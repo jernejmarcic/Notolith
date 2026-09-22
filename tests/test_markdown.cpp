@@ -528,6 +528,29 @@ TEST(DecorationTest, HighlightsCommentsAndFrontmatter)
               QStringLiteral("body\n"));
 }
 
+TEST(DecorationTest, InlineMathHidesEverythingAfterTheOpeningDollar)
+{
+    // Only the opening "$" stays in the display string; the editor turns it
+    // into the anchor a rendered formula image is drawn over.
+    EXPECT_EQ(rendered(QStringLiteral("a $x^2$ b\n")), QStringLiteral("a $ b\n"));
+    // Display maths is unaffected: it still hides each delimiter on its own,
+    // so a renderer that cannot draw it falls back to showing the bare
+    // formula rather than an empty block.
+    EXPECT_EQ(rendered(QStringLiteral("$$x^2$$\n")), QStringLiteral("x^2\n"));
+
+    const Decorations decorations = decorationsOf(QStringLiteral("a $x^2$ b\n"));
+    ASSERT_EQ(decorations.maths.size(), 1);
+    const MathSpan &math = decorations.maths.first();
+    EXPECT_FALSE(math.display);
+
+    const bool hidesFormulaThroughClosingDollar =
+        std::any_of(decorations.syntax.cbegin(), decorations.syntax.cend(),
+                    [&](const Range &range) {
+                        return range.start == math.formula.start && range.end == math.range.end;
+                    });
+    EXPECT_TRUE(hidesFormulaThroughClosingDollar);
+}
+
 TEST(DecorationTest, BlocksCoverTheDocument)
 {
     const Decorations decorations = decorationsOf(QStringLiteral(

@@ -284,6 +284,19 @@ private:
         QString embedLabel;
         /// Draw the code panel and header behind this block.
         bool embedPanel = false;
+
+        /// One inline `$...$` formula resolved while laying this block out.
+        /// `QTextLayout` has no notion of an inline object, so the lone "$"
+        /// the DisplayMap left visible carries letter spacing equal to the
+        /// image's width instead, reserving exactly the room the paint step
+        /// draws into once it knows which line that character landed on.
+        struct InlineMath {
+            qsizetype sourcePos = 0;  ///< the visible "$", in source coordinates
+            qsizetype displayPos = 0; ///< the same character, in display coordinates
+            QPixmap image;
+            QSize imageSize;
+        };
+        std::vector<InlineMath> inlineMaths;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -367,6 +380,14 @@ private:
     /// A block that is one `$$...$$` formula, laid out by MicroTeX.
     bool layoutMath(BlockView &view);
     const MathSpan *displayMathOf(const BlockView &view) const;
+    /// Renders every inline `$...$` formula the block's own maths span list
+    /// touches, and drops a formula's hide range back out of `hidden` when
+    /// MicroTeX cannot draw it - so DisplayMap shows the raw source rather
+    /// than an empty gap. Must run before `view.map` is built from `hidden`.
+    void layoutInlineMaths(BlockView &view, QList<Range> &hidden);
+    /// Draws the images `layoutInlineMaths` recorded, once the block's own
+    /// QTextLayout exists and can say which line each one's "$" landed on.
+    void paintInlineMaths(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;

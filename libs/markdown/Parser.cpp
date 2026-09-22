@@ -644,11 +644,16 @@ void walkItem(MD::Item *item, Walk &walk)
                                                                   : StyleSpan::Kind::InlineCode;
         if (item->type() == MD::ItemType::Math) {
             auto *math = static_cast<MD::Code *>(item);
-            MathSpan span;
-            span.range = range;
-            span.display = !math->isInline();
             const Range open = rangeOf(math->startDelim(), map);
             const Range close = rangeOf(math->endDelim(), map);
+            MathSpan span;
+            // Unlike `range` above - which, for a Math item, is the LaTeX
+            // alone, md4qt's own start/end excluding both delimiters -
+            // `span.range` carries the delimiters too, matching every other
+            // caller's assumption that it is the whole "$...$" or "$$...$$".
+            span.range = {open.isValid() ? open.start : range.start,
+                          close.isValid() ? close.end : range.end};
+            span.display = !math->isInline();
             span.formula = {open.isValid() ? open.end : range.start,
                             close.isValid() ? close.start : range.end};
             walk.decorations.maths.append(span);
@@ -658,9 +663,28 @@ void walkItem(MD::Item *item, Walk &walk)
             const bool block = !code->isInline();
             walk.decorations.styles.append(
                 {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, code->syntax(), {}, {}});
-            // The fences are syntax; their content is not.
-            walk.decorations.syntax.append(rangeOf(code->startDelim(), map));
-            walk.decorations.syntax.append(rangeOf(code->endDelim(), map));
+            if (item->type() == MD::ItemType::Math && code->isInline()) {
+                // Inline maths hides everything from just after the opening
+                // "$" through the closing one, so live preview keeps that one
+                // "$" in the display string as the anchor an inline formula
+                // image gets drawn over - the editor gives it letter spacing
+                // equal to the image's width. A formula the renderer cannot
+                // draw is handled by the editor leaving this range out of
+                // what it actually hides, not by anything decided here.
+                //
+                // `rangeOf(*item, map)` is the LaTeX alone - md4qt's own
+                // start/end for a Math item exclude both delimiters, unlike
+                // its comment above suggests - so the closing "$" comes from
+                // its own endDelim(), the same source `formula` uses below.
+                const Range open = rangeOf(code->startDelim(), map);
+                const Range close = rangeOf(code->endDelim(), map);
+                walk.decorations.syntax.append(
+                    {open.isValid() ? open.end : range.start, close.isValid() ? close.end : range.end});
+            } else {
+                // The fences are syntax; their content is not.
+                walk.decorations.syntax.append(rangeOf(code->startDelim(), map));
+                walk.decorations.syntax.append(rangeOf(code->endDelim(), map));
+            }
             if (code->syntaxPos().startLine() >= 0)
                 walk.decorations.syntax.append(rangeOf(code->syntaxPos(), map));
             if (block && walk.depth == 0)

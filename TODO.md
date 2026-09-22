@@ -176,3 +176,72 @@ budget, which this project has already learned once on the index.
       6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
       way poppler already is.
 - [ ] Future `PKGBUILD` must override CachyOS's `-march=native`.
+
+## Requested 2026-09-23, queued
+
+Jernej's rule: a new feature goes here and the current task carries on.
+
+### In flight
+
+- [ ] **Inline `$...$` maths** - the lane stopped before the fallback for an
+      unrenderable formula; `UnrenderableInlineMathKeepsItsSourceVisible`
+      fails. Finish it before anything else in the editor lands.
+- [ ] Lane: Nerd Font glyphs in `Icons::icon()`, and `LanguageStyles`
+      (`codeblocks.ini`) mirroring `CalloutStyles`.
+- [ ] Lane: navigation - leaving settings on any navigation, single-click
+      folders, back/forward with mouse side buttons and Alt+arrows, caret and
+      scroll remembered per note, reopen the last note, reveal the open note
+      in the tree, Ctrl+, for settings.
+- [x] `Settings.defaultsAreCompiledIn` read the real `~/.config/noteAppC` and
+      failed once Jernej picked the OLED theme. Every settings test now runs
+      against a private config directory.
+
+### Editor, after the maths
+
+- [ ] **Selecting a line reveals markdown syntax; Obsidian does not.** Today
+      the whole block goes raw when the caret enters it
+      (`Decorations::hiddenFor`), even while a selection is being dragged. Two
+      rules: never reveal during a non-empty selection, since text shifting
+      under the mouse mid-drag is the worst version of this; and with a caret,
+      reveal only the markers of the element the caret is inside, not the
+      whole block.
+- [ ] **Code blocks use the callout style format**, in Jernej's words "the
+      format that has been written for callouts":
+      - named styles per language in `~/.config/noteAppC/codeblocks.ini`
+        (`name`, `icon`, `color`, `aliases`, `inherits`);
+      - per-block overrides after the language on the fence,
+        `` ```python name="Setup" icon=U+E73C ``, parsed by the same
+        `parseFenceSpec` callouts use. CommonMark takes the first word of an
+        info string as the language, so Obsidian still highlights it;
+      - the language name on the side of the header, **clickable, copying the
+        block's code to the clipboard**, with a moment of "Copied" feedback;
+      - icons in every form callouts take: built-in (Lucide), Nerd Font glyph,
+        local file, URL.
+- [ ] **Code block tabs.** Adjacent fences, with only blank lines between,
+      that each carry a `tab` attribute group into one block with a tab strip:
+      `` ```python tab="Python" `` then `` ```cpp tab="C++" ``. A bare `tab`
+      labels the tab with the language's style name. Any other text between
+      them ends the group. Obsidian shows them as separate blocks, unchanged.
+- [ ] **Callout gaps**, all verified 2026-09-23:
+      1. a remote `https://` icon never appears until something else repaints:
+         nothing listens to `Icons::notifier()`'s `iconReady`;
+      2. editing `callouts.ini` needs a restart - it is read once, and a
+         comment in `MarkdownEditor.h` wrongly says it reloads on theme change.
+         Watch the file, and `codeblocks.ini` with it;
+      3. nested callouts cannot fold - only the outermost has a handle;
+      4. a listing inside a callout wraps where Obsidian scrolls it;
+      5. Nerd Font glyph icons (arrives with the icon lane).
+
+### Later
+
+- [ ] **Custom themes from a CSS file.** Half there: `libs/theme/Scheme`
+      already imports an Obsidian theme's CSS - `var()` and `hsl()` resolved,
+      tested against all 20 themes installed on this machine - but only for
+      themes inside a vault's `.obsidian/themes`, and with no way to pick one.
+      Missing: a themes directory in `~/.config/noteAppC/themes/` that takes a
+      `.css` as readily as a scheme file, a picker on the settings page, and
+      live reload when the file changes. Worth saying plainly in the docs: a
+      CSS theme maps onto colour and typography tokens only, because Qt
+      widgets do not take CSS layout rules.
+- [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
+      blitting, the Wayland buffer measurement - see above.

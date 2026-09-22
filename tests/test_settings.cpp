@@ -22,6 +22,29 @@ void writeFile(const QString &path, const QString &text)
     file.write(text.toUtf8());
 }
 
+/// Every test in this binary starts from an empty, private config directory.
+/// Without it, anything that calls Settings::load() reads the developer's own
+/// ~/.config/noteAppC - which is how defaultsAreCompiledIn came to fail the
+/// moment someone picked the OLED theme in the real app. Tests that need a
+/// config of their own still point XDG_CONFIG_HOME somewhere else themselves.
+class PrivateConfigHome : public ::testing::Environment {
+public:
+    void SetUp() override
+    {
+        ASSERT_TRUE(m_home.isValid());
+        m_previous = qgetenv("XDG_CONFIG_HOME");
+        qputenv("XDG_CONFIG_HOME", m_home.path().toUtf8());
+    }
+    void TearDown() override { qputenv("XDG_CONFIG_HOME", m_previous); }
+
+private:
+    QTemporaryDir m_home;
+    QByteArray m_previous;
+};
+
+[[maybe_unused]] const auto *privateConfigHome =
+    ::testing::AddGlobalTestEnvironment(new PrivateConfigHome);
+
 } // namespace
 
 TEST(Settings, defaultsAreCompiledIn)

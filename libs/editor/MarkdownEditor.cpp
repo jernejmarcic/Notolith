@@ -1441,6 +1441,75 @@ bool MarkdownEditor::layoutMath(BlockView &view)
     return true;
 }
 
+void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
+{
+    if (m_decorations.maths.isEmpty())
+        return; // the common case: nothing to check, so nothing to render
+
+    const QFont font = fontFor(view.span);
+    const QColor colour = m_theme.color(QStringLiteral("--text-normal"));
+    const qreal ratio = devicePixelRatioF();
+
+    for (const MathSpan &math : m_decorations.maths) {
+        if (math.display || !math.range.overlaps(view.span.range))
+            continue;
+
+        // The parser hid this exact range unconditionally; find it so it can
+        // be dropped again if the formula turns out not to render.
+        const Range hideRange{math.formula.start, math.range.end};
+        auto it = std::find(hidden.begin(), hidden.end(), hideRange);
+        if (it == hidden.end())
+            continue;
+
+        const QString latex = m_text.mid(math.formula.start, math.formula.length()).trimmed();
+        const QString key = QStringLiteral("inlineMath|%1|%2|%3")
+                                .arg(latex)
+                                .arg(font.pixelSize())
+                                .arg(colour.name(QColor::HexArgb));
+
+        QPixmap pixmap = m_images.value(key);
+        if (pixmap.isNull()) {
+            // Inline maths is set in text style, as TeX sets `$...$`: limits
+            // beside a sum rather than above and below it, and a fraction at
+            // the size of the text around it. Rendered in display style, a
+            // \sum was taller than the line and ran into the one below.
+            const QImage image = m_math.render(QStringLiteral("\\textstyle ") + latex,
+                                               font.pixelSize(), colour, contentWidth(), ratio);
+            if (image.isNull()) {
+                hidden.erase(it); // not renderable: show the raw source instead of a gap
+                continue;
+            }
+            pixmap = QPixmap::fromImage(image);
+            m_images.insert(key, pixmap);
+        }
+
+        BlockView::InlineMath formula;
+        formula.sourcePos = math.range.start; // the "$" DisplayMap left visible
+        formula.image = pixmap;
+        formula.imageSize = QSize(int(pixmap.width() / pixmap.devicePixelRatio()),
+                                  int(pixmap.height() / pixmap.devicePixelRatio()));
+        view.inlineMaths.push_back(formula);
+    }
+}
+
+void MarkdownEditor::paintInlineMaths(QPainter &painter, const BlockView &view, qreal left,
+                                      qreal top) const
+{
+    if (view.inlineMaths.empty() || !view.layout)
+        return;
+
+    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+        const QTextLine line = view.layout->lineForTextPosition(int(formula.displayPos));
+        if (!line.isValid())
+            continue;
+        const qreal x = line.cursorToX(int(formula.displayPos));
+        const qreal y = top + line.y() + (line.height() - formula.imageSize.height()) / 2.0;
+        painter.drawPixmap(QRectF(left + x, y, formula.imageSize.width(), formula.imageSize.height())
+                               .toRect(),
+                           formula.image);
+    }
+}
+
 bool MarkdownEditor::layoutTable(BlockView &view)
 {
     view.cells.clear();
@@ -1671,6 +1740,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.imageCentred = false;
     view.textTop = 0;
     view.folded = false;
+    view.inlineMaths.clear();
 
     // Obsidian never shows raw YAML in live preview, only in source mode, so
     // the properties table does not step aside for the caret the way a
@@ -1700,9 +1770,15 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         hidden.reserve(view.lastSyntax - view.firstSyntax);
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
             hidden.append(m_decorations.syntax.at(i));
+        // The parser always adds an inline formula's hide range; whether it
+        // actually stays hidden depends on MicroTeX being able to draw it,
+        // which only the editor knows.
+        layoutInlineMaths(view, hidden);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);
+    for (BlockView::InlineMath &formula : view.inlineMaths)
+        formula.displayPos = view.map.toDisplay(formula.sourcePos);
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -1753,7 +1829,20 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                            ? QTextOption::NoWrap
                            : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
-    view.layout->setFormats(formatsFor(view));
+    QList<QTextLayout::FormatRange> formats = formatsFor(view);
+    for (const BlockView::InlineMath &formula : view.inlineMaths) {
+        // The "$" DisplayMap left visible carries the image: invisible ink,
+        // and letter spacing wide enough that the line reserves exactly the
+        // room the paint step draws into.
+        QTextCharFormat format;
+        format.setForeground(Qt::transparent);
+        format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+        format.setFontLetterSpacing(formula.imageSize.width()
+                                    - QFontMetricsF(view.layout->font())
+                                          .horizontalAdvance(QLatin1Char('$')));
+        formats.append({int(formula.displayPos), 1, format});
+    }
+    view.layout->setFormats(formats);
 
     const qreal listIndent = view.span.kind == BlockSpan::Kind::List ? kListIndent : 0;
     const qreal codeGutter = codeGutterWidth(view);
@@ -1965,6 +2054,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
                     QRectF(left - 14, top, contentWidth() + 28, view.height));
             }
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
+            paintInlineMaths(painter, view, left + indent, top + drop);
             paintListMarkers(painter, view, left + indent, top + drop);
             paintGutter(painter, view, top + drop);
             if (clip)

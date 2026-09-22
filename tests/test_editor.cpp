@@ -153,8 +153,9 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 
         // 4. A visible offset survives the trip unchanged.
         for (qsizetype s = 0; s < length; ++s) {
-            if (!map.isHidden(s))
+            if (!map.isHidden(s)) {
                 ASSERT_EQ(map.toSource(map.toDisplay(s)), s) << "case " << c << " source " << s;
+            }
         }
     }
 }
@@ -1220,6 +1221,49 @@ TEST(MarkdownEditorTest, DisplayMathBecomesARenderedBlock)
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("$$")));
 }
 
+TEST(MarkdownEditorTest, InlineMathRendersAsOneCharacterWhenNotActive)
+{
+    ASSERT_TRUE(MathRenderer::isAvailable());
+    const QString source = QStringLiteral("Inline $e^{i\\pi}+1=0$ formula.\n");
+    auto editor = editorWith(source);
+
+    // Everything the formula's image now stands for - the LaTeX and the
+    // closing "$" - is gone from the display string; only the opening "$"
+    // that anchors the image remains.
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Inline $ formula.\n"));
+}
+
+TEST(MarkdownEditorTest, InlineMathShowsSourceWhenBlockIsActive)
+{
+    const QString source = QStringLiteral("Inline $e^{i\\pi}+1=0$ formula.\n");
+    auto editor = editorWith(source);
+
+    editor->enterBlockAt(0);
+    EXPECT_EQ(editor->displayText(), source);
+}
+
+TEST(MarkdownEditorTest, InlineMathShowsSourceInSourceMode)
+{
+    const QString source = QStringLiteral("Inline $e^{i\\pi}+1=0$ formula.\n");
+    auto editor = editorWith(source);
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_EQ(editor->displayText(), source);
+}
+
+TEST(MarkdownEditorTest, UnrenderableInlineMathKeepsItsSourceVisible)
+{
+    // MicroTeX forgives nearly everything - an unknown command, an unclosed
+    // brace, a dangling ^ all still render. A bare `&` outside an array is one
+    // of the few things it refuses, and a real mistake to make in prose maths.
+    // It must fall back to the raw source rather than to an empty gap, the
+    // same rule display maths follows.
+    const QString source = QStringLiteral("Inline $a & b$ formula.\n");
+    auto editor = editorWith(source);
+
+    EXPECT_EQ(editor->displayText(), source);
+}
+
 TEST(MathRendererTest, ItsFontsAreReachableAsResources)
 {
     // MicroTeX names its fonts by a path relative to the working directory and
@@ -1293,3 +1337,4 @@ TEST(UnresolvedLinkTest, OnlyALinkWithNoNoteBehindItIsDimmed)
     // An external link resolves to nothing and is not meant to.
     EXPECT_EQ(colourOfLinkAt(QStringLiteral("https://example.com")), accent);
 }
+
