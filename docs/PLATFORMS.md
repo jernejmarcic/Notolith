@@ -58,8 +58,9 @@ sh ~/Documents/AI/sessions/2026-09-22_163000_noteappc-callouts-and-perf/bench-he
 It installs nothing - a missing dependency gets the `pacman` line printed - and
 builds with `CFLAGS` and `CXXFLAGS` cleared, so the binary is the one another
 machine would really run. Results land beside the script as `bench-<host>.*`
-and sync back. It also measures scrolling at that machine's own panel size and,
-on a real display, raster against OpenGL.
+and sync back. It also measures scrolling at that machine's largest panel size
+(offscreen), and raster against OpenGL inside a headless `cage` compositor, so
+no window ever appears on a monitor.
 
 Worth running on, in this order: shuttlepod-1 (the 2-in-1, likely the weakest
 x86 machine and the one most likely to have an Intel iGPU), then runabout.

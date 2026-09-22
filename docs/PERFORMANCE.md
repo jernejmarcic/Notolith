@@ -58,8 +58,15 @@ cmake --build build
 ./build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
 ./build/tools/bench/noteAppC-bench --viewport 3440x1440
 QT_SCALE_FACTOR=2 ./build/tools/bench/noteAppC-bench --viewport 2560x1440
-./build/tools/bench/noteAppC-bench --gpu               # on a real display: raster vs OpenGL
+env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
+    cage -- ./build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
 ```
+
+`--gpu` needs a real window and a real GPU context, but never a real monitor:
+inside `cage` with the headless wlroots backend it gets a GPU renderer and one
+virtual output, and nothing appears on any screen. Asking a desktop for a
+particular screen does not work - Hyprland put a fullscreen test window on the
+main panel regardless of `setScreen()`.
 
 The bench generates its vault with `tools/gen_bench_vault.py` unless one is
 given, never touches `~/.config/noteAppC`, and reports median, p95 and worst.
@@ -239,7 +246,17 @@ On screen, vsync off, 5 000-line note, three runs:
 | OpenGL | ~467 ms | 2.16-2.20 ms | 5.1-5.3 ms |
 
 About 11% slower overall - the GL paint engine's glyph cache is the usual
-reason for text - with a steadier tail. The per-frame medians are not
+reason for text - with a steadier tail.
+
+Re-measured headless in `cage`, where both viewports get the same virtual
+output and near-equal frame counts (420 and 444), so frame by frame is fair:
+
+| viewport | median frame | worst frame |
+|---|---|---|
+| raster | 0.70-0.98 ms | 5.3-5.6 ms |
+| OpenGL | 1.57-1.68 ms | 4.3-4.8 ms |
+
+The same verdict: slower on average, slightly steadier in the tail. The per-frame medians are not
 comparable on their own, because the GL viewport scrolled in larger steps: 216
 frames against 400. The whole sweep is the fair number.
 

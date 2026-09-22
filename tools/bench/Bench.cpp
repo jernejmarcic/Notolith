@@ -277,6 +277,10 @@ Timing benchScrollOnScreen(int lines, bool gpu)
     if (gpu)
         editor->setGPUacceleration(true);
     editor->setNoteText(buildLongNote(lines));
+    // Meant to run inside a headless compositor (see --gpu and bench-here.sh),
+    // which fullscreens every window on its one virtual output. Asking a real
+    // desktop for a particular screen does not work: Hyprland put a
+    // fullscreen window on the main panel regardless of setScreen().
     editor->show();
     editor->viewport()->installEventFilter(&counter);
     // Let the window map and settle before anything is timed.
@@ -490,7 +494,9 @@ int main(int argc, char *argv[])
         QStringLiteral("WxH"));
     QCommandLineOption gpuOption(
         QStringLiteral("gpu"),
-        QStringLiteral("Paint the editor viewport through OpenGL. Needs a real display."));
+        QStringLiteral("Only compare the raster and OpenGL viewports, on screen. Run it inside a "
+                       "headless compositor so no window reaches a real monitor: "
+                       "WLR_BACKENDS=headless cage -- noteAppC-bench --gpu"));
     parser.addOption(jsonOption);
     parser.addOption(notesOption);
     parser.addOption(gpuOption);
@@ -548,6 +554,20 @@ int main(int argc, char *argv[])
 
     QList<Timing> timings;
 
+    // --gpu measures one thing: raster against OpenGL, on screen. Everything
+    // else shows windows too (cold start opens seven), and on a real display
+    // those would land on whatever screen someone is working at - so that run
+    // is the headless one, and this one does nothing but the comparison.
+    if (parser.isSet(gpuOption)) {
+        timings << benchScrollOnScreen(5000, false);
+        if (MarkdownEditor::GPUaccelerationAvailable())
+            timings << benchScrollOnScreen(5000, true);
+        else
+            std::fprintf(stderr, "note: no GL context available, skipping the OpenGL run\n");
+        printTable(timings, 0, QStringLiteral("not measured in a --gpu run"));
+        return 0;
+    }
+
     // 5 first: see the comment on benchMemory for why.
     const qint64 peakKB = benchMemory(vaultPath, sizedNotes.value(1024));
     const QString memoryDetail = QStringLiteral("vault (%1 notes) + 1024 kB note").arg(noteCount);
@@ -579,15 +599,6 @@ int main(int argc, char *argv[])
         const QStringList parts = parser.value(viewportOption).split(QLatin1Char('x'));
         if (parts.size() == 2)
             timings << benchScroll(5000, QSize(parts.at(0).toInt(), parts.at(1).toInt()));
-    }
-    if (parser.isSet(gpuOption)) {
-        // Same process, same note, same sweep: the only difference is which
-        // paint engine draws it.
-        timings << benchScrollOnScreen(5000, false);
-        if (MarkdownEditor::GPUaccelerationAvailable())
-            timings << benchScrollOnScreen(5000, true);
-        else
-            std::fprintf(stderr, "note: no GL context available, skipping the OpenGL run\n");
     }
 
     printTable(timings, peakKB, memoryDetail);
