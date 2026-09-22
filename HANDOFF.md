@@ -162,6 +162,29 @@ MicroTeX math, PDF and media embeds, HTML blocks through litehtml, the search
 grammar with `query` blocks, the graph view, Canvas, Bases. See `PLAN.md`
 sections 6, 9, 10 and the phase table in 12.
 
+## Performance, measured
+
+The plan's budget is 20 000 notes cold-indexed in under 5 s. It is met, but
+only after a fix: the full-text table was deleted by a non-indexed column, so
+a cold build was quadratic.
+
+| notes | before | after |
+|---|---|---|
+| 5 000 | 3.49 s | 0.98 s |
+| 10 000 | 14.68 s | 1.57 s |
+| 20 000 | 39.80 s | 3.57 s |
+
+Reproduce it:
+
+```sh
+python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
+./build/tools/noteAppC-index --fresh /tmp/bench-vault
+```
+
+The editor's budgets are asserted in `tests/test_editor.cpp` and currently met
+at 0.09 ms per keystroke and 72 ms to open a 200 kB note. The index has no such
+assertion yet; Phase 7 wants one, and the generator above is its seed.
+
 ## Building and looking at it
 
 ```sh
