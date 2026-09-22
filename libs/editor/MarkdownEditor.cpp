@@ -1,5 +1,7 @@
 #include "MarkdownEditor.h"
 
+#include "Icons.h"
+
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QClipboard>
@@ -610,6 +612,72 @@ int MarkdownEditor::contentLeft() const
     return qMax(m_minimumSideMargin, (viewport()->width() - contentWidth()) / 2);
 }
 
+bool MarkdownEditor::softBreakAt(qsizetype source) const
+{
+    if (m_strictLineBreaks)
+        return false;
+    // A hard break: two spaces or a backslash before the newline.
+    if (source >= 2 && m_text.at(source - 1) == QLatin1Char(' ')
+        && m_text.at(source - 2) == QLatin1Char(' '))
+        return false;
+    if (source >= 1 && m_text.at(source - 1) == QLatin1Char('\\'))
+        return false;
+
+    for (const Range &paragraph : m_decorations.paragraphs) {
+        if (paragraph.start > source)
+            break; // sorted by the walk order, which follows the document
+        if (source > paragraph.start && source < paragraph.end)
+            return true;
+    }
+    return false;
+}
+
+const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
+{
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.range.start == view.span.range.start)
+            return &callout;
+    }
+    return nullptr;
+}
+
+qreal MarkdownEditor::calloutHeaderHeight() const
+{
+    return QFontMetricsF(m_theme.textFont()).height() * 1.9;
+}
+
+void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qreal left,
+                                  qreal top) const
+{
+    if (!view.callout)
+        return;
+
+    const QColor accent = m_theme.calloutColor(view.callout->type);
+    QColor tint = accent;
+    tint.setAlphaF(m_theme.isDark() ? 0.12f : 0.08f);
+
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    QPainterPath rounded;
+    rounded.addRoundedRect(panel, 6, 6);
+    painter.fillPath(rounded, tint);
+    painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), accent);
+
+    const qreal iconSize = QFontMetricsF(m_theme.textFont()).height();
+    const QIcon icon = Icons::icon(Theme::calloutIcon(view.callout->type), accent, int(iconSize));
+    const QRectF iconRect(panel.left() + 14, panel.top() + 10, iconSize, iconSize);
+    icon.paint(&painter, iconRect.toRect());
+
+    painter.save();
+    QFont title = m_theme.textFont();
+    title.setWeight(QFont::DemiBold);
+    painter.setFont(title);
+    painter.setPen(accent);
+    painter.drawText(QRectF(iconRect.right() + 8, panel.top() + 8,
+                            panel.width() - iconSize - 40, iconSize * 1.4),
+                     Qt::AlignVCenter | Qt::AlignLeft, view.callout->title);
+    painter.restore();
+}
+
 const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
 {
     for (const TableSpan &table : m_decorations.tables) {
@@ -756,6 +824,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
 void MarkdownEditor::layoutBlock(BlockView &view)
 {
     view.cells.clear();
+    view.callout = nullptr;
     const bool renderTable = view.span.kind == BlockSpan::Kind::Table
                              && m_mode != Mode::Source && !view.active;
     if (renderTable && layoutTable(view))
@@ -775,8 +844,17 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
     // DisplayMap computed still points at the same glyph.
+    //
+    // Which newlines actually break is CommonMark's rule, which is also
+    // Obsidian's default: a newline inside a paragraph joins the lines, one
+    // between blocks does not. Two trailing spaces still force a break.
     QString shown = view.map.text();
-    shown.replace(QLatin1Char('\n'), QChar::LineSeparator);
+    for (qsizetype i = 0; i < shown.size(); ++i) {
+        if (shown.at(i) != QLatin1Char('\n'))
+            continue;
+        const qsizetype source = view.map.toSource(i);
+        shown[i] = softBreakAt(source) ? QChar(QLatin1Char(' ')) : QChar(QChar::LineSeparator);
+    }
     // The break that ends the block's last line is the block's own boundary,
     // not an empty line inside it.
     if (shown.endsWith(QChar::LineSeparator))
@@ -799,12 +877,21 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         QTextLine line = view.layout->createLine();
         if (!line.isValid())
             break;
-        line.setLineWidth(contentWidth());
+        line.setLineWidth(contentWidth()
+                          - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
         line.setPosition(QPointF(0, height));
         height += lineHeight;
     }
     view.layout->endLayout();
     view.height = qMax(height, lineHeight) + headingAir;
+
+    view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
+    if (view.callout) {
+        // The title line is drawn by the callout header, so the body starts
+        // below it; an empty callout still shows its title.
+        view.height = height > 0 ? height + calloutHeaderHeight()
+                                 : calloutHeaderHeight();
+    }
     view.laidOut = true;
 }
 
@@ -897,6 +984,9 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
         if (top > viewport()->height())
             break;
 
+        if (view.callout)
+            paintCallout(painter, view, left, top);
+
         if (view.span.kind == BlockSpan::Kind::Code) {
             const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
             QPainterPath rounded;
@@ -938,8 +1028,11 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             paintTable(painter, view, left, top);
             continue;
         }
-        if (view.layout)
-            view.layout->draw(&painter, QPointF(left, top), selectionRanges);
+        if (view.layout) {
+            const qreal indent = view.callout ? 14 : 0;
+            const qreal drop = view.callout ? calloutHeaderHeight() : 0;
+            view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
+        }
     }
 
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {

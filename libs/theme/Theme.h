@@ -45,6 +45,11 @@ public:
     /// First family in `families` that fontconfig actually has, else the last.
     static QString firstAvailableFamily(const QStringList &families);
 
+    /// Accent colour Obsidian gives a callout type; falls back to blue.
+    QColor calloutColor(const QString &type) const;
+    /// Lucide icon name for a callout type.
+    static QString calloutIcon(const QString &type);
+
 private:
     void applyDerivedTokens();
 

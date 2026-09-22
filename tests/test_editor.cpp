@@ -319,6 +319,17 @@ TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
     EXPECT_LT(milliseconds, 300.0);
 }
 
+TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
+{
+    // One paragraph across two source lines renders as one flowing line;
+    // the blank line between paragraphs still breaks.
+    auto editor = editorWith(QStringLiteral("one\ntwo\n\nthree\n"));
+    EXPECT_EQ(editor->displayText(), QStringLiteral("one\ntwo\n\nthree\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("one\ntwo\n\nthree\n"));
+    // The buffer is untouched by the rendering decision, which is the point.
+    EXPECT_EQ(editor->wordCount(), 3);
+}
+
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
 {
     CodeHighlighter highlighter;

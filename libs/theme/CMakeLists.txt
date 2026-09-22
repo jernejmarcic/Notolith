@@ -19,7 +19,19 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/chevron-right.svg
     icons/chevron-down.svg
     icons/branch-collapsed.svg
-    icons/branch-expanded.svg)
+    icons/branch-expanded.svg
+    icons/pencil.svg
+    icons/clipboard-list.svg
+    icons/info.svg
+    icons/circle-check.svg
+    icons/flame.svg
+    icons/check.svg
+    icons/circle-help.svg
+    icons/triangle-alert.svg
+    icons/zap.svg
+    icons/bug.svg
+    icons/list.svg
+    icons/quote.svg)
 
 target_include_directories(noteAppC_theme PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Svg)

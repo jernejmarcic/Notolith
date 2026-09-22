@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QString>
 #include <Qt>
 
 #include "SourceMap.h"
@@ -33,7 +34,19 @@ struct StyleSpan {
 /// One top-level block: the unit the editor lays out, caches a height for,
 /// and switches between raw and rendered when the cursor enters it.
 struct BlockSpan {
-    enum class Kind { Paragraph, Heading, List, Quote, Code, Table, Html, Math, Rule, Frontmatter };
+    enum class Kind {
+        Paragraph,
+        Heading,
+        List,
+        Quote,
+        Callout,
+        Code,
+        Table,
+        Html,
+        Math,
+        Rule,
+        Frontmatter,
+    };
 
     Kind kind = Kind::Paragraph;
     Range range;
@@ -49,11 +62,27 @@ struct TableSpan {
     QList<QList<Range>> rows;       ///< rows.first() is the header
 };
 
+/// A callout: Obsidian's `> [!note] Title` blockquote, and the `:::` container
+/// form from Ideas.md that renders the same way.
+struct CalloutSpan {
+    Range range;
+    QString type;     ///< lower case, as written: note, warning, tip, ...
+    QString title;    ///< the text after the marker, or the type capitalised
+    bool foldable = false;
+    bool collapsed = false;
+    Range marker;     ///< `[!type]+` - hidden in live preview
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
     QList<BlockSpan> blocks;
     QList<TableSpan> tables;
+    QList<CalloutSpan> callouts;
+    /// Ranges of every paragraph, nested ones included. A newline inside one
+    /// is a soft break - CommonMark joins the lines, and so does Obsidian
+    /// unless "Strict line breaks" is on.
+    QList<Range> paragraphs;
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;

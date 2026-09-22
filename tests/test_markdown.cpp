@@ -379,6 +379,49 @@ TEST(TableTest, CellsAlignmentAndHeader)
     EXPECT_EQ(slice(table.rows.at(2).at(2)), QStringLiteral("3"));
 }
 
+TEST(CalloutTest, TypeTitleAndFoldMarker)
+{
+    const Decorations plain = decorationsOf(QStringLiteral("> [!note] A title\n> Body.\n"));
+    ASSERT_EQ(plain.callouts.size(), 1);
+    EXPECT_EQ(plain.callouts.first().type, QStringLiteral("note"));
+    EXPECT_EQ(plain.callouts.first().title, QStringLiteral("A title"));
+    EXPECT_FALSE(plain.callouts.first().foldable);
+
+    // No title: the type is the title, capitalised, as in Obsidian.
+    const Decorations bare = decorationsOf(QStringLiteral("> [!warning]\n> Careful.\n"));
+    ASSERT_EQ(bare.callouts.size(), 1);
+    EXPECT_EQ(bare.callouts.first().title, QStringLiteral("Warning"));
+
+    const Decorations folded = decorationsOf(QStringLiteral("> [!tip]- Hidden\n> Body.\n"));
+    ASSERT_EQ(folded.callouts.size(), 1);
+    EXPECT_TRUE(folded.callouts.first().foldable);
+    EXPECT_TRUE(folded.callouts.first().collapsed);
+
+    // A plain blockquote is not a callout.
+    EXPECT_TRUE(decorationsOf(QStringLiteral("> Just a quote.\n")).callouts.isEmpty());
+}
+
+TEST(CalloutTest, QuoteMarkersAreHidden)
+{
+    EXPECT_EQ(rendered(QStringLiteral("> one\n> two\n")), QStringLiteral("one\ntwo\n"));
+    // The whole first line of a callout is drawn by its header.
+    EXPECT_EQ(rendered(QStringLiteral("> [!note] Title\n> Body.\n")), QStringLiteral("Body.\n"));
+}
+
+TEST(ParagraphTest, SoftBreaksAreMarked)
+{
+    const QString text = QStringLiteral("one\ntwo\n\nthree\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_FALSE(decorations.paragraphs.isEmpty());
+
+    // The newline after "one" is inside the first paragraph; the blank line
+    // between the paragraphs is not.
+    const Range first = decorations.paragraphs.first();
+    const qsizetype inside = text.indexOf(QLatin1Char('\n'));
+    EXPECT_GT(inside, first.start);
+    EXPECT_LT(inside, first.end);
+}
+
 TEST(WordCountTest, IgnoresFrontmatter)
 {
     const Metadata metadata =

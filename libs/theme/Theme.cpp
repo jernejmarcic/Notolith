@@ -234,6 +234,75 @@ QFont Theme::monospaceFont() const
     return font;
 }
 
+QColor Theme::calloutColor(const QString &type) const
+{
+    // Obsidian's own mapping of the 13 callout types onto its named colours.
+    static const QHash<QString, QString> colours = {
+        {QStringLiteral("note"), QStringLiteral("--color-blue")},
+        {QStringLiteral("abstract"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("summary"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("tldr"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("info"), QStringLiteral("--color-blue")},
+        {QStringLiteral("todo"), QStringLiteral("--color-blue")},
+        {QStringLiteral("tip"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("hint"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("important"), QStringLiteral("--color-cyan")},
+        {QStringLiteral("success"), QStringLiteral("--color-green")},
+        {QStringLiteral("check"), QStringLiteral("--color-green")},
+        {QStringLiteral("done"), QStringLiteral("--color-green")},
+        {QStringLiteral("question"), QStringLiteral("--color-orange")},
+        {QStringLiteral("help"), QStringLiteral("--color-orange")},
+        {QStringLiteral("faq"), QStringLiteral("--color-orange")},
+        {QStringLiteral("warning"), QStringLiteral("--color-orange")},
+        {QStringLiteral("caution"), QStringLiteral("--color-orange")},
+        {QStringLiteral("attention"), QStringLiteral("--color-orange")},
+        {QStringLiteral("failure"), QStringLiteral("--color-red")},
+        {QStringLiteral("fail"), QStringLiteral("--color-red")},
+        {QStringLiteral("missing"), QStringLiteral("--color-red")},
+        {QStringLiteral("danger"), QStringLiteral("--color-red")},
+        {QStringLiteral("error"), QStringLiteral("--color-red")},
+        {QStringLiteral("bug"), QStringLiteral("--color-red")},
+        {QStringLiteral("example"), QStringLiteral("--color-purple")},
+        {QStringLiteral("quote"), QStringLiteral("--text-muted")},
+        {QStringLiteral("cite"), QStringLiteral("--text-muted")},
+    };
+    return color(colours.value(type.toLower(), QStringLiteral("--color-blue")));
+}
+
+QString Theme::calloutIcon(const QString &type)
+{
+    static const QHash<QString, QString> icons = {
+        {QStringLiteral("note"), QStringLiteral("pencil")},
+        {QStringLiteral("abstract"), QStringLiteral("clipboard-list")},
+        {QStringLiteral("summary"), QStringLiteral("clipboard-list")},
+        {QStringLiteral("tldr"), QStringLiteral("clipboard-list")},
+        {QStringLiteral("info"), QStringLiteral("info")},
+        {QStringLiteral("todo"), QStringLiteral("circle-check")},
+        {QStringLiteral("tip"), QStringLiteral("flame")},
+        {QStringLiteral("hint"), QStringLiteral("flame")},
+        {QStringLiteral("important"), QStringLiteral("flame")},
+        {QStringLiteral("success"), QStringLiteral("check")},
+        {QStringLiteral("check"), QStringLiteral("check")},
+        {QStringLiteral("done"), QStringLiteral("check")},
+        {QStringLiteral("question"), QStringLiteral("circle-help")},
+        {QStringLiteral("help"), QStringLiteral("circle-help")},
+        {QStringLiteral("faq"), QStringLiteral("circle-help")},
+        {QStringLiteral("warning"), QStringLiteral("triangle-alert")},
+        {QStringLiteral("caution"), QStringLiteral("triangle-alert")},
+        {QStringLiteral("attention"), QStringLiteral("triangle-alert")},
+        {QStringLiteral("failure"), QStringLiteral("x")},
+        {QStringLiteral("fail"), QStringLiteral("x")},
+        {QStringLiteral("missing"), QStringLiteral("x")},
+        {QStringLiteral("danger"), QStringLiteral("zap")},
+        {QStringLiteral("error"), QStringLiteral("zap")},
+        {QStringLiteral("bug"), QStringLiteral("bug")},
+        {QStringLiteral("example"), QStringLiteral("list")},
+        {QStringLiteral("quote"), QStringLiteral("quote")},
+        {QStringLiteral("cite"), QStringLiteral("quote")},
+    };
+    return icons.value(type.toLower(), QStringLiteral("pencil"));
+}
+
 QPalette Theme::palette() const
 {
     const QColor primary = color(QStringLiteral("--background-primary"));

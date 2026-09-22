@@ -124,6 +124,9 @@ private:
         /// Filled instead of `layout` when a table renders as a grid.
         std::vector<Cell> cells;
         int headerRows = 0;
+        /// Set when this block is a callout, so painting knows its colour,
+        /// icon and title without looking the span up again.
+        const CalloutSpan *callout = nullptr;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -138,6 +141,13 @@ private:
     /// its structure is missing, so the caller falls back to plain text.
     bool layoutTable(BlockView &view);
     void paintTable(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    const CalloutSpan *calloutFor(const BlockView &view) const;
+    /// True when the newline at `source` joins two lines of one paragraph
+    /// rather than breaking them apart.
+    bool softBreakAt(qsizetype source) const;
+    /// Extra space a callout reserves for its title row.
+    qreal calloutHeaderHeight() const;
     QList<QTextLayout::FormatRange> formatsIn(const BlockView &view, const Range &source,
                                               const DisplayMap &map) const;
     const TableSpan *tableFor(const BlockView &view) const;
@@ -203,6 +213,7 @@ private:
     bool m_interacted = false;
     bool m_modified = false;
     bool m_readable = true;
+    bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;
     int m_topPadding = 28;

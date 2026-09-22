@@ -91,6 +91,54 @@ void collectStyles(MD::ItemWithOpts *item, Walk &walk)
 
 void walkItem(MD::Item *item, Walk &walk);
 
+/// Every `>` that starts a line inside a blockquote, so live preview can hide
+/// them the way Obsidian does.
+void hideQuoteMarkers(const QString &text, const Range &range, Decorations &decorations)
+{
+    static const QRegularExpression marker(QStringLiteral("^[ \\t]*>[ \\t]?"),
+                                           QRegularExpression::MultilineOption);
+    auto it = marker.globalMatch(text, range.start);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        if (match.capturedStart() >= range.end)
+            break;
+        decorations.syntax.append({match.capturedStart(), match.capturedEnd()});
+    }
+}
+
+/// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
+bool detectCallout(const QString &text, const Range &range, const SourceMap &map,
+                   Decorations &decorations)
+{
+    static const QRegularExpression head(
+        QStringLiteral("^[ \\t]*>[ \\t]*(\\[!([\\w-]+)\\]([+-])?)[ \\t]*(.*)$"));
+
+    const qsizetype lineEnd = map.lineEnd(map.lineAt(range.start));
+    const QString firstLine = text.mid(range.start, lineEnd - range.start);
+    const auto match = head.match(firstLine);
+    if (!match.hasMatch())
+        return false;
+
+    CalloutSpan callout;
+    callout.range = range;
+    callout.type = match.captured(2).toLower();
+    callout.foldable = !match.captured(3).isEmpty();
+    callout.collapsed = match.captured(3) == QLatin1String("-");
+    callout.title = match.captured(4).trimmed();
+    if (callout.title.isEmpty()) {
+        callout.title = callout.type;
+        callout.title[0] = callout.title.at(0).toUpper();
+    }
+    callout.marker = {range.start + match.capturedStart(1),
+                      range.start + match.capturedEnd(1)};
+
+    // The marker and the title line are drawn by the callout header, so the
+    // whole first line is syntax as far as the body layout is concerned.
+    decorations.syntax.append({range.start, qMin(range.start + firstLine.size() + 1, range.end)});
+    decorations.callouts.append(callout);
+    return true;
+}
+
 void walkBlock(MD::Block *block, Walk &walk)
 {
     if (!block)
@@ -200,16 +248,31 @@ void walkItem(MD::Item *item, Walk &walk)
         walk.masked.append(out.range);
         break;
     }
+    case MD::ItemType::Blockquote: {
+        const Range range = rangeOf(*item, map);
+        const bool callout = walk.text && detectCallout(*walk.text, range, map, walk.decorations);
+        if (walk.depth == 0) {
+            walk.decorations.blocks.append(
+                {callout ? BlockSpan::Kind::Callout : BlockSpan::Kind::Quote, range, 0});
+        }
+        // The "> " that starts each line is syntax, hidden the way Obsidian
+        // hides it in live preview.
+        if (walk.text)
+            hideQuoteMarkers(*walk.text, range, walk.decorations);
+        ++walk.depth;
+        walkBlock(static_cast<MD::Block *>(item), walk);
+        --walk.depth;
+        break;
+    }
     case MD::ItemType::List:
-    case MD::ItemType::Blockquote:
     case MD::ItemType::Paragraph:
     case MD::ItemType::Footnote:
     case MD::ItemType::TableCell: {
+        if (item->type() == MD::ItemType::Paragraph)
+            walk.decorations.paragraphs.append(rangeOf(*item, map));
         if (walk.depth == 0) {
             const auto kind = item->type() == MD::ItemType::List ? BlockSpan::Kind::List
-                              : item->type() == MD::ItemType::Blockquote
-                                  ? BlockSpan::Kind::Quote
-                                  : BlockSpan::Kind::Paragraph;
+                                                                 : BlockSpan::Kind::Paragraph;
             walk.decorations.blocks.append({kind, rangeOf(*item, map), 0});
         }
         ++walk.depth;
