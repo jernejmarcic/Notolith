@@ -240,15 +240,17 @@ TEST(LinkTest, WikilinksEmbedsAndMarkdownLinks)
     EXPECT_TRUE(targets(metadata).contains(QStringLiteral("Other note.md")));
 
     for (const Link &link : metadata.links) {
-        if (link.target == QStringLiteral("Embed.png"))
+        if (link.target == QStringLiteral("Embed.png")) {
             EXPECT_TRUE(link.embed);
+        }
         if (link.target == QStringLiteral("A note")) {
             EXPECT_EQ(link.subpath, QStringLiteral("#Section"));
             EXPECT_EQ(link.alias, QStringLiteral("alias"));
             EXPECT_EQ(sliceOf(text, link.targetRange), QStringLiteral("A note"));
         }
-        if (link.target.startsWith(QStringLiteral("https://")))
+        if (link.target.startsWith(QStringLiteral("https://"))) {
             EXPECT_TRUE(link.external);
+        }
     }
 }
 
@@ -259,6 +261,76 @@ TEST(LinkTest, RangesPointAtTheSource)
     ASSERT_EQ(metadata.links.size(), 1);
     EXPECT_EQ(sliceOf(text, metadata.links.first().range), QStringLiteral("[[Target|shown]]"));
     EXPECT_EQ(sliceOf(text, metadata.links.first().targetRange), QStringLiteral("Target"));
+}
+
+TEST(LinkTest, ReferenceLinkFormsResolveToTheirDefinition)
+{
+    // The full `[text][ref]` form, its collapsed `[ref][]` shorthand, and the
+    // bare shortcut `[ref]` must all end up pointing at the definition's URL,
+    // not at the label md4qt reports as the target.
+    const QString full = QStringLiteral("A [text][ref] here.\n\n[ref]: https://example.com \"Title\"\n");
+    const QString collapsed = QStringLiteral("A [ref][] here.\n\n[ref]: https://example.com\n");
+    const QString shortcut = QStringLiteral("A [ref] here.\n\n[ref]: https://example.com\n");
+
+    for (const QString &text : {full, collapsed, shortcut}) {
+        const Metadata metadata = parse(text);
+        ASSERT_EQ(metadata.links.size(), 1) << text.toStdString();
+        const Link &link = metadata.links.first();
+        EXPECT_EQ(link.target, QStringLiteral("https://example.com")) << text.toStdString();
+        EXPECT_TRUE(link.raw == QStringLiteral("https://example.com")) << text.toStdString();
+        EXPECT_FALSE(link.wiki) << text.toStdString();
+        // A reference link whose definition is external is external the same
+        // way an inline link written straight to that URL would be.
+        EXPECT_TRUE(link.external) << text.toStdString();
+    }
+}
+
+TEST(LinkTest, ReferenceLabelMatchingFoldsCaseAndWhitespace)
+{
+    // CommonMark folds a label's case and collapses its internal whitespace
+    // before matching it against a definition.
+    const QString text = QStringLiteral(
+        "A [text][My   Ref] here.\n\n[my ref]: https://example.com\n");
+    const Metadata metadata = parse(text);
+    ASSERT_EQ(metadata.links.size(), 1);
+    EXPECT_EQ(metadata.links.first().target, QStringLiteral("https://example.com"));
+}
+
+TEST(LinkTest, ReferenceDefinitionMayFollowTheLink)
+{
+    const QString text = QStringLiteral(
+        "A [text][ref] here.\n\nSome other paragraph.\n\n[ref]: https://example.com\n");
+    const Metadata metadata = parse(text);
+    ASSERT_EQ(metadata.links.size(), 1);
+    EXPECT_EQ(metadata.links.first().target, QStringLiteral("https://example.com"));
+}
+
+TEST(LinkTest, UnresolvedReferenceLabelStaysUnresolved)
+{
+    // No definition anywhere - md4qt does not even see a link, so nothing is
+    // invented for one; the brackets are left as plain text.
+    const QString text = QStringLiteral("A [text][nope] here.\n");
+    const Metadata metadata = parse(text);
+    EXPECT_TRUE(metadata.links.isEmpty());
+}
+
+TEST(LinkTest, ReferenceDefinitionInsideACodeFenceIsNotADefinition)
+{
+    // The only "[ref]: ..." line is inside a fence, so it does not count and
+    // the reference link it would have fed stays unresolved.
+    const QString onlyFenced = QStringLiteral(
+        "A [text][ref] here.\n\n```\n[ref]: https://example.com\n```\n");
+    EXPECT_TRUE(parse(onlyFenced).links.isEmpty());
+
+    // A real definition elsewhere must win over a fenced decoy with the same
+    // label, even when the decoy comes first in the file.
+    const QString decoyFirst = QStringLiteral(
+        "```\n[ref]: https://decoy.example\n```\n\n"
+        "A [text][ref] here.\n\n"
+        "[ref]: https://real.example\n");
+    const Metadata metadata = parse(decoyFirst);
+    ASSERT_EQ(metadata.links.size(), 1);
+    EXPECT_EQ(metadata.links.first().target, QStringLiteral("https://real.example"));
 }
 
 TEST(TagTest, InlineNestedAndNonTags)
@@ -424,6 +496,26 @@ TEST(DecorationTest, ReferenceLinksAndTheirDefinitions)
     // A definition inside a code block is code.
     EXPECT_EQ(rendered(QStringLiteral("```\n[ref]: https://example.com\n```\n")),
               QStringLiteral("\n[ref]: https://example.com\n\n"));
+}
+
+TEST(LinkTest, ReferenceImageResolvesToItsDefinitionToo)
+{
+    // The same mistarget a reference *link* gets from md4qt also leaks into a
+    // reference-style embed; it needs the same fix.
+    const QString full = QStringLiteral("![alt][ref]\n\n[ref]: diagram.png\n");
+    const QString shortcut = QStringLiteral("![ref]\n\n[ref]: diagram.png\n");
+
+    for (const QString &text : {full, shortcut}) {
+        const Metadata metadata = parse(text);
+        ASSERT_EQ(metadata.links.size(), 1) << text.toStdString();
+        const Link &link = metadata.links.first();
+        EXPECT_TRUE(link.embed) << text.toStdString();
+        EXPECT_EQ(link.target, QStringLiteral("diagram.png")) << text.toStdString();
+
+        const Decorations decorations = decorationsOf(text);
+        ASSERT_EQ(decorations.embeds.size(), 1) << text.toStdString();
+        EXPECT_EQ(decorations.embeds.first().target, QStringLiteral("diagram.png")) << text.toStdString();
+    }
 }
 
 TEST(DecorationTest, HighlightsCommentsAndFrontmatter)

@@ -26,6 +26,17 @@ struct Walk {
     QList<Task> tasks;
     Decorations decorations;
     int depth = 0;
+
+    /// A reference-style link or embed - `[text][ref]`, the collapsed
+    /// `[ref][]`, or the shortcut `[ref]` - whose label was recorded during
+    /// the walk but whose target was not: resolving it needs every
+    /// `[ref]: url` definition in the file, including ones after the link, so
+    /// it waits until the walk is done.
+    struct PendingReference {
+        qsizetype linkIndex = -1; ///< index into `links`
+        QString label;           ///< the label exactly as written at the use site
+    };
+    QList<PendingReference> pendingReferences;
 };
 
 Range rangeOf(const MD::WithPosition &position, const SourceMap &map)
@@ -468,6 +479,49 @@ void hideLinkDefinitions(const QString &text, const QList<Range> &masked,
     }
 }
 
+/// CommonMark folds a reference label's case and collapses its internal
+/// whitespace before matching it against a definition.
+QString normaliseLabel(const QString &label)
+{
+    return label.simplified().toCaseFolded();
+}
+
+/// `[ref]: url "title"` again - the same line `hideLinkDefinitions()` finds,
+/// this time captured into label and URL so `[text][ref]` can be resolved to
+/// what the definition actually points at.
+QHash<QString, QString> collectLinkDefinitions(const QString &text, const QList<Range> &masked)
+{
+    static const QRegularExpression definition(
+        QStringLiteral(R"(^ {0,3}\[([^\]\n]+)\]:[ \t]*(\S[^\n]*)$)"),
+        QRegularExpression::MultilineOption);
+
+    QHash<QString, QString> definitions;
+    auto it = definition.globalMatch(text);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const Range line{match.capturedStart(), qMin(text.size(), match.capturedEnd() + 1)};
+        const bool inCode = std::any_of(masked.cbegin(), masked.cend(), [&line](const Range &range) {
+            return range.contains(line.start);
+        });
+        if (inCode)
+            continue;
+
+        // Only the first token after the colon is the destination; a title
+        // may follow it, quoted or in parentheses.
+        QString url = match.captured(2);
+        const qsizetype space = url.indexOf(QRegularExpression(QStringLiteral("[ \\t]")));
+        if (space > 0)
+            url = url.left(space);
+        if (url.size() >= 2 && url.startsWith(QLatin1Char('<')) && url.endsWith(QLatin1Char('>')))
+            url = url.mid(1, url.size() - 2);
+
+        const QString label = normaliseLabel(match.captured(1));
+        if (!definitions.contains(label)) // the first definition for a label wins
+            definitions.insert(label, url);
+    }
+    return definitions;
+}
+
 void walkBlock(MD::Block *block, Walk &walk)
 {
     if (!block)
@@ -573,18 +627,34 @@ void walkItem(MD::Item *item, Walk &walk)
         QString target = out.targetRange.isValid() && walk.text
                              ? walk.text->mid(out.targetRange.start, out.targetRange.length())
                              : link->url();
-        const qsizetype hash = target.indexOf(QLatin1Char('#'));
-        if (hash > 0) {
-            out.subpath = target.mid(hash);
-            target = target.left(hash);
+
+        // A reference-style link or embed has no URL at this position at
+        // all: md4qt puts the *label* at urlPos, because the real target
+        // lives on a `[ref]: url` line elsewhere, and its own url() is an
+        // internal bookkeeping marker rather than that URL. Every such form -
+        // `[text][ref]`, `[ref][]`, `[ref]` - opens with "[" immediately
+        // before the label, which an inline link's "(" or an autolink's "<"
+        // never does, so that one character tells them apart.
+        const bool referenceStyle = out.targetRange.start > 0 && walk.text
+            && walk.text->at(out.targetRange.start - 1) == QLatin1Char('[');
+
+        if (referenceStyle) {
+            walk.links.append(out);
+            walk.pendingReferences.append({walk.links.size() - 1, target});
+        } else {
+            const qsizetype hash = target.indexOf(QLatin1Char('#'));
+            if (hash > 0) {
+                out.subpath = target.mid(hash);
+                target = target.left(hash);
+            }
+            out.raw = target;
+            out.target = QUrl::fromPercentEncoding(target.toUtf8());
+            if (out.embed)
+                walk.decorations.embeds.append(embedOf(out));
+            out.external = ObsidianSyntax::isExternalTarget(out.target);
+            walk.links.append(out);
+            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
         }
-        out.raw = target;
-        out.target = QUrl::fromPercentEncoding(target.toUtf8());
-        if (out.embed)
-            walk.decorations.embeds.append(embedOf(out));
-        out.external = ObsidianSyntax::isExternalTarget(out.target);
-        walk.links.append(out);
-        walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
 
         // Everything around the label is syntax: the `[` or `![`, then the
         // `](url "title")`, the `][ref]` of a reference link, or the angle
@@ -766,6 +836,32 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
 
     if (frontmatter.isValid())
         walk.masked.append(frontmatter);
+
+    // Reference-style links and embeds found their label during the walk but
+    // not their target; resolve them now that every `[ref]: url` definition
+    // in the file - masked ranges included, so one inside a code fence does
+    // not count - is known.
+    if (!walk.pendingReferences.isEmpty()) {
+        const auto definitions = collectLinkDefinitions(text, walk.masked);
+        for (const auto &pending : std::as_const(walk.pendingReferences)) {
+            Link &out = walk.links[pending.linkIndex];
+            const QString resolved = definitions.value(normaliseLabel(pending.label));
+            // No definition: stays unresolved rather than inventing a target
+            // out of the label.
+            QString target = resolved;
+            const qsizetype hash = target.indexOf(QLatin1Char('#'));
+            if (hash > 0) {
+                out.subpath = target.mid(hash);
+                target = target.left(hash);
+            }
+            out.raw = target;
+            out.target = QUrl::fromPercentEncoding(target.toUtf8());
+            out.external = ObsidianSyntax::isExternalTarget(out.target);
+            if (out.embed)
+                walk.decorations.embeds.append(embedOf(out));
+            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
+        }
+    }
 
     const auto obsidian = ObsidianSyntax::scan(text, walk.masked);
 
