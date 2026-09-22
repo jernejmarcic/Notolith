@@ -6,7 +6,9 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QSettings>
+#include <QSaveFile>
+#include <QSet>
+#include <QTextStream>
 
 namespace noteAppC {
 
@@ -70,6 +72,211 @@ QVariant coerceToDefaultType(const QVariant &value, const QVariant &fallback)
     default:
         return value;
     }
+}
+
+/// `editor.readableLineLength` is `[editor] readable-line-length` in the file:
+/// dotted camelCase is what the code reads best, kebab under a section header
+/// is what a person reads best.
+QString kebabOf(const QString &name)
+{
+    QString out;
+    for (const QChar c : name) {
+        if (c.isUpper()) {
+            out.append(QLatin1Char('-'));
+            out.append(c.toLower());
+        } else {
+            out.append(c);
+        }
+    }
+    return out;
+}
+
+QString camelOf(const QString &name)
+{
+    QString out;
+    bool upper = false;
+    for (const QChar c : name) {
+        if (c == QLatin1Char('-')) {
+            upper = true;
+            continue;
+        }
+        out.append(upper ? c.toUpper() : c);
+        upper = false;
+    }
+    return out;
+}
+
+/// A value as a person would write it: bare true/false, bare numbers, bare
+/// text. No quoting and no escaping, because the point of this file is that it
+/// can be opened in an editor.
+QString textOf(const QVariant &value)
+{
+    switch (value.typeId()) {
+    case QMetaType::Bool:
+        return value.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+    case QMetaType::QStringList:
+        return value.toStringList().join(QStringLiteral(", "));
+    default:
+        return value.toString();
+    }
+}
+
+QVariant valueOf(const QString &text, const QVariant &like)
+{
+    switch (like.typeId()) {
+    case QMetaType::Bool:
+        return text.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0
+            || text == QLatin1String("1") || text.compare(QLatin1String("yes"), Qt::CaseInsensitive) == 0;
+    case QMetaType::Int:
+        return text.toInt();
+    case QMetaType::QStringList: {
+        QStringList parts;
+        for (const QString &part : text.split(QLatin1Char(','), Qt::SkipEmptyParts))
+            parts.append(part.trimmed());
+        return parts;
+    }
+    default:
+        return text;
+    }
+}
+
+/// Reads `[section] key = value` into dotted keys. Comments and blank lines are
+/// skipped; an unknown key is kept so the caller can decide.
+QVariantMap readINI(const QString &path)
+{
+    QVariantMap out;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return out;
+
+    QString section;
+    QTextStream stream(&file);
+    while (!stream.atEnd()) {
+        const QString line = stream.readLine().trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QLatin1Char(';')))
+            continue;
+        if (line.startsWith(QLatin1Char('[')) && line.endsWith(QLatin1Char(']'))) {
+            section = line.mid(1, line.size() - 2).trimmed();
+            continue;
+        }
+        const qsizetype equals = line.indexOf(QLatin1Char('='));
+        if (equals < 0)
+            continue;
+        const QString name = camelOf(line.left(equals).trimmed());
+        const QString text = line.mid(equals + 1).trimmed();
+        out.insert(section.isEmpty() ? name : section + QLatin1Char('.') + name, text);
+    }
+    return out;
+}
+
+/// Rewrites `path` so it carries `values`, keeping every comment, blank line
+/// and unknown key exactly where the person left them. A file nobody can edit
+/// by hand is not a configuration file.
+bool writeINI(const QString &path, const QVariantMap &values, const QSet<QString> &known,
+              const QString &header, QString *error)
+{
+    QStringList lines;
+    QFile existing(path);
+    if (existing.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QTextStream stream(&existing);
+        while (!stream.atEnd())
+            lines.append(stream.readLine());
+        existing.close();
+    }
+    const bool fresh = lines.isEmpty();
+
+    QSet<QString> written;
+    QList<qsizetype> drop; // lines for a known key the app no longer sets
+    QString section;
+    for (qsizetype index = 0; index < lines.size(); ++index) {
+        QString &line = lines[index];
+        const QString trimmed = line.trimmed();
+        if (trimmed.startsWith(QLatin1Char('[')) && trimmed.endsWith(QLatin1Char(']'))) {
+            section = trimmed.mid(1, trimmed.size() - 2).trimmed();
+            continue;
+        }
+        if (trimmed.isEmpty() || trimmed.startsWith(QLatin1Char('#'))
+            || trimmed.startsWith(QLatin1Char(';')))
+            continue;
+        const qsizetype equals = line.indexOf(QLatin1Char('='));
+        if (equals < 0)
+            continue;
+
+        const QString name = line.left(equals).trimmed();
+        const QString key = section.isEmpty() ? camelOf(name)
+                                              : section + QLatin1Char('.') + camelOf(name);
+        if (!values.contains(key)) {
+            // A key the app owns and no longer sets was reset, so its line
+            // goes. A key it has never heard of is the person's, and stays.
+            if (known.contains(key))
+                drop.append(index);
+            continue;
+        }
+        line = QStringLiteral("%1 = %2").arg(name, textOf(values.value(key)));
+        written.insert(key);
+    }
+    for (auto it = drop.crbegin(); it != drop.crend(); ++it)
+        lines.removeAt(*it);
+
+    // Whatever is new gets appended under its section, creating it if needed.
+    QMap<QString, QStringList> pending; // section -> "key = value"
+    for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
+        if (written.contains(it.key()))
+            continue;
+        const qsizetype dot = it.key().indexOf(QLatin1Char('.'));
+        const QString group = dot < 0 ? QString() : it.key().left(dot);
+        const QString name = kebabOf(dot < 0 ? it.key() : it.key().mid(dot + 1));
+        pending[group].append(QStringLiteral("%1 = %2").arg(name, textOf(it.value())));
+    }
+
+    for (auto it = pending.constBegin(); it != pending.constEnd(); ++it) {
+        // Find the section's last line, or make the section at the end.
+        qsizetype insertAt = -1;
+        QString current;
+        for (qsizetype i = 0; i < lines.size(); ++i) {
+            const QString trimmed = lines.at(i).trimmed();
+            if (trimmed.startsWith(QLatin1Char('[')) && trimmed.endsWith(QLatin1Char(']')))
+                current = trimmed.mid(1, trimmed.size() - 2).trimmed();
+            if (current == it.key())
+                insertAt = i + 1;
+        }
+        if (insertAt < 0) {
+            if (!lines.isEmpty() && !lines.last().trimmed().isEmpty())
+                lines.append(QString());
+            lines.append(QStringLiteral("[%1]").arg(it.key()));
+            insertAt = lines.size();
+        }
+        for (const QString &entry : it.value())
+            lines.insert(insertAt++, entry);
+    }
+
+    // A file written for the first time explains itself; one the person has
+    // already edited is left to say whatever they made it say.
+    if (fresh && !header.isEmpty()) {
+        QStringList intro = header.split(QLatin1Char('\n'));
+        while (!intro.isEmpty() && intro.last().trimmed().isEmpty())
+            intro.removeLast();
+        intro.append(QString());
+        lines = intro + lines;
+    }
+
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    QTextStream out(&file);
+    for (const QString &line : lines)
+        out << line << '\n';
+    out.flush();
+    if (!file.commit()) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    return true;
 }
 
 QJsonObject readJSONobject(const QString &path)
@@ -137,7 +344,22 @@ QString Settings::configDirectory()
 
 QString Settings::configFile()
 {
-    return QDir(configDirectory()).filePath(QStringLiteral("noteAppC.conf"));
+    return QDir(configDirectory()).filePath(QStringLiteral("settings.ini"));
+}
+
+QString Settings::indexFile()
+{
+    return QDir(configDirectory()).filePath(QStringLiteral("vaults.ini"));
+}
+
+QString Settings::themesDirectory()
+{
+    return QDir(configDirectory()).filePath(QStringLiteral("themes"));
+}
+
+QString Settings::templatesDirectory()
+{
+    return QDir(configDirectory()).filePath(QStringLiteral("templates"));
 }
 
 QStringList Settings::keys()
@@ -217,10 +439,18 @@ Settings Settings::load(const QString &vaultRoot)
     Settings settings;
     settings.m_vaultRoot = vaultRoot;
 
-    QSettings stored(configFile(), QSettings::IniFormat);
-    for (const QString &key : stored.allKeys()) {
-        if (defaults().contains(key))
-            settings.m_user.insert(key, coerceToDefaultType(stored.value(key), defaultValue(key)));
+    const QVariantMap stored = readINI(configFile());
+    for (auto it = stored.constBegin(); it != stored.constEnd(); ++it) {
+        if (defaults().contains(it.key()))
+            settings.m_user.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
+    }
+
+    // What the app remembers lives apart from what a person sets, so opening a
+    // note never rewrites the file they hand-edit.
+    const QVariantMap index = readINI(indexFile());
+    for (auto it = index.constBegin(); it != index.constEnd(); ++it) {
+        if (defaults().contains(it.key()))
+            settings.m_index.insert(it.key(), valueOf(it.value().toString(), defaultValue(it.key())));
     }
 
     settings.m_vault = fromObsidianConfig(vaultRoot);
@@ -232,6 +462,8 @@ QVariant Settings::value(const QString &key) const
     // The user's choice outranks the vault's, which outranks the default.
     if (m_user.contains(key))
         return m_user.value(key);
+    if (m_index.contains(key))
+        return m_index.value(key);
     if (m_vault.contains(key))
         return coerceToDefaultType(m_vault.value(key), defaultValue(key));
     return defaultValue(key);
@@ -241,7 +473,10 @@ void Settings::setValue(const QString &key, const QVariant &value)
 {
     if (!defaults().contains(key))
         return;
-    m_user.insert(key, value);
+    if (key.startsWith(QLatin1String("state.")))
+        m_index.insert(key, value);
+    else
+        m_user.insert(key, value);
 }
 
 bool Settings::isCustomised(const QString &key) const
@@ -257,22 +492,39 @@ void Settings::reset(const QString &key)
 bool Settings::save(QString *error) const
 {
     QDir().mkpath(configDirectory());
-    QSettings stored(configFile(), QSettings::IniFormat);
+    QDir().mkpath(themesDirectory());
+    QDir().mkpath(templatesDirectory());
+
+    // Only what differs from the compiled-in default, so the file stays short
+    // enough to read and a later change of default still reaches people.
+    QVariantMap settings;
     for (const QString &key : keys()) {
-        // Only what the user actually changed, so the file stays readable and
-        // a later change of default still reaches them.
+        if (key.startsWith(QLatin1String("state.")))
+            continue;
         if (m_user.contains(key) && m_user.value(key) != defaultValue(key))
-            stored.setValue(key, m_user.value(key));
-        else
-            stored.remove(key);
+            settings.insert(key, m_user.value(key));
     }
-    stored.sync();
-    if (stored.status() != QSettings::NoError) {
-        if (error)
-            *error = QStringLiteral("could not write %1").arg(configFile());
+    static const QString settingsHeader = QStringLiteral(
+        "# noteAppC settings.\n"
+        "#\n"
+        "# Every value here overrides a built-in default. Delete a line to go\n"
+        "# back to that default. Comments and anything the app does not know\n"
+        "# about are kept when it writes this file.\n"
+        "#\n"
+        "# What the app remembers for itself - recent vaults and notes - lives\n"
+        "# in vaults.ini instead, so this file only changes when you do.\n");
+    QSet<QString> known;
+    for (const QString &key : keys())
+        known.insert(key);
+    if (!writeINI(configFile(), settings, known, settingsHeader, error))
         return false;
-    }
-    return true;
+
+    QVariantMap index;
+    for (auto it = m_index.constBegin(); it != m_index.constEnd(); ++it)
+        index.insert(it.key(), it.value());
+    static const QString indexHeader = QStringLiteral(
+        "# What noteAppC remembers. Safe to delete; it fills itself in again.\n");
+    return writeINI(indexFile(), index, known, indexHeader, error);
 }
 
 QStringList Settings::recentVaults() const

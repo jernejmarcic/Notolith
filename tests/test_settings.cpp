@@ -36,7 +36,7 @@ TEST(Settings, defaultsAreCompiledIn)
 TEST(Settings, configLivesUnderXDG)
 {
     EXPECT_TRUE(Settings::configDirectory().contains(QStringLiteral("noteAppC")));
-    EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral(".conf")));
+    EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral(".ini")));
 }
 
 TEST(Settings, userValueOutranksTheDefaultAndSurvivesASave)
@@ -136,4 +136,101 @@ TEST(LaunchTarget, aFileInsideAVaultOpensTheWholeVault)
 TEST(LaunchTarget, nothingNamedIsAnEmptyWindow)
 {
     EXPECT_EQ(resolveLaunchTarget(QString()).mode, OpenMode::Empty);
+}
+
+TEST(Settings, theConfigDirectoryHasAShape)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("editor.contentWidth"), 820);
+    ASSERT_TRUE(settings.save());
+
+    EXPECT_TRUE(Settings::configFile().endsWith(QStringLiteral("noteAppC/settings.ini")));
+    EXPECT_TRUE(Settings::indexFile().endsWith(QStringLiteral("noteAppC/vaults.ini")));
+    EXPECT_TRUE(QFileInfo(Settings::themesDirectory()).isDir());
+    EXPECT_TRUE(QFileInfo(Settings::templatesDirectory()).isDir());
+}
+
+TEST(Settings, theFileIsWhatAPersonWouldHaveWritten)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("editor.contentWidth"), 820);
+    settings.setValue(QStringLiteral("editor.readableLineLength"), false);
+    settings.setValue(QStringLiteral("appearance.theme"), QStringLiteral("light"));
+    ASSERT_TRUE(settings.save());
+
+    QFile file(Settings::configFile());
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(file.readAll());
+
+    // Grouped, kebab-cased, unquoted, and bare true/false.
+    EXPECT_TRUE(text.contains(QStringLiteral("[editor]")));
+    EXPECT_TRUE(text.contains(QStringLiteral("content-width = 820")));
+    EXPECT_TRUE(text.contains(QStringLiteral("readable-line-length = false")));
+    EXPECT_TRUE(text.contains(QStringLiteral("[appearance]")));
+    EXPECT_TRUE(text.contains(QStringLiteral("theme = light")));
+    // Nothing the app remembers for itself: that lives in vaults.ini. The
+    // header mentions the word, so look for the setting, not the word.
+    EXPECT_FALSE(text.contains(QStringLiteral("recent-vaults =")));
+    EXPECT_FALSE(text.contains(QStringLiteral("recent-files =")));
+    EXPECT_FALSE(text.contains(QStringLiteral("[state]")));
+}
+
+TEST(Settings, handEditsAndCommentsSurviveTheAppWritingTheFile)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    QDir().mkpath(Settings::configDirectory());
+
+    // A file as a person would leave it, comments and all.
+    writeFile(Settings::configFile(), QStringLiteral(
+        "# my notes app\n"
+        "\n"
+        "[editor]\n"
+        "# I like a wide column\n"
+        "content-width = 1100\n"
+        "\n"
+        "[something-else]\n"
+        "# the app has never heard of this\n"
+        "keep-me = yes\n"));
+
+    Settings settings = Settings::load();
+    EXPECT_EQ(settings.integer(QStringLiteral("editor.contentWidth")), 1100);
+
+    settings.setValue(QStringLiteral("appearance.theme"), QStringLiteral("light"));
+    ASSERT_TRUE(settings.save());
+
+    QFile file(Settings::configFile());
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString text = QString::fromUtf8(file.readAll());
+
+    EXPECT_TRUE(text.contains(QStringLiteral("# my notes app")));
+    EXPECT_TRUE(text.contains(QStringLiteral("# I like a wide column")));
+    EXPECT_TRUE(text.contains(QStringLiteral("content-width = 1100")));
+    // A section the app knows nothing about is left exactly as it was.
+    EXPECT_TRUE(text.contains(QStringLiteral("[something-else]")));
+    EXPECT_TRUE(text.contains(QStringLiteral("keep-me = yes")));
+    EXPECT_TRUE(text.contains(QStringLiteral("theme = light")));
+}
+
+TEST(Settings, whatTheAppRemembersGoesInItsOwnFile)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    settings.noteOpened(QStringLiteral("/vaults/mine"), QStringLiteral("/vaults/mine/Note.md"));
+    ASSERT_TRUE(settings.save());
+
+    EXPECT_EQ(Settings::load().recentVaults().value(0), QStringLiteral("/vaults/mine"));
+    EXPECT_EQ(Settings::load().recentFiles().value(0), QStringLiteral("/vaults/mine/Note.md"));
+
+    QFile index(Settings::indexFile());
+    ASSERT_TRUE(index.open(QIODevice::ReadOnly | QIODevice::Text));
+    EXPECT_TRUE(QString::fromUtf8(index.readAll()).contains(QStringLiteral("/vaults/mine")));
 }

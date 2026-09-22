@@ -43,9 +43,24 @@ public:
     /// Defaults plus the user's config. `vaultRoot` adds the vault layer.
     static Settings load(const QString &vaultRoot = {});
 
-    /// `~/.config/noteAppC`, created only when something is saved.
+    /// The configuration directory, `~/.config/noteAppC`, created only when
+    /// something is actually saved. Its shape:
+    ///
+    ///     ~/.config/noteAppC/
+    ///       settings.ini    what a person sets, grouped and commented
+    ///       vaults.ini      what the app remembers: known vaults, last note
+    ///       themes/         colour schemes, one file each
+    ///       templates/      note templates
+    ///
+    /// Settings and memory are kept apart on purpose: `settings.ini` is meant
+    /// to be opened in an editor, and it would be unreadable if the app
+    /// rewrote it every time a note was opened.
     static QString configDirectory();
     static QString configFile();
+    /// Where the app's own memory goes, never the settings file.
+    static QString indexFile();
+    static QString themesDirectory();
+    static QString templatesDirectory();
 
     QVariant value(const QString &key) const;
     bool boolean(const QString &key) const { return value(key).toBool(); }
@@ -84,7 +99,8 @@ public:
     static QVariantMap fromObsidianConfig(const QString &vaultRoot);
 
 private:
-    QVariantMap m_user;  ///< what the user changed, written to XDG
+    QVariantMap m_user;  ///< what the user changed, written to settings.ini
+    QVariantMap m_index; ///< what the app remembers, written to vaults.ini
     QVariantMap m_vault; ///< what the vault's Obsidian config says
     QString m_vaultRoot;
 };
