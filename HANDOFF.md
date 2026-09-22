@@ -147,6 +147,11 @@ sections 6, 9, 10 and the phase table in 12.
 
 ## Performance, measured
 
+**The full record is [docs/PERFORMANCE.md](docs/PERFORMANCE.md)**: current
+numbers, every fix with its before and after, what was tried and rejected
+(OpenGL, Vulkan), and the measurement pitfalls this project has already hit.
+What follows is the original index finding, kept for its history.
+
 The plan's budget is 20 000 notes cold-indexed in under 5 s. It is met, but
 only after a fix: the full-text table was deleted by a non-indexed column, so
 a cold build was quadratic.
