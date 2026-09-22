@@ -129,17 +129,17 @@ The markdown layer emits these and the editor ignores them:
 
 ### 4. Known bugs and smaller jobs
 
-- **The right sidebar panes miss the first index.** Open a vault with a cold
-  cache (`rm -rf ~/.cache/noteAppC`) and the backlinks pane says 0 for a note
-  that has backlinks; a warm cache hides it. The index itself is right -
-  `noteAppC-index --fresh fixtures/demo-vault Welcome` reports 2. The panes
-  need to re-resolve the active note when `Index::changed` fires.
-- **Unresolved links look like resolved ones.** `[[Nowhere]]` renders in the
-  same accent as a real link. Obsidian dims them, which is how you spot a typo
-  in a link. The editor already has a link resolver; style on its answer.
 - **Heading and block links show their raw anchor**: `Second note#Details`
   where Obsidian shows `Second note > Details`, and `Second note#^anchor`
-  where Obsidian shows the block's text.
+  where Obsidian shows the block's text. Substituting the displayed text means
+  the DisplayMap has to map a 1-character source range onto 3 displayed
+  characters; today it only hides, so this needs a replacement run first.
+- **`#|` highlight lines are clamped against a count that includes the option
+  lines**, so a high line number in a short listing can be clamped away.
+- **A `:::` container's range swallows the blank line after its fence**, so two
+  adjacent containers or callouts have no gap between their panels.
+- Property values other than the checkbox are read-only. Text, number, date
+  and list want inline typed editors.
 
 - **Reference links resolve wrong.** md4qt reports `[text][ref]` with a target
   of `#REF//<path>`, so the index records a link to a note literally named
