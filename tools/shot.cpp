@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QFileInfo>
+#include <QTemporaryDir>
 #include <QImage>
 #include <QStyleFactory>
 #include <QTimer>
@@ -15,6 +16,13 @@
 int main(int argc, char *argv[])
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
+    // A screenshot must not touch the real ~/.config/noteAppC: the window
+    // saves settings when it closes, and a review run would quietly rewrite
+    // whoever is looking at it. Point the whole config tree at a temporary
+    // directory unless the caller has already redirected it.
+    QTemporaryDir configHome;
+    if (configHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+        qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-shot"));
