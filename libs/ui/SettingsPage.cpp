@@ -68,6 +68,17 @@ void SettingsPage::setContext(Settings *settings, const QString &vaultRoot)
 {
     m_settings = settings;
     m_vaultRoot = vaultRoot;
+    m_needsRebuild = true;
+    // Building the four pages costs 12 ms, it happened twice before a window
+    // was even on screen, and most sessions never open settings at all. It
+    // waits for something to show the page.
+    if (isVisible())
+        rebuild();
+}
+
+void SettingsPage::rebuild()
+{
+    m_needsRebuild = false;
     m_rows.clear();
 
     const int row = qMax(0, m_nav->currentRow());
@@ -98,6 +109,8 @@ void SettingsPage::keyPressEvent(QKeyEvent *event)
 
 void SettingsPage::showEvent(QShowEvent *event)
 {
+    if (m_needsRebuild)
+        rebuild();
     QWidget::showEvent(event);
     setFocus();
 }

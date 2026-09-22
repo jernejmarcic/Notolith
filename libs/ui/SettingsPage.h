@@ -30,6 +30,9 @@ public:
     /// `settings` is not owned; MainWindow keeps it alive and saves it.
     /// Rebuilds every row from scratch, so call again after the vault (and
     /// so the scheme list and "set by this vault" tags) changes.
+    /// Points the page at a settings object and a vault. The rows themselves
+    /// are not built until the page is shown, because most sessions never
+    /// open it.
     void setContext(Settings *settings, const QString &vaultRoot);
     void applyTheme(const Theme &theme);
 
@@ -45,6 +48,9 @@ protected:
     void showEvent(QShowEvent *event) override;
 
 private:
+    void rebuild();
+    bool m_needsRebuild = true;
+
     QWidget *buildAppearancePage();
     QWidget *buildEditorPage();
     QWidget *buildFilesPage();
