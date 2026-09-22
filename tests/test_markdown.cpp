@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "Decorations.h"
 #include "Frontmatter.h"
 #include "ObsidianSyntax.h"
 #include "Parser.h"
@@ -244,6 +245,112 @@ TEST(TaskTest, DoneAndTodo)
     EXPECT_FALSE(metadata.tasks.at(0).done);
     EXPECT_EQ(metadata.tasks.at(0).text, QStringLiteral("open task"));
     EXPECT_TRUE(metadata.tasks.at(1).done);
+}
+
+// --- decorations: what live preview hides and styles ---------------------
+
+namespace {
+
+/// The display string live preview shows for the whole note, with no block
+/// active - the quickest way to assert what gets hidden.
+QString rendered(const QString &text)
+{
+    static Parser parser;
+    const auto result = parser.parseAll(text, QStringLiteral("/vault/Note.md"));
+
+    QString out;
+    for (qsizetype i = 0; i < text.size(); ++i) {
+        bool hidden = false;
+        for (const Range &range : result.decorations.syntax)
+            hidden = hidden || range.contains(i);
+        if (!hidden)
+            out += text.at(i);
+    }
+    return out;
+}
+
+bool hasStyle(const Decorations &decorations, StyleSpan::Kind kind, const QString &payload = {})
+{
+    for (const StyleSpan &span : decorations.styles) {
+        if (span.kind == kind && (payload.isEmpty() || span.payload == payload))
+            return true;
+    }
+    return false;
+}
+
+Decorations decorationsOf(const QString &text)
+{
+    static Parser parser;
+    return parser.parseAll(text, QStringLiteral("/vault/Note.md")).decorations;
+}
+
+} // namespace
+
+TEST(DecorationTest, HeadingMarkersAreHidden)
+{
+    EXPECT_EQ(rendered(QStringLiteral("## Heading\n")), QStringLiteral("Heading\n"));
+    EXPECT_TRUE(hasStyle(decorationsOf(QStringLiteral("## Heading\n")),
+                         StyleSpan::Kind::Heading));
+}
+
+TEST(DecorationTest, EmphasisDelimitersAreHidden)
+{
+    EXPECT_EQ(rendered(QStringLiteral("a **bold** and *thin* and ~~gone~~\n")),
+              QStringLiteral("a bold and thin and gone\n"));
+
+    const Decorations decorations =
+        decorationsOf(QStringLiteral("a **bold** and *thin* and ~~gone~~\n"));
+    EXPECT_TRUE(hasStyle(decorations, StyleSpan::Kind::Bold));
+    EXPECT_TRUE(hasStyle(decorations, StyleSpan::Kind::Italic));
+    EXPECT_TRUE(hasStyle(decorations, StyleSpan::Kind::Strikethrough));
+}
+
+TEST(DecorationTest, WikilinksShowTheirDisplayText)
+{
+    EXPECT_EQ(rendered(QStringLiteral("see [[Target]] here\n")),
+              QStringLiteral("see Target here\n"));
+    // With an alias, the target half disappears too.
+    EXPECT_EQ(rendered(QStringLiteral("see [[Target|shown]] here\n")),
+              QStringLiteral("see shown here\n"));
+    EXPECT_TRUE(hasStyle(decorationsOf(QStringLiteral("see [[Target|shown]]\n")),
+                         StyleSpan::Kind::Link, QStringLiteral("Target")));
+}
+
+TEST(DecorationTest, HighlightsCommentsAndFrontmatter)
+{
+    EXPECT_EQ(rendered(QStringLiteral("a ==lit== b\n")), QStringLiteral("a lit b\n"));
+    EXPECT_EQ(rendered(QStringLiteral("a %%hidden%% b\n")), QStringLiteral("a  b\n"));
+    EXPECT_EQ(rendered(QStringLiteral("---\ntitle: x\n---\nbody\n")),
+              QStringLiteral("body\n"));
+}
+
+TEST(DecorationTest, BlocksCoverTheDocument)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "---\na: 1\n---\n\n# Title\n\nA paragraph.\n\n- one\n- two\n\n```cpp\nint x;\n```\n"));
+
+    QList<BlockSpan::Kind> kinds;
+    for (const BlockSpan &block : decorations.blocks)
+        kinds << block.kind;
+
+    EXPECT_TRUE(kinds.contains(BlockSpan::Kind::Frontmatter));
+    EXPECT_TRUE(kinds.contains(BlockSpan::Kind::Heading));
+    EXPECT_TRUE(kinds.contains(BlockSpan::Kind::Paragraph));
+    EXPECT_TRUE(kinds.contains(BlockSpan::Kind::List));
+    EXPECT_TRUE(kinds.contains(BlockSpan::Kind::Code));
+    EXPECT_TRUE(hasStyle(decorations, StyleSpan::Kind::CodeBlock, QStringLiteral("cpp")));
+}
+
+TEST(DecorationTest, TheActiveBlockShowsItsSource)
+{
+    const QString text = QStringLiteral("# Title\n\n**bold**\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_FALSE(decorations.blocks.isEmpty());
+
+    const Range heading = decorations.blocks.first().range;
+    // Cursor outside: the "# " is hidden. Cursor inside: nothing is.
+    EXPECT_FALSE(decorations.hiddenFor(heading, text.size()).isEmpty());
+    EXPECT_TRUE(decorations.hiddenFor(heading, heading.start + 1).isEmpty());
 }
 
 TEST(WordCountTest, IgnoresFrontmatter)

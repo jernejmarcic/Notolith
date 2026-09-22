@@ -22,6 +22,8 @@ struct Walk {
     QList<Heading> headings;
     QList<Link> links;
     QList<Task> tasks;
+    Decorations decorations;
+    int depth = 0;
 };
 
 Range rangeOf(const MD::WithPosition &position, const SourceMap &map)
@@ -60,6 +62,33 @@ QString plainText(const MD::Paragraph *paragraph)
     return text.simplified();
 }
 
+/// Styling markers md4qt reports as opening and closing delimiters: `**`,
+/// `_`, `~~`. Live preview hides the delimiters and styles what is between.
+void collectStyles(MD::ItemWithOpts *item, Walk &walk)
+{
+    const SourceMap &map = *walk.map;
+    const auto styleKind = [](int style) -> std::optional<StyleSpan::Kind> {
+        switch (style) {
+        case MD::TextOption::BoldText:
+            return StyleSpan::Kind::Bold;
+        case MD::TextOption::ItalicText:
+            return StyleSpan::Kind::Italic;
+        case MD::TextOption::StrikethroughText:
+            return StyleSpan::Kind::Strikethrough;
+        default:
+            return std::nullopt;
+        }
+    };
+
+    for (const auto &delim : item->openStyles()) {
+        walk.decorations.syntax.append(rangeOf(delim, map));
+        if (const auto kind = styleKind(delim.style()))
+            walk.decorations.styles.append({*kind, rangeOf(*item, map), 0, {}});
+    }
+    for (const auto &delim : item->closeStyles())
+        walk.decorations.syntax.append(rangeOf(delim, map));
+}
+
 void walkItem(MD::Item *item, Walk &walk);
 
 void walkBlock(MD::Block *block, Walk &walk)
@@ -76,6 +105,9 @@ void walkItem(MD::Item *item, Walk &walk)
         return;
     const SourceMap &map = *walk.map;
 
+    if (auto *withOpts = dynamic_cast<MD::ItemWithOpts *>(item))
+        collectStyles(withOpts, walk);
+
     switch (item->type()) {
     case MD::ItemType::Heading: {
         auto *heading = static_cast<MD::Heading *>(item);
@@ -87,13 +119,56 @@ void walkItem(MD::Item *item, Walk &walk)
             out.textRange = rangeOf(*heading->text(), map);
         }
         walk.headings.append(out);
+        walk.decorations.blocks.append({BlockSpan::Kind::Heading, out.range, out.level});
+        for (const auto &delim : heading->delims()) {
+            Range marker = rangeOf(delim, map);
+            // The space between "##" and the text is part of the marker as far
+            // as live preview is concerned, and so is the space before a
+            // closing "##".
+            if (out.textRange.isValid()) {
+                if (marker.end <= out.textRange.start)
+                    marker.end = out.textRange.start;
+                else if (marker.start >= out.textRange.end)
+                    marker.start = out.textRange.end;
+            }
+            walk.decorations.syntax.append(marker);
+        }
+        if (out.textRange.isValid()) {
+            walk.decorations.styles.append(
+                {StyleSpan::Kind::Heading, out.textRange, out.level, out.text});
+        }
+        if (heading->text())
+            walkBlock(heading->text().data(), walk);
         break;
     }
     case MD::ItemType::Code:
     case MD::ItemType::Math:
-    case MD::ItemType::RawHtml:
-        walk.masked.append(rangeOf(*item, map));
+    case MD::ItemType::RawHtml: {
+        const Range range = rangeOf(*item, map);
+        walk.masked.append(range);
+
+        const auto kind = item->type() == MD::ItemType::Math      ? StyleSpan::Kind::Math
+                          : item->type() == MD::ItemType::RawHtml ? StyleSpan::Kind::Html
+                                                                  : StyleSpan::Kind::InlineCode;
+        if (item->type() == MD::ItemType::Code || item->type() == MD::ItemType::Math) {
+            auto *code = static_cast<MD::Code *>(item);
+            const bool block = !code->isInline();
+            walk.decorations.styles.append(
+                {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, code->syntax()});
+            // The fences are syntax; their content is not.
+            walk.decorations.syntax.append(rangeOf(code->startDelim(), map));
+            walk.decorations.syntax.append(rangeOf(code->endDelim(), map));
+            if (code->syntaxPos().startLine() >= 0)
+                walk.decorations.syntax.append(rangeOf(code->syntaxPos(), map));
+            if (block && walk.depth == 0)
+                walk.decorations.blocks.append({BlockSpan::Kind::Code, range, 0});
+        } else {
+            walk.decorations.styles.append({kind, range, 0, {}});
+            if (walk.depth == 0)
+                walk.decorations.blocks.append({BlockSpan::Kind::Html, range, 0});
+        }
         break;
+    }
     case MD::ItemType::Link:
     case MD::ItemType::Image: {
         auto *link = static_cast<MD::Link *>(item);
@@ -120,6 +195,7 @@ void walkItem(MD::Item *item, Walk &walk)
         out.target = QUrl::fromPercentEncoding(target.toUtf8());
         out.external = ObsidianSyntax::isExternalTarget(out.target);
         walk.links.append(out);
+        walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
         // A link's own label can hold emphasis but never a wikilink or a tag.
         walk.masked.append(out.range);
         break;
@@ -128,9 +204,19 @@ void walkItem(MD::Item *item, Walk &walk)
     case MD::ItemType::Blockquote:
     case MD::ItemType::Paragraph:
     case MD::ItemType::Footnote:
-    case MD::ItemType::TableCell:
+    case MD::ItemType::TableCell: {
+        if (walk.depth == 0) {
+            const auto kind = item->type() == MD::ItemType::List ? BlockSpan::Kind::List
+                              : item->type() == MD::ItemType::Blockquote
+                                  ? BlockSpan::Kind::Quote
+                                  : BlockSpan::Kind::Paragraph;
+            walk.decorations.blocks.append({kind, rangeOf(*item, map), 0});
+        }
+        ++walk.depth;
         walkBlock(static_cast<MD::Block *>(item), walk);
+        --walk.depth;
         break;
+    }
     case MD::ItemType::ListItem: {
         auto *listItem = static_cast<MD::ListItem *>(item);
         if (listItem->isTaskList()) {
@@ -149,8 +235,12 @@ void walkItem(MD::Item *item, Walk &walk)
     }
     case MD::ItemType::Table: {
         auto *table = static_cast<MD::Table *>(item);
+        if (walk.depth == 0)
+            walk.decorations.blocks.append({BlockSpan::Kind::Table, rangeOf(*table, map), 0});
+        ++walk.depth;
         for (const auto &row : table->rows())
             walkItem(row.data(), walk);
+        --walk.depth;
         break;
     }
     case MD::ItemType::TableRow:
@@ -189,7 +279,13 @@ Parser::~Parser() = default;
 
 Metadata Parser::parse(const QString &text, const QString &path) const
 {
-    Metadata metadata;
+    return parseAll(text, path).metadata;
+}
+
+Parser::Result Parser::parseAll(const QString &text, const QString &path) const
+{
+    Result result;
+    Metadata &metadata = result.metadata;
     metadata.path = path;
     metadata.size = text.size();
 
@@ -234,7 +330,44 @@ Metadata Parser::parse(const QString &text, const QString &path) const
     metadata.wordCount = countWords(
         QStringView(text).mid(frontmatter.isValid() ? frontmatter.end : 0));
 
-    return metadata;
+    result.decorations = std::move(walk.decorations);
+    if (frontmatter.isValid()) {
+        result.decorations.blocks.prepend({BlockSpan::Kind::Frontmatter, frontmatter, 0});
+        // Properties render as a table, so the whole YAML block is syntax.
+        result.decorations.syntax.append(frontmatter);
+    }
+
+    // Obsidian's own syntax, which md4qt never saw.
+    for (const Link &link : obsidian.links) {
+        if (!link.wiki)
+            continue;
+        result.decorations.styles.append({StyleSpan::Kind::Link, link.range, 0, link.target});
+        const qsizetype openEnd = link.targetRange.isValid() ? link.targetRange.start
+                                                             : link.range.start + 2;
+        // Hide "[[" plus the target and the pipe when an alias is shown, else
+        // just the brackets.
+        if (!link.alias.isEmpty()) {
+            result.decorations.syntax.append(
+                {link.range.start, link.range.end - link.alias.size() - 2});
+        } else {
+            result.decorations.syntax.append({link.range.start, openEnd});
+        }
+        result.decorations.syntax.append({link.range.end - 2, link.range.end});
+    }
+    for (const Tag &tag : obsidian.tags) {
+        if (tag.range == frontmatter)
+            continue; // a frontmatter tag has no inline marker
+        result.decorations.styles.append({StyleSpan::Kind::Tag, tag.range, 0, tag.name});
+    }
+    for (const Range &range : obsidian.highlights) {
+        result.decorations.styles.append({StyleSpan::Kind::Highlight, range, 0, {}});
+        result.decorations.syntax.append({range.start, range.start + 2});
+        result.decorations.syntax.append({range.end - 2, range.end});
+    }
+    for (const Range &range : obsidian.comments)
+        result.decorations.syntax.append(range);
+
+    return result;
 }
 
 QStringList Metadata::linkNames() const

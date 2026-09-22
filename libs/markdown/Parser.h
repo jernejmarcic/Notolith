@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include "Decorations.h"
 #include "Metadata.h"
 #include "SourceMap.h"
 
@@ -22,8 +23,16 @@ public:
     Parser(const Parser &) = delete;
     Parser &operator=(const Parser &) = delete;
 
+    /// Metadata and decorations from one parse. The editor wants both; the
+    /// indexer only ever looks at the metadata.
+    struct Result {
+        Metadata metadata;
+        Decorations decorations;
+    };
+
     /// `path` is only used for messages and for the returned metadata.
     Metadata parse(const QString &text, const QString &path = {}) const;
+    Result parseAll(const QString &text, const QString &path = {}) const;
 
 private:
     struct Private;

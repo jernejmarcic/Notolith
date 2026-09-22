@@ -6,6 +6,8 @@ add_library(noteAppC_markdown STATIC
     ObsidianSyntax.cpp
     ObsidianSyntax.h
     Metadata.h
+    Decorations.cpp
+    Decorations.h
     Parser.cpp
     Parser.h)
 
