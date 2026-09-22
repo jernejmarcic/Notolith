@@ -49,3 +49,11 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+# Installing matters for one reason: a .desktop file is what lets a file
+# manager open a loose .md with noteAppC, which is the whole point of
+# single-file mode.
+include(GNUInstallDirs)
+install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES packaging/noteAppC.desktop
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)

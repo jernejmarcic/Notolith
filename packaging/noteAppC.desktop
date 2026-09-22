@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=noteAppC
+GenericName=Markdown Notes
+Comment=Read and edit Markdown notes and vaults
+Exec=noteAppC %f
+TryExec=noteAppC
+# A generic icon until the app has one of its own; see packaging/README.md.
+Icon=accessories-text-editor
+Terminal=false
+Categories=Office;TextEditor;
+MimeType=text/markdown;text/x-markdown;inode/directory;
+Keywords=markdown;notes;wiki;vault;obsidian;
+StartupNotify=true
+StartupWMClass=noteAppC
