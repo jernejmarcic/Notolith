@@ -854,6 +854,208 @@ TEST(FindTest, SteppingThroughALongNoteStaysInsideTheKeystrokeBudget)
     EXPECT_LT(perStep, 8.0);
 }
 
+// --- block spacing (HANDOFF 4) --------------------------------------------
+
+TEST(BlockSpacingTest, SourceModeGivesEveryLineTheSameHeight)
+{
+    // Three lines of one paragraph and three lines with a blank in the middle
+    // are both three lines of the file, so they are the same height on screen.
+    auto paragraph = editorWith(QStringLiteral("alpha\nbeta\ngamma\n"));
+    paragraph->setMode(MarkdownEditor::Mode::Source);
+    auto blank = editorWith(QStringLiteral("alpha\n\ngamma\n"));
+    blank->setMode(MarkdownEditor::Mode::Source);
+
+    EXPECT_DOUBLE_EQ(paragraph->documentHeight(), blank->documentHeight());
+}
+
+TEST(BlockSpacingTest, OnlyLivePreviewPutsAirOverAHeading)
+{
+    // Obsidian's live preview gives a heading one --p-spacing of air and its
+    // source mode none at all.
+    const QString note = QStringLiteral("# Heading\n\nbody\n");
+    auto live = editorWith(note);
+    auto source = editorWith(note);
+    source->setMode(MarkdownEditor::Mode::Source);
+
+    const qreal spacing = Theme::builtin().textFont().pixelSize();
+    EXPECT_DOUBLE_EQ(live->documentHeight() - source->documentHeight(), spacing);
+}
+
+TEST(BlockSpacingTest, ALineIsTheFontSizeTimesItsLineHeight)
+{
+    // A CSS line-height is a multiple of the font size, not of the font's own
+    // metric height: 16 px text at 1.5 is 24 px, whatever the family measures.
+    auto editor = editorWith(QStringLiteral("one\n"));
+    editor->setMode(MarkdownEditor::Mode::Source);
+    const qreal padding = editor->documentHeight()
+                          - Theme::builtin().textFont().pixelSize() * 1.5;
+
+    auto three = editorWith(QStringLiteral("one\ntwo\nthree\n"));
+    three->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_DOUBLE_EQ(three->documentHeight() - padding,
+                     Theme::builtin().textFont().pixelSize() * 1.5 * 3);
+}
+
+// --- the properties table (HANDOFF 3) -------------------------------------
+
+namespace {
+
+/// Where the properties table puts the control of its first row: the key
+/// column is 180 px, the first block starts 28 px down, and a row is the text
+/// line height plus a fifth. Same numbers as `layoutProperties`.
+QPoint firstPropertyControlPoint(const MarkdownEditor &editor)
+{
+    const int viewport = editor.viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    const qreal rowHeight = Theme::builtin().textFont().pixelSize() * 1.5 * 1.2;
+    return QPoint(left + 180 + 6, int(28 + rowHeight / 2));
+}
+
+} // namespace
+
+TEST(PropertiesTest, FrontmatterIsATableInLivePreviewAndRawInSourceMode)
+{
+    const QString note = QStringLiteral("---\ndone: false\ntags:\n  - one\n---\n\nbody\n");
+    auto editor = editorWith(note);
+
+    ASSERT_EQ(editor->properties().size(), 2);
+    EXPECT_EQ(editor->properties().at(0).key, QStringLiteral("done"));
+    EXPECT_EQ(editor->properties().at(0).type, Property::Type::Checkbox);
+    EXPECT_EQ(editor->properties().at(1).type, Property::Type::List);
+    // The YAML itself is never shown in live preview - the table replaces it.
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("done:")));
+    // The table is taller than the nothing that used to be drawn there.
+    EXPECT_GT(editor->documentHeight(), editorWith(QStringLiteral("\nbody\n"))->documentHeight());
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_EQ(editor->displayText(), note);
+}
+
+TEST(PropertiesTest, ClickingACheckboxRewritesOnlyThatValue)
+{
+    auto editor = editorWith(
+        QStringLiteral("---\ndone: false\ntitle: Keep me\n---\n\nbody\n"));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      firstPropertyControlPoint(*editor));
+
+    // Every other byte of the file is exactly as it was: non-negotiable 1.
+    EXPECT_EQ(editor->noteText(),
+              QStringLiteral("---\ndone: true\ntitle: Keep me\n---\n\nbody\n"));
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      firstPropertyControlPoint(*editor));
+    EXPECT_EQ(editor->noteText(),
+              QStringLiteral("---\ndone: false\ntitle: Keep me\n---\n\nbody\n"));
+}
+
+TEST(PropertiesTest, AQuotedValueIsReadOnly)
+{
+    // `"false"` is text, not a checkbox: the typed editor cannot round trip it,
+    // so clicking where its control would be changes nothing.
+    const QString note = QStringLiteral("---\ndone: \"false\"\n---\n\nbody\n");
+    auto editor = editorWith(note);
+    ASSERT_EQ(editor->properties().at(0).type, Property::Type::Text);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      firstPropertyControlPoint(*editor));
+    EXPECT_EQ(editor->noteText(), note);
+}
+
+TEST(PropertiesTest, TheTableFolds)
+{
+    auto editor = editorWith(QStringLiteral("---\na: 1\nb: 2\nc: 3\n---\n\nbody\n"));
+    const qreal open = editor->documentHeight();
+
+    editor->toggleFoldAt(0);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_LT(editor->documentHeight(), open);
+
+    editor->toggleFoldAt(0);
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+}
+
+// --- folding callouts, containers and code blocks (HANDOFF 3) -------------
+
+TEST(FoldTest, ADetailsContainerStartsFoldedAndShowsItsSummary)
+{
+    auto editor = editorWith(
+        QStringLiteral(":::details summary=\"What it hides\"\nbody\n:::\n"));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+
+    editor->toggleFoldAt(0);
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_GT(editor->documentHeight(), 0);
+}
+
+TEST(FoldTest, AMinusCalloutStartsFoldedAndAPlainOneNeverFolds)
+{
+    auto folded = editorWith(QStringLiteral("> [!warning]- Title\n> body\n"));
+    EXPECT_TRUE(folded->isFoldedAt(0));
+    const qreal collapsed = folded->documentHeight();
+    folded->toggleFoldAt(0);
+    EXPECT_GT(folded->documentHeight(), collapsed);
+
+    auto plain = editorWith(QStringLiteral("> [!note] Title\n> body\n"));
+    EXPECT_FALSE(plain->isFoldedAt(0));
+    const qreal open = plain->documentHeight();
+    plain->toggleFoldAt(0); // not foldable: the state is kept but changes nothing
+    EXPECT_DOUBLE_EQ(plain->documentHeight(), open);
+}
+
+TEST(FoldTest, ClickingTheCalloutTitleToggles)
+{
+    auto editor = editorWith(QStringLiteral("> [!warning]+ Title\n> body\n"));
+    ASSERT_FALSE(editor->isFoldedAt(0));
+
+    const int viewport = editor->viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(left + 80, 34));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_EQ(editor->cursorOffset(), 0) << "folding must not drag the caret with it";
+}
+
+// --- `#|` code block options (HANDOFF 3) ----------------------------------
+
+TEST(CodeOptionsTest, ATitleGivesTheBlockAHeaderStrip)
+{
+    auto plain = editorWith(QStringLiteral("```python\nx = 1\n```\n"));
+    auto titled = editorWith(QStringLiteral("```python\n#| title: fib.py\nx = 1\n```\n"));
+
+    // The option line is hidden either way, so the listing is the same size;
+    // the difference is the strip the title is drawn in.
+    EXPECT_EQ(titled->displayText(), plain->displayText());
+    EXPECT_GT(titled->documentHeight(), plain->documentHeight());
+}
+
+TEST(CodeOptionsTest, FoldCollapsesTheBlockToItsHeader)
+{
+    const QString note =
+        QStringLiteral("```python\n#| title: fib.py\n#| fold: true\nx = 1\ny = 2\n```\n");
+    auto editor = editorWith(note);
+    const qsizetype inside = note.indexOf(QStringLiteral("x = 1"));
+
+    EXPECT_TRUE(editor->isFoldedAt(inside));
+    const qreal collapsed = editor->documentHeight();
+
+    editor->toggleFoldAt(inside);
+    EXPECT_FALSE(editor->isFoldedAt(inside));
+    EXPECT_GT(editor->documentHeight(), collapsed);
+}
+
+TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
+{
+    const QString note =
+        QStringLiteral("```python\n#| lines: 10\n#| highlight: 2\nx = 1\ny = 2\n```\n");
+    auto editor = editorWith(note);
+
+    EXPECT_EQ(editor->noteText(), note);
+    // The options are syntax, so what is laid out is the listing alone.
+    EXPECT_EQ(editor->displayText().trimmed(), QStringLiteral("x = 1\ny = 2"));
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

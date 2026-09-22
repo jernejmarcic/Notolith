@@ -71,7 +71,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         if (m_parseWatcher.future().resultCount() == 0)
             return;
         ParseJob job = m_parseWatcher.result();
-        adoptDecorations(std::move(job.decorations));
+        adoptDecorations(std::move(job.decorations), std::move(job.properties));
         m_parsedVersion = job.version;
         // The buffer moved on while we were parsing: go round again.
         if (m_parsedVersion != m_textVersion)
@@ -177,6 +177,7 @@ void MarkdownEditor::setTheme(const Theme &theme)
     if (m_findBar)
         m_findBar->setTheme(theme);
     m_lineHeights.clear();
+    m_blockSpacing = 0;
     invalidateLayouts();
     setFont(theme.textFont());
     updateLayout();
@@ -379,10 +380,10 @@ void sortDecorations(Decorations &decorations)
 void MarkdownEditor::reparse()
 {
     m_parseTimer.stop();
-    Decorations decorations = m_parser.parseAll(m_text).decorations;
-    sortDecorations(decorations);
+    Parser::Result result = m_parser.parseAll(m_text);
+    sortDecorations(result.decorations);
     m_parsedVersion = m_textVersion;
-    adoptDecorations(std::move(decorations));
+    adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties));
 }
 
 void MarkdownEditor::startParse()
@@ -393,17 +394,20 @@ void MarkdownEditor::startParse()
     const QString snapshot = m_text;
     const quint64 version = m_textVersion;
     m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version] {
+        Parser::Result result = threadParser().parseAll(snapshot);
         ParseJob job;
-        job.decorations = threadParser().parseAll(snapshot).decorations;
+        job.decorations = std::move(result.decorations);
+        job.properties = std::move(result.metadata.properties);
         sortDecorations(job.decorations);
         job.version = version;
         return job;
     }));
 }
 
-void MarkdownEditor::adoptDecorations(Decorations decorations)
+void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> properties)
 {
     m_decorations = std::move(decorations);
+    m_properties = std::move(properties);
     m_lines = SourceMap(m_text);
     rebuildBlocks();
     indexDecorations();
@@ -458,12 +462,28 @@ qreal MarkdownEditor::lineHeightFor(const BlockSpan &span) const
     if (cached != m_lineHeights.constEnd())
         return *cached;
 
-    // Prose breathes at 1.5; code is tighter, as it is in Obsidian.
-    const bool tight = span.kind == BlockSpan::Kind::Code
-                       || span.kind == BlockSpan::Kind::Frontmatter;
-    const qreal height = QFontMetricsF(fontFor(span)).height() * (tight ? 1.3 : 1.5);
+    // A CSS line-height is a multiple of the font *size*, not of the font's
+    // own metric height, which is what made every line here about a quarter
+    // taller than the same line in Obsidian. Obsidian's numbers:
+    // --line-height-normal 1.5, and headings tighter the larger they are.
+    static constexpr qreal headingRatios[] = {1.5, 1.2, 1.2, 1.3, 1.4, 1.5, 1.5};
+    const qreal ratio = span.kind == BlockSpan::Kind::Heading
+                            ? headingRatios[qBound(0, span.level, 6)]
+                            : 1.5;
+    const QFont font = fontFor(span);
+    const qreal height = font.pixelSize() > 0 ? font.pixelSize() * ratio
+                                              : QFontMetricsF(font).height() * ratio;
     m_lineHeights.insert(key, height);
     return height;
+}
+
+qreal MarkdownEditor::blockSpacing() const
+{
+    if (m_blockSpacing <= 0) {
+        const int size = m_theme.textFont().pixelSize();
+        m_blockSpacing = size > 0 ? size : 16;
+    }
+    return m_blockSpacing;
 }
 
 qreal MarkdownEditor::estimatedHeight(const BlockView &view) const
@@ -751,7 +771,9 @@ void MarkdownEditor::paintGutter(QPainter &painter, const BlockView &view, qreal
 
 bool MarkdownEditor::softBreakAt(qsizetype source) const
 {
-    if (m_strictLineBreaks)
+    // Source mode shows the file as it is written: one line of the file is one
+    // line on screen, the way Obsidian's own source mode lays out.
+    if (m_strictLineBreaks || m_mode == Mode::Source)
         return false;
     // A hard break: two spaces or a backslash before the newline.
     if (source >= 2 && m_text.at(source - 1) == QLatin1Char(' ')
@@ -790,7 +812,7 @@ QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &i
 
     const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
     const qreal x = contentLeft() + kListIndent * (1 + item.indent) - box - 8;
-    const qreal y = view.y - verticalScrollBar()->value() + line.y()
+    const qreal y = view.y + view.textTop - verticalScrollBar()->value() + line.y()
                     + (line.height() - box) / 2;
     return QRectF(x, y, box, box);
 }
@@ -805,9 +827,6 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         return;
 
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
-    const QColor onAccent = m_theme.color(QStringLiteral("--text-on-accent"));
-    const QColor border = m_theme.color(QStringLiteral("--background-modifier-border-hover"));
 
     for (const ListItemSpan &item : m_decorations.listItems) {
         if (!item.range.overlaps(view.span.range))
@@ -823,27 +842,9 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
 
         if (item.task) {
             const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
-            const QRectF rect(left + indent - box - 8,
-                              baseline + (line.height() - box) / 2, box, box);
-            QPainterPath rounded;
-            rounded.addRoundedRect(rect, 3, 3);
-
-            painter.save();
-            if (item.done) {
-                painter.fillPath(rounded, accent);
-                painter.setPen(QPen(onAccent, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-                // A tick, drawn rather than shipped as an icon so it scales
-                // with the font.
-                painter.drawPolyline(QPolygonF({
-                    QPointF(rect.left() + rect.width() * 0.24, rect.top() + rect.height() * 0.52),
-                    QPointF(rect.left() + rect.width() * 0.44, rect.top() + rect.height() * 0.72),
-                    QPointF(rect.left() + rect.width() * 0.78, rect.top() + rect.height() * 0.30),
-                }));
-            } else {
-                painter.setPen(QPen(border, 1.5));
-                painter.drawPath(rounded);
-            }
-            painter.restore();
+            paintCheckBox(painter, QRectF(left + indent - box - 8,
+                                          baseline + (line.height() - box) / 2, box, box),
+                          item.done);
             continue;
         }
 
@@ -921,9 +922,14 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
     painter.setFont(title);
     painter.setPen(accent);
     painter.drawText(QRectF(iconRect.right() + 8, panel.top() + 8,
-                            panel.width() - iconSize - 40, iconSize * 1.4),
+                            panel.width() - iconSize - 56, iconSize * 1.4),
                      Qt::AlignVCenter | Qt::AlignLeft, view.callout->title);
     painter.restore();
+
+    // `[!type]+`, `[!type]-` and a `:::` details container all fold; the
+    // triangle says so, and the whole title row toggles it.
+    if (view.callout->foldable)
+        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, accent);
 }
 
 const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
@@ -1130,7 +1136,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 {
     view.cells.clear();
     view.callout = nullptr;
+    view.options = nullptr;
+    view.propertyRows.clear();
     view.image = QPixmap();
+    view.textTop = 0;
+    view.folded = false;
+
+    // Obsidian never shows raw YAML in live preview, only in source mode, so
+    // the properties table does not step aside for the caret the way a
+    // paragraph does.
+    if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
+        && layoutProperties(view))
+        return;
 
     const bool renderMedia = m_mode != Mode::Source && !view.active;
     if (renderMedia && layoutImage(view))
@@ -1140,6 +1157,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                              && m_mode != Mode::Source && !view.active;
     if (renderTable && layoutTable(view))
         return;
+
+    if (renderMedia && view.span.kind == BlockSpan::Kind::Code)
+        view.options = codeOptionsFor(view);
 
     const bool reveal = m_mode == Mode::Source
                         || (m_mode == Mode::LivePreview && view.active);
@@ -1176,13 +1196,17 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setFont(fontFor(view.span));
 
     QTextOption option;
-    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    // `#| wrap: false` is Quarto asking for a listing that does not reflow;
+    // everything else wraps inside the column.
+    option.setWrapMode(view.options && !view.options->wrap
+                           ? QTextOption::NoWrap
+                           : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
     view.layout->setFormats(formatsFor(view));
 
     const qreal listIndent = view.span.kind == BlockSpan::Kind::List ? kListIndent : 0;
+    const qreal codeGutter = codeGutterWidth(view);
     const qreal lineHeight = lineHeightFor(view.span);
-    const qreal headingAir = view.span.kind == BlockSpan::Kind::Heading ? lineHeight * 0.4 : 0;
     view.layout->beginLayout();
     qreal height = 0;
     while (true) {
@@ -1193,30 +1217,34 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         const ListItemSpan *item = listIndent > 0 ? listItemAt(source) : nullptr;
         const qreal indent = listIndent > 0
                                  ? listIndent * (1 + (item ? item->indent : 0))
-                                 : 0;
+                                 : codeGutter;
         line.setLineWidth(contentWidth() - indent
                           - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
         line.setPosition(QPointF(indent, height));
         height += lineHeight;
     }
     view.layout->endLayout();
-    view.height = qMax(height, lineHeight) + headingAir;
+    view.height = qMax(height, lineHeight);
 
-    // A blank line between blocks is vertical rhythm, not an empty line of
-    // text: Obsidian's paragraph spacing is about half a line.
-    if (QStringView(m_text).mid(view.span.range.start, view.span.range.length())
-            .trimmed()
-            .isEmpty()) {
-        view.height = qMax<qreal>(height, lineHeight) * 0.55;
-    }
+    // Obsidian's live preview puts one --p-spacing of air over a heading and
+    // none under it; the blank line in the source is the rest of the rhythm.
+    // Source mode has no block spacing at all: one line is one line.
+    if (view.span.kind == BlockSpan::Kind::Heading && m_mode != Mode::Source)
+        view.textTop = blockSpacing();
 
     view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
     if (view.callout) {
         // The title line is drawn by the callout header, so the body starts
         // below it; an empty callout still shows its title.
-        view.height = height > 0 ? height + calloutHeaderHeight()
-                                 : calloutHeaderHeight();
+        view.textTop = calloutHeaderHeight();
+        view.height = height;
+    } else if (view.options) {
+        view.textTop = codeHeaderHeight();
     }
+
+    view.folded = isFoldable(view) && m_folds.value(view.span.range.start, defaultFoldOf(view));
+    view.height = view.folded ? 0 : view.height + codeCaptionHeight(view);
+    view.height += view.textTop;
     view.laidOut = true;
 }
 
@@ -1309,29 +1337,23 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
         if (top > viewport()->height())
             break;
 
+        if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
+            && !m_properties.isEmpty()) {
+            paintProperties(painter, view, left, top);
+            painter.setPen(text);
+            continue;
+        }
+
         if (view.callout)
             paintCallout(painter, view, left, top);
 
         if (view.span.kind == BlockSpan::Kind::Code) {
-            const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
-            QPainterPath rounded;
-            rounded.addRoundedRect(panel, 6, 6);
-            painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
-
-            QString language;
-            codeContentOf(view, &language);
-            if (!language.isEmpty()) {
-                painter.save();
-                QFont badge = m_theme.uiFont();
-                badge.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
-                painter.setFont(badge);
-                painter.setPen(m_theme.color(QStringLiteral("--text-faint")));
-                painter.drawText(panel.adjusted(0, 4, -10, 0),
-                                 Qt::AlignTop | Qt::AlignRight, language);
-                painter.restore();
-                painter.setPen(text);
-            }
+            paintCodeChrome(painter, view, left, top);
+            painter.setPen(text);
         }
+
+        if (view.folded)
+            continue; // the header is all a folded block shows
 
         QList<QTextLayout::FormatRange> selectionRanges;
         if (selected.length() > 0 && selected.overlaps(view.span.range)) {
@@ -1361,10 +1383,20 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
         }
         if (view.layout) {
             const qreal indent = view.callout ? 14 : 0;
-            const qreal drop = view.callout ? calloutHeaderHeight() : 0;
+            const qreal drop = view.textTop;
+            // A listing that asked not to wrap runs off the end of its line;
+            // the panel is where it stops, not the window.
+            const bool clip = view.options && !view.options->wrap;
+            if (clip) {
+                painter.save();
+                painter.setClipRect(
+                    QRectF(left - 14, top, contentWidth() + 28, view.height));
+            }
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
             paintListMarkers(painter, view, left + indent, top + drop);
             paintGutter(painter, view, top + drop);
+            if (clip)
+                painter.restore();
         }
     }
 
@@ -1394,7 +1426,8 @@ QPointF MarkdownEditor::cursorPoint() const
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
     const qreal x = line.cursorToX(int(display));
-    return QPointF(contentLeft() + x, view.y - verticalScrollBar()->value() + line.y());
+    return QPointF(contentLeft() + x,
+                   view.y + view.textTop - verticalScrollBar()->value() + line.y());
 }
 
 // --- geometry and hit testing --------------------------------------------
@@ -1422,11 +1455,14 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
         const bool last = &view == &m_blocks.back();
         if (y > view.y + view.height + kBlockSpacing && !last)
             continue;
+        if (view.folded)
+            return view.span.range.start;
 
+        const qreal textTop = view.y + view.textTop;
         for (int i = 0; i < view.layout->lineCount(); ++i) {
             const QTextLine line = view.layout->lineAt(i);
             const bool lastLine = i == view.layout->lineCount() - 1;
-            if (y <= view.y + line.y() + line.height() || (lastLine && last)) {
+            if (y <= textTop + line.y() + line.height() || (lastLine && last)) {
                 return view.map.toSource(line.xToCursor(x));
             }
         }
@@ -1458,7 +1494,7 @@ void MarkdownEditor::ensureCursorVisible()
     if (view.layout) {
         const QTextLine line = view.layout->lineForTextPosition(int(display));
         if (line.isValid())
-            y += line.y();
+            y += view.textTop + line.y();
     }
 
     QScrollBar *bar = verticalScrollBar();
@@ -1553,6 +1589,17 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(span.range);
     for (BlockSpan &span : m_decorations.blocks)
         shift(span.range);
+    for (Property &property : m_properties)
+        shift(property.range);
+
+    // Fold state is keyed by the block's start, so it has to move with it.
+    if (delta != 0 && !m_folds.isEmpty()) {
+        QHash<qsizetype, bool> moved;
+        moved.reserve(m_folds.size());
+        for (auto it = m_folds.cbegin(); it != m_folds.cend(); ++it)
+            moved.insert(it.key() >= at ? it.key() + delta : it.key(), it.value());
+        m_folds = std::move(moved);
+    }
 }
 
 void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &inserted)
@@ -1833,6 +1880,9 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         emit linkActivated(target);
         return;
     }
+
+    if (handleBlockClick(event->pos()))
+        return;
 
     for (const BlockView &view : m_blocks) {
         // An active block shows its raw source and paints no box, so there is

@@ -70,6 +70,10 @@ public:
     /// assert live-preview behaviour, and useful when debugging a layout.
     QString displayText() const;
 
+    /// Height of the whole note as it is currently laid out. What the scroll
+    /// bar is built from, and the only honest way to assert block spacing.
+    qreal documentHeight() const { return m_totalHeight; }
+
     /// Pretends the reader clicked into the block holding `offset`, so it
     /// reveals its source. Used by the tests and by "reveal on open".
     void enterBlockAt(qsizetype offset);
@@ -121,6 +125,18 @@ public:
     /// Returns how many matches were replaced.
     int replaceAll(const QString &with);
 
+    // --- folding ----------------------------------------------------------
+    // A `> [!type]-` callout, a `:::` container and a `#| fold: true` code
+    // block all fold the same way; so does the properties table. `offset` is
+    // anywhere inside the block.
+
+    void toggleFoldAt(qsizetype sourceOffset);
+    bool isFoldedAt(qsizetype sourceOffset) const;
+
+    /// The frontmatter properties, as the last parse read them. The properties
+    /// table renders from these, and the window's future property pane will.
+    const QList<Property> &properties() const { return m_properties; }
+
 signals:
     void textChanged();
     void modificationChanged(bool modified);
@@ -140,6 +156,16 @@ protected:
     QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 private:
+    /// One row of the frontmatter properties table: the key and its type icon
+    /// on the left, the typed value on the right. Rectangles are relative to
+    /// the block's own origin, like a table Cell's.
+    struct PropertyRow {
+        int property = 0;     ///< index into `m_properties`
+        QRectF rect;          ///< the whole row
+        QRectF control;       ///< the checkbox, when the value is one
+        QList<QRectF> chips;  ///< one box per item of a list value
+    };
+
     /// One cell of a rendered table.
     struct Cell {
         Range source;
@@ -175,6 +201,17 @@ private:
         /// Set when this block is a callout, so painting knows its colour,
         /// icon and title without looking the span up again.
         const CalloutSpan *callout = nullptr;
+        /// Set when this block is a fenced code block carrying `#|` options.
+        const CodeOptions *options = nullptr;
+        /// Filled instead of `layout` when this is the frontmatter and live
+        /// preview draws it as Obsidian's properties table.
+        std::vector<PropertyRow> propertyRows;
+        /// Space above the text: a callout's title row, a code block's header
+        /// strip, or the air Obsidian puts over a heading.
+        qreal textTop = 0;
+        /// Showing its header only. Callouts, `:::` containers, `#| fold`
+        /// code blocks and the properties table can all be in this state.
+        bool folded = false;
         /// Set when the whole block is one image embed.
         QPixmap image;
         QSize imageSize;
@@ -185,7 +222,7 @@ private:
     void reparse();
     /// Starts a parse on the thread pool; the editor never waits for it.
     void startParse();
-    void adoptDecorations(Decorations decorations);
+    void adoptDecorations(Decorations decorations, QList<Property> properties);
     void rebuildBlocks();
     void indexDecorations();
     void layoutBlock(BlockView &view);
@@ -202,6 +239,44 @@ private:
     QRectF checkboxRect(const BlockView &view, const ListItemSpan &item) const;
     void toggleTask(const ListItemSpan &item);
     const CalloutSpan *calloutFor(const BlockView &view) const;
+
+    // --- block renderers, implemented in BlockRenderers.cpp ---------------
+
+    /// Lays the frontmatter out as Obsidian's properties table. False when
+    /// there is nothing to show, so the caller falls back to plain text.
+    bool layoutProperties(BlockView &view);
+    void paintProperties(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The panel, the header strip, the line-number gutter and the highlighted
+    /// rows of a fenced code block.
+    void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    void paintCheckBox(QPainter &painter, const QRectF &rect, bool done) const;
+    /// The disclosure triangle every foldable block carries.
+    void paintFoldArrow(QPainter &painter, const QRectF &rect, bool folded,
+                        const QColor &colour) const;
+    /// `#|` options of this block, or nullptr. Matched on the block's start:
+    /// `rebuildBlocks` takes the newline after a block into its span, so the
+    /// ends no longer compare equal.
+    const CodeOptions *codeOptionsFor(const BlockView &view) const;
+    qreal codeHeaderHeight() const;
+    /// Space under the listing for a `#| caption:`, 0 when there is none.
+    qreal codeCaptionHeight(const BlockView &view) const;
+    qreal propertyRowHeight() const;
+    /// Width a code block reserves for `#| lines:` numbers, 0 when it has none.
+    qreal codeGutterWidth(const BlockView &view) const;
+    /// Obsidian's `--p-spacing`: one rem of the text font, which is the unit
+    /// every block margin is made of.
+    qreal blockSpacing() const;
+    /// Where this block's disclosure triangle is, in viewport coordinates.
+    QRectF foldHandleRect(const BlockView &view, qreal left, qreal top) const;
+    bool isFoldable(const BlockView &view) const;
+    /// What the source itself says: `[!note]-` and `::: details` start folded.
+    bool defaultFoldOf(const BlockView &view) const;
+    void setFolded(const BlockView &view, bool folded);
+    /// True when the press landed on a fold handle or a property control, so
+    /// the caret must not move.
+    bool handleBlockClick(const QPoint &point);
+    /// Flips a checkbox property, rewriting only that value's bytes.
+    void toggleProperty(int index);
     /// The embed that fills this block on its own, or nullptr.
     const EmbedSpan *soleEmbedOf(const BlockView &view) const;
     /// Loads and scales the image for a block that is one image embed.
@@ -302,7 +377,13 @@ private:
     QString m_text;
     SourceMap m_lines; ///< line starts, for the gutter
     Decorations m_decorations; ///< styles and syntax kept sorted by start
+    QList<Property> m_properties; ///< frontmatter, for the properties table
     std::vector<BlockView> m_blocks; // move-only: QTextLayout is not copyable
+    /// Fold state by block start offset. A block with no entry is in the state
+    /// its source asked for, so folding survives a reparse without the
+    /// decorations having to carry it.
+    QHash<qsizetype, bool> m_folds;
+    mutable qreal m_blockSpacing = 0; ///< memoised, cleared with the theme
 
     qsizetype m_cursor = 0;
     qsizetype m_anchor = 0;
@@ -350,6 +431,7 @@ private:
     /// result still describes the text in the buffer.
     struct ParseJob {
         Decorations decorations;
+        QList<Property> properties;
         quint64 version = 0;
     };
     QFutureWatcher<ParseJob> m_parseWatcher;
