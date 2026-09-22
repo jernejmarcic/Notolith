@@ -35,6 +35,8 @@
 #include <memory>
 #include <vector>
 
+#include <QSurfaceFormat>
+
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
 
@@ -245,6 +247,71 @@ Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 /// timing relayout-of-newly-visible-blocks plus paint for each page - what
 /// the reader actually waits on while scrolling. No budget exists yet;
 /// this is the number the TODO calls out as the one that matters most.
+/// Scroll frame time with the widget actually on screen, which is the only
+/// way to compare the raster viewport against the OpenGL one.
+///
+/// paintedFrame() renders into a QImage, and a QOpenGLWidget asked for that
+/// has to read its framebuffer back over the bus - which would measure the
+/// readback, not the drawing. So this shows the widget, drives the scrollbar,
+/// and waits for a real paint event on the viewport each time. Vsync is off,
+/// or every measurement would come back as one refresh interval.
+Timing benchScrollOnScreen(int lines, bool gpu)
+{
+    struct PaintCounter : QObject {
+        int paints = 0;
+        bool eventFilter(QObject *, QEvent *event) override
+        {
+            if (event->type() == QEvent::Paint)
+                ++paints;
+            return false;
+        }
+    } counter;
+
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(1180, 760);
+    if (gpu)
+        editor->setGPUacceleration(true);
+    editor->setNoteText(buildLongNote(lines));
+    editor->show();
+    editor->viewport()->installEventFilter(&counter);
+    // Let the window map and settle before anything is timed.
+    for (int i = 0; i < 20; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+
+    QScrollBar *bar = editor->verticalScrollBar();
+    const int page = qMax(1, bar->pageStep());
+    const int maxValue = bar->maximum();
+
+    std::vector<double> samples;
+    for (int pass = 0; pass < 2; ++pass) {
+        const int step = pass == 0 ? page : -page;
+        int value = pass == 0 ? 0 : maxValue;
+        bar->setValue(value);
+        while (true) {
+            const int next = qBound(0, value + step, maxValue);
+            if (next == value)
+                break;
+            value = next;
+            const int before = counter.paints;
+            QElapsedTimer clock;
+            clock.start();
+            bar->setValue(value);
+            editor->viewport()->update();
+            // Spin until the viewport has actually repainted, with a ceiling
+            // so a dropped frame cannot hang the run.
+            while (counter.paints == before && clock.elapsed() < 200)
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+            samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        }
+    }
+    return reduce(gpu ? QStringLiteral("Scroll frame, OpenGL viewport")
+                      : QStringLiteral("Scroll frame, raster viewport"),
+                  QStringLiteral("%1-line note, %2 frames, on screen")
+                      .arg(lines)
+                      .arg(int(samples.size())),
+                  samples);
+}
+
 Timing benchScroll(int lines)
 {
     auto editor = std::make_unique<MarkdownEditor>();
@@ -358,7 +425,24 @@ void printJson(const QList<Timing> &timings, qint64 peakKB, const QString &memor
 
 int main(int argc, char *argv[])
 {
-    qputenv("QT_QPA_PLATFORM", "offscreen");
+    // --gpu needs a real GL context, which the offscreen platform cannot give,
+    // so that run keeps whatever platform the session already has.
+    const bool wantsGPU = [argc, argv] {
+        for (int i = 1; i < argc; ++i) {
+            if (qstrcmp(argv[i], "--gpu") == 0)
+                return true;
+        }
+        return false;
+    }();
+    if (!wantsGPU) {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+    } else {
+        // Without this every OpenGL frame waits for the display's refresh and
+        // the measurement is of vsync, not of drawing.
+        QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+        format.setSwapInterval(0);
+        QSurfaceFormat::setDefaultFormat(format);
+    }
     // As in tools/shot.cpp: a benchmark run must not read or write the real
     // ~/.config/noteAppC, and must not silently auto-open whatever vault the
     // real app last had open (MainWindow's constructor does exactly that
@@ -386,8 +470,12 @@ int main(int argc, char *argv[])
                                    QStringLiteral("Notes in the generated vault (ignored with "
                                                  "an explicit vault)."),
                                    QStringLiteral("count"), QStringLiteral("2000"));
+    QCommandLineOption gpuOption(
+        QStringLiteral("gpu"),
+        QStringLiteral("Paint the editor viewport through OpenGL. Needs a real display."));
     parser.addOption(jsonOption);
     parser.addOption(notesOption);
+    parser.addOption(gpuOption);
     parser.process(app);
 
     const QStringList args = parser.positionalArguments();
@@ -468,6 +556,15 @@ int main(int argc, char *argv[])
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);
+    if (parser.isSet(gpuOption)) {
+        // Same process, same note, same sweep: the only difference is which
+        // paint engine draws it.
+        timings << benchScrollOnScreen(5000, false);
+        if (MarkdownEditor::GPUaccelerationAvailable())
+            timings << benchScrollOnScreen(5000, true);
+        else
+            std::fprintf(stderr, "note: no GL context available, skipping the OpenGL run\n");
+    }
 
     printTable(timings, peakKB, memoryDetail);
     if (parser.isSet(jsonOption))

@@ -624,6 +624,7 @@ void MainWindow::applySettings()
     m_editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
     m_editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     m_editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
+    m_editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));

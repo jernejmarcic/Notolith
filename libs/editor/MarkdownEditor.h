@@ -86,6 +86,19 @@ public:
     void setUseWikilinks(bool on);
     bool useWikilinks() const { return m_useWikilinks; }
 
+    /// Paints the viewport through OpenGL instead of Qt's raster engine.
+    ///
+    /// Whether this is faster is a question for the benchmark, not for
+    /// intuition: the GL paint engine uploads a glyph cache and re-uploads it
+    /// whenever the cache is evicted, which a page of text can do on its own.
+    /// Swapping the viewport tears down and rebuilds the backing widget, so
+    /// this is meant to be set once at construction, not toggled per frame.
+    void setGPUacceleration(bool on);
+    bool GPUacceleration() const { return m_GPUacceleration; }
+    /// True when this build can do it at all: Qt6::OpenGLWidgets present, and
+    /// a platform that can give the window a GL context.
+    static bool GPUaccelerationAvailable();
+
     int wordCount() const;
     /// Source offset of the caret, for tests and for the status bar.
     qsizetype cursorOffset() const { return m_cursor; }
@@ -485,6 +498,7 @@ private:
     bool m_indentGuides = false;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
+    bool m_GPUacceleration = false;
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;

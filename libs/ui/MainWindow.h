@@ -67,6 +67,8 @@ public:
     void closeSettings();
     /// Index for the open vault, so views can query links and tags.
     Index *index() { return &m_index; }
+    /// The editor itself, for tools and the benchmark.
+    MarkdownEditor *editor() { return m_editor; }
 
 protected:
     void closeEvent(QCloseEvent *event) override;

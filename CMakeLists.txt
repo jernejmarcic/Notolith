@@ -10,6 +10,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Sql Concurrent Network)
+# Optional: the editor can paint its viewport through OpenGL instead of raster.
+find_package(Qt6 6.5 QUIET COMPONENTS OpenGLWidgets)
 find_package(Qt6 6.5 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 

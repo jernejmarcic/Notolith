@@ -46,7 +46,8 @@ const QVariantMap &defaults()
         // Files and links
         {QStringLiteral("files.attachmentFolder"), QString()},
         {QStringLiteral("files.confirmDelete"), true},
-        {QStringLiteral("links.useWikilinks"), true},
+        {QStringLiteral("editor.gpuAcceleration"), false},
+    {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 
         // Remembered between launches

@@ -13,7 +13,11 @@
 #include <QWheelEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QGuiApplication>
 #include <QScrollBar>
+#ifdef NOTEAPPC_HAVE_OPENGLWIDGETS
+#include <QOpenGLWidget>
+#endif
 #include <QFileInfo>
 #include <QImageReader>
 #include <QLocale>
@@ -314,6 +318,37 @@ void MarkdownEditor::setTabWidth(int spaces)
 void MarkdownEditor::setUseWikilinks(bool on)
 {
     m_useWikilinks = on;
+}
+
+bool MarkdownEditor::GPUaccelerationAvailable()
+{
+#ifdef NOTEAPPC_HAVE_OPENGLWIDGETS
+    // The offscreen and minimal platforms have no GL context to give, and
+    // asking anyway aborts rather than degrading.
+    const QString platform = QGuiApplication::platformName();
+    return platform != QLatin1String("offscreen") && platform != QLatin1String("minimal");
+#else
+    return false;
+#endif
+}
+
+void MarkdownEditor::setGPUacceleration(bool on)
+{
+    if (m_GPUacceleration == on)
+        return;
+#ifdef NOTEAPPC_HAVE_OPENGLWIDGETS
+    if (on && !GPUaccelerationAvailable())
+        return;
+    m_GPUacceleration = on;
+    // setViewport takes ownership and destroys the old one, so everything the
+    // viewport carries has to be set again.
+    setViewport(on ? new QOpenGLWidget(this) : nullptr);
+    viewport()->setCursor(Qt::IBeamCursor);
+    viewport()->setMouseTracking(true);
+    viewport()->update();
+#else
+    Q_UNUSED(on);
+#endif
 }
 
 void MarkdownEditor::setLineNumbers(bool on)

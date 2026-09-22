@@ -448,6 +448,9 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Show a vertical line at each level of list indentation."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
+    addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
+                tr("Draw the note through OpenGL instead of the CPU. Measured slower on "
+                   "average for text, with a steadier worst case - try it on your hardware."));
 
     layout->addStretch(1);
     return scrollWrap(page);
