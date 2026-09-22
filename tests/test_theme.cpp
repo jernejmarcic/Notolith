@@ -220,3 +220,26 @@ TEST(Scheme, contrastRatioMatchesWCAG)
     EXPECT_NEAR(Scheme::contrastRatio(QColor(Qt::black), QColor(Qt::white)), 21.0, 0.01);
     EXPECT_NEAR(Scheme::contrastRatio(QColor(Qt::white), QColor(Qt::white)), 1.0, 0.01);
 }
+
+TEST(ThemeTest, OledIsTrueBlackAndCountsAsDark)
+{
+    const Theme oled = Theme::builtin(Theme::Mode::Oled);
+
+    EXPECT_TRUE(oled.isDark());
+    EXPECT_TRUE(oled.isOled());
+    EXPECT_EQ(oled.mode(), Theme::Mode::Oled);
+    // The note background is the whole point: an unlit pixel on an OLED panel.
+    EXPECT_EQ(oled.color(QStringLiteral("--background-primary")), QColor(Qt::black));
+    // Panels lift just off black, or the interface would lose all structure.
+    EXPECT_NE(oled.color(QStringLiteral("--background-secondary")), QColor(Qt::black));
+    EXPECT_LT(oled.color(QStringLiteral("--background-secondary")).lightness(), 40);
+    // Text stays readable, and the derived tokens took the dark branch.
+    EXPECT_GT(oled.color(QStringLiteral("--text-normal")).lightness(), 200);
+    EXPECT_GT(oled.color(QStringLiteral("--text-normal")).lightness(),
+              oled.color(QStringLiteral("--text-muted")).lightness());
+
+    EXPECT_EQ(Theme::nameOf(Theme::Mode::Oled), QStringLiteral("oled"));
+    EXPECT_EQ(Theme::modeFromName(QStringLiteral("oled")), Theme::Mode::Oled);
+    EXPECT_EQ(Theme::modeFromName(QStringLiteral("light")), Theme::Mode::Light);
+    EXPECT_EQ(Theme::modeFromName(QStringLiteral("nonsense")), Theme::Mode::Dark);
+}

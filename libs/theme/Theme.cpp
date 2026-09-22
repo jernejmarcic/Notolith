@@ -42,6 +42,17 @@ constexpr BaseScale kDark{
     "#a882ff", "#fa99cd",
 };
 
+/// True black, for OLED panels: the backgrounds go to #000000 and the greys
+/// above them are pulled down to keep the same contrast steps Obsidian's dark
+/// scheme has. Text stays a touch softer than pure white, which is easier to
+/// read against black.
+constexpr BaseScale kOled{
+    "#000000", "#040404", "#070707", "#0c0c0c", "#121212", "#1a1a1a",
+    "#262626", "#3a3a3a", "#4d4d4d", "#8a8a8a", "#b8b8b8", "#e4e4e4",
+    "#fb464c", "#e9973f", "#e0de71", "#44cf6e", "#53dfdd", "#3b8cff",
+    "#a882ff", "#fa99cd",
+};
+
 constexpr BaseScale kLight{
     "#ffffff", "#fcfcfc", "#fafafa", "#f6f6f6", "#efefef", "#e4e4e4",
     "#dadada", "#bdbdbd", "#ababab", "#707070", "#5c5c5c", "#222222",
@@ -76,9 +87,33 @@ QString hsl(double hue, double saturationPercent, double lightnessPercent)
 
 } // namespace
 
+QString Theme::nameOf(Mode mode)
+{
+    switch (mode) {
+    case Mode::Light:
+        return QStringLiteral("light");
+    case Mode::Oled:
+        return QStringLiteral("oled");
+    case Mode::Dark:
+        break;
+    }
+    return QStringLiteral("dark");
+}
+
+Theme::Mode Theme::modeFromName(const QString &name)
+{
+    if (name == QLatin1String("light"))
+        return Mode::Light;
+    if (name == QLatin1String("oled"))
+        return Mode::Oled;
+    return Mode::Dark;
+}
+
 Theme Theme::builtin(Mode mode)
 {
-    const BaseScale &scale = mode == Mode::Dark ? kDark : kLight;
+    const BaseScale &scale = mode == Mode::Oled    ? kOled
+                             : mode == Mode::Light ? kLight
+                                                   : kDark;
 
     Theme theme;
     theme.m_mode = mode;

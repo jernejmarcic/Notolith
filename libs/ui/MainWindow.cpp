@@ -580,19 +580,15 @@ void MainWindow::onIndexChanged()
 
 void MainWindow::setThemeMode(Theme::Mode mode)
 {
-    m_settings.setValue(QStringLiteral("appearance.theme"),
-                        mode == Theme::Mode::Dark ? QStringLiteral("dark")
-                                                  : QStringLiteral("light"));
+    m_settings.setValue(QStringLiteral("appearance.theme"), Theme::nameOf(mode));
     applySettings();
 }
 
 Theme MainWindow::themeFromSettings() const
 {
-    Theme::Mode mode = Theme::Mode::Dark;
     const QString modeText = m_settings.text(QStringLiteral("appearance.theme"));
-    if (modeText == QLatin1String("light")) {
-        mode = Theme::Mode::Light;
-    } else if (modeText == QLatin1String("system")) {
+    Theme::Mode mode = Theme::modeFromName(modeText);
+    if (modeText == QLatin1String("system")) {
         mode = QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Light
                   ? Theme::Mode::Light
                   : Theme::Mode::Dark;

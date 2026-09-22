@@ -53,9 +53,7 @@ int main(int argc, char *argv[])
             return 2;
         }
         window.openTarget(noteAppC::resolveLaunchTarget(note.absoluteFilePath()));
-        window.setThemeMode(args.value(4) == QLatin1String("light")
-                                ? noteAppC::Theme::Mode::Light
-                                : noteAppC::Theme::Mode::Dark);
+        window.setThemeMode(noteAppC::Theme::modeFromName(args.value(4)));
         if (sourceMode)
             window.toggleEditingMode();
         window.show();
@@ -84,8 +82,7 @@ int main(int argc, char *argv[])
     }
     // After opening, because opening a vault applies that vault's saved
     // scheme and would otherwise overwrite the mode asked for here.
-    window.setThemeMode(args.value(4) == QLatin1String("light") ? noteAppC::Theme::Mode::Light
-                                                                : noteAppC::Theme::Mode::Dark);
+    window.setThemeMode(noteAppC::Theme::modeFromName(args.value(4)));
     if (sourceMode)
         window.toggleEditingMode();
     window.show();

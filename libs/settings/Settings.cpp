@@ -20,7 +20,7 @@ const QVariantMap &defaults()
 {
     static const QVariantMap map = {
         // Appearance
-        {QStringLiteral("appearance.theme"), QStringLiteral("dark")}, // dark, light, system
+        {QStringLiteral("appearance.theme"), QStringLiteral("dark")}, // dark, oled, light, system
         {QStringLiteral("appearance.scheme"), QString()},             // empty means built-in
         {QStringLiteral("appearance.accentHue"), 258},
         {QStringLiteral("appearance.accentSaturation"), 88},

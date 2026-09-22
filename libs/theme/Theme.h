@@ -18,13 +18,21 @@ namespace noteAppC {
 /// here instead, because Qt Style Sheets has neither.
 class Theme {
 public:
-    enum class Mode { Dark, Light };
+    /// Oled is a true-black variant of Dark: every background collapses to
+    /// #000000 so an OLED panel leaves those pixels unlit. It behaves as a
+    /// dark scheme everywhere else - `isDark()` is true for it.
+    enum class Mode { Dark, Light, Oled };
 
     /// Dark is the default, as in Obsidian and as Jernej asked.
     static Theme builtin(Mode mode = Mode::Dark);
 
     Mode mode() const { return m_mode; }
-    bool isDark() const { return m_mode == Mode::Dark; }
+    bool isDark() const { return m_mode != Mode::Light; }
+    bool isOled() const { return m_mode == Mode::Oled; }
+
+    /// The settings spelling of a mode, and back. Unknown text reads as Dark.
+    static QString nameOf(Mode mode);
+    static Mode modeFromName(const QString &name);
 
     /// Raw token value, empty when the token is unknown.
     QString value(const QString &token) const;

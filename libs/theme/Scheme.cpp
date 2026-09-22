@@ -182,8 +182,11 @@ QString Scheme::resolveVars(const QString &value, const QHash<QString, QString> 
 QHash<QString, QString> Scheme::parseObsidianCSS(const QString &css, Theme::Mode mode)
 {
     const QList<CSSblock> blocks = blocksIn(withoutComments(css));
-    const char *wanted = mode == Theme::Mode::Dark ? "theme-dark" : "theme-light";
-    const char *other = mode == Theme::Mode::Dark ? "theme-light" : "theme-dark";
+    // An OLED scheme reads an Obsidian theme's dark side; only the base
+    // greys differ, and those are ours.
+    const bool dark = mode != Theme::Mode::Light;
+    const char *wanted = dark ? "theme-dark" : "theme-light";
+    const char *other = dark ? "theme-light" : "theme-dark";
 
     // Raw first, so `var()` can point at anything the file declares anywhere.
     QHash<QString, QString> raw;
@@ -293,7 +296,8 @@ QHash<QString, QString> Scheme::load(const QString &path, Theme::Mode mode, QStr
     }
 
     const QJsonObject root = document.object();
-    const QString key = mode == Theme::Mode::Dark ? QStringLiteral("dark") : QStringLiteral("light");
+    const QString key = mode == Theme::Mode::Light ? QStringLiteral("light")
+                                                   : QStringLiteral("dark");
     QHash<QString, QString> tokens;
     // A scheme may carry shared tokens at the top level under "tokens".
     for (const QString &section : {QStringLiteral("tokens"), key}) {

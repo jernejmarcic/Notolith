@@ -155,6 +155,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void wheelEvent(QWheelEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void inputMethodEvent(QInputMethodEvent *event) override;
@@ -203,6 +204,11 @@ private:
         /// Filled instead of `layout` when a table renders as a grid.
         std::vector<Cell> cells;
         int headerRows = 0;
+        /// A table keeps its columns at their natural width; when the total
+        /// exceeds the readable column the table scrolls sideways inside its
+        /// own block, exactly as it does in Obsidian.
+        qreal tableWidth = 0;
+        qreal tableScroll = 0;
         /// Set when this block is a callout, so painting knows its colour,
         /// icon and title without looking the span up again.
         const CalloutSpan *callout = nullptr;
@@ -235,6 +241,8 @@ private:
     /// its structure is missing, so the caller falls back to plain text.
     bool layoutTable(BlockView &view);
     void paintTable(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The table under `viewportPoint` that is wider than the column, or null.
+    BlockView *scrollableTableAt(const QPoint &viewportPoint);
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// Bullets and checkboxes in the margin of a list block.
     void paintListMarkers(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

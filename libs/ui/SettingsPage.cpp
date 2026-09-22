@@ -371,8 +371,9 @@ QWidget *SettingsPage::buildAppearancePage()
     layout->setSpacing(0);
 
     addComboRow(layout, QStringLiteral("appearance.theme"), tr("Appearance"),
-               tr("Dark, light, or match the desktop."),
+               tr("Dark, true black for OLED, light, or match the desktop."),
                {{tr("Dark"), QStringLiteral("dark")},
+                {tr("Black (OLED)"), QStringLiteral("oled")},
                 {tr("Light"), QStringLiteral("light")},
                 {tr("Same as system"), QStringLiteral("system")}});
     addSchemeRow(layout);

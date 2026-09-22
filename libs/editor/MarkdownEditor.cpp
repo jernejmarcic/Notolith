@@ -7,6 +7,8 @@
 #include <QClipboard>
 #include <QCompleter>
 #include <QKeyEvent>
+#include <QLinearGradient>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
@@ -1077,6 +1079,9 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             QString shown = cell.map.text().trimmed();
             cell.layout = std::make_unique<QTextLayout>(shown);
             cell.layout->setCacheEnabled(true);
+            QTextOption wrap;
+            wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            cell.layout->setTextOption(wrap);
             QFont cellFont = font;
             if (r == 0)
                 cellFont.setWeight(QFont::DemiBold);
@@ -1089,20 +1094,23 @@ bool MarkdownEditor::layoutTable(BlockView &view)
         }
     }
 
-    qreal total = 0;
-    for (const qreal width : std::as_const(natural))
-        total += width;
+    // Obsidian does not squeeze a table into the readable column: every column
+    // keeps the width its content wants, and a table too wide to fit scrolls
+    // sideways inside its own block. Only a single runaway column is capped,
+    // so one long cell wraps instead of pushing everything else off screen.
     const qreal available = contentWidth();
-    const qreal scale = total > available ? available / total : 1.0;
+    const qreal columnCap = qMax(minimum * 4, available * 0.66);
 
     QList<qreal> widths;
     QList<qreal> offsets;
     qreal x = 0;
     for (const qreal width : std::as_const(natural)) {
-        widths << width * scale;
+        const qreal used = qBound(minimum, width, columnCap);
+        widths << used;
         offsets << x;
-        x += width * scale;
+        x += used;
     }
+    view.tableWidth = x;
 
     // Lay each cell out at its column width, then rows take the tallest cell.
     QList<qreal> rowHeights(table->rows.size(), lineHeight + 2 * padY);
@@ -1135,6 +1143,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
 
     view.cells = std::move(cells);
     view.headerRows = 1;
+    view.tableScroll = qBound<qreal>(0, view.tableScroll,
+                                     qMax<qreal>(0, view.tableWidth - contentWidth()));
     view.layout.reset();
     view.height = y;
     view.laidOut = true;
@@ -1150,8 +1160,19 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     const qreal padX = 10;
     const qreal padY = 6;
 
+    // A wide table is clipped to the readable column and scrolls inside it;
+    // nothing spills over the note's text.
+    const qreal overflow = qMax<qreal>(0, view.tableWidth - contentWidth());
+    const QRectF window(left, top, contentWidth(), view.height);
+    painter.save();
+    if (overflow > 0)
+        painter.setClipRect(window.adjusted(-1, -1, 1, 1));
+    const qreal shift = -view.tableScroll;
+
     for (const Cell &cell : view.cells) {
-        const QRectF rect = cell.rect.translated(left, top);
+        const QRectF rect = cell.rect.translated(left + shift, top);
+        if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
+            continue;
         if (cell.row < view.headerRows)
             painter.fillRect(rect, header);
         painter.setPen(QPen(border, 1));
@@ -1168,9 +1189,54 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         }
 
         painter.setPen(text);
+        // Each cell clips its own text, so a long word cannot bleed into the
+        // next column.
+        painter.save();
+        painter.setClipRect(rect.adjusted(1, 1, -1, -1), Qt::IntersectClip);
         cell.layout->draw(&painter, QPointF(rect.left() + padX + qMax<qreal>(0, offset),
                                             rect.top() + padY));
+        painter.restore();
     }
+    painter.restore();
+
+    if (overflow <= 0)
+        return;
+
+    // Edge fades say there is more table, and a thin bar says where you are.
+    const QColor background = m_theme.color(QStringLiteral("--background-primary"));
+    const auto fade = [&](const QRectF &rect, bool fromLeft) {
+        QLinearGradient gradient(fromLeft ? rect.topLeft() : rect.topRight(),
+                                 fromLeft ? rect.topRight() : rect.topLeft());
+        QColor opaque = background;
+        QColor clear = background;
+        clear.setAlpha(0);
+        gradient.setColorAt(0, opaque);
+        gradient.setColorAt(1, clear);
+        painter.fillRect(rect, gradient);
+    };
+    if (view.tableScroll > 1)
+        fade(QRectF(window.left(), window.top(), 18, window.height()), true);
+    if (view.tableScroll < overflow - 1)
+        fade(QRectF(window.right() - 18, window.top(), 18, window.height()), false);
+
+    const qreal fraction = contentWidth() / view.tableWidth;
+    const qreal barWidth = qMax<qreal>(28, contentWidth() * fraction);
+    const qreal barX = left + (contentWidth() - barWidth) * (view.tableScroll / overflow);
+    QColor bar = m_theme.color(QStringLiteral("--text-faint"));
+    bar.setAlphaF(0.5f);
+    painter.fillRect(QRectF(barX, top + view.height + 2, barWidth, 3), bar);
+}
+
+MarkdownEditor::BlockView *MarkdownEditor::scrollableTableAt(const QPoint &viewportPoint)
+{
+    const qreal y = viewportPoint.y() + verticalScrollBar()->value();
+    for (BlockView &view : m_blocks) {
+        if (view.cells.empty() || view.tableWidth <= contentWidth())
+            continue;
+        if (y >= view.y && y <= view.y + view.height + 6)
+            return &view;
+    }
+    return nullptr;
 }
 
 void MarkdownEditor::layoutBlock(BlockView &view)
@@ -1486,7 +1552,7 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
             // Clicking any cell puts the caret in it; the block then reveals
             // its source, which is where the editing happens for now.
             for (const Cell &cell : view.cells) {
-                if (cell.rect.translated(0, view.y).contains(QPointF(x, y)))
+                if (cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
                     return cell.source.start;
             }
             return view.span.range.start;
@@ -1975,6 +2041,32 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
         ++end;
     m_anchor = start;
     moveCursor(end, true);
+}
+
+void MarkdownEditor::wheelEvent(QWheelEvent *event)
+{
+    BlockView *table = scrollableTableAt(event->position().toPoint());
+    if (table) {
+        // A horizontal wheel, or shift with a vertical one, pans the table -
+        // the gesture Obsidian answers to.
+        const QPoint pixels = event->pixelDelta();
+        const QPoint degrees = event->angleDelta();
+        qreal dx = pixels.x() != 0 ? pixels.x() : degrees.x() / 2.0;
+        if (qFuzzyIsNull(dx) && event->modifiers().testFlag(Qt::ShiftModifier))
+            dx = pixels.y() != 0 ? pixels.y() : degrees.y() / 2.0;
+
+        if (!qFuzzyIsNull(dx)) {
+            const qreal overflow = table->tableWidth - contentWidth();
+            const qreal wanted = qBound<qreal>(0, table->tableScroll - dx, overflow);
+            if (!qFuzzyCompare(wanted + 1, table->tableScroll + 1)) {
+                table->tableScroll = wanted;
+                viewport()->update();
+            }
+            event->accept();
+            return;
+        }
+    }
+    QAbstractScrollArea::wheelEvent(event);
 }
 
 void MarkdownEditor::focusInEvent(QFocusEvent *event)
