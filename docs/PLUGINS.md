@@ -138,6 +138,11 @@ second, is named in the settings page with its numbers. Obsidian shows startup
 time per plugin; noteAppC shows every hook, and none of them are on startup at
 all.
 
+**Desktop only, by nature.** iOS does not let an app load code it did not
+ship with, and Android only loads native libraries packaged inside the app. A
+mobile noteAppC gets Tier 1 modules and nothing from this tier - see
+[PLATFORMS.md](PLATFORMS.md).
+
 **What it does not do.** A plugin is native code running in the app's process
 with the user's rights, like any program the user installs. There is no
 sandbox, and a plugin that crashes takes the app with it. Out-of-process
@@ -171,7 +176,9 @@ Everything a note-taking app is for, and nothing it is not:
    setting already exists and does nothing - into `libs/ext/spell/` behind
    `NOTEAPPC_WITH_SPELLCHECK`. That establishes Tier 1 with one real module.
 2. Tier 2 only when there is a first real plugin to build against. An API
-   designed with no client is an API designed wrong.
+   designed with no client is an API designed wrong. With a mobile app
+   planned, Tier 1 is also the only tier that reaches every platform, which
+   is a second reason to build it first.
 
 ## Decisions that are Jernej's
 

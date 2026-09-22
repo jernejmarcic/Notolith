@@ -156,3 +156,23 @@ budget, which this project has already learned once on the index.
 - [ ] A listing inside a callout wraps; Obsidian scrolls it.
 - [ ] Property values other than the checkbox are still read-only.
 - [ ] Measure against Obsidian itself. Not installed here.
+
+## Requested 2026-09-23
+
+- [x] Vulkan: answered with numbers in `docs/PERFORMANCE.md`. Buildable here
+      (Qt 6.11, `QRhiWidget`) but it is a renderer of our own, not a switch,
+      and raster fits this machine's 3440x1440 240 Hz panel with room.
+- [x] Document every optimisation: `docs/PERFORMANCE.md`.
+- [x] Plugins: a proposal in `docs/PLUGINS.md`. **Three decisions are
+      Jernej's** (third-party plugins at all, Lua scripts, sidebar panes).
+- [x] Many machines, Intel and AMD, multi-core target with one core as the
+      floor: `docs/PLATFORMS.md`. No `-march` anywhere, no x86-only code.
+- [ ] **Run `bench-here.sh` on shuttlepod-1 and runabout.** In the brain's
+      session directory for this work. Jernej runs it; results sync back.
+- [ ] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
+      viewport - the first thing to do before any Vulkan work.
+- [ ] Measure the Wayland shared-memory buffer transfer the bench cannot see.
+- [ ] Mobile groundwork: build the libraries against the Android kit's Qt
+      6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
+      way poppler already is.
+- [ ] Future `PKGBUILD` must override CachyOS's `-march=native`.
