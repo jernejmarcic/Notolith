@@ -164,7 +164,12 @@ Timing reduce(const QString &metric, const QString &detail, std::vector<double> 
 /// with no display attached.
 QImage paintedFrame(QWidget *widget)
 {
-    QImage frame(widget->size(), QImage::Format_ARGB32_Premultiplied);
+    // At the device pixel ratio, or a HiDPI run renders a 1x frame and reports
+    // it as 2x: a raster engine's cost is the physical pixels it fills, and an
+    // image sized in logical pixels quietly fills a quarter of them.
+    const qreal ratio = widget->devicePixelRatioF();
+    QImage frame(widget->size() * ratio, QImage::Format_ARGB32_Premultiplied);
+    frame.setDevicePixelRatio(ratio);
     widget->render(&frame);
     return frame;
 }
@@ -312,10 +317,10 @@ Timing benchScrollOnScreen(int lines, bool gpu)
                   samples);
 }
 
-Timing benchScroll(int lines)
+Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
 {
     auto editor = std::make_unique<MarkdownEditor>();
-    editor->resize(1180, 760);
+    editor->resize(viewport);
     editor->setNoteText(buildLongNote(lines));
     paintedFrame(editor.get()); // untimed warm-up frame, as above
 
@@ -343,8 +348,16 @@ Timing benchScroll(int lines)
             samples.push_back(double(clock.nsecsElapsed()) / 1e6);
         }
     }
+    // The pixel count is what a raster engine pays for, so it goes in the
+    // label: the same note at 4K and at 2x scale is a different measurement.
+    const qreal ratio = editor->devicePixelRatioF();
     return reduce(QStringLiteral("Scroll frame time"),
-                  QStringLiteral("%1-line note, %2 frames").arg(lines).arg(int(samples.size())),
+                  QStringLiteral("%1 lines, %2x%3 @%4x, %5 frames")
+                      .arg(lines)
+                      .arg(viewport.width())
+                      .arg(viewport.height())
+                      .arg(ratio)
+                      .arg(int(samples.size())),
                   samples);
 }
 
@@ -470,12 +483,18 @@ int main(int argc, char *argv[])
                                    QStringLiteral("Notes in the generated vault (ignored with "
                                                  "an explicit vault)."),
                                    QStringLiteral("count"), QStringLiteral("2000"));
+    QCommandLineOption viewportOption(
+        QStringLiteral("viewport"),
+        QStringLiteral("Also measure scrolling at this size, e.g. 3840x2160. Combine with "
+                       "QT_SCALE_FACTOR=2 for a HiDPI panel."),
+        QStringLiteral("WxH"));
     QCommandLineOption gpuOption(
         QStringLiteral("gpu"),
         QStringLiteral("Paint the editor viewport through OpenGL. Needs a real display."));
     parser.addOption(jsonOption);
     parser.addOption(notesOption);
     parser.addOption(gpuOption);
+    parser.addOption(viewportOption);
     parser.process(app);
 
     const QStringList args = parser.positionalArguments();
@@ -556,6 +575,11 @@ int main(int argc, char *argv[])
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);
+    if (parser.isSet(viewportOption)) {
+        const QStringList parts = parser.value(viewportOption).split(QLatin1Char('x'));
+        if (parts.size() == 2)
+            timings << benchScroll(5000, QSize(parts.at(0).toInt(), parts.at(1).toInt()));
+    }
     if (parser.isSet(gpuOption)) {
         // Same process, same note, same sweep: the only difference is which
         // paint engine draws it.
