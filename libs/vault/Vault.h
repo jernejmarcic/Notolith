@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QList>
+#include <QRegularExpression>
 #include <QString>
 #include <QStringList>
 
@@ -50,8 +52,44 @@ public:
     static QByteArray encode(const Note &note);
     static Note decode(const QByteArray &bytes);
 
+    // --- file operations -------------------------------------------------
+
+    /// Creates an empty note. `folderRelative` may be empty for the vault root.
+    /// Uniquifies like Obsidian: "Untitled", "Untitled 1", "Untitled 2".
+    /// Returns the absolute path, or an empty string with `error` filled.
+    QString createNote(const QString &folderRelative, const QString &baseName,
+                       QString *error = nullptr) const;
+
+    /// Same uniquifying rule, for a folder.
+    QString createFolder(const QString &parentRelative, const QString &baseName,
+                         QString *error = nullptr) const;
+
+    /// Renames a file or folder in place. `newBaseName` carries no path and, for
+    /// a note, no extension. Refuses a name that already exists or that holds
+    /// Obsidian's invalid characters (`# ^ [ ] | : \ /`).
+    bool renamePath(const QString &absolutePath, const QString &newBaseName,
+                    QString *newAbsolutePath, QString *error = nullptr) const;
+
+    /// Moves to the vault's own `.trash/`, the way Obsidian's default does,
+    /// keeping the relative folder structure and suffixing on collision.
+    bool moveToTrash(const QString &absolutePath, QString *error = nullptr) const;
+
+    // --- ignore filters ---------------------------------------------------
+
+    /// True when `relativePath` matches a filter from `.obsidian/app.json`'s
+    /// `userIgnoreFilters` (read when this Vault was constructed), or - for a
+    /// vault with no filters configured at all - looks like `.obsidian/`,
+    /// `.git/`, `.trash/` or a `build*/` directory. The first three are
+    /// already caught by Indexer's own dot-prefix rule; this covers the rest.
+    bool isIgnored(const QString &relativePath) const;
+
 private:
+    void loadIgnoreFilters();
+
     QString m_root;
+    QStringList m_ignorePrefixes;
+    QList<QRegularExpression> m_ignoreRegexes;
+    bool m_filtersConfigured = false;
 };
 
 } // namespace noteAppC

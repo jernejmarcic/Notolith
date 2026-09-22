@@ -3,6 +3,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QSaveFile>
 
 namespace noteAppC {
@@ -11,11 +15,25 @@ namespace {
 // Qt's UTF-8 decoder silently drops a leading byte-order mark, so the mark has
 // to be detected on the bytes, not on the decoded string.
 const QByteArray kBom = QByteArrayLiteral("\xEF\xBB\xBF");
+
+// Obsidian refuses these in a file or folder name, wherever they came from.
+const QString kInvalidNameChars = QStringLiteral("#^[]|:\\/");
+
+bool hasInvalidNameChar(const QString &name)
+{
+    for (const QChar &c : name) {
+        if (kInvalidNameChars.contains(c))
+            return true;
+    }
+    return false;
+}
+
 } // namespace
 
 Vault::Vault(const QString &rootPath)
     : m_root(QDir(rootPath).absolutePath())
 {
+    loadIgnoreFilters();
 }
 
 bool Vault::isValid() const
@@ -114,6 +132,240 @@ bool Vault::write(const QString &path, const Note &note, QString *error)
         return false;
     }
     return true;
+}
+
+// --- file operations -----------------------------------------------------
+
+QString Vault::createNote(const QString &folderRelative, const QString &baseName,
+                          QString *error) const
+{
+    if (!isValid()) {
+        if (error)
+            *error = QStringLiteral("vault is not open");
+        return {};
+    }
+
+    const QString folderAbsolute = folderRelative.isEmpty() ? m_root : absolute(folderRelative);
+    if (!QDir().mkpath(folderAbsolute)) {
+        if (error)
+            *error = QStringLiteral("cannot create %1").arg(folderAbsolute);
+        return {};
+    }
+
+    const QDir folder(folderAbsolute);
+    QString candidate = baseName;
+    QString path;
+    for (int suffix = 0;; ++suffix) {
+        path = folder.absoluteFilePath(candidate + QLatin1String(".md"));
+        if (!QFileInfo::exists(path))
+            break;
+        candidate = QStringLiteral("%1 %2").arg(baseName).arg(suffix + 1);
+    }
+
+    if (!write(path, Note{}, error))
+        return {};
+    return path;
+}
+
+QString Vault::createFolder(const QString &parentRelative, const QString &baseName,
+                            QString *error) const
+{
+    if (!isValid()) {
+        if (error)
+            *error = QStringLiteral("vault is not open");
+        return {};
+    }
+
+    const QString parentAbsolute = parentRelative.isEmpty() ? m_root : absolute(parentRelative);
+    if (!QDir().mkpath(parentAbsolute)) {
+        if (error)
+            *error = QStringLiteral("cannot create %1").arg(parentAbsolute);
+        return {};
+    }
+
+    const QDir parent(parentAbsolute);
+    QString candidate = baseName;
+    QString path;
+    for (int suffix = 0;; ++suffix) {
+        path = parent.absoluteFilePath(candidate);
+        if (!QFileInfo::exists(path))
+            break;
+        candidate = QStringLiteral("%1 %2").arg(baseName).arg(suffix + 1);
+    }
+
+    if (!QDir().mkpath(path)) {
+        if (error)
+            *error = QStringLiteral("cannot create %1").arg(path);
+        return {};
+    }
+    return path;
+}
+
+bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
+                       QString *newAbsolutePath, QString *error) const
+{
+    if (newBaseName.trimmed().isEmpty()) {
+        if (error)
+            *error = QStringLiteral("name cannot be empty");
+        return false;
+    }
+    if (hasInvalidNameChar(newBaseName)) {
+        if (error)
+            *error = QStringLiteral("name contains a character Obsidian does not allow: # ^ [ ] | : \\ /");
+        return false;
+    }
+
+    const QFileInfo info(absolutePath);
+    if (!info.exists()) {
+        if (error)
+            *error = QStringLiteral("%1 does not exist").arg(absolutePath);
+        return false;
+    }
+
+    // A note keeps its extension; a folder has none to keep.
+    const QString newFileName = (info.isFile() && isNote(absolutePath))
+                                    ? newBaseName + QLatin1Char('.') + info.suffix()
+                                    : newBaseName;
+    const QString newPath = QDir(info.absolutePath()).absoluteFilePath(newFileName);
+
+    if (newPath == absolutePath) {
+        if (newAbsolutePath)
+            *newAbsolutePath = newPath;
+        return true;
+    }
+    if (QFileInfo::exists(newPath)) {
+        if (error)
+            *error = QStringLiteral("%1 already exists").arg(newFileName);
+        return false;
+    }
+
+    QFile file(absolutePath);
+    if (!file.rename(newPath)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    if (newAbsolutePath)
+        *newAbsolutePath = newPath;
+    return true;
+}
+
+bool Vault::moveToTrash(const QString &absolutePath, QString *error) const
+{
+    if (!isValid() || !contains(absolutePath)) {
+        if (error)
+            *error = QStringLiteral("%1 is not inside the vault").arg(absolutePath);
+        return false;
+    }
+
+    const QFileInfo info(absolutePath);
+    if (!info.exists()) {
+        if (error)
+            *error = QStringLiteral("%1 does not exist").arg(absolutePath);
+        return false;
+    }
+
+    // ".trash/<same relative folder>/<name>", mirroring Obsidian's default.
+    const QString relativeFolder = QFileInfo(relative(absolutePath)).path();
+    const QString trashFolder = relativeFolder == QLatin1String(".")
+                                    ? m_root + QLatin1String("/.trash")
+                                    : m_root + QLatin1String("/.trash/") + relativeFolder;
+    if (!QDir().mkpath(trashFolder)) {
+        if (error)
+            *error = QStringLiteral("cannot create %1").arg(trashFolder);
+        return false;
+    }
+
+    const QDir trash(trashFolder);
+    const QString base = info.completeBaseName();
+    const QString suffix = info.suffix();
+    QString candidate = info.fileName();
+    QString target = trash.absoluteFilePath(candidate);
+    for (int n = 1; QFileInfo::exists(target); ++n) {
+        candidate = suffix.isEmpty() ? QStringLiteral("%1 %2").arg(base).arg(n)
+                                     : QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix);
+        target = trash.absoluteFilePath(candidate);
+    }
+
+    QDir mover;
+    if (!mover.rename(absolutePath, target)) {
+        if (error)
+            *error = QStringLiteral("cannot move %1 to trash").arg(absolutePath);
+        return false;
+    }
+    return true;
+}
+
+// --- ignore filters --------------------------------------------------------
+
+void Vault::loadIgnoreFilters()
+{
+    m_ignorePrefixes.clear();
+    m_ignoreRegexes.clear();
+    m_filtersConfigured = false;
+
+    QFile file(m_root + QLatin1String("/.obsidian/app.json"));
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+
+    const QJsonArray filters =
+        QJsonDocument::fromJson(file.readAll()).object().value(QLatin1String("userIgnoreFilters")).toArray();
+    if (filters.isEmpty())
+        return;
+    m_filtersConfigured = true;
+
+    // Each entry is either a plain path prefix, or a JavaScript regex literal
+    // like "/(^|\/)node_modules\//".
+    static const QRegularExpression literal(QStringLiteral("^/(.*)/([a-zA-Z]*)$"));
+    for (const QJsonValue &value : filters) {
+        const QString entry = value.toString();
+        if (entry.isEmpty())
+            continue;
+
+        const auto match = literal.match(entry);
+        if (!match.hasMatch()) {
+            m_ignorePrefixes.append(entry);
+            continue;
+        }
+
+        QRegularExpression::PatternOptions options = QRegularExpression::NoPatternOption;
+        const QString flags = match.captured(2);
+        if (flags.contains(QLatin1Char('i')))
+            options |= QRegularExpression::CaseInsensitiveOption;
+        if (flags.contains(QLatin1Char('s')))
+            options |= QRegularExpression::DotMatchesEverythingOption;
+        if (flags.contains(QLatin1Char('m')))
+            options |= QRegularExpression::MultilineOption;
+
+        QRegularExpression re(match.captured(1), options);
+        if (re.isValid())
+            m_ignoreRegexes.append(re);
+        else
+            m_ignorePrefixes.append(entry); // not valid PCRE either; treat literally
+    }
+}
+
+bool Vault::isIgnored(const QString &relativePath) const
+{
+    for (const QString &prefix : m_ignorePrefixes) {
+        if (relativePath.startsWith(prefix))
+            return true;
+    }
+    for (const QRegularExpression &re : m_ignoreRegexes) {
+        if (re.match(relativePath).hasMatch())
+            return true;
+    }
+
+    if (!m_filtersConfigured) {
+        // No configured filters: fall back to skipping the obvious build
+        // artefact directories rather than sweeping them into the index.
+        // ponytail: a fixed "build*/" heuristic, not a full .gitignore reader -
+        // revisit if a real vault needs more.
+        static const QRegularExpression buildDir(QStringLiteral("(^|/)build[^/]*/"));
+        if (buildDir.match(relativePath).hasMatch())
+            return true;
+    }
+    return false;
 }
 
 } // namespace noteAppC

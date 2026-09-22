@@ -2,6 +2,9 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 #include "Vault.h"
@@ -155,4 +158,172 @@ TEST(VaultPaths, RelativeAndContains)
 
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
     EXPECT_TRUE(vault.hasObsidianConfig());
+}
+
+// --- file operations -------------------------------------------------------
+
+TEST(VaultFileOps, CreateNoteUniquifiesLikeObsidian)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+
+    const QString first = vault.createNote(QString(), QStringLiteral("Untitled"), &error);
+    ASSERT_FALSE(first.isEmpty()) << error.toStdString();
+    EXPECT_EQ(first, dir.filePath(QStringLiteral("Untitled.md")));
+
+    const QString second = vault.createNote(QString(), QStringLiteral("Untitled"), &error);
+    EXPECT_EQ(second, dir.filePath(QStringLiteral("Untitled 1.md")));
+
+    const QString third = vault.createNote(QString(), QStringLiteral("Untitled"), &error);
+    EXPECT_EQ(third, dir.filePath(QStringLiteral("Untitled 2.md")));
+
+    Note note;
+    ASSERT_TRUE(Vault::read(first, note, &error));
+    EXPECT_TRUE(note.text.isEmpty());
+}
+
+TEST(VaultFileOps, CreateNoteMakesItsFolder)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+
+    const QString path = vault.createNote(QStringLiteral("Sub/Folder"), QStringLiteral("Note"), &error);
+    ASSERT_FALSE(path.isEmpty()) << error.toStdString();
+    EXPECT_EQ(path, dir.filePath(QStringLiteral("Sub/Folder/Note.md")));
+    EXPECT_TRUE(QFileInfo::exists(path));
+}
+
+TEST(VaultFileOps, CreateFolderUniquifies)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+
+    const QString first = vault.createFolder(QString(), QStringLiteral("New Folder"), &error);
+    ASSERT_FALSE(first.isEmpty()) << error.toStdString();
+    const QString second = vault.createFolder(QString(), QStringLiteral("New Folder"), &error);
+    EXPECT_EQ(second, dir.filePath(QStringLiteral("New Folder 1")));
+    EXPECT_TRUE(QFileInfo(second).isDir());
+}
+
+TEST(VaultFileOps, RenamePathRefusesInvalidCharacters)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("Note"), &error);
+    ASSERT_FALSE(note.isEmpty());
+
+    QString newPath;
+    EXPECT_FALSE(vault.renamePath(note, QStringLiteral("Bad/Name"), &newPath, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(vault.renamePath(note, QStringLiteral("Bad#Name"), &newPath, &error));
+    EXPECT_FALSE(vault.renamePath(note, QStringLiteral("Bad[Name]"), &newPath, &error));
+    // The original file is still exactly where it was.
+    EXPECT_TRUE(QFileInfo::exists(note));
+}
+
+TEST(VaultFileOps, RenamePathRefusesAnExistingName)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    ASSERT_FALSE(vault.createNote(QString(), QStringLiteral("One"), &error).isEmpty());
+    const QString two = vault.createNote(QString(), QStringLiteral("Two"), &error);
+    ASSERT_FALSE(two.isEmpty());
+
+    QString newPath;
+    EXPECT_FALSE(vault.renamePath(two, QStringLiteral("One"), &newPath, &error));
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(VaultFileOps, RenamePathKeepsExtensionAndContent)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("Old Name"), &error);
+    ASSERT_FALSE(note.isEmpty());
+    Note contents;
+    contents.text = QStringLiteral("# Old Name\n\nBody.\n");
+    ASSERT_TRUE(Vault::write(note, contents, &error));
+
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(note, QStringLiteral("New Name"), &newPath, &error)) << error.toStdString();
+    EXPECT_EQ(newPath, dir.filePath(QStringLiteral("New Name.md")));
+    EXPECT_FALSE(QFileInfo::exists(note));
+
+    Note reread;
+    ASSERT_TRUE(Vault::read(newPath, reread, &error));
+    EXPECT_EQ(reread.text, contents.text);
+}
+
+TEST(VaultFileOps, MoveToTrashKeepsFolderStructureAndSuffixesOnCollision)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QStringLiteral("Sub"), QStringLiteral("Note"), &error);
+    ASSERT_FALSE(note.isEmpty());
+
+    ASSERT_TRUE(vault.moveToTrash(note, &error)) << error.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(note));
+    const QString trashed = dir.filePath(QStringLiteral(".trash/Sub/Note.md"));
+    EXPECT_TRUE(QFileInfo::exists(trashed));
+
+    // Trash a second, unrelated file that happens to land on the same name.
+    const QString again = vault.createNote(QStringLiteral("Sub"), QStringLiteral("Note"), &error);
+    ASSERT_FALSE(again.isEmpty());
+    ASSERT_TRUE(vault.moveToTrash(again, &error)) << error.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral(".trash/Sub/Note 1.md"))));
+}
+
+// --- ignore filters ----------------------------------------------------
+
+TEST(VaultIgnoreFilters, UnconfiguredVaultSkipsBuildDirectoriesByDefault)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("build/output.md")));
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("projects/app/build-release/out.o")));
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("Projects/notes.md")));
+}
+
+TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefault)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+
+    QJsonArray filters;
+    filters.append(QStringLiteral("Templates/"));
+    // A JavaScript regex literal, as Obsidian stores it.
+    filters.append(QStringLiteral("/(^|\\/)node_modules\\//"));
+    QJsonObject appJson;
+    appJson[QStringLiteral("userIgnoreFilters")] = filters;
+
+    QFile file(dir.filePath(QStringLiteral(".obsidian/app.json")));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(appJson).toJson());
+    file.close();
+
+    Vault vault(dir.path()); // filters are read at construction time
+
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("Templates/daily.md")));
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("src/node_modules/pkg/index.js")));
+    EXPECT_TRUE(vault.isIgnored(QStringLiteral("node_modules/pkg/index.js")));
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("Projects/notes.md")));
+    // Filters are configured, so the build*/ fallback no longer applies.
+    EXPECT_FALSE(vault.isIgnored(QStringLiteral("build/output.md")));
 }

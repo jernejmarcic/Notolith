@@ -80,7 +80,7 @@ void Indexer::rebuild()
     while (it.hasNext()) {
         const QString path = it.next();
         const QString relative = m_vault.relative(path);
-        if (isIgnored(relative))
+        if (isIgnored(relative) || m_vault.isIgnored(relative))
             continue;
         const QFileInfo info(path);
         if (m_index->isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size()))
@@ -185,7 +185,8 @@ void Indexer::rewatch()
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString path = it.next();
-        if (!isIgnored(m_vault.relative(path)))
+        const QString relative = m_vault.relative(path);
+        if (!isIgnored(relative) && !m_vault.isIgnored(relative))
             directories << path;
     }
     // ponytail: one inotify watch per directory, which tops out around 8k.

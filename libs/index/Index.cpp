@@ -1,5 +1,7 @@
 #include "Index.h"
 
+#include <algorithm>
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
@@ -9,6 +11,9 @@
 #include <QUrl>
 #include <QUuid>
 #include <QVariant>
+
+#include "Parser.h"
+#include "Vault.h"
 
 namespace noteAppC {
 
@@ -115,7 +120,8 @@ bool Index::createSchema()
         QStringLiteral("CREATE TABLE IF NOT EXISTS links ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "target TEXT, subpath TEXT, alias TEXT, embed INTEGER, wiki INTEGER, "
-                       "external INTEGER, start INTEGER, finish INTEGER)"),
+                       "external INTEGER, start INTEGER, finish INTEGER, "
+                       "tstart INTEGER, tfinish INTEGER)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS tags ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "name TEXT, start INTEGER, finish INTEGER)"),
@@ -146,6 +152,12 @@ bool Index::createSchema()
             return false;
         }
     }
+
+    // ponytail: a cache built before tstart/tfinish existed just gets the
+    // columns bolted on rather than a versioned migration; errors here only
+    // mean a fresh table already created them above.
+    query.exec(QStringLiteral("ALTER TABLE links ADD COLUMN tstart INTEGER"));
+    query.exec(QStringLiteral("ALTER TABLE links ADD COLUMN tfinish INTEGER"));
     return true;
 }
 
@@ -258,9 +270,11 @@ void Index::put(const Metadata &metadata, const QString &body)
     }
     for (const Link &link : metadata.links) {
         insert(QStringLiteral("INSERT INTO links(file, target, subpath, alias, embed, wiki, "
-                              "external, start, finish) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+                              "external, start, finish, tstart, tfinish) "
+                              "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
                {fileId, link.target, link.subpath, link.alias, link.embed, link.wiki,
-                link.external, link.range.start, link.range.end});
+                link.external, link.range.start, link.range.end,
+                link.targetRange.start, link.targetRange.end});
     }
     for (const Tag &tag : metadata.tags) {
         insert(QStringLiteral("INSERT INTO tags(file, name, start, finish) VALUES(?, ?, ?, ?)"),
@@ -524,6 +538,168 @@ QStringList Index::linkTargets() const
     while (query.next())
         names << query.value(0).toString();
     return names;
+}
+
+bool Index::basenameStillUnique(const QString &basename, const QString &excludePath) const
+{
+    const QStringList candidates = m_names.value(foldCase(basename));
+    for (const QString &candidate : candidates) {
+        if (candidate != excludePath)
+            return false;
+    }
+    return true;
+}
+
+QString Index::rebasedTarget(const QString &oldTarget, const QString &oldRelative,
+                             const QString &newRelative) const
+{
+    const bool dotSlash = oldTarget.startsWith(QLatin1String("./"));
+    QString working = dotSlash ? oldTarget.mid(2) : oldTarget;
+    const bool hadExt = working.endsWith(QLatin1String(".md"), Qt::CaseInsensitive);
+    if (hadExt)
+        working.chop(3);
+
+    const QString oldBase = QFileInfo(oldRelative).completeBaseName();
+    const QString newBase = QFileInfo(newRelative).completeBaseName();
+    const QString newFull = newRelative.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)
+                                ? newRelative.chopped(3)
+                                : newRelative;
+
+    // A target with no slash that named the old note by its bare basename
+    // stays a basename, provided the new one is still unambiguous - exactly
+    // Obsidian's "shortest path when possible" rule. Anything else (already a
+    // path, or some shape this pass does not specifically recognise) becomes
+    // the new vault-relative path.
+    QString rebased;
+    if (!working.contains(QLatin1Char('/')) && foldCase(working) == foldCase(oldBase))
+        rebased = basenameStillUnique(newBase, oldRelative) ? newBase : newFull;
+    else
+        rebased = newFull;
+
+    if (hadExt)
+        rebased += QLatin1String(".md");
+    if (dotSlash)
+        rebased.prepend(QLatin1String("./"));
+    return rebased;
+}
+
+int Index::updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
+                                  const Vault &vault, QString *error)
+{
+    if (!m_db.isOpen()) {
+        if (error)
+            *error = QStringLiteral("index is not open");
+        return -1;
+    }
+
+    // One pass over every internal link to find what actually resolves to
+    // the renamed note - resolution depends on the linking note's own folder,
+    // so this cannot be a plain string match against `target`.
+    struct Hit {
+        QString subpath;
+        bool wiki = true;
+        Range targetRange;
+    };
+    QHash<QString, QList<Hit>> perFile;
+
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral(
+        "SELECT files.path, links.target, links.subpath, links.wiki, links.tstart, "
+        "links.tfinish FROM links JOIN files ON files.id = links.file "
+        "WHERE links.external = 0"));
+    while (query.next()) {
+        const QString fromPath = query.value(0).toString();
+        const QString target = query.value(1).toString();
+        if (target.isEmpty())
+            continue; // a link into the note's own headings, nothing to resolve
+        if (query.isNull(4) || query.isNull(5))
+            continue; // indexed before tstart/tfinish existed; rebuild will fix it
+
+        const QString fromAbsolute = vault.absolute(fromPath);
+        if (resolve(target, fromAbsolute) != oldRelative)
+            continue;
+
+        Hit hit;
+        hit.subpath = query.value(2).toString();
+        hit.wiki = query.value(3).toBool();
+        hit.targetRange = {query.value(4).toLongLong(), query.value(5).toLongLong()};
+        perFile[fromPath].append(hit);
+    }
+
+    beginBatch();
+    const Parser parser;
+    int rewritten = 0;
+
+    const auto reindex = [&](const QString &absolutePath, const QString &text) {
+        Metadata metadata = parser.parse(text, absolutePath);
+        const QFileInfo info(absolutePath);
+        metadata.mtime = info.lastModified().toMSecsSinceEpoch();
+        metadata.size = info.size();
+        metadata.hash = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1);
+        put(metadata, text);
+    };
+
+    for (auto it = perFile.constBegin(); it != perFile.constEnd(); ++it) {
+        const QString fromPath = it.key();
+        // The renamed note itself has already moved on disk by the time this
+        // runs; every other linking note is still where the index found it.
+        const QString actualRelative = fromPath == oldRelative ? newRelative : fromPath;
+        const QString absolutePath = vault.absolute(actualRelative);
+
+        Note note;
+        if (!Vault::read(absolutePath, note, error)) {
+            endBatch();
+            return -1;
+        }
+
+        QList<Hit> hits = it.value();
+        // Last link first, so an earlier link's offsets stay valid while a
+        // later one's replacement text changes length.
+        std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b) {
+            return a.targetRange.start > b.targetRange.start;
+        });
+
+        for (const Hit &hit : std::as_const(hits)) {
+            // A wikilink's targetRange is the target alone. A Markdown link's
+            // covers the whole URL, subpath included, since that is one
+            // contiguous node in md4qt; only the part before it is the target.
+            const qsizetype rawLength =
+                hit.wiki ? hit.targetRange.length() : hit.targetRange.length() - hit.subpath.length();
+            if (rawLength < 0 || hit.targetRange.start + rawLength > note.text.size())
+                continue; // stale offset - the file moved under us; a rebuild will catch it
+
+            const QString rawSlice = note.text.mid(hit.targetRange.start, rawLength);
+            const QString decoded =
+                hit.wiki ? rawSlice : QUrl::fromPercentEncoding(rawSlice.toUtf8());
+
+            QString rebased = rebasedTarget(decoded, oldRelative, newRelative);
+            if (!hit.wiki)
+                rebased = QString::fromUtf8(QUrl::toPercentEncoding(rebased, "/"));
+
+            note.text.replace(hit.targetRange.start, rawLength, rebased);
+        }
+
+        if (!Vault::write(absolutePath, note, error)) {
+            endBatch();
+            return -1;
+        }
+
+        reindex(absolutePath, note.text);
+        ++rewritten;
+    }
+
+    // The renamed note's own row still sits at the old path until it is
+    // refreshed here - whether or not anything else linked to it. Done last,
+    // so the uniqueness checks above saw the pre-rename set of names.
+    if (oldRelative != newRelative) {
+        remove(vault.absolute(oldRelative));
+        Note note;
+        if (Vault::read(vault.absolute(newRelative), note))
+            reindex(vault.absolute(newRelative), note.text);
+    }
+
+    endBatch();
+    return rewritten;
 }
 
 } // namespace noteAppC

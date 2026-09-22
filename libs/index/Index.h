@@ -10,6 +10,8 @@
 
 namespace noteAppC {
 
+class Vault;
+
 /// One resolved reference from one note to another.
 struct Backlink {
     QString fromPath;  ///< note holding the link
@@ -74,6 +76,16 @@ public:
     /// Every name a wikilink may use, for the `[[` suggester.
     QStringList linkTargets() const;
 
+    /// Rewrites every wikilink and Markdown link that resolves to `oldRelative`
+    /// so it points at `newRelative`, preserving each link's own form: an alias
+    /// stays (`[[old|shown]]` -> `[[new|shown]]`), a subpath stays
+    /// (`[[old#heading]]`), an embed stays an embed, a Markdown link keeps its
+    /// percent-encoding, and a link written as a shortest-unique basename stays a
+    /// basename when that is still unique. Only the link's bytes change.
+    /// Returns the number of notes rewritten, or -1 with `error` filled.
+    int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
+                               const Vault &vault, QString *error = nullptr);
+
 signals:
     void changed();
 
@@ -82,6 +94,11 @@ private:
     void loadNames();
     void indexNames(qint64 fileId, const QString &path, const QStringList &names);
     void forgetNames(const QString &path);
+    /// The new text for one link's target, keeping its basename-vs-path shape
+    /// (a basename only when it stays unique) and any leading "./"/".md".
+    QString rebasedTarget(const QString &oldTarget, const QString &oldRelative,
+                          const QString &newRelative) const;
+    bool basenameStillUnique(const QString &basename, const QString &excludePath) const;
 
     QSqlDatabase m_db;
     QString m_connectionName;
