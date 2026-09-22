@@ -214,6 +214,16 @@ void MarkdownEditor::setModified(bool modified)
     emit modificationChanged(m_modified);
 }
 
+void MarkdownEditor::setLineNumbers(bool on)
+{
+    if (m_lineNumbers == on)
+        return;
+    m_lineNumbers = on;
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
 void MarkdownEditor::setReadableLineLength(bool on)
 {
     if (m_readable == on)
@@ -329,6 +339,7 @@ void MarkdownEditor::startParse()
 void MarkdownEditor::adoptDecorations(Decorations decorations)
 {
     m_decorations = std::move(decorations);
+    m_lines = SourceMap(m_text);
     rebuildBlocks();
     indexDecorations();
     invalidateLayouts();
@@ -621,9 +632,20 @@ QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &
     return formats;
 }
 
+int MarkdownEditor::gutterWidth() const
+{
+    if (!m_lineNumbers || m_mode != Mode::Source)
+        return 0;
+    // Wide enough for the largest number this note can reach.
+    const int digits = qMax(2, QString::number(qMax<qsizetype>(1, m_lines.lineCount())).size());
+    return int(QFontMetricsF(m_theme.monospaceFont()).horizontalAdvance(QLatin1Char('0')))
+               * digits
+           + 18;
+}
+
 int MarkdownEditor::contentWidth() const
 {
-    const int available = viewport()->width() - 2 * m_minimumSideMargin;
+    const int available = viewport()->width() - 2 * m_minimumSideMargin - gutterWidth();
     if (!m_readable)
         return qMax(120, available);
     return qMax(120, qMin(available, m_contentWidth));
@@ -631,7 +653,35 @@ int MarkdownEditor::contentWidth() const
 
 int MarkdownEditor::contentLeft() const
 {
-    return qMax(m_minimumSideMargin, (viewport()->width() - contentWidth()) / 2);
+    return qMax(m_minimumSideMargin + gutterWidth(),
+                (viewport()->width() - contentWidth()) / 2);
+}
+
+void MarkdownEditor::paintGutter(QPainter &painter, const BlockView &view, qreal top) const
+{
+    if (gutterWidth() == 0 || !view.layout)
+        return;
+
+    painter.save();
+    QFont font = m_theme.monospaceFont();
+    font.setPixelSize(int(font.pixelSize() * 0.9));
+    painter.setFont(font);
+    painter.setPen(m_theme.color(QStringLiteral("--text-faint")));
+
+    const qreal right = contentLeft() - 12;
+    for (int i = 0; i < view.layout->lineCount(); ++i) {
+        const QTextLine line = view.layout->lineAt(i);
+        const qsizetype source = view.map.toSource(line.textStart());
+        // Only the first visual line of a wrapped source line is numbered.
+        if (i > 0 && m_lines.lineAt(source) == m_lines.lineAt(view.map.toSource(
+                         view.layout->lineAt(i - 1).textStart())))
+            continue;
+        painter.drawText(QRectF(right - gutterWidth(), top + line.y(), gutterWidth(),
+                                line.height()),
+                         Qt::AlignRight | Qt::AlignVCenter,
+                         QString::number(m_lines.lineAt(source) + 1));
+    }
+    painter.restore();
 }
 
 bool MarkdownEditor::softBreakAt(qsizetype source) const
@@ -683,7 +733,10 @@ QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &i
 void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, qreal left,
                                       qreal top) const
 {
-    if (!view.layout || view.span.kind != BlockSpan::Kind::List)
+    // Source mode and the caret's own block show the real markers, so drawing
+    // bullets as well would double them up.
+    if (!view.layout || view.span.kind != BlockSpan::Kind::List || m_mode == Mode::Source
+        || view.active)
         return;
 
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
@@ -1240,6 +1293,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             const qreal drop = view.callout ? calloutHeaderHeight() : 0;
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
             paintListMarkers(painter, view, left + indent, top + drop);
+            paintGutter(painter, view, top + drop);
         }
     }
 
@@ -1437,6 +1491,7 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // nothing on screen; every other block is untouched by this edit. Shifting
     // the offsets is therefore enough until the debounced parse lands.
     ++m_textVersion;
+    m_lines = SourceMap(m_text); // the gutter needs current line starts
     const qsizetype delta = inserted.size() - removed;
     shiftRanges(at + removed, delta);
     if (delta != 0) {

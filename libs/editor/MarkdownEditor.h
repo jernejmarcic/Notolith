@@ -53,6 +53,10 @@ public:
     bool isModified() const { return m_modified; }
     void setModified(bool modified);
 
+    /// Line numbers in a gutter, the way Obsidian shows them in source mode.
+    void setLineNumbers(bool on);
+    bool lineNumbers() const { return m_lineNumbers; }
+
     void setReadableLineLength(bool on);
     void setContentWidth(int pixels);
 
@@ -185,6 +189,9 @@ private:
     void updateScrollRange();
     int contentLeft() const;
     int contentWidth() const;
+    /// Width reserved for the line-number gutter, 0 when it is not shown.
+    int gutterWidth() const;
+    void paintGutter(QPainter &painter, const BlockView &view, qreal top) const;
 
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;
@@ -222,6 +229,7 @@ private:
     Mode m_mode = Mode::LivePreview;
 
     QString m_text;
+    SourceMap m_lines; ///< line starts, for the gutter
     Decorations m_decorations; ///< styles and syntax kept sorted by start
     std::vector<BlockView> m_blocks; // move-only: QTextLayout is not copyable
 
@@ -236,6 +244,7 @@ private:
     bool m_interacted = false;
     bool m_modified = false;
     bool m_readable = true;
+    bool m_lineNumbers = true; ///< shown in source mode only
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;

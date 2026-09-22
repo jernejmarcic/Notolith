@@ -32,10 +32,13 @@ int main(int argc, char *argv[])
     noteAppC::MainWindow window;
     if (args.value(4) == QLatin1String("light"))
         window.setThemeMode(noteAppC::Theme::Mode::Light);
+    const bool sourceMode = args.contains(QLatin1String("--source"));
     window.resize(size);
     window.openVault(args.at(1));
     if (args.at(2) != QLatin1String("-"))
         window.openNote(args.at(2));
+    if (sourceMode)
+        window.toggleEditingMode();
     window.show();
 
     int status = 0;

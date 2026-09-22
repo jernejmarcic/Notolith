@@ -47,6 +47,10 @@ public:
 protected:
     void closeEvent(QCloseEvent *event) override;
 
+public slots:
+    /// Obsidian's Ctrl+E, exposed so tools and tests can drive it.
+    void toggleEditingModeSlot() { toggleEditingMode(); }
+
 private slots:
     void chooseVault();
     bool save();
