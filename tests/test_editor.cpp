@@ -1338,3 +1338,99 @@ TEST(UnresolvedLinkTest, OnlyALinkWithNoNoteBehindItIsDimmed)
     EXPECT_EQ(colourOfLinkAt(QStringLiteral("https://example.com")), accent);
 }
 
+// --- what a selection reveals ----------------------------------------------
+
+namespace {
+
+/// A point on the first line of the first block, `dx` pixels into the text.
+QPoint firstLinePoint(const MarkdownEditor &editor, int dx)
+{
+    const int viewport = editor.viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    const qreal fontHeight = QFontMetricsF(Theme::builtin().textFont()).height();
+    return QPoint(left + dx, int(28 + fontHeight / 2));
+}
+
+/// Mouse events sent the way Qt Widgets delivers them, so a test sees the same
+/// sequence a real double-click produces: press, release, double-click,
+/// release - the second press arrives as the double-click, not as a press.
+void send(QWidget *target, QEvent::Type type, QPoint at, Qt::MouseButtons held)
+{
+    const Qt::MouseButton button =
+        type == QEvent::MouseMove ? Qt::NoButton : Qt::LeftButton;
+    QMouseEvent event(type, QPointF(at), target->mapToGlobal(QPointF(at)), button, held,
+                      Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &event);
+}
+
+const QString kRevealNote = QStringLiteral("Some **bold** words to select across.\n\nSecond.\n");
+
+} // namespace
+
+TEST(RevealTest, DraggingASelectionNeverRevealsSyntax)
+{
+    // Obsidian keeps rendering while a selection is dragged. Revealing the
+    // markers mid-drag moved the text out from under the pointer.
+    auto editor = editorWith(kRevealNote);
+    const QString rendered = editor->displayText();
+    ASSERT_FALSE(rendered.contains(QLatin1String("**")));
+
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, firstLinePoint(*editor, 4), Qt::LeftButton);
+    EXPECT_EQ(editor->displayText(), rendered) << "nothing may move while the button is down";
+    send(viewport, QEvent::MouseMove, firstLinePoint(*editor, 180), Qt::LeftButton);
+    EXPECT_EQ(editor->displayText(), rendered);
+    send(viewport, QEvent::MouseButtonRelease, firstLinePoint(*editor, 180), Qt::NoButton);
+
+    EXPECT_FALSE(editor->selectedText().isEmpty());
+    EXPECT_EQ(editor->displayText(), rendered) << "a finished selection stays rendered too";
+}
+
+TEST(RevealTest, APlainClickRevealsOnRelease)
+{
+    auto editor = editorWith(kRevealNote);
+    const QString rendered = editor->displayText();
+
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, firstLinePoint(*editor, 4), Qt::LeftButton);
+    EXPECT_EQ(editor->displayText(), rendered);
+    send(viewport, QEvent::MouseButtonRelease, firstLinePoint(*editor, 4), Qt::NoButton);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("**")))
+        << "a bare caret still shows its block's source";
+}
+
+TEST(RevealTest, AKeyboardSelectionRendersAgain)
+{
+    auto editor = editorWith(kRevealNote);
+    const QString rendered = editor->displayText();
+    editor->enterBlockAt(0);
+    ASSERT_TRUE(editor->displayText().contains(QLatin1String("**")));
+
+    QTest::keyClick(editor.get(), Qt::Key_End, Qt::ShiftModifier);
+    EXPECT_FALSE(editor->selectedText().isEmpty());
+    EXPECT_EQ(editor->displayText(), rendered);
+}
+
+TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
+{
+    // The first click's release reveals the block, which shifts everything
+    // after the markers four characters to the right. The word selected has
+    // to be the one under the pointer before that happened.
+    auto editor = editorWith(kRevealNote);
+    const QString rendered = editor->displayText();
+    const qsizetype wordsAt = rendered.indexOf(QLatin1String("words"));
+    ASSERT_GT(wordsAt, 0);
+    const qreal advance = QFontMetricsF(Theme::builtin().textFont())
+                              .horizontalAdvance(rendered.left(wordsAt + 2));
+    const QPoint onWords = firstLinePoint(*editor, int(advance));
+
+    QWidget *viewport = editor->viewport();
+    send(viewport, QEvent::MouseButtonPress, onWords, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWords, Qt::NoButton);
+    send(viewport, QEvent::MouseButtonDblClick, onWords, Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonRelease, onWords, Qt::NoButton);
+
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("words"));
+}
+

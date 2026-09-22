@@ -102,6 +102,9 @@ public:
     int wordCount() const;
     /// Source offset of the caret, for tests and for the status bar.
     qsizetype cursorOffset() const { return m_cursor; }
+    /// The selected source text, exactly as it is in the file - markers
+    /// included, since that is what a copy has to carry.
+    QString selectedText() const;
     void setCursorOffset(qsizetype offset);
 
     /// What the widget currently shows, block by block. The quickest way to
@@ -191,6 +194,7 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
@@ -521,6 +525,11 @@ private:
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;
+    /// The left button is held: what is revealed stays exactly as it was
+    /// until release, so a drag never selects across text that just moved.
+    bool m_pressing = false;
+    /// Where the last press landed, in source coordinates.
+    qsizetype m_pressOffset = 0;
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;

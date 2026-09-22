@@ -1899,7 +1899,14 @@ void MarkdownEditor::updateLayout()
     // focus, so interaction - not focus - is what reveals it.
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
-        const bool active = m_mode == Mode::LivePreview && m_interacted && i == m_activeBlock;
+        // A block shows its raw source only for a bare caret. With a selection
+        // it stays rendered, as in Obsidian, and while the mouse button is
+        // held nothing changes at all: revealing the syntax mid-drag moved the
+        // text out from under the pointer, so the selection chased it.
+        bool active = m_mode == Mode::LivePreview && m_interacted && i == m_activeBlock
+                      && selection().length() == 0;
+        if (m_pressing)
+            active = view.active;
         if (active != view.active) {
             view.active = active;
             view.layout.reset();
@@ -2186,14 +2193,18 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
 {
     const qsizetype clamped = qBound<qsizetype>(0, offset, m_text.size());
     const qsizetype previousBlock = m_activeBlock;
+    const bool hadSelection = m_anchor != m_cursor;
 
     m_cursor = clamped;
     if (!keepAnchor)
         m_anchor = clamped;
 
     m_activeBlock = blockAt(m_cursor);
-    if (m_activeBlock != previousBlock)
-        updateLayout(); // the two blocks swap between raw and rendered
+    // The two blocks swap between raw and rendered - and so does one block
+    // when a selection starts or collapses inside it, since only a bare caret
+    // reveals source.
+    if (m_activeBlock != previousBlock || hadSelection != (m_anchor != m_cursor))
+        updateLayout();
 
     ensureCursorVisible();
     m_cursorOn = true;
@@ -2563,7 +2574,31 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
 
     m_goalX = -1;
     m_interacted = true;
-    moveCursor(offsetAt(event->pos()), event->modifiers().testFlag(Qt::ShiftModifier));
+    // Measured against the layout the reader is looking at now, before this
+    // click can change what is revealed. A double-click selects the word
+    // found here, not under a layout the first click has since shifted.
+    m_pressOffset = offsetAt(event->pos());
+    m_pressing = true;
+    moveCursor(m_pressOffset, event->modifiers().testFlag(Qt::ShiftModifier));
+    updateLayout();
+    viewport()->update();
+}
+
+QString MarkdownEditor::selectedText() const
+{
+    const Range range = selection();
+    return m_text.mid(range.start, range.length());
+}
+
+void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton || !m_pressing) {
+        QAbstractScrollArea::mouseReleaseEvent(event);
+        return;
+    }
+    // Only now does the caret's block decide whether to show its source: a
+    // plain click reveals it, a drag that selected something does not.
+    m_pressing = false;
     updateLayout();
     viewport()->update();
 }
@@ -2586,8 +2621,10 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
         return;
     }
 
-    // Select the word under the caret.
-    const qsizetype at = offsetAt(event->pos());
+    // Select the word the first click landed on. By now that click's release
+    // may have revealed its block's syntax and moved the text, so the pointer
+    // is no longer a reliable way to find the word the reader aimed at.
+    const qsizetype at = m_pressOffset;
     qsizetype start = at;
     qsizetype end = at;
     while (start > 0 && m_text.at(start - 1).isLetterOrNumber())
