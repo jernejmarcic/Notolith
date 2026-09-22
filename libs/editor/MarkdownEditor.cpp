@@ -36,6 +36,11 @@ namespace {
 constexpr int kBlockSpacing = 0;
 /// Width of the margin a list keeps for its bullets and checkboxes.
 constexpr qreal kListIndent = 26;
+/// Above this many characters a note is shown first and parsed on the thread
+/// pool. Below it the parse is quicker than a frame, so the intermediate
+/// plain-text state would be a flicker and nothing else. 200 kB parses in
+/// about 26 ms, 50 kB in 7 ms; this sits between them.
+constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
 constexpr int kTypingBurstMs = 500;
 
 qreal headingScale(int level)
@@ -213,7 +218,18 @@ void MarkdownEditor::setNoteText(const QString &text)
     m_undo.clear();
     m_redo.clear();
     m_interacted = false;
-    reparse();
+    // A big note is shown before it is understood: its text goes up as plain
+    // paragraphs at once and the parse runs on the thread pool, because the
+    // parse is the whole cost of opening one (142 ms of a 1 MB note's 146 ms)
+    // and there is no reason to stare at nothing while it happens. A small
+    // note parses faster than a frame, so it skips the intermediate state
+    // rather than flickering through it.
+    if (text.size() > kAsyncParseThreshold) {
+        adoptDecorations({}, {});
+        startParse();
+    } else {
+        reparse();
+    }
     if (!m_find.pattern.isEmpty())
         updateFindMatches();
     setModified(false);
@@ -569,9 +585,35 @@ qreal MarkdownEditor::estimatedHeight(const BlockView &view) const
     return lines * lineHeightFor(view.span);
 }
 
+/// Paragraph blocks split on blank lines, for a note whose parse has not come
+/// back yet. Without this an unparsed note is one block a megabyte long, and
+/// laying that out as a single QTextLayout costs more than the parse did.
+QList<BlockSpan> MarkdownEditor::plainParagraphs() const
+{
+    QList<BlockSpan> spans;
+    qsizetype start = 0;
+    const qsizetype size = m_text.size();
+    for (qsizetype i = 0; i < size; ++i) {
+        if (m_text.at(i) != QLatin1Char('\n'))
+            continue;
+        // A blank line ends a paragraph, exactly as Markdown says.
+        if (i + 1 < size && m_text.at(i + 1) == QLatin1Char('\n')) {
+            if (i > start)
+                spans.append({BlockSpan::Kind::Paragraph, {start, i}, 0});
+            start = i + 2;
+            ++i;
+        }
+    }
+    if (start < size)
+        spans.append({BlockSpan::Kind::Paragraph, {start, size}, 0});
+    return spans;
+}
+
 void MarkdownEditor::rebuildBlocks()
 {
-    QList<BlockSpan> spans = m_decorations.blocks;
+    QList<BlockSpan> spans =
+        m_decorations.blocks.isEmpty() && !m_text.isEmpty() ? plainParagraphs()
+                                                            : m_decorations.blocks;
     std::sort(spans.begin(), spans.end(),
               [](const BlockSpan &l, const BlockSpan &r) { return l.range.start < r.range.start; });
 

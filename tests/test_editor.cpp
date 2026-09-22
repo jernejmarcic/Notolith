@@ -328,16 +328,13 @@ TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
     EXPECT_LT(milliseconds, 300.0);
 }
 
-TEST(MarkdownEditorTest, OpeningAMegabyteNoteStaysLinear)
+TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
 {
-    // The guard on a specific quadratic: ObsidianSyntax::scan ran the lazy
-    // `%%...%%` comment pattern once per unmasked region, and each run with no
-    // match had to walk to the end of the file. A 1 MB note has some 16 000
-    // regions, so opening it took 2 s of which the comment pass was 1.9 s.
-    //
-    // Asserted as a *ratio*, not a wall-clock number: five times the text
-    // should cost roughly five times the work, and a quadratic cannot hide
-    // inside that however fast the machine is.
+    // Above kAsyncParseThreshold a note is shown before it is parsed: the text
+    // goes up as plain paragraphs and the parse runs on the thread pool. So
+    // what this measures is the time to something readable, which is what the
+    // reader waits for. The parser's own cost is guarded separately, by
+    // ParserPerfTest::ParsingStaysLinearInFileSize in test_markdown.cpp.
     const QString small = generateNote(200);
     const QString large = generateNote(1000);
 
@@ -356,9 +353,10 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteStaysLinear)
                 small.size() / 1024.0, smallMs, large.size() / 1024.0, largeMs,
                 sizeRatio, timeRatio);
 
-    // Generous: linear would be ~5x, the old quadratic was over 30x.
-    EXPECT_LT(timeRatio, sizeRatio * 2.5);
-    EXPECT_LT(largeMs, 900.0);
+    // Showing five times the text must not cost five times the wait, because
+    // almost none of this is proportional to the file any more.
+    EXPECT_LT(timeRatio, sizeRatio);
+    EXPECT_LT(largeMs, 60.0);
 }
 
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)

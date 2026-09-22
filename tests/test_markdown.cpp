@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <QElapsedTimer>
+
 #include "Decorations.h"
 #include "Frontmatter.h"
 #include "ObsidianSyntax.h"
@@ -1048,3 +1050,46 @@ TEST(LinkTest, HeadingAndBlockAnchorsRecordTheirSourceRanges)
     EXPECT_FALSE(plainLink->anchorText.isValid());
 }
 
+TEST(ParserPerfTest, ParsingStaysLinearInFileSize)
+{
+    // The guard on a specific quadratic, and it belongs here rather than in
+    // the editor's tests: ObsidianSyntax::scan ran the lazy `%%...%%` pattern
+    // once per unmasked region, and a run with no match has to walk to the end
+    // of the text before it can say so. A 1 MB note has some 16 000 regions,
+    // which made parsing it take 1 992 ms instead of 142 ms.
+    //
+    // Asserted as a ratio, not a wall-clock number: five times the text should
+    // cost roughly five times the work, and a quadratic cannot fit inside that
+    // however fast the machine is.
+    const QString chunk = QStringLiteral(
+        "## Heading\n\nA paragraph with **bold**, *italic*, `code`, a [[wikilink]] and a "
+        "[link](https://example.org), long enough to wrap.\n\n- one\n- two\n\n");
+    QString small;
+    while (small.size() < 200 * 1024)
+        small += chunk;
+    QString large;
+    while (large.size() < 1000 * 1024)
+        large += chunk;
+
+    Parser parser;
+    // One untimed pass, so neither measurement pays for a cold regex cache.
+    parser.parseAll(chunk, QStringLiteral("/vault/Note.md"));
+
+    QElapsedTimer clock;
+    clock.start();
+    parser.parseAll(small, QStringLiteral("/vault/Note.md"));
+    const double smallMs = clock.nsecsElapsed() / 1e6;
+
+    clock.restart();
+    parser.parseAll(large, QStringLiteral("/vault/Note.md"));
+    const double largeMs = clock.nsecsElapsed() / 1e6;
+
+    const double sizeRatio = double(large.size()) / double(small.size());
+    const double timeRatio = largeMs / std::max(0.001, smallMs);
+    std::printf("[ PERF     ] parse %.0f kB: %.1f ms, %.0f kB: %.1f ms (%.1fx text, %.1fx time)\n",
+                small.size() / 1024.0, smallMs, large.size() / 1024.0, largeMs,
+                sizeRatio, timeRatio);
+
+    // Linear is ~5x. The quadratic this replaced was over 30x.
+    EXPECT_LT(timeRatio, sizeRatio * 2.0);
+}

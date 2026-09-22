@@ -455,6 +455,7 @@ private:
     /// that block's display string.
     QList<QTextLayout::FormatRange> codeFormatsFor(const BlockView &view) const;
     QList<QTextLayout::FormatRange> nestedCodeFormatsFor(const BlockView &view) const;
+    QList<BlockSpan> plainParagraphs() const;
     /// The code between the fences, and the language the fence declared.
     Range codeContentOf(const BlockView &view, QString *language) const;
     QFont fontFor(const BlockSpan &span) const;
