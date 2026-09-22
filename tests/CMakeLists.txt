@@ -8,6 +8,10 @@ add_executable(test_markdown test_markdown.cpp)
 target_link_libraries(test_markdown PRIVATE noteAppC_markdown GTest::gtest GTest::gtest_main)
 add_test(NAME markdown COMMAND test_markdown)
 
+add_executable(test_index test_index.cpp)
+target_link_libraries(test_index PRIVATE noteAppC_index noteAppC_vault Qt6::Test GTest::gtest)
+add_test(NAME index COMMAND test_index)
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME window COMMAND test_window)

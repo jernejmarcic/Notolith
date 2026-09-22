@@ -1,0 +1,95 @@
+#pragma once
+
+#include <QHash>
+#include <QObject>
+#include <QSqlDatabase>
+#include <QString>
+#include <QStringList>
+
+#include "Metadata.h"
+
+namespace noteAppC {
+
+/// One resolved reference from one note to another.
+struct Backlink {
+    QString fromPath;  ///< note holding the link
+    QString context;   ///< the source line, for the backlinks pane
+    Link link;
+};
+
+/// The metadata cache: SQLite with FTS5, one database per vault under
+/// $XDG_CACHE_HOME, the way Obsidian also keeps its cache outside the vault.
+///
+/// Owns link resolution too, because resolving needs the same name table the
+/// database already maintains. Single threaded: parsing happens on a pool,
+/// every write lands here.
+class Index : public QObject {
+    Q_OBJECT
+
+public:
+    explicit Index(QObject *parent = nullptr);
+    ~Index() override;
+
+    /// Opens (and migrates) the cache for `vaultRoot`. False on failure, with
+    /// the reason in lastError().
+    bool open(const QString &vaultRoot);
+    void close();
+    bool isOpen() const;
+    QString lastError() const { return m_error; }
+    QString databasePath() const { return m_databasePath; }
+
+    /// Where the cache for a vault lives; public so the tests can point it
+    /// somewhere temporary.
+    static QString cachePathFor(const QString &vaultRoot);
+
+    // --- writing -------------------------------------------------------
+
+    void beginBatch();
+    void endBatch();
+    void put(const Metadata &metadata, const QString &body);
+    void remove(const QString &path);
+    /// mtime and size of what the cache holds, for skipping unchanged files.
+    bool isCurrent(const QString &path, qint64 mtime, qint64 size) const;
+
+    // --- reading -------------------------------------------------------
+
+    int noteCount() const;
+    QStringList allPaths() const;
+    QStringList allTags() const;
+
+    /// Obsidian's resolution order: exact path, then shortest unique
+    /// basename, then alias, then frontmatter id. `fromPath` breaks ties in
+    /// favour of the linking note's own folder. Empty when unresolved.
+    QString resolve(const QString &target, const QString &fromPath = {}) const;
+
+    QList<Backlink> backlinks(const QString &path) const;
+    QList<Link> outgoingLinks(const QString &path) const;
+    QStringList notesWithTag(const QString &tag) const;
+    /// Quick switcher: paths whose name matches `query`, best first.
+    QStringList findByName(const QString &query, int limit = 50) const;
+    /// Every name a wikilink may use, for the `[[` suggester.
+    QStringList linkTargets() const;
+
+signals:
+    void changed();
+
+private:
+    bool createSchema();
+    void loadNames();
+    void indexNames(qint64 fileId, const QString &path, const QStringList &names);
+    void forgetNames(const QString &path);
+
+    QSqlDatabase m_db;
+    QString m_connectionName;
+    QString m_databasePath;
+    QString m_vaultRoot;
+    QString m_error;
+    bool m_inBatch = false;
+
+    /// lower-cased name -> vault-relative paths that answer to it.
+    QHash<QString, QStringList> m_names;
+    /// vault-relative path -> the names it registered, so a remove is exact.
+    QHash<QString, QStringList> m_pathNames;
+};
+
+} // namespace noteAppC

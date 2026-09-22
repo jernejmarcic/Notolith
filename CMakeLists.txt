@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Sql Concurrent)
 find_package(Qt6 6.5 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
@@ -36,6 +36,7 @@ target_include_directories(md4qt INTERFACE ${CMAKE_BINARY_DIR}/md4qt-include)
 
 add_subdirectory(libs/vault)
 add_subdirectory(libs/markdown)
+add_subdirectory(libs/index)
 add_subdirectory(libs/theme)
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
