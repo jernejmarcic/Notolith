@@ -112,6 +112,77 @@ TEST(FrontmatterTest, PropertiesAliasesTagsAndId)
     EXPECT_TRUE(metadata.linkNames().contains(QStringLiteral("Note")));
 }
 
+TEST(FrontmatterTest, TypesComeFromTheYamlNotTheString)
+{
+    const QString text = QStringLiteral(
+        "---\n"
+        "quoted: \"42\"\n"
+        "count: 42\n"
+        "one: [project]\n"
+        "when: 2026-09-22T10:00:00\n"
+        "empty:\n"
+        "---\n"
+        "\n"
+        "Body.\n");
+    const Metadata metadata = parse(text);
+    ASSERT_EQ(metadata.properties.size(), 5);
+
+    const auto typeOf = [&metadata](const QString &key) {
+        for (const Property &property : metadata.properties) {
+            if (property.key == key)
+                return property.type;
+        }
+        return Property::Type::Unknown;
+    };
+    // Quoting is how a file says "this is text", so 42 and "42" differ.
+    EXPECT_EQ(typeOf(QStringLiteral("quoted")), Property::Type::Text);
+    EXPECT_EQ(typeOf(QStringLiteral("count")), Property::Type::Number);
+    // A list of one is still a list; only the YAML knows that.
+    EXPECT_EQ(typeOf(QStringLiteral("one")), Property::Type::List);
+    EXPECT_EQ(typeOf(QStringLiteral("when")), Property::Type::DateTime);
+    EXPECT_EQ(typeOf(QStringLiteral("empty")), Property::Type::Text);
+}
+
+TEST(FrontmatterTest, KeyOrderRawValuesAndRanges)
+{
+    const QString text = QStringLiteral(
+        "---\n"
+        "title: \"A note\"\n"
+        "flow: [a, \"b c\"]\n"
+        "block:\n"
+        "  - first\n"
+        "  - second\n"
+        "---\n"
+        "\n"
+        "Body.\n");
+    const Metadata metadata = parse(text);
+    ASSERT_EQ(metadata.properties.size(), 3);
+
+    // The file's order, not the YAML map's.
+    EXPECT_EQ(metadata.properties.at(0).key, QStringLiteral("title"));
+    EXPECT_EQ(metadata.properties.at(1).key, QStringLiteral("flow"));
+    EXPECT_EQ(metadata.properties.at(2).key, QStringLiteral("block"));
+
+    // The raw text is what the file says, quotes included, so an editor can put
+    // a value back byte for byte.
+    EXPECT_EQ(metadata.properties.at(0).values,
+              QStringList({QStringLiteral("A note")}));
+    EXPECT_EQ(metadata.properties.at(0).raw,
+              QStringList({QStringLiteral("\"A note\"")}));
+    EXPECT_EQ(metadata.properties.at(1).values,
+              QStringList({QStringLiteral("a"), QStringLiteral("b c")}));
+    EXPECT_EQ(metadata.properties.at(1).raw,
+              QStringList({QStringLiteral("a"), QStringLiteral("\"b c\"")}));
+    EXPECT_EQ(metadata.properties.at(2).raw,
+              QStringList({QStringLiteral("first"), QStringLiteral("second")}));
+
+    // An entry covers every line it is written over.
+    EXPECT_EQ(sliceOf(text, metadata.properties.at(0).range),
+              QStringLiteral("title: \"A note\"\n"));
+    EXPECT_EQ(sliceOf(text, metadata.properties.at(2).range),
+              QStringLiteral("block:\n  - first\n  - second\n"));
+}
+
 TEST(FrontmatterTest, BrokenYamlStillIndexes)
 {
     const Metadata metadata = parse(QStringLiteral("---\n: : :\n\tbad\n---\n\n# Heading\n"));
@@ -318,6 +389,43 @@ TEST(DecorationTest, WikilinksShowTheirDisplayText)
                          StyleSpan::Kind::Link, QStringLiteral("Target")));
 }
 
+TEST(DecorationTest, InlineLinksShowOnlyTheirText)
+{
+    EXPECT_EQ(rendered(QStringLiteral("A [Obsidian](https://obsidian.md) here.\n")),
+              QStringLiteral("A Obsidian here.\n"));
+    // A title is part of the syntax, not part of the label.
+    EXPECT_EQ(rendered(QStringLiteral("A [text](url \"a title\") here.\n")),
+              QStringLiteral("A text here.\n"));
+    // An autolink shows its URL, without the angle brackets.
+    EXPECT_EQ(rendered(QStringLiteral("At <https://example.com> today.\n")),
+              QStringLiteral("At https://example.com today.\n"));
+    // An image is an embed: the alt text stands in for it until it is drawn,
+    // exactly as the target does for a "![[file.png]]" embed.
+    EXPECT_EQ(rendered(QStringLiteral("![alt](diagram.png)\n")), QStringLiteral("alt\n"));
+    // Nothing to show at all, so nothing is left behind either.
+    EXPECT_EQ(rendered(QStringLiteral("x [](url) y\n")), QStringLiteral("x  y\n"));
+
+    EXPECT_TRUE(hasStyle(decorationsOf(QStringLiteral("[Obsidian](https://obsidian.md)\n")),
+                         StyleSpan::Kind::Link, QStringLiteral("https://obsidian.md")));
+}
+
+TEST(DecorationTest, ReferenceLinksAndTheirDefinitions)
+{
+    const QString text = QStringLiteral(
+        "A [text][ref] here.\n"
+        "\n"
+        "[ref]: https://example.com \"Title\"\n");
+    EXPECT_EQ(rendered(text), QStringLiteral("A text here.\n\n"));
+
+    // A shortcut reference is its own label.
+    EXPECT_EQ(rendered(QStringLiteral("A [ref] here.\n\n[ref]: https://example.com\n")),
+              QStringLiteral("A ref here.\n\n"));
+
+    // A definition inside a code block is code.
+    EXPECT_EQ(rendered(QStringLiteral("```\n[ref]: https://example.com\n```\n")),
+              QStringLiteral("\n[ref]: https://example.com\n\n"));
+}
+
 TEST(DecorationTest, HighlightsCommentsAndFrontmatter)
 {
     EXPECT_EQ(rendered(QStringLiteral("a ==lit== b\n")), QStringLiteral("a lit b\n"));
@@ -410,6 +518,186 @@ TEST(CalloutTest, QuoteMarkersAreHidden)
     EXPECT_EQ(rendered(QStringLiteral("> [!note] Title\n> Body.\n")), QStringLiteral("Body.\n"));
 }
 
+TEST(ColonFenceTest, BareAttributeAndDetailsForms)
+{
+    const QString bare = QStringLiteral("::: note\nBody text.\n:::\n");
+    const Decorations plain = decorationsOf(bare);
+    ASSERT_EQ(plain.callouts.size(), 1);
+    EXPECT_EQ(plain.callouts.first().type, QStringLiteral("note"));
+    EXPECT_EQ(plain.callouts.first().title, QStringLiteral("Note"));
+    EXPECT_EQ(sliceOf(bare, plain.callouts.first().range), bare);
+    EXPECT_EQ(sliceOf(bare, plain.callouts.first().marker), QStringLiteral("::: note\n"));
+    // Both fence lines are syntax, so live preview shows only the body.
+    EXPECT_EQ(rendered(bare), QStringLiteral("Body text.\n"));
+
+    const Decorations attributes = decorationsOf(
+        QStringLiteral("::: {.note title=\"Read me\" open=false}\nBody.\n:::\n"));
+    ASSERT_EQ(attributes.callouts.size(), 1);
+    EXPECT_EQ(attributes.callouts.first().type, QStringLiteral("note"));
+    EXPECT_EQ(attributes.callouts.first().title, QStringLiteral("Read me"));
+    EXPECT_TRUE(attributes.callouts.first().foldable);
+    EXPECT_TRUE(attributes.callouts.first().collapsed);
+
+    // A disclosure names its header "summary" and starts closed.
+    const Decorations details =
+        decorationsOf(QStringLiteral("::: details summary=\"The long version\"\nBody.\n:::\n"));
+    ASSERT_EQ(details.callouts.size(), 1);
+    EXPECT_EQ(details.callouts.first().type, QStringLiteral("details"));
+    EXPECT_EQ(details.callouts.first().title, QStringLiteral("The long version"));
+    EXPECT_TRUE(details.callouts.first().collapsed);
+
+    // An unknown class still gets a callout, so the editor can draw a border
+    // and the colour scheme can style it by name.
+    const Decorations unknown = decorationsOf(QStringLiteral("::: sidenote\nBody.\n:::\n"));
+    ASSERT_EQ(unknown.callouts.size(), 1);
+    EXPECT_EQ(unknown.callouts.first().type, QStringLiteral("sidenote"));
+}
+
+TEST(ColonFenceTest, NestingGoesByFenceLength)
+{
+    const QString text = QStringLiteral(
+        ":::: warning\n"
+        "outer\n"
+        "\n"
+        "::: note\n"
+        "inner\n"
+        ":::\n"
+        "\n"
+        "::::\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.callouts.size(), 2);
+
+    // The inner fence closes the inner container only; the whole of it sits
+    // inside the outer one.
+    const auto byType = [&decorations](const QString &type) {
+        return *std::find_if(decorations.callouts.cbegin(), decorations.callouts.cend(),
+                             [&type](const CalloutSpan &callout) { return callout.type == type; });
+    };
+    const CalloutSpan outer = byType(QStringLiteral("warning"));
+    const CalloutSpan inner = byType(QStringLiteral("note"));
+    EXPECT_EQ(sliceOf(text, outer.range), text);
+    EXPECT_EQ(sliceOf(text, inner.range), QStringLiteral("::: note\ninner\n:::\n"));
+
+    EXPECT_EQ(rendered(text), QStringLiteral("outer\n\ninner\n\n"));
+
+    // One Callout block per container, and it owns the lines md4qt read as
+    // paragraphs inside it.
+    int containers = 0;
+    for (const BlockSpan &block : decorations.blocks) {
+        if (block.kind == BlockSpan::Kind::Callout)
+            ++containers;
+        EXPECT_FALSE(block.kind == BlockSpan::Kind::Paragraph
+                     && block.range.start >= outer.range.start
+                     && block.range.end <= outer.range.end);
+    }
+    EXPECT_EQ(containers, 2);
+}
+
+TEST(ColonFenceTest, NotAFenceInsideCodeOrWithoutAClose)
+{
+    // Inside a code block colons are just colons.
+    EXPECT_TRUE(decorationsOf(QStringLiteral("```\n::: note\nx\n:::\n```\n")).callouts.isEmpty());
+
+    // An unclosed container runs to the end of the note, as a code fence does.
+    const QString text = QStringLiteral("::: tip\nTo the end.\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.callouts.size(), 1);
+    EXPECT_EQ(decorations.callouts.first().range.end, text.size());
+}
+
+TEST(CodeOptionTest, RecognisedKeysAndHiddenLines)
+{
+    const QString text = QStringLiteral(
+        "```python\n"
+        "#| title: hello.py\n"
+        "#| lines: 3\n"
+        "#| highlight: 1,3-4\n"
+        "#| wrap: true\n"
+        "#| caption: A greeting\n"
+        "print(1)\n"
+        "print(2)\n"
+        "```\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.codeOptions.size(), 1);
+
+    const CodeOptions &options = decorations.codeOptions.first();
+    EXPECT_EQ(options.title, QStringLiteral("hello.py"));
+    EXPECT_EQ(options.caption, QStringLiteral("A greeting"));
+    EXPECT_TRUE(options.lineNumbers);
+    EXPECT_EQ(options.firstLine, 3);
+    EXPECT_EQ(options.highlight, QList<int>({1, 3, 4}));
+    EXPECT_TRUE(options.wrap);
+    EXPECT_FALSE(options.fold);
+
+    // The options belong to the code block, and are found by its range.
+    const auto block = std::find_if(decorations.blocks.cbegin(), decorations.blocks.cend(),
+                                    [](const BlockSpan &span) {
+                                        return span.kind == BlockSpan::Kind::Code;
+                                    });
+    ASSERT_NE(block, decorations.blocks.cend());
+    EXPECT_EQ(options.block, block->range);
+
+    // They stay in the file and leave the listing.
+    EXPECT_EQ(rendered(text), QStringLiteral("\nprint(1)\nprint(2)\n\n"));
+}
+
+TEST(CodeOptionTest, PrefixFollowsTheLanguage)
+{
+    const Decorations sql = decorationsOf(QStringLiteral(
+        "```sql\n--| title: query.sql\nSELECT 1;\n```\n"));
+    ASSERT_EQ(sql.codeOptions.size(), 1);
+    EXPECT_EQ(sql.codeOptions.first().title, QStringLiteral("query.sql"));
+
+    const Decorations cpp = decorationsOf(QStringLiteral(
+        "```cpp\n//| title: main.cpp\n//| lines: true\nint x;\n```\n"));
+    ASSERT_EQ(cpp.codeOptions.size(), 1);
+    EXPECT_EQ(cpp.codeOptions.first().title, QStringLiteral("main.cpp"));
+    EXPECT_TRUE(cpp.codeOptions.first().lineNumbers);
+    EXPECT_EQ(cpp.codeOptions.first().firstLine, 1);
+
+    const Decorations lisp = decorationsOf(QStringLiteral(
+        "```scheme\n;;| fold: true\n(+ 1 1)\n```\n"));
+    ASSERT_EQ(lisp.codeOptions.size(), 1);
+    EXPECT_TRUE(lisp.codeOptions.first().fold);
+
+    const Decorations tex = decorationsOf(QStringLiteral(
+        "```latex\n%| title: proof.tex\n\\alpha\n```\n"));
+    ASSERT_EQ(tex.codeOptions.size(), 1);
+    EXPECT_EQ(tex.codeOptions.first().title, QStringLiteral("proof.tex"));
+
+    // The wrong comment token is code, not an option.
+    const QString wrong = QStringLiteral("```sql\n#| title: query.sql\nSELECT 1;\n```\n");
+    EXPECT_TRUE(decorationsOf(wrong).codeOptions.isEmpty());
+    EXPECT_EQ(rendered(wrong), QStringLiteral("\n#| title: query.sql\nSELECT 1;\n\n"));
+}
+
+TEST(CodeOptionTest, QuartoExecutionKeysAreParsedAndIgnored)
+{
+    const QString text = QStringLiteral(
+        "```r\n"
+        "#| eval: false\n"
+        "#| echo: true\n"
+        "#| warning: false\n"
+        "#| label: fig-one\n"
+        "plot(x)\n"
+        "```\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.codeOptions.size(), 1);
+
+    const CodeOptions &options = decorations.codeOptions.first();
+    EXPECT_EQ(options.extra.value(QStringLiteral("eval")), QStringLiteral("false"));
+    EXPECT_EQ(options.extra.value(QStringLiteral("echo")), QStringLiteral("true"));
+    EXPECT_EQ(options.extra.value(QStringLiteral("label")), QStringLiteral("fig-one"));
+    // Nothing here runs anything, and nothing here renders either.
+    EXPECT_TRUE(options.title.isEmpty());
+    EXPECT_EQ(rendered(text), QStringLiteral("\nplot(x)\n\n"));
+
+    // Only the leading run of option lines counts.
+    const Decorations later = decorationsOf(
+        QStringLiteral("```r\nplot(x)\n#| eval: false\n```\n"));
+    EXPECT_TRUE(later.codeOptions.isEmpty());
+}
+
 TEST(ParagraphTest, SoftBreaksAreMarked)
 {
     const QString text = QStringLiteral("one\ntwo\n\nthree\n");
@@ -483,6 +771,52 @@ TEST(EmbedTest, SizeSpecInTheAliasSlot)
     const Decorations alias = decorationsOf(QStringLiteral("![[Note|a caption]]\n"));
     ASSERT_EQ(alias.embeds.size(), 1);
     EXPECT_EQ(alias.embeds.first().width, 0);
+}
+
+TEST(OffsetTest, EveryRangeStaysInsideTheDocument)
+{
+    // The editor's DisplayMap is built from these offsets; one that is out by a
+    // character corrupts every position after it.
+    const QString text = QStringLiteral(
+        "---\ntitle: Ünïcode\ntags: [a, b]\n---\n"
+        "\n"
+        "# Hëading with [a link](https://example.com \"t\") and ![img](pic.png)\n"
+        "\n"
+        "::: {.note title=\"Ünïcode\"}\n"
+        "Body with [[Wiki|alias]], ==lit==, #tag and <https://example.com>.\n"
+        ":::\n"
+        "\n"
+        "```python\n#| title: hé.py\n#| highlight: 1-2\nprint(1)\n```\n"
+        "\n"
+        "[ref]: https://example.com \"Title\"\n");
+    const Decorations decorations = decorationsOf(text);
+
+    const auto sane = [&text](const Range &range) {
+        return range.isValid() && range.start >= 0 && range.end <= text.size();
+    };
+    for (const Range &range : decorations.syntax)
+        EXPECT_TRUE(sane(range)) << range.start << ".." << range.end;
+    for (const BlockSpan &block : decorations.blocks)
+        EXPECT_TRUE(sane(block.range));
+    for (const CalloutSpan &callout : decorations.callouts) {
+        EXPECT_TRUE(sane(callout.range));
+        EXPECT_TRUE(sane(callout.marker));
+    }
+    for (const CodeOptions &options : decorations.codeOptions) {
+        EXPECT_TRUE(sane(options.block));
+        EXPECT_TRUE(sane(options.range));
+    }
+    for (const StyleSpan &style : decorations.styles)
+        EXPECT_TRUE(sane(style.range));
+
+    // The frontmatter ranges are cut from a UTF-8 parse; non-ASCII must not
+    // shift them.
+    const Metadata metadata = parse(text);
+    ASSERT_EQ(metadata.properties.size(), 2);
+    EXPECT_EQ(sliceOf(text, metadata.properties.first().range),
+              QStringLiteral("title: Ünïcode\n"));
+    EXPECT_EQ(metadata.properties.first().raw,
+              QStringList({QStringLiteral("Ünïcode")}));
 }
 
 TEST(WordCountTest, IgnoresFrontmatter)

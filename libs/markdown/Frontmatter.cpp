@@ -4,6 +4,8 @@
 #include <QDateTime>
 #include <QRegularExpression>
 
+#include <algorithm>
+
 #include <yaml-cpp/yaml.h>
 
 namespace noteAppC {
@@ -15,25 +17,73 @@ QString toQString(const YAML::Node &node)
     return QString::fromStdString(node.Scalar()).trimmed();
 }
 
-QStringList scalarOrSequence(const YAML::Node &node)
+/// Every position yaml-cpp reports, in order. It gives a node's start and never
+/// its end, so the end of one value is the start of whatever comes next.
+void collectMarks(const YAML::Node &node, QList<int> &marks)
 {
-    QStringList values;
+    marks.append(node.Mark().pos);
+    if (node.IsSequence()) {
+        for (const auto &item : node)
+            collectMarks(item, marks);
+    } else if (node.IsMap()) {
+        for (const auto &entry : node) {
+            collectMarks(entry.first, marks);
+            collectMarks(entry.second, marks);
+        }
+    }
+}
+
+/// The source text of one scalar, byte for byte. yaml-cpp's marks are offsets
+/// into the UTF-8 it was handed, so the cut is made there and converted back.
+///
+/// ponytail: a value ends at its line, so a block scalar (`key: |`) keeps only
+/// its first line. Walk the indentation when someone writes one in frontmatter.
+QString rawOf(const QByteArray &body, const QList<int> &marks, const YAML::Node &node)
+{
+    if (!node.IsDefined() || node.IsNull())
+        return {};
+    const int start = node.Mark().pos;
+    if (start < 0 || start >= body.size())
+        return {};
+
+    const auto next = std::upper_bound(marks.cbegin(), marks.cend(), start);
+    int end = next == marks.cend() ? body.size() : *next;
+    const int lineEnd = body.indexOf('\n', start);
+    if (lineEnd >= 0)
+        end = qMin(end, lineEnd);
+
+    // Whatever separated this value from the next one is not part of it.
+    while (end > start && (body.at(end - 1) == ',' || body.at(end - 1) == ']'
+                           || body.at(end - 1) == '}' || body.at(end - 1) == ' '
+                           || body.at(end - 1) == '\t' || body.at(end - 1) == '\r'))
+        --end;
+    return QString::fromUtf8(body.mid(start, end - start));
+}
+
+/// Values and their source text, one entry each, for a scalar or a sequence.
+void readValues(const YAML::Node &node, const QByteArray &body, const QList<int> &marks,
+                Property &property)
+{
     if (node.IsScalar()) {
         const QString value = toQString(node);
-        if (!value.isEmpty())
-            values << value;
+        if (!value.isEmpty()) {
+            property.values << value;
+            property.raw << rawOf(body, marks, node);
+        }
     } else if (node.IsSequence()) {
         for (const auto &item : node) {
-            if (item.IsScalar())
-                values << toQString(item);
+            if (!item.IsScalar())
+                continue;
+            property.values << toQString(item);
+            property.raw << rawOf(body, marks, item);
         }
     } else if (node.IsMap()) {
         // Obsidian shows nested maps as text; keep the YAML so nothing is lost.
         YAML::Emitter emitter;
         emitter << node;
-        values << QString::fromStdString(emitter.c_str()).trimmed();
+        property.values << QString::fromStdString(emitter.c_str()).trimmed();
+        property.raw << rawOf(body, marks, node);
     }
-    return values;
 }
 
 bool isNumber(const QString &value)
@@ -41,6 +91,22 @@ bool isNumber(const QString &value)
     bool ok = false;
     value.toDouble(&ok);
     return ok;
+}
+
+/// What Obsidian would call this value, asked of the YAML rather than of the
+/// string, so `"42"` stays text and a one-item list stays a list.
+Property::Type typeOf(const YAML::Node &node)
+{
+    if (node.IsSequence())
+        return Property::Type::List;
+    // A null (`key:` with nothing after it) is an empty text property.
+    if (!node.IsScalar())
+        return Property::Type::Text;
+    // yaml-cpp tags a plain scalar "?" and a quoted one "!"; only a plain one
+    // can be a number, a checkbox or a date.
+    if (node.Tag() == "!")
+        return Property::Type::Text;
+    return Frontmatter::inferType({toQString(node)});
 }
 
 } // namespace
@@ -83,7 +149,9 @@ Property::Type Frontmatter::inferType(const QStringList &values)
         return Property::Type::Checkbox;
     if (isNumber(value))
         return Property::Type::Number;
-    if (QDate::fromString(value, Qt::ISODate).isValid())
+    // Obsidian's date is exactly YYYY-MM-DD, and the length has to say so:
+    // QDate::fromString is happy to stop reading at the "T" of a date-time.
+    if (value.size() == 10 && QDate::fromString(value, Qt::ISODate).isValid())
         return Property::Type::Date;
     if (QDateTime::fromString(value, Qt::ISODate).isValid())
         return Property::Type::DateTime;
@@ -113,18 +181,39 @@ void Frontmatter::parse(const QString &text, const Range &block, Metadata &out)
     if (!root.IsMap())
         return;
 
+    // Marks are byte offsets into what yaml-cpp parsed, and lines are lines of
+    // it; both need the body, not the file, to be read back.
+    const QByteArray utf8 = body.toUtf8();
+    QList<int> marks;
+    collectMarks(root, marks);
+    std::sort(marks.begin(), marks.end());
+
+    QList<qsizetype> lineStarts{bodyStart};
+    for (qsizetype i = 0; i < body.size(); ++i) {
+        if (body.at(i) == QLatin1Char('\n'))
+            lineStarts.append(bodyStart + i + 1);
+    }
+    const auto lineStart = [&lineStarts, bodyEnd](int line) {
+        return line >= 0 && line < lineStarts.size() ? lineStarts.at(line) : bodyEnd;
+    };
+
     for (const auto &entry : root) {
         if (!entry.first.IsScalar())
             continue;
         const QString key = toQString(entry.first);
-        const QStringList values = scalarOrSequence(entry.second);
 
         Property property;
         property.key = key;
-        property.values = values;
-        property.type = inferType(values);
+        property.type = typeOf(entry.second);
+        readValues(entry.second, utf8, marks, property);
+        // An entry runs to the line the next key starts on, so a list written
+        // over several lines keeps all of them.
+        property.range = {lineStart(entry.first.Mark().line), bodyEnd};
+        if (!out.properties.isEmpty())
+            out.properties.last().range.end = property.range.start;
         out.properties.append(property);
 
+        const QStringList &values = property.values;
         const QString lower = key.toLower();
         if (lower == QLatin1String("aliases") || lower == QLatin1String("alias")) {
             out.aliases += values;

@@ -4,6 +4,8 @@
 #include <QRegularExpression>
 #include <QTextStream>
 
+#include <algorithm>
+
 #include <md4qt/doc.h>
 #include <md4qt/parser.h>
 
@@ -158,6 +160,134 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
     decorations.listItems.append(span);
 }
 
+bool isTrue(const QString &value)
+{
+    return value.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0
+           || value.compare(QLatin1String("yes"), Qt::CaseInsensitive) == 0
+           || value == QLatin1String("1");
+}
+
+/// A value written the way an attribute or an option writes one, with the
+/// quotes that made it one word taken back off.
+QString unquote(QString value)
+{
+    value = value.trimmed();
+    if (value.size() >= 2 && value.startsWith(value.back())
+        && (value.startsWith(QLatin1Char('"')) || value.startsWith(QLatin1Char('\''))))
+        return value.mid(1, value.size() - 2);
+    return value;
+}
+
+/// The line-comment token a language would use, which is what `#|` options are
+/// written behind so the block still compiles (PLAN.md 16.2).
+QString commentPrefix(const QString &language)
+{
+    static const QHash<QString, QString> prefixes = {
+        {QStringLiteral("c"), QStringLiteral("//")},
+        {QStringLiteral("cpp"), QStringLiteral("//")},
+        {QStringLiteral("c++"), QStringLiteral("//")},
+        {QStringLiteral("cxx"), QStringLiteral("//")},
+        {QStringLiteral("h"), QStringLiteral("//")},
+        {QStringLiteral("hpp"), QStringLiteral("//")},
+        {QStringLiteral("java"), QStringLiteral("//")},
+        {QStringLiteral("js"), QStringLiteral("//")},
+        {QStringLiteral("javascript"), QStringLiteral("//")},
+        {QStringLiteral("jsx"), QStringLiteral("//")},
+        {QStringLiteral("ts"), QStringLiteral("//")},
+        {QStringLiteral("typescript"), QStringLiteral("//")},
+        {QStringLiteral("tsx"), QStringLiteral("//")},
+        {QStringLiteral("go"), QStringLiteral("//")},
+        {QStringLiteral("golang"), QStringLiteral("//")},
+        {QStringLiteral("rust"), QStringLiteral("//")},
+        {QStringLiteral("rs"), QStringLiteral("//")},
+        {QStringLiteral("sql"), QStringLiteral("--")},
+        {QStringLiteral("lua"), QStringLiteral("--")},
+        {QStringLiteral("haskell"), QStringLiteral("--")},
+        {QStringLiteral("hs"), QStringLiteral("--")},
+        {QStringLiteral("lisp"), QStringLiteral(";;")},
+        {QStringLiteral("commonlisp"), QStringLiteral(";;")},
+        {QStringLiteral("elisp"), QStringLiteral(";;")},
+        {QStringLiteral("scheme"), QStringLiteral(";;")},
+        {QStringLiteral("tex"), QStringLiteral("%")},
+        {QStringLiteral("latex"), QStringLiteral("%")},
+        {QStringLiteral("matlab"), QStringLiteral("%")},
+    };
+    return prefixes.value(language.trimmed().toLower(), QStringLiteral("#"));
+}
+
+/// `highlight: 2,5-7`, expanded and clamped to the block so a typo cannot ask
+/// for a million lines.
+QList<int> parseHighlight(const QString &value, int lineCount)
+{
+    QList<int> lines;
+    const auto parts = QStringView(value).split(QLatin1Char(','), Qt::SkipEmptyParts);
+    for (const QStringView part : parts) {
+        const qsizetype dash = part.indexOf(QLatin1Char('-'), 1);
+        const int from = (dash < 0 ? part : part.left(dash)).trimmed().toInt();
+        const int to = dash < 0 ? from : part.mid(dash + 1).trimmed().toInt();
+        for (int line = qMax(1, from); line <= qMin(to, lineCount); ++line)
+            lines.append(line);
+    }
+    return lines;
+}
+
+void applyCodeOption(CodeOptions &options, const QString &key, const QString &value, int lineCount)
+{
+    if (key == QLatin1String("title") || key == QLatin1String("filename")) {
+        options.title = unquote(value);
+    } else if (key == QLatin1String("caption")) {
+        options.caption = unquote(value);
+    } else if (key == QLatin1String("lines")) {
+        bool ok = false;
+        const int from = unquote(value).toInt(&ok);
+        if (ok) {
+            options.lineNumbers = from > 0;
+            options.firstLine = qMax(1, from);
+        } else {
+            options.lineNumbers = isTrue(value);
+        }
+    } else if (key == QLatin1String("highlight")) {
+        options.highlight = parseHighlight(unquote(value), lineCount);
+    } else if (key == QLatin1String("wrap")) {
+        options.wrap = isTrue(value);
+    } else if (key == QLatin1String("fold")) {
+        options.fold = isTrue(value);
+    } else {
+        // Quarto's eval, echo, output, warning and error arrive here and stop.
+        // noteAppC never runs code; keeping them only hides the lines.
+        options.extra.insert(key, unquote(value));
+    }
+}
+
+/// The `#|` lines at the head of a fenced block. `content` is the code between
+/// the fences, which is where md4qt puts a Code item's own range.
+CodeOptions parseCodeOptions(const QString &text, const Range &content, const QString &language)
+{
+    CodeOptions options;
+    options.block = content;
+
+    const int lineCount = 1
+        + int(QStringView(text).mid(content.start, content.length()).count(QLatin1Char('\n')));
+    const QRegularExpression option(
+        QStringLiteral("^[ \\t]*%1\\|[ \\t]*([\\w-]+)[ \\t]*:[ \\t]*(.*)$")
+            .arg(QRegularExpression::escape(commentPrefix(language))));
+
+    qsizetype cursor = content.start;
+    while (cursor < content.end) {
+        qsizetype lineEnd = text.indexOf(QLatin1Char('\n'), cursor);
+        if (lineEnd < 0 || lineEnd > content.end)
+            lineEnd = content.end;
+        const auto match = option.match(text.mid(cursor, lineEnd - cursor));
+        if (!match.hasMatch())
+            break;
+        applyCodeOption(options, match.captured(1).toLower(), match.captured(2).trimmed(),
+                        lineCount);
+        cursor = qMin(content.end, lineEnd + 1);
+        options.range = {content.start, cursor};
+    }
+    return options;
+}
+
 /// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
 bool detectCallout(const QString &text, const Range &range, const SourceMap &map,
                    Decorations &decorations)
@@ -189,6 +319,153 @@ bool detectCallout(const QString &text, const Range &range, const SourceMap &map
     decorations.syntax.append({range.start, qMin(range.start + firstLine.size() + 1, range.end)});
     decorations.callouts.append(callout);
     return true;
+}
+
+/// What a `:::` fence line says about its container: Pandoc's
+/// `{#id .class key="value"}` or the bare `name key="value"` form.
+struct FenceSpec {
+    QString type;
+    QMap<QString, QString> attributes;
+};
+
+FenceSpec parseFenceSpec(QString spec)
+{
+    static const QRegularExpression token(
+        QStringLiteral(R"(([.#]?[\w-]+)(?:[ \t]*=[ \t]*("[^"]*"|'[^']*'|\S+))?)"));
+
+    FenceSpec out;
+    spec = spec.trimmed();
+    if (spec.startsWith(QLatin1Char('{')) && spec.endsWith(QLatin1Char('}')))
+        spec = spec.mid(1, spec.size() - 2);
+
+    auto it = token.globalMatch(spec);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const QString name = match.captured(1);
+        if (name.startsWith(QLatin1Char('#')))
+            continue; // an id names nothing that renders
+        if (match.captured(2).isEmpty()) {
+            // `.note` in braces and `note` in the bare form both name the class.
+            if (out.type.isEmpty())
+                out.type = name.startsWith(QLatin1Char('.')) ? name.mid(1) : name;
+            continue;
+        }
+        out.attributes.insert(name.toLower(), unquote(match.captured(2)));
+    }
+    return out;
+}
+
+/// A `:::` container renders as a callout: by name for the 13 Obsidian types
+/// and for `details`, as a bordered block carrying its class for the rest.
+CalloutSpan calloutOf(const FenceSpec &spec, const Range &range, const Range &marker)
+{
+    CalloutSpan callout;
+    callout.range = range;
+    callout.marker = marker;
+    callout.type = spec.type.toLower();
+    // A disclosure spells its header `summary=`, a callout `title=`.
+    callout.title = spec.attributes.value(QStringLiteral("title"),
+                                          spec.attributes.value(QStringLiteral("summary")));
+    if (callout.title.isEmpty() && !callout.type.isEmpty()) {
+        callout.title = callout.type;
+        callout.title[0] = callout.title.at(0).toUpper();
+    }
+    // A disclosure folds by definition; anything else only when `open` says so.
+    const QString open = spec.attributes.value(QStringLiteral("open"));
+    callout.foldable = !open.isEmpty() || callout.type == QLatin1String("details");
+    callout.collapsed = callout.foldable && !isTrue(open);
+    return callout;
+}
+
+/// `:::` containers (PLAN.md 16.1). md4qt reads the fence lines as ordinary
+/// paragraph text, so they are found here in the source, where the offsets are
+/// already true. Nesting goes by fence length, as in MyST: `::::` wraps `:::`.
+void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
+{
+    static const QRegularExpression fence(
+        QStringLiteral("^(:{3,})[ \\t]*(\\{[^}]*\\}|[\\w-][^\\n]*)?$"),
+        QRegularExpression::MultilineOption);
+
+    struct Open {
+        qsizetype length = 0;
+        Range marker;
+        FenceSpec spec;
+    };
+    QList<Open> stack;
+    QList<CalloutSpan> found;
+
+    const auto close = [&stack, &found, &decorations](const Range &end, qsizetype length) {
+        while (!stack.isEmpty()) {
+            const Open open = stack.takeLast();
+            decorations.syntax.append(open.marker);
+            found.append(calloutOf(open.spec, {open.marker.start, end.end}, open.marker));
+            if (open.length <= length)
+                break;
+        }
+    };
+
+    auto it = fence.globalMatch(text);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const Range line{match.capturedStart(), qMin(text.size(), match.capturedEnd() + 1)};
+        const bool inCode = std::any_of(masked.cbegin(), masked.cend(), [&line](const Range &range) {
+            return range.contains(line.start);
+        });
+        if (inCode)
+            continue;
+
+        const qsizetype length = match.captured(1).size();
+        const QString spec = match.captured(2).trimmed();
+        // A bare row of colons closes the innermost fence it is long enough
+        // for; with nothing open it starts an unnamed container instead.
+        const bool closes = spec.isEmpty()
+            && std::any_of(stack.cbegin(), stack.cend(),
+                           [length](const Open &open) { return open.length <= length; });
+        if (!closes) {
+            stack.append({length, line, parseFenceSpec(spec)});
+            continue;
+        }
+        close(line, length);
+        decorations.syntax.append(line);
+    }
+    // An unclosed container runs to the end of the note, the way a code fence does.
+    close({text.size(), text.size()}, 0);
+
+    if (found.isEmpty())
+        return;
+    // The container is the block now, so whatever md4qt made of its lines is not.
+    decorations.blocks.removeIf([&found](const BlockSpan &block) {
+        return std::any_of(found.cbegin(), found.cend(), [&block](const CalloutSpan &callout) {
+            return block.range.start >= callout.range.start
+                   && block.range.end <= callout.range.end;
+        });
+    });
+    for (const CalloutSpan &callout : std::as_const(found)) {
+        decorations.blocks.append({BlockSpan::Kind::Callout, callout.range, 0});
+        decorations.callouts.append(callout);
+    }
+}
+
+/// `[ref]: https://example.com "Title"` - the other half of a reference link.
+/// md4qt swallows the line without reporting it, so live preview has to find it
+/// to hide it.
+void hideLinkDefinitions(const QString &text, const QList<Range> &masked,
+                         Decorations &decorations)
+{
+    static const QRegularExpression definition(
+        QStringLiteral(R"(^ {0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$)"),
+        QRegularExpression::MultilineOption);
+
+    auto it = definition.globalMatch(text);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const Range line{match.capturedStart(), qMin(text.size(), match.capturedEnd() + 1)};
+        const bool inCode = std::any_of(masked.cbegin(), masked.cend(), [&line](const Range &range) {
+            return range.contains(line.start);
+        });
+        if (!inCode)
+            decorations.syntax.append(line);
+    }
 }
 
 void walkBlock(MD::Block *block, Walk &walk)
@@ -262,6 +539,14 @@ void walkItem(MD::Item *item, Walk &walk)
                 walk.decorations.syntax.append(rangeOf(code->syntaxPos(), map));
             if (block && walk.depth == 0)
                 walk.decorations.blocks.append({BlockSpan::Kind::Code, range, 0});
+            if (block && walk.text) {
+                // `#|` options belong to the file but not to the listing.
+                const CodeOptions options = parseCodeOptions(*walk.text, range, code->syntax());
+                if (options.range.isValid()) {
+                    walk.decorations.syntax.append(options.range);
+                    walk.decorations.codeOptions.append(options);
+                }
+            }
         } else {
             walk.decorations.styles.append({kind, range, 0, {}});
             if (walk.depth == 0)
@@ -271,7 +556,9 @@ void walkItem(MD::Item *item, Walk &walk)
     }
     case MD::ItemType::Link:
     case MD::ItemType::Image: {
-        auto *link = static_cast<MD::Link *>(item);
+        // MD::Link and MD::Image are siblings, not parent and child; only what
+        // they share is reachable from here.
+        auto *link = static_cast<MD::LinkBase *>(item);
         Link out;
         out.wiki = false;
         out.embed = item->type() == MD::ItemType::Image;
@@ -298,6 +585,21 @@ void walkItem(MD::Item *item, Walk &walk)
         out.external = ObsidianSyntax::isExternalTarget(out.target);
         walk.links.append(out);
         walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
+
+        // Everything around the label is syntax: the `[` or `![`, then the
+        // `](url "title")`, the `][ref]` of a reference link, or the angle
+        // brackets of an autolink. md4qt reports the label the same way for
+        // all of them, so one rule covers the lot.
+        const Range label = rangeOf(link->textPos(), map);
+        if (label.isValid() && label.length() > 0 && label.start >= out.range.start
+            && label.end <= out.range.end) {
+            walk.decorations.syntax.append({out.range.start, label.start});
+            walk.decorations.syntax.append({label.end, out.range.end});
+        } else {
+            // `[](url)` has nothing to show; only the embed or the URL remains.
+            walk.decorations.syntax.append(out.range);
+        }
+
         // A link's own label can hold emphasis but never a wikilink or a tag.
         walk.masked.append(out.range);
         break;
@@ -513,6 +815,11 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     }
     for (const Range &range : obsidian.comments)
         result.decorations.syntax.append(range);
+
+    // Two things md4qt leaves on the page: the `:::` fences it read as prose,
+    // and the definition half of a reference link, which it reads and forgets.
+    scanColonFences(text, walk.masked, result.decorations);
+    hideLinkDefinitions(text, walk.masked, result.decorations);
 
     return result;
 }

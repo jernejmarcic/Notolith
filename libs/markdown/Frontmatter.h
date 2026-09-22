@@ -21,6 +21,10 @@ public:
 
     /// Type Obsidian would infer for a value. Exposed for the properties
     /// editor and for `types.json` compatibility.
+    ///
+    /// Parsing uses the YAML node instead, which knows what the file cannot be
+    /// asked afterwards: whether a scalar was quoted, and whether a one-item
+    /// list was a list.
     static Property::Type inferType(const QStringList &values);
 };
 
