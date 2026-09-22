@@ -30,6 +30,19 @@ struct StyleSpan {
     Range range;
     int level = 0;    ///< heading level, or 0
     QString payload;  ///< link target, tag name, code language - kind decides
+
+    /// For Kind::Link on a wikilink to a heading or a block
+    /// (`[[Note#Heading]]`, `[[Note#^block-id]]`): the "#" character alone,
+    /// in source coordinates. Obsidian shows "Note > Heading" and the
+    /// referenced block's own text in place of the raw anchor; today's
+    /// DisplayMap can only hide a range, never substitute text for it, so
+    /// live preview still shows the anchor as written until that groundwork
+    /// is built. Invalid for a link with no subpath.
+    Range anchorHash;
+    /// The text right after `anchorHash`: the heading name, or "^block-id"
+    /// with the caret kept. Invalid along with `anchorHash` when there is no
+    /// subpath.
+    Range anchorText;
 };
 
 /// One top-level block: the unit the editor lays out, caches a height for,

@@ -993,3 +993,58 @@ TEST(CodeOptionTest, HighlightCountsTheVisibleListingNotTheOptionLines)
     EXPECT_EQ(options.highlight, QList<int>({1, 3}));
 }
 
+TEST(ColonFenceTest, AdjacentContainersLeaveAGapForTheBlankLineBetween)
+{
+    // A container's range must stop at the end of its own closing fence line
+    // rather than reaching into the blank line after it, or two stacked
+    // containers paint with no gap between their panels.
+    const QString text = QStringLiteral("::: a\nA\n:::\n\n::: b\nB\n:::\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.callouts.size(), 2);
+
+    const CalloutSpan *first = &decorations.callouts.first();
+    const CalloutSpan *second = &decorations.callouts.last();
+    if (first->range.start > second->range.start)
+        std::swap(first, second);
+
+    EXPECT_EQ(sliceOf(text, first->range), QStringLiteral("::: a\nA\n:::\n"));
+    EXPECT_EQ(sliceOf(text, second->range), QStringLiteral("::: b\nB\n:::\n"));
+    // The blank line sits strictly between the two - neither range touches it.
+    EXPECT_LT(first->range.end, second->range.start);
+}
+
+TEST(LinkTest, HeadingAndBlockAnchorsRecordTheirSourceRanges)
+{
+    // Parser-side groundwork only: today's DisplayMap can hide a range but
+    // never substitute text for it, so live preview still shows the raw
+    // "#Details" or "^anchor" rather than Obsidian's "> Details" or the
+    // referenced block's text. Recording exactly where the "#" and the
+    // anchor text sit is what a future substitution pass needs; actually
+    // performing that substitution is not implemented here.
+    const auto linkStyle = [](const Decorations &decorations) -> const StyleSpan * {
+        for (const StyleSpan &span : decorations.styles) {
+            if (span.kind == StyleSpan::Kind::Link)
+                return &span;
+        }
+        return nullptr;
+    };
+
+    const QString heading = QStringLiteral("See [[Second note#Details]] please.\n");
+    const StyleSpan *headingLink = linkStyle(decorationsOf(heading));
+    ASSERT_NE(headingLink, nullptr);
+    EXPECT_EQ(sliceOf(heading, headingLink->anchorHash), QStringLiteral("#"));
+    EXPECT_EQ(sliceOf(heading, headingLink->anchorText), QStringLiteral("Details"));
+
+    const QString block = QStringLiteral("See [[Second note#^anchor]] please.\n");
+    const StyleSpan *blockLink = linkStyle(decorationsOf(block));
+    ASSERT_NE(blockLink, nullptr);
+    EXPECT_EQ(sliceOf(block, blockLink->anchorHash), QStringLiteral("#"));
+    EXPECT_EQ(sliceOf(block, blockLink->anchorText), QStringLiteral("^anchor"));
+
+    // No subpath, no anchor.
+    const StyleSpan *plainLink = linkStyle(decorationsOf(QStringLiteral("See [[Second note]].\n")));
+    ASSERT_NE(plainLink, nullptr);
+    EXPECT_FALSE(plainLink->anchorHash.isValid());
+    EXPECT_FALSE(plainLink->anchorText.isValid());
+}
+

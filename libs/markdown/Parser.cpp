@@ -96,7 +96,7 @@ void collectStyles(MD::ItemWithOpts *item, Walk &walk)
     for (const auto &delim : item->openStyles()) {
         walk.decorations.syntax.append(rangeOf(delim, map));
         if (const auto kind = styleKind(delim.style()))
-            walk.decorations.styles.append({*kind, rangeOf(*item, map), 0, {}});
+            walk.decorations.styles.append({*kind, rangeOf(*item, map), 0, {}, {}, {}});
     }
     for (const auto &delim : item->closeStyles())
         walk.decorations.syntax.append(rangeOf(delim, map));
@@ -627,7 +627,7 @@ void walkItem(MD::Item *item, Walk &walk)
         }
         if (out.textRange.isValid()) {
             walk.decorations.styles.append(
-                {StyleSpan::Kind::Heading, out.textRange, out.level, out.text});
+                {StyleSpan::Kind::Heading, out.textRange, out.level, out.text, {}, {}});
         }
         if (heading->text())
             walkBlock(heading->text().data(), walk);
@@ -657,7 +657,7 @@ void walkItem(MD::Item *item, Walk &walk)
             auto *code = static_cast<MD::Code *>(item);
             const bool block = !code->isInline();
             walk.decorations.styles.append(
-                {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, code->syntax()});
+                {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, code->syntax(), {}, {}});
             // The fences are syntax; their content is not.
             walk.decorations.syntax.append(rangeOf(code->startDelim(), map));
             walk.decorations.syntax.append(rangeOf(code->endDelim(), map));
@@ -674,7 +674,7 @@ void walkItem(MD::Item *item, Walk &walk)
                 }
             }
         } else {
-            walk.decorations.styles.append({kind, range, 0, {}});
+            walk.decorations.styles.append({kind, range, 0, {}, {}, {}});
             if (walk.depth == 0)
                 walk.decorations.blocks.append({BlockSpan::Kind::Html, range, 0});
         }
@@ -725,7 +725,7 @@ void walkItem(MD::Item *item, Walk &walk)
                 walk.decorations.embeds.append(embedOf(out));
             out.external = ObsidianSyntax::isExternalTarget(out.target);
             walk.links.append(out);
-            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
+            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target, {}, {}});
         }
 
         // Everything around the label is syntax: the `[` or `![`, then the
@@ -931,7 +931,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
             out.external = ObsidianSyntax::isExternalTarget(out.target);
             if (out.embed)
                 walk.decorations.embeds.append(embedOf(out));
-            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
+            walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target, {}, {}});
         }
     }
 
@@ -961,7 +961,19 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
             continue;
         if (link.embed)
             result.decorations.embeds.append(embedOf(link));
-        result.decorations.styles.append({StyleSpan::Kind::Link, link.range, 0, link.target});
+        StyleSpan span{StyleSpan::Kind::Link, link.range, 0, link.target, {}, {}};
+        // A heading or block reference's anchor sits right after the target:
+        // find the "#" there rather than re-deriving it from `link.subpath`,
+        // which was already trimmed and so cannot be trusted for offsets.
+        // This is groundwork only - see the doc comment on anchorHash.
+        if (!link.embed && !link.subpath.isEmpty() && link.targetRange.isValid()) {
+            const qsizetype hashPos = text.indexOf(QLatin1Char('#'), link.targetRange.end);
+            if (hashPos >= 0 && hashPos < link.range.end) {
+                span.anchorHash = {hashPos, hashPos + 1};
+                span.anchorText = {hashPos + 1, hashPos + link.subpath.size()};
+            }
+        }
+        result.decorations.styles.append(span);
         const qsizetype openEnd = link.targetRange.isValid() ? link.targetRange.start
                                                              : link.range.start + 2;
         // Hide "[[" plus the target and the pipe when an alias is shown, else
@@ -977,10 +989,10 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     for (const Tag &tag : obsidian.tags) {
         if (tag.range == frontmatter)
             continue; // a frontmatter tag has no inline marker
-        result.decorations.styles.append({StyleSpan::Kind::Tag, tag.range, 0, tag.name});
+        result.decorations.styles.append({StyleSpan::Kind::Tag, tag.range, 0, tag.name, {}, {}});
     }
     for (const Range &range : obsidian.highlights) {
-        result.decorations.styles.append({StyleSpan::Kind::Highlight, range, 0, {}});
+        result.decorations.styles.append({StyleSpan::Kind::Highlight, range, 0, {}, {}, {}});
         result.decorations.syntax.append({range.start, range.start + 2});
         result.decorations.syntax.append({range.end - 2, range.end});
     }
