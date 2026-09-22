@@ -7,6 +7,8 @@
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QClipboard>
+#include <QFileInfo>
+#include <QFileSystemWatcher>
 #include <QCompleter>
 #include <QKeyEvent>
 #include <QLinearGradient>
@@ -75,6 +77,11 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
         updateLayout(); // blocks scrolling into view need their real layout
     });
+    // An icon given as an https URL arrives after the first paint. Without
+    // this it stayed blank until something unrelated happened to repaint.
+    if (auto *icons = qobject_cast<IconsNotifier *>(Icons::notifier()))
+        connect(icons, &IconsNotifier::iconReady, this, [this] { viewport()->update(); });
+    watchStyleFiles();
 
     // ponytail: the parse is synchronous behind a short debounce. It measures
     // well under the keystroke budget on notes this size; move it to the
@@ -2584,6 +2591,41 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     viewport()->update();
 }
 
+void MarkdownEditor::watchStyleFiles()
+{
+    m_configWatcher = new QFileSystemWatcher(this);
+    // The files, and the directory they live in. An editor that saves by
+    // writing a new file and renaming it over the old one - most do - makes
+    // inotify drop the watch on the file, and a file that does not exist yet
+    // cannot be watched at all; the directory sees both happen.
+    const QStringList files = {CalloutStyles::defaultPath(), LanguageStyles::defaultPath()};
+    const QString directory = QFileInfo(files.first()).absolutePath();
+    if (QFileInfo(directory).isDir())
+        m_configWatcher->addPath(directory);
+    for (const QString &file : files) {
+        if (QFileInfo::exists(file))
+            m_configWatcher->addPath(file);
+    }
+    connect(m_configWatcher, &QFileSystemWatcher::fileChanged, this,
+            &MarkdownEditor::reloadStyleFiles);
+    connect(m_configWatcher, &QFileSystemWatcher::directoryChanged, this,
+            &MarkdownEditor::reloadStyleFiles);
+}
+
+void MarkdownEditor::reloadStyleFiles()
+{
+    // Put back any watch a rename-over-save took away.
+    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath()}) {
+        if (QFileInfo::exists(file) && !m_configWatcher->files().contains(file))
+            m_configWatcher->addPath(file);
+    }
+    m_calloutStyles = CalloutStyles::load();
+    m_languageStyles = LanguageStyles::load();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
 QString MarkdownEditor::selectedText() const
 {
     const Range range = selection();
@@ -2609,8 +2651,25 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
         moveCursor(offsetAt(event->pos()), true);
         return;
     }
-    const bool overLink = !linkAt(event->pos()).isEmpty();
-    viewport()->setCursor(overLink ? Qt::PointingHandCursor : Qt::IBeamCursor);
+    // Which code block the pointer is over, since that is when one without a
+    // language shows its "Copy" label. Only a change repaints.
+    qsizetype hovered = -1;
+    const qreal y = event->position().y() + verticalScrollBar()->value();
+    for (const BlockView &view : m_blocks) {
+        if (view.y - 8 > y)
+            break;
+        if (view.span.kind == BlockSpan::Kind::Code && y <= view.y + view.height + 8) {
+            hovered = view.span.range.start;
+            break;
+        }
+    }
+    if (hovered != m_hoveredCodeBlock) {
+        m_hoveredCodeBlock = hovered;
+        viewport()->update();
+    }
+
+    const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos());
+    viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::IBeamCursor);
 }
 
 void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)

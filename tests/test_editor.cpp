@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <QClipboard>
 #include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QRandomGenerator>
 
 #include <cstdio>
@@ -1434,3 +1436,116 @@ TEST(RevealTest, DoubleClickSelectsTheWordThatWasAimedAt)
     EXPECT_EQ(editor->selectedText(), QStringLiteral("words"));
 }
 
+// --- style files reload live ----------------------------------------------
+
+namespace {
+
+/// Pixels of exactly this colour in the editor as it would paint now. The
+/// callout rail is the only thing drawn in a pure primary, so counting its
+/// pixels is how a test sees which style the editor resolved.
+int pixelsOf(MarkdownEditor &editor, QRgb colour)
+{
+    const QImage frame = editor.grab().toImage().convertToFormat(QImage::Format_RGB32);
+    int count = 0;
+    for (int y = 0; y < frame.height(); ++y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+        for (int x = 0; x < frame.width(); ++x)
+            count += (row[x] & 0xFFFFFF) == (colour & 0xFFFFFF);
+    }
+    return count;
+}
+
+void writeAtomically(const QString &path, const QByteArray &bytes)
+{
+    // Write a new file and rename it over the old one, the way most editors
+    // save. inotify drops a watch on the renamed-over file, which is exactly
+    // the case the reload has to survive.
+    const QString temporary = path + QStringLiteral(".new");
+    QFile file(temporary);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(bytes);
+    file.close();
+    QFile::remove(path);
+    ASSERT_TRUE(QFile::rename(temporary, path));
+}
+
+} // namespace
+
+TEST(StyleFilesTest, EditingCalloutsIniRestylesWithoutARestart)
+{
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
+    const QString ini = QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini"));
+    writeAtomically(ini, "[note]\nbar = #FF0000ff\n");
+
+    auto editor = editorWith(QStringLiteral("> [!note] Title\n> Body.\n"));
+    EXPECT_GT(pixelsOf(*editor, qRgb(255, 0, 0)), 0) << "the file's colour at start";
+
+    writeAtomically(ini, "[note]\nbar = #0000FFff\n");
+    QElapsedTimer waited;
+    waited.start();
+    while (pixelsOf(*editor, qRgb(0, 0, 255)) == 0 && waited.elapsed() < 3000)
+        QTest::qWait(20);
+    EXPECT_GT(pixelsOf(*editor, qRgb(0, 0, 255)), 0) << "reloaded after a rename-over save";
+    EXPECT_EQ(pixelsOf(*editor, qRgb(255, 0, 0)), 0) << "and the old colour is gone";
+
+    // A second save still reaches it: the rename took the file's watch away,
+    // and the reload has to have put it back.
+    writeAtomically(ini, "[note]\nbar = #00FF00ff\n");
+    waited.restart();
+    while (pixelsOf(*editor, qRgb(0, 255, 0)) == 0 && waited.elapsed() < 3000)
+        QTest::qWait(20);
+    EXPECT_GT(pixelsOf(*editor, qRgb(0, 255, 0)), 0);
+
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// --- the code block label -------------------------------------------------
+
+namespace {
+
+/// Clicks across the top-right of the first code block until something lands
+/// on the clipboard. Sweeping, rather than computing the label's rectangle,
+/// keeps the test from restating the editor's spacing - it only asserts that
+/// the label is up there and does the right thing when hit.
+bool clickLabelUntilCopied(MarkdownEditor &editor)
+{
+    QGuiApplication::clipboard()->clear();
+    const int viewport = editor.viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    const int right = left + column + 4;
+    for (int y = 12; y < 110; y += 4) {
+        for (int x = right - 6; x > right - 140; x -= 6) {
+            QTest::mouseClick(editor.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, y));
+            if (!QGuiApplication::clipboard()->text().isEmpty())
+                return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+TEST(CodeLabelTest, ClickingTheLanguageCopiesTheListing)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\nprint(2)\n```\n\nafter\n");
+    auto editor = editorWith(note);
+    ASSERT_TRUE(clickLabelUntilCopied(*editor)) << "no label in the block's top-right corner";
+
+    // The listing as the reader sees it: no fences, no language tag, and no
+    // trailing newline dragged along from before the closing fence.
+    EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("print(1)\nprint(2)"));
+    EXPECT_EQ(editor->noteText(), note) << "copying must not touch the note";
+}
+
+TEST(CodeLabelTest, OptionLinesAreNotCopied)
+{
+    auto editor = editorWith(
+        QStringLiteral("```python\n#| title: Setup\nprint(1)\n```\n\nafter\n"));
+    ASSERT_TRUE(clickLabelUntilCopied(*editor)) << "no label in the header strip";
+    EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("print(1)"));
+}

@@ -11,9 +11,12 @@
 
 #include "Icons.h"
 
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QTimer>
 
 namespace noteAppC {
 
@@ -142,6 +145,14 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             break;
         if (!view.laidOut)
             continue;
+
+        if (view.span.kind == BlockSpan::Kind::Code) {
+            const CodeLabel label = codeLabelOf(view, left, top);
+            if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
+                copyCodeBlock(view);
+                return true;
+            }
+        }
 
         if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
             && !m_properties.isEmpty()) {
@@ -524,6 +535,112 @@ void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &v
     }
 }
 
+LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
+{
+    QString language;
+    codeContentOf(view, &language);
+    return m_languageStyles.resolve(language);
+}
+
+MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qreal left,
+                                                      qreal top) const
+{
+    CodeLabel label;
+    const LanguageStyle style = codeStyleOf(view);
+    const bool copied = m_copiedBlock == view.span.range.start;
+    const bool hovered = m_hoveredCodeBlock == view.span.range.start;
+
+    // A block with a language always names it. One without shows "Copy" only
+    // while the pointer is over it, so a plain listing is copyable without
+    // carrying a label nobody asked for.
+    label.text = copied ? tr("Copied") : !style.name.isEmpty() ? style.name
+                                     : hovered ? tr("Copy") : QString();
+    if (label.text.isEmpty())
+        return label;
+
+    label.font = m_theme.uiFont();
+    label.font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
+    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    label.colour = hovered || copied ? muted : style.color.isValid() ? style.color : faint;
+
+    const QFontMetricsF metrics(label.font);
+    const qreal iconSize = metrics.height();
+    if (!copied && !style.icon.isEmpty())
+        label.icon = Icons::icon(style.icon, label.colour, int(iconSize));
+    const qreal width = metrics.horizontalAdvance(label.text)
+                        + (label.icon.isNull() ? 0 : iconSize + 5);
+
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    // With `#|` options there is a header strip, and the label sits at its
+    // right end, clear of the fold arrow; without one it takes the corner.
+    const qreal right = view.options ? panel.right() - 22 - kFoldHandle : panel.right() - 10;
+    const qreal y = view.options ? panel.top() + (view.textTop + 8 - metrics.height()) / 2
+                                 : panel.top() + 4;
+    label.rect = QRectF(right - width, y, width, metrics.height());
+    label.visible = true;
+    return label;
+}
+
+const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point) const
+{
+    const qreal scroll = verticalScrollBar()->value();
+    const qreal left = contentLeft();
+    for (const BlockView &view : m_blocks) {
+        const qreal top = view.y - scroll;
+        if (top + view.height < 0)
+            continue;
+        if (top > viewport()->height())
+            break;
+        if (view.span.kind != BlockSpan::Kind::Code || !view.laidOut)
+            continue;
+        const CodeLabel label = codeLabelOf(view, left, top);
+        if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point))
+            return &view;
+    }
+    return nullptr;
+}
+
+void MarkdownEditor::copyCodeBlock(const BlockView &view)
+{
+    // The listing as the reader sees it: no fences, no language tag, and no
+    // `#|` option lines, which codeContentOf already leaves out.
+    const Range content = codeContentOf(view, nullptr);
+    QString code = m_text.mid(content.start, content.length());
+    if (code.endsWith(QLatin1Char('\n')))
+        code.chop(1);
+    QGuiApplication::clipboard()->setText(code);
+
+    m_copiedBlock = view.span.range.start;
+    const qsizetype copied = m_copiedBlock;
+    QTimer::singleShot(1500, this, [this, copied] {
+        if (m_copiedBlock == copied) {
+            m_copiedBlock = -1;
+            viewport()->update();
+        }
+    });
+    viewport()->update();
+}
+
+void MarkdownEditor::paintCodeLabel(QPainter &painter, const BlockView &view, qreal left,
+                                    qreal top) const
+{
+    const CodeLabel label = codeLabelOf(view, left, top);
+    if (!label.visible)
+        return;
+    painter.save();
+    painter.setFont(label.font);
+    painter.setPen(label.colour);
+    QRectF text = label.rect;
+    if (!label.icon.isNull()) {
+        const qreal size = label.rect.height();
+        label.icon.paint(&painter, QRectF(text.left(), text.top(), size, size).toRect());
+        text.setLeft(text.left() + size + 5);
+    }
+    painter.drawText(text, Qt::AlignVCenter | Qt::AlignLeft, label.text);
+    painter.restore();
+}
+
 void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {
@@ -541,14 +658,8 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
 
     if (!view.options) {
-        // No `#|` options: the language alone, in the corner, as before.
-        if (!language.isEmpty()) {
-            painter.save();
-            painter.setFont(badgeFont);
-            painter.setPen(faint);
-            painter.drawText(panel.adjusted(0, 4, -10, 0), Qt::AlignTop | Qt::AlignRight, language);
-            painter.restore();
-        }
+        // No `#|` options: the label alone, in the corner.
+        paintCodeLabel(painter, view, left, top);
         return;
     }
 
@@ -571,10 +682,7 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
     const QRectF titleRect(header.left() + 14, header.top(),
                            header.width() - 36 - kFoldHandle, header.height());
     painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
-    if (!language.isEmpty()) {
-        painter.setPen(faint);
-        painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignRight, language);
-    }
+    paintCodeLabel(painter, view, left, top);
     paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
 
     if (view.folded) {

@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QHash>
+#include <QIcon>
 #include <QPixmap>
 #include <QTextLayout>
 #include <QTimer>
@@ -15,6 +16,7 @@
 #include <vector>
 
 class QCompleter;
+class QFileSystemWatcher;
 
 #include "CodeHighlighter.h"
 #include "MathRenderer.h"
@@ -23,6 +25,7 @@ class QCompleter;
 #include "DisplayMap.h"
 #include "Parser.h"
 #include "CalloutStyle.h"
+#include "LanguageStyle.h"
 #include "Theme.h"
 
 namespace noteAppC {
@@ -337,6 +340,24 @@ private:
     /// rows of a fenced code block.
     void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     QRectF bandOf(const BlockView &view, const Range &source) const;
+
+    /// The label on the side of a code block's header: its language's style
+    /// name and icon, and the thing to click to copy the listing. Painting and
+    /// hit-testing both come from codeLabelOf, so they cannot disagree about
+    /// where it is.
+    struct CodeLabel {
+        QRectF rect;   ///< in viewport coordinates, icon included
+        QString text;
+        QIcon icon;
+        QColor colour;
+        QFont font;
+        bool visible = false;
+    };
+    CodeLabel codeLabelOf(const BlockView &view, qreal left, qreal top) const;
+    LanguageStyle codeStyleOf(const BlockView &view) const;
+    void copyCodeBlock(const BlockView &view);
+    const BlockView *codeLabelAt(const QPoint &point) const;
+    void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     int nestingDepthAt(const BlockView &view, qsizetype source) const;
     void paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
                              qreal top) const;
@@ -486,9 +507,14 @@ private:
     QFont fontFor(const BlockSpan &span) const;
 
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
-    /// `~/.config/noteAppC/callouts.ini`, read once and again on a theme
-    /// change, which is the moment a person who edited it will look.
+    /// `~/.config/noteAppC/callouts.ini` and `codeblocks.ini`, reread the
+    /// moment either changes on disk - they are the way a person restyles
+    /// these, so an edit has to show without a restart.
     CalloutStyles m_calloutStyles = CalloutStyles::load();
+    LanguageStyles m_languageStyles = LanguageStyles::load();
+    QFileSystemWatcher *m_configWatcher = nullptr;
+    void watchStyleFiles();
+    void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
     MathRenderer m_math;
@@ -530,6 +556,11 @@ private:
     bool m_pressing = false;
     /// Where the last press landed, in source coordinates.
     qsizetype m_pressOffset = 0;
+    /// The code block whose label just copied, shown as "Copied" briefly; and
+    /// the one under the pointer, which is when a block without a language
+    /// shows its "Copy" label at all. Both keyed by the block's source start.
+    qsizetype m_copiedBlock = -1;
+    qsizetype m_hoveredCodeBlock = -1;
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;
