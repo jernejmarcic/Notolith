@@ -4,3 +4,6 @@ target_link_libraries(noteAppC_shot PRIVATE noteAppC_ui)
 add_executable(noteAppC_index_cli index_cli.cpp)
 set_target_properties(noteAppC_index_cli PROPERTIES OUTPUT_NAME noteAppC-index)
 target_link_libraries(noteAppC_index_cli PRIVATE noteAppC_index noteAppC_vault)
+
+# The performance harness: the numbers every optimisation has to beat.
+add_subdirectory(bench)

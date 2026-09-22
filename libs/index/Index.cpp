@@ -21,7 +21,7 @@ namespace {
 /// Bump when the schema changes. The cache is derived from the vault, so a
 /// mismatch drops it and rebuilds rather than migrating: a wrong migration is
 /// a silently wrong index, and a rebuild costs one pass over the notes.
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 } // namespace
 
 namespace {
@@ -41,6 +41,18 @@ QString normaliseTarget(const QString &target)
 QString foldCase(const QString &value)
 {
     return value.toCaseFolded();
+}
+
+/// The one thing every target that resolves to a given note has in common: its
+/// last path component, folded, without the extension. Obsidian resolves a
+/// target by name, or by a path whose last component is that name, so nothing
+/// whose last component differs can ever resolve to it - which is what lets
+/// backlinks() ask the index a question instead of reading the whole table.
+QString targetName(const QString &target)
+{
+    const QString value = normaliseTarget(target);
+    const qsizetype slash = value.lastIndexOf(QLatin1Char('/'));
+    return foldCase(slash < 0 ? value : value.mid(slash + 1));
 }
 
 } // namespace
@@ -133,8 +145,8 @@ bool Index::createSchema()
                        "level INTEGER, text TEXT, start INTEGER, finish INTEGER)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS links ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
-                       "target TEXT, subpath TEXT, alias TEXT, embed INTEGER, wiki INTEGER, "
-                       "external INTEGER, start INTEGER, finish INTEGER, "
+                       "target TEXT, tname TEXT, subpath TEXT, alias TEXT, embed INTEGER, "
+                       "wiki INTEGER, external INTEGER, start INTEGER, finish INTEGER, "
                        "tstart INTEGER, tfinish INTEGER)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS tags ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
@@ -152,6 +164,9 @@ bool Index::createSchema()
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "name TEXT, folded TEXT)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS links_target ON links(target)"),
+        // Backlinks are looked up by the target's last component, never by the
+        // whole spelling, so that is what has to be indexed.
+        QStringLiteral("CREATE INDEX IF NOT EXISTS links_tname ON links(tname)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS tags_name ON tags(name)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS names_folded ON names(folded)"),
         QStringLiteral("CREATE VIRTUAL TABLE IF NOT EXISTS content USING fts5("
@@ -290,10 +305,11 @@ void Index::put(const Metadata &metadata, const QString &body)
                {fileId, heading.level, heading.text, heading.range.start, heading.range.end});
     }
     for (const Link &link : metadata.links) {
-        insert(QStringLiteral("INSERT INTO links(file, target, subpath, alias, embed, wiki, "
-                              "external, start, finish, tstart, tfinish) "
-                              "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
-               {fileId, link.target, link.subpath, link.alias, link.embed, link.wiki,
+        insert(QStringLiteral("INSERT INTO links(file, target, tname, subpath, alias, embed, "
+                              "wiki, external, start, finish, tstart, tfinish) "
+                              "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+               {fileId, link.target, link.external ? QString() : targetName(link.target),
+                link.subpath, link.alias, link.embed, link.wiki,
                 link.external, link.range.start, link.range.end,
                 link.targetRange.start, link.targetRange.end});
     }
@@ -510,21 +526,27 @@ QList<Link> Index::outgoingLinks(const QString &path) const
 
 QList<Backlink> Index::backlinks(const QString &path) const
 {
-    const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
+    const QDir vault(m_vaultRoot);
+    const QString relative = vault.relativeFilePath(path);
     QList<Backlink> found;
 
+    // Only links whose target ends in this note's name can resolve to it, so
+    // the index answers that and resolve() runs on the handful that come back.
+    // Reading every link in the vault instead made opening one note cost time
+    // proportional to the whole vault: 4.7 ms on 500 notes, 14.6 ms on 2 000.
     QSqlQuery query(m_db);
     query.prepare(QStringLiteral(
         "SELECT files.path, links.target, links.subpath, links.alias, links.embed, "
         "links.wiki, links.start, links.finish FROM links "
-        "JOIN files ON files.id = links.file WHERE links.external = 0"));
+        "JOIN files ON files.id = links.file WHERE links.external = 0 AND links.tname = ?"));
+    query.addBindValue(targetName(QFileInfo(relative).fileName()));
     query.exec();
     while (query.next()) {
         const QString fromPath = query.value(0).toString();
         const QString target = query.value(1).toString();
         if (target.isEmpty())
             continue; // a link into the note's own headings
-        if (resolve(target, QDir(m_vaultRoot).absoluteFilePath(fromPath)) != relative)
+        if (resolve(target, vault.absoluteFilePath(fromPath)) != relative)
             continue;
 
         Backlink backlink;
