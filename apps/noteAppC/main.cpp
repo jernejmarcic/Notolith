@@ -26,7 +26,7 @@ int main(int argc, char *argv[])
     noteAppC::MainWindow window;
     const QStringList args = parser.positionalArguments();
     if (!args.isEmpty())
-        window.openVault(args.first());
+        window.openTarget(noteAppC::resolveLaunchTarget(args.first()));
     window.show();
 
     return app.exec();

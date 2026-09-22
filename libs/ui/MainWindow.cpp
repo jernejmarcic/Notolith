@@ -1,19 +1,25 @@
 #include "MainWindow.h"
 
 #include <QApplication>
+#include <QButtonGroup>
 #include <QCloseEvent>
+#include <QDir>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileIconProvider>
 #include <QFileSystemModel>
+#include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
-#include <QButtonGroup>
-#include <QRegularExpression>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyleHints>
 #include <QTabBar>
 #include <QToolButton>
 #include <QTreeView>
@@ -24,15 +30,15 @@
 #include "MarkdownEditor.h"
 #include "OutgoingLinksPane.h"
 #include "QuickSwitcher.h"
+#include "Scheme.h"
+#include "SettingsPage.h"
 #include "TagsPane.h"
 
 namespace noteAppC {
 
 namespace {
-constexpr auto kLastVault = "vault/last";
 constexpr auto kGeometry = "window/geometry";
 constexpr auto kSplitter = "window/splitter";
-constexpr auto kThemeMode = "appearance/theme";
 constexpr auto kRightSidebar = "window/rightSidebar";
 
 /// Obsidian's file explorer is text only; QFileSystemModel wants to draw
@@ -48,23 +54,26 @@ NoIcons *noIcons()
     static NoIcons provider;
     return &provider;
 }
+
+QString rgbaString(const QColor &color, double alpha)
+{
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(alpha, 0, 'f', 3);
+}
 } // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    QSettings settings;
-    // Dark by default. The stored value uses Obsidian's own names so that
-    // reading `appearance.json` in Phase 4 needs no translation.
-    m_theme = Theme::builtin(settings.value(kThemeMode, QStringLiteral("obsidian")).toString()
-                                     == QLatin1String("moonstone")
-                                 ? Theme::Mode::Light
-                                 : Theme::Mode::Dark);
+    m_theme = themeFromSettings();
 
     auto *central = new QWidget(this);
-    auto *columns = new QHBoxLayout(central);
-    columns->setContentsMargins(0, 0, 0, 0);
-    columns->setSpacing(0);
+    auto *rows = new QVBoxLayout(central);
+    rows->setContentsMargins(0, 0, 0, 0);
+    rows->setSpacing(0);
 
     auto *splitter = new QSplitter(Qt::Horizontal, central);
     splitter->setObjectName(QStringLiteral("mainSplitter"));
@@ -77,8 +86,8 @@ MainWindow::MainWindow(QWidget *parent)
     splitter->setHandleWidth(1);
     splitter->setChildrenCollapsible(false);
 
-    columns->addWidget(buildRibbon());
-    columns->addWidget(splitter, 1);
+    rows->addWidget(buildHeaderBar());
+    rows->addWidget(splitter, 1);
     setCentralWidget(central);
 
     m_wordCount = new QLabel(this);
@@ -105,16 +114,20 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_switcher, &QuickSwitcher::accepted, this, &MainWindow::openRelative);
 
     buildActions();
-    applyTheme();
+    applySettings();
+    // Baseline context so the settings page works even before any vault
+    // ever opens; openVault()/closeVault()/openSingleFile() replace it.
+    m_settingsPage->setContext(&m_settings, QString());
     resize(1180, 760);
 
+    QSettings settings;
     restoreGeometry(settings.value(kGeometry).toByteArray());
     splitter->restoreState(settings.value(kSplitter).toByteArray());
     if (splitter->sizes().value(0) <= 0)
         splitter->setSizes({260, 640, 260});
     m_rightSidebar->setVisible(settings.value(kRightSidebar, true).toBool());
 
-    const QString last = settings.value(kLastVault).toString();
+    const QString last = m_settings.recentVaults().value(0);
     if (!last.isEmpty() && QFileInfo(last).isDir())
         openVault(last);
     else
@@ -134,40 +147,96 @@ QToolButton *MainWindow::iconButton(const QString &objectName, const QString &ic
     return button;
 }
 
-QWidget *MainWindow::buildRibbon()
+QWidget *MainWindow::buildHeaderBar()
 {
-    auto *ribbon = new QWidget(this);
-    ribbon->setObjectName(QStringLiteral("ribbon"));
-    ribbon->setFixedWidth(m_theme.value(QStringLiteral("--ribbon-width")).toInt());
+    m_headerBar = new QWidget(this);
+    m_headerBar->setObjectName(QStringLiteral("headerBar"));
+    m_headerBar->setFixedHeight(44);
 
-    auto *layout = new QVBoxLayout(ribbon);
-    layout->setContentsMargins(4, 8, 4, 8);
-    layout->setSpacing(2);
+    auto *layout = new QHBoxLayout(m_headerBar);
+    layout->setContentsMargins(8, 4, 10, 4);
+    layout->setSpacing(6);
 
-    QToolButton *openVault =
-        iconButton(QStringLiteral("ribbonButton"), QStringLiteral("folder-open"),
-                   tr("Open vault (Ctrl+Shift+O)"), 18);
-    connect(openVault, &QToolButton::clicked, this, &MainWindow::chooseVault);
+    QToolButton *sidebarToggle = iconButton(QStringLiteral("headerSidebarToggle"),
+                                            QStringLiteral("panel-left"),
+                                            tr("Toggle sidebar (Ctrl+Alt+S)"), 18);
+    connect(sidebarToggle, &QToolButton::clicked, this, &MainWindow::toggleSidebar);
 
-    QToolButton *sidebar = iconButton(QStringLiteral("ribbonButton"),
-                                      QStringLiteral("panel-left"),
-                                      tr("Toggle sidebar (Ctrl+Alt+S)"), 18);
-    connect(sidebar, &QToolButton::clicked, this, &MainWindow::toggleSidebar);
+    m_vaultMenuButton = new QToolButton(m_headerBar);
+    m_vaultMenuButton->setObjectName(QStringLiteral("vaultMenuButton"));
+    m_vaultMenuButton->setText(tr("No vault"));
+    m_vaultMenuButton->setCursor(Qt::PointingHandCursor);
+    m_vaultMenuButton->setAutoRaise(true);
+    m_vaultMenuButton->setPopupMode(QToolButton::InstantPopup);
+    m_vaultMenu = new QMenu(m_vaultMenuButton);
+    connect(m_vaultMenu, &QMenu::aboutToShow, this, &MainWindow::rebuildVaultMenu);
+    m_vaultMenuButton->setMenu(m_vaultMenu);
 
-    m_themeButton = iconButton(QStringLiteral("ribbonButton"), QStringLiteral("sun"),
-                               tr("Switch between dark and light"), 18);
-    connect(m_themeButton, &QToolButton::clicked, this, &MainWindow::toggleThemeMode);
+    m_headerSearch = new QLineEdit(m_headerBar);
+    m_headerSearch->setObjectName(QStringLiteral("headerSearch"));
+    m_headerSearch->setPlaceholderText(tr("Search or jump to..."));
+    m_headerSearch->setMaximumWidth(420);
+    m_headerSearch->setClearButtonEnabled(true);
+    m_headerSearch->installEventFilter(this);
+    connect(m_headerSearch, &QLineEdit::returnPressed, this, &MainWindow::openQuickSwitcher);
 
-    QToolButton *settings = iconButton(QStringLiteral("ribbonButton"),
-                                       QStringLiteral("settings"), tr("Settings (Phase 4)"), 18);
-    settings->setEnabled(false);
+    QToolButton *newNote = iconButton(QStringLiteral("headerNewNoteButton"), QStringLiteral("plus"),
+                                      tr("New note (Ctrl+N)"), 18);
+    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(QString()); });
 
-    layout->addWidget(openVault);
-    layout->addWidget(sidebar);
-    layout->addWidget(m_themeButton);
+    QToolButton *rightSidebarToggle = iconButton(QStringLiteral("headerRightSidebarToggle"),
+                                                 QStringLiteral("panel-right"),
+                                                 tr("Toggle right sidebar (Ctrl+Alt+R)"), 18);
+    connect(rightSidebarToggle, &QToolButton::clicked, this, &MainWindow::toggleRightSidebar);
+
+    QToolButton *settingsButton = iconButton(QStringLiteral("headerSettingsButton"),
+                                             QStringLiteral("settings"), tr("Settings (Ctrl+,)"),
+                                             18);
+    connect(settingsButton, &QToolButton::clicked, this, &MainWindow::openSettings);
+
+    layout->addWidget(sidebarToggle);
+    layout->addWidget(m_vaultMenuButton);
     layout->addStretch(1);
-    layout->addWidget(settings);
-    return ribbon;
+    layout->addWidget(m_headerSearch);
+    layout->addStretch(1);
+    layout->addWidget(newNote);
+    layout->addWidget(rightSidebarToggle);
+    layout->addWidget(settingsButton);
+    return m_headerBar;
+}
+
+void MainWindow::rebuildVaultMenu()
+{
+    m_vaultMenu->clear();
+
+    if (m_openMode == OpenMode::SingleFile) {
+        QAction *openFolder = m_vaultMenu->addAction(tr("Open folder as vault"));
+        connect(openFolder, &QAction::triggered, this,
+               [this] { openVault(QFileInfo(m_notePath).absolutePath()); });
+        return;
+    }
+
+    QAction *open = m_vaultMenu->addAction(tr("Open folder..."));
+    connect(open, &QAction::triggered, this, &MainWindow::chooseVault);
+
+    QStringList others;
+    for (const QString &candidate : m_settings.recentVaults()) {
+        if (candidate != m_vault.root() && QFileInfo(candidate).isDir())
+            others << candidate;
+    }
+    if (!others.isEmpty()) {
+        QMenu *recentMenu = m_vaultMenu->addMenu(tr("Open recent"));
+        for (const QString &vaultPath : std::as_const(others)) {
+            QAction *action = recentMenu->addAction(QDir(vaultPath).dirName());
+            connect(action, &QAction::triggered, this, [this, vaultPath] { openVault(vaultPath); });
+        }
+    }
+
+    if (m_vault.isValid()) {
+        m_vaultMenu->addSeparator();
+        QAction *close = m_vaultMenu->addAction(tr("Close vault"));
+        connect(close, &QAction::triggered, this, &MainWindow::closeVault);
+    }
 }
 
 QWidget *MainWindow::buildSidebar()
@@ -182,19 +251,19 @@ QWidget *MainWindow::buildSidebar()
     headerLayout->setContentsMargins(10, 10, 8, 6);
     headerLayout->setSpacing(2);
 
-    m_vaultName = new QLabel(tr("No vault"), header);
-    m_vaultName->setObjectName(QStringLiteral("vaultName"));
+    auto *filesLabel = new QLabel(tr("FILES"), header);
+    filesLabel->setObjectName(QStringLiteral("filesLabel"));
 
-    QToolButton *newNote = iconButton(QStringLiteral("headerButton"),
-                                      QStringLiteral("file-plus"), tr("New note (Phase 1)"), 16);
-    newNote->setEnabled(false);
-    QToolButton *search = iconButton(QStringLiteral("headerButton"), QStringLiteral("search"),
-                                     tr("Search (Phase 5)"), 16);
-    search->setEnabled(false);
+    QToolButton *newNote = iconButton(QStringLiteral("sidebarNewNoteButton"),
+                                      QStringLiteral("file-plus"), tr("New note"), 14);
+    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(QString()); });
+    QToolButton *newFolder = iconButton(QStringLiteral("sidebarNewFolderButton"),
+                                        QStringLiteral("folder-plus"), tr("New folder"), 14);
+    connect(newFolder, &QToolButton::clicked, this, [this] { newFolderIn(QString()); });
 
-    headerLayout->addWidget(m_vaultName, 1);
+    headerLayout->addWidget(filesLabel, 1);
     headerLayout->addWidget(newNote);
-    headerLayout->addWidget(search);
+    headerLayout->addWidget(newFolder);
 
     m_files = new QFileSystemModel(this);
     m_files->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
@@ -213,10 +282,13 @@ QWidget *MainWindow::buildSidebar()
     m_tree->setFrameShape(QFrame::NoFrame);
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
     for (int column = 1; column < m_files->columnCount(); ++column)
         m_tree->hideColumn(column);
     connect(m_tree, &QTreeView::activated, this, &MainWindow::onTreeActivated);
     connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeActivated);
+    connect(m_tree, &QTreeView::customContextMenuRequested, this,
+           &MainWindow::showTreeContextMenu);
     // QFileSystemModel fills a directory on a worker thread, so the root
     // index is not usable until it says so.
     connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
@@ -234,16 +306,17 @@ QWidget *MainWindow::buildSidebar()
 
 QWidget *MainWindow::buildMainArea()
 {
-    auto *main = new QWidget(this);
-    main->setObjectName(QStringLiteral("mainArea"));
+    auto *notesPage = new QWidget(this);
+    notesPage->setObjectName(QStringLiteral("mainArea"));
 
-    auto *strip = new QWidget(main);
-    strip->setObjectName(QStringLiteral("tabStrip"));
-    auto *stripLayout = new QHBoxLayout(strip);
+    m_tabStrip = new QWidget(notesPage);
+    m_tabStrip->setObjectName(QStringLiteral("tabStrip"));
+    auto *stripLayout = new QHBoxLayout(m_tabStrip);
     stripLayout->setContentsMargins(6, 4, 6, 0);
     stripLayout->setSpacing(0);
 
-    m_tabs = new QTabBar(strip);
+    m_tabs = new QTabBar(m_tabStrip);
+    m_tabs->setObjectName(QStringLiteral("noteTabs"));
     m_tabs->setDrawBase(false);
     m_tabs->setExpanding(false);
     m_tabs->setMovable(true);
@@ -251,7 +324,7 @@ QWidget *MainWindow::buildMainArea()
     stripLayout->addWidget(m_tabs);
     stripLayout->addStretch(1);
 
-    auto *editorArea = new QWidget(main);
+    auto *editorArea = new QWidget(notesPage);
     editorArea->setObjectName(QStringLiteral("editorArea"));
     auto *editorLayout = new QVBoxLayout(editorArea);
     editorLayout->setContentsMargins(0, 0, 0, 0);
@@ -295,25 +368,36 @@ QWidget *MainWindow::buildMainArea()
     editorLayout->addWidget(m_inlineTitle);
     editorLayout->addWidget(m_editor, 1);
 
-    auto *layout = new QVBoxLayout(main);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(0);
-    layout->addWidget(strip);
-    layout->addWidget(editorArea, 1);
-    return main;
+    auto *notesLayout = new QVBoxLayout(notesPage);
+    notesLayout->setContentsMargins(0, 0, 0, 0);
+    notesLayout->setSpacing(0);
+    notesLayout->addWidget(m_tabStrip);
+    notesLayout->addWidget(editorArea, 1);
+
+    m_settingsPage = new SettingsPage(this);
+    connect(m_settingsPage, &SettingsPage::settingChanged, this, &MainWindow::applySettings);
+    connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
+
+    m_mainStack = new QStackedWidget(this);
+    m_mainStack->setObjectName(QStringLiteral("mainStack"));
+    m_mainStack->addWidget(notesPage);
+    m_mainStack->addWidget(m_settingsPage);
+    return m_mainStack;
 }
 
 QToolButton *MainWindow::rightSidebarTabButton(QWidget *parent, const QString &objectName,
-                                               const QString &icon, const QString &tooltip,
-                                               int index)
+                                               const QString &icon, const QString &label,
+                                               const QString &tooltip, int index)
 {
     auto *button = new QToolButton(parent);
     button->setObjectName(objectName);
+    button->setText(label);
     button->setToolTip(tooltip);
+    button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     button->setAutoRaise(true);
     button->setCheckable(true);
     button->setCursor(Qt::PointingHandCursor);
-    button->setIconSize(QSize(16, 16));
+    button->setIconSize(QSize(14, 14));
     button->setProperty("iconName", icon);
     connect(button, &QToolButton::toggled, this, [this, button](bool) { updateTabButtonIcon(button); });
     connect(button, &QToolButton::clicked, this, [this, index] { m_rightPanes->setCurrentIndex(index); });
@@ -368,13 +452,15 @@ QWidget *MainWindow::buildRightSidebar()
 
     auto *group = new QButtonGroup(tabRow);
     group->setExclusive(true);
-    QToolButton *backlinksTab = rightSidebarTabButton(
-        tabRow, QStringLiteral("backlinksTabButton"), QStringLiteral("quote"), tr("Backlinks"), 0);
+    QToolButton *backlinksTab =
+        rightSidebarTabButton(tabRow, QStringLiteral("backlinksTabButton"), QStringLiteral("link"),
+                              tr("Backlinks"), tr("Backlinks"), 0);
     QToolButton *tagsTab = rightSidebarTabButton(tabRow, QStringLiteral("tagsTabButton"),
-                                                 QStringLiteral("list"), tr("Tags"), 1);
+                                                 QStringLiteral("tags"), tr("Tags"), tr("Tags"), 1);
     QToolButton *outgoingTab =
         rightSidebarTabButton(tabRow, QStringLiteral("outgoingLinksTabButton"),
-                              QStringLiteral("chevron-right"), tr("Outgoing links"), 2);
+                              QStringLiteral("arrow-up-right"), tr("Outgoing"),
+                              tr("Outgoing links"), 2);
     group->addButton(backlinksTab);
     group->addButton(tagsTab);
     group->addButton(outgoingTab);
@@ -409,7 +495,16 @@ void MainWindow::buildActions()
     add(QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
     add(QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
     add(QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
+    add(QStringLiteral("Ctrl+N"), [this] { newNoteIn(QString()); });
+    add(QStringLiteral("Ctrl+,"), &MainWindow::openSettings);
     add(QStringLiteral("Ctrl+Q"), &MainWindow::close);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_headerSearch && event->type() == QEvent::FocusIn)
+        openQuickSwitcher();
+    return QMainWindow::eventFilter(watched, event);
 }
 
 void MainWindow::toggleSidebar()
@@ -439,6 +534,19 @@ void MainWindow::toggleEditingMode()
     statusBar()->showMessage(source ? tr("Live preview") : tr("Source mode"), 2000);
 }
 
+void MainWindow::openSettings()
+{
+    m_mainStack->setCurrentIndex(1);
+}
+
+void MainWindow::closeSettings()
+{
+    m_settings.save();
+    m_mainStack->setCurrentIndex(0);
+    if (m_editor->isEnabled())
+        m_editor->setFocus();
+}
+
 void MainWindow::openRelative(const QString &relativePath)
 {
     if (!relativePath.isEmpty() && m_vault.isValid())
@@ -455,19 +563,53 @@ void MainWindow::onIndexChanged()
         m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }
 
-void MainWindow::toggleThemeMode()
-{
-    setThemeMode(m_theme.isDark() ? Theme::Mode::Light : Theme::Mode::Dark);
-}
-
 void MainWindow::setThemeMode(Theme::Mode mode)
 {
-    if (m_theme.mode() == mode)
-        return;
-    m_theme = Theme::builtin(mode);
+    m_settings.setValue(QStringLiteral("appearance.theme"),
+                        mode == Theme::Mode::Dark ? QStringLiteral("dark")
+                                                  : QStringLiteral("light"));
+    applySettings();
+}
+
+Theme MainWindow::themeFromSettings() const
+{
+    Theme::Mode mode = Theme::Mode::Dark;
+    const QString modeText = m_settings.text(QStringLiteral("appearance.theme"));
+    if (modeText == QLatin1String("light")) {
+        mode = Theme::Mode::Light;
+    } else if (modeText == QLatin1String("system")) {
+        mode = QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Light
+                  ? Theme::Mode::Light
+                  : Theme::Mode::Dark;
+    }
+
+    const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
+    Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
+
+    theme.setAccent(m_settings.integer(QStringLiteral("appearance.accentHue")),
+                    m_settings.integer(QStringLiteral("appearance.accentSaturation")),
+                    m_settings.integer(QStringLiteral("appearance.accentLightness")));
+    theme.setToken(QStringLiteral("--font-text-size"),
+                   QString::number(m_settings.integer(QStringLiteral("appearance.baseFontSize"))));
+    return theme;
+}
+
+void MainWindow::applySettings()
+{
+    m_theme = themeFromSettings();
     applyTheme();
-    QSettings().setValue(kThemeMode, m_theme.isDark() ? QStringLiteral("obsidian")
-                                                      : QStringLiteral("moonstone"));
+
+    const QString mode = m_settings.text(QStringLiteral("editor.defaultMode"));
+    m_editor->setMode(mode == QLatin1String("source")    ? MarkdownEditor::Mode::Source
+                      : mode == QLatin1String("reading") ? MarkdownEditor::Mode::Reading
+                                                          : MarkdownEditor::Mode::LivePreview);
+    m_editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
+    m_editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
+    m_editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
+    m_editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
+
+    m_inlineTitle->setVisible(!m_notePath.isEmpty()
+                              && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
 }
 
 void MainWindow::applyTheme()
@@ -484,15 +626,12 @@ void MainWindow::applyTheme()
 
     const QColor iconColor = m_theme.color(QStringLiteral("--text-muted"));
     const QColor accentColor = m_theme.color(QStringLiteral("--interactive-accent"));
-    if (m_themeButton)
-        m_themeButton->setProperty("iconName", m_theme.isDark() ? QStringLiteral("sun")
-                                                                : QStringLiteral("moon"));
     for (QToolButton *button : findChildren<QToolButton *>()) {
         const QString name = button->property("iconName").toString();
         if (name.isEmpty())
             continue;
-        // A checked right-sidebar tab button is the active one: accented,
-        // like Obsidian's own tab headers.
+        // A checked tab button is the active one: accented, like Obsidian's
+        // own tab headers.
         const QColor color = button->isChecked() ? accentColor : iconColor;
         button->setIcon(Icons::icon(name, color, button->iconSize().width()));
     }
@@ -502,11 +641,67 @@ void MainWindow::applyTheme()
     m_editor->setTheme(m_theme);
     m_tags->setTheme(m_theme);
     m_outgoingLinks->setTheme(m_theme);
-    m_editor->setContentWidth(m_theme.value(QStringLiteral("--file-line-width")).toInt());
+    if (m_settingsPage)
+        m_settingsPage->applyTheme(m_theme);
+
     // The inline title shares the editor's centred column.
     const int side = qMax(24, (m_editor->width()
                                - m_theme.value(QStringLiteral("--file-line-width")).toInt()) / 2);
     m_inlineTitle->setContentsMargins(side, 32, side, 0);
+
+    // Local overrides for what the app-wide stylesheet (Theme::styleSheet(),
+    // still shaped around Obsidian's ribbon-and-flat-tab chrome) does not
+    // reach: this shell's own header bar, flat underline tabs, icon+label
+    // right-sidebar tabs, and the sidebar's accent-tinted selection. The
+    // note area itself is untouched - only its surroundings are noteAppC's
+    // own.
+    m_headerBar->setStyleSheet(
+        QStringLiteral(
+            "QWidget#headerBar { background: %1; border-bottom: 1px solid %2; }"
+            "QToolButton#vaultMenuButton { font-weight: 600; color: %3; border: none; "
+            "border-radius: 4px; padding: 4px 10px; }"
+            "QToolButton#vaultMenuButton:hover { background: %4; }"
+            "QLineEdit#headerSearch { background: %5; border: 1px solid %2; border-radius: 8px; "
+            "padding: 5px 10px; color: %3; }"
+            "QLineEdit#headerSearch:focus { border-color: %6; }")
+            .arg(m_theme.value(QStringLiteral("--background-secondary")),
+                m_theme.value(QStringLiteral("--divider-color")),
+                m_theme.value(QStringLiteral("--text-normal")),
+                m_theme.value(QStringLiteral("--background-modifier-hover")))
+            .arg(m_theme.value(QStringLiteral("--background-modifier-form-field")),
+                m_theme.value(QStringLiteral("--interactive-accent"))));
+
+    m_tabs->setStyleSheet(
+        QStringLiteral("QTabBar::tab { background: transparent; color: %1; "
+                      "padding: 8px 16px 10px 16px; margin: 0; min-width: 90px; max-width: 260px; "
+                      "border: none; border-bottom: 2px solid transparent; }"
+                      "QTabBar::tab:hover { color: %2; }"
+                      "QTabBar::tab:selected { color: %2; border-bottom: 2px solid %3; }")
+            .arg(m_theme.value(QStringLiteral("--text-muted")),
+                m_theme.value(QStringLiteral("--text-normal")),
+                m_theme.value(QStringLiteral("--interactive-accent"))));
+
+    if (auto *tabRow = findChild<QWidget *>(QStringLiteral("rightSidebarTabs"))) {
+        tabRow->setStyleSheet(
+            QStringLiteral(
+                "QWidget#rightSidebarTabs QToolButton { background: transparent; color: %1; "
+                "border: none; border-radius: 4px; padding: 4px 8px; font-size: %2px; }"
+                "QWidget#rightSidebarTabs QToolButton:hover { background: %3; }"
+                "QWidget#rightSidebarTabs QToolButton:checked { color: %4; border-bottom: 2px "
+                "solid %5; }")
+                .arg(m_theme.value(QStringLiteral("--text-muted")),
+                    m_theme.value(QStringLiteral("--font-ui-smaller")),
+                    m_theme.value(QStringLiteral("--background-modifier-hover")))
+                .arg(m_theme.value(QStringLiteral("--text-normal")), accentColor.name()));
+    }
+
+    m_sidebar->setStyleSheet(
+        QStringLiteral(
+            "QLabel#filesLabel { color: %1; font-size: 11px; font-weight: 700; padding-left: 4px; }"
+            "QTreeView#fileExplorer::item:selected, QTreeView#fileExplorer::item:selected:active { "
+            "background: %2; border-radius: 6px; color: %3; }")
+            .arg(m_theme.value(QStringLiteral("--text-faint")), rgbaString(accentColor, 0.16),
+                m_theme.value(QStringLiteral("--text-normal"))));
 }
 
 void MainWindow::chooseVault()
@@ -515,6 +710,38 @@ void MainWindow::chooseVault()
     const QString path = QFileDialog::getExistingDirectory(this, tr("Open vault"), start);
     if (!path.isEmpty())
         openVault(path);
+}
+
+void MainWindow::reloadSettings(const QString &vaultRoot)
+{
+    QVariantMap unsaved;
+    for (const QString &key : Settings::keys()) {
+        if (m_settings.isCustomised(key))
+            unsaved.insert(key, m_settings.value(key));
+    }
+    m_settings = Settings::load(vaultRoot);
+    for (auto it = unsaved.constBegin(); it != unsaved.constEnd(); ++it)
+        m_settings.setValue(it.key(), it.value());
+    m_settingsPage->setContext(&m_settings, vaultRoot);
+}
+
+void MainWindow::clearOpenNote()
+{
+    m_notePath.clear();
+    m_note = Note{};
+    m_editor->setNoteText(QString());
+    m_editor->setEnabled(false);
+    m_inlineTitle->setVisible(false);
+    while (m_tabs->count() > 0) {
+        // setTabButton() reparents the close button to the tab bar but
+        // removeTab() does not delete it, so it would otherwise linger as an
+        // invisible orphan every time a note is closed.
+        if (QWidget *button = m_tabs->tabButton(0, QTabBar::RightSide))
+            button->deleteLater();
+        m_tabs->removeTab(0);
+    }
+    m_backlinks->setNote(QString());
+    m_outgoingLinks->setNote(QString());
 }
 
 void MainWindow::openVault(const QString &path)
@@ -528,21 +755,20 @@ void MainWindow::openVault(const QString &path)
         return;
     }
 
+    m_openMode = OpenMode::Vault;
     m_vault = vault;
-    m_notePath.clear();
-    m_note = Note{};
-    m_editor->setNoteText(QString());
-    m_editor->setEnabled(false);
-    m_inlineTitle->setVisible(false);
-    while (m_tabs->count() > 0)
-        m_tabs->removeTab(0);
+    clearOpenNote();
+
+    m_sidebar->setVisible(true);
+    m_rightSidebar->setVisible(true);
+    m_tabStrip->setVisible(true);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
-    m_vaultName->setText(m_vault.name());
-    m_backlinks->setNote(QString());
-    m_outgoingLinks->setNote(QString());
     m_indexer->setVault(m_vault);
-    QSettings().setValue(kLastVault, m_vault.root());
+
+    reloadSettings(m_vault.root());
+    m_settings.noteOpened(m_vault.root(), QString());
+    applySettings();
 
     statusBar()->showMessage(m_vault.hasObsidianConfig()
                                  ? tr("Vault opened - Obsidian settings found")
@@ -552,6 +778,65 @@ void MainWindow::openVault(const QString &path)
     updateWordCount();
 }
 
+void MainWindow::closeVault()
+{
+    if (!maybeSave())
+        return;
+
+    m_openMode = OpenMode::Empty;
+    m_vault = Vault();
+    m_index.close();
+    clearOpenNote();
+
+    m_tree->setRootIndex(QModelIndex());
+    m_files->setRootPath(QString());
+
+    reloadSettings(QString());
+    applySettings();
+
+    updateTitle();
+    updateWordCount();
+    statusBar()->showMessage(tr("Vault closed"), 3000);
+}
+
+void MainWindow::openSingleFile(const QString &path)
+{
+    if (!maybeSave())
+        return;
+
+    m_openMode = OpenMode::SingleFile;
+    m_vault = Vault();
+    m_index.close();
+    clearOpenNote();
+
+    m_sidebar->setVisible(false);
+    m_rightSidebar->setVisible(false);
+    m_tabStrip->setVisible(false);
+
+    reloadSettings(QString());
+    applySettings();
+
+    openNote(path);
+}
+
+void MainWindow::openTarget(const LaunchTarget &target)
+{
+    switch (target.mode) {
+    case OpenMode::Vault:
+        openVault(target.vaultRoot);
+        if (!target.filePath.isEmpty())
+            openNote(target.filePath);
+        break;
+    case OpenMode::SingleFile:
+        openSingleFile(target.filePath);
+        break;
+    case OpenMode::Empty:
+        // The constructor already restored the most recent vault, or left
+        // an empty window - resolveLaunchTarget agrees either way.
+        break;
+    }
+}
+
 void MainWindow::onTreeActivated(const QModelIndex &index)
 {
     if (m_files->isDir(index))
@@ -559,8 +844,16 @@ void MainWindow::onTreeActivated(const QModelIndex &index)
     openNote(m_files->filePath(index));
 }
 
-void MainWindow::openNote(const QString &path)
+void MainWindow::openNote(const QString &rawPath)
 {
+    // A caller outside the tree view - the screenshot tool, a future
+    // command-line argument - may hand this a path relative to the working
+    // directory. Index::backlinks/outgoingLinks resolve against the vault
+    // root with QDir::relativeFilePath, which silently misreads a relative
+    // input as relative to the vault instead of the cwd, so every pane that
+    // keys off m_notePath comes up empty. Normalise once, here, so nothing
+    // downstream has to guess.
+    const QString path = QFileInfo(rawPath).absoluteFilePath();
     if (path == m_notePath)
         return;
     if (!Vault::isNote(path)) {
@@ -587,15 +880,36 @@ void MainWindow::openNote(const QString &path)
 
     const QString title = QFileInfo(path).completeBaseName();
     m_inlineTitle->setText(title);
-    m_inlineTitle->setVisible(true);
+    m_inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
     // ponytail: one tab until Phase 4 brings the workspace tree.
-    if (m_tabs->count() == 0)
+    if (m_tabs->count() == 0) {
         m_tabs->addTab(title);
-    else
+        // The style's own close glyph pulls from the desktop icon theme and
+        // can come out looking nothing like the rest of the app (a red
+        // "document-close" square on this box); a Lucide icon through the
+        // same tinting path as every other button keeps it consistent.
+        QToolButton *closeButton = iconButton(QStringLiteral("tabCloseButton"),
+                                              QStringLiteral("x"), tr("Close"), 12);
+        // applyTheme() only re-icons buttons that already exist when it
+        // runs; this one is born between theme applications, so it needs
+        // its first icon set directly or it sits there with none at all.
+        closeButton->setIcon(
+            Icons::icon(QStringLiteral("x"), m_theme.color(QStringLiteral("--text-muted")), 12));
+        connect(closeButton, &QToolButton::clicked, this, [this] {
+            if (!maybeSave())
+                return;
+            clearOpenNote();
+            updateTitle();
+            updateWordCount();
+        });
+        m_tabs->setTabButton(0, QTabBar::RightSide, closeButton);
+    } else {
         m_tabs->setTabText(0, title);
+    }
 
     m_backlinks->setNote(path);
     m_outgoingLinks->setNote(path);
+    m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
 }
@@ -616,8 +930,11 @@ bool MainWindow::save()
 
     m_note = note;
     m_editor->setModified(false);
-    statusBar()->showMessage(tr("Saved %1").arg(m_vault.relative(m_notePath)), 2000);
-    m_indexer->reindex(m_notePath);
+    statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(m_notePath)
+                                                                   : QFileInfo(m_notePath).fileName()),
+                             2000);
+    if (m_vault.isValid())
+        m_indexer->reindex(m_notePath);
     return true;
 }
 
@@ -626,9 +943,10 @@ bool MainWindow::maybeSave()
     if (m_notePath.isEmpty() || !m_editor->isModified())
         return true;
 
+    const QString shown =
+        m_vault.isValid() ? m_vault.relative(m_notePath) : QFileInfo(m_notePath).fileName();
     const auto answer = QMessageBox::question(
-        this, tr("Unsaved changes"),
-        tr("Save changes to %1?").arg(m_vault.relative(m_notePath)),
+        this, tr("Unsaved changes"), tr("Save changes to %1?").arg(shown),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
 
     if (answer == QMessageBox::Cancel)
@@ -652,8 +970,10 @@ void MainWindow::updateTitle()
 {
     const bool modified = !m_notePath.isEmpty() && m_editor->isModified();
     QString title;
-    if (!m_notePath.isEmpty())
-        title = m_vault.relative(m_notePath) + QLatin1String(" - ");
+    if (!m_notePath.isEmpty()) {
+        title = (m_vault.isValid() ? m_vault.relative(m_notePath) : QFileInfo(m_notePath).fileName())
+              + QLatin1String(" - ");
+    }
     if (m_vault.isValid())
         title += m_vault.name() + QLatin1String(" - ");
     title += QStringLiteral("noteAppC");
@@ -664,6 +984,13 @@ void MainWindow::updateTitle()
         m_tabs->setTabText(0, modified ? tab + QLatin1String(" *") : tab);
     }
     m_vaultLabel->setText(m_vault.isValid() ? m_vault.name() : tr("No vault open"));
+
+    if (m_vaultMenuButton) {
+        if (m_openMode == OpenMode::SingleFile && !m_notePath.isEmpty())
+            m_vaultMenuButton->setText(QFileInfo(m_notePath).fileName());
+        else
+            m_vaultMenuButton->setText(m_vault.isValid() ? m_vault.name() : tr("No vault"));
+    }
 }
 
 void MainWindow::updateWordCount()
@@ -681,11 +1008,163 @@ void MainWindow::closeEvent(QCloseEvent *event)
         event->ignore();
         return;
     }
+    m_settings.save();
     QSettings settings;
     settings.setValue(kGeometry, saveGeometry());
     if (auto *splitter = findChild<QSplitter *>(QStringLiteral("mainSplitter")))
         settings.setValue(kSplitter, splitter->saveState());
     event->accept();
+}
+
+// --- file operations: New note/folder, Rename, Delete ---------------------
+
+QString MainWindow::folderRelativeFor(const QModelIndex &index) const
+{
+    if (!index.isValid())
+        return QString();
+    const QString path = m_files->filePath(index);
+    const QString dirPath = m_files->isDir(index) ? path : QFileInfo(path).absolutePath();
+    return m_vault.relative(dirPath);
+}
+
+void MainWindow::showTreeContextMenu(const QPoint &pos)
+{
+    if (!m_vault.isValid())
+        return;
+
+    const QModelIndex index = m_tree->indexAt(pos);
+    QMenu menu(this);
+    QAction *newNoteAction = menu.addAction(tr("New note"));
+    QAction *newFolderAction = menu.addAction(tr("New folder"));
+    QAction *renameAction = nullptr;
+    QAction *deleteAction = nullptr;
+    if (index.isValid()) {
+        menu.addSeparator();
+        renameAction = menu.addAction(tr("Rename"));
+        deleteAction = menu.addAction(tr("Delete"));
+    }
+
+    QAction *chosen = menu.exec(m_tree->viewport()->mapToGlobal(pos));
+    if (!chosen)
+        return;
+    if (chosen == newNoteAction)
+        newNoteIn(folderRelativeFor(index));
+    else if (chosen == newFolderAction)
+        newFolderIn(folderRelativeFor(index));
+    else if (chosen == renameAction)
+        renamePathAt(index);
+    else if (chosen == deleteAction)
+        deletePathAt(index);
+}
+
+void MainWindow::newNoteIn(const QString &folderRelative)
+{
+    if (!m_vault.isValid())
+        return;
+    QString error;
+    const QString path = m_vault.createNote(folderRelative, tr("Untitled"), &error);
+    if (path.isEmpty()) {
+        QMessageBox::warning(this, tr("New note"), tr("Could not create the note:\n%1").arg(error));
+        return;
+    }
+    m_indexer->reindex(path);
+    openNote(path);
+}
+
+void MainWindow::newFolderIn(const QString &folderRelative)
+{
+    if (!m_vault.isValid())
+        return;
+    QString error;
+    const QString path = m_vault.createFolder(folderRelative, tr("New folder"), &error);
+    if (path.isEmpty())
+        QMessageBox::warning(this, tr("New folder"),
+                             tr("Could not create the folder:\n%1").arg(error));
+}
+
+void MainWindow::renamePathAt(const QModelIndex &index)
+{
+    if (!index.isValid() || !m_vault.isValid())
+        return;
+
+    const QString oldPath = m_files->filePath(index);
+    const bool isDir = m_files->isDir(index);
+    const QString currentName =
+        isDir ? QFileInfo(oldPath).fileName() : QFileInfo(oldPath).completeBaseName();
+
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this, tr("Rename"), tr("New name:"),
+                                                   QLineEdit::Normal, currentName, &ok);
+    if (!ok || newName.isEmpty() || newName == currentName)
+        return;
+
+    const QString oldRelative = m_vault.relative(oldPath);
+    QString newPath;
+    QString error;
+    if (!m_vault.renamePath(oldPath, newName, &newPath, &error)) {
+        QMessageBox::warning(this, tr("Rename"), tr("Could not rename %1:\n%2").arg(currentName, error));
+        return;
+    }
+    const QString newRelative = m_vault.relative(newPath);
+
+    if (m_settings.boolean(QStringLiteral("links.autoUpdate")) && m_index.isOpen()) {
+        QString linkError;
+        if (m_index.updateLinksAfterRename(oldRelative, newRelative, m_vault, &linkError) < 0) {
+            statusBar()->showMessage(tr("Renamed, but links could not be updated: %1").arg(linkError),
+                                     4000);
+        }
+    }
+
+    // The open note may be the renamed item itself, or nested inside a
+    // renamed folder; either way its path just moved under it.
+    if (!m_notePath.isEmpty()) {
+        if (m_notePath == oldPath) {
+            m_notePath = newPath;
+            const QString title = QFileInfo(m_notePath).completeBaseName();
+            m_inlineTitle->setText(title);
+            if (m_tabs->count() > 0)
+                m_tabs->setTabText(0, title);
+        } else if (isDir && m_notePath.startsWith(oldPath + QLatin1Char('/'))) {
+            m_notePath.replace(0, oldPath.size(), newPath);
+        }
+    }
+
+    // Picks up the moved path(s) under their new name and drops the old
+    // ones, notes and attachments alike - simpler and just as correct as
+    // patching the renamed rows by hand, folder rename included.
+    m_indexer->rebuild();
+    updateTitle();
+}
+
+void MainWindow::deletePathAt(const QModelIndex &index)
+{
+    if (!index.isValid() || !m_vault.isValid())
+        return;
+
+    const QString path = m_files->filePath(index);
+    const QString name = QFileInfo(path).fileName();
+
+    if (m_settings.boolean(QStringLiteral("files.confirmDelete"))) {
+        const auto answer =
+            QMessageBox::question(this, tr("Delete"), tr("Move %1 to the vault's trash?").arg(name),
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (answer != QMessageBox::Yes)
+            return;
+    }
+
+    QString error;
+    if (!m_vault.moveToTrash(path, &error)) {
+        QMessageBox::warning(this, tr("Delete"), tr("Could not delete %1:\n%2").arg(name, error));
+        return;
+    }
+
+    if (!m_notePath.isEmpty()
+        && (m_notePath == path || m_notePath.startsWith(path + QLatin1Char('/')))) {
+        clearOpenNote();
+    }
+    m_indexer->rebuild();
+    updateTitle();
+    updateWordCount();
 }
 
 } // namespace noteAppC

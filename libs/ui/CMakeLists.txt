@@ -9,8 +9,14 @@ add_library(noteAppC_ui STATIC
     TagsPane.cpp
     TagsPane.h
     OutgoingLinksPane.cpp
-    OutgoingLinksPane.h)
+    OutgoingLinksPane.h
+    SettingsPage.cpp
+    SettingsPage.h
+    ToggleSwitch.cpp
+    ToggleSwitch.h)
 
 set_target_properties(noteAppC_ui PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets noteAppC_vault noteAppC_theme noteAppC_index noteAppC_editor)
+target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets noteAppC_vault noteAppC_theme noteAppC_index
+    noteAppC_editor noteAppC_settings)
+target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
