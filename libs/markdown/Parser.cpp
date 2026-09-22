@@ -345,6 +345,44 @@ void detectDisplayMath(const QString &text, Decorations &decorations,
     }
 }
 
+/// One `key=value`, `key="quoted value"`, `key='quoted'` or bare-word token
+/// from a fence's attribute tail, with an optional surrounding `{}` already
+/// peeled off. `hasValue` is what tells a bare word apart from an explicit
+/// empty value (`flag` against `flag=""`), which print the same but mean
+/// different things to a caller.
+struct FenceToken {
+    QString name;
+    QString value;
+    bool hasValue = false;
+};
+
+/// Tokenises the part of a fence line that is not the type or the language:
+/// a callout's `|` slot, a `:::` container's brace or bare form, and a code
+/// fence's info string all write this same shape, so the tokenising lives
+/// here once rather than in each of them.
+QList<FenceToken> tokeniseFenceSpec(QString spec)
+{
+    static const QRegularExpression token(
+        QStringLiteral(R"(([.#]?[\w-]+)(?:[ \t]*=[ \t]*("[^"]*"|'[^']*'|\S+))?)"));
+
+    spec = spec.trimmed();
+    if (spec.startsWith(QLatin1Char('{')) && spec.endsWith(QLatin1Char('}')))
+        spec = spec.mid(1, spec.size() - 2);
+
+    QList<FenceToken> tokens;
+    auto it = token.globalMatch(spec);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        FenceToken out;
+        out.name = match.captured(1);
+        out.hasValue = !match.captured(2).isEmpty();
+        if (out.hasValue)
+            out.value = unquote(match.captured(2));
+        tokens.append(out);
+    }
+    return tokens;
+}
+
 /// What a `:::` fence line says about its container: Pandoc's
 /// `{#id .class key="value"}` or the bare `name key="value"` form.
 struct FenceSpec {
@@ -352,31 +390,47 @@ struct FenceSpec {
     QMap<QString, QString> attributes;
 };
 
-FenceSpec parseFenceSpec(QString spec)
+FenceSpec parseFenceSpec(const QString &spec)
 {
-    static const QRegularExpression token(
-        QStringLiteral(R"(([.#]?[\w-]+)(?:[ \t]*=[ \t]*("[^"]*"|'[^']*'|\S+))?)"));
-
     FenceSpec out;
-    spec = spec.trimmed();
-    if (spec.startsWith(QLatin1Char('{')) && spec.endsWith(QLatin1Char('}')))
-        spec = spec.mid(1, spec.size() - 2);
-
-    auto it = token.globalMatch(spec);
-    while (it.hasNext()) {
-        const auto match = it.next();
-        const QString name = match.captured(1);
-        if (name.startsWith(QLatin1Char('#')))
+    for (const FenceToken &token : tokeniseFenceSpec(spec)) {
+        if (token.name.startsWith(QLatin1Char('#')))
             continue; // an id names nothing that renders
-        if (match.captured(2).isEmpty()) {
+        if (!token.hasValue) {
             // `.note` in braces and `note` in the bare form both name the class.
             if (out.type.isEmpty())
-                out.type = name.startsWith(QLatin1Char('.')) ? name.mid(1) : name;
+                out.type = token.name.startsWith(QLatin1Char('.')) ? token.name.mid(1) : token.name;
             continue;
         }
-        out.attributes.insert(name.toLower(), unquote(match.captured(2)));
+        out.attributes.insert(token.name.toLower(), token.value);
     }
     return out;
+}
+
+/// A code fence's info string has no type word to peel off the way a callout
+/// or a `:::` container does - CommonMark already spent that word on the
+/// language - so every bare word left after it is a flag with an empty
+/// value: `tab` alone means `attributes["tab"] == ""`.
+QMap<QString, QString> parseFenceAttributes(const QString &spec)
+{
+    QMap<QString, QString> attributes;
+    for (const FenceToken &token : tokeniseFenceSpec(spec))
+        attributes.insert(token.name.toLower(), token.hasValue ? token.value : QString());
+    return attributes;
+}
+
+/// Where a fence's attributes sit on its opening line. md4qt positions only
+/// the language itself (`syntaxPos`); everything after it, to the end of that
+/// line, is noteAppC's own and has to be found from the raw text rather than
+/// asked of md4qt.
+Range fenceAttributesRange(const Range &language, const SourceMap &map)
+{
+    if (!language.isValid())
+        return {};
+    const qsizetype lineEnd = map.lineEnd(map.lineAt(language.start));
+    if (language.end >= lineEnd)
+        return {};
+    return {language.end, lineEnd};
 }
 
 /// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
@@ -444,6 +498,54 @@ CalloutSpan calloutOf(const FenceSpec &spec, const Range &range, const Range &ma
     callout.foldable = !open.isEmpty() || callout.type == QLatin1String("details");
     callout.collapsed = callout.foldable && !isTrue(open);
     return callout;
+}
+
+/// Two or more adjacent depth-0 fences that each carry a `tab` attribute join
+/// into one tabbed block (TODO.md, "Code block tabs"). "Adjacent" is read the
+/// same way `scanColonFences` reads an unclosed container running to the end
+/// of the note: nothing but whitespace may sit between them, so one stray
+/// line of text or a fence with no `tab` ends the run right there. Called
+/// once every fence in the file is known, which is only true once the whole
+/// walk is done - a single fence cannot tell whether it is in a group by
+/// looking only at itself.
+void groupCodeFenceTabs(const QString &text, QList<CodeFenceSpan> &fences)
+{
+    const auto hasTab = [](const CodeFenceSpan &fence) {
+        return fence.depth == 0 && fence.attributes.contains(QStringLiteral("tab"));
+    };
+    // Only spaces, tabs, CRs and newlines are allowed in the gap - which is
+    // also what lets blank lines sit between two members of the same group.
+    const auto onlyBlankBetween = [&text](const Range &end, const Range &start) {
+        for (qsizetype i = end.end; i < start.start; ++i) {
+            const QChar c = text.at(i);
+            if (c != QLatin1Char(' ') && c != QLatin1Char('\t')
+                && c != QLatin1Char('\n') && c != QLatin1Char('\r'))
+                return false;
+        }
+        return true;
+    };
+
+    qsizetype i = 0;
+    while (i < fences.size()) {
+        if (!hasTab(fences.at(i))) {
+            ++i;
+            continue;
+        }
+        qsizetype j = i + 1;
+        while (j < fences.size() && hasTab(fences.at(j))
+               && onlyBlankBetween(fences.at(j - 1).block, fences.at(j).block)) {
+            ++j;
+        }
+        // A lone `tab` fence has nobody to share a strip with, so it is left
+        // as it started: not part of any group.
+        if (j - i >= 2) {
+            for (qsizetype k = i; k < j; ++k) {
+                fences[k].tabGroup = int(i);
+                fences[k].tabLabel = fences.at(k).attributes.value(QStringLiteral("tab"));
+            }
+        }
+        i = j;
+    }
 }
 
 /// `:::` containers (PLAN.md 16.1). md4qt reads the fence lines as ordinary
@@ -696,6 +798,29 @@ void walkItem(MD::Item *item, Walk &walk)
                     walk.decorations.syntax.append(options.range);
                     walk.decorations.codeOptions.append(options);
                 }
+            }
+            if (item->type() == MD::ItemType::Code && code->isFensedCode() && block && walk.text) {
+                // Tab groups are resolved once every fence in the file is
+                // known, so only the per-fence half of the work happens here;
+                // see groupCodeFenceTabs, called at the end of parseAll.
+                CodeFenceSpan fence;
+                fence.content = range;
+                const Range startDelim = rangeOf(code->startDelim(), map);
+                const Range endDelim = rangeOf(code->endDelim(), map);
+                // An unclosed fence, like an unclosed `:::` container, runs to
+                // wherever md4qt stopped reading content - there is no closing
+                // delimiter to measure instead.
+                fence.block = {startDelim.isValid() ? startDelim.start : range.start,
+                               endDelim.isValid() ? endDelim.end : range.end};
+                fence.language = code->syntax();
+                fence.depth = walk.depth;
+                fence.attributesRange = fenceAttributesRange(rangeOf(code->syntaxPos(), map), map);
+                if (fence.attributesRange.isValid()) {
+                    fence.attributes = parseFenceAttributes(
+                        walk.text->mid(fence.attributesRange.start, fence.attributesRange.length()));
+                    walk.decorations.syntax.append(fence.attributesRange);
+                }
+                walk.decorations.codeFences.append(fence);
             }
         } else {
             walk.decorations.styles.append({kind, range, 0, {}, {}, {}});
@@ -1027,6 +1152,10 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     // and the definition half of a reference link, which it reads and forgets.
     scanColonFences(text, walk.masked, result.decorations);
     hideLinkDefinitions(text, walk.masked, result.decorations);
+
+    // Every fence in the file is known only now, which is what a tab group
+    // needs to see across.
+    groupCodeFenceTabs(text, result.decorations.codeFences);
 
     return result;
 }

@@ -132,6 +132,33 @@ struct CodeOptions {
     QMap<QString, QString> extra; ///< every key with no meaning here, as written
 };
 
+/// A fenced code block's own header. CommonMark reads only the info string's
+/// first word as the language - `Code::syntax()`, positioned by
+/// `syntaxPos()` - which is why a listing still highlights in Obsidian even
+/// when noteAppC has written more after it: `` ```python name="Setup
+/// script" icon=U+E73C ``. Everything past the language is noteAppC's own,
+/// parsed the way a callout's `|` slot and a `:::` container's `{}` already
+/// are, so the same override syntax reads the same way everywhere in a note.
+struct CodeFenceSpan {
+    Range block;      ///< the whole fenced block, both fences included
+    Range content;    ///< the listing between the fences
+    QString language; ///< as written, case kept
+    QMap<QString, QString> attributes; ///< from the rest of the info string
+    Range attributesRange; ///< where those attributes sit on the fence line
+    /// How deeply this fence is nested: 0 at top level, >0 inside a quote or
+    /// callout - the same count `CalloutSpan::depth` uses.
+    int depth = 0;
+    /// Adjacent fenced blocks that each carry a `tab` attribute join into one
+    /// tabbed block. This is the index into `Decorations::codeFences` of the
+    /// group's first member, shared by every fence in the group, or -1
+    /// outside any group - which is also what a lone `tab` fence gets, since
+    /// it has nobody to share a tab strip with.
+    int tabGroup = -1;
+    /// The `tab` attribute's value, empty for a bare `tab` - the editor then
+    /// labels that tab with the language's own style name instead.
+    QString tabLabel;
+};
+
 /// One item of a list, so live preview can hide the source marker, draw a
 /// bullet or a checkbox in its place, and indent the text under it.
 struct ListItemSpan {
@@ -170,6 +197,11 @@ struct Decorations {
     /// One entry per fenced code block that carries `#|` options; find a
     /// block's own by matching `block` against its BlockSpan range.
     QList<CodeOptions> codeOptions;
+    /// Every fenced code block, any depth, sorted by `block.start`. A block
+    /// that also carries `#|` options has an entry here as well as in
+    /// `codeOptions` - match the two by `content` against `CodeOptions::block`,
+    /// which is the same range under a different name.
+    QList<CodeFenceSpan> codeFences;
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;

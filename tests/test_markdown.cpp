@@ -1116,3 +1116,143 @@ TEST(ParserPerfTest, ParsingStaysLinearInFileSize)
     // Linear is ~5x. The quadratic this replaced was over 30x.
     EXPECT_LT(timeRatio, sizeRatio * 2.0);
 }
+
+// --- code fence attributes and tab groups (TODO.md, "Code blocks use the
+// callout style format" and "Code block tabs") -----------------------------
+
+TEST(CodeFenceTest, AttributesParsedFromTheInfoString)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "```python name=\"Setup script\" icon=U+E73C tab\nprint(1)\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const CodeFenceSpan &fence = decorations.codeFences.first();
+
+    EXPECT_EQ(fence.language, QStringLiteral("python"));
+    EXPECT_EQ(fence.attributes.value(QStringLiteral("name")), QStringLiteral("Setup script"));
+    EXPECT_EQ(fence.attributes.value(QStringLiteral("icon")), QStringLiteral("U+E73C"));
+    // A bare word is a flag with an empty value, not a type the way a
+    // callout's first bare word would be - a fence has no type word to spend.
+    ASSERT_TRUE(fence.attributes.contains(QStringLiteral("tab")));
+    EXPECT_TRUE(fence.attributes.value(QStringLiteral("tab")).isEmpty());
+
+    // A single-quoted value works the same as a double-quoted one.
+    const Decorations single = decorationsOf(
+        QStringLiteral("```python name='Setup script'\nprint(1)\n```\n"));
+    ASSERT_EQ(single.codeFences.size(), 1);
+    EXPECT_EQ(single.codeFences.first().attributes.value(QStringLiteral("name")),
+              QStringLiteral("Setup script"));
+}
+
+TEST(CodeFenceTest, BraceFormIsAccepted)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("```python {name=\"Setup\" icon=zap}\nprint(1)\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const CodeFenceSpan &fence = decorations.codeFences.first();
+    EXPECT_EQ(fence.language, QStringLiteral("python"));
+    EXPECT_EQ(fence.attributes.value(QStringLiteral("name")), QStringLiteral("Setup"));
+    EXPECT_EQ(fence.attributes.value(QStringLiteral("icon")), QStringLiteral("zap"));
+}
+
+TEST(CodeFenceTest, AttributesRangeIsExactAndHidden)
+{
+    const QString text = QStringLiteral(
+        "```python name=\"Setup script\" icon=U+E73C\nprint(1)\n```\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const CodeFenceSpan &fence = decorations.codeFences.first();
+
+    // Exactly the text after the language, nothing of the language itself and
+    // nothing of the listing that follows.
+    EXPECT_EQ(sliceOf(text, fence.attributesRange),
+              QStringLiteral(" name=\"Setup script\" icon=U+E73C"));
+    EXPECT_EQ(rendered(text), QStringLiteral("\nprint(1)\n\n"));
+}
+
+TEST(CodeFenceTest, LanguageStaysExactlyWhatTheStyleSpanCarries)
+{
+    const Decorations decorations = decorationsOf(
+        QStringLiteral("```Python name=\"Setup\"\nprint(1)\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    // Case is kept, and attributes on the fence do not disturb the language
+    // syntax highlighting already keys off.
+    EXPECT_EQ(decorations.codeFences.first().language, QStringLiteral("Python"));
+    EXPECT_TRUE(hasStyle(decorations, StyleSpan::Kind::CodeBlock, QStringLiteral("Python")));
+}
+
+TEST(CodeFenceTest, NoAttributesIsAnEmptyMapAndAnInvalidRange)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral("```python\nprint(1)\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const CodeFenceSpan &fence = decorations.codeFences.first();
+    EXPECT_TRUE(fence.attributes.isEmpty());
+    EXPECT_FALSE(fence.attributesRange.isValid());
+}
+
+TEST(CodeFenceTest, TwoAdjacentTabFencesShareAGroupAndThreeDoToo)
+{
+    const Decorations two = decorationsOf(QStringLiteral(
+        "```python tab=\"Python\"\nprint(1)\n```\n```cpp tab=\"C++\"\nint x;\n```\n"));
+    ASSERT_EQ(two.codeFences.size(), 2);
+    EXPECT_EQ(two.codeFences.at(0).tabGroup, 0);
+    EXPECT_EQ(two.codeFences.at(1).tabGroup, 0);
+    EXPECT_EQ(two.codeFences.at(0).tabLabel, QStringLiteral("Python"));
+    EXPECT_EQ(two.codeFences.at(1).tabLabel, QStringLiteral("C++"));
+
+    const Decorations three = decorationsOf(QStringLiteral(
+        "```a tab\nx\n```\n```b tab\nx\n```\n```c tab\nx\n```\n"));
+    ASSERT_EQ(three.codeFences.size(), 3);
+    EXPECT_EQ(three.codeFences.at(0).tabGroup, 0);
+    EXPECT_EQ(three.codeFences.at(1).tabGroup, 0);
+    EXPECT_EQ(three.codeFences.at(2).tabGroup, 0);
+}
+
+TEST(CodeFenceTest, TextBetweenEndsATabGroup)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "```a tab\nx\n```\nstray text\n```b tab\nx\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 2);
+    // Real text sits between them, so each is alone rather than sharing a
+    // group with the other.
+    EXPECT_EQ(decorations.codeFences.at(0).tabGroup, -1);
+    EXPECT_EQ(decorations.codeFences.at(1).tabGroup, -1);
+}
+
+TEST(CodeFenceTest, FenceWithoutTabBetweenEndsAGroup)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "```a tab\nx\n```\n```b\nx\n```\n```c tab\nx\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 3);
+    EXPECT_EQ(decorations.codeFences.at(0).tabGroup, -1); // alone: "b" has no tab
+    EXPECT_EQ(decorations.codeFences.at(1).tabGroup, -1); // "b" itself never groups
+    EXPECT_EQ(decorations.codeFences.at(2).tabGroup, -1); // alone on the other side
+}
+
+TEST(CodeFenceTest, LoneTabFenceIsNotAGroup)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral("```python tab\nprint(1)\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    EXPECT_EQ(decorations.codeFences.first().tabGroup, -1);
+}
+
+TEST(CodeFenceTest, BlankLinesBetweenAreAllowed)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "```a tab\nx\n```\n\n\n```b tab\nx\n```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 2);
+    EXPECT_EQ(decorations.codeFences.at(0).tabGroup, 0);
+    EXPECT_EQ(decorations.codeFences.at(1).tabGroup, 0);
+}
+
+TEST(CodeFenceTest, NestedFencesGetDepthAndNoGroup)
+{
+    const Decorations decorations = decorationsOf(QStringLiteral(
+        "> [!note]\n> ```cpp tab\n> x\n> ```\n> ```rust tab\n> x\n> ```\n"));
+    ASSERT_EQ(decorations.codeFences.size(), 2);
+    // Grouping only ever looks at depth-0 fences today, even though these two
+    // are otherwise adjacent - only whitespace sits between them.
+    EXPECT_EQ(decorations.codeFences.at(0).depth, 1);
+    EXPECT_EQ(decorations.codeFences.at(1).depth, 1);
+    EXPECT_EQ(decorations.codeFences.at(0).tabGroup, -1);
+    EXPECT_EQ(decorations.codeFences.at(1).tabGroup, -1);
+}
