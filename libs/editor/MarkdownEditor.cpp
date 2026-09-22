@@ -1,6 +1,8 @@
 #include "MarkdownEditor.h"
 
 #include "Icons.h"
+#include "PdfPage.h"
+#include "Vault.h"
 
 #include <QAbstractItemView>
 #include <QApplication>
@@ -14,6 +16,7 @@
 #include <QScrollBar>
 #include <QFileInfo>
 #include <QImageReader>
+#include <QLocale>
 #include <QStringListModel>
 #include <QtConcurrent>
 #include <QTextLine>
@@ -1000,10 +1003,12 @@ const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
     return nullptr;
 }
 
-bool MarkdownEditor::layoutImage(BlockView &view)
+bool MarkdownEditor::layoutEmbed(BlockView &view)
 {
     view.image = QPixmap();
     view.imagePath.clear();
+    view.embedLabel.clear();
+    view.embedPanel = false;
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed || !m_resolver)
@@ -1013,10 +1018,21 @@ bool MarkdownEditor::layoutImage(BlockView &view)
     if (path.isEmpty())
         return false;
 
-    static const QByteArrayList readable = QImageReader::supportedImageFormats();
-    if (!readable.contains(QFileInfo(path).suffix().toLower().toUtf8()))
-        return false;
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QByteArrayList images = QImageReader::supportedImageFormats();
 
+    if (images.contains(suffix.toUtf8()))
+        return layoutImage(view, *embed, path);
+    if (suffix == QLatin1String("pdf"))
+        return layoutPdf(view, *embed, path);
+    // A note embed is rendered by the transclusion path, not here.
+    if (Vault::isNote(path))
+        return false;
+    return layoutSourceFile(view, *embed, path);
+}
+
+bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path)
+{
     QPixmap pixmap = m_images.value(path);
     if (pixmap.isNull()) {
         pixmap = QPixmap(path);
@@ -1026,10 +1042,10 @@ bool MarkdownEditor::layoutImage(BlockView &view)
     }
 
     // Obsidian caps an image at the readable column and honours |WxH.
-    int width = embed->width > 0 ? embed->width : pixmap.width();
+    int width = embed.width > 0 ? embed.width : pixmap.width();
     width = qMin(width, contentWidth());
-    int height = embed->height > 0 ? embed->height
-                                   : int(qreal(width) * pixmap.height() / pixmap.width());
+    int height = embed.height > 0 ? embed.height
+                                  : int(qreal(width) * pixmap.height() / pixmap.width());
 
     view.image = pixmap;
     view.imageSize = QSize(width, height);
@@ -1037,6 +1053,126 @@ bool MarkdownEditor::layoutImage(BlockView &view)
     view.layout.reset();
     view.cells.clear();
     view.height = height;
+    view.laidOut = true;
+    return true;
+}
+
+bool MarkdownEditor::layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path)
+{
+    // Obsidian addresses a page with `#page=3`; page one otherwise.
+    int page = 0;
+    static const QRegularExpression pageRef(QStringLiteral("#page=(\\d+)"),
+                                            QRegularExpression::CaseInsensitiveOption);
+    const auto match = pageRef.match(embed.subpath);
+    if (match.hasMatch())
+        page = qMax(0, match.captured(1).toInt() - 1);
+
+    const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
+    const QString key = QStringLiteral("%1|%2|%3").arg(path).arg(page).arg(width);
+
+    QPixmap pixmap = m_images.value(key);
+    if (pixmap.isNull()) {
+        const QImage rendered = PdfPage::render(path, page, width);
+        if (rendered.isNull())
+            return false;
+        pixmap = QPixmap::fromImage(rendered);
+        m_images.insert(key, pixmap);
+    }
+
+    const int height = embed.height > 0
+                           ? embed.height
+                           : int(qreal(width) * pixmap.height() / qMax(1, pixmap.width()));
+
+    view.image = pixmap;
+    view.imageSize = QSize(width, height);
+    view.imagePath = path;
+    view.embedLabel = PdfPage::pageCount(path) > 1
+                          ? tr("%1  -  page %2").arg(QFileInfo(path).fileName()).arg(page + 1)
+                          : QFileInfo(path).fileName();
+    view.embedPanel = true;
+    view.layout.reset();
+    view.cells.clear();
+    view.textTop = codeHeaderHeight();
+    view.height = height + view.textTop;
+    view.laidOut = true;
+    return true;
+}
+
+bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
+                                      const QString &path)
+{
+    constexpr qint64 kMaxBytes = 512 * 1024;
+    QFileInfo info(path);
+    if (!info.isFile())
+        return false;
+
+    view.embedLabel = info.fileName();
+    view.embedPanel = true;
+    view.layout.reset();
+    view.cells.clear();
+    view.textTop = codeHeaderHeight();
+
+    QString body;
+    if (info.size() > kMaxBytes) {
+        // Plan 16.4: a huge file shows its header and nothing else. There is
+        // no run button here, and never will be.
+        body = tr("%1 is %2 - too large to show inline.")
+                   .arg(info.fileName(), QLocale().formattedDataSize(info.size()));
+    } else {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return false;
+        body = QString::fromUtf8(file.readAll());
+        body.replace(QLatin1String("\r\n"), QLatin1String("\n"));
+
+        // `#L10-L20`, or `#L10` for one line, as in Obsidian's line links.
+        static const QRegularExpression lineRef(
+            QStringLiteral("#L(\\d+)(?:-L?(\\d+))?"), QRegularExpression::CaseInsensitiveOption);
+        const auto match = lineRef.match(embed.subpath);
+        if (match.hasMatch()) {
+            const QStringList lines = body.split(QLatin1Char('\n'));
+            const int first = qBound(1, match.captured(1).toInt(), int(lines.size()));
+            const int last = match.captured(2).isEmpty()
+                                 ? first
+                                 : qBound(first, match.captured(2).toInt(), int(lines.size()));
+            body = lines.mid(first - 1, last - first + 1).join(QLatin1Char('\n'));
+            view.embedLabel =
+                first == last ? tr("%1:%2").arg(info.fileName()).arg(first)
+                              : tr("%1:%2-%3").arg(info.fileName()).arg(first).arg(last);
+        }
+    }
+    while (body.endsWith(QLatin1Char('\n')))
+        body.chop(1);
+
+    const BlockSpan codeSpan{BlockSpan::Kind::Code, view.span.range, 0};
+    QString shown = body;
+    shown.replace(QLatin1Char('\n'), QChar(QChar::LineSeparator));
+
+    view.map = DisplayMap::build(m_text, view.span.range, {view.span.range});
+    view.layout = std::make_unique<QTextLayout>(shown);
+    view.layout->setCacheEnabled(true);
+    view.layout->setFont(fontFor(codeSpan));
+
+    QTextOption option;
+    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    view.layout->setTextOption(option);
+    // The file's own extension picks the Kate definition.
+    view.layout->setFormats(m_code.highlight(body, info.suffix()));
+
+    const qreal lineHeight = lineHeightFor(codeSpan);
+    view.layout->beginLayout();
+    qreal height = 0;
+    while (true) {
+        QTextLine line = view.layout->createLine();
+        if (!line.isValid())
+            break;
+        line.setLineWidth(contentWidth() - 28);
+        line.setPosition(QPointF(0, height));
+        height += lineHeight;
+    }
+    view.layout->endLayout();
+
+    view.height = qMax(height, lineHeight) + view.textTop;
     view.laidOut = true;
     return true;
 }
@@ -1227,6 +1363,28 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     painter.fillRect(QRectF(barX, top + view.height + 2, barWidth, 3), bar);
 }
 
+void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left,
+                                      qreal top) const
+{
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    QPainterPath rounded;
+    rounded.addRoundedRect(panel, 6, 6);
+    painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
+
+    if (view.embedLabel.isEmpty())
+        return;
+
+    painter.save();
+    QFont label = m_theme.uiFont();
+    label.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    painter.setFont(label);
+    painter.setPen(m_theme.color(QStringLiteral("--text-faint")));
+    painter.drawText(QRectF(panel.left() + 12, panel.top() + 6, panel.width() - 24,
+                            view.textTop),
+                     Qt::AlignVCenter | Qt::AlignLeft, view.embedLabel);
+    painter.restore();
+}
+
 MarkdownEditor::BlockView *MarkdownEditor::scrollableTableAt(const QPoint &viewportPoint)
 {
     const qreal y = viewportPoint.y() + verticalScrollBar()->value();
@@ -1257,7 +1415,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         return;
 
     const bool renderMedia = m_mode != Mode::Source && !view.active;
-    if (renderMedia && layoutImage(view))
+    if (renderMedia && layoutEmbed(view))
         return;
 
     const bool renderTable = view.span.kind == BlockSpan::Kind::Table
@@ -1479,8 +1637,12 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
         }
         appendFindHighlights(view, selectionRanges);
 
+        if (view.embedPanel)
+            paintEmbedChrome(painter, view, left, top);
+
         if (!view.image.isNull()) {
-            const QRectF target(left, top, view.imageSize.width(), view.imageSize.height());
+            const QRectF target(left, top + view.textTop, view.imageSize.width(),
+                                view.imageSize.height());
             painter.drawPixmap(target.toRect(), view.image);
             continue;
         }
@@ -1489,7 +1651,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             continue;
         }
         if (view.layout) {
-            const qreal indent = view.callout ? 14 : 0;
+            const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
             const qreal drop = view.textTop;
             // A listing that asked not to wrap runs off the end of its line;
             // the panel is where it stops, not the window.

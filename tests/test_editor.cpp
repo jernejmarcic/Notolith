@@ -163,12 +163,15 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 
 #include <QApplication>
 #include <QFontMetricsF>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QTest>
 
 #include <utility>
 
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
+#include "PdfPage.h"
 
 namespace {
 
@@ -1054,6 +1057,41 @@ TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
     EXPECT_EQ(editor->noteText(), note);
     // The options are syntax, so what is laid out is the listing alone.
     EXPECT_EQ(editor->displayText().trimmed(), QStringLiteral("x = 1\ny = 2"));
+}
+
+TEST(PdfPageTest, AvailableAndRefusesWhatIsNotAPdf)
+{
+    // Built against poppler-qt6 here; a permissive build without it reports
+    // itself unavailable rather than pretending.
+    EXPECT_TRUE(PdfPage::isAvailable());
+    EXPECT_EQ(PdfPage::pageCount(QStringLiteral("/nonexistent/none.pdf")), 0);
+    EXPECT_TRUE(PdfPage::render(QStringLiteral("/nonexistent/none.pdf"), 0, 400).isNull());
+    // A real file that is not a PDF must not crash the renderer either.
+    EXPECT_EQ(PdfPage::pageCount(QStringLiteral("/etc/hostname")), 0);
+}
+
+TEST(MarkdownEditorTest, EmbedsASourceFileAsAReadOnlyCodeBlock)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString source = dir.filePath(QStringLiteral("snippet.cpp"));
+    {
+        QFile file(source);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("int one() { return 1; }\n"
+                   "int two() { return 2; }\n"
+                   "int three() { return 3; }\n");
+    }
+
+    auto editor = editorWith(QStringLiteral("![[snippet.cpp#L2-L3]]\n"));
+    editor->setLinkResolver([&](const QString &target) {
+        return target == QLatin1String("snippet.cpp") ? source : QString();
+    });
+
+    // The embed replaced the text: the wikilink itself is no longer shown.
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("snippet.cpp")));
+    // And the buffer is untouched, which is what makes the embed read-only.
+    EXPECT_EQ(editor->noteText(), QStringLiteral("![[snippet.cpp#L2-L3]]\n"));
 }
 
 int main(int argc, char **argv)

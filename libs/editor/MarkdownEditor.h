@@ -227,6 +227,10 @@ private:
         QPixmap image;
         QSize imageSize;
         QString imagePath;
+        /// Filename shown in the header strip of a source-file or PDF embed.
+        QString embedLabel;
+        /// Draw the code panel and header behind this block.
+        bool embedPanel = false;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -262,6 +266,8 @@ private:
     /// The panel, the header strip, the line-number gutter and the highlighted
     /// rows of a fenced code block.
     void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// Panel and filename header for a source-file or PDF embed.
+    void paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintCheckBox(QPainter &painter, const QRectF &rect, bool done) const;
     /// The disclosure triangle every foldable block carries.
     void paintFoldArrow(QPainter &painter, const QRectF &rect, bool folded,
@@ -292,8 +298,12 @@ private:
     void toggleProperty(int index);
     /// The embed that fills this block on its own, or nullptr.
     const EmbedSpan *soleEmbedOf(const BlockView &view) const;
-    /// Loads and scales the image for a block that is one image embed.
-    bool layoutImage(BlockView &view);
+    /// A block that is nothing but an embed: an image, a PDF page, or a
+    /// source file shown as a read-only code block.
+    bool layoutEmbed(BlockView &view);
+    bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
+    bool layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path);
+    bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
