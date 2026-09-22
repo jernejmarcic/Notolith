@@ -5,6 +5,7 @@
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
 
 #include <QApplication>
+#include <QFileInfo>
 #include <QImage>
 #include <QStyleFactory>
 #include <QTimer>
@@ -30,13 +31,23 @@ int main(int argc, char *argv[])
                      args.value(6).toInt() > 0 ? args.value(6).toInt() : 760);
 
     noteAppC::MainWindow window;
-    if (args.value(4) == QLatin1String("light"))
-        window.setThemeMode(noteAppC::Theme::Mode::Light);
     const bool sourceMode = args.contains(QLatin1String("--source"));
     window.resize(size);
-    window.openVault(args.at(1));
-    if (args.at(2) != QLatin1String("-"))
-        window.openNote(args.at(2));
+    // Absolute, always: a relative note path makes Vault::read fail, and the
+    // error box it raises blocks forever on the offscreen platform.
+    window.openVault(QFileInfo(args.at(1)).absoluteFilePath());
+    if (args.at(2) != QLatin1String("-")) {
+        const QFileInfo note(args.at(2));
+        if (!note.isFile()) {
+            qWarning("%s is not a file", qPrintable(args.at(2)));
+            return 2;
+        }
+        window.openNote(note.absoluteFilePath());
+    }
+    // After opening, because opening a vault applies that vault's saved
+    // scheme and would otherwise overwrite the mode asked for here.
+    window.setThemeMode(args.value(4) == QLatin1String("light") ? noteAppC::Theme::Mode::Light
+                                                                : noteAppC::Theme::Mode::Dark);
     if (sourceMode)
         window.toggleEditingMode();
     window.show();

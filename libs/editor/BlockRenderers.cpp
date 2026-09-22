@@ -39,7 +39,7 @@ QString propertyIcon(Property::Type type)
         return QStringLiteral("check");
     case Property::Type::Date:
     case Property::Type::DateTime:
-        return QStringLiteral("arrow-right");
+        return QStringLiteral("calendar");
     case Property::Type::Text:
     case Property::Type::Unknown:
         break;
