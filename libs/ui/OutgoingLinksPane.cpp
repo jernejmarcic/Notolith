@@ -19,15 +19,33 @@ namespace {
 /// The trimmed source line a link sits on; empty if the note can't be read
 /// (deleted since the index ran, say), so the caller can fall back to the
 /// link markup itself.
-QString contextLine(const QString &notePath, const Range &range)
-{
-    Note note;
-    if (!range.isValid() || !Vault::read(notePath, note))
-        return {};
-    const SourceMap map(note.text);
-    const qsizetype line = map.lineAt(range.start);
-    return note.text.mid(map.lineStart(line), map.lineEnd(line) - map.lineStart(line)).trimmed();
-}
+/// The note a pane is listing links out of, read once per refresh.
+///
+/// This used to be read, decoded and mapped again for *every* link in the
+/// note, which made refreshing the pane cost O(links x file size): a 1 MB note
+/// spent most of its open re-decoding itself, and it was the single hottest
+/// thing in the whole application under perf.
+struct NoteSource {
+    QString text;
+    SourceMap map;
+
+    explicit NoteSource(const QString &notePath)
+    {
+        Note note;
+        if (Vault::read(notePath, note)) {
+            text = note.text;
+            map = SourceMap(text);
+        }
+    }
+
+    QString lineAt(const Range &range) const
+    {
+        if (!range.isValid() || text.isEmpty() || range.start >= text.size())
+            return {};
+        const qsizetype line = map.lineAt(range.start);
+        return text.mid(map.lineStart(line), map.lineEnd(line) - map.lineStart(line)).trimmed();
+    }
+};
 
 } // namespace
 
@@ -97,6 +115,7 @@ void OutgoingLinksPane::refresh()
 
     const auto links = m_index->outgoingLinks(m_path);
 
+    const NoteSource source(m_path);
     QHash<QString, QTreeWidgetItem *> byTarget;
     QStringList unresolvedRows;
     int shownCount = 0;
@@ -109,7 +128,7 @@ void OutgoingLinksPane::refresh()
         ++shownCount;
 
         const QString resolved = m_index->resolve(link.target, m_path);
-        const QString context = contextLine(m_path, link.range);
+        const QString context = source.lineAt(link.range);
         const QString shown = link.alias.isEmpty() ? link.target : link.alias;
         const QString text = context.isEmpty()
             ? (link.embed ? tr("embed: %1").arg(shown) : QStringLiteral("[[%1]]").arg(shown))

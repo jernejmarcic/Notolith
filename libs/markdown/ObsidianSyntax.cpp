@@ -129,17 +129,25 @@ ObsidianSyntax::Result ObsidianSyntax::scan(const QString &text, const QList<Ran
 
     // Comments first: whatever they cover is masked for everything else,
     // exactly as Obsidian treats %%...%%.
+    // One pass over the whole text, not one per region. `%%...%%` is lazy and
+    // unanchored, so when a file holds no comment at all PCRE has to walk to
+    // the end before it can say so - and running that once per unmasked region
+    // made this O(regions x file size). A 1 MB note has some 16 000 regions,
+    // which was almost the entire cost of opening it.
     QList<Range> commentRanges;
-    for (const Range &region : regions) {
-        auto it = commentRe().globalMatch(text, region.start);
-        while (it.hasNext()) {
-            const auto match = it.next();
-            if (match.capturedStart() >= region.end)
-                break;
-            const Range range{match.capturedStart(), match.capturedEnd()};
-            result.comments.append(range);
-            commentRanges.append(range);
-        }
+    auto comments = commentRe().globalMatch(text);
+    while (comments.hasNext()) {
+        const auto match = comments.next();
+        const Range range{match.capturedStart(), match.capturedEnd()};
+        // `regions` is sorted and disjoint, so the one that could hold this
+        // match is the last whose start is not past it.
+        const auto after = std::upper_bound(
+            regions.cbegin(), regions.cend(), range.start,
+            [](qsizetype value, const Range &region) { return value < region.start; });
+        if (after == regions.cbegin() || (after - 1)->end <= range.start)
+            continue; // the comment opens inside code or another masked span
+        result.comments.append(range);
+        commentRanges.append(range);
     }
 
     const QList<Range> live = unmasked(text.size(), normalise(masked + commentRanges));

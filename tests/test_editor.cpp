@@ -328,6 +328,39 @@ TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
     EXPECT_LT(milliseconds, 300.0);
 }
 
+TEST(MarkdownEditorTest, OpeningAMegabyteNoteStaysLinear)
+{
+    // The guard on a specific quadratic: ObsidianSyntax::scan ran the lazy
+    // `%%...%%` comment pattern once per unmasked region, and each run with no
+    // match had to walk to the end of the file. A 1 MB note has some 16 000
+    // regions, so opening it took 2 s of which the comment pass was 1.9 s.
+    //
+    // Asserted as a *ratio*, not a wall-clock number: five times the text
+    // should cost roughly five times the work, and a quadratic cannot hide
+    // inside that however fast the machine is.
+    const QString small = generateNote(200);
+    const QString large = generateNote(1000);
+
+    QElapsedTimer clock;
+    clock.start();
+    auto smallEditor = editorWith(small);
+    const double smallMs = clock.nsecsElapsed() / 1e6;
+
+    clock.restart();
+    auto largeEditor = editorWith(large);
+    const double largeMs = clock.nsecsElapsed() / 1e6;
+
+    const double sizeRatio = double(large.size()) / double(small.size());
+    const double timeRatio = largeMs / qMax(0.001, smallMs);
+    std::printf("[ PERF     ] open %.0f kB: %.1f ms, %.0f kB: %.1f ms (%.1fx text, %.1fx time)\n",
+                small.size() / 1024.0, smallMs, large.size() / 1024.0, largeMs,
+                sizeRatio, timeRatio);
+
+    // Generous: linear would be ~5x, the old quadratic was over 30x.
+    EXPECT_LT(timeRatio, sizeRatio * 2.5);
+    EXPECT_LT(largeMs, 900.0);
+}
+
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
 {
     // One paragraph across two source lines renders as one flowing line;
