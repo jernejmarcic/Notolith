@@ -74,17 +74,30 @@ void Indexer::rebuild()
         return;
 
     QStringList paths;
+    QStringList attachments;
     QDirIterator it(m_vault.root(), QDir::Files | QDir::NoDotAndDotDot,
                     QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString path = it.next();
         const QString relative = m_vault.relative(path);
-        if (isIgnored(relative) || !Vault::isNote(path))
+        if (isIgnored(relative))
             continue;
         const QFileInfo info(path);
         if (m_index->isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size()))
             continue;
-        paths << path;
+        if (Vault::isNote(path))
+            paths << path;
+        else
+            attachments << path; // so ![[image.png]] resolves
+    }
+
+    if (!attachments.isEmpty()) {
+        m_index->beginBatch();
+        for (const QString &path : std::as_const(attachments)) {
+            const QFileInfo info(path);
+            m_index->putAttachment(path, info.lastModified().toMSecsSinceEpoch(), info.size());
+        }
+        m_index->endBatch();
     }
 
     // Anything the cache holds that is no longer on disk.

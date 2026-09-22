@@ -294,6 +294,35 @@ void Index::put(const Metadata &metadata, const QString &body)
         emit changed();
 }
 
+void Index::putAttachment(const QString &path, qint64 mtime, qint64 size)
+{
+    if (!m_db.isOpen())
+        return;
+
+    const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
+    remove(path);
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "INSERT INTO files(path, mtime, size, hash, words) VALUES(?, ?, ?, NULL, -1)"));
+    query.addBindValue(relative);
+    query.addBindValue(mtime);
+    query.addBindValue(size);
+    if (!query.exec()) {
+        m_error = query.lastError().text();
+        return;
+    }
+
+    // An attachment answers to its file name and to its path, both with the
+    // extension, which is how Obsidian resolves `![[image.png]]`.
+    QStringList names{QFileInfo(relative).fileName(), relative};
+    names.removeDuplicates();
+    indexNames(query.lastInsertId().toLongLong(), relative, names);
+
+    if (!m_inBatch)
+        emit changed();
+}
+
 void Index::remove(const QString &path)
 {
     if (!m_db.isOpen())
@@ -315,7 +344,15 @@ void Index::remove(const QString &path)
 int Index::noteCount() const
 {
     QSqlQuery query(m_db);
-    query.exec(QStringLiteral("SELECT COUNT(*) FROM files"));
+    // Attachments live in the same table (so links resolve) but are not notes.
+    query.exec(QStringLiteral("SELECT COUNT(*) FROM files WHERE words >= 0"));
+    return query.next() ? query.value(0).toInt() : 0;
+}
+
+int Index::attachmentCount() const
+{
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT COUNT(*) FROM files WHERE words < 0"));
     return query.next() ? query.value(0).toInt() : 0;
 }
 
@@ -323,7 +360,9 @@ QStringList Index::allPaths() const
 {
     QStringList paths;
     QSqlQuery query(m_db);
-    query.exec(QStringLiteral("SELECT path FROM files ORDER BY path"));
+    // Notes only: attachments are in `files` so links resolve, but they are
+    // not something the quick switcher or a rescan should walk.
+    query.exec(QStringLiteral("SELECT path FROM files WHERE words >= 0 ORDER BY path"));
     while (query.next())
         paths << query.value(0).toString();
     return paths;
@@ -467,7 +506,8 @@ QStringList Index::findByName(const QString &query, int limit) const
     QSqlQuery statement(m_db);
     statement.prepare(QStringLiteral(
         "SELECT DISTINCT files.path FROM names JOIN files ON files.id = names.file "
-        "WHERE names.folded LIKE ? ORDER BY length(files.path), files.path LIMIT ?"));
+        "WHERE names.folded LIKE ? AND files.words >= 0 "
+        "ORDER BY length(files.path), files.path LIMIT ?"));
     statement.addBindValue(QStringLiteral("%%%1%%").arg(foldCase(query)));
     statement.addBindValue(limit);
     statement.exec();

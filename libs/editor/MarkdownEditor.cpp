@@ -10,6 +10,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QFileInfo>
+#include <QImageReader>
 #include <QStringListModel>
 #include <QtConcurrent>
 #include <QTextLine>
@@ -22,6 +24,8 @@ namespace {
 // The source's own blank lines make the vertical rhythm, exactly as the file
 // reads; only headings get extra air, the way Obsidian styles them.
 constexpr int kBlockSpacing = 0;
+/// Width of the margin a list keeps for its bullets and checkboxes.
+constexpr qreal kListIndent = 26;
 constexpr int kTypingBurstMs = 500;
 
 qreal headingScale(int level)
@@ -90,6 +94,15 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
             this, &MarkdownEditor::insertCompletion);
 
     m_lastEdit.start();
+}
+
+void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> resolver)
+{
+    m_resolver = std::move(resolver);
+    m_images.clear();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
 }
 
 void MarkdownEditor::setLinkTargets(const QStringList &targets)
@@ -504,6 +517,15 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         }
     }
 
+    for (const ListItemSpan &item : m_decorations.listItems) {
+        if (!item.done || !item.range.overlaps(block))
+            continue;
+        QTextCharFormat strike;
+        strike.setFontStrikeOut(true);
+        strike.setForeground(m_theme.color(QStringLiteral("--text-muted")));
+        add({item.marker.end, item.range.end}, strike);
+    }
+
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
         const StyleSpan &span = m_decorations.styles.at(i);
         if (!span.range.overlaps(block))
@@ -632,6 +654,109 @@ bool MarkdownEditor::softBreakAt(qsizetype source) const
     return false;
 }
 
+const ListItemSpan *MarkdownEditor::listItemAt(qsizetype source) const
+{
+    for (const ListItemSpan &item : m_decorations.listItems) {
+        // The marker is hidden, so a line starts exactly where it ends.
+        if (item.marker.end == source || item.range.start == source)
+            return &item;
+    }
+    return nullptr;
+}
+
+QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &item) const
+{
+    if (!view.layout)
+        return {};
+    const qsizetype display = view.map.toDisplay(item.marker.end);
+    const QTextLine line = view.layout->lineForTextPosition(int(display));
+    if (!line.isValid())
+        return {};
+
+    const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
+    const qreal x = contentLeft() + kListIndent * (1 + item.indent) - box - 8;
+    const qreal y = view.y - verticalScrollBar()->value() + line.y()
+                    + (line.height() - box) / 2;
+    return QRectF(x, y, box, box);
+}
+
+void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, qreal left,
+                                      qreal top) const
+{
+    if (!view.layout || view.span.kind != BlockSpan::Kind::List)
+        return;
+
+    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
+    const QColor onAccent = m_theme.color(QStringLiteral("--text-on-accent"));
+    const QColor border = m_theme.color(QStringLiteral("--background-modifier-border-hover"));
+
+    for (const ListItemSpan &item : m_decorations.listItems) {
+        if (!item.range.overlaps(view.span.range))
+            continue;
+
+        const qsizetype display = view.map.toDisplay(item.marker.end);
+        const QTextLine line = view.layout->lineForTextPosition(int(display));
+        if (!line.isValid())
+            continue;
+
+        const qreal indent = kListIndent * (1 + item.indent);
+        const qreal baseline = top + line.y();
+
+        if (item.task) {
+            const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
+            const QRectF rect(left + indent - box - 8,
+                              baseline + (line.height() - box) / 2, box, box);
+            QPainterPath rounded;
+            rounded.addRoundedRect(rect, 3, 3);
+
+            painter.save();
+            if (item.done) {
+                painter.fillPath(rounded, accent);
+                painter.setPen(QPen(onAccent, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+                // A tick, drawn rather than shipped as an icon so it scales
+                // with the font.
+                painter.drawPolyline(QPolygonF({
+                    QPointF(rect.left() + rect.width() * 0.24, rect.top() + rect.height() * 0.52),
+                    QPointF(rect.left() + rect.width() * 0.44, rect.top() + rect.height() * 0.72),
+                    QPointF(rect.left() + rect.width() * 0.78, rect.top() + rect.height() * 0.30),
+                }));
+            } else {
+                painter.setPen(QPen(border, 1.5));
+                painter.drawPath(rounded);
+            }
+            painter.restore();
+            continue;
+        }
+
+        painter.save();
+        painter.setPen(muted);
+        if (item.ordered) {
+            QFont font = view.layout->font();
+            painter.setFont(font);
+            painter.drawText(QRectF(left, baseline, indent - 8, line.height()),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             QStringLiteral("%1.").arg(item.number));
+        } else {
+            const qreal dot = 4;
+            painter.setBrush(muted);
+            painter.drawEllipse(QPointF(left + indent - 12,
+                                        baseline + line.height() / 2), dot / 2, dot / 2);
+        }
+        painter.restore();
+    }
+}
+
+void MarkdownEditor::toggleTask(const ListItemSpan &item)
+{
+    if (!item.task || !item.checkbox.isValid())
+        return;
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(item.checkbox.start, item.checkbox.length(),
+              item.done ? QStringLiteral("[ ]") : QStringLiteral("[x]"));
+}
+
 const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
 {
     for (const CalloutSpan &callout : m_decorations.callouts) {
@@ -685,6 +810,63 @@ const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
             return &table;
     }
     return nullptr;
+}
+
+const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
+{
+    for (const EmbedSpan &embed : m_decorations.embeds) {
+        if (!embed.range.overlaps(view.span.range))
+            continue;
+        // Only when the embed is the whole block; an image in the middle of a
+        // sentence stays inline until Phase 3 finishes inline objects.
+        const QStringView rest =
+            QStringView(m_text).mid(view.span.range.start, view.span.range.length());
+        const QString trimmed = rest.trimmed().toString();
+        if (trimmed == m_text.mid(embed.range.start, embed.range.length()))
+            return &embed;
+    }
+    return nullptr;
+}
+
+bool MarkdownEditor::layoutImage(BlockView &view)
+{
+    view.image = QPixmap();
+    view.imagePath.clear();
+
+    const EmbedSpan *embed = soleEmbedOf(view);
+    if (!embed || !m_resolver)
+        return false;
+
+    const QString path = m_resolver(embed->target);
+    if (path.isEmpty())
+        return false;
+
+    static const QByteArrayList readable = QImageReader::supportedImageFormats();
+    if (!readable.contains(QFileInfo(path).suffix().toLower().toUtf8()))
+        return false;
+
+    QPixmap pixmap = m_images.value(path);
+    if (pixmap.isNull()) {
+        pixmap = QPixmap(path);
+        if (pixmap.isNull())
+            return false;
+        m_images.insert(path, pixmap);
+    }
+
+    // Obsidian caps an image at the readable column and honours |WxH.
+    int width = embed->width > 0 ? embed->width : pixmap.width();
+    width = qMin(width, contentWidth());
+    int height = embed->height > 0 ? embed->height
+                                   : int(qreal(width) * pixmap.height() / pixmap.width());
+
+    view.image = pixmap;
+    view.imageSize = QSize(width, height);
+    view.imagePath = path;
+    view.layout.reset();
+    view.cells.clear();
+    view.height = height;
+    view.laidOut = true;
+    return true;
 }
 
 bool MarkdownEditor::layoutTable(BlockView &view)
@@ -825,6 +1007,12 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 {
     view.cells.clear();
     view.callout = nullptr;
+    view.image = QPixmap();
+
+    const bool renderMedia = m_mode != Mode::Source && !view.active;
+    if (renderMedia && layoutImage(view))
+        return;
+
     const bool renderTable = view.span.kind == BlockSpan::Kind::Table
                              && m_mode != Mode::Source && !view.active;
     if (renderTable && layoutTable(view))
@@ -869,6 +1057,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setTextOption(option);
     view.layout->setFormats(formatsFor(view));
 
+    const qreal listIndent = view.span.kind == BlockSpan::Kind::List ? kListIndent : 0;
     const qreal lineHeight = lineHeightFor(view.span);
     const qreal headingAir = view.span.kind == BlockSpan::Kind::Heading ? lineHeight * 0.4 : 0;
     view.layout->beginLayout();
@@ -877,13 +1066,26 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         QTextLine line = view.layout->createLine();
         if (!line.isValid())
             break;
-        line.setLineWidth(contentWidth()
+        const qsizetype source = view.map.toSource(line.textStart());
+        const ListItemSpan *item = listIndent > 0 ? listItemAt(source) : nullptr;
+        const qreal indent = listIndent > 0
+                                 ? listIndent * (1 + (item ? item->indent : 0))
+                                 : 0;
+        line.setLineWidth(contentWidth() - indent
                           - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
-        line.setPosition(QPointF(0, height));
+        line.setPosition(QPointF(indent, height));
         height += lineHeight;
     }
     view.layout->endLayout();
     view.height = qMax(height, lineHeight) + headingAir;
+
+    // A blank line between blocks is vertical rhythm, not an empty line of
+    // text: Obsidian's paragraph spacing is about half a line.
+    if (QStringView(m_text).mid(view.span.range.start, view.span.range.length())
+            .trimmed()
+            .isEmpty()) {
+        view.height = qMax<qreal>(height, lineHeight) * 0.55;
+    }
 
     view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
     if (view.callout) {
@@ -1024,6 +1226,11 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             }
         }
 
+        if (!view.image.isNull()) {
+            const QRectF target(left, top, view.imageSize.width(), view.imageSize.height());
+            painter.drawPixmap(target.toRect(), view.image);
+            continue;
+        }
         if (!view.cells.empty()) {
             paintTable(painter, view, left, top);
             continue;
@@ -1032,6 +1239,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             const qreal indent = view.callout ? 14 : 0;
             const qreal drop = view.callout ? calloutHeaderHeight() : 0;
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
+            paintListMarkers(painter, view, left + indent, top + drop);
         }
     }
 
@@ -1440,6 +1648,19 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     if (!target.isEmpty() && event->modifiers().testFlag(Qt::ControlModifier)) {
         emit linkActivated(target);
         return;
+    }
+
+    for (const BlockView &view : m_blocks) {
+        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut)
+            continue;
+        for (const ListItemSpan &item : m_decorations.listItems) {
+            if (!item.task || !item.range.overlaps(view.span.range))
+                continue;
+            if (checkboxRect(view, item).adjusted(-3, -3, 3, 3).contains(event->pos())) {
+                toggleTask(item);
+                return;
+            }
+        }
     }
 
     m_goalX = -1;

@@ -265,6 +265,21 @@ QWidget *MainWindow::buildMainArea()
     connect(m_editor, &MarkdownEditor::modificationChanged,
             this, &MainWindow::onModificationChanged);
     connect(m_editor, &MarkdownEditor::textChanged, this, &MainWindow::onTextChanged);
+    m_editor->setLinkResolver([this](const QString &target) -> QString {
+        if (!m_vault.isValid())
+            return {};
+        // An attachment may not be in the index (it only holds notes), so fall
+        // back on the path the note actually wrote.
+        const QString resolved = m_index.resolve(target, m_notePath);
+        if (!resolved.isEmpty())
+            return m_vault.absolute(resolved);
+        const QString beside =
+            QFileInfo(m_notePath).absolutePath() + QLatin1Char('/') + target;
+        if (QFileInfo::exists(beside))
+            return beside;
+        const QString fromRoot = m_vault.absolute(target);
+        return QFileInfo::exists(fromRoot) ? fromRoot : QString();
+    });
     connect(m_editor, &MarkdownEditor::linkActivated, this, [this](const QString &target) {
         const QString resolved = m_index.resolve(target, m_notePath);
         if (!resolved.isEmpty())

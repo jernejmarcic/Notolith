@@ -91,6 +91,24 @@ void collectStyles(MD::ItemWithOpts *item, Walk &walk)
 
 void walkItem(MD::Item *item, Walk &walk);
 
+/// Obsidian puts the display size in the alias slot: `|300` or `|300x200`.
+EmbedSpan embedOf(const Link &link)
+{
+    EmbedSpan embed;
+    embed.range = link.range;
+    embed.target = link.target;
+    embed.subpath = link.subpath;
+    embed.alias = link.alias;
+
+    static const QRegularExpression size(QStringLiteral("^(\\d+)(?:x(\\d+))?$"));
+    const auto match = size.match(link.alias.trimmed());
+    if (match.hasMatch()) {
+        embed.width = match.captured(1).toInt();
+        embed.height = match.captured(2).toInt();
+    }
+    return embed;
+}
+
 /// Every `>` that starts a line inside a blockquote, so live preview can hide
 /// them the way Obsidian does.
 void hideQuoteMarkers(const QString &text, const Range &range, Decorations &decorations)
@@ -104,6 +122,40 @@ void hideQuoteMarkers(const QString &text, const Range &range, Decorations &deco
             break;
         decorations.syntax.append({match.capturedStart(), match.capturedEnd()});
     }
+}
+
+/// The source marker of a list item: the bullet or number, plus a task's
+/// checkbox. Live preview hides it and draws its own in the margin.
+void describeListItem(const QString &text, const Range &range, const SourceMap &map,
+                      Decorations &decorations)
+{
+    static const QRegularExpression head(QStringLiteral(
+        "^([ \\t]*)(?:[-*+]|(\\d+)[.)])[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
+
+    // md4qt puts a list item's start at its bullet, not at the start of the
+    // line, so the indent has to be read from the line itself.
+    const qsizetype line = map.lineAt(range.start);
+    const qsizetype lineStart = map.lineStart(line);
+    const QString firstLine = text.mid(lineStart, map.lineEnd(line) - lineStart);
+    const auto match = head.match(firstLine);
+    if (!match.hasMatch())
+        return;
+
+    ListItemSpan span;
+    span.range = {lineStart, range.end};
+    span.marker = {lineStart, lineStart + match.capturedEnd(0)};
+    // A tab counts as one level, as do two or four spaces.
+    span.indent = int(match.captured(1).count(QLatin1Char('\t'))
+                      + match.captured(1).count(QLatin1Char(' ')) / 2);
+    span.ordered = !match.captured(2).isEmpty();
+    span.number = match.captured(2).toInt();
+    span.task = !match.captured(3).isEmpty();
+    span.done = match.captured(4).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
+    if (span.task)
+        span.checkbox = {lineStart + match.capturedStart(3), lineStart + match.capturedStart(3) + 3};
+
+    decorations.syntax.append(span.marker);
+    decorations.listItems.append(span);
 }
 
 /// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
@@ -241,6 +293,8 @@ void walkItem(MD::Item *item, Walk &walk)
         }
         out.raw = target;
         out.target = QUrl::fromPercentEncoding(target.toUtf8());
+        if (out.embed)
+            walk.decorations.embeds.append(embedOf(out));
         out.external = ObsidianSyntax::isExternalTarget(out.target);
         walk.links.append(out);
         walk.decorations.styles.append({StyleSpan::Kind::Link, out.range, 0, out.target});
@@ -282,6 +336,8 @@ void walkItem(MD::Item *item, Walk &walk)
     }
     case MD::ItemType::ListItem: {
         auto *listItem = static_cast<MD::ListItem *>(item);
+        if (walk.text)
+            describeListItem(*walk.text, rangeOf(*listItem, map), map, walk.decorations);
         if (listItem->isTaskList()) {
             Task task;
             task.done = listItem->isChecked();
@@ -430,6 +486,8 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     for (const Link &link : obsidian.links) {
         if (!link.wiki)
             continue;
+        if (link.embed)
+            result.decorations.embeds.append(embedOf(link));
         result.decorations.styles.append({StyleSpan::Kind::Link, link.range, 0, link.target});
         const qsizetype openEnd = link.targetRange.isValid() ? link.targetRange.start
                                                              : link.range.start + 2;

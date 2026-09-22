@@ -4,9 +4,11 @@
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QHash>
+#include <QPixmap>
 #include <QTextLayout>
 #include <QTimer>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -73,6 +75,10 @@ public:
     /// Names the `[[` suggester offers. Refreshed from the index.
     void setLinkTargets(const QStringList &targets);
 
+    /// Turns a link target into an absolute path, or an empty string when it
+    /// does not resolve. Supplied by the window, which owns the index.
+    void setLinkResolver(std::function<QString(const QString &)> resolver);
+
 signals:
     void textChanged();
     void modificationChanged(bool modified);
@@ -127,6 +133,10 @@ private:
         /// Set when this block is a callout, so painting knows its colour,
         /// icon and title without looking the span up again.
         const CalloutSpan *callout = nullptr;
+        /// Set when the whole block is one image embed.
+        QPixmap image;
+        QSize imageSize;
+        QString imagePath;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -142,7 +152,18 @@ private:
     bool layoutTable(BlockView &view);
     void paintTable(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// Bullets and checkboxes in the margin of a list block.
+    void paintListMarkers(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The list item whose marker was hidden at the start of `source`.
+    const ListItemSpan *listItemAt(qsizetype source) const;
+    /// Checkbox rectangle of `item` in viewport coordinates, for hit testing.
+    QRectF checkboxRect(const BlockView &view, const ListItemSpan &item) const;
+    void toggleTask(const ListItemSpan &item);
     const CalloutSpan *calloutFor(const BlockView &view) const;
+    /// The embed that fills this block on its own, or nullptr.
+    const EmbedSpan *soleEmbedOf(const BlockView &view) const;
+    /// Loads and scales the image for a block that is one image embed.
+    bool layoutImage(BlockView &view);
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
@@ -196,6 +217,8 @@ private:
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     Parser m_parser;
     CodeHighlighter m_code;
+    std::function<QString(const QString &)> m_resolver;
+    mutable QHash<QString, QPixmap> m_images;
     Mode m_mode = Mode::LivePreview;
 
     QString m_text;

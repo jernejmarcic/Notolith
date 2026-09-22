@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "Decorations.h"
 #include "Frontmatter.h"
 #include "ObsidianSyntax.h"
@@ -420,6 +422,67 @@ TEST(ParagraphTest, SoftBreaksAreMarked)
     const qsizetype inside = text.indexOf(QLatin1Char('\n'));
     EXPECT_GT(inside, first.start);
     EXPECT_LT(inside, first.end);
+}
+
+TEST(ListTest, MarkersIndentAndCheckboxes)
+{
+    const QString text = QStringLiteral(
+        "- [x] Todo\n"
+        "- [ ] Not done\n"
+        "- plain\n"
+        "    - nested\n"
+        "\n"
+        "1. first\n"
+        "2. second\n");
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.listItems.size(), 6);
+
+    const auto &items = decorations.listItems;
+    EXPECT_TRUE(items.at(0).task);
+    EXPECT_TRUE(items.at(0).done);
+    EXPECT_EQ(text.mid(items.at(0).checkbox.start, items.at(0).checkbox.length()),
+              QStringLiteral("[x]"));
+    EXPECT_TRUE(items.at(1).task);
+    EXPECT_FALSE(items.at(1).done);
+    EXPECT_FALSE(items.at(2).task);
+
+    // The marker starts at the line, not at the bullet, so the indent is real.
+    const auto nested = *std::find_if(items.cbegin(), items.cend(),
+                                      [](const ListItemSpan &item) { return item.indent > 0; });
+    EXPECT_EQ(nested.indent, 2);
+    EXPECT_EQ(text.mid(nested.marker.start, nested.marker.length()),
+              QStringLiteral("    - "));
+
+    const auto ordered = *std::find_if(items.cbegin(), items.cend(),
+                                       [](const ListItemSpan &item) { return item.ordered; });
+    EXPECT_EQ(ordered.number, 1);
+
+    // Every marker is hidden in live preview.
+    EXPECT_EQ(rendered(QStringLiteral("- [x] Todo\n- plain\n")),
+              QStringLiteral("Todo\nplain\n"));
+}
+
+TEST(EmbedTest, SizeSpecInTheAliasSlot)
+{
+    const Decorations plain = decorationsOf(QStringLiteral("![[diagram.png]]\n"));
+    ASSERT_EQ(plain.embeds.size(), 1);
+    EXPECT_EQ(plain.embeds.first().target, QStringLiteral("diagram.png"));
+    EXPECT_EQ(plain.embeds.first().width, 0);
+
+    const Decorations sized = decorationsOf(QStringLiteral("![[diagram.png|240]]\n"));
+    ASSERT_EQ(sized.embeds.size(), 1);
+    EXPECT_EQ(sized.embeds.first().width, 240);
+    EXPECT_EQ(sized.embeds.first().height, 0);
+
+    const Decorations both = decorationsOf(QStringLiteral("![[diagram.png|240x160]]\n"));
+    ASSERT_EQ(both.embeds.size(), 1);
+    EXPECT_EQ(both.embeds.first().width, 240);
+    EXPECT_EQ(both.embeds.first().height, 160);
+
+    // A real alias is not a size.
+    const Decorations alias = decorationsOf(QStringLiteral("![[Note|a caption]]\n"));
+    ASSERT_EQ(alias.embeds.size(), 1);
+    EXPECT_EQ(alias.embeds.first().width, 0);
 }
 
 TEST(WordCountTest, IgnoresFrontmatter)

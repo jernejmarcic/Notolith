@@ -69,6 +69,13 @@ TEST_F(IndexTest, IgnoresDotDirectoriesAndNonNotes)
     Index index;
     build(index);
     EXPECT_EQ(index.noteCount(), 3);
+    // The .txt is indexed as an attachment so ![[notes.txt]] resolves, but it
+    // is not a note and the dot directory is skipped entirely.
+    EXPECT_EQ(index.attachmentCount(), 1);
+    EXPECT_EQ(index.resolve(QStringLiteral("notes.txt")),
+              QStringLiteral("Projects/notes.txt"));
+    EXPECT_FALSE(index.findByName(QStringLiteral("notes.txt"))
+                     .contains(QStringLiteral("Projects/notes.txt")));
     EXPECT_EQ(index.allPaths(), QStringList({QStringLiteral("Home.md"),
                                              QStringLiteral("Ideas.md"),
                                              QStringLiteral("Projects/noteAppC.md")}));

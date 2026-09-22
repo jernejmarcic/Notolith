@@ -73,6 +73,30 @@ struct CalloutSpan {
     Range marker;     ///< `[!type]+` - hidden in live preview
 };
 
+/// An `![[image.png]]` or `![alt](image.png)` embed, with the size Obsidian
+/// spells in the alias slot (`|300`, `|300x200`).
+struct EmbedSpan {
+    Range range;
+    QString target;
+    QString subpath;
+    QString alias;
+    int width = 0;  ///< 0 means "as wide as it wants, capped by the column"
+    int height = 0;
+};
+
+/// One item of a list, so live preview can hide the source marker, draw a
+/// bullet or a checkbox in its place, and indent the text under it.
+struct ListItemSpan {
+    Range range;
+    Range marker;      ///< "  - ", "1. ", including a task's "[x] "
+    int indent = 0;    ///< nesting level, from the leading whitespace
+    bool ordered = false;
+    int number = 0;
+    bool task = false;
+    bool done = false;
+    Range checkbox;    ///< the "[x]" alone, for click-to-toggle
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
@@ -83,6 +107,8 @@ struct Decorations {
     /// is a soft break - CommonMark joins the lines, and so does Obsidian
     /// unless "Strict line breaks" is on.
     QList<Range> paragraphs;
+    QList<EmbedSpan> embeds;
+    QList<ListItemSpan> listItems;
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;

@@ -47,6 +47,9 @@ public:
     void beginBatch();
     void endBatch();
     void put(const Metadata &metadata, const QString &body);
+    /// Records a non-note file so `![[image.png]]` resolves. Attachments carry
+    /// no metadata and no full-text content, only their names.
+    void putAttachment(const QString &path, qint64 mtime, qint64 size);
     void remove(const QString &path);
     /// mtime and size of what the cache holds, for skipping unchanged files.
     bool isCurrent(const QString &path, qint64 mtime, qint64 size) const;
@@ -54,6 +57,7 @@ public:
     // --- reading -------------------------------------------------------
 
     int noteCount() const;
+    int attachmentCount() const;
     QStringList allPaths() const;
     QStringList allTags() const;
 
