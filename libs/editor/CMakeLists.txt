@@ -1,6 +1,9 @@
 add_library(noteAppC_editor STATIC
     DisplayMap.cpp
     DisplayMap.h
+    EditingCommands.cpp
+    FindBar.cpp
+    FindBar.h
     MarkdownEditor.cpp
     MarkdownEditor.h)
 

@@ -162,7 +162,10 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 // --- the widget ----------------------------------------------------------
 
 #include <QApplication>
+#include <QFontMetricsF>
 #include <QTest>
+
+#include <utility>
 
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
@@ -369,6 +372,486 @@ TEST(CodeHighlighterTest, ColoursTokensAndLeavesUnknownLanguagesAlone)
 
     EXPECT_TRUE(highlighter.highlight(code, QStringLiteral("not-a-language")).isEmpty());
     EXPECT_TRUE(highlighter.highlight(QString(), QStringLiteral("cpp")).isEmpty());
+}
+
+// --- auto-pairs (PLAN.md 4.6) --------------------------------------------
+
+TEST(AutoPairTest, InsertsTheClosingHalfAndSitsBetweenThem)
+{
+    for (const auto &pair : {std::pair{QStringLiteral("("), QStringLiteral("()")},
+                             std::pair{QStringLiteral("["), QStringLiteral("[]")},
+                             std::pair{QStringLiteral("{"), QStringLiteral("{}")},
+                             std::pair{QStringLiteral("\""), QStringLiteral("\"\"")},
+                             std::pair{QStringLiteral("'"), QStringLiteral("''")}}) {
+        // On an empty line: a quote is its own closer, so it deliberately
+        // refuses to open straight after a word (see the test below).
+        auto editor = editorWith(QStringLiteral("\n"));
+        editor->setCursorOffset(0);
+        QTest::keyClicks(editor.get(), pair.first);
+        EXPECT_EQ(editor->noteText(), pair.second + QStringLiteral("\n"));
+        EXPECT_EQ(editor->cursorOffset(), 1) << "caret belongs between " << qPrintable(pair.second);
+    }
+}
+
+TEST(AutoPairTest, TypingTheCloserStepsOverIt)
+{
+    auto editor = editorWith(QStringLiteral("x\n"));
+    editor->setCursorOffset(1);
+    QTest::keyClicks(editor.get(), QStringLiteral("("));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("x()\n"));
+
+    QTest::keyClicks(editor.get(), QStringLiteral(")"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("x()\n")); // no second bracket
+    EXPECT_EQ(editor->cursorOffset(), 3);
+}
+
+TEST(AutoPairTest, BackspaceBetweenAnEmptyPairTakesBoth)
+{
+    auto editor = editorWith(QStringLiteral("x\n"));
+    editor->setCursorOffset(1);
+    QTest::keyClicks(editor.get(), QStringLiteral("("));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("x()\n"));
+
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("x\n"));
+    EXPECT_EQ(editor->cursorOffset(), 1);
+}
+
+TEST(AutoPairTest, DoesNotOpenAQuoteInsideAWord)
+{
+    auto editor = editorWith(QStringLiteral("don\n"));
+    editor->setCursorOffset(3);
+    QTest::keyClicks(editor.get(), QStringLiteral("'"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("don'\n"));
+}
+
+TEST(AutoPairTest, DoesNotCloseInFrontOfAWord)
+{
+    // CodeMirror's rule, which is the one Obsidian runs: "(" before a word
+    // stays a lone bracket.
+    auto editor = editorWith(QStringLiteral("word\n"));
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("("));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("(word\n"));
+}
+
+TEST(AutoPairTest, WrapsASelectionAndKeepsIt)
+{
+    auto editor = editorWith(QStringLiteral("word"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+
+    QTest::keyClicks(editor.get(), QStringLiteral("*"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("*word*"));
+
+    // The selection survives, so a second press reaches Obsidian's "**".
+    QTest::keyClicks(editor.get(), QStringLiteral("*"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("**word**"));
+}
+
+TEST(AutoPairTest, WrapsWithTheMarkdownPairsToo)
+{
+    for (const auto &marker : {QStringLiteral("="), QStringLiteral("~"),
+                               QStringLiteral("_"), QStringLiteral("`")}) {
+        auto editor = editorWith(QStringLiteral("word"));
+        QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClicks(editor.get(), marker);
+        QTest::keyClicks(editor.get(), marker);
+        EXPECT_EQ(editor->noteText(), marker + marker + QStringLiteral("word") + marker + marker);
+    }
+}
+
+TEST(AutoPairTest, CanBeTurnedOff)
+{
+    auto editor = editorWith(QStringLiteral("x\n"));
+    editor->setAutoPairs(false);
+    editor->setCursorOffset(1);
+    QTest::keyClicks(editor.get(), QStringLiteral("("));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("x(\n"));
+    EXPECT_TRUE(editorWith(QString())->autoPairs()) << "on by default, as Obsidian ships it";
+}
+
+// --- list continuation and renumbering ------------------------------------
+
+TEST(ListEditTest, EnterContinuesTheBullet)
+{
+    auto editor = editorWith(QStringLiteral("- one\n"));
+    editor->setCursorOffset(5);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- one\n- \n"));
+    EXPECT_EQ(editor->cursorOffset(), 8);
+}
+
+TEST(ListEditTest, EnterCarriesAnUntickedCheckbox)
+{
+    auto editor = editorWith(QStringLiteral("- [x] done\n"));
+    editor->setCursorOffset(10);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [x] done\n- [ ] \n"));
+}
+
+TEST(ListEditTest, EnterIncrementsAndRenumbersTheRest)
+{
+    auto editor = editorWith(QStringLiteral("1. a\n2. b\n3. c\n"));
+    editor->setCursorOffset(9); // end of "2. b"
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("1. a\n2. b\n3. \n4. c\n"));
+    EXPECT_EQ(editor->cursorOffset(), 13);
+}
+
+TEST(ListEditTest, EnterOnAnEmptyItemEndsTheList)
+{
+    auto editor = editorWith(QStringLiteral("- a\n- \n"));
+    editor->setCursorOffset(6);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- a\n\n"));
+    EXPECT_EQ(editor->cursorOffset(), 4);
+}
+
+TEST(ListEditTest, EnterOnAnEmptyNestedItemOutdentsFirst)
+{
+    auto editor = editorWith(QStringLiteral("- a\n\t- \n"));
+    editor->setCursorOffset(7);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- a\n- \n"));
+    EXPECT_EQ(editor->cursorOffset(), 6);
+}
+
+TEST(ListEditTest, TabIndentsAndRenumbersBothLevels)
+{
+    auto editor = editorWith(QStringLiteral("1. a\n2. b\n3. c\n"));
+    editor->setCursorOffset(5); // start of "2. b"
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("1. a\n\t1. b\n2. c\n"));
+    EXPECT_EQ(editor->cursorOffset(), 9);
+}
+
+TEST(ListEditTest, ShiftTabOutdentsAndRenumbers)
+{
+    auto editor = editorWith(QStringLiteral("1. a\n\t1. b\n2. c\n"));
+    editor->setCursorOffset(9);
+    QTest::keyClick(editor.get(), Qt::Key_Backtab, Qt::ShiftModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("1. a\n2. b\n3. c\n"));
+    EXPECT_EQ(editor->cursorOffset(), 8);
+}
+
+TEST(ListEditTest, TabOutsideAListStillIndentsTheText)
+{
+    auto editor = editorWith(QStringLiteral("plain\n"));
+    editor->setCursorOffset(5);
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("plain    \n"));
+}
+
+TEST(ListEditTest, ContinuationIsOneUndoStep)
+{
+    const QString source = QStringLiteral("1. a\n2. b\n3. c\n");
+    auto editor = editorWith(source);
+    editor->setCursorOffset(9);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    ASSERT_NE(editor->noteText(), source);
+
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), source);
+}
+
+// --- checkboxes -----------------------------------------------------------
+
+TEST(CheckboxTest, CtrlEnterTogglesWithoutMovingTheCaret)
+{
+    auto editor = editorWith(QStringLiteral("- [ ] task\n"));
+    editor->setCursorOffset(8);
+
+    QTest::keyClick(editor.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [x] task\n"));
+    EXPECT_EQ(editor->cursorOffset(), 8);
+
+    QTest::keyClick(editor.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [ ] task\n"));
+    EXPECT_EQ(editor->cursorOffset(), 8);
+}
+
+TEST(CheckboxTest, CtrlEnterMakesATaskOutOfALineThatIsNotOne)
+{
+    auto editor = editorWith(QStringLiteral("- item\n"));
+    editor->setCursorOffset(6);
+    QTest::keyClick(editor.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [ ] item\n"));
+
+    auto plain = editorWith(QStringLiteral("hello\n"));
+    plain->setCursorOffset(3);
+    QTest::keyClick(plain.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(plain->noteText(), QStringLiteral("- [ ] hello\n"));
+    EXPECT_EQ(plain->cursorOffset(), 9); // still on the same character
+}
+
+namespace {
+
+/// Where the painter puts the checkbox of a task on the note's first line:
+/// the content column is centred, the list margin is 26 px, the box is 0.8 of
+/// the line's font height and sits 8 px left of the text, and the first block
+/// starts 28 px down. Same numbers as `paintListMarkers` and `checkboxRect`.
+QPoint firstCheckboxPoint(const MarkdownEditor &editor)
+{
+    const int viewport = editor.viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    const qreal fontHeight = QFontMetricsF(Theme::builtin().textFont()).height();
+    return QPoint(left + int(26 - 8 - fontHeight * 0.4), int(28 + fontHeight / 2));
+}
+
+} // namespace
+
+TEST(CheckboxTest, ClickingTheRenderedBoxToggles)
+{
+    auto editor = editorWith(QStringLiteral("- [ ] task\n"));
+    const QPoint point = firstCheckboxPoint(*editor);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, point);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [x] task\n"))
+        << "clicked at " << point.x() << "," << point.y();
+}
+
+// --- moving and duplicating lines ----------------------------------------
+
+TEST(LineMoveTest, AltUpAndAltDownSwapTheLine)
+{
+    auto editor = editorWith(QStringLiteral("a\nb\nc\n"));
+    editor->setCursorOffset(2); // on "b"
+
+    QTest::keyClick(editor.get(), Qt::Key_Up, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("b\na\nc\n"));
+    EXPECT_EQ(editor->cursorOffset(), 0);
+
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a\nb\nc\n"));
+    EXPECT_EQ(editor->cursorOffset(), 2);
+}
+
+TEST(LineMoveTest, MovingStopsAtTheEdges)
+{
+    auto editor = editorWith(QStringLiteral("a\nb"));
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_Up, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a\nb"));
+
+    editor->setCursorOffset(3);
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a\nb"));
+}
+
+TEST(LineMoveTest, MovingTakesEveryLineTheSelectionTouches)
+{
+    auto editor = editorWith(QStringLiteral("a\nb\nc\n"));
+    editor->setCursorOffset(0);
+    for (int i = 0; i < 3; ++i)
+        QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier); // "a\nb"
+
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("c\na\nb\n"));
+}
+
+TEST(LineMoveTest, CtrlShiftDDuplicatesAndFollowsTheCopy)
+{
+    auto editor = editorWith(QStringLiteral("a\nb\n"));
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a\na\nb\n"));
+    EXPECT_EQ(editor->cursorOffset(), 2);
+}
+
+// --- formatting commands --------------------------------------------------
+
+TEST(FormattingTest, CtrlBWrapsThenUnwraps)
+{
+    auto editor = editorWith(QStringLiteral("hello"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+
+    QTest::keyClick(editor.get(), Qt::Key_B, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("**hello**"));
+
+    // The selection stayed on the words, so the same key takes the markers off.
+    QTest::keyClick(editor.get(), Qt::Key_B, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello"));
+}
+
+TEST(FormattingTest, ItalicAndHighlightUseTheirOwnMarkers)
+{
+    auto italic = editorWith(QStringLiteral("hello"));
+    QTest::keyClick(italic.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(italic.get(), Qt::Key_I, Qt::ControlModifier);
+    EXPECT_EQ(italic->noteText(), QStringLiteral("*hello*"));
+
+    auto highlight = editorWith(QStringLiteral("hello"));
+    QTest::keyClick(highlight.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(highlight.get(), Qt::Key_H, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(highlight->noteText(), QStringLiteral("==hello=="));
+}
+
+TEST(FormattingTest, WithNoSelectionThePairOpensRoundTheCaret)
+{
+    auto editor = editorWith(QStringLiteral("x"));
+    editor->setCursorOffset(1);
+    QTest::keyClick(editor.get(), Qt::Key_B, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("x****"));
+    EXPECT_EQ(editor->cursorOffset(), 3);
+}
+
+TEST(FormattingTest, CtrlKPutsTheCaretInTheSlotThatIsStillEmpty)
+{
+    auto url = editorWith(QStringLiteral("https://example.com"));
+    QTest::keyClick(url.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(url.get(), Qt::Key_K, Qt::ControlModifier);
+    EXPECT_EQ(url->noteText(), QStringLiteral("[](https://example.com)"));
+    EXPECT_EQ(url->cursorOffset(), 1) << "a known URL leaves the text slot to fill in";
+
+    auto text = editorWith(QStringLiteral("click me"));
+    QTest::keyClick(text.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(text.get(), Qt::Key_K, Qt::ControlModifier);
+    EXPECT_EQ(text->noteText(), QStringLiteral("[click me]()"));
+    EXPECT_EQ(text->cursorOffset(), 11);
+}
+
+TEST(FormattingTest, CtrlKOnALinkTakesItApartAgain)
+{
+    auto editor = editorWith(QStringLiteral("[shown](https://example.com)"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(editor.get(), Qt::Key_K, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("shown"));
+}
+
+// --- find and replace -----------------------------------------------------
+
+TEST(FindTest, CountsMatchesAndStepsRoundThem)
+{
+    auto editor = editorWith(QStringLiteral("alpha beta alpha gamma alpha\n"));
+    QTest::keyClick(editor.get(), Qt::Key_F, Qt::ControlModifier);
+    ASSERT_TRUE(editor->findVisible());
+
+    editor->setFindQuery(QStringLiteral("alpha"), false, false);
+    EXPECT_EQ(editor->findMatchCount(), 3);
+    EXPECT_EQ(editor->findCurrentIndex(), 0);
+
+    editor->findStep(1);
+    EXPECT_EQ(editor->findCurrentIndex(), 1);
+    EXPECT_EQ(editor->cursorOffset(), 16); // the match is selected
+
+    editor->findStep(1);
+    editor->findStep(1);
+    EXPECT_EQ(editor->findCurrentIndex(), 0) << "next wraps round, as Obsidian's bar does";
+
+    editor->findStep(-1);
+    EXPECT_EQ(editor->findCurrentIndex(), 2);
+}
+
+TEST(FindTest, HonoursCaseAndRegex)
+{
+    auto editor = editorWith(QStringLiteral("Alpha alpha\n"));
+
+    editor->setFindQuery(QStringLiteral("alpha"), false, false);
+    EXPECT_EQ(editor->findMatchCount(), 2);
+
+    editor->setFindQuery(QStringLiteral("alpha"), true, false);
+    EXPECT_EQ(editor->findMatchCount(), 1);
+
+    editor->setFindQuery(QStringLiteral("a\\w+a"), false, true);
+    EXPECT_EQ(editor->findMatchCount(), 2);
+    EXPECT_TRUE(editor->findPatternValid());
+}
+
+TEST(FindTest, AnUnparseablePatternReportsItselfRatherThanThrowing)
+{
+    auto editor = editorWith(QStringLiteral("alpha\n"));
+    editor->setFindQuery(QStringLiteral("([unclosed"), false, true);
+
+    EXPECT_FALSE(editor->findPatternValid());
+    EXPECT_EQ(editor->findMatchCount(), 0);
+
+    editor->setFindQuery(QStringLiteral("alpha"), false, true);
+    EXPECT_TRUE(editor->findPatternValid());
+    EXPECT_EQ(editor->findMatchCount(), 1);
+}
+
+TEST(FindTest, ReplacesOneAndThenAll)
+{
+    auto one = editorWith(QStringLiteral("alpha beta alpha\n"));
+    one->setFindQuery(QStringLiteral("alpha"), false, false);
+    one->replaceCurrent(QStringLiteral("X"));
+    EXPECT_EQ(one->noteText(), QStringLiteral("X beta alpha\n"));
+    EXPECT_EQ(one->findMatchCount(), 1);
+
+    auto every = editorWith(QStringLiteral("alpha beta alpha\n"));
+    every->setFindQuery(QStringLiteral("alpha"), false, false);
+    EXPECT_EQ(every->replaceAll(QStringLiteral("Y")), 2);
+    EXPECT_EQ(every->noteText(), QStringLiteral("Y beta Y\n"));
+    EXPECT_EQ(every->findMatchCount(), 0);
+}
+
+TEST(FindTest, ReplaceAllIsOneUndoStep)
+{
+    const QString source = QStringLiteral("alpha beta alpha\n");
+    auto editor = editorWith(source);
+    editor->setFindQuery(QStringLiteral("alpha"), false, false);
+    editor->replaceAll(QStringLiteral("Y"));
+    ASSERT_NE(editor->noteText(), source);
+
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), source);
+}
+
+TEST(FindTest, CtrlHOpensTheReplaceRowAndEscapeCloses)
+{
+    auto editor = editorWith(QStringLiteral("alpha\n"));
+    EXPECT_FALSE(editor->findVisible());
+
+    QTest::keyClick(editor.get(), Qt::Key_H, Qt::ControlModifier);
+    EXPECT_TRUE(editor->findVisible());
+
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+    EXPECT_FALSE(editor->findVisible());
+    EXPECT_EQ(editor->findMatchCount(), 0);
+}
+
+TEST(FindTest, MatchesFollowTheTextAsItIsEdited)
+{
+    auto editor = editorWith(QStringLiteral("alpha\n"));
+    editor->showFind(false);
+    editor->setFindQuery(QStringLiteral("alpha"), false, false);
+    ASSERT_EQ(editor->findMatchCount(), 1);
+
+    editor->setCursorOffset(5);
+    QTest::keyClicks(editor.get(), QStringLiteral(" alpha"));
+    EXPECT_EQ(editor->findMatchCount(), 2);
+}
+
+// Searching a long note must not cost a full relayout: the current match is
+// brought on screen through the same viewport-only path scrolling uses.
+TEST(FindTest, SteppingThroughALongNoteStaysInsideTheKeystrokeBudget)
+{
+    const QString note = generateNote(200);
+    auto editor = editorWith(note);
+    editor->showFind(false);
+    editor->setFindQuery(QStringLiteral("Wikilink"), false, false);
+    ASSERT_GT(editor->findMatchCount(), 100);
+
+    QElapsedTimer clock;
+    clock.start();
+    constexpr int kSteps = 20;
+    for (int i = 0; i < kSteps; ++i)
+        editor->findStep(1);
+    const double perStep = double(clock.nsecsElapsed()) / kSteps / 1e6;
+
+    std::printf("[ PERF     ] find step on a %.2f kB note: %.2f ms\n",
+                note.size() / 1024.0, perStep);
+    EXPECT_LT(perStep, 8.0);
 }
 
 int main(int argc, char **argv)

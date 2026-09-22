@@ -16,6 +16,7 @@
 class QCompleter;
 
 #include "CodeHighlighter.h"
+#include "FindBar.h"
 #include "Decorations.h"
 #include "DisplayMap.h"
 #include "Parser.h"
@@ -82,6 +83,43 @@ public:
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
+
+    /// Closes brackets and quotes as you type and wraps a selection instead of
+    /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
+    /// one switch, on by default the way Obsidian ships them.
+    void setAutoPairs(bool on) { m_autoPairs = on; }
+    bool autoPairs() const { return m_autoPairs; }
+
+    // --- editing commands -------------------------------------------------
+    // Bound to the same keys Obsidian uses; public so the Phase 4 command
+    // palette can reach them without a second implementation.
+
+    void toggleBold();      ///< Ctrl+B
+    void toggleItalic();    ///< Ctrl+I
+    void toggleHighlight(); ///< Ctrl+Shift+H
+    void insertLink();      ///< Ctrl+K
+    void toggleTaskAtCursor(); ///< Ctrl+Enter
+    /// Alt+Up / Alt+Down. Moves every line the selection touches.
+    void moveLines(int direction);
+    void duplicateLines(); ///< Ctrl+Shift+D
+
+    // --- find and replace -------------------------------------------------
+
+    /// Ctrl+F, or Ctrl+H for the replace row as well.
+    void showFind(bool withReplace);
+    void hideFind();
+    bool findVisible() const;
+    void setFindQuery(const QString &pattern, bool caseSensitive, bool regex);
+    /// +1 for the next match, -1 for the previous; wraps round, as the bar does.
+    void findStep(int direction);
+    int findMatchCount() const { return int(m_find.matches.size()); }
+    /// Zero-based index of the current match, -1 when there is none.
+    int findCurrentIndex() const { return m_find.current; }
+    /// False when a regex query does not compile; the field turns red.
+    bool findPatternValid() const { return m_find.valid; }
+    void replaceCurrent(const QString &with);
+    /// Returns how many matches were replaced.
+    int replaceAll(const QString &with);
 
 signals:
     void textChanged();
@@ -207,6 +245,39 @@ private:
     void undo();
     void redo();
 
+    // --- editing commands, implemented in EditingCommands.cpp -------------
+
+    /// `applyEdit` leaves the caret after what it inserted; a command that
+    /// wants it elsewhere - or wants the selection kept on the text it just
+    /// moved - says so with this.
+    void setSelectionRange(qsizetype anchor, qsizetype cursor);
+    /// True when the keystroke was an auto-pair and needs no further handling.
+    bool handleAutoPair(QChar typed);
+    /// Backspace between an empty pair takes both halves.
+    bool deleteAutoPair();
+    /// Enter inside a list item: continue it, or end the list.
+    bool handleListEnter();
+    /// Tab / Shift+Tab on a list item. `direction` is +1 in, -1 out.
+    bool handleListIndent(int direction);
+    /// The run of consecutive list lines around `offset`: the stretch one
+    /// structural edit renumbers, rewritten as a single splice.
+    Range listRun(qsizetype offset) const;
+    /// Wraps or unwraps the selection in `marker`; the whole of Ctrl+B/I and
+    /// Ctrl+Shift+H.
+    void toggleWrap(const QString &marker);
+
+    void updateFindMatches();
+    /// Puts the current match on screen with the viewport-only layout path.
+    void scrollToOffset(qsizetype offset);
+    void syncFindBar();
+    void positionFindBar();
+    /// `--text-highlight-bg`, or Obsidian's own default when the theme has no
+    /// such token.
+    QColor findHighlightColor() const;
+    /// Background ranges for the matches inside `view`, in display offsets.
+    void appendFindHighlights(const BlockView &view,
+                              QList<QTextLayout::FormatRange> &into) const;
+
     /// Text typed after the nearest unclosed `[[` before the caret; unset when
     /// the caret is not inside a wikilink.
     std::optional<QString> wikilinkPrefix() const;
@@ -246,6 +317,7 @@ private:
     bool m_readable = true;
     bool m_lineNumbers = true; ///< shown in source mode only
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
+    bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;
     int m_topPadding = 28;
@@ -258,6 +330,19 @@ private:
     QList<Snapshot> m_undo;
     QList<Snapshot> m_redo;
     QElapsedTimer m_lastEdit;
+
+    /// Obsidian's in-note find bar: the matches live here because the editor
+    /// paints them, the bar is only the field and the buttons.
+    struct FindState {
+        QString pattern;
+        bool caseSensitive = false;
+        bool regex = false;
+        bool valid = true;
+        QList<Range> matches; ///< sorted, non-overlapping
+        int current = -1;
+    };
+    FindState m_find;
+    FindBar *m_findBar = nullptr;
 
     QCompleter *m_completer = nullptr;
     QTimer m_parseTimer;

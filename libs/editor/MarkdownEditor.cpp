@@ -174,6 +174,8 @@ void MarkdownEditor::setTheme(const Theme &theme)
 {
     m_theme = theme;
     m_code.setTheme(theme);
+    if (m_findBar)
+        m_findBar->setTheme(theme);
     m_lineHeights.clear();
     invalidateLayouts();
     setFont(theme.textFont());
@@ -201,9 +203,72 @@ void MarkdownEditor::setNoteText(const QString &text)
     m_redo.clear();
     m_interacted = false;
     reparse();
+    if (!m_find.pattern.isEmpty())
+        updateFindMatches();
     setModified(false);
     verticalScrollBar()->setValue(0);
     viewport()->update();
+}
+
+// --- the find bar ---------------------------------------------------------
+
+void MarkdownEditor::showFind(bool withReplace)
+{
+    if (!m_findBar) {
+        m_findBar = new FindBar(viewport());
+        m_findBar->setTheme(m_theme);
+        connect(m_findBar, &FindBar::queryChanged, this, [this] {
+            setFindQuery(m_findBar->pattern(), m_findBar->caseSensitive(),
+                         m_findBar->useRegex());
+        });
+        connect(m_findBar, &FindBar::stepped, this, &MarkdownEditor::findStep);
+        connect(m_findBar, &FindBar::replaceRequested, this, [this] {
+            replaceCurrent(m_findBar->replacement());
+        });
+        connect(m_findBar, &FindBar::replaceAllRequested, this, [this] {
+            replaceAll(m_findBar->replacement());
+        });
+        connect(m_findBar, &FindBar::dismissed, this, &MarkdownEditor::hideFind);
+    }
+
+    // Ctrl+H on an open find bar adds the replace row rather than closing it.
+    if (withReplace)
+        m_findBar->setReplaceShown(true);
+    m_findBar->show();
+    positionFindBar();
+    m_findBar->focusSearch();
+    // Reopening picks the last query back up: the field kept its text while
+    // the bar was away, so the matches have to catch up with it.
+    setFindQuery(m_findBar->pattern(), m_findBar->caseSensitive(), m_findBar->useRegex());
+}
+
+void MarkdownEditor::hideFind()
+{
+    if (!m_findBar)
+        return;
+    m_findBar->hide();
+    m_find.pattern.clear();
+    m_find.matches.clear();
+    m_find.current = -1;
+    m_find.valid = true;
+    setFocus(Qt::OtherFocusReason);
+    viewport()->update();
+}
+
+bool MarkdownEditor::findVisible() const
+{
+    // isVisible() is false while the whole editor is still unshown, which is
+    // not what "the bar is open" means.
+    return m_findBar && !m_findBar->isHidden();
+}
+
+void MarkdownEditor::positionFindBar()
+{
+    if (!m_findBar || m_findBar->isHidden())
+        return;
+    const QSize hint = m_findBar->sizeHint();
+    const int width = qMin(hint.width(), viewport()->width() - 16);
+    m_findBar->setGeometry(viewport()->width() - width - 8, 8, width, hint.height());
 }
 
 void MarkdownEditor::setModified(bool modified)
@@ -804,10 +869,15 @@ void MarkdownEditor::toggleTask(const ListItemSpan &item)
 {
     if (!item.task || !item.checkbox.isValid())
         return;
+    // Ticking a box must not steal the caret; "[x]" and "[ ]" are the same
+    // width, so the offsets it was on are still the right ones.
+    const qsizetype anchor = m_anchor;
+    const qsizetype caret = m_cursor;
     pushUndo();
     m_lastEdit.invalidate();
     applyEdit(item.checkbox.start, item.checkbox.length(),
               item.done ? QStringLiteral("[ ]") : QStringLiteral("[x]"));
+    setSelectionRange(anchor, caret);
 }
 
 const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
@@ -1278,6 +1348,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
                 selectionRanges.append(range);
             }
         }
+        appendFindHighlights(view, selectionRanges);
 
         if (!view.image.isNull()) {
             const QRectF target(left, top, view.imageSize.width(), view.imageSize.height());
@@ -1403,6 +1474,7 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
     // Line breaking depends on the width, so every cached layout is stale.
     invalidateLayouts();
     updateLayout();
+    positionFindBar();
 }
 
 // --- cursor ---------------------------------------------------------------
@@ -1453,7 +1525,8 @@ Range MarkdownEditor::selection() const
 void MarkdownEditor::pushUndo()
 {
     // Typing bursts collapse into one undo step, as in every other editor.
-    if (!m_undo.isEmpty() && m_lastEdit.elapsed() < kTypingBurstMs) {
+    // A command that invalidated the timer is saying it is not part of one.
+    if (!m_undo.isEmpty() && m_lastEdit.isValid() && m_lastEdit.elapsed() < kTypingBurstMs) {
         m_lastEdit.restart();
         return;
     }
@@ -1512,6 +1585,10 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     updateLayout();
     ensureCursorVisible();
     m_parseTimer.start(); // the real parse catches up when typing pauses
+    // Only while the find bar is actually searching: a keystroke with no
+    // query must not pay for a document scan.
+    if (!m_find.pattern.isEmpty())
+        updateFindMatches();
     emit textChanged();
     viewport()->update();
 }
@@ -1602,8 +1679,51 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         updateLayout();
     }
 
+    const bool alt = event->modifiers().testFlag(Qt::AltModifier);
+    if (alt && !control) {
+        switch (event->key()) {
+        case Qt::Key_Up:
+            moveLines(-1);
+            return;
+        case Qt::Key_Down:
+            moveLines(1);
+            return;
+        default:
+            break;
+        }
+    }
+
     if (control) {
         switch (event->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            toggleTaskAtCursor();
+            return;
+        case Qt::Key_B:
+            toggleBold();
+            return;
+        case Qt::Key_I:
+            toggleItalic();
+            return;
+        case Qt::Key_K:
+            insertLink();
+            return;
+        case Qt::Key_H:
+            if (shift) {
+                toggleHighlight();
+                return;
+            }
+            showFind(true);
+            return;
+        case Qt::Key_F:
+            showFind(false);
+            return;
+        case Qt::Key_D:
+            if (shift) {
+                duplicateLines();
+                return;
+            }
+            break;
         case Qt::Key_Z:
             shift ? redo() : undo();
             return;
@@ -1659,7 +1779,8 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     }
     case Qt::Key_Backspace:
-        removeSelectionOrChar(-1);
+        if (!deleteAutoPair())
+            removeSelectionOrChar(-1);
         updateSuggestions();
         return;
     case Qt::Key_Delete:
@@ -1667,25 +1788,33 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        insertText(QStringLiteral("\n"));
+        if (!handleListEnter())
+            insertText(QStringLiteral("\n"));
         return;
     case Qt::Key_Tab:
-        insertText(QStringLiteral("    "));
+        if (!handleListIndent(1))
+            insertText(QStringLiteral("    "));
         return;
+    case Qt::Key_Backtab: // Shift+Tab
+        if (handleListIndent(-1))
+            return;
+        break;
+    case Qt::Key_Escape:
+        if (findVisible()) {
+            hideFind();
+            return;
+        }
+        break; // otherwise Escape is the window's, not the editor's
     default:
         break;
     }
 
     if (!event->text().isEmpty() && event->text().at(0).isPrint()) {
-        insertText(event->text());
-        // Typing the second bracket closes the pair, as in Obsidian.
-        if (event->text() == QLatin1String("[")
-            && QStringView(m_text).mid(0, m_cursor).endsWith(QLatin1String("[["))) {
-            const qsizetype at = m_cursor;
-            applyEdit(at, 0, QStringLiteral("]]"));
-            m_cursor = m_anchor = at; // stay between the brackets
-            m_activeBlock = blockAt(m_cursor);
-        }
+        // Auto-pairing owns the brackets and quotes, "[[" included: the first
+        // "[" opens "[]", the second sees the "]" ahead of it and opens
+        // another, so the suggester still gets its "[[]]".
+        if (!handleAutoPair(event->text().at(0)))
+            insertText(event->text());
         updateSuggestions();
         return;
     }
@@ -1706,7 +1835,9 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     }
 
     for (const BlockView &view : m_blocks) {
-        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut)
+        // An active block shows its raw source and paints no box, so there is
+        // nothing there to click.
+        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut || view.active)
             continue;
         for (const ListItemSpan &item : m_decorations.listItems) {
             if (!item.task || !item.range.overlaps(view.span.range))
