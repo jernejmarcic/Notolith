@@ -118,6 +118,15 @@ struct ListItemSpan {
     Range checkbox;    ///< the "[x]" alone, for click-to-toggle
 };
 
+/// A LaTeX formula. Obsidian writes display maths between `$$` and inline
+/// maths between `$`; both land here with the delimiters recorded separately
+/// so live preview can hide them.
+struct MathSpan {
+    Range range;   ///< including the delimiters
+    Range formula; ///< the LaTeX itself
+    bool display = false;
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
@@ -130,6 +139,7 @@ struct Decorations {
     QList<Range> paragraphs;
     QList<EmbedSpan> embeds;
     QList<ListItemSpan> listItems;
+    QList<MathSpan> maths;
     /// One entry per fenced code block that carries `#|` options; find a
     /// block's own by matching `block` against its BlockSpan range.
     QList<CodeOptions> codeOptions;

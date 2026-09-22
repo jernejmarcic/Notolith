@@ -17,6 +17,7 @@
 class QCompleter;
 
 #include "CodeHighlighter.h"
+#include "MathRenderer.h"
 #include "FindBar.h"
 #include "Decorations.h"
 #include "DisplayMap.h"
@@ -226,6 +227,7 @@ private:
         /// Set when the whole block is one image embed.
         QPixmap image;
         QSize imageSize;
+        bool imageCentred = false;
         QString imagePath;
         /// Filename shown in the header strip of a source-file or PDF embed.
         QString embedLabel;
@@ -304,6 +306,9 @@ private:
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
     bool layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path);
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// A block that is one `$$...$$` formula, laid out by MicroTeX.
+    bool layoutMath(BlockView &view);
+    const MathSpan *displayMathOf(const BlockView &view) const;
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
@@ -398,6 +403,7 @@ private:
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     Parser m_parser;
     CodeHighlighter m_code;
+    MathRenderer m_math;
     std::function<QString(const QString &)> m_resolver;
     mutable QHash<QString, QPixmap> m_images;
     Mode m_mode = Mode::LivePreview;

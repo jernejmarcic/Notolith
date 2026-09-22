@@ -1,15 +1,54 @@
 find_package(KF6SyntaxHighlighting REQUIRED)
 
+# MicroTeX, built from its sources rather than its project: see the comment on
+# FetchContent in the top-level CMakeLists.
+file(GLOB_RECURSE MICROTEX_SOURCES CONFIGURE_DEPENDS
+    ${microtex_SOURCE_DIR}/src/atom/*.cpp
+    ${microtex_SOURCE_DIR}/src/box/*.cpp
+    ${microtex_SOURCE_DIR}/src/core/*.cpp
+    ${microtex_SOURCE_DIR}/src/fonts/*.cpp
+    ${microtex_SOURCE_DIR}/src/utils/*.cpp
+    ${microtex_SOURCE_DIR}/src/res/*.cpp)
+add_library(microtex STATIC
+    ${MICROTEX_SOURCES}
+    ${microtex_SOURCE_DIR}/src/latex.cpp
+    ${microtex_SOURCE_DIR}/src/render.cpp
+    ${microtex_SOURCE_DIR}/src/platform/qt/graphic_qt.cpp)
+target_include_directories(microtex SYSTEM PUBLIC ${microtex_SOURCE_DIR}/src)
+target_compile_definitions(microtex PUBLIC BUILD_QT)
+target_link_libraries(microtex PUBLIC Qt6::Gui Qt6::Widgets PRIVATE tinyxml2::tinyxml2)
+# Upstream's warnings are not ours to fix.
+target_compile_options(microtex PRIVATE -w)
+
+# Its symbol tables are read from disk at runtime, from the root passed to
+# LaTeX::init.
+file(COPY ${microtex_SOURCE_DIR}/res DESTINATION ${CMAKE_BINARY_DIR}/microtex)
+
+# Its fonts, though, are named by a path relative to the working directory -
+# `fonts/base/cmex10.ttf` - with a fall back to the Qt resource of the same
+# name. A note app does not get to dictate its working directory, so the fonts
+# are compiled in and the fall back becomes the path that always works.
+file(GLOB_RECURSE MICROTEX_FONTS
+    ${microtex_SOURCE_DIR}/res/fonts/*.ttf)
+qt_add_resources(microtex "microtex_fonts"
+    PREFIX "/"
+    BASE ${microtex_SOURCE_DIR}/res
+    FILES ${MICROTEX_FONTS})
+
 add_library(noteAppC_render STATIC
     CodeHighlighter.cpp
     CodeHighlighter.h
     PdfPage.cpp
-    PdfPage.h)
+    PdfPage.h
+    MathRenderer.cpp
+    MathRenderer.h)
 
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
-    PRIVATE KF6::SyntaxHighlighting)
+    PRIVATE KF6::SyntaxHighlighting microtex)
+target_compile_definitions(noteAppC_render PRIVATE
+    NOTEAPPC_MICROTEX_RES="${CMAKE_BINARY_DIR}/microtex/res")
 
 # PDF embeds. Optional: poppler is GPL, so a permissive build can drop it and
 # PdfPage then reports itself unavailable.

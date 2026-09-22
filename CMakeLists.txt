@@ -26,6 +26,32 @@ FetchContent_Declare(md4qt
     GIT_TAG e48716a41c1cf7f91b130fe3d3cc1c524e3b404a # v5.1.4
     GIT_SHALLOW FALSE
     EXCLUDE_FROM_ALL)
+# MicroTeX renders the LaTeX in $$...$$ and $...$. It is not packaged, and it
+# wants tinyxml2, which is not installed either - both are vendored and pinned.
+# tinyxml2 is two files under the MIT licence; MicroTeX is MIT too.
+set(tinyxml2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(tinyxml2
+    GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
+    GIT_TAG 10.0.0
+    EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(tinyxml2)
+
+# MicroTeX populated but not added as a subproject: its own CMakeLists insists
+# on a system tinyxml2 and also builds a sample app. SOURCE_SUBDIR points at a
+# directory with no CMakeLists.txt, so FetchContent only downloads it and
+# libs/render builds the pieces it needs.
+# The patch turns Qt font merging off in MicroTeX's backend. TeX fonts are
+# symbol-encoded, so with merging on Qt substitutes another font for the
+# codepoints cmex10 and friends use, and every large operator, radical and
+# delimiter comes out blank.
+FetchContent_Declare(microtex
+    GIT_REPOSITORY https://github.com/NanoMichael/MicroTeX.git
+    GIT_TAG 0e3707f6dafebb121d98b53c64364d16fefe481d # master, 2024-08-06
+    SOURCE_SUBDIR src
+    PATCH_COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/cmake/patch-microtex.sh
+    EXCLUDE_FROM_ALL)
+FetchContent_MakeAvailable(microtex)
+
 FetchContent_MakeAvailable(md4qt)
 
 # In-tree the headers sit in src/, but upstream installs them as <md4qt/*.h>.

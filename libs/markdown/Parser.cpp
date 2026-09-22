@@ -311,6 +311,37 @@ CodeOptions parseCodeOptions(const QString &text, const Range &content, const QS
     return options;
 }
 
+/// `$$ ... $$` display maths. md4qt only reports the inline `$...$` form, so
+/// the block form is found here, outside anything md4qt already claimed.
+void detectDisplayMath(const QString &text, Decorations &decorations,
+                       const QList<Range> &masked)
+{
+    static const QRegularExpression block(QStringLiteral("\\$\\$([\\s\\S]*?)\\$\\$"));
+
+    auto it = block.globalMatch(text);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        const Range range{match.capturedStart(), match.capturedEnd()};
+
+        const bool claimed = std::any_of(masked.cbegin(), masked.cend(),
+                                         [&range](const Range &other) {
+                                             return other.overlaps(range);
+                                         });
+        if (claimed || match.captured(1).trimmed().isEmpty())
+            continue;
+
+        MathSpan span;
+        span.range = range;
+        span.formula = {match.capturedStart(1), match.capturedEnd(1)};
+        span.display = true;
+        decorations.maths.append(span);
+        decorations.syntax.append(range);
+
+        // A formula that owns its lines is a block of its own.
+        decorations.blocks.append({BlockSpan::Kind::Math, range, 0});
+    }
+}
+
 /// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
 bool detectCallout(const QString &text, const Range &range, const SourceMap &map,
                    Decorations &decorations)
@@ -593,6 +624,17 @@ void walkItem(MD::Item *item, Walk &walk)
         const auto kind = item->type() == MD::ItemType::Math      ? StyleSpan::Kind::Math
                           : item->type() == MD::ItemType::RawHtml ? StyleSpan::Kind::Html
                                                                   : StyleSpan::Kind::InlineCode;
+        if (item->type() == MD::ItemType::Math) {
+            auto *math = static_cast<MD::Code *>(item);
+            MathSpan span;
+            span.range = range;
+            span.display = !math->isInline();
+            const Range open = rangeOf(math->startDelim(), map);
+            const Range close = rangeOf(math->endDelim(), map);
+            span.formula = {open.isValid() ? open.end : range.start,
+                            close.isValid() ? close.start : range.end};
+            walk.decorations.maths.append(span);
+        }
         if (item->type() == MD::ItemType::Code || item->type() == MD::ItemType::Math) {
             auto *code = static_cast<MD::Code *>(item);
             const bool block = !code->isInline();
@@ -885,6 +927,9 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     metadata.wordCount = countWords(
         QStringView(text).mid(frontmatter.isValid() ? frontmatter.end : 0));
 
+    // Before the move, or the spans would be written into a Decorations that
+    // is about to be overwritten.
+    detectDisplayMath(text, walk.decorations, walk.masked);
     result.decorations = std::move(walk.decorations);
     if (frontmatter.isValid()) {
         result.decorations.blocks.prepend({BlockSpan::Kind::Frontmatter, frontmatter, 0});

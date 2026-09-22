@@ -163,7 +163,9 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 
 #include <QApplication>
 #include <QFontMetricsF>
+#include <QDirIterator>
 #include <QFile>
+#include <QFontDatabase>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -171,6 +173,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
+#include "MathRenderer.h"
 #include "PdfPage.h"
 
 namespace {
@@ -1092,6 +1095,79 @@ TEST(MarkdownEditorTest, EmbedsASourceFileAsAReadOnlyCodeBlock)
     EXPECT_FALSE(editor->displayText().contains(QStringLiteral("snippet.cpp")));
     // And the buffer is untouched, which is what makes the embed read-only.
     EXPECT_EQ(editor->noteText(), QStringLiteral("![[snippet.cpp#L2-L3]]\n"));
+}
+
+TEST(MathRendererTest, RendersLatexWithInk)
+{
+    EXPECT_TRUE(MathRenderer::isAvailable());
+
+    MathRenderer renderer;
+    const QImage image = renderer.render(
+        QStringLiteral("\\int_0^\\infty e^{-x^2}\\,dx = \\frac{\\sqrt{\\pi}}{2}"), 20,
+        QColor(0xda, 0xda, 0xda), 700, 1.0);
+
+    ASSERT_FALSE(image.isNull()) << renderer.lastError().toStdString();
+    EXPECT_GT(image.width(), 40);
+    EXPECT_GT(image.height(), 20);
+
+    // Glyphs, not just the fraction rules: count how many rows carry ink.
+    int rowsWithInk = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            if (qAlpha(image.pixel(x, y)) > 8) {
+                ++rowsWithInk;
+                break;
+            }
+        }
+    }
+    std::printf("[ MATH     ] %dx%d, %d rows with ink\n", image.width(), image.height(),
+                rowsWithInk);
+    EXPECT_GT(rowsWithInk, image.height() / 4);
+
+    // MicroTeX is forgiving with a truncated formula - it lays out what it
+    // can rather than failing, which is the behaviour we want in a note.
+}
+
+TEST(MarkdownEditorTest, DisplayMathBecomesARenderedBlock)
+{
+    auto editor = editorWith(QStringLiteral("before\n\n$$\nE = mc^2\n$$\n\nafter\n"));
+
+    const QString shown = editor->displayText();
+    std::printf("[ MATH     ] display = %s\n", shown.toUtf8().constData());
+    // The formula is drawn, so its source is not part of the text on screen.
+    EXPECT_FALSE(shown.contains(QStringLiteral("E = mc^2")));
+    EXPECT_TRUE(shown.contains(QStringLiteral("before")));
+    EXPECT_TRUE(shown.contains(QStringLiteral("after")));
+    // And the buffer still holds every character.
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("$$")));
+}
+
+TEST(MathRendererTest, ItsFontsAreReachableAsResources)
+{
+    // MicroTeX names its fonts by a path relative to the working directory and
+    // falls back to ":/<path>", which is why they are compiled in.
+    QDirIterator it(QStringLiteral(":/fonts"), QStringList{QStringLiteral("*.ttf")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    QStringList found;
+    while (it.hasNext())
+        found << it.next();
+    std::printf("[ MATH     ] %lld font resources\n", (long long)found.size());
+    ASSERT_FALSE(found.isEmpty());
+
+    // The fonts the large operators come from must be among them, and Qt must
+    // actually accept them.
+    for (const QString &wanted : {QStringLiteral(":/fonts/base/cmex10.ttf"),
+                                  QStringLiteral(":/fonts/maths/cmsy10.ttf"),
+                                  QStringLiteral(":/fonts/base/cmmi10.ttf")}) {
+        EXPECT_TRUE(found.contains(wanted)) << wanted.toStdString();
+        const int id = QFontDatabase::addApplicationFont(wanted);
+        EXPECT_NE(id, -1) << wanted.toStdString();
+        if (id != -1) {
+            std::printf("[ MATH     ] %s -> %s\n", wanted.toUtf8().constData(),
+                        QFontDatabase::applicationFontFamilies(id).join(QLatin1Char(','))
+                            .toUtf8().constData());
+        }
+    }
 }
 
 int main(int argc, char **argv)

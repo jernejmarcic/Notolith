@@ -21,6 +21,7 @@
 #include <QtConcurrent>
 #include <QTextLine>
 #include <algorithm>
+#include <cstdio>
 
 namespace noteAppC {
 
@@ -1177,6 +1178,65 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     return true;
 }
 
+const MathSpan *MarkdownEditor::displayMathOf(const BlockView &view) const
+{
+    // md4qt reports a formula's range as the LaTeX between the delimiters, so
+    // a block is display maths when it holds one such span and nothing else
+    // but the `$$` around it.
+    for (const MathSpan &math : m_decorations.maths) {
+        if (!math.display || !math.range.overlaps(view.span.range))
+            continue;
+
+        QString rest = m_text.mid(view.span.range.start, view.span.range.length());
+        const qsizetype offset = math.range.start - view.span.range.start;
+        if (offset >= 0 && offset + math.range.length() <= rest.size())
+            rest.remove(offset, math.range.length());
+        rest.remove(QLatin1Char('$'));
+        if (rest.trimmed().isEmpty())
+            return &math;
+    }
+    return nullptr;
+}
+
+bool MarkdownEditor::layoutMath(BlockView &view)
+{
+    const MathSpan *math = displayMathOf(view);
+    if (!math)
+        return false;
+
+    const Range source = math->formula.isValid() && math->formula.length() > 0 ? math->formula
+                                                                               : math->range;
+    const QString latex = m_text.mid(source.start, source.length()).trimmed();
+    const qreal ratio = devicePixelRatioF();
+    const QString key = QStringLiteral("math|%1|%2|%3")
+                            .arg(latex)
+                            .arg(m_theme.value(QStringLiteral("--font-text-size")))
+                            .arg(contentWidth());
+
+    QPixmap pixmap = m_images.value(key);
+    if (pixmap.isNull()) {
+        const QImage image = m_math.render(latex, m_theme.textFont().pixelSize() * 1.2,
+                                           m_theme.color(QStringLiteral("--text-normal")),
+                                           contentWidth(), ratio);
+        if (image.isNull())
+            return false; // falls back to showing the source, not to an error
+        pixmap = QPixmap::fromImage(image);
+        m_images.insert(key, pixmap);
+    }
+
+    // Display maths is centred in the column, as TeX sets it.
+    const int width = int(pixmap.width() / pixmap.devicePixelRatio());
+    const int height = int(pixmap.height() / pixmap.devicePixelRatio());
+    view.image = pixmap;
+    view.imageSize = QSize(width, height);
+    view.imageCentred = true;
+    view.layout.reset();
+    view.cells.clear();
+    view.height = height + 12;
+    view.laidOut = true;
+    return true;
+}
+
 bool MarkdownEditor::layoutTable(BlockView &view)
 {
     view.cells.clear();
@@ -1404,6 +1464,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.options = nullptr;
     view.propertyRows.clear();
     view.image = QPixmap();
+    view.imageCentred = false;
     view.textTop = 0;
     view.folded = false;
 
@@ -1416,6 +1477,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     const bool renderMedia = m_mode != Mode::Source && !view.active;
     if (renderMedia && layoutEmbed(view))
+        return;
+    if (renderMedia && layoutMath(view))
         return;
 
     const bool renderTable = view.span.kind == BlockSpan::Kind::Table
@@ -1641,7 +1704,9 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             paintEmbedChrome(painter, view, left, top);
 
         if (!view.image.isNull()) {
-            const QRectF target(left, top + view.textTop, view.imageSize.width(),
+            const qreal imageX =
+                view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
+            const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
                                 view.imageSize.height());
             painter.drawPixmap(target.toRect(), view.image);
             continue;
