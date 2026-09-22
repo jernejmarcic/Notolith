@@ -1,7 +1,8 @@
 # noteAppC handoff
 
 Written 2026-09-22, so a cold start can pick this up without reading the
-transcript. Kept current: everything below is true of commit `193cc41`.
+transcript. Kept current: everything below is true as of 2026-09-22, with the
+callout and performance work staged (see `TODO.md` for what is in flight).
 
 ## What this is
 
@@ -36,11 +37,17 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 7 test suites pass and the full build is clean.
+All 9 test suites pass and the full build is clean.
 
 ```
-vault  markdown  index  editor  window  theme  settings
+vault  markdown  index  editor  window  theme  icons  settings
 ```
+
+Measured on starbase-1, 2 000-note vault, with `tools/bench/noteAppC-bench`:
+cold start 199 ms, note open 1.4 / 9.4 / 53 ms at 1 / 50 / 200 kB, keystroke
+0.29 ms at 200 kB against an 8 ms budget, scroll frame 0.57 ms median, peak
+RSS 201 MB. A 1 MB note still opens in 822 ms, which is the next number worth
+attacking.
 
 Working today:
 
@@ -52,6 +59,15 @@ Working today:
   new folder, rename and delete, right sidebar with backlinks, tags and
   outgoing links, status bar. A settings page with live-applied values, Reset
   per row and a "set by this vault" tag.
+- **Callouts**, which are noteAppC's own beyond Obsidian's two CSS knobs:
+  named styles in `~/.config/noteAppC/callouts.ini` (icon, both colours with
+  alpha, both fonts, both sizes, both colours, font effects, `inherits`),
+  overridable per callout in Obsidian's `|` metadata slot so notes stay
+  portable. They nest, and a fenced listing inside one keeps its font, its
+  panel and its highlighting.
+- **Maths**: `$$...$$` through MicroTeX, drawn as outlines so every large
+  operator, radical, delimiter and matrix bracket appears. Inline `$...$` is
+  parsed and styled but **not yet rendered**.
 - **Note rendering**, which is the part that follows Obsidian: live preview,
   source and reading modes, headings, emphasis, highlight, links and
   wikilinks with unresolved ones dimmed, lists, checkboxes, tables as a grid,
