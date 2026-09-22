@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractScrollArea>
+#include <QColor>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QHash>
@@ -77,6 +78,10 @@ public:
     /// Pretends the reader clicked into the block holding `offset`, so it
     /// reveals its source. Used by the tests and by "reveal on open".
     void enterBlockAt(qsizetype offset);
+
+    /// Colour a link at `sourceOffset` is painted in, for the tests. Invalid
+    /// when there is no link there.
+    QColor linkColourAt(qsizetype sourceOffset) const;
 
     /// Link target under `viewportPoint`, empty when there is none.
     QString linkAt(const QPoint &viewportPoint) const;
@@ -306,6 +311,11 @@ private:
     int gutterWidth() const;
     void paintGutter(QPainter &painter, const BlockView &view, qreal top) const;
 
+    /// True when a wikilink target has no note behind it, so live preview can
+    /// dim it the way Obsidian does. Cached per parse: the resolver reaches
+    /// the index, and a note full of links is laid out on every keystroke.
+    bool isUnresolvedLink(const QString &target) const;
+
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;
     QPointF cursorPoint() const;
@@ -377,6 +387,7 @@ private:
     QString m_text;
     SourceMap m_lines; ///< line starts, for the gutter
     Decorations m_decorations; ///< styles and syntax kept sorted by start
+    mutable QHash<QString, bool> m_unresolved; ///< link target -> has no note
     QList<Property> m_properties; ///< frontmatter, for the properties table
     std::vector<BlockView> m_blocks; // move-only: QTextLayout is not copyable
     /// Fold state by block start offset. A block with no entry is in the state

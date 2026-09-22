@@ -418,6 +418,7 @@ void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> p
 
 void MarkdownEditor::indexDecorations()
 {
+    m_unresolved.clear();
     // One merge pass: each block records the slice of the sorted decoration
     // lists that can possibly touch it.
     const auto assign = [](auto &items, auto start, int &first, int &last,
@@ -540,6 +541,40 @@ void MarkdownEditor::rebuildBlocks()
     m_activeBlock = blockAt(m_cursor);
 }
 
+QColor MarkdownEditor::linkColourAt(qsizetype sourceOffset) const
+{
+    for (const StyleSpan &span : m_decorations.styles) {
+        if (span.kind != StyleSpan::Kind::Link || !span.range.contains(sourceOffset))
+            continue;
+        return m_theme.color(isUnresolvedLink(span.payload)
+                                 ? QStringLiteral("--link-unresolved-color")
+                                 : QStringLiteral("--text-accent"));
+    }
+    return {};
+}
+
+bool MarkdownEditor::isUnresolvedLink(const QString &target) const
+{
+    if (target.isEmpty() || !m_resolver)
+        return false;
+    // External links resolve to nothing and are not meant to.
+    if (target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:")))
+        return false;
+
+    const auto cached = m_unresolved.constFind(target);
+    if (cached != m_unresolved.constEnd())
+        return *cached;
+
+    // The subpath is not part of what resolves to a file.
+    QString name = target;
+    const qsizetype hash = name.indexOf(QLatin1Char('#'));
+    if (hash >= 0)
+        name.truncate(hash);
+    const bool missing = !name.isEmpty() && m_resolver(name).isEmpty();
+    m_unresolved.insert(target, missing);
+    return missing;
+}
+
 qsizetype MarkdownEditor::blockAt(qsizetype sourceOffset) const
 {
     if (m_blocks.empty())
@@ -600,6 +635,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         formats.append(range);
     };
 
+    const QColor unresolved = m_theme.color(QStringLiteral("--link-unresolved-color"));
+
     // In source mode the markers stay visible, so colour them like Obsidian
     // rather than hiding them.
     if (m_mode == Mode::Source || view.active) {
@@ -648,6 +685,10 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             // come from KSyntaxHighlighting, applied after these.
             continue;
         case StyleSpan::Kind::Link:
+            // A link to a note that does not exist is dimmed, which is how a
+            // typo in a link is spotted at all.
+            format.setForeground(isUnresolvedLink(span.payload) ? unresolved : accent);
+            break;
         case StyleSpan::Kind::Tag:
             format.setForeground(accent);
             break;

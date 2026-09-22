@@ -1065,3 +1065,39 @@ int main(int argc, char **argv)
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// A link to a note that does not exist is dimmed, which is the only way a
+// typo in a wikilink is visible at all.
+TEST(UnresolvedLinkTest, OnlyALinkWithNoNoteBehindItIsDimmed)
+{
+    MarkdownEditor editor;
+    const Theme theme = Theme::builtin(Theme::Mode::Dark);
+    editor.setTheme(theme);
+    // Only "Real" exists; the external link must stay a normal link.
+    editor.setLinkResolver([](const QString &target) {
+        return target == QStringLiteral("Real") ? QStringLiteral("/vault/Real.md") : QString();
+    });
+    editor.setNoteText(QStringLiteral(
+        "See [[Real]], [[Missing]], [[Real#Heading]] and [x](https://example.com).\n"));
+    editor.resize(900, 600);
+    editor.show();
+    QTest::qWait(60);
+
+    const QColor accent = theme.color(QStringLiteral("--text-accent"));
+    const QColor dim = theme.color(QStringLiteral("--link-unresolved-color"));
+    ASSERT_NE(accent, dim);
+
+    const QString text = editor.noteText();
+    const auto colourOfLinkAt = [&](const QString &needle) {
+        const qsizetype at = text.indexOf(needle);
+        EXPECT_GE(at, 0);
+        return editor.linkColourAt(at + 1);
+    };
+
+    EXPECT_EQ(colourOfLinkAt(QStringLiteral("[[Real]]")), accent);
+    EXPECT_EQ(colourOfLinkAt(QStringLiteral("[[Missing]]")), dim);
+    // A subpath does not make a resolved note unresolved.
+    EXPECT_EQ(colourOfLinkAt(QStringLiteral("[[Real#Heading]]")), accent);
+    // An external link resolves to nothing and is not meant to.
+    EXPECT_EQ(colourOfLinkAt(QStringLiteral("https://example.com")), accent);
+}

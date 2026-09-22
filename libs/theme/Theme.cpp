@@ -167,6 +167,9 @@ void Theme::applyDerivedTokens()
     derive(QStringLiteral("--text-on-accent"), QStringLiteral("#ffffff"));
     derive(QStringLiteral("--text-error"), m_tokens[QStringLiteral("--color-red")]);
     derive(QStringLiteral("--text-accent"), dark ? accent1 : accent);
+    // Obsidian dims an unresolved link rather than giving it its own hue.
+    derive(QStringLiteral("--link-unresolved-color"),
+           rgba(QColor(dark ? accent1 : accent), 0.45));
     derive(QStringLiteral("--text-selection"), rgba(QColor(accent), dark ? 0.33 : 0.20));
 
     derive(QStringLiteral("--interactive-normal"), dark ? base("30") : base("00"));
