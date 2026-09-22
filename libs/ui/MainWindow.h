@@ -89,6 +89,8 @@ private:
     QWidget *buildRightSidebar();
     void buildActions();
     void applyTheme();
+    /// Keeps the inline title on the same column as the note text.
+    void updateInlineTitleMargins();
     /// Rebuilds `m_theme` from Settings (mode, scheme, accent, font size),
     /// applies it, then every editor/appearance setting that has a live
     /// hook. Called at startup, on any settings-page edit, and whenever the

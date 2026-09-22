@@ -338,6 +338,7 @@ QWidget *MainWindow::buildMainArea()
     m_inlineTitle->setVisible(false);
 
     m_editor = new MarkdownEditor(editorArea);
+    m_editor->installEventFilter(this); // keeps the inline title on its column
     m_editor->setEnabled(false);
     connect(m_editor, &MarkdownEditor::modificationChanged,
             this, &MainWindow::onModificationChanged);
@@ -504,7 +505,21 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == m_headerSearch && event->type() == QEvent::FocusIn)
         openQuickSwitcher();
+    // The editor changes width when the window resizes, when a sidebar is
+    // toggled and in single-file mode, and the title has to keep following
+    // its column through all three.
+    if (watched == m_editor && event->type() == QEvent::Resize)
+        updateInlineTitleMargins();
     return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::updateInlineTitleMargins()
+{
+    if (!m_editor || !m_inlineTitle)
+        return;
+    const int column = m_theme.value(QStringLiteral("--file-line-width")).toInt();
+    const int side = qMax(24, (m_editor->width() - column) / 2);
+    m_inlineTitle->setContentsMargins(side, 32, side, 0);
 }
 
 void MainWindow::toggleSidebar()
@@ -645,9 +660,7 @@ void MainWindow::applyTheme()
         m_settingsPage->applyTheme(m_theme);
 
     // The inline title shares the editor's centred column.
-    const int side = qMax(24, (m_editor->width()
-                               - m_theme.value(QStringLiteral("--file-line-width")).toInt()) / 2);
-    m_inlineTitle->setContentsMargins(side, 32, side, 0);
+    updateInlineTitleMargins();
 
     // Local overrides for what the app-wide stylesheet (Theme::styleSheet(),
     // still shaped around Obsidian's ribbon-and-flat-tab chrome) does not

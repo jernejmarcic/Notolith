@@ -3,6 +3,7 @@
 // out of.
 //
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
+//   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single
 
 #include <QApplication>
 #include <QFileInfo>
@@ -12,6 +13,7 @@
 #include <QTimer>
 
 #include "MainWindow.h"
+#include "Settings.h"
 
 int main(int argc, char *argv[])
 {
@@ -41,6 +43,34 @@ int main(int argc, char *argv[])
     noteAppC::MainWindow window;
     const bool sourceMode = args.contains(QLatin1String("--source"));
     window.resize(size);
+
+    // `--single <file>`: the mode a loose Markdown file opens in, which has no
+    // vault and so cannot be reached through the vault argument.
+    if (args.contains(QLatin1String("--single"))) {
+        const QFileInfo note(args.at(2));
+        if (!note.isFile()) {
+            qWarning("%s is not a file", qPrintable(args.at(2)));
+            return 2;
+        }
+        window.openTarget(noteAppC::resolveLaunchTarget(note.absoluteFilePath()));
+        window.setThemeMode(args.value(4) == QLatin1String("light")
+                                ? noteAppC::Theme::Mode::Light
+                                : noteAppC::Theme::Mode::Dark);
+        if (sourceMode)
+            window.toggleEditingMode();
+        window.show();
+        int status = 0;
+        QTimer::singleShot(600, &app, [&] {
+            if (!window.grab().toImage().save(args.at(3))) {
+                qWarning("could not write %s", qPrintable(args.at(3)));
+                status = 1;
+            }
+            app.quit();
+        });
+        app.exec();
+        return status;
+    }
+
     // Absolute, always: a relative note path makes Vault::read fail, and the
     // error box it raises blocks forever on the offscreen platform.
     window.openVault(QFileInfo(args.at(1)).absoluteFilePath());
