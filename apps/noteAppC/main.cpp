@@ -25,9 +25,14 @@ int main(int argc, char *argv[])
 
     noteAppC::MainWindow window;
     const QStringList args = parser.positionalArguments();
-    if (!args.isEmpty())
-        window.openTarget(noteAppC::resolveLaunchTarget(args.first()));
+    const noteAppC::LaunchTarget target =
+        args.isEmpty() ? noteAppC::LaunchTarget{} : noteAppC::resolveLaunchTarget(args.first());
+
+    // Show first, open second. The vault is read once the empty shell has been
+    // painted, so the window is on screen in a fraction of the time and fills
+    // in, rather than the user waiting on nothing for the whole load.
     window.show();
+    window.openWhenShown(target);
 
     return app.exec();
 }

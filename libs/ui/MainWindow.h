@@ -2,6 +2,8 @@
 
 #include <QMainWindow>
 
+#include <optional>
+
 #include "Index.h"
 #include "Indexer.h"
 #include "MarkdownEditor.h"
@@ -42,9 +44,17 @@ public:
     void openVault(const QString &path);
     void openNote(const QString &path);
     /// Dispatches on `target.mode`: a vault (plus note), one file with no
-    /// vault around it, or nothing - the constructor already restored the
-    /// most recent vault or left an empty window, so Empty is a no-op here.
+    /// vault around it, or nothing - in which case the most recent vault is
+    /// restored, if there is one.
     void openTarget(const LaunchTarget &target);
+
+    /// Opens `target` only once the empty shell has been painted.
+    ///
+    /// A window that appears immediately and fills in reads as faster than one
+    /// that appears complete after the same wait, so nothing here touches a
+    /// vault before there is something on screen. Call it instead of
+    /// openTarget() at startup, after show().
+    void openWhenShown(const LaunchTarget &target);
 
     const Theme &theme() const { return m_theme; }
     void setThemeMode(Theme::Mode mode);
@@ -60,6 +70,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 public slots:
@@ -142,6 +153,8 @@ private:
     Indexer *m_indexer = nullptr;
     Note m_note;        ///< line endings and BOM of the open file
     QString m_notePath; ///< absolute path, empty when nothing is open
+    /// What openWhenShown() is waiting to open, cleared by the first paint.
+    std::optional<LaunchTarget> m_pendingOpen;
 
     QFileSystemModel *m_files = nullptr;
     QTreeView *m_tree = nullptr;

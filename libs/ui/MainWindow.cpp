@@ -127,11 +127,10 @@ MainWindow::MainWindow(QWidget *parent)
         splitter->setSizes({260, 640, 260});
     m_rightSidebar->setVisible(settings.value(kRightSidebar, true).toBool());
 
-    const QString last = m_settings.recentVaults().value(0);
-    if (!last.isEmpty() && QFileInfo(last).isDir())
-        openVault(last);
-    else
-        updateTitle();
+    updateTitle();
+    // Nothing is opened here on purpose. Reading a vault from the constructor
+    // meant the process did all of its work before the first pixel appeared;
+    // openTarget() does it now, and openWhenShown() waits for the paint.
 }
 
 QToolButton *MainWindow::iconButton(const QString &objectName, const QString &icon,
@@ -846,11 +845,37 @@ void MainWindow::openTarget(const LaunchTarget &target)
     case OpenMode::SingleFile:
         openSingleFile(target.filePath);
         break;
-    case OpenMode::Empty:
-        // The constructor already restored the most recent vault, or left
-        // an empty window - resolveLaunchTarget agrees either way.
+    case OpenMode::Empty: {
+        // Nothing named on the command line: pick up where the last session
+        // left off, or stay an empty window.
+        const QString last = m_settings.recentVaults().value(0);
+        if (!last.isEmpty() && QFileInfo(last).isDir())
+            openVault(last);
+        else
+            updateTitle();
         break;
     }
+    }
+}
+
+void MainWindow::openWhenShown(const LaunchTarget &target)
+{
+    m_pendingOpen = target;
+    update(); // make sure a paint is coming even if nothing else asks for one
+}
+
+void MainWindow::paintEvent(QPaintEvent *event)
+{
+    QMainWindow::paintEvent(event);
+    if (!m_pendingOpen)
+        return;
+
+    // The shell is on screen now, so the wait for the vault happens with
+    // something to look at. Queued rather than run here: a paint handler is no
+    // place to open a database and read a note.
+    const LaunchTarget target = *m_pendingOpen;
+    m_pendingOpen.reset();
+    QTimer::singleShot(0, this, [this, target] { openTarget(target); });
 }
 
 void MainWindow::onTreeActivated(const QModelIndex &index)
