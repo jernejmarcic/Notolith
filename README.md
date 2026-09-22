@@ -35,10 +35,17 @@ Sync, Publish.
 ## Build
 
 ```sh
-cmake -B build -G Ninja
-cmake --build build
-./build/apps/noteAppC/noteAppC
+cmake -B build -G Ninja     # once, and again only if CMakeLists changes
+cmake --build build         # after every edit - this is the one you repeat
+ctest --test-dir build      # all seven suites, about six seconds
+./build/apps/noteAppC/noteAppC            # opens the last vault
+./build/apps/noteAppC/noteAppC ~/notes    # a vault
+./build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile
 ```
+
+`cmake --build build` is incremental and takes a second or two when little
+changed, so run it before every launch. Running an old binary looks exactly
+like a feature not working.
 
 Requires `qt6-base`, `yaml-cpp`, `cmake`, `ninja`, a C++20 compiler, and
 `gtest` for the tests (`ctest --test-dir build`). md4qt is fetched at

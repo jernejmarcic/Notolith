@@ -314,6 +314,17 @@ TEST_F(WindowTest, SettingsPageOpensAndClosesRestoringThePreviousNote)
     ASSERT_NE(settingsPage, nullptr);
     EXPECT_NE(window.findChild<QWidget *>(QStringLiteral("settingsNav")), nullptr);
 
+    // Click the button a person actually clicks, not the slot behind it: a
+    // disconnected button passes every test that calls openSettings().
+    auto *settingsButton =
+        window.findChild<QToolButton *>(QStringLiteral("headerSettingsButton"));
+    ASSERT_NE(settingsButton, nullptr);
+    settingsButton->click();
+    EXPECT_EQ(stack->currentIndex(), 1);
+    EXPECT_EQ(stack->currentWidget(), settingsPage);
+
+    window.closeSettings();
+    ASSERT_EQ(stack->currentIndex(), 0);
     window.openSettings();
     EXPECT_EQ(stack->currentIndex(), 1);
     EXPECT_EQ(stack->currentWidget(), settingsPage);
