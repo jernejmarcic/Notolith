@@ -461,8 +461,16 @@ QFont MarkdownEditor::fontFor(const BlockSpan &span) const
 
 QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view) const
 {
+    QList<QTextLayout::FormatRange> formats = formatsIn(view, view.span.range, view.map);
+    formats += codeFormatsFor(view);
+    return formats;
+}
+
+QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
+                                                          const Range &block,
+                                                          const DisplayMap &map) const
+{
     QList<QTextLayout::FormatRange> formats;
-    const Range block = view.span.range;
 
     const QColor accent = m_theme.color(QStringLiteral("--text-accent"));
     const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
@@ -471,7 +479,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
     const QColor highlight = m_theme.color(QStringLiteral("--color-yellow"));
 
     const auto add = [&](const Range &source, const QTextCharFormat &format) {
-        const Range shown = view.map.toDisplay(source);
+        const Range shown = map.toDisplay(source);
         if (shown.length() <= 0)
             return;
         QTextLayout::FormatRange range;
@@ -537,7 +545,6 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
         }
         add(span.range, format);
     }
-    formats += codeFormatsFor(view);
     return formats;
 }
 
@@ -603,8 +610,157 @@ int MarkdownEditor::contentLeft() const
     return qMax(m_minimumSideMargin, (viewport()->width() - contentWidth()) / 2);
 }
 
+const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
+{
+    for (const TableSpan &table : m_decorations.tables) {
+        if (table.range.start == view.span.range.start)
+            return &table;
+    }
+    return nullptr;
+}
+
+bool MarkdownEditor::layoutTable(BlockView &view)
+{
+    view.cells.clear();
+    const TableSpan *table = tableFor(view);
+    if (!table || table->columns <= 0 || table->rows.isEmpty())
+        return false;
+
+    const QFont font = m_theme.textFont();
+    const qreal lineHeight = QFontMetricsF(font).height() * 1.4;
+    const qreal padX = 10;
+    const qreal padY = 6;
+    const qreal minimum = QFontMetricsF(font).horizontalAdvance(QLatin1Char('m')) * 3;
+
+    // Natural widths first, so the columns can be sized from their content
+    // the way Obsidian does, then scaled down together if they do not fit.
+    QList<qreal> natural(table->columns, minimum);
+    std::vector<Cell> cells;
+
+    for (int r = 0; r < table->rows.size(); ++r) {
+        const QList<Range> &row = table->rows.at(r);
+        for (int c = 0; c < row.size() && c < table->columns; ++c) {
+            Cell cell;
+            cell.source = row.at(c);
+            cell.row = r;
+            cell.column = c;
+            cell.alignment = table->alignment.value(c, Qt::AlignLeft);
+
+            QList<Range> hidden;
+            for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+                const Range &marker = m_decorations.syntax.at(i);
+                if (marker.overlaps(cell.source))
+                    hidden.append(marker);
+            }
+            cell.map = DisplayMap::build(m_text, cell.source, hidden);
+
+            QString shown = cell.map.text().trimmed();
+            cell.layout = std::make_unique<QTextLayout>(shown);
+            cell.layout->setCacheEnabled(true);
+            QFont cellFont = font;
+            if (r == 0)
+                cellFont.setWeight(QFont::DemiBold);
+            cell.layout->setFont(cellFont);
+            cell.layout->setFormats(formatsIn(view, cell.source, cell.map));
+
+            natural[c] = qMax(natural.at(c),
+                              QFontMetricsF(cellFont).horizontalAdvance(shown) + 2 * padX);
+            cells.push_back(std::move(cell));
+        }
+    }
+
+    qreal total = 0;
+    for (const qreal width : std::as_const(natural))
+        total += width;
+    const qreal available = contentWidth();
+    const qreal scale = total > available ? available / total : 1.0;
+
+    QList<qreal> widths;
+    QList<qreal> offsets;
+    qreal x = 0;
+    for (const qreal width : std::as_const(natural)) {
+        widths << width * scale;
+        offsets << x;
+        x += width * scale;
+    }
+
+    // Lay each cell out at its column width, then rows take the tallest cell.
+    QList<qreal> rowHeights(table->rows.size(), lineHeight + 2 * padY);
+    for (Cell &cell : cells) {
+        const qreal width = widths.value(cell.column, minimum) - 2 * padX;
+        cell.layout->beginLayout();
+        qreal height = 0;
+        while (true) {
+            QTextLine line = cell.layout->createLine();
+            if (!line.isValid())
+                break;
+            line.setLineWidth(qMax<qreal>(10, width));
+            line.setPosition(QPointF(0, height));
+            height += lineHeight;
+        }
+        cell.layout->endLayout();
+        rowHeights[cell.row] = qMax(rowHeights.at(cell.row), height + 2 * padY);
+    }
+
+    QList<qreal> rowTops;
+    qreal y = 0;
+    for (const qreal height : std::as_const(rowHeights)) {
+        rowTops << y;
+        y += height;
+    }
+    for (Cell &cell : cells) {
+        cell.rect = QRectF(offsets.value(cell.column), rowTops.value(cell.row),
+                           widths.value(cell.column), rowHeights.value(cell.row));
+    }
+
+    view.cells = std::move(cells);
+    view.headerRows = 1;
+    view.layout.reset();
+    view.height = y;
+    view.laidOut = true;
+    return true;
+}
+
+void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal left,
+                                qreal top) const
+{
+    const QColor border = m_theme.color(QStringLiteral("--background-modifier-border"));
+    const QColor header = m_theme.color(QStringLiteral("--background-secondary"));
+    const QColor text = m_theme.color(QStringLiteral("--text-normal"));
+    const qreal padX = 10;
+    const qreal padY = 6;
+
+    for (const Cell &cell : view.cells) {
+        const QRectF rect = cell.rect.translated(left, top);
+        if (cell.row < view.headerRows)
+            painter.fillRect(rect, header);
+        painter.setPen(QPen(border, 1));
+        painter.drawRect(rect);
+
+        const qreal width = rect.width() - 2 * padX;
+        qreal offset = 0;
+        if (cell.layout->lineCount() > 0) {
+            const qreal lineWidth = cell.layout->lineAt(0).naturalTextWidth();
+            if (cell.alignment.testFlag(Qt::AlignRight))
+                offset = width - lineWidth;
+            else if (cell.alignment.testFlag(Qt::AlignHCenter))
+                offset = (width - lineWidth) / 2;
+        }
+
+        painter.setPen(text);
+        cell.layout->draw(&painter, QPointF(rect.left() + padX + qMax<qreal>(0, offset),
+                                            rect.top() + padY));
+    }
+}
+
 void MarkdownEditor::layoutBlock(BlockView &view)
 {
+    view.cells.clear();
+    const bool renderTable = view.span.kind == BlockSpan::Kind::Table
+                             && m_mode != Mode::Source && !view.active;
+    if (renderTable && layoutTable(view))
+        return;
+
     const bool reveal = m_mode == Mode::Source
                         || (m_mode == Mode::LivePreview && view.active);
     QList<Range> hidden;
@@ -778,7 +934,12 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             }
         }
 
-        view.layout->draw(&painter, QPointF(left, top), selectionRanges);
+        if (!view.cells.empty()) {
+            paintTable(painter, view, left, top);
+            continue;
+        }
+        if (view.layout)
+            view.layout->draw(&painter, QPointF(left, top), selectionRanges);
     }
 
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
@@ -799,7 +960,7 @@ QPointF MarkdownEditor::cursorPoint() const
         return {};
     const BlockView &view = m_blocks.at(size_t(index));
     if (!view.layout)
-        return {};
+        return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
     const qsizetype display = view.map.toDisplay(m_cursor);
     const QTextLine line = view.layout->lineForTextPosition(int(display));
@@ -819,6 +980,17 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
     const qreal x = viewportPoint.x() - contentLeft();
 
     for (const BlockView &view : m_blocks) {
+        if (!view.cells.empty()) {
+            if (y < view.y || y > view.y + view.height)
+                continue;
+            // Clicking any cell puts the caret in it; the block then reveals
+            // its source, which is where the editing happens for now.
+            for (const Cell &cell : view.cells) {
+                if (cell.rect.translated(0, view.y).contains(QPointF(x, y)))
+                    return cell.source.start;
+            }
+            return view.span.range.start;
+        }
         if (!view.layout)
             continue;
         const bool last = &view == &m_blocks.back();

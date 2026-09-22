@@ -353,6 +353,32 @@ TEST(DecorationTest, TheActiveBlockShowsItsSource)
     EXPECT_TRUE(decorations.hiddenFor(heading, heading.start + 1).isEmpty());
 }
 
+TEST(TableTest, CellsAlignmentAndHeader)
+{
+    const QString text = QStringLiteral(
+        "| Phase | What | Weeks |\n"
+        "|:------|:----:|------:|\n"
+        "| 0 | Vault | 1 |\n"
+        "| 1 | Index | 3 |\n");
+    const Decorations decorations = decorationsOf(text);
+
+    ASSERT_EQ(decorations.tables.size(), 1);
+    const TableSpan &table = decorations.tables.first();
+    EXPECT_EQ(table.columns, 3);
+    EXPECT_EQ(table.alignment, QList<Qt::Alignment>({Qt::AlignLeft, Qt::AlignHCenter,
+                                                     Qt::AlignRight}));
+    // Header plus two body rows; md4qt does not report the delimiter row.
+    ASSERT_EQ(table.rows.size(), 3);
+    EXPECT_EQ(table.rows.first().size(), 3);
+
+    const auto slice = [&text](const Range &range) {
+        return text.mid(range.start, range.length()).trimmed();
+    };
+    EXPECT_EQ(slice(table.rows.at(0).at(0)), QStringLiteral("Phase"));
+    EXPECT_EQ(slice(table.rows.at(1).at(1)), QStringLiteral("Vault"));
+    EXPECT_EQ(slice(table.rows.at(2).at(2)), QStringLiteral("3"));
+}
+
 TEST(WordCountTest, IgnoresFrontmatter)
 {
     const Metadata metadata =

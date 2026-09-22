@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <Qt>
 
 #include "SourceMap.h"
 
@@ -39,10 +40,20 @@ struct BlockSpan {
     int level = 0;
 };
 
+/// A table, flattened into what a grid renderer needs: cell source ranges by
+/// row and column, and the alignment the delimiter row asked for.
+struct TableSpan {
+    Range range;
+    int columns = 0;
+    QList<Qt::Alignment> alignment; ///< per column
+    QList<QList<Range>> rows;       ///< rows.first() is the header
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
     QList<BlockSpan> blocks;
+    QList<TableSpan> tables;
     /// Markers hidden while the cursor is outside the block: `#`, `**`, `[[`,
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;

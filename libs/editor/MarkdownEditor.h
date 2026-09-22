@@ -92,6 +92,17 @@ protected:
     QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 private:
+    /// One cell of a rendered table.
+    struct Cell {
+        Range source;
+        DisplayMap map;
+        std::unique_ptr<QTextLayout> layout;
+        QRectF rect;
+        Qt::Alignment alignment = Qt::AlignLeft;
+        int row = 0;
+        int column = 0;
+    };
+
     /// One top-level block: the unit that is laid out, cached and revealed.
     /// Blocks outside the viewport carry an estimated height and no layout,
     /// which is what keeps a 200 kB note responsive.
@@ -110,6 +121,9 @@ private:
         int lastStyle = 0;
         int firstSyntax = 0;
         int lastSyntax = 0;
+        /// Filled instead of `layout` when a table renders as a grid.
+        std::vector<Cell> cells;
+        int headerRows = 0;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -120,6 +134,13 @@ private:
     void rebuildBlocks();
     void indexDecorations();
     void layoutBlock(BlockView &view);
+    /// Lays a table out as a grid. False when this block is not a table or
+    /// its structure is missing, so the caller falls back to plain text.
+    bool layoutTable(BlockView &view);
+    void paintTable(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    QList<QTextLayout::FormatRange> formatsIn(const BlockView &view, const Range &source,
+                                              const DisplayMap &map) const;
+    const TableSpan *tableFor(const BlockView &view) const;
     /// Heights, positions, and layouts for the blocks near the viewport.
     void updateLayout();
     void invalidateLayouts();

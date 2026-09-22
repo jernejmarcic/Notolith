@@ -235,8 +235,34 @@ void walkItem(MD::Item *item, Walk &walk)
     }
     case MD::ItemType::Table: {
         auto *table = static_cast<MD::Table *>(item);
+        const Range tableRange = rangeOf(*table, map);
         if (walk.depth == 0)
-            walk.decorations.blocks.append({BlockSpan::Kind::Table, rangeOf(*table, map), 0});
+            walk.decorations.blocks.append({BlockSpan::Kind::Table, tableRange, 0});
+
+        TableSpan span;
+        span.range = tableRange;
+        span.columns = table->columnsCount();
+        for (int column = 0; column < span.columns; ++column) {
+            switch (table->columnAlignment(column)) {
+            case MD::Table::AlignRight:
+                span.alignment << Qt::AlignRight;
+                break;
+            case MD::Table::AlignCenter:
+                span.alignment << Qt::AlignHCenter;
+                break;
+            default:
+                span.alignment << Qt::AlignLeft;
+                break;
+            }
+        }
+        for (const auto &row : table->rows()) {
+            QList<Range> cells;
+            for (const auto &cell : row->cells())
+                cells << rangeOf(*cell, map);
+            span.rows << cells;
+        }
+        walk.decorations.tables.append(span);
+
         ++walk.depth;
         for (const auto &row : table->rows())
             walkItem(row.data(), walk);
