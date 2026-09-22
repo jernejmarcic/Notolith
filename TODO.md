@@ -13,14 +13,14 @@ work in flight.
 ## Done this session
 
 - [x] Establish true state: clean tree at `669af14`, all 7 suites green on
-      starbase-1
+      starbase-1 (committing was blocked all session by the ssh signing key;
+      fixed separately, see facts/system/SYS_CHANGES.md)
 - [x] **MicroTeX glyphs**. Diagnosed the "large operators do not draw" gap
       recorded in `669af14`. Not font coverage: MicroTeX builds every font at
       1 pt and scales the painter ~19x, so Qt rasterised a 1 pt glyph and
       blew up the raster. Drawing outlines through `QPainterPath` fixes every
       operator, radical, delimiter, matrix bracket and roman glyph.
-      `cmake/patch-microtex.sh` carries it. **Staged, not committed** - the
-      ssh signing key needs its passphrase (`ssh-add ~/.ssh/github_signing`).
+      `cmake/patch-microtex.sh` carries it.
 
 ## Callouts, requested by Jernej 2026-09-22
 
@@ -102,16 +102,57 @@ budget, which this project has already learned once on the index.
       and no longer depends on vault size at all. Schema version 3.
 - [ ] Measure against Obsidian itself on the same vault. Not installed here,
       so the comparison is still unmade - these are noteAppC's own numbers.
-- [ ] The three O(document) passes that run on **every keystroke**, whatever
-      the edit: `MarkdownEditor.cpp:2047` rebuilds the whole `SourceMap`,
-      `:2049` `shiftRanges` walks every block and every decoration, and
-      `updateLayout()` makes two more full passes. Costs 0.29 ms at 200 kB and
-      0.78 ms at 1 MB today, so it is not urgent - but it is why a 1 MB note
-      opens in 822 ms, which is the number worth attacking next.
-- [ ] GPU: **the measurement says not yet.** A scroll frame costs 0.57 ms
-      median and 1.64 ms at its worst on the raster path, which is over 600 fps
-      of headroom on a 5 000-line note. Uploading that to the GPU would cost
-      more than it saves. Revisit if a frame ever approaches 8 ms - a
-      transparency-heavy theme or a very wide window are the likely causes.
-- [ ] Assert the result in `tests/test_editor.cpp` alongside the existing 8 ms
-      keystroke and 300 ms open budgets, so it cannot regress.
+- [x] **Opening a note was quadratic, twice over.** Found with perf, not
+      guessed. `ObsidianSyntax::scan` ran the lazy `%%...%%` pattern once per
+      unmasked region - 16 273 of them on a 1 MB note - and each run with no
+      match walks to the end of the text: parse 1 992 ms -> 142 ms. And
+      `OutgoingLinksPane::refresh` re-read the note from disk, re-decoded it
+      and rebuilt a `SourceMap` **once per link**, which perf put at 30% of
+      the whole run.
+- [x] **A big note is shown before it is parsed.** Above 128 kB the text goes
+      up as plain paragraphs and the parse runs on the thread pool. Time to a
+      readable 1 MB note: 146 ms -> 11.3 ms. `plainParagraphs()` makes it
+      possible; without it an unparsed note is one block a megabyte long.
+- [x] **The settings page builds when opened**, not twice before the window
+      appears: constructor 27.5 ms -> 15.4 ms.
+- [x] **Show the window, then read the vault.** Shell on screen 194.5 ms ->
+      50.5 ms, at a real cost of 8.8 ms - inside the 10 ms limit, but only
+      just, and recorded in the commit so it is not rediscovered.
+- [ ] The three O(document) passes that still run on **every keystroke**:
+      `MarkdownEditor.cpp` rebuilds the whole `SourceMap`, `shiftRanges` walks
+      every block and decoration, and `updateLayout()` makes two more full
+      passes. 0.26 ms at 200 kB and 0.66 ms at 1 MB, so it is nobody's
+      problem yet - but it is the last thing in the editor that is
+      proportional to the file rather than to the edit.
+- [x] **GPU: implemented, measured, off by default.**
+      `MarkdownEditor::setGPUacceleration` swaps the viewport for a
+      `QOpenGLWidget`, and `noteAppC-bench --gpu` compares the two on screen
+      with vsync off (rendering into a QImage would have measured a
+      framebuffer readback instead). On an RTX 5080 the whole scroll sweep
+      costs ~420 ms on raster and ~467 ms on OpenGL, so GL is about 11%
+      slower overall - the glyph cache is the usual reason for text - while
+      holding a steadier tail, 5 ms worst frame against 12 ms. A setting, not
+      a decision, because the tail may matter more on weaker hardware.
+- [x] Guards that cannot quietly stop guarding:
+      `ParserPerfTest::ParsingStaysLinearInFileSize` measures `parseAll`
+      directly (5.0x text, 5.6x time) and
+      `MarkdownEditorTest::OpeningAMegabyteNoteIsImmediate` measures time to
+      readable. The first version of this lived in the editor test and was
+      about to start passing for the wrong reason once the parse moved off
+      the UI thread.
+
+## Still open
+
+- [ ] **Inline `$...$` maths never renders.** Parsed and styled, never laid
+      out. Needs an inline image run inside a `QTextLayout` line. The trick
+      that avoids teaching DisplayMap to substitute text: hide all but one
+      character of the formula and give that character an absolute letter
+      spacing equal to the image width, then paint the image at its x.
+- [ ] **The editor half of `Note > Heading` links.** The parser now records
+      `anchorHash` and `anchorText`; DisplayMap still only hides, never
+      replaces.
+- [ ] `editor.spellcheck` has no dictionary behind it. hunspell is in PLAN.md
+      and is not a dependency yet.
+- [ ] A listing inside a callout wraps; Obsidian scrolls it.
+- [ ] Property values other than the checkbox are still read-only.
+- [ ] Measure against Obsidian itself. Not installed here.
