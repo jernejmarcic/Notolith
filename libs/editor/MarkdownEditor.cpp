@@ -286,6 +286,36 @@ void MarkdownEditor::setModified(bool modified)
     emit modificationChanged(m_modified);
 }
 
+void MarkdownEditor::setStrictLineBreaks(bool on)
+{
+    if (m_strictLineBreaks == on)
+        return;
+    m_strictLineBreaks = on;
+    // It decides whether a newline inside a paragraph joins or breaks, so
+    // every block has to be laid out again, not merely repainted.
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::setIndentGuides(bool on)
+{
+    if (m_indentGuides == on)
+        return;
+    m_indentGuides = on;
+    viewport()->update(); // drawn behind the text; nothing moves
+}
+
+void MarkdownEditor::setTabWidth(int spaces)
+{
+    m_tabWidth = qBound(1, spaces, 8);
+}
+
+void MarkdownEditor::setUseWikilinks(bool on)
+{
+    m_useWikilinks = on;
+}
+
 void MarkdownEditor::setLineNumbers(bool on)
 {
     if (m_lineNumbers == on)
@@ -914,6 +944,36 @@ QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &i
     const qreal y = view.y + view.textTop - verticalScrollBar()->value() + line.y()
                     + (line.height() - box) / 2;
     return QRectF(x, y, box, box);
+}
+
+/// A faint vertical rule at each level of list indentation, the way an editor
+/// shows nesting. Drawn behind the text, one run per item so a wrapped line
+/// keeps the guides of the item it belongs to.
+void MarkdownEditor::paintIndentGuides(QPainter &painter, const BlockView &view, qreal left,
+                                       qreal top) const
+{
+    if (!view.layout || view.folded)
+        return;
+
+    QColor guide = m_theme.color(QStringLiteral("--text-faint"));
+    guide.setAlphaF(0.4f);
+
+    painter.save();
+    painter.setPen(QPen(guide, 1));
+    for (const ListItemSpan &item : m_decorations.listItems) {
+        if (item.indent <= 0 || !item.range.overlaps(view.span.range))
+            continue;
+
+        const QRectF band = bandOf(view, item.range);
+        if (band.height() <= 0)
+            continue;
+        // One rule per level the item sits under, never under its own marker.
+        for (int level = 1; level <= item.indent; ++level) {
+            const qreal x = left + kListIndent * level - 8;
+            painter.drawLine(QPointF(x, top + band.y()), QPointF(x, top + band.y() + band.height()));
+        }
+    }
+    painter.restore();
 }
 
 void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, qreal left,
@@ -1817,6 +1877,8 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
                 if (view.span.kind != BlockSpan::Kind::Code)
                     paintNestedCodePanels(painter, view, left, top);
             }
+            if (m_indentGuides && view.span.kind == BlockSpan::Kind::List)
+                paintIndentGuides(painter, view, left, top + drop);
             // A listing that asked not to wrap runs off the end of its line;
             // the panel is where it stops, not the window.
             const bool clip = view.options && !view.options->wrap;
@@ -2273,7 +2335,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Tab:
         if (!handleListIndent(1))
-            insertText(QStringLiteral("    "));
+            insertText(QString(m_tabWidth, QLatin1Char(' ')));
         return;
     case Qt::Key_Backtab: // Shift+Tab
         if (handleListIndent(-1))

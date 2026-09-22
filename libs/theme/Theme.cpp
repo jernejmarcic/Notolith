@@ -339,27 +339,51 @@ QString Theme::firstAvailableFamily(const QStringList &families)
     return families.isEmpty() ? QString() : families.last();
 }
 
+bool Theme::hasFamily(const QString &family)
+{
+    return !family.isEmpty()
+           && QFontDatabase::families().contains(family, Qt::CaseInsensitive);
+}
+
+void Theme::setFontOverrides(const QString &interfaceFamily, const QString &textFamily,
+                             const QString &monospaceFamily)
+{
+    // A family nobody has is dropped here rather than handed to QFont, which
+    // would substitute something arbitrary for it.
+    m_interfaceFont = hasFamily(interfaceFamily.trimmed()) ? interfaceFamily.trimmed() : QString();
+    m_textFont = hasFamily(textFamily.trimmed()) ? textFamily.trimmed() : QString();
+    m_monospaceFont = hasFamily(monospaceFamily.trimmed()) ? monospaceFamily.trimmed() : QString();
+}
+
 QFont Theme::uiFont() const
 {
-    QFont font(firstAvailableFamily({QStringLiteral("Inter"), QStringLiteral("Noto Sans"),
-                                     QStringLiteral("DejaVu Sans")}));
+    QFont font(m_interfaceFont.isEmpty()
+                   ? firstAvailableFamily({QStringLiteral("Inter"), QStringLiteral("Noto Sans"),
+                                           QStringLiteral("DejaVu Sans")})
+                   : m_interfaceFont);
     font.setPixelSize(value(QStringLiteral("--font-ui-small")).toInt());
     return font;
 }
 
 QFont Theme::textFont() const
 {
+    // The note body takes its own family when one is set, and the interface
+    // font otherwise - which is what Obsidian does too.
     QFont font = uiFont();
+    if (!m_textFont.isEmpty())
+        font.setFamily(m_textFont);
     font.setPixelSize(value(QStringLiteral("--font-text-size")).toInt());
     return font;
 }
 
 QFont Theme::monospaceFont() const
 {
-    QFont font(firstAvailableFamily({QStringLiteral("JetBrains Mono"),
-                                     QStringLiteral("Roboto Mono"),
-                                     QStringLiteral("Noto Sans Mono"),
-                                     QStringLiteral("DejaVu Sans Mono")}));
+    QFont font(m_monospaceFont.isEmpty()
+                   ? firstAvailableFamily({QStringLiteral("JetBrains Mono"),
+                                           QStringLiteral("Roboto Mono"),
+                                           QStringLiteral("Noto Sans Mono"),
+                                           QStringLiteral("DejaVu Sans Mono")})
+                   : m_monospaceFont);
     font.setFixedPitch(true);
     font.setPixelSize(value(QStringLiteral("--font-ui-medium")).toInt());
     return font;

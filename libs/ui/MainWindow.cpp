@@ -602,6 +602,9 @@ Theme MainWindow::themeFromSettings() const
                     m_settings.integer(QStringLiteral("appearance.accentLightness")));
     theme.setToken(QStringLiteral("--font-text-size"),
                    QString::number(m_settings.integer(QStringLiteral("appearance.baseFontSize"))));
+    theme.setFontOverrides(m_settings.text(QStringLiteral("appearance.interfaceFont")),
+                           m_settings.text(QStringLiteral("appearance.textFont")),
+                           m_settings.text(QStringLiteral("appearance.monospaceFont")));
     return theme;
 }
 
@@ -618,6 +621,10 @@ void MainWindow::applySettings()
     m_editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
     m_editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
     m_editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
+    m_editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
+    m_editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
+    m_editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
+    m_editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));

@@ -381,10 +381,9 @@ QWidget *SettingsPage::buildAppearancePage()
     addSpinRow(layout, QStringLiteral("appearance.baseFontSize"), tr("Font size"),
               tr("Size of the note text."), 8, 32, tr(" px"));
 
-    // TODO: Theme has no interfaceFont/textFont/monospaceFont override hook -
-    // only uiFont()/textFont()/monospaceFont(), each with a hardcoded family
-    // list. These three round-trip through Settings but do not apply to
-    // anything until Theme grows one.
+    // A family fontconfig does not have is ignored rather than substituted,
+    // so a typo leaves the built-in list in place instead of changing the
+    // look of the whole application - see Theme::setFontOverrides.
     addLineEditRow(layout, QStringLiteral("appearance.interfaceFont"), tr("Interface font"),
                   tr("Family used for menus and panels."), tr("System default"));
     addLineEditRow(layout, QStringLiteral("appearance.textFont"), tr("Note text font"),
@@ -425,19 +424,15 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Close brackets and quotes as you type, and wrap a selection instead of "
                    "replacing it."));
 
-    // TODO: MarkdownEditor needs setStrictLineBreaks(bool). It already
-    // carries m_strictLineBreaks privately (Obsidian's app.json key of the
-    // same name) but nothing sets it from outside.
     addToggleRow(layout, QStringLiteral("editor.strictLineBreaks"), tr("Strict line breaks"),
                 tr("Treat every newline as a line break, the way CommonMark does."));
-    // TODO: no spellcheck engine is wired up yet; needs
-    // MarkdownEditor::setSpellcheck(bool) once one exists.
+    // The one setting here that still does nothing: there is no dictionary
+    // behind it. hunspell is in PLAN.md and is not a dependency yet, so the
+    // row stores its value and waits rather than pretending.
     addToggleRow(layout, QStringLiteral("editor.spellcheck"), tr("Spellcheck"),
                 tr("Underline words the dictionary does not recognise."));
-    // TODO: MarkdownEditor needs setIndentGuides(bool).
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
-    // TODO: MarkdownEditor needs setTabWidth(int).
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
 
@@ -457,9 +452,6 @@ QWidget *SettingsPage::buildFilesPage()
                 tr("Where a pasted or dropped file lands. Empty means the vault root."));
     addToggleRow(layout, QStringLiteral("files.confirmDelete"), tr("Confirm before deleting"),
                 tr("Ask before moving a note or folder to the vault's trash."));
-    // TODO: MarkdownEditor's link insertion has no wikilink/Markdown-link
-    // preference hook; this round-trips through Settings but Ctrl+K always
-    // writes the same form until it does.
     addToggleRow(layout, QStringLiteral("links.useWikilinks"), tr("Use [[wikilinks]]"),
                 tr("Write new links as [[Note]] instead of [Note](Note.md)."));
     addToggleRow(layout, QStringLiteral("links.autoUpdate"), tr("Update links on rename"),

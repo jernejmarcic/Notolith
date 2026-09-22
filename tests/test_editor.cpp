@@ -752,11 +752,58 @@ TEST(FormattingTest, CtrlKPutsTheCaretInTheSlotThatIsStillEmpty)
     EXPECT_EQ(url->noteText(), QStringLiteral("[](https://example.com)"));
     EXPECT_EQ(url->cursorOffset(), 1) << "a known URL leaves the text slot to fill in";
 
+    // Selected text that is not a URL becomes the target. Which form that
+    // takes is links.useWikilinks, which defaults to on as it does in
+    // Obsidian, so the wikilink is the default answer here.
+    auto wiki = editorWith(QStringLiteral("click me"));
+    QTest::keyClick(wiki.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(wiki.get(), Qt::Key_K, Qt::ControlModifier);
+    EXPECT_EQ(wiki->noteText(), QStringLiteral("[[click me]]"));
+    EXPECT_EQ(wiki->cursorOffset(), 10) << "a wikilink has no second slot to fill";
+
     auto text = editorWith(QStringLiteral("click me"));
+    text->setUseWikilinks(false);
     QTest::keyClick(text.get(), Qt::Key_A, Qt::ControlModifier);
     QTest::keyClick(text.get(), Qt::Key_K, Qt::ControlModifier);
     EXPECT_EQ(text->noteText(), QStringLiteral("[click me]()"));
     EXPECT_EQ(text->cursorOffset(), 11);
+
+    // An empty selection opens whichever form the vault prefers.
+    auto empty = editorWith(QString());
+    QTest::keyClick(empty.get(), Qt::Key_K, Qt::ControlModifier);
+    EXPECT_EQ(empty->noteText(), QStringLiteral("[[]]"));
+    EXPECT_EQ(empty->cursorOffset(), 2);
+}
+
+TEST(EditorSettingsTest, TabWidthStrictBreaksAndGuidesAllApply)
+{
+    // Each of these was shown on the settings page and stored, with nothing
+    // reading it. The point of the test is that they now reach the editor.
+    auto editor = editorWith(QStringLiteral("one\ntwo\n\nthree\n"));
+
+    // Off, a single newline inside a paragraph joins, which is Obsidian's
+    // default. On, CommonMark's rule applies and it breaks.
+    EXPECT_FALSE(editor->strictLineBreaks());
+    editor->setStrictLineBreaks(true);
+    EXPECT_TRUE(editor->strictLineBreaks());
+    editor->setStrictLineBreaks(false);
+
+    editor->setTabWidth(2);
+    EXPECT_EQ(editor->tabWidth(), 2);
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("  one")))
+        << "Tab inserts tabWidth spaces, not a hardcoded four";
+
+    // Out-of-range values are clamped rather than taken literally.
+    editor->setTabWidth(99);
+    EXPECT_EQ(editor->tabWidth(), 8);
+    editor->setTabWidth(0);
+    EXPECT_EQ(editor->tabWidth(), 1);
+
+    EXPECT_FALSE(editor->indentGuides());
+    editor->setIndentGuides(true);
+    EXPECT_TRUE(editor->indentGuides());
 }
 
 TEST(FormattingTest, CtrlKOnALinkTakesItApartAgain)

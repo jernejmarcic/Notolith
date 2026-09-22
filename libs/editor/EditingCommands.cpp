@@ -557,8 +557,14 @@ void MarkdownEditor::insertLink()
     }
 
     if (text.isEmpty()) {
-        applyEdit(selected.start, 0, QStringLiteral("[]()"));
-        setSelectionRange(selected.start + 1, selected.start + 1);
+        // An empty selection opens the form the vault prefers, caret inside it.
+        if (m_useWikilinks) {
+            applyEdit(selected.start, 0, QStringLiteral("[[]]"));
+            setSelectionRange(selected.start + 2, selected.start + 2);
+        } else {
+            applyEdit(selected.start, 0, QStringLiteral("[]()"));
+            setSelectionRange(selected.start + 1, selected.start + 1);
+        }
         return;
     }
 
@@ -567,6 +573,17 @@ void MarkdownEditor::insertLink()
         applyEdit(selected.start, selected.length(),
                   QLatin1String("[](") + text + QLatin1Char(')'));
         setSelectionRange(selected.start + 1, selected.start + 1);
+        return;
+    }
+
+    // Selected text that is not a URL becomes the link's target. A vault that
+    // writes wikilinks wants `[[Note]]`, where the target is the text itself
+    // and there is no second slot to fill.
+    if (m_useWikilinks) {
+        applyEdit(selected.start, selected.length(),
+                  QLatin1String("[[") + text + QLatin1String("]]"));
+        const qsizetype end = selected.start + text.size() + 2;
+        setSelectionRange(end, end);
         return;
     }
 

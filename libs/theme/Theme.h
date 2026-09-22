@@ -68,6 +68,20 @@ public:
     QFont textFont() const;
     QFont monospaceFont() const;
 
+    /// Family overrides from the settings page. An empty family means "use the
+    /// built-in list", which is how a reset works; a family fontconfig does
+    /// not have is ignored rather than substituted, so a typo does not
+    /// silently change the look of the whole application.
+    void setFontOverrides(const QString &interfaceFamily, const QString &textFamily,
+                          const QString &monospaceFamily);
+    QString interfaceFontOverride() const { return m_interfaceFont; }
+    QString textFontOverride() const { return m_textFont; }
+    QString monospaceFontOverride() const { return m_monospaceFont; }
+
+    /// True when fontconfig actually has this family, so the settings page can
+    /// say so instead of letting a typo quietly do nothing.
+    static bool hasFamily(const QString &family);
+
     /// First family in `families` that fontconfig actually has, else the last.
     static QString firstAvailableFamily(const QStringList &families);
 
@@ -83,6 +97,9 @@ private:
     QHash<QString, QString> m_tokens;
     /// Tokens a scheme or the user set by hand; derivation leaves them alone.
     QSet<QString> m_pinned;
+    QString m_interfaceFont;
+    QString m_textFont;
+    QString m_monospaceFont;
 };
 
 } // namespace noteAppC

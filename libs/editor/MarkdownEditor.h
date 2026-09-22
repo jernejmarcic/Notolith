@@ -69,6 +69,23 @@ public:
     void setReadableLineLength(bool on);
     void setContentWidth(int pixels);
 
+    /// CommonMark's rule: every newline is a line break. Off, a single newline
+    /// inside a paragraph joins, which is what Obsidian does by default.
+    void setStrictLineBreaks(bool on);
+    bool strictLineBreaks() const { return m_strictLineBreaks; }
+
+    /// A faint vertical rule at each level of list indentation.
+    void setIndentGuides(bool on);
+    bool indentGuides() const { return m_indentGuides; }
+
+    /// Spaces a Tab inserts where it is not indenting a list item.
+    void setTabWidth(int spaces);
+    int tabWidth() const { return m_tabWidth; }
+
+    /// Whether Ctrl+K on a selection writes `[[Note]]` or `[Note](Note.md)`.
+    void setUseWikilinks(bool on);
+    bool useWikilinks() const { return m_useWikilinks; }
+
     int wordCount() const;
     /// Source offset of the caret, for tests and for the status bar.
     qsizetype cursorOffset() const { return m_cursor; }
@@ -295,6 +312,7 @@ private:
                              qreal top) const;
     void paintNestedCodePanels(QPainter &painter, const BlockView &view, qreal left,
                                qreal top) const;
+    void paintIndentGuides(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// Panel and filename header for a source-file or PDF embed.
     void paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintCheckBox(QPainter &painter, const QRectF &rect, bool done) const;
@@ -464,6 +482,9 @@ private:
     bool m_readable = true;
     bool m_lineNumbers = true; ///< shown in source mode only
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
+    bool m_indentGuides = false;
+    int m_tabWidth = 4;
+    bool m_useWikilinks = true;
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;
