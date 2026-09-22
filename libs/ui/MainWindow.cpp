@@ -19,7 +19,7 @@
 
 #include "BacklinksPane.h"
 #include "Icons.h"
-#include "NoteEdit.h"
+#include "MarkdownEditor.h"
 #include "QuickSwitcher.h"
 
 namespace noteAppC {
@@ -259,16 +259,18 @@ QWidget *MainWindow::buildMainArea()
     m_inlineTitle->setObjectName(QStringLiteral("inlineTitle"));
     m_inlineTitle->setVisible(false);
 
-    m_editor = new NoteEdit(editorArea);
+    m_editor = new MarkdownEditor(editorArea);
     m_editor->setEnabled(false);
-    connect(m_editor->document(), &QTextDocument::modificationChanged,
+    connect(m_editor, &MarkdownEditor::modificationChanged,
             this, &MainWindow::onModificationChanged);
-    connect(m_editor, &NoteEdit::textChanged, this, &MainWindow::onTextChanged);
-    // Keep the inline title in the editor's text column.
-    connect(m_editor, &NoteEdit::sideMarginChanged, this, [this](int side) {
-        m_inlineTitle->setContentsMargins(side, 32, side, 0);
+    connect(m_editor, &MarkdownEditor::textChanged, this, &MainWindow::onTextChanged);
+    connect(m_editor, &MarkdownEditor::linkActivated, this, [this](const QString &target) {
+        const QString resolved = m_index.resolve(target, m_notePath);
+        if (!resolved.isEmpty())
+            openRelative(resolved);
+        else
+            statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
     });
-    m_editor->setTopPadding(10);
 
     editorLayout->addWidget(m_inlineTitle);
     editorLayout->addWidget(m_editor, 1);
@@ -306,6 +308,7 @@ void MainWindow::buildActions()
     add(QStringLiteral("Ctrl+Alt+S"), &MainWindow::toggleSidebar);
     add(QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
     add(QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
+    add(QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
     add(QStringLiteral("Ctrl+Q"), &MainWindow::close);
 }
 
@@ -326,6 +329,14 @@ void MainWindow::openQuickSwitcher()
         return;
     m_switcher->setCandidates(m_index.allPaths());
     m_switcher->popUp();
+}
+
+void MainWindow::toggleEditingMode()
+{
+    const bool source = m_editor->mode() == MarkdownEditor::Mode::Source;
+    m_editor->setMode(source ? MarkdownEditor::Mode::LivePreview
+                             : MarkdownEditor::Mode::Source);
+    statusBar()->showMessage(source ? tr("Live preview") : tr("Source mode"), 2000);
 }
 
 void MainWindow::openRelative(const QString &relativePath)
@@ -381,9 +392,12 @@ void MainWindow::applyTheme()
 
     setFont(m_theme.uiFont());
     m_tree->setFont(m_theme.uiFont());
-    m_editor->setFont(m_theme.textFont());
+    m_editor->setTheme(m_theme);
     m_editor->setContentWidth(m_theme.value(QStringLiteral("--file-line-width")).toInt());
-    m_inlineTitle->setContentsMargins(m_editor->sideMargin(), 32, m_editor->sideMargin(), 0);
+    // The inline title shares the editor's centred column.
+    const int side = qMax(24, (m_editor->width()
+                               - m_theme.value(QStringLiteral("--file-line-width")).toInt()) / 2);
+    m_inlineTitle->setContentsMargins(side, 32, side, 0);
 }
 
 void MainWindow::chooseVault()
@@ -408,7 +422,7 @@ void MainWindow::openVault(const QString &path)
     m_vault = vault;
     m_notePath.clear();
     m_note = Note{};
-    m_editor->clear();
+    m_editor->setNoteText(QString());
     m_editor->setEnabled(false);
     m_inlineTitle->setVisible(false);
     while (m_tabs->count() > 0)
@@ -481,7 +495,7 @@ bool MainWindow::save()
         return true;
 
     Note note = m_note;
-    note.text = m_editor->toPlainText();
+    note.text = m_editor->noteText();
 
     QString error;
     if (!Vault::write(m_notePath, note, &error)) {
@@ -490,7 +504,7 @@ bool MainWindow::save()
     }
 
     m_note = note;
-    m_editor->document()->setModified(false);
+    m_editor->setModified(false);
     statusBar()->showMessage(tr("Saved %1").arg(m_vault.relative(m_notePath)), 2000);
     m_indexer->reindex(m_notePath);
     return true;
@@ -498,7 +512,7 @@ bool MainWindow::save()
 
 bool MainWindow::maybeSave()
 {
-    if (m_notePath.isEmpty() || !m_editor->document()->isModified())
+    if (m_notePath.isEmpty() || !m_editor->isModified())
         return true;
 
     const auto answer = QMessageBox::question(
@@ -525,7 +539,7 @@ void MainWindow::onTextChanged()
 
 void MainWindow::updateTitle()
 {
-    const bool modified = !m_notePath.isEmpty() && m_editor->document()->isModified();
+    const bool modified = !m_notePath.isEmpty() && m_editor->isModified();
     QString title;
     if (!m_notePath.isEmpty())
         title = m_vault.relative(m_notePath) + QLatin1String(" - ");
@@ -547,9 +561,7 @@ void MainWindow::updateWordCount()
         m_wordCount->clear();
         return;
     }
-    static const QRegularExpression whitespace(QStringLiteral("\\s+"));
-    const qsizetype words = m_editor->toPlainText().split(whitespace, Qt::SkipEmptyParts).size();
-    m_wordCount->setText(tr("%n word(s)", nullptr, int(words)));
+    m_wordCount->setText(tr("%n word(s)", nullptr, m_editor->wordCount()));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

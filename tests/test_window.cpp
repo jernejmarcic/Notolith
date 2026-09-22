@@ -10,9 +10,9 @@
 #include <QDir>
 #include <QFileSystemModel>
 #include <QFile>
-#include <QPlainTextEdit>
+#include <QTest>
 
-#include "NoteEdit.h"
+#include "MarkdownEditor.h"
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTreeView>
@@ -21,7 +21,7 @@
 #include "Vault.h"
 
 using noteAppC::MainWindow;
-using noteAppC::NoteEdit;
+using noteAppC::MarkdownEditor;
 
 namespace {
 
@@ -83,11 +83,11 @@ TEST_F(WindowTest, OpensANoteIntoTheEditor)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
 
-    auto *editor = window.findChild<NoteEdit *>();
+    auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_TRUE(editor->isEnabled());
-    EXPECT_EQ(editor->toPlainText(), QStringLiteral("# Welcome\n\nBody.\n"));
-    EXPECT_FALSE(editor->document()->isModified());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_FALSE(editor->isModified());
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
 }
 
@@ -98,9 +98,9 @@ TEST_F(WindowTest, RefusesANonNoteAndLeavesTheEditorAlone)
     window.openNote(path(QStringLiteral("Welcome.md")));
     window.openNote(path(QStringLiteral("attachment.txt")));
 
-    auto *editor = window.findChild<NoteEdit *>();
+    auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
-    EXPECT_EQ(editor->toPlainText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
 }
 
 TEST_F(WindowTest, EditingMarksTheTitleAndSavingClearsIt)
@@ -109,9 +109,10 @@ TEST_F(WindowTest, EditingMarksTheTitleAndSavingClearsIt)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
 
-    auto *editor = window.findChild<NoteEdit *>();
+    auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
-    editor->insertPlainText(QStringLiteral("x"));
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor, QStringLiteral("x"));
     EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*')));
 
     ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
@@ -137,11 +138,11 @@ TEST_F(WindowTest, EditingACrlfNoteKeepsCrlf)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Projects/Crlf.md")));
 
-    auto *editor = window.findChild<NoteEdit *>();
+    auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
-    EXPECT_EQ(editor->toPlainText(), QStringLiteral("one\ntwo\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("one\ntwo\n"));
 
-    editor->setPlainText(QStringLiteral("one\ntwo\nthree\n"));
+    editor->setNoteText(QStringLiteral("one\ntwo\nthree\n"));
     ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
     EXPECT_EQ(readAll(path(QStringLiteral("Projects/Crlf.md"))),
               QByteArray("one\r\ntwo\r\nthree\r\n"));

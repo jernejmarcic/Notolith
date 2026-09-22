@@ -2,6 +2,8 @@
 
 #include <QRandomGenerator>
 
+#include <memory>
+
 #include "DisplayMap.h"
 
 using namespace noteAppC;
@@ -152,4 +154,119 @@ TEST(DisplayMapTest, FuzzRoundTrip)
                 ASSERT_EQ(map.toSource(map.toDisplay(s)), s) << "case " << c << " source " << s;
         }
     }
+}
+
+// --- the widget ----------------------------------------------------------
+
+#include <QApplication>
+#include <QTest>
+
+#include "MarkdownEditor.h"
+
+namespace {
+
+/// An editor sized like a real window, on the offscreen platform.
+std::unique_ptr<MarkdownEditor> editorWith(const QString &text)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setNoteText(text);
+    return editor;
+}
+
+} // namespace
+
+TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
+{
+    const QString source = QStringLiteral("# Title\n\nSome **bold** text.\n");
+    auto editor = editorWith(source);
+
+    // Untouched: every marker is hidden.
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome bold text.\n"));
+
+    // Click into the heading: that block, and only that block, shows its source.
+    editor->enterBlockAt(2);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("# Title\n\nSome bold text.\n"));
+
+    // Move to the paragraph: the heading goes back to rendered.
+    editor->enterBlockAt(source.indexOf(QStringLiteral("bold")));
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome **bold** text.\n"));
+}
+
+TEST(MarkdownEditorTest, SourceModeHidesNothingAndReadingHidesEverything)
+{
+    const QString source = QStringLiteral("# Title\n\n[[A link|shown]]\n");
+    auto editor = editorWith(source);
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_EQ(editor->displayText(), source);
+
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    editor->enterBlockAt(2); // no effect: reading view has no active block
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nshown\n"));
+}
+
+TEST(MarkdownEditorTest, TypingEditsTheBufferAtTheCaret)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+    QTest::keyClicks(editor.get(), QStringLiteral(" world"));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello world\n"));
+    EXPECT_TRUE(editor->isModified());
+    EXPECT_EQ(editor->cursorOffset(), 11);
+    EXPECT_EQ(editor->wordCount(), 2);
+}
+
+TEST(MarkdownEditorTest, BackspaceAndUndo)
+{
+    auto editor = editorWith(QStringLiteral("abc\n"));
+    editor->setCursorOffset(3);
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("ab\n"));
+
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("abc\n"));
+
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("ab\n"));
+}
+
+TEST(MarkdownEditorTest, SelectAllThenTypeReplaces)
+{
+    auto editor = editorWith(QStringLiteral("old text\n"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClicks(editor.get(), QStringLiteral("new"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("new"));
+}
+
+TEST(MarkdownEditorTest, TypingTwoBracketsClosesThePair)
+{
+    auto editor = editorWith(QStringLiteral("see \n"));
+    editor->setCursorOffset(4);
+    QTest::keyClicks(editor.get(), QStringLiteral("[["));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("see [[]]\n"));
+    EXPECT_EQ(editor->cursorOffset(), 6);
+}
+
+TEST(MarkdownEditorTest, CursorSkipsOverHiddenSyntax)
+{
+    // "see [[Target|shown]]" renders as "see shown"; moving right from the
+    // space must land on the "s" of "shown", not inside the hidden brackets.
+    const QString source = QStringLiteral("see [[Target|shown]] end\n");
+    auto editor = editorWith(source);
+
+    editor->setCursorOffset(4);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("see shown end\n"));
+    EXPECT_EQ(editor->noteText(), source);
+}
+
+int main(int argc, char **argv)
+{
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
+    QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

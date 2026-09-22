@@ -13,7 +13,7 @@ target_link_libraries(test_index PRIVATE noteAppC_index noteAppC_vault Qt6::Test
 add_test(NAME index COMMAND test_index)
 
 add_executable(test_editor test_editor.cpp)
-target_link_libraries(test_editor PRIVATE noteAppC_editor GTest::gtest GTest::gtest_main)
+target_link_libraries(test_editor PRIVATE noteAppC_editor Qt6::Test GTest::gtest)
 add_test(NAME editor COMMAND test_editor)
 
 add_executable(test_window test_window.cpp)

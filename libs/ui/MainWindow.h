@@ -4,6 +4,7 @@
 
 #include "Index.h"
 #include "Indexer.h"
+#include "MarkdownEditor.h"
 #include "Theme.h"
 #include "Vault.h"
 
@@ -17,7 +18,7 @@ class QTreeView;
 namespace noteAppC {
 
 class BacklinksPane;
-class NoteEdit;
+class MarkdownEditor;
 class QuickSwitcher;
 
 /// Phase 0 shell, wearing Obsidian's chrome: ribbon, file explorer, tab strip,
@@ -38,6 +39,8 @@ public:
     void toggleSidebar();
     void toggleRightSidebar();
     void openQuickSwitcher();
+    /// Obsidian's Ctrl+E: live preview <-> source.
+    void toggleEditingMode();
     /// Index for the open vault, so views can query links and tags.
     Index *index() { return &m_index; }
 
@@ -77,7 +80,7 @@ private:
 
     QFileSystemModel *m_files = nullptr;
     QTreeView *m_tree = nullptr;
-    NoteEdit *m_editor = nullptr;
+    MarkdownEditor *m_editor = nullptr;
     QTabBar *m_tabs = nullptr;
     QLabel *m_inlineTitle = nullptr;
     QLabel *m_vaultName = nullptr;
