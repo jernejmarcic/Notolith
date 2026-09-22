@@ -665,6 +665,15 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         add({item.marker.end, item.range.end}, strike);
     }
 
+    for (const NestedCallout &nested : view.nested) {
+        if (!nested.span->titleRange.isValid() || !nested.span->titleRange.overlaps(block))
+            continue;
+        QTextCharFormat title;
+        title.setFont(nested.style.titleFont(m_theme));
+        title.setForeground(nested.style.headingColor);
+        add(nested.span->titleRange, title);
+    }
+
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
         const StyleSpan &span = m_decorations.styles.at(i);
         if (!span.range.overlaps(block))
@@ -687,9 +696,13 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             format.setBackground(codeBackground);
             break;
         case StyleSpan::Kind::CodeBlock:
-            // The panel behind it is painted by the block; the token colours
-            // come from KSyntaxHighlighting, applied after these.
-            continue;
+            if (view.span.kind == BlockSpan::Kind::Code)
+                continue; // the block paints its own panel, font and tokens
+            // A fence inside a callout or a blockquote is not a block of its
+            // own, so it has nothing to paint its panel or set its font. It
+            // takes both from here, and its tokens from codeFormatsFor.
+            format.setFont(m_theme.monospaceFont());
+            break;
         case StyleSpan::Kind::Link:
             // A link to a note that does not exist is dimmed, which is how a
             // typo in a link is spotted at all.
@@ -746,7 +759,7 @@ Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) co
 QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &view) const
 {
     if (view.span.kind != BlockSpan::Kind::Code)
-        return {};
+        return nestedCodeFormatsFor(view);
 
     QString language;
     const Range content = codeContentOf(view, &language);
@@ -761,6 +774,36 @@ QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &
     const qsizetype shift = view.map.toDisplay(content.start);
     for (QTextLayout::FormatRange &range : formats)
         range.start += int(shift);
+    return formats;
+}
+
+/// Syntax highlighting for a fence that lives inside a callout or a
+/// blockquote, where it is part of the surrounding layout rather than a block
+/// of its own.
+///
+/// The block form can shift the highlighter's offsets by one constant, because
+/// nothing inside a fence is hidden. Here the `>` that starts every line is,
+/// and the shift is not uniform - so the highlighter is given the *displayed*
+/// text, which is already the listing as the reader sees it.
+QList<QTextLayout::FormatRange> MarkdownEditor::nestedCodeFormatsFor(const BlockView &view) const
+{
+    QList<QTextLayout::FormatRange> formats;
+    const QString shown = view.map.text();
+    for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        const StyleSpan &span = m_decorations.styles.at(i);
+        if (span.kind != StyleSpan::Kind::CodeBlock || span.payload.isEmpty()
+            || !span.range.overlaps(view.span.range))
+            continue;
+
+        const Range range = view.map.toDisplay(span.range);
+        if (range.length() <= 0 || range.end > shown.size())
+            continue;
+        QList<QTextLayout::FormatRange> tokens =
+            m_code.highlight(shown.mid(range.start, range.length()), span.payload);
+        for (QTextLayout::FormatRange &token : tokens)
+            token.start += int(range.start);
+        formats += tokens;
+    }
     return formats;
 }
 
@@ -828,6 +871,15 @@ bool MarkdownEditor::softBreakAt(qsizetype source) const
         return false;
     if (source >= 1 && m_text.at(source - 1) == QLatin1Char('\\'))
         return false;
+
+    // A nested callout's title stays in the layout, so the newline that ends
+    // its header line has to break, or the title and the first line of the
+    // body run together as one paragraph - which, in Markdown, they are.
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.depth > 0 && callout.titleRange.isValid() && source >= callout.titleRange.end
+            && source <= callout.titleRange.end + 1)
+            return false;
+    }
 
     for (const Range &paragraph : m_decorations.paragraphs) {
         if (paragraph.start > source)
@@ -928,6 +980,18 @@ void MarkdownEditor::toggleTask(const ListItemSpan &item)
     setSelectionRange(anchor, caret);
 }
 
+/// How many nested callouts cover this source offset. Zero is the block's own
+/// callout, which is not nested and carries the block's normal indent.
+int MarkdownEditor::nestingDepthAt(const BlockView &view, qsizetype source) const
+{
+    int depth = 0;
+    for (const NestedCallout &nested : view.nested) {
+        if (nested.span->range.contains(source))
+            depth = qMax(depth, nested.span->depth);
+    }
+    return depth;
+}
+
 const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
 {
     for (const CalloutSpan &callout : m_decorations.callouts) {
@@ -937,9 +1001,9 @@ const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
     return nullptr;
 }
 
-qreal MarkdownEditor::calloutHeaderHeight() const
+qreal MarkdownEditor::calloutHeaderHeight(const CalloutStyle &style) const
 {
-    return QFontMetricsF(m_theme.textFont()).height() * 1.9;
+    return QFontMetricsF(style.titleFont(m_theme)).height() * 1.9;
 }
 
 void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qreal left,
@@ -948,35 +1012,38 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
     if (!view.callout)
         return;
 
-    const QColor accent = m_theme.calloutColor(view.callout->type);
-    QColor tint = accent;
-    tint.setAlphaF(m_theme.isDark() ? 0.12f : 0.08f);
-
+    const CalloutStyle &style = view.calloutStyle;
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
     QPainterPath rounded;
     rounded.addRoundedRect(panel, 6, 6);
-    painter.fillPath(rounded, tint);
-    painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), accent);
+    painter.fillPath(rounded, style.background);
+    painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), style.bar);
 
-    const qreal iconSize = QFontMetricsF(m_theme.textFont()).height();
-    const QIcon icon = Icons::icon(Theme::calloutIcon(view.callout->type), accent, int(iconSize));
+    // The icon keeps one size whatever it is, so a photograph and a glyph line
+    // up in the same column. Only a Lucide glyph is recoloured; a user's own
+    // image is drawn as it is.
+    const QFont titleFont = style.titleFont(m_theme);
+    const qreal iconSize = QFontMetricsF(titleFont).height();
+    const QIcon icon = Icons::icon(style.icon, style.bar, int(iconSize));
     const QRectF iconRect(panel.left() + 14, panel.top() + 10, iconSize, iconSize);
-    icon.paint(&painter, iconRect.toRect());
+    if (!icon.isNull())
+        icon.paint(&painter, iconRect.toRect());
 
     painter.save();
-    QFont title = m_theme.textFont();
-    title.setWeight(QFont::DemiBold);
-    painter.setFont(title);
-    painter.setPen(accent);
-    painter.drawText(QRectF(iconRect.right() + 8, panel.top() + 8,
-                            panel.width() - iconSize - 56, iconSize * 1.4),
+    painter.setFont(titleFont);
+    painter.setPen(style.headingColor);
+    // The title runs from the icon to the fold arrow, whatever size the style
+    // gives it; a fixed width clipped any heading larger than the theme's.
+    const qreal titleLeft = iconRect.right() + 8;
+    painter.drawText(QRectF(titleLeft, panel.top() + 8,
+                            qMax(qreal(0), panel.right() - 36 - titleLeft), iconSize * 1.4),
                      Qt::AlignVCenter | Qt::AlignLeft, view.callout->title);
     painter.restore();
 
     // `[!type]+`, `[!type]-` and a `:::` details container all fold; the
     // triangle says so, and the whole title row toggles it.
     if (view.callout->foldable)
-        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, accent);
+        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, style.bar);
 }
 
 const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
@@ -1519,9 +1586,28 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (shown.endsWith(QChar::LineSeparator))
         shown.chop(1);
 
+    view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
+    if (view.callout)
+        view.calloutStyle = m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
+                                                    m_theme);
+    // Callouts nest, and only the outermost one is a block. The rest are
+    // painted inside this layout, so they have to be found before it is built:
+    // each nested one indents the lines it covers.
+    view.nested.clear();
+    if (view.callout) {
+        for (const CalloutSpan &callout : m_decorations.callouts) {
+            if (callout.depth > 0 && view.span.range.contains(callout.range.start))
+                view.nested.push_back(
+                    {&callout,
+                     m_calloutStyles.resolve(callout.type, callout.attributes, m_theme)});
+        }
+    }
+
     view.layout = std::make_unique<QTextLayout>(shown);
     view.layout->setCacheEnabled(true);
-    view.layout->setFont(fontFor(view.span));
+    // A callout may name its own body font, size and effects; everything else
+    // takes the font its kind implies.
+    view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(m_theme) : fontFor(view.span));
 
     QTextOption option;
     // `#| wrap: false` is Quarto asking for a listing that does not reflow;
@@ -1534,7 +1620,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     const qreal listIndent = view.span.kind == BlockSpan::Kind::List ? kListIndent : 0;
     const qreal codeGutter = codeGutterWidth(view);
-    const qreal lineHeight = lineHeightFor(view.span);
+    const qreal lineHeight = view.callout && view.calloutStyle.size > 0
+                                 ? view.calloutStyle.size * 1.5
+                                 : lineHeightFor(view.span);
     view.layout->beginLayout();
     qreal height = 0;
     while (true) {
@@ -1543,9 +1631,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             break;
         const qsizetype source = view.map.toSource(line.textStart());
         const ListItemSpan *item = listIndent > 0 ? listItemAt(source) : nullptr;
-        const qreal indent = listIndent > 0
-                                 ? listIndent * (1 + (item ? item->indent : 0))
-                                 : codeGutter;
+        const qreal nesting = kCalloutIndent * nestingDepthAt(view, source);
+        const qreal indent = nesting
+                             + (listIndent > 0 ? listIndent * (1 + (item ? item->indent : 0))
+                                               : codeGutter);
         line.setLineWidth(contentWidth() - indent
                           - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
         line.setPosition(QPointF(indent, height));
@@ -1560,11 +1649,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (view.span.kind == BlockSpan::Kind::Heading && m_mode != Mode::Source)
         view.textTop = blockSpacing();
 
-    view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
     if (view.callout) {
         // The title line is drawn by the callout header, so the body starts
         // below it; an empty callout still shows its title.
-        view.textTop = calloutHeaderHeight();
+        view.textTop = calloutHeaderHeight(view.calloutStyle);
         view.height = height;
     } else if (view.options) {
         view.textTop = codeHeaderHeight();
@@ -1672,8 +1760,12 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             continue;
         }
 
-        if (view.callout)
+        if (view.callout) {
             paintCallout(painter, view, left, top);
+            painter.setPen(view.calloutStyle.color.isValid() ? view.calloutStyle.color : text);
+        } else {
+            painter.setPen(text);
+        }
 
         if (view.span.kind == BlockSpan::Kind::Code) {
             paintCodeChrome(painter, view, left, top);
@@ -1718,6 +1810,13 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
         if (view.layout) {
             const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
             const qreal drop = view.textTop;
+            if (m_mode != Mode::Source) {
+                // Behind the text, outermost first: a nested callout's panel,
+                // then any listing's panel on top of it.
+                paintNestedCallouts(painter, view, left, top);
+                if (view.span.kind != BlockSpan::Kind::Code)
+                    paintNestedCodePanels(painter, view, left, top);
+            }
             // A listing that asked not to wrap runs off the end of its line;
             // the panel is where it stops, not the window.
             const bool clip = view.options && !view.options->wrap;

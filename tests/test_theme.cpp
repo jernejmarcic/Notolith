@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QTemporaryDir>
 
+#include "CalloutStyle.h"
 #include "Scheme.h"
 #include "Theme.h"
 
@@ -242,4 +243,104 @@ TEST(ThemeTest, OledIsTrueBlackAndCountsAsDark)
     EXPECT_EQ(Theme::modeFromName(QStringLiteral("oled")), Theme::Mode::Oled);
     EXPECT_EQ(Theme::modeFromName(QStringLiteral("light")), Theme::Mode::Light);
     EXPECT_EQ(Theme::modeFromName(QStringLiteral("nonsense")), Theme::Mode::Dark);
+}
+
+// --- callout styles -------------------------------------------------------
+
+TEST(CalloutStyle, HexAlphaIsCSSorder)
+{
+    // Qt reads eight hex digits as #AARRGGBB. CSS, and callouts.ini, put the
+    // alpha last, so a transparent fill must not come back opaque and wrong.
+    const QColor translucent = CalloutStyle::parseColor(QStringLiteral("#FF5A5F26"));
+    EXPECT_EQ(translucent.red(), 0xFF);
+    EXPECT_EQ(translucent.green(), 0x5A);
+    EXPECT_EQ(translucent.blue(), 0x5F);
+    EXPECT_EQ(translucent.alpha(), 0x26);
+
+    // The shorter forms, and the CSS functions Theme already knew, still work.
+    EXPECT_EQ(CalloutStyle::parseColor(QStringLiteral("#f00")), QColor(255, 0, 0));
+    EXPECT_EQ(CalloutStyle::parseColor(QStringLiteral("#00FF00")), QColor(0, 255, 0));
+    EXPECT_EQ(CalloutStyle::parseColor(QStringLiteral("rgba(0, 0, 255, 0.5)")).blue(), 255);
+    EXPECT_FALSE(CalloutStyle::parseColor(QStringLiteral("not a colour")).isValid());
+}
+
+TEST(CalloutStyle, ThreeLayersResolveInOrder)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("callouts.ini"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write(
+        "[deadline]\n"
+        "icon = zap        ; a trailing comment is not part of the value\n"
+        "bar = #FF5A5Fff\n"
+        "bg = #FF5A5F26\n"
+        "size = 17\n"
+        "style = bold italic\n"
+        "heading-size = 20\n"
+        "\n"
+        "[calm]\n"
+        "inherits = deadline\n"
+        "bar = #4C8DFFff\n"
+        "style = normal\n");
+    file.close();
+
+    const CalloutStyles styles = CalloutStyles::load(path);
+    EXPECT_EQ(styles.definedTypes(), QStringList({QStringLiteral("calm"),
+                                                  QStringLiteral("deadline")}));
+
+    const Theme theme = Theme::builtin(Theme::Mode::Dark);
+
+    // Layer one only: a built-in type is untouched by a file that omits it.
+    const CalloutStyle note = styles.resolve(QStringLiteral("note"), {}, theme);
+    EXPECT_EQ(note.icon, Theme::calloutIcon(QStringLiteral("note")));
+    EXPECT_EQ(note.bar, theme.calloutColor(QStringLiteral("note")));
+    EXPECT_EQ(note.size, 0); // defers to the theme
+
+    // Layer two: the file wins over the built-in type.
+    const CalloutStyle deadline = styles.resolve(QStringLiteral("deadline"), {}, theme);
+    EXPECT_EQ(deadline.icon, QStringLiteral("zap"));
+    EXPECT_EQ(deadline.bar, QColor(0xFF, 0x5A, 0x5F));
+    EXPECT_EQ(deadline.background.alpha(), 0x26);
+    EXPECT_EQ(deadline.size, 17);
+    EXPECT_EQ(deadline.weight, QFont::Bold);
+    EXPECT_TRUE(deadline.italic);
+    EXPECT_EQ(deadline.headingSize, 20);
+    // A heading with no colour of its own takes the rail's, as Obsidian does.
+    EXPECT_EQ(deadline.headingColor, deadline.bar);
+
+    // `inherits` carries the parent's fonts; the child's own keys still win,
+    // and `normal` clears an effect the parent set rather than adding to it.
+    const CalloutStyle calm = styles.resolve(QStringLiteral("calm"), {}, theme);
+    EXPECT_EQ(calm.icon, QStringLiteral("zap"));
+    EXPECT_EQ(calm.size, 17);
+    EXPECT_EQ(calm.headingSize, 20);
+    EXPECT_EQ(calm.bar, QColor(0x4C, 0x8D, 0xFF));
+    EXPECT_FALSE(calm.italic);
+    EXPECT_EQ(calm.weight, QFont::Normal);
+
+    // Layer three: what the callout itself says beats the file.
+    QMap<QString, QString> inline_;
+    inline_.insert(QStringLiteral("bg"), QStringLiteral("#00FF0022"));
+    inline_.insert(QStringLiteral("icon"), QStringLiteral("flame"));
+    const CalloutStyle overridden = styles.resolve(QStringLiteral("deadline"), inline_, theme);
+    EXPECT_EQ(overridden.icon, QStringLiteral("flame"));
+    EXPECT_EQ(overridden.background, QColor(0x00, 0xFF, 0x00, 0x22));
+    EXPECT_EQ(overridden.bar, QColor(0xFF, 0x5A, 0x5F)); // untouched by the override
+    EXPECT_EQ(overridden.size, 17);
+}
+
+TEST(CalloutStyle, MissingFileIsNormal)
+{
+    // Nobody has to create callouts.ini, so a file that is not there resolves
+    // to the built-in types rather than failing.
+    const CalloutStyles styles =
+        CalloutStyles::load(QStringLiteral("/nonexistent/callouts.ini"));
+    EXPECT_TRUE(styles.definedTypes().isEmpty());
+    const Theme theme = Theme::builtin(Theme::Mode::Dark);
+    const CalloutStyle warning = styles.resolve(QStringLiteral("warning"), {}, theme);
+    EXPECT_EQ(warning.bar, theme.calloutColor(QStringLiteral("warning")));
+    EXPECT_TRUE(warning.background.isValid());
+    EXPECT_LT(warning.background.alpha(), 255);
 }

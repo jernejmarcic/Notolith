@@ -603,6 +603,57 @@ TEST(CalloutTest, TypeTitleAndFoldMarker)
     EXPECT_TRUE(decorationsOf(QStringLiteral("> Just a quote.\n")).callouts.isEmpty());
 }
 
+TEST(CalloutTest, MetadataSlotCarriesStyle)
+{
+    // noteAppC's own styling rides in the `|` slot Obsidian already parses and
+    // ignores, so a styled note still opens there - just unstyled.
+    const Decorations styled = decorationsOf(
+        QStringLiteral("> [!deadline|bar=#FF5A5Fff bg=\"#FF5A5F26\" icon=zap] Ship it\n> Body.\n"));
+    ASSERT_EQ(styled.callouts.size(), 1);
+    const CalloutSpan &callout = styled.callouts.first();
+    EXPECT_EQ(callout.type, QStringLiteral("deadline"));
+    EXPECT_EQ(callout.title, QStringLiteral("Ship it"));
+    EXPECT_EQ(callout.attributes.value(QStringLiteral("bar")), QStringLiteral("#FF5A5Fff"));
+    EXPECT_EQ(callout.attributes.value(QStringLiteral("bg")), QStringLiteral("#FF5A5F26"));
+    EXPECT_EQ(callout.attributes.value(QStringLiteral("icon")), QStringLiteral("zap"));
+
+    // The fold marker still reads after the slot, and the whole marker is
+    // hidden, attributes included.
+    const QString folded = QStringLiteral("> [!tip|bg=#0F0F0F80]- Hidden\n> Body.\n");
+    const Decorations decorations = decorationsOf(folded);
+    ASSERT_EQ(decorations.callouts.size(), 1);
+    EXPECT_TRUE(decorations.callouts.first().foldable);
+    EXPECT_TRUE(decorations.callouts.first().collapsed);
+    EXPECT_EQ(sliceOf(folded, decorations.callouts.first().marker),
+              QStringLiteral("[!tip|bg=#0F0F0F80]-"));
+    EXPECT_EQ(rendered(folded), QStringLiteral("Body.\n"));
+
+    // The `:::` container carries the same keys in its braces.
+    const Decorations fenced = decorationsOf(
+        QStringLiteral("::: {.deadline bar=\"#FF5A5Fff\" title=\"Ship it\"}\nBody.\n:::\n"));
+    ASSERT_EQ(fenced.callouts.size(), 1);
+    EXPECT_EQ(fenced.callouts.first().type, QStringLiteral("deadline"));
+    EXPECT_EQ(fenced.callouts.first().attributes.value(QStringLiteral("bar")),
+              QStringLiteral("#FF5A5Fff"));
+}
+
+TEST(CalloutTest, NestingIsRecorded)
+{
+    const Decorations nested = decorationsOf(QStringLiteral(
+        "> [!tip] Outer\n> Outer body.\n> > [!info] Inner\n> > Inner body.\n"));
+    ASSERT_EQ(nested.callouts.size(), 2);
+    // Sorted by where they start, so the outer one comes first.
+    const CalloutSpan *outer = &nested.callouts.first();
+    const CalloutSpan *inner = &nested.callouts.last();
+    if (outer->depth > inner->depth)
+        std::swap(outer, inner);
+    EXPECT_EQ(outer->type, QStringLiteral("tip"));
+    EXPECT_EQ(outer->depth, 0);
+    EXPECT_EQ(inner->type, QStringLiteral("info"));
+    EXPECT_EQ(inner->depth, 1);
+    EXPECT_TRUE(outer->range.contains(inner->range.start));
+}
+
 TEST(CalloutTest, QuoteMarkersAreHidden)
 {
     EXPECT_EQ(rendered(QStringLiteral("> one\n> two\n")), QStringLiteral("one\ntwo\n"));
@@ -941,3 +992,4 @@ TEST(CodeOptionTest, HighlightCountsTheVisibleListingNotTheOptionLines)
     // Three lines of listing, so 9 is out of range and 1 and 3 survive.
     EXPECT_EQ(options.highlight, QList<int>({1, 3}));
 }
+

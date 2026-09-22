@@ -25,6 +25,11 @@ add_executable(test_theme test_theme.cpp)
 target_link_libraries(test_theme PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)
 add_test(NAME theme COMMAND test_theme)
 
+add_executable(test_icons test_icons.cpp)
+target_link_libraries(test_icons PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)
+add_test(NAME icons COMMAND test_icons)
+set_tests_properties(icons PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)

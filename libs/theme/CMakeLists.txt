@@ -3,6 +3,8 @@ add_library(noteAppC_theme STATIC
     Theme.h
     Scheme.cpp
     Scheme.h
+    CalloutStyle.cpp
+    CalloutStyle.h
     Icons.cpp
     Icons.h)
 
@@ -58,5 +60,8 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/x.svg
     icons/zap.svg)
 
+# Network is for Icons::icon(), which fetches a remote icon URL itself; the
+# root find_package asks for it, so nothing is requested twice here.
+
 target_include_directories(noteAppC_theme PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Svg)
+target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Svg Qt6::Network)

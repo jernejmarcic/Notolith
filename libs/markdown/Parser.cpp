@@ -126,7 +126,10 @@ EmbedSpan embedOf(const Link &link)
 /// them the way Obsidian does.
 void hideQuoteMarkers(const QString &text, const Range &range, Decorations &decorations)
 {
-    static const QRegularExpression marker(QStringLiteral("^[ \\t]*>[ \\t]?"),
+    // Every level at once: `> > ` in a nested quote is two markers, and the
+    // inner blockquote's own pass cannot reach the second one because `^`
+    // anchors it back to the start of the line.
+    static const QRegularExpression marker(QStringLiteral("^[ \\t]*(?:>[ \\t]?)+"),
                                            QRegularExpression::MultilineOption);
     auto it = marker.globalMatch(text, range.start);
     while (it.hasNext()) {
@@ -342,39 +345,6 @@ void detectDisplayMath(const QString &text, Decorations &decorations,
     }
 }
 
-/// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
-bool detectCallout(const QString &text, const Range &range, const SourceMap &map,
-                   Decorations &decorations)
-{
-    static const QRegularExpression head(
-        QStringLiteral("^[ \\t]*>[ \\t]*(\\[!([\\w-]+)\\]([+-])?)[ \\t]*(.*)$"));
-
-    const qsizetype lineEnd = map.lineEnd(map.lineAt(range.start));
-    const QString firstLine = text.mid(range.start, lineEnd - range.start);
-    const auto match = head.match(firstLine);
-    if (!match.hasMatch())
-        return false;
-
-    CalloutSpan callout;
-    callout.range = range;
-    callout.type = match.captured(2).toLower();
-    callout.foldable = !match.captured(3).isEmpty();
-    callout.collapsed = match.captured(3) == QLatin1String("-");
-    callout.title = match.captured(4).trimmed();
-    if (callout.title.isEmpty()) {
-        callout.title = callout.type;
-        callout.title[0] = callout.title.at(0).toUpper();
-    }
-    callout.marker = {range.start + match.capturedStart(1),
-                      range.start + match.capturedEnd(1)};
-
-    // The marker and the title line are drawn by the callout header, so the
-    // whole first line is syntax as far as the body layout is concerned.
-    decorations.syntax.append({range.start, qMin(range.start + firstLine.size() + 1, range.end)});
-    decorations.callouts.append(callout);
-    return true;
-}
-
 /// What a `:::` fence line says about its container: Pandoc's
 /// `{#id .class key="value"}` or the bare `name key="value"` form.
 struct FenceSpec {
@@ -409,6 +379,50 @@ FenceSpec parseFenceSpec(QString spec)
     return out;
 }
 
+/// `> [!note]+ Title` on the first line of a blockquote makes it a callout.
+bool detectCallout(const QString &text, const Range &range, const SourceMap &map, int depth,
+                   Decorations &decorations)
+{
+    // `[!type]`, `[!type]-`, and noteAppC's own `[!type|bar=#FF5A5Fff ...]`,
+    // which rides in the metadata slot Obsidian parses and ignores.
+    static const QRegularExpression head(
+        QStringLiteral("^[ \\t]*>[ \\t]*(\\[!([\\w-]+)(?:\\|([^\\]]*))?\\]([+-])?)[ \\t]*(.*)$"));
+
+    const qsizetype lineEnd = map.lineEnd(map.lineAt(range.start));
+    const QString firstLine = text.mid(range.start, lineEnd - range.start);
+    const auto match = head.match(firstLine);
+    if (!match.hasMatch())
+        return false;
+
+    CalloutSpan callout;
+    callout.range = range;
+    callout.depth = depth;
+    callout.type = match.captured(2).toLower();
+    callout.attributes = parseFenceSpec(match.captured(3)).attributes;
+    callout.foldable = !match.captured(4).isEmpty();
+    callout.collapsed = match.captured(4) == QLatin1String("-");
+    callout.title = match.captured(5).trimmed();
+    if (callout.title.isEmpty()) {
+        callout.title = callout.type;
+        callout.title[0] = callout.title.at(0).toUpper();
+    }
+    callout.marker = {range.start + match.capturedStart(1),
+                      range.start + match.capturedEnd(1)};
+
+    // A top-level callout's header is drawn by the painter, so its whole first
+    // line is syntax as far as the body layout is concerned. A nested one has
+    // no header of its own to draw into, so only its marker is hidden and the
+    // title stays in the layout, where the painter styles it in place.
+    if (depth == 0)
+        decorations.syntax.append({range.start, qMin(range.start + firstLine.size() + 1, range.end)});
+    else
+        decorations.syntax.append(callout.marker);
+    callout.titleRange = {range.start + match.capturedStart(5),
+                          range.start + match.capturedEnd(5)};
+    decorations.callouts.append(callout);
+    return true;
+}
+
 /// A `:::` container renders as a callout: by name for the 13 Obsidian types
 /// and for `details`, as a bordered block carrying its class for the rest.
 CalloutSpan calloutOf(const FenceSpec &spec, const Range &range, const Range &marker)
@@ -424,6 +438,7 @@ CalloutSpan calloutOf(const FenceSpec &spec, const Range &range, const Range &ma
         callout.title = callout.type;
         callout.title[0] = callout.title.at(0).toUpper();
     }
+    callout.attributes = spec.attributes;
     // A disclosure folds by definition; anything else only when `open` says so.
     const QString open = spec.attributes.value(QStringLiteral("open"));
     callout.foldable = !open.isEmpty() || callout.type == QLatin1String("details");
@@ -450,9 +465,12 @@ void scanColonFences(const QString &text, const QList<Range> &masked, Decoration
 
     const auto close = [&stack, &found, &decorations](const Range &end, qsizetype length) {
         while (!stack.isEmpty()) {
+            const int depth = int(stack.size()) - 1;
             const Open open = stack.takeLast();
             decorations.syntax.append(open.marker);
-            found.append(calloutOf(open.spec, {open.marker.start, end.end}, open.marker));
+            CalloutSpan span = calloutOf(open.spec, {open.marker.start, end.end}, open.marker);
+            span.depth = depth;
+            found.append(span);
             if (open.length <= length)
                 break;
         }
@@ -730,7 +748,7 @@ void walkItem(MD::Item *item, Walk &walk)
     }
     case MD::ItemType::Blockquote: {
         const Range range = rangeOf(*item, map);
-        const bool callout = walk.text && detectCallout(*walk.text, range, map, walk.decorations);
+        const bool callout = walk.text && detectCallout(*walk.text, range, map, walk.depth, walk.decorations);
         if (walk.depth == 0) {
             walk.decorations.blocks.append(
                 {callout ? BlockSpan::Kind::Callout : BlockSpan::Kind::Quote, range, 0});

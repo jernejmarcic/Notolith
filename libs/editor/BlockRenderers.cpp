@@ -432,6 +432,98 @@ qreal MarkdownEditor::codeGutterWidth(const BlockView &view) const
            + 14;
 }
 
+/// The vertical band a source range occupies inside a laid-out block, in the
+/// block's own coordinates - the top of its first display line to the bottom
+/// of its last.
+///
+/// Anything drawn *behind* text that is only part of a block needs this: a
+/// listing's panel inside a callout, and a nested callout's own panel. Returns
+/// an empty band when the range is hidden or falls outside the block.
+QRectF MarkdownEditor::bandOf(const BlockView &view, const Range &source) const
+{
+    if (!view.layout)
+        return {};
+    const Range shown = view.map.toDisplay(source);
+    if (shown.length() <= 0)
+        return {};
+
+    const QTextLine first = view.layout->lineForTextPosition(int(shown.start));
+    // The end offset is one past the last character, which on a line boundary
+    // belongs to the next line; step back so the band stops where the text does.
+    const QTextLine last = view.layout->lineForTextPosition(int(shown.end) - 1);
+    if (!first.isValid() || !last.isValid())
+        return {};
+    return QRectF(0, first.y(), 0, last.y() + last.height() - first.y());
+}
+
+/// Callouts inside a callout. Only the outermost one is a block with a header
+/// of its own; a nested one keeps its title in the layout, where the format
+/// pass styles it, and gets its panel and icon drawn here behind and beside
+/// the lines it covers.
+void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
+                                         qreal top) const
+{
+    for (const NestedCallout &nested : view.nested) {
+        const QRectF band = bandOf(view, nested.span->range);
+        if (band.height() <= 0)
+            continue;
+
+        const qreal inset = left + 14 + kCalloutIndent * (nested.span->depth - 1);
+        const QRectF panel(inset, top + view.textTop + band.y() - 4,
+                           qMax(qreal(40), left + contentWidth() - 14 - inset),
+                           band.height() + 8);
+        QPainterPath rounded;
+        rounded.addRoundedRect(panel, 6, 6);
+        painter.fillPath(rounded, nested.style.background);
+        painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), nested.style.bar);
+
+        // The icon goes in the step the nesting indent opened up, so it never
+        // collides with the title however large the title's font is.
+        const QRectF title = bandOf(view, nested.span->titleRange);
+        // The icon has to fit the step the indent opened, whatever size the
+        // style gives the title - a larger heading font must not push the icon
+        // out over the text.
+        const qreal iconSize = qMin(QFontMetricsF(nested.style.titleFont(m_theme)).height(),
+                                    kCalloutIndent - 8);
+        const QIcon icon = Icons::icon(nested.style.icon, nested.style.bar, int(iconSize));
+        if (!icon.isNull() && title.height() > 0) {
+            const QRectF iconRect(panel.left() + 5, top + view.textTop + title.y()
+                                                        + (title.height() - iconSize) / 2,
+                                  iconSize, iconSize);
+            icon.paint(&painter, iconRect.toRect());
+        }
+    }
+}
+
+/// The panel behind a fenced listing that sits inside a callout or a
+/// blockquote. A block-level listing gets this from paintCodeChrome; one
+/// nested inside another block has no block of its own to paint it, and a
+/// per-character background leaves gaps between the glyphs and stops dead at a
+/// wrapped line.
+void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &view, qreal left,
+                                           qreal top) const
+{
+    const QColor panelColour = m_theme.color(QStringLiteral("--background-primary-alt"));
+    for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        const StyleSpan &span = m_decorations.styles.at(i);
+        if (span.kind != StyleSpan::Kind::CodeBlock || !span.range.overlaps(view.span.range))
+            continue;
+        const QRectF band = bandOf(view, span.range);
+        if (band.height() <= 0)
+            continue;
+        // A listing inside a nested callout steps in with it, or its panel
+        // would cover the callout's own and hide the nesting entirely.
+        const qreal indent = (view.callout ? 14 : 0)
+                             + kCalloutIndent * nestingDepthAt(view, span.range.start);
+        QPainterPath rounded;
+        rounded.addRoundedRect(QRectF(left + indent - 6, top + view.textTop + band.y() - 3,
+                                      qMax(qreal(40), contentWidth() - indent - 8),
+                                      band.height() + 6),
+                               4, 4);
+        painter.fillPath(rounded, panelColour);
+    }
+}
+
 void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {

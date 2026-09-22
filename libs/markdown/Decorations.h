@@ -71,7 +71,21 @@ struct CalloutSpan {
     QString title;    ///< the text after the marker, or the type capitalised
     bool foldable = false;
     bool collapsed = false;
-    Range marker;     ///< `[!type]+` - hidden in live preview
+    Range marker;     ///< `[!type|...]+` - hidden in live preview
+    /// Where the title sits in the source. A nested callout keeps its title in
+    /// the layout rather than having it drawn for it, so the painter needs to
+    /// know which characters to style.
+    Range titleRange;
+    /// How deeply this callout is nested: 0 is a top-level one, 1 is a
+    /// callout inside a callout.
+    int depth = 0;
+    /// Styling written on the callout itself, which noteAppC takes in the
+    /// `|` metadata slot Obsidian already parses and ignores - so
+    /// `> [!note|bg=#00FF0022] Title` still opens correctly in Obsidian, just
+    /// unstyled. The `:::` container form puts the same keys in its braces.
+    /// Sorted, so resolving two layers is deterministic. libs/theme's
+    /// CalloutStyle knows what the keys mean; the parser only collects them.
+    QMap<QString, QString> attributes;
 };
 
 /// An `![[image.png]]` or `![alt](image.png)` embed, with the size Obsidian

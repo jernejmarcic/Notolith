@@ -22,9 +22,15 @@ class QCompleter;
 #include "Decorations.h"
 #include "DisplayMap.h"
 #include "Parser.h"
+#include "CalloutStyle.h"
 #include "Theme.h"
 
 namespace noteAppC {
+
+/// How far a callout inside a callout steps in. Wide enough for its own icon,
+/// which is drawn in the space this opens up. Shared, because the layout sets
+/// the indent and the renderers draw into it.
+constexpr qreal kCalloutIndent = 26;
 
 /// The editor engine: one widget, three modes, no drift between them.
 ///
@@ -187,6 +193,13 @@ private:
     /// One top-level block: the unit that is laid out, cached and revealed.
     /// Blocks outside the viewport carry an estimated height and no layout,
     /// which is what keeps a 200 kB note responsive.
+    /// A callout painted inside another block's layout, with the look it
+    /// resolved to.
+    struct NestedCallout {
+        const CalloutSpan *span = nullptr;
+        CalloutStyle style;
+    };
+
     struct BlockView {
         BlockSpan span;
         DisplayMap map;
@@ -213,6 +226,14 @@ private:
         /// Set when this block is a callout, so painting knows its colour,
         /// icon and title without looking the span up again.
         const CalloutSpan *callout = nullptr;
+        /// The callout's resolved look: the built-in type, then callouts.ini,
+        /// then whatever the callout itself says. Resolved before the block is
+        /// laid out, because it can change the body font and so the metrics.
+        CalloutStyle calloutStyle;
+        /// Callouts nested inside this block, outer first. Only the outermost
+        /// callout is a block of its own; the rest are painted into this one's
+        /// layout, which is why they are resolved before it is built.
+        std::vector<NestedCallout> nested;
         /// Set when this block is a fenced code block carrying `#|` options.
         const CodeOptions *options = nullptr;
         /// Filled instead of `layout` when this is the frontmatter and live
@@ -268,6 +289,12 @@ private:
     /// The panel, the header strip, the line-number gutter and the highlighted
     /// rows of a fenced code block.
     void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    QRectF bandOf(const BlockView &view, const Range &source) const;
+    int nestingDepthAt(const BlockView &view, qsizetype source) const;
+    void paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
+                             qreal top) const;
+    void paintNestedCodePanels(QPainter &painter, const BlockView &view, qreal left,
+                               qreal top) const;
     /// Panel and filename header for a source-file or PDF embed.
     void paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintCheckBox(QPainter &painter, const QRectF &rect, bool done) const;
@@ -313,7 +340,7 @@ private:
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
     /// Extra space a callout reserves for its title row.
-    qreal calloutHeaderHeight() const;
+    qreal calloutHeaderHeight(const CalloutStyle &style) const;
     QList<QTextLayout::FormatRange> formatsIn(const BlockView &view, const Range &source,
                                               const DisplayMap &map) const;
     const TableSpan *tableFor(const BlockView &view) const;
@@ -396,11 +423,15 @@ private:
     /// Kate-definition colours for a fenced code block, in the coordinates of
     /// that block's display string.
     QList<QTextLayout::FormatRange> codeFormatsFor(const BlockView &view) const;
+    QList<QTextLayout::FormatRange> nestedCodeFormatsFor(const BlockView &view) const;
     /// The code between the fences, and the language the fence declared.
     Range codeContentOf(const BlockView &view, QString *language) const;
     QFont fontFor(const BlockSpan &span) const;
 
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
+    /// `~/.config/noteAppC/callouts.ini`, read once and again on a theme
+    /// change, which is the moment a person who edited it will look.
+    CalloutStyles m_calloutStyles = CalloutStyles::load();
     Parser m_parser;
     CodeHighlighter m_code;
     MathRenderer m_math;

@@ -1,0 +1,165 @@
+// Icon resolution: a Lucide id from the bundled resource, a local file named
+// by an absolute or file:// path, and a remote URL that must never block a
+// repaint even when nothing is cached yet.
+
+#include <gtest/gtest.h>
+
+#include <QCryptographicHash>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
+#include <QGuiApplication>
+#include <QImage>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+
+#include "Icons.h"
+
+using namespace noteAppC;
+
+namespace {
+
+QString writeFile(const QString &path, const QByteArray &bytes)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(bytes);
+    return path;
+}
+
+// A minimal Lucide-shaped glyph: a filled square using currentColor, so the
+// same fixture also proves recolouring outside the bundled qrc resource.
+QByteArray glyphSVG()
+{
+    return QByteArrayLiteral(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+        "<rect x='0' y='0' width='24' height='24' fill='currentColor'/></svg>");
+}
+
+// True where the render actually painted in exactly this colour, opaque -
+// ignoring the anti-aliased rim a stroke leaves at the edge.
+bool containsOpaquePixel(const QImage &image, const QColor &color)
+{
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QRgb pixel = image.pixel(x, y);
+            if (qAlpha(pixel) == 255 && qRed(pixel) == color.red()
+                && qGreen(pixel) == color.green() && qBlue(pixel) == color.blue())
+                return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+class IconsTest : public ::testing::Test {
+protected:
+    void TearDown() override { Icons::clearCache(); }
+};
+
+TEST_F(IconsTest, LucideIDStillResolvesAndIsRecoloured)
+{
+    const QIcon icon = Icons::icon(QStringLiteral("check"), QColor(255, 0, 0), 48);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_TRUE(containsOpaquePixel(icon.pixmap(48, 48).toImage(), QColor(255, 0, 0)));
+}
+
+TEST_F(IconsTest, UnknownNameReturnsANullIcon)
+{
+    EXPECT_TRUE(Icons::icon(QStringLiteral("not-a-real-icon"), QColor(Qt::black), 24).isNull());
+}
+
+TEST_F(IconsTest, LocalSVGFileLoadsAndIsRecoloured)
+{
+    QTemporaryDir dir;
+    const QString path = writeFile(dir.filePath(QStringLiteral("glyph.svg")), glyphSVG());
+
+    const QIcon icon = Icons::icon(path, QColor(0, 200, 0), 32);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_TRUE(containsOpaquePixel(icon.pixmap(32, 32).toImage(), QColor(0, 200, 0)));
+}
+
+TEST_F(IconsTest, LocalRasterFileScalesWithoutDistortionAndIsNeverTinted)
+{
+    QTemporaryDir dir;
+
+    // Twice as wide as tall: fitted into a square it must letterbox, not
+    // stretch to fill it - and "recolour" must leave its own colour alone.
+    QImage source(100, 50, QImage::Format_ARGB32);
+    source.fill(QColor(30, 60, 200));
+    const QString path = dir.filePath(QStringLiteral("photo.png"));
+    ASSERT_TRUE(source.save(path, "PNG"));
+
+    const int size = 40;
+    const QIcon icon = Icons::icon(path, QColor(255, 0, 0), size); // red is a decoy
+    ASSERT_FALSE(icon.isNull());
+    const QImage rendered = icon.pixmap(size, size).toImage();
+
+    // The letterboxed strip above the centred image: nothing painted there.
+    EXPECT_EQ(qAlpha(rendered.pixel(size / 2, 2)), 0);
+    // The image itself, centred, in its own colour - never the requested tint.
+    const QRgb centre = rendered.pixel(size / 2, size / 2);
+    EXPECT_EQ(qAlpha(centre), 255);
+    EXPECT_EQ(qRed(centre), 30);
+    EXPECT_EQ(qGreen(centre), 60);
+    EXPECT_EQ(qBlue(centre), 200);
+}
+
+TEST_F(IconsTest, UncachedRemoteURLreturnsImmediatelyWithoutBlocking)
+{
+    QSignalSpy ready(Icons::notifier(), SIGNAL(iconReady(QString)));
+
+    QElapsedTimer timer;
+    timer.start();
+    const QIcon icon = Icons::icon(QStringLiteral("https://example.invalid/never-cached.svg"),
+                                   QColor(Qt::white), 24);
+    // Generous on purpose: the point is "did not wait on a socket", not a
+    // tight budget - a live network reply never completes synchronously here
+    // because nothing ever pumps this test's event loop.
+    EXPECT_LT(timer.elapsed(), 200);
+    EXPECT_TRUE(icon.isNull());
+    EXPECT_EQ(ready.count(), 0);
+}
+
+TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+
+    const QString url = QStringLiteral("https://example.invalid/deadline.svg");
+    // Reproduces Icons' own cache key - sha256 of the URL, named for the
+    // URL's own suffix - without exposing it as API. If that scheme ever
+    // drifts, this stops finding the file the test planted and fails, which
+    // is the point of pinning it here rather than just asserting "some path".
+    const QByteArray hash =
+        QCryptographicHash::hash(url.toUtf8(), QCryptographicHash::Sha256).toHex();
+    const QString cachePath =
+        QDir(cacheHome.path())
+            .filePath(QStringLiteral("noteAppC/icons/%1.svg").arg(QString::fromLatin1(hash)));
+    writeFile(cachePath, glyphSVG());
+
+    const QIcon first = Icons::icon(url, QColor(0, 0, 255), 32);
+    ASSERT_FALSE(first.isNull());
+    EXPECT_TRUE(containsOpaquePixel(first.pixmap(32, 32).toImage(), QColor(0, 0, 255)));
+
+    // Asking again must derive the same key, not a fresh in-flight fetch.
+    const QIcon second = Icons::icon(url, QColor(0, 0, 255), 32);
+    EXPECT_FALSE(second.isNull());
+}
+
+int main(int argc, char **argv)
+{
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    // Icons::icon() reads XDG_CACHE_HOME on every call rather than caching
+    // the directory once, so pointing it at a throwaway directory here keeps
+    // every test - even ones that never touch it directly - off the
+    // developer's real ~/.cache.
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    QGuiApplication app(argc, argv);
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}
