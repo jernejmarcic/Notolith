@@ -13,6 +13,7 @@
 
 class QCompleter;
 
+#include "CodeHighlighter.h"
 #include "Decorations.h"
 #include "DisplayMap.h"
 #include "Parser.h"
@@ -154,10 +155,16 @@ private:
     void insertCompletion(const QString &completion);
 
     QList<QTextLayout::FormatRange> formatsFor(const BlockView &view) const;
+    /// Kate-definition colours for a fenced code block, in the coordinates of
+    /// that block's display string.
+    QList<QTextLayout::FormatRange> codeFormatsFor(const BlockView &view) const;
+    /// The code between the fences, and the language the fence declared.
+    Range codeContentOf(const BlockView &view, QString *language) const;
     QFont fontFor(const BlockSpan &span) const;
 
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     Parser m_parser;
+    CodeHighlighter m_code;
     Mode m_mode = Mode::LivePreview;
 
     QString m_text;

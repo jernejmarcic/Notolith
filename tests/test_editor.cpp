@@ -164,6 +164,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include <QApplication>
 #include <QTest>
 
+#include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
 
 namespace {
@@ -316,6 +317,47 @@ TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
                 note.size() / 1024.0, milliseconds,
                 (long long)editor->displayText().count(QLatin1Char('\n')));
     EXPECT_LT(milliseconds, 300.0);
+}
+
+TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
+{
+    CodeHighlighter highlighter;
+
+    EXPECT_EQ(CodeHighlighter::kateNameFor(QStringLiteral("cpp")), QStringLiteral("C++"));
+    EXPECT_EQ(CodeHighlighter::kateNameFor(QStringLiteral("py")), QStringLiteral("Python"));
+    EXPECT_EQ(CodeHighlighter::kateNameFor(QStringLiteral("sh")), QStringLiteral("Bash"));
+    // An unknown id passes through rather than being mangled.
+    EXPECT_EQ(CodeHighlighter::kateNameFor(QStringLiteral("Rust")), QStringLiteral("Rust"));
+
+    EXPECT_TRUE(highlighter.knows(QStringLiteral("cpp")));
+    EXPECT_TRUE(highlighter.knows(QStringLiteral("python")));
+    EXPECT_FALSE(highlighter.knows(QStringLiteral("not-a-language")));
+    EXPECT_FALSE(highlighter.knows(QString()));
+}
+
+TEST(CodeHighlighterTest, ColoursTokensAndLeavesUnknownLanguagesAlone)
+{
+    CodeHighlighter highlighter;
+    const QString code = QStringLiteral("int x = 42; // comment\nreturn x;\n");
+
+    const auto formats = highlighter.highlight(code, QStringLiteral("cpp"));
+    ASSERT_FALSE(formats.isEmpty());
+    for (const QTextLayout::FormatRange &range : formats) {
+        EXPECT_GE(range.start, 0);
+        EXPECT_GT(range.length, 0);
+        EXPECT_LE(range.start + range.length, code.size());
+    }
+
+    // The keyword on the second line must be found too, so the per-line
+    // offset bookkeeping is right.
+    const int secondLine = int(code.indexOf(QStringLiteral("return")));
+    bool sawReturn = false;
+    for (const QTextLayout::FormatRange &range : formats)
+        sawReturn = sawReturn || range.start == secondLine;
+    EXPECT_TRUE(sawReturn);
+
+    EXPECT_TRUE(highlighter.highlight(code, QStringLiteral("not-a-language")).isEmpty());
+    EXPECT_TRUE(highlighter.highlight(QString(), QStringLiteral("cpp")).isEmpty());
 }
 
 int main(int argc, char **argv)

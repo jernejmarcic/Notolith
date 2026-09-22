@@ -6,6 +6,7 @@
 #include <QCompleter>
 #include <QKeyEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QScrollBar>
 #include <QStringListModel>
 #include <QtConcurrent>
@@ -157,6 +158,7 @@ MarkdownEditor::~MarkdownEditor()
 void MarkdownEditor::setTheme(const Theme &theme)
 {
     m_theme = theme;
+    m_code.setTheme(theme);
     m_lineHeights.clear();
     invalidateLayouts();
     setFont(theme.textFont());
@@ -365,7 +367,10 @@ qreal MarkdownEditor::lineHeightFor(const BlockSpan &span) const
     if (cached != m_lineHeights.constEnd())
         return *cached;
 
-    const qreal height = QFontMetricsF(fontFor(span)).height() * 1.5;
+    // Prose breathes at 1.5; code is tighter, as it is in Obsidian.
+    const bool tight = span.kind == BlockSpan::Kind::Code
+                       || span.kind == BlockSpan::Kind::Frontmatter;
+    const qreal height = QFontMetricsF(fontFor(span)).height() * (tight ? 1.3 : 1.5);
     m_lineHeights.insert(key, height);
     return height;
 }
@@ -506,11 +511,14 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
             format.setFontStrikeOut(true);
             break;
         case StyleSpan::Kind::InlineCode:
-        case StyleSpan::Kind::CodeBlock:
             format.setFont(m_theme.monospaceFont());
             format.setForeground(codeColour);
             format.setBackground(codeBackground);
             break;
+        case StyleSpan::Kind::CodeBlock:
+            // The panel behind it is painted by the block; the token colours
+            // come from KSyntaxHighlighting, applied after these.
+            continue;
         case StyleSpan::Kind::Link:
         case StyleSpan::Kind::Tag:
             format.setForeground(accent);
@@ -529,6 +537,56 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
         }
         add(span.range, format);
     }
+    formats += codeFormatsFor(view);
+    return formats;
+}
+
+Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) const
+{
+    Range content = view.span.range;
+
+    // The fences, and the language tag on the opening one, are syntax; what
+    // is left between them is the code.
+    for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+        const Range &marker = m_decorations.syntax.at(i);
+        if (marker.start <= content.start)
+            content.start = qMax(content.start, marker.end);
+        if (marker.end >= content.end)
+            content.end = qMin(content.end, marker.start);
+    }
+    while (content.start < content.end && m_text.at(content.start) == QLatin1Char('\n'))
+        ++content.start;
+
+    if (language) {
+        for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+            const StyleSpan &span = m_decorations.styles.at(i);
+            if (span.kind == StyleSpan::Kind::CodeBlock && span.range.overlaps(view.span.range)) {
+                *language = span.payload;
+                break;
+            }
+        }
+    }
+    return content;
+}
+
+QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &view) const
+{
+    if (view.span.kind != BlockSpan::Kind::Code)
+        return {};
+
+    QString language;
+    const Range content = codeContentOf(view, &language);
+    if (!content.isValid() || content.length() <= 0 || language.isEmpty())
+        return {};
+
+    const QString code = m_text.mid(content.start, content.length());
+    QList<QTextLayout::FormatRange> formats = m_code.highlight(code, language);
+
+    // Highlighter offsets are relative to the code; the layout wants display
+    // offsets. Nothing inside a fence is ever hidden, so the shift is uniform.
+    const qsizetype shift = view.map.toDisplay(content.start);
+    for (QTextLayout::FormatRange &range : formats)
+        range.start += int(shift);
     return formats;
 }
 
@@ -577,7 +635,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setTextOption(option);
     view.layout->setFormats(formatsFor(view));
 
-    const qreal lineHeight = QFontMetricsF(view.layout->font()).height() * 1.5;
+    const qreal lineHeight = lineHeightFor(view.span);
     const qreal headingAir = view.span.kind == BlockSpan::Kind::Heading ? lineHeight * 0.4 : 0;
     view.layout->beginLayout();
     qreal height = 0;
@@ -684,9 +742,24 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             break;
 
         if (view.span.kind == BlockSpan::Kind::Code) {
-            QRectF background(left - 12, top - 6, contentWidth() + 24, view.height + 12);
-            painter.fillRect(background,
-                             m_theme.color(QStringLiteral("--background-primary-alt")));
+            const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+            QPainterPath rounded;
+            rounded.addRoundedRect(panel, 6, 6);
+            painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
+
+            QString language;
+            codeContentOf(view, &language);
+            if (!language.isEmpty()) {
+                painter.save();
+                QFont badge = m_theme.uiFont();
+                badge.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+                painter.setFont(badge);
+                painter.setPen(m_theme.color(QStringLiteral("--text-faint")));
+                painter.drawText(panel.adjusted(0, 4, -10, 0),
+                                 Qt::AlignTop | Qt::AlignRight, language);
+                painter.restore();
+                painter.setPen(text);
+            }
         }
 
         QList<QTextLayout::FormatRange> selectionRanges;

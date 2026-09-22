@@ -89,7 +89,8 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_indexer, &Indexer::finished, this, [this](int indexed, qint64 milliseconds) {
         statusBar()->showMessage(indexed > 0
-                                     ? tr("Indexed %1 notes in %2 ms").arg(indexed).arg(milliseconds)
+                                     ? tr("Indexed %n note(s) in %1 ms", nullptr, indexed)
+                                           .arg(milliseconds)
                                      : tr("Index up to date"),
                                  4000);
         onIndexChanged();
