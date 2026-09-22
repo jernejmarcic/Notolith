@@ -11,6 +11,7 @@
 class QFileSystemModel;
 class QLabel;
 class QModelIndex;
+class QStackedWidget;
 class QTabBar;
 class QToolButton;
 class QTreeView;
@@ -19,7 +20,9 @@ namespace noteAppC {
 
 class BacklinksPane;
 class MarkdownEditor;
+class OutgoingLinksPane;
 class QuickSwitcher;
+class TagsPane;
 
 /// Phase 0 shell, wearing Obsidian's chrome: ribbon, file explorer, tab strip,
 /// inline title, status bar, dark by default. The workspace splits, command
@@ -74,6 +77,11 @@ private:
     void openRelative(const QString &relativePath);
     QToolButton *iconButton(const QString &objectName, const QString &icon,
                             const QString &tooltip, int size);
+    /// One icon-only button in the right sidebar's tab strip; muted, accented
+    /// while its pane is showing.
+    QToolButton *rightSidebarTabButton(QWidget *parent, const QString &objectName,
+                                       const QString &icon, const QString &tooltip, int index);
+    void updateTabButtonIcon(QToolButton *button);
 
     Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     Vault m_vault;
@@ -91,7 +99,11 @@ private:
     QLabel *m_wordCount = nullptr;
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;
+    QWidget *m_rightSidebar = nullptr;
+    QStackedWidget *m_rightPanes = nullptr;
     BacklinksPane *m_backlinks = nullptr;
+    TagsPane *m_tags = nullptr;
+    OutgoingLinksPane *m_outgoingLinks = nullptr;
     QuickSwitcher *m_switcher = nullptr;
     QToolButton *m_themeButton = nullptr;
 };

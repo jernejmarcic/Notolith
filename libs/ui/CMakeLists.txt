@@ -5,7 +5,11 @@ add_library(noteAppC_ui STATIC
     QuickSwitcher.cpp
     QuickSwitcher.h
     BacklinksPane.cpp
-    BacklinksPane.h)
+    BacklinksPane.h
+    TagsPane.cpp
+    TagsPane.h
+    OutgoingLinksPane.cpp
+    OutgoingLinksPane.h)
 
 set_target_properties(noteAppC_ui PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

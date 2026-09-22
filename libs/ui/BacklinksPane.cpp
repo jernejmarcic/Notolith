@@ -13,7 +13,7 @@ namespace noteAppC {
 BacklinksPane::BacklinksPane(QWidget *parent)
     : QWidget(parent)
 {
-    setObjectName(QStringLiteral("rightSidebar"));
+    setObjectName(QStringLiteral("backlinksPane"));
 
     m_header = new QLabel(tr("Linked mentions"), this);
     m_header->setObjectName(QStringLiteral("paneHeader"));

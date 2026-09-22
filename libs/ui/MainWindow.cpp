@@ -8,9 +8,11 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QButtonGroup>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QTabBar>
 #include <QToolButton>
@@ -20,7 +22,9 @@
 #include "BacklinksPane.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "OutgoingLinksPane.h"
 #include "QuickSwitcher.h"
+#include "TagsPane.h"
 
 namespace noteAppC {
 
@@ -108,7 +112,7 @@ MainWindow::MainWindow(QWidget *parent)
     splitter->restoreState(settings.value(kSplitter).toByteArray());
     if (splitter->sizes().value(0) <= 0)
         splitter->setSizes({260, 640, 260});
-    m_backlinks->setVisible(settings.value(kRightSidebar, true).toBool());
+    m_rightSidebar->setVisible(settings.value(kRightSidebar, true).toBool());
 
     const QString last = settings.value(kLastVault).toString();
     if (!last.isEmpty() && QFileInfo(last).isDir())
@@ -299,13 +303,93 @@ QWidget *MainWindow::buildMainArea()
     return main;
 }
 
+QToolButton *MainWindow::rightSidebarTabButton(QWidget *parent, const QString &objectName,
+                                               const QString &icon, const QString &tooltip,
+                                               int index)
+{
+    auto *button = new QToolButton(parent);
+    button->setObjectName(objectName);
+    button->setToolTip(tooltip);
+    button->setAutoRaise(true);
+    button->setCheckable(true);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setIconSize(QSize(16, 16));
+    button->setProperty("iconName", icon);
+    connect(button, &QToolButton::toggled, this, [this, button](bool) { updateTabButtonIcon(button); });
+    connect(button, &QToolButton::clicked, this, [this, index] { m_rightPanes->setCurrentIndex(index); });
+    return button;
+}
+
+void MainWindow::updateTabButtonIcon(QToolButton *button)
+{
+    const QString name = button->property("iconName").toString();
+    if (name.isEmpty())
+        return;
+    const QColor color = button->isChecked() ? m_theme.color(QStringLiteral("--interactive-accent"))
+                                              : m_theme.color(QStringLiteral("--text-muted"));
+    button->setIcon(Icons::icon(name, color, button->iconSize().width()));
+}
+
 QWidget *MainWindow::buildRightSidebar()
 {
-    m_backlinks = new BacklinksPane(this);
-    m_backlinks->setMinimumWidth(200);
+    m_rightSidebar = new QWidget(this);
+    m_rightSidebar->setObjectName(QStringLiteral("rightSidebar"));
+    m_rightSidebar->setMinimumWidth(200);
+
+    auto *tabRow = new QWidget(m_rightSidebar);
+    tabRow->setObjectName(QStringLiteral("rightSidebarTabs"));
+    auto *tabLayout = new QHBoxLayout(tabRow);
+    tabLayout->setContentsMargins(6, 6, 6, 2);
+    tabLayout->setSpacing(2);
+
+    m_backlinks = new BacklinksPane(m_rightSidebar);
     m_backlinks->setIndex(&m_index);
     connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
-    return m_backlinks;
+
+    m_tags = new TagsPane(m_rightSidebar);
+    m_tags->setIndex(&m_index);
+    connect(m_tags, &TagsPane::tagActivated, this, [this](const QString &tag) {
+        // TODO(Phase 5): hand the tag to the search pane instead of jumping
+        // straight to the first note that carries it.
+        const QStringList notes = m_index.notesWithTag(tag);
+        if (!notes.isEmpty())
+            openRelative(notes.first());
+    });
+
+    m_outgoingLinks = new OutgoingLinksPane(m_rightSidebar);
+    m_outgoingLinks->setIndex(&m_index);
+    connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
+
+    m_rightPanes = new QStackedWidget(m_rightSidebar);
+    m_rightPanes->setObjectName(QStringLiteral("rightSidebarPanes"));
+    m_rightPanes->addWidget(m_backlinks);
+    m_rightPanes->addWidget(m_tags);
+    m_rightPanes->addWidget(m_outgoingLinks);
+
+    auto *group = new QButtonGroup(tabRow);
+    group->setExclusive(true);
+    QToolButton *backlinksTab = rightSidebarTabButton(
+        tabRow, QStringLiteral("backlinksTabButton"), QStringLiteral("quote"), tr("Backlinks"), 0);
+    QToolButton *tagsTab = rightSidebarTabButton(tabRow, QStringLiteral("tagsTabButton"),
+                                                 QStringLiteral("list"), tr("Tags"), 1);
+    QToolButton *outgoingTab =
+        rightSidebarTabButton(tabRow, QStringLiteral("outgoingLinksTabButton"),
+                              QStringLiteral("chevron-right"), tr("Outgoing links"), 2);
+    group->addButton(backlinksTab);
+    group->addButton(tagsTab);
+    group->addButton(outgoingTab);
+    tabLayout->addWidget(backlinksTab);
+    tabLayout->addWidget(tagsTab);
+    tabLayout->addWidget(outgoingTab);
+    tabLayout->addStretch(1);
+    backlinksTab->setChecked(true);
+
+    auto *layout = new QVBoxLayout(m_rightSidebar);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(tabRow);
+    layout->addWidget(m_rightPanes, 1);
+    return m_rightSidebar;
 }
 
 void MainWindow::buildActions()
@@ -335,8 +419,8 @@ void MainWindow::toggleSidebar()
 
 void MainWindow::toggleRightSidebar()
 {
-    m_backlinks->setVisible(!m_backlinks->isVisible());
-    QSettings().setValue(kRightSidebar, m_backlinks->isVisible());
+    m_rightSidebar->setVisible(!m_rightSidebar->isVisible());
+    QSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
 }
 
 void MainWindow::openQuickSwitcher()
@@ -365,6 +449,8 @@ void MainWindow::onIndexChanged()
 {
     m_editor->setLinkTargets(m_index.linkTargets());
     m_backlinks->refresh();
+    m_tags->refresh();
+    m_outgoingLinks->refresh();
     if (m_index.isOpen() && m_notePath.isEmpty())
         m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }
@@ -397,18 +483,25 @@ void MainWindow::applyTheme()
     }
 
     const QColor iconColor = m_theme.color(QStringLiteral("--text-muted"));
+    const QColor accentColor = m_theme.color(QStringLiteral("--interactive-accent"));
     if (m_themeButton)
         m_themeButton->setProperty("iconName", m_theme.isDark() ? QStringLiteral("sun")
                                                                 : QStringLiteral("moon"));
     for (QToolButton *button : findChildren<QToolButton *>()) {
         const QString name = button->property("iconName").toString();
-        if (!name.isEmpty())
-            button->setIcon(Icons::icon(name, iconColor, button->iconSize().width()));
+        if (name.isEmpty())
+            continue;
+        // A checked right-sidebar tab button is the active one: accented,
+        // like Obsidian's own tab headers.
+        const QColor color = button->isChecked() ? accentColor : iconColor;
+        button->setIcon(Icons::icon(name, color, button->iconSize().width()));
     }
 
     setFont(m_theme.uiFont());
     m_tree->setFont(m_theme.uiFont());
     m_editor->setTheme(m_theme);
+    m_tags->setTheme(m_theme);
+    m_outgoingLinks->setTheme(m_theme);
     m_editor->setContentWidth(m_theme.value(QStringLiteral("--file-line-width")).toInt());
     // The inline title shares the editor's centred column.
     const int side = qMax(24, (m_editor->width()
@@ -447,6 +540,7 @@ void MainWindow::openVault(const QString &path)
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     m_vaultName->setText(m_vault.name());
     m_backlinks->setNote(QString());
+    m_outgoingLinks->setNote(QString());
     m_indexer->setVault(m_vault);
     QSettings().setValue(kLastVault, m_vault.root());
 
@@ -501,6 +595,7 @@ void MainWindow::openNote(const QString &path)
         m_tabs->setTabText(0, title);
 
     m_backlinks->setNote(path);
+    m_outgoingLinks->setNote(path);
     updateTitle();
     updateWordCount();
 }
