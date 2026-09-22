@@ -8,8 +8,29 @@ Plan and feature inventory:
 
 ## Status
 
-Phase 0 (bootstrap): opens a vault, shows the file tree, edits a note in a
-plain text widget, saves atomically. The real editor engine is Phase 2.
+Usable for reading and editing a vault. Phases 0 to 2 of the plan are done and
+Phase 3 is under way.
+
+- **Vault** - open, file tree, byte-exact atomic save (CRLF and BOM preserved).
+- **Markdown** - md4qt with a source pass for Obsidian's own syntax, so every
+  offset stays exact.
+- **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
+  Obsidian's link resolution order, backlinks. 1638 notes in 0.76 s.
+- **Editor** - one engine, three modes: live preview, source and reading.
+  Viewport-only layout, incremental edits, debounced parse off the UI thread.
+  0.09 ms per keystroke on a 200 kB note, against an 8 ms budget.
+- **Rendered inline** - headings, emphasis, highlight, links and wikilinks,
+  lists, checkboxes, tables as a grid, callouts, image embeds, fenced code
+  with syntax highlighting, line numbers in source mode.
+- **Shell** - Obsidian's chrome: ribbon, file explorer, tab strip, inline
+  title, status bar, backlinks pane, quick switcher, `[[` autocomplete.
+- **Themes** - dark by default, Obsidian's own token names and values, custom
+  colour schemes, and an importer for the palette of any Obsidian theme
+  already installed in the vault.
+
+Not yet: math, `:::` containers, properties table, graph view, canvas, search
+grammar, HTML blocks, PDF and media embeds. Never: plugins in JavaScript,
+Sync, Publish.
 
 ## Build
 
@@ -19,5 +40,13 @@ cmake --build build
 ./build/apps/noteAppC/noteAppC
 ```
 
-Requires `qt6-base`, `cmake`, `ninja`, a C++20 compiler, and `gtest` for the
-tests (`ctest --test-dir build`).
+Requires `qt6-base`, `yaml-cpp`, `cmake`, `ninja`, a C++20 compiler, and
+`gtest` for the tests (`ctest --test-dir build`). md4qt is fetched at
+configure time.
+
+Render the window to a PNG without a display, which is how the look is
+reviewed:
+
+```sh
+./build/tools/noteAppC_shot <vault> <note> out.png dark 1180 760
+```
