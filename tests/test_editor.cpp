@@ -176,6 +176,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
+#include "Parser.h"
 #include "MathRenderer.h"
 #include "PdfPage.h"
 
@@ -1548,4 +1549,61 @@ TEST(CodeLabelTest, OptionLinesAreNotCopied)
         QStringLiteral("```python\n#| title: Setup\nprint(1)\n```\n\nafter\n"));
     ASSERT_TRUE(clickLabelUntilCopied(*editor)) << "no label in the header strip";
     EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("print(1)"));
+}
+
+// --- folding a callout inside a callout -------------------------------------
+
+namespace {
+
+/// Where the parser says the nested callout starts - the key its fold state
+/// lives under - rather than an offset the test would have to guess.
+qsizetype nestedCalloutStart(const QString &text)
+{
+    const Decorations decorations = Parser().parseAll(text).decorations;
+    for (const CalloutSpan &callout : decorations.callouts) {
+        if (callout.depth > 0)
+            return callout.range.start;
+    }
+    return -1;
+}
+
+} // namespace
+
+TEST(NestedCalloutTest, AMinusStartsFoldedAndOpensAgain)
+{
+    // The empty `>` line is what steps back out to the outer callout. Without
+    // it, `> Back out.` would be a lazy continuation of the inner paragraph -
+    // CommonMark's rule, which md4qt and Obsidian both follow - and folding
+    // would rightly hide it with the rest of the inner callout.
+    const QString note = QStringLiteral(
+        "> [!tip] Outer\n> Outer body.\n> > [!info]- Inner\n> > Hidden body.\n>\n> Back out.\n");
+    auto editor = editorWith(note);
+    const qsizetype inner = nestedCalloutStart(note);
+    ASSERT_GE(inner, 0);
+
+    EXPECT_TRUE(editor->isFoldedAt(inner));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("Hidden body")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("Inner")))
+        << "the title stays, to be clicked open";
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("Back out")))
+        << "folding the inner callout must not swallow the outer one's text";
+
+    editor->toggleFoldAt(inner);
+    EXPECT_FALSE(editor->isFoldedAt(inner));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("Hidden body")));
+    EXPECT_EQ(editor->noteText(), note) << "folding is a view, never an edit";
+}
+
+TEST(NestedCalloutTest, APlusStartsOpenAndFolds)
+{
+    const QString note = QStringLiteral(
+        "> [!tip] Outer\n> Outer body.\n> > [!info]+ Inner\n> > Shown body.\n");
+    auto editor = editorWith(note);
+    const qsizetype inner = nestedCalloutStart(note);
+    ASSERT_GE(inner, 0);
+
+    EXPECT_FALSE(editor->isFoldedAt(inner));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("Shown body")));
+    editor->toggleFoldAt(inner);
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("Shown body")));
 }

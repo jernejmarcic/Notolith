@@ -93,6 +93,16 @@ void MarkdownEditor::setFolded(const BlockView &view, bool folded)
 
 void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
 {
+    // A nested callout is not a block, so it is looked up by its own start.
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset) {
+            m_folds.insert(sourceOffset, !m_folds.value(sourceOffset, callout.collapsed));
+            invalidateLayouts();
+            updateLayout();
+            viewport()->update();
+            return;
+        }
+    }
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return;
@@ -102,6 +112,10 @@ void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
 
 bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
 {
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset)
+            return m_folds.value(sourceOffset, callout.collapsed);
+    }
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return false;
@@ -145,6 +159,14 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             break;
         if (!view.laidOut)
             continue;
+
+        for (const NestedCallout &nested : view.nested) {
+            if (nested.span->foldable
+                && nestedFoldHandleRect(view, nested, left, top).adjusted(-6, -6, 6, 6).contains(point)) {
+                toggleFoldAt(nested.span->range.start);
+                return true;
+            }
+        }
 
         if (view.span.kind == BlockSpan::Kind::Code) {
             const CodeLabel label = codeLabelOf(view, left, top);
@@ -503,7 +525,25 @@ void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &vie
                                   iconSize, iconSize);
             icon.paint(&painter, iconRect.toRect());
         }
+        if (nested.span->foldable) {
+            paintFoldArrow(painter, nestedFoldHandleRect(view, nested, left, top),
+                           m_folds.value(nested.span->range.start, nested.span->collapsed),
+                           nested.style.bar);
+        }
     }
+}
+
+/// Where a nested callout's fold arrow sits: the right end of its title row,
+/// inside its own panel. One function for painting and for clicking.
+QRectF MarkdownEditor::nestedFoldHandleRect(const BlockView &view, const NestedCallout &nested,
+                                            qreal left, qreal top) const
+{
+    const QRectF title = bandOf(view, nested.span->titleRange);
+    if (title.height() <= 0)
+        return {};
+    const qreal right = left + contentWidth() - 14 - 6;
+    const qreal y = top + view.textTop + title.y() + (title.height() - kFoldHandle) / 2;
+    return QRectF(right - kFoldHandle, y, kFoldHandle, kFoldHandle);
 }
 
 /// The panel behind a fenced listing that sits inside a callout or a

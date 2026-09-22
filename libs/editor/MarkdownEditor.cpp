@@ -402,6 +402,31 @@ void MarkdownEditor::setContentWidth(int pixels)
     viewport()->update();
 }
 
+/// The body of every folded callout nested in this block, as ranges to hide.
+/// A nested callout lives inside its parent's layout, so folding one is just
+/// hiding its lines like syntax - its title stays, to be clicked open again.
+void MarkdownEditor::hideFoldedNestedCallouts(const BlockView &view, QList<Range> &hidden) const
+{
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.depth == 0 || !callout.foldable
+            || !view.span.range.contains(callout.range.start)
+            || !m_folds.value(callout.range.start, callout.collapsed))
+            continue;
+        const qsizetype from = callout.titleRange.isValid() ? callout.titleRange.end
+                                                            : callout.range.start;
+        const qsizetype titleEnd = m_text.indexOf(QLatin1Char('\n'), from);
+        if (titleEnd < 0 || titleEnd + 1 >= callout.range.end)
+            continue;
+        qsizetype end = callout.range.end;
+        // Take the body's own last newline too, or it is left behind as an
+        // empty line under the folded title.
+        if (m_text.at(end - 1) != QLatin1Char('\n') && end < m_text.size()
+            && m_text.at(end) == QLatin1Char('\n'))
+            ++end;
+        hidden.append({titleEnd + 1, end});
+    }
+}
+
 QString MarkdownEditor::displayText() const
 {
     // Blocks off screen carry no layout and no map, so this builds what they
@@ -422,6 +447,7 @@ QString MarkdownEditor::displayText() const
         QList<Range> hidden;
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
             hidden.append(m_decorations.syntax.at(i));
+        hideFoldedNestedCallouts(view, hidden);
         parts << DisplayMap::build(m_text, view.span.range, hidden).text();
     }
     return parts.join(QString());
@@ -1781,6 +1807,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // actually stays hidden depends on MicroTeX being able to draw it,
         // which only the editor knows.
         layoutInlineMaths(view, hidden);
+        hideFoldedNestedCallouts(view, hidden);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);

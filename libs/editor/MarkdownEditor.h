@@ -359,6 +359,9 @@ private:
     const BlockView *codeLabelAt(const QPoint &point) const;
     void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     int nestingDepthAt(const BlockView &view, qsizetype source) const;
+    void hideFoldedNestedCallouts(const BlockView &view, QList<Range> &hidden) const;
+    QRectF nestedFoldHandleRect(const BlockView &view, const NestedCallout &nested, qreal left,
+                                qreal top) const;
     void paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
                              qreal top) const;
     void paintNestedCodePanels(QPainter &painter, const BlockView &view, qreal left,
