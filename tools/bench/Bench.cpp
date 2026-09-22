@@ -468,6 +468,12 @@ int main(int argc, char *argv[])
     if (configHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
         qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
 
+    // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
+    // to the systemd journal whenever stderr is not a terminal - piped, run
+    // from a script, run by an agent - and every error the tool reports simply
+    // vanishes.
+    if (!qEnvironmentVariableIsSet("QT_FORCE_STDERR_LOGGING"))
+        qputenv("QT_FORCE_STDERR_LOGGING", "1");
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-bench"));

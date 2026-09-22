@@ -79,9 +79,11 @@ QT_QPA_PLATFORM=offscreen perf record -g --call-graph=dwarf -F 299 \
 perf report --stdio --no-children -g none --percent-limit 1.5
 ```
 
-For throwaway instrumentation use `fprintf(stderr, ...)`. `qWarning` output did
-not reach stderr in this environment, and twice that looked like "this code
-never runs".
+Qt 6 sends `qWarning` to the systemd journal, not stderr, whenever stderr is
+not a terminal - piped, scripted, or run by an agent. Twice that made
+instrumentation look like "this code never runs". Set
+`QT_FORCE_STDERR_LOGGING=1`, or use `fprintf(stderr, ...)` for throwaway
+probes. The screenshot tool and the bench now set it themselves.
 
 ## Guards in the test suite
 
@@ -325,6 +327,10 @@ Each of these produced a wrong number at least once in this project.
   what the editor's linearity test measured, without failing it. When the code
   path under a test changes, check the test still exercises the thing it was
   written for.
+- **A tool that hangs looks like the code under test hanging.** A screenshot
+  of a note that did not exist blocked forever on a modal error box nobody
+  could dismiss offscreen, and it was first taken for a bug in the inline
+  maths that had just landed. The tool now refuses a missing vault or note.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.

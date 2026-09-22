@@ -33,3 +33,16 @@ set_tests_properties(icons PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)
+
+# No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
+# MarkdownEditor loads callouts.ini in its constructor and Settings reads
+# settings.ini, so without this a test's result depended on how the person
+# running it had set up their own copy of the app - Settings.defaultsAreCompiledIn
+# failed the day Jernej switched his theme to OLED. Set once here so every test,
+# including ones not written yet, starts from a clean home.
+get_property(noteappc_tests DIRECTORY PROPERTY TESTS)
+foreach(test IN LISTS noteappc_tests)
+    set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
+        "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
+        "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache")
+endforeach()

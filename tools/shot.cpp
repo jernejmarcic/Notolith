@@ -25,6 +25,12 @@ int main(int argc, char *argv[])
     QTemporaryDir configHome;
     if (configHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
         qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
+    // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
+    // to the systemd journal whenever stderr is not a terminal - piped, run
+    // from a script, run by an agent - and every error the tool reports simply
+    // vanishes.
+    if (!qEnvironmentVariableIsSet("QT_FORCE_STDERR_LOGGING"))
+        qputenv("QT_FORCE_STDERR_LOGGING", "1");
     QApplication app(argc, argv);
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-shot"));
@@ -69,17 +75,25 @@ int main(int argc, char *argv[])
         return status;
     }
 
+    // Refuse a vault or note that is not there before touching either. Opening
+    // a missing note raises a modal "could not read" box, and on the offscreen
+    // platform nobody can dismiss it, so the tool used to hang forever instead
+    // of failing - which looked, the one time it happened, exactly like a hang
+    // in whatever code had just been changed.
+    if (!QFileInfo(args.at(1)).isDir()) {
+        qWarning("%s is not a directory", qPrintable(args.at(1)));
+        return 2;
+    }
+    if (args.at(2) != QLatin1String("-") && !QFileInfo(args.at(2)).isFile()) {
+        qWarning("%s is not a file", qPrintable(args.at(2)));
+        return 2;
+    }
+
     // Absolute, always: a relative note path makes Vault::read fail, and the
     // error box it raises blocks forever on the offscreen platform.
     window.openVault(QFileInfo(args.at(1)).absoluteFilePath());
-    if (args.at(2) != QLatin1String("-")) {
-        const QFileInfo note(args.at(2));
-        if (!note.isFile()) {
-            qWarning("%s is not a file", qPrintable(args.at(2)));
-            return 2;
-        }
-        window.openNote(note.absoluteFilePath());
-    }
+    if (args.at(2) != QLatin1String("-"))
+        window.openNote(QFileInfo(args.at(2)).absoluteFilePath()); // checked above
     // After opening, because opening a vault applies that vault's saved
     // scheme and would otherwise overwrite the mode asked for here.
     window.setThemeMode(noteAppC::Theme::modeFromName(args.value(4)));
