@@ -1,0 +1,515 @@
+#include "Theme.h"
+
+#include <QFontDatabase>
+#include <QStringList>
+
+namespace noteAppC {
+
+namespace {
+
+/// Obsidian's base scale, read out of the installed app's stylesheet
+/// (`.theme-dark` / `.theme-light` in `obsidian.asar`, 1.13.7).
+struct BaseScale {
+    const char *base00;
+    const char *base05;
+    const char *base10;
+    const char *base20;
+    const char *base25;
+    const char *base30;
+    const char *base35;
+    const char *base40;
+    const char *base50;
+    const char *base60;
+    const char *base70;
+    const char *base100;
+    const char *red;
+    const char *orange;
+    const char *yellow;
+    const char *green;
+    const char *cyan;
+    const char *blue;
+    const char *purple;
+    const char *pink;
+};
+
+constexpr BaseScale kDark{
+    "#1c1c1c", "#212121", "#232323", "#282828", "#2e2e2e", "#333333",
+    "#3f3f3f", "#555555", "#666666", "#999999", "#b3b3b3", "#dadada",
+    "#fb464c", "#e9973f", "#e0de71", "#44cf6e", "#53dfdd", "#027aff",
+    "#a882ff", "#fa99cd",
+};
+
+constexpr BaseScale kLight{
+    "#ffffff", "#fcfcfc", "#fafafa", "#f6f6f6", "#efefef", "#e4e4e4",
+    "#dadada", "#bdbdbd", "#ababab", "#707070", "#5c5c5c", "#222222",
+    "#e93147", "#ec7500", "#e0ac00", "#08b94e", "#00bfbc", "#086ddd",
+    "#7852ee", "#d53984",
+};
+
+/// `color-mix(in oklch, <mono> N%, transparent)` has no QSS equivalent; an
+/// rgba() overlay of the same weight is close enough at these small alphas.
+QString overlay(bool dark, double alpha)
+{
+    const int channel = dark ? 255 : 0;
+    return QStringLiteral("rgba(%1, %1, %1, %2)").arg(channel).arg(alpha, 0, 'f', 3);
+}
+
+QString rgba(const QColor &color, double alpha)
+{
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(color.red())
+        .arg(color.green())
+        .arg(color.blue())
+        .arg(alpha, 0, 'f', 3);
+}
+
+QString hsl(double hue, double saturationPercent, double lightnessPercent)
+{
+    const QColor color = QColor::fromHslF(std::fmod(hue < 0 ? hue + 360 : hue, 360.0) / 360.0,
+                                          qBound(0.0, saturationPercent / 100.0, 1.0),
+                                          qBound(0.0, lightnessPercent / 100.0, 1.0));
+    return color.name();
+}
+
+} // namespace
+
+Theme Theme::builtin(Mode mode)
+{
+    const BaseScale &scale = mode == Mode::Dark ? kDark : kLight;
+
+    Theme theme;
+    theme.m_mode = mode;
+    theme.m_tokens = {
+        {QStringLiteral("--color-base-00"), QString::fromLatin1(scale.base00)},
+        {QStringLiteral("--color-base-05"), QString::fromLatin1(scale.base05)},
+        {QStringLiteral("--color-base-10"), QString::fromLatin1(scale.base10)},
+        {QStringLiteral("--color-base-20"), QString::fromLatin1(scale.base20)},
+        {QStringLiteral("--color-base-25"), QString::fromLatin1(scale.base25)},
+        {QStringLiteral("--color-base-30"), QString::fromLatin1(scale.base30)},
+        {QStringLiteral("--color-base-35"), QString::fromLatin1(scale.base35)},
+        {QStringLiteral("--color-base-40"), QString::fromLatin1(scale.base40)},
+        {QStringLiteral("--color-base-50"), QString::fromLatin1(scale.base50)},
+        {QStringLiteral("--color-base-60"), QString::fromLatin1(scale.base60)},
+        {QStringLiteral("--color-base-70"), QString::fromLatin1(scale.base70)},
+        {QStringLiteral("--color-base-100"), QString::fromLatin1(scale.base100)},
+        {QStringLiteral("--color-red"), QString::fromLatin1(scale.red)},
+        {QStringLiteral("--color-orange"), QString::fromLatin1(scale.orange)},
+        {QStringLiteral("--color-yellow"), QString::fromLatin1(scale.yellow)},
+        {QStringLiteral("--color-green"), QString::fromLatin1(scale.green)},
+        {QStringLiteral("--color-cyan"), QString::fromLatin1(scale.cyan)},
+        {QStringLiteral("--color-blue"), QString::fromLatin1(scale.blue)},
+        {QStringLiteral("--color-purple"), QString::fromLatin1(scale.purple)},
+        {QStringLiteral("--color-pink"), QString::fromLatin1(scale.pink)},
+        // Obsidian's default accent.
+        {QStringLiteral("--accent-h"), QStringLiteral("258")},
+        {QStringLiteral("--accent-s"), QStringLiteral("88")},
+        {QStringLiteral("--accent-l"), QStringLiteral("66")},
+        // Metrics, same numbers as Obsidian's variables.
+        {QStringLiteral("--radius-s"), QStringLiteral("4")},
+        {QStringLiteral("--radius-m"), QStringLiteral("8")},
+        {QStringLiteral("--radius-l"), QStringLiteral("12")},
+        {QStringLiteral("--font-ui-smaller"), QStringLiteral("12")},
+        {QStringLiteral("--font-ui-small"), QStringLiteral("13")},
+        {QStringLiteral("--font-ui-medium"), QStringLiteral("15")},
+        {QStringLiteral("--font-ui-large"), QStringLiteral("20")},
+        {QStringLiteral("--font-text-size"), QStringLiteral("16")},
+        {QStringLiteral("--file-line-width"), QStringLiteral("700")},
+        {QStringLiteral("--ribbon-width"), QStringLiteral("44")},
+        {QStringLiteral("--input-height"), QStringLiteral("30")},
+    };
+    theme.applyDerivedTokens();
+    return theme;
+}
+
+void Theme::applyDerivedTokens()
+{
+    const bool dark = isDark();
+    const auto base = [this](const char *name) {
+        return m_tokens.value(QLatin1String("--color-base-") + QLatin1String(name));
+    };
+
+    const double h = value(QStringLiteral("--accent-h")).toDouble();
+    const double s = value(QStringLiteral("--accent-s")).toDouble();
+    const double l = value(QStringLiteral("--accent-l")).toDouble();
+
+    // Obsidian: --color-accent-1/-2 shift hue down and lift lightness, by
+    // different amounts per mode.
+    const QString accent = hsl(h, s, l);
+    const QString accent1 = dark ? hsl(h - 3, s * 1.02, l * 1.15) : hsl(h - 1, s * 1.01, l * 1.075);
+    const QString accent2 = dark ? hsl(h - 5, s * 1.05, l * 1.29) : hsl(h - 3, s * 1.02, l * 1.15);
+
+    m_tokens[QStringLiteral("--color-accent")] = accent;
+    m_tokens[QStringLiteral("--color-accent-1")] = accent1;
+    m_tokens[QStringLiteral("--color-accent-2")] = accent2;
+
+    m_tokens[QStringLiteral("--background-primary")] = base("00");
+    m_tokens[QStringLiteral("--background-primary-alt")] = base("10");
+    m_tokens[QStringLiteral("--background-secondary")] = base("20");
+    m_tokens[QStringLiteral("--background-secondary-alt")] = dark ? base("30") : base("05");
+    m_tokens[QStringLiteral("--background-modifier-border")] = base("30");
+    m_tokens[QStringLiteral("--background-modifier-border-hover")] = base("35");
+    m_tokens[QStringLiteral("--background-modifier-border-focus")] = base("40");
+    m_tokens[QStringLiteral("--background-modifier-form-field")] = dark ? base("25") : base("00");
+    m_tokens[QStringLiteral("--background-modifier-hover")] = overlay(dark, 0.067);
+    m_tokens[QStringLiteral("--background-modifier-active")] = overlay(dark, 0.10);
+
+    m_tokens[QStringLiteral("--text-normal")] = base("100");
+    m_tokens[QStringLiteral("--text-muted")] = base("70");
+    m_tokens[QStringLiteral("--text-faint")] = base("50");
+    m_tokens[QStringLiteral("--text-on-accent")] = QStringLiteral("#ffffff");
+    m_tokens[QStringLiteral("--text-error")] = m_tokens[QStringLiteral("--color-red")];
+    m_tokens[QStringLiteral("--text-accent")] = dark ? accent1 : accent;
+    m_tokens[QStringLiteral("--text-selection")] =
+        rgba(QColor(accent), dark ? 0.33 : 0.20);
+
+    m_tokens[QStringLiteral("--interactive-normal")] = dark ? base("30") : base("00");
+    m_tokens[QStringLiteral("--interactive-hover")] = dark ? base("35") : base("10");
+    m_tokens[QStringLiteral("--interactive-accent")] = dark ? accent : accent1;
+    m_tokens[QStringLiteral("--interactive-accent-hover")] = dark ? accent1 : accent2;
+
+    m_tokens[QStringLiteral("--divider-color")] = base("30");
+    m_tokens[QStringLiteral("--scrollbar-thumb-bg")] = overlay(dark, 0.10);
+    m_tokens[QStringLiteral("--scrollbar-active-thumb-bg")] = overlay(dark, 0.20);
+    m_tokens[QStringLiteral("--nav-item-color")] = m_tokens[QStringLiteral("--text-muted")];
+    m_tokens[QStringLiteral("--nav-item-color-active")] = m_tokens[QStringLiteral("--text-normal")];
+}
+
+QString Theme::value(const QString &token) const
+{
+    return m_tokens.value(token);
+}
+
+QColor Theme::color(const QString &token) const
+{
+    return QColor(value(token));
+}
+
+void Theme::setToken(const QString &token, const QString &value)
+{
+    m_tokens[token] = value;
+    applyDerivedTokens();
+}
+
+void Theme::setAccent(int hue, int saturationPercent, int lightnessPercent)
+{
+    m_tokens[QStringLiteral("--accent-h")] = QString::number(hue);
+    m_tokens[QStringLiteral("--accent-s")] = QString::number(saturationPercent);
+    m_tokens[QStringLiteral("--accent-l")] = QString::number(lightnessPercent);
+    applyDerivedTokens();
+}
+
+QString Theme::firstAvailableFamily(const QStringList &families)
+{
+    const QStringList installed = QFontDatabase::families();
+    for (const QString &family : families) {
+        if (installed.contains(family, Qt::CaseInsensitive))
+            return family;
+    }
+    return families.isEmpty() ? QString() : families.last();
+}
+
+QFont Theme::uiFont() const
+{
+    QFont font(firstAvailableFamily({QStringLiteral("Inter"), QStringLiteral("Noto Sans"),
+                                     QStringLiteral("DejaVu Sans")}));
+    font.setPixelSize(value(QStringLiteral("--font-ui-small")).toInt());
+    return font;
+}
+
+QFont Theme::textFont() const
+{
+    QFont font = uiFont();
+    font.setPixelSize(value(QStringLiteral("--font-text-size")).toInt());
+    return font;
+}
+
+QFont Theme::monospaceFont() const
+{
+    QFont font(firstAvailableFamily({QStringLiteral("JetBrains Mono"),
+                                     QStringLiteral("Roboto Mono"),
+                                     QStringLiteral("Noto Sans Mono"),
+                                     QStringLiteral("DejaVu Sans Mono")}));
+    font.setFixedPitch(true);
+    font.setPixelSize(value(QStringLiteral("--font-ui-medium")).toInt());
+    return font;
+}
+
+QPalette Theme::palette() const
+{
+    const QColor primary = color(QStringLiteral("--background-primary"));
+    const QColor secondary = color(QStringLiteral("--background-secondary"));
+    const QColor normal = color(QStringLiteral("--text-normal"));
+    const QColor muted = color(QStringLiteral("--text-muted"));
+    const QColor faint = color(QStringLiteral("--text-faint"));
+    const QColor accent = color(QStringLiteral("--interactive-accent"));
+
+    QPalette palette;
+    palette.setColor(QPalette::Window, secondary);
+    palette.setColor(QPalette::WindowText, normal);
+    palette.setColor(QPalette::Base, primary);
+    palette.setColor(QPalette::AlternateBase, color(QStringLiteral("--background-primary-alt")));
+    palette.setColor(QPalette::Text, normal);
+    palette.setColor(QPalette::PlaceholderText, faint);
+    palette.setColor(QPalette::Button, color(QStringLiteral("--interactive-normal")));
+    palette.setColor(QPalette::ButtonText, normal);
+    palette.setColor(QPalette::ToolTipBase, secondary);
+    palette.setColor(QPalette::ToolTipText, normal);
+    palette.setColor(QPalette::Highlight, accent);
+    palette.setColor(QPalette::HighlightedText, color(QStringLiteral("--text-on-accent")));
+    palette.setColor(QPalette::Link, color(QStringLiteral("--text-accent")));
+    palette.setColor(QPalette::Mid, color(QStringLiteral("--divider-color")));
+    palette.setColor(QPalette::Disabled, QPalette::Text, faint);
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, faint);
+    palette.setColor(QPalette::Disabled, QPalette::ButtonText, faint);
+    palette.setColor(QPalette::Inactive, QPalette::Highlight,
+                     color(QStringLiteral("--background-modifier-border")));
+    palette.setColor(QPalette::Inactive, QPalette::HighlightedText, muted);
+    return palette;
+}
+
+QString Theme::styleSheet() const
+{
+    QString sheet = QStringLiteral(R"QSS(
+* {
+    outline: none;
+}
+
+QMainWindow, QDialog {
+    background: %{--background-secondary};
+}
+
+/* Ribbon ------------------------------------------------------------- */
+
+QWidget#ribbon {
+    background: %{--background-secondary};
+    border-right: 1px solid %{--divider-color};
+}
+QToolButton#ribbonButton {
+    background: transparent;
+    border: none;
+    border-radius: %{--radius-s}px;
+    padding: 7px;
+}
+QToolButton#ribbonButton:hover {
+    background: %{--background-modifier-hover};
+}
+QToolButton#ribbonButton:pressed {
+    background: %{--background-modifier-active};
+}
+
+/* Sidebar ------------------------------------------------------------ */
+
+QWidget#sidebar, QWidget#sidebarHeader {
+    background: %{--background-secondary};
+}
+QLabel#vaultName {
+    color: %{--text-muted};
+    font-size: %{--font-ui-small}px;
+    font-weight: 600;
+    padding-left: 4px;
+}
+QToolButton#headerButton {
+    background: transparent;
+    border: none;
+    border-radius: %{--radius-s}px;
+    padding: 4px;
+}
+QToolButton#headerButton:hover {
+    background: %{--background-modifier-hover};
+}
+
+QTreeView#fileExplorer {
+    background: %{--background-secondary};
+    border: none;
+    padding: 2px 6px 8px 6px;
+    color: %{--nav-item-color};
+    font-size: %{--font-ui-small}px;
+    show-decoration-selected: 0;
+}
+QTreeView#fileExplorer::item {
+    padding: 4px 6px;
+    border-radius: %{--radius-s}px;
+    min-height: 22px;
+}
+QTreeView#fileExplorer::item:hover {
+    background: %{--background-modifier-hover};
+    color: %{--nav-item-color-active};
+}
+QTreeView#fileExplorer::item:selected,
+QTreeView#fileExplorer::item:selected:active {
+    background: %{--background-modifier-active};
+    color: %{--nav-item-color-active};
+}
+/* Stylesheet mode turns off the style's own branch arrows, so supply them. */
+QTreeView#fileExplorer::branch {
+    background: transparent;
+    image: none;
+}
+QTreeView#fileExplorer::branch:has-children:!has-siblings:closed,
+QTreeView#fileExplorer::branch:closed:has-children:has-siblings {
+    image: url(:/icons/branch-collapsed.svg);
+}
+QTreeView#fileExplorer::branch:open:has-children:!has-siblings,
+QTreeView#fileExplorer::branch:open:has-children:has-siblings {
+    image: url(:/icons/branch-expanded.svg);
+}
+
+/* Main area: tab strip, inline title, editor -------------------------- */
+
+QWidget#mainArea, QWidget#editorArea {
+    background: %{--background-primary};
+}
+QWidget#tabStrip {
+    background: %{--background-secondary};
+}
+QTabBar {
+    background: transparent;
+    border: none;
+    qproperty-drawBase: 0;
+}
+QTabBar::tab {
+    background: transparent;
+    color: %{--text-faint};
+    font-size: %{--font-ui-small}px;
+    padding: 9px 16px;
+    margin: 0;
+    min-width: 90px;
+    max-width: 260px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+QTabBar::tab:hover {
+    color: %{--text-muted};
+}
+QTabBar::tab:selected {
+    background: %{--background-primary};
+    color: %{--text-normal};
+}
+
+QLabel#inlineTitle {
+    color: %{--text-normal};
+    font-size: 30px;
+    font-weight: 700;
+    background: %{--background-primary};
+}
+
+QPlainTextEdit {
+    background: %{--background-primary};
+    color: %{--text-normal};
+    border: none;
+    selection-background-color: %{--text-selection};
+    selection-color: %{--text-normal};
+}
+
+/* Chrome -------------------------------------------------------------- */
+
+QSplitter::handle {
+    background: %{--divider-color};
+}
+QSplitter::handle:horizontal {
+    width: 1px;
+}
+QSplitter::handle:hover {
+    background: %{--interactive-accent};
+}
+
+QMenu {
+    background: %{--background-secondary};
+    color: %{--text-normal};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 6px 28px 6px 12px;
+    border-radius: %{--radius-s}px;
+}
+QMenu::item:selected {
+    background: %{--background-modifier-hover};
+}
+QMenu::separator {
+    height: 1px;
+    background: %{--background-modifier-border};
+    margin: 6px 8px;
+}
+
+QStatusBar {
+    background: %{--background-secondary};
+    color: %{--text-faint};
+    border-top: 1px solid %{--divider-color};
+}
+QStatusBar::item {
+    border: none;
+}
+QStatusBar QLabel {
+    color: %{--text-faint};
+    font-size: %{--font-ui-smaller}px;
+    padding: 0 8px;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: %{--scrollbar-thumb-bg};
+    border-radius: 6px;
+    min-height: 32px;
+    margin: 2px;
+}
+QScrollBar::handle:vertical:hover {
+    background: %{--scrollbar-active-thumb-bg};
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+}
+QScrollBar::handle:horizontal {
+    background: %{--scrollbar-thumb-bg};
+    border-radius: 6px;
+    min-width: 32px;
+    margin: 2px;
+}
+QScrollBar::add-line, QScrollBar::sub-line {
+    width: 0;
+    height: 0;
+}
+QScrollBar::add-page, QScrollBar::sub-page {
+    background: transparent;
+}
+
+QPushButton {
+    background: %{--interactive-normal};
+    color: %{--text-normal};
+    border: none;
+    border-radius: %{--radius-s}px;
+    padding: 6px 14px;
+    min-height: %{--input-height}px;
+}
+QPushButton:hover {
+    background: %{--interactive-hover};
+}
+QPushButton:default {
+    background: %{--interactive-accent};
+    color: %{--text-on-accent};
+}
+QPushButton:default:hover {
+    background: %{--interactive-accent-hover};
+}
+
+QToolTip {
+    background: %{--background-secondary};
+    color: %{--text-normal};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-s}px;
+    padding: 4px 8px;
+}
+)QSS");
+
+    for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it)
+        sheet.replace(QLatin1String("%{") + it.key() + QLatin1Char('}'), it.value());
+    return sheet;
+}
+
+} // namespace noteAppC

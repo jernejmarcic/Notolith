@@ -1,0 +1,2 @@
+qt_add_executable(noteAppC_shot shot.cpp)
+target_link_libraries(noteAppC_shot PRIVATE noteAppC_ui)
