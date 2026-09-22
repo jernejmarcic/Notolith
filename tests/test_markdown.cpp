@@ -708,6 +708,8 @@ TEST(CodeOptionTest, RecognisedKeysAndHiddenLines)
         "#| caption: A greeting\n"
         "print(1)\n"
         "print(2)\n"
+        "print(3)\n"
+        "print(4)\n"
         "```\n");
     const Decorations decorations = decorationsOf(text);
     ASSERT_EQ(decorations.codeOptions.size(), 1);
@@ -730,7 +732,8 @@ TEST(CodeOptionTest, RecognisedKeysAndHiddenLines)
     EXPECT_EQ(options.block, block->range);
 
     // They stay in the file and leave the listing.
-    EXPECT_EQ(rendered(text), QStringLiteral("\nprint(1)\nprint(2)\n\n"));
+    EXPECT_EQ(rendered(text),
+              QStringLiteral("\nprint(1)\nprint(2)\nprint(3)\nprint(4)\n\n"));
 }
 
 TEST(CodeOptionTest, PrefixFollowsTheLanguage)
@@ -916,4 +919,25 @@ TEST(WordCountTest, IgnoresFrontmatter)
     const Metadata metadata =
         parse(QStringLiteral("---\ntitle: one two three four\n---\n\nfive six seven\n"));
     EXPECT_EQ(metadata.wordCount, 3);
+}
+
+// `highlight` numbers the lines the reader sees. Clamping them against a count
+// that still included the `#|` lines silently accepted numbers past the end.
+TEST(CodeOptionTest, HighlightCountsTheVisibleListingNotTheOptionLines)
+{
+    const QString text = QStringLiteral(
+        "```python\n"
+        "#| title: t.py\n"
+        "#| lines: true\n"
+        "#| highlight: 1,3,9\n"
+        "one\n"
+        "two\n"
+        "three\n"
+        "```\n");
+
+    const Decorations decorations = decorationsOf(text);
+    ASSERT_EQ(decorations.codeOptions.size(), 1);
+    const CodeOptions &options = decorations.codeOptions.first();
+    // Three lines of listing, so 9 is out of range and 1 and 3 survive.
+    EXPECT_EQ(options.highlight, QList<int>({1, 3}));
 }

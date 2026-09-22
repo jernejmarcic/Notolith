@@ -242,7 +242,8 @@ QList<int> parseHighlight(const QString &value, int lineCount)
     return lines;
 }
 
-void applyCodeOption(CodeOptions &options, const QString &key, const QString &value, int lineCount)
+void applyCodeOption(CodeOptions &options, const QString &key, const QString &value,
+                     QString &rawHighlight)
 {
     if (key == QLatin1String("title") || key == QLatin1String("filename")) {
         options.title = unquote(value);
@@ -258,7 +259,9 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
             options.lineNumbers = isTrue(value);
         }
     } else if (key == QLatin1String("highlight")) {
-        options.highlight = parseHighlight(unquote(value), lineCount);
+        // Kept raw: the listing's length is only known once every option line
+        // has been consumed, and that is what the numbers count.
+        rawHighlight = unquote(value);
     } else if (key == QLatin1String("wrap")) {
         options.wrap = isTrue(value);
     } else if (key == QLatin1String("fold")) {
@@ -276,9 +279,8 @@ CodeOptions parseCodeOptions(const QString &text, const Range &content, const QS
 {
     CodeOptions options;
     options.block = content;
+    QString rawHighlight;
 
-    const int lineCount = 1
-        + int(QStringView(text).mid(content.start, content.length()).count(QLatin1Char('\n')));
     const QRegularExpression option(
         QStringLiteral("^[ \\t]*%1\\|[ \\t]*([\\w-]+)[ \\t]*:[ \\t]*(.*)$")
             .arg(QRegularExpression::escape(commentPrefix(language))));
@@ -292,9 +294,19 @@ CodeOptions parseCodeOptions(const QString &text, const Range &content, const QS
         if (!match.hasMatch())
             break;
         applyCodeOption(options, match.captured(1).toLower(), match.captured(2).trimmed(),
-                        lineCount);
+                        rawHighlight);
         cursor = qMin(content.end, lineEnd + 1);
         options.range = {content.start, cursor};
+    }
+
+    // `highlight` counts the lines the reader sees, so it is clamped against
+    // the listing with the option lines already taken off the front.
+    if (!rawHighlight.isEmpty()) {
+        const QStringView listing = QStringView(text).mid(cursor, content.end - cursor);
+        const int visibleLines = listing.isEmpty()
+            ? 0
+            : 1 + int(listing.count(QLatin1Char('\n'))) - (listing.endsWith(QLatin1Char('\n')) ? 1 : 0);
+        options.highlight = parseHighlight(rawHighlight, visibleLines);
     }
     return options;
 }
