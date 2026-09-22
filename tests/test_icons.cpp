@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QImage>
 #include <QSignalSpy>
@@ -49,6 +50,21 @@ bool containsOpaquePixel(const QImage &image, const QColor &color)
                 && qGreen(pixel) == color.green() && qBlue(pixel) == color.blue())
                 return true;
         }
+    }
+    return false;
+}
+
+// U+E73C (a Devicons glyph) ships in every Nerd Font patched font regardless
+// of base typeface, so it is present whichever family QFontDatabase::families()
+// happens to list first - the point of these tests is the drawing code, not
+// which specific glyph a particular font carries.
+constexpr char32_t kNerdFontCodepoint = 0xE73C;
+
+bool hasNerdFontInstalled()
+{
+    for (const QString &family : QFontDatabase::families()) {
+        if (family.contains(QStringLiteral("Nerd Font"), Qt::CaseInsensitive))
+            return true;
     }
     return false;
 }
@@ -148,6 +164,46 @@ TEST_F(IconsTest, RemoteCacheKeyIsStableSoAPrecachedFileIsPickedUp)
     // Asking again must derive the same key, not a fresh in-flight fetch.
     const QIcon second = Icons::icon(url, QColor(0, 0, 255), 32);
     EXPECT_FALSE(second.isNull());
+}
+
+// --- Nerd Font glyphs ------------------------------------------------------
+
+TEST_F(IconsTest, NerdFontGlyphByHexCodepointIsDrawnInTint)
+{
+    if (!hasNerdFontInstalled())
+        GTEST_SKIP() << "no Nerd Font family installed on this machine";
+
+    const QIcon icon = Icons::icon(QStringLiteral("U+E73C"), QColor(255, 0, 0), 48);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_TRUE(containsOpaquePixel(icon.pixmap(48, 48).toImage(), QColor(255, 0, 0)));
+}
+
+TEST_F(IconsTest, NerdFontGlyphByLiteralCharacterIsDrawnInTint)
+{
+    if (!hasNerdFontInstalled())
+        GTEST_SKIP() << "no Nerd Font family installed on this machine";
+
+    char32_t codepoint = kNerdFontCodepoint;
+    const QString glyph = QString::fromUcs4(&codepoint, 1);
+    ASSERT_EQ(glyph.toUcs4().size(), 1); // sanity: really one code point
+
+    const QIcon icon = Icons::icon(glyph, QColor(0, 200, 0), 48);
+    ASSERT_FALSE(icon.isNull());
+    EXPECT_TRUE(containsOpaquePixel(icon.pixmap(48, 48).toImage(), QColor(0, 200, 0)));
+
+    // Both forms name the same glyph and must render identically.
+    const QIcon byHex = Icons::icon(QStringLiteral("u+e73c"), QColor(0, 200, 0), 48);
+    ASSERT_FALSE(byHex.isNull());
+    EXPECT_EQ(byHex.pixmap(48, 48).toImage(), icon.pixmap(48, 48).toImage());
+}
+
+TEST_F(IconsTest, AsciiSingleCharacterIsNotTreatedAsAGlyph)
+{
+    // One code point, but inside ASCII: must fall through to the Lucide
+    // resource lookup (which "a" is not) rather than a Nerd Font glyph, or a
+    // one-letter icon name like a language's short code would silently draw
+    // whatever the installed font maps that byte to.
+    EXPECT_TRUE(Icons::icon(QStringLiteral("a"), QColor(Qt::black), 24).isNull());
 }
 
 int main(int argc, char **argv)

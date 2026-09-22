@@ -4,7 +4,11 @@ add_library(noteAppC_theme STATIC
     Scheme.cpp
     Scheme.h
     CalloutStyle.cpp
+    ConfigFile.cpp
+    ConfigFile.h
     CalloutStyle.h
+    LanguageStyle.cpp
+    LanguageStyle.h
     Icons.cpp
     Icons.h)
 

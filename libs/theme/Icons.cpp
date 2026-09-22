@@ -5,6 +5,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFontDatabase>
+#include <QFontMetricsF>
 #include <QHash>
 #include <QImage>
 #include <QNetworkAccessManager>
@@ -12,6 +14,8 @@
 #include <QNetworkRequest>
 #include <QPainter>
 #include <QPixmap>
+#include <QRawFont>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QSvgRenderer>
@@ -229,6 +233,101 @@ QIcon iconFromRemote(const QString &url, const QColor &color, int size)
     return {};
 }
 
+// `U+E73C`, case-insensitive, 4-6 hex digits - the form a Nerd Font
+// cheatsheet gives when the glyph itself is not convenient to paste.
+bool nerdFontHexForm(const QString &name, char32_t *codepoint)
+{
+    static const QRegularExpression pattern(QStringLiteral("^[Uu]\\+([0-9A-Fa-f]{4,6})$"));
+    const QRegularExpressionMatch match = pattern.match(name);
+    if (!match.hasMatch())
+        return false;
+    *codepoint = static_cast<char32_t>(match.captured(1).toUInt(nullptr, 16));
+    return true;
+}
+
+// The glyph character itself, pasted straight in. Exactly one code point and
+// outside ASCII, so an ordinary single-letter string like "a" - which is
+// exactly one code point too - is never mistaken for a glyph lookup.
+bool nerdFontGlyphLiteral(const QString &name, char32_t *codepoint)
+{
+    const QList<uint> points = name.toUcs4();
+    if (points.size() != 1 || points.first() <= 0x7F)
+        return false;
+    *codepoint = static_cast<char32_t>(points.first());
+    return true;
+}
+
+bool isNerdFontForm(const QString &name, char32_t *codepoint)
+{
+    return nerdFontHexForm(name, codepoint) || nerdFontGlyphLiteral(name, codepoint);
+}
+
+// Chosen once per process: QFontDatabase::families() is a linear scan over
+// every installed font, not something to repeat on every icon() call, and
+// the answer cannot change without a restart (a font installed mid-process
+// would need a cache clear elsewhere, which nothing here does - fonts are
+// not icons or remote fetches, they are the platform's own state).
+QString nerdFontFamily()
+{
+    static const QString family = [] {
+        for (const QString &candidate : QFontDatabase::families()) {
+            if (candidate.contains(QStringLiteral("Nerd Font"), Qt::CaseInsensitive))
+                return candidate;
+        }
+        return QString();
+    }();
+    return family;
+}
+
+QIcon iconFromNerdFontGlyph(char32_t codepoint, const QColor &color, int size)
+{
+    const QString family = nerdFontFamily();
+    if (family.isEmpty())
+        return {}; // no Nerd Font installed: never fall back to a wrong glyph
+
+    QFont font(family);
+    // Measured at a large reference size so the fit below is not thrown off
+    // by hinting rounding at the tiny pixel sizes icons are actually drawn
+    // at; QPainter::scale below maps it down to `size` exactly.
+    font.setPixelSize(256);
+
+    // A font can carry the "Nerd Font" name and still lack this exact
+    // codepoint. Qt would otherwise substitute a fallback font's glyph or a
+    // tofu box, either of which is a wrong icon that looks like a right one.
+    if (!QRawFont::fromFont(font).supportsCharacter(codepoint))
+        return {};
+
+    const QString glyph = QString::fromUcs4(&codepoint, 1);
+    const QFontMetricsF metrics(font);
+    const QRectF bounds = metrics.tightBoundingRect(glyph);
+    if (bounds.isEmpty())
+        return {};
+    // The glyph's own ink, not its advance box, fills the square - the same
+    // "fit and centre" rule centeredTarget applies to an SVG viewBox or an
+    // image's natural size.
+    const qreal scale = qMin(size / bounds.width(), size / bounds.height());
+
+    QIcon icon;
+    for (qreal ratio : {1.0, 2.0}) {
+        QPixmap pixmap(QSize(size, size) * ratio);
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+
+        QPainter painter(&pixmap);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::TextAntialiasing);
+        painter.translate(size / 2.0, size / 2.0);
+        painter.scale(scale, scale);
+        painter.translate(-bounds.center());
+        painter.setFont(font);
+        painter.setPen(color);
+        painter.drawText(QPointF(0, 0), glyph);
+        painter.end();
+        icon.addPixmap(pixmap);
+    }
+    return icon;
+}
+
 } // namespace
 
 QIcon Icons::icon(const QString &name, const QColor &color, int size)
@@ -240,10 +339,13 @@ QIcon Icons::icon(const QString &name, const QColor &color, int size)
         return *cached;
 
     QIcon result;
+    char32_t codepoint = 0;
     if (isRemoteURL(name))
         result = iconFromRemote(name, color, size);
     else if (isFileURL(name) || QDir::isAbsolutePath(name))
         result = iconFromFile(localPathOf(name), color, size);
+    else if (isNerdFontForm(name, &codepoint))
+        result = iconFromNerdFontGlyph(codepoint, color, size);
     else
         result = iconFromResource(name, color, size);
 

@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 
 #include "CalloutStyle.h"
+#include "LanguageStyle.h"
 #include "Scheme.h"
 #include "Theme.h"
 
@@ -343,4 +344,92 @@ TEST(CalloutStyle, MissingFileIsNormal)
     EXPECT_EQ(warning.bar, theme.calloutColor(QStringLiteral("warning")));
     EXPECT_TRUE(warning.background.isValid());
     EXPECT_LT(warning.background.alpha(), 255);
+}
+
+// --- language styles --------------------------------------------------------
+
+TEST(LanguageStyle, AliasesAndInheritsResolveLikeCallouts)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("codeblocks.ini"));
+    writeFile(path,
+             QStringLiteral(
+                 "[python]\n"
+                 "name = Python           ; a trailing comment is not part of the value\n"
+                 "icon = U+E73C\n"
+                 "color = #3776ABff\n"
+                 "aliases = py, python3\n"
+                 "\n"
+                 "[cython]\n"
+                 "inherits = python\n"
+                 "name = \"Cython\"\n"));
+
+    const LanguageStyles styles = LanguageStyles::load(path);
+    EXPECT_EQ(styles.definedLanguages(),
+             QStringList({QStringLiteral("cython"), QStringLiteral("python")}));
+
+    // The section itself, case-insensitively.
+    const LanguageStyle python = styles.resolve(QStringLiteral("Python"));
+    EXPECT_EQ(python.name, QStringLiteral("Python"));
+    EXPECT_EQ(python.icon, QStringLiteral("U+E73C"));
+    EXPECT_EQ(python.color, QColor(0x37, 0x76, 0xAB, 0xff));
+
+    // An alias reaches the same section.
+    const LanguageStyle byAlias = styles.resolve(QStringLiteral("py"));
+    EXPECT_EQ(byAlias.name, QStringLiteral("Python"));
+    EXPECT_EQ(byAlias.icon, QStringLiteral("U+E73C"));
+    const LanguageStyle byAlias2 = styles.resolve(QStringLiteral("PYTHON3"));
+    EXPECT_EQ(byAlias2.name, QStringLiteral("Python"));
+
+    // `inherits` carries the parent's icon and colour; the child's own name
+    // still wins.
+    const LanguageStyle cython = styles.resolve(QStringLiteral("cython"));
+    EXPECT_EQ(cython.name, QStringLiteral("Cython"));
+    EXPECT_EQ(cython.icon, QStringLiteral("U+E73C"));
+    EXPECT_EQ(cython.color, QColor(0x37, 0x76, 0xAB, 0xff));
+}
+
+TEST(LanguageStyle, ColourAlphaIsCSSorder)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("codeblocks.ini"));
+    writeFile(path, QStringLiteral("[rust]\ncolor = #FF5A5F26\n"));
+
+    const LanguageStyle rust = LanguageStyles::load(path).resolve(QStringLiteral("rust"));
+    // #RRGGBBAA, alpha last, the same rule CalloutStyle::parseColor enforces
+    // - reused here rather than reimplemented.
+    EXPECT_EQ(rust.color.red(), 0xFF);
+    EXPECT_EQ(rust.color.green(), 0x5A);
+    EXPECT_EQ(rust.color.blue(), 0x5F);
+    EXPECT_EQ(rust.color.alpha(), 0x26);
+}
+
+TEST(LanguageStyle, UnknownAndEmptyLanguageGetPlainDefaults)
+{
+    const LanguageStyles styles = LanguageStyles::load(QStringLiteral("/nonexistent/codeblocks.ini"));
+    EXPECT_TRUE(styles.definedLanguages().isEmpty());
+
+    const LanguageStyle unknown = styles.resolve(QStringLiteral("Brainfuck"));
+    EXPECT_EQ(unknown.name, QStringLiteral("Brainfuck")); // exactly as given, case kept
+    EXPECT_TRUE(unknown.icon.isEmpty());
+    EXPECT_FALSE(unknown.color.isValid());
+
+    const LanguageStyle empty = styles.resolve(QString());
+    EXPECT_TRUE(empty.name.isEmpty());
+    EXPECT_TRUE(empty.icon.isEmpty());
+    EXPECT_FALSE(empty.color.isValid());
+}
+
+TEST(LanguageStyle, MissingFileIsNormal)
+{
+    // Nobody has to create codeblocks.ini, so a missing file resolves every
+    // language to its plain default rather than failing.
+    const LanguageStyles styles = LanguageStyles::load(QStringLiteral("/nonexistent/codeblocks.ini"));
+    EXPECT_TRUE(styles.definedLanguages().isEmpty());
+    const LanguageStyle python = styles.resolve(QStringLiteral("python"));
+    EXPECT_EQ(python.name, QStringLiteral("python"));
+    EXPECT_TRUE(python.icon.isEmpty());
+    EXPECT_FALSE(python.color.isValid());
 }

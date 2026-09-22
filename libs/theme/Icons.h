@@ -25,18 +25,36 @@ signals:
 
 /// Lucide icons (ISC), the set Obsidian itself draws with, recoloured to a
 /// theme token at load - and, in the same slot, a callout's own icon: a local
-/// image file or a remote URL.
+/// image file, a remote URL, or a Nerd Font glyph.
 class Icons {
 public:
-    /// `name` is a Lucide id ("folder-open"), an absolute or `file://` path
-    /// to a local .svg/.png/.jpg/.webp, or an `http://`/`https://` URL to the
-    /// same. Every result is scaled to `size` and centred inside the square,
-    /// preserving its own aspect ratio, so a photograph lines up with a glyph
-    /// in the same column rather than stretching to fill it.
+    /// `name` takes one of four forms:
     ///
-    /// `color` recolours only an SVG that spells `currentColor` - the Lucide
-    /// set does, so today's callers are unaffected; a user's own image, SVG
-    /// or raster, is drawn as-is and never tinted.
+    /// 1. A Lucide id ("folder-open"), resolved from the bundled `:/icons`
+    ///    resource.
+    /// 2. An absolute path or a `file://` URL to a local .svg/.png/.jpg/.webp.
+    /// 3. An `http://`/`https://` URL to the same.
+    /// 4. A Nerd Font glyph, written either as a hex codepoint (`U+E73C`,
+    ///    case-insensitive, 4-6 hex digits) or as the literal glyph character
+    ///    itself - a string that is exactly one Unicode code point outside
+    ///    ASCII (checked with QString::toUcs4()), typed or pasted straight
+    ///    from a cheatsheet. Drawn with the first installed font family whose
+    ///    name contains "Nerd Font" (QFontDatabase::families(), cached once
+    ///    per process); with none installed, or the chosen font missing that
+    ///    exact glyph, this returns a null icon rather than a tofu box or a
+    ///    look-alike from a fallback font - a wrong icon should never appear
+    ///    to be the right one.
+    ///
+    /// Every result is scaled to `size` and centred inside the square,
+    /// preserving its own aspect ratio (a glyph by its own ink, everything
+    /// else by its natural size), so a photograph or a Nerd Font glyph lines
+    /// up with a Lucide icon in the same column rather than stretching to
+    /// fill it.
+    ///
+    /// `color` recolours an SVG that spells `currentColor` - the Lucide set
+    /// does, so today's callers are unaffected - and a Nerd Font glyph, which
+    /// is always tinted like one. A user's own image, SVG or raster, is drawn
+    /// as-is and never tinted.
     ///
     /// Returns a null icon when the resource is missing, which shows up as a
     /// blank button rather than a crash. This is also what a remote URL
