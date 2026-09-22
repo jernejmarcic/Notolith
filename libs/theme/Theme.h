@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QHash>
 #include <QPalette>
+#include <QSet>
 #include <QString>
 
 namespace noteAppC {
@@ -28,7 +29,24 @@ public:
     /// Raw token value, empty when the token is unknown.
     QString value(const QString &token) const;
     QColor color(const QString &token) const;
+
+    /// Any CSS colour Qt's own parser does not take: `rgb()`, `rgba()`,
+    /// `hsl()`, `hsla()`, `transparent`, alongside the hex and named forms it
+    /// does. Invalid when the value is not a colour, which is how the scheme
+    /// importer tells a colour from a size.
+    static QColor parseColor(const QString &value);
+
+    /// Pins a token. A pinned token is never recomputed from the base scale,
+    /// which is what lets a custom scheme override a semantic colour like
+    /// `--background-primary` instead of only the greys it is derived from.
     void setToken(const QString &token, const QString &value);
+    /// Pins every token in `tokens`, then rederives the rest once.
+    void setTokens(const QHash<QString, QString> &tokens);
+    /// Unpins a token, so the next derivation computes it again.
+    void resetToken(const QString &token);
+    bool isPinned(const QString &token) const { return m_pinned.contains(token); }
+    /// Tokens that differ from the built-in scheme of the same mode.
+    QHash<QString, QString> overrides() const;
 
     /// Accent colour, rebuilt from `--accent-h/s/l` like Obsidian's picker.
     void setAccent(int hue, int saturationPercent, int lightnessPercent);
@@ -55,6 +73,8 @@ private:
 
     Mode m_mode = Mode::Dark;
     QHash<QString, QString> m_tokens;
+    /// Tokens a scheme or the user set by hand; derivation leaves them alone.
+    QSet<QString> m_pinned;
 };
 
 } // namespace noteAppC

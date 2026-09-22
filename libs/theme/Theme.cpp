@@ -1,7 +1,10 @@
 #include "Theme.h"
 
 #include <QFontDatabase>
+#include <QRegularExpression>
 #include <QStringList>
+
+#include <cmath>
 
 namespace noteAppC {
 
@@ -124,6 +127,11 @@ Theme Theme::builtin(Mode mode)
 void Theme::applyDerivedTokens()
 {
     const bool dark = isDark();
+    // A pinned token came from a scheme or the user and outranks the scale.
+    const auto derive = [this](const QString &token, const QString &value) {
+        if (!m_pinned.contains(token))
+            m_tokens[token] = value;
+    };
     const auto base = [this](const char *name) {
         return m_tokens.value(QLatin1String("--color-base-") + QLatin1String(name));
     };
@@ -138,40 +146,39 @@ void Theme::applyDerivedTokens()
     const QString accent1 = dark ? hsl(h - 3, s * 1.02, l * 1.15) : hsl(h - 1, s * 1.01, l * 1.075);
     const QString accent2 = dark ? hsl(h - 5, s * 1.05, l * 1.29) : hsl(h - 3, s * 1.02, l * 1.15);
 
-    m_tokens[QStringLiteral("--color-accent")] = accent;
-    m_tokens[QStringLiteral("--color-accent-1")] = accent1;
-    m_tokens[QStringLiteral("--color-accent-2")] = accent2;
+    derive(QStringLiteral("--color-accent"), accent);
+    derive(QStringLiteral("--color-accent-1"), accent1);
+    derive(QStringLiteral("--color-accent-2"), accent2);
 
-    m_tokens[QStringLiteral("--background-primary")] = base("00");
-    m_tokens[QStringLiteral("--background-primary-alt")] = base("10");
-    m_tokens[QStringLiteral("--background-secondary")] = base("20");
-    m_tokens[QStringLiteral("--background-secondary-alt")] = dark ? base("30") : base("05");
-    m_tokens[QStringLiteral("--background-modifier-border")] = base("30");
-    m_tokens[QStringLiteral("--background-modifier-border-hover")] = base("35");
-    m_tokens[QStringLiteral("--background-modifier-border-focus")] = base("40");
-    m_tokens[QStringLiteral("--background-modifier-form-field")] = dark ? base("25") : base("00");
-    m_tokens[QStringLiteral("--background-modifier-hover")] = overlay(dark, 0.067);
-    m_tokens[QStringLiteral("--background-modifier-active")] = overlay(dark, 0.10);
+    derive(QStringLiteral("--background-primary"), base("00"));
+    derive(QStringLiteral("--background-primary-alt"), base("10"));
+    derive(QStringLiteral("--background-secondary"), base("20"));
+    derive(QStringLiteral("--background-secondary-alt"), dark ? base("30") : base("05"));
+    derive(QStringLiteral("--background-modifier-border"), base("30"));
+    derive(QStringLiteral("--background-modifier-border-hover"), base("35"));
+    derive(QStringLiteral("--background-modifier-border-focus"), base("40"));
+    derive(QStringLiteral("--background-modifier-form-field"), dark ? base("25") : base("00"));
+    derive(QStringLiteral("--background-modifier-hover"), overlay(dark, 0.067));
+    derive(QStringLiteral("--background-modifier-active"), overlay(dark, 0.10));
 
-    m_tokens[QStringLiteral("--text-normal")] = base("100");
-    m_tokens[QStringLiteral("--text-muted")] = base("70");
-    m_tokens[QStringLiteral("--text-faint")] = base("50");
-    m_tokens[QStringLiteral("--text-on-accent")] = QStringLiteral("#ffffff");
-    m_tokens[QStringLiteral("--text-error")] = m_tokens[QStringLiteral("--color-red")];
-    m_tokens[QStringLiteral("--text-accent")] = dark ? accent1 : accent;
-    m_tokens[QStringLiteral("--text-selection")] =
-        rgba(QColor(accent), dark ? 0.33 : 0.20);
+    derive(QStringLiteral("--text-normal"), base("100"));
+    derive(QStringLiteral("--text-muted"), base("70"));
+    derive(QStringLiteral("--text-faint"), base("50"));
+    derive(QStringLiteral("--text-on-accent"), QStringLiteral("#ffffff"));
+    derive(QStringLiteral("--text-error"), m_tokens[QStringLiteral("--color-red")]);
+    derive(QStringLiteral("--text-accent"), dark ? accent1 : accent);
+    derive(QStringLiteral("--text-selection"), rgba(QColor(accent), dark ? 0.33 : 0.20));
 
-    m_tokens[QStringLiteral("--interactive-normal")] = dark ? base("30") : base("00");
-    m_tokens[QStringLiteral("--interactive-hover")] = dark ? base("35") : base("10");
-    m_tokens[QStringLiteral("--interactive-accent")] = dark ? accent : accent1;
-    m_tokens[QStringLiteral("--interactive-accent-hover")] = dark ? accent1 : accent2;
+    derive(QStringLiteral("--interactive-normal"), dark ? base("30") : base("00"));
+    derive(QStringLiteral("--interactive-hover"), dark ? base("35") : base("10"));
+    derive(QStringLiteral("--interactive-accent"), dark ? accent : accent1);
+    derive(QStringLiteral("--interactive-accent-hover"), dark ? accent1 : accent2);
 
-    m_tokens[QStringLiteral("--divider-color")] = base("30");
-    m_tokens[QStringLiteral("--scrollbar-thumb-bg")] = overlay(dark, 0.10);
-    m_tokens[QStringLiteral("--scrollbar-active-thumb-bg")] = overlay(dark, 0.20);
-    m_tokens[QStringLiteral("--nav-item-color")] = m_tokens[QStringLiteral("--text-muted")];
-    m_tokens[QStringLiteral("--nav-item-color-active")] = m_tokens[QStringLiteral("--text-normal")];
+    derive(QStringLiteral("--divider-color"), base("30"));
+    derive(QStringLiteral("--scrollbar-thumb-bg"), overlay(dark, 0.10));
+    derive(QStringLiteral("--scrollbar-active-thumb-bg"), overlay(dark, 0.20));
+    derive(QStringLiteral("--nav-item-color"), m_tokens[QStringLiteral("--text-muted")]);
+    derive(QStringLiteral("--nav-item-color-active"), m_tokens[QStringLiteral("--text-normal")]);
 }
 
 QString Theme::value(const QString &token) const
@@ -179,15 +186,96 @@ QString Theme::value(const QString &token) const
     return m_tokens.value(token);
 }
 
+QColor Theme::parseColor(const QString &text)
+{
+    const QString value = text.trimmed();
+    if (value.isEmpty())
+        return {};
+
+    const qsizetype open = value.indexOf(QLatin1Char('('));
+    if (open > 0 && value.endsWith(QLatin1Char(')'))) {
+        const QString function = value.left(open).trimmed().toLower();
+        if (function != QLatin1String("rgb") && function != QLatin1String("rgba")
+            && function != QLatin1String("hsl") && function != QLatin1String("hsla"))
+            return {}; // color-mix(), oklch(), light-dark(): no Qt equivalent
+        // Commas, spaces or a slash before the alpha - CSS allows all three.
+        static const QRegularExpression number(QStringLiteral("[-+]?[0-9]*\\.?[0-9]+\\s*%?"));
+        QList<double> n;
+        bool alphaIsPercent = false;
+        auto it = number.globalMatch(value.mid(open + 1, value.size() - open - 2));
+        while (it.hasNext()) {
+            QString token = it.next().captured().trimmed();
+            const bool percent = token.endsWith(QLatin1Char('%'));
+            if (percent)
+                token.chop(1);
+            if (n.size() == 3)
+                alphaIsPercent = percent;
+            n.append(token.toDouble());
+        }
+        if (n.size() < 3)
+            return {};
+
+        double alpha = n.size() > 3 ? n.at(3) : 1.0;
+        if (alphaIsPercent)
+            alpha /= 100.0;
+
+        QColor color;
+        if (function.startsWith(QLatin1String("rgb"))) {
+            color = QColor(int(n.at(0)), int(n.at(1)), int(n.at(2)));
+        } else {
+            double hue = std::fmod(n.at(0), 360.0);
+            if (hue < 0)
+                hue += 360.0;
+            color = QColor::fromHslF(float(hue / 360.0),
+                                     float(qBound(0.0, n.at(1) / 100.0, 1.0)),
+                                     float(qBound(0.0, n.at(2) / 100.0, 1.0)));
+        }
+        color.setAlphaF(float(qBound(0.0, alpha, 1.0)));
+        return color;
+    }
+
+    if (value.compare(QLatin1String("transparent"), Qt::CaseInsensitive) == 0)
+        return QColor(0, 0, 0, 0);
+
+    return QColor::fromString(value);
+}
+
 QColor Theme::color(const QString &token) const
 {
-    return QColor(value(token));
+    return parseColor(value(token));
 }
 
 void Theme::setToken(const QString &token, const QString &value)
 {
     m_tokens[token] = value;
+    m_pinned.insert(token);
     applyDerivedTokens();
+}
+
+void Theme::setTokens(const QHash<QString, QString> &tokens)
+{
+    for (auto it = tokens.constBegin(); it != tokens.constEnd(); ++it) {
+        m_tokens[it.key()] = it.value();
+        m_pinned.insert(it.key());
+    }
+    applyDerivedTokens();
+}
+
+void Theme::resetToken(const QString &token)
+{
+    m_pinned.remove(token);
+    applyDerivedTokens();
+}
+
+QHash<QString, QString> Theme::overrides() const
+{
+    const Theme base = builtin(m_mode);
+    QHash<QString, QString> changed;
+    for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
+        if (base.value(it.key()) != it.value())
+            changed.insert(it.key(), it.value());
+    }
+    return changed;
 }
 
 void Theme::setAccent(int hue, int saturationPercent, int lightnessPercent)
@@ -195,6 +283,11 @@ void Theme::setAccent(int hue, int saturationPercent, int lightnessPercent)
     m_tokens[QStringLiteral("--accent-h")] = QString::number(hue);
     m_tokens[QStringLiteral("--accent-s")] = QString::number(saturationPercent);
     m_tokens[QStringLiteral("--accent-l")] = QString::number(lightnessPercent);
+    // The picker moves the accent, so whatever pinned the old one gives way.
+    for (const QString &token : {QStringLiteral("--color-accent"),
+                                 QStringLiteral("--color-accent-1"),
+                                 QStringLiteral("--color-accent-2")})
+        m_pinned.remove(token);
     applyDerivedTokens();
 }
 

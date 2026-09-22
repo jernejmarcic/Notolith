@@ -1,6 +1,8 @@
 add_library(noteAppC_theme STATIC
     Theme.cpp
     Theme.h
+    Scheme.cpp
+    Scheme.h
     Icons.cpp
     Icons.h)
 
