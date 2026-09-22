@@ -129,6 +129,18 @@ The markdown layer emits these and the editor ignores them:
 
 ### 4. Known bugs and smaller jobs
 
+- **The right sidebar panes miss the first index.** Open a vault with a cold
+  cache (`rm -rf ~/.cache/noteAppC`) and the backlinks pane says 0 for a note
+  that has backlinks; a warm cache hides it. The index itself is right -
+  `noteAppC-index --fresh fixtures/demo-vault Welcome` reports 2. The panes
+  need to re-resolve the active note when `Index::changed` fires.
+- **Unresolved links look like resolved ones.** `[[Nowhere]]` renders in the
+  same accent as a real link. Obsidian dims them, which is how you spot a typo
+  in a link. The editor already has a link resolver; style on its answer.
+- **Heading and block links show their raw anchor**: `Second note#Details`
+  where Obsidian shows `Second note > Details`, and `Second note#^anchor`
+  where Obsidian shows the block's text.
+
 - **Reference links resolve wrong.** md4qt reports `[text][ref]` with a target
   of `#REF//<path>`, so the index records a link to a note literally named
   `ref` and the definition's real URL is dropped. Fix by collecting the
@@ -139,7 +151,10 @@ The markdown layer emits these and the editor ignores them:
 - Source mode gives a blank line its own tall gap because block spacing
   applies there too. Obsidian's source mode has uniform line height.
 - `Settings` and `Vault` both read `.obsidian/app.json` - `Settings` for the
-  editor keys, `Vault` for `userIgnoreFilters`. Consolidate on `Settings`.
+  editor keys, `Vault` for `userIgnoreFilters`. Consolidating on `Settings`
+  was considered and deliberately deferred: the duplication is one small JSON
+  read each, and the ignore filters are tested and working. Do it when
+  something else forces a change there, not for tidiness.
 
 ### 5. Then the plan's remaining phases
 
@@ -164,9 +179,16 @@ display:
 ./build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800 --source
 ```
 
-A demo vault with one note covering most syntax is built by hand; the one used
-this session lived in the session scratchpad and is gone. Make another, or
-point the tool at any vault.
+`fixtures/demo-vault` is committed for exactly this: one note covering most of
+the syntax, a second to link to and embed, and a `.obsidian` so the
+vault-config path is exercised.
+
+```sh
+./build/tools/noteAppC_shot fixtures/demo-vault fixtures/demo-vault/Welcome.md out.png dark 1240 820
+```
+
+Use it rather than building a vault by hand, so the next person can retake the
+same screenshot.
 
 ## Working with several agents in this tree
 
