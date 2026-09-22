@@ -18,6 +18,13 @@
 namespace noteAppC {
 
 namespace {
+/// Bump when the schema changes. The cache is derived from the vault, so a
+/// mismatch drops it and rebuilds rather than migrating: a wrong migration is
+/// a silently wrong index, and a rebuild costs one pass over the notes.
+constexpr int kSchemaVersion = 2;
+} // namespace
+
+namespace {
 
 /// Obsidian normalises a link target before resolving: no extension, no
 /// percent escapes, no surrounding space, case folded for comparison.
@@ -84,8 +91,15 @@ bool Index::open(const QString &vaultRoot)
     pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
     pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
 
+    int version = 0;
+    if (pragma.exec(QStringLiteral("PRAGMA user_version")) && pragma.next())
+        version = pragma.value(0).toInt();
+    if (version != kSchemaVersion)
+        dropSchema();
+
     if (!createSchema())
         return false;
+    pragma.exec(QStringLiteral("PRAGMA user_version = %1").arg(kSchemaVersion));
 
     loadNames();
     return true;
@@ -153,12 +167,19 @@ bool Index::createSchema()
         }
     }
 
-    // ponytail: a cache built before tstart/tfinish existed just gets the
-    // columns bolted on rather than a versioned migration; errors here only
-    // mean a fresh table already created them above.
-    query.exec(QStringLiteral("ALTER TABLE links ADD COLUMN tstart INTEGER"));
-    query.exec(QStringLiteral("ALTER TABLE links ADD COLUMN tfinish INTEGER"));
     return true;
+}
+
+void Index::dropSchema()
+{
+    QSqlQuery query(m_db);
+    for (const QString &table : {QStringLiteral("content"), QStringLiteral("names"),
+                                 QStringLiteral("props"), QStringLiteral("tasks"),
+                                 QStringLiteral("blocks"), QStringLiteral("tags"),
+                                 QStringLiteral("links"), QStringLiteral("headings"),
+                                 QStringLiteral("files")}) {
+        query.exec(QStringLiteral("DROP TABLE IF EXISTS ") + table);
+    }
 }
 
 void Index::loadNames()
@@ -302,7 +323,11 @@ void Index::put(const Metadata &metadata, const QString &body)
     names.removeDuplicates();
     indexNames(fileId, path, names);
 
-    insert(QStringLiteral("INSERT INTO content(path, body) VALUES(?, ?)"), {path, body});
+    // The rowid is the file's id, so a delete is a rowid lookup rather than a
+    // scan of the whole full-text table. That scan was quadratic: 20 000 notes
+    // took 39.8 s to index, against a 5 s budget.
+    insert(QStringLiteral("INSERT INTO content(rowid, path, body) VALUES(?, ?, ?)"),
+           {fileId, path, body});
 
     if (!m_inBatch)
         emit changed();
@@ -343,16 +368,33 @@ void Index::remove(const QString &path)
         return;
     const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
 
+    // One indexed lookup first: on a cold build nothing is cached yet, so
+    // every note would otherwise pay for two deletes that match no rows.
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("DELETE FROM files WHERE path = ?"));
+    query.prepare(QStringLiteral("SELECT id FROM files WHERE path = ?"));
     query.addBindValue(relative);
+    if (!query.exec() || !query.next()) {
+        forgetNames(relative);
+        return;
+    }
+    const qint64 fileID = query.value(0).toLongLong();
+
+    query.prepare(QStringLiteral("DELETE FROM content WHERE rowid = ?"));
+    query.addBindValue(fileID);
     query.exec();
 
-    query.prepare(QStringLiteral("DELETE FROM content WHERE path = ?"));
-    query.addBindValue(relative);
+    query.prepare(QStringLiteral("DELETE FROM files WHERE id = ?"));
+    query.addBindValue(fileID);
     query.exec();
 
     forgetNames(relative);
+}
+
+int Index::contentRowCount() const
+{
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT COUNT(*) FROM content"));
+    return query.next() ? query.value(0).toInt() : 0;
 }
 
 int Index::noteCount() const

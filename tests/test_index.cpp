@@ -370,3 +370,37 @@ int main(int argc, char **argv)
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+// The full-text table is keyed by the file's id. Nothing reads it until the
+// search grammar lands, so these guard it: a stale or duplicated row would be
+// invisible until Phase 5 and then look like a parser bug.
+TEST_F(IndexTest, ReindexingLeavesOneContentRowPerFile)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+
+    build(index);
+    const int files = index.noteCount() + index.attachmentCount();
+    ASSERT_GT(files, 0);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+
+    // A second and third pass must not accumulate rows.
+    build(index);
+    build(index);
+    EXPECT_EQ(index.noteCount() + index.attachmentCount(), files);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+}
+
+TEST_F(IndexTest, RemovingANoteTakesItsContentWithIt)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const int notes = index.noteCount();
+    ASSERT_EQ(index.contentRowCount(), notes);
+
+    index.remove(dir.filePath(QStringLiteral("Home.md")));
+    EXPECT_EQ(index.noteCount(), notes - 1);
+    EXPECT_EQ(index.contentRowCount(), notes - 1);
+}

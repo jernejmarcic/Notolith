@@ -59,6 +59,10 @@ public:
     // --- reading -------------------------------------------------------
 
     int noteCount() const;
+    /// Rows in the full-text table. Equal to the file count when the cache is
+    /// consistent; the tests watch it because nothing reads the table until
+    /// the search grammar lands, so a stale row would otherwise go unnoticed.
+    int contentRowCount() const;
     int attachmentCount() const;
     QStringList allPaths() const;
     QStringList allTags() const;
@@ -91,6 +95,8 @@ signals:
 
 private:
     bool createSchema();
+    /// Drops every table, for when the cache's schema version is not ours.
+    void dropSchema();
     void loadNames();
     void indexNames(qint64 fileId, const QString &path, const QStringList &names);
     void forgetNames(const QString &path);
