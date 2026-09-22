@@ -401,6 +401,99 @@ QPlainTextEdit {
     selection-color: %{--text-normal};
 }
 
+/* Right sidebar: linked mentions ------------------------------------- */
+
+QWidget#rightSidebar {
+    background: %{--background-secondary};
+    border-left: 1px solid %{--divider-color};
+}
+QLabel#paneHeader {
+    color: %{--text-faint};
+    font-size: %{--font-ui-smaller}px;
+    font-weight: 600;
+    padding-left: 2px;
+}
+QTreeWidget#backlinkList {
+    background: transparent;
+    border: none;
+    color: %{--text-muted};
+    font-size: %{--font-ui-small}px;
+    show-decoration-selected: 0;
+}
+QTreeWidget#backlinkList::item {
+    padding: 3px 4px;
+    border-radius: %{--radius-s}px;
+    min-height: 20px;
+}
+QTreeWidget#backlinkList::item:hover {
+    background: %{--background-modifier-hover};
+    color: %{--text-normal};
+}
+QTreeWidget#backlinkList::branch {
+    background: transparent;
+    image: none;
+}
+QTreeWidget#backlinkList::branch:has-children:!has-siblings:closed,
+QTreeWidget#backlinkList::branch:closed:has-children:has-siblings {
+    image: url(:/icons/branch-collapsed.svg);
+}
+QTreeWidget#backlinkList::branch:open:has-children:!has-siblings,
+QTreeWidget#backlinkList::branch:open:has-children:has-siblings {
+    image: url(:/icons/branch-expanded.svg);
+}
+
+/* Quick switcher ------------------------------------------------------ */
+
+QDialog#quickSwitcher {
+    background: %{--background-secondary};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-l}px;
+}
+QLineEdit#quickSwitcherQuery {
+    background: %{--background-modifier-form-field};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 8px 10px;
+    color: %{--text-normal};
+    font-size: %{--font-ui-medium}px;
+}
+QLineEdit#quickSwitcherQuery:focus {
+    border-color: %{--interactive-accent};
+}
+QListWidget#quickSwitcherResults {
+    background: transparent;
+    border: none;
+    color: %{--text-muted};
+    font-size: %{--font-ui-small}px;
+}
+QListWidget#quickSwitcherResults::item {
+    padding: 6px 8px;
+    border-radius: %{--radius-s}px;
+}
+QListWidget#quickSwitcherResults::item:selected {
+    background: %{--background-modifier-active};
+    color: %{--text-normal};
+}
+
+/* The [[ suggester popup */
+QCompleter QAbstractItemView, QListView#completerPopup {
+    background: %{--background-secondary};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 4px;
+    color: %{--text-muted};
+    font-size: %{--font-ui-small}px;
+    outline: none;
+}
+QCompleter QAbstractItemView::item, QListView#completerPopup::item {
+    padding: 5px 8px;
+    border-radius: %{--radius-s}px;
+}
+QCompleter QAbstractItemView::item:selected, QListView#completerPopup::item:selected {
+    background: %{--interactive-accent};
+    color: %{--text-on-accent};
+}
+
 /* Chrome -------------------------------------------------------------- */
 
 QSplitter::handle {

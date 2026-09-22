@@ -341,9 +341,31 @@ QStringList Index::allTags() const
 
 QString Index::resolve(const QString &target, const QString &fromPath) const
 {
-    const QString wanted = normaliseTarget(target);
+    QString wanted = normaliseTarget(target);
     if (wanted.isEmpty())
         return {};
+
+    // An absolute path inside the vault is just a vault-relative one.
+    if (wanted.startsWith(m_vaultRoot + QLatin1Char('/')))
+        wanted = wanted.mid(m_vaultRoot.size() + 1);
+
+    const QString fromRelative =
+        fromPath.isEmpty() ? QString() : QDir(m_vaultRoot).relativeFilePath(fromPath);
+
+    // A target with a slash is a path: try it relative to the linking note
+    // first, then relative to the vault root, the way Obsidian does.
+    if (wanted.contains(QLatin1Char('/')) || wanted.startsWith(QLatin1String(".."))) {
+        QStringList attempts;
+        if (!fromRelative.isEmpty()) {
+            attempts << QDir::cleanPath(QFileInfo(fromRelative).path() + QLatin1Char('/') + wanted);
+        }
+        attempts << QDir::cleanPath(wanted);
+        for (const QString &attempt : std::as_const(attempts)) {
+            const QStringList hit = m_names.value(foldCase(attempt));
+            if (!hit.isEmpty())
+                return hit.first();
+        }
+    }
 
     const QStringList candidates = m_names.value(foldCase(wanted));
     if (candidates.isEmpty())
@@ -353,7 +375,7 @@ QString Index::resolve(const QString &target, const QString &fromPath) const
 
     // Ambiguous: Obsidian prefers a note in the linking note's own folder,
     // then the shallowest path, then alphabetical order for stability.
-    const QString fromFolder = QFileInfo(QDir(m_vaultRoot).relativeFilePath(fromPath)).path();
+    const QString fromFolder = QFileInfo(fromRelative).path();
     QString best;
     int bestDepth = std::numeric_limits<int>::max();
     for (const QString &candidate : candidates) {

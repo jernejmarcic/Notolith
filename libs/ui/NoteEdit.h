@@ -1,6 +1,11 @@
 #pragma once
 
 #include <QPlainTextEdit>
+#include <QStringList>
+
+#include <optional>
+
+class QCompleter;
 
 namespace noteAppC {
 
@@ -31,6 +36,9 @@ public:
     /// Space above the first line, in pixels.
     void setTopPadding(int pixels);
 
+    /// Names the `[[` suggester offers. Refreshed from the index.
+    void setLinkTargets(const QStringList &targets);
+
     /// Current left/right margin of the text column, so widgets stacked above
     /// the editor (the inline title) can line up with it.
     int sideMargin() const { return m_sideMargin; }
@@ -40,10 +48,18 @@ signals:
 
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     void updateMargins();
     void applyLineHeight();
+    /// Text typed after the nearest unclosed `[[` on this line; unset when the
+    /// cursor is not inside a wikilink. Empty means `[[` with nothing after it.
+    std::optional<QString> wikilinkPrefix() const;
+    void updateSuggestions();
+    void insertCompletion(const QString &completion);
+
+    QCompleter *m_completer = nullptr;
 
     int m_contentWidth = 700;
     int m_sideMargin = 24;

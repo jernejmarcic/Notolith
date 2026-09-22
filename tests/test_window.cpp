@@ -4,11 +4,15 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdio>
+
 #include <QApplication>
 #include <QDir>
 #include <QFileSystemModel>
 #include <QFile>
 #include <QPlainTextEdit>
+
+#include "NoteEdit.h"
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTreeView>
@@ -17,6 +21,7 @@
 #include "Vault.h"
 
 using noteAppC::MainWindow;
+using noteAppC::NoteEdit;
 
 namespace {
 
@@ -65,7 +70,7 @@ TEST_F(WindowTest, OpensAVaultAndShowsItsTree)
     EXPECT_TRUE(window.windowTitle().contains(QDir(dir.path()).dirName()));
     ASSERT_TRUE(loaded.wait(5000));
 
-    auto *tree = window.findChild<QTreeView *>();
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
     ASSERT_NE(tree, nullptr);
     ASSERT_TRUE(tree->rootIndex().isValid());
     // Projects/, Welcome.md, attachment.txt - .obsidian and dotfiles stay hidden.
@@ -78,7 +83,7 @@ TEST_F(WindowTest, OpensANoteIntoTheEditor)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
 
-    auto *editor = window.findChild<QPlainTextEdit *>();
+    auto *editor = window.findChild<NoteEdit *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_TRUE(editor->isEnabled());
     EXPECT_EQ(editor->toPlainText(), QStringLiteral("# Welcome\n\nBody.\n"));
@@ -93,7 +98,7 @@ TEST_F(WindowTest, RefusesANonNoteAndLeavesTheEditorAlone)
     window.openNote(path(QStringLiteral("Welcome.md")));
     window.openNote(path(QStringLiteral("attachment.txt")));
 
-    auto *editor = window.findChild<QPlainTextEdit *>();
+    auto *editor = window.findChild<NoteEdit *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_EQ(editor->toPlainText(), QStringLiteral("# Welcome\n\nBody.\n"));
 }
@@ -104,7 +109,7 @@ TEST_F(WindowTest, EditingMarksTheTitleAndSavingClearsIt)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
 
-    auto *editor = window.findChild<QPlainTextEdit *>();
+    auto *editor = window.findChild<NoteEdit *>();
     ASSERT_NE(editor, nullptr);
     editor->insertPlainText(QStringLiteral("x"));
     EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*')));
@@ -132,7 +137,7 @@ TEST_F(WindowTest, EditingACrlfNoteKeepsCrlf)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Projects/Crlf.md")));
 
-    auto *editor = window.findChild<QPlainTextEdit *>();
+    auto *editor = window.findChild<NoteEdit *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_EQ(editor->toPlainText(), QStringLiteral("one\ntwo\n"));
 

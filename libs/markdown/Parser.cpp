@@ -17,6 +17,7 @@ namespace {
 /// What the Obsidian pass must not look inside: code, math, raw HTML.
 struct Walk {
     const SourceMap *map = nullptr;
+    const QString *text = nullptr;
     QList<Range> masked;
     QList<Heading> headings;
     QList<Link> links;
@@ -99,17 +100,23 @@ void walkItem(MD::Item *item, Walk &walk)
         Link out;
         out.wiki = false;
         out.embed = item->type() == MD::ItemType::Image;
-        out.raw = link->url();
         out.alias = link->text();
         out.range = rangeOf(*link, map);
         out.targetRange = rangeOf(link->urlPos(), map);
 
-        QString target = link->url();
+        // md4qt resolves a relative URL against the file's directory, which
+        // would store "/home/.../PLAN.md" where the note says "PLAN.md".
+        // The index needs what the source says, so a rename rewrites it and
+        // so resolution follows Obsidian's rules rather than the filesystem's.
+        QString target = out.targetRange.isValid() && walk.text
+                             ? walk.text->mid(out.targetRange.start, out.targetRange.length())
+                             : link->url();
         const qsizetype hash = target.indexOf(QLatin1Char('#'));
         if (hash > 0) {
             out.subpath = target.mid(hash);
             target = target.left(hash);
         }
+        out.raw = target;
         out.target = QUrl::fromPercentEncoding(target.toUtf8());
         out.external = ObsidianSyntax::isExternalTarget(out.target);
         walk.links.append(out);
@@ -191,19 +198,24 @@ Metadata Parser::parse(const QString &text, const QString &path) const
     Frontmatter::parse(text, frontmatter, metadata);
 
     // md4qt knows nothing about frontmatter; feeding it the block would make
-    // the `---` fences a thematic break and a setext heading.
-    const QString body = frontmatter.isValid()
-                             ? QString(frontmatter.length(), QLatin1Char('\n')).append(
-                                   QStringView(text).mid(frontmatter.length()))
-                             : text;
+    // the `---` fences a thematic break and a setext heading. Blank the block
+    // out with spaces rather than dropping it, so every line number and column
+    // md4qt reports still indexes the real file.
+    QString body = text;
+    if (frontmatter.isValid()) {
+        for (qsizetype i = frontmatter.start; i < frontmatter.end; ++i) {
+            if (body.at(i) != QLatin1Char('\n'))
+                body[i] = QLatin1Char(' ');
+        }
+    }
 
-    QString source = body;
-    QTextStream stream(&source, QIODevice::ReadOnly);
+    QTextStream stream(&body, QIODevice::ReadOnly);
     const auto document = d->parser.parse(stream, QFileInfo(path).absolutePath(),
                                           QFileInfo(path).fileName());
 
     Walk walk;
     walk.map = &map;
+    walk.text = &text;
     if (document) {
         for (const auto &item : document->items())
             walkItem(item.data(), walk);

@@ -1,4 +1,6 @@
 add_library(noteAppC_index STATIC
+    Fuzzy.cpp
+    Fuzzy.h
     Index.cpp
     Index.h
     Indexer.cpp

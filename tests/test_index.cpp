@@ -7,6 +7,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
+#include "Fuzzy.h"
 #include "Index.h"
 #include "Indexer.h"
 #include "Parser.h"
@@ -186,6 +187,29 @@ TEST_F(IndexTest, DeletedNotesLeaveTheCache)
 
     EXPECT_EQ(index.noteCount(), 2);
     EXPECT_TRUE(index.resolve(QStringLiteral("Brainwaves")).isEmpty());
+}
+
+TEST(FuzzyTest, SubsequenceMatchingAndRanking)
+{
+    EXPECT_TRUE(Fuzzy::matches(QStringLiteral("nac"), QStringLiteral("noteAppC")));
+    EXPECT_TRUE(Fuzzy::matches(QStringLiteral(""), QStringLiteral("anything")));
+    EXPECT_FALSE(Fuzzy::matches(QStringLiteral("zz"), QStringLiteral("noteAppC")));
+    // Case insensitive both ways.
+    EXPECT_TRUE(Fuzzy::matches(QStringLiteral("HOME"), QStringLiteral("home.md")));
+
+    const auto exact = Fuzzy::score(QStringLiteral("home"), QStringLiteral("Home"));
+    const auto longer = Fuzzy::score(QStringLiteral("home"), QStringLiteral("Homework notes"));
+    const auto scattered = Fuzzy::score(QStringLiteral("home"), QStringLiteral("h o m e"));
+    EXPECT_GT(exact.score, longer.score);
+    EXPECT_GT(longer.score, scattered.score);
+
+    // Word starts beat mid-word hits: "pn" should prefer "Projects/noteAppC".
+    const auto boundary = Fuzzy::score(QStringLiteral("pn"), QStringLiteral("Projects/noteAppC"));
+    const auto midWord = Fuzzy::score(QStringLiteral("pn"), QStringLiteral("apron"));
+    EXPECT_GT(boundary.score, midWord.score);
+
+    EXPECT_EQ(Fuzzy::score(QStringLiteral("ac"), QStringLiteral("abc")).positions,
+              QList<qsizetype>({0, 2}));
 }
 
 int main(int argc, char **argv)

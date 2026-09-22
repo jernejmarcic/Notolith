@@ -17,8 +17,10 @@
 #include <QTreeView>
 #include <QVBoxLayout>
 
+#include "BacklinksPane.h"
 #include "Icons.h"
 #include "NoteEdit.h"
+#include "QuickSwitcher.h"
 
 namespace noteAppC {
 
@@ -27,6 +29,7 @@ constexpr auto kLastVault = "vault/last";
 constexpr auto kGeometry = "window/geometry";
 constexpr auto kSplitter = "window/splitter";
 constexpr auto kThemeMode = "appearance/theme";
+constexpr auto kRightSidebar = "window/rightSidebar";
 
 /// Obsidian's file explorer is text only; QFileSystemModel wants to draw
 /// desktop icons, so hand it a provider that draws nothing.
@@ -63,8 +66,10 @@ MainWindow::MainWindow(QWidget *parent)
     splitter->setObjectName(QStringLiteral("mainSplitter"));
     splitter->addWidget(buildSidebar());
     splitter->addWidget(buildMainArea());
+    splitter->addWidget(buildRightSidebar());
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
+    splitter->setStretchFactor(2, 0);
     splitter->setHandleWidth(1);
     splitter->setChildrenCollapsible(false);
 
@@ -78,6 +83,22 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(m_vaultLabel);
     statusBar()->setSizeGripEnabled(false);
 
+    m_indexer = new Indexer(&m_index, this);
+    connect(m_indexer, &Indexer::progress, this, [this](int done, int total) {
+        statusBar()->showMessage(tr("Indexing %1 of %2...").arg(done).arg(total));
+    });
+    connect(m_indexer, &Indexer::finished, this, [this](int indexed, qint64 milliseconds) {
+        statusBar()->showMessage(indexed > 0
+                                     ? tr("Indexed %1 notes in %2 ms").arg(indexed).arg(milliseconds)
+                                     : tr("Index up to date"),
+                                 4000);
+        onIndexChanged();
+    });
+    connect(&m_index, &Index::changed, this, &MainWindow::onIndexChanged);
+
+    m_switcher = new QuickSwitcher(this);
+    connect(m_switcher, &QuickSwitcher::accepted, this, &MainWindow::openRelative);
+
     buildActions();
     applyTheme();
     resize(1180, 760);
@@ -85,7 +106,8 @@ MainWindow::MainWindow(QWidget *parent)
     restoreGeometry(settings.value(kGeometry).toByteArray());
     splitter->restoreState(settings.value(kSplitter).toByteArray());
     if (splitter->sizes().value(0) <= 0)
-        splitter->setSizes({260, 880});
+        splitter->setSizes({260, 640, 260});
+    m_backlinks->setVisible(settings.value(kRightSidebar, true).toBool());
 
     const QString last = settings.value(kLastVault).toString();
     if (!last.isEmpty() && QFileInfo(last).isDir())
@@ -190,6 +212,12 @@ QWidget *MainWindow::buildSidebar()
         m_tree->hideColumn(column);
     connect(m_tree, &QTreeView::activated, this, &MainWindow::onTreeActivated);
     connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeActivated);
+    // QFileSystemModel fills a directory on a worker thread, so the root
+    // index is not usable until it says so.
+    connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
+        if (m_vault.isValid() && path == m_vault.root())
+            m_tree->setRootIndex(m_files->index(m_vault.root()));
+    });
 
     auto *layout = new QVBoxLayout(m_sidebar);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -253,6 +281,15 @@ QWidget *MainWindow::buildMainArea()
     return main;
 }
 
+QWidget *MainWindow::buildRightSidebar()
+{
+    m_backlinks = new BacklinksPane(this);
+    m_backlinks->setMinimumWidth(200);
+    m_backlinks->setIndex(&m_index);
+    connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
+    return m_backlinks;
+}
+
 void MainWindow::buildActions()
 {
     // No menu bar: Obsidian has none, and Phase 4 replaces these with the
@@ -267,12 +304,42 @@ void MainWindow::buildActions()
     add(QStringLiteral("Ctrl+Shift+O"), &MainWindow::chooseVault);
     add(QStringLiteral("Ctrl+S"), [this] { save(); });
     add(QStringLiteral("Ctrl+Alt+S"), &MainWindow::toggleSidebar);
+    add(QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
+    add(QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
     add(QStringLiteral("Ctrl+Q"), &MainWindow::close);
 }
 
 void MainWindow::toggleSidebar()
 {
     m_sidebar->setVisible(!m_sidebar->isVisible());
+}
+
+void MainWindow::toggleRightSidebar()
+{
+    m_backlinks->setVisible(!m_backlinks->isVisible());
+    QSettings().setValue(kRightSidebar, m_backlinks->isVisible());
+}
+
+void MainWindow::openQuickSwitcher()
+{
+    if (!m_vault.isValid())
+        return;
+    m_switcher->setCandidates(m_index.allPaths());
+    m_switcher->popUp();
+}
+
+void MainWindow::openRelative(const QString &relativePath)
+{
+    if (!relativePath.isEmpty() && m_vault.isValid())
+        openNote(m_vault.absolute(relativePath));
+}
+
+void MainWindow::onIndexChanged()
+{
+    m_editor->setLinkTargets(m_index.linkTargets());
+    m_backlinks->refresh();
+    if (m_index.isOpen() && m_notePath.isEmpty())
+        m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }
 
 void MainWindow::toggleThemeMode()
@@ -349,6 +416,8 @@ void MainWindow::openVault(const QString &path)
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     m_vaultName->setText(m_vault.name());
+    m_backlinks->setNote(QString());
+    m_indexer->setVault(m_vault);
     QSettings().setValue(kLastVault, m_vault.root());
 
     statusBar()->showMessage(m_vault.hasObsidianConfig()
@@ -401,6 +470,7 @@ void MainWindow::openNote(const QString &path)
     else
         m_tabs->setTabText(0, title);
 
+    m_backlinks->setNote(path);
     updateTitle();
     updateWordCount();
 }
@@ -422,6 +492,7 @@ bool MainWindow::save()
     m_note = note;
     m_editor->document()->setModified(false);
     statusBar()->showMessage(tr("Saved %1").arg(m_vault.relative(m_notePath)), 2000);
+    m_indexer->reindex(m_notePath);
     return true;
 }
 
