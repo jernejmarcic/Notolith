@@ -2,6 +2,8 @@
 
 #include <QAbstractScrollArea>
 #include <QElapsedTimer>
+#include <QFutureWatcher>
+#include <QHash>
 #include <QTextLayout>
 #include <QTimer>
 
@@ -90,6 +92,8 @@ protected:
 
 private:
     /// One top-level block: the unit that is laid out, cached and revealed.
+    /// Blocks outside the viewport carry an estimated height and no layout,
+    /// which is what keeps a 200 kB note responsive.
     struct BlockView {
         BlockSpan span;
         DisplayMap map;
@@ -97,12 +101,34 @@ private:
         qreal y = 0;
         qreal height = 0;
         bool active = false;
+        bool laidOut = false;
+        bool heightEstimated = false;
+        /// Indices into the sorted decoration lists that touch this block, so
+        /// laying one out never walks the whole document.
+        int firstStyle = 0;
+        int lastStyle = 0;
+        int firstSyntax = 0;
+        int lastSyntax = 0;
     };
 
+    /// Parses on the calling thread. Used when the whole note changes.
     void reparse();
+    /// Starts a parse on the thread pool; the editor never waits for it.
+    void startParse();
+    void adoptDecorations(Decorations decorations);
     void rebuildBlocks();
+    void indexDecorations();
     void layoutBlock(BlockView &view);
-    void layoutAll();
+    /// Heights, positions, and layouts for the blocks near the viewport.
+    void updateLayout();
+    void invalidateLayouts();
+    qreal estimatedHeight(const BlockView &view) const;
+    qreal lineHeightFor(const BlockSpan &span) const;
+    mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
+    /// Moves every range at or after `at` by `delta`, so one keystroke does
+    /// not need a reparse before the caret's block can be redrawn.
+    void shiftRanges(qsizetype at, qsizetype delta);
+    void applyEdit(qsizetype at, qsizetype removed, const QString &inserted);
     void updateScrollRange();
     int contentLeft() const;
     int contentWidth() const;
@@ -135,7 +161,7 @@ private:
     Mode m_mode = Mode::LivePreview;
 
     QString m_text;
-    Decorations m_decorations;
+    Decorations m_decorations; ///< styles and syntax kept sorted by start
     std::vector<BlockView> m_blocks; // move-only: QTextLayout is not copyable
 
     qsizetype m_cursor = 0;
@@ -164,6 +190,15 @@ private:
 
     QCompleter *m_completer = nullptr;
     QTimer m_parseTimer;
+    /// The parse runs off the UI thread; a generation counter says whether the
+    /// result still describes the text in the buffer.
+    struct ParseJob {
+        Decorations decorations;
+        quint64 version = 0;
+    };
+    QFutureWatcher<ParseJob> m_parseWatcher;
+    quint64 m_textVersion = 0;
+    quint64 m_parsedVersion = 0;
     bool m_cursorOn = true;
     QTimer m_blink;
 };

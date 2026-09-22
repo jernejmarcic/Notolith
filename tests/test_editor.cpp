@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <QElapsedTimer>
 #include <QRandomGenerator>
+
+#include <cstdio>
 
 #include <memory>
 
@@ -259,6 +262,60 @@ TEST(MarkdownEditorTest, CursorSkipsOverHiddenSyntax)
     editor->setCursorOffset(4);
     EXPECT_EQ(editor->displayText(), QStringLiteral("see shown end\n"));
     EXPECT_EQ(editor->noteText(), source);
+}
+
+namespace {
+
+/// A note of roughly `kilobytes` kB with realistic structure.
+QString generateNote(int kilobytes)
+{
+    QString text;
+    int block = 0;
+    while (text.size() < kilobytes * 1024) {
+        text += QStringLiteral("## Section %1\n\nA paragraph with **bold**, *italic*, "
+                               "a [[Wikilink %1]], a #tag%1 and `code`. It runs long enough "
+                               "to wrap across a line or two in the editor.\n\n"
+                               "- a list item\n- another one\n\n")
+                    .arg(block++);
+    }
+    return text;
+}
+
+} // namespace
+
+// The plan's budget: keystroke to paint under 8 ms on a 200 kB note. This
+// asserts the parse-and-relayout half, which is the part that can blow it.
+TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
+{
+    const QString note = generateNote(200);
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size() / 2);
+    editor->enterBlockAt(note.size() / 2);
+
+    QElapsedTimer clock;
+    clock.start();
+    constexpr int kKeystrokes = 20;
+    for (int i = 0; i < kKeystrokes; ++i)
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    const double perKeystroke = double(clock.nsecsElapsed()) / kKeystrokes / 1e6;
+
+    std::printf("[ PERF     ] %.2f kB note, %.2f ms per keystroke\n",
+                note.size() / 1024.0, perKeystroke);
+    EXPECT_LT(perKeystroke, 8.0);
+}
+
+TEST(MarkdownEditorTest, OpeningALargeNoteIsFast)
+{
+    const QString note = generateNote(200);
+    QElapsedTimer clock;
+    clock.start();
+    auto editor = editorWith(note);
+    const double milliseconds = clock.nsecsElapsed() / 1e6;
+
+    std::printf("[ PERF     ] open %.2f kB note: %.2f ms, %lld blocks\n",
+                note.size() / 1024.0, milliseconds,
+                (long long)editor->displayText().count(QLatin1Char('\n')));
+    EXPECT_LT(milliseconds, 300.0);
 }
 
 int main(int argc, char **argv)

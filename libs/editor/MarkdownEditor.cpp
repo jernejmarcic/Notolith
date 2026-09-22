@@ -8,6 +8,7 @@
 #include <QPainter>
 #include <QScrollBar>
 #include <QStringListModel>
+#include <QtConcurrent>
 #include <QTextLine>
 #include <algorithm>
 
@@ -49,15 +50,25 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
     horizontalScrollBar()->setRange(0, 0);
+    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
+        updateLayout(); // blocks scrolling into view need their real layout
+    });
 
     // ponytail: the parse is synchronous behind a short debounce. It measures
     // well under the keystroke budget on notes this size; move it to the
     // thread pool when a 1 MB note says otherwise.
     m_parseTimer.setSingleShot(true);
     m_parseTimer.setInterval(20);
-    connect(&m_parseTimer, &QTimer::timeout, this, [this] {
-        reparse();
-        viewport()->update();
+    connect(&m_parseTimer, &QTimer::timeout, this, &MarkdownEditor::startParse);
+    connect(&m_parseWatcher, &QFutureWatcher<ParseJob>::finished, this, [this] {
+        if (m_parseWatcher.future().resultCount() == 0)
+            return;
+        ParseJob job = m_parseWatcher.result();
+        adoptDecorations(std::move(job.decorations));
+        m_parsedVersion = job.version;
+        // The buffer moved on while we were parsing: go round again.
+        if (m_parsedVersion != m_textVersion)
+            startParse();
     });
 
     m_blink.setInterval(QApplication::cursorFlashTime() / 2);
@@ -129,28 +140,27 @@ void MarkdownEditor::insertCompletion(const QString &completion)
 
     // Replace what was typed, then step over the closing brackets if the
     // auto-pair already put them there.
-    m_text.remove(m_cursor - prefix->size(), prefix->size());
-    m_cursor -= prefix->size();
-    const bool closed = QStringView(m_text).mid(m_cursor).startsWith(QLatin1String("]]"));
-    m_text.insert(m_cursor, closed ? completion : completion + QLatin1String("]]"));
-    m_cursor += completion.size() + 2;
-    m_anchor = m_cursor;
-
-    setModified(true);
-    reparse();
-    m_activeBlock = blockAt(m_cursor);
-    layoutAll();
-    emit textChanged();
-    viewport()->update();
+    const qsizetype at = m_cursor - prefix->size();
+    const bool closed =
+        QStringView(m_text).mid(m_cursor).startsWith(QLatin1String("]]"));
+    applyEdit(at, prefix->size(), closed ? completion : completion + QLatin1String("]]"));
+    if (closed)
+        m_cursor = m_anchor = m_cursor + 2;
 }
 
-MarkdownEditor::~MarkdownEditor() = default;
+MarkdownEditor::~MarkdownEditor()
+{
+    if (m_parseWatcher.isRunning())
+        m_parseWatcher.waitForFinished();
+}
 
 void MarkdownEditor::setTheme(const Theme &theme)
 {
     m_theme = theme;
+    m_lineHeights.clear();
+    invalidateLayouts();
     setFont(theme.textFont());
-    layoutAll();
+    updateLayout();
     viewport()->update();
 }
 
@@ -159,13 +169,15 @@ void MarkdownEditor::setMode(Mode mode)
     if (m_mode == mode)
         return;
     m_mode = mode;
-    layoutAll();
+    invalidateLayouts();
+    updateLayout();
     viewport()->update();
 }
 
 void MarkdownEditor::setNoteText(const QString &text)
 {
     m_text = text;
+    ++m_textVersion;
     m_cursor = m_anchor = 0;
     m_activeBlock = -1;
     m_undo.clear();
@@ -190,23 +202,41 @@ void MarkdownEditor::setReadableLineLength(bool on)
     if (m_readable == on)
         return;
     m_readable = on;
-    layoutAll();
+    invalidateLayouts();
+    updateLayout();
     viewport()->update();
 }
 
 void MarkdownEditor::setContentWidth(int pixels)
 {
     m_contentWidth = qMax(200, pixels);
-    layoutAll();
+    invalidateLayouts();
+    updateLayout();
     viewport()->update();
 }
 
 QString MarkdownEditor::displayText() const
 {
+    // Blocks off screen carry no layout and no map, so this builds what they
+    // would show. Test and debug helper only; painting never calls it.
     QStringList parts;
     parts.reserve(int(m_blocks.size()));
-    for (const BlockView &view : m_blocks)
-        parts << view.map.text();
+    for (const BlockView &view : m_blocks) {
+        if (view.laidOut) {
+            parts << view.map.text();
+            continue;
+        }
+        const bool reveal = m_mode == Mode::Source
+                            || (m_mode == Mode::LivePreview && view.active);
+        if (reveal) {
+            parts << m_text.mid(view.span.range.start, view.span.range.length());
+            continue;
+        }
+        QList<Range> hidden;
+        for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
+            hidden.append(m_decorations.syntax.at(i));
+        parts << DisplayMap::build(m_text, view.span.range, hidden).text();
+    }
     return parts.join(QString());
 }
 
@@ -214,7 +244,7 @@ void MarkdownEditor::enterBlockAt(qsizetype offset)
 {
     m_interacted = true;
     moveCursor(offset, false);
-    layoutAll();
+    updateLayout();
     viewport()->update();
 }
 
@@ -233,11 +263,122 @@ int MarkdownEditor::wordCount() const
 
 // --- parsing and block construction --------------------------------------
 
+namespace {
+
+/// One parser per worker thread: md4qt parsers are cheap but not shareable.
+Parser &threadParser()
+{
+    static thread_local Parser parser;
+    return parser;
+}
+
+/// Sorted once, so every later lookup is a binary search instead of a walk
+/// over the whole document.
+void sortDecorations(Decorations &decorations)
+{
+    std::sort(decorations.syntax.begin(), decorations.syntax.end(),
+              [](const Range &l, const Range &r) { return l.start < r.start; });
+    std::sort(decorations.styles.begin(), decorations.styles.end(),
+              [](const StyleSpan &l, const StyleSpan &r) { return l.range.start < r.range.start; });
+}
+
+} // namespace
+
 void MarkdownEditor::reparse()
 {
-    m_decorations = m_parser.parseAll(m_text).decorations;
+    m_parseTimer.stop();
+    Decorations decorations = m_parser.parseAll(m_text).decorations;
+    sortDecorations(decorations);
+    m_parsedVersion = m_textVersion;
+    adoptDecorations(std::move(decorations));
+}
+
+void MarkdownEditor::startParse()
+{
+    if (m_parseWatcher.isRunning())
+        return; // the finished handler starts the next one
+
+    const QString snapshot = m_text;
+    const quint64 version = m_textVersion;
+    m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version] {
+        ParseJob job;
+        job.decorations = threadParser().parseAll(snapshot).decorations;
+        sortDecorations(job.decorations);
+        job.version = version;
+        return job;
+    }));
+}
+
+void MarkdownEditor::adoptDecorations(Decorations decorations)
+{
+    m_decorations = std::move(decorations);
     rebuildBlocks();
-    layoutAll();
+    indexDecorations();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::indexDecorations()
+{
+    // One merge pass: each block records the slice of the sorted decoration
+    // lists that can possibly touch it.
+    const auto assign = [](auto &items, auto start, int &first, int &last,
+                           const Range &block, int &walker) {
+        while (walker > 0 && start(items.at(walker - 1)) >= block.start)
+            --walker;
+        while (walker < items.size() && start(items.at(walker)) < block.start)
+            ++walker;
+        first = walker;
+        int end = walker;
+        while (end < items.size() && start(items.at(end)) < block.end)
+            ++end;
+        last = end;
+    };
+
+    int syntaxWalker = 0;
+    int styleWalker = 0;
+    for (BlockView &view : m_blocks) {
+        assign(m_decorations.syntax, [](const Range &r) { return r.start; },
+               view.firstSyntax, view.lastSyntax, view.span.range, syntaxWalker);
+        assign(m_decorations.styles, [](const StyleSpan &s) { return s.range.start; },
+               view.firstStyle, view.lastStyle, view.span.range, styleWalker);
+    }
+}
+
+void MarkdownEditor::invalidateLayouts()
+{
+    for (BlockView &view : m_blocks) {
+        view.layout.reset();
+        view.laidOut = false;
+        view.heightEstimated = false;
+        view.height = 0;
+    }
+}
+
+qreal MarkdownEditor::lineHeightFor(const BlockSpan &span) const
+{
+    // Building a QFont and its metrics per block per layout pass is what made
+    // a keystroke cost tens of milliseconds on a long note.
+    const int key = int(span.kind) * 16 + span.level;
+    const auto cached = m_lineHeights.constFind(key);
+    if (cached != m_lineHeights.constEnd())
+        return *cached;
+
+    const qreal height = QFontMetricsF(fontFor(span)).height() * 1.5;
+    m_lineHeights.insert(key, height);
+    return height;
+}
+
+qreal MarkdownEditor::estimatedHeight(const BlockView &view) const
+{
+    // Lines in the source, plus an allowance for wrapping, is close enough
+    // for a scrollbar; the real height arrives when the block scrolls in.
+    const qsizetype lines =
+        QStringView(m_text).mid(view.span.range.start, view.span.range.length())
+            .count(QLatin1Char('\n'))
+        + 1;
+    return lines * lineHeightFor(view.span);
 }
 
 void MarkdownEditor::rebuildBlocks()
@@ -285,12 +426,16 @@ void MarkdownEditor::rebuildBlocks()
 
 qsizetype MarkdownEditor::blockAt(qsizetype sourceOffset) const
 {
-    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
-        const Range &range = m_blocks.at(size_t(i)).span.range;
-        if (sourceOffset >= range.start && sourceOffset <= range.end)
-            return i;
-    }
-    return m_blocks.empty() ? -1 : qsizetype(m_blocks.size()) - 1;
+    if (m_blocks.empty())
+        return -1;
+
+    // Blocks are sorted and cover the document without gaps.
+    auto it = std::upper_bound(m_blocks.cbegin(), m_blocks.cend(), sourceOffset,
+                               [](qsizetype offset, const BlockView &view) {
+                                   return offset < view.span.range.start;
+                               });
+    const qsizetype index = qsizetype(std::distance(m_blocks.cbegin(), it)) - 1;
+    return qBound<qsizetype>(0, index, qsizetype(m_blocks.size()) - 1);
 }
 
 QFont MarkdownEditor::fontFor(const BlockSpan &span) const
@@ -334,7 +479,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
     // In source mode the markers stay visible, so colour them like Obsidian
     // rather than hiding them.
     if (m_mode == Mode::Source || view.active) {
-        for (const Range &marker : m_decorations.syntax) {
+        for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+            const Range &marker = m_decorations.syntax.at(i);
             if (!marker.overlaps(block))
                 continue;
             QTextCharFormat format;
@@ -343,7 +489,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view
         }
     }
 
-    for (const StyleSpan &span : m_decorations.styles) {
+    for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        const StyleSpan &span = m_decorations.styles.at(i);
         if (!span.range.overlaps(block))
             continue;
 
@@ -402,10 +549,14 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 {
     const bool reveal = m_mode == Mode::Source
                         || (m_mode == Mode::LivePreview && view.active);
+    QList<Range> hidden;
+    if (!reveal) {
+        hidden.reserve(view.lastSyntax - view.firstSyntax);
+        for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
+            hidden.append(m_decorations.syntax.at(i));
+    }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
-                      : DisplayMap::build(m_text, view.span.range,
-                                          m_decorations.hiddenFor(view.span.range,
-                                                                  std::numeric_limits<qsizetype>::min()));
+                      : DisplayMap::build(m_text, view.span.range, hidden);
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -440,21 +591,64 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     }
     view.layout->endLayout();
     view.height = qMax(height, lineHeight) + headingAir;
+    view.laidOut = true;
 }
 
-void MarkdownEditor::layoutAll()
+void MarkdownEditor::updateLayout()
 {
-    qreal y = m_topPadding;
-    for (BlockView &view : m_blocks) {
-        // Obsidian keeps the caret's own block raw even when the pane loses
-        // focus, so interaction - not focus - is what reveals it.
-        view.active = m_mode == Mode::LivePreview && m_interacted
-                      && qsizetype(&view - m_blocks.data()) == m_activeBlock;
-        layoutBlock(view);
-        view.y = y;
-        y += view.height + kBlockSpacing;
+    if (m_blocks.empty())
+        return;
+
+    // Obsidian keeps the caret's own block raw even when the pane loses
+    // focus, so interaction - not focus - is what reveals it.
+    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
+        BlockView &view = m_blocks[size_t(i)];
+        const bool active = m_mode == Mode::LivePreview && m_interacted && i == m_activeBlock;
+        if (active != view.active) {
+            view.active = active;
+            view.layout.reset();
+            view.laidOut = false;
+            view.heightEstimated = false;
+        }
     }
-    m_totalHeight = y + m_topPadding;
+
+    const auto place = [this] {
+        qreal y = m_topPadding;
+        for (BlockView &view : m_blocks) {
+            view.y = y;
+            if (!view.laidOut && !view.heightEstimated) {
+                view.height = estimatedHeight(view);
+                view.heightEstimated = true;
+            }
+            y += view.height + kBlockSpacing;
+        }
+        m_totalHeight = y + m_topPadding;
+    };
+
+    place();
+
+    // Lay out what is on screen, plus a screen either side so scrolling does
+    // not stutter, plus the caret's block wherever it is.
+    const qreal scroll = verticalScrollBar()->value();
+    const qreal top = scroll - viewport()->height();
+    const qreal bottom = scroll + 2 * viewport()->height();
+
+    bool heightsChanged = false;
+    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
+        BlockView &view = m_blocks[size_t(i)];
+        const bool nearViewport = view.y + view.height >= top && view.y <= bottom;
+        if (!nearViewport && i != m_activeBlock)
+            continue;
+        if (view.laidOut)
+            continue;
+
+        const qreal before = view.height;
+        layoutBlock(view);
+        heightsChanged = heightsChanged || !qFuzzyCompare(before + 1, view.height + 1);
+    }
+
+    if (heightsChanged)
+        place();
     updateScrollRange();
 }
 
@@ -606,7 +800,9 @@ void MarkdownEditor::ensureCursorVisible()
 void MarkdownEditor::resizeEvent(QResizeEvent *event)
 {
     QAbstractScrollArea::resizeEvent(event);
-    layoutAll();
+    // Line breaking depends on the width, so every cached layout is stale.
+    invalidateLayouts();
+    updateLayout();
 }
 
 // --- cursor ---------------------------------------------------------------
@@ -627,7 +823,7 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
 
     m_activeBlock = blockAt(m_cursor);
     if (m_activeBlock != previousBlock)
-        layoutAll(); // the two blocks swap between raw and rendered
+        updateLayout(); // the two blocks swap between raw and rendered
 
     ensureCursorVisible();
     m_cursorOn = true;
@@ -668,6 +864,57 @@ void MarkdownEditor::pushUndo()
     m_lastEdit.restart();
 }
 
+void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
+{
+    const auto shift = [at, delta](Range &range) {
+        if (range.start >= at)
+            range.start += delta;
+        if (range.end >= at)
+            range.end += delta;
+    };
+    for (BlockView &view : m_blocks)
+        shift(view.span.range);
+    for (Range &range : m_decorations.syntax)
+        shift(range);
+    for (StyleSpan &span : m_decorations.styles)
+        shift(span.range);
+    for (BlockSpan &span : m_decorations.blocks)
+        shift(span.range);
+}
+
+void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &inserted)
+{
+    m_text.remove(at, removed);
+    m_text.insert(at, inserted);
+
+    // The caret's block is shown raw, so a stale decoration inside it changes
+    // nothing on screen; every other block is untouched by this edit. Shifting
+    // the offsets is therefore enough until the debounced parse lands.
+    ++m_textVersion;
+    const qsizetype delta = inserted.size() - removed;
+    shiftRanges(at + removed, delta);
+    if (delta != 0) {
+        const qsizetype index = blockAt(at);
+        if (index >= 0 && index < qsizetype(m_blocks.size())) {
+            BlockView &view = m_blocks[size_t(index)];
+            view.span.range.end += delta;
+            view.layout.reset();
+            view.laidOut = false;
+            view.heightEstimated = false;
+        }
+    }
+
+    m_cursor = m_anchor = at + inserted.size();
+    m_activeBlock = blockAt(m_cursor);
+
+    setModified(true);
+    updateLayout();
+    ensureCursorVisible();
+    m_parseTimer.start(); // the real parse catches up when typing pauses
+    emit textChanged();
+    viewport()->update();
+}
+
 void MarkdownEditor::insertText(const QString &text)
 {
     if (m_mode == Mode::Reading || text.isEmpty())
@@ -675,21 +922,7 @@ void MarkdownEditor::insertText(const QString &text)
     pushUndo();
 
     const Range selected = selection();
-    if (selected.length() > 0) {
-        m_text.remove(selected.start, selected.length());
-        m_cursor = selected.start;
-    }
-    m_text.insert(m_cursor, text);
-    m_cursor += text.size();
-    m_anchor = m_cursor;
-
-    setModified(true);
-    reparse();
-    m_activeBlock = blockAt(m_cursor);
-    layoutAll();
-    ensureCursorVisible();
-    emit textChanged();
-    viewport()->update();
+    applyEdit(selected.start, selected.length(), text);
 }
 
 void MarkdownEditor::removeSelectionOrChar(int direction)
@@ -709,16 +942,7 @@ void MarkdownEditor::removeSelectionOrChar(int direction)
     }
 
     pushUndo();
-    m_text.remove(toRemove.start, toRemove.length());
-    m_cursor = m_anchor = toRemove.start;
-
-    setModified(true);
-    reparse();
-    m_activeBlock = blockAt(m_cursor);
-    layoutAll();
-    ensureCursorVisible();
-    emit textChanged();
-    viewport()->update();
+    applyEdit(toRemove.start, toRemove.length(), QString());
 }
 
 void MarkdownEditor::undo()
@@ -728,6 +952,7 @@ void MarkdownEditor::undo()
     m_redo.append({m_text, m_cursor});
     const Snapshot snapshot = m_undo.takeLast();
     m_text = snapshot.text;
+    ++m_textVersion;
     m_cursor = m_anchor = qBound<qsizetype>(0, snapshot.cursor, m_text.size());
     setModified(true);
     reparse();
@@ -742,6 +967,7 @@ void MarkdownEditor::redo()
     m_undo.append({m_text, m_cursor});
     const Snapshot snapshot = m_redo.takeLast();
     m_text = snapshot.text;
+    ++m_textVersion;
     m_cursor = m_anchor = qBound<qsizetype>(0, snapshot.cursor, m_text.size());
     setModified(true);
     reparse();
@@ -772,7 +998,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
     const bool control = event->modifiers().testFlag(Qt::ControlModifier);
     if (!m_interacted) {
         m_interacted = true;
-        layoutAll();
+        updateLayout();
     }
 
     if (control) {
@@ -854,10 +1080,10 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         // Typing the second bracket closes the pair, as in Obsidian.
         if (event->text() == QLatin1String("[")
             && QStringView(m_text).mid(0, m_cursor).endsWith(QLatin1String("[["))) {
-            m_text.insert(m_cursor, QStringLiteral("]]"));
-            reparse();
-            layoutAll();
-            viewport()->update();
+            const qsizetype at = m_cursor;
+            applyEdit(at, 0, QStringLiteral("]]"));
+            m_cursor = m_anchor = at; // stay between the brackets
+            m_activeBlock = blockAt(m_cursor);
         }
         updateSuggestions();
         return;
@@ -881,7 +1107,7 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     m_goalX = -1;
     m_interacted = true;
     moveCursor(offsetAt(event->pos()), event->modifiers().testFlag(Qt::ShiftModifier));
-    layoutAll();
+    updateLayout();
     viewport()->update();
 }
 
