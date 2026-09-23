@@ -8,8 +8,6 @@
 #include "Metadata.h"
 
 namespace noteAppC {
-class Index;
-class Vault;
 class Theme;
 class CodeHighlighter;
 } // namespace noteAppC
@@ -78,13 +76,23 @@ struct ContentResult {
 /// What a render needs beyond the note itself: the rest of the published
 /// site to link and embed against, and the render engines a page's math and
 /// code need. All by reference; the caller (Publisher) owns the lifetime and
-/// decides what is safe to share across threads - see its own comment on
-/// why `highlighterDark`/`highlighterLight` must be this thread's own
-/// instances while `math`/`mathMutex` are shared and serialised.
+/// decides what is safe to share across threads.
+///
+/// `resolveCache` stands in for a live Index: Index::resolve() touches the
+/// QSqlDatabase connection the Index opened on Publisher's own thread, and
+/// Qt requires a connection be used only from the thread that created it -
+/// the same class of constraint that ruled out calling MathRenderer from a
+/// worker thread. Publisher resolves every link once, up front, on its own
+/// thread, and hands every worker this read-only table instead - see its
+/// own comment on why this doubles as backlinks() too, once resolution is
+/// already known rather than queried separately per page.
 struct RenderEnv {
     const PublishedNotes &notes;
-    const noteAppC::Index &index;
-    const noteAppC::Vault &vault;
+    /// Key: target + '\x01' + the linking note's own relativePath (resolve()
+    /// takes the same target text different ways depending which note is
+    /// asking, via fromPath's folder tie-break). Value: the resolved
+    /// vault-relative path, or empty for unresolved.
+    const QHash<QString, QString> &resolveCache;
     noteAppC::CodeHighlighter &highlighterDark;
     noteAppC::CodeHighlighter *highlighterLight = nullptr; ///< null unless the site is "both"
     const noteAppC::Theme &themeDark;

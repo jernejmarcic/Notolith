@@ -8,9 +8,12 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
 #include <QtConcurrent>
 
 #include <algorithm>
+#include <atomic>
+#include <functional>
 
 #include "CodeHighlighter.h"
 #include "Index.h"
@@ -71,7 +74,21 @@ QByteArray sha1Hex(const QByteArray &bytes)
 struct NavNode {
     QMap<QString, NavNode> folders; // QMap keeps folder names sorted for free
     QList<const ParsedNote *> notes;
+    /// This folder's own notes plus every descendant's, filled by
+    /// buildNavTree() once construction is done - renderNav()'s other
+    /// reason to auto-expand a folder besides it being on the active page's
+    /// own path, so an ordinary small vault (almost everything one) stays
+    /// fully browsable from any page's sidebar and only a folder that is
+    /// itself large enough to be the problem ever collapses.
+    int totalNotes = 0;
 };
+
+/// Below this, a folder always expands in the nav regardless of which page
+/// is being rendered - chosen as "obviously fine to ship on every page"
+/// (a few hundred links is a normal-sized page), not measured against any
+/// particular budget; the flat 4 000-notes-in-one-folder shape the 20 000
+/// note benchmark vault uses is well past it either way.
+constexpr int kNavAutoExpandNotes = 300;
 
 NavNode buildNavTree(const PublishedNotes &notes)
 {
@@ -93,54 +110,137 @@ NavNode buildNavTree(const PublishedNotes &notes)
             cursor = &cursor->folders[part];
         cursor->notes.append(n);
     }
+
+    // Post-order: a folder's total needs every child's total first.
+    const std::function<int(NavNode &)> sumTotals = [&](NavNode &node) -> int {
+        int total = node.notes.size();
+        for (auto it = node.folders.begin(); it != node.folders.end(); ++it)
+            total += sumTotals(it.value());
+        node.totalNotes = total;
+        return total;
+    };
+    sumTotals(root);
     return root;
 }
 
-QString renderNav(const NavNode &node, const QString &currentRelativePath, const QString &fromOutputPath)
+/// Every "../" a page needs to reach the site root, purely from how many
+/// folder levels its own output path has - see renderNav()'s own comment on
+/// why hrefs are computed this way instead of Slugs::relativeHref()'s
+/// shortest form.
+QString rootRelativePrefix(const QString &outputPath)
+{
+    return QStringLiteral("../").repeated(outputPath.count(QLatin1Char('/')));
+}
+
+/// The nav tree for one "../" depth and one *active* folder path (the
+/// current page's own folder, "" for the vault root) - every folder on that
+/// path expands, every other folder is named but its notes are not emitted
+/// at all, not merely hidden by CSS. Without this, every page's sidebar
+/// carries a link to every published note in the vault: fine at a few
+/// hundred notes, a genuine correctness problem past a few thousand - the
+/// first 20 000-note benchmark of this lane wrote pages that averaged
+/// 1.5 MB each (30 GB for the whole site) purely from this one tree
+/// appearing, fully expanded, on every single page. `expandAll` bypasses
+/// the collapsing entirely for the one page that is supposed to list
+/// everything - the generated site index used when no home note is set.
+///
+/// Also deliberately *not* Slugs::relativeHref()'s shortest relative path
+/// (which depends on how much of the FROM and TO paths' folders are shared,
+/// not just their depth): every href here is `upPrefix + note.outputPath`,
+/// always correct - a relative URL resolves the same however many redundant
+/// "../y/../" pairs it has to walk - just not always the shortest one. That
+/// is what makes this cacheable by (depth, active folder) rather than
+/// needing a fresh render per page: every page in the same folder, at the
+/// same depth, gets byte-identical nav HTML, so a vault needs only one
+/// render per distinct folder (not per note) - the difference between the
+/// nav costing O(folders) and O(pages^2) at 20 000 notes, see the session
+/// report for the measured numbers.
+QString renderNav(const NavNode &node, const QString &upPrefix, const QString &activeFolderPath,
+                  bool expandAll = false, const QString &pathSoFar = QString())
 {
     QString html = QStringLiteral("<ul>");
     for (auto it = node.folders.constBegin(); it != node.folders.constEnd(); ++it) {
-        html += QStringLiteral("<li class=\"nav-folder\"><span>%1</span>%2</li>")
-                   .arg(escapeHtml(it.key()), renderNav(it.value(), currentRelativePath, fromOutputPath));
+        const QString childPath = pathSoFar.isEmpty() ? it.key() : pathSoFar + QLatin1Char('/') + it.key();
+        const bool expand = expandAll || it.value().totalNotes <= kNavAutoExpandNotes
+            || activeFolderPath == childPath || activeFolderPath.startsWith(childPath + QLatin1Char('/'));
+        if (expand) {
+            html += QStringLiteral("<li class=\"nav-folder\"><span>%1</span>%2</li>")
+                       .arg(escapeHtml(it.key()),
+                           renderNav(it.value(), upPrefix, activeFolderPath, expandAll, childPath));
+        } else {
+            html += QStringLiteral("<li class=\"nav-folder collapsed\"><span>%1</span></li>")
+                       .arg(escapeHtml(it.key()));
+        }
     }
     for (const ParsedNote *n : node.notes) {
-        const bool current = n->relativePath == currentRelativePath;
-        html += QStringLiteral("<li class=\"nav-note%1\"><a href=\"%2\">%3</a></li>")
-                   .arg(current ? QStringLiteral(" current") : QString(),
-                       Slugs::relativeHref(fromOutputPath, n->outputPath), escapeHtml(n->title));
+        html += QStringLiteral("<li class=\"nav-note\"><a href=\"%1%2\">%3</a></li>")
+                   .arg(upPrefix, n->outputPath, escapeHtml(n->title));
     }
     html += QStringLiteral("</ul>");
     return html;
 }
 
-QString renderBacklinks(const ParsedNote &note, const PublishedNotes &notes, const noteAppC::Index &index,
-                        const noteAppC::Vault &vault)
+/// target's relativePath -> the relativePath of every published note whose
+/// resolved links reach it, built once (see the pre-resolve pass in
+/// Publisher::publish()) instead of queried per page through
+/// Index::backlinks() - which, like resolve(), is documented same-thread-
+/// only, so it could not run from a worker anyway. A pure in-memory lookup
+/// here is what lets rendering, backlinks and the file write all happen
+/// together in one worker-thread pass below.
+using BacklinksMap = QHash<QString, QStringList>;
+
+QString renderBacklinks(const ParsedNote &note, const PublishedNotes &notes, const BacklinksMap &backlinksMap)
 {
-    const QList<Backlink> links = index.backlinks(vault.absolute(note.relativePath));
+    const QStringList fromPaths = backlinksMap.value(note.relativePath);
+    if (fromPaths.isEmpty())
+        return {};
     QStringList items;
-    QSet<QString> seen;
-    for (const Backlink &link : links) {
-        if (seen.contains(link.fromPath) || !notes.contains(link.fromPath))
-            continue; // an unpublished note's link to this page is never listed
-        seen.insert(link.fromPath);
-        const ParsedNote &from = notes.value(link.fromPath);
+    for (const QString &fromPath : fromPaths) {
+        const ParsedNote &from = notes.value(fromPath);
         items << QStringLiteral("<li><a href=\"%1\">%2</a></li>")
                     .arg(Slugs::relativeHref(note.outputPath, from.outputPath), escapeHtml(from.title));
     }
-    if (items.isEmpty())
-        return {};
     return QStringLiteral("<section class=\"backlinks\"><h2>Linked mentions</h2><ul>%1</ul></section>")
           .arg(items.join(QString()));
 }
 
+/// One rendered nav per distinct (depth, active folder) - see renderNav()'s
+/// own comment on why the folder matters now, not just the depth.
+using NavCache = QHash<QPair<int, QString>, QString>;
+
+/// A page's own containing folder, "" for one at the vault root - what
+/// renderNav()'s collapsing keys off, and the cache below.
+QString folderOf(const QString &outputPath)
+{
+    const qsizetype slash = outputPath.lastIndexOf(QLatin1Char('/'));
+    return slash < 0 ? QString() : outputPath.left(slash);
+}
+
 QString wrapPage(const QString &title, const QString &outputPath, const QString &contentHtml,
-                 const QString &codeStyle, const QString &backlinksHtml, const NavNode &nav,
-                 const QString &currentRelativePath, const Options &options)
+                 const QString &codeStyle, const QString &backlinksHtml,
+                 const NavCache &navCache, const QString &currentNavOutputPath, const Options &options)
 {
     const QString cssHref = Slugs::relativeHref(outputPath, QStringLiteral("site.css"));
     const QString searchJsHref = Slugs::relativeHref(outputPath, QStringLiteral("search.js"));
     const QString homeHref = Slugs::relativeHref(outputPath, QStringLiteral("index.html"));
-    const QString navHtml = renderNav(nav, currentRelativePath, outputPath);
+
+    // navCache is filled for every (depth, folder) the site has before
+    // rendering starts (see Publisher::publish()) and never written to
+    // again, so concurrent reads here from many worker threads are safe
+    // without a lock - an empty result would mean that precompute missed a
+    // combination, which would be a bug there, not something to paper over
+    // with a second render here that a shared QHash cannot safely do off
+    // this thread.
+    const QString upPrefix = rootRelativePrefix(outputPath);
+    const int depth = outputPath.count(QLatin1Char('/'));
+    QString navHtml = navCache.value({depth, folderOf(outputPath)});
+    if (!currentNavOutputPath.isEmpty()) {
+        // One page's own entry, patched in rather than re-rendering the
+        // whole tree a second time just to add one CSS class.
+        const QString ownHref = upPrefix + currentNavOutputPath;
+        navHtml.replace(QStringLiteral("<li class=\"nav-note\"><a href=\"%1\">").arg(ownHref),
+                        QStringLiteral("<li class=\"nav-note current\"><a href=\"%1\">").arg(ownHref));
+    }
 
     QString html = QStringLiteral(
         "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
@@ -355,7 +455,11 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
 
     // --- phase A: parse every published note, in parallel - the only
     // moment an unpublished note's bytes are read at all is never: this list
-    // already excludes them. ------------------------------------------------
+    // already excludes them. Each result is moved into `notes` below and
+    // nowhere else, rather than kept in both `parsed` and `notes` for the
+    // rest of the run: doubling every note's text/Metadata/Decorations in
+    // memory for a run that never needs the `parsed` copy again is exactly
+    // the kind of thing that turns into gigabytes at 20 000 notes. --------
     struct Parsed {
         QString relativePath;
         QString text;
@@ -378,12 +482,11 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         out.ok = true;
         return out;
     };
-    const QList<Parsed> parsed = QtConcurrent::blockingMapped(publishedPaths, parseOne);
+    QList<Parsed> parsed = QtConcurrent::blockingMapped(publishedPaths, parseOne);
 
     // --- output path assignment: permalink property first, default slug
     // otherwise, then a single dedup pass so the guarantee is absolute
     // regardless of where a collision came from. -----------------------
-    PublishedNotes notes;
     QStringList outputPaths;
     outputPaths.reserve(parsed.size());
     for (const Parsed &p : parsed) {
@@ -402,8 +505,10 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     }
     Slugs::deduplicate(outputPaths);
 
+    PublishedNotes notes;
+    notes.reserve(outputPaths.size());
     qsizetype cursor = 0;
-    for (const Parsed &p : parsed) {
+    for (Parsed &p : parsed) {
         if (!p.ok)
             continue;
         ParsedNote note;
@@ -412,82 +517,91 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         const Property *title = findProperty(p.metadata.properties, QStringLiteral("title"));
         note.title = (title && !title->values.isEmpty()) ? title->values.first()
                                                           : QFileInfo(p.relativePath).completeBaseName();
-        note.text = p.text;
-        note.metadata = p.metadata;
-        note.decorations = p.decorations;
-        notes.insert(note.relativePath, note);
+        note.text = std::move(p.text);
+        note.metadata = std::move(p.metadata);
+        note.decorations = std::move(p.decorations);
+        notes.insert(note.relativePath, std::move(note));
+    }
+    parsed.clear();
+    parsed.squeeze(); // the above moved out of every element; drop the now-empty backing array too
+
+    // --- resolve every link once, and invert it into backlinks, both on
+    // this thread before any rendering starts. Index::resolve() and
+    // Index::backlinks() both touch the QSqlDatabase connection this Index
+    // opened, which - like MathRenderer's font loading being tied to the Qt
+    // GUI thread - Qt requires stays on the thread that created it. Working
+    // this out up front, once, in memory, rather than querying it per link
+    // from whichever worker thread is rendering a page is also what makes
+    // the render-and-write pass below safe to run in parallel at all. -----
+    QHash<QString, QString> resolveCache;
+    BacklinksMap backlinksMap;
+    for (const ParsedNote &note : notes) {
+        QSet<QString> linkedFromThisNote; // dedup: only add this note once per target, however many times it links there
+        for (const Link &link : note.metadata.links) {
+            if (link.external || link.target.isEmpty())
+                continue;
+            const QString key = link.target + QLatin1Char('\x01') + note.relativePath;
+            auto cached = resolveCache.find(key);
+            if (cached == resolveCache.end())
+                cached = resolveCache.insert(key, m_index.resolve(link.target, m_vault.absolute(note.relativePath)));
+            const QString &resolved = cached.value();
+            if (resolved.isEmpty() || resolved == note.relativePath || !notes.contains(resolved))
+                continue;
+            if (linkedFromThisNote.contains(resolved))
+                continue;
+            linkedFromThisNote.insert(resolved);
+            backlinksMap[resolved].append(note.relativePath);
+        }
+    }
+    for (auto it = backlinksMap.begin(); it != backlinksMap.end(); ++it)
+        std::sort(it.value().begin(), it.value().end()); // deterministic order, for a stable incremental diff
+
+    // --- tag -> published notes, needed both for the tag pages themselves
+    // and (next) to know every output path's folder depth before rendering
+    // starts. ---------------------------------------------------------
+    QHash<QString, QStringList> tagToPaths;
+    for (const ParsedNote &note : notes) {
+        QStringList seen;
+        for (const Tag &tag : note.metadata.tags) {
+            if (seen.contains(tag.name))
+                continue;
+            seen << tag.name;
+            tagToPaths[tag.name].append(note.relativePath);
+        }
+    }
+    QHash<QString, QString> tagOutputPaths; // tag name -> its page's output path, computed once
+    for (auto it = tagToPaths.constBegin(); it != tagToPaths.constEnd(); ++it)
+        tagOutputPaths.insert(it.key(), Slugs::tagPagePath(it.key()));
+
+    // --- nav: one render per distinct (depth, active folder) combination
+    // actually used by some page, every one of them right now rather than
+    // lazily - a page rendered on a worker thread below only ever *reads*
+    // navCache, which is what makes a plain QHash safe to share without a
+    // mutex around every lookup (Qt's own guarantee: concurrent reads of a
+    // container nothing is concurrently writing to are safe). See
+    // renderNav()'s own comment for why the folder is part of the key at
+    // all, not just the depth. --------------------------------------------
+    const NavNode nav = buildNavTree(notes);
+    NavCache navCache;
+    {
+        QSet<QPair<int, QString>> combinations{{0, QString()}}; // index.html
+        for (const ParsedNote &note : notes) {
+            combinations.insert({note.outputPath.count(QLatin1Char('/')), folderOf(note.outputPath)});
+        }
+        for (const QString &tagOutputPath : std::as_const(tagOutputPaths)) {
+            combinations.insert(
+                {tagOutputPath.count(QLatin1Char('/')), folderOf(tagOutputPath)});
+        }
+        for (const QPair<int, QString> &combo : std::as_const(combinations)) {
+            navCache.insert(combo,
+                            renderNav(nav, QStringLiteral("../").repeated(combo.first), combo.second));
+        }
     }
 
-    // --- phase B: render every page, in parallel. Two thread-local
-    // highlighters (one per theme mode) mirror Indexer.cpp's own
-    // `thread_local Parser` pattern. Maths is deliberately *not* rendered
-    // here: MicroTeX loads each font file it needs through
-    // QFontDatabase::addApplicationFont() the first time that font is
-    // actually used, and Qt requires that call to happen on the GUI thread -
-    // a mutex only serialises which worker thread runs it, it does not make
-    // it the right thread, and the first formula rendered this way
-    // segfaulted immediately in testing. PageBody instead leaves a
-    // placeholder token per formula (ContentResult::formulas); they are all
-    // resolved below, after this parallel pass, on the thread that called
-    // publish(). -----------------------------------------------------------
-    const noteAppC::Theme themeDark = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Dark);
-    const noteAppC::Theme themeLight = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Light);
-    const bool bothThemes = options.theme == Options::ThemeMode::Both;
-
-    QStringList notePaths = notes.keys();
-    const auto renderOne = [&](const QString &relativePath) -> QPair<QString, ContentResult> {
-        static thread_local noteAppC::CodeHighlighter highlighterDark;
-        static thread_local noteAppC::CodeHighlighter highlighterLight;
-        static thread_local bool ready = false;
-        if (!ready) {
-            highlighterDark.setTheme(themeDark);
-            highlighterLight.setTheme(themeLight);
-            ready = true;
-        }
-        RenderEnv env{notes,
-                     m_index,
-                     m_vault,
-                     highlighterDark,
-                     bothThemes ? &highlighterLight : nullptr,
-                     themeDark,
-                     themeLight,
-                     4};
-        return {relativePath, PageBody::render(notes.value(relativePath), env)};
-    };
-    const QList<QPair<QString, ContentResult>> rendered = QtConcurrent::blockingMapped(notePaths, renderOne);
-    QHash<QString, ContentResult> contents;
-    contents.reserve(rendered.size());
-    for (const auto &pair : rendered)
-        contents.insert(pair.first, pair.second);
-
-    if (progress)
-        progress(total, total);
-
-    // --- maths, on this thread only (see the comment above). The colour is
-    // baked into the SVG rather than left as CSS currentColor - MicroTeX
-    // paints with a literal QColor - so a "both" site renders for light
-    // backgrounds and inverts itself under dark via CSS (site.css), the same
-    // trick as an inverted diagram image. Also used below for the home
-    // note's second render (index.html), which needs the same resolution and
-    // runs on this same thread anyway. ------------------------------------
-    noteAppC::MathRenderer math;
-    const QColor mathColour = options.theme == Options::ThemeMode::Dark
-                                  ? themeDark.color(QStringLiteral("--text-normal"))
-                                  : themeLight.color(QStringLiteral("--text-normal"));
-    const auto resolveFormulas = [&](ContentResult &content) {
-        for (const PendingFormula &formula : content.formulas) {
-            const QString svg = math.renderSvg(formula.latex, formula.pointSize, mathColour, 900);
-            const QString replacement = svg.isEmpty()
-                ? QStringLiteral("<code class=\"math-source\">%1</code>").arg(escapeHtml(formula.latex))
-                : svg;
-            content.html.replace(formula.token, replacement);
-        }
-    };
-    for (auto it = contents.begin(); it != contents.end(); ++it)
-        resolveFormulas(*it);
-
-    // --- assemble the site: manifest-guarded writes only from here on -----
-    const NavNode nav = buildNavTree(notes);
+    // --- manifest: loaded before writing starts, so writeIfChanged() can
+    // compare every write (pages, attachments, tag pages, assets) against
+    // what the previous run left, in one pass rather than a second walk
+    // over the output directory afterwards. -------------------------------
     const QString manifestPath = outDir + QStringLiteral("/noteappc-publish-manifest.json");
     QHash<QString, QByteArray> oldManifest;
     {
@@ -499,8 +613,15 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         }
     }
     QHash<QString, QByteArray> newManifest;
+    QMutex assemblyMutex; // guards every mutable thing below shared across workers
+    QSet<QString> allAttachments;
+    QJsonArray searchIndex;
 
     const auto writeIfChanged = [&](const QString &relPath, const QByteArray &bytes) {
+        // Called both from worker threads (the merged render-and-write pass)
+        // and later from this thread alone (tag pages, assets) - always
+        // under assemblyMutex either way, held by the caller in the first
+        // case and taken here for the second.
         const QByteArray hash = sha1Hex(bytes);
         newManifest.insert(relPath, hash);
         if (oldManifest.value(relPath) == hash) {
@@ -514,25 +635,102 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
             f.write(bytes);
     };
 
-    QSet<QString> allAttachments;
-    QJsonArray searchIndex;
-    for (const ParsedNote &note : notes) {
-        const ContentResult &content = contents.value(note.relativePath);
+    // --- phase B: render, then - maths permitting - finish the page
+    // (backlinks, nav, write) right there on the same worker thread instead
+    // of collecting every page's full rendered HTML into memory first and
+    // writing it all in a second pass afterwards: at 20 000 notes the
+    // difference is between peak memory tracking "the site's parsed
+    // metadata" and tracking that *plus* every page's complete rendered
+    // HTML at once. A note with maths in it cannot finish here - see
+    // RenderEnv and MathRenderer's own comments on why that call has to
+    // stay on this thread - so its ContentResult is handed to
+    // `deferredForMaths` instead and finished below, serially, once
+    // rendering is done. Two thread-local highlighters (one per theme mode)
+    // mirror Indexer.cpp's own `thread_local Parser` pattern. -------------
+    const noteAppC::Theme themeDark = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Dark);
+    const noteAppC::Theme themeLight = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Light);
+    const bool bothThemes = options.theme == Options::ThemeMode::Both;
+    QList<QPair<QString, ContentResult>> deferredForMaths;
+    std::atomic<int> donePages{0};
+
+    const auto finishPage = [&](const ParsedNote &note, ContentResult &content) {
+        // Called with assemblyMutex already held.
         for (const QString &attachment : content.attachments)
             allAttachments.insert(attachment);
-
-        const QString backlinks = renderBacklinks(note, notes, m_index, m_vault);
+        const QString backlinks = renderBacklinks(note, notes, backlinksMap);
         const QString page = wrapPage(note.title, note.outputPath, content.html, content.codeStyle,
-                                      backlinks, nav, note.relativePath, options);
+                                      backlinks, navCache, note.outputPath, options);
         writeIfChanged(note.outputPath, page.toUtf8());
         ++m_counts.pages;
-
         QJsonObject entry;
         entry[QStringLiteral("title")] = note.title;
         entry[QStringLiteral("href")] = note.outputPath;
         entry[QStringLiteral("text")] = content.plainText.left(20000);
         searchIndex.append(entry);
+    };
+
+    const QStringList notePaths = notes.keys();
+    const auto renderAndWriteOne = [&](const QString &relativePath) {
+        static thread_local noteAppC::CodeHighlighter highlighterDark;
+        static thread_local noteAppC::CodeHighlighter highlighterLight;
+        static thread_local bool ready = false;
+        if (!ready) {
+            highlighterDark.setTheme(themeDark);
+            highlighterLight.setTheme(themeLight);
+            ready = true;
+        }
+        RenderEnv env{notes,
+                     resolveCache,
+                     highlighterDark,
+                     bothThemes ? &highlighterLight : nullptr,
+                     themeDark,
+                     themeLight,
+                     4};
+        const ParsedNote &note = notes.value(relativePath);
+        ContentResult content = PageBody::render(note, env);
+
+        QMutexLocker lock(&assemblyMutex);
+        if (!content.formulas.isEmpty()) {
+            deferredForMaths.append({relativePath, std::move(content)});
+        } else {
+            finishPage(note, content);
+        }
+        if (progress) {
+            const int done = donePages.fetch_add(1) + 1;
+            if (done == total || done % 500 == 0)
+                progress(done, total);
+        }
+    };
+    QtConcurrent::blockingMap(notePaths, renderAndWriteOne);
+
+    // --- maths: on this thread only (see RenderEnv's own comment). The
+    // colour is baked into the SVG rather than left as CSS currentColor -
+    // MicroTeX paints with a literal QColor - so a "both" site renders for
+    // light backgrounds and inverts itself under dark via CSS (site.css),
+    // the same trick as an inverted diagram image. Also used below for the
+    // home note's second render (index.html), which needs the same
+    // resolution and runs on this same thread anyway. ---------------------
+    noteAppC::MathRenderer math;
+    const QColor mathColour = options.theme == Options::ThemeMode::Dark
+                                  ? themeDark.color(QStringLiteral("--text-normal"))
+                                  : themeLight.color(QStringLiteral("--text-normal"));
+    const auto resolveFormulas = [&](ContentResult &content) {
+        for (const PendingFormula &formula : content.formulas) {
+            const QString svg = math.renderSvg(formula.latex, formula.pointSize, mathColour, 900);
+            const QString replacement = svg.isEmpty()
+                ? QStringLiteral("<code class=\"math-source\">%1</code>").arg(escapeHtml(formula.latex))
+                : svg;
+            content.html.replace(formula.token, replacement);
+        }
+    };
+    for (auto &pair : deferredForMaths) {
+        resolveFormulas(pair.second);
+        finishPage(notes.value(pair.first), pair.second);
     }
+    deferredForMaths.clear();
+
+    if (progress)
+        progress(total, total);
 
     // --- attachments: copied only because a published page's embed
     // resolved to them (ContentResult::attachments), never speculatively. --
@@ -549,18 +747,8 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     }
 
     // --- tag pages ----------------------------------------------------
-    QHash<QString, QStringList> tagToPaths;
-    for (const ParsedNote &note : notes) {
-        QStringList seen;
-        for (const Tag &tag : note.metadata.tags) {
-            if (seen.contains(tag.name))
-                continue;
-            seen << tag.name;
-            tagToPaths[tag.name].append(note.relativePath);
-        }
-    }
     for (auto it = tagToPaths.constBegin(); it != tagToPaths.constEnd(); ++it) {
-        const QString tagOutputPath = Slugs::tagPagePath(it.key());
+        const QString &tagOutputPath = tagOutputPaths.value(it.key());
         QStringList items;
         QStringList sortedPaths = it.value();
         std::sort(sortedPaths.begin(), sortedPaths.end());
@@ -572,7 +760,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         const QString content = QStringLiteral("<h1 class=\"page-title\">#%1</h1><ul>%2</ul>")
                                     .arg(escapeHtml(it.key()), items.join(QString()));
         const QString page = wrapPage(QStringLiteral("#") + it.key(), tagOutputPath, content, QString(),
-                                      QString(), nav, QString(), options);
+                                      QString(), navCache, QString(), options);
         writeIfChanged(tagOutputPath, page.toUtf8());
     }
 
@@ -586,24 +774,26 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     }
     if (!homeRelativePath.isEmpty()) {
         ParsedNote atRoot = notes.value(homeRelativePath);
+        const QString ownOutputPath = atRoot.outputPath; // the nav's own entry for it - before the override below
         atRoot.outputPath = QStringLiteral("index.html");
         static thread_local noteAppC::CodeHighlighter highlighterDark;
         static thread_local noteAppC::CodeHighlighter highlighterLight;
         highlighterDark.setTheme(themeDark);
         highlighterLight.setTheme(themeLight);
-        RenderEnv env{notes,    m_index, m_vault,    highlighterDark,
+        RenderEnv env{notes, resolveCache, highlighterDark,
                      bothThemes ? &highlighterLight : nullptr, themeDark, themeLight, 4};
         ContentResult content = PageBody::render(atRoot, env);
         resolveFormulas(content);
-        const QString backlinks = renderBacklinks(atRoot, notes, m_index, m_vault);
+        const QString backlinks = renderBacklinks(atRoot, notes, backlinksMap);
         const QString page = wrapPage(atRoot.title, atRoot.outputPath, content.html, content.codeStyle,
-                                      backlinks, nav, atRoot.relativePath, options);
+                                      backlinks, navCache, ownOutputPath, options);
         writeIfChanged(QStringLiteral("index.html"), page.toUtf8());
     } else {
         const QString listHtml = QStringLiteral("<h1 class=\"page-title\">%1</h1>%2")
-                                     .arg(escapeHtml(options.siteName), renderNav(nav, QString(), QStringLiteral("index.html")));
+                                     .arg(escapeHtml(options.siteName),
+                                         renderNav(nav, QString(), QString(), /*expandAll=*/true));
         const QString page = wrapPage(options.siteName, QStringLiteral("index.html"), listHtml, QString(),
-                                      QString(), nav, QString(), options);
+                                      QString(), navCache, QString(), options);
         writeIfChanged(QStringLiteral("index.html"), page.toUtf8());
     }
 

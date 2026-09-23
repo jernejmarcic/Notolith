@@ -10,7 +10,6 @@
 
 #include "CodeHighlighter.h"
 #include "HtmlRenderer.h"
-#include "Index.h"
 #include "Slugs.h"
 #include "Theme.h"
 #include "Vault.h"
@@ -923,8 +922,8 @@ private:
             r.published = m_env.notes.contains(fromRelativePath);
             return r;
         }
-        const QString fromAbsolute = m_env.vault.absolute(fromRelativePath);
-        const QString resolved = m_env.index.resolve(target, fromAbsolute);
+        const QString resolved =
+            m_env.resolveCache.value(target + QLatin1Char('\x01') + fromRelativePath);
         if (resolved.isEmpty())
             return r;
         r.ok = true;
