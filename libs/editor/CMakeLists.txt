@@ -9,6 +9,7 @@ add_library(noteAppC_editor STATIC
     FileEmbedBlock.cpp
     FindBar.cpp
     FindBar.h
+    FootnoteMarks.cpp
     HtmlBlock.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h

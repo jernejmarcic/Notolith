@@ -294,6 +294,11 @@ void MarkdownEditor::setMode(Mode mode)
         return;
     finishPropertyEdit(true); // source and reading modes draw no table to edit in
     m_mode = mode;
+    // Reading view appends a trailing footnotes-list block that no other
+    // mode shows; rebuildBlocks() is what adds or drops it. Skipped when
+    // there is nothing to list - a note without footnotes costs nothing.
+    if (!m_decorations.footnoteDefinitions.isEmpty())
+        rebuildBlocks();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -784,6 +789,7 @@ void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> p
     updateLayout();
     viewport()->update();
     emit headingsChanged();
+    emit footnotesChanged();
 }
 
 void MarkdownEditor::indexDecorations()
@@ -1004,6 +1010,16 @@ void MarkdownEditor::rebuildBlocks()
         blocks.push_back(std::move(view));
     }
 
+    // Reading view lists footnote definitions at the end instead of where
+    // they sit in the source (see layoutBlock's Mode::Reading branch above)
+    // - a block with no real source range, appended after everything else.
+    if (m_mode == Mode::Reading && !m_decorations.footnoteDefinitions.isEmpty()) {
+        BlockView view;
+        view.span = {BlockSpan::Kind::Paragraph, {m_text.size(), m_text.size()}, 0};
+        view.isFootnotesList = true;
+        blocks.push_back(std::move(view));
+    }
+
     m_blocks = std::move(blocks);
     m_activeBlock = blockAt(m_cursor);
 }
@@ -1160,6 +1176,7 @@ QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
             case StyleSpan::Kind::Tag:
             case StyleSpan::Kind::Math:
             case StyleSpan::Kind::Html:
+            case StyleSpan::Kind::Footnote:
                 skip = true;
                 break;
             default:
@@ -1352,6 +1369,11 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             format.setForeground(isUnresolvedLink(span.payload) ? unresolved : accent);
             break;
         case StyleSpan::Kind::Tag:
+            format.setForeground(accent);
+            break;
+        case StyleSpan::Kind::Footnote:
+            // Only tints the raw source, once the caret reveals it -
+            // layoutFootnotes paints the hidden case's number itself.
             format.setForeground(accent);
             break;
         case StyleSpan::Kind::Highlight:
@@ -2630,6 +2652,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.folded = false;
     view.inlineMaths.clear();
     view.separators.clear();
+    view.footnoteMarks.clear();
     view.tabHidden = false;
     view.tabGroup = -1;
     view.isQuery = false;
@@ -2672,6 +2695,24 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                 }
             }
         }
+    }
+
+    // Reading view's own trailing block: not real source, laid out entirely
+    // by layoutFootnotesList.
+    if (view.isFootnotesList) {
+        layoutFootnotesList(view);
+        return;
+    }
+    // Reading view lists footnote definitions at the end instead of where
+    // they sit in the source - hidden outright here, like a tab group's
+    // fence nobody is looking at above.
+    if (m_mode == Mode::Reading && footnoteDefinitionBlock(view)) {
+        view.layout.reset();
+        view.map = DisplayMap();
+        view.height = 0;
+        view.laidOut = true;
+        view.heightEstimated = false;
+        return;
     }
 
     // Obsidian never shows raw YAML in live preview, only in source mode, so
@@ -2739,6 +2780,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         layoutInlineMaths(view, hidden);
         layoutInlineHtml(view, hidden);
         layoutAnchorSeparators(view, hidden);
+        layoutFootnotes(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
         if (renderMedia && m_features.fileEmbeds)
             collectTextEmbeds(view, hidden, textEmbeds);
@@ -2749,6 +2791,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         formula.displayPos = view.map.toDisplay(formula.sourcePos);
     for (BlockView::AnchorSeparator &separator : view.separators)
         separator.displayPos = view.map.toDisplay(separator.sourcePos);
+    for (BlockView::FootnoteMark &mark : view.footnoteMarks)
+        mark.displayPos = view.map.toDisplay(mark.sourcePos);
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -2830,6 +2874,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                     - metrics.horizontalAdvance(QLatin1Char('#')));
         for (const BlockView::AnchorSeparator &separator : view.separators)
             formats.append({int(separator.displayPos), 1, format});
+    }
+    for (const BlockView::FootnoteMark &mark : view.footnoteMarks) {
+        // Same trick: the carrier character reserves exactly the width the
+        // number needs, in whichever of the two footnote fonts it paints in.
+        const QFontMetricsF metrics(footnoteMarkFont(view.layout->font(), mark.superscript));
+        QTextCharFormat format;
+        format.setForeground(Qt::transparent);
+        format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+        format.setFontLetterSpacing(metrics.horizontalAdvance(mark.text)
+                                    - QFontMetricsF(view.layout->font())
+                                          .horizontalAdvance(m_text.at(mark.sourcePos)));
+        formats.append({int(mark.displayPos), 1, format});
     }
     view.layout->setFormats(formats);
 
@@ -3084,6 +3140,11 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             continue;
         }
 
+        if (view.isFootnotesList) {
+            paintFootnotesList(painter, view, left, top);
+            continue;
+        }
+
         if (view.callout) {
             paintCallout(painter, view, left, top);
             painter.setPen(view.calloutStyle.color.isValid() ? view.calloutStyle.color : text);
@@ -3188,6 +3249,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
             paintInlineMaths(painter, view, left + indent, top + drop);
             paintAnchorSeparators(painter, view, left + indent, top + drop);
+            paintFootnoteMarks(painter, view, left + indent, top + drop);
             paintListMarkers(painter, view, left + indent, top + drop);
             paintGutter(painter, view, top + drop);
             if (clip)
@@ -3940,6 +4002,10 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         emit linkActivated(target);
         return;
     }
+    // A footnote never leaves the note, so it jumps straight to an offset
+    // rather than going through linkActivated the way a real link does.
+    if (event->modifiers().testFlag(Qt::ControlModifier) && jumpToFootnote(event->pos()))
+        return;
 
     if (handleBlockClick(event->pos()))
         return;

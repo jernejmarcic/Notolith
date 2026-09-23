@@ -544,6 +544,24 @@ public:
     /// outline pane builds its tree from these instead of re-parsing.
     const QList<Heading> &headings() const { return m_headings; }
 
+    /// One footnote, deduplicated to its first reference and numbered - a
+    /// repeated `[^a]` collapses to one entry, as the Footnotes pane and
+    /// reading view's list both want. Sorted by number.
+    struct FootnoteEntry {
+        int number = 0;
+        QString label;     ///< empty for an inline `^[...]` footnote
+        QString preview;   ///< the definition's (or inline text's) first line
+        qsizetype jumpOffset = 0; ///< setCursorOffset() target for a click
+    };
+    /// The note's footnotes, as the last parse read them. Cheap enough to
+    /// call from footnotesChanged() every time: a note with none costs one
+    /// early-out, and even a heavily footnoted note has few of them.
+    QList<FootnoteEntry> footnotes() const;
+    /// For the tests: the numbers drawn for footnotes in laid-out blocks, in
+    /// order, and how many rows reading view's footnote list has.
+    QStringList footnoteMarkTexts() const;
+    int footnotesListRowCount() const;
+
 signals:
     /// The word count moved. It is published with each parse, so it lags a
     /// keystroke by the parse debounce instead of costing the keystroke.
@@ -552,6 +570,9 @@ signals:
     /// when the heading list did not actually change - cheap to ignore, and
     /// the outline pane only rebuilds a QTreeWidget from it.
     void headingsChanged();
+    /// A parse landed, so footnotes() reflects the current text - the same
+    /// contract as headingsChanged(), for the Footnotes pane.
+    void footnotesChanged();
     void textChanged();
     /// Every change to the text, as one edit - typing, a paste, an undo (a
     /// whole-text replacement) - for another view of the same note to make
@@ -893,6 +914,36 @@ private:
             QColor colour;
         };
         std::vector<AnchorSeparator> separators;
+
+        // --- footnotes, FootnoteMarks.cpp ----------------------------------
+        /// A footnote reference shown as its number (superscript, accent
+        /// colour) or a definition's marker shown as a small muted number -
+        /// the same invisible-ink trick as inline maths and the heading
+        /// separator above: one source character (the opening "[" or "^")
+        /// stays in the display, letter-spaced to the number's width, and
+        /// the paint step draws the number over it.
+        struct FootnoteMark {
+            qsizetype sourcePos = 0;  ///< the visible carrier character
+            qsizetype displayPos = 0; ///< the same character, in display coordinates
+            QString text;             ///< "1", "12.", ...
+            QColor colour;
+            bool superscript = false; ///< a reference; false is a definition's label
+        };
+        std::vector<FootnoteMark> footnoteMarks;
+        /// True only for the synthetic block reading view appends after the
+        /// note's own: the numbered footnote list Obsidian's reading view
+        /// shows at the end. `span.range` is a zero-length range past the
+        /// end of the text - there is no source here, so unlike every other
+        /// block it keeps its own rows instead of a QTextLayout over view.map,
+        /// the way the properties table (PropertyRow) already does.
+        bool isFootnotesList = false;
+        struct FootnotesListRow {
+            std::unique_ptr<QTextLayout> layout; ///< "1.  <first line of the text>"
+            QRectF rect;    ///< block-local, the whole row - a click jumps here too
+            QRectF backRef; ///< block-local, the "return" glyph
+            qsizetype jumpOffset = 0; ///< real source offset a click moves the caret to
+        };
+        std::vector<FootnotesListRow> footnoteListRows;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -1294,6 +1345,40 @@ private:
     void layoutAnchorSeparators(BlockView &view, QList<Range> &hidden);
     void paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
                                qreal top) const;
+
+    // --- footnotes, implemented in FootnoteMarks.cpp ------------------------
+    // References and definition labels: hidden and replaced by a painted
+    // number the same way inline maths and anchor separators are, above.
+    // Reading view's trailing list is a synthetic block instead (see
+    // BlockView::isFootnotesList) since it is not source at any real offset.
+
+    /// The font a footnote number is measured and drawn in: smaller than the
+    /// block's own, superscript for a reference raised further still. Shared
+    /// by the format that reserves the carrier's width and the paint step
+    /// that draws into it, so the two never disagree.
+    QFont footnoteMarkFont(const QFont &blockFont, bool superscript) const;
+    /// Records this block's footnote marks and, for a reference or a
+    /// numbered definition the caret has not revealed, hides everything
+    /// after the carrier character. Must run before `view.map` is built.
+    void layoutFootnotes(BlockView &view, QList<Range> &hidden);
+    /// Draws the numbers `layoutFootnotes` recorded, over their carriers.
+    void paintFootnoteMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// True while `view.span.range` sits inside a numbered footnote
+    /// definition: hidden outright in reading view, which lists definitions
+    /// at the end instead of where they are in the source.
+    bool footnoteDefinitionBlock(const BlockView &view) const;
+    /// Builds the reading view's trailing footnotes-list block: not real
+    /// source, so - like the properties table - it keeps its own rows
+    /// instead of a QTextLayout built from view.map.
+    void layoutFootnotesList(BlockView &view);
+    /// Draws layoutFootnotesList's rows: the rule above them, each numbered
+    /// definition and its back-reference glyph.
+    void paintFootnotesList(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// Ctrl+click handling for a footnote: `viewportPoint` on a reference
+    /// jumps to its definition, on a definition's label (or the trailing
+    /// list's back-reference) jumps to the first reference. False, and no
+    /// jump, when the click was on neither.
+    bool jumpToFootnote(const QPoint &viewportPoint);
 
     // --- query blocks, implemented in QueryBlock.cpp -----------------------
 
