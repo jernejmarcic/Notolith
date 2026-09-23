@@ -13,6 +13,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QSet>
 #include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -461,9 +462,6 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Underline words the dictionary does not recognise. Uses the hunspell "
                    "dictionaries installed for your system's languages."));
 #endif
-    addToggleRow(layout, QStringLiteral("pagePreview.enabled"), tr("Page preview"),
-                tr("Hover over a link to a note to see it: with Ctrl held while editing, on its "
-                   "own in reading view."));
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
@@ -503,11 +501,6 @@ QWidget *SettingsPage::buildFilesPage()
     connect(view, &QPushButton::clicked, this, &SettingsPage::recoveryRequested);
     addRow(layout, {}, tr("Snapshots"),
            tr("Earlier versions of your notes, kept outside the vault."), view, {});
-#ifdef NOTEAPPC_HAVE_HISTORY
-    addToggleRow(layout, QStringLiteral("plugins.noteHistory"), tr("Note history"),
-                tr("Keep every save of a note as a git commit, outside the vault, to browse and "
-                   "restore with \"Show this note's history\"."));
-#endif
 
     layout->addStretch(1);
     return scrollWrap(page);
@@ -539,6 +532,28 @@ QWidget *SettingsPage::buildCorePluginsPage()
     auto *layout = new QVBoxLayout(page);
     layout->setContentsMargins(28, 20, 28, 20);
     layout->setSpacing(0);
+
+    // Only what this build has: a switch with nothing behind it is worse
+    // than none.
+    const QSet<QByteArray> missing = {
+#ifndef NOTEAPPC_HAVE_GRAPH
+        "graph",
+#endif
+#ifndef NOTEAPPC_HAVE_CANVAS
+        "canvas",
+#endif
+#ifndef NOTEAPPC_HAVE_BASES
+        "bases",
+#endif
+#ifndef NOTEAPPC_HAVE_HISTORY
+        "note-history",
+#endif
+    };
+    for (const Settings::Feature &feature : Settings::features()) {
+        if (!missing.contains(feature.id))
+            addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
+                        QCoreApplication::translate("Settings", feature.description));
+    }
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over
     // these, so an Obsidian vault behaves here as it did there.

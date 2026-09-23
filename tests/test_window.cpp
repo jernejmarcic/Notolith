@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLayout>
 #include <QLineEdit>
 #include <QDialog>
 #include <QPushButton>
@@ -59,6 +60,8 @@
 #include "PagePreview.h"
 #include "OutlinePane.h"
 #include "BookmarksPane.h"
+#include "BacklinksPane.h"
+#include "ToggleSwitch.h"
 #include "Snapshots.h"
 #include "RecoveryDialog.h"
 #include "Settings.h"
@@ -1525,9 +1528,11 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
 
     // What the editor sends when the pointer rests on the link with Ctrl held.
     emit window.editor()->linkHovered(QStringLiteral("Other#Part two"), QPoint(200, 200));
-    auto *preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"));
-    ASSERT_NE(preview, nullptr);
-    QTRY_VERIFY_WITH_TIMEOUT(preview->isVisible(), 2000);
+    // Built the first time a link is hovered, not before.
+    noteAppC::PagePreview *preview = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
+        2000);
     const QString shown = preview->editor()->noteText();
     EXPECT_TRUE(shown.startsWith(QLatin1String("# Other")));
     EXPECT_EQ(preview->editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")));
@@ -1552,8 +1557,10 @@ TEST_F(WindowTest, APagePreviewShowsALinkedImage)
     window.openNote(path(QStringLiteral("Linking.md")));
 
     emit window.editor()->linkHovered(QStringLiteral("pic.png"), QPoint(200, 200));
-    auto *preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"));
-    QTRY_VERIFY_WITH_TIMEOUT(preview->isVisible(), 2000);
+    noteAppC::PagePreview *preview = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(
+        (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
+        2000);
     auto *image = preview->findChild<QLabel *>();
     ASSERT_NE(image, nullptr);
     EXPECT_TRUE(image->isVisibleTo(preview));
@@ -1738,3 +1745,72 @@ TEST_F(WindowTest, BookmarkingANoteKeepsItOutsideTheVault)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+
+TEST_F(WindowTest, AFeatureSwitchedOffIsNotBuiltAndItsCommandsStop)
+{
+    QTemporaryDir config; // the switches are the user's, kept apart from other tests
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    MainWindow window;
+    window.show(); // the settings page builds its rows when shown
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    const auto toggle = [&window](const char *key) {
+        noteAppC::ToggleSwitch *found = nullptr;
+        EXPECT_TRUE(QTest::qWaitFor([&] {
+            return (found = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_") + QLatin1String(key)));
+        }));
+        return found;
+    };
+    ASSERT_NE(window.findChild<noteAppC::BacklinksPane *>(), nullptr);
+
+    toggle("plugins.backlink")->click();
+    EXPECT_EQ(window.findChild<noteAppC::BacklinksPane *>(), nullptr) << "off is not built at all";
+    EXPECT_EQ(window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton")), nullptr);
+    toggle("plugins.globalSearch")->click();
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("global-search:open"))->isEnabled());
+    EXPECT_EQ(window.findChild<QToolButton *>(QStringLiteral("searchTabButton")), nullptr);
+
+    // Back on: built again, pointed at the open note, its tab where it was.
+    toggle("plugins.backlink")->click();
+    toggle("plugins.globalSearch")->click();
+    auto *backlinks = window.findChild<noteAppC::BacklinksPane *>();
+    ASSERT_NE(backlinks, nullptr);
+    EXPECT_TRUE(window.findChild<QAction *>(QStringLiteral("global-search:open"))->isEnabled());
+    const QLayout *tabs = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"))->layout();
+    const auto at = [&](const char *name) {
+        return tabs->indexOf(window.findChild<QToolButton *>(QLatin1String(name)));
+    };
+    EXPECT_EQ(at("searchTabButton"), 0);
+    EXPECT_EQ(at("backlinksTabButton"), 1);
+    EXPECT_EQ(at("tagsTabButton"), 2);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    toggle("plugins.graph")->click();
+    EXPECT_EQ(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("graph:open"))->isEnabled());
+    toggle("plugins.graph")->click();
+    EXPECT_NE(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
+#endif
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+TEST_F(WindowTest, AVaultsCorePluginsDecideWhatIsBuilt)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/core-plugins.json"), R"({"backlink": false, "canvas": false, "graph": false})");
+    write(QStringLiteral("Board.canvas"), "{}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    EXPECT_EQ(window.findChild<noteAppC::BacklinksPane *>(), nullptr);
+    EXPECT_NE(window.findChild<noteAppC::OutlinePane *>(), nullptr);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    EXPECT_EQ(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("graph:open"))->isEnabled());
+#endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    EXPECT_EQ(window.findChild<noteAppC::CanvasView *>(), nullptr);
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("canvas:new-file"))->isEnabled());
+#endif
+}

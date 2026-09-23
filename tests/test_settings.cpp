@@ -112,6 +112,32 @@ TEST(Settings, aVaultLayersItsObsidianConfigOverTheDefaults)
     EXPECT_FALSE(settings.isFromVault(QStringLiteral("editor.autoPairs")));
 }
 
+TEST(Settings, aVaultsCorePluginsSwitchFeaturesInEitherForm)
+{
+    // Today's object form: what it names is set, what it leaves out stays on.
+    QTemporaryDir current;
+    writeFile(current.filePath(QStringLiteral(".obsidian/core-plugins.json")),
+              QStringLiteral(R"({"graph":false,"canvas":true,"file-explorer":true})"));
+    const Settings now = Settings::load(current.path());
+    EXPECT_FALSE(now.boolean(QStringLiteral("plugins.graph")));
+    EXPECT_TRUE(now.boolean(QStringLiteral("plugins.canvas")));
+    EXPECT_TRUE(now.boolean(QStringLiteral("plugins.outline")));
+
+    // The old array form lists what was on, so the rest was off - all but
+    // what came after it, and noteAppC's own, which no vault ever set.
+    QTemporaryDir old;
+    writeFile(old.filePath(QStringLiteral(".obsidian/core-plugins.json")),
+              QStringLiteral(R"(["file-explorer","global-search","backlink"])"));
+    const Settings then = Settings::load(old.path());
+    EXPECT_TRUE(then.boolean(QStringLiteral("plugins.globalSearch")));
+    EXPECT_TRUE(then.boolean(QStringLiteral("plugins.backlink")));
+    EXPECT_FALSE(then.boolean(QStringLiteral("plugins.graph")));
+    EXPECT_FALSE(then.boolean(QStringLiteral("plugins.pagePreview")));
+    EXPECT_TRUE(then.boolean(QStringLiteral("plugins.bases")));
+    EXPECT_TRUE(then.boolean(QStringLiteral("plugins.noteHistory")));
+    EXPECT_TRUE(then.isFromVault(QStringLiteral("plugins.graph")));
+}
+
 TEST(Settings, savingNeverWritesIntoAVault)
 {
     QTemporaryDir home;

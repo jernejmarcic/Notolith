@@ -28,6 +28,9 @@ public:
     /// Absolute path of the note to show links to; empty clears the pane.
     void setNote(const QString &path);
     void refresh();
+    /// Whether to look for unlinked mentions at all: a search of the vault
+    /// for each note shown, so off skips the search, not only the list.
+    void setUnlinkedMentions(bool on);
 
 signals:
     void noteActivated(const QString &relativePath);
@@ -42,6 +45,7 @@ private:
     QLabel *m_unlinkedHeader = nullptr;
     QTreeWidget *m_unlinkedList = nullptr;
     QColor m_highlightColor;
+    bool m_unlinked = true;
 };
 
 } // namespace noteAppC

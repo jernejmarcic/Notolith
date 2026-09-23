@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -18,7 +19,8 @@ namespace {
 /// otherwise. Keys are grouped by the page they appear on.
 const QVariantMap &defaults()
 {
-    static const QVariantMap map = {
+    static const QVariantMap map = [] {
+    QVariantMap map = {
         // Appearance
         {QStringLiteral("appearance.theme"), QStringLiteral("dark")}, // dark, oled, light, system
         {QStringLiteral("appearance.scheme"), QString()},             // empty means built-in
@@ -39,9 +41,6 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.lineNumbers"), true},
         {QStringLiteral("editor.strictLineBreaks"), false},
         {QStringLiteral("editor.spellcheck"), true},
-        {QStringLiteral("pagePreview.enabled"), true},
-        // Optional features, each off costing nothing (MainWindow::featureOn).
-        {QStringLiteral("plugins.noteHistory"), true},
         {QStringLiteral("fileRecovery.interval"), 5}, // minutes, Obsidian's default
         {QStringLiteral("fileRecovery.keepDays"), 7},
         {QStringLiteral("editor.autoPairs"), true},
@@ -72,6 +71,11 @@ const QVariantMap &defaults()
         {QStringLiteral("state.recentFiles"), QStringList()},
         {QStringLiteral("state.notePositions"), QStringList()},
     };
+    // Core plugins: every feature on until a person or the vault says not.
+    for (const Settings::Feature &feature : Settings::features())
+        map.insert(Settings::featureKey(feature.id), true);
+    return map;
+    }();
     return map;
 }
 
@@ -455,7 +459,84 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     take(out, appearance, "textFontFamily", QStringLiteral("appearance.textFont"));
     take(out, appearance, "monospaceFontFamily", QStringLiteral("appearance.monospaceFont"));
     take(out, appearance, "cssTheme", QStringLiteral("appearance.scheme"));
+
+    // Newer Obsidian writes {"graph": true, ...}; older wrote the array of
+    // the plugins that were on, so any id missing from it was off.
+    const QJsonDocument plugins = [&config] {
+        QFile file(config.filePath(QStringLiteral("core-plugins.json")));
+        return file.open(QIODevice::ReadOnly) ? QJsonDocument::fromJson(file.readAll()) : QJsonDocument();
+    }();
+    const QJsonArray enabled = plugins.array();
+    for (const Feature &feature : features()) {
+        if (!feature.obsidian)
+            continue;
+        const QString id = QString::fromLatin1(feature.id);
+        if (plugins.isObject() && plugins.object().value(id).isBool())
+            out.insert(featureKey(feature.id), plugins.object().value(id).toBool());
+        // Bases came after the array form: a vault that wrote one never saw it.
+        else if (plugins.isArray() && id != QLatin1String("bases"))
+            out.insert(featureKey(feature.id), enabled.contains(id));
+    }
     return out;
+}
+
+const QList<Settings::Feature> &Settings::features()
+{
+    // Obsidian's own names and wording, where it has the feature.
+    static const QList<Feature> list = {
+        {"backlink", QT_TRANSLATE_NOOP("Settings", "Backlinks"),
+         QT_TRANSLATE_NOOP("Settings", "Show the notes that link to this one in the right sidebar."), true},
+        {"unlinked-mentions", QT_TRANSLATE_NOOP("Settings", "Unlinked mentions"),
+         QT_TRANSLATE_NOOP("Settings", "Under the backlinks, find every note that names this one without "
+                                       "linking it. A search of the vault on each note opened."),
+         false},
+        {"bases", QT_TRANSLATE_NOOP("Settings", "Bases"),
+         QT_TRANSLATE_NOOP("Settings", "Open .base files and base code blocks as tables of notes."), true},
+        {"bookmarks", QT_TRANSLATE_NOOP("Settings", "Bookmarks"),
+         QT_TRANSLATE_NOOP("Settings", "Bookmark notes, headings and searches in the right sidebar."), true},
+        {"canvas", QT_TRANSLATE_NOOP("Settings", "Canvas"),
+         QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
+        {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),
+         QT_TRANSLATE_NOOP("Settings", "Open or create today's note."), true},
+        {"file-recovery", QT_TRANSLATE_NOOP("Settings", "File recovery"),
+         QT_TRANSLATE_NOOP("Settings", "Keep snapshots of notes as they are saved, outside the vault."), true},
+        {"graph", QT_TRANSLATE_NOOP("Settings", "Graph view"),
+         QT_TRANSLATE_NOOP("Settings", "Show the links between notes as a graph, and the local graph in the "
+                                       "right sidebar."),
+         true},
+        {"note-history", QT_TRANSLATE_NOOP("Settings", "Note history"),
+         QT_TRANSLATE_NOOP("Settings", "Keep every save of a note as a git commit, outside the vault, to "
+                                       "browse and restore with \"Show this note's history\"."),
+         false},
+        {"outgoing-link", QT_TRANSLATE_NOOP("Settings", "Outgoing links"),
+         QT_TRANSLATE_NOOP("Settings", "Show the links in this note in the right sidebar."), true},
+        {"outline", QT_TRANSLATE_NOOP("Settings", "Outline"),
+         QT_TRANSLATE_NOOP("Settings", "Show this note's headings in the right sidebar."), true},
+        {"page-preview", QT_TRANSLATE_NOOP("Settings", "Page preview"),
+         QT_TRANSLATE_NOOP("Settings", "Hover over a link to a note to see it: with Ctrl held while editing, "
+                                       "on its own in reading view."),
+         true},
+        {"switcher", QT_TRANSLATE_NOOP("Settings", "Quick switcher"),
+         QT_TRANSLATE_NOOP("Settings", "Jump to any note by name with Ctrl+O."), true},
+        {"global-search", QT_TRANSLATE_NOOP("Settings", "Search"),
+         QT_TRANSLATE_NOOP("Settings", "Search every note from the right sidebar, and run query code "
+                                       "blocks."),
+         true},
+        {"tag-pane", QT_TRANSLATE_NOOP("Settings", "Tags view"),
+         QT_TRANSLATE_NOOP("Settings", "Show every tag in the vault in the right sidebar."), true},
+        {"templates", QT_TRANSLATE_NOOP("Settings", "Templates"),
+         QT_TRANSLATE_NOOP("Settings", "Insert a note from the templates folder."), true},
+        {"word-count", QT_TRANSLATE_NOOP("Settings", "Word count"),
+         QT_TRANSLATE_NOOP("Settings", "Show the note's word count in the status bar."), true},
+        {"workspaces", QT_TRANSLATE_NOOP("Settings", "Workspaces"),
+         QT_TRANSLATE_NOOP("Settings", "Save and load named layouts of tabs and splits."), true},
+    };
+    return list;
+}
+
+QString Settings::featureKey(const char *id)
+{
+    return QStringLiteral("plugins.") + camelOf(QString::fromLatin1(id));
 }
 
 Settings Settings::load(const QString &vaultRoot)

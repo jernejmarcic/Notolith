@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QPointer>
 #include <QThreadPool>
 #include <QTimer>
 
@@ -36,9 +37,14 @@ class SpellChecker;
 class NoteHistory;
 
 class BacklinksPane;
+class BookmarksPane;
+class GraphView;
 class MarkdownEditor;
 class OutgoingLinksPane;
+class OutlinePane;
+class PagePreview;
 class QuickSwitcher;
+class SearchPane;
 class SettingsPage;
 class TagsPane;
 
@@ -186,8 +192,8 @@ private:
     /// The editor's modified flag, or the canvas's when the tab shows one.
     bool isModified(const Leaf *leaf) const;
     /// A file a tab shows in a view of its own rather than the editor: a
-    /// .canvas or a .base, when those modules are built.
-    static bool isViewFile(const QString &path);
+    /// .canvas or a .base, when those modules are built and switched on.
+    bool isViewFile(const QString &path) const;
     /// Shows `path` in the focused tab's view; false when it could not be read.
     bool openView(const QString &path, NavSource source);
     /// Puts the editor back in `leaf` in place of its view.
@@ -211,7 +217,15 @@ private:
     // --- optional features ---------------------------------------------------
     /// Whether an optional feature is on: noteAppC's own switch. A feature
     /// that is off is not built, connected or refreshed - it costs nothing.
-    bool featureOn(const QString &id) const;
+    bool featureOn(const char *id) const;
+    /// Builds what is switched on and destroys what is not: the side panes
+    /// and their tabs, the graph, page preview; and disables the commands of
+    /// every feature that is off.
+    void applyFeatures();
+    /// Points the note-following side panes at `path` (empty clears them).
+    void showNoteInPanes(const QString &path);
+    /// The hover preview, built the first time it is wanted.
+    PagePreview *pagePreview();
     /// Git history of every save (the history module): opened for the vault
     /// when the feature is on, closed when it is not.
     void updateNoteHistory();
@@ -308,7 +322,7 @@ private:
     /// muted, accented while its pane is showing.
     QToolButton *rightSidebarTabButton(QWidget *parent, const QString &objectName,
                                        const QString &icon, const QString &label,
-                                       const QString &tooltip, int index);
+                                       const QString &tooltip, QWidget *pane);
     void updateTabButtonIcon(QToolButton *button);
     /// Shows the right sidebar on `pane`, its tab checked.
     void showRightPane(QWidget *pane);
@@ -362,7 +376,7 @@ private:
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
-    class PagePreview *m_preview = nullptr;
+    QPointer<PagePreview> m_preview; ///< null until a link is first hovered
     /// Resolves a link as the open note sees it; the editor, the preview and
     /// PDF export all use it.
     std::function<QString(const QString &)> m_resolveLink;
@@ -409,15 +423,17 @@ private:
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;
     QStackedWidget *m_rightPanes = nullptr;
-    QButtonGroup *m_rightTabs = nullptr; ///< button ids are m_rightPanes indexes
-    class SearchPane *m_search = nullptr;
-    class GraphView *m_graph = nullptr;      ///< null until first opened, and without the module
-    class GraphView *m_localGraph = nullptr; ///< null without the module
-    BacklinksPane *m_backlinks = nullptr;
-    TagsPane *m_tags = nullptr;
-    OutgoingLinksPane *m_outgoingLinks = nullptr;
-    class OutlinePane *m_outline = nullptr;
-    class BookmarksPane *m_bookmarks = nullptr;
+    QButtonGroup *m_rightTabs = nullptr;
+    /// Each null while its feature is off (applyFeatures()), and m_graph
+    /// until first opened; the graphs are null without their module.
+    QPointer<SearchPane> m_search;
+    QPointer<GraphView> m_graph;
+    QPointer<GraphView> m_localGraph;
+    QPointer<BacklinksPane> m_backlinks;
+    QPointer<TagsPane> m_tags;
+    QPointer<OutgoingLinksPane> m_outgoingLinks;
+    QPointer<OutlinePane> m_outline;
+    QPointer<BookmarksPane> m_bookmarks;
     class TemplatePicker *m_templatePicker = nullptr;
     QuickSwitcher *m_switcher = nullptr;
 

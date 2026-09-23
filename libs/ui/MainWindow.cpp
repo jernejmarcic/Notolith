@@ -420,9 +420,6 @@ QWidget *MainWindow::buildMainArea()
     };
     m_resolveLink = resolver;
 
-    m_preview = new PagePreview(this);
-    m_preview->setLinkResolver(resolver);
-    connect(m_preview, &PagePreview::linkActivated, this, &MainWindow::followLink);
     m_previewDelay.setSingleShot(true);
     m_previewDelay.setInterval(300);
     connect(&m_previewDelay, &QTimer::timeout, this, &MainWindow::showPagePreview);
@@ -553,7 +550,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
     connect(editor, &MarkdownEditor::linkHovered, this,
             [this](const QString &target, const QPoint &globalPos) {
-                if (!m_settings.boolean(QStringLiteral("pagePreview.enabled")))
+                if (!featureOn("page-preview"))
                     return;
                 m_previewTarget = target;
                 m_previewPos = globalPos;
@@ -561,7 +558,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             });
     connect(editor, &MarkdownEditor::linkHoverEnded, this, [this] {
         m_previewDelay.stop();
-        m_preview->leaveSoon();
+        if (m_preview)
+            m_preview->leaveSoon();
     });
     // The outline follows the parse and the caret; m_outline is built with the
     // right sidebar, after the first tab, so these look it up when they fire.
@@ -693,24 +691,15 @@ void MainWindow::activateLeaf(Leaf *leaf)
         const QSignalBlocker blocker(group->tabs);
         group->tabs->setCurrentIndex(index);
     }
-    // The side panes are built after the first tab, which is activated before
-    // there are any.
-    if (!m_backlinks)
+    // The right sidebar is built after the first tab, which is activated
+    // before there is one.
+    if (!m_rightPanes)
         return;
     if (!leaf->pendingPath.isEmpty() && openNote(std::exchange(leaf->pendingPath, QString())))
         return; // opening it filled the panes
     const QString &path = leaf->notePath;
-    m_backlinks->setNote(path);
-    m_outgoingLinks->setNote(path);
-#ifdef NOTEAPPC_HAVE_GRAPH
-    m_localGraph->setCurrentNote(m_vault.isValid() && !path.isEmpty() ? m_vault.relative(path)
-                                                                      : QString());
-#endif
-    if (path.isEmpty()) {
-        m_outline->clear();
-    } else {
-        m_outline->setHeadings(leaf->editor->headings());
-        m_outline->setCursorOffset(leaf->editor->cursorOffset());
+    showNoteInPanes(path);
+    if (!path.isEmpty()) {
         m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
         revealInTree(path);
     }
@@ -913,7 +902,7 @@ void MainWindow::resetWorkspace()
 
 QToolButton *MainWindow::rightSidebarTabButton(QWidget *parent, const QString &objectName,
                                                const QString &icon, const QString &label,
-                                               const QString &tooltip, int index)
+                                               const QString &tooltip, QWidget *pane)
 {
     auto *button = new QToolButton(parent);
     button->setObjectName(objectName);
@@ -926,7 +915,8 @@ QToolButton *MainWindow::rightSidebarTabButton(QWidget *parent, const QString &o
     button->setIconSize(QSize(14, 14));
     button->setProperty("iconName", icon);
     connect(button, &QToolButton::toggled, this, [this, button](bool) { updateTabButtonIcon(button); });
-    connect(button, &QToolButton::clicked, this, [this, index] { m_rightPanes->setCurrentIndex(index); });
+    button->setProperty("pane", QVariant::fromValue<QObject *>(pane));
+    connect(button, &QToolButton::clicked, this, [this, pane] { m_rightPanes->setCurrentWidget(pane); });
     return button;
 }
 
@@ -951,108 +941,14 @@ QWidget *MainWindow::buildRightSidebar()
     auto *tabLayout = new QHBoxLayout(tabRow);
     tabLayout->setContentsMargins(6, 6, 6, 2);
     tabLayout->setSpacing(2);
+    tabLayout->addStretch(1);
+    m_rightTabs = new QButtonGroup(tabRow);
+    m_rightTabs->setExclusive(true);
 
-    m_backlinks = new BacklinksPane(m_rightSidebar);
-    m_backlinks->setIndex(&m_index);
-    connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
-
-    m_tags = new TagsPane(m_rightSidebar);
-    m_tags->setIndex(&m_index);
-    // A tag opens a search for it, as in Obsidian; tag: already finds the
-    // nested tags beneath it.
-    connect(m_tags, &TagsPane::tagActivated, this,
-            [this](const QString &tag) { openSearch(QStringLiteral("tag:#%1").arg(tag)); });
-
-    m_outgoingLinks = new OutgoingLinksPane(m_rightSidebar);
-    m_outgoingLinks->setIndex(&m_index);
-    connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
-
-    m_outline = new OutlinePane(m_rightSidebar);
-    connect(m_outline, &OutlinePane::jumpRequested, this, [this](qsizetype offset) {
-        m_active->editor->setCursorOffset(offset);
-        m_active->editor->setFocus();
-    });
-
-    m_bookmarks = new BookmarksPane(m_rightSidebar);
-    connect(m_bookmarks, &BookmarksPane::noteActivated, this, &MainWindow::openRelative);
-    connect(m_bookmarks, &BookmarksPane::headingActivated, this,
-            [this](const QString &relativePath, const QString &subpath) {
-                openRelative(relativePath);
-                jumpToHeading(subpath);
-            });
-    connect(m_bookmarks, &BookmarksPane::searchActivated, this,
-            [this](const QString &query) { openSearch(query); });
-
-    m_search = new SearchPane(m_rightSidebar);
-    m_search->setIndex(&m_index);
-    connect(m_search, &SearchPane::matchActivated, this,
-            [this](const QString &relativePath, qsizetype offset) {
-                openRelative(relativePath);
-                m_active->editor->setCursorOffset(offset);
-                m_active->editor->setFocus();
-            });
-
+    // The panes and their tabs come from applyFeatures(), each only while
+    // its feature is on.
     m_rightPanes = new QStackedWidget(m_rightSidebar);
     m_rightPanes->setObjectName(QStringLiteral("rightSidebarPanes"));
-    m_rightPanes->addWidget(m_backlinks);
-    m_rightPanes->addWidget(m_tags);
-    m_rightPanes->addWidget(m_outgoingLinks);
-    m_rightPanes->addWidget(m_outline);
-    m_rightPanes->addWidget(m_bookmarks);
-    m_rightPanes->addWidget(m_search);
-#ifdef NOTEAPPC_HAVE_GRAPH
-    // Cheap while hidden: GraphView reads the index only once it is shown.
-    m_localGraph = new GraphView(m_rightSidebar);
-    m_localGraph->setObjectName(QStringLiteral("localGraph"));
-    m_localGraph->setLocalGraph(true);
-    m_localGraph->setIndex(&m_index);
-    connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
-    m_rightPanes->addWidget(m_localGraph);
-#endif
-
-    auto *group = new QButtonGroup(tabRow);
-    group->setExclusive(true);
-    m_rightTabs = group;
-    QToolButton *searchTab = rightSidebarTabButton(
-        tabRow, QStringLiteral("searchTabButton"), QStringLiteral("search"), tr("Search"),
-        tr("Search"), m_rightPanes->indexOf(m_search));
-    QToolButton *backlinksTab =
-        rightSidebarTabButton(tabRow, QStringLiteral("backlinksTabButton"), QStringLiteral("link"),
-                              tr("Backlinks"), tr("Backlinks"), 0);
-    QToolButton *tagsTab = rightSidebarTabButton(tabRow, QStringLiteral("tagsTabButton"),
-                                                 QStringLiteral("tags"), tr("Tags"), tr("Tags"), 1);
-    QToolButton *outgoingTab =
-        rightSidebarTabButton(tabRow, QStringLiteral("outgoingLinksTabButton"),
-                              QStringLiteral("arrow-up-right"), tr("Outgoing"),
-                              tr("Outgoing links"), 2);
-    QToolButton *outlineTab = rightSidebarTabButton(
-        tabRow, QStringLiteral("outlineTabButton"), QStringLiteral("list"), tr("Outline"),
-        tr("Outline"), 3);
-    QToolButton *bookmarksTab = rightSidebarTabButton(
-        tabRow, QStringLiteral("bookmarksTabButton"), QStringLiteral("bookmark"), tr("Bookmarks"),
-        tr("Bookmarks"), 4);
-    int id = 0;
-    for (QToolButton *tab : {backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab}) {
-        // Six panes do not fit as words; Obsidian's sidebar tabs are icons.
-        tab->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        group->addButton(tab, id++);
-    }
-    searchTab->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    group->addButton(searchTab, m_rightPanes->indexOf(m_search));
-    for (QToolButton *tab : {searchTab, backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab})
-        tabLayout->addWidget(tab);
-#ifdef NOTEAPPC_HAVE_GRAPH
-    {
-        QToolButton *graphTab = rightSidebarTabButton(
-            tabRow, QStringLiteral("localGraphTabButton"), QStringLiteral("git-fork"),
-            tr("Local graph"), tr("Local graph"), m_rightPanes->indexOf(m_localGraph));
-        graphTab->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        group->addButton(graphTab, m_rightPanes->indexOf(m_localGraph));
-        tabLayout->addWidget(graphTab);
-    }
-#endif
-    tabLayout->addStretch(1);
-    backlinksTab->setChecked(true);
 
     auto *layout = new QVBoxLayout(m_rightSidebar);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -1060,6 +956,178 @@ QWidget *MainWindow::buildRightSidebar()
     layout->addWidget(tabRow);
     layout->addWidget(m_rightPanes, 1);
     return m_rightSidebar;
+}
+
+void MainWindow::applyFeatures()
+{
+    // The side panes, in their tab order. One that is off is not built: no
+    // widget, nothing connected to the index, nothing refreshed per note.
+    struct Pane {
+        const char *feature;
+        QWidget *widget;
+        std::function<QWidget *()> build;
+        const char *button;
+        const char *icon;
+        QString tooltip;
+    };
+    QWidget *parent = m_rightPanes;
+    const Pane panes[] = {
+        {"global-search", m_search,
+         [this, parent] {
+             m_search = new SearchPane(parent);
+             m_search->setIndex(&m_index);
+             connect(m_search, &SearchPane::matchActivated, this,
+                     [this](const QString &relativePath, qsizetype offset) {
+                         openRelative(relativePath);
+                         m_active->editor->setCursorOffset(offset);
+                         m_active->editor->setFocus();
+                     });
+             return m_search.data();
+         },
+         "searchTabButton", "search", tr("Search")},
+        {"backlink", m_backlinks,
+         [this, parent] {
+             m_backlinks = new BacklinksPane(parent);
+             m_backlinks->setIndex(&m_index);
+             connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
+             return m_backlinks.data();
+         },
+         "backlinksTabButton", "link", tr("Backlinks")},
+        {"tag-pane", m_tags,
+         [this, parent] {
+             m_tags = new TagsPane(parent);
+             m_tags->setIndex(&m_index);
+             // A tag opens a search for it, as in Obsidian; tag: already
+             // finds the nested tags beneath it.
+             connect(m_tags, &TagsPane::tagActivated, this,
+                     [this](const QString &tag) { openSearch(QStringLiteral("tag:#%1").arg(tag)); });
+             return m_tags.data();
+         },
+         "tagsTabButton", "tags", tr("Tags")},
+        {"outgoing-link", m_outgoingLinks,
+         [this, parent] {
+             m_outgoingLinks = new OutgoingLinksPane(parent);
+             m_outgoingLinks->setIndex(&m_index);
+             connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
+             return m_outgoingLinks.data();
+         },
+         "outgoingLinksTabButton", "arrow-up-right", tr("Outgoing links")},
+        {"outline", m_outline,
+         [this, parent] {
+             m_outline = new OutlinePane(parent);
+             connect(m_outline, &OutlinePane::jumpRequested, this, [this](qsizetype offset) {
+                 m_active->editor->setCursorOffset(offset);
+                 m_active->editor->setFocus();
+             });
+             return m_outline.data();
+         },
+         "outlineTabButton", "list", tr("Outline")},
+        {"bookmarks", m_bookmarks,
+         [this, parent] {
+             m_bookmarks = new BookmarksPane(parent);
+             m_bookmarks->setVaultRoot(m_vault.isValid() ? m_vault.root() : QString());
+             connect(m_bookmarks, &BookmarksPane::noteActivated, this, &MainWindow::openRelative);
+             connect(m_bookmarks, &BookmarksPane::headingActivated, this,
+                     [this](const QString &relativePath, const QString &subpath) {
+                         openRelative(relativePath);
+                         jumpToHeading(subpath);
+                     });
+             connect(m_bookmarks, &BookmarksPane::searchActivated, this,
+                     [this](const QString &query) { openSearch(query); });
+             return m_bookmarks.data();
+         },
+         "bookmarksTabButton", "bookmark", tr("Bookmarks")},
+#ifdef NOTEAPPC_HAVE_GRAPH
+        {"graph", m_localGraph,
+         [this, parent] {
+             // Cheap while hidden: GraphView reads the index only once shown.
+             m_localGraph = new GraphView(parent);
+             m_localGraph->setObjectName(QStringLiteral("localGraph"));
+             m_localGraph->setLocalGraph(true);
+             m_localGraph->setIndex(&m_index);
+             connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
+             return m_localGraph.data();
+         },
+         "localGraphTabButton", "git-fork", tr("Local graph")},
+#endif
+    };
+
+    const bool first = m_rightPanes->count() == 0;
+    auto *tabLayout = static_cast<QHBoxLayout *>(static_cast<QWidget *>(m_rightTabs->parent())->layout());
+    bool built = false;
+    int slot = 0;
+    for (const Pane &pane : panes) {
+        auto *button = m_rightSidebar->findChild<QToolButton *>(QLatin1String(pane.button));
+        if (!featureOn(pane.feature)) {
+            delete button;
+            delete pane.widget; // its QPointer member nulls itself
+            continue;
+        }
+        if (!pane.widget) {
+            QWidget *widget = pane.build();
+            m_rightPanes->addWidget(widget);
+            button = rightSidebarTabButton(tabLayout->parentWidget(), QLatin1String(pane.button),
+                                           QLatin1String(pane.icon), pane.tooltip, pane.tooltip, widget);
+            // Seven panes do not fit as words; Obsidian's sidebar tabs are icons.
+            button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            updateTabButtonIcon(button);
+            m_rightTabs->addButton(button);
+            tabLayout->insertWidget(slot, button);
+            built = true;
+        }
+        ++slot;
+    }
+    if (m_backlinks)
+        m_backlinks->setUnlinkedMentions(featureOn("unlinked-mentions"));
+    if (first && m_backlinks)
+        m_rightPanes->setCurrentWidget(m_backlinks); // Obsidian opens on backlinks
+    for (QAbstractButton *tab : m_rightTabs->buttons()) {
+        if (tab->property("pane").value<QObject *>() == m_rightPanes->currentWidget())
+            tab->setChecked(true);
+    }
+    if (built && m_active)
+        showNoteInPanes(m_active->notePath);
+
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_graph && !featureOn("graph")) {
+        if (m_mainStack->currentWidget() == m_graph)
+            leaveSettings();
+        delete m_graph;
+    }
+#endif
+    if (!featureOn("page-preview"))
+        delete m_preview;
+    m_wordCount->setVisible(featureOn("word-count"));
+
+    // A command is its plugin's while its id starts with that plugin's id,
+    // the way Obsidian names them ("graph:open", "daily-notes").
+    for (QAction *action : std::as_const(m_commands)) {
+        const QString id = action->objectName();
+        const QString plugin = id == QLatin1String("insert-template") ? QStringLiteral("templates")
+                                                                      : id.section(QLatin1Char(':'), 0, 0);
+        for (const Settings::Feature &feature : Settings::features()) {
+            if (plugin == QLatin1String(feature.id))
+                action->setEnabled(featureOn(feature.id));
+        }
+    }
+}
+
+void MainWindow::showNoteInPanes(const QString &path)
+{
+    if (m_backlinks)
+        m_backlinks->setNote(path);
+    if (m_outgoingLinks)
+        m_outgoingLinks->setNote(path);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_localGraph)
+        m_localGraph->setCurrentNote(m_vault.isValid() && !path.isEmpty() ? m_vault.relative(path) : QString());
+#endif
+    if (m_outline && path.isEmpty())
+        m_outline->clear();
+    else if (m_outline && m_active && path == m_active->notePath && !m_active->view) {
+        m_outline->setHeadings(m_active->editor->headings());
+        m_outline->setCursorOffset(m_active->editor->cursorOffset());
+    }
 }
 
 void MainWindow::buildActions()
@@ -1174,7 +1242,10 @@ void MainWindow::buildActions()
     add(QStringLiteral("graph:open"), tr("Graph view: Open graph view"), QStringLiteral("Ctrl+G"),
         &MainWindow::openGraph);
     add(QStringLiteral("graph:open-local"), tr("Graph view: Open local graph"), QString(),
-        [this] { showRightPane(m_localGraph); });
+        [this] {
+            if (m_localGraph)
+                showRightPane(m_localGraph);
+        });
 #endif
     add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
         QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
@@ -1201,7 +1272,7 @@ void MainWindow::buildActions()
         &MainWindow::insertTemplate);
     add(QStringLiteral("bookmarks:bookmark-current-view"), tr("Bookmarks: Bookmark this note"),
         QString(), [this] {
-            if (m_vault.isValid() && !m_active->notePath.isEmpty())
+            if (m_bookmarks && m_vault.isValid() && !m_active->notePath.isEmpty())
                 m_bookmarks->bookmarkNote(m_vault.relative(m_active->notePath),
                                           QFileInfo(m_active->notePath).completeBaseName());
         });
@@ -1331,14 +1402,17 @@ void MainWindow::showRightPane(QWidget *pane)
 {
     if (!m_rightSidebar->isVisible())
         toggleRightSidebar();
-    const int index = m_rightPanes->indexOf(pane);
-    m_rightPanes->setCurrentIndex(index);
-    if (QAbstractButton *tab = m_rightTabs->button(index))
-        tab->setChecked(true);
+    m_rightPanes->setCurrentWidget(pane);
+    for (QAbstractButton *tab : m_rightTabs->buttons()) {
+        if (tab->property("pane").value<QObject *>() == pane)
+            tab->setChecked(true);
+    }
 }
 
 void MainWindow::openSearch(const QString &query)
 {
+    if (!m_search)
+        return; // Search is switched off
     showRightPane(m_search);
     if (!query.isEmpty())
         m_search->setQuery(query);
@@ -1348,6 +1422,8 @@ void MainWindow::openSearch(const QString &query)
 void MainWindow::openGraph()
 {
 #ifdef NOTEAPPC_HAVE_GRAPH
+    if (!featureOn("graph"))
+        return;
     if (m_graph && m_mainStack->currentWidget() == m_graph) {
         leaveSettings();
         return;
@@ -1461,6 +1537,7 @@ Theme MainWindow::themeFromSettings() const
 void MainWindow::applySettings()
 {
     m_theme = themeFromSettings();
+    applyFeatures(); // first, so a pane it builds is themed below
     applyTheme();
 
     for (const auto &leaf : m_leaves)
@@ -1641,14 +1718,14 @@ void MainWindow::showPagePreview()
             reader.setScaledSize(size.scaled(1040, size.height(), Qt::KeepAspectRatio));
         const QImage image = reader.read();
         if (!image.isNull())
-            m_preview->showImage(image, m_previewPos);
+            pagePreview()->showImage(image, m_previewPos);
         return;
     }
     if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
         const int page = subpath.startsWith(QLatin1String("page=")) ? subpath.mid(5).toInt() - 1 : 0;
         const QImage image = PdfPage::render(path, qMax(0, page), 520);
         if (!image.isNull())
-            m_preview->showImage(image, m_previewPos);
+            pagePreview()->showImage(image, m_previewPos);
         return;
     }
     Note note;
@@ -1668,7 +1745,18 @@ void MainWindow::showPagePreview()
             }
         }
     }
-    m_preview->showNote(note.text, offset, m_previewPos);
+    pagePreview()->showNote(note.text, offset, m_previewPos);
+}
+
+PagePreview *MainWindow::pagePreview()
+{
+    if (!m_preview) {
+        m_preview = new PagePreview(this);
+        m_preview->setLinkResolver(m_resolveLink);
+        m_preview->applyTheme(m_theme);
+        connect(m_preview, &PagePreview::linkActivated, this, &MainWindow::followLink);
+    }
+    return m_preview;
 }
 
 void MainWindow::updateSpelling()
@@ -1755,16 +1843,22 @@ void MainWindow::applyTheme()
             canvas->setTheme(m_theme);
 #endif
     }
-    m_tags->setTheme(m_theme);
-    m_backlinks->setTheme(m_theme);
-    m_search->setTheme(m_theme);
+    if (m_tags)
+        m_tags->setTheme(m_theme);
+    if (m_backlinks)
+        m_backlinks->setTheme(m_theme);
+    if (m_search)
+        m_search->setTheme(m_theme);
 #ifdef NOTEAPPC_HAVE_GRAPH
-    m_localGraph->setTheme(m_theme);
+    if (m_localGraph)
+        m_localGraph->setTheme(m_theme);
     if (m_graph)
         m_graph->setTheme(m_theme);
 #endif
-    m_preview->applyTheme(m_theme);
-    m_outgoingLinks->setTheme(m_theme);
+    if (m_preview)
+        m_preview->applyTheme(m_theme);
+    if (m_outgoingLinks)
+        m_outgoingLinks->setTheme(m_theme);
     if (m_settingsPage)
         m_settingsPage->applyTheme(m_theme);
 
@@ -1909,12 +2003,7 @@ void MainWindow::clearOpenNote()
     m_active->editor->setEnabled(false);
     m_active->inlineTitle->setVisible(false);
     syncTabs(m_active->group);
-    m_backlinks->setNote(QString());
-    m_outgoingLinks->setNote(QString());
-#ifdef NOTEAPPC_HAVE_GRAPH
-    m_localGraph->setCurrentNote(QString());
-#endif
-    m_outline->clear();
+    showNoteInPanes(QString());
 }
 
 void MainWindow::openVault(const QString &path)
@@ -1944,7 +2033,8 @@ void MainWindow::openVault(const QString &path)
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
     applySettings();
-    m_bookmarks->setVaultRoot(m_vault.root());
+    if (m_bookmarks)
+        m_bookmarks->setVaultRoot(m_vault.root());
     updateNoteHistory();
     restoreLayout(Workspaces::current(m_vault.root()));
 #ifdef NOTEAPPC_HAVE_GRAPH
@@ -1974,7 +2064,8 @@ void MainWindow::closeVault()
 
     m_tree->setRootIndex(QModelIndex());
     m_files->setRootPath(QString());
-    m_bookmarks->setVaultRoot(QString());
+    if (m_bookmarks)
+        m_bookmarks->setVaultRoot(QString());
 
     reloadSettings(QString());
     applySettings();
@@ -2039,7 +2130,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
     }
     }
     // After the first paint: openWhenShown queued this call.
-    if (!m_painted) {
+    if (!m_painted && featureOn("file-recovery")) {
         // Old snapshots go once a session, with the window already up.
         Snapshots::prune(qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays")))
                          * 24 * 3600 * 1000);
@@ -2157,11 +2248,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     m_active->inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
     syncTabs(m_active->group);
 
-    m_backlinks->setNote(path);
-    m_outgoingLinks->setNote(path);
-#ifdef NOTEAPPC_HAVE_GRAPH
-    m_localGraph->setCurrentNote(m_vault.isValid() ? m_vault.relative(path) : QString());
-#endif
+    showNoteInPanes(path);
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
@@ -2406,28 +2493,15 @@ void MainWindow::manageLayouts()
     dialog.exec();
 }
 
-bool MainWindow::featureOn(const QString &id) const
+bool MainWindow::featureOn(const char *id) const
 {
-    // Ids are Obsidian's core-plugin spelling ("note-history"); settings keys
-    // are camelCase ("plugins.noteHistory"), the only form settings.ini
-    // reads back.
-    QString key = QStringLiteral("plugins.");
-    bool upper = false;
-    for (const QChar c : id) {
-        if (c == u'-') {
-            upper = true;
-            continue;
-        }
-        key += upper ? c.toUpper() : c;
-        upper = false;
-    }
-    return m_settings.boolean(key);
+    return m_settings.boolean(Settings::featureKey(id));
 }
 
 void MainWindow::updateNoteHistory()
 {
 #ifdef NOTEAPPC_HAVE_HISTORY
-    const bool wanted = m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn(QStringLiteral("note-history"));
+    const bool wanted = m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("note-history");
     const QString root = wanted ? m_vault.root() : QString();
     if (root == m_noteHistoryRoot && (m_noteHistory != nullptr) == wanted)
         return;
@@ -2519,15 +2593,15 @@ void MainWindow::pushHistory(const QString &path, NavSource source)
     m_active->historyIndex = m_active->history.size() - 1;
 }
 
-bool MainWindow::isViewFile(const QString &path)
+bool MainWindow::isViewFile(const QString &path) const
 {
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive))
-        return true;
+        return featureOn("canvas");
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
     if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive))
-        return true;
+        return featureOn("bases");
 #endif
     Q_UNUSED(path);
     return false;
@@ -2596,9 +2670,9 @@ bool MainWindow::openView(const QString &path, NavSource source)
     view->setFocus();
 
     syncTabs(m_active->group);
-    m_backlinks->setNote(path);
-    m_outgoingLinks->setNote(path);
-    m_outline->clear();
+    showNoteInPanes(path);
+    if (m_outline)
+        m_outline->clear();
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
@@ -2733,7 +2807,8 @@ bool MainWindow::save()
 
     // File recovery, for notes in a vault only: a stray note leaves nothing
     // behind. The first save of a note keeps what it held before, too.
-    const bool snapshots = m_vault.isValid() && m_vault.contains(m_active->notePath);
+    const bool snapshots =
+        featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(m_active->notePath);
     if (snapshots && Snapshots::versions(m_active->notePath).isEmpty() && note.text != m_active->note.text)
         Snapshots::record(m_active->notePath, m_active->note.text, 0);
 
@@ -2817,7 +2892,7 @@ void MainWindow::updateTitle()
 
 void MainWindow::updateWordCount()
 {
-    if (m_active->notePath.isEmpty()) {
+    if (m_active->notePath.isEmpty() || !featureOn("word-count")) {
         m_wordCount->clear();
         return;
     }

@@ -143,9 +143,21 @@ void BacklinksPane::refresh()
     refreshUnlinked();
 }
 
+void BacklinksPane::setUnlinkedMentions(bool on)
+{
+    if (on == m_unlinked)
+        return;
+    m_unlinked = on;
+    m_unlinkedHeader->setVisible(on);
+    m_unlinkedList->setVisible(on);
+    refreshUnlinked();
+}
+
 void BacklinksPane::refreshUnlinked()
 {
     m_unlinkedList->clear();
+    if (!m_unlinked)
+        return;
     if (!m_index || !m_index->isOpen() || m_path.isEmpty()) {
         m_unlinkedHeader->setText(tr("Unlinked mentions"));
         return;

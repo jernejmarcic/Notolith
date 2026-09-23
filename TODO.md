@@ -22,7 +22,7 @@ built; each stage's detail is in its own section further down.
 |---|---|---|
 | 1 | Obsidian's features (the base everything else sits on) | done, but for the command palette (deferred by Jernej) |
 | 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | next |
-| 3 | Every non-core feature switchable off at run time, costing nothing when off | next |
+| 3 | Every non-core feature switchable off at run time, costing nothing when off | in progress: panes, views, commands done; editor blocks wait on stage 2 |
 | 4 | `demo/`, a vault under 5 MB that exercises every feature | grows with each stage |
 | 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
 | 6 | Publishing: the vault as a static website (Obsidian Publish style) | todo |
@@ -378,17 +378,30 @@ obsidian, which is a plugin)", and "Everything but the core features, should
 be decoupled enough that they can be turned off and increase performance IF
 the features existing decreases it".
 
-- [ ] Note history in git: every save a commit, stored outside the vault (no
+- [x] Note history in git: every save a commit, stored outside the vault (no
       dotfile in it), per-note history browsable with diffs and restorable.
-      Measure the cost per save first; libgit2 in process if it is installed,
-      off the UI thread either way. An optional module with a runtime switch.
+      0.093 ms a save; libgit2 in process, on one thread of its own.
 - [ ] Every non-core feature switchable off at run time (Obsidian's core
       plugins page, and the vault's `.obsidian/core-plugins.json` read),
       and when off it costs nothing: not built, not connected, not refreshed.
-      Audit each - search, backlinks and unlinked mentions, outgoing links,
-      tags, outline, bookmarks, graph and local graph, canvas, bases, page
-      preview, file recovery, daily notes, templates, query and HTML blocks,
-      spellcheck, word count, workspace restore - and measure off against on.
+  - [x] `Settings::features()`: 18 switches, `plugins.<camelCase>`; both forms
+        of `core-plugins.json` (the old array form cannot turn off bases,
+        which came after it). On the Core plugins page, only what the build has.
+  - [x] Side panes built and destroyed by `applyFeatures()` - search,
+        backlinks, tags, outgoing links, outline, bookmarks, local graph -
+        their tabs kept in order; unlinked mentions skip their search.
+  - [x] Graph view, page preview (now built at the first hover), word count,
+        file recovery snapshots and pruning, canvas and base files, note
+        history. A feature's commands are disabled while it is off.
+  - [x] Measured, 2 000 notes: cold start 81 ms on, 53 ms off. Note open was
+        10x slower with the panes on at 1 MB; fixed (PERFORMANCE.md fix 17).
+  - [ ] Query blocks (Search off), base blocks (Bases off) and the embeds of
+        stage 2 as editor features: wire `MarkdownEditor::setFeatures` when
+        lane I merges. Spellcheck already has its own switch.
+  - [ ] Found by the measurement: the indexer posts one result per note to
+        the UI thread and writes it to SQLite there, 0.18 ms each, so a cold
+        index of 20 000 notes keeps the event loop busy for seconds. Write on
+        a worker connection and post progress in batches.
 
 ## Requested 2026-09-23, afternoon: a demo vault, and a last pass
 

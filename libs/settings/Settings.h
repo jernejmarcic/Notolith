@@ -110,8 +110,24 @@ public:
     /// Every note with a remembered position, most recently visited first.
     QStringList rememberedNotes() const;
 
-    /// Reads Obsidian's own `app.json` and `appearance.json` from a vault and
-    /// maps them onto noteAppC's keys. Public so the tests can check the
+    /// A feature that can be switched off, costing nothing once it is: an
+    /// Obsidian core plugin, by its id in `.obsidian/core-plugins.json`, or
+    /// one of noteAppC's own (`obsidian` false, never read from a vault).
+    struct Feature {
+        const char *id; ///< "global-search"
+        const char *name;
+        const char *description;
+        bool obsidian;
+    };
+    /// Every feature, in the order the Core plugins page lists them.
+    static const QList<Feature> &features();
+    /// Where a feature's switch lives: "note-history" is
+    /// "plugins.noteHistory", camelCase being the only form settings.ini
+    /// reads back.
+    static QString featureKey(const char *id);
+
+    /// Reads Obsidian's own `app.json`, `appearance.json` and
+    /// `core-plugins.json` from a vault and maps them onto noteAppC's keys. Public so the tests can check the
     /// mapping without a whole vault on disk.
     static QVariantMap fromObsidianConfig(const QString &vaultRoot);
 
