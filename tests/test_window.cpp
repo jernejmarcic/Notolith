@@ -34,6 +34,8 @@
 #include "Index.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
+#include "Snapshots.h"
+#include "RecoveryDialog.h"
 #include "Settings.h"
 #include "Vault.h"
 
@@ -924,5 +926,37 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     // Moving off the link lets it go, after a moment to reach the preview.
     emit window.editor()->linkHoverEnded();
     QTRY_VERIFY_WITH_TIMEOUT(!preview->isVisible(), 2000);
+}
+
+TEST_F(WindowTest, SavingKeepsSnapshotsAndOneCanBePutBack)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    editor->enterBlockAt(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral(" Changed."));
+    ASSERT_TRUE(window.findChild<QAction *>(QStringLiteral("editor:save-file")) != nullptr);
+    window.findChild<QAction *>(QStringLiteral("editor:save-file"))->trigger();
+
+    // The first save keeps what the note held before it, as well as the save.
+    const QList<noteAppC::Snapshots::Version> versions =
+        noteAppC::Snapshots::versions(path(QStringLiteral("Welcome.md")));
+    ASSERT_GE(versions.size(), 1);
+    EXPECT_EQ(noteAppC::Snapshots::read(versions.last()), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    // Opened from the settings page; restoring writes the file and the editor.
+    window.findChild<QAction *>(QStringLiteral("file-recovery:open"))->trigger();
+    auto *dialog = window.findChild<noteAppC::RecoveryDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    emit dialog->restoreRequested(path(QStringLiteral("Welcome.md")),
+                                  noteAppC::Snapshots::read(versions.last()));
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    qputenv("XDG_DATA_HOME", previous);
 }
 

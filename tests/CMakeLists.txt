@@ -54,5 +54,6 @@ get_property(noteappc_tests DIRECTORY PROPERTY TESTS)
 foreach(test IN LISTS noteappc_tests)
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
         "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
-        "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache")
+        "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
+        "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
 endforeach()

@@ -151,6 +151,10 @@ private:
     void watchThemeFiles();
     /// Shows the page preview for the link the editor last reported hovering.
     void showPagePreview();
+    void openRecovery();
+    /// Puts a snapshot back as `notePath`'s content, keeping what it held as
+    /// a snapshot of its own first.
+    void restoreSnapshot(const QString &notePath, const QString &text);
     /// Gives every command its keys: noteAppC's hotkeys.json over the vault's
     /// Obsidian one over the built-in keys, for the window's commands and the
     /// editor's alike.

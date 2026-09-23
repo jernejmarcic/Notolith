@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include "Snapshots.h"
 
 #include <QDir>
 #include <QFile>
@@ -327,3 +328,54 @@ TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefa
     // Filters are configured, so the build*/ fallback no longer applies.
     EXPECT_FALSE(vault.isIgnored(QStringLiteral("build/output.md")));
 }
+
+// --- file recovery -------------------------------------------------------------
+
+namespace {
+
+/// A data home of its own, so snapshots from one test are not another's.
+class SnapshotsTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(m_home.isValid());
+        m_previous = qgetenv("XDG_DATA_HOME");
+        qputenv("XDG_DATA_HOME", m_home.path().toUtf8());
+    }
+    void TearDown() override { qputenv("XDG_DATA_HOME", m_previous); }
+    QTemporaryDir m_home;
+    QByteArray m_previous;
+};
+
+} // namespace
+
+TEST_F(SnapshotsTest, OnePerIntervalAndNeverTheSameTextTwice)
+{
+    const QString note = QStringLiteral("/vault/Note.md");
+    const qint64 minute = 60'000;
+    EXPECT_TRUE(noteAppC::Snapshots::record(note, QStringLiteral("one"), 5 * minute, 1'000'000));
+    EXPECT_FALSE(noteAppC::Snapshots::record(note, QStringLiteral("two"), 5 * minute, 1'000'000 + minute))
+        << "inside the interval";
+    EXPECT_FALSE(noteAppC::Snapshots::record(note, QStringLiteral("one"), 5 * minute,
+                                             1'000'000 + 10 * minute))
+        << "nothing changed";
+    EXPECT_TRUE(noteAppC::Snapshots::record(note, QStringLiteral("three"), 5 * minute,
+                                            1'000'000 + 10 * minute));
+
+    const QList<noteAppC::Snapshots::Version> versions = noteAppC::Snapshots::versions(note);
+    ASSERT_EQ(versions.size(), 2);
+    EXPECT_EQ(noteAppC::Snapshots::read(versions.at(0)), QStringLiteral("three")) << "newest first";
+    EXPECT_EQ(noteAppC::Snapshots::read(versions.at(1)), QStringLiteral("one"));
+    EXPECT_EQ(noteAppC::Snapshots::notes(), QStringList{note});
+    EXPECT_TRUE(noteAppC::Snapshots::directory().startsWith(m_home.path())) << "outside the vault";
+}
+
+TEST_F(SnapshotsTest, OldVersionsArePrunedAndTheirNoteForgotten)
+{
+    const qint64 day = 24LL * 3600 * 1000;
+    noteAppC::Snapshots::record(QStringLiteral("/v/Old.md"), QStringLiteral("old"), 0, 10 * day);
+    noteAppC::Snapshots::record(QStringLiteral("/v/New.md"), QStringLiteral("new"), 0, 19 * day);
+    EXPECT_EQ(noteAppC::Snapshots::prune(7 * day, 20 * day), 1);
+    EXPECT_EQ(noteAppC::Snapshots::notes(), QStringList{QStringLiteral("/v/New.md")});
+}
+

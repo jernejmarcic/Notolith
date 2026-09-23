@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPushButton>
 #include <QScrollArea>
 #include <QShowEvent>
 #include <QSignalBlocker>
@@ -490,6 +491,17 @@ QWidget *SettingsPage::buildFilesPage()
                 tr("Write new links as [[Note]] instead of [Note](Note.md)."));
     addToggleRow(layout, QStringLiteral("links.autoUpdate"), tr("Update links on rename"),
                 tr("Rewrite every link that points at a note when it is renamed or moved."));
+    addSpinRow(layout, QStringLiteral("fileRecovery.interval"), tr("Snapshot interval"),
+              tr("File recovery keeps a copy of a note when it is saved, at most this many "
+                 "minutes apart."),
+              1, 120);
+    addSpinRow(layout, QStringLiteral("fileRecovery.keepDays"), tr("Snapshot history"),
+              tr("Days a snapshot is kept before it is deleted."), 1, 365);
+    auto *view = new QPushButton(tr("View"));
+    view->setObjectName(QStringLiteral("settingsRecoveryButton"));
+    connect(view, &QPushButton::clicked, this, &SettingsPage::recoveryRequested);
+    addRow(layout, {}, tr("Snapshots"),
+           tr("Earlier versions of your notes, kept outside the vault."), view, {});
 
     layout->addStretch(1);
     return scrollWrap(page);

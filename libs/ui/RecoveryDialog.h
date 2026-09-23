@@ -1,0 +1,42 @@
+#pragma once
+
+#include <QDialog>
+
+class QLineEdit;
+class QListWidget;
+class QPlainTextEdit;
+class QPushButton;
+
+namespace noteAppC {
+
+class Vault;
+
+/// Obsidian's file recovery window: find a note, pick one of its snapshots,
+/// read it, then copy it out or put it back.
+class RecoveryDialog : public QDialog {
+    Q_OBJECT
+
+public:
+    /// `vault` only names notes relative to it; snapshots of notes elsewhere
+    /// are listed by their full path.
+    RecoveryDialog(const Vault &vault, QWidget *parent = nullptr);
+
+signals:
+    /// Replace `notePath`'s content with `text`: the window writes it.
+    void restoreRequested(const QString &notePath, const QString &text);
+
+private:
+    void showNotes();
+    void showVersions();
+    void showVersion();
+
+    QString m_root;
+    QLineEdit *m_filter = nullptr;
+    QListWidget *m_notes = nullptr;
+    QListWidget *m_versions = nullptr;
+    QPlainTextEdit *m_preview = nullptr;
+    QPushButton *m_copy = nullptr;
+    QPushButton *m_restore = nullptr;
+};
+
+} // namespace noteAppC

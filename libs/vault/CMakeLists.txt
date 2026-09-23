@@ -1,4 +1,6 @@
 add_library(noteAppC_vault STATIC
+    Snapshots.cpp
+    Snapshots.h
     Vault.cpp
     Vault.h)
 

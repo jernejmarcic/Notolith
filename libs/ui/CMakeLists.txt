@@ -2,6 +2,8 @@
 add_library(noteAppC_ui STATIC
     MainWindow.cpp
     MainWindow.h
+    RecoveryDialog.cpp
+    RecoveryDialog.h
     QuickSwitcher.cpp
     QuickSwitcher.h
     BacklinksPane.cpp

@@ -53,6 +53,8 @@ signals:
     void closeRequested();
     /// The Hotkeys page wrote noteAppC's hotkeys.json.
     void hotkeysChanged();
+    /// "View snapshots" was pressed.
+    void recoveryRequested();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

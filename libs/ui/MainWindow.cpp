@@ -38,6 +38,8 @@
 #include "MarkdownEditor.h"
 #include "OutgoingLinksPane.h"
 #include "PagePreview.h"
+#include "RecoveryDialog.h"
+#include "Snapshots.h"
 #include "Parser.h"
 #include "QuickSwitcher.h"
 #include "Scheme.h"
@@ -447,6 +449,7 @@ QWidget *MainWindow::buildMainArea()
     m_settingsPage = new SettingsPage(this);
     connect(m_settingsPage, &SettingsPage::settingChanged, this, &MainWindow::applySettings);
     connect(m_settingsPage, &SettingsPage::hotkeysChanged, this, &MainWindow::applyHotkeys);
+    connect(m_settingsPage, &SettingsPage::recoveryRequested, this, &MainWindow::openRecovery);
     connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
 
     m_mainStack = new QStackedWidget(this);
@@ -586,6 +589,8 @@ void MainWindow::buildActions()
         &MainWindow::goBack);
     add(QStringLiteral("app:go-forward"), tr("Navigate forward"), QStringLiteral("Alt+Right"),
         &MainWindow::goForward);
+    add(QStringLiteral("file-recovery:open"), tr("File recovery: Open saved snapshots"), QString(),
+        &MainWindow::openRecovery);
 
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
@@ -780,6 +785,41 @@ void MainWindow::applySettings()
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+}
+
+void MainWindow::openRecovery()
+{
+    auto *dialog = new RecoveryDialog(m_vault, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &RecoveryDialog::restoreRequested, this, &MainWindow::restoreSnapshot);
+    dialog->open();
+}
+
+void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
+{
+    // The open note first saves what is in the editor, so that is what the
+    // snapshot below keeps rather than what was last written.
+    if (notePath == m_notePath && !save())
+        return;
+    Note note;
+    QString error;
+    if (!Vault::read(notePath, note, &error)) {
+        QMessageBox::warning(this, tr("Restore"), tr("Could not read %1:\n%2").arg(notePath, error));
+        return;
+    }
+    Snapshots::record(notePath, note.text, 0);
+    note.text = text; // its line endings and BOM stay as the file has them
+    if (!Vault::write(notePath, note, &error)) {
+        QMessageBox::warning(this, tr("Restore"), tr("Could not write %1:\n%2").arg(notePath, error));
+        return;
+    }
+    if (m_vault.isValid())
+        m_indexer->reindex(notePath);
+    if (notePath == m_notePath) {
+        m_note = note;
+        m_editor->setNoteText(text);
+    }
+    statusBar()->showMessage(tr("Restored %1").arg(QFileInfo(notePath).fileName()), 3000);
 }
 
 void MainWindow::showPagePreview()
@@ -1165,6 +1205,11 @@ void MainWindow::openTarget(const LaunchTarget &target)
     }
     }
     // After the first paint: openWhenShown queued this call.
+    if (!m_painted) {
+        // Old snapshots go once a session, with the window already up.
+        Snapshots::prune(qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays")))
+                         * 24 * 3600 * 1000);
+    }
     m_painted = true;
     watchThemeFiles();
     updateSpelling();
@@ -1407,12 +1452,21 @@ bool MainWindow::save()
     Note note = m_note;
     note.text = m_editor->noteText();
 
+    // File recovery, for notes in a vault only: a stray note leaves nothing
+    // behind. The first save of a note keeps what it held before, too.
+    const bool snapshots = m_vault.isValid() && m_vault.contains(m_notePath);
+    if (snapshots && Snapshots::versions(m_notePath).isEmpty() && note.text != m_note.text)
+        Snapshots::record(m_notePath, m_note.text, 0);
+
     QString error;
     if (!Vault::write(m_notePath, note, &error)) {
         QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(m_notePath, error));
         return false;
     }
 
+    if (snapshots)
+        Snapshots::record(m_notePath, note.text,
+                          qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
     m_note = note;
     m_editor->setModified(false);
     statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(m_notePath)
