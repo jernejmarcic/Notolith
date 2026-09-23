@@ -131,6 +131,11 @@ public:
     static BoxKeyPair generateBoxKeyPair();
     static QByteArray sealToBox(const QByteArray &publicKey, const QByteArray &plaintext);
     static QByteArray openBox(const BoxKeyPair &pair, const QByteArray &sealed, bool *ok);
+    /// A device's public key as a code a person can compare between two
+    /// screens: BLAKE2b, 80 bits, "3F2A-91C0-5B7E-0D44-A1C9". Approving a
+    /// device whose code matches is what keeps a server from slipping in a
+    /// key of its own.
+    static QString fingerprint(const QByteArray &publicKey);
 
     // --- server-side login key storage --------------------------------
 

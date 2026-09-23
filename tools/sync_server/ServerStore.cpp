@@ -49,6 +49,9 @@ ServerStore::ServerStore(const QString &dataDir)
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS devices ("
                                   "vaultID BLOB, deviceID BLOB, publicKey BLOB, approved INTEGER, "
                                   "PRIMARY KEY(vaultID, deviceID))"))
+        // Which devices enrol by lockbox, and so wait for a person to approve
+        // them; a database from before this column gains it here.
+        && (exec(q, QStringLiteral("ALTER TABLE devices ADD COLUMN lockbox INTEGER DEFAULT 0")) || true)
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS items_keys ("
                                   "vaultID BLOB, itemsKeyID BLOB, wrapped BLOB, PRIMARY KEY(vaultID, itemsKeyID))"))
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS lockboxes ("
@@ -225,14 +228,23 @@ bool ServerStore::vaultBelongsTo(const QByteArray &vaultID, const QByteArray &ac
     return q.exec() && q.next();
 }
 
-void ServerStore::registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey)
+void ServerStore::registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey,
+                                 bool wantsLockbox)
 {
     QSqlQuery exists(m_db);
     exists.prepare(QStringLiteral("SELECT 1 FROM devices WHERE vaultID=? AND deviceID=?"));
     exists.addBindValue(vaultID);
     exists.addBindValue(deviceID);
-    if (exists.exec() && exists.next())
-        return; // already registered - idempotent
+    if (exists.exec() && exists.next()) {
+        // Already registered - idempotent, but a device may switch paths.
+        QSqlQuery update(m_db);
+        update.prepare(QStringLiteral("UPDATE devices SET lockbox=? WHERE vaultID=? AND deviceID=?"));
+        update.addBindValue(wantsLockbox ? 1 : 0);
+        update.addBindValue(vaultID);
+        update.addBindValue(deviceID);
+        update.exec();
+        return;
+    }
 
     QSqlQuery count(m_db);
     count.prepare(QStringLiteral("SELECT COUNT(*) FROM devices WHERE vaultID=?"));
@@ -241,11 +253,13 @@ void ServerStore::registerDevice(const QByteArray &vaultID, const QByteArray &de
     const bool firstDevice = count.next() && count.value(0).toInt() == 0;
 
     QSqlQuery insert(m_db);
-    insert.prepare(QStringLiteral("INSERT INTO devices(vaultID, deviceID, publicKey, approved) VALUES(?,?,?,?)"));
+    insert.prepare(
+        QStringLiteral("INSERT INTO devices(vaultID, deviceID, publicKey, approved, lockbox) VALUES(?,?,?,?,?)"));
     insert.addBindValue(vaultID);
     insert.addBindValue(deviceID);
     insert.addBindValue(publicKey);
     insert.addBindValue(firstDevice ? 1 : 0);
+    insert.addBindValue(wantsLockbox ? 1 : 0);
     insert.exec();
 }
 
@@ -253,11 +267,12 @@ QList<ServerStore::Device> ServerStore::devices(const QByteArray &vaultID) const
 {
     QList<Device> out;
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("SELECT deviceID, publicKey, approved FROM devices WHERE vaultID=?"));
+    q.prepare(QStringLiteral("SELECT deviceID, publicKey, approved, lockbox FROM devices WHERE vaultID=?"));
     q.addBindValue(vaultID);
     q.exec();
     while (q.next())
-        out << Device{q.value(0).toByteArray(), q.value(1).toByteArray(), q.value(2).toInt() != 0};
+        out << Device{q.value(0).toByteArray(), q.value(1).toByteArray(), q.value(2).toInt() != 0,
+                      q.value(3).toInt() != 0};
     return out;
 }
 

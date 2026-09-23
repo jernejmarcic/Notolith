@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QObject>
+#include <QSet>
 #include <QThread>
 #include <QTimer>
 
@@ -82,6 +83,11 @@ public:
     /// caller must already be signed in this session.
     void changePassword(const QString &newPassword);
 
+    /// Lets `deviceID` (as deviceAwaitingApproval named it) have this vault's
+    /// keys: remembered for this vault on this device, and its lockboxes
+    /// sealed on the spot. Only ever a person's decision.
+    void approveDevice(const QByteArray &deviceID);
+
     /// Where the device identity key is kept: the OS keyring unless one is
     /// set here. A test sets an in-memory one, so a run never writes to the
     /// user's real keyring, nor waits out a secret-service backend that does
@@ -98,6 +104,11 @@ signals:
     /// One pass of the sync cycle finished (pushed/pulled record counts;
     /// conflicts is how many notes got a conflict copy written this pass).
     void syncFinished(int pushed, int pulled, int conflicts);
+    /// A device enrolling without the password wants this vault's keys.
+    /// Nothing is sealed for it until approveDevice(): a person compares
+    /// `fingerprint` with the code the new device shows. Once per device per
+    /// session.
+    void deviceAwaitingApproval(const QByteArray &deviceID, const QString &fingerprint);
 
 private:
     void startOnWorker(QString vaultRoot, QString serverURL, QString email, PasswordPrompt prompt,
@@ -109,7 +120,7 @@ private:
     bool ensureSession();      ///< sign in / register, get a bearer token and vaultID
     bool loadDeviceIdentity(); ///< this device's X25519 keypair, from the OS keyring or freshly made
     bool ensureItemsKey();     ///< path 1 (wrapKey) or path 2 (lockbox), per m_viaLockbox
-    void maintainEnrolment();  ///< seal lockboxes for any pending device, if we can
+    void maintainEnrolment();  ///< seal lockboxes for approved devices, ask about the rest
 
     int pushOutbox();
     void pullJournal(int *pulled, int *conflicts);
@@ -149,6 +160,7 @@ private:
     QByteArray m_vaultID;
     QByteArray m_boxSecretKey; ///< this device's lockbox identity, cached from the OS keyring
     QByteArray m_boxPublicKey;
+    QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session
 };
 
 } // namespace noteAppC

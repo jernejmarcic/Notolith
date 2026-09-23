@@ -3450,6 +3450,22 @@ void MainWindow::updateSync()
                 m_syncStatus->setText(tr("Sync: %1").arg(state));
                 m_syncStatus->setToolTip(message);
             });
+    // A device enrolling without the password gets this vault's keys only
+    // when a person here says so, having compared the code on both screens.
+    connect(m_sync.get(), &SyncEngine::deviceAwaitingApproval, this,
+            [this](const QByteArray &deviceID, const QString &fingerprint) {
+                QMessageBox ask(QMessageBox::Question, tr("Sync"),
+                                tr("A new device asks for this vault's keys. Its code is:\n\n%1\n\n"
+                                   "Approve it only if the new device shows exactly this code. A code you "
+                                   "cannot find on any of your devices is not yours.")
+                                    .arg(fingerprint),
+                                QMessageBox::NoButton, this);
+                QPushButton *approve = ask.addButton(tr("Approve"), QMessageBox::AcceptRole);
+                ask.setDefaultButton(ask.addButton(tr("Not now"), QMessageBox::RejectRole));
+                ask.exec();
+                if (ask.clickedButton() == approve && m_sync)
+                    m_sync->approveDevice(deviceID);
+            });
     // A file changed on disk (another app, the tree) is a change to sync too.
     connect(&m_index, &Index::changed, m_sync.get(), &SyncEngine::noteChanged);
     m_syncStatus->setText(tr("Sync: signing in"));
