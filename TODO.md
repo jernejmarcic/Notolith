@@ -331,6 +331,12 @@ scrolliong through pages, it can make them like a slide".
       several (`2,5,9`), ranges (`3-7`), all; Obsidian's `#height=`; mixed.
 - [ ] A slide layout for PDF embeds: one page at a time with previous/next
       and a page counter, instead of a scrolling column.
+- [ ] Jernej: "if a .tex file is linked it should be rednered in the inline
+      window". A `.tex` of maths alone through MicroTeX; a whole document
+      compiled to PDF off the UI thread by the TeX found on the machine
+      (pdflatex here, TeX Live 2026), with no shell escape and a time and
+      memory cap, cached until the file changes, then shown with the same
+      page arguments and layouts as a PDF.
 
 ## Requested 2026-09-23, afternoon: history and switches
 
