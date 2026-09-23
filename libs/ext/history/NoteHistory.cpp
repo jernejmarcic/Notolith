@@ -65,7 +65,12 @@ struct NoteHistory::Repository {
 NoteHistory::NoteHistory(const QString &vaultRoot)
     : m_repo(std::make_unique<Repository>())
 {
-    git_libgit2_init();
+    // Once per process, and never shut down: a history's last owner can be a
+    // save still running on the history pool, and its git_libgit2_shutdown()
+    // there tore OpenSSL down while the next vault's init on the UI thread
+    // was loading the system's certificates - a crash one test run in six.
+    static const int initialised = git_libgit2_init();
+    Q_UNUSED(initialised);
     m_repo->path = repositoryPathFor(vaultRoot);
     QDir().mkpath(m_repo->path);
     if (git_repository_open_bare(&m_repo->repo, m_repo->path.toUtf8().constData()) != 0
@@ -75,11 +80,7 @@ NoteHistory::NoteHistory(const QString &vaultRoot)
     }
 }
 
-NoteHistory::~NoteHistory()
-{
-    m_repo.reset();
-    git_libgit2_shutdown();
-}
+NoteHistory::~NoteHistory() = default;
 
 QString NoteHistory::repositoryPathFor(const QString &vaultRoot)
 {
