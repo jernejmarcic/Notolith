@@ -338,7 +338,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       stops halving inf.
 - [ ] Graph colour groups use a three-form subset (`path:`, `tag:`, name);
       give them the real search grammar now that it exists.
-- [ ] A build with every optional module OFF, to prove the `#ifdef`s.
+- [x] A build with every optional module OFF, to prove the `#ifdef`s: it
+      found one (the local graph tab); `tools/check.sh` runs it every time.
 - [x] **Hotkeys**: every window command is an action named by its Obsidian
       id, the editor's shortcuts are a table of commands (`runCommand`,
       `setKeyBindings`), keys come from noteAppC's `hotkeys.json` over the
@@ -402,7 +403,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 
 ### Wave 4
 - [ ] Packaging: AppImage, Flatpak manifest, `PKGBUILD` without `-march`.
-- [ ] A local check script in place of CI (there is no remote): build, all
-      suites, the perf guards, the round-trip fuzz.
+- [x] A local check script in place of CI (there is no remote):
+      `sh tools/check.sh [--bench]` - the release build and all suites (perf
+      guards and the new seeded round-trip fuzz among them), then a build
+      with every optional module off and its suites.
 - [ ] The Android build, and a touch mode for the editor.
 
