@@ -1669,6 +1669,27 @@ TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)
     EXPECT_FALSE(block->panelTextAt(0).contains(QStringLiteral("First section body")));
 }
 
+TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("Target.md"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("# Heading\n\nSome **bold** text.\n");
+    }
+    auto editor = editorWith(QStringLiteral("![[Target]]\n\nafter\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    editor->setCursorOffset(editor->noteText().size()); // off the embed's line
+    // Text at once, so layout never waits on the formatted drawing...
+    EXPECT_TRUE(editor->panelTextAt(0).contains(QStringLiteral("bold")));
+    EXPECT_TRUE(editor->embedImageSizeAt(0).isEmpty());
+    // ...which replaces it a turn of the event loop later.
+    QTRY_VERIFY_WITH_TIMEOUT(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+    EXPECT_TRUE(editor->panelTextAt(0).isEmpty());
+    EXPECT_GT(editor->embedImageSizeAt(0).height(), 20);
+}
+
 // --- feature switches: one on/off pair per feature --------------------------
 
 TEST(FeaturesTest, QueryBlocksToggle)

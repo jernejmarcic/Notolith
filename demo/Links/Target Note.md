@@ -6,8 +6,8 @@ aliases:
 
 # Target Note
 
-What to look for: this note exists to be linked *at* - by [[Links and
-References]], by heading (`#Details`) and by block (`#^anchor-block`).
+What to look for: this note exists to be linked *at* - by
+[[Links and References]], by heading (`#Details`) and by block (`#^anchor-block`).
 Following either kind of link should land the view scrolled to that exact
 spot, not just at the top of the note.
 

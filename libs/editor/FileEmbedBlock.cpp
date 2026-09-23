@@ -24,6 +24,7 @@
 #include <QRegularExpression>
 #include <QStringDecoder>
 #include <QTextLine>
+#include <QTimer>
 #include <QUrl>
 
 namespace noteAppC {
@@ -162,7 +163,71 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     if (!ok)
         return false; // no such heading/block: falls back to the paragraph's plain link text
 
-    return layoutTextPanel(view, label, slice, false);
+    // Formatted, as Obsidian draws it: the slice through an editor of its
+    // own in reading view, drawn into an image a turn after this layout.
+    // Until then, and when it cannot be drawn, the plain text.
+    const int width = contentWidth() - 28;
+    const QString key = QStringLiteral("%1|%2|%3|%4|%5")
+                            .arg(path)
+                            .arg(info.lastModified().toMSecsSinceEpoch())
+                            .arg(embed.subpath)
+                            .arg(width)
+                            .arg(embedThemeTag());
+    auto it = m_fileEmbedCache.find(key);
+    if (it == m_fileEmbedCache.end()) {
+        FileEmbedCacheEntry entry;
+        entry.generation = ++m_fileEmbedGeneration;
+        it = m_fileEmbedCache.insert(key, entry);
+        QTimer::singleShot(0, this, [this, key, generation = entry.generation, slice, width] {
+            deliverFileEmbed(key, generation, renderNoteEmbed(slice, width));
+        });
+    }
+    view.imagePath = path; // deliverFileEmbed's way back to this block
+    if (it->pending || it->image.isNull())
+        return layoutTextPanel(view, label, slice, false);
+
+    view.embedLabel = label;
+    view.embedPanel = true;
+    view.layout.reset();
+    view.cells.clear();
+    view.textTop = codeHeaderHeight();
+    hideWholeBlockText(view);
+    const QPixmap pixmap = QPixmap::fromImage(it->image);
+    const qreal ratio = pixmap.devicePixelRatio();
+    view.image = pixmap;
+    view.imageSize = QSize(qRound(pixmap.width() / ratio), qRound(pixmap.height() / ratio));
+    view.height = view.imageSize.height() + view.textTop;
+    view.laidOut = true;
+    return true;
+}
+
+QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width) const
+{
+    // ponytail: one level formatted - the nested editor's own embeds are
+    // gone with it before they can be drawn, which also ends a note that
+    // embeds itself - and a long note cut at kMaxNoteEmbedHeight where
+    // Obsidian scrolls inside the embed.
+    constexpr int kMaxNoteEmbedHeight = 1200;
+    MarkdownEditor nested;
+    nested.setTheme(m_theme);
+    nested.setMode(Mode::Reading);
+    nested.setReadableLineLength(false);
+    nested.setFeatures(m_features);
+    nested.setLinkResolver(m_resolver);
+    nested.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    nested.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    nested.resize(width, 200);
+    nested.setNoteText(slice);
+    if (nested.wordCount() < 0)
+        return {}; // a slice big enough to parse off the thread stays text
+    nested.resize(width, qBound(1, qCeil(nested.documentHeight()), kMaxNoteEmbedHeight));
+    return nested.grab().toImage();
+}
+
+QString MarkdownEditor::embedThemeTag() const
+{
+    return m_theme.color(QStringLiteral("--background-primary")).name()
+         + m_theme.color(QStringLiteral("--text-normal")).name() + QString::number(m_theme.textFont().pointSizeF());
 }
 
 // --- a card for a file with no richer renderer ------------------------------
@@ -278,11 +343,12 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
 
     const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
     const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
-    const QString key = QStringLiteral("%1|%2|%3|%4")
+    const QString key = QStringLiteral("%1|%2|%3|%4|%5")
                             .arg(path)
                             .arg(mtime)
                             .arg(embed.subpath)
-                            .arg(width);
+                            .arg(width)
+                            .arg(embedThemeTag()); // the colours are drawn into the image
 
     auto it = m_fileEmbedCache.find(key);
     if (it == m_fileEmbedCache.end()) {
@@ -571,6 +637,15 @@ QString MarkdownEditor::panelTextAt(qsizetype offset) const
         return QString();
     const BlockView &view = m_blocks[size_t(index)];
     return view.layout ? view.layout->text() : QString();
+}
+
+QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    return view.embedPanel && !view.image.isNull() ? view.imageSize : QSize();
 }
 
 bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,

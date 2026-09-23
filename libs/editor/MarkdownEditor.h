@@ -375,6 +375,9 @@ public:
     /// does, so displayText() (which reads only the map) cannot see them.
     /// Empty when that block has no such layout.
     QString panelTextAt(qsizetype offset) const;
+    /// The size an embed drawn as an image (a formatted note, a canvas)
+    /// shows at; empty while it is text or a placeholder. For the tests.
+    QSize embedImageSizeAt(qsizetype offset) const;
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -1000,6 +1003,12 @@ private:
     /// renderer for (setFileEmbedRenderer) - false when there is none, which
     /// falls through to layoutSourceFile/layoutFileCard.
     bool layoutHookedFileEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// A note embed's slice drawn formatted, `width` wide; null when it
+    /// cannot be drawn without waiting.
+    QImage renderNoteEmbed(const QString &slice, int width) const;
+    /// What an embed drawn into an image took from the theme, so a theme
+    /// change misses its cache instead of showing the old colours.
+    QString embedThemeTag() const;
     QHash<QString, FileEmbedRenderer> m_fileEmbedRenderers; ///< lowercase suffix -> renderer
     struct FileEmbedCacheEntry {
         QImage image;
