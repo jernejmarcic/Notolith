@@ -106,6 +106,11 @@ QList<ViewConfig> parseViews(const YAML::Node &node)
             for (const auto &item : entry["order"])
                 if (item.IsScalar()) view.order << scalarOf(item);
         }
+        // A view that names no columns still lists its notes, by name, as
+        // Obsidian's does; without this it had nothing to draw at all. Only
+        // the parsed view: serialize() writes back the file's own YAML.
+        if (view.order.isEmpty())
+            view.order << QStringLiteral("file.name");
         if (entry["sort"] && entry["sort"].IsSequence()) {
             for (const auto &item : entry["sort"]) {
                 if (!item.IsMap() || !item["property"])

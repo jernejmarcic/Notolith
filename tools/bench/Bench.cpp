@@ -877,6 +877,8 @@ int main(int argc, char *argv[])
                                  [&] { (void)index.search(QStringLiteral("prose bold")); });
             timings << benchCall(QStringLiteral("Search"), QStringLiteral("rare word"), 9,
                                  [&] { (void)index.search(QStringLiteral("zyxwvu")); });
+            timings << benchCall(QStringLiteral("Every note for a base"), QStringLiteral("allNotesForBases"), 5,
+                                 [&] { (void)index.allNotesForBases(); });
         }
     }
 

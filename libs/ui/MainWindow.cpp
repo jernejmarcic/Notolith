@@ -69,6 +69,7 @@
 #include "CanvasView.h"
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
+#include "BaseEditorTable.h"
 #include "BaseView.h"
 #endif
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -597,6 +598,30 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_active->editor->setFocus();
             });
     connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
+#ifdef NOTEAPPC_HAVE_BASES
+    // ```base blocks: the notes and the evaluation both on the pool (the
+    // notes are 54 ms on 20 000); the vault is copied here, on the UI
+    // thread, where the editor asks.
+    editor->setBaseRunner([this, index](const QString &YAMLtext, const MarkdownEditor::BaseDeliver &deliver) {
+        (void)QtConcurrent::run([index, vault = m_vault, YAMLtext, deliver] {
+            const bases::BaseEditorTable table =
+                bases::evaluateBaseForEditor(YAMLtext, index->allNotesForBases(), &vault);
+            BaseTableData result;
+            result.viewNames = table.viewNames;
+            result.shownView = table.shownView;
+            result.headers = table.headers;
+            result.error = table.error;
+            for (const bases::BaseEditorRow &row : table.rows)
+                result.rows.append({row.cells, row.notePath});
+            deliver(result);
+        });
+    });
+    connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
+        openRelative(relativePath);
+        m_active->editor->setFocus();
+    });
+    connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshBases);
+#endif
 
     layout->addWidget(leaf->inlineTitle);
     layout->addWidget(editor, 1);

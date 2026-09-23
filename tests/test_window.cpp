@@ -768,6 +768,31 @@ TEST_F(WindowTest, AQueryBlockShowsTheVaultsSearchResults)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("#project here\n"));
 }
 
+#ifdef NOTEAPPC_HAVE_BASES
+TEST_F(WindowTest, ABaseBlockListsTheVaultsNotes)
+{
+    write(QStringLiteral("Task.md"), "---\nstatus: open\n---\nDo it.\n");
+    write(QStringLiteral("Board.md"), "Intro\n\n```base\nfilters:\n  and:\n    - status == \"open\"\n"
+                                      "views:\n  - type: table\n    name: Open\n```\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show(); // a block's work happens when it is laid out
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Board.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(0);
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("filters"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->baseRowsAt(block).isEmpty(); }, 5000));
+    const auto rows = editor->baseRowsAt(block);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.first().path, QStringLiteral("Task.md"));
+    emit editor->baseRowActivated(rows.first().path);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("---\nstatus: open\n---\nDo it.\n"));
+}
+#endif
+
 TEST_F(WindowTest, AMiddleClickOnATreeRowOpensItInANewTab)
 {
     MainWindow window;

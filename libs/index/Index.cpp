@@ -1060,11 +1060,28 @@ Index::GraphData Index::graphData() const
 QList<Index::BaseNote> Index::allNotesForBases() const
 {
     QList<BaseNote> notes;
-    if (!m_db.isOpen())
+    if (m_databasePath.isEmpty())
         return notes;
+    // A connection of its own, as search() has: 54 ms on 20 000 notes is
+    // worker-thread work, and QSqlDatabase connections are per thread.
+    const QString connectionName =
+        QStringLiteral("noteAppC-bases-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(m_databasePath);
+        if (db.open())
+            notes = readBaseNotes(db);
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return notes;
+}
+
+QList<Index::BaseNote> Index::readBaseNotes(const QSqlDatabase &db)
+{
+    QList<BaseNote> notes;
 
     QHash<qint64, qsizetype> rowOf; // file id -> index into notes
-    QSqlQuery files(m_db);
+    QSqlQuery files(db);
     // Attachments carry no properties and are not what a base lists.
     files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0"));
     while (files.next()) {
@@ -1077,7 +1094,7 @@ QList<Index::BaseNote> Index::allNotesForBases() const
         notes.append(std::move(note));
     }
 
-    QSqlQuery props(m_db);
+    QSqlQuery props(db);
     props.exec(QStringLiteral("SELECT file, key, type, value FROM props"));
     while (props.next()) {
         const auto it = rowOf.constFind(props.value(0).toLongLong());
@@ -1094,7 +1111,7 @@ QList<Index::BaseNote> Index::allNotesForBases() const
         notes[it.value()].properties.append(property);
     }
 
-    QSqlQuery tags(m_db);
+    QSqlQuery tags(db);
     tags.exec(QStringLiteral("SELECT DISTINCT file, name FROM tags"));
     while (tags.next()) {
         const auto it = rowOf.constFind(tags.value(0).toLongLong());
@@ -1102,14 +1119,13 @@ QList<Index::BaseNote> Index::allNotesForBases() const
             notes[it.value()].tags.append(tags.value(1).toString());
     }
 
-    QSqlQuery links(m_db);
+    QSqlQuery links(db);
     links.exec(QStringLiteral("SELECT file, target FROM links WHERE external = 0 AND target != ''"));
     while (links.next()) {
         const auto it = rowOf.constFind(links.value(0).toLongLong());
         if (it != rowOf.constEnd())
             notes[it.value()].linkTargets.append(links.value(1).toString());
     }
-
     return notes;
 }
 
