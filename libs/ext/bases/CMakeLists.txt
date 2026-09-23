@@ -12,7 +12,9 @@ add_library(noteAppC_bases STATIC
     BaseTableModel.h
     BaseTableModel.cpp
     BaseView.h
-    BaseView.cpp)
+    BaseView.cpp
+    BaseEditorTable.h
+    BaseEditorTable.cpp)
 
 set_target_properties(noteAppC_bases PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_bases PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

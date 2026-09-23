@@ -30,6 +30,8 @@
 #include <QTextLayout>
 #include <QTimer>
 
+#include <algorithm>
+
 namespace noteAppC {
 
 QList<MarkdownEditor::QueryResultRow> MarkdownEditor::queryRowsAt(qsizetype offset) const
@@ -179,10 +181,17 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
     view.cells.clear();
 
     const QString queryText = m_text.mid(fence->content.start, fence->content.length()).trimmed();
+    // The header's collapsed/sort-by-name state is remembered by the
+    // block's own source position, the same key m_folds uses - see
+    // toggleQueryCollapsed.
+    const qsizetype blockKey = view.span.range.start;
+    const bool collapsed = m_queryCollapsed.value(blockKey, false);
+    const bool sortByName = m_queryNameSort.value(blockKey, false);
 
     const QColor pathColour = m_theme.color(QStringLiteral("--text-accent"));
     const QColor mutedColour = m_theme.color(QStringLiteral("--text-muted"));
     const QColor textColour = m_theme.color(QStringLiteral("--text-normal"));
+    const QColor accentColour = m_theme.color(QStringLiteral("--text-accent"));
     const QColor highlightBg = m_theme.color(QStringLiteral("--color-yellow"));
     const QColor highlightFg = m_theme.color(QStringLiteral("--color-base-00"));
 
@@ -195,6 +204,12 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
     QString display;
     QList<QTextLayout::FormatRange> formats;
     QList<Row> rows;
+    // Character spans of the header's two controls, within `display` - set
+    // only once a header is actually drawn (a search still pending, empty,
+    // or with no runner shows a single plain message and no header at all,
+    // the same as before this block gained one).
+    qsizetype collapseStart = -1, collapseEnd = -1;
+    qsizetype sortStart = -1, sortEnd = -1;
 
     const auto addPlainLine = [&](const QString &line, const QColor &colour) {
         QTextLayout::FormatRange range;
@@ -213,57 +228,93 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
         const QueryCacheEntry &entry = ensureQuerySearch(queryText);
         if (entry.pending) {
             addPlainLine(tr("Searching “%1”…").arg(queryText), mutedColour);
-        } else if (entry.results.isEmpty()) {
-            addPlainLine(tr("No results for “%1”").arg(queryText), mutedColour);
         } else {
-            for (const QueryResult &result : entry.results) {
-                const qsizetype rowStart = display.size();
+            // --- the header: obsidian.md/help/plugins/search's "Embed
+            // search results in a note" shows a result count over the list,
+            // a collapse toggle and a sort control (that page's own search
+            // pane section lists "File name (A to Z)" among the sort
+            // orders - modified time and match count are not there, so
+            // only a name/best-match toggle is offered here).
+            view.queryResultCountText = entry.results.size() == 1
+                                            ? tr("1 result")
+                                            : tr("%1 results").arg(entry.results.size());
+            const QString collapseGlyph =
+                collapsed ? QStringLiteral("▸ ") : QStringLiteral("▾ ");
 
-                QTextLayout::FormatRange pathRange;
-                pathRange.start = int(display.size());
-                pathRange.length = int(result.path.size());
-                pathRange.format.setForeground(pathColour);
-                pathRange.format.setFontWeight(QFont::Bold);
-                formats.append(pathRange);
-                display += result.path;
+            collapseStart = display.size();
+            addPlainLine(collapseGlyph + view.queryResultCountText, textColour);
+            collapseEnd = display.size();
 
-                const QString count = result.matchCount == 1
-                                          ? tr("  · 1 match")
-                                          : tr("  · %1 matches").arg(result.matchCount);
-                QTextLayout::FormatRange countRange;
-                countRange.start = int(display.size());
-                countRange.length = int(count.size());
-                countRange.format.setForeground(mutedColour);
-                formats.append(countRange);
-                display += count;
+            display += QStringLiteral("    ");
+
+            sortStart = display.size();
+            addPlainLine(sortByName ? tr("Sort: File name") : tr("Sort: Best match"), accentColour);
+            sortEnd = display.size();
+
+            if (!collapsed) {
                 display += QChar(QChar::LineSeparator);
+                display += QChar(QChar::LineSeparator); // blank line under the header
 
-                if (!result.snippet.isEmpty()) {
-                    const qsizetype snippetStart = display.size();
-                    QTextLayout::FormatRange snippetRange;
-                    snippetRange.start = int(snippetStart);
-                    snippetRange.length = int(result.snippet.size());
-                    snippetRange.format.setForeground(textColour);
-                    formats.append(snippetRange);
-                    display += result.snippet;
-                    for (const QueryMatch &hit : result.snippetHighlights) {
-                        if (hit.offset < 0 || hit.offset + hit.length > result.snippet.size())
-                            continue; // a stale offset from a snippet that changed shape
-                        QTextLayout::FormatRange hitRange;
-                        hitRange.start = int(snippetStart + hit.offset);
-                        hitRange.length = int(hit.length);
-                        hitRange.format.setBackground(highlightBg);
-                        hitRange.format.setForeground(highlightFg);
-                        formats.append(hitRange);
+                if (entry.results.isEmpty()) {
+                    addPlainLine(tr("No results for “%1”").arg(queryText), mutedColour);
+                } else {
+                    QueryResults sorted = entry.results;
+                    if (sortByName) {
+                        std::sort(sorted.begin(), sorted.end(),
+                                 [](const QueryResult &a, const QueryResult &b) {
+                                     return a.path.compare(b.path, Qt::CaseInsensitive) < 0;
+                                 });
                     }
-                    display += QChar(QChar::LineSeparator);
-                }
+                    for (const QueryResult &result : sorted) {
+                        const qsizetype rowStart = display.size();
 
-                rows.append({rowStart, display.size(), result.path, result.firstOffset});
-                display += QChar(QChar::LineSeparator); // blank spacer between results
+                        QTextLayout::FormatRange pathRange;
+                        pathRange.start = int(display.size());
+                        pathRange.length = int(result.path.size());
+                        pathRange.format.setForeground(pathColour);
+                        pathRange.format.setFontWeight(QFont::Bold);
+                        formats.append(pathRange);
+                        display += result.path;
+
+                        const QString count = result.matchCount == 1
+                                                  ? tr("  · 1 match")
+                                                  : tr("  · %1 matches").arg(result.matchCount);
+                        QTextLayout::FormatRange countRange;
+                        countRange.start = int(display.size());
+                        countRange.length = int(count.size());
+                        countRange.format.setForeground(mutedColour);
+                        formats.append(countRange);
+                        display += count;
+                        display += QChar(QChar::LineSeparator);
+
+                        if (!result.snippet.isEmpty()) {
+                            const qsizetype snippetStart = display.size();
+                            QTextLayout::FormatRange snippetRange;
+                            snippetRange.start = int(snippetStart);
+                            snippetRange.length = int(result.snippet.size());
+                            snippetRange.format.setForeground(textColour);
+                            formats.append(snippetRange);
+                            display += result.snippet;
+                            for (const QueryMatch &hit : result.snippetHighlights) {
+                                if (hit.offset < 0 || hit.offset + hit.length > result.snippet.size())
+                                    continue; // a stale offset from a snippet that changed shape
+                                QTextLayout::FormatRange hitRange;
+                                hitRange.start = int(snippetStart + hit.offset);
+                                hitRange.length = int(hit.length);
+                                hitRange.format.setBackground(highlightBg);
+                                hitRange.format.setForeground(highlightFg);
+                                formats.append(hitRange);
+                            }
+                            display += QChar(QChar::LineSeparator);
+                        }
+
+                        rows.append({rowStart, display.size(), result.path, result.firstOffset});
+                        display += QChar(QChar::LineSeparator); // blank spacer between results
+                    }
+                    while (display.endsWith(QChar(QChar::LineSeparator)))
+                        display.chop(1);
+                }
             }
-            while (display.endsWith(QChar(QChar::LineSeparator)))
-                display.chop(1);
         }
     }
 
@@ -307,7 +358,91 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
             view.queryRows.push_back({rect, row.path, row.offset});
     }
 
+    // The header's two controls sit side by side on one line, unlike a
+    // result row (which owns its lines outright), so their rects are the
+    // tight x-bounds of their own span on that line rather than the line's
+    // full width - a click between them must not land on either.
+    const auto inlineSpanRect = [&](qsizetype start, qsizetype end) -> QRectF {
+        if (start < 0)
+            return QRectF();
+        for (int i = 0; i < view.layout->lineCount(); ++i) {
+            const QTextLine line = view.layout->lineAt(i);
+            if (start < line.textStart() || start >= line.textStart() + line.textLength())
+                continue;
+            const qreal x1 = line.cursorToX(int(start));
+            const qreal x2 = line.cursorToX(int(qMin<qsizetype>(end, line.textStart() + line.textLength())));
+            return QRectF(x1, view.textTop + line.y(), x2 - x1, line.height());
+        }
+        return QRectF();
+    };
+    view.queryCollapseRect = inlineSpanRect(collapseStart, collapseEnd);
+    view.querySortRect = inlineSpanRect(sortStart, sortEnd);
+
     return true;
+}
+
+void MarkdownEditor::toggleQueryCollapsed(qsizetype offset)
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return;
+    BlockView &view = m_blocks[size_t(index)];
+    if (!view.isQuery)
+        return;
+    const qsizetype key = view.span.range.start;
+    m_queryCollapsed.insert(key, !m_queryCollapsed.value(key, false));
+    view.layout.reset();
+    view.laidOut = false;
+    view.heightEstimated = false;
+    updateLayout();
+    viewport()->update();
+}
+
+bool MarkdownEditor::queryCollapsedAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return false;
+    const BlockView &view = m_blocks[size_t(index)];
+    if (!view.isQuery)
+        return false;
+    return m_queryCollapsed.value(view.span.range.start, false);
+}
+
+void MarkdownEditor::cycleQuerySort(qsizetype offset)
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return;
+    BlockView &view = m_blocks[size_t(index)];
+    if (!view.isQuery)
+        return;
+    const qsizetype key = view.span.range.start;
+    m_queryNameSort.insert(key, !m_queryNameSort.value(key, false));
+    view.layout.reset();
+    view.laidOut = false;
+    view.heightEstimated = false;
+    updateLayout();
+    viewport()->update();
+}
+
+MarkdownEditor::QueryHeader MarkdownEditor::queryHeaderAt(qsizetype offset) const
+{
+    QueryHeader header;
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return header;
+    const BlockView &view = m_blocks[size_t(index)];
+    if (!view.isQuery || !view.queryCollapseRect.isValid())
+        return header; // no header yet: still searching, empty, or no runner
+    const qreal left = contentLeft();
+    const qreal top = view.y - verticalScrollBar()->value();
+    header.collapseRect = view.queryCollapseRect.translated(left, top);
+    header.sortRect = view.querySortRect.translated(left, top);
+    header.collapsed = m_queryCollapsed.value(view.span.range.start, false);
+    header.sortByName = m_queryNameSort.value(view.span.range.start, false);
+    header.countText = view.queryResultCountText;
+    return header;
 }
 
 } // namespace noteAppC

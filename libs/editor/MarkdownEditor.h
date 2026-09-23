@@ -31,6 +31,7 @@ class QFileSystemWatcher;
 #include "Parser.h"
 #include "CalloutStyle.h"
 #include "LanguageStyle.h"
+#include "BaseResult.h"
 #include "QueryResult.h"
 #include "Theme.h"
 
@@ -246,6 +247,63 @@ public:
     /// search per visible block, not one per change.
     void refreshQueries();
 
+    /// The header Obsidian draws over an embedded search's results: the
+    /// result count, and where the collapse toggle and the sort control are
+    /// - in viewport coordinates, the way queryRowsAt exposes result rows,
+    /// so a test can click either without re-deriving the block's layout by
+    /// hand. Default-constructed (empty rects, empty countText) when
+    /// `offset` is not inside a rendered ```query``` block, or its search
+    /// has not answered yet - there is nothing to count or sort until then.
+    struct QueryHeader {
+        QRectF collapseRect;
+        QRectF sortRect;
+        bool collapsed = false;
+        bool sortByName = false; ///< false: the order the search delivered ("best match")
+        QString countText;       ///< "N results", already pluralised
+    };
+    QueryHeader queryHeaderAt(qsizetype offset) const;
+    /// Shows or hides the result rows of the ```query``` block containing
+    /// `offset`, leaving its header in place - what a click on the header's
+    /// collapse toggle does. Remembered for the block's own source position
+    /// for the life of this editor (like a fold - see m_folds), never
+    /// written to the note.
+    void toggleQueryCollapsed(qsizetype offset);
+    bool queryCollapsedAt(qsizetype offset) const;
+    /// Swaps the result order between the search's own ("best match") order
+    /// and file name (Obsidian's search pane sort options include "File name
+    /// (A to Z)" - help.obsidian.md/plugins/search - which is the one that
+    /// still means something once the note text itself is gone). Remembered
+    /// the same way toggleQueryCollapsed is.
+    void cycleQuerySort(qsizetype offset);
+
+    /// One clickable row of a rendered ```` ```base ```` block's table, in
+    /// viewport coordinates - only a row's first cell (`file.name`, by
+    /// convention the view's first `order:` entry) opens its note, mirroring
+    /// BaseTableModel::isNameColumn's choice. Public so the tests can click
+    /// a specific row without reimplementing the table layout by hand.
+    struct BaseRowRect {
+        QRectF rect;
+        QString path;
+    };
+    QList<BaseRowRect> baseRowsAt(qsizetype offset) const;
+
+    /// Delivers one `.base` file evaluated to a plain table, exactly once;
+    /// called from any thread - see setQueryRunner, whose contract this
+    /// mirrors field for field.
+    using BaseDeliver = std::function<void(BaseTableData)>;
+    /// Runs `yamlText` (a ```` ```base ```` block's own content) and calls
+    /// `deliver` exactly once with the result, from any thread. Supplied by
+    /// the window, which owns the index and vault; the editor never links
+    /// libs/ext/bases (docs/PLUGINS.md's module boundary) - see
+    /// bases::evaluateBaseForEditor, which is what a real runner calls.
+    /// Layout never waits on it: a block shows "Loading..." until `deliver`
+    /// is called, the same contract setQueryRunner keeps for a search.
+    void setBaseRunner(std::function<void(const QString &yamlText, const BaseDeliver &deliver)> runner);
+    /// The index changed: every rendered ```` ```base ```` block's table is
+    /// dropped from the cache and evaluated again. Debounced like
+    /// refreshQueries().
+    void refreshBases();
+
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
     /// one switch, on by default the way Obsidian ships them.
@@ -335,6 +393,11 @@ signals:
     /// A result in a rendered ```query``` block was clicked: `relativePath`
     /// is the note it matched, `offset` the first match inside it.
     void queryResultActivated(const QString &relativePath, qsizetype offset);
+    /// A row in a rendered ```` ```base ```` block's table was clicked:
+    /// `relativePath` is the note behind it. No offset - a base row opens a
+    /// note, it does not point at a place inside it the way a search match
+    /// does.
+    void baseRowActivated(const QString &relativePath);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -490,6 +553,34 @@ private:
             qsizetype offset = 0;
         };
         std::vector<QueryRow> queryRows;
+        /// The header's two clickable controls, block-local coordinates -
+        /// null-sized when the block has no header yet (still searching, an
+        /// error, or an empty search - see layoutQuery). queryHeaderAt and
+        /// handleBlockClick both read these rather than recomputing them, so
+        /// a click always lands exactly where the paint went.
+        QRectF queryCollapseRect;
+        QRectF querySortRect;
+        /// "N results", as last computed - what queryHeaderAt hands back
+        /// without re-running a search from a const accessor.
+        QString queryResultCountText;
+
+        /// Set when this block is a fenced ```` ```base ```` block rendered
+        /// as a table: paintBlocks and handleBlockClick both skip the
+        /// ordinary code-listing chrome for it, the same gate isQuery is for
+        /// a ```query``` block.
+        bool isBase = false;
+        /// The shown view's name, painted above the table - empty shows
+        /// nothing extra (an error or a still-loading block shows its
+        /// message instead of a table; see layoutBase).
+        QString baseViewName;
+        /// One clickable row's first cell, block-local coordinates - only
+        /// the name column opens its note, mirroring
+        /// BaseTableModel::isNameColumn's choice for the real widget.
+        struct BaseRow {
+            QRectF rect;
+            QString path;
+        };
+        std::vector<BaseRow> baseRows;
 
         /// Set when this block is a raw HTML block (top-level `<div>`,
         /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
@@ -732,6 +823,28 @@ private:
     /// one on record for `queryText`.
     void deliverQueryResults(const QString &queryText, quint64 generation, QueryResults results);
 
+    // --- base blocks, implemented in BaseBlock.cpp --------------------------
+
+    /// A fenced ```` ```base ```` block: renders its shown view as a table
+    /// instead of the raw YAML, the same shape layoutQuery already gives a
+    /// ```query``` block. False for every other fence.
+    bool layoutBase(BlockView &view);
+    /// The view's name (if any) above the grid, then paintTable for the
+    /// grid itself - the table painting is not duplicated, only framed.
+    void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The cached entry for `yamlText`, starting an evaluation through
+    /// m_baseRunner when there is none yet. Mirrors QueryCacheEntry.
+    struct BaseCacheEntry {
+        BaseTableData results;
+        bool pending = true;
+        quint64 generation = 0;
+    };
+    const BaseCacheEntry &ensureBaseSearch(const QString &yamlText);
+    /// Called back (marshalled onto this thread) when an evaluation started
+    /// by ensureBaseSearch finishes. Ignored if `generation` is no longer
+    /// the one on record for `yamlText`. Mirrors deliverQueryResults.
+    void deliverBaseResults(const QString &yamlText, quint64 generation, BaseTableData results);
+
     // --- HTML blocks and inline HTML, implemented in HtmlBlock.cpp --------
 
     /// A block that is nothing but raw HTML (`<div>`, `<table>`,
@@ -929,6 +1042,18 @@ private:
     /// Debounces refreshQueries(): Index::changed can fire once per save, and
     /// a burst of them should cost one re-search per block, not one each.
     QTimer *m_queryRefreshTimer = nullptr;
+    /// A query block's collapsed/sort-by-name state, by its own source start
+    /// offset - like m_folds, session-only and never written to the note,
+    /// and orphaned (harmlessly - it just falls back to the default) if an
+    /// edit earlier in the note shifts the block's offset.
+    QHash<qsizetype, bool> m_queryCollapsed;
+    QHash<qsizetype, bool> m_queryNameSort;
+
+    std::function<void(const QString &, const BaseDeliver &)> m_baseRunner;
+    QHash<QString, BaseCacheEntry> m_baseCache; ///< YAML text -> its last evaluation
+    quint64 m_baseGeneration = 0;
+    /// Debounces refreshBases(), the same reason m_queryRefreshTimer does.
+    QTimer *m_baseRefreshTimer = nullptr;
 
     QString m_text;
     SourceMap m_lines; ///< line starts, for the gutter

@@ -2629,6 +2629,263 @@ TEST(QueryBlockTest, AStaleDeliveryAfterRefreshIsDropped)
         << "the superseded request's answer must not overwrite the current one";
 }
 
+// --- the embedded search header (result count, collapse, sort) -------------------
+
+TEST(QueryHeaderTest, ShowsResultCountSingularAndPlural)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\n```query\nbar\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 2);
+
+    const qsizetype fooOffset = note.indexOf(QStringLiteral("foo"));
+    const qsizetype barOffset = note.indexOf(QStringLiteral("bar"));
+    for (const FakeQueryRunner::Call &call : fake.calls) {
+        if (call.query == QStringLiteral("foo"))
+            call.deliver({makeQueryResult(QStringLiteral("One.md"), 1, QString(), 0)});
+        else
+            call.deliver({makeQueryResult(QStringLiteral("One.md"), 1, QString(), 0),
+                          makeQueryResult(QStringLiteral("Two.md"), 1, QString(), 0)});
+    }
+    pumpQueuedDelivery();
+
+    EXPECT_EQ(editor->queryHeaderAt(fooOffset).countText, QStringLiteral("1 result"));
+    EXPECT_EQ(editor->queryHeaderAt(barOffset).countText, QStringLiteral("2 results"));
+}
+
+TEST(QueryHeaderTest, ClickingCollapseHidesRowsAndPersistsAcrossAnEdit)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After"))); // leave the block so it renders
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        {makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("a foo b"), 0)});
+    pumpQueuedDelivery();
+
+    const qsizetype offset = note.indexOf(QStringLiteral("foo"));
+    ASSERT_FALSE(editor->queryRowsAt(offset).isEmpty());
+    EXPECT_FALSE(editor->queryCollapsedAt(offset));
+
+    MarkdownEditor::QueryHeader header = editor->queryHeaderAt(offset);
+    ASSERT_TRUE(header.collapseRect.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      header.collapseRect.center().toPoint());
+
+    EXPECT_TRUE(editor->queryCollapsedAt(offset));
+    EXPECT_TRUE(editor->queryRowsAt(offset).isEmpty())
+        << "collapsed hides the result rows, not just some header flag";
+    EXPECT_FALSE(editor->queryHeaderAt(offset).countText.isEmpty())
+        << "the header itself - the count to expand back from - stays";
+
+    // Remembered for the block for the life of the editor even though
+    // nothing was written to the note: an edit elsewhere leaves it collapsed.
+    editor->setCursorOffset(note.indexOf(QStringLiteral("After")));
+    QTest::keyClicks(editor.get(), QStringLiteral("!"));
+    EXPECT_TRUE(editor->queryCollapsedAt(offset));
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->queryHeaderAt(offset).collapseRect.center().toPoint());
+    EXPECT_FALSE(editor->queryCollapsedAt(offset));
+    EXPECT_FALSE(editor->queryRowsAt(offset).isEmpty());
+}
+
+TEST(QueryHeaderTest, ClickingSortTogglesToFileNameOrder)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After")));
+    ASSERT_EQ(fake.calls.size(), 1);
+    // Delivered out of file-name order, so sorting is observable.
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("Zebra.md"), 1, QString(), 0),
+                                makeQueryResult(QStringLiteral("Apple.md"), 1, QString(), 0)});
+    pumpQueuedDelivery();
+
+    const qsizetype offset = note.indexOf(QStringLiteral("foo"));
+    QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(offset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("Zebra.md")) << "best-match: the delivered order";
+    EXPECT_FALSE(editor->queryHeaderAt(offset).sortByName);
+
+    const MarkdownEditor::QueryHeader header = editor->queryHeaderAt(offset);
+    ASSERT_TRUE(header.sortRect.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      header.sortRect.center().toPoint());
+
+    EXPECT_TRUE(editor->queryHeaderAt(offset).sortByName);
+    rows = editor->queryRowsAt(offset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("Apple.md"));
+    EXPECT_EQ(rows.at(1).path, QStringLiteral("Zebra.md"));
+
+    // Toggling back restores delivery order, and neither toggle asks the
+    // runner for anything - sorting is client-side over the cached results.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->queryHeaderAt(offset).sortRect.center().toPoint());
+    EXPECT_FALSE(editor->queryHeaderAt(offset).sortByName);
+    EXPECT_EQ(fake.calls.size(), 1) << "sorting is client-side, never a second search";
+}
+
+// --- base blocks -------------------------------------------------------------------
+
+namespace {
+
+/// A fake `setBaseRunner`, the same shape FakeQueryRunner already is for
+/// setQueryRunner: records every YAML text asked for and hands the test the
+/// `deliver` callback instead of calling it.
+struct FakeBaseRunner {
+    struct Call {
+        QString yamlText;
+        MarkdownEditor::BaseDeliver deliver;
+    };
+    QList<Call> calls;
+
+    void operator()(const QString &yamlText, const MarkdownEditor::BaseDeliver &deliver)
+    {
+        calls.append({yamlText, deliver});
+    }
+};
+
+BaseTableData makeBaseTable(const QStringList &headers, QList<BaseTableRow> rows)
+{
+    BaseTableData table;
+    table.viewNames = {QStringLiteral("Table")};
+    table.shownView = 0;
+    table.headers = headers;
+    table.rows = std::move(rows);
+    return table;
+}
+
+} // namespace
+
+TEST(BaseBlockTest, RendersTableFromAnAsyncRunner)
+{
+    const QString note = QStringLiteral("Intro\n\n```base\nviews:\n  - order: [file.name]\n```\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+
+    const qsizetype baseOffset = note.indexOf(QStringLiteral("views:"));
+    // Rendered but still waiting: the runner was asked, but nothing answered
+    // yet, so there is nothing to click - render must never block on it.
+    ASSERT_EQ(fake.calls.size(), 1);
+    EXPECT_TRUE(editor->baseRowsAt(baseOffset).isEmpty());
+
+    fake.calls.first().deliver(
+        makeBaseTable({QStringLiteral("Name")}, {{{QStringLiteral("One")}, QStringLiteral("One.md")},
+                                                 {{QStringLiteral("Two")}, QStringLiteral("Two.md")}}));
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::BaseRowRect> rows = editor->baseRowsAt(baseOffset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("One.md"));
+    EXPECT_EQ(rows.at(1).path, QStringLiteral("Two.md"));
+
+    // Re-asking for the same YAML without an intervening edit or
+    // refreshBases is a cache hit, not a second evaluation.
+    editor->enterBlockAt(1);   // touches the "Intro" block, not the base one
+    editor->enterBlockAt(baseOffset);
+    editor->enterBlockAt(1);
+    EXPECT_EQ(fake.calls.size(), 1);
+}
+
+TEST(BaseBlockTest, CaretInsideRevealsSourceInsteadOfTheTable)
+{
+    const QString note = QStringLiteral("```base\nviews:\n  - order: [file.name]\n```\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        makeBaseTable({QStringLiteral("Name")}, {{{QStringLiteral("One")}, QStringLiteral("One.md")}}));
+    pumpQueuedDelivery();
+
+    const qsizetype baseOffset = note.indexOf(QStringLiteral("views:"));
+    ASSERT_FALSE(editor->baseRowsAt(baseOffset).isEmpty());
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("order:")))
+        << "rendered: the table shows cell text, not the YAML that produced it";
+
+    editor->enterBlockAt(baseOffset);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("order:")));
+    EXPECT_TRUE(editor->baseRowsAt(baseOffset).isEmpty());
+}
+
+TEST(BaseBlockTest, ClickingARowActivatesItsNote)
+{
+    const QString note =
+        QStringLiteral("```base\nviews:\n  - order: [file.name]\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+    // The default caret starts inside the base block itself; it has to
+    // leave before the block renders a table rather than raw YAML.
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After")));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(makeBaseTable(
+        {QStringLiteral("Name")}, {{{QStringLiteral("Target")}, QStringLiteral("Target.md")}}));
+    pumpQueuedDelivery();
+
+    const qsizetype baseOffset = note.indexOf(QStringLiteral("views:"));
+    const QList<MarkdownEditor::BaseRowRect> rows = editor->baseRowsAt(baseOffset);
+    ASSERT_EQ(rows.size(), 1);
+
+    QSignalSpy activated(editor.get(), &MarkdownEditor::baseRowActivated);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      rows.first().rect.center().toPoint());
+    ASSERT_EQ(activated.size(), 1);
+    EXPECT_EQ(activated.first().at(0).toString(), QStringLiteral("Target.md"));
+}
+
+TEST(BaseBlockTest, EditingElsewhereAsksNothingNew)
+{
+    const QString note = QStringLiteral("Intro\n\n```base\nviews:\n  - order: [file.name]\n```\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        makeBaseTable({QStringLiteral("Name")}, {{{QStringLiteral("One")}, QStringLiteral("One.md")}}));
+    pumpQueuedDelivery();
+
+    editor->setCursorOffset(5); // end of "Intro", nowhere near the base block
+    QTest::keyClicks(editor.get(), QStringLiteral(" more"));
+    EXPECT_EQ(fake.calls.size(), 1) << "a keystroke outside the block must not re-evaluate it";
+}
+
+TEST(BaseBlockTest, AStaleDeliveryAfterRefreshIsDropped)
+{
+    const QString note = QStringLiteral("Intro\n\n```base\nviews:\n  - order: [file.name]\n```\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    const MarkdownEditor::BaseDeliver firstDeliver = fake.calls.first().deliver;
+
+    editor->refreshBases();
+    QTest::qWait(250); // past the 200 ms debounce
+    QCoreApplication::processEvents();
+    ASSERT_EQ(fake.calls.size(), 2);
+    const MarkdownEditor::BaseDeliver secondDeliver = fake.calls.at(1).deliver;
+
+    secondDeliver(makeBaseTable({QStringLiteral("Name")},
+                                {{{QStringLiteral("Fresh")}, QStringLiteral("Fresh.md")}}));
+    pumpQueuedDelivery();
+    firstDeliver(makeBaseTable({QStringLiteral("Name")},
+                               {{{QStringLiteral("Stale")}, QStringLiteral("Stale.md")}}));
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::BaseRowRect> rows =
+        editor->baseRowsAt(note.indexOf(QStringLiteral("views:")));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.first().path, QStringLiteral("Fresh.md"))
+        << "the superseded request's answer must not overwrite the current one";
+}
+
 // --- HTML blocks and inline HTML ----------------------------------------------------
 
 TEST(HtmlRendererTest, AvailableExactlyWhenLitehtmlWasFound)
