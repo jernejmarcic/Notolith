@@ -251,14 +251,14 @@ Jernej's rule: a new feature goes here and the current task carries on.
       per-keystroke O(document) passes, so do it together with making those
       passes proportional to the edit. `ShiftTest` guards the visible case.
 
-- [ ] **Custom themes from a CSS file.** Half there: `libs/theme/Scheme`
-      already imports an Obsidian theme's CSS - `var()` and `hsl()` resolved,
-      tested against all 20 themes installed on this machine - but only for
-      themes inside a vault's `.obsidian/themes`, and with no way to pick one.
-      Missing: a themes directory in `~/.config/noteAppC/themes/` that takes a
-      `.css` as readily as a scheme file, a picker on the settings page, and
-      live reload when the file changes. Worth saying plainly in the docs: a
-      CSS theme maps onto colour and typography tokens only, because Qt
-      widgets do not take CSS layout rules.
+- [ ] **Custom themes from a CSS file** (lane running). Corrected: a picker
+      already exists on the settings page and already lists Obsidian themes.
+      The real gaps, verified: `Scheme::searchPaths` uses `QStandardPaths`,
+      which resolves to `~/.config/noteAppC/noteAppC/themes` rather than the
+      documented `~/.config/noteAppC/themes`, so a theme put where the docs
+      say is never found; a loose `.css` file is not picked up, only an
+      Obsidian `<name>/theme.css` folder; nothing reloads on change.
+- [ ] Mobile groundwork (lane running): KF6 SyntaxHighlighting optional, and
+      a build against the Android kit's Qt 6.7.3.
 - [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
       blitting, the Wayland buffer measurement - see above.

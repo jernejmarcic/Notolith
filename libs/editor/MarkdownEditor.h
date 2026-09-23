@@ -290,6 +290,10 @@ private:
         /// Tracked so the caret crossing a group's edge relays out the whole
         /// group, not only the block it landed in.
         bool inCaretGroup = false;
+        /// The caret's block, in a kind that reveals per element: the syntax
+        /// ranges the caret has uncovered. Kept so a caret moving within the
+        /// block relays it out only when this actually changes.
+        QList<Range> revealed;
         /// Set when this block is a fenced code block carrying `#|` options.
         const CodeOptions *options = nullptr;
         /// Filled instead of `layout` when this is the frontmatter and live
@@ -409,6 +413,11 @@ private:
     void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     int nestingDepthAt(const BlockView &view, qsizetype source) const;
     void hideFoldedNestedCallouts(const BlockView &view, QList<Range> &hidden) const;
+    /// True for the kinds that show all their source when the caret is in
+    /// them - tables, code, maths, callouts - as Obsidian does with its widgets.
+    /// Paragraphs, headings, lists and plain quotes reveal per element instead.
+    bool revealsWholeBlock(const BlockView &view) const;
+    QList<Range> revealedSyntax(const BlockView &view) const;
     QRectF nestedFoldHandleRect(const BlockView &view, const NestedCallout &nested, qreal left,
                                 qreal top) const;
     void paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,

@@ -1238,13 +1238,18 @@ TEST(MarkdownEditorTest, InlineMathRendersAsOneCharacterWhenNotActive)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Inline $ formula.\n"));
 }
 
-TEST(MarkdownEditorTest, InlineMathShowsSourceWhenBlockIsActive)
+TEST(MarkdownEditorTest, InlineMathShowsSourceWhenTheCaretIsInIt)
 {
     const QString source = QStringLiteral("Inline $e^{i\\pi}+1=0$ formula.\n");
     auto editor = editorWith(source);
 
-    editor->enterBlockAt(0);
+    // Only the element the caret is in shows its source.
+    editor->enterBlockAt(source.indexOf(QLatin1String("pi")));
     EXPECT_EQ(editor->displayText(), source);
+
+    // Elsewhere in the same paragraph the formula stays drawn.
+    editor->enterBlockAt(source.indexOf(QLatin1String("formula")));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("\\pi")));
 }
 
 TEST(MarkdownEditorTest, InlineMathShowsSourceInSourceMode)
@@ -1397,19 +1402,23 @@ TEST(RevealTest, APlainClickRevealsOnRelease)
     auto editor = editorWith(kRevealNote);
     const QString rendered = editor->displayText();
 
+    // Aim inside "bold": a caret shows the markers of the element it is in.
+    const qreal advance = QFontMetricsF(Theme::builtin().textFont())
+                              .horizontalAdvance(rendered.left(rendered.indexOf(QLatin1String("bold")) + 2));
+    const QPoint onBold = firstLinePoint(*editor, int(advance));
     QWidget *viewport = editor->viewport();
-    send(viewport, QEvent::MouseButtonPress, firstLinePoint(*editor, 4), Qt::LeftButton);
+    send(viewport, QEvent::MouseButtonPress, onBold, Qt::LeftButton);
     EXPECT_EQ(editor->displayText(), rendered);
-    send(viewport, QEvent::MouseButtonRelease, firstLinePoint(*editor, 4), Qt::NoButton);
+    send(viewport, QEvent::MouseButtonRelease, onBold, Qt::NoButton);
     EXPECT_TRUE(editor->displayText().contains(QLatin1String("**")))
-        << "a bare caret still shows its block's source";
+        << "a bare caret in an element shows that element's markers";
 }
 
 TEST(RevealTest, AKeyboardSelectionRendersAgain)
 {
     auto editor = editorWith(kRevealNote);
     const QString rendered = editor->displayText();
-    editor->enterBlockAt(0);
+    editor->enterBlockAt(kRevealNote.indexOf(QLatin1String("bold")) + 1);
     ASSERT_TRUE(editor->displayText().contains(QLatin1String("**")));
 
     QTest::keyClick(editor.get(), Qt::Key_End, Qt::ShiftModifier);
@@ -1746,5 +1755,124 @@ TEST(CodeTabTest, TheSelectionSurvivesTypingAboveTheGroup)
     const QString shown = editor->displayText();
     EXPECT_TRUE(shown.contains(QLatin1String("puts(\"hi\")")));
     EXPECT_FALSE(shown.contains(QLatin1String("print('hi')")));
+}
+
+// --- revealing per element, as Obsidian does ---------------------------------
+
+TEST(PerElementRevealTest, OnlyTheElementUnderTheCaretShowsItsMarkers)
+{
+    const QString note = QStringLiteral("One **first** and **second** and `code`.\n");
+    auto editor = editorWith(note);
+
+    editor->enterBlockAt(note.indexOf(QLatin1String("first")) + 1);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("One **first** and second and code.\n"));
+
+    editor->enterBlockAt(note.indexOf(QLatin1String("code")) + 1);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("One first and second and `code`.\n"));
+
+    // Plain text between elements reveals nothing at all.
+    editor->enterBlockAt(note.indexOf(QLatin1String(" and ")) + 2);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("One first and second and code.\n"));
+}
+
+TEST(PerElementRevealTest, TouchingAnElementsEdgeCounts)
+{
+    // A caret just after the closing marker is still at the element, which is
+    // where it sits after typing the last character of it.
+    const QString note = QStringLiteral("A **bold** word.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("** word")) + 2);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("**bold**")));
+}
+
+TEST(PerElementRevealTest, NestedMarkersJoinTheirElement)
+{
+    const QString note = QStringLiteral("Very ***strong*** text.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("strong")) + 2);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("***strong***")));
+}
+
+TEST(PerElementRevealTest, AHeadingShowsItsHashOnItsOwnLine)
+{
+    const QString note = QStringLiteral("# Title\n\nBody.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(3);
+    EXPECT_TRUE(editor->displayText().startsWith(QLatin1String("# Title")));
+}
+
+TEST(PerElementRevealTest, AListKeepsItsBulletsWhileTheCaretIsInTheText)
+{
+    const QString note = QStringLiteral("- one **x**\n- two\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("one")) + 1);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("one x\ntwo\n"))
+        << "markers stay hidden and drawn as bullets";
+
+    editor->enterBlockAt(note.indexOf(QLatin1String("x")));
+    EXPECT_EQ(editor->displayText(), QStringLiteral("one **x**\ntwo\n"));
+}
+
+TEST(PerElementRevealTest, ALinkShowsItsTargetOnlyWithTheCaretInIt)
+{
+    const QString note = QStringLiteral("See [the docs](https://example.org) here.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("docs")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("[the docs](https://example.org)")));
+    editor->enterBlockAt(note.indexOf(QLatin1String("here")));
+    EXPECT_EQ(editor->displayText(), QStringLiteral("See the docs here.\n"));
+}
+
+TEST(PerElementRevealTest, ACalloutStillShowsItsWholeSource)
+{
+    // Callouts, tables and code are widgets in Obsidian: clicking into one
+    // shows all of its source, not one element of it.
+    const QString note = QStringLiteral("> [!note] Title\n> Some **bold** text.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("text")));
+    EXPECT_EQ(editor->displayText(), note);
+}
+
+TEST(ListPerfTest, TypingInALongListDoesNotDependOnItsLength)
+{
+    // A list used to be one block, laid out whole on every keystroke and on
+    // every caret move into an element: 11.6 ms per keystroke at 1 000 items,
+    // over the budget, and 154 ms at 5 000. Now each top-level item is its own
+    // block. Measured with a paint after each step - without one, the relayout
+    // is deferred and a timing measures nothing, which is exactly how the
+    // first version of this guard passed while the cost was 150 ms.
+    const auto measure = [](int items, double *typing, double *crossing) {
+        QString note;
+        for (int i = 0; i < items; ++i)
+            note += QStringLiteral("- item %1 **b** x\n").arg(i);
+        auto editor = editorWith(note);
+        const qsizetype middle = note.indexOf(QStringLiteral("- item %1 ").arg(items / 2));
+        const qsizetype bold = note.indexOf(QLatin1String("**b**"), middle);
+        editor->enterBlockAt(bold - 3);
+        editor->grab();
+
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClick(editor.get(), Qt::Key_Y);
+        editor->grab();
+        *typing = clock.nsecsElapsed() / 1e6;
+
+        clock.restart();
+        editor->enterBlockAt(bold + 3); // into the bold: what is revealed changes
+        editor->grab();
+        *crossing = clock.nsecsElapsed() / 1e6;
+    };
+
+    double shortTyping = 0, shortCrossing = 0, longTyping = 0, longCrossing = 0;
+    measure(100, &shortTyping, &shortCrossing);
+    measure(5000, &longTyping, &longCrossing);
+    std::printf("[ PERF     ] list of 100: type %.2f ms, cross %.2f ms; of 5000: type %.2f ms, "
+                "cross %.2f ms\n",
+                shortTyping, shortCrossing, longTyping, longCrossing);
+
+    EXPECT_LT(longTyping, 8.0);
+    EXPECT_LT(longCrossing, 8.0);
+    // Fifty times the list must not cost anything like fifty times the step.
+    EXPECT_LT(longTyping, qMax(1.0, shortTyping) * 4);
 }
 

@@ -404,6 +404,125 @@ void MarkdownEditor::setContentWidth(int pixels)
     viewport()->update();
 }
 
+bool MarkdownEditor::revealsWholeBlock(const BlockView &view) const
+{
+    switch (view.span.kind) {
+    case BlockSpan::Kind::Paragraph:
+    case BlockSpan::Kind::Heading:
+    case BlockSpan::Kind::List:
+    case BlockSpan::Kind::Quote:
+        return false;
+    default:
+        return true;
+    }
+}
+
+/// The syntax the caret uncovers in its own block, the way Obsidian reveals it:
+/// the markers of the inline element the caret is inside or touching - bold,
+/// a link, inline code, a formula - and the line-level markers of the caret's
+/// line, a heading's `#` or a quote's `>`. Everything else stays rendered, so
+/// moving the caret through a paragraph no longer turns the whole of it raw.
+///
+/// A list bullet is the exception: it stays drawn unless the caret is inside
+/// the marker itself. Obsidian's exact rule for bullets was not checked, and
+/// this is the choice that changes least under the caret.
+///
+/// Worked from the caret outward - the styles that contain it, the syntax on
+/// its line - never a scan of the whole block, because a long list is one
+/// block.
+QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
+{
+    QList<Range> revealed;
+    const qsizetype caret = m_cursor;
+    if (!view.span.range.contains(caret) && caret != view.span.range.end)
+        return revealed;
+
+    const qsizetype line = m_lines.lineAt(caret);
+    const qsizetype lineStart = m_lines.lineStart(line);
+    const qsizetype lineEnd = m_lines.lineEnd(line);
+
+    // The markers on the caret's line, found by binary search rather than by
+    // walking the block from its start - a long list is a single block.
+    const auto syntaxBegin = m_decorations.syntax.cbegin() + view.firstSyntax;
+    const auto syntaxEnd = m_decorations.syntax.cbegin() + view.lastSyntax;
+    QList<Range> markers;
+    for (auto it = std::lower_bound(syntaxBegin, syntaxEnd, lineStart,
+                                    [](const Range &marker, qsizetype at) {
+                                        return marker.start < at;
+                                    });
+         it != syntaxEnd && it->start <= lineEnd; ++it)
+        markers.append(*it);
+    if (markers.isEmpty())
+        return revealed;
+
+    const auto isInline = [](StyleSpan::Kind kind) {
+        return kind != StyleSpan::Kind::Heading && kind != StyleSpan::Kind::Quote
+               && kind != StyleSpan::Kind::CodeBlock;
+    };
+    const auto touches = [](const Range &a, const Range &b) {
+        return a.end >= b.start && b.end >= a.start;
+    };
+
+    // Each inline element on the line: its span, grown by the markers that
+    // touch it. The parser's range for `**bold**` is the word alone, with the
+    // asterisks beside it, so ownership is adjacency - and transitive, so the
+    // outer `**` of `***both***` joins through the inner `*`.
+    std::vector<bool> owned(size_t(markers.size()), false);
+    const auto stylesBegin = m_decorations.styles.cbegin() + view.firstStyle;
+    const auto stylesEnd = m_decorations.styles.cbegin() + view.lastStyle;
+    for (auto it = std::lower_bound(stylesBegin, stylesEnd, lineStart,
+                                    [](const StyleSpan &span, qsizetype at) {
+                                        return span.range.start < at;
+                                    });
+         it != stylesEnd && it->range.start <= lineEnd; ++it) {
+        if (!isInline(it->kind))
+            continue;
+        Range extent = it->range;
+        std::vector<int> members;
+        for (bool grew = true; grew;) {
+            grew = false;
+            for (int i = 0; i < markers.size(); ++i) {
+                if (std::find(members.cbegin(), members.cend(), i) != members.cend()
+                    || !touches(markers.at(i), extent))
+                    continue;
+                members.push_back(i);
+                extent = {qMin(extent.start, markers.at(i).start),
+                          qMax(extent.end, markers.at(i).end)};
+                grew = true;
+            }
+        }
+        const bool caretInside = caret >= extent.start && caret <= extent.end;
+        for (int i : members) {
+            owned[size_t(i)] = true;
+            if (caretInside && !revealed.contains(markers.at(i)))
+                revealed.append(markers.at(i));
+        }
+    }
+
+    // What no inline element owns is a line-level marker: a heading's `#`, a
+    // quote's `>`. Those show for the caret's line - except a list bullet,
+    // which stays drawn unless the caret is inside the marker itself.
+    for (int i = 0; i < markers.size(); ++i) {
+        if (owned[size_t(i)])
+            continue;
+        const Range &marker = markers.at(i);
+        if (view.span.kind == BlockSpan::Kind::List) {
+            const auto item = std::find_if(m_decorations.listItems.cbegin(),
+                                           m_decorations.listItems.cend(),
+                                           [&marker](const ListItemSpan &list) {
+                                               return list.marker.overlaps(marker);
+                                           });
+            if (item != m_decorations.listItems.cend()) {
+                if (caret >= item->marker.start && caret < item->marker.end)
+                    revealed.append(marker);
+                continue;
+            }
+        }
+        revealed.append(marker);
+    }
+    return revealed;
+}
+
 /// The body of every folded callout nested in this block, as ranges to hide.
 /// A nested callout lives inside its parent's layout, so folding one is just
 /// hiding its lines like syntax - its title stays, to be clicked open again.
@@ -486,6 +605,13 @@ Parser &threadParser()
 /// over the whole document.
 void sortDecorations(Decorations &decorations)
 {
+    // Sorted so a list can find its own items by binary search: rebuildBlocks
+    // splits every list at its items, and scanning all of a note's items for
+    // each list would make that quadratic in a note full of lists.
+    std::sort(decorations.listItems.begin(), decorations.listItems.end(),
+              [](const ListItemSpan &l, const ListItemSpan &r) {
+                  return l.range.start < r.range.start;
+              });
     std::sort(decorations.syntax.begin(), decorations.syntax.end(),
               [](const Range &l, const Range &r) { return l.start < r.start; });
     std::sort(decorations.styles.begin(), decorations.styles.end(),
@@ -672,6 +798,33 @@ void MarkdownEditor::rebuildBlocks()
         if (view.span.range.end < m_text.size()
             && m_text.at(view.span.range.end) == QLatin1Char('\n'))
             ++view.span.range.end;
+
+        // A list becomes one block per top-level item, its nested items going
+        // with their parent. As one block, a list was laid out whole on every
+        // keystroke and every caret move into an element: 11.6 ms per keystroke
+        // at 1 000 items, over the 8 ms budget, and 154 ms at 5 000. Blocks sit
+        // with no spacing between them, so nothing on screen changes.
+        if (span.kind == BlockSpan::Kind::List) {
+            const auto items = m_decorations.listItems;
+            auto item = std::lower_bound(items.cbegin(), items.cend(), span.range.start,
+                                         [](const ListItemSpan &list, qsizetype at) {
+                                             return list.range.start < at;
+                                         });
+            qsizetype from = view.span.range.start;
+            for (; item != items.cend() && item->range.start < view.span.range.end; ++item) {
+                if (item->indent != 0)
+                    continue;
+                // md4qt starts an item at its bullet; the block starts at its line.
+                const qsizetype lineStart = m_lines.lineStart(m_lines.lineAt(item->range.start));
+                if (lineStart <= from)
+                    continue;
+                BlockView part;
+                part.span = {BlockSpan::Kind::List, {from, lineStart}, span.level};
+                blocks.push_back(std::move(part));
+                from = lineStart;
+            }
+            view.span.range.start = from;
+        }
         blocks.push_back(std::move(view));
         cursor = view.span.range.end;
     }
@@ -1091,14 +1244,21 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
 {
     // Source mode and the caret's own block show the real markers, so drawing
     // bullets as well would double them up.
-    if (!view.layout || view.span.kind != BlockSpan::Kind::List || m_mode == Mode::Source
-        || view.active)
+    if (!view.layout || view.span.kind != BlockSpan::Kind::List || m_mode == Mode::Source)
         return;
 
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
 
+    const auto markerShown = [&view](const ListItemSpan &item) {
+        return std::any_of(view.revealed.cbegin(), view.revealed.cend(),
+                           [&item](const Range &range) { return range.overlaps(item.marker); });
+    };
     for (const ListItemSpan &item : m_decorations.listItems) {
         if (!item.range.overlaps(view.span.range))
+            continue;
+        // The caret has uncovered this item's marker as text, so a drawn
+        // bullet would double it.
+        if (markerShown(item))
             continue;
 
         const qsizetype display = view.map.toDisplay(item.marker.end);
@@ -1822,13 +1982,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderMedia && view.span.kind == BlockSpan::Kind::Code)
         view.options = codeOptionsFor(view);
 
+    const bool perElement = m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
     const bool reveal = m_mode == Mode::Source
-                        || (m_mode == Mode::LivePreview && view.active);
+                        || (m_mode == Mode::LivePreview && view.active && !perElement);
+    view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
     QList<Range> hidden;
     if (!reveal) {
         hidden.reserve(view.lastSyntax - view.firstSyntax);
-        for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
-            hidden.append(m_decorations.syntax.at(i));
+        for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+            const Range &marker = m_decorations.syntax.at(i);
+            if (!view.revealed.contains(marker))
+                hidden.append(marker);
+        }
         // The parser always adds an inline formula's hide range; whether it
         // actually stays hidden depends on MicroTeX being able to draw it,
         // which only the editor knows.
@@ -1978,6 +2143,11 @@ void MarkdownEditor::updateLayout()
             active = view.active;
         if (active != view.active) {
             view.active = active;
+            view.layout.reset();
+            view.laidOut = false;
+            view.heightEstimated = false;
+        } else if (active && view.laidOut && !revealsWholeBlock(view)
+                   && revealedSyntax(view) != view.revealed) {
             view.layout.reset();
             view.laidOut = false;
             view.heightEstimated = false;
@@ -2646,12 +2816,14 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
 
     for (const BlockView &view : m_blocks) {
-        // An active block shows its raw source and paints no box, so there is
-        // nothing there to click.
-        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut || view.active)
+        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut)
             continue;
         for (const ListItemSpan &item : m_decorations.listItems) {
             if (!item.task || !item.range.overlaps(view.span.range))
+                continue;
+            // A marker the caret has uncovered shows as text, with no box to click.
+            if (std::any_of(view.revealed.cbegin(), view.revealed.cend(),
+                            [&item](const Range &range) { return range.overlaps(item.marker); }))
                 continue;
             if (checkboxRect(view, item).adjusted(-3, -3, 3, 3).contains(event->pos())) {
                 toggleTask(item);
