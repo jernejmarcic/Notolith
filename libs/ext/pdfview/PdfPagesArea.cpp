@@ -158,6 +158,16 @@ QRectF PdfPagesArea::toLayoutRect(int page, const QRectF &pageRectPoints) const
     return QRectF(toLayoutPoint(page, pageRectPoints.topLeft()), toLayoutPoint(page, pageRectPoints.bottomRight()));
 }
 
+QRectF PdfPagesArea::normalizedToLayoutRect(int page, const QRectF &normalized) const
+{
+    const QSizeF sizePts = m_pageSizePoints.value(page);
+    if (sizePts.isEmpty())
+        return {};
+    const QRectF pts(normalized.x() * sizePts.width(), normalized.y() * sizePts.height(),
+                     normalized.width() * sizePts.width(), normalized.height() * sizePts.height());
+    return toLayoutRect(page, pts);
+}
+
 QPointF PdfPagesArea::viewportToLayout(const QPoint &viewportPoint) const
 {
     return QPointF(viewportPoint) + QPointF(horizontalScrollBar()->value(), verticalScrollBar()->value());
@@ -846,7 +856,7 @@ void PdfPagesArea::mouseReleaseEvent(QMouseEvent *event)
                 m_selectedID = command->annotationID();
                 m_selectedPage = page;
                 emit selectionChanged();
-                openCommentEditor(page, command->annotationID(), toLayoutRect(page, data.boundary));
+                openCommentEditor(page, command->annotationID(), normalizedToLayoutRect(page, data.boundary));
             }
         }
         break;
@@ -886,7 +896,7 @@ void PdfPagesArea::mouseDoubleClickEvent(QMouseEvent *event)
     m_selectedID = hit->id;
     m_selectedPage = page;
     emit selectionChanged();
-    openCommentEditor(page, hit->id, toLayoutRect(page, hit->boundary));
+    openCommentEditor(page, hit->id, normalizedToLayoutRect(page, hit->boundary));
 }
 
 void PdfPagesArea::wheelEvent(QWheelEvent *event)
@@ -1055,7 +1065,7 @@ void PdfPagesArea::showAnnotationMenu(int page, const QString &id, const QPoint 
     connect(editAction, &QAction::triggered, this, [this, page, id] {
         const auto current = findByID(page, id);
         if (current)
-            openCommentEditor(page, id, toLayoutRect(page, current->boundary));
+            openCommentEditor(page, id, normalizedToLayoutRect(page, current->boundary));
     });
     menu.addSeparator();
     QAction *deleteAction = menu.addAction(tr("Delete"));

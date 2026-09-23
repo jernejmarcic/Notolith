@@ -449,6 +449,13 @@ bool PdfDocument::removeAnnotation(int page, const QString &id)
         if (ann->uniqueName() != id)
             continue;
         p->removeAnnotation(ann.get());
+        // Page::removeAnnotation "destroys the annotation object" itself
+        // (poppler-qt6.h) - it has already freed *ann. Our unique_ptr must
+        // let go without deleting it a second time, or the temporary
+        // vector's destructor double-frees it the moment this loop ends -
+        // this crashed with a plain SIGSEGV inside removeAnnotation before
+        // the release() was added.
+        (void)ann.release();
         m_modified = true;
         return true;
     }

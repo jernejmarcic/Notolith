@@ -78,6 +78,12 @@ public:
 
     QList<PdfOutlineItem> outline() const { return m_document.outline(); }
 
+    /// A page's rect in layout pixels (unscrolled), from its point size and
+    /// the current zoom alone - true the instant load() returns, before any
+    /// raster has landed. Public mainly for tests to check that: see
+    /// tests/test_pdfview.cpp's PagesLayOutWithRightSizesBeforeAnyRenderLands.
+    QRectF pageLayoutRect(int page) const { return pageRectInLayout(page); }
+
     QString selectedText() const { return m_selectionText; }
 
     void findStart(const QString &needle);
@@ -120,6 +126,12 @@ private:
     QPointF toPagePoint(int page, const QPointF &layoutPoint) const;
     QPointF toLayoutPoint(int page, const QPointF &pagePoint) const; ///< inverse
     QRectF toLayoutRect(int page, const QRectF &pageRectPoints) const;
+    /// Same, but for a PdfAnnotationData::boundary - normalized 0..1, not
+    /// points - converted through the page's own point size first. A popup
+    /// positioned straight off toLayoutRect(page, data.boundary) landed at
+    /// the page's top-left corner instead of the annotation, caught by
+    /// screenshotting the note tool while building this.
+    QRectF normalizedToLayoutRect(int page, const QRectF &normalized) const;
     QPointF viewportToLayout(const QPoint &viewportPoint) const;
     void visiblePageRange(int &first, int &last) const;
     void scheduleVisibleRenders();
