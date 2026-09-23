@@ -130,6 +130,29 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
 - [x] Publish from the window: one dialog for folder, site name, home
       note, which notes and theme, remembered per vault (d397dc3).
 
+## Encrypted notes, requested by Jernej 2026-09-24
+
+"on disk encryped notes that can be unlcoked wiht a passowrd. real on disk
+encryption only is decrypted in RAM only. Need to enter password either when
+cklicking the note or on startup (make this a toogle)". Decided with him:
+**noteAppC's own format, Argon2id** (not Meld Encrypt's PBKDF2 .mdenc), and in
+the on-open mode the password lasts **until locked or the app closes**.
+
+- [ ] `libs/ext/crypt` (NOTEAPPC_WITH_ENCRYPTION, libsodium): `.mdlock` files,
+      header (magic, version, Argon2id params, salt, nonce) authenticated as
+      AD, XChaCha20-Poly1305 body; keys and password in sodium_malloc memory.
+- [ ] Session: unlock on first open or at vault open (`encryption.unlockAtStartup`),
+      auto-lock after idle minutes, "Lock encrypted notes"; lock saves and
+      closes every encrypted tab. No core dumps while unlocked.
+- [ ] Never plaintext on disk: no file-recovery snapshot, no git history, no
+      notebook output cache, no plugin code blocks or selection reads for an
+      encrypted note; save writes ciphertext atomically.
+- [ ] Commands: encrypt this note, decrypt this note, new encrypted note,
+      lock, change password (re-encrypts every `.mdlock`).
+- [ ] `[[Secret]]` still resolves after `Secret.md` became `Secret.mdlock`.
+- [ ] docs/ENCRYPTION.md: format, threat model, what it cannot do (swap,
+      old plaintext in history/snapshots/backups before encrypting).
+
 ## Callouts, requested by Jernej 2026-09-22
 
 Decided with him: **named styles in config, inline overrides**, carried in
