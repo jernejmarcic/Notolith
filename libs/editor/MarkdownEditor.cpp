@@ -308,6 +308,8 @@ void MarkdownEditor::setNoteText(const QString &text)
     ++m_textVersion;
     m_cursor = m_anchor = 0;
     m_activeBlock = -1;
+    m_tableEdited = false;
+    m_caretCell = {-1, -1};
     m_undo.clear();
     m_redo.clear();
     m_interacted = false;
@@ -3384,6 +3386,7 @@ void MarkdownEditor::setCursorOffset(qsizetype offset)
 void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
 {
     const qsizetype clamped = qBound<qsizetype>(0, offset, m_text.size());
+    const qsizetype previousCursor = m_cursor;
     const qsizetype previousBlock = m_activeBlock;
     const bool hadSelection = m_anchor != m_cursor;
 
@@ -3392,6 +3395,13 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
         m_anchor = clamped;
 
     m_activeBlock = blockAt(m_cursor);
+    // Out of a table it edited: that table's source is aligned, the way
+    // Advanced Tables does it, so the file reads as a table too.
+    // Not while a selection is being dragged out of it: that would drop it.
+    if (m_tableEdited && m_alignTables && !keepAnchor && tableAround(previousCursor) != tableAround(m_cursor)) {
+        m_tableEdited = false;
+        formatTables(previousCursor);
+    }
     // Into another cell of the same table: the cell it left draws rendered
     // again and the one it entered shows its source.
     const CellRef cell = tableCellAt(m_cursor);
@@ -3573,6 +3583,8 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     if (!m_applyingExternal) {
         m_cursor = m_anchor = at + inserted.size();
         m_activeBlock = blockAt(m_cursor);
+        if (tableAround(m_cursor) >= 0 && !m_formattingTables)
+            m_tableEdited = true;
     }
 
     setModified(true);
@@ -3708,6 +3720,8 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
         {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+        {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
+        {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
     };
     return table;
 }
@@ -3736,6 +3750,10 @@ bool MarkdownEditor::runCommand(const QString &id)
         moveLines(1);
     else if (id == QLatin1String("noteAppC:duplicate-lines"))
         duplicateLines();
+    else if (id == QLatin1String("noteAppC:format-table"))
+        formatTables(m_cursor);
+    else if (id == QLatin1String("noteAppC:format-all-tables"))
+        formatTables(-1);
     else
         return false;
     return true;

@@ -815,6 +815,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
     editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
     editor->setOutlineNumbering(m_settings.boolean(QStringLiteral("editor.outlineNumbering")));
+    editor->setAlignTables(m_settings.boolean(QStringLiteral("editor.alignTables")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));

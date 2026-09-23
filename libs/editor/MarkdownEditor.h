@@ -111,6 +111,9 @@ public:
     /// Nested ordered lists numbered as Word's multilevel lists are - 1.,
     /// then 1.1, 1.2, then 1.2.1 - rather than each list counting on its own.
     void setOutlineNumbering(bool on);
+    /// A table's source aligned into columns when the caret leaves a table
+    /// it edited, as Advanced Tables does. On by default.
+    void setAlignTables(bool on) { m_alignTables = on; }
     bool outlineNumbering() const { return m_outlineNumbering; }
     /// What an ordered item's number reads as drawn (for the tests too).
     QString listLabel(const ListItemSpan &item) const;
@@ -1397,6 +1400,13 @@ private:
     /// What typing or pasting `text` puts into a drawn table's cell: a pipe
     /// escaped, a line break a space. `text` itself anywhere else.
     QString cellSafe(const QString &text) const;
+    /// Aligns the source of the table holding `offset`, or of every table in
+    /// the note when `offset` is -1, as one undo step; the caret stays with
+    /// the text it was in. False when nothing needed it.
+    bool formatTables(qsizetype offset);
+    /// The index in m_decorations.tables of the table whose lines hold
+    /// `offset`, in any mode; -1 outside every table.
+    qsizetype tableAround(qsizetype offset) const;
     /// Adds an empty row below `cell`'s and puts the caret in `column` of it.
     void insertTableRowAfter(const CellRef &cell, int column);
     /// Where a cell's text starts, in block coordinates.
@@ -1600,6 +1610,9 @@ private:
     qsizetype m_anchor = 0;
     qsizetype m_activeBlock = -1;
     Range m_caretCell{-1, -1}; ///< the table cell the caret was last in, to relay out on leaving it
+    bool m_alignTables = true;
+    bool m_tableEdited = false; ///< the caret's table was edited; aligned when the caret leaves it
+    bool m_formattingTables = false; ///< formatTables' own edits do not count as editing
     qreal m_goalX = -1; ///< remembered column for up/down
 
     /// A freshly opened note renders whole; the block under the caret only

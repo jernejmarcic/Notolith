@@ -13,6 +13,7 @@
 #include "MarkdownEditor.h"
 
 #include "Parser.h"
+#include "TableFormat.h"
 
 #include <QKeyEvent>
 #include <QScrollBar>
@@ -97,6 +98,76 @@ const MarkdownEditor::Cell *MarkdownEditor::caretCell(const BlockView &view) con
     return nullptr;
 }
 
+qsizetype MarkdownEditor::tableAround(qsizetype offset) const
+{
+    for (qsizetype i = 0; i < m_decorations.tables.size(); ++i) {
+        const Range &range = m_decorations.tables.at(i).range;
+        if (m_lines.lineStart(m_lines.lineAt(range.start)) <= offset && offset <= range.end)
+            return i;
+    }
+    return -1;
+}
+
+bool MarkdownEditor::formatTables(qsizetype offset)
+{
+    // Whole lines, so a table in a callout keeps its "> " markers.
+    struct Edit {
+        qsizetype table;
+        qsizetype start;
+        qsizetype end;
+        QString text;
+    };
+    QList<Edit> edits;
+    const qsizetype only = offset < 0 ? -1 : tableAround(offset);
+    if (offset >= 0 && only < 0)
+        return false;
+    for (qsizetype i = 0; i < m_decorations.tables.size(); ++i) {
+        if (only >= 0 && i != only)
+            continue;
+        const Range &range = m_decorations.tables.at(i).range;
+        const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
+        const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
+        const QString source = m_text.mid(start, end - start);
+        const QString aligned = formatTable(source);
+        if (aligned != source)
+            edits.append({i, start, end, aligned});
+    }
+    if (edits.isEmpty())
+        return false;
+
+    // The caret stays in its cell, at the same place in its text; outside
+    // every table it moves with the text around it.
+    const CellRef cell = tableCellAt(m_cursor);
+    qsizetype inCell = cell.row >= 0 ? m_cursor - cell.range.start : -1;
+    qsizetype caret = m_cursor;
+    for (const Edit &edit : std::as_const(edits)) {
+        if (edit.end <= m_cursor && !(cell.row >= 0 && tableAround(m_cursor) == edit.table))
+            caret += edit.text.size() - (edit.end - edit.start);
+    }
+    const qsizetype caretTable = cell.row >= 0 ? tableAround(m_cursor) : -1;
+    const int row = cell.row;
+    const int column = cell.column;
+
+    m_lastEdit.invalidate(); // one step of its own, not the end of the typing before it
+    pushUndo();
+    m_formattingTables = true;
+    for (qsizetype i = edits.size() - 1; i >= 0; --i)
+        applyEdit(edits.at(i).start, edits.at(i).end - edits.at(i).start, edits.at(i).text);
+    m_formattingTables = false;
+    m_lastEdit.invalidate();
+    reparse();
+
+    if (caretTable >= 0 && caretTable < m_decorations.tables.size()) {
+        const TableSpan &table = m_decorations.tables.at(caretTable);
+        const Range moved = table.rows.value(row).value(column);
+        if (moved.isValid())
+            caret = moved.start + qMin(inCell, moved.length());
+    }
+    m_tableEdited = false;
+    moveCursor(caret, false);
+    return true;
+}
+
 bool MarkdownEditor::tableRenderedAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
@@ -137,8 +208,8 @@ void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
     for (int c = 0; c < table.columns; ++c)
         row += QStringLiteral("  |");
 
-    pushUndo();
     m_lastEdit.invalidate(); // its own undo step, not part of the typing before it
+    pushUndo();
     applyEdit(lineEnd, 0, row);
     // The row has to be a row before the caret can go into it: parse now,
     // not in 20 ms, or the caret lands in no cell and is snapped away.

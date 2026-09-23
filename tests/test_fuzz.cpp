@@ -96,6 +96,7 @@ TEST(FuzzTest, RandomEditsKeepTheEditorsTextAndUndoPutsItBack)
         const QString original = randomNote(rng);
         MarkdownEditor editor;
         editor.resize(700, 500);
+        editor.setAlignTables(false); // the raw keystroke path; aligning is TableFormatEditorTest's
         editor.setNoteText(original);
         QString model = original;
 

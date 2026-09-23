@@ -4177,3 +4177,40 @@ TEST(ClickToEditTest, MathsAndHTMLOpenWhereTheyAreClicked)
         EXPECT_GE(landed, 10) << element.toStdString() << ": only " << landed * 2 << " px of it opens on a click";
     }
 }
+
+TEST(TableFormatEditorTest, LeavingAnEditedTableAlignsItAndNothingElse)
+{
+    const QString note = QStringLiteral("para  with  spaces\n\n| a | b |\n|---|--:|\n| 1 | 22 |\n\n|x|y|\n|-|-|\n|1|2|\n\nend\n");
+    for (const MarkdownEditor::Mode mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source}) {
+        auto editor = editorWith(note);
+        editor->setMode(mode);
+        editor->show();
+        editor->setCursorOffset(note.indexOf(QStringLiteral("22")) + 2);
+        QTest::keyClicks(editor.get(), QStringLiteral("333"));
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| 1 | 22333 |"))); // not yet: still in it
+        editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("end")) + 1);
+        const QString after = editor->noteText();
+        EXPECT_TRUE(after.contains(QStringLiteral("| a   |     b |\n| --- | ----: |\n| 1   | 22333 |\n")))
+            << after.toStdString();
+        EXPECT_TRUE(after.startsWith(QStringLiteral("para  with  spaces\n\n"))); // the rest byte for byte
+        EXPECT_TRUE(after.contains(QStringLiteral("|x|y|\n|-|-|\n|1|2|\n")));   // an unedited table too
+        EXPECT_EQ(editor->cursorOffset(), after.indexOf(QStringLiteral("end")) + 1); // the caret moved with its text
+
+        QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier); // the alignment is its own step
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| 1 | 22333 |")));
+    }
+}
+
+TEST(TableFormatEditorTest, FormatAllTablesKeepsTheCaretInItsCell)
+{
+    const QString note = QStringLiteral("|x|long header|\n|-|-|\n|1|2|\n\n|p|q|\n|:-:|-|\n|r|s|\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const qsizetype two = note.indexOf(QStringLiteral("2|"));
+    editor->setCursorOffset(two + 1); // after the "2"
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("noteAppC:format-all-tables")));
+    EXPECT_EQ(editor->noteText(),
+              QStringLiteral("| x   | long header |\n| --- | ----------- |\n| 1   | 2           |\n\n"
+                             "|  p  | q   |\n| :-: | --- |\n|  r  | s   |\n"));
+    EXPECT_EQ(editor->noteText().at(editor->cursorOffset() - 1), QLatin1Char('2'));
+}
