@@ -613,6 +613,11 @@ QWidget *SettingsPage::buildCorePluginsPage()
                    QStringLiteral("https://"));
     addLineEditRow(layout, QStringLiteral("sync.email"), tr("Sync account"), tr("The account's email address."));
 #endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    addToggleRow(layout, QStringLiteral("notebooks.allowHostTier"), tr("Let notes run code outside the sandbox"),
+                 tr("A code block's \"#| sandbox: host\" runs it as you, with your files. Off, every block "
+                    "runs sandboxed whatever it asks."));
+#endif
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over
     // these, so an Obsidian vault behaves here as it did there.

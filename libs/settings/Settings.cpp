@@ -55,6 +55,7 @@ const QVariantMap &defaults()
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("sync.serverURL"), QString()},
         {QStringLiteral("sync.email"), QString()},
+        {QStringLiteral("notebooks.allowHostTier"), false}, // a note's "#| sandbox: host" is only a request
         {QStringLiteral("editor.gpuAcceleration"), false},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},

@@ -704,9 +704,16 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
-        // `#| sandbox: host` (a fenced block) or a runnable embed's own
-        // folder (NotebookRunOptions - stage 13's rest, both editor-side).
-        request.tier = options.sandboxHost ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
+        // `#| sandbox: host` is the note asking, and a note can come from
+        // anyone: it leaves the sandbox only when the person has allowed that
+        // in settings. A runnable embed's own folder is bound read-only.
+        const bool host = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
+        if (options.sandboxHost && !host && forceRun) {
+            statusBar()->showMessage(tr("This block asks to run outside the sandbox; it runs inside it unless "
+                                        "Settings allows that"),
+                                     6000);
+        }
+        request.tier = host ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
         if (!options.workingDir.isEmpty())
             request.extraReadOnlyBinds = {options.workingDir};
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {

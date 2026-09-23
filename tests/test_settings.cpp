@@ -61,6 +61,13 @@ TEST(Settings, defaultsAreCompiledIn)
     EXPECT_FALSE(settings.isCustomised(QStringLiteral("appearance.theme")));
 }
 
+TEST(Settings, whatRunsAnotherPersonsCodeIsOffUntilAskedFor)
+{
+    const Settings settings;
+    EXPECT_FALSE(settings.boolean(QStringLiteral("notebooks.allowHostTier")));
+    EXPECT_FALSE(settings.boolean(Settings::featureKey("community-plugins")));
+}
+
 TEST(Settings, configLivesUnderXDG)
 {
     EXPECT_TRUE(Settings::configDirectory().contains(QStringLiteral("noteAppC")));
