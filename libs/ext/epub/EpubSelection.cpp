@@ -56,7 +56,21 @@ EpubView::HitPoint EpubView::hitTest(const QPoint &contentPos)
     if (!m_document.isValid())
         return result;
 
-    const qint64 documentY = contentPos.y() + m_vscroll->value();
+    // Continuous and single-column paged both start their one page at
+    // document-Y == m_vscroll->value(); a two-column spread's right-hand
+    // page starts one page height further in, and a click there needs its
+    // own x offset too - see paintPage's own two calls.
+    int xOffset = 12;
+    qint64 yBase = m_vscroll->value();
+    if (m_readingMode == ReadingMode::Paged && m_pagedColumns == 2) {
+        const int col2Start = 12 + contentWidth() + kPagedColumnGap;
+        if (contentPos.x() >= col2Start) {
+            xOffset = col2Start;
+            yBase += pageHeight();
+        }
+    }
+
+    const qint64 documentY = contentPos.y() + yBase;
     qint64 top = 0;
     const int spineIndex = chapterAtY(documentY, &top);
     if (spineIndex < 0)
@@ -69,7 +83,7 @@ EpubView::HitPoint EpubView::hitTest(const QPoint &contentPos)
         return result;
     }
 
-    const qreal localX = contentPos.x() - 12;
+    const qreal localX = contentPos.x() - xOffset;
     const qreal localY = double(documentY - top);
 
     const HtmlRenderer::TextRun *best = nullptr;
@@ -190,7 +204,7 @@ QString EpubView::plainTextForRange(int spineIndex, qsizetype start, qsizetype e
     return text;
 }
 
-void EpubView::paintHighlightsAndSelection(QPainter &painter, int spineIndex, qint64 top) const
+void EpubView::paintHighlightsAndSelection(QPainter &painter, int spineIndex, qint64 top, int xOffset) const
 {
     for (const EpubHighlight &highlight : m_highlights) {
         if (highlight.locator.spineIndex != spineIndex)
@@ -200,23 +214,41 @@ void EpubView::paintHighlightsAndSelection(QPainter &painter, int spineIndex, qi
             color = QColor(highlight.color);
         color.setAlpha(90);
         for (const QRectF &rect : rectsForRange(spineIndex, highlight.locator.start, highlight.locator.end))
-            painter.fillRect(rect.translated(12, top), color);
+            painter.fillRect(rect.translated(xOffset, top), color);
     }
     if (m_selection.active && m_selection.spineIndex == spineIndex) {
         QColor color = m_theme.color(QStringLiteral("--text-accent"));
         color.setAlpha(80);
         for (const QRectF &rect : rectsForRange(spineIndex, m_selection.start, m_selection.end))
-            painter.fillRect(rect.translated(12, top), color);
+            painter.fillRect(rect.translated(xOffset, top), color);
     }
 }
 
 // --- mouse -----------------------------------------------------------------
+
+bool EpubView::turnPageOnMarginClick(const QPoint &contentPos)
+{
+    if (m_readingMode != ReadingMode::Paged)
+        return false;
+    if (contentPos.x() < kMarginClickWidth) {
+        turnPage(-1);
+        return true;
+    }
+    if (contentPos.x() >= m_content->width() - kMarginClickWidth) {
+        turnPage(1);
+        return true;
+    }
+    return false;
+}
 
 void EpubView::handleContentMousePress(QMouseEvent *event)
 {
     m_content->setFocus();
     if (event->button() != Qt::LeftButton)
         return;
+
+    if (turnPageOnMarginClick(event->pos()))
+        return; // task 4: click the margins to turn a page instead of starting a selection there
 
     const HitPoint hit = hitTest(event->pos());
     if (hit.spineIndex < 0)
@@ -311,16 +343,22 @@ void EpubView::handleContentContextMenu(QContextMenuEvent *event)
 
 // --- table of contents -------------------------------------------------
 
+namespace {
+/// Column 0 data roles a TOC row carries beyond Qt::UserRole (the spine
+/// index, already in use before this task): where to find this row's real
+/// children once it is actually expanded, and whether that has happened yet
+/// - see populateTocTree()/onTocExpanded().
+constexpr int kTocEntryPointerRole = Qt::UserRole + 1;
+constexpr int kTocPopulatedRole = Qt::UserRole + 2;
+} // namespace
+
 void EpubView::buildToc()
 {
-    // ponytail: one QTreeWidgetItem per TOC entry, built here on load()
-    // rather than lazily on the tree's first showEvent (the way GraphView
-    // defers its own build - see docs/PERFORMANCE.md fix 16). Real books
-    // have tens of TOC entries, so this is unmeasurable in practice; a
-    // synthetic 2000-chapter book measured at the bottom of the report made
-    // it roughly a third of open time at that size, which is what to chase
-    // first if a real book with an unusually large TOC ever makes this show
-    // up in a profile.
+    // Not called from load() any more - see setTocVisible()'s own comment
+    // (task 2). What runs here is itself lazy per node too: a synthetic
+    // 2000-entry TOC used to cost roughly a third of open time built eagerly
+    // three levels deep; now only the level actually being shown is ever
+    // materialised as QTreeWidgetItems - see populateTocTree/onTocExpanded.
     m_tocTree->clear();
     populateTocTree(nullptr, m_document.tableOfContents());
     if (m_document.tableOfContents().isEmpty()) {
@@ -339,7 +377,20 @@ void EpubView::populateTocTree(QTreeWidgetItem *parent, const QList<EpubTocEntry
         auto *item = parent ? new QTreeWidgetItem(parent, {entry.title})
                             : new QTreeWidgetItem(m_tocTree, {entry.title});
         item->setData(0, Qt::UserRole, entry.spineIndex);
-        populateTocTree(item, entry.children);
+        if (!entry.children.isEmpty()) {
+            // `entry` is an element of a QList owned by m_document (either
+            // tableOfContents() itself or some ancestor's `children`), never
+            // resized or reallocated after EpubDocument::open() parses it -
+            // stable for exactly as long as m_document stays loaded, which
+            // is at least as long as this tree is (see load(), which clears
+            // and rebuilds the whole tree - and this pointer - on every
+            // open()). A single empty placeholder row is enough to make Qt
+            // draw the expand arrow without walking `entry.children` now;
+            // onTocExpanded() replaces it with the real rows the first time
+            // this item is actually opened.
+            item->setData(0, kTocEntryPointerRole, QVariant::fromValue<qintptr>(qintptr(&entry)));
+            new QTreeWidgetItem(item, {QString()});
+        }
     }
 }
 
@@ -352,9 +403,49 @@ void EpubView::onTocActivated(QTreeWidgetItem *item)
         jumpToSpine(spineIndex);
 }
 
+void EpubView::onTocExpanded(QTreeWidgetItem *item)
+{
+    if (!item || item->data(0, kTocPopulatedRole).toBool())
+        return;
+    item->setData(0, kTocPopulatedRole, true);
+    const QVariant pointerValue = item->data(0, kTocEntryPointerRole);
+    if (!pointerValue.isValid())
+        return;
+    const auto *entry = reinterpret_cast<const EpubTocEntry *>(pointerValue.value<qintptr>());
+    qDeleteAll(item->takeChildren()); // drops the placeholder row buildToc()/an earlier expand left
+    if (entry)
+        populateTocTree(item, entry->children);
+}
+
+int EpubView::tocTopLevelCountForTest() const
+{
+    return m_tocTree->topLevelItemCount();
+}
+
+int EpubView::tocChildCountForTest(int topLevelIndex) const
+{
+    QTreeWidgetItem *item = m_tocTree->topLevelItem(topLevelIndex);
+    return item ? item->childCount() : -1;
+}
+
+void EpubView::expandTocForTest(int topLevelIndex)
+{
+    if (QTreeWidgetItem *item = m_tocTree->topLevelItem(topLevelIndex))
+        item->setExpanded(true); // synchronously emits itemExpanded -> onTocExpanded
+}
+
 void EpubView::setTocVisible(bool visible)
 {
     m_tocVisible = visible;
+    // buildToc() runs at most once per open(): the first time the panel is
+    // actually shown, not at load() - a book whose reader never opens the
+    // TOC pays nothing for it at all, and one who does pays only once (task
+    // 2). load() already builds it early if the panel happens to still be
+    // open across a book switch - see its own comment.
+    if (visible && !m_tocBuilt) {
+        buildToc();
+        m_tocBuilt = true;
+    }
     m_tocTree->setVisible(visible);
     if (m_tocButton->isChecked() != visible)
         m_tocButton->setChecked(visible);
@@ -517,6 +608,7 @@ void EpubView::savePosition()
     position.spineIndex = spineIndex;
     position.scrollWithinChapter = int(m_vscroll->value() - top);
     position.fontPercent = m_fontPercent;
+    position.paged = pagedMode();
     EpubPositionStore::set(m_document.path(), position);
 }
 
@@ -526,6 +618,8 @@ void EpubView::restorePosition()
     if (!position)
         return;
     m_fontPercent = qBound(50, position->fontPercent, 300);
+    if (pagedMode() != position->paged)
+        applyReadingMode(position->paged); // silent - a restore, not a user action; setPagedMode() would re-save
     jumpToSpine(position->spineIndex, position->scrollWithinChapter);
 }
 

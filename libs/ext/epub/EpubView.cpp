@@ -31,6 +31,10 @@ EpubView::EpubView(QWidget *parent)
 
 EpubView::~EpubView()
 {
+    // First thing: no worker's post() can land on this object past this
+    // point (see Lifeline), so everything below runs exactly as if no
+    // render were ever in flight.
+    m_lifeline->end();
     if (m_document.isValid())
         savePosition();
 }
@@ -79,6 +83,16 @@ void EpubView::buildChrome()
     connect(m_findButton, &QToolButton::clicked, this, &EpubView::toggleFind);
     headerLayout->addWidget(m_findButton);
 
+    // Text, not an icon - same call as m_extractButton below: a plain label
+    // needs no Lucide name guessed against the bundled set (see Icons.h).
+    m_pagedButton = new QToolButton(m_header);
+    m_pagedButton->setText(tr("Paged"));
+    m_pagedButton->setCheckable(true);
+    m_pagedButton->setToolTip(
+        tr("Read in pages instead of scrolling (Page Up/Down, arrow keys, click the margins)"));
+    connect(m_pagedButton, &QToolButton::toggled, this, &EpubView::setPagedMode);
+    headerLayout->addWidget(m_pagedButton);
+
     m_extractButton = new QToolButton(m_header);
     m_extractButton->setText(tr("Extract highlights"));
     m_extractButton->setToolTip(tr("Rewrite this book's sidecar note from the highlights below"));
@@ -97,6 +111,7 @@ void EpubView::buildChrome()
     m_tocTree->setFixedWidth(kTocWidth);
     m_tocTree->setVisible(false);
     connect(m_tocTree, &QTreeWidget::itemClicked, this, &EpubView::onTocActivated);
+    connect(m_tocTree, &QTreeWidget::itemExpanded, this, &EpubView::onTocExpanded);
     body->addWidget(m_tocTree);
 
     // The document area and its scrollbar: painted and hit-tested by hand
@@ -165,7 +180,8 @@ void EpubView::applyThemeToChrome()
                                              "QToolButton:checked, QToolButton:pressed { background: %3; }")
                                   .arg(text.name(), border.name(),
                                        m_theme.color(QStringLiteral("--background-modifier-hover")).name());
-    for (QToolButton *button : {m_tocButton, m_fontDownButton, m_fontUpButton, m_findButton, m_extractButton}) {
+    for (QToolButton *button :
+        {m_tocButton, m_fontDownButton, m_fontUpButton, m_findButton, m_extractButton, m_pagedButton}) {
         button->setStyleSheet(buttonCss);
         // The app's own Lucide icons, in the text's colour, as everywhere else.
         if (const QString icon = button->property("iconName").toString(); !icon.isEmpty())
@@ -181,13 +197,23 @@ bool EpubView::load(const QString &path, QString *error)
     if (!m_document.open(path, error))
         return false;
 
+    ++m_renderEpoch; // a render still in flight for the previous book must never land in this one's cache
+    m_pendingSpine.clear();
     m_cache.clear();
     m_cacheOrder.clear();
     m_selection = Selection{};
     m_cacheRoot = cacheRootForBook();
 
     ensureHeightsSized();
-    buildToc();
+    // buildToc() is deferred to the panel's first show - see setTocVisible()
+    // and its own comment (task 2: a book with a huge TOC pays nothing for
+    // it at open unless the reader actually opens the panel).
+    m_tocTree->clear();
+    m_tocBuilt = false;
+    if (m_tocVisible) {
+        buildToc();
+        m_tocBuilt = true;
+    }
     loadHighlights();
     restorePosition();
 
@@ -209,7 +235,12 @@ bool EpubView::navigateToFragment(const QString &fragment)
     }
     if (const auto locator = EpubLocator::parse(fragment)) {
         if (locator->spineIndex >= 0 && locator->spineIndex < m_document.spine().size()) {
-            const RenderedChapter *chapter = renderedChapter(locator->spineIndex);
+            // Blocking: a highlight/TOC jump is a one-off user action, not
+            // the scroll/open hot path task 1 is about, and it needs the
+            // exact offset->Y position right now to land the view on the
+            // right line rather than just the chapter's top - see the
+            // header comment on renderedChapterBlocking().
+            const RenderedChapter *chapter = renderedChapterBlocking(locator->spineIndex);
             qint64 withinY = 0;
             if (chapter) {
                 for (const HtmlRenderer::TextRun &run : chapter->textRuns) {
@@ -260,7 +291,10 @@ void EpubView::jumpToSpine(int spineIndex, qint64 withinChapterY)
         return;
     const qint64 top = chapterTop(spineIndex);
     updateScrollRange();
-    m_vscroll->setValue(int(qBound<qint64>(0, top + withinChapterY, qint64(m_vscroll->maximum()))));
+    qint64 target = qBound<qint64>(0, top + withinChapterY, qint64(m_vscroll->maximum()));
+    if (m_readingMode == ReadingMode::Paged)
+        target = snappedPageTop(target); // land on a page boundary, not mid-page - see pageHeight()'s comment
+    m_vscroll->setValue(int(target));
     m_content->update();
 }
 
@@ -295,6 +329,7 @@ bool EpubView::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
     case QEvent::Resize:
+        recomputeColumns(); // may cross kTwoColumnMinWidth
         invalidateRenders(); // wrap width changed: every cached raster is stale
         updateScrollRange();
         if (m_findBar && !m_findBar->isHidden()) {
@@ -332,11 +367,29 @@ bool EpubView::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
         if (key->key() == Qt::Key_PageDown) {
-            m_vscroll->setValue(m_vscroll->value() + m_vscroll->pageStep());
+            if (m_readingMode == ReadingMode::Paged)
+                turnPage(1);
+            else
+                m_vscroll->setValue(m_vscroll->value() + m_vscroll->pageStep());
             return true;
         }
         if (key->key() == Qt::Key_PageUp) {
-            m_vscroll->setValue(m_vscroll->value() - m_vscroll->pageStep());
+            if (m_readingMode == ReadingMode::Paged)
+                turnPage(-1);
+            else
+                m_vscroll->setValue(m_vscroll->value() - m_vscroll->pageStep());
+            return true;
+        }
+        // Arrow keys turn a page only in paged mode - task 4. Continuous
+        // mode leaves them unhandled, same as before this task.
+        if (m_readingMode == ReadingMode::Paged
+            && (key->key() == Qt::Key_Right || key->key() == Qt::Key_Down)) {
+            turnPage(1);
+            return true;
+        }
+        if (m_readingMode == ReadingMode::Paged
+            && (key->key() == Qt::Key_Left || key->key() == Qt::Key_Up)) {
+            turnPage(-1);
             return true;
         }
         return false;
@@ -350,6 +403,19 @@ void EpubView::wheelEvent(QWheelEvent *event)
 {
     const QPointF delta = event->pixelDelta().isNull() ? QPointF(event->angleDelta()) / 2.0
                                                         : QPointF(event->pixelDelta());
+    if (m_readingMode == ReadingMode::Paged) {
+        // A notch turns a whole page rather than scrolling it smoothly - the
+        // way every other paged reader treats the wheel. angleDelta's own
+        // "one notch" is 120 per Qt's docs; pixelDelta (a touchpad) rarely
+        // reports one, so either direction of a small nudge still turns
+        // exactly one page rather than none.
+        if (delta.y() < 0)
+            turnPage(1);
+        else if (delta.y() > 0)
+            turnPage(-1);
+        event->accept();
+        return;
+    }
     m_vscroll->setValue(m_vscroll->value() - int(delta.y()));
     event->accept();
 }
@@ -361,6 +427,14 @@ void EpubView::changeFontPercent(int delta)
     updateScrollRange();
     m_content->update();
     savePosition();
+}
+
+void EpubView::setPagedMode(bool paged)
+{
+    if (pagedMode() == paged)
+        return;
+    applyReadingMode(paged);
+    savePosition(); // a user action (the header button) - restorePosition() applies the same mode silently
 }
 
 } // namespace noteAppC
