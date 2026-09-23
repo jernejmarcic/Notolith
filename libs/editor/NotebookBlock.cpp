@@ -61,8 +61,9 @@ void MarkdownEditor::setNotebookRunner(NotebookRunner runner)
         // that flag was decided under the previous runner (null, the first
         // time this is ever called) and every Code block needs a chance to
         // become eligible under the new one, the same reasoning
-        // setCodeBlockRenderer's own reset loop follows.
-        if (block.span.kind != BlockSpan::Kind::Code)
+        // setCodeBlockRenderer's own reset loop follows. A runnable
+        // `![[script.py]]` is a source-file embed, which a paragraph holds.
+        if (block.span.kind != BlockSpan::Kind::Code && !block.embedPanel && !block.notebookEligible)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -76,7 +77,8 @@ void MarkdownEditor::setNotebookRunner(NotebookRunner runner)
 }
 
 const MarkdownEditor::NotebookCacheEntry &MarkdownEditor::ensureNotebookResult(
-    const QString &key, const QString &language, const QString &source)
+    const QString &key, const QString &language, const QString &source, const QString &workingDir,
+    bool sandboxHost)
 {
     auto it = m_notebookCache.find(key);
     if (it != m_notebookCache.end())
@@ -89,9 +91,12 @@ const MarkdownEditor::NotebookCacheEntry &MarkdownEditor::ensureNotebookResult(
 
     if (m_notebookRunner) {
         const quint64 generation = entry.generation;
+        NotebookRunOptions options;
+        options.sandboxHost = sandboxHost;
+        options.workingDir = workingDir;
         // forceRun=false: a cache-only lookup. Opening a note must never
         // start a kernel by itself - see the module header comment above.
-        m_notebookRunner(language, source, false,
+        m_notebookRunner(language, source, false, options,
                          [this, lifeline = m_lifeline, key, generation](NotebookRunResult result) {
                              lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
                                  deliverNotebookResult(key, generation, std::move(result));
@@ -217,14 +222,25 @@ void MarkdownEditor::appendNotebookMessage(BlockView &view, const QString &text,
     view.notebookOutputs.push_back(std::move(cell));
 }
 
-void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source)
+void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
+                                          const QString &workingDir, bool sandboxHost)
 {
-    const QString key = language.trimmed().toLower() + QLatin1Char('|') + source;
+    // The tier is part of the key: a host-tier and a bubblewrap-tier run of
+    // the same source must never share a cached result (this stage's own
+    // requirement) - the working directory is not, since it never changes
+    // what the code itself does, only what files sit beside it.
+    const QString key = language.trimmed().toLower() + QLatin1Char('|')
+                       + (sandboxHost ? QStringLiteral("host") : QStringLiteral("bwrap"))
+                       + QLatin1Char('|') + source;
     view.notebookKey = key;
+    view.notebookLanguage = language;
+    view.notebookSource = source;
+    view.notebookWorkingDir = workingDir;
+    view.notebookSandboxHost = sandboxHost;
     view.notebookOutputs.clear();
     view.notebookOutputTop = view.height;
 
-    const NotebookCacheEntry &lookup = ensureNotebookResult(key, language, source);
+    const NotebookCacheEntry &lookup = ensureNotebookResult(key, language, source, workingDir, sandboxHost);
     view.notebookHasRun = lookup.result.hasRun;
     view.notebookRunning = lookup.running;
     view.notebookOk = lookup.result.ok && lookup.result.kernelError.isEmpty();
@@ -345,6 +361,28 @@ void MarkdownEditor::paintNotebookRunControl(QPainter &painter, const BlockView 
     painter.restore();
 }
 
+void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left,
+                                            qreal top) const
+{
+    if (!view.notebookSandboxHost)
+        return;
+    const QRectF run = notebookRunRectFor(view, left, top);
+    if (!run.isValid())
+        return;
+    QFont font = m_theme.uiFont();
+    font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    const QFontMetricsF metrics(font);
+    const QString text = tr("host");
+    const qreal width = metrics.horizontalAdvance(text);
+    const QRectF rect(run.left() - width - 8, run.top(), width, run.height());
+
+    painter.save();
+    painter.setFont(font);
+    painter.setPen(m_theme.color(QStringLiteral("--text-muted")));
+    painter.drawText(rect, Qt::AlignVCenter | Qt::AlignLeft, text);
+    painter.restore();
+}
+
 void MarkdownEditor::paintNotebookOutput(QPainter &painter, const BlockView &view, qreal left,
                                          qreal top) const
 {
@@ -409,16 +447,17 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     if (!view.notebookEligible || !m_notebookRunner)
         return false;
 
-    const CodeFenceSpan *fence = codeFenceOf(view);
-    if (!fence)
-        return false;
-    const Range content{codeContentOf(firstPiece(view), nullptr).start,
-                        codeContentOf(lastPiece(view), nullptr).end};
-    QString source = m_text.mid(content.start, content.length());
-    if (source.endsWith(QLatin1Char('\n')))
-        source.chop(1);
-    const QString language = fence->language;
-    const QString key = language.trimmed().toLower() + QLatin1Char('|') + source;
+    // Exactly what appendNotebookOutput last laid this block out with -
+    // a fenced block's own fence/content, or a runnable embed's file - so a
+    // click always runs what is actually on screen, from the one place that
+    // ever derives it, instead of a second re-derivation here going stale
+    // against the first.
+    const QString language = view.notebookLanguage;
+    const QString source = view.notebookSource;
+    const QString key = view.notebookKey;
+    NotebookRunOptions options;
+    options.sandboxHost = view.notebookSandboxHost;
+    options.workingDir = view.notebookWorkingDir;
 
     NotebookCacheEntry &entry = m_notebookCache[key]; // inserted fresh if this is the first run
     if (entry.running)
@@ -435,7 +474,7 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     updateLayout();
     viewport()->update();
 
-    m_notebookRunner(language, source, /*forceRun=*/true,
+    m_notebookRunner(language, source, /*forceRun=*/true, options,
                      [this, lifeline = m_lifeline, key, generation](NotebookRunResult result) {
                          lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
                              deliverNotebookResult(key, generation, std::move(result));

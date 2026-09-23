@@ -1907,6 +1907,12 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.pdfCells.clear();
     view.pdfError.clear();
     view.isFileCard = false;
+    // A runnable embed (layoutSourceFile, NotebookEmbed part) sets these;
+    // reset here so a file that stops being runnable - a non-code extension
+    // now, or the notebooks feature toggled off - does not keep showing a
+    // stale run control or a previous run's output.
+    view.notebookEligible = false;
+    view.notebookOutputs.clear();
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed || !m_resolver)
@@ -2068,6 +2074,10 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     view.layout->endLayout();
 
     view.height = qMax(height, lineHeight) + view.textTop;
+    // Never for the "too large to show inline" placeholder above - `body`
+    // would be that message, not the file's own code.
+    if (info.size() <= kMaxBytes)
+        layoutRunnableEmbed(view, path, body);
     view.laidOut = true;
     return true;
 }
@@ -2712,6 +2722,12 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderTable && layoutTable(view))
         return;
 
+    // `#| echo: false` hides the listing in live preview while the caret is
+    // elsewhere - Quarto's own meaning, independent of eval. Read further
+    // down, in the same `!reveal` pass every other per-block hide range goes
+    // through; false here whenever that pass cannot even run (source mode,
+    // or the caret already in the block, which reveals everything anyway).
+    bool notebookEchoHidden = false;
     if (renderMedia && view.span.kind == BlockSpan::Kind::Code) {
         view.options = codeOptionsFor(view);
         // Decided early, like view.options just above, because it feeds the
@@ -2721,8 +2737,12 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // appendEmbedRows keeps from layoutEmbed.
         if (m_features.notebooks && m_notebookRunner && view.piece == 0) {
             const CodeFenceSpan *fence = codeFenceOf(view);
-            view.notebookEligible = fence && !fence->language.trimmed().isEmpty();
+            // `#| eval: false` - never runs, so no run control and no cache
+            // lookup either: the same "off" a null runner already gives.
+            view.notebookEligible = fence && !fence->language.trimmed().isEmpty()
+                                    && !(view.options && !view.options->eval);
         }
+        notebookEchoHidden = view.options && !view.options->echo && !view.active;
     }
 
     const bool perElement = m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
@@ -2752,6 +2772,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         hideFoldedNestedCallouts(view, hidden);
         if (renderMedia && m_features.fileEmbeds)
             collectTextEmbeds(view, hidden, textEmbeds);
+        if (notebookEchoHidden)
+            hidden.append(view.span.range);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);
@@ -2895,7 +2917,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // A folded fence folds all of its pieces; only the first keeps its header.
     view.folded = isFoldable(view)
                   && m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
-    view.height = view.folded ? 0 : view.height + codeCaptionHeight(view);
+    // `echo: false` collapses the listing the same way folding does (header
+    // kept, body gone) but, unlike folding, still shows the output below -
+    // see the `view.notebookEligible` block just under this one.
+    view.height = (view.folded || notebookEchoHidden) ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
     // Trailing rows for any embed this block could not render whole -
     // appended after the paragraph's own text rather than spliced in after
@@ -2913,7 +2938,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             QString source = m_text.mid(content.start, content.length());
             if (source.endsWith(QLatin1Char('\n')))
                 source.chop(1);
-            appendNotebookOutput(view, fence->language, source);
+            appendNotebookOutput(view, fence->language, source, QString(),
+                                 view.options && view.options->sandboxHost);
         }
     }
     view.laidOut = true;
@@ -3144,8 +3170,19 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         // but embeds and blank lines).
         paintEmbedCells(painter, view, left, top);
 
-        if (view.embedPanel)
+        if (view.embedPanel) {
             paintEmbedChrome(painter, view, left, top);
+            // A runnable code-file embed (NotebookEmbed part of
+            // FileEmbedBlock.cpp): the same run control and output cells a
+            // fenced block gets, just reached from the embed-panel branch
+            // rather than the Kind::Code one, since an embed's span.kind is
+            // Paragraph.
+            if (view.notebookEligible) {
+                paintNotebookRunControl(painter, view, left, top);
+                if (!view.folded)
+                    paintNotebookOutput(painter, view, left, top);
+            }
+        }
         if (view.isPdfEmbed) {
             paintPdfEmbed(painter, view, left, top);
             continue;

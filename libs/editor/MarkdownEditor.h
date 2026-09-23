@@ -414,6 +414,20 @@ public:
     /// marshals back onto its own thread before touching a block, the same
     /// contract setQueryRunner keeps for a search.
     using NotebookDeliver = std::function<void(NotebookRunResult)>;
+    /// What a run request carries besides the language and source - stage
+    /// 13's rest (per-block sandbox tier, runnable embeds). Kept as one
+    /// struct rather than growing NotebookRunner's own parameter list again
+    /// for the next thing this needs to carry.
+    struct NotebookRunOptions {
+        /// `#| sandbox: host` on a fenced block - tier 0, opt-in. Always
+        /// false for a runnable embed (no `#|` lines to set it from).
+        bool sandboxHost = false;
+        /// A runnable embed's own folder, so a script that reads sibling
+        /// files still can - bound read-only in the bubblewrap tier (the
+        /// window's job; the editor only names the path). Empty for a
+        /// fenced block.
+        QString workingDir;
+    };
     /// Asks for `language`/`source`'s result. `forceRun` false is a
     /// cache-only lookup that must never start a kernel - what every
     /// notebook block asks for the moment it is laid out, so a reopened
@@ -425,7 +439,8 @@ public:
     /// the feature off exactly like a null setCodeBlockRenderer does: no
     /// cache, no lookup, no cost.
     using NotebookRunner = std::function<void(const QString &language, const QString &source,
-                                              bool forceRun, const NotebookDeliver &deliver)>;
+                                              bool forceRun, const NotebookRunOptions &options,
+                                              const NotebookDeliver &deliver)>;
     void setNotebookRunner(NotebookRunner runner);
 
     /// A PDF (or compiled `.tex`) embed's state, for the tests - a click on
@@ -892,7 +907,17 @@ private:
         /// output goes below it, plus a run control alongside "Copy" in the
         /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
         bool notebookEligible = false;
-        QString notebookKey; ///< "language|source" - m_notebookCache's own key
+        QString notebookKey; ///< "language|tier|source" - m_notebookCache's own key
+        /// What the run control's click re-runs - exactly the language,
+        /// source, working directory and sandbox tier appendNotebookOutput
+        /// was last called with, whether that came from a fenced block's own
+        /// `#|` options or a runnable `![[x.py]]` embed's file. Kept on the
+        /// view instead of re-derived at click time so both paths share the
+        /// one run() call in runNotebookBlockAt.
+        QString notebookLanguage;
+        QString notebookSource;
+        QString notebookWorkingDir;
+        bool notebookSandboxHost = false;
         bool notebookHasRun = false;
         bool notebookRunning = false;
         bool notebookOk = true;
@@ -1014,6 +1039,10 @@ private:
     QRectF notebookRunRectFor(const BlockView &view, qreal left, qreal top) const;
     void paintNotebookRunControl(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintNotebookOutput(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// A small "host" marker left of the run control, on a fenced block that
+    /// opted into `#| sandbox: host` - the reader's only sign that this
+    /// block runs unsandboxed. Nothing on any other block.
+    void paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
 
     /// A run of adjacent `tab` fences, shown as one block with a tab strip.
     struct TabGroup {
@@ -1119,6 +1148,12 @@ private:
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed (stage 13's
+    /// rest) - called once layoutSourceFile has already built the panel's
+    /// listing, `body` is its unsliced-or-not source exactly as shown. A
+    /// no-op, and no run control, for an extension no installed kernel
+    /// claims, or when the notebooks feature or its runner is off.
+    void layoutRunnableEmbed(BlockView &view, const QString &path, const QString &body);
 
     // --- PDF and .tex embeds, implemented in PdfEmbedBlock.cpp -------------
 
@@ -1233,7 +1268,10 @@ private:
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.
-    void appendNotebookOutput(BlockView &view, const QString &language, const QString &source);
+    /// `workingDir`/`sandboxHost` are a runnable embed's folder and a
+    /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
+    void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
+                              const QString &workingDir = QString(), bool sandboxHost = false);
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
     /// A Text or Error output, as its own small monospace QTextLayout -
     /// null if `text` ends up empty (an error with no message at all).
@@ -1268,7 +1306,8 @@ private:
     /// the same one-search-per-text idea ensureQuerySearch keeps for a
     /// ```query``` block.
     const NotebookCacheEntry &ensureNotebookResult(const QString &key, const QString &language,
-                                                   const QString &source);
+                                                   const QString &source, const QString &workingDir,
+                                                   bool sandboxHost);
 
     /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
     /// note's own text (or the named section of it), in a panel like a

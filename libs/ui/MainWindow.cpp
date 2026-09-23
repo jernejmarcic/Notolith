@@ -697,12 +697,18 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // reads the output cache; the controller, and any kernel, exist only
     // once something is run.
     editor->setNotebookRunner([this](const QString &language, const QString &source, bool forceRun,
+                                     const MarkdownEditor::NotebookRunOptions &options,
                                      const MarkdownEditor::NotebookDeliver &deliver) {
         if (!m_notebook)
             m_notebook = new notebook::NotebookController(this);
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
+        // `#| sandbox: host` (a fenced block) or a runnable embed's own
+        // folder (NotebookRunOptions - stage 13's rest, both editor-side).
+        request.tier = options.sandboxHost ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
+        if (!options.workingDir.isEmpty())
+            request.extraReadOnlyBinds = {options.workingDir};
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;

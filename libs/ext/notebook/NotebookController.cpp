@@ -52,7 +52,7 @@ NotebookController::~NotebookController()
 
 void NotebookController::run(const RunRequest &request, bool forceRun, const Deliver &deliver)
 {
-    const QString cacheKey = notebookCacheKey(request.language, request.source);
+    const QString cacheKey = notebookCacheKey(request.language, request.source, request.tier);
 
     if (!forceRun) {
         // Cache-only: never starts a kernel. Deferred one tick, like every

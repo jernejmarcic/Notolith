@@ -1362,6 +1362,7 @@ TEST(NotebookBlockTest, RunOptionsShowOutputsBelow)
 
     bool forceRunSeen = false;
     editor->setNotebookRunner([&forceRunSeen](const QString &, const QString &, bool forceRun,
+                                              const MarkdownEditor::NotebookRunOptions &,
                                               const MarkdownEditor::NotebookDeliver &deliver) {
         forceRunSeen = forceRunSeen || forceRun;
         MarkdownEditor::NotebookRunResult result;
@@ -1384,6 +1385,56 @@ TEST(NotebookBlockTest, RunOptionsShowOutputsBelow)
     EXPECT_FALSE(forceRunSeen);
 }
 
+TEST(NotebookBlockTest, EvalFalseNeverRunsAndSandboxHostIsPassedOn)
+{
+    const QString note = QStringLiteral("```python\n#| eval: false\nprint(1)\n```\n\n"
+                                        "```python\n#| sandbox: host\nprint(2)\n```\n");
+    auto editor = editorWith(note);
+    QList<bool> hostRequests;
+    editor->setNotebookRunner([&hostRequests](const QString &, const QString &, bool forceRun,
+                                              const MarkdownEditor::NotebookRunOptions &options,
+                                              const MarkdownEditor::NotebookDeliver &deliver) {
+        if (forceRun)
+            hostRequests.append(options.sandboxHost);
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    QTest::qWait(20);
+    EXPECT_FALSE(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).eligible);
+    EXPECT_FALSE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(1)"))));
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(2)"))));
+    EXPECT_EQ(hostRequests, QList<bool>{true}); // asked for; the window decides whether to honour it
+}
+
+TEST(NotebookBlockTest, AnEmbeddedScriptRunsFromItsOwnFolder)
+{
+    QTemporaryDir dir;
+    const QString script = dir.filePath(QStringLiteral("hello.py"));
+    {
+        QFile file(script);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("print('hi')\n");
+    }
+    auto editor = editorWith(QStringLiteral("![[hello.py]]\n\nafter\n"));
+    editor->setLinkResolver([&](const QString &) { return script; });
+    QString language, source, folder;
+    editor->setNotebookRunner([&](const QString &lang, const QString &src, bool forceRun,
+                                  const MarkdownEditor::NotebookRunOptions &options,
+                                  const MarkdownEditor::NotebookDeliver &deliver) {
+        if (forceRun) {
+            language = lang;
+            source = src;
+            folder = options.workingDir;
+        }
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    editor->setCursorOffset(editor->noteText().size()); // off the embed's line
+    QTest::qWait(20);
+    ASSERT_TRUE(editor->runNotebookBlockAt(0));
+    EXPECT_EQ(language, QStringLiteral("python"));
+    EXPECT_EQ(source.trimmed(), QStringLiteral("print('hi')"));
+    EXPECT_EQ(folder, dir.path());
+}
+
 TEST(NotebookBlockTest, RunControlHitTests)
 {
     const QString note = QStringLiteral("```python\nprint(1)\n```\n");
@@ -1391,6 +1442,7 @@ TEST(NotebookBlockTest, RunControlHitTests)
 
     bool ran = false;
     editor->setNotebookRunner([&ran](const QString &, const QString &, bool forceRun,
+                                     const MarkdownEditor::NotebookRunOptions &,
                                      const MarkdownEditor::NotebookDeliver &deliver) {
         if (forceRun)
             ran = true;
@@ -1423,6 +1475,7 @@ TEST(NotebookBlockTest, CachedOutputReappearsAfterReopeningWithoutAKernel)
     int forceRunCount = 0;
     const auto runner = [&sidecar, &forceRunCount](const QString &language, const QString &source,
                                                     bool forceRun,
+                                                    const MarkdownEditor::NotebookRunOptions &,
                                                     const MarkdownEditor::NotebookDeliver &deliver) {
         const QString key = language.toLower() + QLatin1Char('|') + source;
         if (forceRun) {

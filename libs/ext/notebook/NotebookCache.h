@@ -13,6 +13,8 @@
 // scratch state somewhere that syncs applies to a regenerable cache, not
 // only to a build).
 
+#include "NotebookSandbox.h"
+
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -40,11 +42,16 @@ struct NotebookRunResult {
     QString kernelError;
 };
 
-/// `language` (lower-cased) + the block's own source, hashed - not any of
-/// the display-only `#|` options (title, caption, fold, lines, highlight,
-/// wrap), which must not invalidate a cached run just because a reader
-/// changed how the listing looks.
-QString notebookCacheKey(const QString &language, const QString &source);
+/// `language` (lower-cased) + the block's own source + `tier`, hashed - not
+/// any of the display-only `#|` options (title, caption, fold, lines,
+/// highlight, wrap), which must not invalidate a cached run just because a
+/// reader changed how the listing looks. `tier` is folded in (stage 13's
+/// rest, `#| sandbox: host`) so a host-tier and a bubblewrap-tier run of the
+/// same source never share a cached result - defaults to the tier-1
+/// default for the handful of existing callers that ran before tiers were
+/// a per-block choice.
+QString notebookCacheKey(const QString &language, const QString &source,
+                         SandboxTier tier = SandboxTier::Bubblewrap);
 
 /// Reads `key`'s cached result; `hasRun` is false and everything else
 /// default when there is nothing cached - never an error, since "never run"
