@@ -12,4 +12,4 @@ add_library(noteAppC_markdown STATIC
     Parser.h)
 
 target_include_directories(noteAppC_markdown PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_markdown PUBLIC Qt6::Core md4qt::md4qt PRIVATE yaml-cpp)
+target_link_libraries(noteAppC_markdown PUBLIC Qt6::Core md4qt::md4qt PRIVATE yaml-cpp::yaml-cpp)
