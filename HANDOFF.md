@@ -1,6 +1,6 @@
 # noteAppC handoff
 
-Written 2026-09-22, brought up to date on the evening of 2026-09-23, so a cold start can pick
+Written 2026-09-22, brought up to date 2026-09-23, so a cold start can pick
 this up without reading a transcript. `TODO.md` is the live task list;
 `docs/PERFORMANCE.md` is the measured record.
 
