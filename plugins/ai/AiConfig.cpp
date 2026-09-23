@@ -10,7 +10,7 @@ QString AiConfig::path()
     QString base = qEnvironmentVariable("XDG_CONFIG_HOME");
     if (base.isEmpty())
         base = QDir::homePath() + QStringLiteral("/.config");
-    return base + QStringLiteral("/noteAppC/ai.ini");
+    return base + QStringLiteral("/noteAppC/plugins/ai/ai.ini"); // the only config a plugin sees
 }
 
 AiConfig AiConfig::load()

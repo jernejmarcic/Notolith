@@ -416,8 +416,8 @@ protected:
 
     void writeAiIni(const QString &contents)
     {
-        QDir().mkpath(configDir->filePath(QStringLiteral("noteAppC")));
-        QFile file(configDir->filePath(QStringLiteral("noteAppC/ai.ini")));
+        QDir().mkpath(configDir->filePath(QStringLiteral("noteAppC/plugins/ai")));
+        QFile file(configDir->filePath(QStringLiteral("noteAppC/plugins/ai/ai.ini")));
         ASSERT_TRUE(file.open(QIODevice::WriteOnly));
         file.write(contents.toUtf8());
     }
@@ -627,7 +627,7 @@ TEST_F(AiPluginEndToEndTest, TheApiKeyNeverAppearsInTheConfigFileLogsOrStderr)
     for (const QString &line : logged)
         EXPECT_FALSE(line.contains(secret)) << "log line contained the key: " << line.toStdString();
 
-    QFile configFile(configDir->filePath(QStringLiteral("noteAppC/ai.ini")));
+    QFile configFile(configDir->filePath(QStringLiteral("noteAppC/plugins/ai/ai.ini")));
     ASSERT_TRUE(configFile.open(QIODevice::ReadOnly));
     const QString configContents = QString::fromUtf8(configFile.readAll());
     EXPECT_FALSE(configContents.contains(secret));

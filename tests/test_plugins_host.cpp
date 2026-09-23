@@ -460,6 +460,39 @@ TEST_F(PluginHostTest, TheSandboxDeniesAFileOutsideThePluginsOwnDirectory)
     host.stop();
 }
 
+TEST_F(PluginHostTest, APluginReadsItsOwnConfigAndNoneOfTheAppsOwn)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "bubblewrap not installed on this machine";
+
+    QTemporaryDir configHome;
+    ASSERT_TRUE(configHome.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+    const auto writeFile = [](const QString &path, const QByteArray &bytes) {
+        QDir().mkpath(QFileInfo(path).path());
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    const QString own = configHome.filePath(QStringLiteral("noteAppC/plugins/word-stats/own.ini"));
+    const QString apps = configHome.filePath(QStringLiteral("noteAppC/settings.ini"));
+    ASSERT_TRUE(writeFile(own, "mine"));
+    ASSERT_TRUE(writeFile(apps, "sync.email=me@example.invalid"));
+
+    const auto readAs = [this](const QString &path) {
+        QString notice;
+        PluginHost host(manifest, {PluginPermission::ReadNotes}, callbacksReturning(QStringLiteral("x"), &notice));
+        bool done = false;
+        host.runCommand(QStringLiteral("read-path:") + path, [&](bool, const QJsonObject &, const QString &) { done = true; });
+        EXPECT_TRUE(waitUntil([&] { return done; }));
+        host.stop();
+        return notice;
+    };
+    EXPECT_NE(readAs(own), QStringLiteral("cannot-read"));
+    EXPECT_EQ(readAs(apps), QStringLiteral("cannot-read"));
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // --- PluginRegistry: the community-plugins feature switch -------------------
 
 TEST(PluginRegistryTest, NothingIsReadWhenTheFeatureIsOff)

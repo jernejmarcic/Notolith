@@ -114,19 +114,16 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     // it backwards.
     const QString hostBinaryDir = QFileInfo(hostBinary).absolutePath();
 
-    // A plugin's own config file (docs/PLUGINS.md's AI plugin: "outside the
-    // vault", e.g. $XDG_CONFIG_HOME/noteAppC/ai.ini) - computed from the
-    // app's own, unsandboxed environment, the same fallback
-    // PluginRegistry::configPath() uses, so the bind's source and the value
-    // handed to the sandboxed process below name the same directory. Nothing
-    // secret ever lives in this directory (the hard "no secrets on disk"
-    // rule - an API key travels only as an env var, forwarded separately
-    // below), so read access across the whole noteAppC config tree is an
-    // acceptable, much simpler alternative to a per-plugin subdirectory.
+    // A plugin's own config, outside the vault: its own directory,
+    // $XDG_CONFIG_HOME/noteAppC/plugins/<id>, and nothing else of noteAppC's
+    // - the app's settings name the vaults and the sync account, which is
+    // no plugin's business. Computed from the app's own environment, the
+    // same fallback PluginRegistry::configPath() uses, so the bind's source
+    // and the value handed to the sandboxed process below name one place.
     QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
     if (configHome.isEmpty())
         configHome = QDir::homePath() + QStringLiteral("/.config");
-    const QString noteAppCConfigDir = configHome + QStringLiteral("/noteAppC");
+    const QString noteAppCConfigDir = configHome + QStringLiteral("/noteAppC/plugins/") + m_manifest.id();
 
     *program = bwrap;
     QStringList args = {

@@ -2182,6 +2182,9 @@ void MainWindow::syncPlugins(bool rescan)
         callbacks.activeNoteText = [this] {
             return m_active && !m_active->view ? m_active->editor->noteText() : QString();
         };
+        callbacks.activeSelectionText = [this] {
+            return m_active && !m_active->view ? m_active->editor->selectedText() : QString();
+        };
         callbacks.readNote = [this](const QString &relative) {
             const QString path = m_vault.confinedNotePath(relative);
             Note note;
@@ -2230,7 +2233,10 @@ void MainWindow::syncPlugins(bool rescan)
     QStringList languages;
     if (m_plugins) {
         for (const PluginCommand &command : m_plugins->commands()) {
-            auto *action = new QAction(command.pluginName + QStringLiteral(": ") + command.commandID, this);
+            auto *action = new QAction(command.title.isEmpty()
+                                           ? command.pluginName + QStringLiteral(": ") + command.commandID
+                                           : command.title,
+                                       this);
             action->setObjectName(command.qualifiedID); // "pluginID:commandID", as hotkeys.json names it
             action->setShortcutContext(Qt::WindowShortcut);
             connect(action, &QAction::triggered, this, [this, id = command.qualifiedID] {

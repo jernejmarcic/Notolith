@@ -177,7 +177,7 @@ the settings page.
 **Sandbox and limits.** The host runs under bubblewrap when `bwrap` exists -
 the same allowlist pattern as `libs/render/TexCompiler.cpp`: only `/usr`,
 `/etc`, the plugin's own directory, the host binary's own directory and
-`$XDG_CONFIG_HOME/noteAppC` (all read-only), a private `/tmp`, no home, every
+`$XDG_CONFIG_HOME/noteAppC/plugins/<id>` (all read-only), a private `/tmp`, no home, every
 namespace unshared except network, which is shared only when the plugin's
 `network` permission was granted. The config-directory bind is `--ro-bind-try`
 (most plugins have none) and exists so a plugin can read its own config file
@@ -306,7 +306,7 @@ Everything a note-taking app is for, and nothing it is not:
    A fenced ` ```ai ` block's source is the prompt, its rendered answer is the
    block. Configuration - provider, base URL, model, and the *name* of an
    environment variable holding a key, never the key itself - lives in
-   `$XDG_CONFIG_HOME/noteAppC/ai.ini`, outside the vault; the key is read from
+   `$XDG_CONFIG_HOME/noteAppC/plugins/ai/ai.ini`, outside the vault; the key is read from
    the app's own environment at call time and is never written to a file,
    logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
 
