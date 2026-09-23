@@ -93,6 +93,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         if (m_parseWatcher.future().resultCount() == 0)
             return;
         ParseJob job = m_parseWatcher.result();
+        setWordCount(job.words);
         adoptDecorations(std::move(job.decorations), std::move(job.properties));
         m_parsedVersion = job.version;
         // The buffer moved on while we were parsing: go round again.
@@ -232,6 +233,7 @@ void MarkdownEditor::setNoteText(const QString &text)
     // note parses faster than a frame, so it skips the intermediate state
     // rather than flickering through it.
     if (text.size() > kAsyncParseThreshold) {
+        setWordCount(-1); // not counted until the parse comes back
         adoptDecorations({}, {});
         startParse();
     } else {
@@ -461,17 +463,12 @@ void MarkdownEditor::enterBlockAt(qsizetype offset)
     viewport()->update();
 }
 
-int MarkdownEditor::wordCount() const
+void MarkdownEditor::setWordCount(int words)
 {
-    int words = 0;
-    bool inWord = false;
-    for (const QChar c : m_text) {
-        const bool part = c.isLetterOrNumber() || c == QLatin1Char('_') || c == QLatin1Char('\'');
-        if (part && !inWord)
-            ++words;
-        inWord = part;
-    }
-    return words;
+    if (words == m_wordCount)
+        return;
+    m_wordCount = words;
+    emit wordCountChanged(words);
 }
 
 // --- parsing and block construction --------------------------------------
@@ -503,6 +500,7 @@ void MarkdownEditor::reparse()
     Parser::Result result = m_parser.parseAll(m_text);
     sortDecorations(result.decorations);
     m_parsedVersion = m_textVersion;
+    setWordCount(result.metadata.wordCount);
     adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties));
 }
 
@@ -518,6 +516,7 @@ void MarkdownEditor::startParse()
         ParseJob job;
         job.decorations = std::move(result.decorations);
         job.properties = std::move(result.metadata.properties);
+        job.words = result.metadata.wordCount;
         sortDecorations(job.decorations);
         job.version = version;
         return job;

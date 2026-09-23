@@ -232,6 +232,8 @@ TEST(MarkdownEditorTest, TypingEditsTheBufferAtTheCaret)
     EXPECT_EQ(editor->noteText(), QStringLiteral("hello world\n"));
     EXPECT_TRUE(editor->isModified());
     EXPECT_EQ(editor->cursorOffset(), 11);
+    // Counted with the parse, after the typing pause, not per keystroke.
+    QTest::qWait(80);
     EXPECT_EQ(editor->wordCount(), 2);
 }
 

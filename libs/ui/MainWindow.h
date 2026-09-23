@@ -106,7 +106,6 @@ private slots:
     /// folder the way Obsidian does.
     void onTreeClicked(const QModelIndex &index);
     void onModificationChanged(bool modified);
-    void onTextChanged();
 
     // --- file operations (New note/folder, Rename, Delete) -----------------
     // Slots, not plain methods, so tests can drive them with

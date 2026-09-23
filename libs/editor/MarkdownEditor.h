@@ -102,7 +102,10 @@ public:
     /// a platform that can give the window a GL context.
     static bool GPUaccelerationAvailable();
 
-    int wordCount() const;
+    /// Words in the note, frontmatter excluded, as of the last parse; -1 while
+    /// a large note's first parse is still out. Counted on the parse thread,
+    /// not per keystroke - wordCountChanged says when it moves.
+    int wordCount() const { return m_wordCount; }
     /// Source offset of the caret, for tests and for the status bar.
     qsizetype cursorOffset() const { return m_cursor; }
     /// The selected source text, exactly as it is in the file - markers
@@ -189,6 +192,9 @@ public:
     const QList<Property> &properties() const { return m_properties; }
 
 signals:
+    /// The word count moved. It is published with each parse, so it lags a
+    /// keystroke by the parse debounce instead of costing the keystroke.
+    void wordCountChanged(int words);
     void textChanged();
     void modificationChanged(bool modified);
     void linkActivated(const QString &target);
@@ -645,8 +651,11 @@ private:
     struct ParseJob {
         Decorations decorations;
         QList<Property> properties;
+        int words = 0;
         quint64 version = 0;
     };
+    int m_wordCount = 0;
+    void setWordCount(int words);
     QFutureWatcher<ParseJob> m_parseWatcher;
     quint64 m_textVersion = 0;
     quint64 m_parsedVersion = 0;

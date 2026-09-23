@@ -377,7 +377,9 @@ QWidget *MainWindow::buildMainArea()
     m_editor->setEnabled(false);
     connect(m_editor, &MarkdownEditor::modificationChanged,
             this, &MainWindow::onModificationChanged);
-    connect(m_editor, &MarkdownEditor::textChanged, this, &MainWindow::onTextChanged);
+    // The count comes with each parse. Taking it from textChanged recounted
+    // the whole note on the UI thread for every keystroke.
+    connect(m_editor, &MarkdownEditor::wordCountChanged, this, &MainWindow::updateWordCount);
     m_editor->setLinkResolver([this](const QString &target) -> QString {
         if (!m_vault.isValid())
             return {};
@@ -1225,11 +1227,6 @@ void MainWindow::onModificationChanged(bool)
     updateTitle();
 }
 
-void MainWindow::onTextChanged()
-{
-    updateWordCount();
-}
-
 void MainWindow::updateTitle()
 {
     const bool modified = !m_notePath.isEmpty() && m_editor->isModified();
@@ -1263,7 +1260,11 @@ void MainWindow::updateWordCount()
         m_wordCount->clear();
         return;
     }
-    m_wordCount->setText(tr("%n word(s)", nullptr, m_editor->wordCount()));
+    const int words = m_editor->wordCount();
+    if (words < 0)
+        m_wordCount->clear(); // a large note, still being counted
+    else
+        m_wordCount->setText(tr("%n word(s)", nullptr, words));
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

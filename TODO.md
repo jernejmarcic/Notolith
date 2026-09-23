@@ -234,13 +234,12 @@ Jernej's rule: a new feature goes here and the current task carries on.
 
 ### Next, after tabs
 
-- [ ] **The word count is O(document) on every keystroke.** `textChanged` ->
-      `MainWindow::updateWordCount` -> `MarkdownEditor::wordCount()` scans the
-      whole note. A keystroke through the window costs 0.33 ms at 200 kB
-      against 0.24 ms for a bare editor; this is the likely bulk of the
-      difference (to be confirmed by re-measuring after the fix). Count on the
-      parse thread, which already reads the whole text after a typing pause,
-      and publish the number with the decorations.
+- [x] **The word count was O(document) on every keystroke** - the shell
+      recounted the whole note on `textChanged`, while the parser already
+      counted it on the worker thread and the editor threw that away. It now
+      comes with each parse. Keystroke through the window, 200 kB: 0.33 ms ->
+      0.21 ms, which also shows the app-wide event filter costs nothing
+      measurable.
 
 ### Later
 
