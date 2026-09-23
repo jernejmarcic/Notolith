@@ -537,6 +537,8 @@ const QList<Settings::Feature> &Settings::features()
          false},
         {"file-recovery", QT_TRANSLATE_NOOP("Settings", "File recovery"),
          QT_TRANSLATE_NOOP("Settings", "Keep snapshots of notes as they are saved, outside the vault."), true},
+        {"footnotes", QT_TRANSLATE_NOOP("Settings", "Footnotes view"),
+         QT_TRANSLATE_NOOP("Settings", "List the note's footnotes in the right sidebar."), true},
         {"graph", QT_TRANSLATE_NOOP("Settings", "Graph view"),
          QT_TRANSLATE_NOOP("Settings", "Show the links between notes as a graph, and the local graph in the "
                                        "right sidebar."),

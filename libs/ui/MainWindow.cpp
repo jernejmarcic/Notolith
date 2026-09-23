@@ -113,6 +113,7 @@
 #include "NoteHistoryDialog.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
+#include "FootnotesPane.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
 #include "TagsPane.h"
@@ -664,6 +665,10 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(editor, &MarkdownEditor::cursorMoved, this, [this, leaf](qsizetype offset) {
         if (m_outline && leaf == m_active)
             m_outline->setCursorOffset(offset);
+    });
+    connect(editor, &MarkdownEditor::footnotesChanged, this, [this, leaf] {
+        if (m_footnotes && leaf == m_active)
+            m_footnotes->setFootnotes(leaf->editor->footnotes());
     });
     // ```query blocks: Index::search() opens its own connection, so it runs
     // on the thread pool, and the editor brings the results back to its own
@@ -1347,6 +1352,16 @@ void MainWindow::applyFeatures()
              return m_outline.data();
          },
          "outlineTabButton", "list", tr("Outline")},
+        {"footnotes", m_footnotes,
+         [this, parent] {
+             m_footnotes = new FootnotesPane(parent);
+             connect(m_footnotes, &FootnotesPane::jumpRequested, this, [this](qsizetype offset) {
+                 m_active->editor->setCursorOffset(offset);
+                 m_active->editor->setFocus();
+             });
+             return m_footnotes.data();
+         },
+         "footnotesTabButton", "quote", tr("Footnotes")},
         {"bookmarks", m_bookmarks,
          [this, parent] {
              m_bookmarks = new BookmarksPane(parent);
@@ -1454,6 +1469,12 @@ void MainWindow::showNoteInPanes(const QString &path)
     if (m_localGraph)
         m_localGraph->setCurrentNote(m_vault.isValid() && !path.isEmpty() ? m_vault.relative(path) : QString());
 #endif
+    if (m_footnotes) {
+        if (m_active && path == m_active->notePath && !m_active->view)
+            m_footnotes->setFootnotes(m_active->editor->footnotes());
+        else
+            m_footnotes->clear();
+    }
     if (m_outline && path.isEmpty())
         m_outline->clear();
     else if (m_outline && m_active && path == m_active->notePath && !m_active->view) {

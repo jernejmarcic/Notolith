@@ -37,6 +37,7 @@
 
 #include "WaitFor.h"
 #include "MarkdownEditor.h"
+#include "FootnotesPane.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
 #ifdef NOTEAPPC_HAVE_GRAPH
@@ -1825,6 +1826,23 @@ TEST_F(WindowTest, APastedImageIsSavedToTheAttachmentFolderAndADroppedFileCopied
     QCoreApplication::sendEvent(editor->viewport(), &drop);
     EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("assets/report.pdf"))));
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("![[report.pdf]]")));
+}
+
+TEST_F(WindowTest, TheFootnotesViewListsTheNotesFootnotesAndJumps)
+{
+    write(QStringLiteral("Note.md"), "One.[^a] Two.^[inline]\n\n[^a]: The body.\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Note.md")));
+    auto *pane = window.findChild<noteAppC::FootnotesPane *>();
+    ASSERT_NE(pane, nullptr);
+    auto *list = pane->findChild<QListWidget *>();
+    ASSERT_NE(list, nullptr);
+    WAIT_TRUE(list->count() == 2, 2000);
+    EXPECT_EQ(list->item(0)->text(), QStringLiteral("1   The body."));
+    EXPECT_EQ(list->item(1)->text(), QStringLiteral("2   inline"));
+    emit list->itemClicked(list->item(0));
+    EXPECT_EQ(window.editor()->cursorOffset(), window.editor()->noteText().indexOf(QLatin1String("The body.")));
 }
 
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)

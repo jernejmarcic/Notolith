@@ -54,6 +54,7 @@ class SearchPane;
 class SettingsPage;
 class TagsPane;
 class PropertiesPane;
+class FootnotesPane;
 class SlidesView;
 
 /// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
@@ -505,6 +506,7 @@ private:
     QPointer<BacklinksPane> m_backlinks;
     QPointer<TagsPane> m_tags;
     QPointer<PropertiesPane> m_properties;
+    QPointer<FootnotesPane> m_footnotes;
     QPointer<SlidesView> m_slides; ///< a main-area page, built on first use
     bool m_slidesLeftFullScreen = false; ///< whether ending a presentation restores the window
     QPointer<OutgoingLinksPane> m_outgoingLinks;
