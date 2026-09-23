@@ -120,10 +120,36 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
         rlimit cpu{25, 30};
         setrlimit(RLIMIT_CPU, &cpu);
     });
-    process.start(engine,
-                  {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
-                   QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
-                   inputPath});
+    QString program = engine;
+    QStringList arguments = {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
+                             QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
+                             inputPath};
+    // Where bubblewrap exists, the engine sees the system and its own
+    // directory and nothing else: no home, no other drive, no socket, no
+    // network. -no-shell-escape stops \write18, but \input can still read
+    // any file the user can and set it into the PDF.
+    if (const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap")); !bwrap.isEmpty()) {
+        const QString dir = work.path();
+        arguments = QStringList{QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
+                                QStringLiteral("--ro-bind"), QStringLiteral("/etc"), QStringLiteral("/etc"),
+                                QStringLiteral("--ro-bind-try"), QStringLiteral("/var/lib/texmf"),
+                                QStringLiteral("/var/lib/texmf"),
+                                QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
+                                QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib"),
+                                QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib64"),
+                                QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
+                                QStringLiteral("--proc"), QStringLiteral("/proc"),
+                                QStringLiteral("--dev"), QStringLiteral("/dev"),
+                                QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
+                                QStringLiteral("--bind"), dir, dir,
+                                QStringLiteral("--setenv"), QStringLiteral("HOME"), dir,
+                                QStringLiteral("--unshare-all"), QStringLiteral("--die-with-parent"),
+                                QStringLiteral("--new-session"), QStringLiteral("--chdir"), dir,
+                                QStringLiteral("--"), engine}
+                  + arguments;
+        program = bwrap;
+    }
+    process.start(program, arguments);
 
     bool finished = process.waitForFinished(30000);
     if (!finished) {
