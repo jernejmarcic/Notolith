@@ -4396,8 +4396,10 @@ TEST(TableCommandTest, RowsAndColumnsAsAdvancedTablesDoes)
         auto editor = editorWith(note);
         editor->show();
         editor->setCursorOffset(caret);
-        const bool ran = editor->runCommand(QString::fromLatin1(id));
-        return std::make_pair(ran ? editor->noteText() : QString(), editor->noteText().at(editor->cursorOffset()));
+        EXPECT_TRUE(editor->runCommand(QString::fromLatin1(id))); // a known command runs, even as a no-op
+        // What it changed; nothing, for a row with nowhere to go or a caret not in a table.
+        const QString after = editor->noteText();
+        return std::make_pair(after != note ? after : QString(), after.at(editor->cursorOffset()));
     };
     const qsizetype one = note.indexOf(QLatin1Char('1'));
     const qsizetype four = note.indexOf(QLatin1Char('4'));

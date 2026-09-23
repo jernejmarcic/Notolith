@@ -3783,10 +3783,16 @@ bool MarkdownEditor::runCommand(const QString &id)
         formatTables(m_cursor);
     else if (id == QLatin1String("noteAppC:format-all-tables"))
         formatTables(-1);
-    else if (id.startsWith(QLatin1String("noteAppC:table-")))
-        return runTableCommand(id);
-    else
+    else if (id.startsWith(QLatin1String("noteAppC:table-"))) {
+        // A known command, run - whether or not the caret is in a table for
+        // it to change, as format-table outside one is.
+        const auto &all = commands();
+        if (std::none_of(all.cbegin(), all.cend(), [&id](const Command &command) { return command.id == id; }))
+            return false;
+        runTableCommand(id);
+    } else {
         return false;
+    }
     return true;
 }
 
