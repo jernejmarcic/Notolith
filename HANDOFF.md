@@ -118,6 +118,18 @@ ctest --test-dir build --output-on-failure
 ./build/apps/noteAppC/noteAppC <vault-or-file>
 ```
 
+Under AddressSanitizer and UBSan, which found a use-after-free in a test and
+a malloc/delete mismatch in MicroTeX on 2026-09-23 - worth a run after any
+change to ownership or lifetimes. Wall-clock budgets fail under it, by design:
+
+```sh
+cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+    "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer" \
+    "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
+cmake --build build-asan
+ASAN_OPTIONS=detect_leaks=0 QT_QPA_PLATFORM=offscreen ctest --test-dir build-asan
+```
+
 Render the window offscreen, which is how the look gets reviewed without a
 display:
 
