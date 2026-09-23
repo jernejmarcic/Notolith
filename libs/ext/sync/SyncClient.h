@@ -82,10 +82,14 @@ public:
     };
     BlobResult getBlob(const QByteArray &vaultID, const QByteArray &address);
 
-    bool registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey);
+    /// `wantsLockbox`: this device enrols without the password and waits
+    /// for another device to approve it and seal it a lockbox.
+    bool registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey,
+                        bool wantsLockbox = false);
     struct DeviceInfo {
         QByteArray deviceID;
         QByteArray publicKey;
+        bool wantsLockbox = false; ///< as the server says: it can only hide a prompt, never add a key
     };
     QList<DeviceInfo> listDevices(const QByteArray &vaultID);
 

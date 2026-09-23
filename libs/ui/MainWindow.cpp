@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include <QCryptographicHash>
 #include <QApplication>
 #include <QButtonGroup>
 #include <QClipboard>
@@ -68,6 +69,7 @@
 #include "OutlinePane.h"
 #include "TemplatePicker.h"
 #include "Templates.h"
+#include "PublishDialog.h"
 #include "ExportPdfDialog.h"
 #include "PagePreview.h"
 #include "PdfPage.h"
@@ -2603,20 +2605,33 @@ void MainWindow::publishSite()
         statusBar()->showMessage(tr("Already publishing"), 3000);
         return;
     }
-    const QString folder = QFileDialog::getExistingDirectory(this, tr("Publish to folder"));
-    if (folder.isEmpty())
+    // The last choices for this vault, kept with the window's own state, not
+    // in the vault. Obsidian Publish shares nothing until it is picked, so
+    // neither does a first publish here: marked notes only.
+    QSettings state;
+    const QString group = QStringLiteral("publish/")
+                          + QString::fromLatin1(QCryptographicHash::hash(m_vault.root().toUtf8(),
+                                                                         QCryptographicHash::Sha1).toHex());
+    PublishDialog::Choices remembered;
+    remembered.folder = state.value(group + QStringLiteral("/folder")).toString();
+    remembered.siteName = state.value(group + QStringLiteral("/siteName"), m_vault.name()).toString();
+    remembered.homeNote = state.value(group + QStringLiteral("/homeNote")).toString();
+    remembered.onlyMarked = state.value(group + QStringLiteral("/onlyMarked"), true).toBool();
+    remembered.theme = state.value(group + QStringLiteral("/theme"), 2).toInt();
+    QStringList notes;
+    for (const QString &path : m_index.allPaths()) {
+        if (path.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+            notes << path;
+    }
+    PublishDialog dialog(remembered, notes, this);
+    if (dialog.exec() != QDialog::Accepted)
         return;
-    // Obsidian Publish shares nothing until it is picked, so neither does
-    // this unless asked: marked notes only is the default button.
-    QMessageBox ask(QMessageBox::Question, tr("Publish"), tr("Which notes go on the site?"),
-                    QMessageBox::Cancel, this);
-    QPushButton *marked = ask.addButton(tr("Only notes with publish: true"), QMessageBox::AcceptRole);
-    ask.addButton(tr("Every note"), QMessageBox::AcceptRole);
-    ask.setDefaultButton(marked);
-    ask.exec();
-    if (ask.clickedButton() == ask.button(QMessageBox::Cancel))
-        return;
-    const bool onlyMarked = ask.clickedButton() == marked;
+    const PublishDialog::Choices choices = dialog.choices();
+    state.setValue(group + QStringLiteral("/folder"), choices.folder);
+    state.setValue(group + QStringLiteral("/siteName"), choices.siteName);
+    state.setValue(group + QStringLiteral("/homeNote"), choices.homeNote);
+    state.setValue(group + QStringLiteral("/onlyMarked"), choices.onlyMarked);
+    state.setValue(group + QStringLiteral("/theme"), choices.theme);
 
     struct Result {
         bool ok = false;
@@ -2640,7 +2655,7 @@ void MainWindow::publishSite()
     // Publisher queries the index on the thread that calls it, and an Index
     // is one connection for one thread: this run opens its own on the same
     // cache (WAL, so the indexer is not blocked) instead of sharing m_index.
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, folder, onlyMarked] {
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -2649,9 +2664,11 @@ void MainWindow::publishSite()
         }
         publish::Publisher publisher(vault, index);
         publish::Options options;
-        options.outputDir = folder;
-        options.onlyMarked = onlyMarked;
-        options.siteName = vault.name();
+        options.outputDir = choices.folder;
+        options.onlyMarked = choices.onlyMarked;
+        options.homeNote = choices.homeNote;
+        options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
+        options.theme = publish::Options::ThemeMode(choices.theme);
         result.ok = publisher.publish(options, {}, &result.error);
         result.counts = publisher.counts();
         return result;
@@ -3432,6 +3449,22 @@ void MainWindow::updateSync()
                                                                                           : tr("syncing");
                 m_syncStatus->setText(tr("Sync: %1").arg(state));
                 m_syncStatus->setToolTip(message);
+            });
+    // A device enrolling without the password gets this vault's keys only
+    // when a person here says so, having compared the code on both screens.
+    connect(m_sync.get(), &SyncEngine::deviceAwaitingApproval, this,
+            [this](const QByteArray &deviceID, const QString &fingerprint) {
+                QMessageBox ask(QMessageBox::Question, tr("Sync"),
+                                tr("A new device asks for this vault's keys. Its code is:\n\n%1\n\n"
+                                   "Approve it only if the new device shows exactly this code. A code you "
+                                   "cannot find on any of your devices is not yours.")
+                                    .arg(fingerprint),
+                                QMessageBox::NoButton, this);
+                QPushButton *approve = ask.addButton(tr("Approve"), QMessageBox::AcceptRole);
+                ask.setDefaultButton(ask.addButton(tr("Not now"), QMessageBox::RejectRole));
+                ask.exec();
+                if (ask.clickedButton() == approve && m_sync)
+                    m_sync->approveDevice(deviceID);
             });
     // A file changed on disk (another app, the tree) is a change to sync too.
     connect(&m_index, &Index::changed, m_sync.get(), &SyncEngine::noteChanged);

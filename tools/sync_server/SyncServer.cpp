@@ -258,7 +258,8 @@ void SyncServer::registerRoutes()
                        if (accountID.isEmpty() || !m_store->vaultBelongsTo(vaultID, accountID))
                            return errorResponse(StatusCode::Forbidden, QStringLiteral("not your vault"));
                        const QJsonObject body = bodyOf(request);
-                       m_store->registerDevice(vaultID, unb64(body, "deviceID"), unb64(body, "publicKey"));
+                       m_store->registerDevice(vaultID, unb64(body, "deviceID"), unb64(body, "publicKey"),
+                                               body.value(QStringLiteral("lockbox")).toBool());
                        return QHttpServerResponse(StatusCode::Ok);
                    });
 
@@ -272,7 +273,8 @@ void SyncServer::registerRoutes()
                        for (const ServerStore::Device &d : m_store->devices(vaultID))
                            array.append(QJsonObject{{QStringLiteral("deviceID"), b64(d.deviceID)},
                                                     {QStringLiteral("publicKey"), b64(d.publicKey)},
-                                                    {QStringLiteral("approved"), d.approved}});
+                                                    {QStringLiteral("approved"), d.approved},
+                                                    {QStringLiteral("lockbox"), d.wantsLockbox}});
                        return QHttpServerResponse(QJsonObject{{QStringLiteral("devices"), array}});
                    });
 

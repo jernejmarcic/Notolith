@@ -224,12 +224,14 @@ SyncClient::BlobResult SyncClient::getBlob(const QByteArray &vaultID, const QByt
     return out;
 }
 
-bool SyncClient::registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey)
+bool SyncClient::registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey,
+                                bool wantsLockbox)
 {
     const Reply reply =
         call("POST", QStringLiteral("/v1/vaults/%1/devices").arg(QString::fromLatin1(vaultID.toHex())),
             {{QStringLiteral("deviceID"), QString::fromLatin1(b64(deviceID))},
-             {QStringLiteral("publicKey"), QString::fromLatin1(b64(publicKey))}});
+             {QStringLiteral("publicKey"), QString::fromLatin1(b64(publicKey))},
+             {QStringLiteral("lockbox"), wantsLockbox}});
     return reply.status == 200;
 }
 
@@ -240,7 +242,7 @@ QList<SyncClient::DeviceInfo> SyncClient::listDevices(const QByteArray &vaultID)
         call("GET", QStringLiteral("/v1/vaults/%1/devices").arg(QString::fromLatin1(vaultID.toHex())));
     for (const QJsonValue &v : reply.json.value(QStringLiteral("devices")).toArray()) {
         const QJsonObject o = v.toObject();
-        out << DeviceInfo{unb64(o, "deviceID"), unb64(o, "publicKey")};
+        out << DeviceInfo{unb64(o, "deviceID"), unb64(o, "publicKey"), o.value(QStringLiteral("lockbox")).toBool()};
     }
     return out;
 }

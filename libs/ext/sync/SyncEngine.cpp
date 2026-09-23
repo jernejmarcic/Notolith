@@ -251,6 +251,7 @@ void SyncEngine::stopOnWorker()
     m_boxSecretKey.clear();
     m_boxPublicKey.clear();
     m_vaultID.clear();
+    m_announced.clear();
     m_client.reset();
     m_journal.reset();
     setStatus(Status::Idle);
@@ -410,7 +411,7 @@ bool SyncEngine::ensureItemsKey()
         return false;
 
     const QByteArray deviceID = m_journal->deviceID();
-    m_client->registerDevice(m_vaultID, deviceID, m_boxPublicKey); // idempotent
+    m_client->registerDevice(m_vaultID, deviceID, m_boxPublicKey, m_viaLockbox); // idempotent
 
     if (!m_viaLockbox) {
         const QList<SyncClient::WrappedItemsKey> wrapped = m_client->fetchItemsKeys(m_vaultID, deviceID);
@@ -446,7 +447,10 @@ bool SyncEngine::ensureItemsKey()
     // seal this device a lockbox.
     const QList<SyncClient::Lockbox> boxes = m_client->listLockboxes(m_vaultID, deviceID);
     if (boxes.isEmpty()) {
-        setStatus(Status::WaitingForApproval, QStringLiteral("waiting for an existing device to approve this one"));
+        // The code to read out on the device that approves it.
+        setStatus(Status::WaitingForApproval,
+                  QStringLiteral("approve this device on one that already syncs; its code is %1")
+                      .arg(SyncCrypto::fingerprint(m_boxPublicKey)));
         return false;
     }
     const SyncCrypto::BoxKeyPair pair{m_boxPublicKey, m_boxSecretKey};
@@ -466,19 +470,51 @@ void SyncEngine::maintainEnrolment()
         return;
     const QByteArray deviceID = m_journal->deviceID();
 
+    // The server is not trusted with the keys, so it does not get to say
+    // which devices have them either: a device is sealed a lockbox only once
+    // a person here approved it, having compared its code. Approvals are
+    // kept per vault, on this device only.
+    const QList<QByteArray> approved = m_journal->meta(QStringLiteral("approvedDevices")).split('\n');
     for (const SyncClient::DeviceInfo &device : m_client->listDevices(m_vaultID)) {
-        if (device.deviceID == deviceID)
-            continue;
+        if (device.deviceID == deviceID || !device.wantsLockbox)
+            continue; // a device with the password takes its keys from that
         const QList<SyncClient::Lockbox> already = m_client->listLockboxes(m_vaultID, device.deviceID);
+        QList<SyncJournal::ItemsKeyRecord> missing;
         for (const SyncJournal::ItemsKeyRecord &key : m_journal->allItemsKeys()) {
-            const bool have = std::any_of(already.cbegin(), already.cend(),
-                                          [&key](const SyncClient::Lockbox &box) { return box.itemsKeyID == key.itemsKeyID; });
-            if (have)
-                continue;
-            const QByteArray sealed = SyncCrypto::sealToBox(device.publicKey, key.plaintext);
-            m_client->putLockbox(m_vaultID, device.deviceID, key.itemsKeyID, sealed);
+            if (std::none_of(already.cbegin(), already.cend(),
+                             [&key](const SyncClient::Lockbox &box) { return box.itemsKeyID == key.itemsKeyID; }))
+                missing.append(key);
         }
+        if (missing.isEmpty())
+            continue;
+        if (!approved.contains(device.deviceID.toHex())) {
+            if (!m_announced.contains(device.deviceID)) {
+                m_announced.insert(device.deviceID);
+                emit deviceAwaitingApproval(device.deviceID, SyncCrypto::fingerprint(device.publicKey));
+            }
+            continue;
+        }
+        for (const SyncJournal::ItemsKeyRecord &key : std::as_const(missing))
+            m_client->putLockbox(m_vaultID, device.deviceID, key.itemsKeyID,
+                                 SyncCrypto::sealToBox(device.publicKey, key.plaintext));
     }
+}
+
+void SyncEngine::approveDevice(const QByteArray &deviceID)
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this, deviceID] {
+            if (!m_running || !m_journal)
+                return;
+            QByteArray approved = m_journal->meta(QStringLiteral("approvedDevices"));
+            if (!approved.split('\n').contains(deviceID.toHex()))
+                m_journal->setMeta(QStringLiteral("approvedDevices"),
+                                   approved.isEmpty() ? deviceID.toHex() : approved + '\n' + deviceID.toHex());
+            if (!m_inCycle)
+                maintainEnrolment();
+        },
+        Qt::QueuedConnection);
 }
 
 void SyncEngine::changePassword(const QString &newPassword)

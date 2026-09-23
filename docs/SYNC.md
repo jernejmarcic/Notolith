@@ -423,9 +423,14 @@ two ways it can get them:
    QtKeychain, and after authenticating (still needs `loginKey`, so still
    needs the password once, to prove account ownership - a full stranger
    cannot just claim to be a new device), registers its public key as a
-   *pending* device (`POST /v1/vaults/<id>/devices`). Any device that already
-   holds the itemsKeys in memory notices the pending device on its next sync
-   pass, seals each active itemsKey to the new device's public key
+   *pending* device (`POST /v1/vaults/<id>/devices`, with `"lockbox": true`).
+   Any device that already holds the itemsKeys in memory notices the pending
+   device on its next sync pass and **asks a person** (`deviceAwaitingApproval`,
+   a prompt in the window) showing the device's fingerprint - BLAKE2b of its
+   public key, 80 bits, `3F2A-91C0-5B7E-0D44-A1C9` - which the new device
+   shows too, in its waiting status. Only once approved there (remembered per
+   vault on that device, never on the server) does it seal each active
+   itemsKey to the new device's public key
    (`crypto_box_seal` - anonymous sender, only the recipient's key pair is
    involved, which is the right shape for "device I've never talked to
    before") and uploads the sealed blob (`POST /v1/vaults/<id>/lockboxes`) -
@@ -434,6 +439,14 @@ two ways it can get them:
    what "vouched for" means here. The new device pulls its lockboxes and
    opens them (`crypto_box_seal_open`) with its own secret key. It now holds
    the itemsKeys without ever deriving `wrapKey`.
+
+Why a person and not the server decides: the server is never trusted with
+the keys, so it cannot be trusted to say which devices should get them. When
+existing devices sealed for every device the server listed, a server could
+list a key of its own and be handed the vault. With approval it has to get a
+person to accept a code that no device of theirs shows. A device registered
+without `"lockbox": true` (one that signs in with the password) is never
+asked about; a server that lies about that flag can only hide a prompt.
 
 Path 2 is the one the tests exercise, because it is the one that generalises:
 a future revoked device simply stops receiving new lockboxes (existing

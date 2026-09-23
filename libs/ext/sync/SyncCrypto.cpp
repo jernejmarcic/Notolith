@@ -136,6 +136,19 @@ QByteArray SyncCrypto::contentAddress(const QByteArray &contentKey, const QByteA
     return out;
 }
 
+QString SyncCrypto::fingerprint(const QByteArray &publicKey)
+{
+    QByteArray digest(10, Qt::Uninitialized);
+    crypto_generichash(reinterpret_cast<unsigned char *>(digest.data()), size_t(digest.size()),
+                       reinterpret_cast<const unsigned char *>(publicKey.constData()), size_t(publicKey.size()),
+                       nullptr, 0);
+    QStringList groups;
+    const QString hex = QString::fromLatin1(digest.toHex().toUpper());
+    for (qsizetype i = 0; i < hex.size(); i += 4)
+        groups << hex.mid(i, 4);
+    return groups.join(QLatin1Char('-'));
+}
+
 qint64 SyncCrypto::bucketFor(qint64 size)
 {
     for (const qint64 bucket : kBuckets) {

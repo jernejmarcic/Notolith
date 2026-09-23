@@ -72,11 +72,13 @@ public:
         QByteArray deviceID;
         QByteArray publicKey;
         bool approved = false;
+        bool wantsLockbox = false; ///< enrolling without the password, so waiting on a lockbox
     };
     /// The first device ever registered for a vault is auto-approved
     /// (docs/SYNC.md "Device enrolment with lockboxes"); every one after
     /// starts pending. Idempotent re-registration keeps the existing row.
-    void registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey);
+    void registerDevice(const QByteArray &vaultID, const QByteArray &deviceID, const QByteArray &publicKey,
+                        bool wantsLockbox = false);
     QList<Device> devices(const QByteArray &vaultID) const;
     bool isApproved(const QByteArray &vaultID, const QByteArray &deviceID) const;
 

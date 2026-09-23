@@ -15,6 +15,9 @@
 
 #include <memory>
 
+#include <QTest>
+#include <QSignalSpy>
+#include <QRegularExpression>
 #include <QCoreApplication>
 #include <QMutex>
 #include <QDir>
@@ -348,6 +351,16 @@ TEST(SyncCryptoTest, LockboxOpensOnlyWithTheMatchingSecretKey)
     EXPECT_TRUE(rejected.isEmpty());
 }
 
+TEST(SyncCryptoTest, AFingerprintIsShortStableAndPerKey)
+{
+    const auto one = SyncCrypto::generateBoxKeyPair();
+    const auto two = SyncCrypto::generateBoxKeyPair();
+    const QString code = SyncCrypto::fingerprint(one.publicKey);
+    EXPECT_TRUE(QRegularExpression(QStringLiteral("^([0-9A-F]{4}-){4}[0-9A-F]{4}$")).match(code).hasMatch()) << code.toStdString();
+    EXPECT_EQ(code, SyncCrypto::fingerprint(one.publicKey));
+    EXPECT_NE(code, SyncCrypto::fingerprint(two.publicKey));
+}
+
 TEST(SyncCryptoTest, LoginKeyHashRoundTripsAndRejectsTheWrongKey)
 {
     ASSERT_TRUE(SyncCrypto::init());
@@ -493,6 +506,7 @@ TEST_F(SyncIntegrationTest, CreateEditRenameDeleteSyncBetweenTwoDevices)
 
     SyncEngine engineA;
     Watcher watchA(engineA);
+    QSignalSpy asked(&engineA, &SyncEngine::deviceAwaitingApproval);
     engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
     ASSERT_TRUE(watchA.waitForCycle()) << watchA.lastMessage.toStdString();
     EXPECT_EQ(watchA.pushed, 1);
@@ -512,6 +526,7 @@ TEST_F(SyncIntegrationTest, CreateEditRenameDeleteSyncBetweenTwoDevices)
     ASSERT_TRUE(watchB.waitForCycle());
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/Welcome.md")),
              QStringLiteral("first line EDITED\nsecond line"));
+    EXPECT_TRUE(asked.isEmpty()) << "a device with the password is never an approval to make";
 
     // Rename (and move into a folder) on A.
     QDir(vaultA.path()).mkpath(QStringLiteral("folder"));
@@ -761,7 +776,24 @@ TEST_F(SyncIntegrationTest, ASecondDeviceEnrolledByLockboxReadsEverything)
     ASSERT_TRUE(watchB.waitForStatus(SyncEngine::Status::WaitingForApproval)) << watchB.lastMessage.toStdString();
     EXPECT_EQ(watchB.finishedCount, 0) << "must not have synced anything without a lockbox";
 
-    // A's next cycle notices the pending device and seals it a lockbox.
+    // A's next cycle notices the pending device and asks; nothing is sealed
+    // until a person approves it, comparing the code B shows.
+    QSignalSpy asked(&engineA, &SyncEngine::deviceAwaitingApproval);
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    ASSERT_EQ(asked.size(), 1);
+    const QString code = asked.at(0).at(1).toString();
+    EXPECT_TRUE(watchB.lastMessage.contains(code)) << "B shows " << watchB.lastMessage.toStdString();
+    QSignalSpy statusB(&engineB, &SyncEngine::statusChanged);
+    engineB.syncNow();
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return std::any_of(statusB.cbegin(), statusB.cend(), [](const QList<QVariant> &args) {
+            return args.at(0).value<SyncEngine::Status>() == SyncEngine::Status::WaitingForApproval;
+        });
+    }, 20000)) << "B's own cycle must still be waiting";
+    EXPECT_EQ(watchB.finishedCount, 0) << "not approved: still no keys";
+
+    engineA.approveDevice(asked.at(0).at(0).toByteArray());
     engineA.syncNow();
     ASSERT_TRUE(watchA.waitForCycle());
 

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <functional>
 
+#include <QDialogButtonBox>
 #include <QAbstractButton>
 #include <QApplication>
 #include <QCheckBox>
@@ -60,6 +61,7 @@
 #include <QTreeWidget>
 
 #include "Index.h"
+#include "PublishDialog.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
 #include "OutlinePane.h"
@@ -1480,6 +1482,33 @@ TEST_F(WindowTest, AddingAThemeFileRefreshesTheOpenSettingsPagesList)
     EXPECT_GE(refreshed->findData(QDir(themesDir).filePath(QStringLiteral("New.json"))), 0);
 
     qputenv("XDG_CONFIG_HOME", previousConfigHome);
+}
+
+TEST(PublishDialogTest, AsksForAFolderAndARealHomeNote)
+{
+    noteAppC::PublishDialog::Choices remembered;
+    remembered.siteName = QStringLiteral("Garden");
+    noteAppC::PublishDialog dialog(remembered, {QStringLiteral("Home.md"), QStringLiteral("a/B.md")});
+    auto *publish = dialog.findChild<QDialogButtonBox *>()->buttons().constFirst();
+    for (QAbstractButton *button : dialog.findChild<QDialogButtonBox *>()->buttons()) {
+        if (button->text() == QStringLiteral("Publish"))
+            publish = button;
+    }
+    EXPECT_FALSE(publish->isEnabled()); // no folder yet
+    dialog.findChild<QLineEdit *>(QStringLiteral("publishFolder"))->setText(QStringLiteral("/tmp/site"));
+    EXPECT_TRUE(publish->isEnabled());
+    auto *home = dialog.findChild<QLineEdit *>(QStringLiteral("publishHomeNote"));
+    home->setText(QStringLiteral("Nowhere.md"));
+    EXPECT_FALSE(publish->isEnabled()); // not a note
+    home->setText(QStringLiteral("a/B.md"));
+    EXPECT_TRUE(publish->isEnabled());
+
+    const auto choices = dialog.choices();
+    EXPECT_EQ(choices.folder, QStringLiteral("/tmp/site"));
+    EXPECT_EQ(choices.siteName, QStringLiteral("Garden"));
+    EXPECT_EQ(choices.homeNote, QStringLiteral("a/B.md"));
+    EXPECT_TRUE(choices.onlyMarked); // the safe default
+    EXPECT_EQ(choices.theme, 2);
 }
 
 int main(int argc, char **argv)
