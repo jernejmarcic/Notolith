@@ -96,7 +96,10 @@ void BacklinksPane::setIndex(Index *index)
 
 void BacklinksPane::setTheme(const Theme &theme)
 {
-    m_highlightColor = theme.color(QStringLiteral("--text-accent"));
+    const QColor highlight = theme.color(QStringLiteral("--text-accent"));
+    if (highlight == m_highlightColor)
+        return; // every settings pass re-applies the theme
+    m_highlightColor = highlight;
     refreshUnlinked();
 }
 

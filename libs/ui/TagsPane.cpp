@@ -144,10 +144,15 @@ void TagsPane::setIndex(Index *index)
 
 void TagsPane::setTheme(const Theme &theme)
 {
-    m_mutedColor = theme.color(QStringLiteral("--text-faint"));
     m_sortButton->setIcon(Icons::icon(QStringLiteral("list"),
                                       theme.color(QStringLiteral("--text-muted")),
                                       m_sortButton->iconSize().width()));
+    // Every settings pass re-applies the theme; only a new colour needs the
+    // list rebuilt, which is a query over every tag in the vault.
+    const QColor muted = theme.color(QStringLiteral("--text-faint"));
+    if (muted == m_mutedColor)
+        return;
+    m_mutedColor = muted;
     refresh();
 }
 

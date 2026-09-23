@@ -134,7 +134,9 @@ MainWindow::MainWindow(QWidget *parent)
                                            .arg(milliseconds)
                                      : tr("Index up to date"),
                                  4000);
-        onIndexChanged();
+        // No onIndexChanged() here: Index::changed has already fired, from
+        // open() for a vault that was up to date and from the batch for one
+        // that was not. Both ran it, 210 ms apiece on 20 000 notes.
     });
     connect(&m_index, &Index::changed, this, &MainWindow::onIndexChanged);
 
@@ -1230,9 +1232,8 @@ void MainWindow::onIndexChanged()
         // every link as missing until it was next edited.
         leaf->editor->refreshLinkStatus();
     }
-    m_backlinks->refresh();
-    m_tags->refresh();
-    m_outgoingLinks->refresh();
+    // The backlinks, tags and outgoing-links panes listen to Index::changed
+    // themselves; refreshing them here as well did each one twice per save.
     if (m_index.isOpen() && m_active->notePath.isEmpty())
         m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }

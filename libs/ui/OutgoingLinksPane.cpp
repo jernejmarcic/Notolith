@@ -95,7 +95,10 @@ void OutgoingLinksPane::setIndex(Index *index)
 
 void OutgoingLinksPane::setTheme(const Theme &theme)
 {
-    m_faintColor = theme.color(QStringLiteral("--text-faint"));
+    const QColor faint = theme.color(QStringLiteral("--text-faint"));
+    if (faint == m_faintColor)
+        return; // every settings pass re-applies the theme
+    m_faintColor = faint;
     refresh();
 }
 
