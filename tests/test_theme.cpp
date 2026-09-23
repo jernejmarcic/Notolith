@@ -433,3 +433,23 @@ TEST(LanguageStyle, MissingFileIsNormal)
     EXPECT_TRUE(python.icon.isEmpty());
     EXPECT_FALSE(python.color.isValid());
 }
+
+TEST(CalloutStyle, ColorIsTheBodyTextNotTheRail)
+{
+    // The format Jernej chose: `color` is the text, `bar` is the rail. The two
+    // were once crossed, so a rail came out in the colour meant for words.
+    CalloutStyle style;
+    style.bar = QColor(0x11, 0x22, 0x33);
+    QMap<QString, QString> attributes;
+    attributes.insert(QStringLiteral("color"), QStringLiteral("#E6E6E6ff"));
+    style.apply(attributes);
+    EXPECT_EQ(style.color, QColor(0xE6, 0xE6, 0xE6));
+    EXPECT_EQ(style.bar, QColor(0x11, 0x22, 0x33)) << "color must leave the rail alone";
+
+    attributes.clear();
+    attributes.insert(QStringLiteral("bar"), QStringLiteral("#FF0000ff"));
+    style.apply(attributes);
+    EXPECT_EQ(style.bar, QColor(255, 0, 0));
+    EXPECT_EQ(style.color, QColor(0xE6, 0xE6, 0xE6));
+}
+

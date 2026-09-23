@@ -76,8 +76,7 @@ void CalloutStyle::apply(const QMap<QString, QString> &attributes)
 
         if (key == QLatin1String("icon"))
             icon = value;
-        else if (key == QLatin1String("bar") || key == QLatin1String("color")
-                 || key == QLatin1String("accent"))
+        else if (key == QLatin1String("bar") || key == QLatin1String("accent"))
             bar = parseColor(value);
         else if (key == QLatin1String("bg") || key == QLatin1String("background"))
             background = parseColor(value);
@@ -85,7 +84,11 @@ void CalloutStyle::apply(const QMap<QString, QString> &attributes)
             font = value;
         else if (key == QLatin1String("size"))
             size = value.toInt();
-        else if (key == QLatin1String("text-color") || key == QLatin1String("fg"))
+        // `color` is the body text, as agreed with Jernej when the format was
+        // chosen. It once also meant the rail, which painted a callout's rail
+        // in the colour meant for its words.
+        else if (key == QLatin1String("color") || key == QLatin1String("text-color")
+                 || key == QLatin1String("fg"))
             color = parseColor(value);
         else if (key == QLatin1String("style"))
             applyEffects(value, &weight, &italic, &underline, &strikeOut);
