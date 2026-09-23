@@ -3789,6 +3789,39 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         const QPoint global = QCursor::pos();
         updateLinkHover(viewport()->mapFromGlobal(global), true, global);
     }
+    // The slash popup's keys are handled here rather than left to QCompleter's
+    // own filter on the popup, which only sees them while the popup holds the
+    // keyboard - not, for one, when a platform does not give a popup focus.
+    if (m_slashCompleter && m_slashCompleter->popup()->isVisible()) {
+        QAbstractItemView *popup = m_slashCompleter->popup();
+        const QAbstractItemModel *rows = popup->model();
+        switch (event->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+        case Qt::Key_Tab: {
+            const QString name = popup->currentIndex().data().toString();
+            popup->hide();
+            if (!name.isEmpty())
+                insertSlashCompletion(name);
+            return;
+        }
+        case Qt::Key_Escape:
+            popup->hide();
+            return;
+        case Qt::Key_Up:
+        case Qt::Key_Down: {
+            const int count = rows ? rows->rowCount() : 0;
+            if (count > 0) {
+                const int step = event->key() == Qt::Key_Down ? 1 : -1;
+                const int row = (qMax(0, popup->currentIndex().row()) + step + count) % count;
+                popup->setCurrentIndex(rows->index(row, 0));
+            }
+            return;
+        }
+        default:
+            break;
+        }
+    }
     if (m_completer->popup()->isVisible()) {
         switch (event->key()) {
         case Qt::Key_Return:
@@ -3883,6 +3916,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         if (!deleteAutoPair())
             removeSelectionOrChar(-1);
         updateSuggestions();
+        updateSlashSuggestions();
         return;
     case Qt::Key_Delete:
         removeSelectionOrChar(1);
@@ -3923,6 +3957,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         if (!handleAutoPair(event->text().at(0)))
             insertText(cellSafe(event->text()));
         updateSuggestions();
+        updateSlashSuggestions();
         return;
     }
     QAbstractScrollArea::keyPressEvent(event);

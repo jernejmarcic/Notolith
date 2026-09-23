@@ -348,6 +348,131 @@ TEST(MarkdownEditorTest, CursorSkipsOverHiddenSyntax)
 
 namespace {
 
+QList<MarkdownEditor::SlashCommand> testSlashCommands()
+{
+    QList<MarkdownEditor::SlashCommand> commands;
+    for (const MarkdownEditor::Command &command : MarkdownEditor::commands())
+        commands.append({command.id, command.name,
+                         command.keys.isEmpty() ? QString() : command.keys.constFirst().toString()});
+    return commands;
+}
+
+} // namespace
+
+TEST(SlashCommandTest, SlashAtLineStartOpensThePopupWithCommands)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->setSlashCommands([] { return testSlashCommands(); }, [](const QString &) {});
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/"));
+
+    EXPECT_TRUE(editor->slashPopupVisible());
+    EXPECT_GT(editor->slashSuggestions().size(), 0);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("/\n"));
+}
+
+TEST(SlashCommandTest, QueryFuzzyFiltersToTheBestMatch)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->setSlashCommands([] { return testSlashCommands(); }, [](const QString &) {});
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/bol"));
+
+    const QStringList suggestions = editor->slashSuggestions();
+    ASSERT_GT(suggestions.size(), 0);
+    EXPECT_EQ(suggestions.constFirst(), QStringLiteral("Toggle bold"));
+}
+
+TEST(SlashCommandTest, EnterRunsTheHighlightedCommandAndRemovesTheQuery)
+{
+    auto editor = editorWith(QStringLiteral("see \n"));
+    editor->setCursorOffset(4);
+    QString ranID;
+    editor->setSlashCommands([] { return testSlashCommands(); },
+                             [&ranID](const QString &id) { ranID = id; });
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/bol"));
+    ASSERT_TRUE(editor->slashPopupVisible());
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+
+    EXPECT_EQ(ranID, QStringLiteral("editor:toggle-bold"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("see \n")) << "the \"/bol\" query is gone";
+    EXPECT_FALSE(editor->slashPopupVisible());
+}
+
+TEST(SlashCommandTest, MidWordSlashDoesNotOpenIt)
+{
+    auto editor = editorWith(QStringLiteral("a\n"));
+    editor->setSlashCommands([] { return testSlashCommands(); }, [](const QString &) {});
+    editor->setCursorOffset(1);
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/b"));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a/b\n"));
+    EXPECT_FALSE(editor->slashPopupVisible()) << "\"a/b\" is text, not a command";
+}
+
+TEST(SlashCommandTest, NotInsideACodeBlock)
+{
+    const QString source = QStringLiteral("```\ncode\n```\n");
+    auto editor = editorWith(source);
+    editor->setSlashCommands([] { return testSlashCommands(); }, [](const QString &) {});
+    editor->setCursorOffset(source.indexOf(QStringLiteral("code")) + 2);
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/"));
+
+    EXPECT_FALSE(editor->slashPopupVisible()) << "a fenced block is not where commands run";
+}
+
+TEST(SlashCommandTest, EscapeClosesAndLeavesTheText)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->setSlashCommands([] { return testSlashCommands(); }, [](const QString &) {});
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/bol"));
+    ASSERT_TRUE(editor->slashPopupVisible());
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+
+    EXPECT_FALSE(editor->slashPopupVisible());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("/bol\n"));
+}
+
+TEST(SlashCommandTest, NullSourceMeansSlashIsPlainText)
+{
+    auto editor = editorWith(QStringLiteral("\n")); // setSlashCommands never called
+
+    QTest::keyClicks(editor.get(), QStringLiteral("/bol"));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("/bol\n"));
+    EXPECT_FALSE(editor->slashPopupVisible());
+}
+
+// The plan's budget applies here too: fuzzy-filtering a few hundred commands
+// on every keystroke must stay well under it.
+TEST(SlashCommandTest, FilteringCostStaysInsideTheKeystrokeBudget)
+{
+    QList<MarkdownEditor::SlashCommand> commands;
+    for (int i = 0; i < 400; ++i)
+        commands.append({QStringLiteral("plugin:command-%1").arg(i),
+                         QStringLiteral("Some plugin command number %1").arg(i), QString()});
+
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->setSlashCommands([commands] { return commands; }, [](const QString &) {});
+    QTest::keyClicks(editor.get(), QStringLiteral("/"));
+    ASSERT_TRUE(editor->slashPopupVisible());
+
+    QElapsedTimer clock;
+    clock.start();
+    QTest::keyClicks(editor.get(), QStringLiteral("command"));
+    const double perKeystroke = double(clock.nsecsElapsed()) / QStringLiteral("command").size() / 1e6;
+
+    std::printf("[ PERF     ] slash filter, %d commands: %.3f ms per keystroke\n",
+                int(commands.size()), perKeystroke);
+    EXPECT_LT(perKeystroke, 8.0);
+}
+
+namespace {
+
 /// A note of roughly `kilobytes` kB with realistic structure.
 QString generateNote(int kilobytes)
 {
