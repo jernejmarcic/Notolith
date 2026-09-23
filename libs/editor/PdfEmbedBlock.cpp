@@ -264,24 +264,13 @@ QPixmap MarkdownEditor::ensurePdfPageAsync(const QString &path, qint64 mtime, in
     it = m_pdfPageCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    // `guard` is m_alive's own weak_ptr: checked on the worker thread before
-    // this ever calls back into `this`, so a render that outlives the editor
-    // (the tab was closed, say) is simply dropped rather than touching freed
-    // memory - see ~MarkdownEditor's comment on why the QueuedConnection
-    // context guarantee alone does not cover this.
-    const std::weak_ptr<char> guard = m_alive;
-    (void)QtConcurrent::run([this, guard, key, generation, path, page, width] {
+    // Through m_lifeline: a render that outlives the editor (its tab was
+    // closed, say) is dropped rather than posted to freed memory.
+    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, generation, path, page, width] {
         QImage image = PdfPage::render(path, page, width);
-        if (guard.expired())
-            return;
-        QMetaObject::invokeMethod(
-            this,
-            [this, guard, key, generation, path, image = std::move(image)]() mutable {
-                if (guard.expired())
-                    return;
-                deliverPdfPage(key, generation, path, std::move(image));
-            },
-            Qt::QueuedConnection);
+        lifeline->post(this, [this, key, generation, path, image = std::move(image)]() mutable {
+            deliverPdfPage(key, generation, path, std::move(image));
+        });
     });
     return QPixmap();
 }
@@ -328,19 +317,11 @@ const MarkdownEditor::TexCacheEntry &MarkdownEditor::ensureTexCompiled(const QSt
     it = m_texCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    const std::weak_ptr<char> guard = m_alive; // see ensurePdfPageAsync's own comment
-    (void)QtConcurrent::run([this, guard, key, generation, path] {
+    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, generation, path] {
         TexCompiler::Result result = TexCompiler::compile(path);
-        if (guard.expired())
-            return;
-        QMetaObject::invokeMethod(
-            this,
-            [this, guard, key, generation, result = std::move(result)]() mutable {
-                if (guard.expired())
-                    return;
-                deliverTexCompiled(key, generation, std::move(result));
-            },
-            Qt::QueuedConnection);
+        lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
+            deliverTexCompiled(key, generation, std::move(result));
+        });
     });
     return *it;
 }

@@ -119,17 +119,12 @@ const MarkdownEditor::QueryCacheEntry &MarkdownEditor::ensureQuerySearch(const Q
         // The runner may call this from a worker thread (that is the whole
         // point - a search must never run on, or block, the UI thread), so
         // the delivery is marshalled back onto this object's own thread
-        // before it touches m_queryCache or a single BlockView. Capturing
-        // `this` by raw pointer is safe here: a QueuedConnection with a
-        // QObject context, which invokeMethod(this, ...) is, is simply not
-        // delivered if `this` was destroyed first.
-        m_queryRunner(queryText, [this, queryText, generation](QueryResults results) {
-            QMetaObject::invokeMethod(
-                this,
-                [this, queryText, generation, results = std::move(results)]() mutable {
-                    deliverQueryResults(queryText, generation, std::move(results));
-                },
-                Qt::QueuedConnection);
+        // before it touches m_queryCache or a single BlockView, through
+        // m_lifeline: the editor may be gone by the time a search finishes.
+        m_queryRunner(queryText, [this, lifeline = m_lifeline, queryText, generation](QueryResults results) {
+            lifeline->post(this, [this, queryText, generation, results = std::move(results)]() mutable {
+                deliverQueryResults(queryText, generation, std::move(results));
+            });
         });
     }
     return *it;

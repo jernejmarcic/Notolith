@@ -26,6 +26,7 @@ class QCompleter;
 class QFileSystemWatcher;
 
 #include "CodeHighlighter.h"
+#include "Lifeline.h"
 #include "MathRenderer.h"
 #include "FindBar.h"
 #include "Decorations.h"
@@ -955,11 +956,9 @@ private:
     };
     QHash<QString, PdfPageCacheEntry> m_pdfPageCache; ///< "path|mtime|page|width" -> its render
     quint64 m_pdfGeneration = 0;
-    /// A liveness token for every async PDF/.tex/hooked-file-embed lambda:
-    /// captured by weak_ptr, checked before the lambda ever touches `this`.
-    /// Reset to null first thing in ~MarkdownEditor - see that destructor's
-    /// own comment for why a QueuedConnection alone is not enough here.
-    std::shared_ptr<char> m_alive = std::make_shared<char>();
+    /// How every worker - a search, a base, a PDF page, a .tex compile, a
+    /// hooked file embed - posts back here; ended first in ~MarkdownEditor.
+    std::shared_ptr<Lifeline> m_lifeline = std::make_shared<Lifeline>();
     /// A slides-layout embed's current page, by the block's own source start
     /// - like m_queryCollapsed, session-only and never written to the note.
     QHash<qsizetype, int> m_pdfSlideIndex;

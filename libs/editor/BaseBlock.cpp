@@ -115,15 +115,12 @@ const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QSt
         // May be called from a worker thread (the whole point: parsing and
         // evaluating a base must never run on, or block, the UI thread), so
         // the delivery is marshalled back onto this object's own thread
-        // before it touches m_baseCache or a single BlockView - see
-        // ensureQuerySearch for why capturing `this` by raw pointer is safe.
-        m_baseRunner(yamlText, [this, yamlText, generation](BaseTableData results) {
-            QMetaObject::invokeMethod(
-                this,
-                [this, yamlText, generation, results = std::move(results)]() mutable {
-                    deliverBaseResults(yamlText, generation, std::move(results));
-                },
-                Qt::QueuedConnection);
+        // before it touches m_baseCache or a single BlockView, through
+        // m_lifeline: the editor may be gone by the time the base is ready.
+        m_baseRunner(yamlText, [this, lifeline = m_lifeline, yamlText, generation](BaseTableData results) {
+            lifeline->post(this, [this, yamlText, generation, results = std::move(results)]() mutable {
+                deliverBaseResults(yamlText, generation, std::move(results));
+            });
         });
     }
     return *it;

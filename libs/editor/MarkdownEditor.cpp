@@ -246,19 +246,9 @@ void MarkdownEditor::insertCompletion(const QString &completion)
 
 MarkdownEditor::~MarkdownEditor()
 {
-    // PDF/.tex renders and hooked file embeds run on QtConcurrent's pool and
-    // find their way back here through QMetaObject::invokeMethod(this, ...)
-    // - safe against a delivery arriving after destruction (Qt drops a
-    // queued call whose context is already gone), but not against the call
-    // to invokeMethod itself racing a delete: nothing stops a worker thread
-    // from finishing its render just as this destructor runs, and reading
-    // `this->thread()` on a half- or fully-destroyed object is a plain
-    // use-after-free, not something the queued-connection guarantee covers.
-    // Dropping the last reference to m_alive first means every such
-    // in-flight lambda's own weak_ptr::expired() check - taken before it
-    // ever touches `this` - turns true right here, before anything else
-    // about this object stops being valid.
-    m_alive.reset();
+    // Workers post their results back through m_lifeline; ending it first
+    // means none is part-way through a post to this object (see Lifeline).
+    m_lifeline->end();
 
     // An open property editor is a child widget, and Qt deletes children
     // after this object's members are gone: losing focus as it went, it

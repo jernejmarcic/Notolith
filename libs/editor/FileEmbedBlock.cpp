@@ -296,22 +296,10 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
         // only place that touches m_fileEmbedCache or a BlockView, and it
         // always does so marshalled onto this object's own thread, the same
         // contract setQueryRunner documents for its own deliver callback.
-        // `guard` is m_alive's weak_ptr, checked before either lambda
-        // touches `this` - see ~MarkdownEditor's comment for why a
-        // QueuedConnection's own "dropped if destroyed" guarantee is not
-        // enough when the call to invokeMethod itself can race a delete.
-        const std::weak_ptr<char> guard = m_alive;
-        renderer(path, embed.subpath, width, [this, guard, key, generation](QImage image) {
-            if (guard.expired())
-                return;
-            QMetaObject::invokeMethod(
-                this,
-                [this, guard, key, generation, image = std::move(image)]() mutable {
-                    if (guard.expired())
-                        return;
-                    deliverFileEmbed(key, generation, std::move(image));
-                },
-                Qt::QueuedConnection);
+        renderer(path, embed.subpath, width, [this, lifeline = m_lifeline, key, generation](QImage image) {
+            lifeline->post(this, [this, key, generation, image = std::move(image)]() mutable {
+                deliverFileEmbed(key, generation, std::move(image));
+            });
         });
     }
 

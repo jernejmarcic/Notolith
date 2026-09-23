@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <thread>
+
 #include <QClipboard>
 #include <QScroller>
 #include <QElapsedTimer>
@@ -179,12 +181,14 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include <QDirIterator>
 #include <QFile>
 #include <QFontDatabase>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include <utility>
 
 #include "CodeHighlighter.h"
+#include "Lifeline.h"
 #include "MarkdownEditor.h"
 #include "Parser.h"
 #include "HtmlRenderer.h"
@@ -1504,6 +1508,32 @@ TEST(TexCompilerTest, NeverRunsWrite18)
 
     (void)TexCompiler::compile(path);
     EXPECT_FALSE(QFile::exists(marker)) << "-no-shell-escape must have refused \\write18";
+}
+
+TEST(TexCompilerTest, ADocumentCannotReadAFileOutsideItsOwnDirectory)
+{
+    if (!TexCompiler::isAvailable() || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "needs pdflatex and bubblewrap";
+
+    // A file the user can read, somewhere a document has no business in.
+    QTemporaryDir elsewhere;
+    const QString secret = elsewhere.filePath(QStringLiteral("secret.tex"));
+    {
+        QFile file(secret);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("private\n");
+    }
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("nosy.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}\\input{" + secret.toUtf8()
+                   + "}\\end{document}\n");
+    }
+    const TexCompiler::Result result = TexCompiler::compile(path);
+    EXPECT_FALSE(result.ok) << "the sandbox must hide files outside the compile directory";
+    EXPECT_TRUE(result.log.contains(QLatin1String("not found"))) << result.log.toStdString();
 }
 
 TEST(MarkdownEditorTest, TexMathsAloneRendersThroughMicroTeX)
@@ -3085,6 +3115,34 @@ void pumpQueuedDelivery()
 }
 
 } // namespace
+
+TEST(LifelineTest, NothingIsPostedOnceTheReceiverHasEnded)
+{
+    noteAppC::Lifeline lifeline;
+    QObject receiver;
+    int calls = 0;
+    EXPECT_TRUE(lifeline.post(&receiver, [&calls] { ++calls; }));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(calls, 1);
+    lifeline.end();
+    EXPECT_FALSE(lifeline.post(&receiver, [&calls] { ++calls; }));
+    QCoreApplication::processEvents();
+    EXPECT_EQ(calls, 1);
+}
+
+TEST(QueryBlockTest, AResultArrivingAfterTheEditorIsGoneIsDropped)
+{
+    FakeQueryRunner fake;
+    {
+        auto editor = editorWith(QStringLiteral("```query\nfoo\n```\n"));
+        editor->setQueryRunner(std::ref(fake));
+        ASSERT_EQ(fake.calls.size(), 1);
+    }
+    // From another thread, as a real search delivers: nothing may reach the
+    // freed editor, neither the post nor the queued call.
+    std::thread([&fake] { fake.calls.constFirst().deliver({}); }).join();
+    pumpQueuedDelivery();
+}
 
 TEST(QueryBlockTest, RendersResultsFromAnAsyncRunner)
 {
