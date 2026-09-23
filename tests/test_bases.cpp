@@ -493,10 +493,6 @@ TEST(BaseFileTest, NoViewsGetsAnImplicitTable)
     EXPECT_EQ(file->views().first().type, QStringLiteral("table"));
 }
 
-// =========================================================================
-// BaseQuery: filters, sort, limit, formulas, grouping
-// =========================================================================
-
 namespace {
 
 BaseFile parseOrDie(const QString &yaml)
@@ -507,6 +503,174 @@ BaseFile parseOrDie(const QString &yaml)
 }
 
 } // namespace
+
+// =========================================================================
+// BaseFile::rewriteViewSort: a header click's save-back, byte-exact -
+// comments, key order and everything the click did not touch survive.
+// =========================================================================
+
+TEST(BaseFileSortRewriteTest, AppendsSortToAViewThatHasNone)
+{
+    const QString yaml = QStringLiteral(
+        "# top comment\n"
+        "views:\n"
+        "  - type: table\n"
+        "    name: T\n"
+        "    order: [file.name, price]\n"
+        "  - type: cards\n"
+        "    name: C\n"
+        "    order: [file.name]\n");
+    const std::optional<QString> rewritten =
+        BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("price"), SortDirection::Ascending);
+    ASSERT_TRUE(rewritten.has_value());
+    const QString &out = *rewritten;
+
+    // Nothing before the new block moved: the whole original text up to and
+    // including "order: [file.name, price]\n" is still there, byte for byte.
+    const qsizetype cut = yaml.indexOf(QStringLiteral("order: [file.name, price]\n"))
+                         + QStringLiteral("order: [file.name, price]\n").size();
+    EXPECT_EQ(out.left(cut), yaml.left(cut));
+    // The second view - everything after the insertion - is untouched too.
+    EXPECT_TRUE(out.contains(QStringLiteral("  - type: cards\n    name: C\n    order: [file.name]\n")));
+    EXPECT_TRUE(out.contains(QStringLiteral("    sort:\n      - property: price\n        direction: ASC\n")));
+
+    const BaseFile reparsed = parseOrDie(out);
+    ASSERT_EQ(reparsed.views().size(), 2);
+    ASSERT_EQ(reparsed.views().at(0).sort.size(), 1);
+    EXPECT_EQ(reparsed.views().at(0).sort.first().property, QStringLiteral("price"));
+    EXPECT_EQ(reparsed.views().at(0).sort.first().direction, SortDirection::Ascending);
+    EXPECT_TRUE(reparsed.views().at(1).sort.isEmpty()); // the other view: untouched
+}
+
+TEST(BaseFileSortRewriteTest, ReplacesAnExistingSortInPlace)
+{
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n"
+        "    order: [file.name, price] # trailing comment on order\n"
+        "    sort:\n"
+        "      - property: price\n"
+        "        direction: ASC\n"
+        "    limit: 50\n");
+    const std::optional<QString> rewritten =
+        BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("file.name"), SortDirection::Descending);
+    ASSERT_TRUE(rewritten.has_value());
+    const QString &out = *rewritten;
+
+    // Before the sort: block, and after it (limit: 50), both untouched.
+    EXPECT_TRUE(out.contains(QStringLiteral("order: [file.name, price] # trailing comment on order\n")));
+    EXPECT_TRUE(out.contains(QStringLiteral("    limit: 50\n")));
+    EXPECT_TRUE(out.contains(QStringLiteral("    sort:\n      - property: file.name\n        direction: DESC\n")));
+    EXPECT_FALSE(out.contains(QStringLiteral("property: price")));
+
+    const BaseFile reparsed = parseOrDie(out);
+    ASSERT_EQ(reparsed.views().first().sort.size(), 1);
+    EXPECT_EQ(reparsed.views().first().sort.first().property, QStringLiteral("file.name"));
+    EXPECT_EQ(reparsed.views().first().sort.first().direction, SortDirection::Descending);
+    // limit: survived the edit, proof the rewrite really is scoped to sort:.
+    EXPECT_EQ(reparsed.views().first().limit, 50);
+}
+
+TEST(BaseFileSortRewriteTest, AViewsOwnSortAsItsVeryFirstKeyIsLeftAlone)
+{
+    // "sort:" sharing the sequence's own "- " line: removing "from the start
+    // of this line" would eat the "- " and corrupt the views: list, so this
+    // is refused rather than guessed at (see rewriteViewSort's own comment).
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - sort:\n"
+        "      - property: price\n"
+        "        direction: ASC\n"
+        "    order: [file.name, price]\n");
+    EXPECT_FALSE(BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("file.name"), SortDirection::Ascending)
+                     .has_value());
+}
+
+TEST(BaseFileSortRewriteTest, AViewsFirstKeySharingTheDashLineIsFineWhenItIsNotSort)
+{
+    // The ordinary shape ("- type: table"): the type: key shares the dash's
+    // line, but sort: itself does not, so appending after the view works.
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n"
+        "    order: [file.name]\n");
+    const std::optional<QString> rewritten =
+        BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("file.name"), SortDirection::Ascending);
+    ASSERT_TRUE(rewritten.has_value());
+    EXPECT_TRUE(rewritten->startsWith(QStringLiteral("views:\n  - type: table\n    order: [file.name]\n")));
+    EXPECT_TRUE(rewritten->contains(QStringLiteral("    sort:\n      - property: file.name\n")));
+}
+
+TEST(BaseFileSortRewriteTest, LastViewLastKeyAppendsAtEndOfFileEvenWithoutATrailingNewline)
+{
+    const QString yaml = QStringLiteral("views:\n  - type: table\n    order: [file.name]");
+    ASSERT_FALSE(yaml.endsWith(QLatin1Char('\n')));
+    const std::optional<QString> rewritten =
+        BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("file.name"), SortDirection::Ascending);
+    ASSERT_TRUE(rewritten.has_value());
+    EXPECT_TRUE(rewritten->startsWith(yaml));
+    const BaseFile reparsed = parseOrDie(*rewritten);
+    EXPECT_EQ(reparsed.views().first().sort.first().property, QStringLiteral("file.name"));
+}
+
+TEST(BaseFileSortRewriteTest, KeyOrderAndACommentBetweenViewsSurviveUntouched)
+{
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n"
+        "    order: [file.name]\n"
+        "  # a comment between two views\n"
+        "  - type: table\n"
+        "    name: Second\n"
+        "    order: [file.name, price]\n");
+    const std::optional<QString> rewritten =
+        BaseFile::rewriteViewSort(yaml, 1, QStringLiteral("price"), SortDirection::Descending);
+    ASSERT_TRUE(rewritten.has_value());
+    const QString &out = *rewritten;
+    EXPECT_TRUE(out.contains(QStringLiteral("  - type: table\n    order: [file.name]\n"
+                                            "  # a comment between two views\n")))
+        << out.toStdString();
+    EXPECT_TRUE(out.contains(QStringLiteral("name: Second")));
+    EXPECT_TRUE(out.endsWith(QStringLiteral("sort:\n      - property: price\n        direction: DESC\n")));
+
+    const BaseFile reparsed = parseOrDie(out);
+    ASSERT_EQ(reparsed.views().size(), 2);
+    EXPECT_TRUE(reparsed.views().at(0).sort.isEmpty());
+    EXPECT_EQ(reparsed.views().at(1).sort.first().property, QStringLiteral("price"));
+}
+
+TEST(BaseFileSortRewriteTest, FlowStyleViewsAreRefusedNotCorrupted)
+{
+    const QString yaml = QStringLiteral("views: [{type: table, order: [file.name]}]\n");
+    EXPECT_FALSE(BaseFile::rewriteViewSort(yaml, 0, QStringLiteral("file.name"), SortDirection::Ascending)
+                     .has_value());
+}
+
+TEST(BaseFileSortRewriteTest, OutOfRangeViewIndexAndBadYamlAreRefused)
+{
+    const QString yaml = QStringLiteral("views:\n  - type: table\n    order: [file.name]\n");
+    EXPECT_FALSE(BaseFile::rewriteViewSort(yaml, 5, QStringLiteral("file.name"), SortDirection::Ascending)
+                     .has_value());
+    EXPECT_FALSE(BaseFile::rewriteViewSort(QStringLiteral("not: [valid"), 0, QStringLiteral("file.name"),
+                                           SortDirection::Ascending)
+                     .has_value());
+}
+
+TEST(BaseFileSortRewriteTest, NewFileTemplateParsesToOneTableViewShowingEverything)
+{
+    // BaseFile::newFileTemplate() is the new-base command's starting
+    // content (see MainWindow's own "canvas:new-file" for the shape the
+    // lead wires it into) - it just needs to open as a working, unfiltered
+    // table, the same as Obsidian's own empty base does.
+    const BaseFile file = parseOrDie(BaseFile::newFileTemplate());
+    ASSERT_EQ(file.views().size(), 1);
+    EXPECT_EQ(file.views().first().type, QStringLiteral("table"));
+    EXPECT_TRUE(file.globalFilters().matchesEverything());
+}
+
+// =========================================================================
+// BaseQuery: filters, sort, limit, formulas, grouping
+// =========================================================================
 
 TEST(BaseSummaryTest, EachBuiltInSummaryOverItsKindOfColumn)
 {
@@ -1255,6 +1419,49 @@ void addProperty(Index::BaseNote &note, const QString &key, Property::Type type,
 }
 
 } // namespace
+
+// =========================================================================
+// rowFromNote: a property holding [[Note]] (or a list of them) becomes a
+// Link value - obsidian.md/help/bases/syntax: "Links in frontmatter
+// properties are automatically recognized as Link objects".
+// =========================================================================
+
+TEST(BaseQueryRowTest, WikilinkPropertiesBecomeLinkValues)
+{
+    Index::BaseNote note = makeBaseNote(QStringLiteral("A.md"));
+    addProperty(note, QStringLiteral("author"), Property::Type::Text, {QStringLiteral("[[Textbook]]")});
+    addProperty(note, QStringLiteral("aliased"), Property::Type::Text, {QStringLiteral("[[Textbook|My Book]]")});
+    addProperty(note, QStringLiteral("mentions"), Property::Type::Text,
+               {QStringLiteral("see [[Textbook]] for more")}); // not the *whole* value: stays text
+    addProperty(note, QStringLiteral("related"), Property::Type::List,
+               {QStringLiteral("[[A]]"), QStringLiteral("plain text"), QStringLiteral("[[B|Beta]]")});
+
+    const Row row = rowFromNote(note);
+
+    const Value author = row.properties.value(QStringLiteral("author"));
+    EXPECT_EQ(author.type, Value::Type::Link);
+    EXPECT_EQ(author.text, QStringLiteral("Textbook"));
+    EXPECT_EQ(author.toDisplayString(), QStringLiteral("Textbook")); // no alias: shows the raw target
+
+    const Value aliased = row.properties.value(QStringLiteral("aliased"));
+    EXPECT_EQ(aliased.type, Value::Type::Link);
+    EXPECT_EQ(aliased.text, QStringLiteral("Textbook"));
+    EXPECT_EQ(aliased.toDisplayString(), QStringLiteral("My Book"));
+
+    const Value mentions = row.properties.value(QStringLiteral("mentions"));
+    EXPECT_EQ(mentions.type, Value::Type::String);
+    EXPECT_EQ(mentions.text, QStringLiteral("see [[Textbook]] for more"));
+
+    const Value related = row.properties.value(QStringLiteral("related"));
+    ASSERT_EQ(related.type, Value::Type::List);
+    ASSERT_EQ(related.list.size(), 3);
+    EXPECT_EQ(related.list.at(0).type, Value::Type::Link);
+    EXPECT_EQ(related.list.at(0).text, QStringLiteral("A"));
+    EXPECT_EQ(related.list.at(1).type, Value::Type::String);
+    EXPECT_EQ(related.list.at(1).text, QStringLiteral("plain text"));
+    EXPECT_EQ(related.list.at(2).type, Value::Type::Link);
+    EXPECT_EQ(related.list.at(2).toDisplayString(), QStringLiteral("Beta"));
+}
 
 TEST(BaseEditorTableTest, BuildsHeadersAndRowsFromTheFirstView)
 {
