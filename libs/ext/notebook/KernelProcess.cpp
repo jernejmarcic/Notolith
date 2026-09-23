@@ -144,16 +144,30 @@ qint64 KernelProcess::processId() const
     return m_process ? m_process->processId() : 0;
 }
 
+qint64 KernelProcess::realKernelPid() const
+{
+    // Under SandboxTier::Host, processId() already is the kernel. Under
+    // SandboxTier::Bubblewrap it is not, even with --unshare-pid left out
+    // (NotebookSandbox's own comment): bwrap still forks once - confirmed
+    // by hand, not just read off its man page, which documents none of
+    // this - before it execs the kernel into that child, and the outer
+    // process QProcess sees has no signal handler that forwards anything
+    // to it. /proc/<pid>/task/<pid>/children is the kernel-provided,
+    // race-free way to name that one child without shelling out to `ps`.
+    if (m_tierUsed != SandboxTier::Bubblewrap)
+        return processId();
+    QFile children(QStringLiteral("/proc/%1/task/%1/children").arg(processId()));
+    if (!children.open(QIODevice::ReadOnly))
+        return processId();
+    const qint64 child = children.readAll().trimmed().split(' ').value(0).toLongLong();
+    return child > 0 ? child : processId();
+}
+
 void KernelProcess::interrupt()
 {
     if (!isRunning())
         return;
-    // Sent to the QProcess's own pid - under bubblewrap with --unshare-pid
-    // that is bwrap itself, acting as pid 1 of the sandbox's own pid
-    // namespace, which forwards SIGINT/SIGTERM/SIGHUP to the process it is
-    // supervising (bwrap(1), "SIGNAL HANDLING"); under SandboxTier::Host it
-    // is the kernel process directly. Either way, one code path.
-    ::kill(pid_t(processId()), SIGINT);
+    ::kill(pid_t(realKernelPid()), SIGINT);
 }
 
 } // namespace noteAppC::notebook

@@ -56,8 +56,20 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     // leaves for its own late binds, and for the same reason.
     wrapped << QStringLiteral("--bind") << request.runtimeDir << request.runtimeDir;
 
+    // No --unshare-pid, unlike PluginHost's sandbox: bwrap(1) says that with
+    // a pid namespace it "runs a minimal pid 1 process in the sandbox...
+    // detects when the initial application process (pid 2) dies and reports
+    // its exit status back to the original spawner" - reporting an exit
+    // status is all it documents doing; it does not forward signals sent to
+    // the outer process into the namespace. KernelProcess::interrupt() and
+    // stop() both rely on the pid QProcess sees being the kernel itself, not
+    // an unrelated reaper one level removed - without --unshare-pid, and
+    // with no other fork in the way, bwrap execs the kernel in its own
+    // place, so that pid *is* the kernel. The cost is real but small: a
+    // sandboxed kernel can see (not touch - the other unshares still stand)
+    // the host's process list.
     wrapped << QStringLiteral("--unshare-user-try") << QStringLiteral("--unshare-ipc")
-           << QStringLiteral("--unshare-pid") << QStringLiteral("--unshare-uts")
+           << QStringLiteral("--unshare-uts")
            << QStringLiteral("--unshare-cgroup-try") << QStringLiteral("--unshare-net")
            << QStringLiteral("--clearenv") << QStringLiteral("--setenv") << QStringLiteral("PATH")
            << QStringLiteral("/usr/bin:/bin")

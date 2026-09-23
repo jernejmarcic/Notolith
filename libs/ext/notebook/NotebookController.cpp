@@ -170,15 +170,40 @@ void NotebookController::wireKernel(KernelSession *session)
                auto it = session->inFlight.find(parent);
                if (it == session->inFlight.end())
                    return;
-               NotebookRunResult result = it->result;
-               result.hasRun = true;
-               result.ok = result.ok && ok;
-               result.wallMs = it->clock.elapsed();
-               writeNotebookCache(it->cacheKey, result);
-               const Deliver deliver = it->deliver;
-               session->inFlight.erase(it);
-               deliver(result);
+               it->gotReply = true;
+               it->replyOk = ok;
+               finalizeIfDone(session, it);
            });
+    connect(client, &KernelClient::statusChanged, this,
+           [this, session](const QString &parent, const QString &state) {
+               if (state != QLatin1String("idle"))
+                   return; // "busy" carries nothing this needs
+               auto it = session->inFlight.find(parent);
+               if (it == session->inFlight.end())
+                   return;
+               it->gotIdle = true;
+               finalizeIfDone(session, it);
+           });
+}
+
+void NotebookController::finalizeIfDone(KernelSession *session, QHash<QString, InFlight>::iterator it)
+{
+    // Shell (execute_reply) and iopub (status: idle) are independent
+    // sockets - either can arrive first - so a request is only really over
+    // once both have: idle is the kernel's own promise that every output
+    // message it will ever send for this request is already on the wire
+    // ahead of it (iopub preserves send order for one sender), and the
+    // reply carries the ok/error status finalize needs regardless.
+    if (!it->gotReply || !it->gotIdle)
+        return;
+    NotebookRunResult result = it->result;
+    result.hasRun = true;
+    result.ok = result.ok && it->replyOk;
+    result.wallMs = it->clock.elapsed();
+    writeNotebookCache(it->cacheKey, result);
+    const Deliver deliver = it->deliver;
+    session->inFlight.erase(it);
+    deliver(result);
 }
 
 void NotebookController::failInFlight(KernelSession *session, const QString &error)
@@ -198,8 +223,17 @@ void NotebookController::interruptKernel(const QString &language)
     if (it == m_kernels.end())
         return;
     KernelSession *session = it->second.get();
-    session->process->interrupt();          // "signal" mode: what python3's kernelspec uses
-    session->client->requestInterrupt();     // "message" mode: harmless if unsupported
+    // Exactly one, chosen by what the kernelspec actually declares - not
+    // both. The installed python3 kernelspec sets no interrupt_mode, so
+    // KernelSpec defaults it to "signal"; sending interrupt_request on the
+    // control channel as well, "just in case", turned out not to be
+    // harmless (caught by the end-to-end test, not guessed at): ipykernel
+    // answers it, but the original cell's own execute_reply on the shell
+    // channel then never arrives, wedging finalizeIfDone forever.
+    if (session->spec.interruptMode == QLatin1String("message"))
+        session->client->requestInterrupt();
+    else
+        session->process->interrupt();
 }
 
 void NotebookController::restartKernel(const QString &language)

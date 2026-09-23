@@ -73,7 +73,9 @@ public:
     /// python3 kernelspec asks for. A "message" mode kernel is interrupted
     /// through KernelClient's control channel instead; this is still called
     /// (harmlessly, since nothing listens for SIGINT there) so a caller does
-    /// not have to know which mode a given kernel uses before asking.
+    /// not have to know which mode a given kernel uses before asking. Only
+    /// meaningful because NotebookSandbox deliberately drops --unshare-pid -
+    /// see its own comment - so this process's pid is the kernel's own.
     void interrupt();
 
     const KernelConnectionInfo &connectionInfo() const { return m_connection; }
@@ -87,6 +89,10 @@ signals:
     void finished(int exitCode);
 
 private:
+    /// The pid a signal actually needs to go to - see the .cpp for why this
+    /// is not always processId().
+    qint64 realKernelPid() const;
+
     std::unique_ptr<QProcess> m_process;
     std::unique_ptr<QTemporaryDir> m_runtimeDir;
     KernelConnectionInfo m_connection;

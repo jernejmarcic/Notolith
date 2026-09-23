@@ -133,6 +133,19 @@ if(TARGET noteAppC_sync AND TARGET Qt6::HttpServer)
     set_tests_properties(sync PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# Stage 13 (docs/PLUGINS.md, Tier 1): the Jupyter kernel protocol client,
+# built only when NOTEAPPC_WITH_NOTEBOOK is on and libzmq was found. The
+# end-to-end cases skip themselves (GTEST_SKIP) when no kernel is
+# installed, so the minimal environment still passes; TIMEOUT is generous
+# because a kernel process really does take on the order of a second to
+# import and become ready.
+if(TARGET noteAppC_notebook)
+    add_executable(test_notebook test_notebook.cpp)
+    target_link_libraries(test_notebook PRIVATE noteAppC_notebook Qt6::Test GTest::gtest)
+    add_test(NAME notebook COMMAND test_notebook)
+    set_tests_properties(notebook PROPERTIES TIMEOUT 60)
+endif()
+
 add_executable(test_fuzz test_fuzz.cpp)
 target_link_libraries(test_fuzz PRIVATE noteAppC_editor noteAppC_vault Qt6::Test GTest::gtest)
 add_test(NAME fuzz COMMAND test_fuzz)

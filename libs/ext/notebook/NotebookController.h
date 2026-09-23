@@ -74,6 +74,15 @@ private:
         QString cacheKey;
         QString language;
         NotebookRunResult result;
+        // shell (execute_reply) and iopub (status: idle) are separate ZMQ
+        // sockets with no ordering guarantee *between* them, only within
+        // each - so idle can arrive before the reply, or after. Finalizing
+        // on the reply alone raced against a stream/result message still on
+        // its way and occasionally dropped it (caught by the end-to-end
+        // test, not guessed at); waiting for both closes that race.
+        bool gotReply = false;
+        bool gotIdle = false;
+        bool replyOk = true;
     };
 
     struct KernelSession {
@@ -86,6 +95,7 @@ private:
 
     KernelSession *ensureKernel(const RunRequest &request, QString *error);
     void wireKernel(KernelSession *session);
+    void finalizeIfDone(KernelSession *session, QHash<QString, InFlight>::iterator it);
     void failInFlight(KernelSession *session, const QString &error);
 
     /// std::map, not QHash: QHash's copy-on-write detach needs a copyable
