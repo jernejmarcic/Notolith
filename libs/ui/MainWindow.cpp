@@ -59,6 +59,9 @@
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
 #include "AudioRecorder.h"
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+#include "NotebookController.h"
+#endif
 #include "Frontmatter.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
@@ -182,6 +185,10 @@ MainWindow::~MainWindow()
         m_plugins->shutdownAll();
     delete m_plugins;
     m_plugins = nullptr;
+#endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (m_notebook)
+        m_notebook->shutdownAll(); // no kernel outlives the window
 #endif
     QThreadPool::globalInstance()->waitForDone();
     m_historyPool.waitForDone();
@@ -682,6 +689,36 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
     if (m_applyPluginRenderer)
         m_applyPluginRenderer(editor); // plugin fences in a new tab too
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // Code blocks through a Jupyter kernel. A lookup (forceRun false) only
+    // reads the output cache; the controller, and any kernel, exist only
+    // once something is run.
+    editor->setNotebookRunner([this](const QString &language, const QString &source, bool forceRun,
+                                     const MarkdownEditor::NotebookDeliver &deliver) {
+        if (!m_notebook)
+            m_notebook = new notebook::NotebookController(this);
+        notebook::NotebookController::RunRequest request;
+        request.language = language;
+        request.source = source;
+        m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
+            MarkdownEditor::NotebookRunResult shown;
+            shown.hasRun = result.hasRun;
+            shown.ok = result.ok;
+            shown.wallMs = result.wallMs;
+            shown.kernelError = result.kernelError;
+            for (const notebook::NotebookOutput &output : result.outputs) {
+                MarkdownEditor::NotebookOutput cell;
+                cell.kind = MarkdownEditor::NotebookOutput::Kind(int(output.kind));
+                cell.text = output.kind == notebook::NotebookOutput::Kind::Error ? output.evalue : output.text;
+                cell.imageBytes = output.imageBytes;
+                cell.ename = output.ename;
+                cell.traceback = output.traceback;
+                shown.outputs.append(cell);
+            }
+            deliver(shown);
+        });
+    });
+#endif
 #ifdef NOTEAPPC_HAVE_BASES
     // ```base blocks: the notes and the evaluation both on the pool (the
     // notes are 54 ms on 20 000); the vault is copied here, on the UI
@@ -791,6 +828,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.PDFembeds = featureOn("pdf-embeds");
     features.texEmbeds = featureOn("tex-embeds");
     features.mediaEmbeds = featureOn("media-embeds");
+    features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);
 #ifdef NOTEAPPC_HAVE_CANVAS
     // A canvas embed is the canvas drawn into an image, framed to its cards
@@ -1427,7 +1465,6 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+P"), &MainWindow::openCommandPalette);
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
-#ifdef NOTEAPPC_HAVE_CANVAS
 #ifdef NOTEAPPC_HAVE_BASES
     // ponytail: Obsidian's own id for this command is unconfirmed; this one
     // follows canvas:new-file's shape. A hotkeys.json naming another will not bind.
@@ -1443,6 +1480,26 @@ void MainWindow::buildActions()
             openNote(path);
     });
 #endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    add(QStringLiteral("notebooks:run-block"), tr("Notebooks: Run the code block at the cursor"),
+        QStringLiteral("Ctrl+Shift+Return"), [this] {
+            if (!m_active->view)
+                m_active->editor->runNotebookBlockAt(m_active->editor->cursorOffset());
+        });
+    add(QStringLiteral("notebooks:run-all"), tr("Notebooks: Run every code block in this note"), QString(), [this] {
+        if (!m_active->view && m_active->editor->runAllNotebookBlocks() == 0)
+            statusBar()->showMessage(tr("No code block here can run"), 3000);
+    });
+    // The kernel of the block at the cursor: one kernel per language.
+    add(QStringLiteral("notebooks:interrupt"), tr("Notebooks: Interrupt the kernel"), QString(), [this] {
+        if (m_notebook && !m_active->view)
+            m_notebook->interruptKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()));
+    });
+    add(QStringLiteral("notebooks:restart"), tr("Notebooks: Restart the kernel"), QString(), [this] {
+        if (m_notebook && !m_active->view)
+            m_notebook->restartKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()));
+    });
+#endif
     add(QStringLiteral("audio-recorder:start"), tr("Audio recorder: Start recording audio"), QString(),
         &MainWindow::startRecording);
     add(QStringLiteral("audio-recorder:stop"), tr("Audio recorder: Stop recording audio"), QString(), [this] {
@@ -1453,6 +1510,7 @@ void MainWindow::buildActions()
         QString(), &MainWindow::mergeCurrentNote);
     add(QStringLiteral("note-composer:split-file"), tr("Note composer: Extract current selection"), QString(),
         &MainWindow::extractSelection);
+#ifdef NOTEAPPC_HAVE_CANVAS
     add(QStringLiteral("canvas:new-file"), tr("Canvas: Create new canvas"), QString(), [this] {
         if (!m_vault.isValid())
             return;

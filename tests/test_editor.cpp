@@ -14,6 +14,7 @@
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
+#include <QTimer>
 #include <QtConcurrent>
 
 #include <algorithm>
@@ -1216,6 +1217,119 @@ TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
     EXPECT_EQ(editor->noteText(), note);
     // The options are syntax, so what is laid out is the listing alone.
     EXPECT_EQ(editor->displayText().trimmed(), QStringLiteral("x = 1\ny = 2"));
+}
+
+// Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and
+// setBaseRunner are faked elsewhere in this file - libs/editor must not link
+// libs/ext/notebook, so a real kernel is only ever exercised by
+// tests/test_notebook.cpp. `deliver` is always called through
+// QTimer::singleShot(0, ...), matching every other runner's contract here:
+// never synchronously, so a test has to pump the event loop once.
+TEST(NotebookBlockTest, RunOptionsShowOutputsBelow)
+{
+    const QString note = QStringLiteral("```python\n#| title: cell\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    const qreal before = editor->documentHeight();
+
+    bool forceRunSeen = false;
+    editor->setNotebookRunner([&forceRunSeen](const QString &, const QString &, bool forceRun,
+                                              const MarkdownEditor::NotebookDeliver &deliver) {
+        forceRunSeen = forceRunSeen || forceRun;
+        MarkdownEditor::NotebookRunResult result;
+        result.hasRun = true;
+        result.ok = true;
+        MarkdownEditor::NotebookOutput output;
+        output.kind = MarkdownEditor::NotebookOutput::Kind::Text;
+        output.text = QStringLiteral("1\n");
+        result.outputs.append(output);
+        QTimer::singleShot(0, [deliver, result] { deliver(result); });
+    });
+    QTest::qWait(50);
+
+    EXPECT_GT(editor->documentHeight(), before);
+    const auto info = editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)")));
+    EXPECT_TRUE(info.eligible);
+    EXPECT_TRUE(info.hasRun);
+    EXPECT_TRUE(info.ok);
+    // A note opening never runs anything - only a cache-only lookup.
+    EXPECT_FALSE(forceRunSeen);
+}
+
+TEST(NotebookBlockTest, RunControlHitTests)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+
+    bool ran = false;
+    editor->setNotebookRunner([&ran](const QString &, const QString &, bool forceRun,
+                                     const MarkdownEditor::NotebookDeliver &deliver) {
+        if (forceRun)
+            ran = true;
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    QTest::qWait(50);
+
+    const qsizetype offset = note.indexOf(QStringLiteral("print(1)"));
+    const auto info = editor->notebookInfoAt(offset);
+    ASSERT_TRUE(info.eligible);
+    // In the header's corner, the way codeLabelOf's own rect is.
+    EXPECT_TRUE(info.runRect.isValid());
+    EXPECT_GT(info.runRect.width(), 0);
+
+    EXPECT_TRUE(editor->runNotebookBlockAt(offset));
+    QTest::qWait(50);
+    EXPECT_TRUE(ran);
+
+    // Outside any code block: nothing to run.
+    EXPECT_FALSE(editor->runNotebookBlockAt(0));
+}
+
+TEST(NotebookBlockTest, CachedOutputReappearsAfterReopeningWithoutAKernel)
+{
+    const QString note = QStringLiteral("```python\nprint(2)\n```\n");
+    // Stands in for libs/ext/notebook's own sidecar cache (NotebookCache.cpp)
+    // - shared across two separate MarkdownEditor instances the way the real
+    // cache is shared across two separate times a note is opened.
+    QHash<QString, MarkdownEditor::NotebookRunResult> sidecar;
+    int forceRunCount = 0;
+    const auto runner = [&sidecar, &forceRunCount](const QString &language, const QString &source,
+                                                    bool forceRun,
+                                                    const MarkdownEditor::NotebookDeliver &deliver) {
+        const QString key = language.toLower() + QLatin1Char('|') + source;
+        if (forceRun) {
+            ++forceRunCount;
+            MarkdownEditor::NotebookRunResult result;
+            result.hasRun = true;
+            result.ok = true;
+            MarkdownEditor::NotebookOutput output;
+            output.kind = MarkdownEditor::NotebookOutput::Kind::Text;
+            output.text = QStringLiteral("2\n");
+            result.outputs.append(output);
+            sidecar.insert(key, result);
+            QTimer::singleShot(0, [deliver, result] { deliver(result); });
+            return;
+        }
+        const MarkdownEditor::NotebookRunResult cached = sidecar.value(key);
+        QTimer::singleShot(0, [deliver, cached] { deliver(cached); });
+    };
+
+    auto first = editorWith(note);
+    first->setNotebookRunner(runner);
+    const qsizetype offset = note.indexOf(QStringLiteral("print(2)"));
+    ASSERT_TRUE(first->runNotebookBlockAt(offset));
+    QTest::qWait(50);
+    EXPECT_TRUE(first->notebookInfoAt(offset).hasRun);
+    EXPECT_EQ(forceRunCount, 1);
+
+    // A fresh editor over the same text - "reopening the note" - sharing
+    // only the sidecar, never the first editor's own runtime state.
+    auto second = editorWith(note);
+    second->setNotebookRunner(runner);
+    QTest::qWait(50);
+    EXPECT_TRUE(second->notebookInfoAt(offset).hasRun);
+    EXPECT_EQ(second->notebookInfoAt(offset).ok, true);
+    // Reopening never started anything - still the one run from above.
+    EXPECT_EQ(forceRunCount, 1);
 }
 
 TEST(PdfPageTest, AvailableAndRefusesWhatIsNotAPdf)

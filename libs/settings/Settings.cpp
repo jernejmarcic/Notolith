@@ -543,6 +543,10 @@ const QList<Settings::Feature> &Settings::features()
         {"note-composer", QT_TRANSLATE_NOOP("Settings", "Note composer"),
          QT_TRANSLATE_NOOP("Settings", "Merge a note into another, and extract a selection into a new note."),
          true},
+        {"notebooks", QT_TRANSLATE_NOOP("Settings", "Notebooks"),
+         QT_TRANSLATE_NOOP("Settings", "Run code blocks through an installed Jupyter kernel, sandboxed, and show "
+                                       "their output below them. No kernel starts until you run a block."),
+         true},
         {"outgoing-link", QT_TRANSLATE_NOOP("Settings", "Outgoing links"),
          QT_TRANSLATE_NOOP("Settings", "Show the links in this note in the right sidebar."), true},
         {"outline", QT_TRANSLATE_NOOP("Settings", "Outline"),

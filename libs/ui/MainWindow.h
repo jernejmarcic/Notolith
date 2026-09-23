@@ -38,6 +38,9 @@ class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
 class AudioRecorder;
+namespace notebook {
+class NotebookController;
+}
 
 class BacklinksPane;
 class BookmarksPane;
@@ -483,6 +486,8 @@ private:
     QLabel *m_syncStatus = nullptr;
     QLabel *m_recordingStatus = nullptr;
     AudioRecorder *m_recorder = nullptr; ///< made on the first recording
+    /// Made when the first block runs; owns one kernel per language.
+    notebook::NotebookController *m_notebook = nullptr;
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;
     QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for
