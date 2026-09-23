@@ -332,6 +332,26 @@ scrolliong through pages, it can make them like a slide".
 - [ ] A slide layout for PDF embeds: one page at a time with previous/next
       and a page counter, instead of a scrolling column.
 
+## Requested 2026-09-23, afternoon: history and switches
+
+Jernej: "make it have built in git integration (for storing note hostories as
+git diffs) if that is efficient enough (kind of like the editz files in
+obsidian, which is a plugin)", and "Everything but the core features, should
+be decoupled enough that they can be turned off and increase performance IF
+the features existing decreases it".
+
+- [ ] Note history in git: every save a commit, stored outside the vault (no
+      dotfile in it), per-note history browsable with diffs and restorable.
+      Measure the cost per save first; libgit2 in process if it is installed,
+      off the UI thread either way. An optional module with a runtime switch.
+- [ ] Every non-core feature switchable off at run time (Obsidian's core
+      plugins page, and the vault's `.obsidian/core-plugins.json` read),
+      and when off it costs nothing: not built, not connected, not refreshed.
+      Audit each - search, backlinks and unlinked mentions, outgoing links,
+      tags, outline, bookmarks, graph and local graph, canvas, bases, page
+      preview, file recovery, daily notes, templates, query and HTML blocks,
+      spellcheck, word count, workspace restore - and measure off against on.
+
 ## Requested 2026-09-23: the rest of Obsidian
 
 Jernej, on the list of what is not built yet: "Command pallete is ok fo rlater,
