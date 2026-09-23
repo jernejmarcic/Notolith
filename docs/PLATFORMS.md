@@ -135,6 +135,18 @@ session's file ownership):
 All four are variations on the same change: `QString` gained more ways to be
 built from a view in 6.8.
 
+**Re-checked 2026-09-23, after search, graph, canvas, bases, tabs/splits,
+workspaces and query/HTML blocks all landed.** Same build, same patch, no
+new failures: the desktop build of the Android kit's Qt 6.7.3
+(`/tmp/noteAppC-android-qt673`, both options off) compiles clean and passes
+all 16 suites, and the ordinary desktop build (system Qt 6.11) passes 16/16
+full and 12/12 with every optional module off
+(`/tmp/noteAppC-android-desktop-build`, `/tmp/noteAppC-android-desktop-minimal`
+- `tools/check.sh`'s own two configurations, run from dedicated `/tmp` dirs
+since another lane was using its usual ones). So the code written since the
+first check still uses nothing from Qt 6.8+; md4qt's four conversions above
+remain the only blocker, and nothing needed replacing this time.
+
 **Resolved the same day.** `cmake/patch-md4qt.sh` applies the four
 replacements when md4qt is fetched, the way `cmake/patch-microtex.sh` already
 patches MicroTeX; each is the explicit spelling of the same conversion and
@@ -156,9 +168,136 @@ cmake --build /tmp/noteAppC-qt673
 QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-qt673
 ```
 
-This is the desktop build of the Android kit's Qt, not an Android build: it
-proves the API surface, not that the app runs on a phone. The Android build
-itself, and the touch-mode editor it needs, are the next steps.
+That desktop build of the Android kit's Qt proves the API surface, not that
+the app runs on a phone. **Built for real 2026-09-23**: a debug arm64 APK,
+signed with the Android debug key. The touch-mode editor it needs is still
+open - this is packaging and CMake only, no UI change.
+
+**One more dependency was missing.** `yaml-cpp` (frontmatter, Bases) was
+linked as a bare `yaml-cpp` name in `libs/markdown` and `libs/ext/bases`,
+which is not a CMake target either package exports (Arch's yaml-cpp only
+exports the namespaced `yaml-cpp::yaml-cpp`) - it worked on desktop only
+because CMake fell back to passing `-lyaml-cpp` straight to the linker,
+resolved by luck from the system library path. The Android NDK sysroot has
+no yaml-cpp at all, so that fallback would simply fail to link. The root
+`CMakeLists.txt` now calls `find_package(yaml-cpp)` for real, falling back to
+`FetchContent` (pinned to the `0.8.0` tag's commit, built as a static
+library, same pattern as md4qt and tinyxml2) only when that comes up empty;
+both paths land on the `yaml-cpp::yaml-cpp` target name, so neither consumer
+needed further changes. yaml-cpp's own `cmake_minimum_required` predates what
+CMake 4.4.3 (installed here) still accepts, so the Android configure also
+needs `-DCMAKE_POLICY_VERSION_MINIMUM=3.5` - harmless, it only affects that
+one fetched dependency's own policy floor.
+
+**What is off, and why.** Four of the five options `docs/PLUGINS.md` lists as
+Tier 1 have a system dependency with no arm64 build in this toolchain -
+`NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (KF6), `NOTEAPPC_WITH_PDF` (poppler-qt6),
+`NOTEAPPC_WITH_SPELLCHECK` (hunspell) and `NOTEAPPC_WITH_HTML` (litehtml) are
+all passed `OFF` explicitly at configure time, rather than left to
+auto-detect and fail to find anything. That is deliberate, not just tidy:
+each is found through `pkg_check_modules`, which shells out to the *host's*
+`pkg-config` rather than going through CMake's own sysroot-aware
+`find_package` search, so an Android cross-configure risks it silently
+matching the host's x86-64 `.pc` file instead of failing cleanly - a wrong
+link, not a missing one. `NOTEAPPC_WITH_GRAPH`, `_CANVAS` and `_BASES` have
+no external dependency (Tier 1 modules built to "work everywhere", per
+`docs/PLUGINS.md`) and stay on; graph, canvas and Bases all compiled and
+linked into the arm64 library without changes.
+
+**`NOTEAPPC_WITH_MEDIA` is also off, for a different reason: it compiles
+fine but androiddeployqt cannot deploy it.** Qt Multimedia's Android/FFmpeg
+backend is a plugin selected at runtime through `QFactoryLoader`, and
+androiddeployqt's automatic plugin detection only packages what it can infer
+from static linkage - with `NOTEAPPC_WITH_MEDIA=ON` the build links
+`libQt6Multimedia_arm64-v8a.so` cleanly but ships with no backend at all, so
+`MediaPlayback` would report itself unavailable on every device regardless
+of what the code does. Two documented fixes exist and both were tried and
+rejected: `QT_ANDROID_EXTRA_PLUGINS` copies a directory into the APK as-is,
+keeping the `multimedia/` subdirectory, which Qt's own flat
+`lib/<abi>/libplugins_<type>_*` plugin scan then never finds; the
+Multimedia-specific ELF dependency (`Qt6::QFFmpegMediaPlugin`) it is called
+through also isn't declared in a non-static Qt build, so simply promoting the
+`Qt6::Multimedia` CMake target to `GLOBAL` (which is otherwise the correct
+fix for it being invisible outside `libs/render`'s directory scope, since
+Qt's own `Qt6MultimediaTargets.cmake` imports it without `GLOBAL`) makes a
+*different* Qt finalizer fail outright looking for that target.
+`QT_ANDROID_DEPLOYMENT_DEPENDENCIES` (paths relative to the Qt install root)
+is the documented fix for a Qt-shipped plugin androiddeployqt did not
+detect, and it does place the file correctly, but it replaces the automatic
+dependency list rather than adding to it - every transitive Qt library the
+plugin itself needs (Core, Gui, Network, Multimedia) has to be listed by
+hand or packaging fails outright, which is what happened on the one attempt:
+`No platform plugin included in the deployment`, a broken APK. None of that
+is worth carrying for a lane that does not touch the editor or the embed
+code; an audio/video embed on Android falls back to "open the file",
+exactly as it already does on a desktop build without Qt Multimedia.
+
+**Build it:**
+
+```sh
+JAVA_HOME=$HOME/Documents/AI/.toolchains/jdk/jdk-17.0.20+8 \
+ANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
+ANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
+$HOME/Documents/AI/.toolchains/Qt/6.7.3/android_arm64_v8a/bin/qt-cmake \
+    -S . -B /tmp/noteAppC-android-build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Debug \
+    -DANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
+    -DANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
+    -DQT_HOST_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
+    -DBUILD_TESTING=OFF -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDF=OFF \
+    -DNOTEAPPC_WITH_SPELLCHECK=OFF -DNOTEAPPC_WITH_HTML=OFF -DNOTEAPPC_WITH_MEDIA=OFF
+
+JAVA_HOME=$HOME/Documents/AI/.toolchains/jdk/jdk-17.0.20+8 \
+ANDROID_SDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk \
+ANDROID_NDK_ROOT=$HOME/Documents/AI/.toolchains/Android/Sdk/ndk/26.1.10909125 \
+GRADLE_USER_HOME=/tmp/noteAppC-gradle \
+cmake --build /tmp/noteAppC-android-build --target apk --parallel 6
+```
+
+`GRADLE_USER_HOME` is pointed at `/tmp` on purpose: left at its default it
+would grow a Gradle cache inside `~/Documents`, which Syncthing replicates to
+every machine. `BUILD_TESTING=OFF` skips `tools/` and `tests/` - the
+screenshot tool, the index CLI and the bench harness are desktop developer
+tools with nothing to gain from Android packaging, and GTest is not part of
+this toolchain either.
+
+Artifact:
+`/tmp/noteAppC-android-build/apps/noteAppC/android-build/build/outputs/apk/debug/android-build-debug.apk`,
+18 MB, signed with the `Android Debug` certificate (`apksigner verify
+--print-certs`). `aapt2 dump badging` confirms `package:
+io.github.jernejmarcic.noteAppC`, `sdkVersion:'26'`, `targetSdkVersion:'34'`,
+a single `INTERNET` permission and `native-code: 'arm64-v8a'`. `unzip -l`
+confirms `lib/arm64-v8a/libnoteAppC_arm64-v8a.so` (15 MB, every noteAppC
+library statically linked into it), every linked Qt library
+(Core/Gui/Widgets/Svg/Sql/Concurrent/Network/OpenGL/OpenGLWidgets), and every
+plugin the app needs at runtime: `libplugins_platforms_qtforandroid`
+(without it Qt cannot create a window at all), `libplugins_sqldrivers_qsqlite`
+(the vault and index databases), `libplugins_imageformats_{svg,jpeg,gif,ico}`
+and `libplugins_iconengines_qsvgicon` (Lucide icons and image embeds), plus
+`styles`, `tls` and `networkinformation` that Qt itself always deploys on
+Android. **Not run on a device** - no arm64 phone or emulator was used, so
+touch input, the app's own layout at phone size, and the manifest's runtime
+behaviour are all unverified.
+
+**What a phone needs that the desktop does not: a vault location.**
+`QStandardPaths::writableLocation(AppDataLocation)` resolves to the app's own
+sandboxed storage under Android's scoped storage (in force since API 29,
+i.e. every device this targets), not a path the user can browse to or Obsidian
+vaults typically live in - "the latter directories will still be returned by
+`QStandardPaths::writableLocation()` when usable, otherwise the app-private
+location is returned based on the runtime Android version" (Qt's own
+`QStandardPaths` docs). Reaching a vault the user already has, on shared
+storage or in another app's folder, means Android's Storage Access
+Framework - a system folder picker that hands back a `content://` URI, not a
+filesystem path - which `Vault` does not speak today; `MANAGE_EXTERNAL_STORAGE`
+(unrestricted filesystem access) is a Play Store policy risk for the scope
+it asks for and is not the recommended route for a document-scoped app like
+this one. Building that picker is real UI work and explicitly out of scope
+here; on first run today, a vault would have to live under the app's private
+`AppDataLocation`, invisible to any other app including a file manager,
+which is workable for trying the build but not a real answer for someone's
+existing notes.
 
 **Plugins do not travel.** iOS does not let an app load code it did not ship
 with, and Android only loads native libraries packaged inside the app. So

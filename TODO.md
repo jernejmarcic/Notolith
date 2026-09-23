@@ -284,8 +284,19 @@ Jernej's rule: a new feature goes here and the current task carries on.
 - [x] **The whole tree builds and passes on Qt 6.7.3**, the Android kit's
       version, after patching md4qt's four 6.8-only conversions at fetch
       (`cmake/patch-md4qt.sh`). noteAppC's own code uses no 6.8+ API.
-- [ ] The actual Android build (Sonnet lane running 2026-09-23: arm64 debug APK
-      with the workspace kit, CMake and docs only), and a touch mode for the editor.
+- [x] **The actual Android build** (Sonnet lane, 2026-09-23): `android/`
+      (manifest, CMake wiring), yaml-cpp found via `find_package` with a
+      FetchContent fallback (needed for Android - see
+      `build(deps)` commit), 18 MB debug arm64 APK built and its contents
+      checked. NOTEAPPC_WITH_MEDIA also off there: Qt Multimedia links, but
+      androiddeployqt's plugin auto-detection cannot see its runtime-loaded
+      backend, and the two documented fixes (`QT_ANDROID_EXTRA_PLUGINS`,
+      `QT_ANDROID_DEPLOYMENT_DEPENDENCIES`) either land the plugin somewhere
+      Qt's loader never scans or require hand-listing every transitive Qt
+      dependency and broke the whole package on the one attempt made - not
+      worth it for a lane that does not touch the editor. Detail in
+      `docs/PLATFORMS.md`. A touch mode for the editor is still open, and
+      the APK has not run on a device.
 - [x] **Typing in a long code block was over budget.** Release, keystroke
       plus paint: 100 / 1 000 / 5 000 lines went 2.7 / 26 / 158 ms ->
       1.10 / 1.10 / 1.16 ms. Fences over 32 lines are 32-line blocks, the
@@ -433,5 +444,5 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       `sh tools/check.sh [--bench]` - the release build and all suites (perf
       guards and the new seeded round-trip fuzz among them), then a build
       with every optional module off and its suites.
-- [ ] The Android build, and a touch mode for the editor.
+- [x] The Android build - see above. A touch mode for the editor is still open.
 
