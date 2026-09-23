@@ -4,6 +4,7 @@
 
 #include <numeric>
 
+#include <QRegularExpression>
 #include <QSet>
 
 #include "Vault.h"
@@ -15,6 +16,39 @@
 namespace noteAppC::bases {
 
 namespace {
+
+/// A frontmatter scalar that is *entirely* a wikilink - `[[Note]]` or
+/// `[[Note|Alias]]`, optionally embed-marked (`![[...]]`, harmless here
+/// since a property value is text either way) - reads as a Link, the same
+/// as Obsidian: "Links in frontmatter properties are automatically
+/// recognized as Link objects" (obsidian.md/help/bases/syntax). A value
+/// that merely *contains* one mid-sentence stays plain text.
+const QRegularExpression &wikilinkPattern()
+{
+    static const QRegularExpression pattern(
+        QStringLiteral("^\\s*!?\\[\\[([^\\]|]+)(?:\\|([^\\]]+))?\\]\\]\\s*$"));
+    return pattern;
+}
+
+Value scalarPropertyValue(const QString &raw)
+{
+    const QRegularExpressionMatch m = wikilinkPattern().match(raw);
+    if (m.hasMatch())
+        return Value::ofLink(m.captured(1).trimmed(), m.captured(2).trimmed());
+    return Value::ofString(raw);
+}
+
+/// The same normalisation `link.linksTo()`'s fuzzy match needs, kept as its
+/// own copy rather than reaching into Expression.cpp's - this module and
+/// Expression are separate translation units, and the rule is four lines
+/// duplicated versus a link normaliser made public just for this.
+QString normalisedLinkKey(QString target)
+{
+    target = target.trimmed();
+    while (target.startsWith(QLatin1String("./"))) target.remove(0, 2);
+    if (target.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) target.chop(3);
+    return target.toCaseFolded();
+}
 
 /// A `FilterNode` tree, rendered as one expression string so it can be
 /// compiled and evaluated through the ordinary Expression parser instead of
@@ -54,8 +88,13 @@ Value valueFromProperty(const Property &property)
     if (property.values.isEmpty())
         return Value::empty();
     switch (property.type) {
-    case Property::Type::List:
-        return Value::ofList(property.values);
+    case Property::Type::List: {
+        QList<Value> items;
+        items.reserve(property.values.size());
+        for (const QString &item : property.values)
+            items << scalarPropertyValue(item);
+        return Value::ofValues(std::move(items));
+    }
     case Property::Type::Number: {
         bool ok = false;
         const double n = property.values.first().toDouble(&ok);
@@ -74,7 +113,7 @@ Value valueFromProperty(const Property &property)
     case Property::Type::Text:
     case Property::Type::Unknown:
     default:
-        return Value::ofString(property.values.first());
+        return scalarPropertyValue(property.values.first());
     }
 }
 
@@ -153,7 +192,37 @@ public:
         return v;
     }
 
+    /// `link.linksTo(file)`: the target `linkText` resolves to's own
+    /// outgoing links, found by the same path-or-basename fuzzy match
+    /// `file.hasLink()` uses - built once per query, from the rows already
+    /// held for filtering, not a second database pass.
+    QStringList outgoingLinksOf(const QString &linkText) const override
+    {
+        ensureLinkIndex();
+        const QString key = normalisedLinkKey(linkText);
+        if (const auto it = m_byPath.constFind(key); it != m_byPath.constEnd())
+            return m_owner->m_rows.at(it.value()).links;
+        if (const auto it = m_byName.constFind(basenameKey(key)); it != m_byName.constEnd())
+            return m_owner->m_rows.at(it.value()).links;
+        return {};
+    }
+
 private:
+    static QString basenameKey(const QString &key)
+    {
+        const qsizetype slash = key.lastIndexOf(u'/');
+        return slash < 0 ? key : key.mid(slash + 1);
+    }
+    void ensureLinkIndex() const
+    {
+        if (m_linkIndexBuilt) return;
+        m_linkIndexBuilt = true;
+        for (qsizetype i = 0; i < m_owner->m_rows.size(); ++i) {
+            const Row &row = m_owner->m_rows.at(i);
+            m_byPath.insert(normalisedLinkKey(row.notePath), i);
+            m_byName.insert(normalisedLinkKey(row.noteName), i);
+        }
+    }
     std::shared_ptr<Expression> compileFormula(const QString &name, const QString &text) const
     {
         if (const auto it = m_compiledFormulas.constFind(name); it != m_compiledFormulas.constEnd())
@@ -172,6 +241,8 @@ private:
     mutable QHash<QString, Value> m_memo;
     mutable QSet<QString> m_resolving;
     mutable QHash<QString, std::shared_ptr<Expression>> m_compiledFormulas;
+    mutable bool m_linkIndexBuilt = false;
+    mutable QHash<QString, qsizetype> m_byPath, m_byName;
 };
 
 // --- BaseQuery ------------------------------------------------------------

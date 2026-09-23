@@ -94,6 +94,22 @@ public:
     QString displayNameFor(const QString &propertyReference) const;
     const QList<ViewConfig> &views() const;
 
+    /// Rewrites `viewIndex`'s `sort:` to the single entry
+    /// `{property, direction}` - what clicking a table header means - by
+    /// editing `yamlText` in place: comments, key order and every other byte
+    /// are untouched, unlike serialize() (see the class doc). std::nullopt
+    /// when the file's own shape cannot be edited this way (flow-style
+    /// views, tabs instead of spaces, a view index out of range, ...); the
+    /// caller's own sort still applies on screen, it is just not saved.
+    static std::optional<QString> rewriteViewSort(const QString &yamlText, int viewIndex,
+                                                   const QString &propertyReference, SortDirection direction);
+
+    /// A new, empty base's starting content - one unnamed table view, so it
+    /// opens showing every note rather than nothing (BaseFile::parse would
+    /// give an empty file that same implicit view anyway; written out
+    /// explicitly is what a person hand-editing the file expects to find).
+    static QString newFileTemplate();
+
     BaseFile();
     BaseFile(const BaseFile &) = delete;
     BaseFile &operator=(const BaseFile &) = delete;
