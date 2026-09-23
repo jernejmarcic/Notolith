@@ -22,6 +22,8 @@ add_library(noteAppC_ui STATIC
     BookmarksPane.h
     TemplatePicker.cpp
     TemplatePicker.h
+    SearchPane.cpp
+    SearchPane.h
     SettingsPage.cpp
     SettingsPage.h
     ToggleSwitch.cpp
@@ -29,11 +31,13 @@ add_library(noteAppC_ui STATIC
 
 set_target_properties(noteAppC_ui PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets noteAppC_vault noteAppC_theme noteAppC_index
-    noteAppC_editor noteAppC_settings)
+# Qt6::Concurrent used to arrive only with the optional spell module; SearchPane
+# needs it unconditionally to run Index::search() off the UI thread.
+target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent noteAppC_vault noteAppC_theme
+    noteAppC_index noteAppC_editor noteAppC_settings)
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
 
 if(TARGET noteAppC_spell)
-    target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell Qt6::Concurrent)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SPELLCHECK)
 endif()
