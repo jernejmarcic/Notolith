@@ -352,6 +352,9 @@ private:
     /// "Graph view: Open graph view", in the main area; again returns to the
     /// note. Built on first use: nothing optional before first paint.
     void openGraph();
+    /// "Publish: Export the vault as a website": asks for a folder, then
+    /// writes the site there off the UI thread (libs/ext/publish).
+    void publishSite();
     /// (Re)builds the vault menu button's popup just before it shows, since
     /// its contents depend on OpenMode and the current vault.
     void rebuildVaultMenu();
@@ -417,6 +420,7 @@ private:
     QString m_noteHistoryRoot;
     int m_historyRecords = 0;
     bool m_spellLoading = false;
+    bool m_publishing = false;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width

@@ -535,6 +535,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Hover over a link to a note to see it: with Ctrl held while editing, "
                                        "on its own in reading view."),
          true},
+        {"publish", QT_TRANSLATE_NOOP("Settings", "Publish"),
+         QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
+                                       "website."),
+         true},
         {"switcher", QT_TRANSLATE_NOOP("Settings", "Quick switcher"),
          QT_TRANSLATE_NOOP("Settings", "Jump to any note by name with Ctrl+O."), true},
         {"global-search", QT_TRANSLATE_NOOP("Settings", "Search"),

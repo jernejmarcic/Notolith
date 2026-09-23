@@ -69,6 +69,9 @@
 #ifdef NOTEAPPC_HAVE_EPUB
 #include "EpubView.h"
 #endif
+#ifdef NOTEAPPC_HAVE_PUBLISH
+#include "Publisher.h"
+#endif
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
 #endif
@@ -1342,6 +1345,10 @@ void MainWindow::buildActions()
                 showRightPane(m_localGraph);
         });
 #endif
+#ifdef NOTEAPPC_HAVE_PUBLISH
+    add(QStringLiteral("publish:export"), tr("Publish: Export the vault as a website"), QString(),
+        &MainWindow::publishSite);
+#endif
     add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
         QStringLiteral("Ctrl+E"), &MainWindow::toggleReadingView);
     add(QStringLiteral("editor:toggle-source"), tr("Toggle Live Preview/Source mode"), QString(),
@@ -1988,6 +1995,70 @@ void MainWindow::updateSpelling()
     });
     watcher->setFuture(QtConcurrent::run(
         [] { return std::make_shared<SpellChecker>(SpellChecker::systemLanguages()); }));
+#endif
+}
+
+void MainWindow::publishSite()
+{
+#ifdef NOTEAPPC_HAVE_PUBLISH
+    if (!m_vault.isValid())
+        return;
+    if (m_publishing) {
+        statusBar()->showMessage(tr("Already publishing"), 3000);
+        return;
+    }
+    const QString folder = QFileDialog::getExistingDirectory(this, tr("Publish to folder"));
+    if (folder.isEmpty())
+        return;
+    // Obsidian Publish shares nothing until it is picked, so neither does
+    // this unless asked: marked notes only is the default button.
+    QMessageBox ask(QMessageBox::Question, tr("Publish"), tr("Which notes go on the site?"),
+                    QMessageBox::Cancel, this);
+    QPushButton *marked = ask.addButton(tr("Only notes with publish: true"), QMessageBox::AcceptRole);
+    ask.addButton(tr("Every note"), QMessageBox::AcceptRole);
+    ask.setDefaultButton(marked);
+    ask.exec();
+    if (ask.clickedButton() == ask.button(QMessageBox::Cancel))
+        return;
+    const bool onlyMarked = ask.clickedButton() == marked;
+
+    struct Result {
+        bool ok = false;
+        QString error;
+        publish::Counts counts;
+    };
+    m_publishing = true;
+    statusBar()->showMessage(tr("Publishing..."));
+    auto *watcher = new QFutureWatcher<Result>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        const Result result = watcher->result();
+        watcher->deleteLater();
+        m_publishing = false;
+        if (!result.ok) {
+            statusBar()->clearMessage();
+            QMessageBox::warning(this, tr("Publish"), tr("Could not publish the vault:\n%1").arg(result.error));
+            return;
+        }
+        statusBar()->showMessage(tr("Published %n page(s)", nullptr, result.counts.pages), 5000);
+    });
+    // Publisher queries the index on the thread that calls it, and an Index
+    // is one connection for one thread: this run opens its own on the same
+    // cache (WAL, so the indexer is not blocked) instead of sharing m_index.
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, folder, onlyMarked] {
+        Result result;
+        Index index;
+        if (!index.open(vault.root())) {
+            result.error = index.lastError();
+            return result;
+        }
+        publish::Publisher publisher(vault, index);
+        publish::Options options;
+        options.outputDir = folder;
+        options.onlyMarked = onlyMarked;
+        result.ok = publisher.publish(options, {}, &result.error);
+        result.counts = publisher.counts();
+        return result;
+    }));
 #endif
 }
 

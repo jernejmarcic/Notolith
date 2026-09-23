@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QtConcurrent>
 
 #include "Index.h"
 #include "Indexer.h"
@@ -377,6 +378,36 @@ TEST(PublishTest, RefusesTheVaultRootItself)
     QString error;
     EXPECT_FALSE(publisher.publish(options, nullptr, &error));
     EXPECT_FALSE(error.isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// Off the UI thread
+
+// What MainWindow::publishSite does: its own Index on the same cache, opened
+// on the pool thread that publishes, so links resolve without touching the
+// UI thread's connection.
+TEST(PublishTest, PublishesFromAPoolThreadWithItsOwnIndex)
+{
+    TestSite site({
+        {QStringLiteral("Root.md"), "See [[notes/Sub]].\n"},
+        {QStringLiteral("notes/Sub.md"), "Body.\n"},
+    });
+    const Vault vault = site.vault;
+    const QString folder = site.outDir.path();
+    const QString error = QtConcurrent::run([vault, folder] {
+        Index index;
+        if (!index.open(vault.root()))
+            return index.lastError();
+        Publisher publisher(vault, index);
+        Options options;
+        options.outputDir = folder;
+        QString failure;
+        if (!publisher.publish(options, nullptr, &failure))
+            return failure;
+        return publisher.counts().pages == 2 ? QString() : QStringLiteral("wrong page count");
+    }).result();
+    EXPECT_TRUE(error.isEmpty()) << error.toStdString();
+    EXPECT_TRUE(site.read(QStringLiteral("root.html")).contains(QStringLiteral("href=\"notes/sub.html\"")));
 }
 
 int main(int argc, char **argv)
