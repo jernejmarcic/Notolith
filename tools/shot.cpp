@@ -4,11 +4,14 @@
 //
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
 //   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single
+//   ... [--command <id> [--type <text>]]
 
+#include <QAction>
 #include <QApplication>
 #include <QFileInfo>
 #include <QTemporaryDir>
 #include <QImage>
+#include <QLineEdit>
 #include <QStyleFactory>
 #include <QTimer>
 
@@ -101,15 +104,39 @@ int main(int argc, char *argv[])
         window.toggleEditingMode();
     window.show();
 
+    // `--command <id>` triggers a window command (its Obsidian command id)
+    // once the vault is indexed, and `--type <text>` then types into whatever
+    // it focused: enough to show a pane or a search the way a user reaches it.
+    const auto flag = [&args](const char *name) {
+        const qsizetype at = args.indexOf(QLatin1String(name));
+        return at >= 0 ? args.value(at + 1) : QString();
+    };
+    const QString command = flag("--command");
+    const QString typed = flag("--type");
+
     int status = 0;
-    // One turn of the event loop so QFileSystemModel's worker fills the tree.
-    QTimer::singleShot(600, &app, [&] {
+    const auto capture = [&] {
         const QImage shot = window.grab().toImage();
         if (!shot.save(args.at(3))) {
             qWarning("could not write %s", qPrintable(args.at(3)));
             status = 1;
         }
         app.quit();
+    };
+    // One turn of the event loop so QFileSystemModel's worker fills the tree.
+    QTimer::singleShot(600, &app, [&] {
+        if (command.isEmpty())
+            return capture();
+        auto *action = window.findChild<QAction *>(command);
+        if (!action) {
+            qWarning("no command %s", qPrintable(command));
+            status = 1;
+            return app.quit();
+        }
+        action->trigger();
+        if (auto *edit = qobject_cast<QLineEdit *>(QApplication::focusWidget()); edit && !typed.isEmpty())
+            edit->setText(typed);
+        QTimer::singleShot(1200, &app, capture); // a debounced search, a settling graph
     });
     app.exec();
     return status;
