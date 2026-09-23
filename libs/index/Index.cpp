@@ -766,4 +766,52 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     return rewritten;
 }
 
+// --- graph view (libs/ext/graph) ------------------------------------------
+// Added for the optional graph module; see the matching block at the end of
+// Index.h. Two queries total, matching the "no per-note queries" budget the
+// rest of Index already holds itself to (put()/remove() are the exception,
+// and only because a write genuinely is per-note).
+
+Index::GraphData Index::graphData() const
+{
+    GraphData result;
+    if (!m_db.isOpen())
+        return result;
+
+    // Files, with each one's tags concatenated in the same query - the
+    // second query below is the only other one this method runs. Char 30
+    // (ASCII record separator) is not a character a tag can contain.
+    QSqlQuery files(m_db);
+    files.exec(QStringLiteral(
+        "SELECT files.path, files.words, GROUP_CONCAT(tags.name, char(30)) FROM files "
+        "LEFT JOIN tags ON tags.file = files.id GROUP BY files.id ORDER BY files.path"));
+    while (files.next()) {
+        GraphFileInfo file;
+        file.path = files.value(0).toString();
+        file.isAttachment = files.value(1).toInt() < 0;
+        const QString tags = files.value(2).toString();
+        if (!tags.isEmpty())
+            file.tags = tags.split(QChar(30), Qt::SkipEmptyParts);
+        result.files.append(file);
+    }
+
+    const QDir vaultDir(m_vaultRoot);
+    QSqlQuery links(m_db);
+    links.exec(QStringLiteral(
+        "SELECT src.path, links.target FROM links "
+        "JOIN files AS src ON src.id = links.file WHERE links.external = 0"));
+    while (links.next()) {
+        GraphLinkInfo link;
+        link.fromPath = links.value(0).toString();
+        link.targetName = links.value(1).toString();
+        // resolve() is an in-memory hash lookup (see m_names), not a query,
+        // so running it once per link here still holds the "no per-note
+        // queries" budget.
+        link.toPath = resolve(link.targetName, vaultDir.absoluteFilePath(link.fromPath));
+        result.links.append(link);
+    }
+
+    return result;
+}
+
 } // namespace noteAppC

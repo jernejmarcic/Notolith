@@ -117,6 +117,39 @@ private:
     QHash<QString, QStringList> m_names;
     /// vault-relative path -> the names it registered, so a remove is exact.
     QHash<QString, QStringList> m_pathNames;
+
+    // --- graph view (libs/ext/graph) ----------------------------------
+    // Added for the optional graph module. Kept in its own block at the end
+    // of the class, separate from everything above, since another engineer
+    // edits the rest of Index in parallel.
+public:
+    /// One note or attachment as the graph needs it - no ranges, no
+    /// properties, just enough to build a node.
+    struct GraphFileInfo {
+        QString path; ///< vault-relative
+        bool isAttachment = false;
+        QStringList tags;
+    };
+
+    /// One internal link as the graph needs it. `toPath` is resolve()'s
+    /// answer, empty when the link does not resolve to anything in the
+    /// vault; `targetName` is the raw target text, for labelling that case.
+    struct GraphLinkInfo {
+        QString fromPath;
+        QString toPath;
+        QString targetName;
+    };
+
+    struct GraphData {
+        QList<GraphFileInfo> files;
+        QList<GraphLinkInfo> links;
+    };
+
+    /// Every note/attachment and every internal link in the vault, in two
+    /// queries - no per-note round trips. GraphView (libs/ext/graph) turns
+    /// this into nodes and edges and does its own filtering; Index does
+    /// neither.
+    GraphData graphData() const;
 };
 
 } // namespace noteAppC
