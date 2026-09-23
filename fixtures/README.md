@@ -5,7 +5,7 @@ exercises most of the syntax noteAppC renders, a second gives it something to
 link to, embed and resolve.
 
 ```sh
-./build/tools/noteAppC_shot fixtures/demo-vault fixtures/demo-vault/Welcome.md out.png dark 1240 800
+/tmp/noteAppC-build/tools/noteAppC_shot fixtures/demo-vault fixtures/demo-vault/Welcome.md out.png dark 1240 800
 ```
 
 It carries a `.obsidian/app.json` so the vault-config path is exercised too.

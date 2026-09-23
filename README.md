@@ -28,32 +28,34 @@ Phase 3 is under way.
   colour schemes, and an importer for the palette of any Obsidian theme
   already installed in the vault.
 
-Not yet: math, `:::` containers, properties table, graph view, canvas, search
-grammar, HTML blocks, PDF and media embeds. Never: plugins in JavaScript,
+Not yet: graph view, canvas, search grammar, HTML blocks, media embeds. Never: plugins in JavaScript,
 Sync, Publish.
 
 ## Build
 
+Build under `/tmp`, not in the project: `~/Documents` is synced to every
+machine, and a build directory is gigabytes nobody needs copied.
+
 ```sh
-cmake -B build -G Ninja     # once, and again only if CMakeLists changes
-cmake --build build         # after every edit - this is the one you repeat
-ctest --test-dir build      # all seven suites, about six seconds
-./build/apps/noteAppC/noteAppC            # opens the last vault
-./build/apps/noteAppC/noteAppC ~/notes    # a vault
-./build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile
+cmake -B /tmp/noteAppC-build -G Ninja     # once, and again only if CMakeLists changes
+cmake --build /tmp/noteAppC-build         # after every edit - this is the one you repeat
+ctest --test-dir /tmp/noteAppC-build      # all ten suites, about six seconds
+/tmp/noteAppC-build/apps/noteAppC/noteAppC            # opens the last vault
+/tmp/noteAppC-build/apps/noteAppC/noteAppC ~/notes    # a vault
+/tmp/noteAppC-build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile
 ```
 
-`cmake --build build` is incremental and takes a second or two when little
+`cmake --build /tmp/noteAppC-build` is incremental and takes a second or two when little
 changed, so run it before every launch. Running an old binary looks exactly
 like a feature not working.
 
 Requires `qt6-base`, `yaml-cpp`, `cmake`, `ninja`, a C++20 compiler, and
-`gtest` for the tests (`ctest --test-dir build`). md4qt is fetched at
+`gtest` for the tests (`ctest --test-dir /tmp/noteAppC-build`). md4qt is fetched at
 configure time.
 
 Render the window to a PNG without a display, which is how the look is
 reviewed:
 
 ```sh
-./build/tools/noteAppC_shot <vault> <note> out.png dark 1180 760
+/tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1180 760
 ```

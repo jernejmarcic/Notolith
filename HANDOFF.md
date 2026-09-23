@@ -36,7 +36,11 @@ JavaScript, no QML, no browser engine, no Electron.
    every way; perceived speed never bought with more than 10 ms of real
    speed; nothing optional before the first paint; many CPUs, one core as the
    floor, a phone later; simplicity first, extras cost nothing when off.
-6. Naming is modified camelCase: initialisms stay uppercase (`noteID`,
+6. **Build outside the tree.** `~/Documents` is shared by Syncthing, so a
+   build directory in here is copied to every machine; builds go under
+   `/tmp` (`/tmp/noteAppC-build` in every command below), and so do
+   hand-made git worktrees.
+7. Naming is modified camelCase: initialisms stay uppercase (`noteID`,
    `JSONdata`, `HTMLblock`), never `noteId`.
 
 ## State
@@ -106,16 +110,16 @@ Reproduce it:
 
 ```sh
 python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
-./build/tools/noteAppC-index --fresh /tmp/bench-vault
+/tmp/noteAppC-build/tools/noteAppC-index --fresh /tmp/bench-vault
 ```
 
 ## Building and looking at it
 
 ```sh
-cmake -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
-./build/apps/noteAppC/noteAppC <vault-or-file>
+cmake -B /tmp/noteAppC-build -G Ninja
+cmake --build /tmp/noteAppC-build
+ctest --test-dir /tmp/noteAppC-build --output-on-failure
+/tmp/noteAppC-build/apps/noteAppC/noteAppC <vault-or-file>
 ```
 
 Under AddressSanitizer and UBSan, which found a use-after-free in a test and
@@ -123,19 +127,19 @@ a malloc/delete mismatch in MicroTeX on 2026-09-23 - worth a run after any
 change to ownership or lifetimes. Wall-clock budgets fail under it, by design:
 
 ```sh
-cmake -B build-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+cmake -B /tmp/noteAppC-asan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
     "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer" \
     "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"
-cmake --build build-asan
-ASAN_OPTIONS=detect_leaks=0 QT_QPA_PLATFORM=offscreen ctest --test-dir build-asan
+cmake --build /tmp/noteAppC-asan
+ASAN_OPTIONS=detect_leaks=0 QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-asan
 ```
 
 Render the window offscreen, which is how the look gets reviewed without a
 display:
 
 ```sh
-./build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800
-./build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800 --source
+/tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800
+/tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800 --source
 ```
 
 `fixtures/demo-vault` is committed for exactly this: one note covering most of
@@ -143,7 +147,7 @@ the syntax, a second to link to and embed, and a `.obsidian` so the
 vault-config path is exercised.
 
 ```sh
-./build/tools/noteAppC_shot fixtures/demo-vault fixtures/demo-vault/Welcome.md out.png dark 1240 820
+/tmp/noteAppC-build/tools/noteAppC_shot fixtures/demo-vault fixtures/demo-vault/Welcome.md out.png dark 1240 820
 ```
 
 Use it rather than building a vault by hand, so the next person can retake the

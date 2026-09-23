@@ -108,7 +108,7 @@ formats, and code blocks still render, monospaced and uncoloured. The two
 Built with `CMAKE_PREFIX_PATH` pointed at the Android kit's `gcc_64` sibling
 build (`~/Documents/AI/.toolchains/Qt/6.7.3/gcc_64`, a desktop Qt 6.7.3 build
 matching the `android_arm64_v8a` one) and both new options `OFF`, in a
-separate `build-qt673/` directory. No Qt module the root `CMakeLists.txt`
+separate `/tmp/noteAppC-qt673/` directory. No Qt module the root `CMakeLists.txt`
 asks for (`Widgets Svg Sql Concurrent Network`, optional `OpenGLWidgets` and
 `Test`) is missing from the kit - configure succeeds cleanly.
 
@@ -149,11 +149,11 @@ build chose.
 To repeat the check:
 
 ```sh
-env -u CFLAGS -u CXXFLAGS cmake -B build-qt673 -G Ninja \
+env -u CFLAGS -u CXXFLAGS cmake -B /tmp/noteAppC-qt673 -G Ninja \
     -DCMAKE_PREFIX_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
     -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDF=OFF
-cmake --build build-qt673
-QT_QPA_PLATFORM=offscreen ctest --test-dir build-qt673
+cmake --build /tmp/noteAppC-qt673
+QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-qt673
 ```
 
 This is the desktop build of the Android kit's Qt, not an Android build: it

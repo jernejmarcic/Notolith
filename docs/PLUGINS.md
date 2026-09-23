@@ -41,7 +41,7 @@ Bases, export, git sync. Each is a library under `libs/ext/<name>/`, behind a
 CMake option, and the application links it only when the option is on:
 
 ```sh
-cmake -B build -DNOTEAPPC_WITH_SPELLCHECK=ON -DNOTEAPPC_WITH_GRAPH=ON
+cmake -B /tmp/noteAppC-build -DNOTEAPPC_WITH_SPELLCHECK=ON -DNOTEAPPC_WITH_GRAPH=ON
 ```
 
 This is not new. It is the pattern the codebase already uses twice: PDF embeds

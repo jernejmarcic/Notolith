@@ -2,7 +2,7 @@
 """Generates a synthetic vault for timing the indexer.
 
     python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
-    ./build/tools/noteAppC-index --fresh /tmp/bench-vault
+    /tmp/noteAppC-build/tools/noteAppC-index --fresh /tmp/bench-vault
 
 Notes are spread over five folders with a realistic link density (two to eight
 wikilinks each, so the name table and resolution do real work) and carry

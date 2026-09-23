@@ -57,13 +57,13 @@ See [the async parse](#8-a-big-note-is-shown-before-it-is-parsed).
 ## Measuring
 
 ```sh
-cmake --build build
-./build/tools/bench/noteAppC-bench                     # the table, headless
-./build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
-./build/tools/bench/noteAppC-bench --viewport 3440x1440
-QT_SCALE_FACTOR=2 ./build/tools/bench/noteAppC-bench --viewport 2560x1440
+cmake --build /tmp/noteAppC-build
+/tmp/noteAppC-build/tools/bench/noteAppC-bench                     # the table, headless
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 3440x1440
+QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
-    cage -- ./build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
+    cage -- /tmp/noteAppC-build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
 ```
 
 `--gpu` needs a real window and a real GPU context, but never a real monitor:
@@ -79,7 +79,7 @@ To find where time goes, `perf` works on the real binaries:
 
 ```sh
 QT_QPA_PLATFORM=offscreen perf record -g --call-graph=dwarf -F 299 \
-    ./build/tools/noteAppC_shot <vault> <note> out.png dark 900 600
+    /tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 900 600
 perf report --stdio --no-children -g none --percent-limit 1.5
 ```
 
