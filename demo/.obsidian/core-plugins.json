@@ -1,0 +1,18 @@
+{
+  "backlink": true,
+  "bases": true,
+  "bookmarks": true,
+  "canvas": true,
+  "daily-notes": true,
+  "file-recovery": true,
+  "graph": true,
+  "outgoing-link": true,
+  "outline": true,
+  "page-preview": true,
+  "switcher": true,
+  "global-search": true,
+  "tag-pane": true,
+  "templates": true,
+  "word-count": true,
+  "workspaces": true
+}

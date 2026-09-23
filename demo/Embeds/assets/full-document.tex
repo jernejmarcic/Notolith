@@ -1,0 +1,30 @@
+\documentclass{article}
+\usepackage{amsmath}
+
+\title{A Small Compiling Document}
+\author{demo vault}
+\date{}
+
+\begin{document}
+\maketitle
+
+This file is embedded whole with \verb|![[full-document.tex]]|. Per
+TODO.md's "afternoon: embeds" entry, a whole \texttt{.tex} document is meant
+to be compiled off the UI thread by whatever \texttt{pdflatex} is on the
+machine and shown with the same page arguments as a PDF embed.
+
+\section{A short derivation}
+
+The quadratic formula solves $ax^2 + bx + c = 0$ for $x$:
+\[
+  x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+\]
+
+\begin{equation}
+  \sum_{i=1}^{n} i = \frac{n(n+1)}{2}
+\end{equation}
+
+Only standard packages are used (\texttt{amsmath}), and this compiles with
+plain \texttt{pdflatex full-document.tex} with no shell escape.
+
+\end{document}
