@@ -1672,6 +1672,29 @@ TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)
     EXPECT_FALSE(block->panelTextAt(0).contains(QStringLiteral("First section body")));
 }
 
+TEST(RuleTest, AThematicBreakIsDrawnAsALine)
+{
+    auto editor = editorWith(QStringLiteral("above\n\n---\n\nbelow\n"));
+    editor->setCursorOffset(editor->noteText().size()); // off the rule's line
+    editor->show();
+    QApplication::processEvents();
+    const QImage shot = editor->viewport()->grab().toImage();
+    const QColor background = shot.pixelColor(2, shot.height() - 2);
+    // A line: some row where most of the text column is one colour that is
+    // not the background.
+    bool found = false;
+    for (int y = 0; y < shot.height() && !found; ++y) {
+        QHash<QRgb, int> counts;
+        for (int x = 0; x < shot.width(); ++x)
+            ++counts[shot.pixel(x, y)];
+        for (auto it = counts.cbegin(); it != counts.cend(); ++it) {
+            if (QColor(it.key()) != background && it.value() > shot.width() / 2)
+                found = true;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
 TEST(CodeBlockHookTest, APluginLanguageIsDrawnAsItsRendererAnswers)
 {
     auto editor = editorWith(QStringLiteral("```calc\n2+2\n```\n\n```text\nplain\n```\n\nafter\n"));

@@ -826,6 +826,14 @@ void walkItem(MD::Item *item, Walk &walk)
         collectStyles(withOpts, walk);
 
     switch (item->type()) {
+    case MD::ItemType::HorizontalLine:
+        // `---`, `***`, `___`: a rule, drawn as one; its characters are syntax.
+        if (walk.depth == 0) {
+            const Range range = rangeOf(*item, map);
+            walk.decorations.blocks.append({BlockSpan::Kind::Rule, range, 0});
+            walk.decorations.syntax.append(range);
+        }
+        break;
     case MD::ItemType::Heading: {
         auto *heading = static_cast<MD::Heading *>(item);
         Heading out;

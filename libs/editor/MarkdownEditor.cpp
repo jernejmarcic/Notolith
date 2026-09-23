@@ -2962,6 +2962,17 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             painter.setPen(text);
         }
 
+        // A `---` rule, its characters hidden, is a line across the text
+        // column - until the caret is on it and it shows as typed.
+        if (view.span.kind == BlockSpan::Kind::Rule && m_mode != Mode::Source && !view.active) {
+            const qreal y = std::round(top + view.height / 2.0) + 0.5;
+            painter.save();
+            painter.setPen(QPen(m_theme.color(QStringLiteral("--background-modifier-border")), 2));
+            painter.drawLine(QPointF(left, y), QPointF(left + contentWidth(), y));
+            painter.restore();
+            continue;
+        }
+
         if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
             paintCodeChrome(painter, view, left, top);
             painter.setPen(text);
