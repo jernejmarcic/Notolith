@@ -12,6 +12,7 @@
 #include "Vault.h"
 
 class QFileSystemModel;
+class QFileSystemWatcher;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -137,6 +138,17 @@ private:
     /// call or a settings-page edit made before switching vaults should
     /// survive the switch, not be silently dropped by re-reading disk.
     void reloadSettings(const QString &vaultRoot);
+    /// Points m_themeWatcher at every directory Scheme::searchPaths() would
+    /// look in (so adding or removing a theme file updates the settings
+    /// page's list) plus the selected scheme's own file (so editing it
+    /// restyles the window). A no-op when neither the vault nor the selected
+    /// scheme has changed since the last call, so this costs nothing on the
+    /// settings-page keystroke path.
+    void watchThemeFiles();
+    /// QFileSystemWatcher fired: re-applies the theme, puts back any watch a
+    /// save-by-rename dropped, and refreshes the settings page's scheme list
+    /// if it is open.
+    void reloadThemeFiles();
     /// Offers to save a modified note. False means the user cancelled.
     bool maybeSave();
     void updateTitle();
@@ -208,6 +220,14 @@ private:
     /// back. -1 means nothing has been opened yet.
     QStringList m_history;
     int m_historyIndex = -1;
+
+    /// Live reload for the selected colour scheme and the directories it can
+    /// be picked from; owned because MainWindow is what applies the theme.
+    QFileSystemWatcher *m_themeWatcher = nullptr;
+    /// What m_themeWatcher is currently set up for, so watchThemeFiles() can
+    /// skip the rescan when nothing that would change it has moved.
+    QString m_watchedSchemePath;
+    QString m_watchedThemeVaultRoot;
 
     QFileSystemModel *m_files = nullptr;
     QTreeView *m_tree = nullptr;

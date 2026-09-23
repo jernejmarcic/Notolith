@@ -7,7 +7,9 @@
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileIconProvider>
+#include <QFileInfo>
 #include <QFileSystemModel>
+#include <QFileSystemWatcher>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -710,6 +712,11 @@ void MainWindow::applySettings()
 
 void MainWindow::applyTheme()
 {
+    // Keeps the watch on the right files as settings change - but only once
+    // watching has begun, which openTarget does after the first paint. Live
+    // reload is optional, and nothing optional runs before the window is up.
+    if (m_themeWatcher)
+        watchThemeFiles();
     Icons::clearCache();
 
     if (auto *app = qobject_cast<QApplication *>(QCoreApplication::instance())) {
@@ -817,6 +824,65 @@ void MainWindow::reloadSettings(const QString &vaultRoot)
     for (auto it = unsaved.constBegin(); it != unsaved.constEnd(); ++it)
         m_settings.setValue(it.key(), it.value());
     m_settingsPage->setContext(&m_settings, vaultRoot);
+}
+
+void MainWindow::watchThemeFiles()
+{
+    const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
+    const QString vaultRoot = m_vault.root();
+    if (m_themeWatcher && schemePath == m_watchedSchemePath && vaultRoot == m_watchedThemeVaultRoot)
+        return;
+
+    if (!m_themeWatcher) {
+        m_themeWatcher = new QFileSystemWatcher(this);
+        connect(m_themeWatcher, &QFileSystemWatcher::fileChanged, this,
+                &MainWindow::reloadThemeFiles);
+        connect(m_themeWatcher, &QFileSystemWatcher::directoryChanged, this,
+                &MainWindow::reloadThemeFiles);
+    }
+    const QStringList current = m_themeWatcher->directories() + m_themeWatcher->files();
+    if (!current.isEmpty())
+        m_themeWatcher->removePaths(current);
+
+    // Nothing is created here. ~/.config/noteAppC appears only when something
+    // is saved - opening a stray note must leave nothing behind - so a themes
+    // directory that does not exist yet is simply not watched; the settings
+    // page lists what is there whenever it opens.
+    // Every directory Scheme::available() would look in, so adding or
+    // removing a theme file is noticed even when no scheme is selected yet.
+    for (const QString &dir : Scheme::searchPaths(vaultRoot)) {
+        if (QFileInfo(dir).isDir())
+            m_themeWatcher->addPath(dir);
+    }
+    // The selected scheme's own file, and (the same reason
+    // MarkdownEditor::watchStyleFiles watches a directory too) the directory
+    // holding it, in case an editor saves by renaming a new file over the
+    // old one and drops inotify's watch on the file itself.
+    if (!schemePath.isEmpty()) {
+        const QString directory = QFileInfo(schemePath).absolutePath();
+        if (QFileInfo(directory).isDir() && !m_themeWatcher->directories().contains(directory))
+            m_themeWatcher->addPath(directory);
+        if (QFile::exists(schemePath))
+            m_themeWatcher->addPath(schemePath);
+    }
+
+    m_watchedSchemePath = schemePath;
+    m_watchedThemeVaultRoot = vaultRoot;
+}
+
+void MainWindow::reloadThemeFiles()
+{
+    const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
+    if (!schemePath.isEmpty() && QFile::exists(schemePath) && m_themeWatcher
+        && !m_themeWatcher->files().contains(schemePath)) {
+        m_themeWatcher->addPath(schemePath);
+    }
+    m_theme = themeFromSettings();
+    applyTheme();
+    // A theme added, removed or renamed changes what the combo box should
+    // list; setContext() only rebuilds immediately if the page happens to be
+    // visible right now, and otherwise just marks it stale for next time.
+    m_settingsPage->setContext(&m_settings, m_vault.root());
 }
 
 void MainWindow::clearOpenNote()
@@ -949,6 +1015,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
         break;
     }
     }
+    watchThemeFiles(); // after the first paint: openWhenShown queued this call
 }
 
 void MainWindow::openWhenShown(const LaunchTarget &target)

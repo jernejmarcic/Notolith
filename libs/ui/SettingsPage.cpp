@@ -107,6 +107,15 @@ void SettingsPage::keyPressEvent(QKeyEvent *event)
     QWidget::keyPressEvent(event);
 }
 
+void SettingsPage::hideEvent(QHideEvent *event)
+{
+    // Rebuilt on the next open, so a theme added where nothing was watching -
+    // a themes directory created after launch - is still listed then. It
+    // costs nothing until someone opens the page again.
+    m_needsRebuild = true;
+    QWidget::hideEvent(event);
+}
+
 void SettingsPage::showEvent(QShowEvent *event)
 {
     if (m_needsRebuild)

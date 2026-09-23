@@ -8,6 +8,7 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
@@ -31,12 +32,14 @@
 
 #include "Index.h"
 #include "MainWindow.h"
+#include "Settings.h"
 #include "Vault.h"
 
 using noteAppC::Index;
 using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
 using noteAppC::MarkdownEditor;
+using noteAppC::Settings;
 
 namespace {
 
@@ -738,6 +741,122 @@ TEST_F(WindowTest, CtrlCommaOpensSettingsAndEscapeCloses)
     ASSERT_NE(settingsPage, nullptr);
     QTest::keyClick(settingsPage, Qt::Key_Escape);
     EXPECT_EQ(stack->currentIndex(), 0);
+}
+
+TEST_F(WindowTest, EditingTheSelectedThemeFileRestylesLive)
+{
+    // Its own private config home: the suite-wide one in main() is shared by
+    // every test in this binary, and this test writes an actual theme file
+    // into it rather than just settings.ini.
+    const QByteArray previousConfigHome = qgetenv("XDG_CONFIG_HOME");
+    QTemporaryDir configHome;
+    ASSERT_TRUE(configHome.isValid());
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+
+    const QString themesDir = Settings::themesDirectory();
+    ASSERT_TRUE(QDir().mkpath(themesDir));
+    const QString schemePath = QDir(themesDir).filePath(QStringLiteral("Live.json"));
+    {
+        QFile file(schemePath);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QByteArrayLiteral(R"({"name":"Live","dark":{"--background-primary":"#111111"}})"));
+    }
+
+    MainWindow window;
+    // openTarget, as main.cpp reaches it through openWhenShown: watching theme
+    // files starts there, after the first paint, not in the constructor.
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    // SettingsPage builds its rows lazily on showEvent(), which only fires
+    // once the window itself is actually shown - not just given focus in the
+    // stacked widget.
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *settingsButton = window.findChild<QToolButton *>(QStringLiteral("headerSettingsButton"));
+    ASSERT_NE(settingsButton, nullptr);
+    settingsButton->click();
+
+    auto *combo = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int index = combo->findData(schemePath);
+    ASSERT_GE(index, 0) << "Live.json was not offered - themesDirectory() and "
+                           "Scheme::searchPaths() have drifted apart again";
+    combo->setCurrentIndex(index);
+    EXPECT_EQ(window.theme().value(QStringLiteral("--background-primary")),
+              QStringLiteral("#111111"));
+
+    // Edited the way a person's editor does - in place - with no call back
+    // into MainWindow at all: only the file on disk changed.
+    {
+        QFile file(schemePath);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        file.write(QByteArrayLiteral(R"({"name":"Live","dark":{"--background-primary":"#222222"}})"));
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 5000
+           && window.theme().value(QStringLiteral("--background-primary"))
+                  != QStringLiteral("#222222")) {
+        QCoreApplication::processEvents();
+        QTest::qWait(10);
+    }
+    EXPECT_EQ(window.theme().value(QStringLiteral("--background-primary")),
+              QStringLiteral("#222222"));
+
+    qputenv("XDG_CONFIG_HOME", previousConfigHome);
+}
+
+TEST_F(WindowTest, AddingAThemeFileRefreshesTheOpenSettingsPagesList)
+{
+    const QByteArray previousConfigHome = qgetenv("XDG_CONFIG_HOME");
+    QTemporaryDir configHome;
+    ASSERT_TRUE(configHome.isValid());
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+
+    // The themes directory exists before launch, as it does for anyone who
+    // has themes: noteAppC never creates it just to watch it, since opening a
+    // note must leave nothing behind in ~/.config.
+    const QString themesDir = Settings::themesDirectory();
+    ASSERT_TRUE(QDir().mkpath(themesDir));
+
+    MainWindow window;
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *settingsButton = window.findChild<QToolButton *>(QStringLiteral("headerSettingsButton"));
+    ASSERT_NE(settingsButton, nullptr);
+    settingsButton->click();
+
+    auto *combo = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+    ASSERT_NE(combo, nullptr);
+    const int before = combo->count();
+
+    {
+        QFile file(QDir(themesDir).filePath(QStringLiteral("New.json")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QByteArrayLiteral(R"({"name":"New","dark":{}})"));
+    }
+
+    // setContext() only rebuilds this instant if the page is visible, which it
+    // is here - so the combo (a fresh widget each rebuild, not the one above)
+    // should gain the new entry without the page ever being closed.
+    QElapsedTimer timer;
+    timer.start();
+    QComboBox *refreshed = nullptr;
+    while (timer.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        refreshed = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+        if (refreshed && refreshed->count() > before)
+            break;
+        QTest::qWait(10);
+    }
+    ASSERT_NE(refreshed, nullptr);
+    EXPECT_GT(refreshed->count(), before);
+    EXPECT_GE(refreshed->findData(QDir(themesDir).filePath(QStringLiteral("New.json"))), 0);
+
+    qputenv("XDG_CONFIG_HOME", previousConfigHome);
 }
 
 int main(int argc, char **argv)

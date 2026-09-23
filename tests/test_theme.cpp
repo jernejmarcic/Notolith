@@ -170,6 +170,50 @@ TEST(Scheme, savesAndReloadsWhatTheUserChanged)
               QStringLiteral("#fffdf7"));
 }
 
+TEST(Scheme, findsThemesInTheDirectorySettingsDocuments)
+{
+    QTemporaryDir xdgHome;
+    ASSERT_TRUE(xdgHome.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", xdgHome.path().toUtf8());
+
+    // Settings::themesDirectory() documents ~/.config/noteAppC/themes (or
+    // $XDG_CONFIG_HOME/noteAppC/themes if that is set). Scheme::searchPaths()
+    // used to ask QStandardPaths::AppConfigLocation instead, which - since
+    // main.cpp sets both the organisation and the application name to
+    // "noteAppC" - names .../noteAppC/noteAppC/themes, one directory too deep.
+    // A theme placed exactly where the docs say must be found here, not just
+    // in a directory nobody was told about.
+    const QString documented = QDir(xdgHome.path()).filePath(QStringLiteral("noteAppC/themes"));
+    writeFile(QDir(documented).filePath(QStringLiteral("Mine.json")),
+              QStringLiteral(R"({"name":"Mine","dark":{"--color-base-00":"#0f1419"}})"));
+
+    const QList<SchemeInfo> schemes = Scheme::available();
+    ASSERT_EQ(schemes.size(), 1);
+    EXPECT_EQ(schemes.at(0).name, QStringLiteral("Mine"));
+    EXPECT_EQ(schemes.at(0).path, QDir(documented).filePath(QStringLiteral("Mine.json")));
+
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+TEST(Scheme, findsALooseCSSFileNotJustAnObsidianThemeFolder)
+{
+    QTemporaryDir vault;
+    // Obsidian only ever installs a theme as <name>/theme.css; a person
+    // dropping a bare .css file into the themes directory must still get a
+    // scheme out of it, named after the file and read the same way.
+    writeFile(vault.filePath(QStringLiteral(".obsidian/noteAppC-themes/Loose.css")),
+              QStringLiteral(".theme-dark { --color-base-00: #202020; }"));
+
+    const QList<SchemeInfo> schemes = Scheme::available(vault.path());
+    ASSERT_EQ(schemes.size(), 1);
+    EXPECT_EQ(schemes.at(0).name, QStringLiteral("Loose"));
+    EXPECT_TRUE(schemes.at(0).obsidianCSS);
+
+    const Theme theme = Scheme::apply(schemes.at(0).path, Theme::Mode::Dark);
+    EXPECT_EQ(theme.value(QStringLiteral("--background-primary")), QStringLiteral("#202020"));
+}
+
 TEST(Scheme, findsVaultSchemesAndInstalledObsidianThemes)
 {
     QTemporaryDir vault;

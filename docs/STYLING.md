@@ -138,3 +138,33 @@ A bare `tab` takes the language's name and icon from `codeblocks.ini`;
 any other text ends the group. The Copy button copies the tab being shown.
 With the caret inside the group every fence shows as written, so you can edit
 any of them. Obsidian shows the same note as separate blocks.
+
+## Themes
+
+Pick a colour scheme on the settings page's Appearance tab. A theme file goes
+in `~/.config/noteAppC/themes/` (or under `$XDG_CONFIG_HOME`), or in a vault's
+own `.obsidian/themes/` or `.obsidian/noteAppC-themes/` to travel with that
+vault. Three forms are read from any of those directories:
+
+- **A noteAppC scheme**: `Mine.json`, a `dark` and/or `light` object of token
+  overrides - only the tokens a scheme wants to change from the built-in
+  theme, keyed exactly as the CSS tokens below.
+- **A loose CSS file**: `Mine.css`, named after the file and read the same way
+  as an Obsidian theme's CSS below.
+- **An installed Obsidian theme**: `Mine/theme.css`, the folder Obsidian
+  itself installs a community theme as.
+
+Either CSS form maps onto noteAppC's colour tokens only - every `--name:
+value` a `:root`, `body`, `.theme-dark` or `.theme-light` block declares,
+colours normalised and `var()` resolved, plus the three `--accent-h`/`-s`/`-l`
+numbers Obsidian's own accent picker writes. A font, a size, a layout rule -
+anything that is not a colour - is dropped rather than guessed at. A noteAppC
+`.json` scheme is not filtered the same way and may set a typography token
+directly. Either way a theme's layout does not come across, and cannot: Qt
+Widgets are styled with QSS, not CSS, and QSS has no equivalent for an
+Obsidian theme's layout.
+
+Like `callouts.ini` and `codeblocks.ini`, a theme reloads the moment its file
+changes - edit the selected scheme and the window restyles with no restart -
+and adding or removing a file in a themes directory updates the settings
+page's list while it is open.
