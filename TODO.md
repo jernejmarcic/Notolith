@@ -692,6 +692,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Touch mode, first part: momentum scrolling where a touchscreen
       exists (a mouse drag still selects), long-press selects a word, both
       sidebars fold below 720 px and come back.
-- [ ] Touch mode, rest: selection handles, touch-sized hit targets (task
-      boxes, fold arrows, chips), sidebars as drawers over the note.
+- [x] Touch mode, rest: selection handles after a long press, finger-sized
+      hit targets while a touch press is handled, sidebars as drawers over
+      the note below 720 px. Not tried on a real touchscreen yet.
 
