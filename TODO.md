@@ -10,23 +10,12 @@ updated: 2026-09-22
 `HANDOFF.md` is the cold-start document and the long list. This file is the
 work in flight.
 
-## Next, once the lanes in flight have merged: move the project
+## Where the project lives
 
-Jernej, 2026-09-23: "Can you create the project inside ~/Projects under its
-own git, and just transplant the existing commits there?" - "After you finish
-the current share of work ofc". The repo already has its own complete history
-(214 commits, root `a3d9c6d` "feat: bootstrap noteAppC"); the brain repo never
-tracked it. So the move is the directory, history intact:
-
-- [ ] Wait for the publish, sync, PDF viewer, EPUB and plugin lanes to report;
-      merge them. Their worktrees in /tmp point into this `.git`.
-- [ ] `mv ~/Documents/AI/projects/noteAppC ~/Projects/noteAppC`, then
-      `git worktree repair` / `prune`; check `git fsck` and the log.
-- [ ] Fresh build dirs from the new source path (`tools/check.sh`), all green.
-- [ ] Every reference to the old path: repo docs, the brain's memory
-      (`project_obsidian_clone_cpp`), `facts/workdirs.md`, session notes.
-      Both paths are inside Syncthing's Home folder, so other machines get the
-      same move.
+Jernej, 2026-09-23, on moving it to `~/Projects`: "Ok, if it is its own repo
+then that is fine". It is - its own `.git`, 214 commits from `a3d9c6d`
+"feat: bootstrap noteAppC", never tracked by the brain repo - so it stays at
+`~/Documents/AI/projects/noteAppC`.
 
 ## Roadmap: the Notes app of `~/Projects/Ideas.md`
 
