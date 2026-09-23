@@ -2,12 +2,8 @@
 
 #include <QApplication>
 #include <QButtonGroup>
-#include <numeric>
-#include <QJsonArray>
-#include <QPushButton>
-#include <QListWidget>
-#include <QDialog>
 #include <QCloseEvent>
+#include <QDialog>
 #include <QDir>
 #include <QEvent>
 #include <QFileDialog>
@@ -18,12 +14,15 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QJsonArray>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPushButton>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
@@ -31,11 +30,14 @@
 #include <QStatusBar>
 #include <QStyleHints>
 #include <QTabBar>
+#include <QtConcurrent>
+#include <QThreadPool>
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
 
 #include <memory>
+#include <numeric>
 
 #include "BacklinksPane.h"
 #include "Hotkeys.h"
@@ -104,6 +106,12 @@ QString rgbaString(const QColor &color, double alpha)
         .arg(alpha, 0, 'f', 3);
 }
 } // namespace
+
+MainWindow::~MainWindow()
+{
+    // Searches for ```query blocks run on the pool against m_index.
+    QThreadPool::globalInstance()->waitForDone();
+}
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -544,6 +552,31 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (m_outline && leaf == m_active)
             m_outline->setCursorOffset(offset);
     });
+    // ```query blocks: Index::search() opens its own connection, so it runs
+    // on the thread pool, and the editor brings the results back to its own
+    // thread. ~MainWindow waits for the pool, so a search never outlives the
+    // index it reads.
+    Index *index = &m_index;
+    editor->setQueryRunner([index](const QString &query, const MarkdownEditor::QueryDeliver &deliver) {
+        (void)QtConcurrent::run([index, query, deliver] {
+            QueryResults results;
+            for (const SearchResult &found : index->search(query)) {
+                QueryResult result{found.path, found.matchCount, found.snippet, {},
+                                   found.matches.isEmpty() ? 0 : found.matches.constFirst().offset};
+                for (const SearchMatch &match : found.snippetHighlights)
+                    result.snippetHighlights.append({match.offset, match.length});
+                results.append(result);
+            }
+            deliver(results);
+        });
+    });
+    connect(editor, &MarkdownEditor::queryResultActivated, this,
+            [this](const QString &relativePath, qsizetype offset) {
+                openRelative(relativePath);
+                m_active->editor->setCursorOffset(offset);
+                m_active->editor->setFocus();
+            });
+    connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
 
     layout->addWidget(leaf->inlineTitle);
     layout->addWidget(editor, 1);

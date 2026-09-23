@@ -731,6 +731,30 @@ TEST_F(WindowTest, NamedLayoutsSaveAndLoad)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
 }
 
+TEST_F(WindowTest, AQueryBlockShowsTheVaultsSearchResults)
+{
+    write(QStringLiteral("Tagged.md"), "#project here\n");
+    write(QStringLiteral("Board.md"), "Intro\n\n```query\ntag:#project\n```\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show(); // a query runs when its block is laid out
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Board.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(0); // in "Intro", so the query block renders
+
+    const qsizetype query = editor->noteText().indexOf(QStringLiteral("tag:"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->queryRowsAt(query).isEmpty(); }, 5000));
+    const auto rows = editor->queryRowsAt(query);
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.first().path, QStringLiteral("Tagged.md"));
+
+    emit editor->queryResultActivated(rows.first().path, rows.first().offset);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("#project here\n"));
+}
+
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
 {
     MainWindow window;

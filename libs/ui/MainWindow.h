@@ -56,6 +56,7 @@ public:
     enum class NavSource { Tree, History, Other };
 
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
 
     void openVault(const QString &path);
     /// Returns false when `path` was not opened - not a note, unsaved changes
