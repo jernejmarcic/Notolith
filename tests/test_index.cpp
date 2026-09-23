@@ -489,6 +489,69 @@ TEST_F(IndexTest, SearchOnAnEmptyOrInvalidQueryReturnsNoResults)
     EXPECT_FALSE(error.isEmpty());
 }
 
+// --- Index::unlinkedMentions -----------------------------------------------
+
+TEST_F(IndexTest, UnlinkedMentionsFindsPlainTextButNotItself)
+{
+    write(QStringLiteral("Mentions.md"), "Talking about Home today, not linked.\n");
+
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QList<SearchResult> results = index.unlinkedMentions(dir.filePath(QStringLiteral("Home.md")));
+    QStringList paths;
+    for (const SearchResult &result : results)
+        paths << result.path;
+
+    // Home.md's own "# Home" heading and "#home" tag both textually contain
+    // "Home" - excluded because a note never mentions itself. Ideas.md and
+    // Projects/noteAppC.md both already link to Home ([[Home]]) with no bare
+    // mention elsewhere, so they contribute nothing either.
+    EXPECT_EQ(paths, QStringList({QStringLiteral("Mentions.md")}));
+}
+
+TEST_F(IndexTest, UnlinkedMentionsMaskOutOccurrencesThatAreAlreadyLinks)
+{
+    // Links Home *and* separately mentions it as plain text - only the
+    // second occurrence should survive the mask.
+    write(QStringLiteral("Mixed.md"), "[[Home]] is great. I mention Home again here.\n");
+
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QList<SearchResult> results = index.unlinkedMentions(dir.filePath(QStringLiteral("Home.md")));
+    const auto mixed = std::find_if(results.cbegin(), results.cend(), [](const SearchResult &r) {
+        return r.path == QStringLiteral("Mixed.md");
+    });
+    ASSERT_NE(mixed, results.cend());
+    EXPECT_EQ(mixed->matchCount, 1);
+
+    Note note;
+    ASSERT_TRUE(Vault::read(dir.filePath(QStringLiteral("Mixed.md")), note));
+    const SearchMatch &match = mixed->matches.first();
+    EXPECT_EQ(note.text.mid(match.offset, match.length), QStringLiteral("Home"));
+    // The surviving match is the bare mention, not the one inside [[Home]].
+    EXPECT_GT(match.offset, note.text.indexOf(QStringLiteral("[[Home]]")) + 8);
+}
+
+TEST_F(IndexTest, UnlinkedMentionsIncludeAliases)
+{
+    // Ideas.md's alias is "Brainwaves" (see the fixture's frontmatter).
+    write(QStringLiteral("AliasMention.md"), "Some notes call this Brainwaves instead.\n");
+
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QList<SearchResult> results = index.unlinkedMentions(dir.filePath(QStringLiteral("Ideas.md")));
+    QStringList paths;
+    for (const SearchResult &result : results)
+        paths << result.path;
+    EXPECT_TRUE(paths.contains(QStringLiteral("AliasMention.md")));
+}
+
 namespace {
 
 /// Builds a vault of `noteCount` notes, every one containing "needle" (so

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <QHash>
 #include <QObject>
 #include <QSqlDatabase>
@@ -96,6 +98,16 @@ public:
     /// database. On a parse error, returns no results and fills `error`.
     QList<SearchResult> search(const QString &queryText, int limit = 200, QString *error = nullptr) const;
 
+    /// Obsidian's "Unlinked mentions": notes that mention this note's title
+    /// or one of its aliases as plain text without a `[[...]]`/`[...](...)`
+    /// to it. Built on the same search engine as search() - one quoted-OR
+    /// query over the note's own linkNames() - with any occurrence that
+    /// falls inside a link this note's backlinks() already accounts for
+    /// masked out, so a note that both links here and separately mentions
+    /// the bare name shows only the second kind here. Also safe to call from
+    /// any thread but this one, for the same reason search() is.
+    QList<SearchResult> unlinkedMentions(const QString &path, int limit = 200) const;
+
     /// Rewrites every wikilink and Markdown link that resolves to `oldRelative`
     /// so it points at `newRelative`, preserving each link's own form: an alias
     /// stays (`[[old|shown]]` -> `[[new|shown]]`), a subpath stays
@@ -121,6 +133,13 @@ private:
     QString rebasedTarget(const QString &oldTarget, const QString &oldRelative,
                           const QString &newRelative) const;
     bool basenameStillUnique(const QString &basename, const QString &excludePath) const;
+
+    /// The engine behind search() and unlinkedMentions(): narrows the FTS5
+    /// table, loads whatever metadata the query needs, and calls `onMatch`
+    /// for every one of the first `limit` candidates that evaluate() judges
+    /// a match. See Index.cpp for why it opens its own connection.
+    void eachMatch(const SearchQuery &query, int limit,
+                   const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch) const;
 
     QSqlDatabase m_db;
     QString m_connectionName;

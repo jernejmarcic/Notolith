@@ -606,34 +606,34 @@ QStringList Index::linkTargets() const
 
 // --- search (libs/index/Search.h has the grammar and the evaluator) -------
 
-QList<SearchResult> Index::search(const QString &queryText, int limit, QString *error) const
+/// The FTS5-narrow-then-confirm engine behind both search() and
+/// unlinkedMentions(): they differ only in what they do with a match, not in
+/// how one is found, so the DB-connection and candidate-gathering code lives
+/// here once. Calls `onMatch` for up to `limit` candidates that satisfy
+/// `query`, each with the NoteContext evaluate() was run against (so a
+/// caller can rebuild a snippet, mask offsets, or whatever else it needs
+/// without a second trip to the database).
+///
+/// Opens its own connection rather than reusing `m_db`, never touching any
+/// other member: QSqlDatabase requires a connection be used only from the
+/// thread that opened it, and this has to be safe to call from a
+/// QtConcurrent worker so a search over a large vault never costs the UI
+/// thread anything. WAL mode (set once in open()) is what lets this reader
+/// run alongside the indexer's writer.
+void Index::eachMatch(const SearchQuery &query, int limit,
+                      const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch) const
 {
-    QList<SearchResult> results;
-    if (queryText.trimmed().isEmpty())
-        return results;
+    if (!query.isValid())
+        return;
 
-    const SearchQuery query = SearchQuery::parse(queryText);
-    if (!query.isValid()) {
-        if (error)
-            *error = query.error();
-        return results;
-    }
-
-    // A connection of its own, never `m_db`: QSqlDatabase requires a
-    // connection be used only from the thread that opened it, and this
-    // method has to be callable from a QtConcurrent worker so a search over a
-    // large vault never blocks the UI thread. WAL mode (set once in open())
-    // is what lets this reader run alongside the indexer's writer.
     const QString connectionName =
         QStringLiteral("noteAppC-search-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
         db.setDatabaseName(m_databasePath);
         if (!db.open()) {
-            if (error)
-                *error = db.lastError().text();
             QSqlDatabase::removeDatabase(connectionName);
-            return results;
+            return;
         }
 
         struct Candidate {
@@ -666,10 +666,10 @@ QList<SearchResult> Index::search(const QString &queryText, int limit, QString *
         // Tags, headings and tasks are loaded whole rather than filtered to
         // just these candidates (no IN-list, no bind-parameter ceiling to
         // worry about) - ponytail: a full scan of three small tables per
-        // search call. Skipped entirely when the query never reads them,
-        // which is the common case (a handful of bare words never touches
-        // any of the three), so the cost that remains scales with how much
-        // of the vault actually uses tags/headings/tasks, not with the query.
+        // call. Skipped entirely when the query never reads them, which is
+        // the common case (a handful of bare words never touches any of the
+        // three), so the cost that remains scales with how much of the vault
+        // actually uses tags/headings/tasks, not with the query.
         const FieldNeeds needs = query.fieldNeeds();
         QHash<qint64, QList<NoteTag>> tagsByFile;
         QHash<qint64, QList<NoteHeading>> headingsByFile;
@@ -703,8 +703,9 @@ QList<SearchResult> Index::search(const QString &queryText, int limit, QString *
             }
         }
 
+        int delivered = 0;
         for (const Candidate &candidate : std::as_const(candidates)) {
-            if (results.size() >= limit)
+            if (delivered >= limit)
                 break;
 
             NoteContext note;
@@ -714,23 +715,111 @@ QList<SearchResult> Index::search(const QString &queryText, int limit, QString *
             note.headings = headingsByFile.value(candidate.id);
             note.tasks = tasksByFile.value(candidate.id);
 
-            const SearchOutcome outcome = query.evaluate(note);
+            SearchOutcome outcome = query.evaluate(note);
             if (!outcome.matched)
                 continue;
-
-            SearchResult result;
-            result.path = candidate.path;
-            result.matches = outcome.matches;
-            std::sort(result.matches.begin(), result.matches.end(),
+            std::sort(outcome.matches.begin(), outcome.matches.end(),
                       [](const SearchMatch &a, const SearchMatch &b) { return a.offset < b.offset; });
-            result.matchCount = int(result.matches.size());
-            const SearchSnippet snippet = buildSnippet(note.text, result.matches);
-            result.snippet = snippet.text;
-            result.snippetHighlights = snippet.highlights;
-            results.append(result);
+
+            ++delivered;
+            onMatch(std::move(note), std::move(outcome));
         }
     }
     QSqlDatabase::removeDatabase(connectionName);
+}
+
+QList<SearchResult> Index::search(const QString &queryText, int limit, QString *error) const
+{
+    QList<SearchResult> results;
+    if (queryText.trimmed().isEmpty())
+        return results;
+
+    const SearchQuery query = SearchQuery::parse(queryText);
+    if (!query.isValid()) {
+        if (error)
+            *error = query.error();
+        return results;
+    }
+
+    eachMatch(query, limit, [&results](NoteContext &&note, SearchOutcome &&outcome) {
+        SearchResult result;
+        result.path = note.path;
+        result.matches = outcome.matches;
+        result.matchCount = int(result.matches.size());
+        const SearchSnippet snippet = buildSnippet(note.text, result.matches);
+        result.snippet = snippet.text;
+        result.snippetHighlights = snippet.highlights;
+        results.append(std::move(result));
+    });
+    return results;
+}
+
+QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) const
+{
+    QList<SearchResult> results;
+    if (!m_db.isOpen())
+        return results;
+
+    const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
+
+    // The note's own title and aliases, re-read from the file rather than
+    // trusted from the index - "the file is the truth", and this only runs
+    // once per note the backlinks pane opens, not on every keystroke.
+    Note note;
+    if (!Vault::read(path, note))
+        return results;
+    const Parser parser;
+    const QStringList titles = parser.parse(note.text, path).linkNames();
+    if (titles.isEmpty())
+        return results;
+
+    QStringList quoted;
+    quoted.reserve(titles.size());
+    for (const QString &title : titles) {
+        QString escaped = title;
+        escaped.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+        quoted << QStringLiteral("\"%1\"").arg(escaped);
+    }
+    const SearchQuery query = SearchQuery::parse(quoted.join(QStringLiteral(" OR ")));
+    if (!query.isValid())
+        return results;
+
+    // Every link that already resolves to this note, so its own [[...]] (or
+    // [text](...)) bytes can be masked out of what the search below finds -
+    // otherwise a note that already links here would also show up as an
+    // "unlinked" mention, since the link text itself contains the title.
+    QHash<QString, QList<Range>> linkedRanges;
+    for (const Backlink &backlink : backlinks(path))
+        linkedRanges[backlink.fromPath].append(backlink.link.range);
+
+    // +1 of slack for the note's own row, which is always dropped below and
+    // would otherwise silently cost one real result.
+    eachMatch(query, limit + 1, [&](NoteContext &&candidate, SearchOutcome &&outcome) {
+        if (candidate.path == relative || results.size() >= limit)
+            return;
+
+        const QList<Range> masked = linkedRanges.value(candidate.path);
+        QList<SearchMatch> kept;
+        for (const SearchMatch &match : outcome.matches) {
+            const Range span{match.offset, match.offset + match.length};
+            const bool insideAnExistingLink = std::any_of(
+                masked.cbegin(), masked.cend(),
+                [&span](const Range &range) { return range.overlaps(span); });
+            if (!insideAnExistingLink)
+                kept.append(match);
+        }
+        if (kept.isEmpty())
+            return; // every occurrence here was already a linked mention
+
+        SearchResult result;
+        result.path = candidate.path;
+        result.matches = kept;
+        result.matchCount = int(kept.size());
+        const SearchSnippet snippet = buildSnippet(candidate.text, kept);
+        result.snippet = snippet.text;
+        result.snippetHighlights = snippet.highlights;
+        results.append(std::move(result));
+    });
     return results;
 }
 
