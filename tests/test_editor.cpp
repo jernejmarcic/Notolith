@@ -2629,6 +2629,108 @@ TEST(QueryBlockTest, AStaleDeliveryAfterRefreshIsDropped)
         << "the superseded request's answer must not overwrite the current one";
 }
 
+// --- the embedded search header (result count, collapse, sort) -------------------
+
+TEST(QueryHeaderTest, ShowsResultCountSingularAndPlural)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\n```query\nbar\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 2);
+
+    const qsizetype fooOffset = note.indexOf(QStringLiteral("foo"));
+    const qsizetype barOffset = note.indexOf(QStringLiteral("bar"));
+    for (const FakeQueryRunner::Call &call : fake.calls) {
+        if (call.query == QStringLiteral("foo"))
+            call.deliver({makeQueryResult(QStringLiteral("One.md"), 1, QString(), 0)});
+        else
+            call.deliver({makeQueryResult(QStringLiteral("One.md"), 1, QString(), 0),
+                          makeQueryResult(QStringLiteral("Two.md"), 1, QString(), 0)});
+    }
+    pumpQueuedDelivery();
+
+    EXPECT_EQ(editor->queryHeaderAt(fooOffset).countText, QStringLiteral("1 result"));
+    EXPECT_EQ(editor->queryHeaderAt(barOffset).countText, QStringLiteral("2 results"));
+}
+
+TEST(QueryHeaderTest, ClickingCollapseHidesRowsAndPersistsAcrossAnEdit)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After"))); // leave the block so it renders
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        {makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("a foo b"), 0)});
+    pumpQueuedDelivery();
+
+    const qsizetype offset = note.indexOf(QStringLiteral("foo"));
+    ASSERT_FALSE(editor->queryRowsAt(offset).isEmpty());
+    EXPECT_FALSE(editor->queryCollapsedAt(offset));
+
+    MarkdownEditor::QueryHeader header = editor->queryHeaderAt(offset);
+    ASSERT_TRUE(header.collapseRect.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      header.collapseRect.center().toPoint());
+
+    EXPECT_TRUE(editor->queryCollapsedAt(offset));
+    EXPECT_TRUE(editor->queryRowsAt(offset).isEmpty())
+        << "collapsed hides the result rows, not just some header flag";
+    EXPECT_FALSE(editor->queryHeaderAt(offset).countText.isEmpty())
+        << "the header itself - the count to expand back from - stays";
+
+    // Remembered for the block for the life of the editor even though
+    // nothing was written to the note: an edit elsewhere leaves it collapsed.
+    editor->setCursorOffset(note.indexOf(QStringLiteral("After")));
+    QTest::keyClicks(editor.get(), QStringLiteral("!"));
+    EXPECT_TRUE(editor->queryCollapsedAt(offset));
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->queryHeaderAt(offset).collapseRect.center().toPoint());
+    EXPECT_FALSE(editor->queryCollapsedAt(offset));
+    EXPECT_FALSE(editor->queryRowsAt(offset).isEmpty());
+}
+
+TEST(QueryHeaderTest, ClickingSortTogglesToFileNameOrder)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After")));
+    ASSERT_EQ(fake.calls.size(), 1);
+    // Delivered out of file-name order, so sorting is observable.
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("Zebra.md"), 1, QString(), 0),
+                                makeQueryResult(QStringLiteral("Apple.md"), 1, QString(), 0)});
+    pumpQueuedDelivery();
+
+    const qsizetype offset = note.indexOf(QStringLiteral("foo"));
+    QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(offset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("Zebra.md")) << "best-match: the delivered order";
+    EXPECT_FALSE(editor->queryHeaderAt(offset).sortByName);
+
+    const MarkdownEditor::QueryHeader header = editor->queryHeaderAt(offset);
+    ASSERT_TRUE(header.sortRect.isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      header.sortRect.center().toPoint());
+
+    EXPECT_TRUE(editor->queryHeaderAt(offset).sortByName);
+    rows = editor->queryRowsAt(offset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("Apple.md"));
+    EXPECT_EQ(rows.at(1).path, QStringLiteral("Zebra.md"));
+
+    // Toggling back restores delivery order, and neither toggle asks the
+    // runner for anything - sorting is client-side over the cached results.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->queryHeaderAt(offset).sortRect.center().toPoint());
+    EXPECT_FALSE(editor->queryHeaderAt(offset).sortByName);
+    EXPECT_EQ(fake.calls.size(), 1) << "sorting is client-side, never a second search";
+}
+
 // --- HTML blocks and inline HTML ----------------------------------------------------
 
 TEST(HtmlRendererTest, AvailableExactlyWhenLitehtmlWasFound)

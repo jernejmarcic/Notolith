@@ -246,6 +246,35 @@ public:
     /// search per visible block, not one per change.
     void refreshQueries();
 
+    /// The header Obsidian draws over an embedded search's results: the
+    /// result count, and where the collapse toggle and the sort control are
+    /// - in viewport coordinates, the way queryRowsAt exposes result rows,
+    /// so a test can click either without re-deriving the block's layout by
+    /// hand. Default-constructed (empty rects, empty countText) when
+    /// `offset` is not inside a rendered ```query``` block, or its search
+    /// has not answered yet - there is nothing to count or sort until then.
+    struct QueryHeader {
+        QRectF collapseRect;
+        QRectF sortRect;
+        bool collapsed = false;
+        bool sortByName = false; ///< false: the order the search delivered ("best match")
+        QString countText;       ///< "N results", already pluralised
+    };
+    QueryHeader queryHeaderAt(qsizetype offset) const;
+    /// Shows or hides the result rows of the ```query``` block containing
+    /// `offset`, leaving its header in place - what a click on the header's
+    /// collapse toggle does. Remembered for the block's own source position
+    /// for the life of this editor (like a fold - see m_folds), never
+    /// written to the note.
+    void toggleQueryCollapsed(qsizetype offset);
+    bool queryCollapsedAt(qsizetype offset) const;
+    /// Swaps the result order between the search's own ("best match") order
+    /// and file name (Obsidian's search pane sort options include "File name
+    /// (A to Z)" - help.obsidian.md/plugins/search - which is the one that
+    /// still means something once the note text itself is gone). Remembered
+    /// the same way toggleQueryCollapsed is.
+    void cycleQuerySort(qsizetype offset);
+
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
     /// one switch, on by default the way Obsidian ships them.
@@ -490,6 +519,16 @@ private:
             qsizetype offset = 0;
         };
         std::vector<QueryRow> queryRows;
+        /// The header's two clickable controls, block-local coordinates -
+        /// null-sized when the block has no header yet (still searching, an
+        /// error, or an empty search - see layoutQuery). queryHeaderAt and
+        /// handleBlockClick both read these rather than recomputing them, so
+        /// a click always lands exactly where the paint went.
+        QRectF queryCollapseRect;
+        QRectF querySortRect;
+        /// "N results", as last computed - what queryHeaderAt hands back
+        /// without re-running a search from a const accessor.
+        QString queryResultCountText;
 
         /// Set when this block is a raw HTML block (top-level `<div>`,
         /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
@@ -929,6 +968,12 @@ private:
     /// Debounces refreshQueries(): Index::changed can fire once per save, and
     /// a burst of them should cost one re-search per block, not one each.
     QTimer *m_queryRefreshTimer = nullptr;
+    /// A query block's collapsed/sort-by-name state, by its own source start
+    /// offset - like m_folds, session-only and never written to the note,
+    /// and orphaned (harmlessly - it just falls back to the default) if an
+    /// edit earlier in the note shifts the block's offset.
+    QHash<qsizetype, bool> m_queryCollapsed;
+    QHash<qsizetype, bool> m_queryNameSort;
 
     QString m_text;
     SourceMap m_lines; ///< line starts, for the gutter

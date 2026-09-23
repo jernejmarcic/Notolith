@@ -2500,6 +2500,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.tabGroup = -1;
     view.isQuery = false;
     view.queryRows.clear();
+    view.queryCollapseRect = QRectF();
+    view.querySortRect = QRectF();
+    view.queryResultCountText.clear();
     view.isHtml = false;
     view.inlineHtmlFormats.clear();
 

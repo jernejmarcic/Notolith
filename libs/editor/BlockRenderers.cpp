@@ -172,6 +172,16 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             return true;
 
         if (view.isQuery) {
+            if (view.queryCollapseRect.isValid()
+                && view.queryCollapseRect.translated(left, top).contains(point)) {
+                toggleQueryCollapsed(view.span.range.start);
+                return true;
+            }
+            if (view.querySortRect.isValid()
+                && view.querySortRect.translated(left, top).contains(point)) {
+                cycleQuerySort(view.span.range.start);
+                return true;
+            }
             for (const BlockView::QueryRow &row : view.queryRows) {
                 if (row.rect.translated(left, top).contains(point)) {
                     emit queryResultActivated(row.path, row.offset);
