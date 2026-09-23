@@ -1607,3 +1607,53 @@ TEST(NestedCalloutTest, APlusStartsOpenAndFolds)
     editor->toggleFoldAt(inner);
     EXPECT_FALSE(editor->displayText().contains(QLatin1String("Shown body")));
 }
+
+namespace {
+
+/// Pixels in a code block label's corner - the top right of the first block -
+/// where one channel (0 red, 1 green, 2 blue) clearly outweighs the other two.
+/// Not an exact colour match: the label is antialiased text, and only a few of
+/// its pixels ever land on the exact colour - how many depends on the state of
+/// Qt's glyph cache, which is why an exact count passed alone and failed after
+/// other tests had drawn text first.
+int labelPixelsDominatedBy(MarkdownEditor &editor, int channel)
+{
+    const QImage frame = editor.grab().toImage().convertToFormat(QImage::Format_RGB32);
+    int count = 0;
+    for (int y = 0; y < qMin(frame.height(), 110); ++y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+        for (int x = frame.width() * 3 / 5; x < frame.width(); ++x) {
+            const int c[3] = {qRed(row[x]), qGreen(row[x]), qBlue(row[x])};
+            if (c[channel] - qMax(c[(channel + 1) % 3], c[(channel + 2) % 3]) > 70)
+                ++count;
+        }
+    }
+    return count;
+}
+
+} // namespace
+
+TEST(CodeLabelTest, TheFenceItselfOverridesCodeblocksIni)
+{
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
+    writeAtomically(QDir(home.path()).filePath(QStringLiteral("noteAppC/codeblocks.ini")),
+                    "[python]\nname = Python\ncolor = #0000FFff\n");
+
+    // The file's colour, then the fence's own, the same three layers a
+    // callout has: the language, codeblocks.ini, the block itself.
+    auto fromFile = editorWith(QStringLiteral("```python\nx = 1\n```\n"));
+    EXPECT_GT(labelPixelsDominatedBy(*fromFile, 2), 3);
+
+    auto overridden = editorWith(QStringLiteral("```python color=#FF0000ff name=Setup\nx = 1\n```\n"));
+    EXPECT_GT(labelPixelsDominatedBy(*overridden, 0), 3);
+    EXPECT_EQ(labelPixelsDominatedBy(*overridden, 2), 0);
+    EXPECT_FALSE(overridden->displayText().contains(QLatin1String("color=")))
+        << "the attributes are hidden with the fence";
+
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+

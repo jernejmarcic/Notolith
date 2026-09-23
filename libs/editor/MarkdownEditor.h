@@ -354,6 +354,7 @@ private:
         bool visible = false;
     };
     CodeLabel codeLabelOf(const BlockView &view, qreal left, qreal top) const;
+    const CodeFenceSpan *codeFenceOf(const BlockView &view) const;
     LanguageStyle codeStyleOf(const BlockView &view) const;
     void copyCodeBlock(const BlockView &view);
     const BlockView *codeLabelAt(const QPoint &point) const;

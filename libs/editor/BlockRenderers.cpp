@@ -575,11 +575,43 @@ void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &v
     }
 }
 
+const CodeFenceSpan *MarkdownEditor::codeFenceOf(const BlockView &view) const
+{
+    // Matched by the listing rather than by start: md4qt's code item covers
+    // the listing alone, so the two ranges agree about the middle and not
+    // necessarily about the fences.
+    for (const CodeFenceSpan &fence : m_decorations.codeFences) {
+        if (fence.depth == 0 && (fence.content.overlaps(view.span.range)
+                                 || view.span.range.contains(fence.block.start)))
+            return &fence;
+    }
+    return nullptr;
+}
+
 LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
 {
+    // Three layers, as callouts have: the language as written, the section
+    // codeblocks.ini gives it, then whatever the fence itself says after the
+    // language - `name`, `icon` and `color`, the keys codeblocks.ini uses.
+    const CodeFenceSpan *fence = codeFenceOf(view);
     QString language;
-    codeContentOf(view, &language);
-    return m_languageStyles.resolve(language);
+    if (fence)
+        language = fence->language;
+    else
+        codeContentOf(view, &language);
+
+    LanguageStyle style = m_languageStyles.resolve(language);
+    if (!fence)
+        return style;
+    const QMap<QString, QString> &own = fence->attributes;
+    if (!own.value(QStringLiteral("name")).isEmpty())
+        style.name = own.value(QStringLiteral("name"));
+    if (!own.value(QStringLiteral("icon")).isEmpty())
+        style.icon = own.value(QStringLiteral("icon"));
+    const QColor colour = CalloutStyle::parseColor(own.value(QStringLiteral("color")));
+    if (colour.isValid())
+        style.color = colour;
+    return style;
 }
 
 MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qreal left,
