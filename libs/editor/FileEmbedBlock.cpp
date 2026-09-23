@@ -413,7 +413,11 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
                 m_images.insert(path, pixmap);
         }
         if (!pixmap.isNull()) {
-            const qreal width = qMin<qreal>(maxWidth, pixmap.width());
+            // |width still applies to a cell in a row - a reader who asked
+            // for a small thumbnail should get one here too, not the row's
+            // whole share just because it is sharing a line with another
+            // embed.
+            const qreal width = qMin<qreal>(maxWidth, embed.width > 0 ? embed.width : pixmap.width());
             const qreal height = width * pixmap.height() / qMax(1, pixmap.width());
             cell.image = pixmap;
             cell.rect = QRectF(0, 0, width, height);
