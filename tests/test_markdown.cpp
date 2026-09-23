@@ -89,6 +89,40 @@ TEST(SourceMapTest, AnEditIsTheSameAsRebuilding)
     }
 }
 
+TEST(FrontmatterTest, AWrittenValueReadsBackTheSame)
+{
+    // What the properties table writes has to come back as the same value
+    // and the same type, whatever the characters.
+    const auto readBack = [](const QString &yaml) {
+        const QString text = QStringLiteral("---\nkey: %1\n---\n").arg(yaml);
+        Metadata metadata;
+        Frontmatter::parse(text, Frontmatter::find(text), metadata);
+        return metadata.properties.value(0);
+    };
+    const QStringList texts = {QStringLiteral("plain words"), QStringLiteral("a: b"),
+                               QStringLiteral("#tag"), QStringLiteral("[x]"),
+                               QStringLiteral("42"), QStringLiteral("true"),
+                               QStringLiteral("2026-09-23"), QStringLiteral("say \"hi\""),
+                               QStringLiteral("Škofja Loka")};
+    for (const QString &value : texts) {
+        const std::optional<QString> yaml = Frontmatter::scalarFor(value, Property::Type::Text);
+        ASSERT_TRUE(yaml.has_value()) << qPrintable(value);
+        const Property property = readBack(*yaml);
+        EXPECT_EQ(property.values.value(0), value) << qPrintable(*yaml);
+        EXPECT_EQ(property.type, Property::Type::Text) << qPrintable(*yaml);
+    }
+    EXPECT_EQ(Frontmatter::scalarFor(QStringLiteral("plain words"), Property::Type::Text),
+              QStringLiteral("plain words")) << "quoted only when it has to be";
+
+    EXPECT_EQ(readBack(*Frontmatter::scalarFor(QStringLiteral("3.5"), Property::Type::Number)).type,
+              Property::Type::Number);
+    EXPECT_EQ(readBack(*Frontmatter::scalarFor(QStringLiteral("2026-09-23"), Property::Type::Date)).type,
+              Property::Type::Date);
+    EXPECT_FALSE(Frontmatter::scalarFor(QStringLiteral("soon"), Property::Type::Number));
+    EXPECT_FALSE(Frontmatter::scalarFor(QStringLiteral("2026-13-40"), Property::Type::Date));
+    EXPECT_FALSE(Frontmatter::scalarFor(QStringLiteral("a"), Property::Type::List));
+}
+
 TEST(FrontmatterTest, FoundOnlyAtTheTop)
 {
     EXPECT_TRUE(Frontmatter::find(QStringLiteral("---\na: 1\n---\nbody\n")).isValid());

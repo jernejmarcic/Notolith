@@ -2,6 +2,8 @@
 
 #include "Metadata.h"
 
+#include <optional>
+
 namespace noteAppC {
 
 /// YAML frontmatter, Obsidian's "properties".
@@ -26,6 +28,13 @@ public:
     /// asked afterwards: whether a scalar was quoted, and whether a one-item
     /// list was a list.
     static Property::Type inferType(const QStringList &values);
+
+    /// The YAML to write for `value` as a property of `type`, such that
+    /// reading it back gives the same value and the same type: a text that
+    /// would read as a number, a date or a checkbox is quoted, and a number,
+    /// date or date-time that is not one is refused. Only those four types
+    /// can be written this way.
+    static std::optional<QString> scalarFor(const QString &value, Property::Type type);
 };
 
 } // namespace noteAppC

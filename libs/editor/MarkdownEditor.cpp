@@ -213,6 +213,7 @@ void MarkdownEditor::setMode(Mode mode)
 {
     if (m_mode == mode)
         return;
+    finishPropertyEdit(true); // source and reading modes draw no table to edit in
     m_mode = mode;
     invalidateLayouts();
     updateLayout();
@@ -221,6 +222,7 @@ void MarkdownEditor::setMode(Mode mode)
 
 void MarkdownEditor::setNoteText(const QString &text)
 {
+    finishPropertyEdit(false); // a different note: what was typed belongs to the old one
     m_text = text;
     ++m_textVersion;
     m_cursor = m_anchor = 0;
@@ -2438,6 +2440,9 @@ void MarkdownEditor::updateLayout()
 
 void MarkdownEditor::scrollContentsBy(int dx, int dy)
 {
+    // The property editor is a widget over the table, and would stay put
+    // while the table moved away under it.
+    finishPropertyEdit(true);
     updateLayout(); // blocks scrolling into view need their real layout
 
     // A wheel notch moves most of the screen by a few lines, and unless the
@@ -2684,6 +2689,7 @@ void MarkdownEditor::ensureCursorVisible()
 
 void MarkdownEditor::resizeEvent(QResizeEvent *event)
 {
+    finishPropertyEdit(true);
     QAbstractScrollArea::resizeEvent(event);
     // Line breaking depends on the width, so every cached layout is stale.
     invalidateLayouts();

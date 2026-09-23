@@ -9,10 +9,13 @@
 
 #include "MarkdownEditor.h"
 
+#include "Frontmatter.h"
 #include "Icons.h"
 
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
@@ -193,12 +196,18 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 return true;
             }
             for (const PropertyRow &row : view.propertyRows) {
-                if (row.control.isNull())
+                if (!row.control.isNull()) {
+                    if (row.control.translated(left, top).adjusted(-4, -4, 4, 4).contains(point)) {
+                        toggleProperty(row.property);
+                        return true;
+                    }
                     continue;
-                if (row.control.translated(left, top).adjusted(-4, -4, 4, 4).contains(point)) {
-                    toggleProperty(row.property);
-                    return true;
                 }
+                // The value column of a scalar: click to edit it in place.
+                const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
+                if (row.chips.isEmpty() && value.contains(point)
+                    && editPropertyAt(m_properties.at(row.property).range.start))
+                    return true;
             }
             continue;
         }
@@ -394,6 +403,157 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
         painter.drawPath(rounded);
     }
     painter.restore();
+}
+
+Range MarkdownEditor::editableValueOf(const Property &property) const
+{
+    switch (property.type) {
+    case Property::Type::Text:
+    case Property::Type::Number:
+    case Property::Type::Date:
+    case Property::Type::DateTime:
+        break;
+    default:
+        return {}; // lists are chips, checkboxes toggle, maps stay as written
+    }
+    if (property.raw.size() > 1 || property.values.size() > 1)
+        return {};
+    // One line, key and value, and nothing after it that belongs to the
+    // entry: a comment, a block scalar, a flow value run over lines.
+    const qsizetype lineEnd = m_text.indexOf(QLatin1Char('\n'), property.range.start);
+    if (lineEnd < 0 || lineEnd + 1 != property.range.end)
+        return {};
+    const qsizetype colon = m_text.indexOf(QLatin1Char(':'), property.range.start);
+    if (colon < 0 || colon >= lineEnd)
+        return {};
+
+    if (property.raw.isEmpty() || property.raw.first().isEmpty()) {
+        // `key:` with no value yet: it goes after the colon.
+        if (!QStringView(m_text).mid(colon + 1, lineEnd - colon - 1).trimmed().isEmpty())
+            return {};
+        return {colon + 1, lineEnd};
+    }
+    const QString &raw = property.raw.first();
+    const qsizetype at = m_text.indexOf(raw, colon + 1);
+    if (at < 0 || at + raw.size() > lineEnd || raw.contains(QLatin1String(" #")))
+        return {};
+    // Only blanks may follow; anything else is a part of the line this does
+    // not understand, and it is left alone.
+    if (!QStringView(m_text).mid(at + raw.size(), lineEnd - at - raw.size()).trimmed().isEmpty())
+        return {};
+    return {at, at + raw.size()};
+}
+
+bool MarkdownEditor::editPropertyAt(qsizetype sourceOffset)
+{
+    if (m_mode == Mode::Source || m_mode == Mode::Reading)
+        return false;
+    finishPropertyEdit(true);
+    const auto property = std::find_if(m_properties.cbegin(), m_properties.cend(),
+                                       [sourceOffset](const Property &candidate) {
+                                           return candidate.range.contains(sourceOffset);
+                                       });
+    if (property == m_properties.cend() || !editableValueOf(*property).isValid())
+        return false;
+    const int index = int(property - m_properties.cbegin());
+
+    // The row it sits in, where the value column starts.
+    const BlockView *table = nullptr;
+    for (const BlockView &view : m_blocks) {
+        if (view.span.kind == BlockSpan::Kind::Frontmatter && !view.propertyRows.empty()) {
+            table = &view;
+            break;
+        }
+    }
+    if (!table || table->folded)
+        return false;
+    const auto row = std::find_if(table->propertyRows.cbegin(), table->propertyRows.cend(),
+                                  [index](const PropertyRow &r) { return r.property == index; });
+    if (row == table->propertyRows.cend())
+        return false;
+    const qreal top = table->y - verticalScrollBar()->value();
+    const QRectF cell = row->rect.translated(contentLeft(), top).adjusted(kKeyColumn - 4, 0, 0, 0);
+
+    auto *edit = new QLineEdit(viewport());
+    edit->setFrame(false);
+    edit->setFont(m_theme.textFont());
+    QPalette palette = edit->palette();
+    palette.setColor(QPalette::Base, m_theme.color(QStringLiteral("--background-modifier-hover")));
+    palette.setColor(QPalette::Text, m_theme.color(QStringLiteral("--text-normal")));
+    palette.setColor(QPalette::Highlight, m_theme.color(QStringLiteral("--interactive-accent")));
+    edit->setPalette(palette);
+    edit->setGeometry(cell.toRect());
+    edit->setText(property->values.value(0));
+    edit->selectAll();
+    edit->installEventFilter(this);
+    // Enter, or the focus going elsewhere, keeps what was typed.
+    connect(edit, &QLineEdit::editingFinished, this, [this] { finishPropertyEdit(true); });
+    m_propertyEdit = edit;
+    m_editedKey = property->key;
+    edit->show();
+    edit->setFocus();
+    return true;
+}
+
+void MarkdownEditor::finishPropertyEdit(bool commit)
+{
+    if (!m_propertyEdit)
+        return;
+    // Cleared first: hiding the editor moves the focus, which finishes it again.
+    QLineEdit *edit = m_propertyEdit;
+    m_propertyEdit = nullptr;
+    const QString typed = edit->text();
+    edit->removeEventFilter(this);
+    edit->disconnect(this);
+    edit->hide();
+    edit->deleteLater();
+    setFocus();
+
+    if (!commit)
+        return;
+    // By key, not by index: a reparse may have renumbered the properties.
+    const auto property = std::find_if(m_properties.begin(), m_properties.end(),
+                                       [this](const Property &candidate) {
+                                           return candidate.key == m_editedKey;
+                                       });
+    if (property == m_properties.end() || typed == property->values.value(0))
+        return;
+    const Range value = editableValueOf(*property);
+    const std::optional<QString> yaml = Frontmatter::scalarFor(typed, property->type);
+    if (!value.isValid() || !yaml)
+        return; // a number that is not one, say: the file keeps what it had
+    const QString written =
+        property->raw.isEmpty() || property->raw.first().isEmpty() ? QLatin1Char(' ') + *yaml : *yaml;
+
+    const qsizetype delta = written.size() - value.length();
+    const qsizetype anchor = m_anchor > value.start ? m_anchor + delta : m_anchor;
+    const qsizetype caret = m_cursor > value.start ? m_cursor + delta : m_cursor;
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(value.start, value.length(), written);
+    property->values = QStringList{typed.trimmed()};
+    property->raw = QStringList{*yaml};
+    setSelectionRange(anchor, caret);
+}
+
+bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_propertyEdit && event->type() == QEvent::KeyPress) {
+        // Handled here, not left to QLineEdit: it lets Return go on to its
+        // parent, and the editor would type it into the note.
+        switch (static_cast<QKeyEvent *>(event)->key()) {
+        case Qt::Key_Escape:
+            finishPropertyEdit(false);
+            return true;
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            finishPropertyEdit(true);
+            return true;
+        default:
+            break;
+        }
+    }
+    return QAbstractScrollArea::eventFilter(watched, event);
 }
 
 void MarkdownEditor::toggleProperty(int index)

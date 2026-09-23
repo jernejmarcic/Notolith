@@ -7,6 +7,7 @@
 #include <QHash>
 #include <QIcon>
 #include <QPixmap>
+#include <QPointer>
 #include <QTextLayout>
 #include <QTimer>
 
@@ -57,6 +58,12 @@ public:
 
     void setTheme(const Theme &theme);
     void setMode(Mode mode);
+
+    /// Opens an editor over the value of the property whose line holds
+    /// `sourceOffset`, as clicking the value does. False when that value
+    /// cannot be rewritten safely: a list, a checkbox (which toggles), or one
+    /// that is quoted across lines, carries a comment, or spans several lines.
+    bool editPropertyAt(qsizetype sourceOffset);
     Mode mode() const { return m_mode; }
 
     /// Replaces the buffer and clears undo. Returns the caret to the top.
@@ -495,6 +502,12 @@ private:
     bool handleBlockClick(const QPoint &point);
     /// Flips a checkbox property, rewriting only that value's bytes.
     void toggleProperty(int index);
+    /// The key's line, and where on it the value is, when its value can be
+    /// replaced without touching anything else; both invalid otherwise.
+    Range editableValueOf(const Property &property) const;
+    /// Closes the property editor, writing what it holds when `commit`.
+    void finishPropertyEdit(bool commit);
+    bool eventFilter(QObject *watched, QEvent *event) override;
     /// The embed that fills this block on its own, or nullptr.
     const EmbedSpan *soleEmbedOf(const BlockView &view) const;
     /// A block that is nothing but an embed: an image, a PDF page, or a
@@ -640,6 +653,10 @@ private:
     void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
+    /// The inline editor over a property value, while one is open, and the
+    /// key it edits: a reparse can renumber the properties under it.
+    QPointer<class QLineEdit> m_propertyEdit;
+    QString m_editedKey;
     /// Where the last updateLayout() moved blocks from, in document y; +inf
     /// when nothing moved. A scroll can reuse the pixels on screen only if
     /// nothing on screen moved.

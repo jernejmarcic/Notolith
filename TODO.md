@@ -156,7 +156,12 @@ budget, which this project has already learned once on the index.
 - [ ] `editor.spellcheck` has no dictionary behind it. hunspell is in PLAN.md
       and is not a dependency yet.
 - [ ] A listing inside a callout wraps; Obsidian scrolls it.
-- [ ] Property values other than the checkbox are still read-only.
+- [x] Property values: text, number, date and date-time edit in place (click
+      the value; Enter or clicking away keeps it, Escape drops it). Written
+      through yaml-cpp, quoted only when needed, and refused when it would
+      change the type or touch anything else on the line.
+- [ ] List properties are still read-only chips: adding, removing and
+      editing an item.
 - [ ] Measure against Obsidian itself. Not installed here.
 
 ## Requested 2026-09-23

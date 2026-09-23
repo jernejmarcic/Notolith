@@ -4,6 +4,7 @@
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QRandomGenerator>
+#include <QLineEdit>
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
@@ -2145,6 +2146,101 @@ TEST(CodePieceTest, FoldingFoldsEveryPiece)
     editor->toggleFoldAt(late);
     EXPECT_FALSE(editor->isFoldedAt(late));
     EXPECT_GT(editor->documentHeight(), folded + 100 * 10) << "a hundred lines came back";
+}
+
+// --- editing property values -------------------------------------------------
+
+namespace {
+
+/// Types `text` into the open property editor and presses `key` there.
+bool typeIntoPropertyEditor(MarkdownEditor &editor, const QString &text, Qt::Key key)
+{
+    auto *edit = editor.findChild<QLineEdit *>();
+    if (!edit || edit->isHidden())
+        return false;
+    edit->setText(text);
+    QTest::keyClick(edit, key);
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    return true;
+}
+
+const QString kPropertiesNote = QStringLiteral(
+    "---\ntitle: Old\ncount: 3\nempty:\ntags:\n  - a\n  - b\ndone: false\n"
+    "noted: kept # a comment\n---\n\nBody\n");
+
+} // namespace
+
+TEST(PropertyEditTest, AValueIsRewrittenInPlaceAndQuotedOnlyWhenItHasTo)
+{
+    auto editor = editorWith(kPropertiesNote);
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("title"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("New: title"), Qt::Key_Return));
+    EXPECT_EQ(editor->noteText(), QString(kPropertiesNote).replace(
+                                      QStringLiteral("title: Old"),
+                                      QStringLiteral("title: \"New: title\"")));
+    EXPECT_FALSE(editor->findChild<QLineEdit *>()) << "the editor closes";
+
+    // Undo takes the edit back as one step.
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), kPropertiesNote);
+}
+
+TEST(PropertyEditTest, EscapeLeavesTheFileAlone)
+{
+    auto editor = editorWith(kPropertiesNote);
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("title"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("Something else"), Qt::Key_Escape));
+    EXPECT_EQ(editor->noteText(), kPropertiesNote);
+}
+
+TEST(PropertyEditTest, ANumberStaysANumber)
+{
+    auto editor = editorWith(kPropertiesNote);
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("count"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("many"), Qt::Key_Return));
+    EXPECT_EQ(editor->noteText(), kPropertiesNote) << "not a number: refused";
+
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("count"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("4.5"), Qt::Key_Return));
+    EXPECT_TRUE(editor->noteText().contains(QLatin1String("\ncount: 4.5\n")));
+}
+
+TEST(PropertyEditTest, AnEmptyValueIsFilledIn)
+{
+    auto editor = editorWith(kPropertiesNote);
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("empty"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("now"), Qt::Key_Return));
+    EXPECT_TRUE(editor->noteText().contains(QLatin1String("\nempty: now\ntags:")));
+}
+
+TEST(PropertyEditTest, WhatCannotBeRewrittenSafelyIsNotOpened)
+{
+    auto editor = editorWith(kPropertiesNote);
+    EXPECT_FALSE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("tags"))))
+        << "a list";
+    EXPECT_FALSE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("done"))))
+        << "a checkbox toggles";
+    EXPECT_FALSE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("noted"))))
+        << "a comment on the line would be lost";
+    EXPECT_FALSE(editor->findChild<QLineEdit *>());
+}
+
+TEST(PropertyEditTest, ClickingAValueOpensItsEditor)
+{
+    auto editor = editorWith(kPropertiesNote);
+    // Swept, like the code label, rather than restating the table's spacing:
+    // somewhere right of the key column on the first rows is the title.
+    const int viewport = editor->viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    QLineEdit *edit = nullptr;
+    for (int y = 4; y < 80 && !edit; y += 3) {
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                          QPoint(left + 260, y));
+        edit = editor->findChild<QLineEdit *>();
+    }
+    ASSERT_TRUE(edit) << "no value editor near the top of the table";
+    EXPECT_EQ(edit->text(), QStringLiteral("Old"));
 }
 
 // --- links to headings -------------------------------------------------------

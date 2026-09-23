@@ -158,6 +158,31 @@ Property::Type Frontmatter::inferType(const QStringList &values)
     return Property::Type::Text;
 }
 
+std::optional<QString> Frontmatter::scalarFor(const QString &value, Property::Type type)
+{
+    const QString trimmed = value.trimmed();
+    const Property::Type reads = trimmed.isEmpty() ? Property::Type::Text : inferType({trimmed});
+    switch (type) {
+    case Property::Type::Text:
+        break;
+    case Property::Type::Number:
+    case Property::Type::Date:
+    case Property::Type::DateTime:
+        if (reads != type)
+            return std::nullopt;
+        break;
+    default:
+        return std::nullopt;
+    }
+    // yaml-cpp decides what needs quoting - "a: b", "#tag", "[x]" - which is
+    // the same library that reads it back.
+    YAML::Emitter emitter;
+    if (type == Property::Type::Text && reads != Property::Type::Text)
+        emitter << YAML::DoubleQuoted; // "42" stays text
+    emitter << trimmed.toStdString();
+    return QString::fromStdString(emitter.c_str());
+}
+
 void Frontmatter::parse(const QString &text, const Range &block, Metadata &out)
 {
     out.frontmatter = block;
