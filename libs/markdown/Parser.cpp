@@ -551,11 +551,31 @@ void groupCodeFenceTabs(const QString &text, QList<CodeFenceSpan> &fences)
 /// `:::` containers (PLAN.md 16.1). md4qt reads the fence lines as ordinary
 /// paragraph text, so they are found here in the source, where the offsets are
 /// already true. Nesting goes by fence length, as in MyST: `::::` wraps `:::`.
-void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
+const QRegularExpression &colonFenceRe()
 {
     static const QRegularExpression fence(
         QStringLiteral("^(:{3,})[ \\t]*(\\{[^}]*\\}|[\\w-][^\\n]*)?$"),
         QRegularExpression::MultilineOption);
+    return fence;
+}
+
+/// A `:::` fence's own line is noteAppC's syntax, not the note's text: its
+/// `{bar="#4C8DFFff"}` attributes are not tags, nor its title links.
+QList<Range> withColonFenceLines(const QString &text, QList<Range> masked)
+{
+    if (!text.contains(QLatin1String(":::")))
+        return masked;
+    auto it = colonFenceRe().globalMatch(text);
+    while (it.hasNext()) {
+        const auto match = it.next();
+        masked.append({match.capturedStart(), match.capturedEnd()});
+    }
+    return masked;
+}
+
+void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
+{
+    const QRegularExpression &fence = colonFenceRe();
 
     struct Open {
         qsizetype length = 0;
@@ -1084,7 +1104,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
         }
     }
 
-    const auto obsidian = ObsidianSyntax::scan(text, walk.masked);
+    const auto obsidian = ObsidianSyntax::scan(text, withColonFenceLines(text, walk.masked));
 
     metadata.headings = walk.headings;
     metadata.links = walk.links + obsidian.links;

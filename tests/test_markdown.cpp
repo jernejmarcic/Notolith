@@ -444,6 +444,15 @@ TEST(TagTest, InlineNestedAndNonTags)
                                                QStringLiteral("in-brackets")}));
 }
 
+TEST(TagTest, AColonFencesAttributesAreNotTags)
+{
+    const QString text = QStringLiteral(
+        "::: {.tip bar=\"#4C8DFFff\" title=\"Styled\"}\n"
+        "Inside, #real is a tag.\n"
+        ":::\n");
+    EXPECT_EQ(tagNames(parse(text)), QStringList{QStringLiteral("real")});
+}
+
 TEST(MaskingTest, CodeAndCommentsHideEverything)
 {
     const QString text = QStringLiteral(
