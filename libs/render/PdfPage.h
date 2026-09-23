@@ -31,7 +31,15 @@ public:
     /// Renders `page` (0-based) so the result is `widthPixels` wide. A null
     /// image means the file, or that page, could not be rendered. Meant to
     /// be called from a worker thread - see the class comment.
-    static QImage render(const QString &path, int page, int widthPixels);
+    ///
+    /// `hideAnnotations` skips poppler's own baked-in annotation drawing.
+    /// Only libs/ext/pdfview passes true: it draws every annotation itself,
+    /// live off PdfDocument rather than off this render's on-disk snapshot,
+    /// so an edit shows immediately and a deleted annotation does not leave
+    /// a stale mark baked into the cached raster underneath the overlay.
+    /// Every other caller (PDF embeds) keeps the default and gets poppler's
+    /// own rendering, unchanged.
+    static QImage render(const QString &path, int page, int widthPixels, bool hideAnnotations = false);
 
     /// False in a build configured without poppler.
     static bool isAvailable();

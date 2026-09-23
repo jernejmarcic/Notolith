@@ -3,6 +3,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QList>
+#include <QPair>
 #include <QPolygonF>
 #include <QRectF>
 #include <QSizeF>
@@ -107,6 +108,16 @@ public:
     QList<PdfWordBox> words(int page) const;
     /// Every match of `needle` on the page, as point-space rects.
     QList<QRectF> findOnPage(int page, const QString &needle) const;
+
+    /// One match, as (0-based page, point-space rect on it), page by page in
+    /// order. Static and against the file on disk through its own
+    /// thread-local Document cache (mirrors PdfPage.cpp's) rather than the
+    /// live, possibly mid-edit m_doc - safe to call from a worker thread,
+    /// which is the point: PdfView runs this off the UI thread so Ctrl+F on
+    /// a big PDF never blocks scrolling. Annotating never changes a page's
+    /// text, so a copy that is one edit stale is harmless here.
+    static QList<QPair<int, QRectF>> findAcrossDocument(const QString &path, const QString &needle,
+                                                         int pageCount);
 
     QList<PdfOutlineItem> outline() const;
     QList<PdfLinkInfo> links(int page) const;

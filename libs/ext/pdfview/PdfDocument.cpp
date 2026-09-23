@@ -20,6 +20,7 @@
 
 #include <poppler-qt6.h>
 
+#include <QFileInfo>
 #include <QSaveFile>
 #include <QUuid>
 
@@ -217,6 +218,29 @@ PdfOutlineItem convertOutline(const OutlineItem &item)
     return out;
 }
 
+/// One Document per calling thread, reopened only when the path or its
+/// mtime changes - the exact shape of PdfPage.cpp's own openCached, kept as
+/// a separate copy rather than shared: that one is private to libs/render,
+/// and duplicating eight lines is cheaper than exporting it.
+Document *openForSearch(const QString &path)
+{
+    struct Cached {
+        QString path;
+        qint64 mtime = 0;
+        std::unique_ptr<Document> document;
+    };
+    thread_local Cached cache;
+
+    const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
+    if (cache.document && cache.path == path && cache.mtime == mtime)
+        return cache.document.get();
+
+    cache.document = Document::load(path);
+    cache.path = path;
+    cache.mtime = mtime;
+    return cache.document.get();
+}
+
 } // namespace
 
 PdfDocument::PdfDocument() = default;
@@ -285,6 +309,25 @@ QList<QRectF> PdfDocument::findOnPage(int page, const QString &needle) const
     if (!p)
         return {};
     return p->search(needle, Page::IgnoreCase);
+}
+
+QList<QPair<int, QRectF>> PdfDocument::findAcrossDocument(const QString &path, const QString &needle,
+                                                           int pageCount)
+{
+    QList<QPair<int, QRectF>> matches;
+    if (needle.isEmpty())
+        return matches;
+    Document *document = openForSearch(path);
+    if (!document)
+        return matches;
+    for (int page = 0; page < pageCount; ++page) {
+        const auto p = document->page(page);
+        if (!p)
+            continue;
+        for (const QRectF &rect : p->search(needle, Page::IgnoreCase))
+            matches.append({page, rect});
+    }
+    return matches;
 }
 
 QList<PdfOutlineItem> PdfDocument::outline() const
