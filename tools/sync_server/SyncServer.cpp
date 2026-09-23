@@ -295,17 +295,17 @@ void SyncServer::registerRoutes()
             const QByteArray vaultID = hexArg(vaultIDHex);
             if (accountID.isEmpty() || !m_store->vaultBelongsTo(vaultID, accountID))
                 return errorResponse(StatusCode::Forbidden, QStringLiteral("not your vault"));
-            const QByteArray device = hexArg(QUrlQuery(request.query()).queryItemValue(QStringLiteral("device")));
-            // Gated to an approved device (docs/SYNC.md path 1): an
-            // unapproved caller gets an empty list, not an error, so a
-            // device waiting on a lockbox can poll this every cycle
-            // without treating "not yet approved" as a failure.
+            // Not gated by device approval: an authenticated caller has
+            // already proved it derived the correct loginKey from the
+            // account password, which means it can derive wrapKey too -
+            // withholding the wrapped itemsKeys here would not stop it,
+            // only require it to take the lockbox path instead (see
+            // docs/SYNC.md "Device enrolment with lockboxes"). Approval
+            // matters for *that* path, not this one.
             QJsonArray array;
-            if (m_store->isApproved(vaultID, device)) {
-                for (const ServerStore::WrappedItemsKey &k : m_store->itemsKeys(vaultID))
-                    array.append(
-                        QJsonObject{{QStringLiteral("itemsKeyID"), b64(k.itemsKeyID)}, {QStringLiteral("wrapped"), b64(k.wrapped)}});
-            }
+            for (const ServerStore::WrappedItemsKey &k : m_store->itemsKeys(vaultID))
+                array.append(
+                    QJsonObject{{QStringLiteral("itemsKeyID"), b64(k.itemsKeyID)}, {QStringLiteral("wrapped"), b64(k.wrapped)}});
             return QHttpServerResponse(QJsonObject{{QStringLiteral("itemsKeys"), array}});
         });
 
