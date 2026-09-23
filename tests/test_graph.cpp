@@ -368,6 +368,24 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
     EXPECT_TRUE(view.containsNode(QStringLiteral("Ideas.md")));
 }
 
+TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
+{
+    Index index;
+    build(index);
+    GraphView view;
+    view.setIndex(&index);
+    ASSERT_EQ(view.nodeCount(), 4);
+
+    // Hidden: a change must not re-read the vault, only mark it stale.
+    emit index.changed();
+    view.setGraphData({{QStringLiteral("X"), QStringLiteral("X")}}, {});
+    emit index.changed();
+    EXPECT_EQ(view.nodeCount(), 1);
+
+    view.show();
+    EXPECT_EQ(view.nodeCount(), 4);
+}
+
 // ---------------------------------------------------------------------------
 // Performance guard: the plan's budget is 5 000 nodes / ~10 000 edges at 60 fps.
 

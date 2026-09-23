@@ -264,8 +264,17 @@ void GraphView::setIndex(Index *index)
     if (m_index)
         disconnect(m_index, nullptr, this, nullptr);
     m_index = index;
-    if (m_index)
-        connect(m_index, &Index::changed, this, &GraphView::applyIndexData);
+    if (m_index) {
+        // A graph nobody is looking at (a background tab, a closed sidebar)
+        // must not re-read the whole vault on every save; it catches up in
+        // showEvent().
+        connect(m_index, &Index::changed, this, [this] {
+            if (isVisible())
+                applyIndexData();
+            else
+                m_staleData = true;
+        });
+    }
     applyIndexData();
 }
 
@@ -368,10 +377,12 @@ void GraphView::setLocalGraph(bool local, const QString &path, int depth)
 void GraphView::setCurrentNote(const QString &relativePath)
 {
     m_currentNote = relativePath;
-    if (m_localMode)
+    if (!m_localMode)
+        update();
+    else if (isVisible())
         rebuild();
     else
-        update();
+        m_staleLayout = true; // every note switch would otherwise rebuild an unseen pane
 }
 
 void GraphView::rebuild()
@@ -514,6 +525,11 @@ void GraphView::ensureTimerRunning()
 void GraphView::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    if (m_staleData)
+        applyIndexData();
+    else if (m_staleLayout)
+        rebuild();
+    m_staleData = m_staleLayout = false;
     if (!m_layout.isSettled())
         ensureTimerRunning();
 }

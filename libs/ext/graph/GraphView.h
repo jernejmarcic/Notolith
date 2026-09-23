@@ -201,6 +201,8 @@ private:
     QColor m_accentColor{Qt::cyan};
 
     bool m_localMode = false;
+    bool m_staleData = false;   ///< the index changed while hidden
+    bool m_staleLayout = false; ///< the local graph's note changed while hidden
     QString m_currentNote;
 
     QList<GraphNode> m_rawNodes; // last full dataset, pre local-graph filtering
