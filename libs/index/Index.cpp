@@ -636,33 +636,6 @@ void Index::eachMatch(const SearchQuery &query, int limit,
             return;
         }
 
-        struct Candidate {
-            qint64 id;
-            QString path;
-            QString body;
-        };
-        QList<Candidate> candidates;
-
-        const QString fts = query.ftsExpression();
-        QSqlQuery statement(db);
-        bool ok = false;
-        if (!fts.isEmpty()) {
-            statement.prepare(QStringLiteral(
-                "SELECT rowid, path, body FROM content WHERE content MATCH ? ORDER BY path"));
-            statement.addBindValue(fts);
-            ok = statement.exec();
-        }
-        if (fts.isEmpty() || !ok) {
-            // No restriction could be derived (a bare -word, path:/tag:-only
-            // query, a lone /regex/) - every note is a candidate, and
-            // evaluate() below is what actually confirms each one.
-            statement.exec(QStringLiteral("SELECT rowid, path, body FROM content ORDER BY path"));
-        }
-        while (statement.next()) {
-            candidates.append({statement.value(0).toLongLong(), statement.value(1).toString(),
-                               statement.value(2).toString()});
-        }
-
         // Tags, headings and tasks are loaded whole rather than filtered to
         // just these candidates (no IN-list, no bind-parameter ceiling to
         // worry about) - ponytail: a full scan of three small tables per
@@ -703,17 +676,44 @@ void Index::eachMatch(const SearchQuery &query, int limit,
             }
         }
 
+        // Candidates in path order, but without their bodies: ORDER BY makes
+        // SQLite copy every selected column of every match into its sorter, so
+        // a common word over 20 000 notes sorted 20 000 bodies to confirm the
+        // first 200 (18 ms). Bodies are read one by one below, only until
+        // `limit` notes have matched.
+        const QString fts = query.ftsExpression();
+        QSqlQuery statement(db);
+        statement.setForwardOnly(true);
+        bool ok = false;
+        if (!fts.isEmpty()) {
+            statement.prepare(QStringLiteral(
+                "SELECT rowid, path FROM content WHERE content MATCH ? ORDER BY path"));
+            statement.addBindValue(fts);
+            ok = statement.exec();
+        }
+        if (fts.isEmpty() || !ok) {
+            // No restriction could be derived (a bare -word, path:/tag:-only
+            // query, a lone /regex/) - every note is a candidate, and
+            // evaluate() below is what actually confirms each one.
+            statement.exec(QStringLiteral("SELECT rowid, path FROM content ORDER BY path"));
+        }
+        QSqlQuery bodyQuery(db);
+        bodyQuery.prepare(QStringLiteral("SELECT body FROM content WHERE rowid = ?"));
+
         int delivered = 0;
-        for (const Candidate &candidate : std::as_const(candidates)) {
-            if (delivered >= limit)
-                break;
+        while (delivered < limit && statement.next()) {
+            const qint64 id = statement.value(0).toLongLong();
+            bodyQuery.bindValue(0, id);
+            if (!bodyQuery.exec() || !bodyQuery.next())
+                continue;
 
             NoteContext note;
-            note.path = candidate.path;
-            note.text = candidate.body;
-            note.tags = tagsByFile.value(candidate.id);
-            note.headings = headingsByFile.value(candidate.id);
-            note.tasks = tasksByFile.value(candidate.id);
+            note.path = statement.value(1).toString();
+            note.text = bodyQuery.value(0).toString();
+            bodyQuery.finish();
+            note.tags = tagsByFile.value(id);
+            note.headings = headingsByFile.value(id);
+            note.tasks = tasksByFile.value(id);
 
             SearchOutcome outcome = query.evaluate(note);
             if (!outcome.matched)

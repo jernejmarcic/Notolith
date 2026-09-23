@@ -104,8 +104,10 @@ public:
     /// query over the note's own linkNames() - with any occurrence that
     /// falls inside a link this note's backlinks() already accounts for
     /// masked out, so a note that both links here and separately mentions
-    /// the bare name shows only the second kind here. Also safe to call from
-    /// any thread but this one, for the same reason search() is.
+    /// the bare name shows only the second kind here. Unlike search(), only
+    /// for the thread that opened this Index: backlinks() reads `m_db`. It
+    /// costs 0.3 ms on a 20 000-note vault (noteAppC-bench), so the pane
+    /// calls it directly.
     QList<SearchResult> unlinkedMentions(const QString &path, int limit = 200) const;
 
     /// Rewrites every wikilink and Markdown link that resolves to `oldRelative`

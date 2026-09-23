@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -38,6 +39,7 @@
 
 #include <QSurfaceFormat>
 
+#include "Index.h"
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
 
@@ -229,6 +231,48 @@ Timing benchNoteOpen(MainWindow &window, const QString &notePath, const QString 
         samples.push_back(double(clock.nsecsElapsed()) / 1e6);
     }
     return reduce(QStringLiteral("Note open"), detail, samples);
+}
+
+/// Median of `runs` calls to `call`, for costs that have no frame of their own.
+template <typename Call>
+Timing benchCall(const QString &metric, const QString &detail, int runs, Call call)
+{
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        call();
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(metric, detail, samples);
+}
+
+/// Returns once the index has stopped growing for half a second: the indexer
+/// runs in the background and says nothing the bench can wait on directly.
+void waitForIndex(const Index &index)
+{
+    QElapsedTimer total;
+    total.start();
+    int last = -1;
+    QElapsedTimer steady;
+    steady.start();
+    while (total.elapsed() < 180000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        const int now = index.noteCount();
+        if (now != last) {
+            last = now;
+            steady.restart();
+        } else if (now > 0 && steady.elapsed() > 500) {
+            return;
+        }
+    }
+}
+
+QString firstNoteIn(const QString &vaultPath)
+{
+    QDirIterator it(vaultPath, {QStringLiteral("*.md")}, QDir::Files, QDirIterator::Subdirectories);
+    return it.hasNext() ? it.next() : QString();
 }
 
 /// 3. Keystroke latency: insert one character mid-document, relay out and
@@ -673,6 +717,24 @@ int main(int argc, char *argv[])
         for (int kb : sizesKB) {
             timings << benchNoteOpen(*window, sizedNotes.value(kb), scratchPath,
                                      QStringLiteral("%1 kB note").arg(kb), 9);
+        }
+
+        // The notes above live outside the vault, so no pane finds anything
+        // about them. A vault note is what a real switch costs: backlinks and
+        // unlinked mentions search the index for it. Measured once the
+        // indexer has settled, or the searches would run over half a vault.
+        waitForIndex(*window->index());
+        const QString vaultNote = firstNoteIn(vaultPath);
+        if (!vaultNote.isEmpty()) {
+            timings << benchNoteOpen(*window, vaultNote, scratchPath,
+                                     QStringLiteral("vault note, panes filled"), 9);
+            const Index &index = *window->index();
+            timings << benchCall(QStringLiteral("Unlinked mentions"), QStringLiteral("vault note"),
+                                 9, [&] { (void)index.unlinkedMentions(vaultNote); });
+            timings << benchCall(QStringLiteral("Search"), QStringLiteral("two words"), 9,
+                                 [&] { (void)index.search(QStringLiteral("prose bold")); });
+            timings << benchCall(QStringLiteral("Search"), QStringLiteral("rare word"), 9,
+                                 [&] { (void)index.search(QStringLiteral("zyxwvu")); });
         }
     }
 
