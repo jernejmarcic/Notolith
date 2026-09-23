@@ -100,8 +100,16 @@ probes. The screenshot tool and the bench now set it themselves.
 | `ParserPerfTest.ParsingStaysLinearInFileSize` | 5x the text costs under 10x the parse |
 | `ListPerfTest.TypingInALongListDoesNotDependOnItsLength` | 5 000 items type and reveal inside 8 ms, and within 4x of 100 |
 | `CodeBlockPerfTest.TypingInALongCodeBlockStaysInBudget` | 5 000 lines inside 8 ms, and within 4x of 100, after the parse has landed |
+| `EpubViewTest.ChapterRenderRunsOffThreadAndArrivesAsynchronously` | a cache miss never blocks; the chapter lands within 2 s of being asked for |
+| `EpubViewTest.AStaleRenderFromBeforeAResizeIsDiscardedNotCached` | a render started before a resize/font/theme change never overwrites the fresh one |
+| `EpubViewTest.DeletingTheViewWhileAWorkerRenderIsInFlightIsSafe` | deleting the view mid-render is safe (also run clean under ASAN+UBSan) |
+| `EpubViewTest.TocIsNotBuiltAtOpenEvenForAHugeBook` | `open()` builds zero TOC rows, however large the book's TOC |
+| `EpubViewTest.TocExpandsOneNodeAtATimeAndOnlyOnce` | a node's children exist only after it is expanded, and only once |
+| `EpubViewTest.FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched` | `@font-face` registration has already happened before the worker is dispatched |
+| `EpubViewTest.RemoteFontFaceIsNeverFetched` | a remote `@font-face` source is never attempted |
+| `EpubViewTest.PagedModeNeverScrollsPastTheDocumentBounds` | paged navigation clamps to `[0, documentHeight - pageHeight]` |
 
-The last one used to live in the editor tests. When the parse moved off the UI
+The last of the editor rows used to live in the editor tests. When the parse moved off the UI
 thread it started measuring the layout path instead, and would have gone on
 passing while the quadratic it existed for came back. It now measures
 `Parser::parseAll` directly, which is where the bug was.
@@ -456,6 +464,75 @@ itself to change; a pane built by a switch takes the theme when it is built,
 and the settings page re-themes the rows it rebuilds (they had kept the
 default colours until the next restyle). Settings pass, 1 MB note open: 21.6 ms
 to 1.6 ms (bench row "Settings pass").
+
+### 20. EPUB reader: chapter rendering off the UI thread, a lazy TOC, CSS resources, paged mode
+
+Four gaps in the EPUB reader (`libs/ext/epub`), not from a profile - the
+module is new enough that its own report named them directly. All four
+numbers below are `tests/test_epub.cpp`'s own `Perf*` tests, printed via
+`fprintf(stderr, ...)` (`QT_FORCE_STDERR_LOGGING=1 ctest -R epub`), not the
+bench (there is no EPUB row in it yet).
+
+**Chapter rendering.** Opening a book laid out and rasterised its first
+chapter with litehtml on the UI thread, ~11 ms. `requestChapterRender()` now
+does the archive/CSS/font work synchronously (cheap - string handling and a
+QFontDatabase call, never litehtml) and hands the layout/raster itself to
+`QtConcurrent::run`, delivered back through the same Lifeline +
+generation-counter (here: `m_renderEpoch`) pattern `MarkdownEditor`'s embeds
+already use (`PdfEmbedBlock.cpp`). A cache miss during paint shows the
+already-known/guessed chapter height as a placeholder and repaints when the
+worker delivers.
+
+| | before | after |
+|---|---|---|
+| chapter render: time blocking the UI thread | ~11 ms | 0 ms |
+| chapter render: total time to a cached, paintable chapter | ~11 ms (all on the UI thread) | ~10-11 ms (all off it) |
+
+The work costs the same - litehtml did not get faster - only where it runs
+changed. Page-turn time (paged mode, below) is a position update only
+(0 ms); the page painting it triggers is the same off-thread render path.
+
+**Lazy table of contents.** `buildToc()` used to run at `load()`, all levels
+at once. It now runs only the first time the panel is shown, one level at a
+time (a node with children gets a single placeholder row until it is
+actually expanded - `onTocExpanded()`). Measured on a synthetic 50 000-entry
+TOC (50 volumes x 1 000 chapters each - `makeEpubWithHugeToc`):
+
+| | cost |
+|---|---|
+| `open()` | 0 (deferred entirely) |
+| first show (50 top-level rows) | 346 us |
+| one volume expanded (1 000 rows) | 429 us |
+| the other 49 volumes (49 000 rows - what an eager build at `open()` used to pay) | 20.1 ms |
+
+At the 2 000-entry scale the committed regression test uses (20 x 100, cheap
+enough to run on every `ctest`), all three numbers round to 0 ms - see
+`PerfTocBuildOnAHugeToc`.
+
+**CSS `url()` resources.** A chapter's stylesheets (external `<link>` sheets
+and inline `<style>` blocks) never had their `url()`s resolved into the
+archive at all - a `background-image` drew nothing, and no `@font-face`
+source was ever loaded. Both are now extracted the same way an `<img src>`
+already was (`rewriteCssUrls`), and every `@font-face` source is registered
+into the application font database once per archive path
+(`registerChapterFonts`). Not a speed fix, but a thread-safety one: this
+registration is why the calling thread still does the archive/CSS work
+before dispatch in the chapter-rendering fix above -
+`QFontDatabase::addApplicationFontFromData` is not safe off the Qt GUI
+thread, the exact rule that already keeps MathRenderer/MicroTeX font loading
+on `Publisher`'s calling thread rather than its worker pool
+(`PageBody.h`/`Publisher.cpp`, "publish, PDF viewer, plugins and sync
+merged"). `FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched`
+checks the registration count is already 1 the instant
+`requestChapterRender()` returns, before the worker has run at all.
+
+**Paged mode.** New, not a fix: one or two page-height slices of the same
+continuous document-space litehtml already lays out (`m_vscroll`'s value,
+snapped to multiples of the viewport height), rather than a second layout
+path - so the render cache, hit-testing and highlight painting needed no
+changes to work in both modes. Page-turn cost above; column count picked
+from viewport width (`kTwoColumnMinWidth`, 900 px). See "Guards in the test
+suite" above for the regression tests this fix added.
 
 ## Tried and not adopted
 
