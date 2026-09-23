@@ -32,11 +32,11 @@ built; each stage's detail is in its own section further down.
 | 3 | Every non-core feature switchable off at run time, costing nothing when off | done: 23 switches |
 | 4 | `demo/`, a vault under 5 MB that exercises every feature | 354 kB, 77 files, `test_demo` opens all of it; grows with each stage |
 | 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
-| 6 | Publishing: the vault as a static website (Obsidian Publish style) | todo |
-| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | todo (poppler writes PDF annotations; EPUB via libarchive) |
-| 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | todo (quickjs-ng fetched pinned, as md4qt is) |
+| 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Left: footnote links, code-tab strips |
+| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: EPUB paged mode, CSS `url()`, image annotation |
+| 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | done but quickjs-ng: sandboxed host per plugin, C ABI, commands, code blocks, vault events, permissions page. quickjs-ng: "Decide later" |
 | 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | todo, on stage 8 |
-| 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | todo |
+| 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
 | 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | last feature stage |
@@ -60,6 +60,25 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       blew up the raster. Drawing outlines through `QPainterPath` fixes every
       operator, radical, delimiter, matrix bracket and roman glyph.
       `cmake/patch-microtex.sh` carries it.
+
+## Merged 2026-09-23, evening
+
+- [x] Lanes J (publish), K1 (PDF viewer), P (plugins) and S (sync) merged
+      and wired; both builds green, 24 and 15 suites.
+- [x] A clicked `[[Note#Heading]]` opens at the heading, `[[x.pdf#page=3]]`
+      on page 3, `[[#Heading]]` in the note; web and mail links open in
+      their apps (other schemes refused). Neither worked before.
+- [x] `QTRY_*` in a gtest test passed on timeout; `tests/WaitFor.h` fails it.
+- [x] Plugin manifests lost every list with more than one item (QSettings).
+- [x] test_sync wrote device keys into the real OS keyring and waited 15 s
+      per engine on it; an in-memory store in tests, 197 s -> 5 s.
+- [ ] `[[Note#^block]]` clicked opens the note at its top, not the block.
+- [ ] Sync asks the password every session: keep the derived keys in the
+      keyring instead, once Jernej says the keyring is where they belong.
+- [ ] Lockbox approval (a second device enrolled without the password) has
+      no UI yet; the engine supports it.
+- [ ] Publish from the window writes the whole vault only when asked;
+      the site's name and home note are not asked for (the CLI takes both).
 
 ## Callouts, requested by Jernej 2026-09-22
 
