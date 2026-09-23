@@ -40,7 +40,10 @@ public:
     };
     Auth registerAccount(const QString &email, const QByteArray &salt, const QByteArray &loginKey);
     Auth signIn(const QString &email, const QByteArray &loginKey);
-    bool changePassword(const QByteArray &newSalt, const QByteArray &newLoginKey,
+    /// `vaultID`'s itemsKeys are the ones rewrapped - see docs/SYNC.md
+    /// "Password change" for why this call is scoped to the one vault the
+    /// caller is managing rather than every vault the account might have.
+    bool changePassword(const QByteArray &vaultID, const QByteArray &newSalt, const QByteArray &newLoginKey,
                         const QList<QPair<QByteArray, QByteArray>> &rewrappedItemsKeys);
 
     struct Created {

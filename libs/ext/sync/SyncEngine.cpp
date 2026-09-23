@@ -439,7 +439,7 @@ void SyncEngine::changePassword(const QString &newPassword)
                                                          SyncCrypto::buildAD("WK", {key.itemsKeyID, kWrapGeneration0}));
                 rewrapped.append({key.itemsKeyID, wrap});
             }
-            if (!m_client->changePassword(newSalt, newLoginKey, rewrapped)) {
+            if (!m_client->changePassword(m_vaultID, newSalt, newLoginKey, rewrapped)) {
                 setStatus(Status::Error, QStringLiteral("password change rejected by the server"));
                 return;
             }

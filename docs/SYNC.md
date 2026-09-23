@@ -443,14 +443,23 @@ stage.
    every journal record already synced stays valid with no rewrite.
 3. One authenticated request (authenticated with the *old* `loginKey`, since
    the old session is still live), `POST /v1/account/password`, carries the
-   new salt, the new `loginKey'` (server re-hashes it with
-   `crypto_pwhash_str`, discarding the old hash), and the re-wrapped
-   itemsKeys, applied atomically.
+   vault this device is managing, the new salt, the new `loginKey'` (server
+   re-hashes it with `crypto_pwhash_str`, discarding the old hash), and that
+   vault's re-wrapped itemsKeys, applied atomically.
 4. A device that is offline during the change keeps working against its
    cached (plaintext-in-memory-only, for that session) itemsKeys - a
    restart makes it fall back to "nothing usable", so it just needs a fresh
    sign-in (old password fails, new one works) or a lockbox from a device
    that already switched, same as ordinary enrolment.
+
+**Scoped to one vault.** The call rewraps the itemsKeys of the vault the
+initiating `SyncEngine` is managing, not every vault the account might have -
+`SyncEngine` is one engine per vault (docs/SYNC.md's own API is "start/stop
+for a vault"), and it only ever holds the itemsKeys of the vault it started
+for. An account with a second vault would need that vault's own engine to
+run a follow-up rewrap against the new salt/loginKey; nothing today
+triggers that automatically. Worth fixing once multi-vault accounts are
+actually exercised - not before.
 
 ## What the client keeps (`$XDG_DATA_HOME/noteAppC/sync/<vault digest>/`)
 

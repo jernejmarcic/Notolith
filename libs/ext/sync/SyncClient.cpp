@@ -39,7 +39,9 @@ SyncClient::Reply SyncClient::callRaw(const QByteArray &verb, const QString &pat
     QNetworkRequest request(QUrl(m_baseURL + path));
     request.setHeader(QNetworkRequest::ContentTypeHeader, QString::fromLatin1(contentType));
     if (!m_token.isEmpty())
-        request.setRawHeader("Authorization", "Bearer " + m_token);
+        // Hex, not the raw bytes: a bearer token is random binary and an
+        // HTTP header value has to stay ASCII-safe text.
+        request.setRawHeader("Authorization", "Bearer " + m_token.toHex());
 
     QEventLoop loop;
     QNetworkReply *reply = nullptr;
@@ -118,7 +120,7 @@ SyncClient::Auth SyncClient::signIn(const QString &email, const QByteArray &logi
     return out;
 }
 
-bool SyncClient::changePassword(const QByteArray &newSalt, const QByteArray &newLoginKey,
+bool SyncClient::changePassword(const QByteArray &vaultID, const QByteArray &newSalt, const QByteArray &newLoginKey,
                                 const QList<QPair<QByteArray, QByteArray>> &rewrappedItemsKeys)
 {
     QJsonArray keys;
@@ -126,7 +128,8 @@ bool SyncClient::changePassword(const QByteArray &newSalt, const QByteArray &new
         keys.append(QJsonObject{{QStringLiteral("itemsKeyID"), QString::fromLatin1(b64(id))},
                                 {QStringLiteral("wrapped"), QString::fromLatin1(b64(wrapped))}});
     const Reply reply = call("POST", QStringLiteral("/v1/account/password"),
-                             {{QStringLiteral("newSalt"), QString::fromLatin1(b64(newSalt))},
+                             {{QStringLiteral("vaultID"), QString::fromLatin1(b64(vaultID))},
+                              {QStringLiteral("newSalt"), QString::fromLatin1(b64(newSalt))},
                               {QStringLiteral("newLoginKey"), QString::fromLatin1(b64(newLoginKey))},
                               {QStringLiteral("itemsKeys"), keys}});
     return reply.status == 200;
