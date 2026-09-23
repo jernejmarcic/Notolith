@@ -16,10 +16,11 @@ QString notebookCacheRoot()
     return base + QStringLiteral("/noteAppC/notebook");
 }
 
-QString notebookCacheKey(const QString &language, const QString &source)
+QString notebookCacheKey(const QString &language, const QString &source, SandboxTier tier)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
-    hash.addData(language.trimmed().toLower().toUtf8() + '\x1f' + source.toUtf8());
+    hash.addData(language.trimmed().toLower().toUtf8() + '\x1f' + source.toUtf8() + '\x1f'
+                + QByteArray::number(int(tier)));
     return QString::fromLatin1(hash.result().toHex());
 }
 

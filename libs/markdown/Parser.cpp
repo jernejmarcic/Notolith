@@ -383,9 +383,18 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
         options.wrap = isTrue(value);
     } else if (key == QLatin1String("fold")) {
         options.fold = isTrue(value);
+    } else if (key == QLatin1String("eval")) {
+        options.eval = isTrue(value);
+    } else if (key == QLatin1String("echo")) {
+        options.echo = isTrue(value);
+    } else if (key == QLatin1String("sandbox")) {
+        // Anything but "host" keeps the tier-1 default rather than failing a
+        // typo closed - "bubblewrap" written out, or a future tier's name
+        // this build does not implement yet, both land here as bubblewrap.
+        options.sandboxHost = unquote(value).compare(QLatin1String("host"), Qt::CaseInsensitive) == 0;
     } else {
-        // Quarto's eval, echo, output, warning and error arrive here and stop.
-        // noteAppC never runs code; keeping them only hides the lines.
+        // Quarto's output, warning and error arrive here and stop - noteAppC
+        // never surfaces them; keeping them only hides the lines.
         options.extra.insert(key, unquote(value));
     }
 }

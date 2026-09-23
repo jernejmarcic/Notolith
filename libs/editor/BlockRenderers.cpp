@@ -177,6 +177,19 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         if (handleEmbedCellClick(view, point, left, top))
             return true;
 
+        // A runnable code-file embed's own run control (NotebookEmbed part
+        // of FileEmbedBlock.cpp): the same rect notebookRunRectFor places
+        // for a fenced block's header, reached from here instead of the
+        // Code-kind branch below since an embed's own span.kind is
+        // Paragraph, not Code.
+        if (view.embedPanel && view.notebookEligible) {
+            const QRectF runRect = notebookRunRectFor(view, left, top);
+            if (runRect.isValid() && runRect.adjusted(-4, -4, 4, 4).contains(point)) {
+                runNotebookBlockAt(view.span.range.start);
+                return true;
+            }
+        }
+
         if (view.isQuery) {
             if (view.queryCollapseRect.isValid()
                 && view.queryCollapseRect.translated(left, top).contains(point)) {
@@ -1322,6 +1335,7 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
         }
         paintCodeLabel(painter, view, left, top);
         paintNotebookRunControl(painter, view, left, top);
+        paintNotebookHostBadge(painter, view, left, top);
         return;
     }
 
@@ -1336,6 +1350,7 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
         painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
     paintCodeLabel(painter, view, left, top);
     paintNotebookRunControl(painter, view, left, top);
+    paintNotebookHostBadge(painter, view, left, top);
     if (view.options)
         paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
 }

@@ -113,10 +113,11 @@ struct EmbedSpan {
 /// `#|` option lines at the head of a fenced code block (PLAN.md 16.2), where
 /// `#` is whatever the language uses for a line comment.
 ///
-/// noteAppC never runs code, so Quarto's execution keys (`eval`, `echo`,
-/// `output`, `warning`, `error`) are read into `extra` and go no further; they
-/// are here only so a Quarto notebook still renders instead of showing its
-/// options as the first lines of the listing.
+/// Stage 13's rest gives three of Quarto's execution keys real meaning -
+/// `eval`, `echo` and noteAppC's own `sandbox` (not a Quarto key at all).
+/// `output`, `warning` and `error` still just fall into `extra` and go no
+/// further; they are here only so a Quarto notebook still renders instead of
+/// showing its options as the first lines of the listing.
 struct CodeOptions {
     Range block;   ///< the code between the fences, as the Code BlockSpan has it
     Range range;   ///< the option lines themselves - hidden in live preview
@@ -127,6 +128,12 @@ struct CodeOptions {
     QList<int> highlight; ///< 1-based lines from `highlight: 2,5-7`
     bool wrap = false;
     bool fold = false;
+    bool eval = true;  ///< `eval: false` - the block never runs, no run control at all
+    bool echo = true;  ///< `echo: false` - live preview shows only the run control and
+                       ///< output, never the listing; the caret entering the block reveals it
+    /// `sandbox: host` - tier 0, opt-in: the kernel runs as the user, unsandboxed.
+    /// Anything else (absent, or `bubblewrap`) is the tier-1 default.
+    bool sandboxHost = false;
     QMap<QString, QString> extra; ///< every key with no meaning here, as written
 };
 

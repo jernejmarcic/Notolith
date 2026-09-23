@@ -13,6 +13,7 @@ add_library(noteAppC_editor STATIC
     MarkdownEditor.cpp
     MarkdownEditor.h
     NotebookBlock.cpp
+    NotebookEmbed.cpp
     TableCells.cpp
     PdfEmbedBlock.cpp
     PdfExport.cpp

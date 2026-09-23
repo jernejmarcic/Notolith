@@ -1019,7 +1019,7 @@ TEST(CodeOptionTest, PrefixFollowsTheLanguage)
     EXPECT_EQ(rendered(wrong), QStringLiteral("\n#| title: query.sql\nSELECT 1;\n\n"));
 }
 
-TEST(CodeOptionTest, QuartoExecutionKeysAreParsedAndIgnored)
+TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
 {
     const QString text = QStringLiteral(
         "```r\n"
@@ -1033,10 +1033,12 @@ TEST(CodeOptionTest, QuartoExecutionKeysAreParsedAndIgnored)
     ASSERT_EQ(decorations.codeOptions.size(), 1);
 
     const CodeOptions &options = decorations.codeOptions.first();
-    EXPECT_EQ(options.extra.value(QStringLiteral("eval")), QStringLiteral("false"));
-    EXPECT_EQ(options.extra.value(QStringLiteral("echo")), QStringLiteral("true"));
+    EXPECT_FALSE(options.eval); // a notebook block that never runs
+    EXPECT_TRUE(options.echo);
+    EXPECT_FALSE(options.sandboxHost);
+    EXPECT_EQ(options.extra.value(QStringLiteral("warning")), QStringLiteral("false"));
     EXPECT_EQ(options.extra.value(QStringLiteral("label")), QStringLiteral("fig-one"));
-    // Nothing here runs anything, and nothing here renders either.
+    // The options themselves render nothing.
     EXPECT_TRUE(options.title.isEmpty());
     EXPECT_EQ(rendered(text), QStringLiteral("\nplot(x)\n\n"));
 
