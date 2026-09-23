@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTest>
 
 #include "GraphLayout.h"
 #include "GraphView.h"
@@ -234,6 +235,36 @@ TEST(GraphViewTest, LocalGraphRespectsDepth)
     view.setLocalGraph(false);
     EXPECT_FALSE(view.isLocalGraph());
     EXPECT_EQ(view.nodeCount(), 5);
+}
+
+TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)
+{
+    // A local graph's shape: one note and its eight links, in a sidebar-wide
+    // view. At a fixed zoom the leaves sat a link distance (250) out, off a
+    // 260 px pane; with 1/d^2 repulsion they never spread and stacked up.
+    QStringList ids{QStringLiteral("hub")};
+    QList<GraphEdge> edges;
+    for (int i = 0; i < 8; ++i) {
+        ids << QStringLiteral("leaf%1").arg(i);
+        edges.append({QStringLiteral("hub"), ids.last()});
+    }
+    GraphView view;
+    view.resize(260, 500);
+    view.setGraphData(nodesFor(ids), edges);
+    view.show();
+    QTest::qWait(2500); // the step timer runs until the layout settles
+
+    const QRectF pane = QRectF(view.rect()).adjusted(4, 4, -4, -4);
+    for (const QString &id : std::as_const(ids))
+        EXPECT_TRUE(pane.contains(view.screenPosition(id))) << id.toStdString() << " is off the pane";
+    double closest = 1e9;
+    for (int a = 1; a < ids.size(); ++a) {
+        for (int b = a + 1; b < ids.size(); ++b) {
+            const QPointF d = view.screenPosition(ids[a]) - view.screenPosition(ids[b]);
+            closest = std::min(closest, std::hypot(d.x(), d.y()));
+        }
+    }
+    EXPECT_GT(closest, 12.0) << "two leaves sit on top of each other";
 }
 
 TEST(GraphViewTest, OrphanFilterDropsUnconnectedNotes)

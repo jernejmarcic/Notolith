@@ -145,6 +145,11 @@ public:
     int nodeCount() const { return m_nodes.size(); }
     int edgeCount() const { return m_edgeIndices.size(); }
     bool containsNode(const QString &id) const { return m_idToIndex.contains(id); }
+    /// Where node `id` is drawn, in widget pixels.
+    QPointF screenPosition(const QString &id) const
+    {
+        return toScreen(m_layout.position(m_idToIndex.value(id, -1)));
+    }
 
     /// Advances the simulation by `steps` steps immediately, instead of
     /// waiting for the timer to do a few per frame, and repaints once
@@ -180,6 +185,7 @@ private:
     void rebuild();
     void applyIndexData();
     void ensureTimerRunning();
+    void fitToView();
     QWidget *buildControlsPanel();
     void layoutControls();
 
@@ -220,6 +226,7 @@ private:
 
     double m_zoom = 1.0;
     QPointF m_pan{0, 0};
+    bool m_cameraMoved = false; ///< zoomed or panned by hand: stop fitting the view
 
     int m_hoverNode = -1;
     int m_dragNode = -1;

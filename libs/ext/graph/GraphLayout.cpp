@@ -192,7 +192,12 @@ void ForceLayout::accumulateForce(int nodeIndex, int bodyIndex, double &fx, doub
     if (resolveDirectly) {
         distSq = std::max(distSq, kSoftening);
         const double dist = std::sqrt(distSq);
-        const double force = m_options.repelStrength * node.mass / distSq;
+        // d3-force's many-body law, the engine Obsidian's graph runs on:
+        // strength / d, not / d^2. At 10 / d^2 a leaf 150 px from its
+        // neighbour felt 0.0004 against springs in the hundreds, so a local
+        // graph's leaves never spread before the layout cooled and sat
+        // stacked on one spot.
+        const double force = m_options.repelStrength * kRepelScale * node.mass / dist;
         fx += dx / dist * force;
         fy += dy / dist * force;
         return;
@@ -217,8 +222,8 @@ double ForceLayout::step()
         // so it stays weak near the middle and never overwhelms repulsion
         // for a node that has drifted far out - matches Obsidian's slider,
         // which behaves the same way.
-        fx -= m_position[i].x() * m_options.centerStrength;
-        fy -= m_position[i].y() * m_options.centerStrength;
+        fx -= m_position[i].x() * m_options.centerStrength * kCenterScale;
+        fy -= m_position[i].y() * m_options.centerStrength * kCenterScale;
         m_force[i] = QPointF(fx, fy);
     }
 

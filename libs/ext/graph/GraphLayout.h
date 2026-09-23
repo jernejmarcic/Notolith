@@ -136,6 +136,12 @@ private:
     // steps (a dense initial scatter) without limiting normal settling once
     // forces are back in a sane range.
     static constexpr double kMaxSpeedFactor = 4.0;
+    // Obsidian's slider values (repel 10, centre 0.5) to force units: d3's
+    // default charge is 30 per node, and its forceX/forceY default is 0.1.
+    // A centre spring at the slider's raw 0.5 outweighed springs 250 px long
+    // and pulled every leaf of a star onto one side.
+    static constexpr double kRepelScale = 30.0;
+    static constexpr double kCenterScale = 0.1;
     static constexpr double kSettleEnergy = 0.02;
     static constexpr int kSettleStreak = 8;
 };

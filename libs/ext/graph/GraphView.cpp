@@ -487,6 +487,8 @@ void GraphView::rebuild()
 
     m_hoverNode = -1;
     m_dragNode = -1;
+    m_cameraMoved = false;
+    fitToView();
     ensureTimerRunning();
     update();
 }
@@ -513,6 +515,8 @@ void GraphView::ensureTimerRunning()
             const int stepsPerFrame = m_nodes.size() > 1000 ? 1 : 3;
             for (int i = 0; i < stepsPerFrame; ++i)
                 m_layout.step();
+            if (!m_cameraMoved)
+                fitToView();
             update();
             if (m_layout.isSettled() && m_dragNode < 0)
                 m_stepTimer->stop(); // the picture stopped moving - stop paying for it
@@ -520,6 +524,34 @@ void GraphView::ensureTimerRunning()
     }
     if (!m_stepTimer->isActive())
         m_stepTimer->start(16);
+}
+
+void GraphView::fitToView()
+{
+    // Follows the layout as it spreads until the user zooms or pans, the way
+    // Obsidian frames a graph when it opens: at a fixed zoom a local graph's
+    // few nodes sit a link distance (250) apart and miss a 260 px pane.
+    if (m_nodes.isEmpty() || width() <= 0 || height() <= 0)
+        return;
+    // Min and max by hand: QRectF's |= skips an empty rect, and a point is one.
+    double left = 0, top = 0, right = 0, bottom = 0;
+    bool any = false;
+    for (int i = 0; i < m_nodes.size(); ++i) {
+        const QPointF p = m_layout.position(i);
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y()))
+            continue;
+        left = any ? std::min(left, p.x()) : p.x();
+        right = any ? std::max(right, p.x()) : p.x();
+        top = any ? std::min(top, p.y()) : p.y();
+        bottom = any ? std::max(bottom, p.y()) : p.y();
+        any = true;
+    }
+    const QRectF bounds(QPointF(left, top), QPointF(right, bottom));
+    const double margin = 40.0;
+    const double zoomX = (width() - 2 * margin) / std::max(1.0, bounds.width());
+    const double zoomY = (height() - 2 * margin) / std::max(1.0, bounds.height());
+    m_zoom = std::clamp(std::min(zoomX, zoomY), 0.05, 1.0);
+    m_pan = -bounds.center() * m_zoom;
 }
 
 void GraphView::showEvent(QShowEvent *event)
@@ -560,8 +592,10 @@ QPointF GraphView::toGraph(QPointF screenPos) const
 double GraphView::radiusFor(int degree) const
 {
     // Sub-linear in degree so a hundred-link hub reads as bigger, not ten
-    // times the area of a one-link note.
-    return (3.0 + std::sqrt(double(std::max(0, degree))) * 1.6) * m_options.nodeSizeMultiplier;
+    // times the area of a one-link note. Obsidian's nodes are small dots:
+    // at 3 + 1.6 sqrt(degree) a ten-link note was 8 px and a 300-note vault
+    // read as a blob.
+    return (2.0 + std::sqrt(double(std::max(0, degree)))) * m_options.nodeSizeMultiplier;
 }
 
 QColor GraphView::colorFor(const VisualNode &node) const
@@ -755,6 +789,7 @@ void GraphView::wheelEvent(QWheelEvent *event)
 
     const double factor = std::pow(1.0015, event->angleDelta().y());
     m_zoom = std::clamp(m_zoom * factor, 0.05, 8.0);
+    m_cameraMoved = true;
 
     // Re-derive pan so the point under the cursor stays under it - zooming
     // "about the pointer" rather than about the widget's centre.
@@ -775,6 +810,7 @@ void GraphView::mousePressEvent(QMouseEvent *event)
     const int hit = nodeAt(event->position());
     if (hit >= 0) {
         m_dragNode = hit;
+        m_cameraMoved = true; // a refit would slide the node out from under the pointer
         m_layout.setPinned(hit, true);
         m_layout.wake();
         ensureTimerRunning();
@@ -796,6 +832,7 @@ void GraphView::mouseMoveEvent(QMouseEvent *event)
     }
     if (m_panning) {
         m_pan = m_panOrigin + (event->position() - m_panStart);
+        m_cameraMoved = true;
         update();
         return;
     }
