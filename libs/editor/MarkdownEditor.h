@@ -24,6 +24,10 @@
 
 class QCompleter;
 class QFileSystemWatcher;
+class QMimeData;
+class QDragEnterEvent;
+class QDragMoveEvent;
+class QDropEvent;
 
 #include "CodeHighlighter.h"
 #include "Lifeline.h"
@@ -242,6 +246,21 @@ public:
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
+
+    // --- paste and drop --------------------------------------------------
+    // The editor never links libs/vault, so saving an attachment or
+    // resolving a dropped path is the window's job; these seams hand it
+    // back the link text to insert (or empty to insert nothing). See
+    // PasteDrop.cpp.
+    /// Saves a pasted or dropped image's bytes as `suggestedName` (a name,
+    /// not a path); returns the `![[...]]` text to insert, or empty on
+    /// failure.
+    using AttachmentSaver = std::function<QString(const QString &suggestedName, const QByteArray &bytes)>;
+    void setAttachmentSaver(AttachmentSaver saver);
+    /// Imports a local file dropped from outside the editor (a path, not a
+    /// URL); returns the link or embed text to insert, or empty on failure.
+    using FileImporter = std::function<QString(const QString &sourcePath)>;
+    void setFileImporter(FileImporter importer);
 
     /// Delivers the results of one ```query``` block's search, in the order
     /// found; called from any thread. See setQueryRunner.
@@ -581,6 +600,11 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    // Paste and drop: a dropped file or image lands where the pointer is,
+    // with the caret shown there while dragging. See PasteDrop.cpp.
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void leaveEvent(QEvent *event) override;
@@ -1445,6 +1469,11 @@ private:
     void ensureCursorVisible();
 
     void insertText(const QString &text);
+    /// The insertFromMimeData logic shared by Ctrl+V and a drop: an image
+    /// goes through m_attachmentSaver, local file URLs through
+    /// m_fileImporter (or the path as text with neither set), else plain
+    /// text - cellSafe()'d either way. Inserts at the caret.
+    void insertMimeData(const QMimeData *mime);
     void removeSelectionOrChar(int direction);
     void moveCursor(qsizetype offset, bool keepAnchor);
     void moveVertically(int lines, bool keepAnchor);
@@ -1571,6 +1600,8 @@ private:
     qreal m_movedFrom = 0;
     MathRenderer m_math;
     std::function<QString(const QString &)> m_resolver;
+    AttachmentSaver m_attachmentSaver;
+    FileImporter m_fileImporter;
     mutable QHash<QString, QPixmap> m_images;
     Mode m_mode = Mode::LivePreview;
 

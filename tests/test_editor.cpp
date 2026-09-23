@@ -4,8 +4,11 @@
 
 #include <QClipboard>
 #include <QScroller>
+#include <QDropEvent>
 #include <QElapsedTimer>
 #include <QGuiApplication>
+#include <QImage>
+#include <QMimeData>
 #include <QRandomGenerator>
 #include <QLineEdit>
 #include <QMenu>
@@ -15,6 +18,7 @@
 #include <QScrollBar>
 #include <QScreen>
 #include <QTimer>
+#include <QUrl>
 #include <QtConcurrent>
 
 #include <algorithm>
@@ -4101,6 +4105,19 @@ QPoint clickInto(MarkdownEditor &editor, Range range)
     return {};
 }
 
+/// A drop the way Qt delivers one: to the viewport, and only after a drag
+/// entering it was accepted. True when the editor took the drop.
+bool dropOnto(MarkdownEditor &editor, QPoint point, const QMimeData &mime)
+{
+    QDragEnterEvent enter(point, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor.viewport(), &enter);
+    if (!enter.isAccepted())
+        return false;
+    QDropEvent drop(QPointF(point), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor.viewport(), &drop);
+    return drop.isAccepted();
+}
+
 } // namespace
 
 TEST(TableCellTest, AClickEditsTheCellAndTheTableStaysATable)
@@ -4213,4 +4230,150 @@ TEST(TableFormatEditorTest, FormatAllTablesKeepsTheCaretInItsCell)
               QStringLiteral("| x   | long header |\n| --- | ----------- |\n| 1   | 2           |\n\n"
                              "|  p  | q   |\n| :-: | --- |\n|  r  | s   |\n"));
     EXPECT_EQ(editor->noteText().at(editor->cursorOffset() - 1), QLatin1Char('2'));
+}
+
+// --- paste and drop (PasteDrop.cpp) -----------------------------------------
+
+TEST(PasteDropTest, ImagePasteCallsTheSaverAndInsertsTheEmbed)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QGuiApplication::clipboard()->setImage(image);
+
+    QString gotName;
+    QByteArray gotBytes;
+    editor->setAttachmentSaver([&](const QString &name, const QByteArray &bytes) {
+        gotName = name;
+        gotBytes = bytes;
+        return QStringLiteral("![[") + name + QStringLiteral("]]");
+    });
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_TRUE(gotName.startsWith(QStringLiteral("Pasted image "))) << gotName.toStdString();
+    EXPECT_TRUE(gotName.endsWith(QStringLiteral(".png")));
+    ASSERT_FALSE(gotBytes.isEmpty());
+    EXPECT_TRUE(QImage::fromData(gotBytes, "PNG").size() == image.size());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello![[") + gotName + QStringLiteral("]]\n"));
+}
+
+TEST(PasteDropTest, ShiftPasteIsTextOnlyEvenWithAnImageOnTheClipboard)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    QGuiApplication::clipboard()->setImage(image);
+
+    bool saverCalled = false;
+    editor->setAttachmentSaver([&](const QString &, const QByteArray &) {
+        saverCalled = true;
+        return QString();
+    });
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier | Qt::ShiftModifier);
+
+    EXPECT_FALSE(saverCalled);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n")); // no text on the clipboard either
+}
+
+TEST(PasteDropTest, NoSaverSetDoesNothingForAnImagePaste)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    QGuiApplication::clipboard()->setImage(image);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n"));
+}
+
+TEST(PasteDropTest, DropOfAnOutsideFileImportsAndInsertsTheEmbedAtTheDropPoint)
+{
+    const QString note = QStringLiteral("above\nbelow\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7}); // the start of "below"
+    ASSERT_FALSE(point.isNull());
+
+    QString gotPath;
+    editor->setFileImporter([&](const QString &path) {
+        gotPath = path;
+        return QStringLiteral("![[photo.png]]");
+    });
+
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(QStringLiteral("/outside/photo.png"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_EQ(gotPath, QStringLiteral("/outside/photo.png"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n![[photo.png]]below\n"));
+}
+
+TEST(PasteDropTest, DropOfAnInVaultNoteInsertsWhateverTheImporterReturns)
+{
+    const QString note = QStringLiteral("above\nbelow\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    editor->setFileImporter([](const QString &) { return QStringLiteral("[[Note]]"); });
+
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(QStringLiteral("/vault/Note.md"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n[[Note]]below\n"));
+}
+
+TEST(PasteDropTest, DropWithNoImporterInsertsThePathAsText)
+{
+    const QString note = QStringLiteral("above\nbelow\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(QStringLiteral("/outside/photo.png"))});
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\n/outside/photo.pngbelow\n"));
+}
+
+TEST(PasteDropTest, DroppedTextIsInsertedAtThePoint)
+{
+    const QString note = QStringLiteral("above\nbelow\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QPoint point = clickInto(*editor, {5, 7});
+    ASSERT_FALSE(point.isNull());
+
+    QMimeData mime;
+    mime.setText(QStringLiteral("dropped"));
+    ASSERT_TRUE(dropOnto(*editor, point, mime));
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("above\ndroppedbelow\n"));
+}
+
+TEST(PasteDropTest, PasteIntoATableCellStaysSafe)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    ASSERT_FALSE(clickInto(*editor, {apple, apple + 5}).isNull());
+    editor->setCursorOffset(apple + 5);
+
+    QGuiApplication::clipboard()->setText(QStringLiteral("a|b\nc"));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| applea\\|b c | 3 |")))
+        << editor->noteText().toStdString();
 }
