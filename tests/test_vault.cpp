@@ -335,6 +335,28 @@ TEST(VaultAttachmentFolder, ObsidiansFourForms)
     EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("../../outside"), note), vault.root()); // never out
 }
 
+TEST(VaultAttachmentFolder, UniqueAttachmentPathAddsACountBeforeTheExtension)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    // Nothing there yet: the plain name.
+    EXPECT_EQ(Vault::uniqueAttachmentPath(dir.path(), QStringLiteral("Pasted image.png")),
+             dir.filePath(QStringLiteral("Pasted image.png")));
+
+    // Taken: " 1", then " 2", same as createNote()'s "Untitled 1".
+    QFile(dir.filePath(QStringLiteral("Pasted image.png"))).open(QIODevice::WriteOnly);
+    EXPECT_EQ(Vault::uniqueAttachmentPath(dir.path(), QStringLiteral("Pasted image.png")),
+             dir.filePath(QStringLiteral("Pasted image 1.png")));
+    QFile(dir.filePath(QStringLiteral("Pasted image 1.png"))).open(QIODevice::WriteOnly);
+    EXPECT_EQ(Vault::uniqueAttachmentPath(dir.path(), QStringLiteral("Pasted image.png")),
+             dir.filePath(QStringLiteral("Pasted image 2.png")));
+
+    // No extension: the count still lands before nothing.
+    EXPECT_EQ(Vault::uniqueAttachmentPath(dir.path(), QStringLiteral("README")),
+             dir.filePath(QStringLiteral("README")));
+}
+
 TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefault)
 {
     QTemporaryDir dir;

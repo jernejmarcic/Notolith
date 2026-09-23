@@ -88,6 +88,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     setAttribute(Qt::WA_InputMethodEnabled, true);
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
+    viewport()->setAcceptDrops(true); // an image or a file dropped in; see PasteDrop.cpp
     horizontalScrollBar()->setRange(0, 0);
     // An icon given as an https URL arrives after the first paint. Without
     // this it stayed blank until something unrelated happened to repaint.
@@ -3904,7 +3905,12 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             }
             return;
         case Qt::Key_V:
-            insertText(cellSafe(QApplication::clipboard()->text()));
+            // Plain text only with Shift, as Obsidian does; otherwise an
+            // image on the clipboard is saved as an attachment (PasteDrop.cpp).
+            if (shift)
+                insertText(cellSafe(QApplication::clipboard()->text()));
+            else
+                insertMimeData(QApplication::clipboard()->mimeData());
             return;
         default:
             break;

@@ -105,6 +105,20 @@ QString Vault::attachmentFolderFor(const QString &setting, const QString &notePa
     return contains(folder) ? folder : m_root;
 }
 
+QString Vault::uniqueAttachmentPath(const QString &folder, const QString &fileName)
+{
+    const QFileInfo info(fileName);
+    const QString base = info.completeBaseName();
+    const QString suffix = info.suffix();
+    const QDir dir(folder);
+    QString path = dir.filePath(fileName);
+    for (int n = 1; QFileInfo::exists(path); ++n) {
+        path = dir.filePath(suffix.isEmpty() ? QStringLiteral("%1 %2").arg(base).arg(n)
+                                             : QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix));
+    }
+    return path;
+}
+
 Note Vault::decode(const QByteArray &bytes)
 {
     Note note;

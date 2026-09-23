@@ -49,6 +49,10 @@ public:
     /// folder, "./sub" a folder beneath it, anything else a folder in the
     /// vault. Never outside the vault. Not created here.
     QString attachmentFolderFor(const QString &setting, const QString &notePath) const;
+    /// `folder`/`fileName`, or with " 1", " 2" ... inserted before the
+    /// extension when that already exists - the same collision rule
+    /// createNote() and the audio recorder use. Never touches the disk.
+    static QString uniqueAttachmentPath(const QString &folder, const QString &fileName);
 
     /// Reads UTF-8, normalising CRLF to LF and stripping a BOM. On failure
     /// returns false and fills `error`.
