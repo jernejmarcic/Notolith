@@ -4698,3 +4698,50 @@ TEST(PasteDropTest, PasteIntoATableCellStaysSafe)
     EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| applea\\|b c | 3 |")))
         << editor->noteText().toStdString();
 }
+
+TEST(TableCellTest, AShortRowGetsItsMissingCellsWhenReached)
+{
+    const QString note = QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 |\n\nafter\n");
+    {
+        auto editor = editorWith(note);
+        editor->show();
+        editor->setCursorOffset(note.indexOf(QLatin1Char('1')) + 1);
+        QTest::keyClick(editor.get(), Qt::Key_Tab); // into a cell the row lacks
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 | x |  |\n")))
+            << editor->noteText().toStdString();
+        QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+        QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+        EXPECT_EQ(editor->noteText(), note); // typing, then the filling, each undone
+    }
+    // A click on a missing cell: the row is filled and the caret lands in it.
+    bool filled = false;
+    for (int y = 4; y < 200 && !filled; y += 6) {
+        for (int x = 4; x < 880 && !filled; x += 40) {
+            auto editor = editorWith(note);
+            editor->show();
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(x, y));
+            if (editor->noteText() == note)
+                continue;
+            filled = true;
+            EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 |  |  |\n")))
+                << editor->noteText().toStdString();
+            const qsizetype caret = editor->cursorOffset();
+            EXPECT_EQ(editor->noteText().at(caret - 1), QLatin1Char(' '));
+            EXPECT_EQ(editor->noteText().at(caret), QLatin1Char(' ')); // inside a new "|  |"
+        }
+    }
+    EXPECT_TRUE(filled) << "no click reached a missing cell";
+}
+
+TEST(TableCellTest, ASelectionAcrossCellsIsDrawnInThem)
+{
+    const QString note = QStringLiteral("| alpha | beta | gamma |\n|---|---|---|\n| one | two | three |\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const QImage before = editor->viewport()->grab().toImage();
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    ASSERT_TRUE(editor->tableRenderedAt(note.indexOf(QStringLiteral("two"))));
+    const QImage after = editor->viewport()->grab().toImage();
+    EXPECT_NE(before, after) << "the selection left the drawn table unchanged";
+}
