@@ -1545,6 +1545,33 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     QTRY_VERIFY_WITH_TIMEOUT(!preview->isVisible(), 2000);
 }
 
+TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Part two\n\nSecond part.\n");
+    write(QStringLiteral("Linking.md"), "[[Other#Part two]]\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.resize(1000, 700);
+    window.show();
+    window.openNote(path(QStringLiteral("Linking.md")));
+    QApplication::processEvents();
+
+    // Wherever the link landed on screen: the click is what is under test.
+    MarkdownEditor *editor = window.editor();
+    QSignalSpy clicked(editor, &MarkdownEditor::linkActivated);
+    for (int y = 2; y < 300 && clicked.isEmpty(); y += 4) {
+        for (int x = 2; x < 600 && clicked.isEmpty(); x += 6)
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x, y));
+    }
+    ASSERT_FALSE(clicked.isEmpty());
+    EXPECT_EQ(clicked.first().first().toString(), QStringLiteral("Other#Part two"));
+    const QString shown = window.editor()->noteText();
+    EXPECT_TRUE(shown.startsWith(QLatin1String("# Other")));
+    QTRY_COMPARE_WITH_TIMEOUT(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")), 2000);
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);

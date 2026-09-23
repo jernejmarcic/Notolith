@@ -112,19 +112,25 @@ QString Snapshots::read(const Version &version)
 
 int Snapshots::prune(qint64 keepMs, qint64 nowMs)
 {
+    return pruneStore(directory(), QStringLiteral(".md"), keepMs, nowMs);
+}
+
+int Snapshots::pruneStore(const QString &directory, const QString &suffix, qint64 keepMs, qint64 nowMs)
+{
     const qint64 cutoff = nowOr(nowMs) - keepMs;
     int removed = 0;
-    QDir root(directory());
+    const QString pattern = QLatin1Char('*') + suffix;
+    QDir root(directory);
     for (const QString &name : root.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
         QDir dir(root.filePath(name));
-        for (const QString &file : dir.entryList({QStringLiteral("*.md")}, QDir::Files)) {
+        for (const QString &file : dir.entryList({pattern}, QDir::Files)) {
             bool ok = false;
             const qint64 time = QFileInfo(file).completeBaseName().toLongLong(&ok);
             if (ok && time < cutoff && dir.remove(file))
                 ++removed;
         }
         // A note with no versions left keeps no directory either.
-        if (dir.entryList({QStringLiteral("*.md")}, QDir::Files).isEmpty())
+        if (dir.entryList({pattern}, QDir::Files).isEmpty())
             dir.removeRecursively();
     }
     return removed;

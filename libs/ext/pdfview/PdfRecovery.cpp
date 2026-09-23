@@ -7,6 +7,8 @@
 #include <QFileInfo>
 #include <QSaveFile>
 
+#include "Snapshots.h"
+
 #include <algorithm>
 
 namespace noteAppC {
@@ -83,6 +85,11 @@ QList<PdfRecovery::Version> PdfRecovery::versions(const QString &pdfPath)
     }
     std::sort(out.begin(), out.end(), [](const Version &l, const Version &r) { return l.time > r.time; });
     return out;
+}
+
+int PdfRecovery::prune(qint64 keepMs, qint64 nowMs)
+{
+    return Snapshots::pruneStore(directory(), QStringLiteral(".pdf"), keepMs, nowMs);
 }
 
 QByteArray PdfRecovery::read(const Version &version)

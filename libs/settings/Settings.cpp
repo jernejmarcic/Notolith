@@ -535,6 +535,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Hover over a link to a note to see it: with Ctrl held while editing, "
                                        "on its own in reading view."),
          true},
+        {"pdf-viewer", QT_TRANSLATE_NOOP("Settings", "PDF viewer"),
+         QT_TRANSLATE_NOOP("Settings", "Open PDFs in a tab to read and annotate: highlight, underline, "
+                                       "strike out, ink, notes and boxes, saved into the file."),
+         false},
         {"publish", QT_TRANSLATE_NOOP("Settings", "Publish"),
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),

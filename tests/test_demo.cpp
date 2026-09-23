@@ -37,7 +37,7 @@ QString vaultPath()
     return QStringLiteral(NOTEAPPC_DEMO_VAULT_PATH);
 }
 
-// Every note, canvas and base file under the vault, vault-relative, sorted -
+// Every note, canvas, base, PDF and book under the vault, vault-relative, sorted -
 // deterministic order for a reproducible failure. .obsidian's own JSON is
 // vault configuration, not something MainWindow::openNote ever opens, so it
 // is not walked here.
@@ -51,6 +51,12 @@ QStringList demoFiles()
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
     kinds << QStringLiteral("*.base");
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    kinds << QStringLiteral("*.pdf");
+#endif
+#ifdef NOTEAPPC_HAVE_EPUB
+    kinds << QStringLiteral("*.epub");
 #endif
     QDirIterator it(vaultPath(), kinds, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext())

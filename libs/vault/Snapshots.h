@@ -37,6 +37,9 @@ public:
     static QString read(const Version &version);
     /// Deletes versions older than `keepMs`; returns how many went.
     static int prune(qint64 keepMs, qint64 nowMs = 0);
+    /// The same for any store of this shape: `<directory>/<key>/<ms><suffix>`
+    /// (PdfRecovery keeps PDFs so).
+    static int pruneStore(const QString &directory, const QString &suffix, qint64 keepMs, qint64 nowMs = 0);
 };
 
 } // namespace noteAppC

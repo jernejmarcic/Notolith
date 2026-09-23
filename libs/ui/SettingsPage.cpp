@@ -559,6 +559,9 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_EPUB
         "epub-reader",
 #endif
+#ifndef NOTEAPPC_HAVE_PDFVIEW
+        "pdf-viewer",
+#endif
 #ifndef NOTEAPPC_HAVE_PUBLISH
         "publish",
 #endif

@@ -3144,8 +3144,12 @@ QString MarkdownEditor::linkAt(const QPoint &viewportPoint) const
     const BlockView &view = m_blocks[size_t(index)];
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
         const StyleSpan &span = m_decorations.styles.at(i);
-        if (span.kind == StyleSpan::Kind::Link && span.range.contains(offset))
-            return span.payload;
+        if (span.kind != StyleSpan::Kind::Link || !span.range.contains(offset))
+            continue;
+        // The whole target, "Note#Heading" when the link names one.
+        if (span.anchorText.isValid() && span.anchorText.length() > 0)
+            return span.payload + QLatin1Char('#') + m_text.mid(span.anchorText.start, span.anchorText.length());
+        return span.payload;
     }
     return {};
 }
@@ -3153,23 +3157,8 @@ QString MarkdownEditor::linkAt(const QPoint &viewportPoint) const
 void MarkdownEditor::updateLinkHover(const QPoint &viewportPoint, bool control,
                                      const QPoint &globalPos)
 {
-    // The whole target, "Note#Heading" when the link names one, so the
-    // preview can open at that heading; linkAt() gives the note alone.
-    QString target;
-    const qsizetype offset = offsetAt(viewportPoint);
-    const qsizetype index = blockAt(offset);
-    if (index >= 0) {
-        const BlockView &view = m_blocks[size_t(index)];
-        for (int i = view.firstStyle; i < view.lastStyle; ++i) {
-            const StyleSpan &span = m_decorations.styles.at(i);
-            if (span.kind != StyleSpan::Kind::Link || !span.range.contains(offset))
-                continue;
-            target = span.payload;
-            if (span.anchorText.isValid() && span.anchorText.length() > 0)
-                target += QLatin1Char('#') + m_text.mid(span.anchorText.start, span.anchorText.length());
-            break;
-        }
-    }
+    // "Note#Heading" when the link names one, so the preview opens there.
+    QString target = linkAt(viewportPoint);
     // Only a link to a note has a page to preview.
     if (target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:")))
         target.clear();

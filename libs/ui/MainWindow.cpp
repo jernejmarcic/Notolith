@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCloseEvent>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QDialog>
 #include <QDir>
 #include <QDirIterator>
@@ -71,6 +73,10 @@
 #endif
 #ifdef NOTEAPPC_HAVE_PUBLISH
 #include "Publisher.h"
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+#include "PdfRecovery.h"
+#include "PdfView.h"
 #endif
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
@@ -658,20 +664,38 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
 
 void MainWindow::followLink(const QString &target)
 {
-    // A link into a view file keeps its fragment for the view - a book's
-    // place, a PDF's page; a note's heading goes the usual way.
-    if (const qsizetype hash = target.indexOf(QLatin1Char('#')); hash > 0 && isViewFile(target.left(hash))) {
-        const QString file = m_index.resolve(target.left(hash), m_active->notePath);
-        if (!file.isEmpty()) {
-            openNote(m_vault.absolute(file), NavSource::Other, target.mid(hash + 1));
-            return;
-        }
+    // The web and mail in their own apps; any other scheme a note names
+    // (file:, a custom handler) is not something a click should launch.
+    if (target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:"))) {
+        const QUrl url(target);
+        const QString scheme = url.scheme().toLower();
+        if (scheme == QLatin1String("http") || scheme == QLatin1String("https") || scheme == QLatin1String("mailto"))
+            QDesktopServices::openUrl(url);
+        else
+            statusBar()->showMessage(tr("Links with %1: are not opened").arg(scheme), 3000);
+        return;
     }
-    const QString resolved = m_index.resolve(target, m_active->notePath);
-    if (!resolved.isEmpty())
-        openRelative(resolved);
-    else
-        statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
+    // A fragment goes with the file: a note's heading, a book's place, a
+    // PDF's page. [[#Heading]] alone is this note's.
+    const qsizetype hash = target.indexOf(QLatin1Char('#'));
+    const QString name = hash < 0 ? target : target.left(hash);
+    const QString fragment = hash < 0 ? QString() : target.mid(hash + 1);
+    if (name.isEmpty()) {
+        jumpToHeading(fragment);
+        return;
+    }
+    const QString resolved = m_index.resolve(name, m_active->notePath);
+    if (resolved.isEmpty()) {
+        statusBar()->showMessage(tr("%1 is not in this vault yet").arg(name), 3000);
+        return;
+    }
+    if (isViewFile(resolved)) {
+        openNote(m_vault.absolute(resolved), NavSource::Other, fragment);
+        return;
+    }
+    // ponytail: a ^block-id fragment opens the note at its top; jump to the block when asked.
+    if (openNote(m_vault.absolute(resolved)) && !fragment.isEmpty() && !fragment.startsWith(QLatin1Char('^')))
+        jumpToHeading(fragment);
 }
 
 MarkdownEditor::Mode MainWindow::defaultMode() const
@@ -1343,6 +1367,21 @@ void MainWindow::buildActions()
         [this] {
             if (m_localGraph)
                 showRightPane(m_localGraph);
+        });
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    add(QStringLiteral("pdf-viewer:extract-annotations"), tr("PDF: Extract annotations to a note"), QString(),
+        [this] {
+            auto *pdf = qobject_cast<PdfView *>(m_active->view);
+            if (!pdf) {
+                statusBar()->showMessage(tr("Open a PDF first"), 3000);
+                return;
+            }
+            QString error;
+            if (!pdf->extractAnnotations(QString(), &error))
+                QMessageBox::warning(this, tr("Extract annotations"), error);
+            else
+                statusBar()->showMessage(tr("Annotations extracted"), 3000);
         });
 #endif
 #ifdef NOTEAPPC_HAVE_PUBLISH
@@ -2099,6 +2138,10 @@ void MainWindow::applyTheme()
         if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
             canvas->setTheme(m_theme);
 #endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+        if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
+            pdf->setTheme(m_theme);
+#endif
     }
     if (m_tags)
         m_tags->setTheme(m_theme);
@@ -2391,8 +2434,11 @@ void MainWindow::openTarget(const LaunchTarget &target)
     // After the first paint: openWhenShown queued this call.
     if (!m_painted && featureOn("file-recovery")) {
         // Old snapshots go once a session, with the window already up.
-        Snapshots::prune(qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays")))
-                         * 24 * 3600 * 1000);
+        const qint64 keep = qint64(m_settings.integer(QStringLiteral("fileRecovery.keepDays"))) * 24 * 3600 * 1000;
+        Snapshots::prune(keep);
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+        PdfRecovery::prune(keep);
+#endif
     }
     m_painted = true;
     watchThemeFiles();
@@ -2568,6 +2614,7 @@ QJsonObject MainWindow::layoutJSON() const
                 const QString type = path.endsWith(QLatin1String(".canvas")) ? QStringLiteral("canvas")
                                    : path.endsWith(QLatin1String(".base"))   ? QStringLiteral("bases")
                                    : path.endsWith(QLatin1String(".epub"))   ? QStringLiteral("epub")
+                                   : path.endsWith(QLatin1String(".pdf"))    ? QStringLiteral("pdf")
                                                                             : QStringLiteral("markdown");
                 view = {{QStringLiteral("type"), type},
                         {QStringLiteral("state"), QJsonObject{{QStringLiteral("file"), m_vault.relative(path)}}}};
@@ -2641,7 +2688,8 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
                     view.value(QStringLiteral("state")).toObject().value(QStringLiteral("file")).toString();
                 const QString kind = view.value(QStringLiteral("type")).toString();
                 const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
-                                || kind == QLatin1String("bases") || kind == QLatin1String("epub");
+                                || kind == QLatin1String("bases") || kind == QLatin1String("epub")
+                                || kind == QLatin1String("pdf");
                 if (opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)))
                     leaf->pendingPath = m_vault.absolute(file);
                 byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
@@ -2884,6 +2932,10 @@ bool MainWindow::isViewFile(const QString &path) const
     if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive))
         return featureOn("bases");
 #endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive))
+        return featureOn("pdf-viewer");
+#endif
     Q_UNUSED(path);
     return false;
 }
@@ -2905,6 +2957,29 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             connect(epub, &EpubView::statusMessage, this,
                     [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
             view = epub;
+        }
+    }
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
+        auto *pdf = new PdfView(m_active->area);
+        pdf->setTheme(m_theme);
+        if (!pdf->load(path, &error)) {
+            delete pdf;
+        } else {
+            if (!fragment.isEmpty())
+                pdf->openFragment(fragment);
+            Leaf *leaf = m_active;
+            connect(pdf, &PdfView::modificationChanged, this, [this, leaf](bool modified) {
+                if (leaf == m_active)
+                    updateTitle();
+                else
+                    syncTabs(leaf->group);
+                if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
+                    m_autosave.start(); // annotations are kept like a note's text
+            });
+            connect(pdf, &PdfView::noteActivated, this, &MainWindow::openRelative);
+            view = pdf;
         }
     }
 #endif
@@ -3001,6 +3076,10 @@ bool MainWindow::isModified(const Leaf *leaf) const
     if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
         return canvas->isModified();
 #endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
+        return pdf->isModified();
+#endif
     return leaf->editor->isModified();
 }
 
@@ -3096,6 +3175,18 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
         if (!canvas->save(QString(), &error)) {
+            reportSaveError(target->notePath, error, quiet);
+            return false;
+        }
+        if (!quiet)
+            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
+        return true;
+    }
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (auto *pdf = qobject_cast<PdfView *>(target->view)) {
+        QString error;
+        if (!pdf->save(&error)) {
             reportSaveError(target->notePath, error, quiet);
             return false;
         }

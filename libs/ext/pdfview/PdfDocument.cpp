@@ -472,7 +472,9 @@ bool PdfDocument::save(QString *error)
 
     // The previous bytes, kept outside the vault, before anything on disk
     // changes - mirrors Snapshots' own ordering in MainWindow's save path.
-    PdfRecovery::record(m_path);
+    // Five minutes apart, Obsidian's snapshot default: a PDF is a whole copy
+    // each time, and an annotated book autosaves as it is marked up.
+    PdfRecovery::record(m_path, 5 * 60'000);
 
     QSaveFile file(m_path);
     if (!file.open(QIODevice::WriteOnly)) {

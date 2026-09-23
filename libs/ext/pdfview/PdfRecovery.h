@@ -33,6 +33,8 @@ public:
     /// Newest first.
     static QList<Version> versions(const QString &pdfPath);
     static QByteArray read(const Version &version);
+    /// Deletes versions older than `keepMs`, as Snapshots::prune does.
+    static int prune(qint64 keepMs, qint64 nowMs = 0);
 };
 
 } // namespace noteAppC
