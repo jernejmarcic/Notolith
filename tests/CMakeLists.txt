@@ -12,6 +12,10 @@ add_executable(test_index test_index.cpp)
 target_link_libraries(test_index PRIVATE noteAppC_index noteAppC_vault Qt6::Test GTest::gtest)
 add_test(NAME index COMMAND test_index)
 
+add_executable(test_search test_search.cpp)
+target_link_libraries(test_search PRIVATE noteAppC_index GTest::gtest GTest::gtest_main)
+add_test(NAME search COMMAND test_search)
+
 add_executable(test_editor test_editor.cpp)
 target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
