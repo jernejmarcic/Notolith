@@ -283,7 +283,7 @@ TEST(EpubDocumentTest, ScriptsAndEventHandlersAreStripped)
     ASSERT_FALSE(raw.isEmpty());
     ASSERT_TRUE(QString::fromUtf8(raw).contains(QStringLiteral("<script>")));
 
-    const QString sanitized = HtmlRenderer::sanitize(QString::fromUtf8(raw));
+    const QString sanitized = HtmlRenderer::sanitizeHtml(QString::fromUtf8(raw));
     EXPECT_FALSE(sanitized.contains(QStringLiteral("<script"), Qt::CaseInsensitive));
     EXPECT_FALSE(sanitized.contains(QStringLiteral("window.evil")));
     EXPECT_FALSE(sanitized.contains(QStringLiteral("onclick")));
