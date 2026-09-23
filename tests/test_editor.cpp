@@ -1672,6 +1672,24 @@ TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)
     EXPECT_FALSE(block->panelTextAt(0).contains(QStringLiteral("First section body")));
 }
 
+TEST(ListLabelTest, CountedNumbersAndWordStyleOutlines)
+{
+    auto editor = editorWith(QString());
+    ListItemSpan item;
+    item.ordered = true;
+    item.number = 1;      // typed "1." ...
+    item.shownNumber = 3; // ... as the third item
+    item.bullet = QLatin1Char(')');
+    item.outline = QStringLiteral("2.3");
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3)"));
+    editor->setOutlineNumbering(true);
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("2.3"));
+    item.outline = QStringLiteral("4"); // the top level keeps its own look
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3)"));
+    ListItemSpan bullet;
+    EXPECT_TRUE(editor->listLabel(bullet).isEmpty());
+}
+
 TEST(RuleTest, AThematicBreakIsDrawnAsALine)
 {
     auto editor = editorWith(QStringLiteral("above\n\n---\n\nbelow\n"));

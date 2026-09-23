@@ -488,6 +488,9 @@ QWidget *SettingsPage::buildEditorPage()
 #endif
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
+    addToggleRow(layout, QStringLiteral("editor.outlineNumbering"), tr("Outline numbering"),
+                tr("Number nested ordered lists as 1.1, 1.2, 1.2.1, the way a word "
+                   "processor's multilevel list does. The note's text is unchanged."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
     addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),

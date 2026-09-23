@@ -45,6 +45,7 @@ const QVariantMap &defaults()
         {QStringLiteral("fileRecovery.keepDays"), 7},
         {QStringLiteral("editor.autoPairs"), true},
         {QStringLiteral("editor.showIndentGuides"), true},
+        {QStringLiteral("editor.outlineNumbering"), false},
         {QStringLiteral("editor.tabWidth"), 4},
 
         // Files and links

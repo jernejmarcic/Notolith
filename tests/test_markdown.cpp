@@ -485,6 +485,45 @@ TEST(FootnoteTest, ReferencesInlineNotesAndDefinitionsAreNumberedInOrder)
         EXPECT_FALSE(hidden.contains(definition.content.start));
 }
 
+TEST(ListTest, NestingCountingBulletsAndOutlines)
+{
+    const QString text = QStringLiteral(
+        "1. a\n"
+        "1. b\n"
+        "   1. b.1\n"
+        "   5. b.2\n"
+        "      1. b.2.1\n"
+        "- dash\n"
+        "  * star\n"
+        "    + plus\n"
+        "    1. under a bullet\n");
+    const QList<ListItemSpan> items = Parser().parseAll(text).decorations.listItems;
+    ASSERT_EQ(items.size(), 9);
+    const auto at = [&](int i) { return items.at(i); };
+    EXPECT_EQ(at(0).shownNumber, 1);
+    EXPECT_EQ(at(1).shownNumber, 2); // typed "1.", counts as the second
+    EXPECT_EQ(at(2).indent, 1);
+    EXPECT_EQ(at(3).shownNumber, 2);
+    EXPECT_EQ(at(3).outline, QStringLiteral("2.2"));
+    EXPECT_EQ(at(4).indent, 2); // six spaces: two levels, not three
+    EXPECT_EQ(at(4).outline, QStringLiteral("2.2.1"));
+    EXPECT_EQ(at(5).bullet, QLatin1Char('-'));
+    EXPECT_EQ(at(6).bullet, QLatin1Char('*'));
+    EXPECT_EQ(at(7).bullet, QLatin1Char('+'));
+    EXPECT_EQ(at(8).outline, QStringLiteral("1")); // a bullet starts the outline afresh
+}
+
+TEST(ListTest, ListsInsideAQuoteNestToo)
+{
+    const QString text = QStringLiteral("> 1. one\n> 2. two\n>    1. nested\n> - dash\n>   - dash nested\n");
+    const QList<ListItemSpan> items = Parser().parseAll(text).decorations.listItems;
+    ASSERT_EQ(items.size(), 5);
+    EXPECT_EQ(items.at(2).indent, 1);
+    EXPECT_EQ(items.at(4).indent, 1);
+    EXPECT_EQ(text.mid(items.at(2).marker.start, items.at(2).marker.length()), QStringLiteral("   1. ")); // after the ">", as a list line starts at its indent
+    EXPECT_TRUE(items.at(1).range.contains(items.at(2).range.start)) << items.at(1).range.start << "-" << items.at(1).range.end << " vs " << items.at(2).range.start;
+}
+
 TEST(MaskingTest, CodeAndCommentsHideEverything)
 {
     const QString text = QStringLiteral(
@@ -1042,10 +1081,11 @@ TEST(ListTest, MarkersIndentAndCheckboxes)
     EXPECT_FALSE(items.at(1).done);
     EXPECT_FALSE(items.at(2).task);
 
-    // The marker starts at the line, not at the bullet, so the indent is real.
+    // The marker starts at the line, not at the bullet; the level is the
+    // nesting, one list deep, however many spaces it took.
     const auto nested = *std::find_if(items.cbegin(), items.cend(),
                                       [](const ListItemSpan &item) { return item.indent > 0; });
-    EXPECT_EQ(nested.indent, 2);
+    EXPECT_EQ(nested.indent, 1);
     EXPECT_EQ(text.mid(nested.marker.start, nested.marker.length()),
               QStringLiteral("    - "));
 

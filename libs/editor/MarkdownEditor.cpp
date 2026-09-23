@@ -420,6 +420,23 @@ void MarkdownEditor::setIndentGuides(bool on)
     viewport()->update(); // drawn behind the text; nothing moves
 }
 
+void MarkdownEditor::setOutlineNumbering(bool on)
+{
+    if (m_outlineNumbering == on)
+        return;
+    m_outlineNumbering = on;
+    // The labels' widths set the lists' columns, so the text moves.
+    for (BlockView &block : m_blocks) {
+        if (block.listTextX.empty())
+            continue;
+        block.layout.reset();
+        block.laidOut = false;
+        block.heightEstimated = false;
+    }
+    updateLayout();
+    viewport()->update();
+}
+
 void MarkdownEditor::setTabWidth(int spaces)
 {
     m_tabWidth = qBound(1, spaces, 8);
@@ -1571,14 +1588,72 @@ std::span<const ListItemSpan> MarkdownEditor::listItemsIn(const Range &block) co
     return {items.constData() + (first - items.cbegin()), size_t(last - first)};
 }
 
-const ListItemSpan *MarkdownEditor::listItemAt(const BlockView &view, qsizetype source) const
+QString MarkdownEditor::listLabel(const ListItemSpan &item) const
 {
-    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
-        // The marker is hidden, so a line starts exactly where it ends.
-        if (item.marker.end == source || item.range.start == source)
-            return &item;
+    if (!item.ordered)
+        return {};
+    // Word's multilevel style: "1." at the top, then "1.1", "1.2.1".
+    if (m_outlineNumbering && item.outline.contains(QLatin1Char('.')))
+        return item.outline;
+    const int number = item.shownNumber > 0 ? item.shownNumber : item.number;
+    return QString::number(number) + (item.bullet.isNull() ? QLatin1Char('.') : item.bullet);
+}
+
+void MarkdownEditor::layoutListColumns(BlockView &view) const
+{
+    view.listTextX.clear();
+    view.listParent.clear();
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    if (items.empty())
+        return;
+
+    // Each item's parent: the nearest item before it, one level out, whose
+    // range holds it.
+    view.listParent.assign(items.size(), -1);
+    std::vector<int> open;
+    for (size_t i = 0; i < items.size(); ++i) {
+        while (!open.empty()) {
+            const ListItemSpan &candidate = items[size_t(open.back())];
+            if (candidate.indent < items[i].indent && candidate.range.start <= items[i].range.start
+                && items[i].range.start < candidate.range.end)
+                break;
+            open.pop_back();
+        }
+        view.listParent[i] = open.empty() ? -1 : open.back();
+        open.push_back(int(i));
     }
-    return nullptr;
+
+    // Siblings share a column as wide as their widest label.
+    const QFontMetricsF metrics(fontFor(view.span));
+    QHash<qint64, qreal> columns; // (parent, level) -> width
+    const auto keyOf = [&](size_t i) { return (qint64(view.listParent[i]) << 16) ^ items[i].indent; };
+    for (size_t i = 0; i < items.size(); ++i) {
+        const QString label = listLabel(items[i]);
+        const qreal wanted = label.isEmpty() ? kListIndent : metrics.horizontalAdvance(label) + 10;
+        qreal &column = columns[keyOf(i)];
+        column = qMax(column, qMax(kListIndent, wanted));
+    }
+    view.listTextX.resize(items.size());
+    for (size_t i = 0; i < items.size(); ++i) {
+        const int parent = view.listParent[i];
+        const qreal base = parent < 0 ? kListIndent * items[i].indent : view.listTextX[size_t(parent)];
+        view.listTextX[i] = base + columns.value(keyOf(i));
+    }
+}
+
+qreal MarkdownEditor::listTextAt(const BlockView &view, qsizetype source) const
+{
+    // Items come in order and a nested one lies inside its parent, so the
+    // last one begun that still holds the offset is the innermost.
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    qreal x = -1;
+    for (size_t i = 0; i < items.size() && i < view.listTextX.size(); ++i) {
+        if (items[i].range.start > source)
+            break;
+        if (source < items[i].range.end || source == items[i].range.start)
+            x = view.listTextX[i];
+    }
+    return x;
 }
 
 QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &item) const
@@ -1591,7 +1666,7 @@ QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &i
         return {};
 
     const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
-    const qreal x = contentLeft() + kListIndent * (1 + item.indent) - box - 8;
+    const qreal x = contentLeft() + line.x() - box - 8;
     const qreal y = view.y + view.textTop - verticalScrollBar()->value() + line.y()
                     + (line.height() - box) / 2;
     return QRectF(x, y, box, box);
@@ -1603,7 +1678,7 @@ QRectF MarkdownEditor::checkboxRect(const BlockView &view, const ListItemSpan &i
 void MarkdownEditor::paintIndentGuides(QPainter &painter, const BlockView &view, qreal left,
                                        qreal top) const
 {
-    if (!view.layout || view.folded)
+    if (!view.layout || view.folded || view.listTextX.empty())
         return;
 
     QColor guide = m_theme.color(QStringLiteral("--text-faint"));
@@ -1611,16 +1686,16 @@ void MarkdownEditor::paintIndentGuides(QPainter &painter, const BlockView &view,
 
     painter.save();
     painter.setPen(QPen(guide, 1));
-    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
-        if (item.indent <= 0)
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    for (size_t i = 0; i < items.size() && i < view.listParent.size(); ++i) {
+        if (view.listParent[i] < 0)
             continue;
-
-        const QRectF band = bandOf(view, item.range);
+        const QRectF band = bandOf(view, items[i].range);
         if (band.height() <= 0)
             continue;
-        // One rule per level the item sits under, never under its own marker.
-        for (int level = 1; level <= item.indent; ++level) {
-            const qreal x = left + kListIndent * level - 8;
+        // One rule under each item it sits in, just left of that item's text.
+        for (int parent = view.listParent[i]; parent >= 0; parent = view.listParent[size_t(parent)]) {
+            const qreal x = left + view.listTextX[size_t(parent)] - 8;
             painter.drawLine(QPointF(x, top + band.y()), QPointF(x, top + band.y() + band.height()));
         }
     }
@@ -1632,7 +1707,7 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
 {
     // Source mode and the caret's own block show the real markers, so drawing
     // bullets as well would double them up.
-    if (!view.layout || view.span.kind != BlockSpan::Kind::List || m_mode == Mode::Source)
+    if (!view.layout || view.listTextX.empty() || m_mode == Mode::Source)
         return;
 
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
@@ -1652,13 +1727,13 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         if (!line.isValid())
             continue;
 
-        const qreal indent = kListIndent * (1 + item.indent);
+        // Where the item's text starts: its column's right edge.
+        const qreal textX = left + line.x();
         const qreal baseline = top + line.y();
 
         if (item.task) {
             const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
-            paintCheckBox(painter, QRectF(left + indent - box - 8,
-                                          baseline + (line.height() - box) / 2, box, box),
+            paintCheckBox(painter, QRectF(textX - box - 8, baseline + (line.height() - box) / 2, box, box),
                           item.done);
             continue;
         }
@@ -1666,16 +1741,29 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         painter.save();
         painter.setPen(muted);
         if (item.ordered) {
-            QFont font = view.layout->font();
-            painter.setFont(font);
-            painter.drawText(QRectF(left, baseline, indent - 8, line.height()),
-                             Qt::AlignRight | Qt::AlignVCenter,
-                             QStringLiteral("%1.").arg(item.number));
+            painter.setFont(view.layout->font());
+            const QString label = listLabel(item);
+            const qreal width = QFontMetricsF(view.layout->font()).horizontalAdvance(label);
+            painter.drawText(QRectF(textX - 8 - width - 2, baseline, width + 2, line.height()),
+                             Qt::AlignRight | Qt::AlignVCenter, label);
         } else {
-            const qreal dot = 4;
-            painter.setBrush(muted);
-            painter.drawEllipse(QPointF(left + indent - 12,
-                                        baseline + line.height() / 2), dot / 2, dot / 2);
+            // One look per way of writing a bullet: "-" a dot, "*" a ring,
+            // "+" a square.
+            const QPointF centre(textX - 12, baseline + line.height() / 2);
+            painter.setRenderHint(QPainter::Antialiasing);
+            if (item.bullet == QLatin1Char('*')) {
+                painter.setPen(QPen(muted, 1.2));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(centre, 2.6, 2.6);
+            } else if (item.bullet == QLatin1Char('+')) {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(muted);
+                painter.drawRect(QRectF(centre.x() - 2.2, centre.y() - 2.2, 4.4, 4.4));
+            } else {
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(muted);
+                painter.drawEllipse(centre, 2, 2);
+            }
         }
         painter.restore();
     }
@@ -2727,7 +2815,16 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     }
     view.layout->setFormats(formats);
 
-    const qreal listIndent = view.span.kind == BlockSpan::Kind::List ? kListIndent : 0;
+    // A list's lines, and a list's inside a quote or callout outside source
+    // mode, sit at their own item's text column - a wrapped line too.
+    const bool listLines = view.span.kind == BlockSpan::Kind::List
+                           || (m_mode != Mode::Source
+                               && (view.span.kind == BlockSpan::Kind::Callout
+                                   || view.span.kind == BlockSpan::Kind::Quote));
+    if (listLines)
+        layoutListColumns(view);
+    else
+        view.listTextX.clear();
     const qreal codeGutter = codeGutterWidth(view);
     const qreal lineHeight = view.callout && view.calloutStyle.size > 0
                                  ? view.calloutStyle.size * 1.5
@@ -2739,11 +2836,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         if (!line.isValid())
             break;
         const qsizetype source = view.map.toSource(line.textStart());
-        const ListItemSpan *item = listIndent > 0 ? listItemAt(view, source) : nullptr;
+        const qreal listX = view.listTextX.empty() ? -1 : listTextAt(view, source);
         const qreal nesting = kCalloutIndent * nestingDepthAt(view, source);
-        const qreal indent = nesting
-                             + (listIndent > 0 ? listIndent * (1 + (item ? item->indent : 0))
-                                               : codeGutter);
+        const qreal indent =
+            nesting + (listX >= 0 ? listX
+                                  : (view.span.kind == BlockSpan::Kind::List ? kListIndent : codeGutter));
         line.setLineWidth(contentWidth() - indent
                           - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
         line.setPosition(QPointF(indent, height));
@@ -3044,7 +3141,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                 if (view.span.kind != BlockSpan::Kind::Code)
                     paintNestedCodePanels(painter, view, left, top);
             }
-            if (m_indentGuides && view.span.kind == BlockSpan::Kind::List)
+            if (m_indentGuides && !view.listTextX.empty())
                 paintIndentGuides(painter, view, left, top + drop);
             // A listing that asked not to wrap runs off the end of its line;
             // the panel is where it stops, not the window.
@@ -3747,7 +3844,7 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
 
     for (const BlockView &view : m_blocks) {
-        if (view.span.kind != BlockSpan::Kind::List || !view.laidOut)
+        if (view.listTextX.empty() || !view.laidOut)
             continue;
         for (const ListItemSpan &item : listItemsIn(view.span.range)) {
             if (!item.task)

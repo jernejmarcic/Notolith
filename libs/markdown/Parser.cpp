@@ -30,6 +30,16 @@ struct Walk {
     int depth = 0;
     /// Walking a footnote's body, which is not the note's flow of paragraphs.
     bool inFootnote = false;
+    /// One per list the walk is inside: how many items it has had, and the
+    /// last number it gave out.
+    struct ListFrame {
+        int items = 0;
+        int last = 0;
+    };
+    QList<ListFrame> lists;
+    /// The outline ("2.1") of each list item the walk is inside; empty for a
+    /// bullet, which starts Word-style numbering afresh beneath it.
+    QStringList itemOutlines;
 
     /// A reference-style link or embed - `[text][ref]`, the collapsed
     /// `[ref][]`, or the shortcut `[ref]` - whose label was recorded during
@@ -146,14 +156,16 @@ void hideQuoteMarkers(const QString &text, const Range &range, Decorations &deco
 
 /// The source marker of a list item: the bullet or number, plus a task's
 /// checkbox. Live preview hides it and draws its own in the margin.
-void describeListItem(const QString &text, const Range &range, const SourceMap &map,
-                      Decorations &decorations)
+void describeListItem(const QString &text, const Range &range, const SourceMap &map, int depth,
+                      int shownNumber, const QString &outline, Decorations &decorations)
 {
+    // A quote's or callout's ">" markers first: they are hidden on their own
+    // (hideQuoteMarkers), and the list marker is what follows them.
     static const QRegularExpression head(QStringLiteral(
-        "^([ \\t]*)(?:[-*+]|(\\d+)[.)])[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
 
     // md4qt puts a list item's start at its bullet, not at the start of the
-    // line, so the indent has to be read from the line itself.
+    // line, so the marker has to be read from the line itself.
     const qsizetype line = map.lineAt(range.start);
     const qsizetype lineStart = map.lineStart(line);
     const QString firstLine = text.mid(lineStart, map.lineEnd(line) - lineStart);
@@ -163,19 +175,74 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
 
     ListItemSpan span;
     span.range = {lineStart, range.end};
-    span.marker = {lineStart, lineStart + match.capturedEnd(0)};
-    // A tab counts as one level, as do two or four spaces.
-    span.indent = int(match.captured(1).count(QLatin1Char('\t'))
-                      + match.captured(1).count(QLatin1Char(' ')) / 2);
-    span.ordered = !match.captured(2).isEmpty();
-    span.number = match.captured(2).toInt();
-    span.task = !match.captured(3).isEmpty();
-    span.done = match.captured(4).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
+    span.marker = {lineStart + match.capturedEnd(1), lineStart + match.capturedEnd(0)};
+    // The nesting md4qt found, not the whitespace: an ordered list nests at
+    // three spaces, a bullet at two, and a count of spaces got one of them
+    // wrong either way.
+    span.indent = depth;
+    span.ordered = !match.captured(3).isEmpty();
+    span.number = match.captured(3).toInt();
+    span.bullet = span.ordered ? match.captured(4).at(0) : match.captured(2).at(0);
+    span.shownNumber = shownNumber;
+    span.outline = outline;
+    span.task = !match.captured(5).isEmpty();
+    span.done = match.captured(6).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
     if (span.task)
-        span.checkbox = {lineStart + match.capturedStart(3), lineStart + match.capturedStart(3) + 3};
+        span.checkbox = {lineStart + match.capturedStart(5), lineStart + match.capturedStart(5) + 3};
 
     decorations.syntax.append(span.marker);
     decorations.listItems.append(span);
+}
+
+/// md4qt reads a list inside a quote flat - "> 1. a" then ">    1. b" come
+/// back as two items of one list - so a quoted list's nesting is worked out
+/// here, CommonMark's way: an item nests under the one before it when its
+/// marker starts at or past that item's text. Its numbering follows.
+void nestQuotedLists(const QString &text, const SourceMap &map, QList<ListItemSpan> &items)
+{
+    struct Open {
+        qsizetype content; ///< the column the item's text starts at
+        int index;
+    };
+    QList<Open> open;
+    struct Count {
+        bool ordered = false;
+        int last = 0;
+        bool started = false;
+    };
+    QList<Count> counts; // one per depth, for the items at it now
+    for (int i = 0; i < items.size(); ++i) {
+        ListItemSpan &item = items[i];
+        const qsizetype lineStart = map.lineStart(map.lineAt(item.range.start));
+        if (!text.mid(lineStart, item.marker.start - lineStart).contains(QLatin1Char('>'))) {
+            open.clear(); // not in a quote: md4qt's nesting stands
+            counts.clear();
+            continue;
+        }
+        qsizetype bullet = item.marker.start;
+        while (bullet < item.marker.end && text.at(bullet).isSpace())
+            ++bullet;
+        const qsizetype column = bullet - lineStart;
+        while (!open.isEmpty() && column < open.last().content)
+            open.removeLast();
+        const int depth = int(open.size());
+        item.indent = depth;
+        for (const Open &outer : std::as_const(open)) // each item it sits in now holds it
+            items[outer.index].range.end = qMax(items[outer.index].range.end, item.range.end);
+
+        counts.resize(depth + 1);
+        Count &count = counts[depth];
+        if (!count.started || count.ordered != item.ordered)
+            count = {item.ordered, item.number - 1, true}; // a new list: its first number counts
+        if (item.ordered) {
+            item.shownNumber = ++count.last;
+            const ListItemSpan *parent = open.isEmpty() ? nullptr : &items[open.last().index];
+            item.outline = parent && parent->ordered
+                               ? parent->outline + QLatin1Char('.') + QString::number(item.shownNumber)
+                               : QString::number(item.shownNumber);
+        }
+        open.append({item.marker.end - lineStart, i});
+    }
 }
 
 bool isTrue(const QString &value)
@@ -1053,15 +1120,34 @@ void walkItem(MD::Item *item, Walk &walk)
                                                                  : BlockSpan::Kind::Paragraph;
             walk.decorations.blocks.append({kind, rangeOf(*item, map), 0});
         }
+        const bool list = item->type() == MD::ItemType::List;
+        if (list)
+            walk.lists.append(Walk::ListFrame{});
         ++walk.depth;
         walkBlock(static_cast<MD::Block *>(item), walk);
         --walk.depth;
+        if (list)
+            walk.lists.removeLast();
         break;
     }
     case MD::ItemType::ListItem: {
         auto *listItem = static_cast<MD::ListItem *>(item);
+        if (walk.lists.isEmpty())
+            walk.lists.append(Walk::ListFrame{}); // md4qt always wraps items in a List; never trust it blindly
+        Walk::ListFrame &frame = walk.lists.last();
+        const bool ordered = listItem->listType() == MD::ListItem::Ordered;
+        int shown = 0;
+        QString outline;
+        if (ordered) {
+            shown = frame.items == 0 ? listItem->startNumber() : frame.last + 1;
+            frame.last = shown;
+            const QString parent = walk.itemOutlines.isEmpty() ? QString() : walk.itemOutlines.last();
+            outline = parent.isEmpty() ? QString::number(shown) : parent + QLatin1Char('.') + QString::number(shown);
+        }
+        ++frame.items;
         if (walk.text)
-            describeListItem(*walk.text, rangeOf(*listItem, map), map, walk.decorations);
+            describeListItem(*walk.text, rangeOf(*listItem, map), map, int(walk.lists.size()) - 1, shown,
+                             outline, walk.decorations);
         if (listItem->isTaskList()) {
             Task task;
             task.done = listItem->isChecked();
@@ -1073,7 +1159,9 @@ void walkItem(MD::Item *item, Walk &walk)
             }
             walk.tasks.append(task);
         }
+        walk.itemOutlines.append(outline);
         walkBlock(listItem, walk);
+        walk.itemOutlines.removeLast();
         break;
     }
     case MD::ItemType::Table: {
@@ -1287,6 +1375,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     }
     for (const Range &range : obsidian.comments)
         result.decorations.syntax.append(range);
+    nestQuotedLists(text, map, result.decorations.listItems);
     scanFootnotes(text, walk.masked + obsidian.comments, result.decorations);
 
     // Two things md4qt leaves on the page: the `:::` fences it read as prose,

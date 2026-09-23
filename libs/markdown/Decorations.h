@@ -161,10 +161,18 @@ struct CodeFenceSpan {
 /// bullet or a checkbox in its place, and indent the text under it.
 struct ListItemSpan {
     Range range;
-    Range marker;      ///< "  - ", "1. ", including a task's "[x] "
-    int indent = 0;    ///< nesting level, from the leading whitespace
+    Range marker;      ///< "  - ", "1. ", including a task's "[x] "; after a quote's ">"
+    int indent = 0;    ///< nesting level: how many lists it sits inside
     bool ordered = false;
-    int number = 0;
+    int number = 0;    ///< as typed
+    /// '-', '*' or '+' for a bullet; '.' or ')' after an ordered item's number.
+    QChar bullet;
+    /// What an ordered item counts as, CommonMark's way: the list's first
+    /// number, then one more for each item, whatever was typed after it.
+    int shownNumber = 0;
+    /// "2.1.3": the counts of the ordered items it sits in, then its own,
+    /// for Word-style numbering. Empty for a bullet.
+    QString outline;
     bool task = false;
     bool done = false;
     Range checkbox;    ///< the "[x]" alone, for click-to-toggle

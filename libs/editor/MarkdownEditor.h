@@ -108,6 +108,12 @@ public:
     /// A faint vertical rule at each level of list indentation.
     void setIndentGuides(bool on);
     bool indentGuides() const { return m_indentGuides; }
+    /// Nested ordered lists numbered as Word's multilevel lists are - 1.,
+    /// then 1.1, 1.2, then 1.2.1 - rather than each list counting on its own.
+    void setOutlineNumbering(bool on);
+    bool outlineNumbering() const { return m_outlineNumbering; }
+    /// What an ordered item's number reads as drawn (for the tests too).
+    QString listLabel(const ListItemSpan &item) const;
 
     /// Spaces a Tab inserts where it is not indenting a list item.
     void setTabWidth(int spaces);
@@ -621,6 +627,12 @@ private:
         /// Filled instead of `layout` when this is the frontmatter and live
         /// preview draws it as Obsidian's properties table.
         std::vector<PropertyRow> propertyRows;
+        /// For each of the block's list items (listItemsIn order): where its
+        /// text starts, block-local, and the item it is nested in (-1 for
+        /// none). Siblings share one marker column, as wide as their widest
+        /// number, so "10." pushes its list's text over rather than into it.
+        std::vector<qreal> listTextX;
+        std::vector<int> listParent;
         /// Space above the text: a callout's title row, a code block's header
         /// strip, or the air Obsidian puts over a heading.
         qreal textTop = 0;
@@ -801,11 +813,13 @@ private:
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// Bullets and checkboxes in the margin of a list block.
     void paintListMarkers(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    /// The list item in `view` whose marker was hidden at the start of `source`.
-    const ListItemSpan *listItemAt(const BlockView &view, qsizetype source) const;
     /// The list items that start inside `block`.
     std::span<const ListItemSpan> listItemsIn(const Range &block) const;
     /// Checkbox rectangle of `item` in viewport coordinates, for hit testing.
+    /// Fills listTextX and listParent; empty for a block with no list lines.
+    void layoutListColumns(BlockView &view) const;
+    /// The text start of the innermost list item holding `source`, or -1.
+    qreal listTextAt(const BlockView &view, qsizetype source) const;
     QRectF checkboxRect(const BlockView &view, const ListItemSpan &item) const;
     void toggleTask(const ListItemSpan &item);
     const CalloutSpan *calloutFor(const BlockView &view) const;
@@ -1422,6 +1436,7 @@ private:
     bool m_lineNumbers = true; ///< shown in source mode only
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
     bool m_indentGuides = false;
+    bool m_outlineNumbering = false;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;
