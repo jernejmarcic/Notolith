@@ -80,6 +80,9 @@
 #ifdef NOTEAPPC_HAVE_PLUGINS
 #include "PluginRegistry.h"
 #endif
+#ifdef NOTEAPPC_HAVE_SYNC
+#include "SyncEngine.h"
+#endif
 #ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfRecovery.h"
 #include "PdfView.h"
@@ -145,6 +148,7 @@ MainWindow::~MainWindow()
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
     m_indexer->stop();
+    m_sync.reset(); // its thread stops and joins here
 #ifdef NOTEAPPC_HAVE_PLUGINS
     // Its pending requests fail through callbacks that reach this window.
     if (m_plugins)
@@ -188,6 +192,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_wordCount = new QLabel(this);
     m_vaultLabel = new QLabel(this);
+    m_syncStatus = new QLabel(this);
+    m_syncStatus->setObjectName(QStringLiteral("syncStatus"));
+    m_syncStatus->hide();
+    statusBar()->addPermanentWidget(m_syncStatus);
     statusBar()->addPermanentWidget(m_wordCount);
     statusBar()->addPermanentWidget(m_vaultLabel);
     statusBar()->setSizeGripEnabled(false);
@@ -1402,6 +1410,15 @@ void MainWindow::buildActions()
                 statusBar()->showMessage(tr("Annotations extracted"), 3000);
         });
 #endif
+#ifdef NOTEAPPC_HAVE_SYNC
+    add(QStringLiteral("sync:sign-in"), tr("Sync: Sign in"), QString(), &MainWindow::syncSignIn);
+    add(QStringLiteral("sync:sync-now"), tr("Sync: Sync now"), QString(), [this] {
+        if (m_sync)
+            m_sync->syncNow();
+        else
+            syncSignIn();
+    });
+#endif
 #ifdef NOTEAPPC_HAVE_PUBLISH
     add(QStringLiteral("publish:export"), tr("Publish: Export the vault as a website"), QString(),
         &MainWindow::publishSite);
@@ -1794,6 +1811,7 @@ void MainWindow::applySettings()
     }
     updateSpelling();
     updateNoteHistory();
+    updateSync();
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
     for (const auto &leaf : m_leaves) {
@@ -2531,6 +2549,7 @@ void MainWindow::closeVault()
     m_vault = Vault();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
+    updateSync(); // stops syncing the vault just closed
     resetWorkspace();
     resetHistory();
 
@@ -2613,6 +2632,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
     }
     m_painted = true;
     syncPlugins();
+    updateSync();
     watchThemeFiles();
     updateSpelling();
 }
@@ -3004,6 +3024,68 @@ void MainWindow::updateNoteHistory()
 #endif
 }
 
+void MainWindow::updateSync()
+{
+#ifdef NOTEAPPC_HAVE_SYNC
+    const QString server = m_settings.text(QStringLiteral("sync.serverURL")).trimmed();
+    const QString email = m_settings.text(QStringLiteral("sync.email")).trimmed();
+    const bool configured = m_painted && m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("sync")
+                            && !server.isEmpty() && !email.isEmpty();
+    const QString wanted = configured ? m_vault.root() + u'\n' + server + u'\n' + email : QString();
+    if (wanted == m_syncFor && (m_sync || m_syncPassword.isEmpty()))
+        return;
+    m_sync.reset();
+    m_syncFor.clear();
+    m_syncStatus->setVisible(configured);
+    if (!configured)
+        return;
+    if (m_syncPassword.isEmpty()) {
+        m_syncStatus->setText(tr("Sync: not signed in"));
+        m_syncFor = wanted;
+        return;
+    }
+    // The password goes to the engine's thread once and is gone from here:
+    // it keeps the keys it derives, not the password.
+    auto password = std::make_shared<QString>(std::exchange(m_syncPassword, QString()));
+    m_sync = std::make_shared<SyncEngine>();
+    m_syncFor = wanted;
+    connect(m_sync.get(), &SyncEngine::statusChanged, this,
+            [this](SyncEngine::Status status, const QString &message) {
+                const QString state = status == SyncEngine::Status::Idle          ? tr("synced")
+                                      : status == SyncEngine::Status::Error      ? tr("error")
+                                      : status == SyncEngine::Status::WaitingForApproval ? tr("waiting for approval")
+                                                                                          : tr("syncing");
+                m_syncStatus->setText(tr("Sync: %1").arg(state));
+                m_syncStatus->setToolTip(message);
+            });
+    // A file changed on disk (another app, the tree) is a change to sync too.
+    connect(&m_index, &Index::changed, m_sync.get(), &SyncEngine::noteChanged);
+    m_syncStatus->setText(tr("Sync: signing in"));
+    m_sync->start(m_vault.root(), server, email, [password](const QString &) {
+        return std::exchange(*password, QString());
+    });
+#endif
+}
+
+void MainWindow::syncSignIn()
+{
+#ifdef NOTEAPPC_HAVE_SYNC
+    const QString email = m_settings.text(QStringLiteral("sync.email")).trimmed();
+    if (m_settings.text(QStringLiteral("sync.serverURL")).trimmed().isEmpty() || email.isEmpty()) {
+        statusBar()->showMessage(tr("Set a sync server and account in Settings, Core plugins"), 5000);
+        return;
+    }
+    bool ok = false;
+    const QString password = QInputDialog::getText(this, tr("Sync"), tr("Password for %1:").arg(email),
+                                                   QLineEdit::Password, QString(), &ok);
+    if (!ok || password.isEmpty())
+        return;
+    m_syncPassword = password;
+    m_syncFor.clear(); // a fresh engine, even for the same account
+    updateSync();
+#endif
+}
+
 void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
 {
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -3392,6 +3474,10 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
                           qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
     recordHistory(target->notePath, note.text);
     notifyPlugins("note-saved", target->notePath);
+#ifdef NOTEAPPC_HAVE_SYNC
+    if (m_sync)
+        m_sync->noteChanged();
+#endif
     target->note = note;
     target->editor->setModified(false);
     // Every other tab on this note shows this same document, so this saved

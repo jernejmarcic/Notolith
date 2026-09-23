@@ -585,6 +585,9 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_PUBLISH
         "publish",
 #endif
+#ifndef NOTEAPPC_HAVE_SYNC
+        "sync",
+#endif
     };
     if (!PdfPage::isAvailable())
         missing << "pdf-embeds";
@@ -597,6 +600,13 @@ QWidget *SettingsPage::buildCorePluginsPage()
             addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
                         QCoreApplication::translate("Settings", feature.description));
     }
+
+#ifdef NOTEAPPC_HAVE_SYNC
+    addLineEditRow(layout, QStringLiteral("sync.serverURL"), tr("Sync server"),
+                   tr("The server this vault syncs through. \"Sync: Sign in\" asks the password."),
+                   QStringLiteral("https://"));
+    addLineEditRow(layout, QStringLiteral("sync.email"), tr("Sync account"), tr("The account's email address."));
+#endif
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over
     // these, so an Obsidian vault behaves here as it did there.

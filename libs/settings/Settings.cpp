@@ -51,6 +51,8 @@ const QVariantMap &defaults()
         {QStringLiteral("files.attachmentFolder"), QString()},
         {QStringLiteral("files.confirmDelete"), true},
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
+        {QStringLiteral("sync.serverURL"), QString()},
+        {QStringLiteral("sync.email"), QString()},
         {QStringLiteral("editor.gpuAcceleration"), false},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
@@ -546,6 +548,10 @@ const QList<Settings::Feature> &Settings::features()
         {"publish", QT_TRANSLATE_NOOP("Settings", "Publish"),
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),
+         true},
+        {"sync", QT_TRANSLATE_NOOP("Settings", "Sync"),
+         QT_TRANSLATE_NOOP("Settings", "Sync this vault through a server, end-to-end encrypted: the server "
+                                       "never sees note contents, file names or tags."),
          true},
         {"switcher", QT_TRANSLATE_NOOP("Settings", "Quick switcher"),
          QT_TRANSLATE_NOOP("Settings", "Jump to any note by name with Ctrl+O."), true},

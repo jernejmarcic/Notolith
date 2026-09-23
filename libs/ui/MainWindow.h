@@ -36,6 +36,7 @@ namespace noteAppC {
 class SpellChecker;
 class NoteHistory;
 class PluginRegistry;
+class SyncEngine;
 
 class BacklinksPane;
 class BookmarksPane;
@@ -250,6 +251,11 @@ private:
     /// Git history of every save (the history module): opened for the vault
     /// when the feature is on, closed when it is not.
     void updateNoteHistory();
+    /// Sync: an engine for this vault while the switch is on, a server and
+    /// an account are set, and this session signed in - after the first
+    /// paint only. syncSignIn() asks the password, here on the UI thread.
+    void updateSync();
+    void syncSignIn();
     /// Queues `text` as a new version of `absolutePath`, off the UI thread.
     void recordHistory(const QString &absolutePath, const QString &text);
     /// "Note history: Show this note's history".
@@ -454,6 +460,10 @@ private:
     Hotkeys::Bindings m_editorBindings; ///< for editors made after applyHotkeys()
     MarkdownEditor::Spelling m_editorSpelling;
     QLabel *m_wordCount = nullptr;
+    QLabel *m_syncStatus = nullptr;
+    std::shared_ptr<SyncEngine> m_sync;
+    QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for
+    QString m_syncPassword; ///< from syncSignIn, handed to the next engine once
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;

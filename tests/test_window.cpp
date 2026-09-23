@@ -1677,6 +1677,33 @@ TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
 }
 #endif
 
+#ifdef NOTEAPPC_EXPECT_SYNC
+TEST_F(WindowTest, SyncWaitsForASignInAndNeverAsksOnItsOwn)
+{
+    MainWindow window;
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    auto *status = window.findChild<QLabel *>(QStringLiteral("syncStatus"));
+    ASSERT_NE(status, nullptr);
+    EXPECT_FALSE(status->isVisibleTo(&window)); // no server set: nothing to show
+    ASSERT_NE(window.findChild<QAction *>(QStringLiteral("sync:sign-in")), nullptr);
+
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("sync.serverURL"), QStringLiteral("https://sync.invalid"));
+    settings.setValue(QStringLiteral("sync.email"), QStringLiteral("me@example.invalid"));
+    ASSERT_TRUE(settings.save());
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    // Configured, but no password this session: no engine, no dialog, no network.
+    EXPECT_TRUE(status->isVisibleTo(&window));
+    EXPECT_EQ(status->text(), QStringLiteral("Sync: not signed in"));
+    for (const QDialog *dialog : window.findChildren<QDialog *>())
+        EXPECT_FALSE(dialog->isVisible()) << dialog->metaObject()->className();
+
+    settings.setValue(QStringLiteral("sync.serverURL"), QString());
+    settings.setValue(QStringLiteral("sync.email"), QString());
+    ASSERT_TRUE(settings.save());
+}
+#endif
+
 #ifdef NOTEAPPC_WORD_STATS_PLUGIN_DIR
 TEST_F(WindowTest, AnEnabledPluginsCommandIsAnActionAndItsFenceIsDrawn)
 {
