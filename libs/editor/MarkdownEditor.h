@@ -118,6 +118,10 @@ public:
         std::function<void(const QString &)> addWord;
     };
     void setSpelling(Spelling spelling);
+
+    /// Types `text` at the caret, replacing any selection, as one undo step:
+    /// how a template or a snippet goes in.
+    void insertAtCaret(const QString &text) { insertText(text); }
     /// The menu a right click on a misspelt word at `sourceOffset` opens:
     /// its suggestions, then "Add to dictionary". Null anywhere else. Built
     /// rather than shown, so it can be tested.

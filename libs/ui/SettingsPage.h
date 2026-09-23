@@ -70,6 +70,7 @@ private:
     QWidget *buildFilesPage();
     QWidget *buildAboutPage();
     QWidget *buildHotkeysPage();
+    QWidget *buildCorePluginsPage();
     /// The keys `id` has now: noteAppC's own file, else the vault's
     /// Obsidian file, else the built-in ones.
     QList<QKeySequence> effectiveKeys(const HotkeyCommand &command) const;

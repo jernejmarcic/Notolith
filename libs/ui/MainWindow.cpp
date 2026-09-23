@@ -36,7 +36,12 @@
 #include "Hotkeys.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "BookmarksPane.h"
+#include "DailyNotes.h"
 #include "OutgoingLinksPane.h"
+#include "OutlinePane.h"
+#include "TemplatePicker.h"
+#include "Templates.h"
 #include "ExportPdfDialog.h"
 #include "PagePreview.h"
 #include "RecoveryDialog.h"
@@ -438,6 +443,19 @@ QWidget *MainWindow::buildMainArea()
         m_previewDelay.stop();
         m_preview->leaveSoon();
     });
+    // The outline follows the parse and the caret; m_outline is built with the
+    // right sidebar, after this, so these look it up when they fire.
+    connect(m_editor, &MarkdownEditor::headingsChanged, this, [this] {
+        if (m_outline)
+            m_outline->setHeadings(m_editor->headings());
+    });
+    connect(m_editor, &MarkdownEditor::cursorMoved, this, [this](qsizetype offset) {
+        if (m_outline)
+            m_outline->setCursorOffset(offset);
+    });
+    m_templatePicker = new TemplatePicker(this);
+    connect(m_templatePicker, &TemplatePicker::templateChosen, this,
+            [this](const QString &text) { m_editor->insertAtCaret(text); });
 
     editorLayout->addWidget(m_inlineTitle);
     editorLayout->addWidget(m_editor, 1);
@@ -520,11 +538,31 @@ QWidget *MainWindow::buildRightSidebar()
     m_outgoingLinks->setIndex(&m_index);
     connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
 
+    m_outline = new OutlinePane(m_rightSidebar);
+    connect(m_outline, &OutlinePane::jumpRequested, this, [this](qsizetype offset) {
+        m_editor->setCursorOffset(offset);
+        m_editor->setFocus();
+    });
+
+    m_bookmarks = new BookmarksPane(m_rightSidebar);
+    connect(m_bookmarks, &BookmarksPane::noteActivated, this, &MainWindow::openRelative);
+    connect(m_bookmarks, &BookmarksPane::headingActivated, this,
+            [this](const QString &relativePath, const QString &subpath) {
+                openRelative(relativePath);
+                jumpToHeading(subpath);
+            });
+    connect(m_bookmarks, &BookmarksPane::searchActivated, this, [this](const QString &query) {
+        // TODO(search lane): hand the query to the search pane.
+        statusBar()->showMessage(tr("Search: %1").arg(query), 3000);
+    });
+
     m_rightPanes = new QStackedWidget(m_rightSidebar);
     m_rightPanes->setObjectName(QStringLiteral("rightSidebarPanes"));
     m_rightPanes->addWidget(m_backlinks);
     m_rightPanes->addWidget(m_tags);
     m_rightPanes->addWidget(m_outgoingLinks);
+    m_rightPanes->addWidget(m_outline);
+    m_rightPanes->addWidget(m_bookmarks);
 
     auto *group = new QButtonGroup(tabRow);
     group->setExclusive(true);
@@ -537,12 +575,18 @@ QWidget *MainWindow::buildRightSidebar()
         rightSidebarTabButton(tabRow, QStringLiteral("outgoingLinksTabButton"),
                               QStringLiteral("arrow-up-right"), tr("Outgoing"),
                               tr("Outgoing links"), 2);
-    group->addButton(backlinksTab);
-    group->addButton(tagsTab);
-    group->addButton(outgoingTab);
-    tabLayout->addWidget(backlinksTab);
-    tabLayout->addWidget(tagsTab);
-    tabLayout->addWidget(outgoingTab);
+    QToolButton *outlineTab = rightSidebarTabButton(
+        tabRow, QStringLiteral("outlineTabButton"), QStringLiteral("list"), tr("Outline"),
+        tr("Outline"), 3);
+    QToolButton *bookmarksTab = rightSidebarTabButton(
+        tabRow, QStringLiteral("bookmarksTabButton"), QStringLiteral("bookmark"), tr("Bookmarks"),
+        tr("Bookmarks"), 4);
+    for (QToolButton *tab : {backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab}) {
+        // Five panes do not fit as words; Obsidian's sidebar tabs are icons.
+        tab->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        group->addButton(tab);
+        tabLayout->addWidget(tab);
+    }
     tabLayout->addStretch(1);
     backlinksTab->setChecked(true);
 
@@ -595,6 +639,20 @@ void MainWindow::buildActions()
         &MainWindow::openRecovery);
     add(QStringLiteral("workspace:export-pdf"), tr("Export to PDF"), QString(),
         &MainWindow::exportPdf);
+    add(QStringLiteral("daily-notes"), tr("Daily notes: Open today's daily note"), QString(),
+        [this] { openDailyNote(0); });
+    add(QStringLiteral("daily-notes:goto-prev"), tr("Daily notes: Open previous daily note"),
+        QString(), [this] { openDailyNote(-1); });
+    add(QStringLiteral("daily-notes:goto-next"), tr("Daily notes: Open next daily note"),
+        QString(), [this] { openDailyNote(1); });
+    add(QStringLiteral("insert-template"), tr("Templates: Insert template"), QString(),
+        &MainWindow::insertTemplate);
+    add(QStringLiteral("bookmarks:bookmark-current-view"), tr("Bookmarks: Bookmark this note"),
+        QString(), [this] {
+            if (m_vault.isValid() && !m_notePath.isEmpty())
+                m_bookmarks->bookmarkNote(m_vault.relative(m_notePath),
+                                          QFileInfo(m_notePath).completeBaseName());
+        });
 
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
@@ -789,6 +847,95 @@ void MainWindow::applySettings()
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+}
+
+DailyNotes MainWindow::dailyNotes() const
+{
+    DailyNotes::Config config;
+    config.folder = m_settings.text(QStringLiteral("dailyNotes.folder"));
+    config.format = m_settings.text(QStringLiteral("dailyNotes.format"));
+    config.templatePath = m_settings.text(QStringLiteral("dailyNotes.template"));
+    if (QFileInfo::exists(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/daily-notes.json"))))
+        config = DailyNotes::readConfig(m_vault.root());
+    return DailyNotes(m_vault.root(), config);
+}
+
+void MainWindow::openDailyNote(int step)
+{
+    if (!m_vault.isValid()) {
+        statusBar()->showMessage(tr("Daily notes live in a vault"), 3000);
+        return;
+    }
+    const DailyNotes daily = dailyNotes();
+    QDate date = QDate::currentDate();
+    QString path;
+    if (step == 0) {
+        QString error;
+        path = daily.ensureNote(date, &error);
+        if (path.isEmpty()) {
+            QMessageBox::warning(this, tr("Daily notes"), error);
+            return;
+        }
+    } else {
+        // From the daily note that is open, when one is; from today otherwise.
+        // ponytail: finds its date by trying the year either side, since an
+        // arbitrary format need not parse back into a date.
+        for (int days = 0; days <= 366; ++days) {
+            if (daily.pathFor(date.addDays(-days)) == m_notePath) {
+                date = date.addDays(-days);
+                break;
+            }
+            if (daily.pathFor(date.addDays(days)) == m_notePath) {
+                date = date.addDays(days);
+                break;
+            }
+        }
+        path = step < 0 ? daily.previousNote(date) : daily.nextNote(date);
+        if (path.isEmpty()) {
+            statusBar()->showMessage(step < 0 ? tr("No earlier daily note") : tr("No later daily note"),
+                                     3000);
+            return;
+        }
+    }
+    openNote(QFileInfo(path).isAbsolute() ? path : m_vault.absolute(path));
+}
+
+void MainWindow::insertTemplate()
+{
+    if (!m_vault.isValid() || m_notePath.isEmpty())
+        return;
+    Templates::Config config;
+    config.folder = m_settings.text(QStringLiteral("templates.folder"));
+    config.dateFormat = m_settings.text(QStringLiteral("templates.dateFormat"));
+    config.timeFormat = m_settings.text(QStringLiteral("templates.timeFormat"));
+    if (QFileInfo::exists(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/templates.json"))))
+        config = Templates::readConfig(m_vault.root());
+    m_templatePicker->setTemplates(Templates(m_vault.root(), config));
+    m_templatePicker->popUp(QFileInfo(m_notePath).completeBaseName());
+}
+
+void MainWindow::jumpToHeading(const QString &subpath)
+{
+    const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
+    if (wanted.isEmpty())
+        return;
+    const auto jump = [this, wanted] {
+        for (const Heading &heading : m_editor->headings()) {
+            if (heading.text.compare(wanted, Qt::CaseInsensitive) == 0) {
+                m_editor->setCursorOffset(heading.range.start);
+                return true;
+            }
+        }
+        return false;
+    };
+    if (jump())
+        return;
+    // A big note's headings come with its parse, off the UI thread.
+    auto connection = std::make_shared<QMetaObject::Connection>();
+    *connection = connect(m_editor, &MarkdownEditor::headingsChanged, this, [this, jump, connection] {
+        jump();
+        disconnect(*connection);
+    });
 }
 
 void MainWindow::exportPdf()
@@ -1117,6 +1264,7 @@ void MainWindow::clearOpenNote()
     }
     m_backlinks->setNote(QString());
     m_outgoingLinks->setNote(QString());
+    m_outline->clear();
 }
 
 void MainWindow::openVault(const QString &path)
@@ -1145,6 +1293,7 @@ void MainWindow::openVault(const QString &path)
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
     applySettings();
+    m_bookmarks->setVaultRoot(m_vault.root());
 
     statusBar()->showMessage(m_vault.hasObsidianConfig()
                                  ? tr("Vault opened - Obsidian settings found")
@@ -1167,6 +1316,7 @@ void MainWindow::closeVault()
 
     m_tree->setRootIndex(QModelIndex());
     m_files->setRootPath(QString());
+    m_bookmarks->setVaultRoot(QString());
 
     reloadSettings(QString());
     applySettings();

@@ -316,12 +316,12 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       task-todo: task-done: content: match-case: ignore-case:, /regex/ - over
       the FTS5 table; a search pane; the tags pane hands a tag to it.
 - [ ] **Unlinked mentions** in the backlinks pane (lane A).
-- [ ] **Outline** pane (lane B): the note's headings, click to jump.
-- [ ] **Bookmarks** (lane B): notes, headings, searches, groups; reads
+- [x] **Outline** pane: the note's headings as a tree, the caret's in bold, click to jump.
+- [x] **Bookmarks**: notes, headings, searches, groups; reads
       `.obsidian/bookmarks.json`, keeps its own copy outside the vault.
-- [ ] **Daily notes** (lane B): today's note from folder, format and template,
+- [x] **Daily notes**: today's note from folder, format and template,
       `.obsidian/daily-notes.json` honoured.
-- [ ] **Templates** (lane B): insert from the templates folder, `{{title}}`
+- [x] **Templates**: insert from the templates folder, `{{title}}`
       `{{date}}` `{{time}}` and `{{date:FORMAT}}`.
 - [ ] **Graph view** (lane C), a Tier 1 module like spellcheck: global and
       local, force layout that holds 5 000 nodes at 60 fps, `graph.json` options.

@@ -153,6 +153,15 @@ private:
     /// Shows the page preview for the link the editor last reported hovering.
     void showPagePreview();
     void openRecovery();
+    /// Today's daily note (`step` 0), or the one before or after the daily
+    /// note that is open (-1, +1), created from its template when missing.
+    void openDailyNote(int step);
+    void insertTemplate();
+    /// Moves the caret to the heading `subpath` names ("#Heading"), now or,
+    /// for a note still being parsed, as soon as its headings arrive.
+    void jumpToHeading(const QString &subpath);
+    /// The vault's own Obsidian configuration when it has one, else noteAppC's.
+    class DailyNotes dailyNotes() const;
     /// Obsidian's Export to PDF, for the open note.
     void exportPdf();
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
@@ -282,6 +291,9 @@ private:
     BacklinksPane *m_backlinks = nullptr;
     TagsPane *m_tags = nullptr;
     OutgoingLinksPane *m_outgoingLinks = nullptr;
+    class OutlinePane *m_outline = nullptr;
+    class BookmarksPane *m_bookmarks = nullptr;
+    class TemplatePicker *m_templatePicker = nullptr;
     QuickSwitcher *m_switcher = nullptr;
 
     QWidget *m_headerBar = nullptr;

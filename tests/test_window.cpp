@@ -27,6 +27,7 @@
 #include "MarkdownEditor.h"
 #include <QSignalSpy>
 #include <QAction>
+#include <QDate>
 #include <QTemporaryDir>
 #include <QTreeView>
 #include <QTreeWidget>
@@ -34,6 +35,8 @@
 #include "Index.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
+#include "OutlinePane.h"
+#include "BookmarksPane.h"
 #include "Snapshots.h"
 #include "RecoveryDialog.h"
 #include "Settings.h"
@@ -958,5 +961,72 @@ TEST_F(WindowTest, SavingKeepsSnapshotsAndOneCanBePutBack)
     EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\n"));
     EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
     qputenv("XDG_DATA_HOME", previous);
+}
+
+// --- core plugins in the window ---------------------------------------------------
+
+TEST_F(WindowTest, TheOutlineShowsTheNotesHeadingsAndJumpsToThem)
+{
+    write(QStringLiteral("Outlined.md"), "# Top\n\nText.\n\n## Second\n\nMore.\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Outlined.md")));
+    auto *outline = window.findChild<noteAppC::OutlinePane *>();
+    ASSERT_NE(outline, nullptr);
+    auto *tree = outline->findChild<QTreeWidget *>();
+    ASSERT_NE(tree, nullptr);
+    ASSERT_EQ(tree->topLevelItemCount(), 1);
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("Top"));
+    ASSERT_EQ(tree->topLevelItem(0)->childCount(), 1);
+
+    emit outline->jumpRequested(QStringLiteral("# Top\n\nText.\n\n").size());
+    EXPECT_EQ(window.editor()->cursorOffset(), QStringLiteral("# Top\n\nText.\n\n").size());
+}
+
+TEST_F(WindowTest, TodaysDailyNoteIsMadeWhereTheVaultSays)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/daily-notes.json"), R"({"folder": "Journal", "format": "YYYY-MM-DD"})");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.findChild<QAction *>(QStringLiteral("daily-notes"))->trigger();
+    const QString today = path(QStringLiteral("Journal/%1.md")
+                                   .arg(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
+    EXPECT_TRUE(QFileInfo::exists(today));
+    EXPECT_TRUE(window.windowTitle().contains(QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"))));
+}
+
+TEST_F(WindowTest, ATemplateGoesInAtTheCaret)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Templates")));
+    write(QStringLiteral(".obsidian/templates.json"), R"({"folder": "Templates"})");
+    write(QStringLiteral("Templates/Meeting.md"), "Notes on {{title}}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.editor()->setCursorOffset(0);
+    window.findChild<QAction *>(QStringLiteral("insert-template"))->trigger();
+    auto *query = window.findChild<QLineEdit *>(QStringLiteral("templatePickerQuery"));
+    ASSERT_NE(query, nullptr);
+    QTest::keyClick(query, Qt::Key_Return); // the one template there is
+    EXPECT_TRUE(window.editor()->noteText().startsWith(QLatin1String("Notes on Welcome\n")));
+}
+
+TEST_F(WindowTest, BookmarkingANoteKeepsItOutsideTheVault)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("bookmarks:bookmark-current-view"))->trigger();
+    auto *tree = window.findChild<noteAppC::BookmarksPane *>()->findChild<QTreeWidget *>();
+    ASSERT_NE(tree, nullptr);
+    EXPECT_EQ(tree->topLevelItemCount(), 1);
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".obsidian/bookmarks.json"))))
+        << "the vault is never written";
+    qputenv("XDG_CONFIG_HOME", previous);
 }
 

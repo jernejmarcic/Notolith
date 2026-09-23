@@ -51,8 +51,8 @@ SettingsPage::SettingsPage(QWidget *parent)
     m_nav->setObjectName(QStringLiteral("settingsNav"));
     m_nav->setFixedWidth(200);
     m_nav->setFrameShape(QFrame::NoFrame);
-    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("Hotkeys"),
-                     tr("About")});
+    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("Core plugins"),
+                     tr("Hotkeys"), tr("About")});
 
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("settingsPages"));
@@ -97,6 +97,7 @@ void SettingsPage::rebuild()
     m_pages->addWidget(buildAppearancePage());
     m_pages->addWidget(buildEditorPage());
     m_pages->addWidget(buildFilesPage());
+    m_pages->addWidget(buildCorePluginsPage());
     m_pages->addWidget(buildHotkeysPage());
     m_pages->addWidget(buildAboutPage());
     m_nav->setCurrentRow(row < m_pages->count() ? row : 0);
@@ -524,6 +525,32 @@ QList<QKeySequence> SettingsPage::effectiveKeys(const HotkeyCommand &command) co
     const Hotkeys::Bindings bindings = Hotkeys::load(m_vaultRoot);
     const auto found = bindings.constFind(command.id);
     return found != bindings.constEnd() ? *found : command.builtIn;
+}
+
+QWidget *SettingsPage::buildCorePluginsPage()
+{
+    auto *page = new QWidget;
+    page->setObjectName(QStringLiteral("settingsCorePluginsPage"));
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(28, 20, 28, 20);
+    layout->setSpacing(0);
+
+    // A vault's own .obsidian/daily-notes.json and templates.json win over
+    // these, so an Obsidian vault behaves here as it did there.
+    addFolderRow(layout, QStringLiteral("dailyNotes.folder"), tr("Daily notes folder"),
+                tr("Where today's note is created. Empty means the vault root."));
+    addLineEditRow(layout, QStringLiteral("dailyNotes.format"), tr("Daily note date format"),
+                   tr("Its file name, in Obsidian's moment.js tokens."), QStringLiteral("YYYY-MM-DD"));
+    addLineEditRow(layout, QStringLiteral("dailyNotes.template"), tr("Daily note template"),
+                   tr("A note to start each day's note from, as a vault path without \".md\"."));
+    addFolderRow(layout, QStringLiteral("templates.folder"), tr("Templates folder"),
+                tr("Where Insert template looks."));
+    addLineEditRow(layout, QStringLiteral("templates.dateFormat"), tr("Template date format"),
+                   tr("What {{date}} becomes."), QStringLiteral("YYYY-MM-DD"));
+    addLineEditRow(layout, QStringLiteral("templates.timeFormat"), tr("Template time format"),
+                   tr("What {{time}} becomes."), QStringLiteral("HH:mm"));
+    layout->addStretch(1);
+    return scrollWrap(page);
 }
 
 QWidget *SettingsPage::buildHotkeysPage()
