@@ -500,6 +500,18 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
         {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),
          QT_TRANSLATE_NOOP("Settings", "Open or create today's note."), true},
+        {"html-blocks", QT_TRANSLATE_NOOP("Settings", "HTML blocks"),
+         QT_TRANSLATE_NOOP("Settings", "Draw raw HTML in notes as HTML rather than showing its source."), false},
+        {"media-embeds", QT_TRANSLATE_NOOP("Settings", "Audio and video embeds"),
+         QT_TRANSLATE_NOOP("Settings", "Play embedded audio and video files in the note."), false},
+        {"pdf-embeds", QT_TRANSLATE_NOOP("Settings", "PDF embeds"),
+         QT_TRANSLATE_NOOP("Settings", "Show embedded PDFs as pages - one, a list, a range or all, in a column, "
+                                       "a grid or as slides."),
+         false},
+        {"tex-embeds", QT_TRANSLATE_NOOP("Settings", "LaTeX embeds"),
+         QT_TRANSLATE_NOOP("Settings", "Render an embedded .tex file: maths through MicroTeX, a whole document "
+                                       "compiled by the TeX installed, in a sandbox."),
+         false},
         {"file-recovery", QT_TRANSLATE_NOOP("Settings", "File recovery"),
          QT_TRANSLATE_NOOP("Settings", "Keep snapshots of notes as they are saved, outside the vault."), true},
         {"graph", QT_TRANSLATE_NOOP("Settings", "Graph view"),

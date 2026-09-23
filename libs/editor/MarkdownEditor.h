@@ -325,6 +325,7 @@ public:
         bool mediaEmbeds = true; ///< `![[x.mp3]]` / `![[x.mp4]]`
         bool maths = true;       ///< `$...$` and `$$...$$`
         bool fileEmbeds = true;  ///< notes, `.canvas`, and any other file's card
+        bool operator==(const Features &) const = default;
     };
     void setFeatures(const Features &features);
     const Features &features() const { return m_features; }
@@ -336,7 +337,7 @@ public:
     /// and setBaseRunner already use. `deliver` may be called from any
     /// thread, at most once per call; an embed shows a small placeholder
     /// sized to `width` until it does. Suffixes are matched case-insensitive,
-    /// without the dot.
+    /// without the dot; a null renderer unregisters them.
     using FileEmbedRenderer = std::function<void(const QString &path, const QString &subpath,
                                                   int width, const std::function<void(QImage)> &deliver)>;
     void setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer);
@@ -700,6 +701,7 @@ private:
         /// nothing extra (an error or a still-loading block shows its
         /// message instead of a table; see layoutBase).
         QString baseViewName;
+        QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
         /// One clickable row's first cell, block-local coordinates - only
         /// the name column opens its note, mirroring
         /// BaseTableModel::isNameColumn's choice for the real widget.
@@ -1111,6 +1113,11 @@ private:
     /// instead of the raw YAML, the same shape layoutQuery already gives a
     /// ```query``` block. False for every other fence.
     bool layoutBase(BlockView &view);
+    /// A base's table for `yamlText`, for a ```base fence and for an
+    /// embedded .base file alike.
+    bool layoutBaseTable(BlockView &view, const QString &yamlText);
+    /// A .base file's text, read again only when its mtime moves.
+    QHash<QString, QPair<qint64, QString>> m_baseFiles;
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

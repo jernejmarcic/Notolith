@@ -141,12 +141,7 @@ void MarkdownEditor::deliverBaseResults(const QString &yamlText, quint64 generat
 
     bool touched = false;
     for (BlockView &block : m_blocks) {
-        if (!block.isBase)
-            continue;
-        const CodeFenceSpan *fence = codeFenceOf(block);
-        if (!fence)
-            continue;
-        if (m_text.mid(fence->content.start, fence->content.length()).trimmed() != yamlText)
+        if (!block.isBase || block.baseYAML != yamlText)
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -170,13 +165,17 @@ bool MarkdownEditor::layoutBase(BlockView &view)
     if (!fence || fence->language.compare(QLatin1String("base"), Qt::CaseInsensitive) != 0)
         return false;
 
+    return layoutBaseTable(view, m_text.mid(fence->content.start, fence->content.length()).trimmed());
+}
+
+bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
+{
     view.isBase = true;
     view.image = QPixmap();
     view.cells.clear();
     view.baseRows.clear();
     view.baseViewName.clear();
-
-    const QString yamlText = m_text.mid(fence->content.start, fence->content.length()).trimmed();
+    view.baseYAML = yamlText;
 
     const QColor mutedColour = m_theme.color(QStringLiteral("--text-muted"));
     const QColor errorColour = m_theme.color(QStringLiteral("--text-error"));

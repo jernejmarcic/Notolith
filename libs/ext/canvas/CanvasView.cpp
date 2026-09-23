@@ -68,12 +68,18 @@ bool CanvasView::load(const QString &path, QString *error)
     return true;
 }
 
-void CanvasView::fitToContent()
+QRectF CanvasView::contentBounds() const
 {
-    m_fitPending = false;
     QRectF bounds;
     for (const CanvasNode &node : m_document.nodes())
         bounds = bounds.isNull() ? node.rect() : bounds.united(node.rect());
+    return bounds;
+}
+
+void CanvasView::fitToContent()
+{
+    m_fitPending = false;
+    const QRectF bounds = contentBounds();
     if (bounds.isEmpty() || width() <= 0 || height() <= 0)
         return;
     const qreal margin = 40;

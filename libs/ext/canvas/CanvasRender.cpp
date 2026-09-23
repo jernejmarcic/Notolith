@@ -305,7 +305,7 @@ void CanvasView::paintNodes(QPainter &painter) const
             continue;
         paintNodeChrome(painter, node, screen);
 
-        if (screen.width() < kLodMinPixels || screen.height() < kLodMinPixels)
+        if (!m_alwaysDrawContent && (screen.width() < kLodMinPixels || screen.height() < kLodMinPixels))
             continue; // too small on screen to be worth the content pixmap
 
         const QPixmap pixmap = contentPixmap(node);

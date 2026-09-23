@@ -657,6 +657,49 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+
+    // What the editor draws of the optional features: off, a block shows
+    // its source and none of that feature's code runs.
+    MarkdownEditor::Features features;
+    features.queryBlocks = featureOn("global-search"); // embedded search is Search's, in Obsidian
+    features.baseBlocks = featureOn("bases");
+    features.HTMLblocks = featureOn("html-blocks");
+    features.PDFembeds = featureOn("pdf-embeds");
+    features.texEmbeds = featureOn("tex-embeds");
+    features.mediaEmbeds = featureOn("media-embeds");
+    editor->setFeatures(features);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    // A canvas embed is the canvas drawn into an image, framed to its cards
+    // - the editor cannot hold a widget in its text. Drawn a turn later, so
+    // the note paints first with the box in place.
+    const MarkdownEditor::FileEmbedRenderer canvasEmbed =
+        [this](const QString &path, const QString &, int width, const std::function<void(QImage)> &deliver) {
+            QTimer::singleShot(0, this, [this, path, width, deliver] {
+                CanvasView canvas;
+                canvas.setTheme(m_theme);
+                canvas.setFileResolver(m_resolveLink);
+                if (!canvas.load(path)) {
+                    deliver({});
+                    return;
+                }
+                // Its own shape, within reason, so the cards are not
+                // shrunk past reading to fit a letterbox.
+                const QRectF bounds = canvas.contentBounds();
+                const qreal aspect = bounds.isEmpty() ? 0.5625 : bounds.height() / bounds.width();
+                canvas.resize(width, qRound(width * qBound(0.3, aspect, 1.0)));
+                canvas.setAlwaysDrawContent(true);
+                canvas.fitToContent();
+                const qreal ratio = devicePixelRatioF();
+                QImage image(canvas.size() * ratio, QImage::Format_ARGB32_Premultiplied);
+                image.setDevicePixelRatio(ratio);
+                image.fill(Qt::transparent);
+                canvas.render(&image);
+                deliver(image);
+            });
+        };
+    editor->setFileEmbedRenderer({QStringLiteral("canvas")},
+                                 featureOn("canvas") ? canvasEmbed : MarkdownEditor::FileEmbedRenderer());
+#endif
 }
 
 void MainWindow::configureEditor(MarkdownEditor *editor)

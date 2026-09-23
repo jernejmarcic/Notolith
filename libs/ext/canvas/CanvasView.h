@@ -72,6 +72,11 @@ public:
     void setZoom(qreal zoom);
     /// Zooms and pans so every node shows, at most at 100%.
     void fitToContent();
+    /// The canvas-space box around every node; null for an empty canvas.
+    QRectF contentBounds() const;
+    /// Draws every card's content however small it is on screen, for a
+    /// canvas drawn once into a note rather than panned about.
+    void setAlwaysDrawContent(bool always) { m_alwaysDrawContent = always; }
     /// The canvas-space point that maps to the viewport's top-left pixel.
     QPointF origin() const { return m_origin; }
 
@@ -210,6 +215,7 @@ private:
     qreal m_zoom = 1.0;
     QPointF m_origin{0, 0};
     bool m_fitPending = false; ///< loaded, not painted yet: frame it first
+    bool m_alwaysDrawContent = false;
 
     QSet<QString> m_selectedNodes;
     QSet<QString> m_selectedEdges;

@@ -1855,3 +1855,44 @@ TEST_F(WindowTest, TheCommandPaletteRunsCommandsAndPutsTheLastFirst)
     run(QStringLiteral("toggle bold"));
     EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# **Welcome**")));
 }
+
+#ifdef NOTEAPPC_HAVE_BASES
+TEST_F(WindowTest, AnEmbeddedBaseShowsItsRowsInTheNote)
+{
+    write(QStringLiteral("Task.md"), "---\nstatus: open\n---\nDo it.\n");
+    write(QStringLiteral("Tasks.base"),
+          "filters:\n  and:\n    - status == \"open\"\nviews:\n  - type: table\n    order: [file.name, status]\n");
+    write(QStringLiteral("Board.md"), "![[Tasks.base]]\n");
+    MainWindow window;
+    window.show();
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.md"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size()); // the caret off the embed's line
+    QTRY_VERIFY_WITH_TIMEOUT(editor->baseRowsAt(0).size() == 1, 5000);
+    EXPECT_EQ(editor->baseRowsAt(0).constFirst().path, QStringLiteral("Task.md"));
+}
+#endif
+
+TEST_F(WindowTest, TheCorePluginsSwitchesReachTheEditor)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.pdfEmbeds"), false);
+    off.setValue(QStringLiteral("plugins.globalSearch"), false);
+    ASSERT_TRUE(off.save());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        const MarkdownEditor::Features features = window.editor()->features();
+        EXPECT_FALSE(features.PDFembeds);
+        EXPECT_FALSE(features.queryBlocks) << "embedded search is Search's";
+        EXPECT_TRUE(features.baseBlocks);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}

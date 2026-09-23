@@ -163,6 +163,8 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
 
 void MarkdownEditor::setFeatures(const Features &features)
 {
+    if (features == m_features)
+        return; // every settings pass asks, and this relays out every block
     m_features = features;
     // A rare, administrative call - not the keystroke path - so relaying out
     // every block rather than picking out just the ones a flag touches is
@@ -177,8 +179,18 @@ void MarkdownEditor::setFeatures(const Features &features)
 
 void MarkdownEditor::setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer)
 {
-    for (const QString &suffix : suffixes)
-        m_fileEmbedRenderers.insert(suffix.toLower(), renderer);
+    // A null renderer takes the suffix back. Only a change in which suffixes
+    // have one re-renders anything: every settings pass hands the same one.
+    bool changed = false;
+    for (const QString &suffix : suffixes) {
+        changed = changed || bool(renderer) != m_fileEmbedRenderers.contains(suffix.toLower());
+        if (renderer)
+            m_fileEmbedRenderers.insert(suffix.toLower(), renderer);
+        else
+            m_fileEmbedRenderers.remove(suffix.toLower());
+    }
+    if (!changed)
+        return;
     m_fileEmbedCache.clear();
     invalidateLayouts();
     updateLayout();
@@ -1827,6 +1839,19 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
 
     if (Vault::isNote(path))
         return layoutNoteEmbed(view, *embed, path);
+    // A .base is the ```base block's own table, fed the file: its rows open
+    // their notes, as they do in Obsidian's embedded base.
+    if (m_features.baseBlocks && suffix == QLatin1String("base")) {
+        const qint64 mtime = QFileInfo(path).lastModified().toMSecsSinceEpoch();
+        auto cached = m_baseFiles.find(path);
+        if (cached == m_baseFiles.end() || cached->first != mtime) {
+            QFile file(path);
+            const QString text = file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : QString();
+            cached = m_baseFiles.insert(path, {mtime, text});
+        }
+        hideWholeBlockText(view);
+        return layoutBaseTable(view, cached->second.trimmed());
+    }
     if (m_fileEmbedRenderers.contains(suffix))
         return layoutHookedFileEmbed(view, *embed, path);
     return layoutSourceFile(view, *embed, path);
@@ -2526,6 +2551,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.queryResultCountText.clear();
     view.isBase = false;
     view.baseViewName.clear();
+    view.baseYAML.clear();
     view.baseRows.clear();
     view.embedCells.clear();
     view.isFileCard = false;

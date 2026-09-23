@@ -23,7 +23,10 @@
 
 #include <algorithm>
 
+#include "HtmlRenderer.h"
 #include "Hotkeys.h"
+#include "MediaPlayback.h"
+#include "PdfPage.h"
 #include "Scheme.h"
 #include "Settings.h"
 #include "Theme.h"
@@ -535,7 +538,7 @@ QWidget *SettingsPage::buildCorePluginsPage()
 
     // Only what this build has: a switch with nothing behind it is worse
     // than none.
-    const QSet<QByteArray> missing = {
+    QSet<QByteArray> missing = {
 #ifndef NOTEAPPC_HAVE_GRAPH
         "graph",
 #endif
@@ -549,6 +552,12 @@ QWidget *SettingsPage::buildCorePluginsPage()
         "note-history",
 #endif
     };
+    if (!PdfPage::isAvailable())
+        missing << "pdf-embeds";
+    if (!MediaPlayback::isAvailable())
+        missing << "media-embeds";
+    if (!HtmlRenderer::isAvailable())
+        missing << "html-blocks";
     for (const Settings::Feature &feature : Settings::features()) {
         if (!missing.contains(feature.id))
             addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
