@@ -293,8 +293,9 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
             const qreal box = metrics.height() * 0.8;
             row.control = QRectF(kKeyColumn, y + (rowHeight - box) / 2, box, box);
         } else if (property.type == Property::Type::List) {
-            // Only a list that can be rewritten gets the controls to change it.
-            const bool editable = listIsRewritable(property);
+            // Only a list that can be rewritten gets the controls to change it,
+            // and not in reading view, which is for reading - and for print.
+            const bool editable = m_mode != Mode::Reading && listIsRewritable(property);
             qreal x = kKeyColumn;
             qreal chipTop = y + (rowHeight - chipHeight) / 2;
             for (const QString &value : property.values) {

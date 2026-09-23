@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QTimer>
 
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -152,6 +153,8 @@ private:
     /// Shows the page preview for the link the editor last reported hovering.
     void showPagePreview();
     void openRecovery();
+    /// Obsidian's Export to PDF, for the open note.
+    void exportPdf();
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
     /// a snapshot of its own first.
     void restoreSnapshot(const QString &notePath, const QString &text);
@@ -244,6 +247,9 @@ private:
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
     class PagePreview *m_preview = nullptr;
+    /// Resolves a link as the open note sees it; the editor, the preview and
+    /// PDF export all use it.
+    std::function<QString(const QString &)> m_resolveLink;
     /// A moment's pause before a preview opens, so sweeping the pointer across
     /// a paragraph of links does not flash one up for each.
     QTimer m_previewDelay;

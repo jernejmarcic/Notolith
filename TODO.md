@@ -343,7 +343,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       Notes only for now - Obsidian also previews images and PDFs.
 - [ ] Audio and video embeds (Qt Multimedia, optional).
 - [ ] `query` blocks, on the wave 1 search.
-- [ ] PDF export of the reading view.
+- [x] PDF export of the reading view (`workspace:export-pdf`): Obsidian's
+      options - file name as title, A3/A4/A5/Legal/Letter/Tabloid,
+      orientation, margin presets, downscale - light theme on white paper,
+      pages broken between blocks.
 
 ### Wave 3
 - [ ] Split panes and workspaces.

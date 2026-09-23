@@ -7,6 +7,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
@@ -2480,6 +2481,41 @@ TEST(PagePreviewTest, AnExternalLinkHasNothingToPreview)
     auto reading = editorWith(QStringLiteral("[a site](https://example.org) and [a site](https://example.org)\n"));
     reading->setMode(MarkdownEditor::Mode::Reading);
     EXPECT_TRUE(hoverFirstLine(*reading, Qt::NoModifier).isEmpty());
+}
+
+// --- export to PDF ---------------------------------------------------------------
+
+TEST(PdfExportTest, APageBreaksBetweenBlocksAndOnlyATallOneIsCut)
+{
+    // Blocks as (top, height), pages 100 high.
+    EXPECT_EQ(MarkdownEditor::pageStarts({{0, 40}, {40, 50}}, 100), (QList<qreal>{0}));
+    // The third block would cross the edge, so it starts page two.
+    EXPECT_EQ(MarkdownEditor::pageStarts({{0, 40}, {40, 50}, {90, 30}}, 100),
+              (QList<qreal>{0, 90}));
+    // Taller than a page: it fills the rest of this page and runs on, cut at
+    // the page height as many times as it takes - as a browser prints it.
+    EXPECT_EQ(MarkdownEditor::pageStarts({{0, 20}, {20, 250}}, 100),
+              (QList<qreal>{0, 100, 200}));
+}
+
+TEST(PdfExportTest, ALongNoteBecomesSeveralPages)
+{
+    QString note = QStringLiteral("---\ntags: [a]\n---\n");
+    for (int i = 0; i < 120; ++i)
+        note += QStringLiteral("Paragraph %1 with **bold** text that runs on for a while.\n\n").arg(i);
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("out.pdf"));
+    QString error;
+    ASSERT_TRUE(MarkdownEditor::exportPdf(path, note, QStringLiteral("A title"), {},
+                                          MarkdownEditor::PdfOptions{}, &error))
+        << qPrintable(error);
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const QByteArray pdf = file.readAll();
+    EXPECT_TRUE(pdf.startsWith("%PDF"));
+    static const QRegularExpression pageObject(QStringLiteral("/Type\\s*/Page[^s]"));
+    EXPECT_GE(QString::fromLatin1(pdf).count(pageObject), 3) << "120 paragraphs on A4";
 }
 
 // --- links to headings -------------------------------------------------------

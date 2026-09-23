@@ -2637,19 +2637,9 @@ void MarkdownEditor::updateScrollRange()
 
 // --- painting -------------------------------------------------------------
 
-void MarkdownEditor::paintEvent(QPaintEvent *event)
+void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedTop,
+                                 qreal exposedBottom) const
 {
-    QPainter painter(viewport());
-    painter.setRenderHint(QPainter::Antialiasing);
-    // After a scroll only the strip that came into view is exposed; blocks
-    // outside it are skipped rather than drawn and clipped away. The margin
-    // covers what a block paints past its own edges, like a code panel's.
-    const QRect exposed = event->rect();
-    const qreal exposedTop = exposed.top() - 16;
-    const qreal exposedBottom = exposed.bottom() + 16;
-    painter.fillRect(exposed, m_theme.color(QStringLiteral("--background-primary")));
-
-    const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
     const QColor text = m_theme.color(QStringLiteral("--text-normal"));
     const QColor selectionColour = m_theme.color(QStringLiteral("--interactive-accent"));
@@ -2752,6 +2742,21 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
                 painter.restore();
         }
     }
+}
+
+void MarkdownEditor::paintEvent(QPaintEvent *event)
+{
+    QPainter painter(viewport());
+    painter.setRenderHint(QPainter::Antialiasing);
+    // After a scroll only the strip that came into view is exposed; blocks
+    // outside it are skipped rather than drawn and clipped away. The margin
+    // covers what a block paints past its own edges, like a code panel's.
+    const QRect exposed = event->rect();
+    const qreal exposedTop = exposed.top() - 16;
+    const qreal exposedBottom = exposed.bottom() + 16;
+    painter.fillRect(exposed, m_theme.color(QStringLiteral("--background-primary")));
+
+    paintBlocks(painter, verticalScrollBar()->value(), exposedTop, exposedBottom);
 
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
         const QPointF point = cursorPoint();

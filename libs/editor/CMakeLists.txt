@@ -6,7 +6,8 @@ add_library(noteAppC_editor STATIC
     FindBar.cpp
     FindBar.h
     MarkdownEditor.cpp
-    MarkdownEditor.h)
+    MarkdownEditor.h
+    PdfExport.cpp)
 
 set_target_properties(noteAppC_editor PROPERTIES AUTOMOC ON)
 

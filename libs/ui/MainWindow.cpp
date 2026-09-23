@@ -37,6 +37,7 @@
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "OutgoingLinksPane.h"
+#include "ExportPdfDialog.h"
 #include "PagePreview.h"
 #include "RecoveryDialog.h"
 #include "Snapshots.h"
@@ -408,6 +409,7 @@ QWidget *MainWindow::buildMainArea()
         const QString fromRoot = m_vault.absolute(target);
         return QFileInfo::exists(fromRoot) ? fromRoot : QString();
     };
+    m_resolveLink = resolver;
     m_editor->setLinkResolver(resolver);
     const auto follow = [this](const QString &target) {
         const QString resolved = m_index.resolve(target, m_notePath);
@@ -591,6 +593,8 @@ void MainWindow::buildActions()
         &MainWindow::goForward);
     add(QStringLiteral("file-recovery:open"), tr("File recovery: Open saved snapshots"), QString(),
         &MainWindow::openRecovery);
+    add(QStringLiteral("workspace:export-pdf"), tr("Export to PDF"), QString(),
+        &MainWindow::exportPdf);
 
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
@@ -785,6 +789,27 @@ void MainWindow::applySettings()
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+}
+
+void MainWindow::exportPdf()
+{
+    if (m_notePath.isEmpty())
+        return;
+    ExportPdfDialog options(this);
+    if (options.exec() != QDialog::Accepted)
+        return;
+    const QFileInfo note(m_notePath);
+    const QString target = QFileDialog::getSaveFileName(
+        this, tr("Export to PDF"), note.dir().filePath(note.completeBaseName() + QStringLiteral(".pdf")),
+        tr("PDF (*.pdf)"));
+    if (target.isEmpty())
+        return;
+    QString error;
+    if (MarkdownEditor::exportPdf(target, m_editor->noteText(), note.completeBaseName(),
+                                  m_resolveLink, options.options(), &error))
+        statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(target).fileName()), 3000);
+    else
+        QMessageBox::warning(this, tr("Export to PDF"), error);
 }
 
 void MainWindow::openRecovery()

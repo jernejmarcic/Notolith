@@ -1,5 +1,7 @@
 # The window lives in a library so the widget smoke test can drive it.
 add_library(noteAppC_ui STATIC
+    ExportPdfDialog.cpp
+    ExportPdfDialog.h
     MainWindow.cpp
     MainWindow.h
     RecoveryDialog.cpp

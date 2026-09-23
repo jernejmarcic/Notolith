@@ -7,6 +7,8 @@
 #include <QHash>
 #include <QIcon>
 #include <QKeySequence>
+#include <QPageLayout>
+#include <QPageSize>
 #include <QPixmap>
 #include <QPointer>
 #include <QTextLayout>
@@ -134,6 +136,25 @@ public:
     /// True when this build can do it at all: Qt6::OpenGLWidgets present, and
     /// a platform that can give the window a GL context.
     static bool GPUaccelerationAvailable();
+
+    /// Obsidian's Export to PDF options, with its defaults.
+    struct PdfOptions {
+        bool includeTitle = true;
+        QPageSize pageSize = QPageSize(QPageSize::A4);
+        QPageLayout::Orientation orientation = QPageLayout::Portrait;
+        qreal marginMillimetres = 25.4; ///< "Default", about an inch
+        int downscalePercent = 100;
+    };
+    /// Renders `text` in reading view, light theme, onto paper, page by page.
+    /// A page breaks between blocks; only a block taller than a page is cut.
+    /// `resolver` resolves links and embeds as the window's does.
+    static bool exportPdf(const QString &path, const QString &text, const QString &title,
+                          std::function<QString(const QString &)> resolver,
+                          const PdfOptions &options, QString *error = nullptr);
+    /// Where each page starts, given every block's top and height: a block
+    /// that does not fit starts the next page, one taller than a page runs on
+    /// across as many as it takes.
+    static QList<qreal> pageStarts(const QList<QPair<qreal, qreal>> &blocks, qreal pageHeight);
 
     /// Words in the note, frontmatter excluded, as of the last parse; -1 while
     /// a large note's first parse is still out. Counted on the parse thread,
@@ -721,6 +742,10 @@ private:
     void watchStyleFiles();
     void reloadStyleFiles();
     Parser m_parser;
+    /// Every block between `exposedTop` and `exposedBottom`, which are in
+    /// viewport coordinates for a document scrolled to `scroll`. The screen
+    /// and a PDF page both paint through this.
+    void paintBlocks(QPainter &painter, qreal scroll, qreal exposedTop, qreal exposedBottom) const;
     CodeHighlighter m_code;
     /// The link a preview was asked for, so the signals fire on changes only.
     QString m_previewLink;
