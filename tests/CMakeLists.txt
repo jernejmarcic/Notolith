@@ -74,6 +74,14 @@ if(TARGET noteAppC_bases)
     set_tests_properties(bases PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+if(TARGET noteAppC_publish)
+    add_executable(test_publish test_publish.cpp)
+    target_link_libraries(test_publish
+        PRIVATE noteAppC_publish noteAppC_index noteAppC_vault Qt6::Test Qt6::Widgets GTest::gtest)
+    add_test(NAME publish COMMAND test_publish)
+    set_tests_properties(publish PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(test_fuzz test_fuzz.cpp)
 target_link_libraries(test_fuzz PRIVATE noteAppC_editor noteAppC_vault Qt6::Test GTest::gtest)
 add_test(NAME fuzz COMMAND test_fuzz)

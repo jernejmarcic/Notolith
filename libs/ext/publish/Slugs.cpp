@@ -127,12 +127,19 @@ void Slugs::deduplicate(QStringList &paths)
 
 QString Slugs::relativeHref(const QString &fromOutputPath, const QString &toOutputPath)
 {
-    // QDir::relativeFilePath wants a *directory* to resolve from; a page's
-    // own links are relative to the directory it sits in, not to the page
-    // file itself.
+    // QDir::relativeFilePath() only walks ".." correctly between two
+    // *absolute* paths - given two relative ones, verified empirically, it
+    // just returns the target unchanged instead (undocumented, but
+    // consistent: relative-to-relative is not really what the method is
+    // for). Site-root-relative output paths are relative by construction -
+    // this never touches a real filesystem path - so both are anchored to a
+    // fake absolute root purely for this call, then handed back relative
+    // again.
     const QString fromDir = QFileInfo(fromOutputPath).path();
-    QString href = QDir(fromDir.isEmpty() ? QStringLiteral(".") : fromDir)
-                       .relativeFilePath(toOutputPath);
+    const QString fromAbs =
+        QLatin1Char('/') + (fromDir == QLatin1String(".") ? QString() : fromDir);
+    const QString toAbs = QLatin1Char('/') + toOutputPath;
+    QString href = QDir(fromAbs).relativeFilePath(toAbs);
     if (href.isEmpty())
         href = QFileInfo(toOutputPath).fileName();
     return href;

@@ -349,8 +349,24 @@ private:
             // <p> - see soleEmbedSpan().
             if (soleEmbedSpan(node.range, note))
                 return content + QStringLiteral("\n");
-            return QStringLiteral("<p>") + content + QStringLiteral("</p>\n");
+            return QStringLiteral("<p%1>").arg(blockAnchorAttr(node.range, note)) + content
+                  + QStringLiteral("</p>\n");
         }
+        }
+        return {};
+    }
+
+    /// ` id="block-xyz"`, for whichever element - a paragraph, a list item -
+    /// carries a `^xyz` block-id marker in its own range, so `[[Note#^xyz]]`
+    /// has something in the page to actually jump to. Obsidian keeps the
+    /// marker itself visible in reading view (ObsidianSyntax::scan() does
+    /// not mask it as syntax to hide, and neither does this renderer), so
+    /// this only adds the id - it never touches what text is shown.
+    QString blockAnchorAttr(const Range &range, const ParsedNote &note) const
+    {
+        for (const BlockId &id : note.metadata.blockIds) {
+            if (range.contains(id.range.start))
+                return QStringLiteral(" id=\"%1\"").arg(Slugs::blockAnchor(id.id));
         }
         return {};
     }
@@ -401,7 +417,7 @@ private:
             if (item.task)
                 cls = item.done ? QStringLiteral(" class=\"task-list-item done\"")
                                 : QStringLiteral(" class=\"task-list-item\"");
-            out += QStringLiteral("<li%1>").arg(cls);
+            out += QStringLiteral("<li%1%2>").arg(cls, blockAnchorAttr(item.range, note));
             if (item.task) {
                 out += QStringLiteral("<input type=\"checkbox\" disabled%1> ")
                       .arg(item.done ? QStringLiteral(" checked") : QString());
@@ -707,16 +723,26 @@ private:
 
     QString renderRawHtml(const QString &raw, bool block)
     {
+        // sanitizeHtml() (HtmlRenderer's own script/on*= stripper, reused
+        // rather than duplicated) matches a *paired* "<script>...</script>"
+        // within one string. That is right for a whole raw-HTML block
+        // ("<div>...<script>x</script>...</div>" arrives here as one block,
+        // matched fine), but CommonMark's *inline* raw-HTML grammar matches
+        // one tag at a time: "text <script>x</script> more" is parsed as
+        // three separate items - "<script>", "x", "</script>" - so within
+        // any single one of those three calls there is nothing for a
+        // pair-matching regex to pair. Every open or close tag for a
+        // dangerous element is therefore also stripped outright, matched or
+        // not - defence in depth for iframe/object/embed/link/meta/style
+        // (which the live app only ever hides with CSS, safe for a real
+        // browser but not for a static site that promises no network
+        // request of any kind), and the actual fix for maths of the lone-tag
+        // case above.
         QString safe = noteAppC::HtmlRenderer::sanitizeHtml(raw);
-        // Defence in depth beyond what the live app needs: the app hides
-        // iframe/object/embed with CSS and never fetches their target, which
-        // is not available to a page the browser renders for real, and a
-        // static site promises no network request of any kind. Emptied
-        // outright, matching sanitise()'s own approach for <script>.
-        static const QRegularExpression dangerous(
-            QStringLiteral("<(iframe|object|embed|link|meta|style)\\b[^>]*>(.*?</\\1\\s*>)?"),
-            QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-        safe.remove(dangerous);
+        static const QRegularExpression dangerousTag(
+            QStringLiteral("</?\\s*(script|style|iframe|object|embed|link|meta)\\b[^>]*>"),
+            QRegularExpression::CaseInsensitiveOption);
+        safe.remove(dangerousTag);
         return block ? (QStringLiteral("<div class=\"html-block\">") + safe + QStringLiteral("</div>\n"))
                     : safe;
     }
@@ -1049,7 +1075,11 @@ private:
             return renderAttachmentEmbed(link, resolved.relativePath, note);
 
         // A note/heading/block embed.
-        if (m_embedStack.contains(resolved.relativePath) || m_embedDepth >= m_env.embedDepthLimit) {
+        if (m_embedStack.contains(resolved.relativePath)) {
+            return QStringLiteral("<div class=\"embed embed-cycle\">circular embed: %1</div>")
+                  .arg(escapeHtml(link.target));
+        }
+        if (m_embedDepth >= m_env.embedDepthLimit) {
             return QStringLiteral("<div class=\"embed embed-limit\">%1</div>")
                   .arg(escapeHtml(link.target));
         }
