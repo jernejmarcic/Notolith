@@ -311,11 +311,17 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 `/tmp` with capped jobs (starbase-1 froze once and swappiness is still 100).
 
 ### Wave 1
-- [ ] **Search** (lane A): Obsidian's search grammar - words, "phrases", OR,
+- [x] **Search** (lane A): Obsidian's search grammar - words, "phrases", OR,
       -negation, ( ), path: file: tag: line: block: section: task:
       task-todo: task-done: content: match-case: ignore-case:, /regex/ - over
-      the FTS5 table; a search pane; the tags pane hands a tag to it.
-- [ ] **Unlinked mentions** in the backlinks pane (lane A).
+      the FTS5 table; a search pane (first sidebar tab, `global-search:open`,
+      Ctrl+Shift+F) off the UI thread; a tag or a bookmarked search opens it;
+      a result opens its note at the match. 20 000 notes: a common word
+      6.4 ms, a rare one 0.05 ms. Left: `[property:value]` syntax; `block:`
+      is paragraph-level, not md4qt's blocks; `/regex/` is PCRE2, not JS.
+- [x] **Unlinked mentions** in the backlinks pane (lane A), 0.3 ms per note.
+- [ ] Search snippet for a frontmatter tag highlights the whole frontmatter
+      (the tag's range is the block's); highlight the tag's own text.
 - [x] **Outline** pane: the note's headings as a tree, the caret's in bold, click to jump.
 - [x] **Bookmarks**: notes, headings, searches, groups; reads
       `.obsidian/bookmarks.json`, keeps its own copy outside the vault.
@@ -323,8 +329,16 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       `.obsidian/daily-notes.json` honoured.
 - [x] **Templates**: insert from the templates folder, `{{title}}`
       `{{date}}` `{{time}}` and `{{date:FORMAT}}`.
-- [ ] **Graph view** (lane C), a Tier 1 module like spellcheck: global and
-      local, force layout that holds 5 000 nodes at 60 fps, `graph.json` options.
+- [x] **Graph view** (lane C), a Tier 1 module like spellcheck: global
+      (`graph:open`, Ctrl+G, a main-area page built on first use) and local
+      (a sidebar tab following the note), Barnes-Hut layout with d3-force's
+      laws, 5 000 nodes: frame 9.5 ms, step 5.5 ms; `graph.json` options;
+      hidden views do not re-read the index. The lane first found the 55 GB
+      crash: Euler integration diverging to inf, and a quadtree that never
+      stops halving inf.
+- [ ] Graph colour groups use a three-form subset (`path:`, `tag:`, name);
+      give them the real search grammar now that it exists.
+- [ ] A build with every optional module OFF, to prove the `#ifdef`s.
 - [x] **Hotkeys**: every window command is an action named by its Obsidian
       id, the editor's shortcuts are a table of commands (`runCommand`,
       `setKeyBindings`), keys come from noteAppC's `hotkeys.json` over the
@@ -353,8 +367,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 
 ### Wave 3
 - [ ] Split panes and workspaces.
-- [ ] Canvas (JSON Canvas).
-- [ ] Bases (`.base` table and list views, filters, sort, formulas).
+- [ ] Canvas (JSON Canvas) - lane D running in `/tmp/noteAppC-canvas`.
+- [ ] Bases (`.base` table and list views, filters, sort, formulas) - lane E
+      running in `/tmp/noteAppC-bases`.
 - [ ] HTML blocks through litehtml.
 
 ### Wave 4
