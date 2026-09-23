@@ -19,6 +19,9 @@ class QPainterPath;
 
 namespace noteAppC {
 
+/// The section of `text` a file card's subpath names (see CanvasRender.cpp).
+QString canvasSectionOf(const QString &text, const QString &subpath);
+
 class MarkdownEditor;
 
 /// Obsidian's infinite canvas over a JSON Canvas 1.0 file: pan and zoom,

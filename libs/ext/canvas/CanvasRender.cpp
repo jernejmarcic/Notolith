@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QFontMetrics>
 #include <QImage>
+#include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTimer>
@@ -20,6 +21,52 @@
 #include "MarkdownEditor.h"
 
 namespace noteAppC {
+
+/// The part of a note a file card names with its subpath, as Obsidian shows
+/// it: `#Heading` is that heading down to the next one at its level or
+/// above, `#^id` the line carrying that block id. The whole note when there
+/// is no subpath or it names nothing. Lines inside a code fence are never
+/// headings.
+QString canvasSectionOf(const QString &text, const QString &subpath)
+{
+    if (!subpath.startsWith(QLatin1Char('#')) || subpath.size() < 2)
+        return text;
+    const QStringList lines = text.split(QLatin1Char('\n'));
+    if (subpath.at(1) == QLatin1Char('^')) {
+        const QString id = subpath.mid(1);
+        for (const QString &line : lines) {
+            if (line.trimmed().endsWith(id))
+                return line.left(line.lastIndexOf(id)).trimmed();
+        }
+        return text;
+    }
+    const QString wanted = subpath.mid(1).section(QLatin1Char('#'), -1).trimmed(); // the last level
+    const auto headingLevel = [](const QString &line) {
+        int level = 0;
+        while (level < line.size() && line.at(level) == QLatin1Char('#'))
+            ++level;
+        return level >= 1 && level <= 6 && level < line.size() && line.at(level) == QLatin1Char(' ') ? level : 0;
+    };
+    bool inFence = false;
+    int start = -1;
+    int level = 0;
+    for (int i = 0; i < lines.size(); ++i) {
+        if (lines.at(i).trimmed().startsWith(QLatin1String("```"))) {
+            inFence = !inFence;
+            continue;
+        }
+        const int here = inFence ? 0 : headingLevel(lines.at(i));
+        if (!here)
+            continue;
+        if (start >= 0 && here <= level)
+            return lines.mid(start, i - start).join(QLatin1Char('\n'));
+        if (start < 0 && lines.at(i).mid(here).trimmed().compare(wanted, Qt::CaseInsensitive) == 0) {
+            start = i;
+            level = here;
+        }
+    }
+    return start >= 0 ? lines.mid(start).join(QLatin1Char('\n')) : text;
+}
 
 namespace {
 constexpr qreal kGridSpacingCanvas = 32.0;
@@ -431,7 +478,7 @@ QPixmap CanvasView::contentPixmap(const CanvasNode &node) const
         const QString absolute = m_fileResolver ? m_fileResolver(node.file()) : QString();
         if (absolute.isEmpty()) {
             pixmap = renderFileCard(node.file(), physical, true);
-        } else if (const QImage probe(absolute); !probe.isNull()) {
+        } else if (QImageReader(absolute).canRead()) { // the header only, not a decode
             pixmap = renderImageContent(absolute, physical);
         } else if (node.file().endsWith(QLatin1String(".md"), Qt::CaseInsensitive)
                   || node.file().endsWith(QLatin1String(".markdown"), Qt::CaseInsensitive)) {
@@ -439,7 +486,7 @@ QPixmap CanvasView::contentPixmap(const CanvasNode &node) const
             QString text;
             if (file.open(QIODevice::ReadOnly))
                 text = QString::fromUtf8(file.readAll());
-            pixmap = renderMarkdownContent(text, physical);
+            pixmap = renderMarkdownContent(canvasSectionOf(text, node.subpath()), physical);
         } else {
             pixmap = renderFileCard(QFileInfo(absolute).fileName(), physical, false);
         }

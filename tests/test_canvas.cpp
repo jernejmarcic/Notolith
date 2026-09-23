@@ -536,6 +536,18 @@ TEST_F(CanvasViewTest, EditingMarksTheViewModifiedAndSaveClearsIt)
     EXPECT_FALSE(view->isModified());
 }
 
+TEST(CanvasRenderTest, AFileCardsSubpathShowsThatSectionOnly)
+{
+    const QString note = QStringLiteral("# Top\nintro\n## Plan\nstep one\n```\n# not a heading\n```\n"
+                                        "### Detail\nmore\n## Next\nlater\nA line ^abc\n");
+    EXPECT_EQ(canvasSectionOf(note, QString()), note);
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Plan")),
+              QStringLiteral("## Plan\nstep one\n```\n# not a heading\n```\n### Detail\nmore"));
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Top#Next")), QStringLiteral("## Next\nlater\nA line ^abc\n"));
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#^abc")), QStringLiteral("A line"));
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Missing")), note);
+}
+
 TEST(CanvasRenderTest, AStraightVerticalEdgeIsDrawn)
 {
     CanvasView view;

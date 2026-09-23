@@ -403,7 +403,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Canvas controls as Obsidian's: a drag on empty canvas draws a
       selection box, the wheel pans (Shift sideways), Ctrl+wheel zooms,
       Space- or middle-drag pans; a group carries the cards inside it.
-- [ ] Canvas left out: a file node's subpath does not scroll to its heading.
+- [x] A file card's subpath shows that section (`#Heading`, `#^block`), as Obsidian.
 - [x] Middle-click a tree row to open it in a new tab.
 - [ ] **For Jernej:** Obsidian opens a link in a new tab on Ctrl+click, but
       in noteAppC's editing view Ctrl+click is how a link is followed at all
