@@ -172,6 +172,8 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Code)
         return false;
+    if (!m_features.queryBlocks)
+        return false; // the fence shows as a plain, uncoloured code listing
     const CodeFenceSpan *fence = codeFenceOf(view);
     if (!fence || fence->language.compare(QLatin1String("query"), Qt::CaseInsensitive) != 0)
         return false;

@@ -24,6 +24,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
+#include <QPdfWriter>
 #include <QProcess>
 #include <QScrollBar>
 #include <QStyleFactory>
@@ -488,6 +490,108 @@ Timing benchHtmlKeystroke(int runs)
                   QStringLiteral("note with a rendered HTML block"), samples);
 }
 
+/// A multi-page PDF for the embed benchmarks below - QPdfWriter (already a
+/// project dependency; PdfExport.cpp uses it), not pdflatex, so the bench
+/// never depends on a TeX install being present on the machine that runs it.
+QString buildBenchPdf(const QString &dir, int pages = 30)
+{
+    const QString path = dir + QStringLiteral("/bench.pdf");
+    QPdfWriter writer(path);
+    writer.setPageSize(QPageSize(QPageSize::A4));
+    QPainter painter(&writer);
+    for (int page = 0; page < pages; ++page) {
+        if (page > 0)
+            writer.newPage();
+        painter.drawText(200, 200, QStringLiteral("Bench page %1").arg(page + 1));
+    }
+    painter.end();
+    return path;
+}
+
+/// benchQueryKeystroke/benchHtmlKeystroke's own shape, for a 30-page PDF
+/// embed in column layout: every page's render happens off the UI thread and
+/// is cached by (path, mtime, page, width) - PdfPage's own thread-local
+/// Poppler::Document avoids reopening the file once per page - so once the
+/// embed has settled this measures every *other* keystroke's cost with a
+/// many-page PDF on screen, not the rendering itself.
+Timing benchPdfKeystroke(const QString &scratchPath, int runs)
+{
+    const QString pdfPath = buildBenchPdf(scratchPath);
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setLinkResolver([&](const QString &) { return pdfPath; });
+    const QString note = QStringLiteral("A paragraph above the embed.\n\n"
+                                        "![[bench.pdf#page=all&layout=column]]\n\n"
+                                        "A paragraph below it.\n");
+    editor->setNoteText(note);
+    // A generous window for the pool to render all 30 pages and queue their
+    // deliveries back before anything is timed - the first few keystrokes
+    // would otherwise measure the render, not a settled embed.
+    for (int i = 0; i < 60; ++i)
+        QTest::qWait(50);
+
+    const qsizetype caret = note.indexOf(QStringLiteral("A paragraph above"));
+    editor->setCursorOffset(caret);
+    editor->enterBlockAt(caret);
+    paintedFrame(editor.get()); // untimed: not also paying for the first paint
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage frame = paintedFrame(editor.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Keystroke to relaid, painted block"),
+                  QStringLiteral("note with a 30-page PDF embed (column) on screen"), samples);
+}
+
+/// benchScroll's own shape, for the same 30-page PDF embed: scrolling past
+/// it pages through cached pixmaps (already rendered, by the wait above)
+/// rather than QTextLayout blocks, so this is the raster/composite cost
+/// alone, not a render's.
+Timing benchPdfScroll(const QString &scratchPath, QSize viewport = QSize(1180, 760))
+{
+    const QString pdfPath = buildBenchPdf(scratchPath);
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(viewport);
+    editor->setLinkResolver([&](const QString &) { return pdfPath; });
+    editor->setNoteText(QStringLiteral("![[bench.pdf#page=all&layout=column]]\n"));
+    for (int i = 0; i < 60; ++i)
+        QTest::qWait(50); // let every page's off-thread render land first
+    paintedFrame(editor.get()); // untimed warm-up frame
+
+    QScrollBar *bar = editor->verticalScrollBar();
+    const int page = qMax(1, bar->pageStep());
+    const int maxValue = bar->maximum();
+
+    std::vector<double> samples;
+    for (int pass = 0; pass < 2; ++pass) {
+        const int step = pass == 0 ? page : -page;
+        int value = pass == 0 ? 0 : maxValue;
+        bar->setValue(value);
+        while (true) {
+            const int next = qBound(0, value + step, maxValue);
+            if (next == value)
+                break;
+            value = next;
+            QElapsedTimer clock;
+            clock.start();
+            bar->setValue(value);
+            const QImage frame = paintedFrame(editor.get());
+            (void)frame;
+            samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        }
+    }
+    return reduce(QStringLiteral("Scroll frame"),
+                  QStringLiteral("30-page PDF embed (column), %1 frames, off screen")
+                      .arg(int(samples.size())),
+                  samples);
+}
+
 /// 4. Scroll frame time: page down through a long note and back up,
 /// timing relayout-of-newly-visible-blocks plus paint for each page - what
 /// the reader actually waits on while scrolling. No budget exists yet;
@@ -892,9 +996,11 @@ int main(int argc, char *argv[])
     timings << benchQueryKeystroke(30);
     timings << benchBaseKeystroke(30);
     timings << benchHtmlKeystroke(30);
+    timings << benchPdfKeystroke(workDir.path(), 30);
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);
+    timings << benchPdfScroll(workDir.path());
     if (parser.isSet(viewportOption)) {
         const QStringList parts = parser.value(viewportOption).split(QLatin1Char('x'));
         if (parts.size() == 2)

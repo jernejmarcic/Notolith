@@ -43,6 +43,8 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Html)
         return false;
+    if (!m_features.HTMLblocks)
+        return false; // source shows; litehtml is never asked to build a document
     if (!HtmlRenderer::isAvailable())
         return false; // NOTEAPPC_WITH_HTML off, or litehtml not found: source shows, as today
 

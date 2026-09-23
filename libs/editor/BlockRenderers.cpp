@@ -170,6 +170,12 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         if (handleMediaClick(view, point, left, top))
             return true;
+        if (handlePdfEmbedClick(view, point, left, top))
+            return true;
+        if (handleFileCardClick(view, point, left, top))
+            return true;
+        if (handleEmbedCellClick(view, point, left, top))
+            return true;
 
         if (view.isQuery) {
             if (view.queryCollapseRect.isValid()

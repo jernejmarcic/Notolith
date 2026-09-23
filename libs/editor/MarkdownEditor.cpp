@@ -161,6 +161,30 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
     viewport()->update();
 }
 
+void MarkdownEditor::setFeatures(const Features &features)
+{
+    m_features = features;
+    // A rare, administrative call - not the keystroke path - so relaying out
+    // every block rather than picking out just the ones a flag touches is
+    // the simple and correct choice, not a slow one that happens to work.
+    m_pdfPageCache.clear();
+    m_texCache.clear();
+    m_fileEmbedCache.clear();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer)
+{
+    for (const QString &suffix : suffixes)
+        m_fileEmbedRenderers.insert(suffix.toLower(), renderer);
+    m_fileEmbedCache.clear();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
 void MarkdownEditor::setLinkTargets(const QStringList &targets)
 {
     if (auto *model = qobject_cast<QStringListModel *>(m_completer->model()))
@@ -222,6 +246,20 @@ void MarkdownEditor::insertCompletion(const QString &completion)
 
 MarkdownEditor::~MarkdownEditor()
 {
+    // PDF/.tex renders and hooked file embeds run on QtConcurrent's pool and
+    // find their way back here through QMetaObject::invokeMethod(this, ...)
+    // - safe against a delivery arriving after destruction (Qt drops a
+    // queued call whose context is already gone), but not against the call
+    // to invokeMethod itself racing a delete: nothing stops a worker thread
+    // from finishing its render just as this destructor runs, and reading
+    // `this->thread()` on a half- or fully-destroyed object is a plain
+    // use-after-free, not something the queued-connection guarantee covers.
+    // Dropping the last reference to m_alive first means every such
+    // in-flight lambda's own weak_ptr::expired() check - taken before it
+    // ever touches `this` - turns true right here, before anything else
+    // about this object stops being valid.
+    m_alive.reset();
+
     // An open property editor is a child widget, and Qt deletes children
     // after this object's members are gone: losing focus as it went, it
     // would call back into an editor that no longer exists. Cut it loose now.
@@ -1747,6 +1785,11 @@ const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
     return nullptr;
 }
 
+void MarkdownEditor::hideWholeBlockText(BlockView &view)
+{
+    view.map = DisplayMap::build(m_text, view.span.range, {view.span.range});
+}
+
 bool MarkdownEditor::layoutEmbed(BlockView &view)
 {
     view.image = QPixmap();
@@ -1755,6 +1798,10 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.embedPanel = false;
     view.mediaPath.clear();
     view.mediaVideo = false;
+    view.isPdfEmbed = false;
+    view.pdfCells.clear();
+    view.pdfError.clear();
+    view.isFileCard = false;
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed || !m_resolver)
@@ -1767,7 +1814,11 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QByteArrayList images = QImageReader::supportedImageFormats();
 
-    if (images.contains(suffix.toUtf8()))
+    // Some installs register a PDF-reading QImageIOHandler (a thumbnailer
+    // plugin, commonly), which would otherwise steal every PDF into a flat
+    // one-page raster here before the richer, page-aware PdfPage path below
+    // ever gets a look at it.
+    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
         return layoutImage(view, *embed, path);
     // Obsidian's audio and video formats.
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
@@ -1775,13 +1826,19 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
                                       QStringLiteral("opus")};
     static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
-    if (audio.contains(suffix) || video.contains(suffix))
+    if (m_features.mediaEmbeds && (audio.contains(suffix) || video.contains(suffix)))
         return layoutMedia(view, path, video.contains(suffix));
-    if (suffix == QLatin1String("pdf"))
+    if (m_features.PDFembeds && suffix == QLatin1String("pdf"))
         return layoutPdf(view, *embed, path);
-    // A note embed is rendered by the transclusion path, not here.
+    if (m_features.texEmbeds && suffix == QLatin1String("tex"))
+        return layoutTexEmbed(view, *embed, path);
+    if (!m_features.fileEmbeds)
+        return false; // falls through to the paragraph's plain link text
+
     if (Vault::isNote(path))
-        return false;
+        return layoutNoteEmbed(view, *embed, path);
+    if (m_fileEmbedRenderers.contains(suffix))
+        return layoutHookedFileEmbed(view, *embed, path);
     return layoutSourceFile(view, *embed, path);
 }
 
@@ -1807,47 +1864,7 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     view.layout.reset();
     view.cells.clear();
     view.height = height;
-    view.laidOut = true;
-    return true;
-}
-
-bool MarkdownEditor::layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path)
-{
-    // Obsidian addresses a page with `#page=3`; page one otherwise.
-    int page = 0;
-    static const QRegularExpression pageRef(QStringLiteral("#page=(\\d+)"),
-                                            QRegularExpression::CaseInsensitiveOption);
-    const auto match = pageRef.match(embed.subpath);
-    if (match.hasMatch())
-        page = qMax(0, match.captured(1).toInt() - 1);
-
-    const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
-    const QString key = QStringLiteral("%1|%2|%3").arg(path).arg(page).arg(width);
-
-    QPixmap pixmap = m_images.value(key);
-    if (pixmap.isNull()) {
-        const QImage rendered = PdfPage::render(path, page, width);
-        if (rendered.isNull())
-            return false;
-        pixmap = QPixmap::fromImage(rendered);
-        m_images.insert(key, pixmap);
-    }
-
-    const int height = embed.height > 0
-                           ? embed.height
-                           : int(qreal(width) * pixmap.height() / qMax(1, pixmap.width()));
-
-    view.image = pixmap;
-    view.imageSize = QSize(width, height);
-    view.imagePath = path;
-    view.embedLabel = PdfPage::pageCount(path) > 1
-                          ? tr("%1  -  page %2").arg(QFileInfo(path).fileName()).arg(page + 1)
-                          : QFileInfo(path).fileName();
-    view.embedPanel = true;
-    view.layout.reset();
-    view.cells.clear();
-    view.textTop = codeHeaderHeight();
-    view.height = height + view.textTop;
+    hideWholeBlockText(view);
     view.laidOut = true;
     return true;
 }
@@ -1859,6 +1876,11 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     QFileInfo info(path);
     if (!info.isFile())
         return false;
+    // Never a binary file's bytes as text: a card (icon, name, size) opens
+    // it instead - the same fallback Obsidian's own "unsupported file" embed
+    // shows.
+    if (isBinaryFile(path))
+        return layoutFileCard(view, embed, path);
 
     view.embedLabel = info.fileName();
     view.embedPanel = true;
@@ -1953,6 +1975,9 @@ const MathSpan *MarkdownEditor::displayMathOf(const BlockView &view) const
 
 bool MarkdownEditor::layoutMath(BlockView &view)
 {
+    if (!m_features.maths)
+        return false; // shows as source - no MicroTeX call, no image cached
+
     const MathSpan *math = displayMathOf(view);
     if (!math)
         return false;
@@ -2004,11 +2029,16 @@ void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
             continue;
 
         // The parser hid this exact range unconditionally; find it so it can
-        // be dropped again if the formula turns out not to render.
+        // be dropped again if the formula turns out not to render - which,
+        // with the feature off, it never even tries to.
         const Range hideRange{math.formula.start, math.range.end};
         auto it = std::find(hidden.begin(), hidden.end(), hideRange);
         if (it == hidden.end())
             continue;
+        if (!m_features.maths) {
+            hidden.erase(it);
+            continue;
+        }
 
         const QString latex = m_text.mid(math.formula.start, math.formula.length()).trimmed();
         const QString key = QStringLiteral("inlineMath|%1|%2|%3")
@@ -2321,6 +2351,7 @@ bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool vide
     view.cells.clear();
     view.textTop = codeHeaderHeight();
     view.height = view.textTop + mediaScreenRect(view, 0, 0).height() + kMediaControls;
+    hideWholeBlockText(view);
     view.laidOut = true;
     return true;
 }
@@ -2506,6 +2537,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.isBase = false;
     view.baseViewName.clear();
     view.baseRows.clear();
+    view.embedCells.clear();
+    view.isFileCard = false;
     view.isHtml = false;
     view.inlineHtmlFormats.clear();
 
@@ -2566,6 +2599,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
     view.caretWord = view.active ? wordAtCaret() : Range{};
     QList<Range> hidden;
+    // Embeds inside this block that layoutEmbed did not already render whole
+    // - several sharing a paragraph, or one mixed in with running text; see
+    // collectTextEmbeds and layoutEmbedRow's comment in the header for why
+    // these become trailing rows rather than true inline objects.
+    QList<const EmbedSpan *> textEmbeds;
     if (!reveal) {
         hidden.reserve(view.lastSyntax - view.firstSyntax);
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
@@ -2580,6 +2618,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         layoutInlineHtml(view, hidden);
         layoutAnchorSeparators(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
+        if (renderMedia && m_features.fileEmbeds)
+            collectTextEmbeds(view, hidden, textEmbeds);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);
@@ -2709,6 +2749,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                   && m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
     view.height = view.folded ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
+    // Trailing rows for any embed this block could not render whole -
+    // appended after the paragraph's own text rather than spliced in after
+    // each embed's own line; see the comment on collectTextEmbeds.
+    if (!textEmbeds.isEmpty() && !view.folded)
+        appendEmbedRows(view, textEmbeds);
     view.laidOut = true;
 }
 
@@ -2918,9 +2963,22 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             }
         }
         appendFindHighlights(view, selectionRanges);
+        // Several embeds sharing this block, or one mixed in with running
+        // text: their rows trail whichever of the branches below paints the
+        // block's own text (or nothing, in the rare case a block is nothing
+        // but embeds and blank lines).
+        paintEmbedCells(painter, view, left, top);
 
         if (view.embedPanel)
             paintEmbedChrome(painter, view, left, top);
+        if (view.isPdfEmbed) {
+            paintPdfEmbed(painter, view, left, top);
+            continue;
+        }
+        if (view.isFileCard) {
+            paintFileCard(painter, view, left, top);
+            continue;
+        }
         if (!view.mediaPath.isEmpty()) {
             paintMedia(painter, view, left, top);
             continue;

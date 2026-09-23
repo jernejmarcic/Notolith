@@ -189,7 +189,12 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include "Parser.h"
 #include "HtmlRenderer.h"
 #include "MathRenderer.h"
+#include "PdfArgs.h"
 #include "PdfPage.h"
+#include "TexCompiler.h"
+
+#include <QPainter>
+#include <QPdfWriter>
 
 namespace {
 
@@ -220,6 +225,29 @@ std::unique_ptr<MarkdownEditor> parsedEditorWith(const QString &text)
     }
     return editor;
 }
+
+#ifdef NOTEAPPC_EXPECT_PDF
+/// A real, if minimal, multi-page PDF for the page-argument and layout
+/// tests - built with QPdfWriter (already a project dependency, PdfExport.cpp
+/// uses it) rather than relying on pdflatex being installed, so these tests
+/// run wherever poppler itself does. Every call site is itself behind
+/// NOTEAPPC_EXPECT_PDF (there is nothing to open a PDF with otherwise), so
+/// this is too.
+QString makeTestPdf(const QString &dir, int pages, const QString &name = QStringLiteral("doc.pdf"))
+{
+    const QString path = dir + QLatin1Char('/') + name;
+    QPdfWriter writer(path);
+    writer.setPageSize(QPageSize(QPageSize::A4));
+    QPainter painter(&writer);
+    for (int page = 0; page < pages; ++page) {
+        if (page > 0)
+            writer.newPage();
+        painter.drawText(200, 200, QStringLiteral("page %1").arg(page + 1));
+    }
+    painter.end();
+    return path;
+}
+#endif
 
 } // namespace
 
@@ -1197,6 +1225,566 @@ TEST(PdfPageTest, AvailableAndRefusesWhatIsNotAPdf)
     EXPECT_TRUE(PdfPage::render(QStringLiteral("/nonexistent/none.pdf"), 0, 400).isNull());
     // A real file that is not a PDF must not crash the renderer either.
     EXPECT_EQ(PdfPage::pageCount(QStringLiteral("/etc/hostname")), 0);
+}
+
+#ifdef NOTEAPPC_EXPECT_PDF
+TEST(PdfPageTest, PageSizeReadsDimensionsWithoutRendering)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = makeTestPdf(dir.path(), 2);
+    const QSizeF size = PdfPage::pageSize(path, 0);
+    EXPECT_GT(size.width(), 0);
+    EXPECT_GT(size.height(), 0);
+    EXPECT_TRUE(PdfPage::pageSize(path, 99).isEmpty()) << "out of range";
+    EXPECT_EQ(PdfPage::pageCount(path), 2);
+}
+#endif
+
+// --- PdfArgs: the fragment grammar, one form per test ----------------------
+
+TEST(PdfArgsTest, NoArgumentsIsTheWholeDocumentAsSlides)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QString());
+    EXPECT_TRUE(args.ok());
+    EXPECT_FALSE(args.pagesGiven);
+    EXPECT_FALSE(args.allPages);
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Slides);
+
+    const QList<int> pages = resolvePdfPages(args, 5);
+    EXPECT_EQ(pages, (QList<int>{0, 1, 2, 3, 4}));
+}
+
+TEST(PdfArgsTest, SinglePage)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=3"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.pages, (QList<int>{2}));
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Column) << "pages listed default to column";
+}
+
+TEST(PdfArgsTest, SeveralPages)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=2,5,9"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.pages, (QList<int>{1, 4, 8}));
+}
+
+TEST(PdfArgsTest, ARange)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=3-7"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.pages, (QList<int>{2, 3, 4, 5, 6}));
+}
+
+TEST(PdfArgsTest, MixedListAndRange)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=1,3-5,9"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.pages, (QList<int>{0, 2, 3, 4, 8}));
+}
+
+TEST(PdfArgsTest, AllPages)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=all"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_TRUE(args.allPages);
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Column);
+    EXPECT_EQ(resolvePdfPages(args, 4), (QList<int>{0, 1, 2, 3}));
+}
+
+TEST(PdfArgsTest, HeightAloneKeepsTheSlidesDefault)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#height=400"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.height, 400);
+    EXPECT_FALSE(args.pagesGiven);
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Slides);
+}
+
+TEST(PdfArgsTest, ExplicitLayoutOverridesTheDefault)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=1,2&layout=slides"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Slides);
+}
+
+TEST(PdfArgsTest, GridWithColumns)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#layout=grid&columns=3"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(args.layout, PdfEmbedArgs::Layout::Grid);
+    EXPECT_EQ(args.columns, 3);
+}
+
+TEST(PdfArgsTest, BadPageNumberErrors)
+{
+    EXPECT_FALSE(parsePdfEmbedArgs(QStringLiteral("#page=abc")).ok());
+    EXPECT_FALSE(parsePdfEmbedArgs(QStringLiteral("#page=0")).ok()) << "pages start at 1";
+}
+
+TEST(PdfArgsTest, ReversedRangeErrors)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=7-3"));
+    EXPECT_FALSE(args.ok());
+    EXPECT_FALSE(args.error.isEmpty());
+}
+
+TEST(PdfArgsTest, BadHeightErrors)
+{
+    EXPECT_FALSE(parsePdfEmbedArgs(QStringLiteral("#height=big")).ok());
+    EXPECT_FALSE(parsePdfEmbedArgs(QStringLiteral("#height=0")).ok());
+}
+
+TEST(PdfArgsTest, UnknownLayoutErrors)
+{
+    EXPECT_FALSE(parsePdfEmbedArgs(QStringLiteral("#layout=carousel")).ok());
+}
+
+TEST(PdfArgsTest, UnknownKeyIsIgnoredNotAnError)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=1&zoom=150"));
+    EXPECT_TRUE(args.ok());
+}
+
+TEST(PdfArgsTest, ResolvePdfPagesDropsOutOfRangeRatherThanClamping)
+{
+    const PdfEmbedArgs args = parsePdfEmbedArgs(QStringLiteral("#page=1,5"));
+    ASSERT_TRUE(args.ok());
+    EXPECT_EQ(resolvePdfPages(args, 3), (QList<int>{0})) << "page 5 of a 3-page document is dropped";
+}
+
+// --- PDF embeds in the editor: layout, async render, slides nav ------------
+
+#ifdef NOTEAPPC_EXPECT_PDF
+
+TEST(PdfEmbedTest, ColumnLayoutShowsEveryRequestedPage)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 6);
+
+    auto editor = editorWith(QStringLiteral("![[report.pdf#page=1,3-5]]\n"));
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+
+    const MarkdownEditor::PdfEmbedInfo info = editor->pdfEmbedInfoAt(0);
+    ASSERT_TRUE(info.isPdfEmbed);
+    EXPECT_TRUE(info.error.isEmpty()) << info.error.toStdString();
+    EXPECT_EQ(info.pageCount, 6);
+    EXPECT_EQ(info.layout, PdfEmbedArgs::Layout::Column);
+    EXPECT_EQ(info.cellCount, 4) << "1, 3, 4, 5";
+}
+
+TEST(PdfEmbedTest, SlidesLayoutShowsOnePageAndStepsWithPdfSlideStep)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 4);
+
+    auto editor = editorWith(QStringLiteral("![[deck.pdf]]\n"));
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+
+    MarkdownEditor::PdfEmbedInfo info = editor->pdfEmbedInfoAt(0);
+    ASSERT_TRUE(info.isPdfEmbed);
+    EXPECT_EQ(info.layout, PdfEmbedArgs::Layout::Slides);
+    EXPECT_EQ(info.cellCount, 1);
+    EXPECT_EQ(info.slideIndex, 0);
+    EXPECT_EQ(info.slideCount, 4);
+
+    editor->pdfSlideStep(0, 1);
+    info = editor->pdfEmbedInfoAt(0);
+    EXPECT_EQ(info.slideIndex, 1);
+
+    editor->pdfSlideStep(0, -1);
+    editor->pdfSlideStep(0, -1); // clamps at 0, does not wrap
+    info = editor->pdfEmbedInfoAt(0);
+    EXPECT_EQ(info.slideIndex, 0);
+}
+
+TEST(PdfEmbedTest, GridLayoutRespectsColumns)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 5);
+
+    auto editor = editorWith(QStringLiteral("![[deck.pdf#page=all&layout=grid&columns=2]]\n"));
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+
+    const MarkdownEditor::PdfEmbedInfo info = editor->pdfEmbedInfoAt(0);
+    ASSERT_TRUE(info.isPdfEmbed);
+    EXPECT_EQ(info.layout, PdfEmbedArgs::Layout::Grid);
+    EXPECT_EQ(info.cellCount, 5);
+}
+
+TEST(PdfEmbedTest, BadArgumentShowsAnErrorInsteadOfCrashing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 2);
+
+    auto editor = editorWith(QStringLiteral("![[deck.pdf#page=9-3]]\n"));
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+
+    const MarkdownEditor::PdfEmbedInfo info = editor->pdfEmbedInfoAt(0);
+    ASSERT_TRUE(info.isPdfEmbed);
+    EXPECT_FALSE(info.error.isEmpty());
+    EXPECT_EQ(info.cellCount, 0);
+}
+
+#endif // NOTEAPPC_EXPECT_PDF
+
+// --- .tex embeds -------------------------------------------------------------
+
+TEST(TexCompilerTest, IsFullDocumentTellsMathsAloneApart)
+{
+    EXPECT_FALSE(TexCompiler::isFullDocument(QStringLiteral("E = mc^2")));
+    EXPECT_TRUE(TexCompiler::isFullDocument(
+        QStringLiteral("\\documentclass{article}\\begin{document}hi\\end{document}")));
+}
+
+TEST(TexCompilerTest, CompilesATinyDocumentAndCachesIt)
+{
+    if (!TexCompiler::isAvailable())
+        GTEST_SKIP() << "no pdflatex on PATH";
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("doc.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}hello\\end{document}\n");
+    }
+
+    const TexCompiler::Result first = TexCompiler::compile(path);
+    ASSERT_TRUE(first.ok) << first.log.toStdString() << first.error.toStdString();
+    EXPECT_TRUE(QFile::exists(first.pdfPath));
+
+    // Unchanged bytes hash to the same cache entry, so a second call answers
+    // without running pdflatex again - observable here as the same path.
+    const TexCompiler::Result second = TexCompiler::compile(path);
+    EXPECT_EQ(second.pdfPath, first.pdfPath);
+}
+
+TEST(TexCompilerTest, ReportsAFailedCompile)
+{
+    if (!TexCompiler::isAvailable())
+        GTEST_SKIP() << "no pdflatex on PATH";
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("broken.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("\\documentclass{article}\\begin{document}\\undefinedcommand{x}\\end{document}\n");
+    }
+
+    const TexCompiler::Result result = TexCompiler::compile(path);
+    EXPECT_FALSE(result.ok);
+    EXPECT_FALSE(result.log.isEmpty());
+}
+
+TEST(TexCompilerTest, NeverRunsWrite18)
+{
+    if (!TexCompiler::isAvailable())
+        GTEST_SKIP() << "no pdflatex on PATH";
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString marker = dir.filePath(QStringLiteral("pwned"));
+    const QString path = dir.filePath(QStringLiteral("evil.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(("\\documentclass{article}\\begin{document}"
+                    "\\immediate\\write18{touch " + marker.toUtf8() + "}"
+                    "\\end{document}\n"));
+    }
+
+    (void)TexCompiler::compile(path);
+    EXPECT_FALSE(QFile::exists(marker)) << "-no-shell-escape must have refused \\write18";
+}
+
+TEST(MarkdownEditorTest, TexMathsAloneRendersThroughMicroTeX)
+{
+    ASSERT_TRUE(MathRenderer::isAvailable());
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("formula.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("E = mc^2");
+    }
+
+    auto editor = editorWith(QStringLiteral("![[formula.tex]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("formula.tex")));
+    EXPECT_GT(editor->documentHeight(), 0);
+}
+
+// --- file cards and several embeds in one block -----------------------------
+
+TEST(FileEmbedTest, BinaryFileBecomesACardNotAWallOfBytes)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("blob.bin"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        QByteArray bytes(256, char(0));
+        for (int i = 0; i < bytes.size(); ++i)
+            bytes[i] = char(i % 256);
+        file.write(bytes);
+    }
+
+    auto editor = editorWith(QStringLiteral("![[blob.bin]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+
+    EXPECT_TRUE(editor->isFileCardAt(0));
+    EXPECT_FALSE(editor->displayText().contains(QChar(0)));
+}
+
+TEST(FileEmbedTest, TextFileStaysAReadOnlyListing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("notes.txt"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("plain text, nothing binary here\n");
+    }
+
+    auto editor = editorWith(QStringLiteral("![[notes.txt]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+
+    EXPECT_FALSE(editor->isFileCardAt(0));
+}
+
+TEST(MultiEmbedTest, AParagraphOfSeveralImageEmbedsRendersEveryOne)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    const QString a = dir.filePath(QStringLiteral("a.png"));
+    const QString b = dir.filePath(QStringLiteral("b.png"));
+    ASSERT_TRUE(image.save(a));
+    ASSERT_TRUE(image.save(b));
+
+    auto editor = editorWith(QStringLiteral("![[a.png]]\n![[b.png]]\n"));
+    editor->setLinkResolver([&](const QString &target) {
+        return target == QLatin1String("a.png") ? a : target == QLatin1String("b.png") ? b : QString();
+    });
+
+    // Two embeds, each on its own line, nothing else in the block: each is
+    // its own row of one cell.
+    EXPECT_EQ(editor->embedCellCountAt(0), 2);
+}
+
+TEST(MultiEmbedTest, AnEmbedInsideRunningTextStillRenders)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::blue);
+    const QString path = dir.filePath(QStringLiteral("inline.png"));
+    ASSERT_TRUE(image.save(path));
+
+    auto editor = editorWith(QStringLiteral("see ![[inline.png]] here\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+
+    EXPECT_EQ(editor->embedCellCountAt(0), 1);
+    // The paragraph's own text is still there - only the embed's own source
+    // range was hidden, not the words around it.
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("see")));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("here")));
+}
+
+// --- note embeds: whole, #Heading, #^block ----------------------------------
+
+TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("Target.md"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("Intro line.\n\n"
+                   "# First\n\nFirst section body.\n\n"
+                   "# Second\n\nSecond section body. ^myblock\n");
+    }
+
+    // The panel's own text - not displayText(), which only ever reflects
+    // view.map, and a note embed (like a source-file listing) substitutes a
+    // synthetic QTextLayout instead of mapping the note's own bytes.
+    auto whole = editorWith(QStringLiteral("![[Target]]\n"));
+    whole->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(whole->panelTextAt(0).contains(QStringLiteral("Intro line")));
+    EXPECT_TRUE(whole->panelTextAt(0).contains(QStringLiteral("Second section body")));
+
+    auto heading = editorWith(QStringLiteral("![[Target#First]]\n"));
+    heading->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(heading->panelTextAt(0).contains(QStringLiteral("First section body")));
+    EXPECT_FALSE(heading->panelTextAt(0).contains(QStringLiteral("Second section body")));
+
+    auto block = editorWith(QStringLiteral("![[Target#^myblock]]\n"));
+    block->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(block->panelTextAt(0).contains(QStringLiteral("Second section body")));
+    EXPECT_FALSE(block->panelTextAt(0).contains(QStringLiteral("First section body")));
+}
+
+// --- feature switches: one on/off pair per feature --------------------------
+
+TEST(FeaturesTest, QueryBlocksToggle)
+{
+    const QString note = QStringLiteral("```query\nhello\n```\n");
+    auto editor = editorWith(note);
+    // No runner needed: even "No search source connected" is the query
+    // machinery's own message, drawn through a substituted QTextLayout - so
+    // displayText() (which only ever reflects view.map) shows nothing for
+    // this block, not the fence's raw "hello". panelTextAt is query.cpp's
+    // own message text; displayText is enough to prove the fence's content
+    // is not leaking through as plain text.
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("hello")))
+        << "on: rendered through the query machinery, not as a plain fence";
+
+    MarkdownEditor::Features off;
+    off.queryBlocks = false;
+    editor->setFeatures(off);
+    // Fence lines are syntax, hidden in live preview like any other marker;
+    // the fence's own content showing through plainly (mapped, not
+    // substituted) is what "off" actually looks like.
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("hello")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("Searching")));
+}
+
+TEST(FeaturesTest, BaseBlocksToggle)
+{
+    const QString note = QStringLiteral("```base\nviews:\n  - type: table\n```\n");
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("views:")))
+        << "on: rendered through the base machinery (\"No base source connected\" with no "
+           "runner), not as a plain fence";
+
+    MarkdownEditor::Features off;
+    off.baseBlocks = false;
+    editor->setFeatures(off);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("views:")))
+        << "off: the fence's own content shows as a plain listing";
+}
+
+#ifdef NOTEAPPC_EXPECT_HTML
+TEST(FeaturesTest, HTMLblocksToggle)
+{
+    const QString note = QStringLiteral("<div>hello</div>\n");
+    auto editor = editorWith(note);
+    ASSERT_TRUE(editor->htmlImageSizeAt(0).isValid()) << "on by default";
+
+    MarkdownEditor::Features off;
+    off.HTMLblocks = false;
+    editor->setFeatures(off);
+    EXPECT_FALSE(editor->htmlImageSizeAt(0).isValid());
+}
+#endif
+
+#ifdef NOTEAPPC_EXPECT_PDF
+TEST(FeaturesTest, PDFembedsToggle)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString pdf = makeTestPdf(dir.path(), 1);
+    auto editor = editorWith(QStringLiteral("![[deck.pdf]]\n"));
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+    EXPECT_TRUE(editor->pdfEmbedInfoAt(0).isPdfEmbed);
+
+    MarkdownEditor::Features off;
+    off.PDFembeds = false;
+    editor->setFeatures(off);
+    EXPECT_FALSE(editor->pdfEmbedInfoAt(0).isPdfEmbed);
+}
+#endif
+
+TEST(FeaturesTest, TexEmbedsToggle)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("formula.tex"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("E = mc^2");
+    }
+    auto editor = editorWith(QStringLiteral("![[formula.tex]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("formula.tex")))
+        << "on: rendered - maths alone, through MicroTeX";
+    const qreal on = editor->documentHeight();
+
+    MarkdownEditor::Features off;
+    off.texEmbeds = false;
+    editor->setFeatures(off);
+    // Still not the raw link - fileEmbeds (still on) renders it as a source
+    // listing instead; panelTextAt is that listing's own text, which
+    // displayText() cannot see (see the comment on QueryBlocksToggle).
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("formula.tex")))
+        << "off: falls back to a source listing, not to the raw link";
+    EXPECT_TRUE(editor->panelTextAt(0).contains(QStringLiteral("E = mc^2")))
+        << "off: MicroTeX never ran - this is the file's own bytes, plainly listed";
+    EXPECT_NE(editor->documentHeight(), on)
+        << "off: a source listing is laid out differently from a rendered formula";
+}
+
+TEST(FeaturesTest, MediaEmbedsToggle)
+{
+    auto editor = editorWith(QStringLiteral("![[song.mp3]]\n"));
+    editor->setLinkResolver([](const QString &target) { return QStringLiteral("/nowhere/") + target; });
+    const qreal on = editor->documentHeight();
+
+    MarkdownEditor::Features off;
+    off.mediaEmbeds = false;
+    editor->setFeatures(off);
+    const qreal disabled = editor->documentHeight();
+    EXPECT_LT(disabled, on) << "off: no player card, just the link";
+}
+
+TEST(FeaturesTest, MathsToggle)
+{
+    auto editor = editorWith(QStringLiteral("Inline $e^{i\\pi}+1=0$ formula.\n"));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("\\pi")));
+
+    MarkdownEditor::Features off;
+    off.maths = false;
+    editor->setFeatures(off);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("\\pi")))
+        << "off: the raw LaTeX shows, MicroTeX never runs";
+}
+
+TEST(FeaturesTest, FileEmbedsToggle)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("notes.txt"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("plain text\n");
+    }
+    auto editor = editorWith(QStringLiteral("![[notes.txt]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("notes.txt")))
+        << "on: rendered as a listing, the wikilink text is gone";
+
+    MarkdownEditor::Features off;
+    off.fileEmbeds = false;
+    editor->setFeatures(off);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("notes.txt")))
+        << "off: falls back to the plain link";
 }
 
 TEST(MarkdownEditorTest, EmbedsASourceFileAsAReadOnlyCodeBlock)

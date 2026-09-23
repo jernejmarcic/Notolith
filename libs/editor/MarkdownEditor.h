@@ -6,11 +6,13 @@
 #include <QFutureWatcher>
 #include <QHash>
 #include <QIcon>
+#include <QImage>
 #include <QKeySequence>
 #include <QPageLayout>
 #include <QPageSize>
 #include <QPixmap>
 #include <QPointer>
+#include <QSizeF>
 #include <QTextLayout>
 #include <QTimer>
 
@@ -34,6 +36,8 @@ class QFileSystemWatcher;
 #include "BaseResult.h"
 #include "QueryResult.h"
 #include "Theme.h"
+#include "PdfArgs.h"
+#include "TexCompiler.h"
 
 class QLineEdit;
 class QMenu;
@@ -304,6 +308,72 @@ public:
     /// refreshQueries().
     void refreshBases();
 
+    // --- feature switches ---------------------------------------------------
+    // Jernej: "Everything but the core features, should be decoupled enough
+    // that they can be turned off ... IF the features existing decreases
+    // [performance]". Every optional block renderer is gated by one of these;
+    // off means the block shows as source (or, for a file embed, a plain
+    // link) and none of that feature's code runs or allocates - no cache, no
+    // worker thread, no bytes read that would not be read anyway.
+    struct Features {
+        bool queryBlocks = true; ///< ```` ```query ```` blocks
+        bool baseBlocks = true;  ///< ```` ```base ```` blocks and `.base` embeds
+        bool HTMLblocks = true;  ///< raw HTML blocks through litehtml
+        bool PDFembeds = true;   ///< `![[x.pdf]]`
+        bool texEmbeds = true;   ///< `![[x.tex]]`
+        bool mediaEmbeds = true; ///< `![[x.mp3]]` / `![[x.mp4]]`
+        bool maths = true;       ///< `$...$` and `$$...$$`
+        bool fileEmbeds = true;  ///< notes, `.canvas`, and any other file's card
+    };
+    void setFeatures(const Features &features);
+    const Features &features() const { return m_features; }
+
+    /// A file kind the editor has no built-in renderer for - `.canvas` is
+    /// the reason this exists: the canvas module lives in libs/ext and the
+    /// editor must not link it (docs/PLUGINS.md's module boundary), so the
+    /// window registers a renderer instead, the same shape setQueryRunner
+    /// and setBaseRunner already use. `deliver` may be called from any
+    /// thread, at most once per call; an embed shows a small placeholder
+    /// sized to `width` until it does. Suffixes are matched case-insensitive,
+    /// without the dot.
+    using FileEmbedRenderer = std::function<void(const QString &path, const QString &subpath,
+                                                  int width, const std::function<void(QImage)> &deliver)>;
+    void setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer);
+
+    /// A PDF (or compiled `.tex`) embed's state, for the tests - a click on
+    /// its previous/next controls is exercised through pdfSlideStep rather
+    /// than a synthesised QMouseEvent, the same way toggleQueryCollapsed
+    /// stands in for clicking a query header.
+    struct PdfEmbedInfo {
+        bool isPdfEmbed = false;
+        QString error;       ///< a bad argument, a missing file, or a failed .tex compile
+        int pageCount = 0;   ///< pages in the underlying PDF, 0 if it could not be opened
+        int cellCount = 0;   ///< pages actually laid out (column/grid: shown at once)
+        PdfEmbedArgs::Layout layout = PdfEmbedArgs::Layout::Slides;
+        int slideIndex = 0;  ///< slides layout only
+        int slideCount = 0;
+    };
+    PdfEmbedInfo pdfEmbedInfoAt(qsizetype offset) const;
+    /// +1 / -1: what a click on the slide layout's next/previous control
+    /// does. Remembered per block for the editor's lifetime, like a query's
+    /// collapsed state - never written to the note.
+    void pdfSlideStep(qsizetype offset, int direction);
+
+    /// For the tests: whether the block containing `offset` rendered as a
+    /// file card (icon, name, size) - the fallback for a binary file, or any
+    /// file with no richer renderer.
+    bool isFileCardAt(qsizetype offset) const;
+    /// How many embeds the block containing `offset` rendered as trailing
+    /// cells - see layoutEmbedRow's comment. 0 outside such a block.
+    int embedCellCountAt(qsizetype offset) const;
+    /// For the tests: the raw text a block containing `offset` drew through
+    /// its own substituted QTextLayout - a source-file listing, a note
+    /// embed's panel, a `.tex` compile's error log, a query block's message
+    /// - none of which flow through view.map the way ordinary note text
+    /// does, so displayText() (which reads only the map) cannot see them.
+    /// Empty when that block has no such layout.
+    QString panelTextAt(qsizetype offset) const;
+
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
     /// one switch, on by default the way Obsidian ships them.
@@ -540,6 +610,62 @@ private:
         QString mediaPath;
         bool mediaVideo = false;
 
+        // --- PDF and .tex embeds, PdfEmbedBlock.cpp -----------------------
+        /// Set when this block is a PDF, or a compiled `.tex`, page embed -
+        /// laid out by pdfArgs instead of the single `image` field above,
+        /// which a plain one-page PDF still uses when that is all pdfArgs
+        /// asks for (see layoutPdf).
+        bool isPdfEmbed = false;
+        PdfEmbedArgs pdfArgs;
+        QString pdfPath;   ///< the PDF actually shown - a .tex's own compiled output
+        qint64 pdfMtime = 0;
+        QString pdfError;  ///< a bad argument, a missing file, or a failed compile
+        int pdfPageCount = 0;
+        /// One requested page. Column and grid lay out every page pdfArgs
+        /// resolved to; slides lays out the one currently shown. `image` is
+        /// null while its render is still in flight off the UI thread -
+        /// painted as a placeholder box sized from `pointSize` until then.
+        struct PdfCell {
+            int page = 0;
+            QRectF rect; ///< block-local
+            QPixmap image;
+            QSizeF pointSize; ///< the page's own size, in PDF points
+        };
+        std::vector<PdfCell> pdfCells;
+        int pdfSlideIndex = 0;
+        int pdfSlideCount = 0;
+        QRectF pdfPrevRect, pdfNextRect; ///< slide nav, block-local; null when not slides
+        QString pdfCounterText;          ///< "3 / 12"
+
+        // --- file cards and note embeds, FileEmbedBlock.cpp ---------------
+        /// Set when this block is a file noteAppC has no richer renderer
+        /// for: a small card (icon, name, size) that opens the file on
+        /// click - never a binary file's bytes shown as text.
+        bool isFileCard = false;
+        QString fileCardPath;
+        QString fileCardLabel;
+        QString fileCardSize;
+        QRectF fileCardRect; ///< block-local; the whole card is the click target
+
+        /// One embedded file inside a block that holds more than one embed,
+        /// or mixes an embed with running text - see layoutEmbedRow's
+        /// comment for why these are laid out as trailing rows rather than
+        /// truly inline. Built by the same per-kind logic a sole whole-block
+        /// embed uses, addressed by its own rect instead of the block's
+        /// single set of fields above.
+        struct EmbedCell {
+            Range source; ///< the `![[...]]` span, for a click
+            QRectF rect;    ///< block-local
+            QPixmap image;  ///< a thumbnail (image or a PDF's first requested page)
+            QString label;
+            QString sizeText;  ///< set for a file-card cell
+            bool isFileCard = false;
+            bool panel = false; ///< a small filename caption under a PDF thumbnail
+            QString openPath;  ///< what a click opens - the resolved file, or a note target
+            bool isNote = false; ///< opens through linkActivated rather than QDesktopServices
+        };
+        std::vector<EmbedCell> embedCells;
+
         /// Set when this block is a fenced ```query``` block rendered as
         /// search results: paintBlocks and handleBlockClick both skip the
         /// ordinary code-listing chrome (panel, "Copy", tabs) for it.
@@ -772,14 +898,171 @@ private:
     /// Closes the property editor, writing what it holds when `commit`.
     void finishPropertyEdit(bool commit);
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// Every whole-block embed kind (image, PDF, .tex, media, a file card, a
+    /// hooked renderer) paints from its own fields, not from `view.layout` -
+    /// but `view.map` still has to say the block's whole source is hidden,
+    /// or displayText() (and anything else that reads the map rather than
+    /// the paint output) sees whatever the block's *previous* layout left
+    /// behind, stale, instead of nothing. Called once the kind is settled,
+    /// before `view.laidOut = true`.
+    void hideWholeBlockText(BlockView &view);
     /// The embed that fills this block on its own, or nullptr.
     const EmbedSpan *soleEmbedOf(const BlockView &view) const;
-    /// A block that is nothing but an embed: an image, a PDF page, or a
-    /// source file shown as a read-only code block.
+    /// A block that is nothing but an embed: an image, a PDF page, a note, a
+    /// file the window has a renderer for, or a file shown as a read-only
+    /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
-    bool layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path);
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
+
+    // --- PDF and .tex embeds, implemented in PdfEmbedBlock.cpp -------------
+
+    bool layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// A `.tex` embed whose source is a full document (has `\documentclass`)
+    /// rather than maths alone: compiled to a PDF off the UI thread, then
+    /// laid out exactly as layoutPdf lays out a real one. Maths-alone `.tex`
+    /// is not an embed at all in this sense - layoutMath's own inline/display
+    /// formula path handles it, since it is a formula and not a document.
+    bool layoutTexEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// Shared by layoutPdf and layoutTexEmbed once each has a real PDF path
+    /// on disk (the file itself, or a .tex's compiled output): resolves the
+    /// page arguments against the document and fills in view's PDF fields.
+    bool buildPdfBlock(BlockView &view, const QString &pdfPath, const QString &label,
+                       const PdfEmbedArgs &args, int requestedWidth);
+    void paintPdfEmbed(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The previous/next controls (slides layout) or nothing; a click on
+    /// either steps pdfSlideIndex and relays out just this block.
+    bool handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
+    /// Cached page count and per-page size, keyed by path and mtime - a
+    /// metadata read, not a render, so this runs on the UI thread; PdfPage
+    /// itself still opens the file at most once per (path, mtime) per
+    /// thread. `count` and `sizes` are left untouched when the file cannot
+    /// be opened as a PDF.
+    void pdfMetadata(const QString &path, qint64 mtime, int &count, QList<QSizeF> &sizes) const;
+    struct PdfMeta {
+        int count = 0;
+        QList<QSizeF> sizes;
+    };
+    mutable QHash<QString, PdfMeta> m_pdfMetaCache; ///< "path|mtime" -> page count and sizes
+    /// The cached page image for (path, mtime, page, width), or a null
+    /// QPixmap while a render is in flight - which this also starts, off the
+    /// UI thread, if one is not in flight already.
+    QPixmap ensurePdfPageAsync(const QString &path, qint64 mtime, int page, int width);
+    struct PdfPageCacheEntry {
+        QPixmap image;
+        bool pending = true;
+        quint64 generation = 0;
+    };
+    QHash<QString, PdfPageCacheEntry> m_pdfPageCache; ///< "path|mtime|page|width" -> its render
+    quint64 m_pdfGeneration = 0;
+    /// A liveness token for every async PDF/.tex/hooked-file-embed lambda:
+    /// captured by weak_ptr, checked before the lambda ever touches `this`.
+    /// Reset to null first thing in ~MarkdownEditor - see that destructor's
+    /// own comment for why a QueuedConnection alone is not enough here.
+    std::shared_ptr<char> m_alive = std::make_shared<char>();
+    /// A slides-layout embed's current page, by the block's own source start
+    /// - like m_queryCollapsed, session-only and never written to the note.
+    QHash<qsizetype, int> m_pdfSlideIndex;
+    /// Called back (marshalled onto this thread) when a render started by
+    /// ensurePdfPageAsync finishes. Relays out every block currently showing
+    /// `path`, since column and grid can have several cells waiting on it.
+    void deliverPdfPage(const QString &key, quint64 generation, const QString &path, QImage image);
+    /// A `.tex` compile, cached by the file's own path and mtime - mirrors
+    /// PdfPageCacheEntry, just for TexCompiler::compile instead of a render.
+    struct TexCacheEntry {
+        TexCompiler::Result result;
+        bool pending = true;
+        quint64 generation = 0;
+    };
+    QHash<QString, TexCacheEntry> m_texCache; ///< "path|mtime" -> its compile
+    quint64 m_texGeneration = 0;
+    const TexCacheEntry &ensureTexCompiled(const QString &path, qint64 mtime);
+    void deliverTexCompiled(const QString &key, quint64 generation, TexCompiler::Result result);
+
+    // --- file cards, note embeds and multi-embed rows, FileEmbedBlock.cpp --
+
+    /// A file none of the above render: a small card (icon, name, size) that
+    /// opens it on click. Also where layoutSourceFile redirects when the
+    /// bytes it read back are not text - never shown as a wall of garbage.
+    bool layoutFileCard(BlockView &view, const EmbedSpan &embed, const QString &path);
+    void paintFileCard(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    bool handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
+                             qreal top) const;
+    /// A crude, cheap binary sniff over the file's first few KB: a NUL byte,
+    /// or a high enough share of bytes that are neither printable ASCII nor
+    /// part of a valid UTF-8 sequence, both say "binary" the way `file(1)`
+    /// and git's own diff heuristic do. False (text) on a read failure or an
+    /// empty file - an embed that cannot be read shows that as an error
+    /// elsewhere, not here.
+    bool isBinaryFile(const QString &path) const;
+    /// `.canvas`, `.base`, or any other suffix the window registered a
+    /// renderer for (setFileEmbedRenderer) - false when there is none, which
+    /// falls through to layoutSourceFile/layoutFileCard.
+    bool layoutHookedFileEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
+    QHash<QString, FileEmbedRenderer> m_fileEmbedRenderers; ///< lowercase suffix -> renderer
+    struct FileEmbedCacheEntry {
+        QImage image;
+        bool pending = true;
+        quint64 generation = 0;
+    };
+    QHash<QString, FileEmbedCacheEntry> m_fileEmbedCache; ///< "path|mtime|subpath|width" -> result
+    quint64 m_fileEmbedGeneration = 0;
+    void deliverFileEmbed(const QString &key, quint64 generation, QImage image);
+
+    /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
+    /// note's own text (or the named section of it), in a panel like a
+    /// source file embed's. A plain-text slice, not a recursive re-render of
+    /// the target's own markdown - ponytail: no nested live-preview styling,
+    /// upgrade to one if a transcluded note's own formatting turns out to
+    /// matter enough to pay for a second parser instance per embed.
+    bool layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// The panel chrome a source-file, note or failed-`.tex` embed all share:
+    /// a header strip with `label`, then `body` laid out as plain text
+    /// (`monospace` picks the code font over the note font). Always
+    /// succeeds - callers with a real failure still have text to show here,
+    /// even if it is only the reason.
+    bool layoutTextPanel(BlockView &view, const QString &label, const QString &body,
+                        bool monospace);
+    /// The slice of `noteText` that `subpath` (empty, `#Heading` or
+    /// `#^block-id`) asks for, and the label to show above it. `ok` is false
+    /// when a `#Heading` or `#^block-id` was asked for and not found.
+    QString noteEmbedSlice(const QString &noteText, const QString &subpath, const QString &title,
+                           QString &label, bool &ok) const;
+
+    /// A block that holds two or more embeds - each on its own line, or
+    /// several on one line - with nothing else in it, or an embed mixed in
+    /// with running text. Obsidian renders every one of them; today only a
+    /// block that is exactly one embed does (soleEmbedOf), so a paragraph of
+    /// several, or a sentence with one in the middle, showed literal link
+    /// text for every embed instead of the file.
+    ///
+    /// What this actually builds: `view.embedCells`, one row per source line
+    /// that carries an embed (several embeds sharing a line sit side by side
+    /// in that row), appended after the block's own text - not spliced in
+    /// after that exact line. QTextLayout, used bare here rather than
+    /// through QTextDocument, has no inline-object registration to hook a
+    /// widget into a specific line the way Obsidian's CodeMirror does; doing
+    /// that would mean hand-rolling line-by-line height injection into
+    /// layoutBlock's shared layout loop, which every other block kind also
+    /// runs through. ponytail: rows trail the paragraph instead of
+    /// interleaving with it; upgrade path is in layoutBlock's own comment,
+    /// next to where the trailing rows are appended.
+    ///
+    /// Each cell reuses layoutImage's and layoutPdf's own caches (a thumbnail
+    /// is not rendered twice just because the same file is both a sole embed
+    /// elsewhere and one of several here); anything that is not an image or
+    /// a PDF page becomes a file card, including audio, video and notes -
+    /// their own richer treatment is what a *sole* embed still gets.
+    void collectTextEmbeds(const BlockView &view, QList<Range> &hidden,
+                           QList<const EmbedSpan *> &found) const;
+    void appendEmbedRows(BlockView &view, const QList<const EmbedSpan *> &embeds);
+    BlockView::EmbedCell buildEmbedCell(const EmbedSpan &embed, qreal maxWidth);
+    void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
+                              qreal top);
+
+    Features m_features;
+
     /// A block that is one `$$...$$` formula, laid out by MicroTeX.
     bool layoutMath(BlockView &view);
     const MathSpan *displayMathOf(const BlockView &view) const;
