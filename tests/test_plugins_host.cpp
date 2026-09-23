@@ -88,6 +88,15 @@ QByteArray bigEndianHeader(quint32 length)
 
 // --- framing: PluginProtocol on its own, no process involved ---------------
 
+TEST(PluginManifestTest, ListsWithSeveralItemsKeepEveryItem)
+{
+    const PluginManifest manifest = PluginManifest::load(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR));
+    ASSERT_TRUE(manifest.isValid()) << manifest.error().toStdString();
+    EXPECT_EQ(manifest.commands(),
+              (QStringList{QStringLiteral("count-words"), QStringLiteral("hang"), QStringLiteral("crash")}));
+    EXPECT_EQ(manifest.codeBlockLanguages(), QStringList{QStringLiteral("calc")});
+}
+
 TEST(PluginProtocolFraming, RoundTripsEveryMessageKind)
 {
     QJsonObject params;

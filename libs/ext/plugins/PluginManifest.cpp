@@ -8,8 +8,12 @@ namespace noteAppC {
 
 namespace {
 
-QStringList splitList(const QString &text)
+// QSettings reads "a, b" as a QStringList and "a" as a QString; toString()
+// on the list is empty, which dropped every plugin's second command.
+QStringList splitList(const QVariant &value)
 {
+    const QString text = value.typeId() == QMetaType::QStringList ? value.toStringList().join(QLatin1Char(','))
+                                                                  : value.toString();
     QStringList out;
     for (const QString &item : text.split(QLatin1Char(','), Qt::SkipEmptyParts))
         out << item.trimmed();
@@ -62,9 +66,9 @@ PluginManifest PluginManifest::load(const QString &directory)
                                .toLower();
     manifest.m_engine = engine == QLatin1String("quickjs") ? PluginEngineKind::QuickJS : PluginEngineKind::Native;
 
-    manifest.m_commands = splitList(ini.value(QStringLiteral("provides/commands")).toString());
-    manifest.m_codeBlockLanguages = splitList(ini.value(QStringLiteral("provides/code-blocks")).toString());
-    manifest.m_vaultEvents = splitList(ini.value(QStringLiteral("provides/events")).toString());
+    manifest.m_commands = splitList(ini.value(QStringLiteral("provides/commands")));
+    manifest.m_codeBlockLanguages = splitList(ini.value(QStringLiteral("provides/code-blocks")));
+    manifest.m_vaultEvents = splitList(ini.value(QStringLiteral("provides/events")));
 
     const auto wants = [&ini](const char *key) {
         return ini.value(QLatin1String("permissions/") + QLatin1String(key), false).toBool();
