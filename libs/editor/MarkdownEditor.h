@@ -1407,6 +1407,13 @@ private:
     /// The index in m_decorations.tables of the table whose lines hold
     /// `offset`, in any mode; -1 outside every table.
     qsizetype tableAround(qsizetype offset) const;
+    /// Advanced Tables' row and column commands on the table at the caret -
+    /// ids "noteAppC:table-..." - rewriting the table aligned, as one undo
+    /// step, the caret following its cell. False when the caret is in no
+    /// table cell or the command does not apply (the header row cannot move).
+    bool runTableCommand(const QString &id);
+    /// The same commands for the right-click menu of a table cell.
+    void addTableActions(QMenu &menu, qsizetype offset);
     /// Adds an empty row below `cell`'s and puts the caret in `column` of it.
     void insertTableRowAfter(const CellRef &cell, int column);
     /// Where a cell's text starts, in block coordinates.

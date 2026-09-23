@@ -16,6 +16,7 @@
 #include "TableFormat.h"
 
 #include <QKeyEvent>
+#include <QMenu>
 #include <QScrollBar>
 #include <QTextLayout>
 
@@ -284,6 +285,120 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
         return m_cursor == cell.range.end;
     default:
         return false;
+    }
+}
+
+bool MarkdownEditor::runTableCommand(const QString &id)
+{
+    const CellRef cell = tableCellAt(m_cursor);
+    if (cell.row < 0)
+        return false;
+    const qsizetype index = tableAround(m_cursor);
+    const Range &range = m_decorations.tables.at(index).range;
+    const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
+    const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
+
+    // The table as rows of cell text; line 1 is the delimiter row, so the
+    // parser's row r is line r, or r + 1 past the header.
+    QStringList lines = m_text.mid(start, end - start).split(QLatin1Char('\n'));
+    QString prefix;
+    QList<QStringList> rows;
+    for (const QString &line : std::as_const(lines)) {
+        qsizetype lead = 0;
+        while (lead < line.size() && (line.at(lead) == QLatin1Char('>') || line.at(lead).isSpace()))
+            ++lead;
+        if (rows.isEmpty())
+            prefix = line.left(lead);
+        QStringList cells;
+        for (const Range &text : tableRowCells(line, 0, line.size()))
+            cells << line.mid(text.start, text.length());
+        rows << cells;
+    }
+    int columns = 0;
+    for (const QStringList &row : std::as_const(rows))
+        columns = qMax(columns, int(row.size()));
+    for (QStringList &row : rows) {
+        while (row.size() < columns)
+            row << QString();
+    }
+
+    int line = cell.row == 0 ? 0 : cell.row + 1;
+    int column = cell.column;
+    const bool header = line == 0;
+    const bool last = line == rows.size() - 1;
+    const auto emptyRow = [columns] { return QStringList(columns, QString()); };
+    if (id.endsWith(QLatin1String("insert-row-before"))) {
+        line = header ? 2 : line; // nothing goes above the header
+        rows.insert(line, emptyRow());
+    } else if (id.endsWith(QLatin1String("insert-row-after"))) {
+        line = header ? 2 : line + 1;
+        rows.insert(line, emptyRow());
+    } else if (id.endsWith(QLatin1String("delete-row"))) {
+        if (header)
+            return false;
+        rows.removeAt(line);
+        line = qMin(line, int(rows.size()) - 1);
+        if (line == 1)
+            line = 0; // the last body row went: back to the header
+    } else if (id.endsWith(QLatin1String("move-row-up"))) {
+        if (header || line == 2)
+            return false;
+        rows.swapItemsAt(line, line - 1);
+        --line;
+    } else if (id.endsWith(QLatin1String("move-row-down"))) {
+        if (header || last)
+            return false;
+        rows.swapItemsAt(line, line + 1);
+        ++line;
+    } else if (id.endsWith(QLatin1String("insert-column-before")) || id.endsWith(QLatin1String("insert-column-after"))) {
+        column += id.endsWith(QLatin1String("after")) ? 1 : 0;
+        for (int r = 0; r < rows.size(); ++r)
+            rows[r].insert(column, r == 1 ? QStringLiteral("---") : QString());
+    } else if (id.endsWith(QLatin1String("delete-column"))) {
+        if (columns <= 1)
+            return false;
+        for (QStringList &row : rows)
+            row.removeAt(column);
+        column = qMin(column, columns - 2);
+    } else if (id.endsWith(QLatin1String("move-column-left")) || id.endsWith(QLatin1String("move-column-right"))) {
+        const int other = column + (id.endsWith(QLatin1String("left")) ? -1 : 1);
+        if (other < 0 || other >= columns)
+            return false;
+        for (QStringList &row : rows)
+            row.swapItemsAt(column, other);
+        column = other;
+    } else {
+        return false;
+    }
+
+    QStringList rebuilt;
+    for (const QStringList &row : std::as_const(rows))
+        rebuilt << prefix + QStringLiteral("| ") + row.join(QStringLiteral(" | ")) + QStringLiteral(" |");
+    const QString text = formatTable(rebuilt.join(QLatin1Char('\n')));
+
+    m_lastEdit.invalidate();
+    pushUndo();
+    m_formattingTables = true; // aligned already: leaving it has nothing to do
+    applyEdit(start, end - start, text);
+    m_formattingTables = false;
+    m_lastEdit.invalidate();
+    reparse();
+    const QList<QList<Range>> &after = m_decorations.tables.value(index).rows;
+    const int row = line == 0 ? 0 : line - 1;
+    moveCursor(after.value(row).value(column, Range{start, start}).start, false);
+    return true;
+}
+
+void MarkdownEditor::addTableActions(QMenu &menu, qsizetype offset)
+{
+    for (const Command &command : commands()) {
+        if (!command.id.startsWith(QLatin1String("noteAppC:table-")))
+            continue;
+        const QString name = command.name.section(QStringLiteral(": "), 1);
+        connect(menu.addAction(name), &QAction::triggered, this, [this, id = command.id, offset] {
+            setCursorOffset(offset);
+            runTableCommand(id);
+        });
     }
 }
 

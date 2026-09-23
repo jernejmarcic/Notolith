@@ -1257,7 +1257,16 @@ std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
 void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
 {
     const QPoint point = viewport()->mapFrom(this, event->pos());
-    if (std::unique_ptr<QMenu> menu = spellingMenuAt(offsetAt(point)))
+    const qsizetype offset = offsetAt(point);
+    std::unique_ptr<QMenu> menu = spellingMenuAt(offset);
+    if (tableCellAt(offset).row >= 0) {
+        if (!menu)
+            menu = std::make_unique<QMenu>(this);
+        else
+            menu->addSeparator();
+        addTableActions(*menu, offset);
+    }
+    if (menu)
         menu->exec(event->globalPos());
 }
 
@@ -3732,6 +3741,16 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
         {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
         {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
+        {QStringLiteral("noteAppC:table-insert-row-before"), tr("Table: Insert row before"), {}},
+        {QStringLiteral("noteAppC:table-insert-row-after"), tr("Table: Insert row after"), {}},
+        {QStringLiteral("noteAppC:table-delete-row"), tr("Table: Delete row"), {}},
+        {QStringLiteral("noteAppC:table-move-row-up"), tr("Table: Move row up"), {}},
+        {QStringLiteral("noteAppC:table-move-row-down"), tr("Table: Move row down"), {}},
+        {QStringLiteral("noteAppC:table-insert-column-before"), tr("Table: Insert column before"), {}},
+        {QStringLiteral("noteAppC:table-insert-column-after"), tr("Table: Insert column after"), {}},
+        {QStringLiteral("noteAppC:table-delete-column"), tr("Table: Delete column"), {}},
+        {QStringLiteral("noteAppC:table-move-column-left"), tr("Table: Move column left"), {}},
+        {QStringLiteral("noteAppC:table-move-column-right"), tr("Table: Move column right"), {}},
     };
     return table;
 }
@@ -3764,6 +3783,8 @@ bool MarkdownEditor::runCommand(const QString &id)
         formatTables(m_cursor);
     else if (id == QLatin1String("noteAppC:format-all-tables"))
         formatTables(-1);
+    else if (id.startsWith(QLatin1String("noteAppC:table-")))
+        return runTableCommand(id);
     else
         return false;
     return true;

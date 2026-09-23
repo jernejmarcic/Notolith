@@ -4263,3 +4263,34 @@ TEST(TableFormatEditorTest, FormatAllTablesKeepsTheCaretInItsCell)
                              "|  p  | q   |\n| :-: | --- |\n|  r  | s   |\n"));
     EXPECT_EQ(editor->noteText().at(editor->cursorOffset() - 1), QLatin1Char('2'));
 }
+
+TEST(TableCommandTest, RowsAndColumnsAsAdvancedTablesDoes)
+{
+    const QString note = QStringLiteral("| a | b |\n| --- | --: |\n| 1 | 2 |\n| 3 | 4 |\n");
+    const auto run = [&](qsizetype caret, const char *id) {
+        auto editor = editorWith(note);
+        editor->show();
+        editor->setCursorOffset(caret);
+        const bool ran = editor->runCommand(QString::fromLatin1(id));
+        return std::make_pair(ran ? editor->noteText() : QString(), editor->noteText().at(editor->cursorOffset()));
+    };
+    const qsizetype one = note.indexOf(QLatin1Char('1'));
+    const qsizetype four = note.indexOf(QLatin1Char('4'));
+
+    EXPECT_EQ(run(one, "noteAppC:table-insert-row-after").first,
+              QStringLiteral("| a   |   b |\n| --- | --: |\n| 1   |   2 |\n|     |     |\n| 3   |   4 |\n"));
+    EXPECT_EQ(run(one, "noteAppC:table-delete-row").first,
+              QStringLiteral("| a   |   b |\n| --- | --: |\n| 3   |   4 |\n"));
+    auto moved = run(one, "noteAppC:table-move-row-down");
+    EXPECT_EQ(moved.first, QStringLiteral("| a   |   b |\n| --- | --: |\n| 3   |   4 |\n| 1   |   2 |\n"));
+    EXPECT_EQ(moved.second, QLatin1Char('1')); // the caret went with its row
+    EXPECT_EQ(run(one, "noteAppC:table-move-row-up").first, QString()); // already the first body row
+    EXPECT_EQ(run(four, "noteAppC:table-insert-column-before").first,
+              QStringLiteral("| a   |     |   b |\n| --- | --- | --: |\n| 1   |     |   2 |\n| 3   |     |   4 |\n"));
+    EXPECT_EQ(run(four, "noteAppC:table-delete-column").first,
+              QStringLiteral("| a   |\n| --- |\n| 1   |\n| 3   |\n"));
+    moved = run(one, "noteAppC:table-move-column-right");
+    EXPECT_EQ(moved.first, QStringLiteral("|   b | a   |\n| --: | --- |\n|   2 | 1   |\n|   4 | 3   |\n"));
+    EXPECT_EQ(moved.second, QLatin1Char('1'));
+    EXPECT_EQ(run(0, "noteAppC:table-delete-row").first, QString()); // nowhere near a cell
+}
