@@ -16,6 +16,7 @@
 #include <memory>
 
 #include <QCoreApplication>
+#include <QMutex>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -815,6 +816,22 @@ TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    // Never the real OS keyring: a run must not leave device keys in it,
+    // and an unanswered secret-service call cost each engine 15 s.
+    static QMutex secretsMutex;
+    static QHash<QString, QByteArray> secrets;
+    SyncEngine::setSecretStore({[](const QString &key, QByteArray *value) {
+                                    const QMutexLocker lock(&secretsMutex);
+                                    if (!secrets.contains(key))
+                                        return false;
+                                    *value = secrets.value(key);
+                                    return true;
+                                },
+                                [](const QString &key, const QByteArray &value) {
+                                    const QMutexLocker lock(&secretsMutex);
+                                    secrets.insert(key, value);
+                                    return true;
+                                }});
     // Deliberately *not* QStandardPaths::setTestModeEnabled(true), unlike
     // test_index.cpp's own main(): test mode redirects
     // QStandardPaths::writableLocation() to a fixed ~/.qttest/... - which

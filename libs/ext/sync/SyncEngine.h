@@ -82,6 +82,17 @@ public:
     /// caller must already be signed in this session.
     void changePassword(const QString &newPassword);
 
+    /// Where the device identity key is kept: the OS keyring unless one is
+    /// set here. A test sets an in-memory one, so a run never writes to the
+    /// user's real keyring, nor waits out a secret-service backend that does
+    /// not answer. Process-wide; set it before any engine starts. Both
+    /// functions run on engines' worker threads.
+    struct SecretStore {
+        std::function<bool(const QString &key, QByteArray *value)> read;
+        std::function<bool(const QString &key, const QByteArray &value)> write;
+    };
+    static void setSecretStore(SecretStore store);
+
 signals:
     void statusChanged(noteAppC::SyncEngine::Status status, const QString &message);
     /// One pass of the sync cycle finished (pushed/pulled record counts;

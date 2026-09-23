@@ -103,6 +103,12 @@ bool writeRawFile(const QString &path, const QByteArray &bytes)
 /// own 15 s one: an unresponsive secret-service D-Bus backend must not
 /// hang the sync thread forever (and, since this runs inside runCycle()'s
 /// m_inCycle window, must not hang the destructor's teardown either).
+SyncEngine::SecretStore &secretStore()
+{
+    static SyncEngine::SecretStore store;
+    return store;
+}
+
 void runKeychainJob(QKeychain::Job *job)
 {
     QEventLoop loop;
@@ -119,6 +125,11 @@ void runKeychainJob(QKeychain::Job *job)
 }
 
 } // namespace
+
+void SyncEngine::setSecretStore(SecretStore store)
+{
+    secretStore() = std::move(store);
+}
 
 SyncEngine::SyncEngine()
 {
@@ -349,6 +360,21 @@ bool SyncEngine::loadDeviceIdentity()
     const QString service = QStringLiteral("noteAppC-sync");
     const QString cachedPublic = QString::fromLatin1(m_journal->meta(QStringLiteral("boxPublicKey")).toHex());
     const QString keychainKey = QStringLiteral("device-box-secret-") + QString::fromLatin1(m_journal->deviceID().toHex());
+
+    const SecretStore &store = secretStore();
+    if (store.read && store.write) {
+        QByteArray secret;
+        if (!cachedPublic.isEmpty() && store.read(keychainKey, &secret)) {
+            m_boxPublicKey = m_journal->meta(QStringLiteral("boxPublicKey"));
+            m_boxSecretKey = secret;
+            return true;
+        }
+        const SyncCrypto::BoxKeyPair pair = SyncCrypto::generateBoxKeyPair();
+        m_boxPublicKey = pair.publicKey;
+        m_boxSecretKey = pair.secretKey;
+        m_journal->setMeta(QStringLiteral("boxPublicKey"), m_boxPublicKey);
+        return store.write(keychainKey, m_boxSecretKey);
+    }
 
     if (!cachedPublic.isEmpty()) {
         QKeychain::ReadPasswordJob read(service);

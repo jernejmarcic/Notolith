@@ -520,31 +520,17 @@ encryption" is the assumption.
   format supports multiple itemsKeys already (`itemsKeyID` on every record),
   so adding rotation later does not touch the wire format.
 
-## A known, unexplained test-suite slowdown
+## The test suite never touches the OS keyring
 
-`tests/test_sync.cpp`'s integration tests are correct - every run passes -
-but not always fast: once at least two of them have already run a full
-sign-in-and-sync cycle in the same process, later ones can take on the order
-of fifteen seconds *per SyncEngine's first cycle*, with the stall sitting
-between two adjacent lines of already-instrumented code (every network call,
-every KDF call, every database write, `applyRecord()` itself - all measured
-individually and all fast) and no line of this lane's own code in between
-them. Ruled out, each by direct experiment: the OS keychain/D-Bus path
-(forcing QtKeychain's insecure-file fallback made no difference), the memory
-cap mechanism (reproduces uncapped, under a `ulimit -v`, and under
-`systemd-run`'s cgroup alike), wall-clock time since process start (an
-artificial delay before an otherwise-fast run changes nothing), and Qt's
-network-reachability polling (disabling it via env var made no difference).
-One real bug *was* found and fixed along the way -
-`QStandardPaths::setTestModeEnabled(true)` (copied from `test_index.cpp`'s
-own `main()`) silently overrides `XDG_DATA_HOME`, so every test's
-`SyncJournal` was writing into one shared, ever-growing, never-cleaned
-`~/.qttest/share/noteAppC/sync/` instead of its own isolated
-`QTemporaryDir` - not under `/tmp`, and after a long debugging session, over
-two hundred stale directories deep. Removing it (this suite does not call
-`setTestModeEnabled` at all) fixed that hygiene problem and measurably
-sped up the first two integration tests, but did not fully explain the
-slowdown pattern on its own. `tests/CMakeLists.txt` gives the `sync` ctest
-test a 600 s timeout so this does not fail a run that uses a tighter
-`ctest --timeout`; still worth root-causing properly, ideally by bisecting
-with a minimal reproduction outside GTest.
+The device identity key normally goes to the OS keyring through QtKeychain.
+`tests/test_sync.cpp` sets an in-memory `SyncEngine::SecretStore` in its
+`main()` instead, for two reasons. A test run must not leave device keys in
+the user's real keyring. And a secret-service backend that never answers (a
+locked keyring, a prompt nobody sees) held each engine for the full 15 s of
+`runKeychainJob`'s watchdog: that was the whole of the "per-process
+slowdown" once noted here, 30 s for most two-device tests, and the suite
+now runs in about five seconds.
+
+`QStandardPaths::setTestModeEnabled(true)` stays out of the suite as well:
+it overrides the per-test `XDG_DATA_HOME`, so every test's `SyncJournal`
+wrote into one shared, never-cleaned `~/.qttest/share/noteAppC/sync/`.

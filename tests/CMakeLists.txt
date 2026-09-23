@@ -36,6 +36,9 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub)
         target_link_libraries(test_window PRIVATE ${module})
     endif()
 endforeach()
+if(TARGET noteAppC_sync)
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_EXPECT_SYNC)
+endif()
 # A real plugin in a real host process, through the window's own wiring.
 if(TARGET noteAppC_plugins)
     target_compile_definitions(test_window PRIVATE
@@ -127,14 +130,7 @@ if(TARGET noteAppC_sync AND TARGET Qt6::HttpServer)
         noteAppC_sync noteAppC_vault Qt6::HttpServer Qt6::Test GTest::gtest)
     set_target_properties(test_sync PROPERTIES AUTOMOC ON)
     add_test(NAME sync COMMAND test_sync)
-    # TIMEOUT here overrides a caller's own `ctest --timeout 240`, which
-    # this suite has been observed to brush up against - see docs/SYNC.md's
-    # "left out" note on the still-unexplained per-process slowdown a real
-    # loopback server and several sequential SyncEngines hit after enough
-    # of them have run in the same test binary (never in an isolated
-    # scenario, and never a correctness problem - every run passes, just
-    # slower). 600 s is generous headroom until that is root-caused.
-    set_tests_properties(sync PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 600)
+    set_tests_properties(sync PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 add_executable(test_fuzz test_fuzz.cpp)
