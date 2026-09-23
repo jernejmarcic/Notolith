@@ -36,6 +36,7 @@ std::optional<EpubPosition> EpubPositionStore::get(const QString &bookPath)
     position.spineIndex = settings.value(QStringLiteral("spineIndex"), 0).toInt();
     position.scrollWithinChapter = settings.value(QStringLiteral("scroll"), 0).toInt();
     position.fontPercent = settings.value(QStringLiteral("fontPercent"), 100).toInt();
+    position.paged = settings.value(QStringLiteral("paged"), false).toBool();
     settings.endGroup();
     return position;
 }
@@ -51,6 +52,7 @@ void EpubPositionStore::set(const QString &bookPath, const EpubPosition &positio
     settings.setValue(QStringLiteral("spineIndex"), position.spineIndex);
     settings.setValue(QStringLiteral("scroll"), position.scrollWithinChapter);
     settings.setValue(QStringLiteral("fontPercent"), position.fontPercent);
+    settings.setValue(QStringLiteral("paged"), position.paged);
     settings.endGroup();
 }
 

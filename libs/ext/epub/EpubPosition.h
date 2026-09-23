@@ -12,6 +12,7 @@ struct EpubPosition {
     int spineIndex = 0;
     int scrollWithinChapter = 0; ///< logical pixels, at fontPercent below
     int fontPercent = 100;
+    bool paged = false; ///< continuous scroll vs paged reading - see EpubView::setPagedMode
 
     friend bool operator==(const EpubPosition &, const EpubPosition &) = default;
 };

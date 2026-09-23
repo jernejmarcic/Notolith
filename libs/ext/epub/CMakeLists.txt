@@ -24,4 +24,4 @@ set_target_properties(noteAppC_epub PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_epub PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_epub
     PUBLIC Qt6::Widgets noteAppC_theme
-    PRIVATE noteAppC_render noteAppC_vault noteAppC_editor PkgConfig::LIBARCHIVE)
+    PRIVATE noteAppC_render noteAppC_vault noteAppC_editor Qt6::Concurrent PkgConfig::LIBARCHIVE)
