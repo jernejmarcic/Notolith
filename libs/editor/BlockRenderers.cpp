@@ -224,6 +224,13 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         }
 
         if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
+            if (view.notebookEligible) {
+                const QRectF runRect = notebookRunRectFor(view, left, top);
+                if (runRect.isValid() && runRect.adjusted(-4, -4, 4, 4).contains(point)) {
+                    runNotebookBlockAt(view.span.range.start);
+                    return true;
+                }
+            }
             const CodeLabel label = codeLabelOf(view, left, top);
             if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
                 copyCodeBlock(view);
@@ -1144,9 +1151,10 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
                         + (label.icon.isNull() ? 0 : iconSize + 5);
 
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
-    // With `#|` options there is a header strip, and the label sits at its
-    // right end, clear of the fold arrow; without one it takes the corner.
-    const bool header = view.options || strip;
+    // With `#|` options, or a notebook run control, there is a header strip,
+    // and the label sits at its right end, clear of the fold arrow; without
+    // either it takes the corner.
+    const bool header = view.options || strip || view.notebookEligible;
     const qreal right = view.options ? panel.right() - 22 - kFoldHandle
                         : strip      ? panel.right() - 14
                                      : panel.right() - 10;
@@ -1262,8 +1270,9 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
 void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top, const QRectF &panel) const
 {
-    if (!view.options && view.tabGroup < 0) {
-        // No `#|` options and no tabs: the label alone, in the corner.
+    if (!view.options && view.tabGroup < 0 && !view.notebookEligible) {
+        // No `#|` options, no tabs, not a notebook block: the label alone,
+        // in the corner.
         paintCodeLabel(painter, view, left, top);
         return;
     }
@@ -1312,6 +1321,7 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
                                  accent);
         }
         paintCodeLabel(painter, view, left, top);
+        paintNotebookRunControl(painter, view, left, top);
         return;
     }
 
@@ -1319,9 +1329,15 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
     painter.setPen(muted);
     const QRectF titleRect(header.left() + 14, header.top(), header.width() - 36 - kFoldHandle,
                            header.height());
-    painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
+    // No `#|` title on a notebook-only block (no options at all) - just the
+    // run control and the language label share the strip a title would
+    // otherwise sit in.
+    if (view.options)
+        painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
     paintCodeLabel(painter, view, left, top);
-    paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
+    paintNotebookRunControl(painter, view, left, top);
+    if (view.options)
+        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
 }
 
 void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qreal left,

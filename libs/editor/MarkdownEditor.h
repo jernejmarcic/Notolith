@@ -325,6 +325,7 @@ public:
         bool mediaEmbeds = true; ///< `![[x.mp3]]` / `![[x.mp4]]`
         bool maths = true;       ///< `$...$` and `$$...$$`
         bool fileEmbeds = true;  ///< notes, `.canvas`, and any other file's card
+        bool notebooks = true;   ///< running a code block through a Jupyter kernel
         bool operator==(const Features &) const = default;
     };
     void setFeatures(const Features &features);
@@ -358,6 +359,46 @@ public:
         std::function<void(const QString &language, const QString &source, int width, const QString &theme,
                            const std::function<void(CodeBlockResult)> &deliver)>;
     void setCodeBlockRenderer(const QStringList &languages, CodeBlockRenderer renderer);
+
+    /// One piece of a notebook block's output (NotebookBlock.cpp, stage 13):
+    /// a Jupyter kernel's stream/execute_result/display_data/error, already
+    /// reduced to what this editor can draw without linking libs/ext -
+    /// libs/ext/notebook's own NotebookOutput is the source this is built
+    /// from, one field at a time, by whatever the window's runner is.
+    struct NotebookOutput {
+        enum class Kind { Text, Markdown, ImagePng, ImageSvg, Error };
+        Kind kind = Kind::Text;
+        QString text;          ///< text/plain (ANSI stripped), text/markdown source, or an error's evalue
+        QByteArray imageBytes; ///< Kind::ImagePng only
+        QString ename;         ///< Kind::Error only
+        QStringList traceback; ///< Kind::Error only, ANSI already stripped
+    };
+    /// A block's last run, or - `hasRun` false - nothing run yet, which is
+    /// the normal state for a block nobody has clicked "Run" on.
+    struct NotebookRunResult {
+        bool hasRun = false;
+        bool ok = true;
+        qint64 wallMs = -1;
+        QList<NotebookOutput> outputs;
+        QString kernelError; ///< no kernel for this language, one that would not start...
+    };
+    /// Delivers a block's result exactly once, from any thread - the editor
+    /// marshals back onto its own thread before touching a block, the same
+    /// contract setQueryRunner keeps for a search.
+    using NotebookDeliver = std::function<void(NotebookRunResult)>;
+    /// Asks for `language`/`source`'s result. `forceRun` false is a
+    /// cache-only lookup that must never start a kernel - what every
+    /// notebook block asks for the moment it is laid out, so a reopened
+    /// note shows its last output without running anything; `forceRun` true
+    /// is what the block's own "Run" control (paintCodeChrome,
+    /// codeLabelOf, handleBlockClick) and the window's "Run all blocks"
+    /// command ask for. Supplied by the window, which owns
+    /// libs/ext/notebook; the editor never links it. A null runner turns
+    /// the feature off exactly like a null setCodeBlockRenderer does: no
+    /// cache, no lookup, no cost.
+    using NotebookRunner = std::function<void(const QString &language, const QString &source,
+                                              bool forceRun, const NotebookDeliver &deliver)>;
+    void setNotebookRunner(NotebookRunner runner);
 
     /// A PDF (or compiled `.tex`) embed's state, for the tests - a click on
     /// its previous/next controls is exercised through pdfSlideStep rather
@@ -395,6 +436,25 @@ public:
     /// The size an embed drawn as an image (a formatted note, a canvas)
     /// shows at; empty while it is text or a placeholder. For the tests.
     QSize embedImageSizeAt(qsizetype offset) const;
+
+    /// A notebook block's state at `offset` (NotebookBlock.cpp) - default
+    /// (`eligible` false) outside a fenced code block, when the notebooks
+    /// feature or setNotebookRunner is off, or when the block has never run
+    /// and nothing is cached for it. `runRect` is in viewport coordinates,
+    /// the way queryHeaderAt's rects are, so a test can click it without
+    /// reimplementing the header strip's layout by hand.
+    struct NotebookBlockInfo {
+        bool eligible = false;
+        bool hasRun = false;
+        bool running = false;
+        bool ok = true;
+        QRectF runRect;
+    };
+    NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
+    /// What a click on that block's run control does: asks the window's
+    /// runner to actually run it (forceRun). False, and nothing asked for,
+    /// when notebookInfoAt(offset).eligible is false.
+    bool runNotebookBlockAt(qsizetype offset);
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -753,6 +813,34 @@ private:
         /// listing chrome, and codeBlockKey finds it again on delivery.
         bool isPluginBlock = false;
         QString codeBlockKey;
+
+        // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
+        /// A fenced code block with a language, shown while the notebooks
+        /// feature and setNotebookRunner are both on - unlike isPluginBlock,
+        /// this never replaces the listing: the source stays, and any
+        /// output goes below it, plus a run control alongside "Copy" in the
+        /// header (codeLabelOf, paintCodeChrome, handleBlockClick).
+        bool notebookEligible = false;
+        QString notebookKey; ///< "language|source" - m_notebookCache's own key
+        bool notebookHasRun = false;
+        bool notebookRunning = false;
+        bool notebookOk = true;
+        /// Top of the output area, below the listing (view.textTop + the
+        /// listing's own height + caption); == view.height while there is
+        /// no output to show.
+        qreal notebookOutputTop = 0;
+        /// One output, in the order the kernel produced it. A Text/Error
+        /// cell draws through its own QTextLayout (monospace, ANSI already
+        /// stripped by the runner); an ImagePng/ImageSvg/Markdown cell
+        /// through `image`, `image` already rendered from raw bytes/SVG/
+        /// markdown by appendNotebookOutput so painting never re-decodes it.
+        struct NotebookOutputCell {
+            NotebookOutput::Kind kind = NotebookOutput::Kind::Text;
+            std::unique_ptr<QTextLayout> layout;
+            QPixmap image;
+            QRectF rect; ///< block-local
+        };
+        std::vector<NotebookOutputCell> notebookOutputs;
         /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
         /// resolved to a QTextCharFormat by layoutInlineHtml - added to
         /// formatsIn's output the way spellcheck underlines are. Source
@@ -844,6 +932,15 @@ private:
     const CodeFenceSpan *codeFenceOf(const BlockView &view) const;
     LanguageStyle codeStyleOf(const BlockView &view) const;
     LanguageStyle styleOfFence(const CodeFenceSpan &fence) const;
+
+    /// NotebookBlock.cpp: a notebook-eligible block's run control, in the
+    /// header strip alongside codeLabelOf's own label - recomputed from
+    /// `left`/`top` on every call, the same as codeLabelOf, rather than
+    /// cached in the view, so it never goes stale across a scroll. Null-sized
+    /// when the block is not notebook-eligible or has no header row.
+    QRectF notebookRunRectFor(const BlockView &view, qreal left, qreal top) const;
+    void paintNotebookRunControl(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    void paintNotebookOutput(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
 
     /// A run of adjacent `tab` fences, shown as one block with a tab strip.
     struct TabGroup {
@@ -1059,6 +1156,46 @@ private:
     };
     QHash<QString, CodeBlockCacheEntry> m_codeBlockCache; ///< "language|width|theme|source" -> result
     quint64 m_codeBlockGeneration = 0;
+
+    /// NotebookBlock.cpp: a fenced code block's output, shown below its own
+    /// listing rather than in place of it - the one difference from
+    /// layoutPluginCode's shape just above, which this otherwise mirrors.
+    void appendNotebookOutput(BlockView &view, const QString &language, const QString &source);
+    void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
+    /// A Text or Error output, as its own small monospace QTextLayout -
+    /// null if `text` ends up empty (an error with no message at all).
+    std::unique_ptr<QTextLayout> buildNotebookTextLayout(const QString &text, qreal width,
+                                                         const QColor &colour) const;
+    /// An Image/Markdown/Svg output rendered once to a QPixmap at `width` -
+    /// null on a decode failure, which appendNotebookOutput then just skips.
+    QPixmap renderNotebookImage(const NotebookOutput &output, int width) const;
+    /// The "Running...", or a kernel-level error, single-line message a
+    /// block shows below its listing when there is nothing richer yet.
+    void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);
+    NotebookRunner m_notebookRunner;
+    struct NotebookCacheEntry {
+        NotebookRunResult result;
+        bool pending = true;
+        bool running = false; ///< a forceRun in flight - the header strip shows this, not `pending`
+        quint64 generation = 0;
+        /// Image/Markdown/Svg outputs, pre-rendered once in
+        /// deliverNotebookResult rather than on every layout - one entry per
+        /// `result.outputs`, a null QPixmap for a Text/Error slot. Rescaled
+        /// rather than rebuilt when contentWidth() no longer matches
+        /// `renderedWidth` (a resize): cheap, unlike re-running a nested
+        /// editor over Markdown or re-decoding a PNG.
+        QList<QPixmap> renderedImages;
+        int renderedWidth = 0;
+    };
+    QHash<QString, NotebookCacheEntry> m_notebookCache; ///< "language|source" -> result
+    quint64 m_notebookGeneration = 0;
+    /// Inserts a pending entry and asks m_notebookRunner for it
+    /// (forceRun=false: cache-only, never starts a kernel) the first time
+    /// `key` is seen; every later call just returns what is already there,
+    /// the same one-search-per-text idea ensureQuerySearch keeps for a
+    /// ```query``` block.
+    const NotebookCacheEntry &ensureNotebookResult(const QString &key, const QString &language,
+                                                   const QString &source);
 
     /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
     /// note's own text (or the named section of it), in a panel like a

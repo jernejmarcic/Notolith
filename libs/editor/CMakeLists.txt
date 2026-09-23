@@ -12,6 +12,7 @@ add_library(noteAppC_editor STATIC
     HtmlBlock.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
+    NotebookBlock.cpp
     PdfEmbedBlock.cpp
     PdfExport.cpp
     QueryBlock.cpp
@@ -20,7 +21,10 @@ add_library(noteAppC_editor STATIC
 set_target_properties(noteAppC_editor PROPERTIES AUTOMOC ON)
 
 target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault PRIVATE Qt6::Concurrent)
+# Qt6::Svg is NotebookBlock.cpp's own: an image/svg+xml kernel output
+# (matplotlib's default figure format, among others) is rasterised with
+# QSvgRenderer rather than shown as raw markup or skipped.
+target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault PRIVATE Qt6::Concurrent Qt6::Svg)
 
 # An OpenGL viewport, so the GPU question can be answered with a measurement
 # rather than an opinion. Optional: a build without Qt6::OpenGLWidgets simply

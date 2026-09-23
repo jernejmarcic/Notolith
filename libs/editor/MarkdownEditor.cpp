@@ -2613,8 +2613,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderTable && layoutTable(view))
         return;
 
-    if (renderMedia && view.span.kind == BlockSpan::Kind::Code)
+    if (renderMedia && view.span.kind == BlockSpan::Kind::Code) {
         view.options = codeOptionsFor(view);
+        // Decided early, like view.options just above, because it feeds the
+        // same "does this block get a header strip" decision below - the
+        // output itself (appendNotebookOutput) is only built once the rest
+        // of this block's own layout is settled, the same distance
+        // appendEmbedRows keeps from layoutEmbed.
+        if (m_features.notebooks && m_notebookRunner && view.piece == 0) {
+            const CodeFenceSpan *fence = codeFenceOf(view);
+            view.notebookEligible = fence && !fence->language.trimmed().isEmpty();
+        }
+    }
 
     const bool perElement = m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
     const bool reveal = m_mode == Mode::Source
@@ -2763,8 +2773,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // below it; an empty callout still shows its title.
         view.textTop = calloutHeaderHeight(view.calloutStyle);
         view.height = height;
-    } else if ((view.options || view.tabGroup >= 0) && view.piece == 0) {
-        view.textTop = codeHeaderHeight(); // the `#|` header, or the tab strip
+    } else if ((view.options || view.tabGroup >= 0 || view.notebookEligible) && view.piece == 0) {
+        view.textTop = codeHeaderHeight(); // the `#|` header, the tab strip, or the run control
     }
 
     // A folded fence folds all of its pieces; only the first keeps its header.
@@ -2777,6 +2787,20 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // each embed's own line; see the comment on collectTextEmbeds.
     if (!textEmbeds.isEmpty() && !view.folded)
         appendEmbedRows(view, textEmbeds);
+    // A notebook block's output, below its own listing - never in place of
+    // it, unlike layoutPluginCode's fences. Only the first piece carries it
+    // (view.notebookEligible is only ever set there), and a folded fence
+    // shows nothing below its header, the same rule embeds follow.
+    if (view.notebookEligible && !view.folded) {
+        if (const CodeFenceSpan *fence = codeFenceOf(view)) {
+            const Range content{codeContentOf(firstPiece(view), nullptr).start,
+                                codeContentOf(lastPiece(view), nullptr).end};
+            QString source = m_text.mid(content.start, content.length());
+            if (source.endsWith(QLatin1Char('\n')))
+                source.chop(1);
+            appendNotebookOutput(view, fence->language, source);
+        }
+    }
     view.laidOut = true;
 }
 
@@ -2964,6 +2988,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
             paintCodeChrome(painter, view, left, top);
+            if (view.notebookEligible && !view.folded)
+                paintNotebookOutput(painter, view, left, top);
             painter.setPen(text);
         }
 
