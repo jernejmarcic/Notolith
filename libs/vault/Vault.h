@@ -44,6 +44,11 @@ public:
     /// it is not a note, or when "..", an absolute path or a symlink would
     /// take it out of the vault. It need not exist, but its folder must.
     QString confinedNotePath(const QString &relativePath) const;
+    /// Where a new attachment for `notePath` goes, by Obsidian's
+    /// attachmentFolderPath: "" or "/" the vault root, "./" the note's own
+    /// folder, "./sub" a folder beneath it, anything else a folder in the
+    /// vault. Never outside the vault. Not created here.
+    QString attachmentFolderFor(const QString &setting, const QString &notePath) const;
 
     /// Reads UTF-8, normalising CRLF to LF and stripping a BOM. On failure
     /// returns false and fills `error`.

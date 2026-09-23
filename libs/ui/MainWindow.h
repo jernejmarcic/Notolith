@@ -37,6 +37,7 @@ class SpellChecker;
 class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
+class AudioRecorder;
 
 class BacklinksPane;
 class BookmarksPane;
@@ -313,6 +314,9 @@ private:
     /// Note composer: the current note appended to one picked, its links
     /// following it there, and it moved to the trash.
     void mergeCurrentNote();
+    /// Audio recorder: records into the attachment folder and embeds the
+    /// file in the note it was started from once stopped.
+    void startRecording();
     bool mergeNote(const QString &source, const QString &target);
     /// Note composer: the selection moved into a new note beside this one,
     /// a link (or, set so, an embed) left in its place.
@@ -477,6 +481,9 @@ private:
     MarkdownEditor::Spelling m_editorSpelling;
     QLabel *m_wordCount = nullptr;
     QLabel *m_syncStatus = nullptr;
+    QLabel *m_recordingStatus = nullptr;
+    AudioRecorder *m_recorder = nullptr; ///< made on the first recording
+    QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;
     QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for
     QString m_syncPassword; ///< from syncSignIn, handed to the next engine once

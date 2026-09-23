@@ -322,6 +322,19 @@ TEST(VaultConfinedNotePath, OnlyNotesInsideTheVault)
     EXPECT_TRUE(vault.confinedNotePath(QStringLiteral(".obsidian/app.json")).isEmpty());
 }
 
+TEST(VaultAttachmentFolder, ObsidiansFourForms)
+{
+    QTemporaryDir dir;
+    const Vault vault(dir.path());
+    const QString note = dir.filePath(QStringLiteral("notes/Day.md"));
+    EXPECT_EQ(vault.attachmentFolderFor(QString(), note), vault.root());
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("/"), note), vault.root());
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("./"), note), dir.filePath(QStringLiteral("notes")));
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("./assets"), note), dir.filePath(QStringLiteral("notes/assets")));
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("Attachments"), note), dir.filePath(QStringLiteral("Attachments")));
+    EXPECT_EQ(vault.attachmentFolderFor(QStringLiteral("../../outside"), note), vault.root()); // never out
+}
+
 TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefault)
 {
     QTemporaryDir dir;

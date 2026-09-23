@@ -89,6 +89,22 @@ QString Vault::confinedNotePath(const QString &relativePath) const
     return real.startsWith(root + QLatin1Char('/')) ? path : QString();
 }
 
+QString Vault::attachmentFolderFor(const QString &setting, const QString &notePath) const
+{
+    const QString wanted = setting.trimmed();
+    const QString noteFolder = QFileInfo(notePath).absolutePath();
+    QString folder;
+    if (wanted.isEmpty() || wanted == QLatin1String("/"))
+        folder = m_root;
+    else if (wanted == QLatin1String(".") || wanted == QLatin1String("./"))
+        folder = noteFolder;
+    else if (wanted.startsWith(QLatin1String("./")))
+        folder = QDir::cleanPath(noteFolder + QLatin1Char('/') + wanted.mid(2));
+    else
+        folder = QDir::cleanPath(absolute(wanted));
+    return contains(folder) ? folder : m_root;
+}
+
 Note Vault::decode(const QByteArray &bytes)
 {
     Note note;
