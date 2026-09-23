@@ -61,6 +61,18 @@ option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 # `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
 # libs/markdown, so this carries no new external dependency.
 option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
+# Another Tier 1 module: an EPUB reader (libs/ext/epub/) - libarchive reads
+# the book's zip container, litehtml (through HtmlRenderer, libs/render)
+# lays out and paints each chapter. Actually built only when both are found
+# (see the add_subdirectory below, after libs/render has looked for
+# litehtml) - turning this on with neither installed builds nothing.
+option(NOTEAPPC_WITH_EPUB "Read EPUB books, with highlights and notes" ON)
+if(NOTEAPPC_WITH_EPUB)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBARCHIVE QUIET IMPORTED_TARGET libarchive)
+    endif()
+endif()
 
 add_compile_options(-Wall -Wextra)
 
@@ -157,6 +169,10 @@ if(NOTEAPPC_WITH_CANVAS)
 endif()
 if(NOTEAPPC_WITH_BASES)
     add_subdirectory(libs/ext/bases)
+endif()
+get_property(noteappc_have_litehtml GLOBAL PROPERTY NOTEAPPC_HAVE_LITEHTML)
+if(NOTEAPPC_WITH_EPUB AND TARGET PkgConfig::LIBARCHIVE AND noteappc_have_litehtml)
+    add_subdirectory(libs/ext/epub)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

@@ -1,0 +1,112 @@
+#include "EpubArchive.h"
+
+#include <archive.h>
+#include <archive_entry.h>
+
+namespace noteAppC {
+
+namespace {
+
+/// RAII for an archive_read stream opened on one file, so every early return
+/// below still calls archive_read_free() - libarchive has no destructor of
+/// its own to lean on since it is a C library.
+class ReadStream {
+public:
+    explicit ReadStream(const QString &path)
+        : m_archive(archive_read_new())
+    {
+        archive_read_support_format_zip(m_archive);
+        const QByteArray utf8 = path.toUtf8();
+        m_ok = archive_read_open_filename(m_archive, utf8.constData(), 64 * 1024) == ARCHIVE_OK;
+    }
+    ~ReadStream() { archive_read_free(m_archive); }
+    ReadStream(const ReadStream &) = delete;
+    ReadStream &operator=(const ReadStream &) = delete;
+
+    bool isOpen() const { return m_ok; }
+    archive *handle() const { return m_archive; }
+    QString errorString() const { return QString::fromUtf8(archive_error_string(m_archive)); }
+
+private:
+    archive *m_archive;
+    bool m_ok = false;
+};
+
+} // namespace
+
+bool EpubArchive::open(const QString &path, QString *error)
+{
+    m_names.clear();
+    m_nameSet.clear();
+    m_path.clear();
+
+    ReadStream stream(path);
+    if (!stream.isOpen()) {
+        if (error)
+            *error = stream.errorString();
+        return false;
+    }
+
+    archive_entry *entry = nullptr;
+    while (archive_read_next_header(stream.handle(), &entry) == ARCHIVE_OK) {
+        // Directory entries carry a trailing '/' in a zip and name nothing a
+        // chapter or manifest ever points at; skip them so contains()/read()
+        // only ever answer for real files.
+        const QString name = QString::fromUtf8(archive_entry_pathname(entry));
+        if (!name.isEmpty() && !name.endsWith(QLatin1Char('/'))) {
+            m_names << name;
+            m_nameSet.insert(name);
+        }
+        archive_read_data_skip(stream.handle()); // seeks past the compressed bytes, does not inflate them
+    }
+
+    if (m_names.isEmpty()) {
+        if (error)
+            *error = QStringLiteral("not a readable EPUB (empty or not a zip)");
+        return false;
+    }
+    m_path = path;
+    return true;
+}
+
+QByteArray EpubArchive::read(const QString &entryName, QString *error) const
+{
+    if (!m_nameSet.contains(entryName)) {
+        if (error)
+            *error = QStringLiteral("%1 is not in %2").arg(entryName, m_path);
+        return {};
+    }
+
+    ReadStream stream(m_path);
+    if (!stream.isOpen()) {
+        if (error)
+            *error = stream.errorString();
+        return {};
+    }
+
+    archive_entry *entry = nullptr;
+    while (archive_read_next_header(stream.handle(), &entry) == ARCHIVE_OK) {
+        if (QString::fromUtf8(archive_entry_pathname(entry)) != entryName) {
+            archive_read_data_skip(stream.handle());
+            continue;
+        }
+        QByteArray bytes;
+        const qint64 size = archive_entry_size(entry);
+        if (size > 0)
+            bytes.resize(int(size));
+        qint64 got = 0;
+        while (got < bytes.size()) {
+            const auto n = archive_read_data(stream.handle(), bytes.data() + got, size_t(bytes.size() - got));
+            if (n <= 0)
+                break;
+            got += n;
+        }
+        bytes.resize(int(got));
+        return bytes;
+    }
+    if (error)
+        *error = QStringLiteral("%1 vanished from %2 between open() and read()").arg(entryName, m_path);
+    return {};
+}
+
+} // namespace noteAppC
