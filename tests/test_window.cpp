@@ -1513,6 +1513,36 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     QTRY_VERIFY_WITH_TIMEOUT(!preview->isVisible(), 2000);
 }
 
+TEST_F(WindowTest, APagePreviewShowsALinkedImage)
+{
+    QImage picture(800, 400, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    write(QStringLiteral("Linking.md"), "See [[pic.png]] and [[Other]].\n");
+    write(QStringLiteral("Other.md"), "# Other\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    emit window.editor()->linkHovered(QStringLiteral("pic.png"), QPoint(200, 200));
+    auto *preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"));
+    QTRY_VERIFY_WITH_TIMEOUT(preview->isVisible(), 2000);
+    auto *image = preview->findChild<QLabel *>();
+    ASSERT_NE(image, nullptr);
+    EXPECT_TRUE(image->isVisibleTo(preview));
+    EXPECT_FALSE(preview->editor()->isVisibleTo(preview));
+    // Fitted into the popover, its shape kept.
+    const QPixmap shown = image->pixmap();
+    EXPECT_LE(shown.width(), 520);
+    EXPECT_EQ(shown.width(), shown.height() * 2);
+
+    // A note after it puts the editor back.
+    emit window.editor()->linkHovered(QStringLiteral("Other"), QPoint(200, 200));
+    QTRY_VERIFY_WITH_TIMEOUT(preview->editor()->isVisibleTo(preview), 2000);
+}
+
 TEST_F(WindowTest, SavingKeepsSnapshotsAndOneCanBePutBack)
 {
     QTemporaryDir data;

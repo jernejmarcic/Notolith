@@ -1,6 +1,7 @@
 #include "PagePreview.h"
 
 #include <QGuiApplication>
+#include <QLabel>
 #include <QScreen>
 #include <QVBoxLayout>
 
@@ -45,11 +46,36 @@ PagePreview::PagePreview(QWidget *parent)
 void PagePreview::showNote(const QString &text, qsizetype offset, const QPoint &globalPos)
 {
     m_hide.stop();
+    if (m_image)
+        m_image->hide();
+    m_editor->show();
     m_editor->setNoteText(text);
     m_editor->setCursorOffset(offset); // scrolls there; reading view draws no caret
+    place(globalPos, QSize(kWidth, kHeight));
+}
 
-    // Below and to the right of the pointer, kept on the screen it is on.
-    QRect frame(globalPos + QPoint(12, 16), QSize(kWidth, kHeight));
+void PagePreview::showImage(const QImage &image, const QPoint &globalPos)
+{
+    m_hide.stop();
+    if (!m_image) {
+        m_image = new QLabel(this);
+        m_image->setAlignment(Qt::AlignCenter);
+        layout()->addWidget(m_image);
+    }
+    m_editor->hide();
+    m_editor->setNoteText(QString()); // nothing of the last note kept around
+    const QSize room(kWidth - 2, kHeight - 2);
+    const QImage fitted = image.width() > room.width() || image.height() > room.height()
+                              ? image.scaled(room, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                              : image;
+    m_image->setPixmap(QPixmap::fromImage(fitted));
+    m_image->show();
+    place(globalPos, fitted.size() + QSize(2, 2));
+}
+
+void PagePreview::place(const QPoint &globalPos, QSize size)
+{
+    QRect frame(globalPos + QPoint(12, 16), size);
     if (QScreen *screen = QGuiApplication::screenAt(globalPos)) {
         const QRect area = screen->availableGeometry();
         if (frame.right() > area.right())

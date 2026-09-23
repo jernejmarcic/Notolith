@@ -1,9 +1,12 @@
 #pragma once
 
 #include <QFrame>
+#include <QImage>
 #include <QTimer>
 
 #include <functional>
+
+class QLabel;
 
 namespace noteAppC {
 
@@ -22,6 +25,8 @@ public:
     /// `text` is the whole note; `offset` is where to scroll to - a heading
     /// or a block the link names - and `globalPos` the pointer.
     void showNote(const QString &text, qsizetype offset, const QPoint &globalPos);
+    /// An image, or a PDF page drawn as one, fitted into the popover.
+    void showImage(const QImage &image, const QPoint &globalPos);
     /// The pointer left the link: hide soon, unless it comes onto the preview.
     void leaveSoon();
     void applyTheme(const Theme &theme);
@@ -37,7 +42,11 @@ protected:
     void leaveEvent(QEvent *event) override;
 
 private:
+    /// Below and to the right of the pointer, kept on its screen.
+    void place(const QPoint &globalPos, QSize size);
+
     MarkdownEditor *m_editor = nullptr;
+    QLabel *m_image = nullptr; ///< built on the first image preview
     QTimer m_hide;
 };
 

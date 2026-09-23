@@ -13,6 +13,7 @@
 #include <QFileSystemWatcher>
 #include <QGuiApplication>
 #include <QHBoxLayout>
+#include <QImageReader>
 #include <QInputDialog>
 #include <QJsonArray>
 #include <QKeyEvent>
@@ -53,6 +54,7 @@
 #include "Templates.h"
 #include "ExportPdfDialog.h"
 #include "PagePreview.h"
+#include "PdfPage.h"
 #include "RecoveryDialog.h"
 #include "Snapshots.h"
 #include "Parser.h"
@@ -1587,12 +1589,28 @@ void MainWindow::showPagePreview()
     const QString subpath = hash >= 0 ? m_previewTarget.mid(hash + 1).trimmed() : QString();
     QString path = m_active->notePath;
     if (!name.isEmpty()) {
-        const QString relative = m_index.resolve(name, m_active->notePath);
-        if (relative.isEmpty())
+        path = m_resolveLink(name); // attachments too, which the index may not hold
+        if (path.isEmpty())
             return; // nothing there yet to preview
-        path = m_vault.absolute(relative);
     }
-    // ponytail: notes only; Obsidian also previews images and PDFs.
+    // Images and PDFs preview as a picture, as in Obsidian. The reader looks
+    // at the header first, so a note is never decoded as an image.
+    if (QImageReader reader(path); reader.canRead()) {
+        QSize size = reader.size();
+        if (size.width() > 1040)
+            reader.setScaledSize(size.scaled(1040, size.height(), Qt::KeepAspectRatio));
+        const QImage image = reader.read();
+        if (!image.isNull())
+            m_preview->showImage(image, m_previewPos);
+        return;
+    }
+    if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive)) {
+        const int page = subpath.startsWith(QLatin1String("page=")) ? subpath.mid(5).toInt() - 1 : 0;
+        const QImage image = PdfPage::render(path, qMax(0, page), 520);
+        if (!image.isNull())
+            m_preview->showImage(image, m_previewPos);
+        return;
+    }
     Note note;
     if (!Vault::isNote(path) || !Vault::read(path, note))
         return;

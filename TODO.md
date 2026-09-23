@@ -355,7 +355,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Page preview: the linked note rendered in a popover, opened at the
       heading or block the link names; Ctrl held while editing, plain hover
       in reading view, as Obsidian. Links inside it can be followed.
-      Notes only for now - Obsidian also previews images and PDFs.
+      Images and PDF pages (first, or `#page=N`) preview as pictures.
 - [x] Audio and video embeds: a player card (play/pause, seek bar, clock;
       video frames painted into the block), Qt Multimedia optional behind
       `NOTEAPPC_WITH_MEDIA` - without it a click opens the file. No poster
