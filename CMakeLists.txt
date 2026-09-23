@@ -61,6 +61,11 @@ option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 # `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
 # libs/markdown, so this carries no new external dependency.
 option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
+# Another Tier 1 module: exports a vault (or its `publish: true` part) as a
+# static, JavaScript-optional website - Obsidian Publish style
+# (libs/ext/publish/). No new external dependency: it only draws on
+# libraries this project already links (markdown, index, render, theme).
+option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publish)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -157,6 +162,9 @@ if(NOTEAPPC_WITH_CANVAS)
 endif()
 if(NOTEAPPC_WITH_BASES)
     add_subdirectory(libs/ext/bases)
+endif()
+if(NOTEAPPC_WITH_PUBLISH)
+    add_subdirectory(libs/ext/publish)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
