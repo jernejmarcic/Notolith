@@ -3790,6 +3790,55 @@ TEST(HtmlRendererTest, ScriptNeverRendersItsText)
     EXPECT_EQ(plain, withScript) << "a <script> body must never add a pixel to the rendered block";
 }
 
+TEST(HtmlRendererTest, GradientsRoundedCornersAndPerSideBorders)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    const HtmlRenderer::Theme theme = testHtmlTheme();
+    const auto near = [](QColor a, QColor b) {
+        return qAbs(a.red() - b.red()) < 40 && qAbs(a.green() - b.green()) < 40 && qAbs(a.blue() - b.blue()) < 40;
+    };
+
+    // litehtml's default body margin puts every box 8 px in.
+    // A left-to-right gradient: red at one end, blue at the other, not one flat stop.
+    const QImage gradient = HtmlRenderer::render(
+        QStringLiteral("<div style=\"width:200px;height:40px;background:linear-gradient(to right, #ff0000, #0000ff)\"></div>"),
+        theme, 300, QString());
+    ASSERT_FALSE(gradient.isNull());
+    EXPECT_TRUE(near(gradient.pixelColor(12, 28), Qt::red)) << gradient.pixelColor(12, 28).name().toStdString();
+    EXPECT_TRUE(near(gradient.pixelColor(203, 28), Qt::blue)) << gradient.pixelColor(203, 28).name().toStdString();
+
+    // A rounded box leaves its corner unpainted.
+    const QImage rounded = HtmlRenderer::render(
+        QStringLiteral("<div style=\"width:100px;height:60px;background:#00ff00;border-radius:20px\"></div>"),
+        theme, 300, QString());
+    EXPECT_TRUE(near(rounded.pixelColor(58, 38), Qt::green));
+    EXPECT_FALSE(near(rounded.pixelColor(9, 9), Qt::green)) << "the corner is cut";
+
+    // Each side its own colour.
+    const QImage sides = HtmlRenderer::render(
+        QStringLiteral("<div style=\"width:100px;height:60px;border-top:6px solid #ff0000;"
+                       "border-bottom:6px solid #0000ff\"></div>"),
+        theme, 300, QString());
+    EXPECT_TRUE(near(sides.pixelColor(58, 10), Qt::red));
+    EXPECT_TRUE(near(sides.pixelColor(58, 77), Qt::blue)) << sides.pixelColor(58, 77).name().toStdString();
+}
+
+TEST(HtmlRendererTest, ListMarkersUseTheirNumeralSystem)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    // Markers are painted, not text runs, so compare against a list drawn
+    // with the same items and the decimal style: the pictures must differ.
+    const QImage roman = HtmlRenderer::render(
+        QStringLiteral("<ol style=\"list-style-type:upper-roman\"><li>a</li><li>b</li><li>c</li><li>d</li></ol>"),
+        testHtmlTheme(), 300, QString());
+    const QImage decimal = HtmlRenderer::render(
+        QStringLiteral("<ol><li>a</li><li>b</li><li>c</li><li>d</li></ol>"), testHtmlTheme(), 300, QString());
+    ASSERT_FALSE(roman.isNull());
+    EXPECT_NE(roman, decimal);
+}
+
 TEST(HTMLBlockTest, RendersAsANonEmptyCachedImage)
 {
     const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
