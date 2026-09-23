@@ -81,6 +81,10 @@ QString EpubView::resourceCachePath(const QString &archivePath) const
 
 QString EpubView::extractToCache(const QString &archivePath) const
 {
+    // resolveArchivePath already refuses "..", but a book's bytes are written
+    // under this path: a second check where the write happens.
+    if (archivePath.split(QLatin1Char('/')).contains(QLatin1String("..")) || archivePath.startsWith(QLatin1Char('/')))
+        return {};
     const QString cachePath = resourceCachePath(archivePath);
     if (!QFileInfo::exists(cachePath)) {
         const QByteArray bytes = m_document.readEntry(archivePath);
