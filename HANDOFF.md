@@ -1,6 +1,6 @@
 # noteAppC handoff
 
-Written 2026-09-22, brought up to date 2026-09-23, so a cold start can pick
+Written 2026-09-22, brought up to date on the evening of 2026-09-23, so a cold start can pick
 this up without reading a transcript. `TODO.md` is the live task list;
 `docs/PERFORMANCE.md` is the measured record.
 
@@ -45,41 +45,76 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 10 test suites pass and the build is clean (the tenth, `spell`, exists
-only in a build with the spellcheck module):
+All 16 suites pass in the full build and 12 in a build with every optional
+module off (`sh tools/check.sh` runs both):
 
 ```
-vault  markdown  index  editor  window  theme  icons  settings  spell
+vault  markdown  index  search  editor  window  theme  icons  spell  graph
+canvas  bases  fuzz  settings  plugins  appstreamtest
 ```
 
-Release build on starbase-1, 2 000-note vault, `tools/bench/noteAppC-bench`:
-window on screen 50.5 ms from process start, note open 1.2 / 6.9 / 2.6 / 16 ms
-at 1 / 50 / 200 / 1 024 kB (above 128 kB the note is readable first and styled
-when its async parse lands), keystroke 0.19-0.44 ms from 1 kB to 1 MB and
-1.1 ms in a code block of any length, scroll frame 0.36 ms, one wheel notch
-on screen 0.4-0.65 ms. Every fix behind those numbers, with before and after,
-is in `docs/PERFORMANCE.md`.
+Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`:
+cold start to first painted frame 278 ms (including `openVault`), note open
+1.7 / 13 / 27 / 150 ms at 1 / 50 / 200 / 1 024 kB and 3.7 ms for a vault note
+with every side pane filled, keystroke 0.2-0.5 ms, a search 0.05-6.4 ms off the
+UI thread, unlinked mentions 0.3 ms. Every fix behind the numbers, with before
+and after, is in `docs/PERFORMANCE.md` (16 of them so far).
 
-Working today, beyond the basics (vault or loose file, the shell, live
-preview / source / reading, index, find and replace):
+Working today, beyond the basics (vault or loose file, live preview / source /
+reading, index, find and replace):
 
-- **Obsidian's note rendering**: per-element syntax reveal, a selection that
-  never reveals syntax, inline and display maths (MicroTeX), callouts that
-  nest and fold, tables, embeds, `Note > Heading` links, the properties table
-  with text, number, date and list values editable in place.
-- **Styling beyond Obsidian**, in [docs/STYLING.md](docs/STYLING.md):
-  `callouts.ini`, `codeblocks.ini` and per-block overrides, code block labels
-  that copy, tabbed code blocks, icons in four forms, custom themes from a
-  CSS file or an Obsidian theme, all reloaded live.
-- **Spellcheck**, the first optional module (`libs/ext/spell/`, hunspell):
-  see [docs/PLUGINS.md](docs/PLUGINS.md) for the module pattern it sets.
+- **Obsidian's note rendering**: per-element syntax reveal, maths (MicroTeX),
+  callouts, tables, embeds (notes, images, PDFs, audio, video), heading links,
+  editable properties, `query` blocks, raw HTML through litehtml.
+- **The workspace**: tabs, splits nested either way, each tab its own editor
+  and history; the layout reopens with the vault and named layouts save and
+  load, in Obsidian's `workspace.json` shape; background tabs load when shown.
+- **Core plugins**: search with Obsidian's grammar, backlinks with unlinked
+  mentions, outgoing links, tags, outline, bookmarks, daily notes, templates,
+  page preview, file recovery, PDF export, hotkeys with a settings page.
+- **Optional modules** (`libs/ext/`, each behind a CMake option, see
+  [docs/PLUGINS.md](docs/PLUGINS.md)): spellcheck (hunspell), graph view
+  (global and local), canvas (JSON Canvas), bases (`.base` views).
+- **Styling beyond Obsidian**, in [docs/STYLING.md](docs/STYLING.md).
+- **Packaging**: an Arch `PKGBUILD` that is built and checked, AppStream
+  metadata; Flatpak and AppImage recipes not yet built (`packaging/`).
 - **Platforms**: builds and passes on the Android kit's Qt 6.7.3 with the
   optional dependencies off; see [docs/PLATFORMS.md](docs/PLATFORMS.md).
+
+### How the window holds its tabs
+
+`MainWindow` owns `Leaf`s (one per tab: an editor, its inline title, the
+note, its history, and optionally a canvas or base view in the editor's
+place) inside `TabGroup`s (a tab bar over a stack) inside `QSplitter`s rooted
+at `m_workspace`. `m_active` is the focused leaf; every command and side pane
+follows it, and `activateLeaf()` is the one place that switches. A new editor
+gets the current settings, theme, hotkeys and spelling from
+`configureEditor()`. A restored tab keeps its file in `pendingPath` until it is
+first shown.
+
+### Traps this code has already fallen into
+
+- `QRectF::united()` and `intersects()` treat a zero-width rect as empty: a
+  point, or a straight vertical edge, silently drops out of a bounding box or
+  a cull. Take bounds by hand; pad culling boxes.
+- The editor styles an edited block at once and reparses the whole note 20 ms
+  later, off the UI thread. A test that compares against a fresh load has to
+  wait for that parse.
+- Layout-driven work (query block searches, graph framing) only happens in a
+  widget that has been shown; an offscreen test must `show()` the window.
+- `findChildren<MarkdownEditor *>()` finds the page preview's editor too.
+- Qt sends `qWarning` to the journal when stderr is not a terminal, so a
+  debug print from a test run through a pipe seems to vanish.
+- The same refresh wired from two signals costs twice: see fix 15.
 
 ## Next
 
 `TODO.md` has the list. The ones that are Jernej's to answer:
 
+- autosave like Obsidian, or the save prompt noteAppC has now;
+- a licence, an app id, an app icon (packaging waits on all three);
+- what Ctrl+click on a link should do (follow, as now, or a new tab as in
+  Obsidian);
 - three decisions in [docs/PLUGINS.md](docs/PLUGINS.md) (third-party
   plugins, Lua scripts, sidebar panes from plugins);
 - run `bench-here.sh` from the brain's session directory on shuttlepod-1 and
@@ -116,11 +151,13 @@ python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
 ## Building and looking at it
 
 ```sh
-cmake -B /tmp/noteAppC-build -G Ninja
-cmake --build /tmp/noteAppC-build
-ctest --test-dir /tmp/noteAppC-build --output-on-failure
+sh tools/check.sh              # both configurations, every suite; --bench adds the bench
 /tmp/noteAppC-build/apps/noteAppC/noteAppC <vault-or-file>
 ```
+
+Run builds and tests in a memory-capped scope (a runaway test once took the
+whole session down with it): `systemd-run --user --scope -q -p MemoryMax=8G
+-p MemorySwapMax=0 <command>`. `check.sh` does this itself.
 
 Under AddressSanitizer and UBSan, which found a use-after-free in a test and
 a malloc/delete mismatch in MicroTeX on 2026-09-23 - worth a run after any
@@ -140,6 +177,8 @@ display:
 ```sh
 /tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800
 /tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1240 800 --source
+/tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1400 860 --command graph:open
+/tmp/noteAppC-build/tools/noteAppC_shot <vault> - out.png dark 1400 860 --command global-search:open --type "tag:#work"
 ```
 
 `fixtures/demo-vault` is committed for exactly this: one note covering most of
@@ -155,10 +194,13 @@ same screenshot.
 
 ## Working with several agents in this tree
 
-It works, with one rule: **ownership is by file and nothing overlaps.** The
-split that worked was `libs/markdown`, `libs/editor`, `libs/vault`+`libs/index`,
-`libs/ui`, each with its own test file, each building in its own
-`build-<track>` directory, none of them running a git command. The parent
-session owns `libs/theme`, `libs/settings`, `tools`, the root CMake,
-`tests/CMakeLists.txt`, and every commit. Right-size the model per track:
-parser and engine work needs the strong one, widgets and CRUD do not.
+It works, with two rules. **Ownership is by file and nothing overlaps**: a
+lane gets its own directories (a module in `libs/ext/`, its test file, one
+clearly separated block in a shared file such as `Index.h`), and the lead
+owns `libs/ui`, the root CMake, the merges and wiring. **Every lane works in
+its own worktree under `/tmp`** (`git worktree add -b lane/<name>
+/tmp/noteAppC-<name> main`), builds in `/tmp/noteAppC-<name>-build` with
+`-j6` inside a 4 GB memory cap, commits there in small steps, and reports
+its API and wiring instructions; the lead reviews, merges with `--no-ff`,
+measures and wires. Seven lanes ran this way on 2026-09-23 (search, plugins,
+graph, canvas, bases, editor blocks). Right-size the model per lane.
