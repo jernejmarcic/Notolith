@@ -110,6 +110,18 @@ if(NOTEAPPC_WITH_SYNC)
     # library - a desktop build has no business linking an HTTP server.
     find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
 endif()
+# The last Tier 1 module: Jupyter-style code execution in notes
+# (libs/ext/notebook) - a client of the Jupyter messaging protocol over
+# ZeroMQ, so any installed kernel (ipykernel, a Julia or R kernel...) is a
+# language, never Python running inside this app. Needs libzmq; without it
+# the option is silently off, the same as spellcheck without hunspell.
+option(NOTEAPPC_WITH_NOTEBOOK "Run code blocks through a Jupyter kernel (libs/ext/notebook)" ON)
+if(NOTEAPPC_WITH_NOTEBOOK)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(ZMQ QUIET IMPORTED_TARGET libzmq)
+    endif()
+endif()
 
 add_compile_options(-Wall -Wextra)
 
@@ -223,6 +235,9 @@ if(NOTEAPPC_WITH_PLUGINS)
 endif()
 if(TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
     add_subdirectory(libs/ext/sync)
+endif()
+if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
+    add_subdirectory(libs/ext/notebook)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
