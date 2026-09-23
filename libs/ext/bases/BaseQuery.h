@@ -66,9 +66,8 @@ public:
     /// protection) the same way a filter or a formula-of-a-formula would.
     Value valueOf(qsizetype rowIndex, const QString &propertyReference) const;
     /// The view's summary for `propertyReference` over resultRows(), "" when
-    /// the view gives it none. ponytail: built-in summaries only - a file's
-    /// own `summaries:` formulas are over `values`, a list the expression
-    /// language cannot yet hold; such a summary shows nothing.
+    /// the view gives it none: a file's own top-level summary formula of
+    /// that name (an expression over `values`), else a built-in.
     QString summaryOf(const QString &propertyReference) const;
 
     /// Re-orders resultRows() by an arbitrary property - a clicked table

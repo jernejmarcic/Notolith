@@ -304,6 +304,21 @@ QString BaseQuery::summaryOf(const QString &propertyReference) const
     values.reserve(m_result.size());
     for (const qsizetype row : m_result)
         values << valueOf(row, propertyReference);
+    // The file's own summary, an expression over `values`, before a
+    // built-in of the same name.
+    if (const QString formula = m_file.summaryFormula(name); !formula.isEmpty()) {
+        QString error;
+        const std::unique_ptr<Expression> expression = Expression::parse(formula, &error);
+        if (!expression) {
+            warnOnce(error);
+            return {};
+        }
+        const Value result = expression->evaluate(Row(), nullptr, m_now, &error,
+                                                  {{QStringLiteral("values"), Value::ofValues(values)}});
+        if (!error.isEmpty())
+            warnOnce(error);
+        return result.toDisplayString();
+    }
     return summarize(name, values);
 }
 

@@ -85,8 +85,8 @@ TEST(ExpressionTest, FilePropertyAccess)
     EXPECT_EQ(evalText(QStringLiteral("file.ext"), row).text, QStringLiteral("md"));
     EXPECT_EQ(evalText(QStringLiteral("file.path"), row).text, QStringLiteral("Projects/Home.md"));
     EXPECT_DOUBLE_EQ(evalText(QStringLiteral("file.size"), row).number, 1234);
-    EXPECT_EQ(evalText(QStringLiteral("file.tags"), row).list, QStringList({"a", "b"}));
-    EXPECT_EQ(evalText(QStringLiteral("file.links"), row).list, QStringList({"Other"}));
+    EXPECT_EQ(evalText(QStringLiteral("file.tags"), row).strings(), QStringList({"a", "b"}));
+    EXPECT_EQ(evalText(QStringLiteral("file.links"), row).strings(), QStringList({"Other"}));
     EXPECT_EQ(evalText(QStringLiteral("file.tags.length"), row).number, 2);
 }
 
@@ -190,7 +190,7 @@ TEST(ExpressionTest, StringFunctions)
              QStringLiteral("Hello There"));
     EXPECT_EQ(evalText(QStringLiteral("s.slice(0, 5)"), row).text, QStringLiteral("Hello"));
     EXPECT_EQ(evalText(QStringLiteral("s.slice(-5)"), row).text, QStringLiteral("World"));
-    EXPECT_EQ(evalText(QStringLiteral("s.split(\" \")"), row).list, QStringList({"Hello", "World"}));
+    EXPECT_EQ(evalText(QStringLiteral("s.split(\" \")"), row).strings(), QStringList({"Hello", "World"}));
     EXPECT_EQ(evalText(QStringLiteral("\"ab\".repeat(3)"), row).text, QStringLiteral("ababab"));
     EXPECT_EQ(evalText(QStringLiteral("\"abc\".reverse()"), row).text, QStringLiteral("cba"));
     EXPECT_TRUE(evalText(QStringLiteral("s.containsAny(\"xx\", \"World\")"), row).boolean);
@@ -207,16 +207,36 @@ TEST(ExpressionTest, NumberFunctions)
     EXPECT_EQ(evalText(QStringLiteral("(2).toFixed(2)"), row).text, QStringLiteral("2.00"));
 }
 
+TEST(ExpressionTest, FilterMapAndReduceBindValueIndexAndAcc)
+{
+    const Row row = makeRow(QStringLiteral("N"));
+    // Obsidian's own examples, from its functions reference.
+    EXPECT_EQ(evalText(QStringLiteral("[1,2,3,4].filter(value > 2)"), row).strings(), QStringList({"3", "4"}));
+    EXPECT_EQ(evalText(QStringLiteral("[1,2,3,4].map(value + 1)"), row).strings(), QStringList({"2", "3", "4", "5"}));
+    const Value sum = evalText(QStringLiteral("[1,2,3].reduce(acc + value, 0)"), row);
+    EXPECT_EQ(sum.type, Value::Type::Number) << "a sum, not the digits joined";
+    EXPECT_EQ(sum.number, 6);
+    EXPECT_EQ(evalText(QStringLiteral("[\"a\",\"b\",\"c\"].map(index)"), row).strings(), QStringList({"0", "1", "2"}));
+    // Nested: the inner call's value is its own, and the outer's comes back.
+    EXPECT_EQ(evalText(QStringLiteral("[[1,2],[3]].map(value.map(value * 10).join(\"+\"))"), row).strings(),
+              QStringList({"10+20", "30"}));
+    EXPECT_EQ(evalText(QStringLiteral("[[1,2],[3]].flat()"), row).strings(), QStringList({"1", "2", "3"}));
+    EXPECT_EQ(evalText(QStringLiteral("[4,1,7].mean()"), row).number, 4);
+    QString error;
+    evalText(QStringLiteral("[1].reduce(acc + value)"), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty()) << "reduce needs its initial value";
+}
+
 TEST(ExpressionTest, ListFunctions)
 {
     Row row = makeRow(QStringLiteral("N"));
     row.properties.insert(QStringLiteral("tags"), Value::ofList({"a", "b", "a", "c"}));
     EXPECT_TRUE(evalText(QStringLiteral("tags.contains(\"b\")"), row).boolean);
     EXPECT_EQ(evalText(QStringLiteral("tags.join(\",\")"), row).text, QStringLiteral("a,b,a,c"));
-    EXPECT_EQ(evalText(QStringLiteral("tags.unique()"), row).list, QStringList({"a", "b", "c"}));
+    EXPECT_EQ(evalText(QStringLiteral("tags.unique()"), row).strings(), QStringList({"a", "b", "c"}));
     // Reversal on a non-palindromic list actually proves the order flipped.
-    EXPECT_EQ(evalText(QStringLiteral("tags.reverse()"), row).list, QStringList({"c", "a", "b", "a"}));
-    EXPECT_EQ(evalText(QStringLiteral("tags.sort()"), row).list, QStringList({"a", "a", "b", "c"}));
+    EXPECT_EQ(evalText(QStringLiteral("tags.reverse()"), row).strings(), QStringList({"c", "a", "b", "a"}));
+    EXPECT_EQ(evalText(QStringLiteral("tags.sort()"), row).strings(), QStringList({"a", "a", "b", "c"}));
     EXPECT_EQ(evalText(QStringLiteral("tags.length"), row).number, 4);
     EXPECT_FALSE(evalText(QStringLiteral("tags.isEmpty()"), row).boolean);
 }
@@ -249,8 +269,8 @@ TEST(ExpressionTest, UnsupportedGivesAClearErrorNeverACrash)
     Expression::parse(QStringLiteral("(("), &error);
     EXPECT_FALSE(error.isEmpty()); // bad syntax
 
-    evalText(QStringLiteral("tags.filter(x)"), row, nullptr, &error);
-    EXPECT_FALSE(error.isEmpty()); // documented-but-unimplemented function
+    evalText(QStringLiteral("tags.toBase64()"), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty()); // no such list function
 
     evalText(QStringLiteral("nope(1)"), row, nullptr, &error);
     EXPECT_FALSE(error.isEmpty()); // unknown global function
@@ -443,6 +463,23 @@ TEST(BaseSummaryTest, AViewsSummariesFollowItsFilteredRows)
     ASSERT_TRUE(query.openView(0));
     EXPECT_EQ(query.summaryOf(QStringLiteral("price")), QStringLiteral("7")); // 3 + 4
     EXPECT_TRUE(query.summaryOf(QStringLiteral("file.name")).isEmpty());
+}
+
+TEST(BaseSummaryTest, AFilesOwnSummaryFormulaRunsOverValues)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "summaries:\n  customAverage: 'values.mean().round(3)'\n"
+        "views:\n  - type: table\n    order: [file.name, price]\n"
+        "    summaries:\n      price: customAverage\n"));
+    QList<Row> rows;
+    for (const double price : {1.0, 1.0, 2.0}) {
+        Row r = makeRow(QStringLiteral("N%1").arg(rows.size()));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(price));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    EXPECT_EQ(query.summaryOf(QStringLiteral("price")), QStringLiteral("1.333"));
 }
 
 TEST(BaseQueryTest, FiltersRows)

@@ -553,9 +553,11 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [ ] A new-base command: Obsidian's id is not in the 1.1.15 list, find it.
 - [x] ` ```base ` blocks inside notes, on `BaseView`.
 - [x] Bases `summaries:` - every built-in (Average ... Unique), a footer row in
-      the base view and in a base block. A file's own summary formulas over
-      `values` wait on list values in the expression language.
-- [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
+      the base view and in a base block.
+- [x] Bases list functions: `filter`/`map`/`reduce` with `value`, `index`,
+      `acc`; list literals; `flat`; lists of any values; a file's own
+      summary formulas over `values` (`values.mean().round(3)`).
+- [ ] Bases left out: link/file/image values,
       `summaries:`, list-property cells, cards read-only, sort not saved back.
 - [x] Canvas controls as Obsidian's: a drag on empty canvas draws a
       selection box, the wheel pans (Shift sideways), Ctrl+wheel zooms,

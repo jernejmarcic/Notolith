@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
 #include <optional>
 
 namespace noteAppC::bases {
@@ -122,7 +123,7 @@ bool tokenize(const QString &source, QList<Token> &out, QString *error)
 // --- AST -------------------------------------------------------------------
 
 struct Expression::Node {
-    enum class Kind { Literal, Path, Unary, Binary, Call };
+    enum class Kind { Literal, Path, Unary, Binary, Call, List };
     Kind kind = Kind::Literal;
     Value literal;
     QStringList path;
@@ -332,6 +333,20 @@ private:
             if (!expect(Token::Kind::RParen, "')'")) return nullptr;
             return inner;
         }
+        if (check(Token::Kind::LBracket)) { // a list literal, [1, "a", x]
+            advance();
+            auto list = std::make_unique<Node>();
+            list->kind = Node::Kind::List;
+            while (!check(Token::Kind::RBracket)) {
+                list->args.push_back(parseOr());
+                if (m_failed) return nullptr;
+                if (!check(Token::Kind::Comma))
+                    break;
+                advance();
+            }
+            if (!expect(Token::Kind::RBracket, "']'")) return nullptr;
+            return list;
+        }
         if (check(Token::Kind::Ident)) {
             auto node = std::make_unique<Node>();
             node->kind = Node::Kind::Path;
@@ -482,7 +497,7 @@ bool valuesEqual(const Value &a, const Value &b)
         case Value::Type::Number: return a.number == b.number;
         case Value::Type::String: return a.text == b.text;
         case Value::Type::Date: return a.date == b.date;
-        case Value::Type::List: return a.list == b.list;
+        case Value::Type::List: return a.strings() == b.strings();
         default: return true;
         }
     }
@@ -589,6 +604,9 @@ private:
     const FormulaSource *m_formulas;
     QDateTime m_now;
     QString *m_error = nullptr;
+public:
+    QHash<QString, Value> m_locals; ///< names bound for this evaluation: value, index, acc, values
+private:
 
     bool failed() const { return m_error && !m_error->isEmpty(); }
     Value fail(const QString &message)
@@ -607,6 +625,13 @@ private:
         case Node::Kind::Unary: return evalUnary(node);
         case Node::Kind::Binary: return evalBinary(node);
         case Node::Kind::Call: return evalCall(node);
+        case Node::Kind::List: {
+            QList<Value> items;
+            items.reserve(qsizetype(node.args.size()));
+            for (const auto &item : node.args)
+                items << eval(*item);
+            return failed() ? Value::empty() : Value::ofValues(std::move(items));
+        }
         }
         return Value::empty();
     }
@@ -626,6 +651,10 @@ private:
         }
         if (path.size() == 1) {
             const QString &head = path.first();
+            // filter/map/reduce's `value`, `index` and `acc`, and a summary's
+            // `values`, ahead of any property of the same name.
+            if (const auto local = m_locals.constFind(head); local != m_locals.constEnd())
+                return *local;
             if (head == QLatin1String("file") || head == QLatin1String("note")
                 || head == QLatin1String("formula"))
                 return fail(QStringLiteral("'%1' is not a value by itself").arg(head));
@@ -908,6 +937,10 @@ private:
                                      args.first().toDisplayString(), Qt::CaseInsensitive) == 0);
         }
 
+        if (receiver.type == Value::Type::List
+            && (name == QLatin1String("filter") || name == QLatin1String("map") || name == QLatin1String("reduce")))
+            return iterateList(receiver.list, name, argNodes);
+
         const QList<Value> args = evalArgs(argNodes);
         if (failed()) return Value::empty();
 
@@ -1008,43 +1041,105 @@ private:
         return fail(QStringLiteral("no function 'date.%1'").arg(name));
     }
 
-    Value dispatchList(const QStringList &list, const QString &name, const QList<Value> &args)
+    Value dispatchList(const QList<Value> &list, const QString &name, const QList<Value> &args)
     {
+        // Membership compares text, as it always has: a tag "2" and a
+        // number 2 are the same entry to a person reading the note.
+        const QStringList text = Value::ofValues(list).strings();
         if (name == QLatin1String("contains"))
-            return needArgs(args, 1, name) ? Value::ofBool(list.contains(args[0].toDisplayString())) : Value::empty();
+            return needArgs(args, 1, name) ? Value::ofBool(text.contains(args[0].toDisplayString())) : Value::empty();
         if (name == QLatin1String("containsAll")) {
-            for (const Value &v : args) if (!list.contains(v.toDisplayString())) return Value::ofBool(false);
+            for (const Value &v : args) if (!text.contains(v.toDisplayString())) return Value::ofBool(false);
             return Value::ofBool(true);
         }
         if (name == QLatin1String("containsAny")) {
-            for (const Value &v : args) if (list.contains(v.toDisplayString())) return Value::ofBool(true);
+            for (const Value &v : args) if (text.contains(v.toDisplayString())) return Value::ofBool(true);
             return Value::ofBool(false);
         }
         if (name == QLatin1String("join"))
-            return needArgs(args, 1, name) ? Value::ofString(list.join(args[0].toDisplayString()))
+            return needArgs(args, 1, name) ? Value::ofString(text.join(args[0].toDisplayString()))
                                            : Value::empty();
         if (name == QLatin1String("reverse")) {
-            QStringList r = list;
+            QList<Value> r = list;
             std::reverse(r.begin(), r.end());
-            return Value::ofList(r);
+            return Value::ofValues(r);
         }
         if (name == QLatin1String("sort")) {
-            QStringList r = list;
-            std::sort(r.begin(), r.end());
-            return Value::ofList(r);
+            QList<Value> r = list;
+            std::stable_sort(r.begin(), r.end(), [](const Value &a, const Value &b) { return compareForSort(a, b) < 0; });
+            return Value::ofValues(r);
         }
         if (name == QLatin1String("unique")) {
-            QStringList r;
-            for (const QString &s : list) if (!r.contains(s)) r << s;
-            return Value::ofList(r);
+            QList<Value> r;
+            QStringList seen;
+            for (const Value &v : list) {
+                const QString key = v.toDisplayString();
+                if (!seen.contains(key)) { seen << key; r << v; }
+            }
+            return Value::ofValues(r);
+        }
+        if (name == QLatin1String("flat")) {
+            QList<Value> r;
+            for (const Value &v : list) {
+                if (v.type == Value::Type::List) r << v.list; else r << v;
+            }
+            return Value::ofValues(r);
         }
         if (name == QLatin1String("slice")) {
             if (args.isEmpty()) return fail(QStringLiteral("slice() takes at least one argument"));
             const qsizetype start = normaliseIndex(args[0].number, list.size());
             const qsizetype end = args.size() > 1 ? normaliseIndex(args[1].number, list.size()) : list.size();
-            return Value::ofList(end > start ? list.mid(start, end - start) : QStringList());
+            return Value::ofValues(end > start ? list.mid(start, end - start) : QList<Value>());
+        }
+        // Not in Obsidian's list reference, but its own summary example
+        // reads `values.mean()`: the numeric aggregates a summary wants.
+        if (name == QLatin1String("mean") || name == QLatin1String("sum") || name == QLatin1String("min")
+            || name == QLatin1String("max")) {
+            QList<double> numbers;
+            for (const Value &v : list) {
+                if (const auto n = coerceNumber(v)) numbers << *n;
+            }
+            if (numbers.isEmpty()) return Value::empty();
+            if (name == QLatin1String("min")) return Value::ofNumber(*std::min_element(numbers.cbegin(), numbers.cend()));
+            if (name == QLatin1String("max")) return Value::ofNumber(*std::max_element(numbers.cbegin(), numbers.cend()));
+            const double sum = std::accumulate(numbers.cbegin(), numbers.cend(), 0.0);
+            return Value::ofNumber(name == QLatin1String("sum") ? sum : sum / double(numbers.size()));
         }
         return fail(QStringLiteral("no function 'list.%1'").arg(name));
+    }
+
+    /// filter/map/reduce: the argument is an expression evaluated once per
+    /// element, with `value` and `index` (and reduce's `acc`) bound.
+    Value iterateList(const QList<Value> &list, const QString &name,
+                      const std::vector<std::unique_ptr<Node>> &argNodes)
+    {
+        const bool reduce = name == QLatin1String("reduce");
+        if (argNodes.size() != (reduce ? 2u : 1u))
+            return fail(QStringLiteral("%1() takes %2 argument(s)").arg(name).arg(reduce ? 2 : 1));
+        const QHash<QString, Value> outer = m_locals; // nested calls restore what they shadow
+        Value acc;
+        if (reduce) {
+            acc = eval(*argNodes[1]);
+            if (failed()) return Value::empty();
+        }
+        QList<Value> out;
+        for (qsizetype i = 0; i < list.size() && !failed(); ++i) {
+            m_locals.insert(QStringLiteral("value"), list.at(i));
+            m_locals.insert(QStringLiteral("index"), Value::ofNumber(double(i)));
+            if (reduce)
+                m_locals.insert(QStringLiteral("acc"), acc);
+            const Value result = eval(*argNodes[0]);
+            if (name == QLatin1String("filter")) {
+                if (result.truthy()) out << list.at(i);
+            } else if (name == QLatin1String("map")) {
+                out << result;
+            } else {
+                acc = result;
+            }
+        }
+        m_locals = outer;
+        if (failed()) return Value::empty();
+        return reduce ? acc : Value::ofValues(out);
     }
 
     bool needArgs(const QList<Value> &args, int count, const QString &name)
@@ -1089,7 +1184,14 @@ std::unique_ptr<Expression> Expression::parse(const QString &source, QString *er
 Value Expression::evaluate(const Row &row, const FormulaSource *formulas, const QDateTime &now,
                            QString *error) const
 {
+    return evaluate(row, formulas, now, error, {});
+}
+
+Value Expression::evaluate(const Row &row, const FormulaSource *formulas, const QDateTime &now, QString *error,
+                           const QHash<QString, Value> &locals) const
+{
     Evaluator evaluator(row, formulas, now);
+    evaluator.m_locals = locals;
     QString localError;
     Value v = evaluator.run(*m_root, &localError);
     if (error) *error = localError;

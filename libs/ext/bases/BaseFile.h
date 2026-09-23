@@ -85,6 +85,8 @@ public:
 
     const FilterNode &globalFilters() const;
     const QList<BaseFormula> &formulas() const;
+    /// A top-level `summaries:` formula by name (over `values`), "" if none.
+    QString summaryFormula(const QString &name) const;
     /// The configured `displayName` for a property reference ("file.ext",
     /// "formula.ppu", a bare frontmatter key), or - when none was configured
     /// - that reference with its scope prefix dropped and capitalised, so a

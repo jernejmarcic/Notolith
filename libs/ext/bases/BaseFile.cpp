@@ -145,6 +145,7 @@ struct BaseFile::Impl {
     YAML::Node root;
     FilterNode globalFilters;
     QList<BaseFormula> formulas;
+    QHash<QString, QString> summaryFormulas; ///< top-level `summaries:`
     QHash<QString, QString> displayNames;
     QList<ViewConfig> views;
 };
@@ -176,6 +177,8 @@ std::optional<BaseFile> BaseFile::parse(const QString &yamlText, QString *error)
     file.m_impl->root = root;
     file.m_impl->globalFilters = parseFilterNode(root["filters"]);
     file.m_impl->formulas = parseFormulas(root["formulas"]);
+    for (const BaseFormula &summary : parseFormulas(root["summaries"]))
+        file.m_impl->summaryFormulas.insert(summary.name, summary.expression);
     file.m_impl->displayNames = parseDisplayNames(root["properties"]);
     file.m_impl->views = parseViews(root["views"]);
     if (file.m_impl->views.isEmpty()) {
@@ -199,6 +202,7 @@ QString BaseFile::serialize() const
 
 const FilterNode &BaseFile::globalFilters() const { return m_impl->globalFilters; }
 const QList<BaseFormula> &BaseFile::formulas() const { return m_impl->formulas; }
+QString BaseFile::summaryFormula(const QString &name) const { return m_impl->summaryFormulas.value(name); }
 const QList<ViewConfig> &BaseFile::views() const { return m_impl->views; }
 
 QString BaseFile::displayNameFor(const QString &propertyReference) const

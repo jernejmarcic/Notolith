@@ -68,14 +68,16 @@ public:
 ///  - number: `abs` `ceil` `floor` `isEmpty` `round` `toFixed`;
 ///  - date: `date` `format` `time` `relative` `isEmpty`;
 ///  - list: `contains` `containsAll` `containsAny` `isEmpty` `join`
-///    `reverse` `slice` `sort` `unique` `length` (via `.length`, Obsidian's
-///    own shorthand for a list's size, seen in the docs' formula examples);
+///    `reverse` `slice` `sort` `unique` `flat` `length` (via `.length`,
+///    Obsidian's own shorthand for a list's size, seen in the docs' formula
+///    examples), `filter(expr)` `map(expr)` `reduce(expr, initial)` with
+///    `value`, `index` and `acc` bound, list literals `[1, "a"]`, and
+///    `mean` `sum` `min` `max` for a summary's `values`;
 ///  - file: `file.hasTag(...)` `file.inFolder(...)` `file.hasLink(...)`
 ///    `file.hasProperty(...)`.
 ///
 /// Not implemented - each is a clear "unsupported" parse or evaluate error,
-/// never a crash: `list.filter/map/reduce` (would need a mini-interpreter
-/// with an implicit loop variable), `link`/`file`/`icon`/`html`/`image`
+/// never a crash: `link`/`file`/`icon`/`html`/`image`
 /// object values and their methods, `object` values, `escapeHTML`,
 /// `random`, regular-expression arguments to `replace`/`split`
 /// (a plain-string needle/separator works).
@@ -94,6 +96,10 @@ public:
     /// row does not match" / "sorts last", not as a crash.
     Value evaluate(const Row &row, const FormulaSource *formulas, const QDateTime &now,
                    QString *error) const;
+    /// The same, with `locals` bound as names ahead of any property: a
+    /// summary formula's `values`.
+    Value evaluate(const Row &row, const FormulaSource *formulas, const QDateTime &now, QString *error,
+                   const QHash<QString, Value> &locals) const;
 
     /// The `formula.x` names this expression reads, so BaseQuery can detect a
     /// cycle before evaluating anything.

@@ -13,12 +13,9 @@ namespace noteAppC::bases {
 /// or show a property boils down to these five - see the module's report for
 /// what is deliberately left out.
 ///
-/// ponytail: a "list" is always a list of strings. Every real list this
-/// module ever produces - `file.tags`, `file.links`, a list-typed frontmatter
-/// property - already is one, so a nested/mixed-type list would only exist if
-/// a formula's `list()`/`map()` built one, and those two functions are not
-/// implemented (see Expression.h). Upgrade path: replace QStringList with a
-/// QList<Value> if a future function needs heterogeneous lists.
+/// A list holds values of any type: `file.tags` and list properties are
+/// lists of strings, but `map()` makes numbers, and `reduce()` has to add
+/// them rather than join their text.
 struct Value {
     enum class Type { Empty, Bool, Number, String, Date, List };
 
@@ -27,7 +24,7 @@ struct Value {
     double number = 0.0;
     QString text;
     QDateTime date;
-    QStringList list;
+    QList<Value> list;
 
     Value() = default;
     static Value empty() { return Value(); }
@@ -35,7 +32,25 @@ struct Value {
     static Value ofNumber(double n) { Value v; v.type = Type::Number; v.number = n; return v; }
     static Value ofString(QString s) { Value v; v.type = Type::String; v.text = std::move(s); return v; }
     static Value ofDate(QDateTime d) { Value v; v.type = Type::Date; v.date = std::move(d); return v; }
-    static Value ofList(QStringList l) { Value v; v.type = Type::List; v.list = std::move(l); return v; }
+    static Value ofList(const QStringList &l)
+    {
+        Value v;
+        v.type = Type::List;
+        v.list.reserve(l.size());
+        for (const QString &s : l)
+            v.list << ofString(s);
+        return v;
+    }
+    static Value ofValues(QList<Value> l) { Value v; v.type = Type::List; v.list = std::move(l); return v; }
+    /// A list's elements as text, the form contains()/join() compare in.
+    QStringList strings() const
+    {
+        QStringList out;
+        out.reserve(list.size());
+        for (const Value &item : list)
+            out << item.toDisplayString();
+        return out;
+    }
 
     bool isEmpty() const { return type == Type::Empty; }
 
@@ -68,7 +83,7 @@ struct Value {
         }
         case Type::String: return text;
         case Type::Date: return date.toString(Qt::ISODate);
-        case Type::List: return list.join(QStringLiteral(", "));
+        case Type::List: return strings().join(QStringLiteral(", "));
         }
         return {};
     }
@@ -106,7 +121,7 @@ inline int compareForSort(const Value &a, const Value &b)
         case Value::Type::Number: return a.number < b.number ? -1 : (a.number > b.number ? 1 : 0);
         case Value::Type::String: return a.text.compare(b.text);
         case Value::Type::Date: return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
-        case Value::Type::List: return a.list.join(QLatin1Char(',')).compare(b.list.join(QLatin1Char(',')));
+        case Value::Type::List: return a.strings().join(QLatin1Char(',')).compare(b.strings().join(QLatin1Char(',')));
         }
     }
     return a.toDisplayString().compare(b.toDisplayString());
