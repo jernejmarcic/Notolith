@@ -93,12 +93,11 @@ public:
     /// or the package was not found).
     static bool isAvailable();
 
-    /// The same `<script>`/`on*=` stripping render() applies to `html` before
-    /// litehtml ever sees it, exposed so a caller that lays out markup
-    /// through a different path - the EPUB reader sanitises a whole
-    /// chapter's XHTML, not a note's HTML block - gets the identical defence
-    /// in depth rather than a second copy of the same two regexes.
-    static QString sanitize(const QString &html);
+    /// The `<script>`/`on*=` stripping render() applies before litehtml
+    /// ever sees markup, for callers that lay out or publish HTML some other
+    /// way: the EPUB reader's chapters, the static site exporter. There in
+    /// every build, litehtml or not - it is a text transform, not a render.
+    static QString sanitizeHtml(const QString &html);
 
     /// How many times render() has actually built a litehtml document, since
     /// process start. Test-only: it is what proves a note with no HTML block

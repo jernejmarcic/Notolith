@@ -73,6 +73,11 @@ if(NOTEAPPC_WITH_EPUB)
         pkg_check_modules(LIBARCHIVE QUIET IMPORTED_TARGET libarchive)
     endif()
 endif()
+# Another Tier 1 module: exports a vault (or its `publish: true` part) as a
+# static, JavaScript-optional website - Obsidian Publish style
+# (libs/ext/publish/). No new external dependency: it only draws on
+# libraries this project already links (markdown, index, render, theme).
+option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publish)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -173,6 +178,9 @@ endif()
 get_property(noteappc_have_litehtml GLOBAL PROPERTY NOTEAPPC_HAVE_LITEHTML)
 if(NOTEAPPC_WITH_EPUB AND TARGET PkgConfig::LIBARCHIVE AND noteappc_have_litehtml)
     add_subdirectory(libs/ext/epub)
+endif()
+if(NOTEAPPC_WITH_PUBLISH)
+    add_subdirectory(libs/ext/publish)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

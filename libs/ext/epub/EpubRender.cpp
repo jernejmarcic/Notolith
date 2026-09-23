@@ -170,9 +170,9 @@ const EpubView::RenderedChapter *EpubView::renderedChapter(int spineIndex)
     if (raw.isEmpty())
         return nullptr;
 
-    // Same defence in depth as a note's HTML block (HtmlRenderer::sanitize),
+    // Same defence in depth as a note's HTML block (HtmlRenderer::sanitizeHtml),
     // applied to a whole chapter rather than one span.
-    const QString sanitized = HtmlRenderer::sanitize(QString::fromUtf8(raw));
+    const QString sanitized = HtmlRenderer::sanitizeHtml(QString::fromUtf8(raw));
     const QString withImages = rewriteResourceRefs(sanitized, archivePath);
     const QString css = collectStylesheets(sanitized, archivePath);
 

@@ -1,6 +1,6 @@
 #include "HtmlRenderer.h"
 
-#include <QRegularExpression> // used by sanitize() in both branches below
+#include <QRegularExpression> // used by sanitizeHtml() in both branches below
 
 #ifdef NOTEAPPC_HAVE_LITEHTML
 
@@ -443,14 +443,14 @@ bool HtmlRenderer::isAvailable()
     return true;
 }
 
+QString HtmlRenderer::sanitizeHtml(const QString &html)
+{
+    return sanitise(html);
+}
+
 qint64 HtmlRenderer::renderCount()
 {
     return g_renderCount.load();
-}
-
-QString HtmlRenderer::sanitize(const QString &html)
-{
-    return sanitise(html);
 }
 
 QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPixels,
@@ -525,7 +525,7 @@ qint64 HtmlRenderer::renderCount()
     return 0;
 }
 
-QString HtmlRenderer::sanitize(const QString &html)
+QString HtmlRenderer::sanitizeHtml(const QString &html)
 {
     // No litehtml to protect, but the EPUB reader still calls this
     // unconditionally before layout of its own (a plain-text fallback) - so
