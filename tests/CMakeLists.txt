@@ -180,6 +180,26 @@ if(TARGET noteAppC_plugins)
         TIMEOUT 60)
 endif()
 
+# The AI plugin (plugins/ai, docs/PLUGINS.md's "AI plugin"): AiProvider's
+# request/response logic against a real in-process fake server, plus the
+# real libai.so through a real sandboxed host process. Needs Qt6::HttpServer
+# for the fake server regardless of whether NOTEAPPC_WITH_SYNC (the other
+# consumer of that component) is on.
+find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
+if(TARGET ai AND TARGET Qt6::HttpServer)
+    add_executable(test_ai_plugin test_ai_plugin.cpp)
+    target_include_directories(test_ai_plugin PRIVATE ${CMAKE_SOURCE_DIR}/plugins/ai)
+    target_link_libraries(test_ai_plugin PRIVATE
+        noteAppC_ai_provider noteAppC_plugins noteAppC_plugin_protocol Qt6::HttpServer Qt6::Test GTest::gtest)
+    target_compile_definitions(test_ai_plugin PRIVATE
+        NOTEAPPC_AI_PLUGIN_DIR="${CMAKE_BINARY_DIR}/plugins/ai")
+    add_dependencies(test_ai_plugin noteAppC-plugin-host ai)
+    add_test(NAME ai_plugin COMMAND test_ai_plugin)
+    set_tests_properties(ai_plugin PROPERTIES
+        ENVIRONMENT "NOTEAPPC_PLUGIN_HOST=$<TARGET_FILE:noteAppC-plugin-host>"
+        TIMEOUT 120)
+endif()
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
