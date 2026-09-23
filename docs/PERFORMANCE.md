@@ -419,6 +419,17 @@ it was on screen. Hidden, it now only marks itself stale and catches up in
 `showEvent()`. The sidebar's local graph is built at startup for this reason
 alone: it costs nothing until its tab is opened.
 
+### 17. A whole parse for a title
+
+The backlinks pane's unlinked mentions re-read the note and ran the full
+Markdown parser over it to learn its title and aliases, which only the file
+name and the front matter hold. Measuring every feature off against on (the
+Core plugins switches) showed it: a 1 MB note opened in 15 ms with the side
+panes off and 156 ms with them on. Now only the front matter is parsed, and
+the outgoing links pane no longer reads the note when it has no links. Note
+open with the panes on, 20 000-note vault: 13 / 27 / 156 ms at 50 / 200 /
+1 024 kB to 7.5 / 3.2 / 19 ms; unlinked mentions 0.33 to 0.16 ms.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -555,6 +566,13 @@ Each of these produced a wrong number at least once in this project.
   existing 210 ms refresh earlier, where it ran a second time, and made the
   next theme pass pay for a list it had just filled. Phase timings inside
   `openVault` found it in two runs; guessing would not have.
+- **A cost that lands after the window closes.** With every feature off, the
+  20 000-note cold start read 1 473 ms against 277 ms with them on. Nothing
+  off was slow: `processEvents(flags, 50)` checks its deadline only between
+  dispatcher passes, and one pass ran the indexer's 6 800 queued results. With
+  the panes on, `openVault` took 110 ms longer and the same flood landed just
+  after the frame, unmeasured. Counting events by receiver found it; a CPU
+  profile could not, because the main thread was mostly waiting.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.

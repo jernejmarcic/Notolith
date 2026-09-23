@@ -13,6 +13,7 @@
 #include <QUuid>
 #include <QVariant>
 
+#include "Frontmatter.h"
 #include "Parser.h"
 #include "Vault.h"
 
@@ -781,13 +782,16 @@ QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) cons
     const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
 
     // The note's own title and aliases, re-read from the file rather than
-    // trusted from the index - "the file is the truth", and this only runs
-    // once per note the backlinks pane opens, not on every keystroke.
+    // trusted from the index - "the file is the truth". From its front
+    // matter alone: a whole parse was 130 ms for a 1 MB note, each time the
+    // backlinks pane showed it.
     Note note;
     if (!Vault::read(path, note))
         return results;
-    const Parser parser;
-    const QStringList titles = parser.parse(note.text, path).linkNames();
+    Metadata own;
+    own.path = path;
+    Frontmatter::parse(note.text, Frontmatter::find(note.text), own);
+    const QStringList titles = own.linkNames();
     if (titles.isEmpty())
         return results;
 

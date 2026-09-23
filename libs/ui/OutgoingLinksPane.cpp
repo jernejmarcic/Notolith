@@ -118,7 +118,7 @@ void OutgoingLinksPane::refresh()
 
     const auto links = m_index->outgoingLinks(m_path);
 
-    const NoteSource source(m_path);
+    const NoteSource source(links.isEmpty() ? QString() : m_path); // no links, no need to read it
     QHash<QString, QTreeWidgetItem *> byTarget;
     QStringList unresolvedRows;
     int shownCount = 0;
