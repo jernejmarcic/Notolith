@@ -233,6 +233,53 @@ QString MarkdownEditor::cellSafe(const QString &text) const
     return safe;
 }
 
+bool MarkdownEditor::fillShortRow(qsizetype table, int row)
+{
+    if (table < 0 || table >= m_decorations.tables.size())
+        return false;
+    const TableSpan &span = m_decorations.tables.at(table);
+    const QList<Range> cells = span.rows.value(row);
+    if (cells.isEmpty() || cells.size() >= span.columns)
+        return false;
+    const qsizetype lineEnd = m_lines.lineEnd(m_lines.lineAt(cells.last().start));
+    // A row written without its closing pipe gets one before the new cells.
+    qsizetype last = lineEnd;
+    while (last > cells.last().end && m_text.at(last - 1).isSpace())
+        --last;
+    QString added = last > cells.last().end && m_text.at(last - 1) == QLatin1Char('|') ? QString() : QStringLiteral(" |");
+    for (qsizetype c = cells.size(); c < span.columns; ++c)
+        added += QStringLiteral("  |");
+
+    const qsizetype caret = m_cursor;
+    m_lastEdit.invalidate();
+    pushUndo();
+    applyEdit(last, lineEnd - last, added);
+    m_lastEdit.invalidate();
+    reparse();
+    // The caret stays where it was; the click or the key that asked moves it.
+    m_cursor = m_anchor = caret <= last ? caret : caret + added.size() - (lineEnd - last);
+    return true;
+}
+
+bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
+{
+    const qreal y = viewportPoint.y() + verticalScrollBar()->value();
+    const qreal x = viewportPoint.x() - contentLeft();
+    for (const BlockView &view : m_blocks) {
+        if (view.cells.empty() || y < view.y || y > view.y + view.height || m_mode == Mode::Source)
+            continue;
+        const TableSpan *table = tableFor(view);
+        if (!table)
+            return false; // a base's cells, not a table's
+        for (const Cell &cell : view.cells) {
+            if (!cell.source.isValid() && cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
+                return fillShortRow(table - m_decorations.tables.constData(), cell.row);
+        }
+        return false;
+    }
+    return false;
+}
+
 bool MarkdownEditor::handleTableKey(QKeyEvent *event)
 {
     if (m_anchor != m_cursor)
@@ -246,6 +293,16 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
 
     switch (event->key()) {
     case Qt::Key_Tab: {
+        // The next cell is one this short row lacks: give the row its cells.
+        if (cell.column + 1 < table.columns && cell.column + 1 >= columns) {
+            const qsizetype index = &table - m_decorations.tables.constData();
+            const int rowIndex = cell.row;
+            const int next = cell.column + 1;
+            if (fillShortRow(index, rowIndex)) {
+                moveCursor(m_decorations.tables.at(index).rows.value(rowIndex).value(next).start, false);
+                return true;
+            }
+        }
         if (cell.column + 1 < columns) {
             moveCursor(row.at(cell.column + 1).end, false);
         } else if (cell.row + 1 < table.rows.size()) {

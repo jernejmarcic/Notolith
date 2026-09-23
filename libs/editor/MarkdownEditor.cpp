@@ -2347,6 +2347,18 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                               QFontMetricsF(cellFont).horizontalAdvance(shown) + 2 * padX);
             cells.push_back(std::move(cell));
         }
+        // A row shorter than the header still draws its missing cells, as
+        // Obsidian does; they have no source until a click fills the row in
+        // (fillShortRow).
+        for (int c = int(row.size()); c < table->columns; ++c) {
+            Cell cell;
+            cell.row = r;
+            cell.column = c;
+            cell.alignment = table->alignment.value(c, Qt::AlignLeft);
+            cell.layout = std::make_unique<QTextLayout>(QString());
+            cell.layout->setFont(font);
+            cells.push_back(std::move(cell));
+        }
     }
 
     // Obsidian does not squeeze a table into the readable column: every column
@@ -2431,12 +2443,38 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         painter.setPen(QPen(border, 1));
         painter.drawRect(rect);
 
+        // A selection is drawn in each cell it reaches; one that runs across
+        // cells tints the ones it covers whole, so it reads as a block.
+        QList<QTextLayout::FormatRange> selected;
+        const Range selection = this->selection();
+        if (selection.length() > 0 && cell.source.isValid()
+            && selection.start <= cell.source.end && cell.source.start <= selection.end) {
+            QColor background = m_theme.color(QStringLiteral("--interactive-accent"));
+            const bool whole = selection.start <= cell.source.start && cell.source.end <= selection.end;
+            const bool across = selection.start < cell.source.start || cell.source.end < selection.end;
+            if (whole && across) {
+                background.setAlphaF(0.18f);
+                painter.fillRect(rect.adjusted(1, 1, -1, -1), background);
+            }
+            const int length = int(cell.layout->text().size());
+            const int from = qBound(0, int(cell.map.toDisplay(qMax(selection.start, cell.source.start))) - cell.lead, length);
+            const int to = qBound(0, int(cell.map.toDisplay(qMin(selection.end, cell.source.end))) - cell.lead, length);
+            if (to > from) {
+                QTextLayout::FormatRange range;
+                range.start = from;
+                range.length = to - from;
+                background.setAlphaF(0.33f);
+                range.format.setBackground(background);
+                selected.append(range);
+            }
+        }
+
         painter.setPen(text);
         // Each cell clips its own text, so a long word cannot bleed into the
         // next column.
         painter.save();
         painter.setClipRect(rect.adjusted(1, 1, -1, -1), Qt::IntersectClip);
-        cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top));
+        cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top), selected);
         painter.restore();
     }
     painter.restore();
@@ -3372,7 +3410,9 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
             // Clicking a cell puts the caret on the character under the
             // pointer, and the table is edited where it is drawn.
             for (const Cell &cell : view.cells) {
-                if (!cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
+                // A cell with no source - a base's, or one a short row lacks
+                // - has no character to land on; the block's start does.
+                if (!cell.source.isValid() || !cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
                     continue;
                 const QPointF origin = cellTextOrigin(view, cell) + QPointF(0, view.y);
                 for (int i = 0; cell.layout && i < cell.layout->lineCount(); ++i) {
@@ -4112,6 +4152,8 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     if (event->modifiers().testFlag(Qt::ControlModifier) && jumpToFootnote(event->pos()))
         return;
 
+    // A click on a cell a short row lacks gives the row that cell first.
+    fillShortRowAt(event->pos());
     if (handleBlockClick(event->pos()))
         return;
 
