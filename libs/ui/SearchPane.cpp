@@ -56,6 +56,7 @@ SearchPane::SearchPane(QWidget *parent)
     m_queryEdit->setObjectName(QStringLiteral("quickSwitcherQuery"));
     m_queryEdit->setPlaceholderText(tr("Search the vault..."));
     m_queryEdit->setClearButtonEnabled(true);
+    setFocusProxy(m_queryEdit); // "Search in all files" focuses the pane, and means the box
 
     m_header = new QLabel(tr("Search"), this);
     m_header->setObjectName(QStringLiteral("paneHeader"));

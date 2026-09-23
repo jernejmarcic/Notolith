@@ -48,6 +48,7 @@
 #include "Snapshots.h"
 #include "Parser.h"
 #include "QuickSwitcher.h"
+#include "SearchPane.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "TagsPane.h"
@@ -526,13 +527,10 @@ QWidget *MainWindow::buildRightSidebar()
 
     m_tags = new TagsPane(m_rightSidebar);
     m_tags->setIndex(&m_index);
-    connect(m_tags, &TagsPane::tagActivated, this, [this](const QString &tag) {
-        // TODO(Phase 5): hand the tag to the search pane instead of jumping
-        // straight to the first note that carries it.
-        const QStringList notes = m_index.notesWithTag(tag);
-        if (!notes.isEmpty())
-            openRelative(notes.first());
-    });
+    // A tag opens a search for it, as in Obsidian; tag: already finds the
+    // nested tags beneath it.
+    connect(m_tags, &TagsPane::tagActivated, this,
+            [this](const QString &tag) { openSearch(QStringLiteral("tag:#%1").arg(tag)); });
 
     m_outgoingLinks = new OutgoingLinksPane(m_rightSidebar);
     m_outgoingLinks->setIndex(&m_index);
@@ -551,10 +549,17 @@ QWidget *MainWindow::buildRightSidebar()
                 openRelative(relativePath);
                 jumpToHeading(subpath);
             });
-    connect(m_bookmarks, &BookmarksPane::searchActivated, this, [this](const QString &query) {
-        // TODO(search lane): hand the query to the search pane.
-        statusBar()->showMessage(tr("Search: %1").arg(query), 3000);
-    });
+    connect(m_bookmarks, &BookmarksPane::searchActivated, this,
+            [this](const QString &query) { openSearch(query); });
+
+    m_search = new SearchPane(m_rightSidebar);
+    m_search->setIndex(&m_index);
+    connect(m_search, &SearchPane::matchActivated, this,
+            [this](const QString &relativePath, qsizetype offset) {
+                openRelative(relativePath);
+                m_editor->setCursorOffset(offset);
+                m_editor->setFocus();
+            });
 
     m_rightPanes = new QStackedWidget(m_rightSidebar);
     m_rightPanes->setObjectName(QStringLiteral("rightSidebarPanes"));
@@ -563,9 +568,14 @@ QWidget *MainWindow::buildRightSidebar()
     m_rightPanes->addWidget(m_outgoingLinks);
     m_rightPanes->addWidget(m_outline);
     m_rightPanes->addWidget(m_bookmarks);
+    m_rightPanes->addWidget(m_search);
 
     auto *group = new QButtonGroup(tabRow);
     group->setExclusive(true);
+    m_rightTabs = group;
+    QToolButton *searchTab = rightSidebarTabButton(
+        tabRow, QStringLiteral("searchTabButton"), QStringLiteral("search"), tr("Search"),
+        tr("Search"), m_rightPanes->indexOf(m_search));
     QToolButton *backlinksTab =
         rightSidebarTabButton(tabRow, QStringLiteral("backlinksTabButton"), QStringLiteral("link"),
                               tr("Backlinks"), tr("Backlinks"), 0);
@@ -581,12 +591,16 @@ QWidget *MainWindow::buildRightSidebar()
     QToolButton *bookmarksTab = rightSidebarTabButton(
         tabRow, QStringLiteral("bookmarksTabButton"), QStringLiteral("bookmark"), tr("Bookmarks"),
         tr("Bookmarks"), 4);
+    int id = 0;
     for (QToolButton *tab : {backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab}) {
-        // Five panes do not fit as words; Obsidian's sidebar tabs are icons.
+        // Six panes do not fit as words; Obsidian's sidebar tabs are icons.
         tab->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        group->addButton(tab);
-        tabLayout->addWidget(tab);
+        group->addButton(tab, id++);
     }
+    searchTab->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    group->addButton(searchTab, m_rightPanes->indexOf(m_search));
+    for (QToolButton *tab : {searchTab, backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab})
+        tabLayout->addWidget(tab);
     tabLayout->addStretch(1);
     backlinksTab->setChecked(true);
 
@@ -624,6 +638,8 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
     add(QStringLiteral("switcher:open"), tr("Quick switcher: Open quick switcher"),
         QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
+    add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
+        QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
     add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
         QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
     add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
@@ -738,6 +754,24 @@ void MainWindow::toggleRightSidebar()
 {
     m_rightSidebar->setVisible(!m_rightSidebar->isVisible());
     QSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
+}
+
+void MainWindow::showRightPane(QWidget *pane)
+{
+    if (!m_rightSidebar->isVisible())
+        toggleRightSidebar();
+    const int index = m_rightPanes->indexOf(pane);
+    m_rightPanes->setCurrentIndex(index);
+    if (QAbstractButton *tab = m_rightTabs->button(index))
+        tab->setChecked(true);
+}
+
+void MainWindow::openSearch(const QString &query)
+{
+    showRightPane(m_search);
+    if (!query.isEmpty())
+        m_search->setQuery(query);
+    m_search->setFocus();
 }
 
 void MainWindow::openQuickSwitcher()
@@ -1103,6 +1137,8 @@ void MainWindow::applyTheme()
     m_tree->setFont(m_theme.uiFont());
     m_editor->setTheme(m_theme);
     m_tags->setTheme(m_theme);
+    m_backlinks->setTheme(m_theme);
+    m_search->setTheme(m_theme);
     m_preview->applyTheme(m_theme);
     m_outgoingLinks->setTheme(m_theme);
     if (m_settingsPage)

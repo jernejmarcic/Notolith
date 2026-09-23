@@ -14,6 +14,7 @@
 #include "Theme.h"
 #include "Vault.h"
 
+class QButtonGroup;
 class QFileSystemModel;
 class QFileSystemWatcher;
 class QLabel;
@@ -202,6 +203,11 @@ private:
                                        const QString &icon, const QString &label,
                                        const QString &tooltip, int index);
     void updateTabButtonIcon(QToolButton *button);
+    /// Shows the right sidebar on `pane`, its tab checked.
+    void showRightPane(QWidget *pane);
+    /// "Search: Search in all files": the search pane, focused, with `query`
+    /// run when one is given (a tag, a bookmarked search).
+    void openSearch(const QString &query = QString());
     /// (Re)builds the vault menu button's popup just before it shows, since
     /// its contents depend on OpenMode and the current vault.
     void rebuildVaultMenu();
@@ -288,6 +294,8 @@ private:
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;
     QStackedWidget *m_rightPanes = nullptr;
+    QButtonGroup *m_rightTabs = nullptr; ///< button ids are m_rightPanes indexes
+    class SearchPane *m_search = nullptr;
     BacklinksPane *m_backlinks = nullptr;
     TagsPane *m_tags = nullptr;
     OutgoingLinksPane *m_outgoingLinks = nullptr;

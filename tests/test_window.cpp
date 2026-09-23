@@ -200,6 +200,56 @@ TEST_F(WindowTest, TagsPaneListsTagsNestedAndSortedByCount)
     EXPECT_EQ(list->topLevelItem(1)->text(0), QStringLiteral("area"));
 }
 
+TEST_F(WindowTest, ClickingATagSearchesForItAndAResultOpensTheNoteAtTheMatch)
+{
+    write(QStringLiteral("A.md"), "Intro line.\n#project #project/alpha\n");
+    write(QStringLiteral("B.md"), "#project\n");
+    write(QStringLiteral("C.md"), "#area\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+
+    auto *tags = window.findChild<QWidget *>(QStringLiteral("tagsPane"))->findChild<QTreeWidget *>();
+    ASSERT_NE(tags, nullptr);
+    emit tags->itemClicked(tags->topLevelItem(0)->child(0), 0); // project/alpha
+
+    auto *search = window.findChild<QWidget *>(QStringLiteral("searchPane"));
+    ASSERT_NE(search, nullptr);
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    EXPECT_EQ(panes->currentWidget(), search);
+    EXPECT_TRUE(window.findChild<QToolButton *>(QStringLiteral("searchTabButton"))->isChecked());
+    EXPECT_EQ(search->findChild<QLineEdit *>()->text(), QStringLiteral("tag:#project/alpha"));
+
+    auto *results = search->findChild<QTreeWidget *>();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return results->topLevelItemCount() == 1; }, 5000));
+    EXPECT_EQ(results->topLevelItem(0)->data(0, Qt::UserRole).toString(), QStringLiteral("A.md"));
+
+    emit results->itemClicked(results->topLevelItem(0), 0);
+    auto *editor = window.findChild<MarkdownEditor *>();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("Intro line.\n#project #project/alpha\n"));
+    EXPECT_EQ(editor->cursorOffset(), 21); // at "#project/alpha", not the note's start
+}
+
+TEST_F(WindowTest, SearchInAllFilesShowsTheSearchPaneAndFocusesItsBox)
+{
+    write(QStringLiteral("A.md"), "text\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *command = window.findChild<QAction *>(QStringLiteral("global-search:open"));
+    ASSERT_NE(command, nullptr);
+    EXPECT_EQ(command->shortcut(), QKeySequence(QStringLiteral("Ctrl+Shift+F")));
+    command->trigger();
+
+    auto *search = window.findChild<QWidget *>(QStringLiteral("searchPane"));
+    EXPECT_TRUE(search->isVisible());
+    EXPECT_EQ(QApplication::focusWidget(), search->findChild<QLineEdit *>());
+}
+
 TEST_F(WindowTest, OutgoingLinksPaneGroupsByTargetAndFlagsUnresolved)
 {
     write(QStringLiteral("Target.md"), "# Target\n");
