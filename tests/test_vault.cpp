@@ -301,6 +301,27 @@ TEST(VaultIgnoreFilters, UnconfiguredVaultSkipsBuildDirectoriesByDefault)
     EXPECT_FALSE(vault.isIgnored(QStringLiteral("Projects/notes.md")));
 }
 
+TEST(VaultConfinedNotePath, OnlyNotesInsideTheVault)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub")));
+    QFile(outside.filePath(QStringLiteral("secret.md"))).open(QIODevice::WriteOnly);
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("secret.md")), dir.filePath(QStringLiteral("link.md"))));
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("away"))));
+    const Vault vault(dir.path());
+
+    EXPECT_EQ(vault.confinedNotePath(QStringLiteral("sub/New.md")), dir.filePath(QStringLiteral("sub/New.md")));
+    EXPECT_EQ(vault.confinedNotePath(QStringLiteral("sub/../Top.md")), dir.filePath(QStringLiteral("Top.md")));
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral("../x.md")).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral("sub/../../x.md")).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(outside.filePath(QStringLiteral("secret.md"))).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral("link.md")).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral("away/secret.md")).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral("missing/New.md")).isEmpty());
+    EXPECT_TRUE(vault.confinedNotePath(QStringLiteral(".obsidian/app.json")).isEmpty());
+}
+
 TEST(VaultIgnoreFilters, ConfiguredFiltersMatchPrefixAndRegexAndDropTheBuildDefault)
 {
     QTemporaryDir dir;

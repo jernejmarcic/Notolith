@@ -49,6 +49,7 @@
 #include <QTableView>
 #include "BaseView.h"
 #endif
+#include <QSettings>
 #include <QSignalSpy>
 #include <QAction>
 #include <QDate>
@@ -1672,6 +1673,48 @@ TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
     Settings on = Settings::load();
     on.setValue(QStringLiteral("plugins.noteHistory"), true);
     ASSERT_TRUE(on.save());
+    qputenv("XDG_DATA_HOME", previous);
+}
+#endif
+
+#ifdef NOTEAPPC_WORD_STATS_PLUGIN_DIR
+TEST_F(WindowTest, AnEnabledPluginsCommandIsAnActionAndItsFenceIsDrawn)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
+    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/word-stats");
+    ASSERT_TRUE(QDir().mkpath(installed));
+    for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libword-stats.so")})
+        ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR "/") + file, installed + u'/' + file));
+    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC/plugins.ini");
+    {
+        QSettings config(grants, QSettings::IniFormat);
+        config.setValue(QStringLiteral("word-stats/enabled"), true);
+    }
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.communityPlugins"), true);
+    ASSERT_TRUE(on.save());
+    write(QStringLiteral("Calc.md"), "```calc\n2+2\n```\n\nafter\n");
+    {
+        MainWindow window;
+        // openTarget, as main.cpp reaches it after the first paint: plugins
+        // start there, never before.
+        window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+        window.resize(1000, 700);
+        window.show();
+        WAIT_TRUE(window.findChild<QAction *>(QStringLiteral("word-stats:count-words")), 5000);
+        window.openNote(path(QStringLiteral("Calc.md")));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype calc = editor->noteText().indexOf(QLatin1String("2+2"));
+        WAIT_TRUE(!editor->embedImageSizeAt(calc).isEmpty(), 10000);
+    }
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.communityPlugins"), false);
+    ASSERT_TRUE(off.save());
+    QFile::remove(grants);
     qputenv("XDG_DATA_HOME", previous);
 }
 #endif

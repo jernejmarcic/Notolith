@@ -75,6 +75,20 @@ bool Vault::contains(const QString &absolutePath) const
     return path == m_root || path.startsWith(m_root + QLatin1Char('/'));
 }
 
+QString Vault::confinedNotePath(const QString &relativePath) const
+{
+    if (!isValid() || relativePath.isEmpty() || QDir::isAbsolutePath(relativePath))
+        return {};
+    const QString path = QDir::cleanPath(absolute(relativePath));
+    if (!isNote(path) || !contains(path))
+        return {};
+    const QFileInfo info(path);
+    const QString real = info.exists() ? info.canonicalFilePath()
+                                       : QFileInfo(info.path()).canonicalFilePath() + QLatin1Char('/') + info.fileName();
+    const QString root = QFileInfo(m_root).canonicalFilePath();
+    return real.startsWith(root + QLatin1Char('/')) ? path : QString();
+}
+
 Note Vault::decode(const QByteArray &bytes)
 {
     Note note;

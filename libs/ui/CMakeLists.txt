@@ -59,6 +59,11 @@ if(TARGET noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
 endif()
 
+if(TARGET noteAppC_plugins)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_plugins)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PLUGINS)
+endif()
+
 if(TARGET noteAppC_pdfview)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_pdfview)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PDFVIEW)

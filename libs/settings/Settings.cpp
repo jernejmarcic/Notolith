@@ -74,7 +74,7 @@ const QVariantMap &defaults()
     };
     // Core plugins: every feature on until a person or the vault says not.
     for (const Settings::Feature &feature : Settings::features())
-        map.insert(Settings::featureKey(feature.id), true);
+        map.insert(Settings::featureKey(feature.id), QByteArray(feature.id) != "community-plugins");
     return map;
     }();
     return map;
@@ -499,6 +499,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Run any command by name with Ctrl+P."), true},
         {"canvas", QT_TRANSLATE_NOOP("Settings", "Canvas"),
          QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
+        {"community-plugins", QT_TRANSLATE_NOOP("Settings", "Community plugins"),
+         QT_TRANSLATE_NOOP("Settings", "Load plugins from ~/.local/share/noteAppC/plugins, each in its own "
+                                       "sandboxed process, with only the permissions you grant it."),
+         false},
         {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),
          QT_TRANSLATE_NOOP("Settings", "Open or create today's note."), true},
         {"html-blocks", QT_TRANSLATE_NOOP("Settings", "HTML blocks"),

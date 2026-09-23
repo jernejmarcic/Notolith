@@ -36,6 +36,13 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub)
         target_link_libraries(test_window PRIVATE ${module})
     endif()
 endforeach()
+# A real plugin in a real host process, through the window's own wiring.
+if(TARGET noteAppC_plugins)
+    target_compile_definitions(test_window PRIVATE
+        NOTEAPPC_WORD_STATS_PLUGIN_DIR="${CMAKE_BINARY_DIR}/examples/plugins/word-stats"
+        NOTEAPPC_PLUGIN_HOST_PATH="$<TARGET_FILE:noteAppC-plugin-host>")
+    add_dependencies(test_window noteAppC-plugin-host word-stats)
+endif()
 
 add_executable(test_demo test_demo.cpp)
 target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)

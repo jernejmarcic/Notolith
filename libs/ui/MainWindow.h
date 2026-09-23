@@ -35,6 +35,7 @@ namespace noteAppC {
 
 class SpellChecker;
 class NoteHistory;
+class PluginRegistry;
 
 class BacklinksPane;
 class BookmarksPane;
@@ -236,6 +237,12 @@ private:
     /// and their tabs, the graph, page preview; and disables the commands of
     /// every feature that is off.
     void applyFeatures();
+    /// Community plugins: the registry started or stopped to match the
+    /// switch, after the first paint only. `rescan` rebuilds the commands
+    /// and code-block languages even when the switch did not move - a
+    /// plugin was turned on or off in settings.
+    void syncPlugins(bool rescan = false);
+    void notifyPlugins(const char *event, const QString &path);
     /// Points the note-following side panes at `path` (empty clears them).
     void showNoteInPanes(const QString &path);
     /// The hover preview, built the first time it is wanted.
@@ -421,6 +428,10 @@ private:
     int m_historyRecords = 0;
     bool m_spellLoading = false;
     bool m_publishing = false;
+    PluginRegistry *m_plugins = nullptr;
+    QList<QAction *> m_pluginCommands;
+    QStringList m_pluginLanguages;
+    std::function<void(MarkdownEditor *)> m_applyPluginRenderer; ///< for an editor made later
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width

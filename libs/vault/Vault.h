@@ -39,6 +39,11 @@ public:
     QString relative(const QString &absolutePath) const;
     QString absolute(const QString &relativePath) const;
     bool contains(const QString &absolutePath) const;
+    /// The absolute path of the note `relativePath` names, for a caller
+    /// that is not trusted with the rest of the disk (a plugin): empty when
+    /// it is not a note, or when "..", an absolute path or a symlink would
+    /// take it out of the vault. It need not exist, but its folder must.
+    QString confinedNotePath(const QString &relativePath) const;
 
     /// Reads UTF-8, normalising CRLF to LF and stripping a BOM. On failure
     /// returns false and fills `error`.

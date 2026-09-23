@@ -24,6 +24,9 @@
 #include <algorithm>
 
 #include "HtmlRenderer.h"
+#ifdef NOTEAPPC_HAVE_PLUGINS
+#include "PluginRegistry.h"
+#endif
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
 #include "PdfPage.h"
@@ -55,8 +58,11 @@ SettingsPage::SettingsPage(QWidget *parent)
     m_nav->setObjectName(QStringLiteral("settingsNav"));
     m_nav->setFixedWidth(200);
     m_nav->setFrameShape(QFrame::NoFrame);
-    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("Core plugins"),
-                     tr("Hotkeys"), tr("About")});
+    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("Core plugins")});
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    m_nav->addItem(tr("Community plugins"));
+#endif
+    m_nav->addItems({tr("Hotkeys"), tr("About")});
 
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("settingsPages"));
@@ -84,6 +90,16 @@ void SettingsPage::setContext(Settings *settings, const QString &vaultRoot)
         rebuild();
 }
 
+void SettingsPage::setPluginRegistry(PluginRegistry *registry)
+{
+    if (registry == m_pluginRegistry)
+        return;
+    m_pluginRegistry = registry;
+    m_needsRebuild = true;
+    if (isVisible())
+        rebuild();
+}
+
 void SettingsPage::rebuild()
 {
     m_needsRebuild = false;
@@ -102,6 +118,9 @@ void SettingsPage::rebuild()
     m_pages->addWidget(buildEditorPage());
     m_pages->addWidget(buildFilesPage());
     m_pages->addWidget(buildCorePluginsPage());
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    m_pages->addWidget(buildCommunityPluginsPage());
+#endif
     m_pages->addWidget(buildHotkeysPage());
     m_pages->addWidget(buildAboutPage());
     m_nav->setCurrentRow(row < m_pages->count() ? row : 0);
@@ -544,6 +563,7 @@ QWidget *SettingsPage::buildCorePluginsPage()
     // Only what this build has: a switch with nothing behind it is worse
     // than none.
     QSet<QByteArray> missing = {
+        "community-plugins", // its own page
 #ifndef NOTEAPPC_HAVE_GRAPH
         "graph",
 #endif
@@ -592,6 +612,77 @@ QWidget *SettingsPage::buildCorePluginsPage()
                    tr("What {{date}} becomes."), QStringLiteral("YYYY-MM-DD"));
     addLineEditRow(layout, QStringLiteral("templates.timeFormat"), tr("Template time format"),
                    tr("What {{time}} becomes."), QStringLiteral("HH:mm"));
+    layout->addStretch(1);
+    return scrollWrap(page);
+}
+
+QWidget *SettingsPage::buildCommunityPluginsPage()
+{
+    auto *page = new QWidget;
+    page->setObjectName(QStringLiteral("settingsCommunityPluginsPage"));
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(28, 20, 28, 20);
+    layout->setSpacing(0);
+    for (const Settings::Feature &feature : Settings::features()) {
+        if (QByteArray(feature.id) == "community-plugins")
+            addToggleRow(layout, Settings::featureKey(feature.id), QCoreApplication::translate("Settings", feature.name),
+                        QCoreApplication::translate("Settings", feature.description));
+    }
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    if (m_pluginRegistry) {
+        const QList<PluginStatus> plugins = m_pluginRegistry->installedPlugins();
+        if (plugins.isEmpty()) {
+            auto *none = new QLabel(tr("No plugins installed. A plugin is a folder in %1.")
+                                        .arg(PluginRegistry::pluginsRoot()),
+                                    page);
+            none->setObjectName(QStringLiteral("settingsRowDescription"));
+            none->setWordWrap(true);
+            layout->addWidget(none);
+        }
+        for (const PluginStatus &plugin : plugins) {
+            const QString id = plugin.manifest.id();
+            auto *toggle = new ToggleSwitch(this);
+            toggle->setObjectName(QStringLiteral("settingsPlugin_") + id);
+            toggle->setChecked(plugin.enabled);
+            connect(toggle, &QAbstractButton::toggled, this, [this, id](bool on) {
+                if (m_pluginRegistry && m_pluginRegistry->setPluginEnabled(id, on))
+                    emit pluginsChanged();
+            });
+            QString about = tr("Version %1").arg(plugin.manifest.version());
+            const PluginHost::Timing &timing = plugin.timing;
+            if (timing.lastStartMs >= 0) {
+                about += tr(" - started in %1 ms, last command %2 ms, last render %3 ms%4")
+                             .arg(timing.lastStartMs)
+                             .arg(timing.lastCommandMs)
+                             .arg(timing.lastRenderMs)
+                             .arg(timing.slow ? tr(" - slow") : QString());
+            }
+            addRow(layout, {}, plugin.manifest.name(), about, toggle, [] {});
+
+            // What it asked for, each granted only when ticked here.
+            QList<PluginPermission> requested(plugin.manifest.requestedPermissions().cbegin(),
+                                              plugin.manifest.requestedPermissions().cend());
+            std::sort(requested.begin(), requested.end());
+            for (const PluginPermission permission : requested) {
+                const QString what = permission == PluginPermission::ReadNotes    ? tr("Read notes")
+                                     : permission == PluginPermission::WriteNotes ? tr("Change notes")
+                                     : permission == PluginPermission::Network    ? tr("Use the network")
+                                                                                  : tr("Use the clipboard");
+                auto *grant = new ToggleSwitch(this);
+                grant->setObjectName(QStringLiteral("settingsPluginPermission_") + id + QLatin1Char('_')
+                                     + PluginManifest::permissionID(permission));
+                grant->setChecked(plugin.grantedPermissions.contains(permission));
+                connect(grant, &QAbstractButton::toggled, this, [this, id, permission](bool on) {
+                    if (m_pluginRegistry)
+                        m_pluginRegistry->setPermissionGranted(id, permission, on);
+                });
+                addRow(layout, {}, tr("%1: %2").arg(plugin.manifest.name(), what),
+                       tr("Asked for by the plugin; nothing is allowed until it is switched on here."), grant,
+                       [] {});
+            }
+        }
+    }
+#endif
     layout->addStretch(1);
     return scrollWrap(page);
 }

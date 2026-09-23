@@ -19,6 +19,7 @@ class QShowEvent;
 namespace noteAppC {
 
 class Settings;
+class PluginRegistry;
 
 /// The settings page: left nav (Appearance, Editor, Files and links, About)
 /// beside scrolling rows of label+description and a control, read and
@@ -46,6 +47,9 @@ public:
         QList<QKeySequence> builtIn;
     };
     void setCommands(const QList<HotkeyCommand> &commands);
+    /// What the Community plugins page lists: null while the switch is off.
+    /// Not owned.
+    void setPluginRegistry(PluginRegistry *registry);
 
 signals:
     /// A row wrote to `settings`; MainWindow re-applies live and will save()
@@ -57,6 +61,8 @@ signals:
     void hotkeysChanged();
     /// "View snapshots" was pressed.
     void recoveryRequested();
+    /// A plugin was switched on or off: its commands and code blocks change.
+    void pluginsChanged();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -74,6 +80,8 @@ private:
     QWidget *buildAboutPage();
     QWidget *buildHotkeysPage();
     QWidget *buildCorePluginsPage();
+    QWidget *buildCommunityPluginsPage();
+    PluginRegistry *m_pluginRegistry = nullptr;
     /// The keys `id` has now: noteAppC's own file, else the vault's
     /// Obsidian file, else the built-in ones.
     QList<QKeySequence> effectiveKeys(const HotkeyCommand &command) const;

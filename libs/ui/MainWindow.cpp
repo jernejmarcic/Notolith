@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QUrl>
@@ -19,6 +20,7 @@
 #include <QImageReader>
 #include <QInputDialog>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -26,6 +28,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -73,6 +76,9 @@
 #endif
 #ifdef NOTEAPPC_HAVE_PUBLISH
 #include "Publisher.h"
+#endif
+#ifdef NOTEAPPC_HAVE_PLUGINS
+#include "PluginRegistry.h"
 #endif
 #ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfRecovery.h"
@@ -139,6 +145,13 @@ MainWindow::~MainWindow()
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
     m_indexer->stop();
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    // Its pending requests fail through callbacks that reach this window.
+    if (m_plugins)
+        m_plugins->shutdownAll();
+    delete m_plugins;
+    m_plugins = nullptr;
+#endif
     QThreadPool::globalInstance()->waitForDone();
     m_historyPool.waitForDone();
 }
@@ -462,6 +475,7 @@ QWidget *MainWindow::buildMainArea()
     connect(m_settingsPage, &SettingsPage::hotkeysChanged, this, &MainWindow::applyHotkeys);
     connect(m_settingsPage, &SettingsPage::recoveryRequested, this, &MainWindow::openRecovery);
     connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
+    connect(m_settingsPage, &SettingsPage::pluginsChanged, this, [this] { syncPlugins(true); });
 
     m_mainStack = new QStackedWidget(this);
     m_mainStack->setObjectName(QStringLiteral("mainStack"));
@@ -626,6 +640,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_active->editor->setFocus();
             });
     connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
+    if (m_applyPluginRenderer)
+        m_applyPluginRenderer(editor); // plugin fences in a new tab too
 #ifdef NOTEAPPC_HAVE_BASES
     // ```base blocks: the notes and the evaluation both on the pool (the
     // notes are 54 ms on 20 000); the vault is copied here, on the UI
@@ -1230,6 +1246,8 @@ void MainWindow::applyFeatures()
                 action->setEnabled(featureOn(feature.id));
         }
     }
+    if (m_painted)
+        syncPlugins();
 }
 
 void MainWindow::showNoteInPanes(const QString &path)
@@ -2037,6 +2055,159 @@ void MainWindow::updateSpelling()
 #endif
 }
 
+void MainWindow::notifyPlugins(const char *event, const QString &path)
+{
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    if (m_plugins && m_vault.isValid() && m_vault.contains(path))
+        m_plugins->notifyVaultEvent(QString::fromLatin1(event), m_vault.relative(path));
+#else
+    Q_UNUSED(event);
+    Q_UNUSED(path);
+#endif
+}
+
+void MainWindow::syncPlugins(bool rescan)
+{
+#ifdef NOTEAPPC_HAVE_PLUGINS
+    const bool on = featureOn("community-plugins");
+    if (on == bool(m_plugins) && !rescan)
+        return;
+    if (on && !m_plugins) {
+        m_plugins = new PluginRegistry(this);
+        // Every path a plugin names goes through confinedNotePath: notes in
+        // this vault only, never "..", a symlink out, or its config.
+        PluginAppCallbacks callbacks;
+        callbacks.activeNotePath = [this] {
+            return m_active && m_vault.isValid() && m_vault.contains(m_active->notePath)
+                       ? m_vault.relative(m_active->notePath)
+                       : QString();
+        };
+        callbacks.activeNoteText = [this] {
+            return m_active && !m_active->view ? m_active->editor->noteText() : QString();
+        };
+        callbacks.readNote = [this](const QString &relative) {
+            const QString path = m_vault.confinedNotePath(relative);
+            Note note;
+            return !path.isEmpty() && Vault::read(path, note) ? note.text : QString();
+        };
+        callbacks.listNotes = [this] { return m_index.allPaths(); };
+        callbacks.replaceSelection = [this](const QString &text) {
+            if (!m_active || m_active->view || !m_active->editor->isEnabled())
+                return false;
+            m_active->editor->insertAtCaret(text);
+            return true;
+        };
+        callbacks.writeNote = [this](const QString &relative, const QString &text) {
+            const QString path = m_vault.confinedNotePath(relative);
+            if (path.isEmpty())
+                return false;
+            Note note;
+            if (QFileInfo::exists(path) && !Vault::read(path, note))
+                return false;
+            note.text = text; // its line endings and BOM stay as they were
+            return Vault::write(path, note);
+        };
+        callbacks.clipboardRead = [] { return QGuiApplication::clipboard()->text(); };
+        callbacks.clipboardWrite = [](const QString &text) {
+            QGuiApplication::clipboard()->setText(text);
+            return true;
+        };
+        callbacks.showNotice = [this](const QString &message) { statusBar()->showMessage(message, 5000); };
+        callbacks.log = [](const QString &pluginID, const QString &message) {
+            qInfo("plugin %s: %s", qPrintable(pluginID), qPrintable(message));
+        };
+        m_plugins->setCallbacks(std::move(callbacks));
+        m_plugins->scan(true);
+    } else if (!on && m_plugins) {
+        m_plugins->shutdownAll();
+        delete m_plugins;
+        m_plugins = nullptr;
+    }
+    m_settingsPage->setPluginRegistry(m_plugins);
+
+    for (QAction *action : std::as_const(m_pluginCommands)) {
+        m_commands.removeOne(action);
+        delete action;
+    }
+    m_pluginCommands.clear();
+    QStringList languages;
+    if (m_plugins) {
+        for (const PluginCommand &command : m_plugins->commands()) {
+            auto *action = new QAction(command.pluginName + QStringLiteral(": ") + command.commandID, this);
+            action->setObjectName(command.qualifiedID); // "pluginID:commandID", as hotkeys.json names it
+            action->setShortcutContext(Qt::WindowShortcut);
+            connect(action, &QAction::triggered, this, [this, id = command.qualifiedID] {
+                if (!m_plugins)
+                    return;
+                m_plugins->runCommand(id, [this](bool ok, const QJsonObject &, const QString &error) {
+                    if (!ok)
+                        statusBar()->showMessage(tr("The plugin command failed: %1").arg(error), 5000);
+                });
+            });
+            addAction(action);
+            m_commands << action;
+            m_pluginCommands << action;
+        }
+        languages = m_plugins->codeBlockOwners().keys();
+    }
+    applyHotkeys();
+
+    MarkdownEditor::CodeBlockRenderer renderer;
+    if (!languages.isEmpty()) {
+        const QPointer<PluginRegistry> registry = m_plugins;
+        const qreal ratio = devicePixelRatioF();
+        renderer = [registry, ratio](const QString &language, const QString &source, int width, const QString &theme,
+                                     const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+            if (!registry) {
+                deliver({});
+                return;
+            }
+            registry->renderCodeBlock(
+                language, source, width, ratio, theme,
+                [deliver, width](bool ok, const QJsonObject &result, const QString &error) {
+                    if (!ok) {
+                        deliver({true, QStringLiteral("> [!failure] %1").arg(error), {}});
+                        return;
+                    }
+                    if (result.value(QStringLiteral("isMarkdown")).toBool()) {
+                        deliver({true, result.value(QStringLiteral("text")).toString(), {}});
+                        return;
+                    }
+                    // A plugin's bytes: the size they claim is checked, not trusted.
+                    const int w = result.value(QStringLiteral("width")).toInt();
+                    const int h = result.value(QStringLiteral("height")).toInt();
+                    const QByteArray bytes =
+                        QByteArray::fromBase64(result.value(QStringLiteral("rgbaBase64")).toString().toLatin1());
+                    if (w <= 0 || h <= 0 || bytes.size() != qsizetype(w) * h * 4) {
+                        deliver({});
+                        return;
+                    }
+                    QImage image = QImage(reinterpret_cast<const uchar *>(bytes.constData()), w, h, w * 4,
+                                          QImage::Format_RGBA8888)
+                                       .copy();
+                    if (w > width)
+                        image.setDevicePixelRatio(qreal(w) / width);
+                    deliver({false, QString(), std::move(image)});
+                });
+        };
+    }
+    for (const auto &leaf : m_leaves) {
+        if (!m_pluginLanguages.isEmpty())
+            leaf->editor->setCodeBlockRenderer(m_pluginLanguages, nullptr);
+        if (renderer)
+            leaf->editor->setCodeBlockRenderer(languages, renderer);
+    }
+    m_pluginLanguages = languages;
+    m_applyPluginRenderer = nullptr;
+    if (renderer)
+        m_applyPluginRenderer = [languages, renderer](MarkdownEditor *editor) {
+            editor->setCodeBlockRenderer(languages, renderer);
+        };
+#else
+    Q_UNUSED(rescan);
+#endif
+}
+
 void MainWindow::publishSite()
 {
 #ifdef NOTEAPPC_HAVE_PUBLISH
@@ -2441,6 +2612,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
 #endif
     }
     m_painted = true;
+    syncPlugins();
     watchThemeFiles();
     updateSpelling();
 }
@@ -2570,6 +2742,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
         revealInTree(path);
     if (source != NavSource::History)
         updateHistoryButtons();
+    notifyPlugins("note-opened", path);
     return true;
 }
 
@@ -3218,6 +3391,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
         Snapshots::record(target->notePath, note.text,
                           qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
     recordHistory(target->notePath, note.text);
+    notifyPlugins("note-saved", target->notePath);
     target->note = note;
     target->editor->setModified(false);
     // Every other tab on this note shows this same document, so this saved
@@ -3456,6 +3630,7 @@ void MainWindow::renamePathAt(const QModelIndex &index)
         return;
     }
     const QString newRelative = m_vault.relative(newPath);
+    notifyPlugins("note-renamed", newPath);
 #ifdef NOTEAPPC_HAVE_HISTORY
     // The history follows the note: every note under a renamed folder too.
     if (m_noteHistory) {
