@@ -9,10 +9,13 @@
 #include <QFontMetricsF>
 #include <QHash>
 #include <QPainter>
+#include <QPainterPath>
+#include <QPolygonF>
 
 #include <atomic>
 
 #include <litehtml.h>
+#include <litehtml/num_cvt.h>
 
 namespace noteAppC {
 
@@ -191,14 +194,10 @@ public:
         case litehtml::list_style_type_none:
             break;
         default:
-            // Numbered/lettered list styles: litehtml gives the item's
-            // plain index, not the alphabet or numeral system's rendering
-            // of it - a decimal is close enough for a note's own list.
-            // ponytail: full roman/alpha/cjk numeral rendering, if a note
-            // actually turns up needing one.
+            // Numbered and lettered styles, in litehtml's own converters;
+            // the rest of CSS's numeral systems fall back to decimal.
             painter->setPen(toQColor(marker.color));
-            painter->drawText(box.adjusted(0, 0, 40, 0),
-                              QString::number(marker.index) + QLatin1Char('.'));
+            painter->drawText(box.adjusted(0, 0, 40, 0), markerLabel(marker.marker_type, marker.index));
             break;
         }
         painter->restore();
@@ -234,7 +233,10 @@ public:
             resolveImagePath(QString::fromUtf8(url.c_str()), QString::fromUtf8(baseUrl.c_str())));
         if (image.isNull())
             return; // remote, missing, or unreadable: nothing draws, as documented on the class
+        painter->save();
+        painter->setClipPath(roundedPath(toQRect(layer.border_box), layer.border_radius), Qt::IntersectClip);
         painter->drawImage(toQRect(layer.border_box), image);
+        painter->restore();
     }
 
     void draw_solid_fill(litehtml::uint_ptr, const litehtml::background_layer &layer,
@@ -242,29 +244,43 @@ public:
     {
         if (!painter || color.alpha == 0)
             return;
-        painter->fillRect(toQRect(layer.border_box), toQColor(color));
+        fillBrush(layer, QBrush(toQColor(color)));
     }
 
-    // A real gradient renderer (colour stops, angle and position math) is a
-    // lot of machinery for chrome inside a note's HTML block - Obsidian's
-    // own renderer does not treat these specially either. The first colour
-    // stop stands in as a flat fill. ponytail: proper QLinearGradient/
-    // QRadialGradient/QConicGradient support, if a note turns up that needs
-    // the gradient itself rather than just a background colour.
-    void draw_linear_gradient(litehtml::uint_ptr hdc, const litehtml::background_layer &layer,
+    // Gradients as Qt's own: litehtml gives the geometry relative to the
+    // layer's origin box and the stops as offsets from 0 to 1, which is
+    // QGradient's shape. Clipped to the rounded border box like any fill.
+    void draw_linear_gradient(litehtml::uint_ptr, const litehtml::background_layer &layer,
                               const litehtml::background_layer::linear_gradient &gradient) override
     {
-        fillWithFirstStop(hdc, layer, gradient.color_points);
+        const QPointF origin(layer.origin_box.x, layer.origin_box.y);
+        QLinearGradient fill(origin + QPointF(gradient.start.x, gradient.start.y),
+                             origin + QPointF(gradient.end.x, gradient.end.y));
+        fillGradient(layer, fill, gradient.color_points);
     }
-    void draw_radial_gradient(litehtml::uint_ptr hdc, const litehtml::background_layer &layer,
+    void draw_radial_gradient(litehtml::uint_ptr, const litehtml::background_layer &layer,
                               const litehtml::background_layer::radial_gradient &gradient) override
     {
-        fillWithFirstStop(hdc, layer, gradient.color_points);
+        // An ellipse: a circle of the x radius, squashed to the y one.
+        const QPointF centre(layer.origin_box.x + gradient.position.x, layer.origin_box.y + gradient.position.y);
+        const qreal rx = qMax<qreal>(gradient.radius.x, 0.01);
+        const qreal ry = qMax<qreal>(gradient.radius.y, 0.01);
+        QRadialGradient fill(QPointF(0, 0), rx);
+        QBrush brush = gradientBrush(fill, gradient.color_points);
+        brush.setTransform(QTransform::fromTranslate(centre.x(), centre.y()).scale(1, ry / rx));
+        fillBrush(layer, brush);
     }
-    void draw_conic_gradient(litehtml::uint_ptr hdc, const litehtml::background_layer &layer,
+    void draw_conic_gradient(litehtml::uint_ptr, const litehtml::background_layer &layer,
                              const litehtml::background_layer::conic_gradient &gradient) override
     {
-        fillWithFirstStop(hdc, layer, gradient.color_points);
+        // CSS starts at the top and turns clockwise; Qt starts at three
+        // o'clock and turns anticlockwise, and runs its stops the same way.
+        const QPointF centre(layer.origin_box.x + gradient.position.x, layer.origin_box.y + gradient.position.y);
+        QConicalGradient fill(centre, 90 - gradient.angle);
+        litehtml::vector<litehtml::background_layer::color_point> reversed;
+        for (auto it = gradient.color_points.rbegin(); it != gradient.color_points.rend(); ++it)
+            reversed.emplace_back(1.0f - it->offset, it->color);
+        fillGradient(layer, fill, reversed);
     }
 
     void draw_borders(litehtml::uint_ptr, const litehtml::borders &borders, const litehtml::position &pos,
@@ -272,26 +288,48 @@ public:
     {
         if (!painter)
             return;
-        // One rectangle in the dominant side's colour, not four independent
-        // sides with mitred corners: a note's HTML block borders are simple
-        // (a <table> cell, a <div> made to look like a callout), and this is
-        // what those look like. ponytail: true per-side/radius drawing, if
-        // a block turns up with mismatched border colours or a border-radius
-        // worth honouring.
-        const litehtml::border *chosen = nullptr;
-        for (const litehtml::border *side : {&borders.top, &borders.left, &borders.right, &borders.bottom}) {
-            if (side->width > 0 && side->style != litehtml::border_style_none) {
-                chosen = side;
-                break;
-            }
-        }
-        if (!chosen)
+        const litehtml::border *sides[] = {&borders.top, &borders.right, &borders.bottom, &borders.left};
+        const auto shown = [](const litehtml::border *side) {
+            return side->width > 0 && side->style != litehtml::border_style_none
+                   && side->style != litehtml::border_style_hidden && side->color.alpha > 0;
+        };
+        if (std::none_of(std::begin(sides), std::end(sides), shown))
             return;
         painter->save();
-        painter->setPen(QPen(toQColor(chosen->color), qreal(chosen->width)));
-        painter->setBrush(Qt::NoBrush);
-        const qreal half = chosen->width / 2.0;
-        painter->drawRect(toQRect(pos).adjusted(half, half, -half, -half));
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        const QRectF box = toQRect(pos);
+        const bool uniform = std::all_of(std::begin(sides), std::end(sides), [&](const litehtml::border *side) {
+            return side->width == borders.top.width && side->style == borders.top.style
+                   && side->color == borders.top.color;
+        });
+        if (uniform) {
+            // One stroke round the (maybe rounded) box, inset by half the
+            // width so it stays inside it, as a CSS border does.
+            const qreal half = borders.top.width / 2.0;
+            QPen pen(toQColor(borders.top.color), qreal(borders.top.width));
+            pen.setStyle(penStyleFor(borders.top.style));
+            painter->setPen(pen);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawPath(roundedPath(box.adjusted(half, half, -half, -half), borders.radius, half));
+        } else {
+            // Each side its own colour, a trapezoid mitred at the corners.
+            // ponytail: radii are dropped when the sides differ; a note's
+            // HTML has not needed both at once.
+            const QPointF outer[] = {box.topLeft(), box.topRight(), box.bottomRight(), box.bottomLeft()};
+            const QPointF inner[] = {
+                box.topLeft() + QPointF(borders.left.width, borders.top.width),
+                box.topRight() + QPointF(-borders.right.width, borders.top.width),
+                box.bottomRight() + QPointF(-borders.right.width, -borders.bottom.width),
+                box.bottomLeft() + QPointF(borders.left.width, -borders.bottom.width)};
+            painter->setPen(Qt::NoPen);
+            for (int i = 0; i < 4; ++i) {
+                if (!shown(sides[i]))
+                    continue;
+                const int next = (i + 1) % 4;
+                painter->setBrush(toQColor(sides[i]->color));
+                painter->drawPolygon(QPolygonF({outer[i], outer[next], inner[next], inner[i]}));
+            }
+        }
         painter->restore();
     }
 
@@ -381,11 +419,101 @@ public:
     }
 
 private:
-    void fillWithFirstStop(litehtml::uint_ptr hdc, const litehtml::background_layer &layer,
-                           const litehtml::vector<litehtml::background_layer::color_point> &stops)
+    /// A box with CSS's per-corner elliptical radii, each shrunk by `inset`
+    /// (half a border's width) so a stroke follows the curve inside it.
+    static QPainterPath roundedPath(const QRectF &box, const litehtml::border_radiuses &r, qreal inset = 0)
+    {
+        const auto radius = [inset](litehtml::pixel_t x, litehtml::pixel_t y) {
+            return QSizeF(qMax<qreal>(0, x - inset), qMax<qreal>(0, y - inset));
+        };
+        const QSizeF tl = radius(r.top_left_x, r.top_left_y), tr = radius(r.top_right_x, r.top_right_y);
+        const QSizeF br = radius(r.bottom_right_x, r.bottom_right_y), bl = radius(r.bottom_left_x, r.bottom_left_y);
+        QPainterPath path;
+        if (tl.isEmpty() && tr.isEmpty() && br.isEmpty() && bl.isEmpty()) {
+            path.addRect(box);
+            return path;
+        }
+        path.moveTo(box.left() + tl.width(), box.top());
+        path.lineTo(box.right() - tr.width(), box.top());
+        path.arcTo(QRectF(box.right() - 2 * tr.width(), box.top(), 2 * tr.width(), 2 * tr.height()), 90, -90);
+        path.lineTo(box.right(), box.bottom() - br.height());
+        path.arcTo(QRectF(box.right() - 2 * br.width(), box.bottom() - 2 * br.height(), 2 * br.width(),
+                          2 * br.height()), 0, -90);
+        path.lineTo(box.left() + bl.width(), box.bottom());
+        path.arcTo(QRectF(box.left(), box.bottom() - 2 * bl.height(), 2 * bl.width(), 2 * bl.height()), 270, -90);
+        path.lineTo(box.left(), box.top() + tl.height());
+        path.arcTo(QRectF(box.left(), box.top(), 2 * tl.width(), 2 * tl.height()), 180, -90);
+        path.closeSubpath();
+        return path;
+    }
+
+    void fillBrush(const litehtml::background_layer &layer, const QBrush &brush)
+    {
+        if (!painter)
+            return;
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing, true);
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(brush);
+        painter->drawPath(roundedPath(toQRect(layer.border_box), layer.border_radius));
+        painter->restore();
+    }
+
+    static QBrush gradientBrush(QGradient &gradient,
+                                const litehtml::vector<litehtml::background_layer::color_point> &stops)
+    {
+        for (const auto &stop : stops)
+            gradient.setColorAt(qBound(0.0, qreal(stop.offset), 1.0), toQColor(stop.color));
+        return QBrush(gradient);
+    }
+
+    void fillGradient(const litehtml::background_layer &layer, QGradient &gradient,
+                      const litehtml::vector<litehtml::background_layer::color_point> &stops)
     {
         if (!stops.empty())
-            draw_solid_fill(hdc, layer, stops.front().color);
+            fillBrush(layer, gradientBrush(gradient, stops));
+    }
+
+    static Qt::PenStyle penStyleFor(litehtml::border_style style)
+    {
+        switch (style) {
+        case litehtml::border_style_dotted:
+            return Qt::DotLine;
+        case litehtml::border_style_dashed:
+            return Qt::DashLine;
+        default:
+            return Qt::SolidLine; // double, groove, ridge, inset, outset: drawn solid
+        }
+    }
+
+    static QString markerLabel(litehtml::list_style_type type, int index)
+    {
+        using namespace litehtml::num_cvt;
+        std::string label;
+        switch (type) {
+        case litehtml::list_style_type_lower_alpha:
+        case litehtml::list_style_type_lower_latin:
+            label = to_latin_lower(index);
+            break;
+        case litehtml::list_style_type_upper_alpha:
+        case litehtml::list_style_type_upper_latin:
+            label = to_latin_upper(index);
+            break;
+        case litehtml::list_style_type_lower_greek:
+            label = to_greek_lower(index);
+            break;
+        case litehtml::list_style_type_lower_roman:
+            label = to_roman_lower(index);
+            break;
+        case litehtml::list_style_type_upper_roman:
+            label = to_roman_upper(index);
+            break;
+        case litehtml::list_style_type_decimal_leading_zero:
+            return QStringLiteral("%1.").arg(index, 2, 10, QLatin1Char('0'));
+        default:
+            return QString::number(index) + QLatin1Char('.');
+        }
+        return QString::fromStdString(label) + QLatin1Char('.');
     }
 
     /// A local path relative to `baseUrl` (litehtml's own base-url tracking)
