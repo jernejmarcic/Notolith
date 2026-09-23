@@ -72,7 +72,18 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
 - [x] Plugin manifests lost every list with more than one item (QSettings).
 - [x] test_sync wrote device keys into the real OS keyring and waited 15 s
       per engine on it; an in-memory store in tests, 197 s -> 5 s.
-- [ ] `[[Note#^block]]` clicked opens the note at its top, not the block.
+- [x] `[[Note#^block]]` and `[[#^block]]` open at the block, the preview too.
+- [x] Footnotes: parsed (refs, inline `^[..]`, definitions, numbering; the
+      bodies' links and emphasis read at last), and a published page lists
+      them. A `:::` fence's attributes are no longer tags. Index schema 5.
+- [x] Images, audio and video open in a tab of their own.
+- [ ] **After the notebook lane merges (it owns libs/editor now):**
+  - [ ] Footnotes in the editor: references as superscript numbers, the
+        definitions as Obsidian shows them (reading view: a list at the end).
+  - [ ] Paste and drop: an image pasted (Ctrl+V) or a file dropped into a
+        note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
+        "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
+        `![[...]]` inserted. Not built at all yet.
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
 - [ ] Lockbox approval (a second device enrolled without the password) has
