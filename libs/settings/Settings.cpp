@@ -490,6 +490,9 @@ const QList<Settings::Feature> &Settings::features()
 {
     // Obsidian's own names and wording, where it has the feature.
     static const QList<Feature> list = {
+        {"audio-recorder", QT_TRANSLATE_NOOP("Settings", "Audio recorder"),
+         QT_TRANSLATE_NOOP("Settings", "Record audio from the microphone into an attachment, embedded in the note."),
+         true},
         {"backlink", QT_TRANSLATE_NOOP("Settings", "Backlinks"),
          QT_TRANSLATE_NOOP("Settings", "Show the notes that link to this one in the right sidebar."), true},
         {"unlinked-mentions", QT_TRANSLATE_NOOP("Settings", "Unlinked mentions"),

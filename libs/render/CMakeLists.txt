@@ -46,6 +46,8 @@ add_library(noteAppC_render STATIC
     CodeHighlighter.h
     HtmlRenderer.cpp
     HtmlRenderer.h
+    AudioRecorder.cpp
+    AudioRecorder.h
     MediaPlayback.cpp
     MediaPlayback.h
     PdfArgs.cpp

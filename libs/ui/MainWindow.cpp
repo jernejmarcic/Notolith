@@ -58,6 +58,7 @@
 #include "MarkdownEditor.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "AudioRecorder.h"
 #include "Frontmatter.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
@@ -222,6 +223,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_syncStatus->setObjectName(QStringLiteral("syncStatus"));
     m_syncStatus->hide();
     statusBar()->addPermanentWidget(m_syncStatus);
+    // Never recording unseen: the status bar says so while it does.
+    m_recordingStatus = new QLabel(this);
+    m_recordingStatus->setObjectName(QStringLiteral("recordingStatus"));
+    m_recordingStatus->hide();
+    statusBar()->addPermanentWidget(m_recordingStatus);
     statusBar()->addPermanentWidget(m_wordCount);
     statusBar()->addPermanentWidget(m_vaultLabel);
     statusBar()->setSizeGripEnabled(false);
@@ -1297,6 +1303,10 @@ void MainWindow::applyFeatures()
                 action->setEnabled(featureOn(feature.id));
         }
     }
+    // Switched off mid-recording: its Stop command just went dark, so stop
+    // here rather than leave the microphone on.
+    if (m_recorder && !featureOn("audio-recorder"))
+        m_recorder->stop();
     if (m_painted)
         syncPlugins();
 }
@@ -1432,6 +1442,12 @@ void MainWindow::buildActions()
             openNote(path);
     });
 #endif
+    add(QStringLiteral("audio-recorder:start"), tr("Audio recorder: Start recording audio"), QString(),
+        &MainWindow::startRecording);
+    add(QStringLiteral("audio-recorder:stop"), tr("Audio recorder: Stop recording audio"), QString(), [this] {
+        if (m_recorder)
+            m_recorder->stop();
+    });
     add(QStringLiteral("note-composer:merge-file"), tr("Note composer: Merge current file with another file"),
         QString(), &MainWindow::mergeCurrentNote);
     add(QStringLiteral("note-composer:split-file"), tr("Note composer: Extract current selection"), QString(),
@@ -1931,6 +1947,49 @@ void MainWindow::startPresentation()
     m_mainStack->setCurrentWidget(m_slides);
     showFullScreen();
     m_slides->present(SlidesView::split(text), int(SlidesView::split(before).size()) - 1);
+}
+
+void MainWindow::startRecording()
+{
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath))
+        return;
+    if (m_recorder && m_recorder->isRecording())
+        return;
+    const QString suffix = AudioRecorder::fileSuffix();
+    const QString folder =
+        m_vault.attachmentFolderFor(m_settings.text(QStringLiteral("files.attachmentFolder")), m_active->notePath);
+    QDir().mkpath(folder);
+    // Obsidian's name for it; a second in the same second gets " 1".
+    const QString base = QStringLiteral("Recording ") + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMddHHmmss"));
+    QString path = QDir(folder).filePath(base + QLatin1Char('.') + suffix);
+    for (int n = 1; QFileInfo::exists(path); ++n)
+        path = QDir(folder).filePath(QStringLiteral("%1 %2.%3").arg(base).arg(n).arg(suffix));
+    if (!m_recorder) {
+        m_recorder = new AudioRecorder(this);
+        connect(m_recorder, &AudioRecorder::finished, this, [this](const QString &file, const QString &error) {
+            m_recordingStatus->hide();
+            if (!QFileInfo::exists(file)) {
+                statusBar()->showMessage(tr("The recording failed: %1").arg(error), 5000);
+                return;
+            }
+            // Into the note it was started from, where its caret is.
+            for (const auto &leaf : m_leaves) {
+                if (leaf->notePath == m_recordingNote && !leaf->view) {
+                    leaf->editor->insertAtCaret(QStringLiteral("![[") + QFileInfo(file).fileName() + QStringLiteral("]]"));
+                    return;
+                }
+            }
+            statusBar()->showMessage(tr("Recording saved as %1").arg(m_vault.relative(file)), 8000);
+        });
+    }
+    QString error;
+    if (!m_recorder->start(path, &error)) {
+        statusBar()->showMessage(tr("Cannot record: %1").arg(error), 5000);
+        return;
+    }
+    m_recordingNote = m_active->notePath;
+    m_recordingStatus->setText(tr("Recording"));
+    m_recordingStatus->show();
 }
 
 void MainWindow::mergeCurrentNote()
