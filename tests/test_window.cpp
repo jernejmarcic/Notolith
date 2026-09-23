@@ -10,7 +10,9 @@
 
 #include <QAbstractButton>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QPlainTextEdit>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
@@ -823,6 +825,56 @@ TEST_F(WindowTest, ANarrowWindowFoldsBothSidebarsAndGivesThemBack)
     EXPECT_TRUE(left->isVisible());
     EXPECT_FALSE(right->isVisible()) << "it was closed before the window narrowed";
     window.toggleRightSidebar(); // put it back for the next test
+}
+
+TEST(RecoveryDiffTest, LinesAreKeptRemovedOrAddedInOrder)
+{
+    using Kind = noteAppC::RecoveryDialog::DiffLine::Kind;
+    const auto diff = noteAppC::RecoveryDialog::lineDiff(
+        {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c"), QStringLiteral("d")},
+        {QStringLiteral("a"), QStringLiteral("c"), QStringLiteral("x"), QStringLiteral("d")});
+    QStringList shown;
+    for (const auto &line : diff)
+        shown << (line.kind == Kind::Same ? QStringLiteral(" ") : line.kind == Kind::Removed ? QStringLiteral("-") : QStringLiteral("+"))
+                     + line.text;
+    EXPECT_EQ(shown, (QStringList{QStringLiteral(" a"), QStringLiteral("-b"), QStringLiteral(" c"),
+                                  QStringLiteral("+x"), QStringLiteral(" d")}));
+    // Identical: nothing but kept lines.
+    const auto same = noteAppC::RecoveryDialog::lineDiff({QStringLiteral("a")}, {QStringLiteral("a")});
+    ASSERT_EQ(same.size(), 1);
+    EXPECT_EQ(same.first().kind, Kind::Same);
+}
+
+TEST_F(WindowTest, RecoveryShowsChangesAgainstTheNoteButRestoresTheSnapshot)
+{
+    const QString note = path(QStringLiteral("Welcome.md"));
+    noteAppC::Snapshots::record(note, QStringLiteral("# Welcome\n\nOld body.\n"), 0);
+    noteAppC::Vault vault(dir.path());
+    noteAppC::RecoveryDialog dialog(vault);
+    auto *notes = dialog.findChild<QListWidget *>(QStringLiteral("recoveryNotes"));
+    for (int i = 0; i < notes->count(); ++i) {
+        if (notes->item(i)->text() == QStringLiteral("Welcome.md"))
+            notes->setCurrentRow(i);
+    }
+    auto *preview = dialog.findChild<QPlainTextEdit *>(QStringLiteral("recoveryPreview"));
+    EXPECT_EQ(preview->toPlainText(), QStringLiteral("# Welcome\n\nOld body.\n"));
+
+    dialog.findChild<QCheckBox *>(QStringLiteral("recoveryShowChanges"))->setChecked(true);
+    EXPECT_TRUE(preview->toPlainText().contains(QStringLiteral("- Old body.")));
+    EXPECT_TRUE(preview->toPlainText().contains(QStringLiteral("+ Body.")));
+
+    QString restored;
+    QObject::connect(&dialog, &noteAppC::RecoveryDialog::restoreRequested,
+                     [&restored](const QString &, const QString &text) { restored = text; });
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    for (QPushButton *button : dialog.findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("Restore"))
+            button->click();
+    }
+    EXPECT_EQ(restored, QStringLiteral("# Welcome\n\nOld body.\n")) << "the snapshot, not the diff";
 }
 
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)

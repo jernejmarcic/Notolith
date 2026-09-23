@@ -2,6 +2,7 @@
 
 #include <QDialog>
 
+class QCheckBox;
 class QLineEdit;
 class QListWidget;
 class QPlainTextEdit;
@@ -21,6 +22,16 @@ public:
     /// are listed by their full path.
     RecoveryDialog(const Vault &vault, QWidget *parent = nullptr);
 
+    /// One line of a line diff: in both, only in the snapshot, or only in
+    /// the note as it is now.
+    struct DiffLine {
+        enum class Kind { Same, Removed, Added };
+        Kind kind;
+        QString text;
+    };
+    /// `before` to `after`, line by line.
+    static QList<DiffLine> lineDiff(const QStringList &before, const QStringList &after);
+
 signals:
     /// Replace `notePath`'s content with `text`: the window writes it.
     void restoreRequested(const QString &notePath, const QString &text);
@@ -29,6 +40,8 @@ private:
     void showNotes();
     void showVersions();
     void showVersion();
+    /// The snapshot, or with "Show changes" its difference from the note now.
+    void showPreview();
 
     QString m_root;
     QLineEdit *m_filter = nullptr;
@@ -37,6 +50,8 @@ private:
     QPlainTextEdit *m_preview = nullptr;
     QPushButton *m_copy = nullptr;
     QPushButton *m_restore = nullptr;
+    QCheckBox *m_changes = nullptr;
+    QString m_snapshot; ///< what Copy and Restore use, whatever the preview shows
 };
 
 } // namespace noteAppC

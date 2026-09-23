@@ -350,8 +350,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] File recovery: a snapshot on save at most every 5 minutes per note,
       kept 7 days (Obsidian's defaults, both settings), under
       `$XDG_DATA_HOME/noteAppC/recovery`, vault notes only; a window to find
-      a note, read a version, copy it or restore it. No "show changes" diff
-      yet.
+      a note, read a version, copy it or restore it, and "Show changes"
+      against the note as it is now (a line diff).
 - [x] Page preview: the linked note rendered in a popover, opened at the
       heading or block the link names; Ctrl held while editing, plain hover
       in reading view, as Obsidian. Links inside it can be followed.
