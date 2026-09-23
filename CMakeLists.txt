@@ -35,6 +35,10 @@ if(NOTEAPPC_WITH_SPELLCHECK)
         pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
     endif()
 endif()
+# The second Tier 1 module: a force-directed graph view, no external
+# dependencies, so unlike spellcheck there is nothing to detect - the option
+# alone decides whether libs/ext/graph is built at all.
+option(NOTEAPPC_WITH_GRAPH "Build the graph view (libs/ext/graph)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -95,6 +99,9 @@ add_subdirectory(libs/theme)
 add_subdirectory(libs/settings)
 if(TARGET PkgConfig::HUNSPELL)
     add_subdirectory(libs/ext/spell)
+endif()
+if(NOTEAPPC_WITH_GRAPH)
+    add_subdirectory(libs/ext/graph)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
