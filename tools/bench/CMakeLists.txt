@@ -5,6 +5,13 @@
 qt_add_executable(noteAppC-bench Bench.cpp)
 target_link_libraries(noteAppC-bench PRIVATE noteAppC_ui Qt6::Test)
 
+# EPUB open/scroll rows, only when the module is built (see the root
+# CMakeLists.txt) - the same guarded-link shape tests/CMakeLists.txt uses.
+if(TARGET noteAppC_epub)
+    target_link_libraries(noteAppC-bench PRIVATE noteAppC_epub PkgConfig::LIBARCHIVE)
+    target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_EPUB)
+endif()
+
 # So the tool can find gen_bench_vault.py without guessing the working
 # directory the caller ran it from.
 target_compile_definitions(noteAppC-bench PRIVATE

@@ -1,5 +1,7 @@
 #include "HtmlRenderer.h"
 
+#include <QRegularExpression> // used by sanitize() in both branches below
+
 #ifdef NOTEAPPC_HAVE_LITEHTML
 
 #include <QDir>
@@ -7,7 +9,6 @@
 #include <QFontMetricsF>
 #include <QHash>
 #include <QPainter>
-#include <QRegularExpression>
 
 #include <atomic>
 
@@ -113,15 +114,41 @@ public:
     void draw_text(litehtml::uint_ptr, const char *text, litehtml::uint_ptr hFont,
                    litehtml::web_color color, const litehtml::position &pos) override
     {
-        if (!painter || !text || !*text)
+        if (!text || !*text)
             return;
         const auto *handle = reinterpret_cast<FontHandle *>(hFont);
-        painter->save();
-        painter->setFont(handle->font);
-        painter->setPen(toQColor(color));
-        const QFontMetricsF metrics(handle->font);
-        painter->drawText(QPointF(pos.x, pos.y + metrics.ascent()), QString::fromUtf8(text));
-        painter->restore();
+        if (painter) {
+            painter->save();
+            painter->setFont(handle->font);
+            painter->setPen(toQColor(color));
+            const QFontMetricsF metrics(handle->font);
+            painter->drawText(QPointF(pos.x, pos.y + metrics.ascent()), QString::fromUtf8(text));
+            painter->restore();
+        }
+        recordRun(text, pos, handle->font);
+    }
+
+    /// Public rather than accessed through a setter: render() pokes this and
+    /// `painter`/`width` the same way, right after constructing the
+    /// container - see the class comment on those two.
+    QList<HtmlRenderer::TextRun> *textRunsOut = nullptr;
+
+    void recordRun(const char *text, const litehtml::position &pos, const QFont &font)
+    {
+        if (!textRunsOut)
+            return;
+        const QString run = QString::fromUtf8(text);
+        if (run.isEmpty())
+            return;
+        // A run whose top sits clearly below the previous one started a new
+        // line; see TextRun's comment on why that costs one synthetic
+        // separator in the offset space rather than nothing.
+        if (m_havePrevRunY && double(pos.y) > m_prevRunY + 1.0)
+            ++m_textOffset;
+        textRunsOut->push_back({toQRect(pos), m_textOffset, run, font});
+        m_textOffset += run.size();
+        m_prevRunY = double(pos.y);
+        m_havePrevRunY = true;
     }
 
     litehtml::pixel_t pt_to_px(float pt) const override { return litehtml::pixel_t(pt * 96.0f / 72.0f); }
@@ -384,6 +411,10 @@ private:
     QString m_baseUrl;
     mutable QByteArray m_defaultFontName;
     QHash<QString, QImage> m_images;
+
+    qsizetype m_textOffset = 0;
+    double m_prevRunY = 0.0;
+    bool m_havePrevRunY = false;
 };
 
 /// Defence in depth. litehtml has no script interpreter to run `<script>`
@@ -417,8 +448,14 @@ qint64 HtmlRenderer::renderCount()
     return g_renderCount.load();
 }
 
+QString HtmlRenderer::sanitize(const QString &html)
+{
+    return sanitise(html);
+}
+
 QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPixels,
-                            const QString &baseDir, qreal devicePixelRatio)
+                            const QString &baseDir, qreal devicePixelRatio,
+                            const QString &extraCss, QList<TextRun> *textRuns)
 {
     if (widthPixels <= 0 || html.trimmed().isEmpty())
         return {};
@@ -426,6 +463,7 @@ QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPi
 
     PainterContainer container(theme, baseDir);
     container.width = widthPixels;
+    container.textRunsOut = textRuns;
 
     const int fontSize = qMax(1, theme.textFont.pixelSize() > 0 ? theme.textFont.pixelSize() : 14);
     const std::string userCss = "html,body{margin:0;padding:4px;color:" + toCssColor(theme.text)
@@ -435,7 +473,10 @@ QImage HtmlRenderer::render(const QString &html, const Theme &theme, int widthPi
         + "code,kbd,pre{font-family:'" + theme.codeFont.family().toStdString()
         + "';background:" + toCssColor(theme.codeBackground) + ";}"
         + "table,th,td{border:1px solid " + toCssColor(theme.border) + ";border-collapse:collapse;padding:4px;}"
-        + "script,style,iframe,object,embed{display:none;}";
+        + "script,style,iframe,object,embed{display:none;}"
+        // The document's own stylesheet, cascading after the theme above so
+        // a colour/font it actually declares wins - see the header comment.
+        + extraCss.toStdString();
 
     litehtml::document::ptr document;
     try {
@@ -484,7 +525,26 @@ qint64 HtmlRenderer::renderCount()
     return 0;
 }
 
-QImage HtmlRenderer::render(const QString &, const Theme &, int, const QString &, qreal)
+QString HtmlRenderer::sanitize(const QString &html)
+{
+    // No litehtml to protect, but the EPUB reader still calls this
+    // unconditionally before layout of its own (a plain-text fallback) - so
+    // the stripping happens either way rather than being a second thing
+    // every caller has to gate on NOTEAPPC_HAVE_HTML too.
+    QString out = html;
+    static const QRegularExpression script(
+        QStringLiteral("<script\\b[^>]*>.*?</script\\s*>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    out.remove(script);
+    static const QRegularExpression onAttribute(
+        QStringLiteral("\\son[a-zA-Z]+\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    out.remove(onAttribute);
+    return out;
+}
+
+QImage HtmlRenderer::render(const QString &, const Theme &, int, const QString &, qreal, const QString &,
+                            QList<TextRun> *)
 {
     return {};
 }
