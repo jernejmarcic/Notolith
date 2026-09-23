@@ -1,6 +1,7 @@
 #include "Search.h"
 
 #include <algorithm>
+#include <optional>
 #include <memory>
 
 #include <QFileInfo>
@@ -361,6 +362,56 @@ private:
     bool m_isRegex;
 };
 
+/// `[property]` - the note has it - and `[property:value]`, a value of it
+/// containing `value` (a /regex/ or a "phrase" too); `[property:null]` is a
+/// property with no value, as Obsidian has it. Keys match without regard to
+/// case. A property has no place in the body to point at, so, like `path:`,
+/// a match carries no offsets.
+class PropertyNode : public SearchQueryNode {
+public:
+    PropertyNode(QString key, std::optional<QString> literal, QRegularExpression regex, bool isRegex)
+        : m_key(std::move(key)), m_literal(std::move(literal)), m_regex(std::move(regex)), m_isRegex(isRegex)
+    {
+    }
+
+    SearchOutcome evaluate(const EvalContext &ctx) const override
+    {
+        for (const NoteProperty &property : ctx.note.properties) {
+            if (property.key.compare(m_key, Qt::CaseInsensitive) != 0)
+                continue;
+            if (!m_literal && !m_isRegex)
+                return {true, {}};
+            if (!m_isRegex && m_literal->compare(QLatin1String("null"), Qt::CaseInsensitive) == 0) {
+                const bool empty = std::all_of(property.values.cbegin(), property.values.cend(),
+                                               [](const QString &value) { return value.trimmed().isEmpty(); });
+                return {empty, {}};
+            }
+            for (const QString &value : property.values) {
+                bool matched = false;
+                if (m_isRegex) {
+                    QRegularExpression regex = m_regex;
+                    if (ctx.caseSensitivity == Qt::CaseInsensitive)
+                        regex.setPatternOptions(regex.patternOptions() | QRegularExpression::CaseInsensitiveOption);
+                    matched = regex.match(value).hasMatch();
+                } else {
+                    matched = value.contains(*m_literal, ctx.caseSensitivity);
+                }
+                if (matched)
+                    return {true, {}};
+            }
+        }
+        return {};
+    }
+
+    FieldNeeds fieldNeeds() const override { return {false, false, false, true}; }
+
+private:
+    QString m_key;
+    std::optional<QString> m_literal;
+    QRegularExpression m_regex;
+    bool m_isRegex;
+};
+
 /// `tag:`. A tag matches its own nested children the way Index::notesWithTag
 /// already does (`tag:#work` also finds `#work/meeting`), and every match
 /// carries the tag's real position, so a tag search highlights like any
@@ -633,6 +684,8 @@ private:
             return parsePhraseNode();
         if (peek() == QLatin1Char('/'))
             return parseRegexNode();
+        if (peek() == QLatin1Char('[') && m_text.mid(m_pos + 1, 1) != QLatin1String("["))
+            return parsePropertyNode(); // "[[" is a word: a link's own text
 
         const QString field = tryReadFieldName();
         if (!field.isEmpty())
@@ -684,6 +737,38 @@ private:
             return parseTagField();
         // "content": exactly the value's own node, content: is transparent.
         return parseFieldValueAsQuery();
+    }
+
+    /// `[key]`, `[key:value]`, `[key:"a phrase"]` or `[key:/regex/]`.
+    NodePtr parsePropertyNode()
+    {
+        const qsizetype close = m_text.indexOf(QLatin1Char(']'), m_pos);
+        if (close < 0) {
+            m_error = QStringLiteral("unterminated '[' at position %1").arg(m_pos);
+            return nullptr;
+        }
+        const QString inside = m_text.mid(m_pos + 1, close - m_pos - 1);
+        m_pos = close + 1;
+        const qsizetype colon = inside.indexOf(QLatin1Char(':'));
+        const QString key = (colon < 0 ? inside : inside.left(colon)).trimmed();
+        if (key.isEmpty()) {
+            m_error = QStringLiteral("a property name is missing inside '[ ]'");
+            return nullptr;
+        }
+        if (colon < 0)
+            return std::make_shared<const PropertyNode>(key, std::nullopt, QRegularExpression(), false);
+        QString value = inside.mid(colon + 1).trimmed();
+        if (value.size() >= 2 && value.startsWith(QLatin1Char('/')) && value.endsWith(QLatin1Char('/'))) {
+            QRegularExpression regex(value.mid(1, value.size() - 2));
+            if (!regex.isValid()) {
+                m_error = QStringLiteral("invalid regex in '[ ]': %1").arg(regex.errorString());
+                return nullptr;
+            }
+            return std::make_shared<const PropertyNode>(key, std::nullopt, regex, true);
+        }
+        if (value.size() >= 2 && value.startsWith(QLatin1Char('"')) && value.endsWith(QLatin1Char('"')))
+            value = value.mid(1, value.size() - 2);
+        return std::make_shared<const PropertyNode>(key, value, QRegularExpression(), false);
     }
 
     NodePtr parseFieldValueAsQuery()

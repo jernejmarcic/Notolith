@@ -494,6 +494,19 @@ TEST_F(IndexTest, SearchTagFieldReadsTheRealTagsTable)
     EXPECT_EQ(results.first().path, QStringLiteral("Ideas.md"));
 }
 
+TEST_F(IndexTest, SearchFindsNotesByTheirProperties)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+    // Ideas.md's frontmatter: aliases [Brainwaves], id 01J9, tags [thinking].
+    QList<SearchResult> results = index.search(QStringLiteral("[aliases:brainwaves]"));
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results.first().path, QStringLiteral("Ideas.md"));
+    EXPECT_EQ(index.search(QStringLiteral("[id]")).size(), 1);
+    EXPECT_TRUE(index.search(QStringLiteral("[id:nothing]")).isEmpty());
+}
+
 TEST_F(IndexTest, SearchOffsetsLandOnTheRealMatch)
 {
     Index index;

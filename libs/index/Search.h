@@ -46,6 +46,10 @@ struct NoteTask {
     bool done = false;
     Range range; ///< the whole list item, as Metadata::Task stores it
 };
+struct NoteProperty {
+    QString key;
+    QStringList values; ///< a list property's items, or the one value
+};
 
 /// One note's raw text plus the pieces of its metadata a field search reads.
 /// `text` is the same string `Index::put()` was given as `body` - the file's
@@ -57,6 +61,7 @@ struct NoteContext {
     QList<NoteTag> tags;
     QList<NoteHeading> headings;
     QList<NoteTask> tasks;
+    QList<NoteProperty> properties;
 };
 
 /// Which of a note's metadata tables a parsed query actually reads, so
@@ -67,10 +72,12 @@ struct FieldNeeds {
     bool tags = false;
     bool headings = false;
     bool tasks = false;
+    bool properties = false;
 
     FieldNeeds operator|(const FieldNeeds &other) const
     {
-        return {tags || other.tags, headings || other.headings, tasks || other.tasks};
+        return {tags || other.tags, headings || other.headings, tasks || other.tasks,
+                properties || other.properties};
     }
 };
 
@@ -89,7 +96,8 @@ class SearchQueryNode;
 /// A parsed Obsidian-style search query: bare words (AND by default), "quoted
 /// phrases", OR, -negation, (parentheses), /regular expressions/, and the
 /// file: path: content: tag: line:(...) block:(...) section:(...) task:
-/// task-todo: task-done: match-case: ignore-case: operators documented at
+/// task-todo: task-done: match-case: ignore-case: operators, and
+/// [property] / [property:value], documented at
 /// https://obsidian.md/help/plugins/search.
 ///
 /// Deliberately independent of SQL and of Index: parsing and evaluation are

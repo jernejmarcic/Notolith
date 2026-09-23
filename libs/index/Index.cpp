@@ -810,6 +810,7 @@ void Index::eachMatch(const SearchQuery &query, int limit,
         QHash<qint64, QList<NoteTag>> tagsByFile;
         QHash<qint64, QList<NoteHeading>> headingsByFile;
         QHash<qint64, QList<NoteTask>> tasksByFile;
+        QHash<qint64, QList<NoteProperty>> propertiesByFile;
 
         if (needs.tags) {
             QSqlQuery tagQuery(db);
@@ -836,6 +837,16 @@ void Index::eachMatch(const SearchQuery &query, int limit,
                 tasksByFile[taskQuery.value(0).toLongLong()].append(
                     NoteTask{taskQuery.value(1).toBool(),
                             Range{taskQuery.value(2).toLongLong(), taskQuery.value(3).toLongLong()}});
+            }
+        }
+
+        if (needs.properties) {
+            QSqlQuery propertyQuery(db);
+            propertyQuery.exec(QStringLiteral("SELECT file, key, value FROM props"));
+            while (propertyQuery.next()) {
+                propertiesByFile[propertyQuery.value(0).toLongLong()].append(
+                    NoteProperty{propertyQuery.value(1).toString(),
+                                 propertyQuery.value(2).toString().split(QLatin1Char('\n'))});
             }
         }
 
@@ -877,6 +888,7 @@ void Index::eachMatch(const SearchQuery &query, int limit,
             note.tags = tagsByFile.value(id);
             note.headings = headingsByFile.value(id);
             note.tasks = tasksByFile.value(id);
+            note.properties = propertiesByFile.value(id);
 
             SearchOutcome outcome = query.evaluate(note);
             if (!outcome.matched)

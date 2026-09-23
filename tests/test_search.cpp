@@ -384,6 +384,26 @@ TEST(SearchFieldNeedsTest, EachFieldFlagsItsOwnTable)
 
 // --- snippets ----------------------------------------------------------
 
+TEST(SearchPropertyTest, HasValueNullRegexAndLinksStayWords)
+{
+    NoteContext n = note(QStringLiteral("body text [[Other]]"));
+    n.properties = {{QStringLiteral("status"), {QStringLiteral("Draft")}},
+                    {QStringLiteral("tags"), {QStringLiteral("alpha"), QStringLiteral("beta")}},
+                    {QStringLiteral("empty"), {QString()}}};
+    EXPECT_TRUE(matches(QStringLiteral("[status]"), n));
+    EXPECT_TRUE(matches(QStringLiteral("[Status:draft]"), n));
+    EXPECT_FALSE(matches(QStringLiteral("[status:published]"), n));
+    EXPECT_TRUE(matches(QStringLiteral("[tags:beta]"), n)); // any item of a list
+    EXPECT_TRUE(matches(QStringLiteral("[tags:/^al/]"), n));
+    EXPECT_TRUE(matches(QStringLiteral("[empty:null]"), n));
+    EXPECT_FALSE(matches(QStringLiteral("[status:null]"), n));
+    EXPECT_FALSE(matches(QStringLiteral("[missing]"), n));
+    EXPECT_TRUE(matches(QStringLiteral("[status] body -[missing]"), n));
+    EXPECT_TRUE(SearchQuery::parse(QStringLiteral("[status]")).fieldNeeds().properties);
+    EXPECT_TRUE(matches(QStringLiteral("[[Other]]"), n)); // a link's text, not a property
+    EXPECT_FALSE(SearchQuery::parse(QStringLiteral("[status")).isValid());
+}
+
 TEST(SearchSnippetTest, CentresOnTheFirstMatchAndMarksTruncation)
 {
     QString text = QStringLiteral("word ");
