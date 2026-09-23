@@ -529,6 +529,7 @@ void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> p
     m_decorations = std::move(decorations);
     m_properties = std::move(properties);
     m_lines = SourceMap(m_text);
+    collectTabGroups();
     rebuildBlocks();
     indexDecorations();
     invalidateLayouts();
@@ -1774,6 +1775,32 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.textTop = 0;
     view.folded = false;
     view.inlineMaths.clear();
+    view.tabHidden = false;
+    view.tabGroup = -1;
+
+    // A tab group shows one of its fences under a strip of tabs, and hides the
+    // rest along with the blank lines between them. With the caret anywhere
+    // inside the group it shows every fence as it is instead, so the caret can
+    // never be inside a tab nobody can see.
+    if (m_mode != Mode::Source && !m_tabGroups.empty()) {
+        if (const TabGroup *group = tabGroupAt(view.span.range.start)) {
+            if (caretTabGroup() != group && view.span.range.start < group->hiddenEnd) {
+                const CodeFenceSpan &shown =
+                    m_decorations.codeFences.at(group->first + selectedTabOf(*group));
+                if (view.span.kind == BlockSpan::Kind::Code && codeFenceOf(view) == &shown) {
+                    view.tabGroup = int(group - m_tabGroups.data());
+                } else {
+                    view.tabHidden = true;
+                    view.layout.reset();
+                    view.map = DisplayMap();
+                    view.height = 0;
+                    view.laidOut = true;
+                    view.heightEstimated = false;
+                    return;
+                }
+            }
+        }
+    }
 
     // Obsidian never shows raw YAML in live preview, only in source mode, so
     // the properties table does not step aside for the caret the way a
@@ -1914,8 +1941,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // below it; an empty callout still shows its title.
         view.textTop = calloutHeaderHeight(view.calloutStyle);
         view.height = height;
-    } else if (view.options) {
-        view.textTop = codeHeaderHeight();
+    } else if (view.options || view.tabGroup >= 0) {
+        view.textTop = codeHeaderHeight(); // the `#|` header, or the tab strip
     }
 
     view.folded = isFoldable(view) && m_folds.value(view.span.range.start, defaultFoldOf(view));
@@ -1931,8 +1958,17 @@ void MarkdownEditor::updateLayout()
 
     // Obsidian keeps the caret's own block raw even when the pane loses
     // focus, so interaction - not focus - is what reveals it.
+    const TabGroup *caretGroup = caretTabGroup();
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
+        const bool inCaretGroup = caretGroup && view.span.range.start >= caretGroup->span.start
+                                  && view.span.range.start < caretGroup->span.end;
+        if (inCaretGroup != view.inCaretGroup) {
+            view.inCaretGroup = inCaretGroup;
+            view.layout.reset();
+            view.laidOut = false;
+            view.heightEstimated = false;
+        }
         // A block shows its raw source only for a bare caret. With a selection
         // it stays rendered, as in Obsidian, and while the mouse button is
         // held nothing changes at all: revealing the syntax mid-drag moved the
@@ -2019,6 +2055,8 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
             continue;
         if (top > viewport()->height())
             break;
+        if (view.tabHidden)
+            continue;
 
         if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
             && !m_properties.isEmpty()) {
@@ -2298,6 +2336,23 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(span.range);
     for (Property &property : m_properties)
         shift(property.range);
+
+    for (CodeFenceSpan &fence : m_decorations.codeFences) {
+        shift(fence.block);
+        shift(fence.content);
+        shift(fence.attributesRange);
+    }
+    for (TabGroup &group : m_tabGroups) {
+        shift(group.span);
+        if (group.hiddenEnd >= at)
+            group.hiddenEnd += delta;
+    }
+    if (delta != 0 && !m_selectedTabs.isEmpty()) {
+        QHash<qsizetype, int> moved;
+        for (auto it = m_selectedTabs.cbegin(); it != m_selectedTabs.cend(); ++it)
+            moved.insert(it.key() >= at ? it.key() + delta : it.key(), it.value());
+        m_selectedTabs = std::move(moved);
+    }
 
     // Fold state is keyed by the block's start, so it has to move with it.
     if (delta != 0 && !m_folds.isEmpty()) {

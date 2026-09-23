@@ -174,6 +174,13 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 copyCodeBlock(view);
                 return true;
             }
+            for (const TabRect &tab : tabsOf(view, left, top)) {
+                if (!tab.rect.contains(point))
+                    continue;
+                if (!tab.selected)
+                    selectCodeTab(m_tabGroups.at(size_t(view.tabGroup)).span.start, tab.member);
+                return true; // a click on the strip never moves the caret into the group
+            }
         }
 
         if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
@@ -577,33 +584,31 @@ void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &v
 
 const CodeFenceSpan *MarkdownEditor::codeFenceOf(const BlockView &view) const
 {
-    // Matched by the listing rather than by start: md4qt's code item covers
-    // the listing alone, so the two ranges agree about the middle and not
+    // codeFences is sorted by start, and a note can hold thousands of them, so
+    // this is a binary search rather than a walk: layout asks it per block.
+    // Matched by the listing, not the start - md4qt's code item covers the
+    // listing alone, so the two ranges agree about the middle and not
     // necessarily about the fences.
-    for (const CodeFenceSpan &fence : m_decorations.codeFences) {
-        if (fence.depth == 0 && (fence.content.overlaps(view.span.range)
-                                 || view.span.range.contains(fence.block.start)))
-            return &fence;
+    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    auto it = std::lower_bound(fences.cbegin(), fences.cend(), view.span.range.start,
+                               [](const CodeFenceSpan &fence, qsizetype start) {
+                                   return fence.block.end <= start;
+                               });
+    for (; it != fences.cend() && it->block.start < view.span.range.end; ++it) {
+        if (it->depth == 0
+            && (it->content.overlaps(view.span.range) || view.span.range.contains(it->block.start)))
+            return &*it;
     }
     return nullptr;
 }
 
-LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
+LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
 {
     // Three layers, as callouts have: the language as written, the section
     // codeblocks.ini gives it, then whatever the fence itself says after the
     // language - `name`, `icon` and `color`, the keys codeblocks.ini uses.
-    const CodeFenceSpan *fence = codeFenceOf(view);
-    QString language;
-    if (fence)
-        language = fence->language;
-    else
-        codeContentOf(view, &language);
-
-    LanguageStyle style = m_languageStyles.resolve(language);
-    if (!fence)
-        return style;
-    const QMap<QString, QString> &own = fence->attributes;
+    LanguageStyle style = m_languageStyles.resolve(fence.language);
+    const QMap<QString, QString> &own = fence.attributes;
     if (!own.value(QStringLiteral("name")).isEmpty())
         style.name = own.value(QStringLiteral("name"));
     if (!own.value(QStringLiteral("icon")).isEmpty())
@@ -612,6 +617,118 @@ LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
     if (colour.isValid())
         style.color = colour;
     return style;
+}
+
+LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
+{
+    if (const CodeFenceSpan *fence = codeFenceOf(view))
+        return styleOfFence(*fence);
+    QString language;
+    codeContentOf(view, &language);
+    return m_languageStyles.resolve(language);
+}
+
+void MarkdownEditor::selectCodeTab(qsizetype sourceOffset, int member)
+{
+    const TabGroup *group = tabGroupAt(sourceOffset);
+    if (!group || member < 0 || member >= group->count)
+        return;
+    m_selectedTabs.insert(group->span.start, member);
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::collectTabGroups()
+{
+    // Rebuilt once per parse, so layout finds a block's group by binary
+    // search instead of scanning every fence for every block.
+    m_tabGroups.clear();
+    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    for (int i = 0; i < fences.size(); ++i) {
+        if (fences.at(i).tabGroup != i)
+            continue; // only a group's first member carries its own index
+        int end = i;
+        while (end < fences.size() && fences.at(end).tabGroup == i)
+            ++end;
+        TabGroup group;
+        group.span = {fences.at(i).block.start, fences.at(end - 1).block.end};
+        group.hiddenEnd = fences.at(end - 1).content.end;
+        group.first = i;
+        group.count = end - i;
+        m_tabGroups.push_back(group);
+        i = end - 1;
+    }
+}
+
+const MarkdownEditor::TabGroup *MarkdownEditor::tabGroupAt(qsizetype source) const
+{
+    auto it = std::upper_bound(m_tabGroups.cbegin(), m_tabGroups.cend(), source,
+                               [](qsizetype at, const TabGroup &group) {
+                                   return at < group.span.start;
+                               });
+    if (it == m_tabGroups.cbegin())
+        return nullptr;
+    --it;
+    return source < it->span.end ? &*it : nullptr;
+}
+
+const MarkdownEditor::TabGroup *MarkdownEditor::caretTabGroup() const
+{
+    if (m_mode != Mode::LivePreview || !m_interacted || m_tabGroups.empty())
+        return nullptr;
+    if (const TabGroup *group = tabGroupAt(m_cursor))
+        return group;
+    // Just past the closing fence still counts as inside.
+    const TabGroup *before = m_cursor > 0 ? tabGroupAt(m_cursor - 1) : nullptr;
+    return before && m_cursor == before->span.end ? before : nullptr;
+}
+
+int MarkdownEditor::selectedTabOf(const TabGroup &group) const
+{
+    return qBound(0, m_selectedTabs.value(group.span.start, 0), group.count - 1);
+}
+
+std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &view, qreal left,
+                                                            qreal top) const
+{
+    std::vector<TabRect> tabs;
+    if (view.tabGroup < 0 || view.tabGroup >= int(m_tabGroups.size()))
+        return tabs;
+    const TabGroup &group = m_tabGroups.at(size_t(view.tabGroup));
+    const int selected = selectedTabOf(group);
+
+    QFont font = m_theme.uiFont();
+    font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+    const QFontMetricsF metrics(font);
+    const qreal iconSize = metrics.height();
+    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    const qreal height = view.textTop + 8;
+
+    qreal x = panel.left() + 8;
+    for (int i = 0; i < group.count; ++i) {
+        const CodeFenceSpan &fence = m_decorations.codeFences.at(group.first + i);
+        const LanguageStyle style = styleOfFence(fence);
+        TabRect tab;
+        tab.member = i;
+        tab.selected = i == selected;
+        // A bare `tab` takes the language's style name; one with no language
+        // at all is numbered, so no tab is ever blank.
+        tab.text = !fence.tabLabel.isEmpty() ? fence.tabLabel
+                   : !style.name.isEmpty()   ? style.name
+                                             : tr("Tab %1").arg(i + 1);
+        if (!style.icon.isEmpty())
+            tab.icon = Icons::icon(style.icon,
+                                   style.color.isValid() ? style.color
+                                                         : m_theme.color(QStringLiteral("--text-muted")),
+                                   int(iconSize));
+        const qreal width = 12 + (tab.icon.isNull() ? 0 : iconSize + 5)
+                            + metrics.horizontalAdvance(tab.text) + 12;
+        tab.rect = QRectF(x, panel.top(), width, height);
+        x += width;
+        tabs.push_back(tab);
+    }
+    return tabs;
 }
 
 MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qreal left,
@@ -625,8 +742,14 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
     // A block with a language always names it. One without shows "Copy" only
     // while the pointer is over it, so a plain listing is copyable without
     // carrying a label nobody asked for.
-    label.text = copied ? tr("Copied") : !style.name.isEmpty() ? style.name
-                                     : hovered ? tr("Copy") : QString();
+    // In a tab strip the tabs already carry the names, so the label is only
+    // the copy button there.
+    const bool strip = view.tabGroup >= 0;
+    label.text = copied                         ? tr("Copied")
+                 : strip                        ? tr("Copy")
+                 : !style.name.isEmpty()        ? style.name
+                 : hovered                      ? tr("Copy")
+                                                : QString();
     if (label.text.isEmpty())
         return label;
 
@@ -638,7 +761,7 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
 
     const QFontMetricsF metrics(label.font);
     const qreal iconSize = metrics.height();
-    if (!copied && !style.icon.isEmpty())
+    if (!copied && !strip && !style.icon.isEmpty())
         label.icon = Icons::icon(style.icon, label.colour, int(iconSize));
     const qreal width = metrics.horizontalAdvance(label.text)
                         + (label.icon.isNull() ? 0 : iconSize + 5);
@@ -646,9 +769,12 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
     // With `#|` options there is a header strip, and the label sits at its
     // right end, clear of the fold arrow; without one it takes the corner.
-    const qreal right = view.options ? panel.right() - 22 - kFoldHandle : panel.right() - 10;
-    const qreal y = view.options ? panel.top() + (view.textTop + 8 - metrics.height()) / 2
-                                 : panel.top() + 4;
+    const bool header = view.options || strip;
+    const qreal right = view.options ? panel.right() - 22 - kFoldHandle
+                        : strip      ? panel.right() - 14
+                                     : panel.right() - 10;
+    const qreal y = header ? panel.top() + (view.textTop + 8 - metrics.height()) / 2
+                           : panel.top() + 4;
     label.rect = QRectF(right - width, y, width, metrics.height());
     label.visible = true;
     return label;
@@ -729,8 +855,8 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
     const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
 
-    if (!view.options) {
-        // No `#|` options: the label alone, in the corner.
+    if (!view.options && view.tabGroup < 0) {
+        // No `#|` options and no tabs: the label alone, in the corner.
         paintCodeLabel(painter, view, left, top);
         return;
     }
@@ -749,13 +875,45 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
         painter.drawLine(header.bottomLeft(), header.bottomRight());
     }
 
-    painter.setFont(badgeFont);
-    painter.setPen(muted);
-    const QRectF titleRect(header.left() + 14, header.top(),
-                           header.width() - 36 - kFoldHandle, header.height());
-    painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
-    paintCodeLabel(painter, view, left, top);
-    paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
+    if (view.tabGroup >= 0) {
+        // The strip: the tab being shown in the normal text colour over an
+        // accent underline, the others muted. The tabs own the header, so a
+        // `#|` title has nowhere to go here and is not drawn.
+        QFont tabFont = m_theme.uiFont();
+        tabFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+        painter.setFont(tabFont);
+        const QColor normal = m_theme.color(QStringLiteral("--text-normal"));
+        const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
+        for (const TabRect &tab : tabsOf(view, left, top)) {
+            QRectF text = tab.rect.adjusted(12, 0, -12, 0);
+            if (!tab.icon.isNull()) {
+                const qreal size = QFontMetricsF(tabFont).height();
+                tab.icon.paint(&painter, QRectF(text.left(), tab.rect.center().y() - size / 2,
+                                                size, size)
+                                             .toRect());
+                text.setLeft(text.left() + size + 5);
+            }
+            painter.setPen(tab.selected ? normal : muted);
+            painter.drawText(text, Qt::AlignVCenter | Qt::AlignLeft, tab.text);
+            if (tab.selected)
+                painter.fillRect(QRectF(tab.rect.left() + 6, tab.rect.bottom() - 2,
+                                        tab.rect.width() - 12, 2),
+                                 accent);
+        }
+        paintCodeLabel(painter, view, left, top);
+        if (!view.options) {
+            painter.restore();
+            return; // no `#|` options, so no highlighted rows or line numbers
+        }
+    } else {
+        painter.setFont(badgeFont);
+        painter.setPen(muted);
+        const QRectF titleRect(header.left() + 14, header.top(),
+                               header.width() - 36 - kFoldHandle, header.height());
+        painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
+        paintCodeLabel(painter, view, left, top);
+        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
+    }
 
     if (view.folded) {
         painter.restore();

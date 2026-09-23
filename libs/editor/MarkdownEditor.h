@@ -121,6 +121,9 @@ public:
     /// Pretends the reader clicked into the block holding `offset`, so it
     /// reveals its source. Used by the tests and by "reveal on open".
     void enterBlockAt(qsizetype offset);
+    /// Shows tab `member` of the code tab group containing `sourceOffset`.
+    /// What a click on a tab does; public for tests and for a keyboard command.
+    void selectCodeTab(qsizetype sourceOffset, int member);
 
     /// Colour a link at `sourceOffset` is painted in, for the tests. Invalid
     /// when there is no link there.
@@ -271,6 +274,16 @@ private:
         /// callout is a block of its own; the rest are painted into this one's
         /// layout, which is why they are resolved before it is built.
         std::vector<NestedCallout> nested;
+        /// A fence in a tab group that is not the tab being shown, or the
+        /// blank lines between two of them: no height, nothing painted.
+        bool tabHidden = false;
+        /// Set on the fence a tab group is showing: it paints the strip.
+        /// An index into m_tabGroups, -1 outside any group.
+        int tabGroup = -1;
+        /// Inside the tab group the caret is in, which shows every fence.
+        /// Tracked so the caret crossing a group's edge relays out the whole
+        /// group, not only the block it landed in.
+        bool inCaretGroup = false;
         /// Set when this block is a fenced code block carrying `#|` options.
         const CodeOptions *options = nullptr;
         /// Filled instead of `layout` when this is the frontmatter and live
@@ -356,6 +369,35 @@ private:
     CodeLabel codeLabelOf(const BlockView &view, qreal left, qreal top) const;
     const CodeFenceSpan *codeFenceOf(const BlockView &view) const;
     LanguageStyle codeStyleOf(const BlockView &view) const;
+    LanguageStyle styleOfFence(const CodeFenceSpan &fence) const;
+
+    /// A run of adjacent `tab` fences, shown as one block with a tab strip.
+    struct TabGroup {
+        Range span;    ///< the first fence's start to the last fence's end
+        /// Where hiding stops: the end of the last fence's listing. A code
+        /// block's listing is its own block, and its fences sit in the gap
+        /// blocks around it - so the gap after the last listing, which holds
+        /// the closing fence and the blank line before the next paragraph,
+        /// has to stay, or the group loses the spacing any code block has.
+        qsizetype hiddenEnd = 0;
+        int first = 0; ///< index into m_decorations.codeFences
+        int count = 0;
+    };
+    /// One tab in a group's strip. tabsOf computes these for painting and for
+    /// clicking both, so the two cannot disagree about where a tab is.
+    struct TabRect {
+        QRectF rect;
+        QString text;
+        QIcon icon;
+        int member = 0;
+        bool selected = false;
+    };
+    void collectTabGroups();
+    const TabGroup *tabGroupAt(qsizetype source) const;
+    /// The tab group the caret is in, its closing fence's end included.
+    const TabGroup *caretTabGroup() const;
+    int selectedTabOf(const TabGroup &group) const;
+    std::vector<TabRect> tabsOf(const BlockView &view, qreal left, qreal top) const;
     void copyCodeBlock(const BlockView &view);
     const BlockView *codeLabelAt(const QPoint &point) const;
     void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
@@ -564,6 +606,10 @@ private:
     /// the one under the pointer, which is when a block without a language
     /// shows its "Copy" label at all. Both keyed by the block's source start.
     qsizetype m_copiedBlock = -1;
+    /// Tab groups, sorted by start, rebuilt with each parse; and which tab
+    /// each shows, keyed by the group's start so it survives a reparse.
+    std::vector<TabGroup> m_tabGroups;
+    QHash<qsizetype, int> m_selectedTabs;
     qsizetype m_hoveredCodeBlock = -1;
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;

@@ -1657,3 +1657,92 @@ TEST(CodeLabelTest, TheFenceItselfOverridesCodeblocksIni)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+TEST(ShiftTest, ACalloutBelowTheCaretKeepsItsPanelWhileTyping)
+{
+    // A guard, not a regression that happened. Between a keystroke and the
+    // debounced reparse only syntax, styles, blocks and properties are
+    // shifted; callout ranges are not. It holds anyway because a block below
+    // the edit keeps its cached layout and its pointer to the callout, so the
+    // stale range is never consulted - unless that block is laid out again in
+    // those 20 ms. If a change ever relays out every block per keystroke,
+    // this is what will notice the callouts vanishing.
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
+    writeAtomically(QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini")),
+                    "[note]\nbar = #FF0000ff\n");
+
+    auto editor = editorWith(QStringLiteral("Typing here.\n\n> [!note] Title\n> Body.\n"));
+    ASSERT_GT(pixelsOf(*editor, qRgb(255, 0, 0)), 0);
+
+    editor->enterBlockAt(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("abc"));
+    // Straight away, before the parse has had its 20 ms.
+    EXPECT_GT(pixelsOf(*editor, qRgb(255, 0, 0)), 0) << "the callout's rail vanished mid-typing";
+
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// --- code block tabs ---------------------------------------------------------
+
+namespace {
+
+const QString kTabbedNote = QStringLiteral(
+    "Before.\n\n"
+    "```python tab=\"Python\"\nprint('hi')\n```\n\n"
+    "```cpp tab\nputs(\"hi\");\n```\n\n"
+    "After.\n");
+
+} // namespace
+
+TEST(CodeTabTest, OnlyTheSelectedTabIsShown)
+{
+    auto editor = editorWith(kTabbedNote);
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("print('hi')")));
+    EXPECT_FALSE(shown.contains(QLatin1String("puts(\"hi\")")));
+    EXPECT_TRUE(shown.contains(QLatin1String("Before.")));
+    EXPECT_TRUE(shown.contains(QLatin1String("After.")))
+        << "the group hides its own fences, nothing around it";
+
+    editor->selectCodeTab(kTabbedNote.indexOf(QLatin1String("```python")), 1);
+    const QString second = editor->displayText();
+    EXPECT_FALSE(second.contains(QLatin1String("print('hi')")));
+    EXPECT_TRUE(second.contains(QLatin1String("puts(\"hi\")")));
+    EXPECT_EQ(editor->noteText(), kTabbedNote) << "switching tabs is a view, never an edit";
+}
+
+TEST(CodeTabTest, TheCaretInsideTheGroupShowsEveryFence)
+{
+    // So the caret can never be inside a tab nobody can see.
+    auto editor = editorWith(kTabbedNote);
+    editor->enterBlockAt(kTabbedNote.indexOf(QLatin1String("print")));
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("print('hi')")));
+    EXPECT_TRUE(shown.contains(QLatin1String("puts(\"hi\")")));
+}
+
+TEST(CodeTabTest, SourceModeShowsEveryFence)
+{
+    auto editor = editorWith(kTabbedNote);
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_EQ(editor->displayText(), kTabbedNote);
+}
+
+TEST(CodeTabTest, TheSelectionSurvivesTypingAboveTheGroup)
+{
+    // The chosen tab is keyed by the group's position, which moves with the
+    // text - and survives the reparse that follows.
+    auto editor = editorWith(kTabbedNote);
+    editor->selectCodeTab(kTabbedNote.indexOf(QLatin1String("```python")), 1);
+    editor->enterBlockAt(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("More "));
+    QTest::qWait(80); // past the parse debounce
+    editor->enterBlockAt(editor->noteText().indexOf(QLatin1String("After.")));
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("puts(\"hi\")")));
+    EXPECT_FALSE(shown.contains(QLatin1String("print('hi')")));
+}
+
