@@ -400,9 +400,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [ ] ` ```base ` blocks inside notes, on `BaseView`.
 - [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
       `summaries:`, list-property cells, cards read-only, sort not saved back.
-- [ ] Canvas left out: dragging a group does not move what is in it; a file
-      node's subpath does not scroll to the heading; plain drag pans, Obsidian
-      rubber-bands (Shift here).
+- [x] Canvas controls as Obsidian's: a drag on empty canvas draws a
+      selection box, the wheel pans (Shift sideways), Ctrl+wheel zooms,
+      Space- or middle-drag pans; a group carries the cards inside it.
+- [ ] Canvas left out: a file node's subpath does not scroll to its heading.
 - [x] Middle-click a tree row to open it in a new tab.
 - [ ] **For Jernej:** Obsidian opens a link in a new tab on Ctrl+click, but
       in noteAppC's editing view Ctrl+click is how a link is followed at all

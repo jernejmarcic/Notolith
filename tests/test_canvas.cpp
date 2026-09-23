@@ -442,12 +442,28 @@ TEST_F(CanvasViewTest, NodeAtAndEdgeAtFindWhatIsUnderThePoint)
     EXPECT_EQ(view->edgeAt(QPoint(200, 25)), edgeID); // midpoint of a straight left-right curve
 }
 
-TEST_F(CanvasViewTest, WheelZoomsAboutThePointerAndPanMovesTheOrigin)
+TEST_F(CanvasViewTest, WheelPansCtrlWheelZoomsAndMiddleDragPans)
 {
+    // Obsidian's canvas: the wheel pans (Shift sideways), Ctrl+wheel zooms.
+    const QPointF start = view->origin();
+    QWheelEvent pan(QPointF(400, 300), QPointF(400, 300), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
+                    Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(view.get(), &pan);
+    EXPECT_LT(view->origin().y(), start.y());
+    EXPECT_EQ(view->origin().x(), start.x());
+    EXPECT_EQ(view->zoom(), 1.0);
+
+    const QPointF beforeSideways = view->origin();
+    QWheelEvent sideways(QPointF(400, 300), QPointF(400, 300), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
+                         Qt::ShiftModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(view.get(), &sideways);
+    EXPECT_LT(view->origin().x(), beforeSideways.x());
+    EXPECT_EQ(view->origin().y(), beforeSideways.y());
+
     const qreal before = view->zoom();
-    QWheelEvent wheel(QPointF(400, 300), QPointF(400, 300), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
-                      Qt::NoModifier, Qt::NoScrollPhase, false);
-    QCoreApplication::sendEvent(view.get(), &wheel);
+    QWheelEvent zoom(QPointF(400, 300), QPointF(400, 300), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
+                     Qt::ControlModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(view.get(), &zoom);
     EXPECT_GT(view->zoom(), before);
 
     const QPointF originBefore = view->origin();
@@ -455,6 +471,40 @@ TEST_F(CanvasViewTest, WheelZoomsAboutThePointerAndPanMovesTheOrigin)
     send(view.get(), QEvent::MouseMove, QPoint(350, 260), Qt::MiddleButton);
     send(view.get(), QEvent::MouseButtonRelease, QPoint(350, 260), Qt::MiddleButton);
     EXPECT_NE(view->origin(), originBefore);
+}
+
+TEST_F(CanvasViewTest, APlainDragOnTheEmptyCanvasDrawsASelectionBox)
+{
+    const QString a = view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+    const QString farAway = view->document().addNode(makeTextNode(QRectF(2000, 2000, 100, 50)));
+    const QPointF origin = view->origin();
+    send(view.get(), QEvent::MouseButtonPress, QPoint(-20, -20), Qt::LeftButton);
+    send(view.get(), QEvent::MouseMove, QPoint(150, 80), Qt::LeftButton);
+    send(view.get(), QEvent::MouseButtonRelease, QPoint(150, 80), Qt::LeftButton);
+    EXPECT_EQ(view->selectedNodeIDs(), QStringList{a});
+    EXPECT_EQ(view->origin(), origin) << "it selects, it does not pan";
+    Q_UNUSED(farAway);
+}
+
+TEST_F(CanvasViewTest, MovingAGroupMovesWhatIsInsideItInOneUndoStep)
+{
+    CanvasNode group = makeTextNode(QRectF(0, 0, 400, 300));
+    group.setType(CanvasNodeType::Group);
+    const QString frame = view->document().addNode(group);
+    const QString inside = view->document().addNode(makeTextNode(QRectF(50, 60, 100, 50)));
+    const QString outside = view->document().addNode(makeTextNode(QRectF(600, 60, 100, 50)));
+
+    // Grab the frame by its empty middle, well clear of the card in it.
+    send(view.get(), QEvent::MouseButtonPress, QPoint(300, 250), Qt::LeftButton);
+    send(view.get(), QEvent::MouseMove, QPoint(340, 270), Qt::LeftButton);
+    send(view.get(), QEvent::MouseButtonRelease, QPoint(340, 270), Qt::LeftButton);
+    EXPECT_EQ(view->document().node(frame)->rect(), QRectF(40, 20, 400, 300));
+    EXPECT_EQ(view->document().node(inside)->rect(), QRectF(90, 80, 100, 50));
+    EXPECT_EQ(view->document().node(outside)->rect(), QRectF(600, 60, 100, 50));
+
+    view->undoStack()->undo();
+    EXPECT_EQ(view->document().node(frame)->rect(), QRectF(0, 0, 400, 300));
+    EXPECT_EQ(view->document().node(inside)->rect(), QRectF(50, 60, 100, 50));
 }
 
 TEST_F(CanvasViewTest, DoubleClickingAFileNodeEmitsNoteActivatedWithTheRawRelativePath)

@@ -322,14 +322,22 @@ bool CanvasView::eventFilter(QObject *watched, QEvent *event)
 
 void CanvasView::wheelEvent(QWheelEvent *event)
 {
-    // Wheel zooms about the pointer, unconditionally - this project's own
-    // convention (docs/PLUGINS.md's "extra costs nothing when off" spirit
-    // extends to keeping the primary gesture single-purpose); see HANDOFF for
-    // the reasoning if this needs to grow a pan mode later.
-    const QPointF before = mapToCanvas(event->position().toPoint());
-    const qreal factor = std::pow(1.0015, event->angleDelta().y());
-    m_zoom = qBound(kMinZoom, m_zoom * factor, kMaxZoom);
-    m_origin = before - QPointF(event->position()) / m_zoom;
+    // Obsidian's canvas: the wheel pans, Shift turns it sideways, and Ctrl
+    // or a held Space makes it zoom about the pointer. A touchpad's pixel
+    // deltas pan as they come; a mouse wheel's degrees are halved into
+    // pixels the way the editor's tables pan.
+    if (event->modifiers().testFlag(Qt::ControlModifier) || m_spaceHeld) {
+        const QPointF before = mapToCanvas(event->position().toPoint());
+        const qreal factor = std::pow(1.0015, event->angleDelta().y());
+        m_zoom = qBound(kMinZoom, m_zoom * factor, kMaxZoom);
+        m_origin = before - QPointF(event->position()) / m_zoom;
+    } else {
+        QPointF delta = event->pixelDelta().isNull() ? QPointF(event->angleDelta()) / 2.0
+                                                    : QPointF(event->pixelDelta());
+        if (event->modifiers().testFlag(Qt::ShiftModifier) && qFuzzyIsNull(delta.x()))
+            delta = QPointF(delta.y(), 0);
+        m_origin -= delta / m_zoom;
+    }
     if (m_textEditor)
         positionTextEditor();
     update();

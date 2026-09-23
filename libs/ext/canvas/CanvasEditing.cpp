@@ -208,6 +208,19 @@ void CanvasView::beginMove(const HitResult &hit, const QPoint &viewportPoint, Qt
         for (const QString &id : std::as_const(m_selectedNodes))
             if (const CanvasNode *node = m_document.node(id))
                 m_drag.startRects.insert(id, node->rect());
+        // A group carries what sits inside it, as in Obsidian: every card
+        // wholly within a moved group's frame when the drag starts moves too,
+        // in the same undo step.
+        const QHash<QString, QRectF> moving = m_drag.startRects;
+        for (auto it = moving.cbegin(); it != moving.cend(); ++it) {
+            const CanvasNode *group = m_document.node(it.key());
+            if (!group || group->type() != CanvasNodeType::Group)
+                continue;
+            for (const CanvasNode &node : m_document.nodes()) {
+                if (node.id() != group->id() && it.value().contains(node.rect()))
+                    m_drag.startRects.insert(node.id(), node.rect());
+            }
+        }
     }
 }
 
@@ -386,12 +399,9 @@ void CanvasView::mousePressEvent(QMouseEvent *event)
         return;
     }
 
-    if (event->modifiers() & Qt::ShiftModifier) {
-        beginRubberBand(event->pos(), true);
-    } else {
-        clearSelection();
-        beginPan(event->pos());
-    }
+    // A drag on the empty canvas draws a selection box, as in Obsidian;
+    // Shift adds to what is selected. Panning is Space or the middle button.
+    beginRubberBand(event->pos(), event->modifiers() & Qt::ShiftModifier);
 }
 
 void CanvasView::mouseMoveEvent(QMouseEvent *event)
