@@ -766,4 +766,66 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     return rewritten;
 }
 
+// --- Bases (libs/ext/bases) ---------------------------------------------
+// Added for the optional Bases module; see the block comment in Index.h.
+// Read-only, and never called from the indexing path - only when a .base
+// file is opened, so it costs nothing in a build without the module and
+// nothing at startup in a build with it.
+
+QList<Index::BaseNote> Index::allNotesForBases() const
+{
+    QList<BaseNote> notes;
+    if (!m_db.isOpen())
+        return notes;
+
+    QHash<qint64, qsizetype> rowOf; // file id -> index into notes
+    QSqlQuery files(m_db);
+    // Attachments carry no properties and are not what a base lists.
+    files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0"));
+    while (files.next()) {
+        BaseNote note;
+        const qint64 id = files.value(0).toLongLong();
+        note.path = files.value(1).toString();
+        note.mtime = files.value(2).toLongLong();
+        note.size = files.value(3).toLongLong();
+        rowOf.insert(id, notes.size());
+        notes.append(std::move(note));
+    }
+
+    QSqlQuery props(m_db);
+    props.exec(QStringLiteral("SELECT file, key, type, value FROM props"));
+    while (props.next()) {
+        const auto it = rowOf.constFind(props.value(0).toLongLong());
+        if (it == rowOf.constEnd())
+            continue;
+        Property property;
+        property.key = props.value(1).toString();
+        property.type = static_cast<Property::Type>(props.value(2).toInt());
+        // put() joins a list's values with '\n'; an empty join would come
+        // back as one empty string instead of no values at all.
+        const QString value = props.value(3).toString();
+        if (!value.isEmpty())
+            property.values = value.split(QLatin1Char('\n'));
+        notes[it.value()].properties.append(property);
+    }
+
+    QSqlQuery tags(m_db);
+    tags.exec(QStringLiteral("SELECT DISTINCT file, name FROM tags"));
+    while (tags.next()) {
+        const auto it = rowOf.constFind(tags.value(0).toLongLong());
+        if (it != rowOf.constEnd())
+            notes[it.value()].tags.append(tags.value(1).toString());
+    }
+
+    QSqlQuery links(m_db);
+    links.exec(QStringLiteral("SELECT file, target FROM links WHERE external = 0 AND target != ''"));
+    while (links.next()) {
+        const auto it = rowOf.constFind(links.value(0).toLongLong());
+        if (it != rowOf.constEnd())
+            notes[it.value()].linkTargets.append(links.value(1).toString());
+    }
+
+    return notes;
+}
+
 } // namespace noteAppC

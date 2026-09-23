@@ -90,6 +90,32 @@ public:
     int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
                                const Vault &vault, QString *error = nullptr);
 
+    // --- Bases (libs/ext/bases) -----------------------------------------
+    // One read-only block for the optional Bases module (NOTEAPPC_WITH_BASES).
+    // Nothing above this point reads or writes it, and it changes no table.
+
+    /// One note as a base needs it: the file facts and frontmatter properties
+    /// already in the cache, plus its own tags and outgoing link targets.
+    /// `mtime`/`size` come straight from `files`; there is no `ctime` column,
+    /// so `file.ctime` is left to whoever builds the row from the vault (a
+    /// base that never asks for it never pays for a stat() the cache does
+    /// not keep).
+    struct BaseNote {
+        QString path; ///< vault-relative
+        qint64 mtime = 0;
+        qint64 size = 0;
+        QList<Property> properties;
+        QStringList tags;
+        QStringList linkTargets; ///< raw text of each outgoing link's target
+    };
+
+    /// Every indexed note (not attachment) with its properties, tags and
+    /// outgoing link targets, for libs/ext/bases to filter and sort in
+    /// memory. Four queries total - files, props, tags, links - never one
+    /// per note, the same shape the 20 000-note indexing budget already
+    /// depends on.
+    QList<BaseNote> allNotesForBases() const;
+
 signals:
     void changed();
 
