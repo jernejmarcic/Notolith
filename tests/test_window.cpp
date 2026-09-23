@@ -53,6 +53,9 @@
 #include "BaseView.h"
 #endif
 #include <QSettings>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QClipboard>
 #include <QSignalSpy>
 #include <QAction>
 #include <QDate>
@@ -1791,6 +1794,37 @@ TEST_F(WindowTest, SlashCommandsListTheWindowsCommandsWhenSwitchedOn)
     Settings off = Settings::load();
     off.setValue(QStringLiteral("plugins.slashCommand"), false);
     ASSERT_TRUE(off.save());
+}
+
+TEST_F(WindowTest, APastedImageIsSavedToTheAttachmentFolderAndADroppedFileCopiedIn)
+{
+    write(QStringLiteral("Note.md"), "\n");
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"attachmentFolderPath": "assets"})");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Note.md")));
+    MarkdownEditor *editor = window.editor();
+
+    QImage image(3, 2, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    QGuiApplication::clipboard()->setImage(image);
+    QTest::keyClick(editor, Qt::Key_V, Qt::ControlModifier);
+    const QStringList saved = QDir(path(QStringLiteral("assets"))).entryList({QStringLiteral("Pasted image *.png")});
+    ASSERT_EQ(saved.size(), 1);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("![[") + saved.first() + QStringLiteral("]]")));
+
+    QTemporaryDir outside;
+    const QString dropped = outside.filePath(QStringLiteral("report.pdf"));
+    QFile(dropped).open(QIODevice::WriteOnly);
+    QMimeData mime;
+    mime.setUrls({QUrl::fromLocalFile(dropped)});
+    QDragEnterEvent enter(QPoint(20, 20), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor->viewport(), &enter);
+    QDropEvent drop(QPointF(20, 20), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor->viewport(), &drop);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("assets/report.pdf"))));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("![[report.pdf]]")));
 }
 
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)

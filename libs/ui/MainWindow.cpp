@@ -35,6 +35,7 @@
 #include <QRegularExpression>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QSaveFile>
 #include <QScrollBar>
 #include <QSet>
 #include <QSettings>
@@ -903,6 +904,57 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
         editor->setSpelling(m_editorSpelling);
     if (m_index.isOpen())
         editor->setLinkTargets(m_index.linkTargets());
+
+    // Paste and drop: the files go into the vault's attachment folder for the
+    // editor's note, by Obsidian's rules; a note outside a vault takes none.
+    const auto noteOf = [this, editor]() -> QString {
+        for (const auto &leaf : m_leaves) {
+            if (leaf->editor == editor)
+                return m_vault.isValid() && m_vault.contains(leaf->notePath) ? leaf->notePath : QString();
+        }
+        return {};
+    };
+    const auto attachmentFolder = [this](const QString &note) {
+        const QString folder =
+            m_vault.attachmentFolderFor(m_settings.text(QStringLiteral("files.attachmentFolder")), note);
+        QDir().mkpath(folder);
+        return folder;
+    };
+    // ponytail: embeds by file name, Obsidian's "shortest path"; two files
+    // of one name in the vault resolve to whichever the index finds first.
+    editor->setAttachmentSaver([this, noteOf, attachmentFolder](const QString &name, const QByteArray &bytes) {
+        const QString note = noteOf();
+        if (note.isEmpty()) {
+            statusBar()->showMessage(tr("Images are pasted into notes in a vault"), 4000);
+            return QString();
+        }
+        const QString path = Vault::uniqueAttachmentPath(attachmentFolder(note), name);
+        QSaveFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+            statusBar()->showMessage(tr("Could not save %1: %2").arg(name, file.errorString()), 5000);
+            return QString();
+        }
+        return QStringLiteral("![[") + QFileInfo(path).fileName() + QStringLiteral("]]");
+    });
+    editor->setFileImporter([this, noteOf, attachmentFolder](const QString &source) {
+        const QFileInfo info(source);
+        if (!info.isFile())
+            return QString();
+        // Already in the vault: a link to it, copied nowhere.
+        if (m_vault.isValid() && m_vault.contains(info.absoluteFilePath())) {
+            return Vault::isNote(source) ? QStringLiteral("[[") + info.completeBaseName() + QStringLiteral("]]")
+                                         : QStringLiteral("![[") + info.fileName() + QStringLiteral("]]");
+        }
+        const QString note = noteOf();
+        if (note.isEmpty())
+            return source; // no vault to copy into: the path, as text
+        const QString target = Vault::uniqueAttachmentPath(attachmentFolder(note), info.fileName());
+        if (!QFile::copy(source, target)) {
+            statusBar()->showMessage(tr("Could not copy %1 into the vault").arg(info.fileName()), 5000);
+            return QString();
+        }
+        return QStringLiteral("![[") + QFileInfo(target).fileName() + QStringLiteral("]]");
+    });
 }
 
 void MainWindow::activateLeaf(Leaf *leaf)
