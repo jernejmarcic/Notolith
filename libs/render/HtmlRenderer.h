@@ -53,6 +53,14 @@ public:
     /// or the package was not found).
     static bool isAvailable();
 
+    /// The `<script>`/`on*=` stripping render() already applies before ever
+    /// handing markup to litehtml, exposed for callers that want sanitised
+    /// HTML *text* rather than a rasterised image - the static site exporter
+    /// (libs/ext/publish) is the first one. Available unconditionally, even
+    /// in a build with litehtml itself missing: it is a text transform, not
+    /// a render.
+    static QString sanitizeHtml(const QString &html);
+
     /// How many times render() has actually built a litehtml document, since
     /// process start. Test-only: it is what proves a note with no HTML block
     /// never constructs one at all, and that a rendered block's image is

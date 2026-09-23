@@ -25,6 +25,14 @@ public:
     QImage render(const QString &latex, qreal pointSize, const QColor &colour,
                   int maxWidth, qreal devicePixelRatio = 1.0) const;
 
+    /// The same layout, as scalable SVG markup instead of a raster image, for
+    /// a static export that wants maths to stay crisp with no JavaScript
+    /// (MathJax/KaTeX) and no raster at a fixed size. Same box model, same
+    /// MicroTeX call, only the paint device differs - see the .cpp. Empty
+    /// string on the same failures render() returns a null image for.
+    QString renderSvg(const QString &latex, qreal pointSize, const QColor &colour,
+                      int maxWidth) const;
+
     /// Why the last render returned null. Empty when it succeeded.
     QString lastError() const;
 

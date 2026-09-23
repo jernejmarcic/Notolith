@@ -1,10 +1,12 @@
 #include "MathRenderer.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFileInfo>
 #include <QPainter>
 #include <QCoreApplication>
 #include <QStandardPaths>
+#include <QSvgGenerator>
 
 #include <latex.h>
 #include <platform/qt/graphic_qt.h>
@@ -73,6 +75,33 @@ bool ensureInitialised(QString *error)
 
 struct MathRenderer::Private {
     mutable QString error;
+
+    /// The parse step render() and renderSvg() share; only the paint device
+    /// differs afterwards. MicroTeX owns the returned render.
+    std::unique_ptr<tex::TeXRender> parse(const QString &latex, qreal pointSize,
+                                          const QColor &colour, int maxWidth) const
+    {
+        error.clear();
+        if (latex.trimmed().isEmpty() || maxWidth <= 0)
+            return nullptr;
+        if (!ensureInitialised(&error))
+            return nullptr;
+        try {
+            std::unique_ptr<tex::TeXRender> render(
+                tex::LaTeX::parse(latex.toStdWString(), maxWidth, float(pointSize),
+                                  float(pointSize) / 3.0f, colour.rgba()));
+            if (!render || render->getWidth() <= 0 || render->getHeight() <= 0) {
+                error = QStringLiteral("the formula laid out empty");
+                return nullptr;
+            }
+            return render;
+        } catch (const std::exception &e) {
+            error = QString::fromUtf8(e.what());
+        } catch (...) {
+            error = QStringLiteral("could not parse the formula");
+        }
+        return nullptr;
+    }
 };
 
 MathRenderer::MathRenderer()
@@ -96,28 +125,9 @@ QString MathRenderer::lastError() const
 QImage MathRenderer::render(const QString &latex, qreal pointSize, const QColor &colour,
                             int maxWidth, qreal devicePixelRatio) const
 {
-    d->error.clear();
-    if (latex.trimmed().isEmpty() || maxWidth <= 0)
+    const auto render = d->parse(latex, pointSize, colour, maxWidth);
+    if (!render)
         return {};
-    if (!ensureInitialised(&d->error))
-        return {};
-
-    // MicroTeX owns the returned render.
-    std::unique_ptr<tex::TeXRender> render;
-    try {
-        render.reset(tex::LaTeX::parse(latex.toStdWString(), maxWidth, float(pointSize),
-                                       float(pointSize) / 3.0f, colour.rgba()));
-    } catch (const std::exception &e) {
-        d->error = QString::fromUtf8(e.what());
-        return {};
-    } catch (...) {
-        d->error = QStringLiteral("could not parse the formula");
-        return {};
-    }
-    if (!render || render->getWidth() <= 0 || render->getHeight() <= 0) {
-        d->error = QStringLiteral("the formula laid out empty");
-        return {};
-    }
 
     const int width = qMin(render->getWidth(), maxWidth);
     QImage image(QSize(width, render->getHeight()) * devicePixelRatio,
@@ -134,6 +144,35 @@ QImage MathRenderer::render(const QString &latex, qreal pointSize, const QColor 
     painter.end();
 
     return image;
+}
+
+QString MathRenderer::renderSvg(const QString &latex, qreal pointSize, const QColor &colour,
+                                int maxWidth) const
+{
+    const auto render = d->parse(latex, pointSize, colour, maxWidth);
+    if (!render)
+        return {};
+
+    const int width = qMin(render->getWidth(), maxWidth);
+    const int height = render->getHeight();
+
+    QBuffer buffer;
+    buffer.open(QIODevice::WriteOnly);
+    {
+        QSvgGenerator generator;
+        generator.setOutputDevice(&buffer);
+        generator.setSize(QSize(width, height));
+        generator.setViewBox(QRect(0, 0, width, height));
+        // No title/description: this SVG is inlined directly into a page,
+        // and those would surface as a tooltip over every formula.
+        QPainter painter(&generator);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        tex::Graphics2D_qt graphics(&painter);
+        render->draw(graphics, 0, 0);
+        painter.end();
+    }
+    return QString::fromUtf8(buffer.data());
 }
 
 } // namespace noteAppC

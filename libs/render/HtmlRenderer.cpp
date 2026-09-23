@@ -412,6 +412,11 @@ bool HtmlRenderer::isAvailable()
     return true;
 }
 
+QString HtmlRenderer::sanitizeHtml(const QString &html)
+{
+    return sanitise(html);
+}
+
 qint64 HtmlRenderer::renderCount()
 {
     return g_renderCount.load();

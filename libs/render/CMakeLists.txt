@@ -57,7 +57,7 @@ set_target_properties(noteAppC_render PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
-    PRIVATE microtex)
+    PRIVATE microtex Qt6::Svg)
 target_compile_definitions(noteAppC_render PRIVATE
     NOTEAPPC_MICROTEX_RES="${CMAKE_BINARY_DIR}/microtex/res")
 
