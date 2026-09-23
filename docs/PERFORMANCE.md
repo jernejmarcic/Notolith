@@ -34,13 +34,15 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
+| cold start to first painted frame (bench) | 47 ms | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
 | note open, 200 kB | 2.2 ms (readable; styled ~26 ms later) | 300 ms |
 | note open, 1 MB | 11.3 ms (readable; styled ~140 ms later) | - |
-| keystroke to relaid, painted block, 200 kB | 0.25 ms | 8 ms |
-| keystroke, 1 MB | 0.66 ms | 8 ms |
+| keystroke to relaid, painted block, 200 kB | 0.24 ms | 8 ms |
+| keystroke through the whole window, 200 kB | 0.21 ms | 8 ms |
+| keystroke, 1 MB | 0.64 ms | 8 ms |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
 | cold index, 20 000 notes | 3.6 s | 5 s |
@@ -232,6 +234,25 @@ than the parse did.
 The parse still costs what it cost. It is off the UI thread and no longer in
 front of the reader.
 
+### 9. The word count, recounted for every keystroke
+
+`c77d7a5`. Every keystroke fired `textChanged`, and the shell answered by
+recounting the words of the whole note on the UI thread - O(document) on the
+keystroke path. The benchmark could not see it, because its keystroke row drove
+a bare editor, not the window a person types into; a row that types through the
+whole `MainWindow` was added for exactly this. Meanwhile `Parser::parseAll`
+already counted the words, with the identical rule, on the worker thread, and
+the editor threw the number away. The count now travels with the parse.
+
+| keystroke through the window, 200 kB | before | after |
+|---|---|---|
+| median | 0.33 ms | 0.21 ms |
+
+It also answered a question: the navigation work had installed an
+application-wide event filter, so every event passes through
+`MainWindow::eventFilter`. With the word count gone the window row sits at the
+bare editor's number, so the filter costs nothing measurable.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -331,6 +352,18 @@ Each of these produced a wrong number at least once in this project.
   of a note that did not exist blocked forever on a modal error box nobody
   could dismiss offscreen, and it was first taken for a bug in the inline
   maths that had just landed. The tool now refuses a missing vault or note.
+- **A benchmark that skips the real path.** The keystroke row drove a bare
+  editor, so a whole-document word count the shell ran on every keystroke was
+  invisible to it for as long as it existed.
+- **Building while another agent edits a shared header.** A struct grew a
+  field in `Decorations.h` in the middle of a build; some objects saw one
+  layout and some the other, and a destructor crashed freeing a string that was
+  not there. It looked exactly like a real bug. Rebuild everything that
+  includes a header after it changes, and do not build over a live edit.
+- **Exact-colour pixel counts on antialiased text.** Only a handful of a
+  label's pixels land on its exact colour, and how many depends on Qt's glyph
+  cache - a test passed alone and failed every time after another test had
+  drawn text. Count pixels a channel clearly dominates instead.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.

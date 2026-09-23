@@ -59,6 +59,8 @@ Working today:
   new folder, rename and delete, right sidebar with backlinks, tags and
   outgoing links, status bar. A settings page with live-applied values, Reset
   per row and a "set by this vault" tag.
+- **Styling reference for users**: [docs/STYLING.md](docs/STYLING.md) -
+  `callouts.ini`, `codeblocks.ini`, per-block overrides, code tabs.
 - **Callouts**, which are noteAppC's own beyond Obsidian's two CSS knobs:
   named styles in `~/.config/noteAppC/callouts.ini` (icon, both colours with
   alpha, both fonts, both sizes, both colours, font effects, `inherits`),
