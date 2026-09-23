@@ -35,7 +35,7 @@ built; each stage's detail is in its own section further down.
 | 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Left: footnote links, code-tab strips |
 | 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: EPUB paged mode, CSS `url()`, image annotation |
 | 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | done but quickjs-ng: sandboxed host per plugin, C ABI, commands, code blocks, vault events, permissions page. quickjs-ng: "Decide later" |
-| 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | todo, on stage 8 |
+| 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | done: `plugins/ai` (Ollama, OpenAI-compatible, Anthropic; key by env var name only), `ai` code blocks, declared per-plugin timeouts. Left: a typed question (no host prompt call yet) |
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
@@ -601,6 +601,21 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] One note in several tabs is one document: every edit (and undo) is
       made in the others, a new tab adopts the unsaved text, one save is
       every view's, closing one view asks nothing.
+
+### Wave 5: Obsidian's other core plugins (found missing 2026-09-23)
+- [x] Random note (`random-note`): open a random note.
+- [x] Unique note creator (`zk-prefixer`): a note named by a timestamp.
+- [x] Properties view (`properties`): every property in the vault, with counts;
+      search gained `[property]` / `[property:value]` for its clicks.
+- [ ] Slides (`slides`): present a note, slides split at `---`.
+- [ ] Note composer (`note-composer`): merge a note into another; extract the
+      selection into a new note, leaving a link or an embed.
+- [ ] Audio recorder (`audio-recorder`): record into an attachment, embed it.
+- [ ] Slash commands (`slash-command`): "/" in the editor lists commands -
+      editor-side, after the notebook lane.
+- [ ] Footnotes view: a pane of the note's footnotes.
+- Not built: Web viewer (it needs a web engine, and C/C++-only rules that
+  out), Format converter and Markdown importer (one-off migration tools).
 
 ### For Jernej to decide
 - [ ] **A licence.** None is chosen; the PKGBUILD says `LicenseRef-unknown`
