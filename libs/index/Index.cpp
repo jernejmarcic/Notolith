@@ -22,11 +22,12 @@ namespace noteAppC {
 
 namespace {
 /// Bump when the schema changes, or when the parser reads a note differently
-/// (4: a `:::` fence's attributes are no longer tags). The cache is derived
+/// (4: a `:::` fence's attributes are no longer tags; 5: links inside
+/// footnotes are read). The cache is derived
 /// from the vault, so a mismatch drops it and rebuilds rather than migrating:
 /// a wrong migration is a silently wrong index, and a rebuild costs one pass
 /// over the notes.
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 } // namespace
 
 namespace {

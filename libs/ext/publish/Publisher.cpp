@@ -340,6 +340,10 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
   padding: 8px 12px; margin: 1em 0; }
 .embed-title { font-size: 0.85em; color: var(--text-muted); }
 .unresolved { color: var(--link-unresolved-color); text-decoration: line-through dotted; }
+.footnote-ref a { text-decoration: none; }
+.footnotes { margin-top: 2em; border-top: 1px solid var(--background-modifier-border);
+  font-size: 0.9em; color: var(--text-muted); }
+.footnote-back { text-decoration: none; }
 .tag { background: var(--background-modifier-hover); border-radius: 10px; padding: 0 8px;
   text-decoration: none; font-size: 0.85em; }
 .backlinks { margin-top: 40px; border-top: 1px solid var(--background-modifier-border);

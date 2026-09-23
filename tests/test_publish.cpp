@@ -380,6 +380,20 @@ TEST(PublishTest, RefusesTheVaultRootItself)
     EXPECT_FALSE(error.isEmpty());
 }
 
+TEST(PublishTest, FootnotesAreNumberedLinkedAndListedOnce)
+{
+    TestSite site({{QStringLiteral("Note.md"),
+                    "Text.[^a] Inline.^[Inline body.] Again.[^a]\n\n[^a]: The **body**.\n\nAfter.\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    EXPECT_TRUE(page.contains(QStringLiteral("<a href=\"#fn-1\" id=\"fnref-1\">1</a>")));
+    EXPECT_TRUE(page.contains(QStringLiteral("<a href=\"#fn-2\" id=\"fnref-2\">2</a>")));
+    EXPECT_EQ(page.count(QStringLiteral("id=\"fnref-1\"")), 1); // the second reference has no id
+    EXPECT_TRUE(page.contains(QStringLiteral("<li id=\"fn-1\">The <strong>body</strong>.")));
+    EXPECT_EQ(page.count(QStringLiteral("The <strong>body</strong>")), 1); // not also a paragraph
+    EXPECT_FALSE(page.contains(QStringLiteral("[^a]")));
+}
+
 // ---------------------------------------------------------------------------
 // Off the UI thread
 

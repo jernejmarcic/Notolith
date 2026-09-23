@@ -453,6 +453,38 @@ TEST(TagTest, AColonFencesAttributesAreNotTags)
     EXPECT_EQ(tagNames(parse(text)), QStringList{QStringLiteral("real")});
 }
 
+TEST(FootnoteTest, ReferencesInlineNotesAndDefinitionsAreNumberedInOrder)
+{
+    const QString text = QStringLiteral(
+        "First.[^a] Inline.^[With a [[Link]] inside.] Again.[^a] Missing.[^none]\n"
+        "`[^a]` in code is text.\n"
+        "\n"
+        "[^a]: The body,\n"
+        "continued lazily.\n"
+        "\n"
+        "    And an indented paragraph.\n"
+        "\n"
+        "After the footnote.\n");
+    const Decorations decorations = Parser().parseAll(text).decorations;
+    ASSERT_EQ(decorations.footnoteDefinitions.size(), 1);
+    const FootnoteDefinition &definition = decorations.footnoteDefinitions.first();
+    EXPECT_EQ(definition.label, QStringLiteral("a"));
+    const QString body = text.mid(definition.content.start, definition.content.length());
+    EXPECT_TRUE(body.startsWith(QLatin1String("The body,")));
+    EXPECT_TRUE(body.endsWith(QLatin1String("And an indented paragraph.")));
+
+    ASSERT_EQ(decorations.footnotes.size(), 3); // [^none] has no definition, the code span is code
+    EXPECT_EQ(decorations.footnotes.at(0).number, 1);
+    EXPECT_EQ(decorations.footnotes.at(1).label, QString());
+    EXPECT_EQ(decorations.footnotes.at(1).number, 2);
+    EXPECT_EQ(text.mid(decorations.footnotes.at(1).content.start, decorations.footnotes.at(1).content.length()),
+              QStringLiteral("With a [[Link]] inside."));
+    EXPECT_EQ(decorations.footnotes.at(2).number, 1); // the same label, the same number
+    // Not a link reference definition, whose whole line would be hidden.
+    for (const Range &hidden : decorations.syntax)
+        EXPECT_FALSE(hidden.contains(definition.content.start));
+}
+
 TEST(MaskingTest, CodeAndCommentsHideEverything)
 {
     const QString text = QStringLiteral(

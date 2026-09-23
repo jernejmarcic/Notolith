@@ -4,6 +4,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QRegularExpression>
+#include <QMap>
 #include <QSet>
 #include <QUrl>
 #include <algorithm>
@@ -88,7 +89,7 @@ struct BlockNode {
 /// One span in the inline forest built per text run.
 struct InlineNode {
     Range range;
-    enum Kind { Bold, Italic, Strike, Code, Highlight, Tag, Html, Math, Link } kind;
+    enum Kind { Bold, Italic, Strike, Code, Highlight, Tag, Html, Math, Link, Footnote } kind;
     qsizetype dataIndex = -1;
 };
 
@@ -138,6 +139,7 @@ public:
         const qsizetype bodyStart = frontmatter.isValid() ? frontmatter.end : 0;
         html += emitRegion({bodyStart, qsizetype(m_topLevel->text.size())}, *m_topLevel,
                            /*includeHeadings=*/true);
+        html += renderFootnotes(*m_topLevel);
         html += QStringLiteral("</div>");
 
         result.html = html;
@@ -793,6 +795,10 @@ private:
             if (within(d.maths.at(i).range, range))
                 nodes.append({d.maths.at(i).range, InlineNode::Math, i});
         }
+        for (qsizetype i = 0; i < d.footnotes.size(); ++i) {
+            if (within(d.footnotes.at(i).range, range) && !excluded(InlineNode::Footnote, i))
+                nodes.append({d.footnotes.at(i).range, InlineNode::Footnote, i});
+        }
         std::sort(nodes.begin(), nodes.end(),
                  [](const InlineNode &a, const InlineNode &b) { return nodeLess(a.range, b.range); });
         return nodes;
@@ -892,8 +898,40 @@ private:
             return renderMath(note.decorations.maths.at(node.dataIndex), note);
         case InlineNode::Link:
             return renderLinkNode(note.decorations.styles.at(node.dataIndex), note);
+        case InlineNode::Footnote: {
+            // Linked only on the page that lists the footnotes: an embedded
+            // note's numbers have no list here to point at.
+            const QString number = QString::number(note.decorations.footnotes.at(node.dataIndex).number);
+            if (&note != m_topLevel)
+                return QStringLiteral("<sup class=\"footnote-ref\">") + number + QStringLiteral("</sup>");
+            const bool first = !m_footnoteRefs.contains(number);
+            m_footnoteRefs.insert(number);
+            return QStringLiteral("<sup class=\"footnote-ref\"><a href=\"#fn-%1\"%2>%1</a></sup>")
+                .arg(number, first ? QStringLiteral(" id=\"fnref-%1\"").arg(number) : QString());
+        }
         }
         return {};
+    }
+
+    /// The page's footnotes, numbered as referenced, each with a way back.
+    QString renderFootnotes(const ParsedNote &note)
+    {
+        QMap<int, qsizetype> byNumber; // number -> its first reference
+        for (qsizetype i = 0; i < note.decorations.footnotes.size(); ++i) {
+            if (!byNumber.contains(note.decorations.footnotes.at(i).number))
+                byNumber.insert(note.decorations.footnotes.at(i).number, i);
+        }
+        if (byNumber.isEmpty())
+            return {};
+        QString out = QStringLiteral("<section class=\"footnotes\"><ol>\n");
+        for (auto it = byNumber.cbegin(); it != byNumber.cend(); ++it) {
+            const FootnoteSpan &footnote = note.decorations.footnotes.at(it.value());
+            out += QStringLiteral("<li id=\"fn-%1\">").arg(it.key())
+                   + emitInline(footnote.content, note, InlineNode::Footnote, it.value())
+                   + QStringLiteral(" <a class=\"footnote-back\" href=\"#fnref-%1\">&#8617;&#xFE0E;</a></li>\n")
+                         .arg(it.key());
+        }
+        return out + QStringLiteral("</ol></section>\n");
     }
 
     QString renderTag(const QString &name)
@@ -1226,6 +1264,7 @@ private:
     int m_blockDepth = 0;
     int m_inlineDepth = 0;
     QList<Range> m_extraHides;
+    QSet<QString> m_footnoteRefs; ///< numbers whose first reference already carries its id
     QHash<QString, int> m_headingAnchors;
     QHash<QString, QString> m_iconCache;
     QList<TokenStyle> m_codeStyles;

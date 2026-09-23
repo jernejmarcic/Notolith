@@ -179,6 +179,22 @@ struct MathSpan {
     bool display = false;
 };
 
+/// A footnote reference: `[^label]` with a definition somewhere in the note,
+/// or Obsidian's inline `^[text]`.
+struct FootnoteSpan {
+    Range range;    ///< "[^1]" or "^[text]"
+    QString label;  ///< empty for an inline footnote
+    Range content;  ///< the definition's text, or the inline text
+    int number = 0; ///< 1-based, in the order footnotes are first referenced
+};
+
+/// `[^label]: text`, continued by indented lines.
+struct FootnoteDefinition {
+    QString label;
+    Range range;   ///< the whole definition, marker included
+    Range content; ///< after "[^label]: "
+};
+
 /// Everything the editor needs that the index does not: which ranges are
 /// syntax to hide, what styling the rest gets, and where the blocks are.
 struct Decorations {
@@ -204,6 +220,10 @@ struct Decorations {
     /// `==`, fence lines, the target half of an aliased wikilink.
     QList<Range> syntax;
     QList<StyleSpan> styles;
+    /// Sorted by position. A reference to a label no definition names is
+    /// not a footnote, as in Obsidian: it stays text.
+    QList<FootnoteSpan> footnotes;
+    QList<FootnoteDefinition> footnoteDefinitions;
 
     /// Ranges to hide for the block containing `sourceOffset`, or all of them
     /// when `activeBlock` is not a real offset.

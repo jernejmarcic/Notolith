@@ -4,6 +4,8 @@
 #include <QRegularExpression>
 #include <QTextStream>
 
+#include <QHash>
+
 #include <algorithm>
 
 #include <md4qt/doc.h>
@@ -26,6 +28,8 @@ struct Walk {
     QList<Task> tasks;
     Decorations decorations;
     int depth = 0;
+    /// Walking a footnote's body, which is not the note's flow of paragraphs.
+    bool inFootnote = false;
 
     /// A reference-style link or embed - `[text][ref]`, the collapsed
     /// `[ref][]`, or the shortcut `[ref]` - whose label was recorded during
@@ -573,6 +577,105 @@ QList<Range> withColonFenceLines(const QString &text, QList<Range> masked)
     return masked;
 }
 
+bool maskedAt(const QList<Range> &masked, qsizetype at)
+{
+    return std::any_of(masked.cbegin(), masked.cend(), [at](const Range &range) { return range.contains(at); });
+}
+
+/// `[^label]: text` definitions, `[^label]` references and inline `^[text]`,
+/// outside code, maths and comments. A definition runs on through indented
+/// lines, and through lines that simply continue its paragraph.
+void scanFootnotes(const QString &text, const QList<Range> &masked, Decorations &decorations)
+{
+    if (!text.contains(QLatin1String("[^")) && !text.contains(QLatin1String("^[")))
+        return;
+    static const QRegularExpression definition(QStringLiteral(R"(^\[\^([^\]\s]+)\]:[ \t]?)"),
+                                               QRegularExpression::MultilineOption);
+    static const QRegularExpression reference(QStringLiteral(R"(\[\^([^\]\s]+)\](?!:))"));
+
+    const auto lineEndAt = [&text](qsizetype from) {
+        const qsizetype at = text.indexOf(QLatin1Char('\n'), from);
+        return at < 0 ? text.size() : at;
+    };
+    const auto isIndented = [&text](qsizetype from) {
+        return text.mid(from, 1) == QLatin1String("\t") || text.mid(from, 4) == QLatin1String("    ");
+    };
+    QHash<QString, int> byLabel; // label -> index into footnoteDefinitions
+    auto defs = definition.globalMatch(text);
+    while (defs.hasNext()) {
+        const auto match = defs.next();
+        if (maskedAt(masked, match.capturedStart()))
+            continue;
+        qsizetype end = lineEndAt(match.capturedEnd());
+        for (qsizetype line = end + 1; line < text.size();) {
+            const qsizetype lineEnd = lineEndAt(line);
+            const QStringView view = QStringView(text).mid(line, lineEnd - line);
+            if (view.trimmed().isEmpty()) {
+                // A blank line ends it, unless an indented line carries it on.
+                qsizetype next = lineEnd + 1;
+                while (next < text.size() && QStringView(text).mid(next, lineEndAt(next) - next).trimmed().isEmpty())
+                    next = lineEndAt(next) + 1;
+                if (next >= text.size() || !isIndented(next))
+                    break;
+                line = next;
+                continue;
+            }
+            if (definition.match(view.toString()).hasMatch())
+                break; // the next definition
+            end = lineEnd;
+            line = lineEnd + 1;
+        }
+        while (end > match.capturedEnd() && text.at(end - 1).isSpace())
+            --end;
+        byLabel.insert(match.captured(1), int(decorations.footnoteDefinitions.size()));
+        decorations.footnoteDefinitions.append(
+            {match.captured(1), {match.capturedStart(), end}, {match.capturedEnd(), end}});
+    }
+
+    QList<FootnoteSpan> found;
+    auto refs = reference.globalMatch(text);
+    while (refs.hasNext()) {
+        const auto match = refs.next();
+        const auto def = byLabel.constFind(match.captured(1));
+        if (def == byLabel.cend() || maskedAt(masked, match.capturedStart()))
+            continue;
+        const FootnoteDefinition &target = decorations.footnoteDefinitions.at(*def);
+        found.append({{match.capturedStart(), match.capturedEnd()}, match.captured(1), target.content, 0});
+    }
+    // ^[inline], its brackets balanced so a [[link]] inside does not end it.
+    for (qsizetype at = text.indexOf(QLatin1String("^[")); at >= 0; at = text.indexOf(QLatin1String("^["), at + 2)) {
+        if (maskedAt(masked, at))
+            continue;
+        int depth = 0;
+        qsizetype close = -1;
+        for (qsizetype i = at + 1; i < text.size(); ++i) {
+            const QChar c = text.at(i);
+            if (c == QLatin1Char('\n') && i + 1 < text.size() && text.at(i + 1) == QLatin1Char('\n'))
+                break; // not past a paragraph
+            if (c == QLatin1Char('['))
+                ++depth;
+            else if (c == QLatin1Char(']') && --depth == 0) {
+                close = i;
+                break;
+            }
+        }
+        if (close > at + 2)
+            found.append({{at, close + 1}, QString(), {at + 2, close}, 0});
+    }
+    std::sort(found.begin(), found.end(),
+              [](const FootnoteSpan &a, const FootnoteSpan &b) { return a.range.start < b.range.start; });
+    QHash<QString, int> numbers;
+    int next = 0;
+    for (FootnoteSpan &span : found) {
+        if (span.label.isEmpty())
+            span.number = ++next;
+        else
+            span.number = numbers.contains(span.label) ? numbers.value(span.label)
+                                                       : numbers.insert(span.label, ++next).value();
+    }
+    decorations.footnotes = found;
+}
+
 void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
 {
     const QRegularExpression &fence = colonFenceRe();
@@ -647,7 +750,7 @@ void hideLinkDefinitions(const QString &text, const QList<Range> &masked,
                          Decorations &decorations)
 {
     static const QRegularExpression definition(
-        QStringLiteral(R"(^ {0,3}\[[^\]\n]+\]:[ \t]*\S[^\n]*$)"),
+        QStringLiteral(R"(^ {0,3}\[(?!\^)[^\]\n]+\]:[ \t]*\S[^\n]*$)"), // "[^1]:" is a footnote
         QRegularExpression::MultilineOption);
 
     auto it = definition.globalMatch(text);
@@ -675,7 +778,7 @@ QString normaliseLabel(const QString &label)
 QHash<QString, QString> collectLinkDefinitions(const QString &text, const QList<Range> &masked)
 {
     static const QRegularExpression definition(
-        QStringLiteral(R"(^ {0,3}\[([^\]\n]+)\]:[ \t]*(\S[^\n]*)$)"),
+        QStringLiteral(R"(^ {0,3}\[(?!\^)([^\]\n]+)\]:[ \t]*(\S[^\n]*)$)"),
         QRegularExpression::MultilineOption);
 
     QHash<QString, QString> definitions;
@@ -935,7 +1038,7 @@ void walkItem(MD::Item *item, Walk &walk)
     case MD::ItemType::Paragraph:
     case MD::ItemType::Footnote:
     case MD::ItemType::TableCell: {
-        if (item->type() == MD::ItemType::Paragraph)
+        if (item->type() == MD::ItemType::Paragraph && !walk.inFootnote)
             walk.decorations.paragraphs.append(rangeOf(*item, map));
         if (walk.depth == 0) {
             const auto kind = item->type() == MD::ItemType::List ? BlockSpan::Kind::List
@@ -1073,6 +1176,15 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     if (document) {
         for (const auto &item : document->items())
             walkItem(item.data(), walk);
+        // Footnote bodies live apart from the items, so their emphasis and
+        // links were never seen. Below block level: they are not blocks of
+        // their own in the note's flow.
+        ++walk.depth;
+        walk.inFootnote = true;
+        for (const auto &footnote : document->footnotesMap())
+            walkItem(footnote.data(), walk);
+        walk.inFootnote = false;
+        --walk.depth;
     }
 
     if (frontmatter.isValid())
@@ -1167,6 +1279,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     }
     for (const Range &range : obsidian.comments)
         result.decorations.syntax.append(range);
+    scanFootnotes(text, walk.masked + obsidian.comments, result.decorations);
 
     // Two things md4qt leaves on the page: the `:::` fences it read as prose,
     // and the definition half of a reference link, which it reads and forgets.
