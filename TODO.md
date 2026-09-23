@@ -68,7 +68,7 @@ over the 13 built-in Obsidian types:
 
 ## Found while looking, not yet scheduled
 
-- [ ] **Inline `$...$` maths never renders** - it is parsed and styled purple
+- [x] **Inline `$...$` maths never renders** - it is parsed and styled purple
       but only display maths is laid out, in `layoutMath`, which takes a whole
       block. Needs an inline image run inside a `QTextLayout` line, which the
       editor has no mechanism for yet; block-level embeds have the same limit.
@@ -143,7 +143,7 @@ budget, which this project has already learned once on the index.
 
 ## Still open
 
-- [ ] **Inline `$...$` maths never renders.** Parsed and styled, never laid
+- [x] **Inline `$...$` maths never renders.** Parsed and styled, never laid
       out. Needs an inline image run inside a `QTextLayout` line. The trick
       that avoids teaching DisplayMap to substitute text: hide all but one
       character of the formula and give that character an absolute letter
@@ -172,7 +172,7 @@ budget, which this project has already learned once on the index.
 - [ ] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
       viewport - the first thing to do before any Vulkan work.
 - [ ] Measure the Wayland shared-memory buffer transfer the bench cannot see.
-- [ ] Mobile groundwork: build the libraries against the Android kit's Qt
+- [x] Mobile groundwork: build the libraries against the Android kit's Qt
       6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
       way poppler already is.
 - [ ] Future `PKGBUILD` must override CachyOS's `-march=native`.
@@ -183,12 +183,12 @@ Jernej's rule: a new feature goes here and the current task carries on.
 
 ### In flight
 
-- [ ] **Inline `$...$` maths** - the lane stopped before the fallback for an
+- [x] **Inline `$...$` maths** - the lane stopped before the fallback for an
       unrenderable formula; `UnrenderableInlineMathKeepsItsSourceVisible`
       fails. Finish it before anything else in the editor lands.
-- [ ] Lane: Nerd Font glyphs in `Icons::icon()`, and `LanguageStyles`
+- [x] Lane: Nerd Font glyphs in `Icons::icon()`, and `LanguageStyles`
       (`codeblocks.ini`) mirroring `CalloutStyles`.
-- [ ] Lane: navigation - leaving settings on any navigation, single-click
+- [x] Lane: navigation - leaving settings on any navigation, single-click
       folders, back/forward with mouse side buttons and Alt+arrows, caret and
       scroll remembered per note, reopen the last note, reveal the open note
       in the tree, Ctrl+, for settings.
@@ -198,14 +198,14 @@ Jernej's rule: a new feature goes here and the current task carries on.
 
 ### Editor, after the maths
 
-- [ ] **Selecting a line reveals markdown syntax; Obsidian does not.** Today
+- [x] **Selecting a line reveals markdown syntax; Obsidian does not.** Today
       the whole block goes raw when the caret enters it
       (`Decorations::hiddenFor`), even while a selection is being dragged. Two
       rules: never reveal during a non-empty selection, since text shifting
       under the mouse mid-drag is the worst version of this; and with a caret,
       reveal only the markers of the element the caret is inside, not the
       whole block.
-- [ ] **Code blocks use the callout style format**, in Jernej's words "the
+- [x] **Code blocks use the callout style format**, in Jernej's words "the
       format that has been written for callouts":
       - named styles per language in `~/.config/noteAppC/codeblocks.ini`
         (`name`, `icon`, `color`, `aliases`, `inherits`);
@@ -217,12 +217,12 @@ Jernej's rule: a new feature goes here and the current task carries on.
         block's code to the clipboard**, with a moment of "Copied" feedback;
       - icons in every form callouts take: built-in (Lucide), Nerd Font glyph,
         local file, URL.
-- [ ] **Code block tabs.** Adjacent fences, with only blank lines between,
+- [x] **Code block tabs.** Adjacent fences, with only blank lines between,
       that each carry a `tab` attribute group into one block with a tab strip:
       `` ```python tab="Python" `` then `` ```cpp tab="C++" ``. A bare `tab`
       labels the tab with the language's style name. Any other text between
       them ends the group. Obsidian shows them as separate blocks, unchanged.
-- [ ] **Callout gaps**, all verified 2026-09-23:
+- [ ] **Callout gaps**, all verified 2026-09-23 - 1, 2, 3 and 5 done; 4 open:
       1. a remote `https://` icon never appears until something else repaints:
          nothing listens to `Icons::notifier()`'s `iconReady`;
       2. editing `callouts.ini` needs a restart - it is read once, and a
@@ -251,7 +251,7 @@ Jernej's rule: a new feature goes here and the current task carries on.
       per-keystroke O(document) passes, so do it together with making those
       passes proportional to the edit. `ShiftTest` guards the visible case.
 
-- [ ] **Custom themes from a CSS file** (lane running). Corrected: a picker
+- [x] **Custom themes from a CSS file** - done in 256d913. Corrected: a picker
       already exists on the settings page and already lists Obsidian themes.
       The real gaps, verified: `Scheme::searchPaths` uses `QStandardPaths`,
       which resolves to `~/.config/noteAppC/noteAppC/themes` rather than the
