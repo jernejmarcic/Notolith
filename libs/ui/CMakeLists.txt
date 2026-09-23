@@ -10,6 +10,8 @@ add_library(noteAppC_ui STATIC
     TagsPane.h
     OutgoingLinksPane.cpp
     OutgoingLinksPane.h
+    PagePreview.cpp
+    PagePreview.h
     SettingsPage.cpp
     SettingsPage.h
     ToggleSwitch.cpp

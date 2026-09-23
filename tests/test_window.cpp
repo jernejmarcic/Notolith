@@ -33,6 +33,7 @@
 
 #include "Index.h"
 #include "MainWindow.h"
+#include "PagePreview.h"
 #include "Settings.h"
 #include "Vault.h"
 
@@ -899,5 +900,29 @@ TEST_F(WindowTest, AVaultsObsidianHotkeysRebindTheWindowAndTheEditor)
         QTest::keyClick(editor, Qt::Key_Right, Qt::ShiftModifier); // "Welcome"
     QTest::keyClick(editor, Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier);
     EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# **Welcome**")));
+}
+
+TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Part two\n\nSecond part.\n");
+    write(QStringLiteral("Linking.md"), "See [[Other#Part two]].\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    QTRY_VERIFY_WITH_TIMEOUT(!window.findChildren<QAction *>().isEmpty(), 1000);
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    // What the editor sends when the pointer rests on the link with Ctrl held.
+    emit window.editor()->linkHovered(QStringLiteral("Other#Part two"), QPoint(200, 200));
+    auto *preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"));
+    ASSERT_NE(preview, nullptr);
+    QTRY_VERIFY_WITH_TIMEOUT(preview->isVisible(), 2000);
+    const QString shown = preview->editor()->noteText();
+    EXPECT_TRUE(shown.startsWith(QLatin1String("# Other")));
+    EXPECT_EQ(preview->editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")));
+    EXPECT_EQ(preview->editor()->mode(), MarkdownEditor::Mode::Reading);
+
+    // Moving off the link lets it go, after a moment to reach the preview.
+    emit window.editor()->linkHoverEnded();
+    QTRY_VERIFY_WITH_TIMEOUT(!preview->isVisible(), 2000);
 }
 

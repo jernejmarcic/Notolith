@@ -37,6 +37,8 @@
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "OutgoingLinksPane.h"
+#include "PagePreview.h"
+#include "Parser.h"
 #include "QuickSwitcher.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
@@ -389,7 +391,7 @@ QWidget *MainWindow::buildMainArea()
     // The count comes with each parse. Taking it from textChanged recounted
     // the whole note on the UI thread for every keystroke.
     connect(m_editor, &MarkdownEditor::wordCountChanged, this, &MainWindow::updateWordCount);
-    m_editor->setLinkResolver([this](const QString &target) -> QString {
+    const auto resolver = [this](const QString &target) -> QString {
         if (!m_vault.isValid())
             return {};
         // An attachment may not be in the index (it only holds notes), so fall
@@ -403,13 +405,34 @@ QWidget *MainWindow::buildMainArea()
             return beside;
         const QString fromRoot = m_vault.absolute(target);
         return QFileInfo::exists(fromRoot) ? fromRoot : QString();
-    });
-    connect(m_editor, &MarkdownEditor::linkActivated, this, [this](const QString &target) {
+    };
+    m_editor->setLinkResolver(resolver);
+    const auto follow = [this](const QString &target) {
         const QString resolved = m_index.resolve(target, m_notePath);
         if (!resolved.isEmpty())
             openRelative(resolved);
         else
             statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
+    };
+    connect(m_editor, &MarkdownEditor::linkActivated, this, follow);
+
+    m_preview = new PagePreview(this);
+    m_preview->setLinkResolver(resolver);
+    connect(m_preview, &PagePreview::linkActivated, this, follow);
+    m_previewDelay.setSingleShot(true);
+    m_previewDelay.setInterval(300);
+    connect(&m_previewDelay, &QTimer::timeout, this, &MainWindow::showPagePreview);
+    connect(m_editor, &MarkdownEditor::linkHovered, this,
+            [this](const QString &target, const QPoint &globalPos) {
+                if (!m_settings.boolean(QStringLiteral("pagePreview.enabled")))
+                    return;
+                m_previewTarget = target;
+                m_previewPos = globalPos;
+                m_previewDelay.start();
+            });
+    connect(m_editor, &MarkdownEditor::linkHoverEnded, this, [this] {
+        m_previewDelay.stop();
+        m_preview->leaveSoon();
     });
 
     editorLayout->addWidget(m_inlineTitle);
@@ -759,6 +782,40 @@ void MainWindow::applySettings()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
 }
 
+void MainWindow::showPagePreview()
+{
+    // "Note#Heading", "Note#^block", "#Heading" in this note, or "Note".
+    const qsizetype hash = m_previewTarget.indexOf(QLatin1Char('#'));
+    const QString name = hash >= 0 ? m_previewTarget.left(hash) : m_previewTarget;
+    const QString subpath = hash >= 0 ? m_previewTarget.mid(hash + 1).trimmed() : QString();
+    QString path = m_notePath;
+    if (!name.isEmpty()) {
+        const QString relative = m_index.resolve(name, m_notePath);
+        if (relative.isEmpty())
+            return; // nothing there yet to preview
+        path = m_vault.absolute(relative);
+    }
+    // ponytail: notes only; Obsidian also previews images and PDFs.
+    Note note;
+    if (!Vault::isNote(path) || !Vault::read(path, note))
+        return;
+
+    qsizetype offset = 0;
+    if (subpath.startsWith(QLatin1Char('^'))) {
+        const qsizetype at = note.text.indexOf(QLatin1Char(' ') + subpath);
+        if (at >= 0)
+            offset = note.text.lastIndexOf(QLatin1Char('\n'), at) + 1;
+    } else if (!subpath.isEmpty()) {
+        for (const Heading &heading : Parser().parseAll(note.text).metadata.headings) {
+            if (heading.text.compare(subpath, Qt::CaseInsensitive) == 0) {
+                offset = heading.range.start;
+                break;
+            }
+        }
+    }
+    m_preview->showNote(note.text, offset, m_previewPos);
+}
+
 void MainWindow::updateSpelling()
 {
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
@@ -834,6 +891,7 @@ void MainWindow::applyTheme()
     m_tree->setFont(m_theme.uiFont());
     m_editor->setTheme(m_theme);
     m_tags->setTheme(m_theme);
+    m_preview->applyTheme(m_theme);
     m_outgoingLinks->setTheme(m_theme);
     if (m_settingsPage)
         m_settingsPage->applyTheme(m_theme);

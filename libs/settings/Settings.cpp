@@ -39,6 +39,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.lineNumbers"), true},
         {QStringLiteral("editor.strictLineBreaks"), false},
         {QStringLiteral("editor.spellcheck"), true},
+        {QStringLiteral("pagePreview.enabled"), true},
         {QStringLiteral("editor.autoPairs"), true},
         {QStringLiteral("editor.showIndentGuides"), true},
         {QStringLiteral("editor.tabWidth"), 4},

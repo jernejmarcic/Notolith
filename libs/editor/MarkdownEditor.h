@@ -254,6 +254,12 @@ signals:
     void modificationChanged(bool modified);
     void linkActivated(const QString &target);
     void cursorMoved(qsizetype offset);
+    /// The pointer came to rest on a link to a note, the way Obsidian's page
+    /// preview wants it: plain hover in reading view, with Ctrl held while
+    /// editing. `globalPos` is where the pointer is.
+    void linkHovered(const QString &target, const QPoint &globalPos);
+    /// It left that link, or let go of it by leaving the editor.
+    void linkHoverEnded();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -263,6 +269,7 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void leaveEvent(QEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
@@ -715,6 +722,9 @@ private:
     void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
+    /// The link a preview was asked for, so the signals fire on changes only.
+    QString m_previewLink;
+    void updateLinkHover(const QPoint &viewportPoint, bool control, const QPoint &globalPos);
     /// A key combination, as QKeyCombination::toCombined(), to the command
     /// it runs.
     QHash<int, QString> m_keymap;

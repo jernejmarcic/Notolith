@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QCompleter>
+#include <QCursor>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QWheelEvent>
@@ -2825,12 +2826,62 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
 
 QString MarkdownEditor::linkAt(const QPoint &viewportPoint) const
 {
+    // Asked on every mouse move, so only the block under the pointer is
+    // searched, not every span in the note.
     const qsizetype offset = offsetAt(viewportPoint);
-    for (const StyleSpan &span : m_decorations.styles) {
+    const qsizetype index = blockAt(offset);
+    if (index < 0)
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        const StyleSpan &span = m_decorations.styles.at(i);
         if (span.kind == StyleSpan::Kind::Link && span.range.contains(offset))
             return span.payload;
     }
     return {};
+}
+
+void MarkdownEditor::updateLinkHover(const QPoint &viewportPoint, bool control,
+                                     const QPoint &globalPos)
+{
+    // The whole target, "Note#Heading" when the link names one, so the
+    // preview can open at that heading; linkAt() gives the note alone.
+    QString target;
+    const qsizetype offset = offsetAt(viewportPoint);
+    const qsizetype index = blockAt(offset);
+    if (index >= 0) {
+        const BlockView &view = m_blocks[size_t(index)];
+        for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+            const StyleSpan &span = m_decorations.styles.at(i);
+            if (span.kind != StyleSpan::Kind::Link || !span.range.contains(offset))
+                continue;
+            target = span.payload;
+            if (span.anchorText.isValid() && span.anchorText.length() > 0)
+                target += QLatin1Char('#') + m_text.mid(span.anchorText.start, span.anchorText.length());
+            break;
+        }
+    }
+    // Only a link to a note has a page to preview.
+    if (target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:")))
+        target.clear();
+    if (!target.isEmpty() && !(m_mode == Mode::Reading || control))
+        target.clear();
+    if (target == m_previewLink)
+        return;
+    m_previewLink = target;
+    if (target.isEmpty())
+        emit linkHoverEnded();
+    else
+        emit linkHovered(target, globalPos);
+}
+
+void MarkdownEditor::leaveEvent(QEvent *event)
+{
+    if (!m_previewLink.isEmpty()) {
+        m_previewLink.clear();
+        emit linkHoverEnded();
+    }
+    QAbstractScrollArea::leaveEvent(event);
 }
 
 void MarkdownEditor::ensureCursorVisible()
@@ -3183,6 +3234,12 @@ void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &b
 
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
+    // Ctrl pressed with the pointer already resting on a link previews it,
+    // as in Obsidian, without the mouse having to move.
+    if (event->key() == Qt::Key_Control && viewport()->underMouse()) {
+        const QPoint global = QCursor::pos();
+        updateLinkHover(viewport()->mapFromGlobal(global), true, global);
+    }
     if (m_completer->popup()->isVisible()) {
         switch (event->key()) {
         case Qt::Key_Return:
@@ -3441,6 +3498,8 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 
     const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos());
     viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::IBeamCursor);
+    updateLinkHover(event->pos(), event->modifiers().testFlag(Qt::ControlModifier),
+                    event->globalPosition().toPoint());
 }
 
 void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)

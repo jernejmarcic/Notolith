@@ -6,6 +6,7 @@
 #include <QRandomGenerator>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
@@ -2438,6 +2439,47 @@ TEST(CommandTest, EveryCommandHasAnIDANameAndRuns)
         editor->enterBlockAt(1);
         EXPECT_TRUE(editor->runCommand(command.id)) << qPrintable(command.id);
     }
+}
+
+// --- page preview ----------------------------------------------------------------
+
+namespace {
+
+/// Moves the pointer across the first line until the editor reports a link,
+/// holding `modifiers`; the position of the link is the editor's business.
+QString hoverFirstLine(MarkdownEditor &editor, Qt::KeyboardModifiers modifiers)
+{
+    QSignalSpy hovered(&editor, &MarkdownEditor::linkHovered);
+    for (int x = 20; x < editor.viewport()->width() && hovered.isEmpty(); x += 3) {
+        const QPointF at(x, 40);
+        QMouseEvent move(QEvent::MouseMove, at, editor.viewport()->mapToGlobal(at), Qt::NoButton,
+                         Qt::NoButton, modifiers);
+        QCoreApplication::sendEvent(editor.viewport(), &move);
+    }
+    return hovered.isEmpty() ? QString() : hovered.first().at(0).toString();
+}
+
+} // namespace
+
+TEST(PagePreviewTest, ReadingViewPreviewsOnHoverAndEditingNeedsCtrl)
+{
+    // Obsidian: plain hover in reading view, Ctrl held while editing.
+    const QString note = QStringLiteral("[[Other note#Part two]] [[Other note#Part two]] and more\n");
+    auto editing = editorWith(note);
+    EXPECT_TRUE(hoverFirstLine(*editing, Qt::NoModifier).isEmpty());
+    EXPECT_EQ(hoverFirstLine(*editing, Qt::ControlModifier), QStringLiteral("Other note#Part two"))
+        << "the heading comes with the note, so the preview can open there";
+
+    auto reading = editorWith(note);
+    reading->setMode(MarkdownEditor::Mode::Reading);
+    EXPECT_EQ(hoverFirstLine(*reading, Qt::NoModifier), QStringLiteral("Other note#Part two"));
+}
+
+TEST(PagePreviewTest, AnExternalLinkHasNothingToPreview)
+{
+    auto reading = editorWith(QStringLiteral("[a site](https://example.org) and [a site](https://example.org)\n"));
+    reading->setMode(MarkdownEditor::Mode::Reading);
+    EXPECT_TRUE(hoverFirstLine(*reading, Qt::NoModifier).isEmpty());
 }
 
 // --- links to headings -------------------------------------------------------

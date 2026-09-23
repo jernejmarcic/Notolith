@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QTimer>
 
 #include <memory>
 #include <optional>
@@ -148,6 +149,8 @@ private:
     /// scheme has changed since the last call, so this costs nothing on the
     /// settings-page keystroke path.
     void watchThemeFiles();
+    /// Shows the page preview for the link the editor last reported hovering.
+    void showPagePreview();
     /// Gives every command its keys: noteAppC's hotkeys.json over the vault's
     /// Obsidian one over the built-in keys, for the window's commands and the
     /// editor's alike.
@@ -236,6 +239,12 @@ private:
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
+    class PagePreview *m_preview = nullptr;
+    /// A moment's pause before a preview opens, so sweeping the pointer across
+    /// a paragraph of links does not flash one up for each.
+    QTimer m_previewDelay;
+    QString m_previewTarget;
+    QPoint m_previewPos;
     /// The window's commands, each an action named by its command id and
     /// carrying its built-in keys as data.
     QList<QAction *> m_commands;

@@ -459,6 +459,9 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Underline words the dictionary does not recognise. Uses the hunspell "
                    "dictionaries installed for your system's languages."));
 #endif
+    addToggleRow(layout, QStringLiteral("pagePreview.enabled"), tr("Page preview"),
+                tr("Hover over a link to a note to see it: with Ctrl held while editing, on its "
+                   "own in reading view."));
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),

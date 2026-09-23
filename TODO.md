@@ -333,7 +333,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 
 ### Wave 2
 - [ ] File recovery: snapshots on save, a browser to restore from.
-- [ ] Page preview: a rendered popup over a link.
+- [x] Page preview: the linked note rendered in a popover, opened at the
+      heading or block the link names; Ctrl held while editing, plain hover
+      in reading view, as Obsidian. Links inside it can be followed.
+      Notes only for now - Obsidian also previews images and PDFs.
 - [ ] Audio and video embeds (Qt Multimedia, optional).
 - [ ] `query` blocks, on the wave 1 search.
 - [ ] PDF export of the reading view.
