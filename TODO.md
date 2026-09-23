@@ -198,7 +198,7 @@ budget, which this project has already learned once on the index.
 - [x] Mobile groundwork: build the libraries against the Android kit's Qt
       6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
       way poppler already is.
-- [ ] Future `PKGBUILD` must override CachyOS's `-march=native`.
+- [x] `PKGBUILD` overrides CachyOS's `-march=native` (it strips it).
 
 ## Requested 2026-09-23, queued
 
@@ -360,7 +360,12 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       video frames painted into the block), Qt Multimedia optional behind
       `NOTEAPPC_WITH_MEDIA` - without it a click opens the file. No poster
       frame before play yet.
-- [ ] `query` blocks, on the wave 1 search.
+- [x] `query` blocks, on the wave 1 search (lane F): results, match counts
+      and highlighted snippets in the note, off the UI thread, cached per
+      query, refreshed on index changes; a result opens its note at the
+      match. 0.10 ms per unrelated keystroke with one on screen.
+- [ ] Obsidian frames an embedded search with a header ("N results",
+      collapse, sort); the block shows the results alone.
 - [x] PDF export of the reading view (`workspace:export-pdf`): Obsidian's
       options - file name as title, A3/A4/A5/Legal/Letter/Tabloid,
       orientation, margin presets, downscale - light theme on white paper,
@@ -382,8 +387,14 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Bases (lane E): `.base` filters, formulas, table and card views, sort,
       group, limit, an expression language in C++; editing a cell writes
       only that property. Opens in a tab. 20 000 rows filter+sort in 71 ms.
-- [ ] `query` blocks and HTML blocks (litehtml) - lane F running in
-      `/tmp/noteAppC-editor`.
+- [x] HTML blocks through litehtml (lane F), behind `NOTEAPPC_WITH_HTML`:
+      rendered once per block into a cached image in the theme's colours;
+      scripts, `on*`, iframes, objects and embeds never run or load; remote
+      images are not fetched. Inline `b i u s kbd code mark sup sub` and
+      `span style="color:"` map onto text formats. A container of our own:
+      Qt Creator's qlitehtml is GPL-3, so it was read, not vendored.
+- [ ] HTML left out: gradients are a flat first stop, borders one colour
+      and no radii, list markers always decimal.
 - [ ] `canvas:new-file` ("Create new canvas") and a new-base command.
 - [ ] ` ```base ` blocks inside notes, on `BaseView`.
 - [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
@@ -397,12 +408,23 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       Obsidian edits one document from every view.
 
 ### For Jernej to decide
+- [ ] **A licence.** None is chosen; the PKGBUILD says `LicenseRef-unknown`
+      and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
+      tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
+- [ ] **An app id** for Flatpak and AppStream: `eu.mangoblue.noteAppC` is a
+      placeholder on the homelab's domain.
+- [ ] **An app icon.** The desktop file borrows `accessories-text-editor`;
+      drawing one is image making, which is off unless you say otherwise.
 - [ ] **Autosave.** Obsidian saves on its own a moment after typing stops;
       noteAppC asks on close ("Save changes to X?"). Tabs make that prompt
       come more often. Autosave like Obsidian?
 
 ### Wave 4
-- [ ] Packaging: AppImage, Flatpak manifest, `PKGBUILD` without `-march`.
+- [x] `PKGBUILD` without `-march` (`packaging/arch`): built here into /tmp,
+      its `check()` passes all suites under makepkg's flags. AppStream
+      metainfo installed and validated.
+- [ ] AppImage and Flatpak recipes. Neither can be built here without
+      installing tools (flatpak-builder, linuxdeploy), which is yours to do.
 - [x] A local check script in place of CI (there is no remote):
       `sh tools/check.sh [--bench]` - the release build and all suites (perf
       guards and the new seeded round-trip fuzz among them), then a build
