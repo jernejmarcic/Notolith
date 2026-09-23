@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QCompleter>
+#include <QListView>
 #include <QCursor>
 #include <QUrl>
 #include <QDesktopServices>
@@ -120,6 +121,11 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     m_completer = new QCompleter(new QStringListModel(this), this);
     m_completer->setWidget(this);
     m_completer->popup()->setObjectName(QStringLiteral("completerPopup"));
+    // One line per name. Without this, every application-wide style change
+    // (each theme pass) sized all of a vault's link targets row by row, hidden
+    // popup or not: 157 ms of a 20 000-note vault's cold start.
+    if (auto *list = qobject_cast<QListView *>(m_completer->popup()))
+        list->setUniformItemSizes(true);
     m_completer->setCompletionMode(QCompleter::PopupCompletion);
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_completer->setFilterMode(Qt::MatchContains);
