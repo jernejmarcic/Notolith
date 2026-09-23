@@ -27,6 +27,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
+#include <QSet>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -133,6 +134,9 @@ MainWindow::~MainWindow()
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    m_autosave.setSingleShot(true);
+    m_autosave.setInterval(2000); // Obsidian's pause, near enough
+    connect(&m_autosave, &QTimer::timeout, this, &MainWindow::autosave);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
@@ -549,6 +553,11 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 for (Leaf *other : viewsOfSameNote(leaf))
                     other->editor->applyExternalEdit(at, removed, inserted);
             });
+    // A moment after typing stops, everything unsaved is saved.
+    connect(editor, &MarkdownEditor::edited, this, [this] {
+        if (m_settings.boolean(QStringLiteral("files.autosave")))
+            m_autosave.start();
+    });
     // The count comes with each parse. Taking it from textChanged recounted
     // the whole note on the UI thread for every keystroke.
     connect(editor, &MarkdownEditor::wordCountChanged, this, [this, leaf] {
@@ -2804,11 +2813,13 @@ bool MainWindow::openView(const QString &path, NavSource source)
             delete canvas;
         } else {
             Leaf *leaf = m_active;
-            connect(canvas, &CanvasView::modificationChanged, this, [this, leaf] {
+            connect(canvas, &CanvasView::modificationChanged, this, [this, leaf, canvas] {
                 if (leaf == m_active)
                     updateTitle();
                 else
                     syncTabs(leaf->group);
+                if (canvas->isModified() && m_settings.boolean(QStringLiteral("files.autosave")))
+                    m_autosave.start(); // a canvas is kept like a note
             });
             connect(canvas, &CanvasView::noteActivated, this, &MainWindow::openRelative);
             view = canvas;
@@ -2969,48 +2980,53 @@ void MainWindow::goForward()
 
 bool MainWindow::save()
 {
-    if (m_active->notePath.isEmpty())
+    return saveLeaf(m_active, false);
+}
+
+bool MainWindow::saveLeaf(Leaf *target, bool quiet)
+{
+    if (target->notePath.isEmpty())
         return true;
 #ifdef NOTEAPPC_HAVE_CANVAS
-    if (auto *canvas = qobject_cast<CanvasView *>(m_active->view)) {
+    if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
         if (!canvas->save(QString(), &error)) {
-            QMessageBox::warning(this, tr("Save"),
-                                 tr("Could not save %1:\n%2").arg(m_active->notePath, error));
+            reportSaveError(target->notePath, error, quiet);
             return false;
         }
-        statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(m_active->notePath).fileName()), 2000);
+        if (!quiet)
+            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
         return true;
     }
 #endif
-    if (m_active->view)
+    if (target->view)
         return true; // a base writes each cell edit to its note as it happens
 
-    Note note = m_active->note;
-    note.text = m_active->editor->noteText();
+    Note note = target->note;
+    note.text = target->editor->noteText();
 
     // File recovery, for notes in a vault only: a stray note leaves nothing
     // behind. The first save of a note keeps what it held before, too.
     const bool snapshots =
-        featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(m_active->notePath);
-    if (snapshots && Snapshots::versions(m_active->notePath).isEmpty() && note.text != m_active->note.text)
-        Snapshots::record(m_active->notePath, m_active->note.text, 0);
+        featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(target->notePath);
+    if (snapshots && Snapshots::versions(target->notePath).isEmpty() && note.text != target->note.text)
+        Snapshots::record(target->notePath, target->note.text, 0);
 
     QString error;
-    if (!Vault::write(m_active->notePath, note, &error)) {
-        QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(m_active->notePath, error));
+    if (!Vault::write(target->notePath, note, &error)) {
+        reportSaveError(target->notePath, error, quiet);
         return false;
     }
 
     if (snapshots)
-        Snapshots::record(m_active->notePath, note.text,
+        Snapshots::record(target->notePath, note.text,
                           qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
-    recordHistory(m_active->notePath, note.text);
-    m_active->note = note;
-    m_active->editor->setModified(false);
+    recordHistory(target->notePath, note.text);
+    target->note = note;
+    target->editor->setModified(false);
     // Every other tab on this note shows this same document, so this saved
     // it too.
-    for (Leaf *leaf : viewsOfSameNote(m_active)) {
+    for (Leaf *leaf : viewsOfSameNote(target)) {
         leaf->note = note;
         if (leaf->editor->noteText() == note.text) {
             leaf->editor->setModified(false);
@@ -3020,18 +3036,45 @@ bool MainWindow::save()
         leaf->editor->setNoteText(note.text);
         leaf->editor->setCursorOffset(qMin(caret, qsizetype(note.text.size())));
     }
-    statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(m_active->notePath)
-                                                                   : QFileInfo(m_active->notePath).fileName()),
-                             2000);
+    if (!quiet) {
+        statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(target->notePath)
+                                                                       : QFileInfo(target->notePath).fileName()),
+                                 2000);
+    }
     if (m_vault.isValid())
-        m_indexer->reindex(m_active->notePath);
+        m_indexer->reindex(target->notePath);
     return true;
+}
+
+void MainWindow::reportSaveError(const QString &path, const QString &error, bool quiet)
+{
+    // An autosave runs while someone types: a box in their face then is
+    // worse than the failure, which the next pause tries again anyway. The
+    // bar keeps saying so until a save goes through.
+    if (quiet)
+        statusBar()->showMessage(tr("Could not save %1: %2 - will try again").arg(QFileInfo(path).fileName(), error));
+    else
+        QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(path, error));
+}
+
+void MainWindow::autosave()
+{
+    QSet<QString> saved; // a note in two tabs is one document, saved once
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))
+            continue;
+        saved.insert(leaf->notePath);
+        saveLeaf(leaf.get(), true);
+    }
 }
 
 bool MainWindow::maybeSave()
 {
     if (m_active->notePath.isEmpty() || !isModified(m_active))
         return true;
+    // Obsidian's way: what is typed is kept, never asked about.
+    if (m_settings.boolean(QStringLiteral("files.autosave")))
+        return saveLeaf(m_active, true);
 
     const QString shown =
         m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();

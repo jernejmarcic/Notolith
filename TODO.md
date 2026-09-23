@@ -37,7 +37,7 @@ built; each stage's detail is in its own section further down.
 | 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | todo (quickjs-ng fetched pinned, as md4qt is) |
 | 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | todo, on stage 8 |
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | todo |
-| 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; **for Jernej:** Ideas.md names yrs (Rust) - a C++ CRDT keeps the C/C++-only rule, and is the plan unless you say otherwise |
+| 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
 | 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | last feature stage |
 | 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
@@ -562,7 +562,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       Space- or middle-drag pans; a group carries the cards inside it.
 - [x] A file card's subpath shows that section (`#Heading`, `#^block`), as Obsidian.
 - [x] Middle-click a tree row to open it in a new tab.
-- [ ] **For Jernej:** Obsidian opens a link in a new tab on Ctrl+click, but
+- [x] **Decided (Jernej 2026-09-23, "Follow in place"):** Obsidian opens a link in a new tab on Ctrl+click, but
       in noteAppC's editing view Ctrl+click is how a link is followed at all
       (a plain click places the caret). Which should Ctrl+click be?
 - [x] Only the focused split's tab is accented, as in Obsidian.
@@ -578,9 +578,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
 - [ ] **An app icon.** The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
-- [ ] **Autosave.** Obsidian saves on its own a moment after typing stops;
-      noteAppC asks on close ("Save changes to X?"). Tabs make that prompt
-      come more often. Autosave like Obsidian?
+- [x] **Autosave.** Jernej 2026-09-23: "Autosave like Obsidian". A note or
+      canvas saves 2 s after the last edit and whenever it is left or closed;
+      nothing asks. `files.autosave` (on) keeps the old prompts for anyone
+      who turns it off.
 
 ### Wave 4
 - [x] `PKGBUILD` without `-march` (`packaging/arch`): built here into /tmp,

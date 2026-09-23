@@ -1983,3 +1983,63 @@ TEST_F(WindowTest, ANoteInTwoTabsIsOneDocument)
     EXPECT_FALSE(second->isModified());
     EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), first->noteText().toUtf8());
 }
+
+TEST_F(WindowTest, TypingIsSavedAMomentAfterItStopsAndLeavingNeverAsks)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("typed"));
+    ASSERT_TRUE(editor->isModified());
+    EXPECT_FALSE(readAll(path(QStringLiteral("Welcome.md"))).contains("typed")) << "not on every keystroke";
+    QTRY_VERIFY_WITH_TIMEOUT(!editor->isModified(), 5000);
+    EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed"));
+
+    // Leaving a note with unsaved changes saves it; nothing asks.
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            box->button(QMessageBox::Cancel)->click();
+        }
+    });
+    watch.start(20);
+    QTest::keyClicks(editor, QStringLiteral(" more"));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Projects/Crlf.md"))));
+    EXPECT_FALSE(asked);
+    EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed more"));
+}
+
+TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        QTest::qWait(2600);
+        EXPECT_TRUE(window.editor()->isModified());
+        bool asked = false;
+        QTimer watch;
+        QObject::connect(&watch, &QTimer::timeout, [&asked] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                asked = true;
+                box->button(QMessageBox::Discard)->click();
+            }
+        });
+        watch.start(20);
+        window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+        EXPECT_TRUE(asked);
+    }
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\n"));
+    qputenv("XDG_CONFIG_HOME", previous);
+}

@@ -316,6 +316,12 @@ private:
     void reloadThemeFiles();
     /// Offers to save a modified note. False means the user cancelled.
     bool maybeSave();
+    /// Saves `leaf`'s note; `quiet` for autosave: no "Saved" message, and a
+    /// failure in the status bar rather than a box.
+    bool saveLeaf(Leaf *leaf, bool quiet);
+    void reportSaveError(const QString &path, const QString &error, bool quiet);
+    /// Every tab with unsaved changes, a moment after typing stops.
+    void autosave();
     void updateTitle();
     void updateWordCount();
     void onIndexChanged();
@@ -455,6 +461,7 @@ private:
     /// an open tab's mode only when this setting is what changed.
     QString m_appliedDefaultMode;
     bool m_themeApplied = false; ///< applySettings has styled the window once
+    QTimer m_autosave; ///< restarted by every edit
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

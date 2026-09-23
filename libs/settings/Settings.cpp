@@ -50,6 +50,7 @@ const QVariantMap &defaults()
         // Files and links
         {QStringLiteral("files.attachmentFolder"), QString()},
         {QStringLiteral("files.confirmDelete"), true},
+        {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("editor.gpuAcceleration"), false},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},

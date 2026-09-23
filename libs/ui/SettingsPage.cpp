@@ -489,6 +489,9 @@ QWidget *SettingsPage::buildFilesPage()
 
     addFolderRow(layout, QStringLiteral("files.attachmentFolder"), tr("Attachment folder"),
                 tr("Where a pasted or dropped file lands. Empty means the vault root."));
+    addToggleRow(layout, QStringLiteral("files.autosave"), tr("Save automatically"),
+                tr("Save a note a moment after typing stops, and before it is closed or left, "
+                   "as Obsidian does. Off asks before closing a note with unsaved changes."));
     addToggleRow(layout, QStringLiteral("files.confirmDelete"), tr("Confirm before deleting"),
                 tr("Ask before moving a note or folder to the vault's trash."));
     addToggleRow(layout, QStringLiteral("links.useWikilinks"), tr("Use [[wikilinks]]"),
