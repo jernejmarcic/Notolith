@@ -21,9 +21,9 @@ built; each stage's detail is in its own section further down.
 | # | stage | state |
 |---|---|---|
 | 1 | Obsidian's features (the base everything else sits on) | done; the command palette (Ctrl+P) landed 2026-09-23 |
-| 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | next |
-| 3 | Every non-core feature switchable off at run time, costing nothing when off | in progress: panes, views, commands done; editor blocks wait on stage 2 |
-| 4 | `demo/`, a vault under 5 MB that exercises every feature | grows with each stage |
+| 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | done; formatted note transclusion left |
+| 3 | Every non-core feature switchable off at run time, costing nothing when off | done: 23 switches |
+| 4 | `demo/`, a vault under 5 MB that exercises every feature | 354 kB, 77 files, `test_demo` opens all of it; grows with each stage |
 | 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
 | 6 | Publishing: the vault as a static website (Obsidian Publish style) | todo |
 | 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | todo (poppler writes PDF annotations; EPUB via libarchive) |
@@ -355,20 +355,25 @@ page, or display the pages in a specific manner. Such as displaying mutiple
 plages, all pages, certain pages, pages in a range. Also make it, instead of
 scrolliong through pages, it can make them like a slide".
 
-- [ ] Audit every `![[...]]` kind against Obsidian: notes (whole, heading,
-      block), images (with `|width` / `|widthxheight`), PDFs, audio, video,
-      canvases, bases, other files (a card that opens them); fix what does not
-      render.
-- [ ] PDF embeds with page arguments: one page (`#page=3`, Obsidian's),
-      several (`2,5,9`), ranges (`3-7`), all; Obsidian's `#height=`; mixed.
-- [ ] A slide layout for PDF embeds: one page at a time with previous/next
-      and a page counter, instead of a scrolling column.
-- [ ] Jernej: "if a .tex file is linked it should be rednered in the inline
-      window". A `.tex` of maths alone through MicroTeX; a whole document
-      compiled to PDF off the UI thread by the TeX found on the machine
-      (pdflatex here, TeX Live 2026), with no shell escape and a time and
-      memory cap, cached until the file changes, then shown with the same
-      page arguments and layouts as a PDF.
+- [x] Every `![[...]]` kind (lane I, merged 9faaafe): notes (whole, heading,
+      block), images, PDFs, audio, video, source files, a card for any other
+      file (binary content detected, never shown as text); several embeds in
+      one paragraph render as rows. `.base` embeds are the base block's own
+      table fed the file; `.canvas` embeds are the canvas drawn to an image.
+- [x] PDF page arguments (`libs/render/PdfArgs`): `#page=3`, `2,5,9`,
+      `3-7`, mixed, `all`, `#height=`, `layout=column|slides|grid`,
+      `columns=`; no arguments is the whole document as slides.
+- [x] `.tex`: maths alone through MicroTeX; a document compiled by pdflatex
+      off the UI thread, cached by content, `-no-shell-escape`, rlimits, and
+      in a bubblewrap sandbox that sees only the system and its own
+      directory (4038601).
+- [ ] An embedded note is a plain-text panel; Obsidian draws it formatted.
+      Render it through the editor's own block layout.
+- [ ] An embed inside running text trails its line as a row (bare
+      QTextLayout has no inline objects); a canvas embed is a picture, not
+      interactive; `![[x.base#View]]` shows the first view.
+- [ ] PDF placeholders size every page on the UI thread once per file
+      (`pdfMetadata`): measure a 500-page PDF, and size only the pages shown.
 
 ## Requested 2026-09-23, afternoon: history and switches
 
@@ -395,9 +400,9 @@ the features existing decreases it".
         history. A feature's commands are disabled while it is off.
   - [x] Measured, 2 000 notes: cold start 81 ms on, 53 ms off. Note open was
         10x slower with the panes on at 1 MB; fixed (PERFORMANCE.md fix 17).
-  - [ ] Query blocks (Search off), base blocks (Bases off) and the embeds of
-        stage 2 as editor features: wire `MarkdownEditor::setFeatures` when
-        lane I merges. Spellcheck already has its own switch.
+  - [x] Query blocks follow Search, base blocks and `.base` embeds Bases,
+        canvas embeds Canvas; HTML blocks, PDF, LaTeX, audio and video embeds
+        have switches of their own. Spellcheck already had one.
   - [x] Found by the measurement: the indexer wrote every note to SQLite on
         the UI thread. The scan now runs on its own thread and connection
         (PERFORMANCE.md fix 18): 20 000-note cold start 277 to 65 ms.
