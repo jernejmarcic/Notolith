@@ -10,7 +10,9 @@ add_library(noteAppC_vault STATIC
     DailyNotes.cpp
     DailyNotes.h
     Bookmarks.cpp
-    Bookmarks.h)
+    Bookmarks.h
+    Workspaces.cpp
+    Workspaces.h)
 
 target_include_directories(noteAppC_vault PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_vault PUBLIC Qt6::Core noteAppC_settings)

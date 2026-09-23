@@ -2,6 +2,11 @@
 
 #include <QApplication>
 #include <QButtonGroup>
+#include <numeric>
+#include <QJsonArray>
+#include <QPushButton>
+#include <QListWidget>
+#include <QDialog>
 #include <QCloseEvent>
 #include <QDir>
 #include <QEvent>
@@ -49,6 +54,7 @@
 #include "Parser.h"
 #include "QuickSwitcher.h"
 #include "SearchPane.h"
+#include "Workspaces.h"
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
@@ -588,7 +594,9 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
 
 void MainWindow::activateLeaf(Leaf *leaf)
 {
-    if (!leaf || leaf == m_active)
+    // The focused tab can still owe its deferred file: a restored layout
+    // reuses the tab that was already focused.
+    if (!leaf || (leaf == m_active && leaf->pendingPath.isEmpty()))
         return;
     m_active = leaf;
     TabGroup *group = leaf->group;
@@ -602,6 +610,8 @@ void MainWindow::activateLeaf(Leaf *leaf)
     // there are any.
     if (!m_backlinks)
         return;
+    if (!leaf->pendingPath.isEmpty() && openNote(std::exchange(leaf->pendingPath, QString())))
+        return; // opening it filled the panes
     const QString &path = leaf->notePath;
     m_backlinks->setNote(path);
     m_outgoingLinks->setNote(path);
@@ -624,6 +634,8 @@ void MainWindow::activateLeaf(Leaf *leaf)
 
 QString MainWindow::tabTitle(const Leaf *leaf) const
 {
+    if (leaf->notePath.isEmpty() && !leaf->pendingPath.isEmpty())
+        return QFileInfo(leaf->pendingPath).completeBaseName();
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     const QString name = QFileInfo(leaf->notePath).completeBaseName();
@@ -633,7 +645,8 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
 void MainWindow::syncTabs(TabGroup *group)
 {
     const bool soleEmpty = m_leaves.size() == 1 && group->leaves.size() == 1
-                        && group->leaves.constFirst()->notePath.isEmpty();
+                        && group->leaves.constFirst()->notePath.isEmpty()
+                        && group->leaves.constFirst()->pendingPath.isEmpty();
     const int wanted = soleEmpty ? 0 : int(group->leaves.size());
     m_syncingTabs = true;
     while (group->tabs->count() > wanted) {
@@ -992,6 +1005,57 @@ void MainWindow::buildActions()
         [this] { splitActive(Qt::Horizontal); });
     add(QStringLiteral("workspace:split-horizontal"), tr("Split down"), QString(),
         [this] { splitActive(Qt::Vertical); });
+    for (int i = 1; i <= 8; ++i) {
+        add(QStringLiteral("workspace:goto-tab-%1").arg(i), tr("Go to tab #%1").arg(i),
+            QStringLiteral("Ctrl+%1").arg(i), [this, i] { gotoTab(i - 1); });
+    }
+    add(QStringLiteral("workspace:goto-last-tab"), tr("Go to last tab"), QStringLiteral("Ctrl+9"),
+        [this] { gotoTab(-1); });
+    add(QStringLiteral("workspace:close-others"), tr("Close all other tabs"), QString(), [this] {
+        const QList<Leaf *> others = [this] {
+            QList<Leaf *> list;
+            for (Leaf *leaf : m_active->group->leaves)
+                if (leaf != m_active)
+                    list << leaf;
+            return list;
+        }();
+        Leaf *keep = m_active;
+        for (Leaf *leaf : others) {
+            closeLeaf(leaf);
+            if (std::none_of(m_leaves.cbegin(), m_leaves.cend(),
+                             [leaf](const auto &owned) { return owned.get() == leaf; }))
+                continue;
+            break; // cancelled at a save prompt
+        }
+        activateLeaf(keep);
+    });
+    add(QStringLiteral("workspaces:open-modal"), tr("Workspaces: Manage workspace layouts"), QString(),
+        &MainWindow::manageLayouts);
+    add(QStringLiteral("workspaces:load"), tr("Workspaces: Load workspace layout"), QString(), [this] {
+        if (!m_vault.isValid())
+            return;
+        const QStringList names =
+            Workspaces::named(m_vault.root()).value(QStringLiteral("workspaces")).toObject().keys();
+        bool ok = false;
+        const QString name = QInputDialog::getItem(this, tr("Load workspace layout"), tr("Layout:"),
+                                                   names, 0, false, &ok);
+        if (ok)
+            loadNamedLayout(name);
+    });
+    add(QStringLiteral("workspaces:save-and-load"),
+        tr("Workspaces: Save and load another workspace layout"), QString(), [this] {
+            if (!m_vault.isValid())
+                return;
+            QJsonObject all = Workspaces::named(m_vault.root());
+            const QString active = all.value(QStringLiteral("active")).toString();
+            QJsonObject layouts = all.value(QStringLiteral("workspaces")).toObject();
+            if (!active.isEmpty() && layouts.contains(active)) {
+                layouts.insert(active, layoutJSON());
+                all.insert(QStringLiteral("workspaces"), layouts);
+                Workspaces::saveNamed(m_vault.root(), all);
+            }
+            findChild<QAction *>(QStringLiteral("workspaces:load"))->trigger();
+        });
     add(QStringLiteral("workspace:next-tab"), tr("Go to next tab"), QStringLiteral("Ctrl+Tab"),
         [this] { cycleTab(1); });
     add(QStringLiteral("workspace:previous-tab"), tr("Go to previous tab"),
@@ -1726,6 +1790,7 @@ void MainWindow::openVault(const QString &path)
         return;
     }
 
+    saveLayout(); // the vault being left
     m_openMode = OpenMode::Vault;
     m_vault = vault;
     resetWorkspace();
@@ -1742,6 +1807,7 @@ void MainWindow::openVault(const QString &path)
     m_settings.noteOpened(m_vault.root(), QString());
     applySettings();
     m_bookmarks->setVaultRoot(m_vault.root());
+    restoreLayout(Workspaces::current(m_vault.root()));
 #ifdef NOTEAPPC_HAVE_GRAPH
     if (m_graph)
         m_graph->setOptions(GraphOptions::readFromVault(m_vault.root()));
@@ -1760,6 +1826,7 @@ void MainWindow::closeVault()
     if (!maybeSaveAll())
         return;
 
+    saveLayout();
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
     m_index.close();
@@ -1783,6 +1850,7 @@ void MainWindow::openSingleFile(const QString &path)
     if (!maybeSaveAll())
         return;
 
+    saveLayout();
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
     m_index.close();
@@ -1967,6 +2035,245 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     if (source != NavSource::History)
         updateHistoryButtons();
     return true;
+}
+
+QJsonObject MainWindow::layoutJSON() const
+{
+    // Obsidian's ids are 16 hex digits; any unique string reads back.
+    int counter = 0;
+    const auto nextID = [&counter] { return QString::number(++counter, 16).rightJustified(16, u'0'); };
+    QString activeID;
+    const std::function<QJsonObject(QWidget *)> node = [&](QWidget *widget) -> QJsonObject {
+        if (auto *split = qobject_cast<QSplitter *>(widget)) {
+            const QList<int> sizes = split->sizes();
+            const double total = std::accumulate(sizes.cbegin(), sizes.cend(), 0.0);
+            QJsonArray children;
+            for (int i = 0; i < split->count(); ++i) {
+                QJsonObject child = node(split->widget(i));
+                if (total > 0)
+                    child.insert(QStringLiteral("dimension"), 100.0 * sizes.value(i) / total);
+                children.append(child);
+            }
+            // Obsidian names a split by its divider: "vertical" sits side by side.
+            return {{QStringLiteral("id"), nextID()},
+                    {QStringLiteral("type"), QStringLiteral("split")},
+                    {QStringLiteral("children"), children},
+                    {QStringLiteral("direction"), split->orientation() == Qt::Horizontal
+                                                      ? QStringLiteral("vertical")
+                                                      : QStringLiteral("horizontal")}};
+        }
+        const auto owner = std::find_if(m_groups.cbegin(), m_groups.cend(),
+                                        [widget](const auto &group) { return group->widget == widget; });
+        if (owner == m_groups.cend())
+            return {};
+        const TabGroup *group = owner->get();
+        QJsonArray tabs;
+        int currentTab = 0;
+        for (int i = 0; i < group->leaves.size(); ++i) {
+            const Leaf *leaf = group->leaves.at(i);
+            const QString path = leaf->notePath.isEmpty() ? leaf->pendingPath : leaf->notePath;
+            QJsonObject view{{QStringLiteral("type"), QStringLiteral("empty")},
+                             {QStringLiteral("state"), QJsonObject()}};
+            if (!path.isEmpty() && m_vault.isValid()) {
+                const QString type = path.endsWith(QLatin1String(".canvas")) ? QStringLiteral("canvas")
+                                   : path.endsWith(QLatin1String(".base"))   ? QStringLiteral("bases")
+                                                                            : QStringLiteral("markdown");
+                view = {{QStringLiteral("type"), type},
+                        {QStringLiteral("state"), QJsonObject{{QStringLiteral("file"), m_vault.relative(path)}}}};
+            }
+            const QString id = nextID();
+            if (leaf == m_active)
+                activeID = id;
+            if (leaf->area == group->stack->currentWidget())
+                currentTab = i;
+            tabs.append(QJsonObject{{QStringLiteral("id"), id},
+                                    {QStringLiteral("type"), QStringLiteral("leaf")},
+                                    {QStringLiteral("state"), view}});
+        }
+        return {{QStringLiteral("id"), nextID()},
+                {QStringLiteral("type"), QStringLiteral("tabs")},
+                {QStringLiteral("children"), tabs},
+                {QStringLiteral("currentTab"), currentTab}};
+    };
+    QJsonObject layout{{QStringLiteral("main"), node(m_workspace)}};
+    layout.insert(QStringLiteral("left"),
+                  QJsonObject{{QStringLiteral("collapsed"), !m_sidebar->isVisible()}});
+    layout.insert(QStringLiteral("right"),
+                  QJsonObject{{QStringLiteral("collapsed"), !m_rightSidebar->isVisible()}});
+    layout.insert(QStringLiteral("active"), activeID);
+    return layout;
+}
+
+bool MainWindow::restoreLayout(const QJsonObject &layout)
+{
+    const QJsonObject main = layout.value(QStringLiteral("main")).toObject();
+    if (main.value(QStringLiteral("type")).toString() != QLatin1String("split") || !m_vault.isValid())
+        return false;
+    resetWorkspace(); // one empty tab in one split, straight in m_workspace
+    TabGroup *spareGroup = m_active->group;
+    Leaf *spareLeaf = m_active;
+    QHash<QString, Leaf *> byID;
+    QList<std::pair<TabGroup *, int>> shown;
+
+    const std::function<void(const QJsonObject &, QSplitter *)> build =
+        [&](const QJsonObject &node, QSplitter *parent) {
+            const QString type = node.value(QStringLiteral("type")).toString();
+            if (type == QLatin1String("split")) {
+                QSplitter *split = parent ? new QSplitter : m_workspace;
+                split->setChildrenCollapsible(false);
+                split->setOrientation(node.value(QStringLiteral("direction")).toString()
+                                              == QLatin1String("horizontal")
+                                          ? Qt::Vertical
+                                          : Qt::Horizontal);
+                if (parent)
+                    parent->addWidget(split);
+                QList<int> sizes;
+                for (const QJsonValue &child : node.value(QStringLiteral("children")).toArray()) {
+                    build(child.toObject(), split);
+                    sizes << int(child.toObject().value(QStringLiteral("dimension")).toDouble(0) * 100);
+                }
+                if (!sizes.contains(0) && sizes.size() == split->count())
+                    split->setSizes(sizes);
+                return;
+            }
+            if (type != QLatin1String("tabs") || !parent)
+                return;
+            TabGroup *group = spareGroup ? std::exchange(spareGroup, nullptr) : newGroup();
+            parent->addWidget(group->widget);
+            for (const QJsonValue &value : node.value(QStringLiteral("children")).toArray()) {
+                const QJsonObject tab = value.toObject();
+                if (tab.value(QStringLiteral("type")).toString() != QLatin1String("leaf"))
+                    continue;
+                Leaf *leaf = spareLeaf ? std::exchange(spareLeaf, nullptr) : newLeaf(group);
+                const QJsonObject view = tab.value(QStringLiteral("state")).toObject();
+                const QString file =
+                    view.value(QStringLiteral("state")).toObject().value(QStringLiteral("file")).toString();
+                const QString kind = view.value(QStringLiteral("type")).toString();
+                const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
+                                || kind == QLatin1String("bases");
+                if (opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)))
+                    leaf->pendingPath = m_vault.absolute(file);
+                byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
+            }
+            shown << std::pair{group, node.value(QStringLiteral("currentTab")).toInt()};
+            syncTabs(group);
+        };
+    build(main, nullptr);
+
+    // Each split's own tab first, the focused one last so it ends up active.
+    for (const auto &[group, index] : std::as_const(shown)) {
+        if (!group->leaves.isEmpty())
+            activateLeaf(group->leaves.at(qBound(0, index, int(group->leaves.size()) - 1)));
+    }
+    if (Leaf *active = byID.value(layout.value(QStringLiteral("active")).toString()))
+        activateLeaf(active);
+    for (const auto &group : m_groups)
+        syncTabs(group.get());
+
+    m_sidebar->setVisible(!layout.value(QStringLiteral("left")).toObject().value(QStringLiteral("collapsed")).toBool());
+    m_rightSidebar->setVisible(
+        !layout.value(QStringLiteral("right")).toObject().value(QStringLiteral("collapsed")).toBool());
+    return true;
+}
+
+void MainWindow::saveLayout()
+{
+    if (m_openMode == OpenMode::Vault && m_vault.isValid())
+        Workspaces::saveCurrent(m_vault.root(), layoutJSON());
+}
+
+void MainWindow::loadNamedLayout(const QString &name)
+{
+    QJsonObject all = Workspaces::named(m_vault.root());
+    const QJsonObject layout =
+        all.value(QStringLiteral("workspaces")).toObject().value(name).toObject();
+    if (layout.isEmpty() || !maybeSaveAll())
+        return;
+    restoreLayout(layout);
+    all.insert(QStringLiteral("active"), name);
+    Workspaces::saveNamed(m_vault.root(), all);
+    if (m_active->editor->isVisible())
+        m_active->editor->setFocus();
+}
+
+void MainWindow::manageLayouts()
+{
+    if (!m_vault.isValid())
+        return;
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("workspacesDialog"));
+    dialog.setWindowTitle(tr("Manage workspace layouts"));
+    auto *name = new QLineEdit(&dialog);
+    name->setObjectName(QStringLiteral("workspaceName"));
+    name->setPlaceholderText(tr("Name of workspace layout"));
+    auto *save = new QPushButton(tr("Save"), &dialog);
+    save->setObjectName(QStringLiteral("workspaceSave"));
+    auto *list = new QListWidget(&dialog);
+    list->setObjectName(QStringLiteral("workspaceList"));
+    auto *load = new QPushButton(tr("Load"), &dialog);
+    load->setObjectName(QStringLiteral("workspaceLoad"));
+    auto *remove = new QPushButton(tr("Delete layout"), &dialog);
+    remove->setObjectName(QStringLiteral("workspaceDelete"));
+
+    const auto refill = [this, list] {
+        list->clear();
+        list->addItems(Workspaces::named(m_vault.root()).value(QStringLiteral("workspaces")).toObject().keys());
+    };
+    refill();
+    connect(save, &QPushButton::clicked, &dialog, [this, name, refill] {
+        const QString title = name->text().trimmed();
+        if (title.isEmpty())
+            return;
+        QJsonObject all = Workspaces::named(m_vault.root());
+        QJsonObject layouts = all.value(QStringLiteral("workspaces")).toObject();
+        layouts.insert(title, layoutJSON()); // the same name updates it, as in Obsidian
+        all.insert(QStringLiteral("workspaces"), layouts);
+        all.insert(QStringLiteral("active"), title);
+        Workspaces::saveNamed(m_vault.root(), all);
+        refill();
+    });
+    connect(load, &QPushButton::clicked, &dialog, [this, list, &dialog] {
+        if (QListWidgetItem *item = list->currentItem()) {
+            const QString title = item->text();
+            dialog.accept();
+            loadNamedLayout(title);
+        }
+    });
+    connect(list, &QListWidget::itemDoubleClicked, load, &QPushButton::click);
+    connect(remove, &QPushButton::clicked, &dialog, [this, list, refill] {
+        QListWidgetItem *item = list->currentItem();
+        if (!item)
+            return;
+        QJsonObject all = Workspaces::named(m_vault.root());
+        QJsonObject layouts = all.value(QStringLiteral("workspaces")).toObject();
+        layouts.remove(item->text());
+        all.insert(QStringLiteral("workspaces"), layouts);
+        Workspaces::saveNamed(m_vault.root(), all);
+        refill();
+    });
+
+    auto *saveRow = new QHBoxLayout;
+    saveRow->addWidget(name, 1);
+    saveRow->addWidget(save);
+    auto *buttons = new QHBoxLayout;
+    buttons->addStretch(1);
+    buttons->addWidget(remove);
+    buttons->addWidget(load);
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->addLayout(saveRow);
+    layout->addWidget(list, 1);
+    layout->addLayout(buttons);
+    dialog.resize(420, 360);
+    dialog.exec();
+}
+
+void MainWindow::gotoTab(int index)
+{
+    const QList<Leaf *> &leaves = m_active->group->leaves;
+    if (leaves.isEmpty())
+        return;
+    activateLeaf(leaves.at(index < 0 ? leaves.size() - 1 : qMin(index, int(leaves.size()) - 1)));
+    m_active->editor->setFocus();
 }
 
 void MainWindow::pushHistory(const QString &path, NavSource source)
@@ -2296,10 +2603,11 @@ void MainWindow::closeEvent(QCloseEvent *event)
         return;
     }
     for (const auto &leaf : m_leaves) {
-        if (!leaf->notePath.isEmpty())
+        if (!leaf->notePath.isEmpty() && !leaf->view)
             m_settings.setNotePosition(leaf->notePath, leaf->editor->cursorOffset(),
                                        leaf->editor->verticalScrollBar()->value());
     }
+    saveLayout();
     m_settings.save();
     QSettings settings;
     settings.setValue(kGeometry, saveGeometry());

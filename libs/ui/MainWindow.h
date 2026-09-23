@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QMainWindow>
 #include <QTimer>
 
@@ -144,6 +145,10 @@ private:
         TabGroup *group = nullptr;
         /// A canvas or a base shown in place of the editor, or null.
         QWidget *view = nullptr;
+        /// A restored tab's file, loaded the first time the tab is shown, as
+        /// Obsidian defers its background tabs: a layout of ten tabs costs
+        /// one note's open at startup, not ten.
+        QString pendingPath;
     };
     /// Tabs in one split: a tab bar over a stack of their editors.
     struct TabGroup {
@@ -183,6 +188,19 @@ private:
     void closeView(Leaf *leaf);
     /// Records a visit in the focused tab's back/forward history.
     void pushHistory(const QString &path, NavSource source);
+
+    // --- workspace layouts (Obsidian's Workspaces core plugin) ------------
+    /// The splits and tabs, in Obsidian's workspace.json shape.
+    QJsonObject layoutJSON() const;
+    /// Rebuilds the splits and tabs from `layout`; false when it has none.
+    /// Only each split's visible tab is read now, the rest when shown.
+    bool restoreLayout(const QJsonObject &layout);
+    /// Keeps the open vault's layout for the next time it is opened.
+    void saveLayout();
+    void loadNamedLayout(const QString &name);
+    /// "Manage workspace layouts": save, load and delete named ones.
+    void manageLayouts();
+    void gotoTab(int index);
     /// Obsidian's close-tab: offers to save, then drops the tab and, with its
     /// last tab, the split. The window's last tab is emptied instead.
     void closeLeaf(Leaf *leaf);

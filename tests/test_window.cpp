@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdio>
+#include <functional>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -16,6 +17,9 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QDialog>
+#include <QPushButton>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QSplitter>
@@ -623,6 +627,109 @@ TEST_F(WindowTest, ABaseOpensInATabAndItsRowsOpenNotes)
     EXPECT_FALSE(window.editor()->isHidden());
 }
 #endif
+
+TEST_F(WindowTest, TheLayoutComesBackWhenTheVaultIsReopenedWithBackgroundTabsDeferred)
+{
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+        window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+        window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+        window.close();
+    }
+
+    MainWindow window;
+    window.openVault(dir.path());
+    auto *root = window.findChild<QSplitter *>(QStringLiteral("workspace"));
+    ASSERT_EQ(root->count(), 2);
+    const QList<QTabBar *> bars{root->widget(0)->findChild<QTabBar *>(),
+                                root->widget(1)->findChild<QTabBar *>()};
+    EXPECT_EQ(tabTexts(bars.at(0)), QStringList{QStringLiteral("Welcome")});
+    EXPECT_EQ(tabTexts(bars.at(1)), (QStringList{QStringLiteral("Welcome"), QStringLiteral("Crlf")}));
+    EXPECT_EQ(bars.at(1)->currentIndex(), 1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("one\ntwo\n"));
+
+    // The right split's first tab is in the background: not read yet.
+    int loaded = 0;
+    for (MarkdownEditor *editor : tabEditors(window))
+        loaded += !editor->noteText().isEmpty();
+    EXPECT_EQ(loaded, 2);
+    bars.at(1)->setCurrentIndex(0);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, ObsidiansOwnLayoutIsReadAndNeverWritten)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    const QByteArray obsidian = R"({
+  "main": {"id": "5f", "type": "split", "direction": "horizontal", "children": [
+    {"id": "a1", "type": "tabs", "children": [
+      {"id": "b1", "type": "leaf", "state": {"type": "markdown", "state": {"file": "Welcome.md", "mode": "source"}}}]},
+    {"id": "a2", "type": "tabs", "children": [
+      {"id": "b2", "type": "leaf", "state": {"type": "markdown", "state": {"file": "Projects/Crlf.md"}}}]}]},
+  "left": {"id": "l", "type": "split", "children": [], "collapsed": true},
+  "right": {"id": "r", "type": "split", "children": [], "collapsed": false},
+  "active": "b1",
+  "lastOpenFiles": []
+})";
+    write(QStringLiteral(".obsidian/workspace.json"), obsidian);
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        auto *root = window.findChild<QSplitter *>(QStringLiteral("workspace"));
+        EXPECT_EQ(root->orientation(), Qt::Vertical); // "horizontal": stacked
+        EXPECT_EQ(root->count(), 2);
+        EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+        EXPECT_TRUE(window.findChild<QWidget *>(QStringLiteral("sidebar"))->isHidden())
+            << "left.collapsed hides the file explorer";
+        window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+        window.close();
+    }
+    EXPECT_EQ(readAll(path(QStringLiteral(".obsidian/workspace.json"))), obsidian);
+    // noteAppC's own copy now wins: the tab closed above stays closed.
+    MainWindow window;
+    window.openVault(dir.path());
+    EXPECT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 1);
+}
+
+TEST_F(WindowTest, NamedLayoutsSaveAndLoad)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+
+    const auto inDialog = [](const std::function<void(QDialog *)> &act) {
+        QTimer::singleShot(0, [act] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            ASSERT_NE(dialog, nullptr);
+            act(dialog);
+            if (dialog->isVisible())
+                dialog->reject();
+        });
+    };
+    inDialog([](QDialog *dialog) {
+        dialog->findChild<QLineEdit *>(QStringLiteral("workspaceName"))->setText(QStringLiteral("Solo"));
+        dialog->findChild<QPushButton *>(QStringLiteral("workspaceSave"))->click();
+    });
+    window.findChild<QAction *>(QStringLiteral("workspaces:open-modal"))->trigger();
+
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-horizontal"))->trigger();
+    ASSERT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 3);
+
+    inDialog([](QDialog *dialog) {
+        auto *list = dialog->findChild<QListWidget *>(QStringLiteral("workspaceList"));
+        ASSERT_EQ(list->count(), 1);
+        list->setCurrentRow(0);
+        dialog->findChild<QPushButton *>(QStringLiteral("workspaceLoad"))->click();
+    });
+    window.findChild<QAction *>(QStringLiteral("workspaces:open-modal"))->trigger();
+    flushDeletes();
+    EXPECT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
 
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
 {
