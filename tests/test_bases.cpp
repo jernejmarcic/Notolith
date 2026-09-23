@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QApplication>
 
+#include "BaseEditorTable.h"
 #include "BaseFile.h"
 #include "BaseQuery.h"
 #include "BaseTableModel.h"
@@ -698,6 +699,133 @@ TEST_F(BasesIndexTest, BaseViewOpensAndSwitchesViews)
         "  - type: cards\n    name: Cards\n    order: [file.name]\n");
     ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")), yaml)) << view.lastError().toStdString();
     EXPECT_TRUE(view.warnings().isEmpty());
+}
+
+// =========================================================================
+// evaluateBaseForEditor: the one function libs/editor's ```base block calls
+// (on a worker thread - see MarkdownEditor::setBaseRunner), so tested here
+// with hand-built Index::BaseNote rows rather than a real Index: the point
+// of the function is that it needs neither a database nor a widget.
+// =========================================================================
+
+namespace {
+
+Index::BaseNote makeBaseNote(const QString &path, qint64 mtime = 1000, qint64 size = 100)
+{
+    Index::BaseNote note;
+    note.path = path;
+    note.mtime = mtime;
+    note.size = size;
+    return note;
+}
+
+void addProperty(Index::BaseNote &note, const QString &key, Property::Type type,
+                 const QStringList &values)
+{
+    Property p;
+    p.key = key;
+    p.type = type;
+    p.values = values;
+    note.properties << p;
+}
+
+} // namespace
+
+TEST(BaseEditorTableTest, BuildsHeadersAndRowsFromTheFirstView)
+{
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n    name: Prices\n    order: [file.name, price]\n");
+
+    Index::BaseNote a = makeBaseNote(QStringLiteral("A.md"));
+    addProperty(a, QStringLiteral("price"), Property::Type::Number, {QStringLiteral("12")});
+    Index::BaseNote b = makeBaseNote(QStringLiteral("Folder/B.md"));
+    addProperty(b, QStringLiteral("price"), Property::Type::Number, {QStringLiteral("7")});
+
+    const bases::BaseEditorTable table = bases::evaluateBaseForEditor(yaml, {a, b});
+
+    EXPECT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    ASSERT_EQ(table.viewNames.size(), 1);
+    EXPECT_EQ(table.viewNames.first(), QStringLiteral("Prices"));
+    EXPECT_EQ(table.shownView, 0);
+    ASSERT_EQ(table.headers.size(), 2);
+    EXPECT_EQ(table.headers.at(0), QStringLiteral("Name")); // displayNameFor("file.name")
+    EXPECT_EQ(table.headers.at(1), QStringLiteral("Price"));
+
+    ASSERT_EQ(table.rows.size(), 2);
+    for (const bases::BaseEditorRow &row : table.rows) {
+        ASSERT_EQ(row.cells.size(), 2);
+        if (row.notePath == QStringLiteral("A.md")) {
+            EXPECT_EQ(row.cells.at(0), QStringLiteral("A"));
+            EXPECT_EQ(row.cells.at(1), QStringLiteral("12")); // Value::toDisplayString: no ".0"
+        } else {
+            EXPECT_EQ(row.notePath, QStringLiteral("Folder/B.md"));
+            EXPECT_EQ(row.cells.at(1), QStringLiteral("7"));
+        }
+    }
+}
+
+TEST(BaseEditorTableTest, FormatsEveryColumnTypeAsPlainTextIncludingBooleans)
+{
+    // BaseTableModel::data() shows a Bool column as a checkbox (empty
+    // DisplayRole text - see BaseTableModel.cpp), but there is no checkbox
+    // in a plain editor table, so this function's job is to format it as
+    // text too - Value::toDisplayString() already knows how ("true"/
+    // "false"), the same call BaseTableModel makes for every other type.
+    const QString yaml = QStringLiteral(
+        "formulas:\n  expensive: \"price > 10\"\n"
+        "views:\n  - type: table\n    name: T\n    order: [file.name, formula.expensive]\n");
+    Index::BaseNote note = makeBaseNote(QStringLiteral("A.md"));
+    addProperty(note, QStringLiteral("price"), Property::Type::Number, {QStringLiteral("12")});
+
+    const bases::BaseEditorTable table = bases::evaluateBaseForEditor(yaml, {note});
+    ASSERT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    ASSERT_EQ(table.rows.size(), 1);
+    EXPECT_EQ(table.rows.first().cells.at(1), QStringLiteral("true"));
+}
+
+TEST(BaseEditorTableTest, InvalidYAMLSurfacesAsError)
+{
+    const bases::BaseEditorTable table =
+        bases::evaluateBaseForEditor(QStringLiteral("- just\n- a\n- list\n"), {});
+    EXPECT_FALSE(table.error.isEmpty());
+    EXPECT_TRUE(table.rows.isEmpty());
+    EXPECT_TRUE(table.headers.isEmpty());
+}
+
+TEST(BaseEditorTableTest, InvalidFilterSyntaxSurfacesAsErrorNotEmptyResults)
+{
+    const QString yaml = QStringLiteral(
+        "filters:\n  and:\n    - 'price >'\nviews:\n  - type: table\n    name: T\n");
+    const bases::BaseEditorTable table =
+        bases::evaluateBaseForEditor(yaml, {makeBaseNote(QStringLiteral("A.md"))});
+    EXPECT_FALSE(table.error.isEmpty());
+}
+
+TEST(BaseEditorTableTest, OutOfRangeViewIndexFallsBackToTheFirstView)
+{
+    const QString yaml = QStringLiteral(
+        "views:\n  - type: table\n    name: Only\n    order: [file.name]\n");
+    const bases::BaseEditorTable table =
+        bases::evaluateBaseForEditor(yaml, {makeBaseNote(QStringLiteral("A.md"))}, nullptr, 99);
+    EXPECT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    EXPECT_EQ(table.shownView, 0);
+    EXPECT_EQ(table.rows.size(), 1);
+}
+
+TEST(BaseEditorTableTest, NoViewsGetsTheImplicitAllNotesTableWithNoColumns)
+{
+    // BaseFile::parse gives a base with no `views:` one implicit unfiltered
+    // table (BaseFileTest.NoViewsGetsAnImplicitTable), but that implicit
+    // view has no `order:` either - the same degenerate case
+    // BaseTableModel::columnCount() already shows as zero columns, mirrored
+    // here rather than solved differently.
+    const bases::BaseEditorTable table =
+        bases::evaluateBaseForEditor(QString(), {makeBaseNote(QStringLiteral("A.md"))});
+    EXPECT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    ASSERT_EQ(table.viewNames.size(), 1);
+    EXPECT_EQ(table.viewNames.first(), QStringLiteral("All notes"));
+    EXPECT_TRUE(table.headers.isEmpty());
 }
 
 // =========================================================================

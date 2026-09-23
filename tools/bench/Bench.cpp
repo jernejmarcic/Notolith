@@ -103,6 +103,16 @@ QString buildQueryNote()
         "# Notes\n\n```query\ntag:#project\n```\n\nA paragraph to type into, well away from it.\n");
 }
 
+/// A heading, a `base` block whose one-row table is already resolved and
+/// cached, and a paragraph to type into - buildQueryNote's own case, for the
+/// other block that runs its own evaluation off the keystroke path.
+QString buildBaseNote()
+{
+    return QStringLiteral(
+        "# Notes\n\n```base\nviews:\n  - order: [file.name]\n```\n\n"
+        "A paragraph to type into, well away from it.\n");
+}
+
 /// A heading, one small HTML block (rendered once and cached by litehtml, or
 /// shown as source in a build with none), and a paragraph to type into - the
 /// same steady-state case buildQueryNote measures for the query block.
@@ -404,6 +414,47 @@ Timing benchQueryKeystroke(int runs)
     }
     return reduce(QStringLiteral("Keystroke to relaid, painted block"),
                   QStringLiteral("note with a rendered query block"), samples);
+}
+
+/// benchQueryKeystroke's own measurement, for a ```base``` block: its
+/// evaluation (bases::evaluateBaseForEditor, on the thread pool in the real
+/// app - see MainWindow's setBaseRunner wiring) runs once, off the keystroke
+/// path entirely, so this is what every *other* keystroke costs once the
+/// block has settled into its cached, rendered table.
+Timing benchBaseKeystroke(int runs)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    const QString note = buildBaseNote();
+    editor->setNoteText(note);
+
+    editor->setBaseRunner([](const QString &, const MarkdownEditor::BaseDeliver &deliver) {
+        BaseTableData table;
+        table.viewNames = {QStringLiteral("Table")};
+        table.shownView = 0;
+        table.headers = {QStringLiteral("Name")};
+        table.rows = {{{QStringLiteral("Project")}, QStringLiteral("Project.md")}};
+        deliver(table);
+    });
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50); // lets the queued delivery land
+
+    const qsizetype caret = note.indexOf(QStringLiteral("A paragraph"));
+    editor->setCursorOffset(caret);
+    editor->enterBlockAt(caret);
+    paintedFrame(editor.get()); // untimed: not also paying for the first paint
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage frame = paintedFrame(editor.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Keystroke to relaid, painted block"),
+                  QStringLiteral("note with a rendered base block"), samples);
 }
 
 /// The HTML block renders once (litehtml lays it out and rasterises it into
@@ -837,6 +888,7 @@ int main(int argc, char *argv[])
         timings << benchKeystroke(buildCodeNote(lines),
                                   QStringLiteral("%1-line code block").arg(lines), 30);
     timings << benchQueryKeystroke(30);
+    timings << benchBaseKeystroke(30);
     timings << benchHtmlKeystroke(30);
 
     // 4: scroll frame time over a 5 000-line note.

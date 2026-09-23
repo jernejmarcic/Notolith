@@ -2503,6 +2503,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.queryCollapseRect = QRectF();
     view.querySortRect = QRectF();
     view.queryResultCountText.clear();
+    view.isBase = false;
+    view.baseViewName.clear();
+    view.baseRows.clear();
     view.isHtml = false;
     view.inlineHtmlFormats.clear();
 
@@ -2539,6 +2542,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     const bool renderMedia = m_mode != Mode::Source && !view.active;
     if (renderMedia && layoutQuery(view))
+        return;
+    if (renderMedia && layoutBase(view))
         return;
     if (renderMedia && layoutHtml(view))
         return;
@@ -2889,7 +2894,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             painter.setPen(text);
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase) {
             paintCodeChrome(painter, view, left, top);
             painter.setPen(text);
         }
@@ -2927,6 +2932,10 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
                                 view.imageSize.height());
             painter.drawPixmap(target.toRect(), view.image);
+            continue;
+        }
+        if (view.isBase && !view.cells.empty()) {
+            paintBase(painter, view, left, top);
             continue;
         }
         if (!view.cells.empty()) {

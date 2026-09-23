@@ -196,6 +196,19 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 return true;
         }
 
+        if (view.isBase) {
+            for (const BlockView::BaseRow &row : view.baseRows) {
+                if (row.rect.translated(left, top).contains(point)) {
+                    emit baseRowActivated(row.path);
+                    return true;
+                }
+            }
+            // Same rationale as the isQuery branch above: a rendered base
+            // table has no source text of its own to place a caret in.
+            if (view.laidOut && top <= point.y() && point.y() <= top + view.height)
+                return true;
+        }
+
         for (const NestedCallout &nested : view.nested) {
             if (nested.span->foldable
                 && nestedFoldHandleRect(view, nested, left, top).adjusted(-6, -6, 6, 6).contains(point)) {
@@ -204,7 +217,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             }
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase) {
             const CodeLabel label = codeLabelOf(view, left, top);
             if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
                 copyCodeBlock(view);
