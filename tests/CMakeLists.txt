@@ -61,6 +61,13 @@ if(TARGET noteAppC_canvas)
     set_tests_properties(canvas PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+if(TARGET noteAppC_bases)
+    add_executable(test_bases test_bases.cpp)
+    target_link_libraries(test_bases PRIVATE noteAppC_bases noteAppC_index noteAppC_vault Qt6::Test GTest::gtest)
+    add_test(NAME bases COMMAND test_bases)
+    set_tests_properties(bases PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)

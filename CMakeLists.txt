@@ -44,6 +44,10 @@ option(NOTEAPPC_WITH_GRAPH "Build the graph view (libs/ext/graph)" ON)
 # Canvas format. No external dependency - only Qt and the editor library, to
 # reuse MarkdownEditor for a node's Markdown.
 option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
+# Another Tier 1 module: database-like table/card views over a vault from a
+# `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
+# libs/markdown, so this carries no new external dependency.
+option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -110,6 +114,9 @@ if(NOTEAPPC_WITH_GRAPH)
 endif()
 if(NOTEAPPC_WITH_CANVAS)
     add_subdirectory(libs/ext/canvas)
+endif()
+if(NOTEAPPC_WITH_BASES)
+    add_subdirectory(libs/ext/bases)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
