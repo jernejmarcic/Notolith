@@ -22,6 +22,9 @@ namespace noteAppC {
 class ServerStore {
 public:
     explicit ServerStore(const QString &dataDir);
+    ~ServerStore();
+    ServerStore(const ServerStore &) = delete;
+    ServerStore &operator=(const ServerStore &) = delete;
     bool isOpen() const;
     QString error() const { return m_error; }
 
@@ -126,6 +129,7 @@ public:
 
 private:
     QSqlDatabase m_db;
+    QString m_connectionName;
     QString m_dataDir;
     QString m_error;
     QHash<QString, QList<qint64>> m_loginAttempts; ///< email -> attempt timestamps (ms), in-memory

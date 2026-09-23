@@ -26,7 +26,12 @@ ServerStore::ServerStore(const QString &dataDir)
 {
     QDir().mkpath(m_dataDir);
     QDir().mkpath(m_dataDir + QStringLiteral("/blobs"));
-    m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("noteAppC-sync-server"));
+    // A fixed connection name would collide the moment a second ServerStore
+    // exists in the same process (every test in tests/test_sync.cpp makes
+    // one) - same reasoning as SyncJournal's per-instance name.
+    m_connectionName =
+        QStringLiteral("noteAppC-sync-server-%1").arg(reinterpret_cast<quintptr>(this), 0, 16);
+    m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
     m_db.setDatabaseName(m_dataDir + QStringLiteral("/server.db"));
     if (!m_db.open()) {
         m_error = m_db.lastError().text();
@@ -56,6 +61,13 @@ ServerStore::ServerStore(const QString &dataDir)
         && exec(q, QStringLiteral("CREATE INDEX IF NOT EXISTS journal_vault_seq ON journal(vaultID, seq)"));
     if (!ok)
         m_error = q.lastError().text();
+}
+
+ServerStore::~ServerStore()
+{
+    m_db = QSqlDatabase();
+    if (QSqlDatabase::contains(m_connectionName))
+        QSqlDatabase::removeDatabase(m_connectionName);
 }
 
 bool ServerStore::isOpen() const
