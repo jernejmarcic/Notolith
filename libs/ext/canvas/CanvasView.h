@@ -67,6 +67,8 @@ public:
     /// Changes the zoom level about the viewport's centre; clamped to the
     /// same range the wheel is. For tests and for a future zoom control.
     void setZoom(qreal zoom);
+    /// Zooms and pans so every node shows, at most at 100%.
+    void fitToContent();
     /// The canvas-space point that maps to the viewport's top-left pixel.
     QPointF origin() const { return m_origin; }
 
@@ -204,6 +206,7 @@ private:
 
     qreal m_zoom = 1.0;
     QPointF m_origin{0, 0};
+    bool m_fitPending = false; ///< loaded, not painted yet: frame it first
 
     QSet<QString> m_selectedNodes;
     QSet<QString> m_selectedEdges;

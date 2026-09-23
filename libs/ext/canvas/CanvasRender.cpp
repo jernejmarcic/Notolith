@@ -131,7 +131,10 @@ void CanvasView::paintEdges(QPainter &painter) const
     for (const CanvasEdge &edge : m_document.edges()) {
         QPointF labelAnchor;
         const QPainterPath path = edgePath(edge, &labelAnchor);
-        if (path.isEmpty() || !path.boundingRect().intersects(viewport))
+        // Padded: a straight vertical or horizontal edge has a zero-width
+        // box, and QRectF::intersects() calls an empty rect disjoint from
+        // everything, so such an edge was never drawn.
+        if (path.isEmpty() || !path.boundingRect().adjusted(-1, -1, 1, 1).intersects(viewport))
             continue;
 
         const bool selected = m_selectedEdges.contains(edge.id());

@@ -60,8 +60,28 @@ bool CanvasView::load(const QString &path, QString *error)
     m_undoStack.setClean();
     m_zoom = 1.0;
     m_origin = QPointF(0, 0);
+    // Framed at the first paint, when the layout has given the view its real
+    // size (a tab's layout resizes it several times first): a canvas is
+    // rarely drawn around the origin, and Obsidian opens one showing all of it.
+    m_fitPending = true;
     update();
     return true;
+}
+
+void CanvasView::fitToContent()
+{
+    m_fitPending = false;
+    QRectF bounds;
+    for (const CanvasNode &node : m_document.nodes())
+        bounds = bounds.isNull() ? node.rect() : bounds.united(node.rect());
+    if (bounds.isEmpty() || width() <= 0 || height() <= 0)
+        return;
+    const qreal margin = 40;
+    m_zoom = qMin((width() - 2 * margin) / bounds.width(), (height() - 2 * margin) / bounds.height());
+    m_zoom = qMin(m_zoom, 1.0); // never blown up past its own size
+    clampZoom();
+    m_origin = bounds.center() - QPointF(width(), height()) / (2 * m_zoom);
+    update();
 }
 
 bool CanvasView::save(const QString &path, QString *error)
@@ -257,6 +277,8 @@ void CanvasView::cancelEditingText()
 
 void CanvasView::paintEvent(QPaintEvent *)
 {
+    if (m_fitPending)
+        fitToContent();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);

@@ -486,6 +486,66 @@ TEST_F(CanvasViewTest, EditingMarksTheViewModifiedAndSaveClearsIt)
     EXPECT_FALSE(view->isModified());
 }
 
+TEST(CanvasRenderTest, AStraightVerticalEdgeIsDrawn)
+{
+    CanvasView view;
+    view.resize(400, 600);
+    const QString top = view.document().addNode(makeTextNode(QRectF(100, 0, 200, 100)));
+    const QString bottom = view.document().addNode(makeTextNode(QRectF(100, 400, 200, 100)));
+    QJsonObject edge;
+    edge.insert(QStringLiteral("id"), QStringLiteral("e"));
+    edge.insert(QStringLiteral("fromNode"), top);
+    edge.insert(QStringLiteral("fromSide"), QStringLiteral("bottom"));
+    edge.insert(QStringLiteral("toNode"), bottom);
+    edge.insert(QStringLiteral("toSide"), QStringLiteral("top"));
+    view.document().addEdge(CanvasEdge(edge));
+
+    const QImage frame = view.grab().toImage();
+    // Down the middle of the gap, where only the edge can be.
+    int drawn = 0;
+    const QRgb background = frame.pixel(5, 250);
+    for (int x = 195; x <= 205; ++x)
+        drawn += frame.pixel(x, 250) != background;
+    EXPECT_GT(drawn, 0);
+}
+
+TEST(CanvasFitTest, OpeningACanvasShowsAllOfIt)
+{
+    // Far from the origin, as canvases usually are: Obsidian opens one with
+    // every node in view.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("far.canvas"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(R"({"nodes":[)"
+               R"({"id":"a","type":"text","text":"a","x":3000,"y":2000,"width":400,"height":300},)"
+               R"({"id":"b","type":"text","text":"b","x":5000,"y":2600,"width":400,"height":300}]})");
+    file.close();
+
+    CanvasView view;
+    view.resize(800, 600);
+    ASSERT_TRUE(view.load(path));
+    (void)view.grab(); // the first paint frames it
+    const QRect viewport = view.rect();
+    for (const CanvasNode &node : view.document().nodes()) {
+        const QRectF shown(view.mapFromCanvasF(node.rect().topLeft()),
+                           view.mapFromCanvasF(node.rect().bottomRight()));
+        EXPECT_TRUE(QRectF(viewport).contains(shown)) << node.id().toStdString();
+    }
+    EXPECT_LE(view.zoom(), 1.0);
+
+    // Loaded while still small (a tab being laid out), it frames at the size
+    // it has when it is first painted, not the one it was loaded at.
+    CanvasView later;
+    later.resize(100, 30);
+    ASSERT_TRUE(later.load(path));
+    later.resize(800, 600);
+    (void)later.grab();
+    const QRectF b(later.mapFromCanvasF(QPointF(5000, 2600)), later.mapFromCanvasF(QPointF(5400, 2900)));
+    EXPECT_TRUE(QRectF(later.rect()).contains(b));
+}
+
 // --- performance: panning a large canvas ----------------------------------
 
 namespace {
