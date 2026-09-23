@@ -175,11 +175,14 @@ void RecoveryDialog::showPreview()
     }
     Note current;
     Vault::read(note->data(kPathRole).toString(), current); // a deleted note diffs against nothing
-    const QList<DiffLine> diff =
-        lineDiff(m_snapshot.split(QLatin1Char('\n')), current.text.split(QLatin1Char('\n')));
+    showDiff(m_preview, m_snapshot, current.text);
+}
 
-    m_preview->clear();
-    QTextCursor cursor(m_preview->document());
+void RecoveryDialog::showDiff(QPlainTextEdit *view, const QString &before, const QString &after)
+{
+    const QList<DiffLine> diff = lineDiff(before.split(QLatin1Char('\n')), after.split(QLatin1Char('\n')));
+    view->clear();
+    QTextCursor cursor(view->document());
     QTextCharFormat same;
     QTextCharFormat removed;
     removed.setBackground(QColor(220, 60, 60, 70));
@@ -196,7 +199,7 @@ void RecoveryDialog::showPreview()
         case DiffLine::Kind::Added: cursor.insertText(QStringLiteral("+ ") + line.text, added); break;
         }
     }
-    m_preview->moveCursor(QTextCursor::Start);
+    view->moveCursor(QTextCursor::Start);
 }
 
 QList<RecoveryDialog::DiffLine> RecoveryDialog::lineDiff(const QStringList &before, const QStringList &after)

@@ -5,6 +5,7 @@
 #include <QCloseEvent>
 #include <QDialog>
 #include <QDir>
+#include <QDirIterator>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFileIconProvider>
@@ -70,6 +71,10 @@
 #ifdef NOTEAPPC_HAVE_BASES
 #include "BaseView.h"
 #endif
+#ifdef NOTEAPPC_HAVE_HISTORY
+#include "NoteHistory.h"
+#endif
+#include "NoteHistoryDialog.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "TagsPane.h"
@@ -116,13 +121,17 @@ QString rgbaString(const QColor &color, double alpha)
 
 MainWindow::~MainWindow()
 {
-    // Searches for ```query blocks run on the pool against m_index.
+    // Searches for ```query blocks run on the pool against m_index, and the
+    // history's last saves may still be on their way to disk.
     QThreadPool::globalInstance()->waitForDone();
+    m_historyPool.waitForDone();
 }
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    m_historyPool.setMaxThreadCount(1);
+    m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
 
     auto *central = new QWidget(this);
@@ -1084,6 +1093,10 @@ void MainWindow::buildActions()
         }
         activateLeaf(keep);
     });
+#ifdef NOTEAPPC_HAVE_HISTORY
+    add(QStringLiteral("note-history:open"), tr("Note history: Show this note's history"), QString(),
+        &MainWindow::openNoteHistory);
+#endif
     add(QStringLiteral("workspaces:open-modal"), tr("Workspaces: Manage workspace layouts"), QString(),
         &MainWindow::manageLayouts);
     add(QStringLiteral("workspaces:load"), tr("Workspaces: Load workspace layout"), QString(), [this] {
@@ -1428,6 +1441,7 @@ void MainWindow::applySettings()
     for (const auto &leaf : m_leaves)
         applyEditorSettings(leaf->editor);
     updateSpelling();
+    updateNoteHistory();
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
     for (const auto &leaf : m_leaves) {
@@ -1572,6 +1586,7 @@ void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
         QMessageBox::warning(this, tr("Restore"), tr("Could not write %1:\n%2").arg(notePath, error));
         return;
     }
+    recordHistory(notePath, text);
     if (m_vault.isValid())
         m_indexer->reindex(notePath);
     if (notePath == m_active->notePath) {
@@ -1905,6 +1920,7 @@ void MainWindow::openVault(const QString &path)
     m_settings.noteOpened(m_vault.root(), QString());
     applySettings();
     m_bookmarks->setVaultRoot(m_vault.root());
+    updateNoteHistory();
     restoreLayout(Workspaces::current(m_vault.root()));
 #ifdef NOTEAPPC_HAVE_GRAPH
     if (m_graph)
@@ -2365,6 +2381,98 @@ void MainWindow::manageLayouts()
     dialog.exec();
 }
 
+bool MainWindow::featureOn(const QString &id) const
+{
+    // Ids are Obsidian's core-plugin spelling ("note-history"); settings keys
+    // are camelCase ("plugins.noteHistory"), the only form settings.ini
+    // reads back.
+    QString key = QStringLiteral("plugins.");
+    bool upper = false;
+    for (const QChar c : id) {
+        if (c == u'-') {
+            upper = true;
+            continue;
+        }
+        key += upper ? c.toUpper() : c;
+        upper = false;
+    }
+    return m_settings.boolean(key);
+}
+
+void MainWindow::updateNoteHistory()
+{
+#ifdef NOTEAPPC_HAVE_HISTORY
+    const bool wanted = m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn(QStringLiteral("note-history"));
+    const QString root = wanted ? m_vault.root() : QString();
+    if (root == m_noteHistoryRoot && (m_noteHistory != nullptr) == wanted)
+        return;
+    m_historyPool.waitForDone(); // the old vault's last saves land first
+    m_noteHistory.reset();
+    m_noteHistoryRoot = root;
+    if (!wanted)
+        return;
+    m_noteHistory = std::make_shared<NoteHistory>(root);
+    if (!m_noteHistory->isOpen()) {
+        statusBar()->showMessage(tr("Note history is off: %1").arg(m_noteHistory->error()), 6000);
+        m_noteHistory.reset();
+    }
+#endif
+}
+
+void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
+{
+#ifdef NOTEAPPC_HAVE_HISTORY
+    if (!m_noteHistory || !m_vault.contains(absolutePath))
+        return;
+    const std::shared_ptr<NoteHistory> history = m_noteHistory;
+    const QString relative = m_vault.relative(absolutePath);
+    // Now and then, fold the loose objects into a pack, where git keeps each
+    // version as a delta: never on a save's own path, and only once there
+    // are enough to be worth it.
+    const bool maybePack = ++m_historyRecords % 256 == 0;
+    m_historyPool.start([history, relative, text, maybePack] {
+        history->record(relative, text);
+        if (maybePack && history->looseObjects() > 4000)
+            history->pack();
+    });
+#else
+    Q_UNUSED(absolutePath);
+    Q_UNUSED(text);
+#endif
+}
+
+void MainWindow::openNoteHistory()
+{
+#ifdef NOTEAPPC_HAVE_HISTORY
+    if (!m_noteHistory || m_active->notePath.isEmpty() || m_active->view)
+        return;
+    const std::shared_ptr<NoteHistory> history = m_noteHistory;
+    const QString relative = m_vault.relative(m_active->notePath);
+    // Every queued save lands first, then the history is read here: with
+    // the pool drained nothing else touches the repository, and the dialog
+    // is modal, so nothing can queue behind it. (Not a task on the pool:
+    // QFuture::waitForFinished() may run an unstarted task on the calling
+    // thread, ahead of the saves and beside the pool's own thread.)
+    m_historyPool.waitForDone();
+    QList<NoteHistoryDialog::Version> versions;
+    for (const NoteHistory::Version &version : history->versions(relative))
+        versions.append({version.id, version.time});
+    QThreadPool *pool = &m_historyPool;
+    const auto read = [history, relative, pool](const QString &id) {
+        pool->waitForDone();
+        return history->read(relative, id);
+    };
+    NoteHistoryDialog dialog(QFileInfo(m_active->notePath).completeBaseName(), versions, read,
+                             m_active->editor->noteText(), this);
+    const QString path = m_active->notePath;
+    connect(&dialog, &NoteHistoryDialog::restoreRequested, this, [this, path, &dialog](const QString &text) {
+        dialog.accept();
+        restoreSnapshot(path, text);
+    });
+    dialog.exec();
+#endif
+}
+
 void MainWindow::gotoTab(int index)
 {
     const QList<Leaf *> &leaves = m_active->group->leaves;
@@ -2613,6 +2721,7 @@ bool MainWindow::save()
     if (snapshots)
         Snapshots::record(m_active->notePath, note.text,
                           qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
+    recordHistory(m_active->notePath, note.text);
     m_active->note = note;
     m_active->editor->setModified(false);
     // The same note in another split follows the save, unless it holds edits
@@ -2822,6 +2931,26 @@ void MainWindow::renamePathAt(const QModelIndex &index)
         return;
     }
     const QString newRelative = m_vault.relative(newPath);
+#ifdef NOTEAPPC_HAVE_HISTORY
+    // The history follows the note: every note under a renamed folder too.
+    if (m_noteHistory) {
+        QList<std::pair<QString, QString>> moves;
+        if (isDir) {
+            QDirIterator notes(newPath, {QStringLiteral("*.md")}, QDir::Files, QDirIterator::Subdirectories);
+            while (notes.hasNext()) {
+                const QString now = m_vault.relative(notes.next());
+                moves.append({oldRelative + now.mid(newRelative.size()), now});
+            }
+        } else {
+            moves.append({oldRelative, newRelative});
+        }
+        const std::shared_ptr<NoteHistory> history = m_noteHistory;
+        m_historyPool.start([history, moves] {
+            for (const auto &[from, to] : moves)
+                history->rename(from, to);
+        });
+    }
+#endif
 
     if (m_settings.boolean(QStringLiteral("links.autoUpdate")) && m_index.isOpen()) {
         QString linkError;

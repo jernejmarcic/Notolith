@@ -503,6 +503,11 @@ QWidget *SettingsPage::buildFilesPage()
     connect(view, &QPushButton::clicked, this, &SettingsPage::recoveryRequested);
     addRow(layout, {}, tr("Snapshots"),
            tr("Earlier versions of your notes, kept outside the vault."), view, {});
+#ifdef NOTEAPPC_HAVE_HISTORY
+    addToggleRow(layout, QStringLiteral("plugins.noteHistory"), tr("Note history"),
+                tr("Keep every save of a note as a git commit, outside the vault, to browse and "
+                   "restore with \"Show this note's history\"."));
+#endif
 
     layout->addStretch(1);
     return scrollWrap(page);

@@ -6,6 +6,8 @@ add_library(noteAppC_ui STATIC
     MainWindow.h
     RecoveryDialog.cpp
     RecoveryDialog.h
+    NoteHistoryDialog.cpp
+    NoteHistoryDialog.h
     QuickSwitcher.cpp
     QuickSwitcher.h
     BacklinksPane.cpp
@@ -55,4 +57,9 @@ endif()
 if(TARGET noteAppC_bases)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
+endif()
+
+if(TARGET noteAppC_history)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_history)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_HISTORY)
 endif()

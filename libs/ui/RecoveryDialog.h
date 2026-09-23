@@ -31,6 +31,9 @@ public:
     };
     /// `before` to `after`, line by line.
     static QList<DiffLine> lineDiff(const QStringList &before, const QStringList &after);
+    /// Draws `before` to `after` into `view`: kept lines plain, removed ones
+    /// on red, added ones on green. Shared with the note history dialog.
+    static void showDiff(QPlainTextEdit *view, const QString &before, const QString &after);
 
 signals:
     /// Replace `notePath`'s content with `text`: the window writes it.

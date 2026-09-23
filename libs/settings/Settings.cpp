@@ -40,6 +40,8 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.strictLineBreaks"), false},
         {QStringLiteral("editor.spellcheck"), true},
         {QStringLiteral("pagePreview.enabled"), true},
+        // Optional features, each off costing nothing (MainWindow::featureOn).
+        {QStringLiteral("plugins.noteHistory"), true},
         {QStringLiteral("fileRecovery.interval"), 5}, // minutes, Obsidian's default
         {QStringLiteral("fileRecovery.keepDays"), 7},
         {QStringLiteral("editor.autoPairs"), true},

@@ -1543,6 +1543,77 @@ TEST_F(WindowTest, APagePreviewShowsALinkedImage)
     QTRY_VERIFY_WITH_TIMEOUT(preview->editor()->isVisibleTo(preview), 2000);
 }
 
+#ifdef NOTEAPPC_HAVE_HISTORY
+TEST_F(WindowTest, EverySaveIsInTheNotesHistoryAndOneCanBePutBack)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        QTest::keyClicks(editor, QStringLiteral("one"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        QTest::keyClicks(editor, QStringLiteral(" two"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+
+        QTimer::singleShot(0, [] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog) {
+                ADD_FAILURE() << "no history dialog";
+                return;
+            }
+            auto *versions = dialog->findChild<QListWidget *>(QStringLiteral("noteHistoryVersions"));
+            EXPECT_EQ(versions->count(), 2);
+            if (versions->count() != 2) {
+                dialog->reject(); // never leave a modal dialog open: the test would hang
+                return;
+            }
+            versions->setCurrentRow(1); // the first save
+            auto *preview = dialog->findChild<QPlainTextEdit *>(QStringLiteral("noteHistoryPreview"));
+            EXPECT_EQ(preview->toPlainText(), QStringLiteral("# Welcome\n\nBody.\none"));
+            QTimer::singleShot(0, [] {
+                if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                    box->button(QMessageBox::Yes)->click();
+            });
+            dialog->findChild<QPushButton *>(QStringLiteral("noteHistoryRestore"))->click();
+        });
+        window.findChild<QAction *>(QStringLiteral("note-history:open"))->trigger();
+        EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\none"));
+        EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\none"));
+    }
+    // The history lives in the data home, and the vault gained nothing.
+    EXPECT_TRUE(QDir(data.path() + QStringLiteral("/noteAppC/history")).exists());
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".git"))));
+    qputenv("XDG_DATA_HOME", previous);
+}
+
+TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.noteHistory"), false);
+    ASSERT_TRUE(off.save());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    }
+    EXPECT_FALSE(QDir(data.path() + QStringLiteral("/noteAppC/history")).exists());
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.noteHistory"), true);
+    ASSERT_TRUE(on.save());
+    qputenv("XDG_DATA_HOME", previous);
+}
+#endif
+
 TEST_F(WindowTest, SavingKeepsSnapshotsAndOneCanBePutBack)
 {
     QTemporaryDir data;

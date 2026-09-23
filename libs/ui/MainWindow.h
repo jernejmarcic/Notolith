@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QMainWindow>
+#include <QThreadPool>
 #include <QTimer>
 
 #include <functional>
@@ -32,6 +33,7 @@ class QTreeView;
 namespace noteAppC {
 
 class SpellChecker;
+class NoteHistory;
 
 class BacklinksPane;
 class MarkdownEditor;
@@ -205,6 +207,18 @@ private:
     /// "Manage workspace layouts": save, load and delete named ones.
     void manageLayouts();
     void gotoTab(int index);
+
+    // --- optional features ---------------------------------------------------
+    /// Whether an optional feature is on: noteAppC's own switch. A feature
+    /// that is off is not built, connected or refreshed - it costs nothing.
+    bool featureOn(const QString &id) const;
+    /// Git history of every save (the history module): opened for the vault
+    /// when the feature is on, closed when it is not.
+    void updateNoteHistory();
+    /// Queues `text` as a new version of `absolutePath`, off the UI thread.
+    void recordHistory(const QString &absolutePath, const QString &text);
+    /// "Note history: Show this note's history".
+    void openNoteHistory();
     /// Obsidian's close-tab: offers to save, then drops the tab and, with its
     /// last tab, the split. The window's last tab is emptied instead.
     void closeLeaf(Leaf *leaf);
@@ -362,6 +376,12 @@ private:
     QList<QAction *> m_commands;
 
     std::shared_ptr<SpellChecker> m_spell;
+    /// Every history call runs on this one thread, in order: libgit2's
+    /// repository is not to be shared between threads.
+    QThreadPool m_historyPool;
+    std::shared_ptr<NoteHistory> m_noteHistory;
+    QString m_noteHistoryRoot;
+    int m_historyRecords = 0;
     bool m_spellLoading = false;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
