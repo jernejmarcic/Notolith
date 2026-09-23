@@ -10,6 +10,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QSignalBlocker>
 #include <QLabel>
 #include <QPixmap>
 #include <QRegularExpression>
@@ -17,6 +18,7 @@
 #include <QStackedWidget>
 #include <QTableView>
 #include <QVBoxLayout>
+#include <QtConcurrent>
 
 #include <algorithm>
 
@@ -40,7 +42,17 @@ BaseView::BaseView(QWidget *parent) : QWidget(parent)
     layout->addWidget(m_stack, 1);
 
     m_table = new QTableView(this);
-    m_table->setSortingEnabled(true);
+    // Sorted by a header click, and the indicator set from the view's own
+    // `sort:` without sorting again. With Qt's sorting switched on, the
+    // header showed its default - the first column, descending - over rows
+    // in no such order.
+    m_table->horizontalHeader()->setSectionsClickable(true);
+    m_table->horizontalHeader()->setSortIndicatorShown(true);
+    connect(m_table->horizontalHeader(), &QHeaderView::sortIndicatorChanged, this,
+            [this](int column, Qt::SortOrder order) {
+                if (m_tableModel)
+                    m_tableModel->sort(column, order);
+            });
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->horizontalHeader()->setSectionsMovable(false);
     m_table->verticalHeader()->setVisible(false);
@@ -57,9 +69,16 @@ BaseView::BaseView(QWidget *parent) : QWidget(parent)
     m_cardsLayout = new QGridLayout(m_cardsContent);
     m_cardsArea->setWidget(m_cardsContent);
     m_stack->addWidget(m_cardsArea);
+
+    connect(&m_opening, &QFutureWatcher<Opened>::finished, this, &BaseView::showOpenedView);
 }
 
-BaseView::~BaseView() = default;
+BaseView::~BaseView()
+{
+    // Children are destroyed after members, and a shown table asks its model
+    // for columns while it hides: the model reads the query, gone by then.
+    m_table->setModel(nullptr);
+}
 
 void BaseView::setIndex(Index *index) { m_index = index; }
 void BaseView::setVault(const Vault *vault) { m_vault = vault; }
@@ -67,10 +86,11 @@ void BaseView::setVault(const Vault *vault) { m_vault = vault; }
 void BaseView::clear()
 {
     m_file.reset();
-    m_query.reset();
+    m_query = nullptr;
     m_table->setModel(nullptr);
     delete m_tableModel;
     m_tableModel = nullptr;
+    m_shown = Opened{};
     rebuildCards();
     m_viewSwitcher->blockSignals(true);
     m_viewSwitcher->clear();
@@ -89,7 +109,7 @@ bool BaseView::open(const QString &absolutePath, const QString &yamlText)
         m_lastError = error;
         return false;
     }
-    m_file = std::move(parsed);
+    m_file = std::make_shared<const BaseFile>(std::move(*parsed));
     m_currentView = 0;
     rebuildViewSwitcher();
     openCurrentView();
@@ -103,8 +123,8 @@ void BaseView::rebuildViewSwitcher()
     if (m_file) {
         int i = 0;
         for (const ViewConfig &v : m_file->views()) {
-            m_viewSwitcher->addItem(v.name.isEmpty() ? tr("View %1").arg(++i) : v.name);
             ++i;
+            m_viewSwitcher->addItem(v.name.isEmpty() ? tr("View %1").arg(i) : v.name);
         }
     }
     m_viewSwitcher->setCurrentIndex(m_currentView);
@@ -126,22 +146,55 @@ void BaseView::openCurrentView()
         return;
     }
 
-    QList<Row> rows;
-    for (const Index::BaseNote &note : m_index->allNotesForBases())
-        rows << rowFromNote(note);
+    // allNotesForBases() opens its own connection, so it is worker-safe; a
+    // newer request replaces this one, and the watcher drops its result.
+    // ~MainWindow waits for the pool, so a task never outlives the index.
+    m_status->setText(tr("Loading..."));
+    m_opening.setFuture(QtConcurrent::run(
+        [index = m_index, file = m_file, view = m_currentView,
+         vault = std::make_shared<const Vault>(m_vault ? *m_vault : Vault())] {
+            QList<Row> rows;
+            for (const Index::BaseNote &note : index->allNotesForBases())
+                rows << rowFromNote(note);
+            Opened opened;
+            opened.file = file;
+            opened.vault = vault;
+            opened.query = std::make_shared<BaseQuery>(*file, std::move(rows), vault.get());
+            if (!opened.query->openView(view, &opened.error))
+                opened.query.reset();
+            return opened;
+        }));
+}
 
-    m_query = std::make_unique<BaseQuery>(*m_file, std::move(rows), m_vault);
-    QString error;
-    if (!m_query->openView(m_currentView, &error)) {
-        m_status->setText(error);
-        m_query.reset();
+void BaseView::showOpenedView()
+{
+    const Opened opened = m_opening.result();
+    if (!opened.query) {
+        m_status->setText(opened.error);
+        emit viewOpened();
         return;
     }
-
+    // The model goes before the query it points into.
+    m_table->setModel(nullptr);
     delete m_tableModel;
-    m_tableModel = new BaseTableModel(m_query.get(), m_index, m_vault, this);
+    m_tableModel = nullptr;
+    m_shown = opened;
+    m_query = m_shown.query.get();
+
+    m_tableModel = new BaseTableModel(m_query, m_index, m_vault, this);
     connect(m_tableModel, &BaseTableModel::noteEdited, this, &BaseView::onCellEdited);
     m_table->setModel(m_tableModel);
+    {
+        // The indicator shows the view's own first sort key, and setting it
+        // must not sort again.
+        const QSignalBlocker blocker(m_table->horizontalHeader());
+        const ViewConfig *shown = view();
+        const bool sorted = shown && !shown->sort.isEmpty();
+        m_table->horizontalHeader()->setSortIndicator(
+            sorted ? m_tableModel->columnOf(shown->sort.constFirst().property) : -1,
+            sorted && shown->sort.constFirst().direction == SortDirection::Descending ? Qt::DescendingOrder
+                                                                                      : Qt::AscendingOrder);
+    }
 
     const bool cards = view() && view()->type.compare(QLatin1String("cards"), Qt::CaseInsensitive) == 0;
     m_stack->setCurrentWidget(cards ? static_cast<QWidget *>(m_cardsArea) : m_table);
@@ -152,6 +205,7 @@ void BaseView::openCurrentView()
     m_status->setText(warn.isEmpty()
         ? tr("%1 notes").arg(m_query->resultRows().size())
         : tr("%1 notes - %2 warning(s)").arg(m_query->resultRows().size()).arg(warn.size()));
+    emit viewOpened();
 }
 
 const ViewConfig *BaseView::view() const

@@ -53,6 +53,8 @@ public:
     /// True when `column`'s property reference is the note's own name
     /// (`file.name`) - BaseView makes that specific cell open the note.
     bool isNameColumn(int column) const;
+    /// The column showing `propertyReference`, or -1.
+    int columnOf(const QString &propertyReference) const;
 
 signals:
     /// A cell edit wrote to a note's frontmatter and the index was

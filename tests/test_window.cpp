@@ -637,7 +637,8 @@ TEST_F(WindowTest, ABaseOpensInATabAndItsRowsOpenNotes)
     ASSERT_NE(base, nullptr);
     auto *table = base->findChild<QTableView *>();
     ASSERT_NE(table, nullptr);
-    ASSERT_EQ(table->model()->rowCount(), 1);
+    // Evaluated on the pool: the rows come a moment after the tab.
+    QTRY_VERIFY_WITH_TIMEOUT(table->model() && table->model()->rowCount() == 1, 5000);
 
     emit base->noteActivated(QStringLiteral("Task.md"));
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("---\nstatus: open\n---\nDo it.\n"));

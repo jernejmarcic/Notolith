@@ -2,6 +2,7 @@
 
 #include "BaseFile.h"
 
+#include <QFutureWatcher>
 #include <QWidget>
 
 #include <memory>
@@ -46,8 +47,8 @@ public:
 
     /// Parses `yamlText` (already read from `absolutePath` - this module
     /// does no file I/O of its own beyond a cell edit's own note, see
-    /// BaseTableModel) and opens its first view. False with lastError() set
-    /// on a YAML or schema error.
+    /// BaseTableModel) and opens its first view, whose rows arrive with
+    /// viewOpened(). False with lastError() set on a YAML or schema error.
     bool open(const QString &absolutePath, const QString &yamlText);
     void clear();
     QString lastError() const { return m_lastError; }
@@ -59,6 +60,8 @@ signals:
     /// The note at `relativePath` should be opened in the editor - a
     /// double-clicked row, or the `file.name` cell.
     void noteActivated(const QString &relativePath);
+    /// The current view's rows are showing (or its error is).
+    void viewOpened();
 
 private slots:
     void onViewSwitched(int index);
@@ -72,11 +75,24 @@ private:
     QWidget *makeCard(qsizetype rowIndex);
     /// The currently selected view's config, null before anything is open.
     const ViewConfig *view() const;
+    void showOpenedView();
+
+    /// A view evaluated on the pool: the notes and the evaluation were 54
+    /// and 71 ms on 20 000 notes, paid on every open, switch and cell edit.
+    struct Opened {
+        std::shared_ptr<const BaseFile> file; ///< what the query points into
+        std::shared_ptr<const Vault> vault;   ///< the query's, for file.ctime
+        std::shared_ptr<BaseQuery> query;     ///< null on error
+        QString error;
+    };
+    QFutureWatcher<Opened> m_opening;
 
     Index *m_index = nullptr;
     const Vault *m_vault = nullptr;
-    std::optional<BaseFile> m_file;
-    std::unique_ptr<BaseQuery> m_query;
+    /// Shared with a view evaluating on the pool, whose query points into it.
+    std::shared_ptr<const BaseFile> m_file;
+    Opened m_shown; ///< keeps the query shown, and what it points into, alive
+    BaseQuery *m_query = nullptr;
     QString m_lastError;
     int m_currentView = 0;
 

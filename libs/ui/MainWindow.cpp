@@ -2956,7 +2956,8 @@ void MainWindow::updateTitle()
 
 void MainWindow::updateWordCount()
 {
-    if (m_active->notePath.isEmpty() || !featureOn("word-count")) {
+    // A canvas or a base has no words of its own to count.
+    if (m_active->notePath.isEmpty() || m_active->view || !featureOn("word-count")) {
         m_wordCount->clear();
         return;
     }

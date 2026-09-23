@@ -1,5 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <QTableView>
+#include <QHeaderView>
+
+#include <QComboBox>
+
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
@@ -697,8 +702,88 @@ TEST_F(BasesIndexTest, BaseViewOpensAndSwitchesViews)
         "views:\n"
         "  - type: table\n    name: Table\n    order: [file.name]\n"
         "  - type: cards\n    name: Cards\n    order: [file.name]\n");
+    QSignalSpy opened(&view, &BaseView::viewOpened);
     ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")), yaml)) << view.lastError().toStdString();
+    ASSERT_TRUE(opened.wait(5000));
     EXPECT_TRUE(view.warnings().isEmpty());
+    auto *table = view.findChild<QTableView *>();
+    ASSERT_NE(table, nullptr);
+    EXPECT_GT(table->model()->rowCount(), 0);
+
+    // The second view, and its name as the switcher shows it.
+    auto *switcher = view.findChild<QComboBox *>();
+    ASSERT_EQ(switcher->count(), 2);
+    EXPECT_EQ(switcher->itemText(1), QStringLiteral("Cards"));
+    switcher->setCurrentIndex(1);
+    ASSERT_TRUE(opened.wait(5000));
+}
+
+TEST_F(BasesIndexTest, TheTableKeepsTheBasesOwnSortOrder)
+{
+    write(QStringLiteral("Task1.md"), "---\npriority: 2\n---\n");
+    write(QStringLiteral("Task2.md"), "---\npriority: 3\n---\n");
+    write(QStringLiteral("Task3.md"), "---\npriority: 1\n---\n");
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+    BaseView view;
+    view.setIndex(&index);
+    view.setVault(&vault);
+    view.show(); // the header sorts only a shown table
+    QSignalSpy opened(&view, &BaseView::viewOpened);
+    ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")),
+                          QStringLiteral("filters:\n  and:\n    - priority > 0\nviews:\n  - type: table\n"
+                                         "    order: [file.name, priority]\n"
+                                         "    sort:\n      - property: priority\n        direction: ASC\n")));
+    ASSERT_TRUE(opened.wait(5000));
+    auto *table = view.findChild<QTableView *>();
+    ASSERT_EQ(table->model()->rowCount(), 3);
+    // Not re-sorted by the header's default (the name, descending).
+    EXPECT_EQ(table->model()->index(0, 0).data().toString(), QStringLiteral("Task3"));
+    EXPECT_EQ(table->model()->index(1, 0).data().toString(), QStringLiteral("Task1"));
+    EXPECT_EQ(table->model()->index(2, 0).data().toString(), QStringLiteral("Task2"));
+}
+
+TEST_F(BasesIndexTest, AViewWithoutASortKeepsTheNotesOwnOrder)
+{
+    write(QStringLiteral("Task1.md"), "---\npriority: 2\n---\n");
+    write(QStringLiteral("Task2.md"), "---\npriority: 3\n---\n");
+    write(QStringLiteral("Task3.md"), "---\npriority: 1\n---\n");
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+    BaseView view;
+    view.setIndex(&index);
+    view.setVault(&vault);
+    view.show();
+    QSignalSpy opened(&view, &BaseView::viewOpened);
+    ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")),
+                          QStringLiteral("filters:\n  and:\n    - priority > 0\nviews:\n  - type: table\n"
+                                         "    order: [file.name, priority]\n")));
+    ASSERT_TRUE(opened.wait(5000));
+    auto *table = view.findChild<QTableView *>();
+    ASSERT_EQ(table->model()->rowCount(), 3);
+    EXPECT_EQ(table->model()->index(0, 0).data().toString(), QStringLiteral("Task1")); // was Task3
+    EXPECT_EQ(table->horizontalHeader()->sortIndicatorSection(), -1);
+
+    // A header click still sorts.
+    table->horizontalHeader()->setSortIndicator(1, Qt::AscendingOrder);
+    EXPECT_EQ(table->model()->index(0, 0).data().toString(), QStringLiteral("Task3"));
+}
+
+TEST_F(BasesIndexTest, AnUnnamedViewIsNumberedByItsPlace)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+    BaseView view;
+    view.setIndex(&index);
+    view.setVault(&vault);
+    ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")),
+                          QStringLiteral("views:\n  - type: table\n  - type: table\n")));
+    auto *switcher = view.findChild<QComboBox *>();
+    ASSERT_EQ(switcher->count(), 2);
+    EXPECT_EQ(switcher->itemText(1), QStringLiteral("View 2")); // was "View 3"
 }
 
 // =========================================================================

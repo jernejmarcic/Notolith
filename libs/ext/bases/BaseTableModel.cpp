@@ -131,9 +131,18 @@ QVariant BaseTableModel::headerData(int section, Qt::Orientation orientation, in
     return m_query->file().displayNameFor(ref);
 }
 
+int BaseTableModel::columnOf(const QString &propertyReference) const
+{
+    for (int column = 0; column < columnCount(); ++column) {
+        if (propertyReferenceAt(column) == propertyReference)
+            return column;
+    }
+    return -1;
+}
+
 void BaseTableModel::sort(int column, Qt::SortOrder order)
 {
-    if (!m_query)
+    if (!m_query || column < 0)
         return;
     beginResetModel();
     m_query->sortBy(propertyReferenceAt(column),

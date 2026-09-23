@@ -1227,8 +1227,10 @@ QList<Index::BaseNote> Index::readBaseNotes(const QSqlDatabase &db)
 
     QHash<qint64, qsizetype> rowOf; // file id -> index into notes
     QSqlQuery files(db);
-    // Attachments carry no properties and are not what a base lists.
-    files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0"));
+    // Attachments carry no properties and are not what a base lists. In path
+    // order, what a view with no `sort:` shows: the rowid order was the
+    // order the indexer happened to walk the disk in.
+    files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0 ORDER BY path"));
     while (files.next()) {
         BaseNote note;
         const qint64 id = files.value(0).toLongLong();
