@@ -108,10 +108,11 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
         place to click for the missing ones.
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
-- [ ] Lockbox approval (a second device enrolled without the password) has
-      no UI yet; the engine supports it.
-- [ ] Publish from the window writes the whole vault only when asked;
-      the site's name and home note are not asked for (the CLI takes both).
+- [x] Lockbox approval: a person approves a device enrolling by lockbox,
+      comparing a fingerprint shown on both; before, every device the server
+      listed was sealed the keys (a server could list its own). 9647a92.
+- [x] Publish from the window: one dialog for folder, site name, home
+      note, which notes and theme, remembered per vault (d397dc3).
 
 ## Callouts, requested by Jernej 2026-09-22
 
