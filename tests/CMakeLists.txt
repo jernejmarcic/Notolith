@@ -133,6 +133,21 @@ if(TARGET noteAppC_pdfview)
     set_tests_properties(pdfview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# The runtime plugin host (docs/PLUGINS.md, Tier 2) - libs/ext/plugins plus a
+# real noteAppC-plugin-host process and the word-stats example/fixture
+# plugin, built by the tree only when NOTEAPPC_WITH_PLUGINS is on.
+if(TARGET noteAppC_plugins)
+    add_executable(test_plugins_host test_plugins_host.cpp)
+    target_link_libraries(test_plugins_host PRIVATE noteAppC_plugins noteAppC_plugin_protocol Qt6::Test GTest::gtest)
+    target_compile_definitions(test_plugins_host PRIVATE
+        NOTEAPPC_WORD_STATS_PLUGIN_DIR="${CMAKE_BINARY_DIR}/examples/plugins/word-stats")
+    add_dependencies(test_plugins_host noteAppC-plugin-host word-stats)
+    add_test(NAME plugins_host COMMAND test_plugins_host)
+    set_tests_properties(plugins_host PROPERTIES
+        ENVIRONMENT "NOTEAPPC_PLUGIN_HOST=$<TARGET_FILE:noteAppC-plugin-host>"
+        TIMEOUT 60)
+endif()
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person

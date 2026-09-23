@@ -87,6 +87,14 @@ option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publi
 # PkgConfig::POPPLER_QT6 target - this option on top lets it be switched off
 # on its own even when embeds stay on.
 option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
+# Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
+# `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
+# external dependency at this level - only Qt, libdl and bubblewrap when
+# present; NOTEAPPC_WITH_QUICKJS (tools/plugin_host/CMakeLists.txt) is the
+# separate, still-off option for a second, scripted engine. Desktop only,
+# by nature (docs/PLUGINS.md): off on Android regardless of this option,
+# the same as the tools directory it lives under.
+option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-side glue" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -195,13 +203,21 @@ get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
 if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
     add_subdirectory(libs/ext/pdfview)
 endif()
+if(NOTEAPPC_WITH_PLUGINS)
+    add_subdirectory(libs/ext/plugins)
+endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
-# The screenshot tool, the index CLI and the bench harness are desktop
-# developer tools, not part of the app; on Android they would need their own
-# packaging for no benefit, so they simply do not build there.
+# The screenshot tool, the index CLI, the bench harness and the plugin host
+# (tools/plugin_host) are desktop developer/runtime tools, not part of the
+# app bundle itself; on Android they would need their own packaging for no
+# benefit - and Tier 2 plugins are desktop-only by nature besides - so they
+# simply do not build there.
 if(NOT ANDROID)
     add_subdirectory(tools)
+    if(NOTEAPPC_WITH_PLUGINS)
+        add_subdirectory(examples/plugins)
+    endif()
 endif()
 
 include(CTest)

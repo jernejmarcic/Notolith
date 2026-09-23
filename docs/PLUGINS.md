@@ -1,7 +1,11 @@
 # Extending noteAppC
 
-**Status: proposal.** Nothing here is built. It exists so that when the first
-extra is added, it goes in a way that keeps the core small and fast.
+**Status: Tier 0 and Tier 1 are proposal only (nothing to build - Tier 1 is
+already how `libs/ext/` works, see HANDOFF.md); Tier 2 is built, 2026-09-23**
+(`libs/ext/plugins/`, `tools/plugin_host/`, `include/noteappc/`, its own
+section below). Tier 3 remains a proposal. This file exists so that each
+extra goes in at the lowest tier that can do the job, keeping the core small
+and fast.
 
 ## What it has to satisfy
 
@@ -54,101 +58,150 @@ A module's settings rows appear only when it is compiled in. Today the page
 shows a Spellcheck toggle with nothing behind it; under this scheme it would
 not exist until the module did.
 
-### Tier 2: runtime plugins - shared libraries with a C ABI
+### Tier 2: runtime plugins - out-of-process, over a C ABI
 
-For third-party extras, and for first-party ones a distribution might ship
-separately. A plugin is a directory:
+**Status: built, 2026-09-23.** For third-party extras, and for first-party
+ones a distribution might ship separately. What follows describes what is
+actually in the tree (`libs/ext/plugins/`, `tools/plugin_host/`,
+`include/noteappc/`), not a proposal - the one change from the shape sketched
+above is that the C ABI now loads inside a *separate host process*, never
+inside the app, because "a plugin that crashes takes the app with it" turned
+out not to be a cost worth paying once it was time to actually build this.
+
+A plugin is still a directory, unchanged from the proposal:
 
 ```
-~/.local/share/noteAppC/plugins/mermaid/
-  plugin.ini            what it is and what it provides
-  libmermaid.so         loaded only when needed
+~/.local/share/noteAppC/plugins/word-stats/
+  plugin.ini            what it is, what it provides, what it asks for
+  libword-stats.so       loaded only when needed, in its own process
 ```
 
-`plugin.ini` is INI for the same reason `settings.ini` is: a person can read and
-edit it.
+`plugin.ini` is INI for the same reason `settings.ini` is: a person can read
+and edit it. The real shape, from `examples/plugins/word-stats/plugin.ini`:
 
 ```ini
 [plugin]
-id = mermaid
-name = Mermaid diagrams
-version = 1.0.0
+id = word-stats
+name = Word stats
+version = 0.1.0
 api = 1
-library = libmermaid.so
+engine = native      ; native | quickjs (quickjs is a seam, not built - below)
+library = libword-stats.so
 
 [provides]
-code-blocks = mermaid
-commands = mermaid.copy-svg
+commands = count-words
+code-blocks = calc
+events =              ; note-opened, note-saved, note-renamed - empty means none
+
+[permissions]
+read-notes = true
+write-notes = false
+network = false
+clipboard = false
 ```
 
-**How it stays free until used.** After the first paint, the app reads each
-`plugin.ini` - a few small files - and records what the plugins declare. It
-does not load a single library. A `.so` is `dlopen`ed the first time something
-it declared is actually needed: a `mermaid` code block scrolls into view, or its
-command is invoked. A plugin nobody uses in a session is never loaded in it.
+**Process model.** One `noteAppC-plugin-host --plugin <dir>` process per
+*enabled* plugin, not per installed one. The app starts it lazily - after the
+first paint, and only the first time something the plugin declared is
+actually needed: its command run from the palette, its code-block language
+scrolling into view, or an event it subscribed to firing. A plugin nobody
+uses in a session never has a process at all. A crash or a hang is contained
+to that one process (`libs/ext/plugins/PluginHost.cpp` restarts it, with
+backoff, the next time it is needed) and never reaches the app.
 
-**Why a C ABI.** A C++ interface breaks whenever the compiler, the standard
-library or the Qt version differs between the app and the plugin, and it breaks
-silently, as a crash. A table of C function pointers does not. Authors still
-write C++; a header-only wrapper hides the C.
+**Protocol.** Length-prefixed JSON over the host's stdin/stdout -
+`libs/ext/plugins/PluginProtocol.h`, a 4-byte big-endian length prefix
+followed by that many bytes of compact JSON, request/response pairs matched
+by id in both directions plus one-way notifications. Either side can be the
+requester: the app asks the host to run a command or render a block; the host
+asks the app to read/write a note, use the clipboard, or show a notice -
+which is how `noteappc_host`'s synchronous C calls turn into a network-style
+round trip without either process needing a thread. An image in a
+`codeBlock.render` response travels as base64 inside the JSON; the framing
+itself is documented and unit-tested for partial reads, an oversized frame,
+and malformed JSON (`tests/test_plugins_host.cpp`).
 
-```c
-#define NOTEAPPC_PLUGIN_API 1
+**The C ABI - unchanged from the proposal above**, still `NOTEAPPC_PLUGIN_API
+1`, still a `noteappc_host`/`noteappc_plugin` function-table pair, still
+`noteappc_plugin_entry()` as the one dlsym'd symbol. The real header is
+`include/noteappc/plugin.h`, with four more host functions than the sketch
+had (`list_notes`, `write_note`, `clipboard_read`, `clipboard_write`) and a
+`render_code_block` that can return either an image or plain text, so a
+plugin without an image encoder can still answer a code block. A header-only
+C++ convenience wrapper is `include/noteappc/plugin.hpp` (`noteAppC::Plugin`,
+`NOTEAPPC_PLUGIN_ENTRY`) for a future plugin that wants `std::function`
+instead of raw function pointers - `examples/plugins/word-stats` is plain C
+against the bare header, on purpose, as the shortest proof the ABI itself
+works.
 
-typedef struct noteappc_host {      /* what the app offers a plugin */
-    uint32_t api;
-    const char *(*note_text)(void);
-    void (*replace_range)(int64_t start, int64_t end, const char *utf8);
-    void (*open_note)(const char *path);
-    void (*log)(const char *utf8);
-} noteappc_host;
+**Engine abstraction, inside the host.** `tools/plugin_host/Engine.h` is an
+interface with one method per plugin hook; `NativeEngine` (`dlopen`, the C
+ABI above) is the only one built. `QuickJSEngine.h` documents the seam a
+scripted engine would fill - quickjs-ng is not installed anywhere this
+project builds, and this codebase does not fetch a dependency on its own
+initiative, so it is not built. `plugin.ini`'s `engine` key already
+distinguishes `native` from `quickjs`, and the CMake option
+`NOTEAPPC_WITH_QUICKJS` (default `OFF`) fails the configure step with a clear
+message either way it could go wrong - the library missing, or (today,
+always) the engine simply not written yet.
 
-typedef struct noteappc_plugin {    /* what a plugin offers the app */
-    uint32_t api;
-    int  (*init)(const noteappc_host *host);
-    void (*shutdown)(void);
-    int  (*run_command)(const char *command_id);
-    /* Draw a fenced block of a language this plugin declared, into RGBA. */
-    int  (*render_block)(const char *language, const char *source,
-                         int width_px, float device_pixel_ratio,
-                         noteappc_image *out);
-} noteappc_plugin;
+**Capability allowlist, enforced on every request.** `plugin.ini`'s
+`[permissions]` declares what a plugin *wants*: `read-notes`, `write-notes`,
+`network`, `clipboard`. What it actually gets is a separate, user-controlled
+*granted* set (`~/.config/noteAppC/plugins.ini`, never the vault), set when
+the user enables the plugin on the Community plugins settings page. Every
+host request that needs a capability is checked against the granted set
+before the corresponding app callback ever runs
+(`PluginHost::handleHostRequest`); a refusal is an ordinary error response
+(the plugin gets `NULL`/empty back, the same as "not found" - it cannot tell
+the difference, which is the point) and is logged and emitted as a signal for
+the settings page.
 
-NOTEAPPC_EXPORT const noteappc_plugin *noteappc_plugin_entry(void);
-```
+**Sandbox and limits.** The host runs under bubblewrap when `bwrap` exists -
+the same allowlist pattern as `libs/render/TexCompiler.cpp`: only `/usr`,
+`/etc`, the plugin's own directory and the host binary's own directory
+(read-only), a private `/tmp`, no home, every namespace unshared except
+network, which is shared only when the plugin's `network` permission was
+granted. `QProcess::setChildProcessModifier` sets `RLIMIT_AS` (256 MiB) and
+`RLIMIT_NOFILE` (64) between fork and exec, so the limit holds whether or not
+bwrap is present. A per-request timeout in the app kills a host that does not
+answer; the next command or render on that plugin restarts it, after a
+backoff that grows with repeated failures. The host never sees a byte of the
+vault except what the protocol hands it - no file access, no path to the
+vault root.
 
-**Few extension points, each typed.** The whole list, to start:
+**Few extension points, each typed** - v1 has three:
 
 | point | what a plugin gets | runs |
 |---|---|---|
-| command | a named action for the palette and hotkeys, with the host table above | UI thread, user-initiated |
-| code block | render ```` ```lang ```` blocks it declared to an image | thread pool, cached |
-| file type | open an extension it declared, e.g. `.canvas` | on demand |
-| vault event | note opened, saved, renamed | thread pool, never blocking |
+| command | its bare id, run through `run_command`; the palette names it `pluginID:commandID` | the host process, on demand |
+| code block | a declared ```` ```lang ```` block's source, rendered to text or an RGBA image, cached by (language, source, width, theme) | off the UI thread, with a placeholder shown until it lands |
+| vault event | note opened, saved, renamed - fire-and-forget | the host process, only if the plugin declared `[provides] events` |
 
 A plugin never gets the widget tree, the raw parser, or a hook inside a
-keystroke. Code blocks go through exactly the machinery maths already uses:
-rendered off the UI thread, cached by source and size, and a placeholder shown
-until the image arrives, the way a remote callout icon is. The editor never
-waits for a plugin.
+keystroke - the code-block path is exactly the machinery maths and file
+embeds already use (`MarkdownEditor::setFileEmbedRenderer`'s shape), which is
+also why the editor-side hook this lane could not build itself
+(`setCodeBlockRenderer`) is designed to slot in next to it rather than beside
+it. See "For the lead" in this section's companion report for the exact
+snippet.
 
-**Budgets that are enforced, not hoped for.** Every load and every hook call is
-timed. A plugin whose command takes over 100 ms, or whose render takes over a
-second, is named in the settings page with its numbers. Obsidian shows startup
-time per plugin; noteAppC shows every hook, and none of them are on startup at
-all.
+**Budgets that are enforced, not hoped for.** Every command and every render
+is timed; a command over 100 ms or a render over 1000 ms flags the plugin
+"slow" on the settings page with its actual numbers, and host start time is
+recorded too. None of it runs at startup - the first process for any plugin
+only exists once something it declared is used.
 
 **Desktop only, by nature.** iOS does not let an app load code it did not
 ship with, and Android only loads native libraries packaged inside the app. A
 mobile noteAppC gets Tier 1 modules and nothing from this tier - see
-[PLATFORMS.md](PLATFORMS.md).
+[PLATFORMS.md](PLATFORMS.md). Tier 2 does not build on Android
+(`NOTEAPPC_WITH_PLUGINS`, like the rest of `tools/`, is skipped there).
 
-**What it does not do.** A plugin is native code running in the app's process
-with the user's rights, like any program the user installs. There is no
-sandbox, and a plugin that crashes takes the app with it. Out-of-process
-plugins over a pipe, the way language servers work, would fix both, at the cost
-of latency that rules them out for rendering. That is a later option for heavy,
-untrusted extras, not the default.
+**Nothing costs anything when off.** `community-plugins` is a feature switch
+like any other (`Settings::features()`), default off - Obsidian starts in
+restricted mode too. Off means `PluginRegistry::scan()` does not read a
+single `plugin.ini`, not just that nothing is enabled.
 
 ### Tier 3: scripts - only if wanted
 
@@ -180,17 +233,21 @@ Everything a note-taking app is for, and nothing it is not:
    without the module. The dictionaries load on the thread pool after the
    first paint, and the settings row exists only in a build that has the
    module. It is the pattern the next module copies.
-2. Tier 2 only when there is a first real plugin to build against. An API
-   designed with no client is an API designed wrong. With a mobile app
-   planned, Tier 1 is also the only tier that reaches every platform, which
-   is a second reason to build it first.
+2. **Done 2026-09-23.** Tier 2, built against a first real plugin
+   (`examples/plugins/word-stats`) rather than designed with no client - see
+   above. Built out-of-process from the start rather than the in-process
+   `dlopen` this section originally sketched, once "a plugin that crashes
+   takes the app with it" was weighed against the cost of a pipe: noteAppC's
+   own speed budget (docs/PERFORMANCE.md) is about the keystroke and paint
+   path, which a plugin's process never sits on, so the latency Tier 2's
+   first draft ruled out for rendering was not actually the cost it looked
+   like once code blocks already went through a cache and a placeholder
+   either way.
 
 ## Decisions that are Jernej's
 
-1. Are third-party runtime plugins (Tier 2) wanted at all, or only first-party
-   modules compiled in (Tier 1)?
-2. Scripts (Tier 3): yes with Lua, or never?
-3. May a plugin add a pane to the sidebar? Doing that through a C ABI means the
+1. Scripts (Tier 3): yes with Lua, or never?
+2. May a plugin add a pane to the sidebar? Doing that through a C ABI means the
    plugin hands over data - a tree of items - and the app draws it, so every
    pane looks like noteAppC. Handing over a raw `QWidget` would allow anything,
    but ties every plugin to the exact Qt build the app was compiled against.
