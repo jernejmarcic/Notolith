@@ -308,6 +308,8 @@ void MarkdownEditor::setNoteText(const QString &text)
     ++m_textVersion;
     m_cursor = m_anchor = 0;
     m_activeBlock = -1;
+    m_tableEdited = false;
+    m_caretCell = {-1, -1};
     m_undo.clear();
     m_redo.clear();
     m_interacted = false;
@@ -2269,15 +2271,22 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             cell.column = c;
             cell.alignment = table->alignment.value(c, Qt::AlignLeft);
 
+            // The cell the caret is in shows its source, as any element
+            // under the caret does.
+            const bool editing = view.active && m_anchor == m_cursor && cell.source.start <= m_cursor
+                                 && m_cursor <= cell.source.end;
             QList<Range> hidden;
-            for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+            for (int i = view.firstSyntax; i < view.lastSyntax && !editing; ++i) {
                 const Range &marker = m_decorations.syntax.at(i);
                 if (marker.overlaps(cell.source))
                     hidden.append(marker);
             }
             cell.map = DisplayMap::build(m_text, cell.source, hidden);
 
-            QString shown = cell.map.text().trimmed();
+            const QString full = cell.map.text();
+            while (cell.lead < full.size() && full.at(cell.lead).isSpace())
+                ++cell.lead;
+            QString shown = full.trimmed();
             cell.layout = std::make_unique<QTextLayout>(shown);
             cell.layout->setCacheEnabled(true);
             QTextOption wrap;
@@ -2358,8 +2367,6 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     const QColor border = m_theme.color(QStringLiteral("--background-modifier-border"));
     const QColor header = m_theme.color(QStringLiteral("--background-secondary"));
     const QColor text = m_theme.color(QStringLiteral("--text-normal"));
-    const qreal padX = 10;
-    const qreal padY = 6;
 
     // A wide table is clipped to the readable column and scrolls inside it;
     // nothing spills over the note's text.
@@ -2379,23 +2386,12 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         painter.setPen(QPen(border, 1));
         painter.drawRect(rect);
 
-        const qreal width = rect.width() - 2 * padX;
-        qreal offset = 0;
-        if (cell.layout->lineCount() > 0) {
-            const qreal lineWidth = cell.layout->lineAt(0).naturalTextWidth();
-            if (cell.alignment.testFlag(Qt::AlignRight))
-                offset = width - lineWidth;
-            else if (cell.alignment.testFlag(Qt::AlignHCenter))
-                offset = (width - lineWidth) / 2;
-        }
-
         painter.setPen(text);
         // Each cell clips its own text, so a long word cannot bleed into the
         // next column.
         painter.save();
         painter.setClipRect(rect.adjusted(1, 1, -1, -1), Qt::IntersectClip);
-        cell.layout->draw(&painter, QPointF(rect.left() + padX + qMax<qreal>(0, offset),
-                                            rect.top() + padY));
+        cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top));
         painter.restore();
     }
     painter.restore();
@@ -2696,8 +2692,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderMedia && layoutMath(view))
         return;
 
-    const bool renderTable = view.span.kind == BlockSpan::Kind::Table
-                             && m_mode != Mode::Source && !view.active;
+    // A table stays a table while the caret is in one of its cells: it is
+    // edited where it is drawn (TableCells.cpp), not dropped to its source.
+    const bool renderTable = view.span.kind == BlockSpan::Kind::Table && m_mode != Mode::Source
+                             && (!view.active || (m_anchor == m_cursor && tableCellAt(m_cursor).row >= 0));
     if (renderTable && layoutTable(view))
         return;
 
@@ -3219,6 +3217,14 @@ QPointF MarkdownEditor::cursorPoint() const
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return {};
     const BlockView &view = m_blocks.at(size_t(index));
+    if (const Cell *cell = caretCell(view); cell && cell->layout) {
+        const int length = int(cell->layout->text().size());
+        const int display = qBound(0, int(cell->map.toDisplay(m_cursor)) - cell->lead, length);
+        const QTextLine line = cell->layout->lineForTextPosition(display);
+        const QPointF origin = cellTextOrigin(view, *cell);
+        return QPointF(contentLeft() + origin.x() + (line.isValid() ? line.cursorToX(display) : 0),
+                       view.y - verticalScrollBar()->value() + origin.y() + (line.isValid() ? line.y() : 0));
+    }
     if (!view.layout)
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
@@ -3244,16 +3250,31 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
         if (!view.cells.empty()) {
             if (y < view.y || y > view.y + view.height)
                 continue;
-            // Clicking any cell puts the caret in it; the block then reveals
-            // its source, which is where the editing happens for now.
+            // Clicking a cell puts the caret on the character under the
+            // pointer, and the table is edited where it is drawn.
             for (const Cell &cell : view.cells) {
-                if (cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
-                    return cell.source.start;
+                if (!cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
+                    continue;
+                const QPointF origin = cellTextOrigin(view, cell) + QPointF(0, view.y);
+                for (int i = 0; cell.layout && i < cell.layout->lineCount(); ++i) {
+                    const QTextLine line = cell.layout->lineAt(i);
+                    if (y <= origin.y() + line.y() + line.height() || i == cell.layout->lineCount() - 1) {
+                        const qsizetype source = cell.map.toSource(line.xToCursor(x - origin.x()) + cell.lead);
+                        return qBound(cell.source.start, source, cell.source.end);
+                    }
+                }
+                return cell.source.start;
             }
             return view.span.range.start;
         }
-        if (!view.layout)
+        if (!view.layout) {
+            // Drawn as an image - display maths, HTML: a click on it opens
+            // its source, as it does in Obsidian, instead of falling through
+            // to the block below.
+            if (y >= view.y && y <= view.y + view.height)
+                return view.span.range.start;
             continue;
+        }
         const bool last = &view == &m_blocks.back();
         if (y > view.y + view.height + kBlockSpacing && !last)
             continue;
@@ -3365,6 +3386,7 @@ void MarkdownEditor::setCursorOffset(qsizetype offset)
 void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
 {
     const qsizetype clamped = qBound<qsizetype>(0, offset, m_text.size());
+    const qsizetype previousCursor = m_cursor;
     const qsizetype previousBlock = m_activeBlock;
     const bool hadSelection = m_anchor != m_cursor;
 
@@ -3373,6 +3395,29 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
         m_anchor = clamped;
 
     m_activeBlock = blockAt(m_cursor);
+    // Out of a table it edited: that table's source is aligned, the way
+    // Advanced Tables does it, so the file reads as a table too.
+    // Not while a selection is being dragged out of it: that would drop it.
+    if (m_tableEdited && m_alignTables && !keepAnchor && tableAround(previousCursor) != tableAround(m_cursor)) {
+        m_tableEdited = false;
+        formatTables(previousCursor);
+    }
+    // Into another cell of the same table: the cell it left draws rendered
+    // again and the one it entered shows its source.
+    const CellRef cell = tableCellAt(m_cursor);
+    const Range caretCell = cell.row >= 0 ? cell.range : Range{-1, -1};
+    if (!(caretCell == m_caretCell)) {
+        for (const qsizetype block : {previousBlock, m_activeBlock}) {
+            if (block < 0 || block >= qsizetype(m_blocks.size()) || m_blocks[size_t(block)].cells.empty())
+                continue;
+            BlockView &view = m_blocks[size_t(block)];
+            view.laidOut = false;
+            view.heightEstimated = false;
+        }
+        m_caretCell = caretCell;
+        updateLayout();
+        revealCaretCell();
+    }
     // The two blocks swap between raw and rendered - and so does one block
     // when a selection starts or collapses inside it, since only a bare caret
     // reveals source.
@@ -3393,7 +3438,8 @@ void MarkdownEditor::moveVertically(int lines, bool keepAnchor)
     const QPoint target(int(x), int(point.y() + lines * lineHeight + lineHeight / 2));
 
     const qreal goal = x;
-    moveCursor(offsetAt(target), keepAnchor);
+    const qsizetype landed = offsetAt(target);
+    moveCursor(keepAnchor ? landed : snapToTableCell(landed, m_cursor), keepAnchor);
     m_goalX = goal;
 }
 
@@ -3459,8 +3505,14 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
     for (TableSpan &table : m_decorations.tables) {
         shift(table.range);
         for (QList<Range> &row : table.rows) {
-            for (Range &cell : row)
-                shift(cell);
+            // Typed at a cell's very start, or into an empty cell, the text
+            // is the cell's: it grows rather than moving off.
+            for (Range &cell : row) {
+                if (cell.start > at || (cell.start == at && delta < 0))
+                    cell.start += delta;
+                if (cell.end >= at)
+                    cell.end += delta;
+            }
         }
     }
     for (Range &paragraph : m_decorations.paragraphs)
@@ -3531,6 +3583,8 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     if (!m_applyingExternal) {
         m_cursor = m_anchor = at + inserted.size();
         m_activeBlock = blockAt(m_cursor);
+        if (tableAround(m_cursor) >= 0 && !m_formattingTables)
+            m_tableEdited = true;
     }
 
     setModified(true);
@@ -3666,6 +3720,8 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
         {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+        {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
+        {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
     };
     return table;
 }
@@ -3694,6 +3750,10 @@ bool MarkdownEditor::runCommand(const QString &id)
         moveLines(1);
     else if (id == QLatin1String("noteAppC:duplicate-lines"))
         duplicateLines();
+    else if (id == QLatin1String("noteAppC:format-table"))
+        formatTables(m_cursor);
+    else if (id == QLatin1String("noteAppC:format-all-tables"))
+        formatTables(-1);
     else
         return false;
     return true;
@@ -3774,7 +3834,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             }
             return;
         case Qt::Key_V:
-            insertText(QApplication::clipboard()->text());
+            insertText(cellSafe(QApplication::clipboard()->text()));
             return;
         default:
             break;
@@ -3782,12 +3842,17 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
     }
 
     m_goalX = -1;
-    switch (event->key()) {
-    case Qt::Key_Left:
-        moveCursor(m_cursor > 0 ? m_cursor - 1 : 0, shift);
+    if (handleTableKey(event))
         return;
+    switch (event->key()) {
+    // In a drawn table the arrows cross from one cell into the next.
+    case Qt::Key_Left: {
+        const qsizetype target = m_cursor > 0 ? m_cursor - 1 : 0;
+        moveCursor(shift ? target : snapToTableCell(target, m_cursor), shift);
+        return;
+    }
     case Qt::Key_Right:
-        moveCursor(m_cursor + 1, shift);
+        moveCursor(shift ? m_cursor + 1 : snapToTableCell(m_cursor + 1, m_cursor), shift);
         return;
     case Qt::Key_Up:
         moveVertically(-1, shift);
@@ -3846,7 +3911,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         // "[" opens "[]", the second sees the "]" ahead of it and opens
         // another, so the suggester still gets its "[[]]".
         if (!handleAutoPair(event->text().at(0)))
-            insertText(event->text());
+            insertText(cellSafe(event->text()));
         updateSuggestions();
         return;
     }
@@ -3892,6 +3957,8 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     // click can change what is revealed. A double-click selects the word
     // found here, not under a layout the first click has since shifted.
     m_pressOffset = offsetAt(event->pos());
+    if (!event->modifiers().testFlag(Qt::ShiftModifier))
+        m_pressOffset = snapToTableCell(m_pressOffset, m_pressOffset);
     m_pressing = true;
     if (event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen) {
         m_pressPoint = event->pos();

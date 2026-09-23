@@ -245,6 +245,49 @@ void nestQuotedLists(const QString &text, const SourceMap &map, QList<ListItemSp
     }
 }
 
+} // namespace
+
+QList<Range> tableRowCells(const QString &text, qsizetype lineStart, qsizetype lineEnd)
+{
+    // A pipe after an odd run of backslashes is text, not a cell border.
+    const auto escaped = [&text, lineStart](qsizetype at) {
+        qsizetype slashes = 0;
+        while (at - slashes - 1 >= lineStart && text.at(at - slashes - 1) == QLatin1Char('\\'))
+            ++slashes;
+        return slashes % 2 == 1;
+    };
+    qsizetype start = lineStart;
+    while (start < lineEnd && (text.at(start) == QLatin1Char('>') || text.at(start).isSpace()))
+        ++start;
+    qsizetype end = lineEnd;
+    while (end > start && text.at(end - 1).isSpace())
+        --end;
+    if (start < end && text.at(start) == QLatin1Char('|'))
+        ++start;
+    if (end > start && text.at(end - 1) == QLatin1Char('|') && !escaped(end - 1))
+        --end;
+
+    QList<Range> cells;
+    qsizetype from = start;
+    for (qsizetype i = start; i <= end; ++i) {
+        if (i < end && (text.at(i) != QLatin1Char('|') || escaped(i)))
+            continue;
+        qsizetype a = from;
+        qsizetype b = i;
+        while (a < b && text.at(a).isSpace())
+            ++a;
+        while (b > a && text.at(b - 1).isSpace())
+            --b;
+        if (a == b) // empty: one space in, so "|  |" types as "| x |"
+            a = b = from + (i - from >= 2 ? 1 : 0);
+        cells << Range{a, b};
+        from = i + 1;
+    }
+    return cells;
+}
+
+namespace {
+
 bool isTrue(const QString &value)
 {
     return value.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0
@@ -1186,9 +1229,18 @@ void walkItem(MD::Item *item, Walk &walk)
                 break;
             }
         }
-        for (const auto &row : table->rows()) {
+        // Row by row from the source lines, the delimiter row skipped, since
+        // md4qt's cell positions go wrong for an empty cell.
+        qsizetype line = map.lineAt(tableRange.start);
+        for (qsizetype r = 0; r < table->rows().size(); ++r, ++line) {
+            if (r == 1)
+                ++line;
+            if (walk.text && line < map.lineCount()) {
+                span.rows << tableRowCells(*walk.text, map.lineStart(line), map.lineEnd(line));
+                continue;
+            }
             QList<Range> cells;
-            for (const auto &cell : row->cells())
+            for (const auto &cell : table->rows().at(r)->cells())
                 cells << rangeOf(*cell, map);
             span.rows << cells;
         }

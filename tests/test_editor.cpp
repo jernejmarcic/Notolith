@@ -4079,3 +4079,138 @@ TEST(ScrollTest, AScrolledFrameMatchesAFreshOne)
     EXPECT_TRUE(shown == fresh) << "what the scroll left on screen differs from a full repaint";
 }
 
+
+
+// --- a table edited where it is drawn (TableCells.cpp) ---------------------
+
+namespace {
+
+const QString kTableNote = QStringLiteral("above\n\n| name | qty |\n|---|---:|\n| apple | 3 |\n| pear |  |\n\nbelow\n");
+
+/// Clicks across and down the note until the caret lands in `range`; the
+/// point it did, or a null point.
+QPoint clickInto(MarkdownEditor &editor, Range range)
+{
+    for (int y = 4; y < 400; y += 4) {
+        for (int x = 4; x < editor.viewport()->width(); x += 12) {
+            QTest::mouseClick(editor.viewport(), Qt::LeftButton, {}, QPoint(x, y));
+            if (editor.cursorOffset() > range.start && editor.cursorOffset() < range.end)
+                return QPoint(x, y);
+        }
+    }
+    return {};
+}
+
+} // namespace
+
+TEST(TableCellTest, AClickEditsTheCellAndTheTableStaysATable)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    ASSERT_TRUE(editor->tableRenderedAt(apple));
+    ASSERT_FALSE(clickInto(*editor, {apple, apple + 5}).isNull());
+    EXPECT_TRUE(editor->tableRenderedAt(apple)); // not dropped to "| apple | 3 |"
+
+    editor->setCursorOffset(apple + 5);
+    QTest::keyClicks(editor.get(), QStringLiteral("s|x"));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| apples\\|x | 3 |")));
+    EXPECT_TRUE(editor->tableRenderedAt(apple));
+}
+
+TEST(TableCellTest, KeysMoveBetweenCellsAndNeverEatAPipe)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    const qsizetype three = kTableNote.indexOf(QStringLiteral("3 |"));
+    editor->setCursorOffset(apple);
+
+    QTest::keyClick(editor.get(), Qt::Key_Backspace); // at the cell's start: nothing
+    EXPECT_EQ(editor->noteText(), kTableNote);
+    editor->setCursorOffset(apple + 5);
+    QTest::keyClick(editor.get(), Qt::Key_Right); // past the end: into the next cell
+    EXPECT_EQ(editor->cursorOffset(), three);
+    QTest::keyClick(editor.get(), Qt::Key_Left);
+    EXPECT_EQ(editor->cursorOffset(), apple + 5);
+
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    EXPECT_EQ(editor->cursorOffset(), three + 1);
+    QTest::keyClick(editor.get(), Qt::Key_Return); // down a row, same column: the empty cell
+    QTest::keyClicks(editor.get(), QStringLiteral("7"));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| pear | 7 |")));
+
+    // Tab from the last cell adds a row, as Advanced Tables does.
+    QTest::keyClick(editor.get(), Qt::Key_Tab);
+    QTest::keyClicks(editor.get(), QStringLiteral("fig"));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| pear | 7 |\n| fig |  |\n")))
+        << editor->noteText().toStdString();
+    EXPECT_TRUE(editor->tableRenderedAt(apple));
+}
+
+TEST(TableCellTest, SourceModeStillShowsThePipes)
+{
+    auto editor = editorWith(kTableNote);
+    editor->setMode(MarkdownEditor::Mode::Source);
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    editor->setCursorOffset(apple - 2);
+    EXPECT_EQ(editor->cursorOffset(), apple - 2); // no snapping into cells there
+    EXPECT_FALSE(editor->tableRenderedAt(apple));
+}
+
+TEST(ClickToEditTest, MathsAndHTMLOpenWhereTheyAreClicked)
+{
+    // Drawn as images, they once let a click fall through to the paragraph
+    // below; only the sliver above them opened them. A fresh editor per
+    // click, since an opened block shows its source and moves everything.
+    for (const QString &element : {QStringLiteral("$$\nx^2 + y^2 = z^2\n$$"), QStringLiteral("<div>hello html</div>")}) {
+        const QString text = QStringLiteral("above paragraph\n\n") + element + QStringLiteral("\n\nbelow paragraph\n");
+        const qsizetype start = text.indexOf(element);
+        int landed = 0;
+        for (int y = 2; y < 300; y += 2) {
+            auto editor = editorWith(text);
+            editor->show();
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(editor->viewport()->width() / 2, y));
+            if (editor->cursorOffset() >= start && editor->cursorOffset() <= start + element.size())
+                ++landed;
+        }
+        EXPECT_GE(landed, 10) << element.toStdString() << ": only " << landed * 2 << " px of it opens on a click";
+    }
+}
+
+TEST(TableFormatEditorTest, LeavingAnEditedTableAlignsItAndNothingElse)
+{
+    const QString note = QStringLiteral("para  with  spaces\n\n| a | b |\n|---|--:|\n| 1 | 22 |\n\n|x|y|\n|-|-|\n|1|2|\n\nend\n");
+    for (const MarkdownEditor::Mode mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source}) {
+        auto editor = editorWith(note);
+        editor->setMode(mode);
+        editor->show();
+        editor->setCursorOffset(note.indexOf(QStringLiteral("22")) + 2);
+        QTest::keyClicks(editor.get(), QStringLiteral("333"));
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| 1 | 22333 |"))); // not yet: still in it
+        editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("end")) + 1);
+        const QString after = editor->noteText();
+        EXPECT_TRUE(after.contains(QStringLiteral("| a   |     b |\n| --- | ----: |\n| 1   | 22333 |\n")))
+            << after.toStdString();
+        EXPECT_TRUE(after.startsWith(QStringLiteral("para  with  spaces\n\n"))); // the rest byte for byte
+        EXPECT_TRUE(after.contains(QStringLiteral("|x|y|\n|-|-|\n|1|2|\n")));   // an unedited table too
+        EXPECT_EQ(editor->cursorOffset(), after.indexOf(QStringLiteral("end")) + 1); // the caret moved with its text
+
+        QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier); // the alignment is its own step
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| 1 | 22333 |")));
+    }
+}
+
+TEST(TableFormatEditorTest, FormatAllTablesKeepsTheCaretInItsCell)
+{
+    const QString note = QStringLiteral("|x|long header|\n|-|-|\n|1|2|\n\n|p|q|\n|:-:|-|\n|r|s|\n");
+    auto editor = editorWith(note);
+    editor->show();
+    const qsizetype two = note.indexOf(QStringLiteral("2|"));
+    editor->setCursorOffset(two + 1); // after the "2"
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("noteAppC:format-all-tables")));
+    EXPECT_EQ(editor->noteText(),
+              QStringLiteral("| x   | long header |\n| --- | ----------- |\n| 1   | 2           |\n\n"
+                             "|  p  | q   |\n| :-: | --- |\n|  r  | s   |\n"));
+    EXPECT_EQ(editor->noteText().at(editor->cursorOffset() - 1), QLatin1Char('2'));
+}

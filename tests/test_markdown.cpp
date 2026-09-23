@@ -9,6 +9,7 @@
 #include "ObsidianSyntax.h"
 #include "Parser.h"
 #include "SourceMap.h"
+#include "TableFormat.h"
 
 using namespace noteAppC;
 
@@ -1432,4 +1433,232 @@ TEST(CodeFenceTest, NestedFencesGetDepthAndNoGroup)
     EXPECT_EQ(decorations.codeFences.at(1).depth, 1);
     EXPECT_EQ(decorations.codeFences.at(0).tabGroup, -1);
     EXPECT_EQ(decorations.codeFences.at(1).tabGroup, -1);
+}
+
+// --- TableFormat -----------------------------------------------------------
+
+TEST(TableFormatTest, BasicAlignment)
+{
+    const QString input = QStringLiteral(
+        "|Name|Age|\n"
+        "|---|---|\n"
+        "|Al|5|\n"
+        "|Bob|30|\n");
+    const QString expected = QStringLiteral(
+        "| Name | Age |\n"
+        "| ---- | --- |\n"
+        "| Al   | 5   |\n"
+        "| Bob  | 30  |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, FourDelimiterAlignmentsPadCorrectly)
+{
+    const QString input = QStringLiteral(
+        "|A|B|C|D|\n"
+        "|---|:---|---:|:---:|\n"
+        "|1|22|333|4|\n");
+    const QString expected = QStringLiteral(
+        "| A   | B   |   C |  D  |\n"
+        "| --- | :-- | --: | :-: |\n"
+        "| 1   | 22  | 333 |  4  |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, MissingOuterPipesGetAdded)
+{
+    const QString input = QStringLiteral(
+        "Name | Age\n"
+        "--- | ---\n"
+        "Al | 5\n");
+    const QString expected = QStringLiteral(
+        "| Name | Age |\n"
+        "| ---- | --- |\n"
+        "| Al   | 5   |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, ShortRowIsPaddedWithEmptyCells)
+{
+    const QString input = QStringLiteral(
+        "|Name|Age|\n"
+        "|---|---|\n"
+        "|Al|\n");
+    const QString expected = QStringLiteral(
+        "| Name | Age |\n"
+        "| ---- | --- |\n"
+        "| Al   |     |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, ExtraCellExtendsColumnCount)
+{
+    const QString input = QStringLiteral(
+        "|A|B|\n"
+        "|---|---|\n"
+        "|1|2|3|\n");
+    const QString formatted = formatTable(input);
+    const QStringList lines = formatted.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    ASSERT_EQ(lines.size(), 3);
+    // Three columns everywhere now, header included, and every row the same
+    // overall width.
+    for (const QString &line : lines)
+        EXPECT_EQ(line.count(QLatin1Char('|')), 4);
+    EXPECT_EQ(lines.at(0).size(), lines.at(1).size());
+    EXPECT_EQ(lines.at(0).size(), lines.at(2).size());
+    EXPECT_TRUE(lines.at(2).contains(QStringLiteral("3")));
+}
+
+TEST(TableFormatTest, EscapedPipeStaysInOneCell)
+{
+    const QString input = QStringLiteral(
+        "|A|B|\n"
+        "|---|---|\n"
+        "|x\\|y|z|\n");
+    const QString formatted = formatTable(input);
+    const QStringList lines = formatted.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    ASSERT_EQ(lines.size(), 3);
+    // Still two columns - the escaped pipe did not split the cell (its own
+    // "|" plus the three real separators is 4 pipe characters on the line).
+    EXPECT_EQ(lines.at(2).count(QLatin1Char('|')), 4);
+    EXPECT_TRUE(lines.at(2).contains(QStringLiteral("x\\|y")));
+    EXPECT_TRUE(formatTable(formatted) == formatted);
+}
+
+TEST(TableFormatTest, CJKwidthAlignsWithAscii)
+{
+    // "日本" is "日本", two fullwidth characters - display width 4,
+    // same as "abcd", though it is only two QChars where "abcd" is four.
+    const QString cjk = QStringLiteral("日本");
+    const QString input = QStringLiteral("|H|\n|---|\n|abcd|\n|") + cjk + QStringLiteral("|\n");
+    const QString expected = QStringLiteral("| H    |\n| ---- |\n| abcd |\n| ") + cjk
+        + QStringLiteral(" |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, CombiningMarkIsZeroWidth)
+{
+    const QString combining = QStringLiteral("ábc"); // "a" + combining acute + "bc"
+    const QString input = QStringLiteral("|H|\n|---|\n|abc|\n|") + combining + QStringLiteral("|\n");
+    const QString formatted = formatTable(input);
+    const QStringList lines = formatted.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    ASSERT_EQ(lines.size(), 4);
+    // Both cells display as width 3, so both get the same single margin
+    // space either side - no extra padding on "abc" for the combining row's
+    // (irrelevant) extra code unit.
+    EXPECT_EQ(lines.at(2), QStringLiteral("| abc |"));
+    EXPECT_EQ(lines.at(3), QLatin1String("| ") + combining + QLatin1String(" |"));
+}
+
+TEST(TableFormatTest, BlockquotePrefixIsPreserved)
+{
+    const QString input = QStringLiteral(
+        "> |A|B|\n"
+        "> |---|---|\n"
+        "> |1|2|\n");
+    const QString expected = QStringLiteral(
+        "> | A   | B   |\n"
+        "> | --- | --- |\n"
+        "> | 1   | 2   |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
+TEST(TableFormatTest, IsIdempotent)
+{
+    const QStringList inputs = {
+        QStringLiteral("|Name|Age|\n|---|---|\n|Al|5|\n|Bob|30|\n"),
+        QStringLiteral("Name | Age\n--- | ---\nAl | 5\n"),
+        QStringLiteral("|A|B|C|D|\n|---|:---|---:|:---:|\n|1|22|333|4|\n"),
+        QStringLiteral("> |A|B|\n> |---|---|\n> |1|2|\n"),
+    };
+    for (const QString &input : inputs) {
+        const QString once = formatTable(input);
+        EXPECT_EQ(formatTable(once), once);
+    }
+}
+
+TEST(TableFormatTest, NotATableIsReturnedUnchanged)
+{
+    const QString noPipes = QStringLiteral("just text\nsecond line\n");
+    EXPECT_EQ(formatTable(noPipes), noPipes);
+
+    const QString badDelimiter = QStringLiteral("|A|B|\n|foo|bar|\n|1|2|\n");
+    EXPECT_EQ(formatTable(badDelimiter), badDelimiter);
+
+    const QString oneLine = QStringLiteral("|A|B|\n");
+    EXPECT_EQ(formatTable(oneLine), oneLine);
+}
+
+TEST(TableFormatTest, TrailingNewlineIsKeptOrNot)
+{
+    const QString withNewline = QStringLiteral("|A|B|\n|---|---|\n|1|2|\n");
+    EXPECT_TRUE(formatTable(withNewline).endsWith(QLatin1Char('\n')));
+
+    const QString withoutNewline = QStringLiteral("|A|B|\n|---|---|\n|1|2|");
+    EXPECT_FALSE(formatTable(withoutNewline).endsWith(QLatin1Char('\n')));
+}
+
+TEST(TableFormatTest, ParserSeesSameTableBeforeAndAfter)
+{
+    const QString before = QStringLiteral(
+        "| Name | Model |\n"
+        "|---|---:|\n"
+        "| BME680 Breakout | BME680 (PIM357) |\n");
+    const QString after = formatTable(before);
+    ASSERT_NE(after, before); // formatting actually changed the padding
+
+    const Decorations beforeDecorations = decorationsOf(before);
+    const Decorations afterDecorations = decorationsOf(after);
+    ASSERT_EQ(beforeDecorations.tables.size(), 1);
+    ASSERT_EQ(afterDecorations.tables.size(), 1);
+
+    const TableSpan &beforeTable = beforeDecorations.tables.first();
+    const TableSpan &afterTable = afterDecorations.tables.first();
+    EXPECT_EQ(beforeTable.columns, afterTable.columns);
+    EXPECT_EQ(beforeTable.alignment, afterTable.alignment);
+    ASSERT_EQ(beforeTable.rows.size(), afterTable.rows.size());
+    for (int r = 0; r < beforeTable.rows.size(); ++r) {
+        ASSERT_EQ(beforeTable.rows[r].size(), afterTable.rows[r].size());
+        for (int c = 0; c < beforeTable.rows[r].size(); ++c) {
+            EXPECT_EQ(sliceOf(before, beforeTable.rows[r][c]).trimmed(),
+                      sliceOf(after, afterTable.rows[r][c]).trimmed());
+        }
+    }
+}
+
+TEST(TableFormatTest, RealWorldTableAlignsAndStaysIdempotent)
+{
+    // – en dash, ± plus-minus, £ pound sign - written as
+    // universal-character-name escapes rather than raw UTF-8 bytes, since a
+    // narrow byte literal concatenated into QStringLiteral's u"" literal is
+    // reinterpreted one byte per QChar instead of being UTF-8 decoded.
+    const QString input = QStringLiteral(
+        "| Name | Model | Interface | Supply | Typical power/current | Key spec | Price | "
+        "Delivery (UK/EU) | Datasheet | Buy |\n"
+        "|---|---|---|---|---|---|---:|---|---|---|\n"
+        "| BME680 Breakout | BME680 (PIM357) | I2C, SPI | 1.71–3.6 V IC (breakout "
+        "3.3/5 V friendly) | 2.1 uA sleep (typ) | RH accuracy ±3 %RH | £15.75 | "
+        "UK £3.90 / EU weight-based | "
+        "https://cdn.shopify.com/s/files/1/0174/1800/files/bst-bme680-ds001.pdf?v=1629474140 | "
+        "https://shop.pimoroni.com/products/bme680-breakout |\n");
+
+    const QString formatted = formatTable(input);
+    EXPECT_EQ(formatTable(formatted), formatted); // idempotent
+
+    const QStringList lines = formatted.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    ASSERT_EQ(lines.size(), 3);
+    // Every row padded to the same overall width - the "looks good in plain
+    // text" ask.
+    EXPECT_EQ(lines.at(0).size(), lines.at(1).size());
+    EXPECT_EQ(lines.at(0).size(), lines.at(2).size());
+
+    EXPECT_TRUE(formatted.contains(QStringLiteral("BME680 Breakout")));
+    EXPECT_TRUE(formatted.contains(QStringLiteral("shop.pimoroni.com/products/bme680-breakout")));
+
+    // The parser still sees the same cells, just better padded.
+    const Decorations before = decorationsOf(input);
+    const Decorations after = decorationsOf(formatted);
+    ASSERT_EQ(before.tables.size(), 1);
+    ASSERT_EQ(after.tables.size(), 1);
+    EXPECT_EQ(before.tables.first().columns, after.tables.first().columns);
 }

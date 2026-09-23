@@ -111,6 +111,9 @@ public:
     /// Nested ordered lists numbered as Word's multilevel lists are - 1.,
     /// then 1.1, 1.2, then 1.2.1 - rather than each list counting on its own.
     void setOutlineNumbering(bool on);
+    /// A table's source aligned into columns when the caret leaves a table
+    /// it edited, as Advanced Tables does. On by default.
+    void setAlignTables(bool on) { m_alignTables = on; }
     bool outlineNumbering() const { return m_outlineNumbering; }
     /// What an ordered item's number reads as drawn (for the tests too).
     QString listLabel(const ListItemSpan &item) const;
@@ -457,6 +460,9 @@ public:
         QRectF runRect;
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
+    /// Whether the table holding `offset` is drawn as a table rather than
+    /// as its source. For the tests.
+    bool tableRenderedAt(qsizetype offset) const;
     /// What a click on that block's run control does: asks the window's
     /// runner to actually run it (forceRun). False, and nothing asked for,
     /// when notebookInfoAt(offset).eligible is false.
@@ -610,6 +616,7 @@ private:
         Qt::Alignment alignment = Qt::AlignLeft;
         int row = 0;
         int column = 0;
+        int lead = 0; ///< display characters trimmed off the front of `layout`'s text
     };
 
     /// One top-level block: the unit that is laid out, cached and revealed.
@@ -1372,6 +1379,42 @@ private:
     QList<QTextLayout::FormatRange> formatsIn(const BlockView &view, const Range &source,
                                               const DisplayMap &map) const;
     const TableSpan *tableFor(const BlockView &view) const;
+
+    // --- a rendered table edited in place, TableCells.cpp ------------------
+    /// The table cell holding `source`, its end included, in live preview.
+    struct CellRef {
+        const TableSpan *table = nullptr;
+        int row = -1;
+        int column = -1;
+        Range range;
+        bool valid() const { return table != nullptr; }
+    };
+    CellRef tableCellAt(qsizetype source) const;
+    /// Where a caret bound for `offset` goes when that is inside a rendered
+    /// table but in no cell - a pipe, a padding space, the delimiter row: the
+    /// nearest cell the way it was moving from `from`, or out of the table.
+    qsizetype snapToTableCell(qsizetype offset, qsizetype from) const;
+    /// Tab, Shift+Tab, Enter, Home, End, and Backspace or Delete at a cell's
+    /// edge, inside a rendered table. False when the caret is in none.
+    bool handleTableKey(QKeyEvent *event);
+    /// What typing or pasting `text` puts into a drawn table's cell: a pipe
+    /// escaped, a line break a space. `text` itself anywhere else.
+    QString cellSafe(const QString &text) const;
+    /// Aligns the source of the table holding `offset`, or of every table in
+    /// the note when `offset` is -1, as one undo step; the caret stays with
+    /// the text it was in. False when nothing needed it.
+    bool formatTables(qsizetype offset);
+    /// The index in m_decorations.tables of the table whose lines hold
+    /// `offset`, in any mode; -1 outside every table.
+    qsizetype tableAround(qsizetype offset) const;
+    /// Adds an empty row below `cell`'s and puts the caret in `column` of it.
+    void insertTableRowAfter(const CellRef &cell, int column);
+    /// Where a cell's text starts, in block coordinates.
+    QPointF cellTextOrigin(const BlockView &view, const Cell &cell) const;
+    /// The caret's cell in a rendered table, when it is in one.
+    const Cell *caretCell(const BlockView &view) const;
+    /// Scrolls a wide table sideways so the caret's cell is in view.
+    void revealCaretCell();
     /// Heights, positions, and layouts for the blocks near the viewport.
     void updateLayout();
     void invalidateLayouts();
@@ -1566,6 +1609,10 @@ private:
     qsizetype m_cursor = 0;
     qsizetype m_anchor = 0;
     qsizetype m_activeBlock = -1;
+    Range m_caretCell{-1, -1}; ///< the table cell the caret was last in, to relay out on leaving it
+    bool m_alignTables = true;
+    bool m_tableEdited = false; ///< the caret's table was edited; aligned when the caret leaves it
+    bool m_formattingTables = false; ///< formatTables' own edits do not count as editing
     qreal m_goalX = -1; ///< remembered column for up/down
 
     /// A freshly opened note renders whole; the block under the caret only

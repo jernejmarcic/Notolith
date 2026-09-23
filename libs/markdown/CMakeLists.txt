@@ -9,7 +9,9 @@ add_library(noteAppC_markdown STATIC
     Decorations.cpp
     Decorations.h
     Parser.cpp
-    Parser.h)
+    Parser.h
+    TableFormat.cpp
+    TableFormat.h)
 
 target_include_directories(noteAppC_markdown PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_markdown PUBLIC Qt6::Core md4qt::md4qt PRIVATE yaml-cpp::yaml-cpp)
