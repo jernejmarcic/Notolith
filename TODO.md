@@ -358,6 +358,23 @@ the features existing decreases it".
       preview, file recovery, daily notes, templates, query and HTML blocks,
       spellcheck, word count, workspace restore - and measure off against on.
 
+## Requested 2026-09-23, afternoon: a demo vault, and a last pass
+
+Jernej: "create a small vault. Like max 5MB in total size, that should serve
+to test all features. This does not have to be in TMP, and should be called
+demo. You can actually built in now if you want. But for more extreme testing
+work in tmp." And: "after ALL is done, see if you can topimize anything".
+
+- [ ] `demo/` in the project: a vault under 5 MB with a note (or file) for
+      every feature - rendering, links and embeds of every kind, PDFs with
+      page arguments, `.tex`, canvases, bases, `query` and `base` blocks,
+      HTML, callouts, code styles, maths, media, daily notes, templates,
+      bookmarks, `.obsidian` config (hotkeys, graph, workspace), and later
+      notebook blocks. Grown as each feature lands; big and extreme vaults
+      stay generated under /tmp.
+- [ ] Once everything else is done: a profiling and optimisation pass over
+      the whole app, measured before and after (docs/PERFORMANCE.md).
+
 ## Requested 2026-09-23, afternoon: notebooks, last of all
 
 Jernej: "when everything is said and done, implement the juypter notebook like
