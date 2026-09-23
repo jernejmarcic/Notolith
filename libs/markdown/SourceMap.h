@@ -29,6 +29,11 @@ public:
     SourceMap() = default;
     explicit SourceMap(const QString &text);
 
+    /// The text had `removed` characters at `at` replaced by `inserted`: the
+    /// same as rebuilding from the new text, at the cost of moving the line
+    /// starts after the edit rather than rescanning the document.
+    void applyEdit(qsizetype at, qsizetype removed, QStringView inserted);
+
     qsizetype lineCount() const { return m_lineStarts.size(); }
     /// Offset of the first character of `line`, clamped to the document.
     qsizetype lineStart(qsizetype line) const;

@@ -115,4 +115,12 @@ Range DisplayMap::toDisplay(const Range &sourceRange) const
     return {toDisplay(sourceRange.start), toDisplay(sourceRange.end)};
 }
 
+void DisplayMap::shift(qsizetype delta)
+{
+    m_block.start += delta;
+    m_block.end += delta;
+    for (Run &run : m_runs)
+        run.sourceStart += delta;
+}
+
 } // namespace noteAppC

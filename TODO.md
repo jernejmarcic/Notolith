@@ -118,12 +118,11 @@ budget, which this project has already learned once on the index.
 - [x] **Show the window, then read the vault.** Shell on screen 194.5 ms ->
       50.5 ms, at a real cost of 8.8 ms - inside the 10 ms limit, but only
       just, and recorded in the commit so it is not rediscovered.
-- [ ] The three O(document) passes that still run on **every keystroke**:
-      `MarkdownEditor.cpp` rebuilds the whole `SourceMap`, `shiftRanges` walks
-      every block and decoration, and `updateLayout()` makes two more full
-      passes. 0.26 ms at 200 kB and 0.66 ms at 1 MB, so it is nobody's
-      problem yet - but it is the last thing in the editor that is
-      proportional to the file rather than to the edit.
+- [x] **The O(document) passes on every keystroke**, 2026-09-23 (fix 11 in
+      `docs/PERFORMANCE.md`): `SourceMap` moves line starts instead of
+      rescanning, `updateLayout()` makes one pass and finds the viewport by
+      binary search, list items are looked up per block. 1 MB 0.71 -> 0.44 ms.
+      Left: `shiftRanges` and the placement pass, both still O(blocks).
 - [x] **GPU: implemented, measured, off by default.**
       `MarkdownEditor::setGPUacceleration` swaps the viewport for a
       `QOpenGLWidget`, and `noteAppC-bench --gpu` compares the two on screen
@@ -243,13 +242,10 @@ Jernej's rule: a new feature goes here and the current task carries on.
 
 ### Later
 
-- [ ] **Latent: decorations other than syntax, styles, blocks and properties
-      are not shifted between a keystroke and the reparse** - callouts,
-      maths, embeds, list items, tables, code fences. Invisible today because
-      blocks below an edit keep their cached layout; it would show if such a
-      block were laid out inside the 20 ms debounce. Fixing it adds to the
-      per-keystroke O(document) passes, so do it together with making those
-      passes proportional to the edit. `ShiftTest` guards the visible case.
+- [x] **Latent: decorations other than syntax, styles, blocks and properties
+      were not shifted** between a keystroke and the reparse. Closed with
+      fix 11: every decoration kind and the cached maps of the blocks below
+      an edit now move with the text. `ShiftTest` guards it.
 
 - [x] **Custom themes from a CSS file** - done in 256d913. Corrected: a picker
       already exists on the settings page and already lists Obsidian themes.
@@ -264,7 +260,8 @@ Jernej's rule: a new feature goes here and the current task carries on.
 - [x] **The whole tree builds and passes on Qt 6.7.3**, the Android kit's
       version, after patching md4qt's four 6.8-only conversions at fetch
       (`cmake/patch-md4qt.sh`). noteAppC's own code uses no 6.8+ API.
-- [ ] The actual Android build, and a touch mode for the editor.
+- [ ] The actual Android build (Sonnet lane running 2026-09-23: arm64 debug APK
+      with the workspace kit, CMake and docs only), and a touch mode for the editor.
 - [x] **Typing in a long code block was over budget.** Release, keystroke
       plus paint: 100 / 1 000 / 5 000 lines went 2.7 / 26 / 158 ms ->
       1.10 / 1.10 / 1.16 ms. Fences over 32 lines are 32-line blocks, the
@@ -279,8 +276,5 @@ Jernej's rule: a new feature goes here and the current task carries on.
       with the caret on them, which also means the language tag can only be
       edited from its own line. I believe Obsidian shows both fences as soon
       as the caret is anywhere inside; check before changing anything.
-- [ ] Latent: `formatsIn` walks every list item in the note for every block
-      it lays out. Unmeasurable today (the 5 000-item list guard is flat),
-      but it is O(list items) per block.
 - [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
       blitting, the Wayland buffer measurement - see above.

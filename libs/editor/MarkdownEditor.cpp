@@ -28,6 +28,7 @@
 #include <QTextLine>
 #include <algorithm>
 #include <cstdio>
+#include <span>
 
 namespace noteAppC {
 
@@ -511,12 +512,12 @@ QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
             continue;
         const Range &marker = markers.at(i);
         if (view.span.kind == BlockSpan::Kind::List) {
-            const auto item = std::find_if(m_decorations.listItems.cbegin(),
-                                           m_decorations.listItems.cend(),
+            const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+            const auto item = std::find_if(items.begin(), items.end(),
                                            [&marker](const ListItemSpan &list) {
                                                return list.marker.overlaps(marker);
                                            });
-            if (item != m_decorations.listItems.cend()) {
+            if (item != items.end()) {
                 if (caret >= item->marker.start && caret < item->marker.end)
                     revealed.append(marker);
                 continue;
@@ -1012,8 +1013,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         }
     }
 
-    for (const ListItemSpan &item : m_decorations.listItems) {
-        if (!item.done || !item.range.overlaps(block))
+    for (const ListItemSpan &item : listItemsIn(block)) {
+        if (!item.done)
             continue;
         QTextCharFormat strike;
         strike.setFontStrikeOut(true);
@@ -1288,9 +1289,22 @@ bool MarkdownEditor::softBreakAt(qsizetype source) const
     return false;
 }
 
-const ListItemSpan *MarkdownEditor::listItemAt(qsizetype source) const
+std::span<const ListItemSpan> MarkdownEditor::listItemsIn(const Range &block) const
 {
-    for (const ListItemSpan &item : m_decorations.listItems) {
+    // Sorted by start, so this is two binary searches rather than a walk over
+    // every item in the note - which layout used to do once per line.
+    const QList<ListItemSpan> &items = m_decorations.listItems;
+    const auto startsBefore = [](const ListItemSpan &item, qsizetype at) {
+        return item.range.start < at;
+    };
+    const auto first = std::lower_bound(items.cbegin(), items.cend(), block.start, startsBefore);
+    const auto last = std::lower_bound(first, items.cend(), block.end, startsBefore);
+    return {items.constData() + (first - items.cbegin()), size_t(last - first)};
+}
+
+const ListItemSpan *MarkdownEditor::listItemAt(const BlockView &view, qsizetype source) const
+{
+    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
         // The marker is hidden, so a line starts exactly where it ends.
         if (item.marker.end == source || item.range.start == source)
             return &item;
@@ -1328,8 +1342,8 @@ void MarkdownEditor::paintIndentGuides(QPainter &painter, const BlockView &view,
 
     painter.save();
     painter.setPen(QPen(guide, 1));
-    for (const ListItemSpan &item : m_decorations.listItems) {
-        if (item.indent <= 0 || !item.range.overlaps(view.span.range))
+    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+        if (item.indent <= 0)
             continue;
 
         const QRectF band = bandOf(view, item.range);
@@ -1358,9 +1372,7 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         return std::any_of(view.revealed.cbegin(), view.revealed.cend(),
                            [&item](const Range &range) { return range.overlaps(item.marker); });
     };
-    for (const ListItemSpan &item : m_decorations.listItems) {
-        if (!item.range.overlaps(view.span.range))
-            continue;
+    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
         // The caret has uncovered this item's marker as text, so a drawn
         // bullet would double it.
         if (markerShown(item))
@@ -2186,7 +2198,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         if (!line.isValid())
             break;
         const qsizetype source = view.map.toSource(line.textStart());
-        const ListItemSpan *item = listIndent > 0 ? listItemAt(source) : nullptr;
+        const ListItemSpan *item = listIndent > 0 ? listItemAt(view, source) : nullptr;
         const qreal nesting = kCalloutIndent * nestingDepthAt(view, source);
         const qreal indent = nesting
                              + (listIndent > 0 ? listIndent * (1 + (item ? item->indent : 0))
@@ -2236,6 +2248,16 @@ void MarkdownEditor::updateLayout()
         m_activeBlock >= 0 && m_activeBlock < qsizetype(m_blocks.size())
             ? m_activeBlock - m_blocks[size_t(m_activeBlock)].piece
             : -1;
+    // A block shows its raw source only for a bare caret. With a selection it
+    // stays rendered, as in Obsidian, and while the mouse button is held
+    // nothing changes at all: revealing the syntax mid-drag moved the text out
+    // from under the pointer, so the selection chased it.
+    const bool bareCaret =
+        m_mode == Mode::LivePreview && m_interacted && selection().length() == 0;
+
+    // One pass over the note, which is the only part of this proportional to
+    // its length: settle what each block reveals, and place it.
+    qreal y = m_topPadding;
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
         const bool inCaretGroup = caretGroup && view.span.range.start >= caretGroup->span.start
@@ -2246,14 +2268,7 @@ void MarkdownEditor::updateLayout()
             view.laidOut = false;
             view.heightEstimated = false;
         }
-        // A block shows its raw source only for a bare caret. With a selection
-        // it stays rendered, as in Obsidian, and while the mouse button is
-        // held nothing changes at all: revealing the syntax mid-drag moved the
-        // text out from under the pointer, so the selection chased it.
-        bool active = m_mode == Mode::LivePreview && m_interacted && i - view.piece == caretFirst
-                      && selection().length() == 0;
-        if (m_pressing)
-            active = view.active;
+        const bool active = m_pressing ? view.active : bareCaret && i - view.piece == caretFirst;
         if (active != view.active) {
             view.active = active;
             view.layout.reset();
@@ -2265,11 +2280,57 @@ void MarkdownEditor::updateLayout()
             view.laidOut = false;
             view.heightEstimated = false;
         }
-    }
 
-    const auto place = [this] {
-        qreal y = m_topPadding;
-        for (BlockView &view : m_blocks) {
+        view.y = y;
+        if (!view.laidOut && !view.heightEstimated) {
+            view.height = estimatedHeight(view);
+            view.heightEstimated = true;
+        }
+        y += view.height + kBlockSpacing;
+    }
+    m_totalHeight = y + m_topPadding;
+
+    // Lay out what is on screen, plus a screen either side so scrolling does
+    // not stutter, plus the caret's block wherever it is. Blocks are placed in
+    // order, so the first one near the screen is a binary search away.
+    const qreal scroll = verticalScrollBar()->value();
+    const qreal top = scroll - viewport()->height();
+    const qreal bottom = scroll + 2 * viewport()->height();
+    const auto nearTop = std::partition_point(m_blocks.begin(), m_blocks.end(),
+                                              [top](const BlockView &view) {
+                                                  return view.y + view.height < top;
+                                              });
+    const qsizetype from = std::distance(m_blocks.begin(), nearTop);
+
+    qsizetype firstChanged = -1;
+    const auto layOut = [this, &firstChanged](qsizetype i) {
+        BlockView &view = m_blocks[size_t(i)];
+        if (view.laidOut)
+            return;
+        const qreal before = view.height;
+        layoutBlock(view);
+        if (!qFuzzyCompare(before + 1, view.height + 1) && (firstChanged < 0 || i < firstChanged))
+            firstChanged = i;
+    };
+    // In index order: laying out a piece of a long fence can clear the
+    // layouts of the pieces after it, and those have to be redone here.
+    const bool caretAbove = m_activeBlock >= 0 && m_activeBlock < from;
+    if (caretAbove)
+        layOut(m_activeBlock);
+    qsizetype i = from;
+    for (; i < qsizetype(m_blocks.size()) && m_blocks[size_t(i)].y <= bottom; ++i)
+        layOut(i);
+    if (m_activeBlock >= i && m_activeBlock < qsizetype(m_blocks.size()))
+        layOut(m_activeBlock);
+
+    // Only what follows a block whose height changed moves.
+    if (firstChanged >= 0) {
+        qreal y = firstChanged == 0 ? m_topPadding
+                                    : m_blocks[size_t(firstChanged - 1)].y
+                                          + m_blocks[size_t(firstChanged - 1)].height
+                                          + kBlockSpacing;
+        for (qsizetype j = firstChanged; j < qsizetype(m_blocks.size()); ++j) {
+            BlockView &view = m_blocks[size_t(j)];
             view.y = y;
             if (!view.laidOut && !view.heightEstimated) {
                 view.height = estimatedHeight(view);
@@ -2278,32 +2339,7 @@ void MarkdownEditor::updateLayout()
             y += view.height + kBlockSpacing;
         }
         m_totalHeight = y + m_topPadding;
-    };
-
-    place();
-
-    // Lay out what is on screen, plus a screen either side so scrolling does
-    // not stutter, plus the caret's block wherever it is.
-    const qreal scroll = verticalScrollBar()->value();
-    const qreal top = scroll - viewport()->height();
-    const qreal bottom = scroll + 2 * viewport()->height();
-
-    bool heightsChanged = false;
-    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
-        BlockView &view = m_blocks[size_t(i)];
-        const bool nearViewport = view.y + view.height >= top && view.y <= bottom;
-        if (!nearViewport && i != m_activeBlock)
-            continue;
-        if (view.laidOut)
-            continue;
-
-        const qreal before = view.height;
-        layoutBlock(view);
-        heightsChanged = heightsChanged || !qFuzzyCompare(before + 1, view.height + 1);
     }
-
-    if (heightsChanged)
-        place();
     updateScrollRange();
 }
 
@@ -2602,22 +2638,60 @@ void MarkdownEditor::pushUndo()
 
 void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
 {
+    // Between a keystroke and the reparse that follows it, everything that
+    // speaks source offsets has to agree about them: a block below the edit
+    // keeps its cached layout, so its map moves with the text instead of being
+    // rebuilt, and every decoration a layout or a paint can consult moves too.
+    // Once, only some of them did, and a block laid out or clicked in those
+    // 20 ms read the others at the wrong offsets.
     const auto shift = [at, delta](Range &range) {
         if (range.start >= at)
             range.start += delta;
         if (range.end >= at)
             range.end += delta;
     };
-    for (BlockView &view : m_blocks)
+    for (BlockView &view : m_blocks) {
+        if (view.span.range.start >= at)
+            view.map.shift(delta);
         shift(view.span.range);
+    }
     for (Range &range : m_decorations.syntax)
         shift(range);
     for (StyleSpan &span : m_decorations.styles)
         shift(span.range);
-    for (BlockSpan &span : m_decorations.blocks)
-        shift(span.range);
+    // m_decorations.blocks is not shifted: only rebuildBlocks reads it, and
+    // only straight after a parse has replaced it.
     for (Property &property : m_properties)
         shift(property.range);
+    for (ListItemSpan &item : m_decorations.listItems) {
+        shift(item.range);
+        shift(item.marker);
+        shift(item.checkbox);
+    }
+    for (CalloutSpan &callout : m_decorations.callouts) {
+        shift(callout.range);
+        shift(callout.marker);
+        shift(callout.titleRange);
+    }
+    for (TableSpan &table : m_decorations.tables) {
+        shift(table.range);
+        for (QList<Range> &row : table.rows) {
+            for (Range &cell : row)
+                shift(cell);
+        }
+    }
+    for (Range &paragraph : m_decorations.paragraphs)
+        shift(paragraph);
+    for (EmbedSpan &embed : m_decorations.embeds)
+        shift(embed.range);
+    for (MathSpan &math : m_decorations.maths) {
+        shift(math.range);
+        shift(math.formula);
+    }
+    for (CodeOptions &options : m_decorations.codeOptions) {
+        shift(options.block);
+        shift(options.range);
+    }
 
     for (CodeFenceSpan &fence : m_decorations.codeFences) {
         shift(fence.block);
@@ -2655,7 +2729,7 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // nothing on screen; every other block is untouched by this edit. Shifting
     // the offsets is therefore enough until the debounced parse lands.
     ++m_textVersion;
-    m_lines = SourceMap(m_text); // the gutter needs current line starts
+    m_lines.applyEdit(at, removed, inserted); // the gutter needs current line starts
     const qsizetype delta = inserted.size() - removed;
     // shiftRanges already moves the end of the block the edit is in; moving it
     // here as well once made that block run on into the next one, drawn twice
@@ -2933,8 +3007,8 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     for (const BlockView &view : m_blocks) {
         if (view.span.kind != BlockSpan::Kind::List || !view.laidOut)
             continue;
-        for (const ListItemSpan &item : m_decorations.listItems) {
-            if (!item.task || !item.range.overlaps(view.span.range))
+        for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+            if (!item.task)
                 continue;
             // A marker the caret has uncovered shows as text, with no box to click.
             if (std::any_of(view.revealed.cbegin(), view.revealed.cend(),

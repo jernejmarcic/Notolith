@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #include <memory>
 
@@ -193,6 +194,25 @@ std::unique_ptr<MarkdownEditor> editorWith(const QString &text)
     return editor;
 }
 
+/// An editor whose parse has landed. Above kAsyncParseThreshold the parse runs
+/// on the thread pool and the note is plain paragraphs until it comes back, so
+/// a timing taken before then measures the placeholder: two guards once did.
+/// Null if the parse never returns.
+std::unique_ptr<MarkdownEditor> parsedEditorWith(const QString &text)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
+    editor->setNoteText(text);
+    // A small note parses before setNoteText returns. A big one sends -1 at
+    // once, "not counted yet", and its real count with the parse.
+    while (!parsed.isEmpty() && parsed.last().at(0).toInt() < 0) {
+        if (!parsed.wait(10000))
+            return nullptr;
+    }
+    return editor;
+}
+
 } // namespace
 
 TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
@@ -306,7 +326,8 @@ QString generateNote(int kilobytes)
 TEST(MarkdownEditorTest, KeystrokeStaysInsideTheBudget)
 {
     const QString note = generateNote(200);
-    auto editor = editorWith(note);
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
     editor->setCursorOffset(note.size() / 2);
     editor->enterBlockAt(note.size() / 2);
 
@@ -1726,6 +1747,36 @@ TEST(ShiftTest, TypingDoesNotRunIntoTheNextBlock)
     EXPECT_EQ(editor->displayText(), QStringLiteral("ayyyyybc\n\ndef x\n"));
 }
 
+TEST(ShiftTest, TheNextItemKeepsItsBulletWhileTyping)
+{
+    // List items are found by a binary search on their starts, so they have
+    // to move with the text: a stale start would leave every item after the
+    // edit out of its block, and its bullet undrawn, until the reparse.
+    auto editor = editorWith(QStringLiteral("- one\n- two\n- three\n"));
+    editor->enterBlockAt(3);
+    const QImage before = editor->grab().toImage();
+    // Longer than an item, or a stale slice can pick up the item after the
+    // one it lost and draw its bullet in the same place.
+    QTest::keyClicks(editor.get(), QStringLiteral("abcdefghijkl"));
+    const QImage after = editor->grab().toImage(); // before the 20 ms reparse
+    // Only the edited line may change; the rows of the other two items, their
+    // bullets included, must come out exactly as they were.
+    ASSERT_EQ(before.size(), after.size());
+    int first = -1;
+    int last = -1;
+    for (int y = 0; y < before.height(); ++y) {
+        if (std::memcmp(before.constScanLine(y), after.constScanLine(y),
+                        size_t(before.bytesPerLine()))
+            != 0) {
+            if (first < 0)
+                first = y;
+            last = y;
+        }
+    }
+    ASSERT_GE(first, 0) << "typing drew nothing";
+    EXPECT_LT(last - first, 30) << "rows below the edited line changed";
+}
+
 // --- code block tabs ---------------------------------------------------------
 
 namespace {
@@ -1917,18 +1968,9 @@ TEST(CodeBlockPerfTest, TypingInALongCodeBlockStaysInBudget)
         for (int i = 0; i < lines; ++i)
             note += QStringLiteral("int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
         note += QStringLiteral("```\n");
-        // Above kAsyncParseThreshold the parse runs on the thread pool, and a
-        // listing measured before it lands is an unhighlighted paragraph:
-        // the first version of this guard timed exactly that.
-        auto editor = std::make_unique<MarkdownEditor>();
-        editor->resize(900, 600);
-        QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
-        editor->setNoteText(note);
-        // -1 goes out at once, meaning "not counted yet"; the count follows
-        // with the parse.
-        while (parsed.isEmpty() || parsed.last().at(0).toInt() < 0)
-            if (!parsed.wait(10000))
-                return -1.0; // never parsed: fails the budget check below
+        auto editor = parsedEditorWith(note);
+        if (!editor)
+            return -1.0; // never parsed: fails the check below
         const qsizetype middle = note.indexOf(QStringLiteral("value%1 ").arg(lines / 2));
         editor->setCursorOffset(middle);
         editor->enterBlockAt(middle);

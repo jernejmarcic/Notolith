@@ -34,15 +34,15 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench, includes `openVault`) | 64 ms | - |
+| cold start to first painted frame (bench, includes `openVault`) | 57 ms | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
 | note open, 200 kB | 2.2 ms (readable; styled ~26 ms later) | 300 ms |
 | note open, 1 MB | 11.3 ms (readable; styled ~140 ms later) | - |
-| keystroke to relaid, painted block, 200 kB | 0.24 ms | 8 ms |
-| keystroke through the whole window, 200 kB | 0.21 ms | 8 ms |
-| keystroke, 1 MB | 0.71 ms | 8 ms |
+| keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
+| keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
+| keystroke, 1 MB | 0.44 ms | 8 ms |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
@@ -309,6 +309,42 @@ next one as well - a flicker of duplicated text on every keystroke.
 Not covered: a long listing inside a callout is still part of the callout's
 single layout.
 
+### 11. What a keystroke still did to the whole note
+
+After fix 10, perf on a parsed 1 MB note (Release, UI thread only) put a third
+of a keystroke in `SourceMap`'s constructor: the editor rescanned the whole
+note for line starts on every edit, one `QString::at()` at a time. Then
+`updateLayout()`'s own loops, four passes over every block, and
+`shiftRanges`.
+
+- `SourceMap::applyEdit` moves the line starts after the edit instead of
+  rescanning, and the full scan uses the vectorised `indexOf`, which also
+  speeds the parse. A randomised test holds it to a rebuild after 2 000 edits.
+- `updateLayout()` settles what each block reveals and places it in one pass,
+  finds the blocks near the viewport by binary search, and after a layout
+  re-places only from the first block whose height changed.
+- List items are found by binary search on the block, not by walking every
+  item in the note, which layout did once per line and painting once per
+  list block.
+
+| keystroke, relaid and painted | before | after |
+|---|---|---|
+| 1 MB | 0.71 ms | 0.44 ms |
+| 200 kB | 0.27 ms | 0.22 ms |
+| 200 kB, through the window | 0.22 ms | 0.17 ms |
+
+The list change needed list items to move with the text between a keystroke
+and its reparse, and doing only that broke something the new guard caught:
+the bullets of the items below an edit disappeared. A block below an edit
+keeps its cached layout, and its `DisplayMap` was still in the old offsets;
+the unshifted items had agreed with it by accident. So now the cached maps
+shift with the text, and so does every decoration a layout or paint can read
+- callouts, tables, embeds, maths, `#|` options, paragraphs - which closes the
+latent hazard this page and the TODO had recorded: gutter numbers, code-row
+wrapping and click positions on blocks below an edit were also read at stale
+offsets for those 20 ms. That costs back about 0.05 ms at 1 MB, included
+above.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -436,11 +472,11 @@ Each of these produced a wrong number at least once in this project.
 
 ## Still open
 
-- The three O(document) passes on every keystroke: the `SourceMap` rebuild,
-  `shiftRanges` over every block and decoration, and two full passes in
-  `updateLayout()`. 0.25 ms at 200 kB, 0.66 ms at 1 MB - nobody's problem yet,
-  but the last thing in the editor proportional to the file rather than the
-  edit.
+- Two passes per keystroke are still proportional to the note, not the edit:
+  `shiftRanges` over every block and decoration, and `updateLayout()`'s one
+  placement pass. 0.44 ms in all at 1 MB. Proportional to the edit would take
+  offsets stored relative to something, which is a bigger change than the
+  numbers ask for yet.
 - Scroll by blitting, and the Wayland buffer measurement, above.
 - Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
   path to first paint.

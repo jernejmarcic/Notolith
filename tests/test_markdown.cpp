@@ -60,6 +60,35 @@ TEST(SourceMapTest, OffsetsAndLines)
     EXPECT_EQ(sliceOf(text, map.range(0, 0, 1, 2)), QStringLiteral("one\ntwo"));
 }
 
+TEST(SourceMapTest, AnEditIsTheSameAsRebuilding)
+{
+    // The editor moves its line starts on every keystroke instead of
+    // rescanning the note; any edit must land where a rebuild would.
+    QString text = QStringLiteral("one\ntwo\n\nfour\nfive\n");
+    SourceMap map(text);
+    const QStringList pieces = {QString(), QStringLiteral("x"), QStringLiteral("\n"),
+                                QStringLiteral("a\nb"), QStringLiteral("\n\n"),
+                                QStringLiteral("tail\n")};
+    quint32 seed = 7;
+    const auto next = [&seed](quint32 bound) {
+        seed = seed * 1664525u + 1013904223u; // any fixed sequence will do
+        return bound ? (seed >> 8) % bound : 0;
+    };
+    for (int step = 0; step < 2000; ++step) {
+        const qsizetype at = next(quint32(text.size() + 1));
+        const qsizetype removed = qMin<qsizetype>(next(4), text.size() - at);
+        const QString inserted = pieces.at(next(quint32(pieces.size())));
+        text.replace(at, removed, inserted);
+        map.applyEdit(at, removed, inserted);
+
+        const SourceMap rebuilt(text);
+        ASSERT_EQ(map.lineCount(), rebuilt.lineCount()) << "step " << step;
+        for (qsizetype line = 0; line < rebuilt.lineCount(); ++line)
+            ASSERT_EQ(map.lineStart(line), rebuilt.lineStart(line)) << "step " << step;
+        ASSERT_EQ(map.lineEnd(rebuilt.lineCount() - 1), text.size()) << "step " << step;
+    }
+}
+
 TEST(FrontmatterTest, FoundOnlyAtTheTop)
 {
     EXPECT_TRUE(Frontmatter::find(QStringLiteral("---\na: 1\n---\nbody\n")).isValid());

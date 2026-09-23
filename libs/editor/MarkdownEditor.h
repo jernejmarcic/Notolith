@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <optional>
 #include <vector>
 
@@ -362,8 +363,10 @@ private:
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// Bullets and checkboxes in the margin of a list block.
     void paintListMarkers(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    /// The list item whose marker was hidden at the start of `source`.
-    const ListItemSpan *listItemAt(qsizetype source) const;
+    /// The list item in `view` whose marker was hidden at the start of `source`.
+    const ListItemSpan *listItemAt(const BlockView &view, qsizetype source) const;
+    /// The list items that start inside `block`.
+    std::span<const ListItemSpan> listItemsIn(const Range &block) const;
     /// Checkbox rectangle of `item` in viewport coordinates, for hit testing.
     QRectF checkboxRect(const BlockView &view, const ListItemSpan &item) const;
     void toggleTask(const ListItemSpan &item);

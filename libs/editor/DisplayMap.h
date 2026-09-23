@@ -56,6 +56,10 @@ public:
     /// The display range covering a source range, for painting a selection.
     Range toDisplay(const Range &sourceRange) const;
 
+    /// The source moved by `delta` in front of this block: an edit above it.
+    /// The display string is unchanged, so a cached layout stays valid.
+    void shift(qsizetype delta);
+
 private:
     QString m_text;
     Range m_block;
