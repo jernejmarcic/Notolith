@@ -15,8 +15,12 @@ if(PkgConfig_FOUND)
 endif()
 
 add_library(noteAppC_pdfview STATIC
+    PdfAnnotationCommands.cpp
+    PdfAnnotationCommands.h
     PdfDocument.cpp
     PdfDocument.h
+    PdfExtract.cpp
+    PdfExtract.h
     PdfRecovery.cpp
     PdfRecovery.h)
 
