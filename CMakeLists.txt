@@ -104,6 +104,30 @@ file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/md4qt-include)
 file(CREATE_LINK ${md4qt_SOURCE_DIR}/src ${CMAKE_BINARY_DIR}/md4qt-include/md4qt SYMBOLIC)
 target_include_directories(md4qt INTERFACE ${CMAKE_BINARY_DIR}/md4qt-include)
 
+# yaml-cpp: frontmatter and Bases parsing (libs/markdown, libs/ext/bases).
+# Found the normal way - the namespaced yaml-cpp::yaml-cpp target is what
+# both consumers link against. The Android kit carries no yaml-cpp at all, so
+# when find_package fails this falls back to building it from source, pinned
+# like md4qt and tinyxml2 above; upstream's own CMakeLists only defines the
+# bare "yaml-cpp" target, so that path is given the same namespaced alias.
+find_package(yaml-cpp QUIET)
+if(NOT TARGET yaml-cpp::yaml-cpp)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+    set(YAML_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG f7320141120f720aecc4c32be25586e7da9eb978 # 0.8.0
+        EXCLUDE_FROM_ALL)
+    FetchContent_MakeAvailable(yaml-cpp)
+    if(TARGET yaml-cpp AND NOT TARGET yaml-cpp::yaml-cpp)
+        add_library(yaml-cpp::yaml-cpp ALIAS yaml-cpp)
+    endif()
+    message(STATUS "noteAppC: yaml-cpp not found on the system, building it from source (0.8.0)")
+endif()
+
 add_subdirectory(libs/vault)
 add_subdirectory(libs/markdown)
 add_subdirectory(libs/index)
@@ -125,7 +149,12 @@ if(NOTEAPPC_WITH_BASES)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
-add_subdirectory(tools)
+# The screenshot tool, the index CLI and the bench harness are desktop
+# developer tools, not part of the app; on Android they would need their own
+# packaging for no benefit, so they simply do not build there.
+if(NOT ANDROID)
+    add_subdirectory(tools)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -134,11 +163,15 @@ endif()
 
 # Installing matters for one reason: a .desktop file is what lets a file
 # manager open a loose .md with noteAppC, which is the whole point of
-# single-file mode.
-include(GNUInstallDirs)
-install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES packaging/noteAppC.desktop
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-# What software centres and Flatpak read to describe the app.
-install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+# single-file mode - meaningless on Android, where qt_add_executable() makes
+# noteAppC a MODULE target instead of an executable and this same
+# install(TARGETS) would need a LIBRARY DESTINATION it has no use for.
+if(NOT ANDROID)
+    include(GNUInstallDirs)
+    install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/noteAppC.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    # What software centres and Flatpak read to describe the app.
+    install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+endif()
