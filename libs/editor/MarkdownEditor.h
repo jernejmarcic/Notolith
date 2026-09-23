@@ -267,10 +267,18 @@ public:
     /// table renders from these, and the window's future property pane will.
     const QList<Property> &properties() const { return m_properties; }
 
+    /// The note's headings, as the last parse read them, in source order. The
+    /// outline pane builds its tree from these instead of re-parsing.
+    const QList<Heading> &headings() const { return m_headings; }
+
 signals:
     /// The word count moved. It is published with each parse, so it lags a
     /// keystroke by the parse debounce instead of costing the keystroke.
     void wordCountChanged(int words);
+    /// A parse landed, so headings() reflects the current text. Fired even
+    /// when the heading list did not actually change - cheap to ignore, and
+    /// the outline pane only rebuilds a QTreeWidget from it.
+    void headingsChanged();
     void textChanged();
     void modificationChanged(bool modified);
     void linkActivated(const QString &target);
@@ -446,7 +454,7 @@ private:
     void reparse();
     /// Starts a parse on the thread pool; the editor never waits for it.
     void startParse();
-    void adoptDecorations(Decorations decorations, QList<Property> properties);
+    void adoptDecorations(Decorations decorations, QList<Property> properties, QList<Heading> headings);
     void rebuildBlocks();
     void indexDecorations();
     void layoutBlock(BlockView &view);
@@ -777,6 +785,7 @@ private:
     Decorations m_decorations; ///< styles and syntax kept sorted by start
     mutable QHash<QString, bool> m_unresolved; ///< link target -> has no note
     QList<Property> m_properties; ///< frontmatter, for the properties table
+    QList<Heading> m_headings; ///< as of the last parse, for the outline pane
     std::vector<BlockView> m_blocks; // move-only: QTextLayout is not copyable
     /// Fold state by block start offset. A block with no entry is in the state
     /// its source asked for, so folding survives a reparse without the
@@ -849,6 +858,7 @@ private:
     struct ParseJob {
         Decorations decorations;
         QList<Property> properties;
+        QList<Heading> headings;
         int words = 0;
         quint64 version = 0;
     };

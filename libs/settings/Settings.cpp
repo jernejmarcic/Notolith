@@ -53,6 +53,18 @@ const QVariantMap &defaults()
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 
+        // Daily notes and templates. A vault's own `.obsidian/daily-notes.json`
+        // and `templates.json` are read directly by DailyNotes and Templates
+        // (libs/vault) rather than mapped in here, the same as bookmarks.json;
+        // these are the fallback for a vault that has never set its own, and
+        // Obsidian's own defaults besides.
+        {QStringLiteral("dailyNotes.folder"), QString()},
+        {QStringLiteral("dailyNotes.format"), QStringLiteral("YYYY-MM-DD")},
+        {QStringLiteral("dailyNotes.template"), QString()},
+        {QStringLiteral("templates.folder"), QString()},
+        {QStringLiteral("templates.dateFormat"), QStringLiteral("YYYY-MM-DD")},
+        {QStringLiteral("templates.timeFormat"), QStringLiteral("HH:mm")},
+
         // Remembered between launches
         {QStringLiteral("state.recentVaults"), QStringList()},
         {QStringLiteral("state.recentFiles"), QStringList()},
