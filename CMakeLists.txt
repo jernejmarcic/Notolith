@@ -15,6 +15,12 @@ find_package(Qt6 6.5 QUIET COMPONENTS OpenGLWidgets)
 find_package(Qt6 6.5 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
+# Neither dependency is in the Android Qt kit, so both can be turned off for a
+# mobile/cross build; NOTEAPPC_WITH_PDF also covers dropping poppler-qt6 when
+# it is installed but built against a Qt too new to link with that kit.
+option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
+option(NOTEAPPC_WITH_PDF "Embed PDFs with poppler-qt6" ON)
+
 add_compile_options(-Wall -Wextra)
 
 # md4qt is not packaged on Arch; pin the KDE repository by commit.

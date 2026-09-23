@@ -34,6 +34,12 @@ public:
     /// Obsidian and Prism use ids Kate does not always share.
     static QString kateNameFor(const QString &infoString);
 
+    /// False in a build configured without KF6 SyntaxHighlighting (the
+    /// Android Qt kit does not carry it): `highlight()` then always returns
+    /// no formats and `knows()` is always false, but code still renders,
+    /// monospaced and uncoloured.
+    static bool isAvailable();
+
 private:
     struct Private;
     std::unique_ptr<Private> d;

@@ -93,6 +93,54 @@ blocks) and poppler-qt6 (PDF embeds) come from the Linux distribution. For
 Android they must be cross-built or made optional. Poppler already is
 optional; syntax highlighting is `REQUIRED` and would need the same treatment.
 
+**Checked 2026-09-23: both are now optional, and the tree was built against
+6.7.3.** `NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING` (default `ON`) and
+`NOTEAPPC_WITH_PDF` (default `ON`, so poppler can be turned off even when it
+is installed - the system poppler-qt6 here is built against Qt 6.11 and
+cannot be linked against the 6.7.3 kit) now guard the `find_package` calls in
+`libs/render/CMakeLists.txt`. With either off or the package missing,
+`CodeHighlighter`/`PdfPage` compile without it: `CodeHighlighter::isAvailable()`
+and `PdfPage::isAvailable()` report `false`, `highlight()` returns no token
+formats, and code blocks still render, monospaced and uncoloured. The two
+`CodeHighlighterTest` cases in `tests/test_editor.cpp` skip
+(`GTEST_SKIP`) when `isAvailable()` is false rather than failing.
+
+Built with `CMAKE_PREFIX_PATH` pointed at the Android kit's `gcc_64` sibling
+build (`~/Documents/AI/.toolchains/Qt/6.7.3/gcc_64`, a desktop Qt 6.7.3 build
+matching the `android_arm64_v8a` one) and both new options `OFF`, in a
+separate `build-qt673/` directory. No Qt module the root `CMakeLists.txt`
+asks for (`Widgets Svg Sql Concurrent Network`, optional `OpenGLWidgets` and
+`Test`) is missing from the kit - configure succeeds cleanly.
+
+**The tree does not build end to end against 6.7.3 yet - blocked upstream of
+noteAppC's own code.** `libs/vault`, `libs/theme`, `libs/settings` and
+`libs/render` (with the options above) all compile clean, and their test
+suites (`test_vault`, `test_settings`, `test_theme`, `test_icons`) build and
+pass. But md4qt - fetched by `FetchContent` and pinned to commit
+`e48716a41c1cf7f91b130fe3d3cc1c524e3b404a` (v5.1.4) - fails to compile itself
+under 6.7.3, in its own vendored sources, before noteAppC's code that depends
+on it (`libs/markdown`, and everything downstream: `libs/index`,
+`libs/editor`, `libs/ui`, the app, and their tests) is ever reached. Two Qt
+6.8+ APIs, both inside md4qt's own tree (fetched to
+`_deps/md4qt-src/src/`, not part of this repository - not edited, per this
+session's file ownership):
+
+| file:line | API (Qt 6.8+) | 6.7-compatible replacement |
+|---|---|---|
+| `text_stream.h:242` | `QString(QStringView)` - `QString`'s new implicit-conversion constructor from a view | `view().sliced(pos, len).toString().replace(...)` - call `.toString()` on the view first |
+| `atx_heading_parser.cpp:211` | `QString(QStringView)`, same constructor, over `currentLine.view()` | `currentLine.view().toString()` |
+| `utils.cpp:120` | `QString(QChar::fromUcs4(c))` - `QChar::fromUcs4`'s Qt 6.8 return type gained an implicit conversion to `QString` that 6.7's does not have | `QString::fromUcs4(&c, 1)` |
+| `utils.cpp:138` | same as above, the decimal-entity branch | `QString::fromUcs4(&c, 1)` |
+
+All four are variations on the same change: `QString` gained more ways to be
+built from a view in 6.8. Since these errors are in the vendored dependency
+and cascade (every md4qt translation unit includes `text_stream.h`), nothing
+past it was attempted, so `libs/markdown`/`libs/index`/`libs/editor`/`libs/ui`
+and the app remain **unverified against 6.7.3** - they may or may not have
+6.8+ uses of their own; that is still to check once md4qt itself builds
+against the kit (a newer md4qt release, or a patched fork, since this
+session's scope did not include changing the pinned dependency).
+
 **Plugins do not travel.** iOS does not let an app load code it did not ship
 with, and Android only loads native libraries packaged inside the app. So
 runtime plugins ([PLUGINS.md](PLUGINS.md), Tier 2) are desktop-only by

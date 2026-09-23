@@ -378,6 +378,9 @@ TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
 
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
 {
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+
     CodeHighlighter highlighter;
 
     EXPECT_EQ(CodeHighlighter::kateNameFor(QStringLiteral("cpp")), QStringLiteral("C++"));
@@ -394,6 +397,9 @@ TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
 
 TEST(CodeHighlighterTest, ColoursTokensAndLeavesUnknownLanguagesAlone)
 {
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+
     CodeHighlighter highlighter;
     const QString code = QStringLiteral("int x = 42; // comment\nreturn x;\n");
 

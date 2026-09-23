@@ -1,4 +1,10 @@
-find_package(KF6SyntaxHighlighting REQUIRED)
+# Colours fenced code blocks. Not in the Android Qt kit, so it is skipped
+# entirely when the option is off or the package is missing - CodeHighlighter
+# then returns no token formats and code still renders, monospaced and
+# uncoloured, rather than failing the build.
+if(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING)
+    find_package(KF6SyntaxHighlighting QUIET)
+endif()
 
 # MicroTeX, built from its sources rather than its project: see the comment on
 # FetchContent in the top-level CMakeLists.
@@ -46,15 +52,29 @@ add_library(noteAppC_render STATIC
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
-    PRIVATE KF6::SyntaxHighlighting microtex)
+    PRIVATE microtex)
 target_compile_definitions(noteAppC_render PRIVATE
     NOTEAPPC_MICROTEX_RES="${CMAKE_BINARY_DIR}/microtex/res")
 
+if(TARGET KF6::SyntaxHighlighting)
+    target_link_libraries(noteAppC_render PRIVATE KF6::SyntaxHighlighting)
+    target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING)
+    message(STATUS "noteAppC: syntax highlighting enabled (KF6::SyntaxHighlighting)")
+elseif(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING)
+    message(STATUS "noteAppC: KF6 SyntaxHighlighting not found, code blocks will be uncoloured")
+else()
+    message(STATUS "noteAppC: syntax highlighting disabled (NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF)")
+endif()
+
 # PDF embeds. Optional: poppler is GPL, so a permissive build can drop it and
-# PdfPage then reports itself unavailable.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(POPPLER_QT6 IMPORTED_TARGET poppler-qt6)
+# PdfPage then reports itself unavailable; NOTEAPPC_WITH_PDF also lets it be
+# switched off when it is installed but built against a Qt the target kit
+# cannot link against (the system poppler-qt6 here is built against Qt 6.11).
+if(NOTEAPPC_WITH_PDF)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(POPPLER_QT6 IMPORTED_TARGET poppler-qt6)
+    endif()
 endif()
 if(TARGET PkgConfig::POPPLER_QT6)
     target_link_libraries(noteAppC_render PRIVATE PkgConfig::POPPLER_QT6)

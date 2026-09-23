@@ -1,15 +1,19 @@
 #include "CodeHighlighter.h"
 
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
 #include <KSyntaxHighlighting/AbstractHighlighter>
 #include <KSyntaxHighlighting/Definition>
 #include <KSyntaxHighlighting/Format>
 #include <KSyntaxHighlighting/Repository>
 #include <KSyntaxHighlighting/State>
 #include <KSyntaxHighlighting/Theme>
+#endif
 
 namespace noteAppC {
 
 namespace {
+
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
 
 /// Collects formats instead of painting, which is what lets the result be
 /// appended to a QTextLayout the editor already built.
@@ -67,6 +71,8 @@ private:
     qsizetype m_base = 0;
 };
 
+#endif // NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
+
 /// Ids Obsidian and Prism use that Kate spells differently.
 const QHash<QString, QString> &aliases()
 {
@@ -103,26 +109,43 @@ const QHash<QString, QString> &aliases()
 } // namespace
 
 struct CodeHighlighter::Private {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     KSyntaxHighlighting::Repository repository;
     KSyntaxHighlighting::Theme theme;
     mutable Collector collector;
+#endif
 };
 
 CodeHighlighter::CodeHighlighter()
     : d(std::make_unique<Private>())
 {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     d->theme = d->repository.defaultTheme(KSyntaxHighlighting::Repository::DarkTheme);
     d->collector.setTheme(d->theme);
+#endif
 }
 
 CodeHighlighter::~CodeHighlighter() = default;
 
 void CodeHighlighter::setTheme(const Theme &theme)
 {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     d->theme = d->repository.defaultTheme(theme.isDark()
                                               ? KSyntaxHighlighting::Repository::DarkTheme
                                               : KSyntaxHighlighting::Repository::LightTheme);
     d->collector.setTheme(d->theme);
+#else
+    Q_UNUSED(theme);
+#endif
+}
+
+bool CodeHighlighter::isAvailable()
+{
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
+    return true;
+#else
+    return false;
+#endif
 }
 
 QString CodeHighlighter::kateNameFor(const QString &infoString)
@@ -135,14 +158,20 @@ QString CodeHighlighter::kateNameFor(const QString &infoString)
 
 bool CodeHighlighter::knows(const QString &language) const
 {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     if (language.isEmpty())
         return false;
     return d->repository.definitionForName(kateNameFor(language)).isValid();
+#else
+    Q_UNUSED(language);
+    return false;
+#endif
 }
 
 QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
                                                            const QString &language) const
 {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     if (text.isEmpty())
         return {};
 
@@ -158,6 +187,11 @@ QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
     d->collector.setDefinition(definition);
     d->collector.run(text);
     return d->collector.formats;
+#else
+    Q_UNUSED(text);
+    Q_UNUSED(language);
+    return {};
+#endif
 }
 
 } // namespace noteAppC
