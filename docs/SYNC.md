@@ -333,8 +333,17 @@ user of line-diffing turns up, not before (YAGNI).
 
 - **Clean merge** (no overlapping hunks): write the merged text through
   `Vault::write` (atomic, preserves CRLF/BOM - the same path any other
-  vault-write uses), update the base, and queue the merged result to be
-  pushed as the next record for that entity.
+  vault-write uses) and update the base to it. The merge result is **not**
+  itself pushed as a new record - it does not need to be. The merge is a
+  pure function of `(base, local, remote)`, so any other device that pulls
+  the same two raw edits (its own, and the one that was just applied here)
+  recomputes the identical text independently; pushing it too would only
+  be extra traffic and a theoretical ping-pong if two devices both decided
+  to "helpfully" re-announce a merge they just computed. Applying pulled
+  records one at a time, in `seq` order, each against whatever `base` the
+  *previous* record in the batch left behind, is what makes this converge
+  for more than two devices too - it is a fold, not a pairwise special
+  case.
 - **True conflict**: the local file is left exactly as it is (local wins in
   place - never silently discard what's on screen), the remote version is
   written next to it as `<name> (sync conflict, <device>, <timestamp>).md`
