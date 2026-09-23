@@ -22,6 +22,7 @@
 
 #include <algorithm>
 
+#include "WaitFor.h"
 #include "Index.h"
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
@@ -109,7 +110,7 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
     const qsizetype notes = std::count_if(all.cbegin(), all.cend(), [](const QString &file) {
         return file.endsWith(QLatin1String(".md"));
     });
-    QTRY_VERIFY_WITH_TIMEOUT(window.index()->noteCount() >= notes, 15000);
+    WAIT_TRUE(window.index()->noteCount() >= notes, 15000);
     window.resize(1280, 900);
     window.show();
     QApplication::processEvents();

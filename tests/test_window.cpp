@@ -34,6 +34,7 @@
 #include <QTimer>
 #include <QToolButton>
 
+#include "WaitFor.h"
 #include "MarkdownEditor.h"
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
@@ -638,7 +639,7 @@ TEST_F(WindowTest, ABaseOpensInATabAndItsRowsOpenNotes)
     auto *table = base->findChild<QTableView *>();
     ASSERT_NE(table, nullptr);
     // Evaluated on the pool: the rows come a moment after the tab.
-    QTRY_VERIFY_WITH_TIMEOUT(table->model() && table->model()->rowCount() == 1, 5000);
+    WAIT_TRUE(table->model() && table->model()->rowCount() == 1, 5000);
 
     emit base->noteActivated(QStringLiteral("Task.md"));
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("---\nstatus: open\n---\nDo it.\n"));
@@ -1525,14 +1526,14 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     write(QStringLiteral("Linking.md"), "See [[Other#Part two]].\n");
     MainWindow window;
     window.openVault(dir.path());
-    QTRY_VERIFY_WITH_TIMEOUT(!window.findChildren<QAction *>().isEmpty(), 1000);
+    WAIT_TRUE(!window.findChildren<QAction *>().isEmpty(), 1000);
     window.openNote(path(QStringLiteral("Linking.md")));
 
     // What the editor sends when the pointer rests on the link with Ctrl held.
     emit window.editor()->linkHovered(QStringLiteral("Other#Part two"), QPoint(200, 200));
     // Built the first time a link is hovered, not before.
     noteAppC::PagePreview *preview = nullptr;
-    QTRY_VERIFY_WITH_TIMEOUT(
+    WAIT_TRUE(
         (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
         2000);
     const QString shown = preview->editor()->noteText();
@@ -1542,7 +1543,7 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
 
     // Moving off the link lets it go, after a moment to reach the preview.
     emit window.editor()->linkHoverEnded();
-    QTRY_VERIFY_WITH_TIMEOUT(!preview->isVisible(), 2000);
+    WAIT_TRUE(!preview->isVisible(), 2000);
 }
 
 TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
@@ -1569,7 +1570,7 @@ TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
     EXPECT_EQ(clicked.first().first().toString(), QStringLiteral("Other#Part two"));
     const QString shown = window.editor()->noteText();
     EXPECT_TRUE(shown.startsWith(QLatin1String("# Other")));
-    QTRY_COMPARE_WITH_TIMEOUT(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")), 2000);
+    WAIT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")), 2000);
 }
 
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
@@ -1587,7 +1588,7 @@ TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 
     emit window.editor()->linkHovered(QStringLiteral("pic.png"), QPoint(200, 200));
     noteAppC::PagePreview *preview = nullptr;
-    QTRY_VERIFY_WITH_TIMEOUT(
+    WAIT_TRUE(
         (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
         2000);
     auto *image = preview->findChild<QLabel *>();
@@ -1601,7 +1602,7 @@ TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 
     // A note after it puts the editor back.
     emit window.editor()->linkHovered(QStringLiteral("Other"), QPoint(200, 200));
-    QTRY_VERIFY_WITH_TIMEOUT(preview->editor()->isVisibleTo(preview), 2000);
+    WAIT_TRUE(preview->editor()->isVisibleTo(preview), 2000);
 }
 
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -1898,7 +1899,7 @@ TEST_F(WindowTest, AnEmbeddedBaseShowsItsRowsInTheNote)
     ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.md"))));
     MarkdownEditor *editor = window.editor();
     editor->setCursorOffset(editor->noteText().size()); // the caret off the embed's line
-    QTRY_VERIFY_WITH_TIMEOUT(editor->baseRowsAt(0).size() == 1, 5000);
+    WAIT_TRUE(editor->baseRowsAt(0).size() == 1, 5000);
     EXPECT_EQ(editor->baseRowsAt(0).constFirst().path, QStringLiteral("Task.md"));
 }
 #endif
@@ -2021,7 +2022,7 @@ TEST_F(WindowTest, TypingIsSavedAMomentAfterItStopsAndLeavingNeverAsks)
     QTest::keyClicks(editor, QStringLiteral("typed"));
     ASSERT_TRUE(editor->isModified());
     EXPECT_FALSE(readAll(path(QStringLiteral("Welcome.md"))).contains("typed")) << "not on every keystroke";
-    QTRY_VERIFY_WITH_TIMEOUT(!editor->isModified(), 5000);
+    WAIT_TRUE(!editor->isModified(), 5000);
     EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed"));
 
     // Leaving a note with unsaved changes saves it; nothing asks.
