@@ -92,7 +92,7 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       bodies' links and emphasis read at last), and a published page lists
       them. A `:::` fence's attributes are no longer tags. Index schema 5.
 - [x] Images, audio and video open in a tab of their own.
-- [ ] **After the notebook lane merges (it owns libs/editor now):**
+- [x] **After the notebook lane merges (it owns libs/editor now):**
   - [x] Lists (Jernej 2026-09-23): nested markers no longer overlap their
         text, "-"/"*"/"+" drawn distinctly, Word-style 1.1/1.2 numbering as
         a setting ("Outline numbering"), lists nest inside quotes/callouts.
@@ -509,21 +509,24 @@ atuonomously"; "If there are blockers due to stuff not being insatlled, just
 work on work that isn't blocked".
 
 What the spec asks for:
-- [ ] Run a code block through a **Jupyter kernel**: a client of the
+- [x] Run a code block through a **Jupyter kernel**: a client of the
       messaging protocol (ZeroMQ, five sockets), so any installed kernel is a
-      language. The frontend stays language-agnostic.
-- [ ] **Per-block options as `#|` lines inside the fence** (Quarto's
+      language. The frontend stays language-agnostic. (libs/ext/notebook)
+- [x] **Per-block options as `#|` lines inside the fence** (Quarto's
       hash-pipe): valid comments in the block's language, so the `.md` stays
       clean CommonMark.
-- [ ] **Output cached in a sidecar**, never in the `.md` (Quarto's freeze
+- [x] **Output cached in a sidecar**, never in the `.md` (Quarto's freeze
       model): shown under the block, kept across launches.
-- [ ] **Runnable code-file embeds**: `![[file.py]]` runs the file and shows its
+- [x] **Runnable code-file embeds**: `![[file.py]]` runs the file and shows its
       cached output below.
 - [ ] **Tiered sandbox**, chosen per block by trust: tier 0 host-direct
       (opt-in), tier 1 bubblewrap/nsjail with seccomp and Landlock (the
       desktop default); gVisor, Firecracker and WASM tiers later (server and
       mobile).
-- [ ] Check what is installed before building on it (libzmq, a kernel such as
+      Built: tier 0 (`#| sandbox: host`, honoured only when Settings allows)
+      and tier 1 bubblewrap. Left: seccomp and Landlock inside tier 1, and
+      the server/mobile tiers.
+- [x] Check what is installed before building on it (libzmq, a kernel such as
       ipykernel, bubblewrap); leave anything missing for Jernej.
 
 ## Requested 2026-09-23: the rest of Obsidian
