@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 
@@ -494,8 +495,12 @@ TEST_F(WindowTest, SplitRightShowsTheSameNoteAndFollowsItsSave)
     MarkdownEditor *left = window.editor();
 
     window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
-    const QList<QTabBar *> bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+    QList<QTabBar *> bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
     ASSERT_EQ(bars.size(), 2);
+    // Left to right: child order is creation order, not screen order.
+    std::sort(bars.begin(), bars.end(), [&window](QTabBar *a, QTabBar *b) {
+        return a->mapTo(&window, QPoint()).x() < b->mapTo(&window, QPoint()).x();
+    });
     MarkdownEditor *right = window.editor();
     ASSERT_NE(right, left);
     EXPECT_EQ(right->noteText(), left->noteText());
@@ -508,10 +513,15 @@ TEST_F(WindowTest, SplitRightShowsTheSameNoteAndFollowsItsSave)
     ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
     EXPECT_EQ(left->noteText(), QStringLiteral("x# Welcome\n\nBody.\n"));
 
-    // Focus decides which split the window follows.
+    EXPECT_FALSE(bars.at(0)->property("focusedSplit").toBool());
+    EXPECT_TRUE(bars.at(1)->property("focusedSplit").toBool());
+
+    // Focus decides which split the window follows, and which tab is marked.
     left->setFocus();
     QApplication::processEvents();
     EXPECT_EQ(window.editor(), left);
+    EXPECT_TRUE(bars.at(0)->property("focusedSplit").toBool());
+    EXPECT_FALSE(bars.at(1)->property("focusedSplit").toBool());
 
     // Closing a split's last tab closes the split.
     right->setFocus();

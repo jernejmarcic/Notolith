@@ -320,8 +320,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       6.4 ms, a rare one 0.05 ms. Left: `[property:value]` syntax; `block:`
       is paragraph-level, not md4qt's blocks; `/regex/` is PCRE2, not JS.
 - [x] **Unlinked mentions** in the backlinks pane (lane A), 0.3 ms per note.
-- [ ] Search snippet for a frontmatter tag highlights the whole frontmatter
-      (the tag's range is the block's); highlight the tag's own text.
+- [x] Search snippet for a frontmatter tag highlighted the whole frontmatter;
+      now the tag's own word.
 - [x] **Outline** pane: the note's headings as a tree, the caret's in bold, click to jump.
 - [x] **Bookmarks**: notes, headings, searches, groups; reads
       `.obsidian/bookmarks.json`, keeps its own copy outside the vault.
@@ -407,7 +407,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [ ] **For Jernej:** Obsidian opens a link in a new tab on Ctrl+click, but
       in noteAppC's editing view Ctrl+click is how a link is followed at all
       (a plain click places the caret). Which should Ctrl+click be?
-- [ ] The unfocused split's tab header could dim, as Obsidian's does.
+- [x] Only the focused split's tab is accented, as in Obsidian.
 - [ ] One note edited in two splits at once diverges; last save wins.
       Obsidian edits one document from every view.
 
@@ -433,5 +433,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       `sh tools/check.sh [--bench]` - the release build and all suites (perf
       guards and the new seeded round-trip fuzz among them), then a build
       with every optional module off and its suites.
-- [ ] The Android build, and a touch mode for the editor.
+- [ ] The Android build - lane G running in `/tmp/noteAppC-android`.
+- [x] Touch mode, first part: momentum scrolling where a touchscreen
+      exists (a mouse drag still selects), long-press selects a word, both
+      sidebars fold below 720 px and come back.
+- [ ] Touch mode, rest: selection handles, touch-sized hit targets (task
+      boxes, fold arrows, chips), sidebars as drawers over the note.
 

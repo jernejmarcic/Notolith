@@ -29,6 +29,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QStatusBar>
+#include <QStyle>
 #include <QStyleHints>
 #include <QTabBar>
 #include <QtConcurrent>
@@ -448,10 +449,14 @@ QString MainWindow::tabBarStyle() const
                           "padding: 8px 16px 10px 16px; margin: 0; min-width: 90px; max-width: 260px; "
                           "border: none; border-bottom: 2px solid transparent; }"
                           "QTabBar::tab:hover { color: %2; }"
-                          "QTabBar::tab:selected { color: %2; border-bottom: 2px solid %3; }")
+                          "QTabBar::tab:selected { color: %2; border-bottom: 2px solid %3; }"
+                          // Only the focused split's tab is marked, as in Obsidian;
+                          // the others keep theirs, unaccented.
+                          "QTabBar[focusedSplit=\"false\"]::tab:selected { border-bottom-color: %4; }")
         .arg(m_theme.value(QStringLiteral("--text-muted")),
              m_theme.value(QStringLiteral("--text-normal")),
-             m_theme.value(QStringLiteral("--interactive-accent")));
+             m_theme.value(QStringLiteral("--interactive-accent")),
+             m_theme.value(QStringLiteral("--background-modifier-border")));
 }
 
 MainWindow::TabGroup *MainWindow::newGroup()
@@ -635,7 +640,16 @@ void MainWindow::activateLeaf(Leaf *leaf)
     // reuses the tab that was already focused.
     if (!leaf || (leaf == m_active && leaf->pendingPath.isEmpty()))
         return;
+    TabGroup *previousGroup = m_active ? m_active->group : nullptr;
     m_active = leaf;
+    if (leaf->group != previousGroup) {
+        for (const auto &group : m_groups) {
+            group->tabs->setProperty("focusedSplit", group.get() == leaf->group);
+            // A dynamic property only restyles on a fresh polish.
+            group->tabs->style()->unpolish(group->tabs);
+            group->tabs->style()->polish(group->tabs);
+        }
+    }
     TabGroup *group = leaf->group;
     group->stack->setCurrentWidget(leaf->area);
     const int index = group->leaves.indexOf(leaf);
