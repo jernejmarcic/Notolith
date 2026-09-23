@@ -37,6 +37,7 @@
 #include "WaitFor.h"
 #include "MarkdownEditor.h"
 #include "PropertiesPane.h"
+#include "SlidesView.h"
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
@@ -1649,6 +1650,36 @@ TEST_F(WindowTest, ARandomNoteAndAUniqueNote)
     unique->trigger();
     EXPECT_TRUE(QFileInfo::exists(
         path(QStringLiteral("zk/ZK-%1.md").arg(QDate::currentDate().year()))));
+}
+
+TEST_F(WindowTest, SlidesSplitAtRulesAndStepWithTheKeys)
+{
+    EXPECT_EQ(noteAppC::SlidesView::split(QStringLiteral("---\ntitle: x\n---\n# One\n\n---\n\n# Two\n\n---\n\n```\n---\n```\n")),
+              (QStringList{QStringLiteral("# One"), QStringLiteral("# Two"),
+                           QStringLiteral("```\n---\n```")})); // frontmatter out, a fence kept whole
+
+    write(QStringLiteral("Deck.md"), "# One\n\n---\n\n# Two\n\n---\n\n# Three\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.resize(1000, 700);
+    window.show();
+    window.openNote(path(QStringLiteral("Deck.md")));
+    window.editor()->setCursorOffset(window.editor()->noteText().indexOf(QLatin1String("Two")));
+    window.findChild<QAction *>(QStringLiteral("slides:start"))->trigger();
+
+    auto *slides = window.findChild<noteAppC::SlidesView *>();
+    ASSERT_NE(slides, nullptr);
+    EXPECT_EQ(slides->count(), 3);
+    EXPECT_EQ(slides->current(), 1); // where the caret was
+    QTest::keyClick(slides->editor(), Qt::Key_Right);
+    EXPECT_EQ(slides->current(), 2);
+    EXPECT_TRUE(slides->editor()->noteText().contains(QLatin1String("Three")));
+    QTest::keyClick(slides->editor(), Qt::Key_Right); // the last stays the last
+    EXPECT_EQ(slides->current(), 2);
+    QTest::keyClick(slides->editor(), Qt::Key_Home);
+    EXPECT_EQ(slides->current(), 0);
+    QTest::keyClick(slides->editor(), Qt::Key_Escape);
+    WAIT_TRUE(!slides->isVisible() && window.editor()->isVisible(), 1000);
 }
 
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)

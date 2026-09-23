@@ -50,6 +50,7 @@ class SearchPane;
 class SettingsPage;
 class TagsPane;
 class PropertiesPane;
+class SlidesView;
 
 /// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
 /// Obsidian's workspace of tabs in splits, a settings page in the main area,
@@ -305,6 +306,8 @@ private:
     void openRecovery();
     /// Today's daily note (`step` 0), or the one before or after the daily
     /// note that is open (-1, +1), created from its template when missing.
+    /// "Slides: Start presentation": the note's slides, full screen.
+    void startPresentation();
     /// "Unique note creator": a note named by the time, per zk-prefixer.json.
     void createUniqueNote();
     void openDailyNote(int step);
@@ -483,6 +486,8 @@ private:
     QPointer<BacklinksPane> m_backlinks;
     QPointer<TagsPane> m_tags;
     QPointer<PropertiesPane> m_properties;
+    QPointer<SlidesView> m_slides; ///< a main-area page, built on first use
+    bool m_slidesLeftFullScreen = false; ///< whether ending a presentation restores the window
     QPointer<OutgoingLinksPane> m_outgoingLinks;
     QPointer<OutlinePane> m_outline;
     QPointer<BookmarksPane> m_bookmarks;

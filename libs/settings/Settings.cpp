@@ -559,6 +559,9 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Sync this vault through a server, end-to-end encrypted: the server "
                                        "never sees note contents, file names or tags."),
          true},
+        {"slides", QT_TRANSLATE_NOOP("Settings", "Slides"),
+         QT_TRANSLATE_NOOP("Settings", "Present a note full screen, one slide per part between --- rules."),
+         true},
         {"switcher", QT_TRANSLATE_NOOP("Settings", "Quick switcher"),
          QT_TRANSLATE_NOOP("Settings", "Jump to any note by name with Ctrl+O."), true},
         {"global-search", QT_TRANSLATE_NOOP("Settings", "Search"),

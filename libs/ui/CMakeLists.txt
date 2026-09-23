@@ -13,6 +13,8 @@ add_library(noteAppC_ui STATIC
     BacklinksPane.cpp
     BacklinksPane.h
     PropertiesPane.cpp
+    SlidesView.cpp
+    SlidesView.h
     PropertiesPane.h
     TagsPane.cpp
     TagsPane.h

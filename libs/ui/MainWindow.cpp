@@ -104,6 +104,7 @@
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "PropertiesPane.h"
+#include "SlidesView.h"
 #include "TagsPane.h"
 
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
@@ -1494,6 +1495,8 @@ void MainWindow::buildActions()
     });
     add(QStringLiteral("zk-prefixer"), tr("Unique note creator: Create new unique note"), QString(),
         &MainWindow::createUniqueNote);
+    add(QStringLiteral("slides:start"), tr("Slides: Start presentation"), QString(),
+        &MainWindow::startPresentation);
     add(QStringLiteral("insert-template"), tr("Templates: Insert template"), QString(),
         &MainWindow::insertTemplate);
     add(QStringLiteral("bookmarks:bookmark-current-view"), tr("Bookmarks: Bookmark this note"),
@@ -1877,6 +1880,35 @@ DailyNotes MainWindow::dailyNotes() const
     if (QFileInfo::exists(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/daily-notes.json"))))
         config = DailyNotes::readConfig(m_vault.root());
     return DailyNotes(m_vault.root(), config);
+}
+
+void MainWindow::startPresentation()
+{
+    if (m_active->notePath.isEmpty() || m_active->view) {
+        statusBar()->showMessage(tr("Open a note to present it"), 3000);
+        return;
+    }
+    if (!m_slides) {
+        m_slides = new SlidesView(m_mainStack);
+        m_mainStack->addWidget(m_slides);
+        connect(m_slides, &SlidesView::finished, this, [this] {
+            m_mainStack->setCurrentIndex(0);
+            if (m_slidesLeftFullScreen)
+                showNormal();
+            m_active->editor->setFocus();
+        });
+    }
+    m_slides->setTheme(m_theme);
+    m_slides->setLinkResolver(m_resolveLink);
+    m_slides->setFeatures(m_active->editor->features());
+    // The slide the caret is on, the way Obsidian starts from where you are;
+    // a caret just past a rule is on the next one.
+    const QString text = m_active->editor->noteText();
+    const QString before = text.left(m_active->editor->cursorOffset()) + QLatin1Char('x');
+    m_slidesLeftFullScreen = !isFullScreen();
+    m_mainStack->setCurrentWidget(m_slides);
+    showFullScreen();
+    m_slides->present(SlidesView::split(text), int(SlidesView::split(before).size()) - 1);
 }
 
 void MainWindow::createUniqueNote()
