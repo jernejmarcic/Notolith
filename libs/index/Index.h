@@ -7,6 +7,7 @@
 #include <QStringList>
 
 #include "Metadata.h"
+#include "Search.h"
 
 namespace noteAppC {
 
@@ -79,6 +80,21 @@ public:
     QStringList findByName(const QString &query, int limit = 50) const;
     /// Every name a wikilink may use, for the `[[` suggester.
     QStringList linkTargets() const;
+
+    // --- search (libs/index/Search.h has the grammar and the evaluator) ---
+
+    /// Obsidian's search grammar against the full-text table: FTS5 narrows to
+    /// candidates (SearchQuery::ftsExpression()), then every candidate is
+    /// confirmed and located with SearchQuery::evaluate() against the text
+    /// `put()` was given, so offsets land in the same coordinate space as
+    /// every other range in this codebase. Safe to call from any thread other
+    /// than the one that opened this Index: it never touches `m_db`, opening
+    /// its own short-lived connection instead, so a search running on a
+    /// worker thread cannot race the indexer's writes. `limit` caps the
+    /// number of notes returned; a note may itself carry many matches. Empty
+    /// (or all-whitespace) queries return no results without touching the
+    /// database. On a parse error, returns no results and fills `error`.
+    QList<SearchResult> search(const QString &queryText, int limit = 200, QString *error = nullptr) const;
 
     /// Rewrites every wikilink and Markdown link that resolves to `oldRelative`
     /// so it points at `newRelative`, preserving each link's own form: an alias

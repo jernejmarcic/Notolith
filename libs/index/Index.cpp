@@ -604,6 +604,136 @@ QStringList Index::linkTargets() const
     return names;
 }
 
+// --- search (libs/index/Search.h has the grammar and the evaluator) -------
+
+QList<SearchResult> Index::search(const QString &queryText, int limit, QString *error) const
+{
+    QList<SearchResult> results;
+    if (queryText.trimmed().isEmpty())
+        return results;
+
+    const SearchQuery query = SearchQuery::parse(queryText);
+    if (!query.isValid()) {
+        if (error)
+            *error = query.error();
+        return results;
+    }
+
+    // A connection of its own, never `m_db`: QSqlDatabase requires a
+    // connection be used only from the thread that opened it, and this
+    // method has to be callable from a QtConcurrent worker so a search over a
+    // large vault never blocks the UI thread. WAL mode (set once in open())
+    // is what lets this reader run alongside the indexer's writer.
+    const QString connectionName =
+        QStringLiteral("noteAppC-search-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(m_databasePath);
+        if (!db.open()) {
+            if (error)
+                *error = db.lastError().text();
+            QSqlDatabase::removeDatabase(connectionName);
+            return results;
+        }
+
+        struct Candidate {
+            qint64 id;
+            QString path;
+            QString body;
+        };
+        QList<Candidate> candidates;
+
+        const QString fts = query.ftsExpression();
+        QSqlQuery statement(db);
+        bool ok = false;
+        if (!fts.isEmpty()) {
+            statement.prepare(QStringLiteral(
+                "SELECT rowid, path, body FROM content WHERE content MATCH ? ORDER BY path"));
+            statement.addBindValue(fts);
+            ok = statement.exec();
+        }
+        if (fts.isEmpty() || !ok) {
+            // No restriction could be derived (a bare -word, path:/tag:-only
+            // query, a lone /regex/) - every note is a candidate, and
+            // evaluate() below is what actually confirms each one.
+            statement.exec(QStringLiteral("SELECT rowid, path, body FROM content ORDER BY path"));
+        }
+        while (statement.next()) {
+            candidates.append({statement.value(0).toLongLong(), statement.value(1).toString(),
+                               statement.value(2).toString()});
+        }
+
+        // Tags, headings and tasks are loaded whole rather than filtered to
+        // just these candidates (no IN-list, no bind-parameter ceiling to
+        // worry about) - ponytail: a full scan of three small tables per
+        // search call. Skipped entirely when the query never reads them,
+        // which is the common case (a handful of bare words never touches
+        // any of the three), so the cost that remains scales with how much
+        // of the vault actually uses tags/headings/tasks, not with the query.
+        const FieldNeeds needs = query.fieldNeeds();
+        QHash<qint64, QList<NoteTag>> tagsByFile;
+        QHash<qint64, QList<NoteHeading>> headingsByFile;
+        QHash<qint64, QList<NoteTask>> tasksByFile;
+
+        if (needs.tags) {
+            QSqlQuery tagQuery(db);
+            tagQuery.exec(QStringLiteral("SELECT file, name, start, finish FROM tags"));
+            while (tagQuery.next()) {
+                tagsByFile[tagQuery.value(0).toLongLong()].append(
+                    NoteTag{tagQuery.value(1).toString(),
+                           Range{tagQuery.value(2).toLongLong(), tagQuery.value(3).toLongLong()}});
+            }
+        }
+        if (needs.headings) {
+            QSqlQuery headingQuery(db);
+            headingQuery.exec(QStringLiteral("SELECT file, level, start, finish FROM headings"));
+            while (headingQuery.next()) {
+                headingsByFile[headingQuery.value(0).toLongLong()].append(NoteHeading{
+                    headingQuery.value(1).toInt(),
+                    Range{headingQuery.value(2).toLongLong(), headingQuery.value(3).toLongLong()}});
+            }
+        }
+        if (needs.tasks) {
+            QSqlQuery taskQuery(db);
+            taskQuery.exec(QStringLiteral("SELECT file, done, start, finish FROM tasks"));
+            while (taskQuery.next()) {
+                tasksByFile[taskQuery.value(0).toLongLong()].append(
+                    NoteTask{taskQuery.value(1).toBool(),
+                            Range{taskQuery.value(2).toLongLong(), taskQuery.value(3).toLongLong()}});
+            }
+        }
+
+        for (const Candidate &candidate : std::as_const(candidates)) {
+            if (results.size() >= limit)
+                break;
+
+            NoteContext note;
+            note.path = candidate.path;
+            note.text = candidate.body;
+            note.tags = tagsByFile.value(candidate.id);
+            note.headings = headingsByFile.value(candidate.id);
+            note.tasks = tasksByFile.value(candidate.id);
+
+            const SearchOutcome outcome = query.evaluate(note);
+            if (!outcome.matched)
+                continue;
+
+            SearchResult result;
+            result.path = candidate.path;
+            result.matches = outcome.matches;
+            std::sort(result.matches.begin(), result.matches.end(),
+                      [](const SearchMatch &a, const SearchMatch &b) { return a.offset < b.offset; });
+            result.matchCount = int(result.matches.size());
+            const SearchSnippet snippet = buildSnippet(note.text, result.matches);
+            result.snippet = snippet.text;
+            result.snippetHighlights = snippet.highlights;
+            results.append(result);
+        }
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return results;
+}
+
 bool Index::basenameStillUnique(const QString &basename, const QString &excludePath) const
 {
     const QStringList candidates = m_names.value(foldCase(basename));

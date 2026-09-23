@@ -1,7 +1,11 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdio>
+
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -403,4 +407,147 @@ TEST_F(IndexTest, RemovingANoteTakesItsContentWithIt)
     index.remove(dir.filePath(QStringLiteral("Home.md")));
     EXPECT_EQ(index.noteCount(), notes - 1);
     EXPECT_EQ(index.contentRowCount(), notes - 1);
+}
+
+// --- Index::search: the whole pipeline (FTS5 narrowing -> confirm in the
+// real, indexed text -> snippet), on top of test_search.cpp's grammar-only
+// coverage over a bare NoteContext with no database at all. ------------------
+
+TEST_F(IndexTest, SearchFindsPlainWordsAcrossTheVault)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    // "noteAppC" is the heading of Projects/noteAppC.md and also sits inside
+    // Home.md's own link text ([[Projects/noteAppC]]), since search reads the
+    // raw source, not the rendered note.
+    const QList<SearchResult> results = index.search(QStringLiteral("noteAppC"));
+    QStringList paths;
+    for (const SearchResult &result : results)
+        paths << result.path;
+    paths.sort();
+    EXPECT_EQ(paths, QStringList({QStringLiteral("Home.md"), QStringLiteral("Projects/noteAppC.md")}));
+
+    for (const SearchResult &result : results) {
+        EXPECT_GT(result.matchCount, 0);
+        EXPECT_FALSE(result.snippet.isEmpty());
+    }
+}
+
+TEST_F(IndexTest, SearchTagFieldReadsTheRealTagsTable)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    // Ideas.md carries "#thinking/deep" inline and "tags: [thinking]" in its
+    // frontmatter; tag:thinking has to find it through either.
+    const QList<SearchResult> results = index.search(QStringLiteral("tag:thinking"));
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results.first().path, QStringLiteral("Ideas.md"));
+}
+
+TEST_F(IndexTest, SearchOffsetsLandOnTheRealMatch)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QList<SearchResult> results = index.search(QStringLiteral("Brainwaves"));
+    ASSERT_EQ(results.size(), 1);
+    ASSERT_FALSE(results.first().matches.isEmpty());
+
+    Note note;
+    ASSERT_TRUE(Vault::read(dir.filePath(results.first().path), note));
+    const SearchMatch &match = results.first().matches.first();
+    EXPECT_EQ(note.text.mid(match.offset, match.length), QStringLiteral("Brainwaves"));
+}
+
+TEST_F(IndexTest, SearchRespectsItsLimit)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    // Every note in the fixture links to or mentions another; "the" is a
+    // deliberately unrelated needle - what matters here is just the cap.
+    const QList<SearchResult> results = index.search(QStringLiteral("noteAppC OR Ideas OR Home"), 1);
+    EXPECT_LE(results.size(), 1);
+}
+
+TEST_F(IndexTest, SearchOnAnEmptyOrInvalidQueryReturnsNoResults)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    EXPECT_TRUE(index.search(QStringLiteral("   ")).isEmpty());
+
+    QString error;
+    EXPECT_TRUE(index.search(QStringLiteral("\"never closed"), 200, &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+}
+
+namespace {
+
+/// Builds a vault of `noteCount` notes, every one containing "needle" (so
+/// every one is a genuine candidate FTS5 has to hand to the confirm-and-locate
+/// pass, not just a fast rowid lookup that skips most of the vault), indexes
+/// it cold, and returns how long index.search("needle") itself took.
+double timeSearchOverAGeneratedVault(int noteCount)
+{
+    QTemporaryDir dir;
+    for (int i = 0; i < noteCount; ++i) {
+        QFile file(dir.filePath(QStringLiteral("Note%1.md").arg(i)));
+        if (!file.open(QIODevice::WriteOnly))
+            return -1;
+        file.write(QStringLiteral("# Note %1\n\nneedle appears in the body here, padded out with some "
+                                  "filler filler filler text so each note has a realistic size.\n")
+                       .arg(i)
+                       .toUtf8());
+    }
+
+    Vault vault(dir.path());
+    Index index;
+    if (!index.open(dir.path()))
+        return -1;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    if (!done.wait(60000))
+        return -1;
+
+    QElapsedTimer clock;
+    clock.start();
+    const QList<SearchResult> results = index.search(QStringLiteral("needle"), noteCount + 10);
+    const double ms = clock.nsecsElapsed() / 1e6;
+    EXPECT_EQ(results.size(), noteCount);
+    return ms;
+}
+
+} // namespace
+
+TEST(SearchPerfTest, SearchTimeScalesWithVaultSizeNotQuadratically)
+{
+    // Asserted as a ratio, the way ParserPerfTest is: five times the notes
+    // should cost roughly five times the work. This is the guard against a
+    // confirm-and-locate pass that quietly becomes quadratic - e.g. by
+    // re-scanning already-seen candidates, or by re-reading tags/headings/
+    // tasks per note instead of once per search - the kind of bug this
+    // project has hit twice already (see docs/PERFORMANCE.md, fixes 2 and 3).
+    const int small = 500;
+    const int large = small * 5;
+
+    const double smallMs = timeSearchOverAGeneratedVault(small);
+    const double largeMs = timeSearchOverAGeneratedVault(large);
+    ASSERT_GE(smallMs, 0.0);
+    ASSERT_GE(largeMs, 0.0);
+
+    const double sizeRatio = double(large) / double(small);
+    const double timeRatio = largeMs / std::max(0.001, smallMs);
+    std::printf("[ PERF     ] search %d notes: %.2f ms, %d notes: %.2f ms (%.1fx notes, %.1fx time)\n",
+                small, smallMs, large, largeMs, sizeRatio, timeRatio);
+
+    EXPECT_LT(timeRatio, sizeRatio * 2.0);
 }
