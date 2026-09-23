@@ -2,6 +2,8 @@
 add_library(noteAppC_ui STATIC
     ExportPdfDialog.cpp
     ExportPdfDialog.h
+    PublishDialog.cpp
+    PublishDialog.h
     MainWindow.cpp
     MainWindow.h
     RecoveryDialog.cpp
