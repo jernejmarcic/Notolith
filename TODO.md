@@ -336,8 +336,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       hidden views do not re-read the index. The lane first found the 55 GB
       crash: Euler integration diverging to inf, and a quadtree that never
       stops halving inf.
-- [ ] Graph colour groups use a three-form subset (`path:`, `tag:`, name);
-      give them the real search grammar now that it exists.
+- [x] Graph colour groups are search queries now (OR, negation, groups,
+      path:, file:, tag:, regex), matched once per rebuild, not per frame.
 - [x] A build with every optional module OFF, to prove the `#ifdef`s: it
       found one (the local graph tab); `tools/check.sh` runs it every time.
 - [x] **Hotkeys**: every window command is an action named by its Obsidian

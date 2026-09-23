@@ -267,6 +267,29 @@ TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)
     EXPECT_GT(closest, 12.0) << "two leaves sit on top of each other";
 }
 
+TEST(GraphViewTest, ColourGroupsAreSearchQueries)
+{
+    QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Journal/B.md"),
+                                       QStringLiteral("Home.md")});
+    nodes[0].label = QStringLiteral("A");
+    nodes[0].tags = {QStringLiteral("work")};
+    nodes[1].label = QStringLiteral("B");
+    nodes[1].tags = {QStringLiteral("work/meeting")};
+    nodes[2].label = QStringLiteral("Home");
+
+    GraphView view;
+    GraphOptions options = view.options();
+    options.colorGroups = {{QStringLiteral("tag:#work -path:Journal"), Qt::red},
+                           {QStringLiteral("Home OR B"), Qt::blue}};
+    view.setOptions(options);
+    view.setGraphData(nodes, {});
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), QColor(Qt::red));
+    // work/meeting is under #work, but the negation keeps Journal out, so the
+    // next group's bare word - matched against the name - takes it.
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Journal/B.md")), QColor(Qt::blue));
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Home.md")), QColor(Qt::blue));
+}
+
 TEST(GraphViewTest, OrphanFilterDropsUnconnectedNotes)
 {
     GraphOptions options = GraphOptions::defaults();

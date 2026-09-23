@@ -95,12 +95,10 @@ struct GraphOptions {
 /// background tab burns no CPU, and one with a hundred notes stops moving
 /// within a couple of seconds and then costs nothing at all.
 ///
-/// Colour groups understand three query forms without needing a search
-/// engine (Obsidian's own grammar is a whole feature another engineer is
-/// building in parallel): `path:text` (substring of the vault-relative
-/// path), `tag:name` (an exact tag or one nested under it), and bare text
-/// (substring of the note's file name). Left out: quoted phrases, boolean
-/// operators, negation, and any `content:`/full-text match.
+/// Colour groups are queries in Obsidian's search grammar (libs/index's
+/// SearchQuery): OR, -negation, groups, `path:`, `file:`, `tag:`, regexes.
+/// A node carries no note text, so a bare word or `content:` is matched
+/// against its name.
 class GraphView : public QWidget {
     Q_OBJECT
 
@@ -145,6 +143,12 @@ public:
     int nodeCount() const { return m_nodes.size(); }
     int edgeCount() const { return m_edgeIndices.size(); }
     bool containsNode(const QString &id) const { return m_idToIndex.contains(id); }
+    /// The colour node `id` is drawn in: its colour group's, or its kind's.
+    QColor nodeColor(const QString &id) const
+    {
+        const int index = m_idToIndex.value(id, -1);
+        return index < 0 ? QColor() : colorFor(m_nodes.at(index));
+    }
     /// Where node `id` is drawn, in widget pixels.
     QPointF screenPosition(const QString &id) const
     {
@@ -180,9 +184,11 @@ private:
     struct VisualNode {
         GraphNode data;
         int degree = 0;
+        int group = -1; ///< the first colour group it matches, or -1
     };
 
     void rebuild();
+    void assignColorGroups();
     void applyIndexData();
     void ensureTimerRunning();
     void fitToView();

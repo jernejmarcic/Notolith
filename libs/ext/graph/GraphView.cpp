@@ -33,24 +33,6 @@ namespace {
 /// The three query forms documented on GraphView: path:, tag:, and a bare
 /// substring of the file name. Anything else (quotes, booleans, content:)
 /// is out of scope - see the class comment.
-bool matchesQuery(const GraphNode &node, const QString &query)
-{
-    if (query.isEmpty())
-        return false;
-    if (query.startsWith(QLatin1String("path:")))
-        return node.id.contains(query.mid(5), Qt::CaseInsensitive);
-    if (query.startsWith(QLatin1String("tag:"))) {
-        const QString wanted = query.mid(4);
-        for (const QString &tag : node.tags) {
-            if (tag.compare(wanted, Qt::CaseInsensitive) == 0
-                || tag.startsWith(wanted + QLatin1Char('/'), Qt::CaseInsensitive))
-                return true;
-        }
-        return false;
-    }
-    return node.label.contains(query, Qt::CaseInsensitive);
-}
-
 // Alpha-blends `color` at `alpha` (0-255) over `background` and returns an
 // opaque result - measured on the performance guard's 5 000-node graph,
 // asking the raster engine to alpha-composite ~10 000 semi-transparent
@@ -464,6 +446,7 @@ void GraphView::rebuild()
     m_idToIndex.reserve(m_nodes.size());
     for (int i = 0; i < m_nodes.size(); ++i)
         m_idToIndex.insert(m_nodes[i].data.id, i);
+    assignColorGroups();
 
     m_edgeIndices.clear();
     QList<std::pair<int, int>> layoutEdges;
@@ -598,12 +581,38 @@ double GraphView::radiusFor(int degree) const
     return (2.0 + std::sqrt(double(std::max(0, degree)))) * m_options.nodeSizeMultiplier;
 }
 
+void GraphView::assignColorGroups()
+{
+    // Obsidian's colour groups are search queries, so they get the search
+    // grammar - OR, -negation, (groups), path:, file:, tag:, /regex/. A node
+    // has no text here, so a bare word is looked for in its name, which is
+    // what one means in a colour group. Parsed and matched once per
+    // rebuild; painting only reads the result.
+    QList<SearchQuery> queries;
+    for (const GraphColorGroup &group : std::as_const(m_options.colorGroups))
+        queries << SearchQuery::parse(group.query);
+    for (VisualNode &node : m_nodes) {
+        node.group = -1;
+        if (queries.isEmpty())
+            continue;
+        NoteContext context;
+        context.path = node.data.id;
+        context.text = node.data.label;
+        for (const QString &tag : std::as_const(node.data.tags))
+            context.tags << NoteTag{tag, Range{0, context.text.size()}};
+        for (int i = 0; i < queries.size(); ++i) {
+            if (queries.at(i).isValid() && queries.at(i).evaluate(context).matched) {
+                node.group = i;
+                break;
+            }
+        }
+    }
+}
+
 QColor GraphView::colorFor(const VisualNode &node) const
 {
-    for (const GraphColorGroup &group : std::as_const(m_options.colorGroups)) {
-        if (matchesQuery(node.data, group.query))
-            return group.color;
-    }
+    if (node.group >= 0 && node.group < m_options.colorGroups.size())
+        return m_options.colorGroups.at(node.group).color;
     switch (node.data.kind) {
     case GraphNode::Kind::Tag:
         return m_accentColor;
