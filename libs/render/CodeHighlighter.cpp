@@ -9,6 +9,8 @@
 #include <KSyntaxHighlighting/Theme>
 #endif
 
+#include <optional>
+
 namespace noteAppC {
 
 namespace {
@@ -19,12 +21,13 @@ namespace {
 /// appended to a QTextLayout the editor already built.
 class Collector : public KSyntaxHighlighting::AbstractHighlighter {
 public:
-    void run(const QString &text)
+    /// Highlights `text` as lines continuing from `state`, and returns the
+    /// state the last line ended in.
+    KSyntaxHighlighting::State run(const QString &text, KSyntaxHighlighting::State state)
     {
         formats.clear();
         m_base = 0;
 
-        KSyntaxHighlighting::State state;
         qsizetype from = 0;
         while (from <= text.size()) {
             qsizetype breakAt = text.indexOf(QLatin1Char('\n'), from);
@@ -36,6 +39,14 @@ public:
                 break;
             from = breakAt + 1;
         }
+        return state;
+    }
+
+    void setTheme(const KSyntaxHighlighting::Theme &theme) override
+    {
+        AbstractHighlighter::setTheme(theme);
+        m_theme = theme;
+        m_formats.clear();
     }
 
     QList<QTextLayout::FormatRange> formats;
@@ -43,32 +54,51 @@ public:
 protected:
     void applyFormat(int offset, int length, const KSyntaxHighlighting::Format &format) override
     {
-        if (length <= 0 || format.isDefaultTextStyle(theme()))
+        if (length <= 0)
             return;
 
-        QTextCharFormat charFormat;
-        if (format.hasTextColor(theme()))
-            charFormat.setForeground(format.textColor(theme()));
-        if (format.hasBackgroundColor(theme()))
-            charFormat.setBackground(format.backgroundColor(theme()));
-        if (format.isBold(theme()))
-            charFormat.setFontWeight(QFont::Bold);
-        if (format.isItalic(theme()))
-            charFormat.setFontItalic(true);
-        if (format.isUnderline(theme()))
-            charFormat.setFontUnderline(true);
-        if (format.isStrikeThrough(theme()))
-            charFormat.setFontStrikeOut(true);
+        // One QTextCharFormat per Kate format, built once. theme() returns a
+        // copy, and asking it up to seven times per token was most of what
+        // highlighting cost.
+        auto cached = m_formats.find(format.id());
+        if (cached == m_formats.end())
+            cached = m_formats.insert(format.id(), charFormatOf(format));
+        if (!cached->has_value())
+            return; // the default text style: nothing to add
 
         QTextLayout::FormatRange range;
         range.start = int(m_base) + offset;
         range.length = length;
-        range.format = charFormat;
+        range.format = **cached;
         formats.append(range);
     }
 
 private:
+    std::optional<QTextCharFormat> charFormatOf(const KSyntaxHighlighting::Format &format) const
+    {
+        const KSyntaxHighlighting::Theme &theme = m_theme;
+        if (format.isDefaultTextStyle(theme))
+            return std::nullopt;
+
+        QTextCharFormat charFormat;
+        if (format.hasTextColor(theme))
+            charFormat.setForeground(format.textColor(theme));
+        if (format.hasBackgroundColor(theme))
+            charFormat.setBackground(format.backgroundColor(theme));
+        if (format.isBold(theme))
+            charFormat.setFontWeight(QFont::Bold);
+        if (format.isItalic(theme))
+            charFormat.setFontItalic(true);
+        if (format.isUnderline(theme))
+            charFormat.setFontUnderline(true);
+        if (format.isStrikeThrough(theme))
+            charFormat.setFontStrikeOut(true);
+        return charFormat;
+    }
+
     qsizetype m_base = 0;
+    KSyntaxHighlighting::Theme m_theme;
+    QHash<int, std::optional<QTextCharFormat>> m_formats; // by Format::id()
 };
 
 #endif // NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
@@ -127,6 +157,28 @@ CodeHighlighter::CodeHighlighter()
 
 CodeHighlighter::~CodeHighlighter() = default;
 
+struct CodeHighlighter::State::Data {
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
+    KSyntaxHighlighting::State state;
+#endif
+};
+
+CodeHighlighter::State::State() = default;
+CodeHighlighter::State::~State() = default;
+CodeHighlighter::State::State(const State &other) = default;
+CodeHighlighter::State &CodeHighlighter::State::operator=(const State &other) = default;
+
+bool CodeHighlighter::State::operator==(const State &other) const
+{
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
+    const KSyntaxHighlighting::State none;
+    return (d ? d->state : none) == (other.d ? other.d->state : none);
+#else
+    Q_UNUSED(other);
+    return true;
+#endif
+}
+
 void CodeHighlighter::setTheme(const Theme &theme)
 {
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
@@ -171,6 +223,14 @@ bool CodeHighlighter::knows(const QString &language) const
 QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
                                                            const QString &language) const
 {
+    State state;
+    return highlight(text, language, &state);
+}
+
+QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
+                                                           const QString &language,
+                                                           State *state) const
+{
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     if (text.isEmpty())
         return {};
@@ -184,12 +244,17 @@ QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
     if (!definition.isValid())
         return {};
 
-    d->collector.setDefinition(definition);
-    d->collector.run(text);
+    if (d->collector.definition() != definition)
+        d->collector.setDefinition(definition);
+    const KSyntaxHighlighting::State start = state->d ? state->d->state : KSyntaxHighlighting::State();
+    auto end = std::make_shared<State::Data>();
+    end->state = d->collector.run(text, start);
+    state->d = std::move(end);
     return d->collector.formats;
 #else
     Q_UNUSED(text);
     Q_UNUSED(language);
+    Q_UNUSED(state);
     return {};
 #endif
 }

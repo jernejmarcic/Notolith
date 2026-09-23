@@ -5,6 +5,8 @@
 #include <QString>
 #include <QTextLayout>
 
+#include <memory>
+
 #include "Theme.h"
 
 namespace noteAppC {
@@ -23,9 +25,32 @@ public:
     /// Picks the Kate theme that suits the colour scheme. Call on theme change.
     void setTheme(const Theme &theme);
 
+    /// Where highlighting stands between two lines of one listing: opaque and
+    /// cheap to copy. Default-constructed is the start of a listing. Equal
+    /// states highlight whatever follows identically, which is what lets an
+    /// edit stop re-highlighting a listing once they agree again.
+    class State {
+    public:
+        State();
+        ~State();
+        State(const State &other);
+        State &operator=(const State &other);
+        bool operator==(const State &other) const;
+
+    private:
+        friend class CodeHighlighter;
+        struct Data;
+        std::shared_ptr<const Data> d;
+    };
+
     /// `language` is the info string after the opening fence ("cpp", "py",
     /// "Rust", ...). Unknown languages return no formats rather than failing.
     QList<QTextLayout::FormatRange> highlight(const QString &text, const QString &language) const;
+
+    /// The same, for lines that continue a listing from `*state`; leaves
+    /// `*state` where the last of them ended.
+    QList<QTextLayout::FormatRange> highlight(const QString &text, const QString &language,
+                                              State *state) const;
 
     /// True when the language has a definition, so the caller can decide
     /// whether a header badge is worth showing.
