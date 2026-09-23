@@ -387,7 +387,7 @@ public:
             }
             if (matched) {
                 outcome.matched = true;
-                outcome.matches.append({tag.range.start, tag.range.length()});
+                outcome.matches.append(ownText(ctx.note.text, tag));
             }
         }
         return outcome;
@@ -396,6 +396,26 @@ public:
     FieldNeeds fieldNeeds() const override { return {true, false, false}; }
 
 private:
+    /// An inline tag's range is its own `#tag`. A frontmatter tag's is the
+    /// whole property block it came from, which highlighted every line of
+    /// the frontmatter; the tag's own word inside it is the match.
+    static SearchMatch ownText(const QString &text, const NoteTag &tag)
+    {
+        const qsizetype start = tag.range.start;
+        const qsizetype length = tag.range.length();
+        if (length <= tag.name.size() + 1 || tag.name.isEmpty())
+            return {start, length};
+        const auto isWordChar = [](QChar c) { return c.isLetterOrNumber() || c == u'/' || c == u'_' || c == u'-'; };
+        const QStringView block = QStringView(text).mid(start, length);
+        for (qsizetype at = block.indexOf(tag.name, 0, Qt::CaseInsensitive); at >= 0;
+             at = block.indexOf(tag.name, at + 1, Qt::CaseInsensitive)) {
+            const qsizetype end = at + tag.name.size();
+            if ((at == 0 || !isWordChar(block.at(at - 1))) && (end == block.size() || !isWordChar(block.at(end))))
+                return {start + at, tag.name.size()};
+        }
+        return {start, length};
+    }
+
     QString m_literal;
     QRegularExpression m_regex;
     bool m_isRegex;

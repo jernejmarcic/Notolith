@@ -178,6 +178,24 @@ TEST(SearchGrammarTest, TagMatchesByNameAndNestedChild)
     EXPECT_FALSE(matches(QStringLiteral("tag:play"), n));
 }
 
+TEST(SearchGrammarTest, AFrontmatterTagHighlightsItsOwnWordNotTheBlock)
+{
+    // The index gives a frontmatter tag its property block as its range.
+    const QString text = QStringLiteral("---\ntags: [a, work]\n---\nbody\n");
+    NoteContext n = note(text);
+    n.tags.append(NoteTag{QStringLiteral("a"), Range{0, 24}});
+    n.tags.append(NoteTag{QStringLiteral("work"), Range{0, 24}});
+    const SearchQuery work = SearchQuery::parse(QStringLiteral("tag:#work"));
+    const SearchOutcome found = work.evaluate(n);
+    ASSERT_EQ(found.matches.size(), 1);
+    EXPECT_EQ(text.mid(found.matches.first().offset, found.matches.first().length), QStringLiteral("work"));
+    // Whole words: "a" is not the a in "tags".
+    const SearchOutcome single = SearchQuery::parse(QStringLiteral("tag:a")).evaluate(n);
+    ASSERT_EQ(single.matches.size(), 1);
+    EXPECT_EQ(single.matches.first().offset, text.indexOf(QStringLiteral("[a")) + 1);
+    EXPECT_EQ(single.matches.first().length, 1);
+}
+
 // --- line:(...) block:(...) section:(...) -------------------------------
 
 TEST(SearchGrammarTest, LineRequiresBothWordsOnTheSameLine)
