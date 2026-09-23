@@ -7,3 +7,8 @@ target_link_libraries(noteAppC_index_cli PRIVATE noteAppC_index noteAppC_vault)
 
 # The performance harness: the numbers every optimisation has to beat.
 add_subdirectory(bench)
+
+# The reference sync server (docs/SYNC.md), built alongside libs/ext/sync.
+if(TARGET noteAppC_sync AND TARGET Qt6::HttpServer)
+    add_subdirectory(sync_server)
+endif()

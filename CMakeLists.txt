@@ -71,6 +71,9 @@ if(NOTEAPPC_WITH_SYNC)
         pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
     endif()
     find_package(Qt6Keychain QUIET)
+    # The reference server (tools/sync_server) only, never the client
+    # library - a desktop build has no business linking an HTTP server.
+    find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
 endif()
 
 add_compile_options(-Wall -Wextra)
