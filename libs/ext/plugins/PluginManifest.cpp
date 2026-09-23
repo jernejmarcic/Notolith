@@ -70,6 +70,19 @@ PluginManifest PluginManifest::load(const QString &directory)
     manifest.m_codeBlockLanguages = splitList(ini.value(QStringLiteral("provides/code-blocks")));
     manifest.m_vaultEvents = splitList(ini.value(QStringLiteral("provides/events")));
 
+    // [commands] is optional titles, not a list: "id = Title" per line,
+    // e.g. "summarize = Summarize this note". allKeys() rather than
+    // beginGroup()/childKeys() because `ini` is const here, the same reason
+    // every other section above reads "section/key" paths directly.
+    for (const QString &key : ini.allKeys()) {
+        if (key.startsWith(QLatin1String("commands/")))
+            manifest.m_commandTitles.insert(key.mid(9), ini.value(key).toString());
+    }
+
+    int timeoutMs = ini.value(QStringLiteral("plugin/timeout-ms"), 0).toInt();
+    manifest.m_requestTimeoutMs = timeoutMs > 0 ? qBound(1000, timeoutMs, 300000) : 0;
+    manifest.m_envPassthrough = splitList(ini.value(QStringLiteral("plugin/env-passthrough")));
+
     const auto wants = [&ini](const char *key) {
         return ini.value(QLatin1String("permissions/") + QLatin1String(key), false).toBool();
     };

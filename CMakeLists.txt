@@ -95,6 +95,20 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # by nature (docs/PLUGINS.md): off on Android regardless of this option,
 # the same as the tools directory it lives under.
 option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-side glue" ON)
+# The first Tier 2 plugin that is not a test fixture (docs/PLUGINS.md,
+# "AI plugin"): a local Ollama server, or an OpenAI-compatible/Anthropic
+# HTTP API, over libcurl. Only reachable when NOTEAPPC_WITH_PLUGINS is also
+# on (plugins/ai add_subdirectory, further below, guards on both); off, or
+# without libcurl, and the tree contains no plugins/ai code at all - the
+# same "off means it was never even considered" every other optional module
+# in this file promises.
+option(NOTEAPPC_WITH_AI_PLUGIN "Build the first-party AI plugin (plugins/ai)" ON)
+if(NOTEAPPC_WITH_AI_PLUGIN)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(CURL QUIET IMPORTED_TARGET libcurl)
+    endif()
+endif()
 # Another Tier 1 module: local-first sync to an optional server, end-to-end
 # encrypted (docs/SYNC.md). Needs libsodium for the crypto and Qt6Keychain
 # for the device identity key it keeps in the OS keyring; without either the
@@ -235,6 +249,9 @@ if(NOT ANDROID)
     add_subdirectory(tools)
     if(NOTEAPPC_WITH_PLUGINS)
         add_subdirectory(examples/plugins)
+        if(NOTEAPPC_WITH_AI_PLUGIN AND TARGET PkgConfig::CURL)
+            add_subdirectory(plugins/ai)
+        endif()
     endif()
 endif()
 
@@ -256,4 +273,17 @@ if(NOT ANDROID)
     # What software centres and Flatpak read to describe the app.
     install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+    # The AI plugin ships as part of the package, the same layout
+    # ~/.local/share/noteAppC/plugins/ai/ uses (docs/PLUGINS.md) so a
+    # distribution can symlink or copy it into place post-install; the
+    # registry itself only ever scans $XDG_DATA_HOME today
+    # (PluginRegistry::pluginsRoot()), so this alone does not make a
+    # packaged install self-enable the plugin - that is still the user
+    # opting in from the Community plugins settings page, same as any
+    # plugin they installed by hand.
+    if(TARGET ai)
+        install(TARGETS ai LIBRARY DESTINATION ${CMAKE_INSTALL_DATADIR}/noteAppC/plugins/ai)
+        install(FILES plugins/ai/plugin.ini
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/noteAppC/plugins/ai)
+    endif()
 endif()

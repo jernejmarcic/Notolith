@@ -27,8 +27,19 @@ extern "C" {
 
 /* Bumped on any incompatible change to either struct below. A plugin built
  * against a different value than the host implements is refused before
- * init() runs (checked against noteappc_plugin::api by the host). */
-#define NOTEAPPC_PLUGIN_API 1
+ * init() runs (checked against noteappc_plugin::api by the host).
+ *
+ * 2 (2026-09-23, the AI plugin lane): added noteappc_host::active_selection_text
+ * (needed to read what the user selected before sending it to a language
+ * model - MarkdownEditor::selectedText() already existed, this just exposes
+ * it the way active_note_text() exposes the whole note). The field lands
+ * between active_note_text and read_note, so this is a real layout change:
+ * a plugin built against api = 1 must be rebuilt against this header before
+ * it will load again (every in-tree plugin was, examples/plugins/word-stats/
+ * plugin.ini's `api =` bumped alongside) - the whole point of this check is
+ * to refuse that mismatch loudly instead of a plugin reading garbage out of
+ * a table shaped differently than it expects. */
+#define NOTEAPPC_PLUGIN_API 2
 
 #if defined(_WIN32)
 #define NOTEAPPC_EXPORT __declspec(dllexport)
@@ -77,6 +88,12 @@ typedef struct noteappc_host {
      * the two apart, which is intentional: neither is actionable. */
     const char *(*active_note_path)(void);
     const char *(*active_note_text)(void);
+    /* The editor's current text selection, or empty when there is none -
+     * same "NULL/empty means failure or refusal, a plugin cannot tell which"
+     * rule as the rest of read-notes. A plugin that wants to act on "the
+     * selection" (rewrite it, ask about it) reads this instead of trying to
+     * find it inside active_note_text() itself. */
+    const char *(*active_selection_text)(void);
     /* `vault_path` is relative to the vault root, forward slashes. */
     const char *(*read_note)(const char *vault_path);
     /* NUL-separated, double-NUL-terminated list of vault-relative paths -

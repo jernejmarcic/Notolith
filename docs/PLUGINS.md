@@ -84,14 +84,21 @@ and edit it. The real shape, from `examples/plugins/word-stats/plugin.ini`:
 id = word-stats
 name = Word stats
 version = 0.1.0
-api = 1
+api = 2
 engine = native      ; native | quickjs (quickjs is a seam, not built - below)
 library = libword-stats.so
+timeout-ms =          ; optional, [1000, 300000]; unset keeps PluginHost's 4000ms default
+env-passthrough =     ; optional, comma list of env var NAMES to forward - see "Timeouts" below
 
 [provides]
 commands = count-words
 code-blocks = calc
 events =              ; note-opened, note-saved, note-renamed - empty means none
+
+[commands]
+; optional human titles, "id = Title" - a command with none shows as
+; "pluginName: commandID" (MainWindow::syncPlugins). word-stats declares none.
+; count-words = Count the words in this note
 
 [permissions]
 read-notes = true
@@ -121,18 +128,28 @@ round trip without either process needing a thread. An image in a
 itself is documented and unit-tested for partial reads, an oversized frame,
 and malformed JSON (`tests/test_plugins_host.cpp`).
 
-**The C ABI - unchanged from the proposal above**, still `NOTEAPPC_PLUGIN_API
-1`, still a `noteappc_host`/`noteappc_plugin` function-table pair, still
+**The C ABI - unchanged in shape from the proposal above**, still a
+`noteappc_host`/`noteappc_plugin` function-table pair, still
 `noteappc_plugin_entry()` as the one dlsym'd symbol. The real header is
-`include/noteappc/plugin.h`, with four more host functions than the sketch
-had (`list_notes`, `write_note`, `clipboard_read`, `clipboard_write`) and a
-`render_code_block` that can return either an image or plain text, so a
-plugin without an image encoder can still answer a code block. A header-only
-C++ convenience wrapper is `include/noteappc/plugin.hpp` (`noteAppC::Plugin`,
-`NOTEAPPC_PLUGIN_ENTRY`) for a future plugin that wants `std::function`
-instead of raw function pointers - `examples/plugins/word-stats` is plain C
-against the bare header, on purpose, as the shortest proof the ABI itself
+`include/noteappc/plugin.h`, with five more host functions than the sketch
+had (`active_selection_text`, `list_notes`, `write_note`, `clipboard_read`,
+`clipboard_write`) and a `render_code_block` that can return either an image
+or plain text, so a plugin without an image encoder can still answer a code
+block. A header-only C++ convenience wrapper is `include/noteappc/plugin.hpp`
+(`noteAppC::Plugin`, `NOTEAPPC_PLUGIN_ENTRY`) for a plugin that wants
+`std::function` instead of raw function pointers (the AI plugin,
+`plugins/ai/`, uses it) - `examples/plugins/word-stats` is plain C against
+the bare header instead, on purpose, as the shortest proof the ABI itself
 works.
+
+`NOTEAPPC_PLUGIN_API` is `2` as of the AI plugin lane (2026-09-23): it was `1`
+until `active_selection_text` landed in the host table, needed so a plugin can
+read what the user selected (`MarkdownEditor::selectedText()` already
+existed; this just exposes it the way `active_note_text()` exposes the whole
+note) before deciding what to send a language model. A struct gaining a field
+is a real layout change, so every in-tree plugin's `plugin.ini` bumped its
+`api =` alongside - see `plugin.h`'s comment on the macro for what a
+third-party plugin needs to do.
 
 **Engine abstraction, inside the host.** `tools/plugin_host/Engine.h` is an
 interface with one method per plugin hook; `NativeEngine` (`dlopen`, the C
@@ -159,16 +176,49 @@ the settings page.
 
 **Sandbox and limits.** The host runs under bubblewrap when `bwrap` exists -
 the same allowlist pattern as `libs/render/TexCompiler.cpp`: only `/usr`,
-`/etc`, the plugin's own directory and the host binary's own directory
-(read-only), a private `/tmp`, no home, every namespace unshared except
-network, which is shared only when the plugin's `network` permission was
-granted. `QProcess::setChildProcessModifier` sets `RLIMIT_AS` (256 MiB) and
+`/etc`, the plugin's own directory, the host binary's own directory and
+`$XDG_CONFIG_HOME/noteAppC` (all read-only), a private `/tmp`, no home, every
+namespace unshared except network, which is shared only when the plugin's
+`network` permission was granted. The config-directory bind is `--ro-bind-try`
+(most plugins have none) and exists so a plugin can read its own config file
+outside the vault (the AI plugin's `ai.ini`, below) - nothing secret ever
+lives there, since the one thing that would be (an API key) travels only as
+an environment variable, forwarded by name from `[plugin] env-passthrough` and
+only once `network` is granted (`PluginHost::sandboxArguments` - `--clearenv`
+wipes everything else, including `$XDG_CONFIG_HOME` itself, which is why it is
+also explicitly re-set to the same value the config bind used).
+`QProcess::setChildProcessModifier` sets `RLIMIT_AS` (256 MiB) and
 `RLIMIT_NOFILE` (64) between fork and exec, so the limit holds whether or not
 bwrap is present. A per-request timeout in the app kills a host that does not
 answer; the next command or render on that plugin restarts it, after a
 backoff that grows with repeated failures. The host never sees a byte of the
 vault except what the protocol hands it - no file access, no path to the
 vault root.
+
+**Timeouts, declared.** `PluginHost`'s per-request kill timeout defaults to
+4000ms - fine for a word count, wrong for a plugin whose work is inherently
+slow (the AI plugin waiting on a language model, seconds to minutes).
+`plugin.ini`'s `[plugin] timeout-ms` overrides it for that plugin's every
+`command.run` and `codeBlock.render`, clamped to `[1000, 300000]`
+(`PluginManifest::requestTimeoutMs`, `PluginHost`'s constructor) - a plugin
+cannot declare an unbounded hang. This alone does not make a slow command
+safe: the app side was already asynchronous before this lane (`PluginHost`'s
+requests are callback-based over `QProcess`'s signals, never a blocking wait
+on the UI thread) and the host process blocks on exactly one request at a
+time by design (`tools/plugin_host/HostIO.cpp`), so a plugin's own blocking
+network call only ever holds up its own process, never the app or another
+plugin. A plugin that wants to fail cleanly before being killed gives its own
+HTTP call a shorter timeout than its declared budget (the AI plugin's
+`ai.ini` `timeout-ms`, comfortably under its `plugin.ini` one) so the common
+slow case is a clean error result, not a `SIGKILL`.
+
+**Command titles.** `plugin.ini`'s optional `[commands]` section
+(`PluginManifest::commandTitle`, surfaced on `PluginCommand::title`) gives a
+command a human title instead of showing `pluginName: commandID` in the
+palette. `MainWindow::syncPlugins` builds that `QAction` label itself
+(`libs/ui`, outside this tier's ownership), so the one-line change that reads
+the new field is not in this file - it is handed to the lead as a diff
+instead of applied here.
 
 **Few extension points, each typed** - v1 has three:
 
@@ -243,6 +293,22 @@ Everything a note-taking app is for, and nothing it is not:
    first draft ruled out for rendering was not actually the cost it looked
    like once code blocks already went through a cache and a placeholder
    either way.
+3. **Done 2026-09-23.** The first Tier 2 plugin that is not a test fixture:
+   `plugins/ai/` (`NOTEAPPC_WITH_AI_PLUGIN`, on by default), an optional
+   first-party integration with a local Ollama server or an OpenAI-compatible
+   or Anthropic HTTP API. It is what drove the `timeout-ms`, `env-passthrough`
+   and `[commands]` manifest additions and the `active_selection_text` host
+   function above - none of those existed until a plugin that actually needed
+   them was built against the tier, the same lesson Tier 2 itself drew from
+   word-stats. Commands: summarize (a notice - stays inside `read-notes`, no
+   `write-notes` needed), ask/rewrite the selection and continue writing (all
+   `replace_selection`), and a `list-models` command for Ollama's `/api/tags`.
+   A fenced ` ```ai ` block's source is the prompt, its rendered answer is the
+   block. Configuration - provider, base URL, model, and the *name* of an
+   environment variable holding a key, never the key itself - lives in
+   `$XDG_CONFIG_HOME/noteAppC/ai.ini`, outside the vault; the key is read from
+   the app's own environment at call time and is never written to a file,
+   logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
 
 ## Decisions that are Jernej's
 

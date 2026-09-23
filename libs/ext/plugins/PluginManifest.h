@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QSet>
 #include <QString>
 #include <QStringList>
@@ -45,6 +46,11 @@ public:
     /// Bare command ids (no "pluginID:" prefix - the app adds that when it
     /// registers the QAction, see docs/PLUGINS.md's MainWindow snippet).
     const QStringList &commands() const { return m_commands; }
+    /// A command's human title from `plugin.ini`'s `[commands]` section
+    /// (`id = Title`), or empty when the plugin declared none - the caller
+    /// then falls back to "pluginName: commandID" the way it always has
+    /// (docs/PLUGINS.md's MainWindow snippet shows both).
+    QString commandTitle(const QString &commandID) const { return m_commandTitles.value(commandID); }
     /// Fenced code-block languages this plugin renders.
     const QStringList &codeBlockLanguages() const { return m_codeBlockLanguages; }
     /// Vault events this plugin wants ("note-opened", "note-saved",
@@ -57,6 +63,25 @@ public:
     const QSet<PluginPermission> &requestedPermissions() const { return m_permissions; }
 
     static QString permissionID(PluginPermission permission);
+
+    /// The hard per-request kill timeout PluginHost should use for this
+    /// plugin (command.run and codeBlock.render alike), from `[plugin]
+    /// timeout-ms`, already clamped to [1000, 300000] - 0 means "not
+    /// declared", and PluginHost keeps its own 4000ms default in that case.
+    /// docs/PLUGINS.md, "Timeouts": a plugin whose work is inherently slow
+    /// (an AI plugin waiting on a language model) declares a realistic
+    /// budget instead of a command meant to finish in milliseconds forcing
+    /// one on it.
+    int requestTimeoutMs() const { return m_requestTimeoutMs; }
+
+    /// Environment variable NAMES (never values - this is metadata, not a
+    /// secret) this plugin may read inside its sandboxed process, from
+    /// `[plugin] env-passthrough`. PluginHost::sandboxArguments() clears the
+    /// child's entire environment before forwarding exactly these, and only
+    /// once the plugin's `network` permission is granted - see its comment
+    /// for why this exists (docs/PLUGINS.md's AI plugin reads an API key
+    /// this way, never from a file).
+    const QStringList &envPassthrough() const { return m_envPassthrough; }
 
 private:
     bool m_valid = false;
@@ -72,6 +97,9 @@ private:
     QStringList m_codeBlockLanguages;
     QStringList m_vaultEvents;
     QSet<PluginPermission> m_permissions;
+    QHash<QString, QString> m_commandTitles;
+    int m_requestTimeoutMs = 0;
+    QStringList m_envPassthrough;
 };
 
 } // namespace noteAppC

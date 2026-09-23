@@ -26,6 +26,7 @@ namespace noteAppC {
 struct PluginAppCallbacks {
     std::function<QString()> activeNotePath;                    ///< read-notes
     std::function<QString()> activeNoteText;                    ///< read-notes
+    std::function<QString()> activeSelectionText;                ///< read-notes; empty = no selection/refused
     std::function<QString(const QString &vaultPath)> readNote;  ///< read-notes; empty = missing/refused
     std::function<QStringList()> listNotes;                     ///< read-notes
     std::function<bool(const QString &utf8)> replaceSelection;  ///< write-notes
@@ -91,10 +92,13 @@ public:
     };
     Timing timing() const { return m_timing; }
 
-    /// Overrides the hard per-request kill timeout (default a few seconds)
-    /// for all three request kinds. Production code never calls this; it
-    /// exists so tests/test_plugins_host.cpp does not need several real
-    /// seconds to prove a hang is killed.
+    /// Overrides the hard per-request kill timeout - the constructor already
+    /// set it from the manifest's `[plugin] timeout-ms` (PluginManifest::
+    /// requestTimeoutMs(), clamped to [1000, 300000]) if it declared one,
+    /// default 4000 otherwise. Production code never calls this; it exists
+    /// so tests/test_plugins_host.cpp does not need several real seconds -
+    /// or several real minutes, for a plugin that declared a long one - to
+    /// prove a hang is killed.
     void setRequestTimeoutMsForTesting(int ms) { m_requestTimeoutMs = ms; }
 
 signals:
@@ -139,6 +143,10 @@ private:
     Timing m_timing;
     QElapsedTimer m_sinceFailure;
     bool m_hasFailed = false;
+    // Default for a plugin whose manifest declares no `timeout-ms` - the
+    // constructor body overrides this from PluginManifest::requestTimeoutMs()
+    // when one is declared (docs/PLUGINS.md, "Timeouts": an AI-style plugin
+    // whose calls take seconds to minutes needs far more than this).
     int m_requestTimeoutMs = 4000;
 };
 
