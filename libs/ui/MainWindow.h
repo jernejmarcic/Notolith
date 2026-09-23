@@ -93,8 +93,12 @@ public:
     /// Obsidian's command palette: every command the window can run now, the
     /// focused note's editing commands with them, most recently used first.
     void openCommandPalette();
-    /// Obsidian's Ctrl+E: live preview <-> source.
-    void toggleEditingMode();
+    /// Obsidian's "Toggle reading view" (Ctrl+E): reading, and back to the
+    /// editing mode the tab was in.
+    void toggleReadingView();
+    /// "Toggle Live Preview/Source mode"; in reading view, the mode the tab
+    /// will edit in.
+    void toggleSourceMode();
     void openSettings();
     void closeSettings();
     /// Index for the open vault, so views can query links and tags.
@@ -114,10 +118,6 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
-
-public slots:
-    /// Obsidian's Ctrl+E, exposed so tools and tests can drive it.
-    void toggleEditingModeSlot() { toggleEditingMode(); }
 
 private slots:
     void chooseVault();
@@ -160,6 +160,8 @@ private:
         TabGroup *group = nullptr;
         /// A canvas or a base shown in place of the editor, or null.
         QWidget *view = nullptr;
+        /// What Ctrl+E goes back to from reading view.
+        MarkdownEditor::Mode editingMode = MarkdownEditor::Mode::LivePreview;
         /// A restored tab's file, loaded the first time the tab is shown, as
         /// Obsidian defers its background tabs: a layout of ten tabs costs
         /// one note's open at startup, not ten.
@@ -221,6 +223,8 @@ private:
     /// Whether an optional feature is on: noteAppC's own switch. A feature
     /// that is off is not built, connected or refreshed - it costs nothing.
     bool featureOn(const char *id) const;
+    /// `editor.defaultMode`, for a new tab.
+    MarkdownEditor::Mode defaultMode() const;
     /// Builds what is switched on and destroys what is not: the side panes
     /// and their tabs, the graph, page preview; and disables the commands of
     /// every feature that is off.
@@ -442,6 +446,9 @@ private:
     QuickSwitcher *m_palette = nullptr; ///< null until first opened
     QHash<QString, QString> m_paletteIDs; ///< shown name -> command id, as last listed
     QStringList m_recentCommands;         ///< ids, most recent first, this session
+    /// The default mode last applied to every tab: a settings pass changes
+    /// an open tab's mode only when this setting is what changed.
+    QString m_appliedDefaultMode;
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

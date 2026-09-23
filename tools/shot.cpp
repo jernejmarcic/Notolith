@@ -65,7 +65,7 @@ int main(int argc, char *argv[])
         window.openTarget(noteAppC::resolveLaunchTarget(note.absoluteFilePath()));
         window.setThemeMode(noteAppC::Theme::modeFromName(args.value(4)));
         if (sourceMode)
-            window.toggleEditingMode();
+            window.toggleSourceMode();
         window.show();
         int status = 0;
         QTimer::singleShot(600, &app, [&] {
@@ -102,7 +102,7 @@ int main(int argc, char *argv[])
     // scheme and would otherwise overwrite the mode asked for here.
     window.setThemeMode(noteAppC::Theme::modeFromName(args.value(4)));
     if (sourceMode)
-        window.toggleEditingMode();
+        window.toggleSourceMode();
     window.show();
 
     // `--command <id>` triggers a window command (its Obsidian command id)

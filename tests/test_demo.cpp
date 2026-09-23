@@ -15,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QImage>
+#include <QAction>
 #include <QSignalSpy>
 #include <QTest>
 #include <QTemporaryDir>
@@ -113,21 +114,22 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
         EXPECT_FALSE(livePreview.isNull());
 
         // Reading and live-preview mode only mean anything for a Markdown
-        // note - a canvas or base file has no editor mode to switch. Set the
-        // mode directly rather than through the "markdown:toggle-preview"
-        // command/Ctrl+E: that command only flips Source<->LivePreview and
-        // never reaches Mode::Reading at all (see the report for details),
-        // so it cannot be used to reach reading mode here.
+        // note - a canvas or base file has no editor mode to switch. Through
+        // Ctrl+E's own command, there and back.
         if (path.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) {
             MarkdownEditor *editor = window.editor();
             ASSERT_NE(editor, nullptr);
+            QAction *toggle = window.findChild<QAction *>(QStringLiteral("markdown:toggle-preview"));
+            ASSERT_NE(toggle, nullptr);
 
-            editor->setMode(MarkdownEditor::Mode::Reading);
+            toggle->trigger();
+            ASSERT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
             QApplication::processEvents();
             const QImage reading = window.grab().toImage();
             EXPECT_FALSE(reading.isNull());
 
-            editor->setMode(MarkdownEditor::Mode::LivePreview);
+            toggle->trigger();
+            ASSERT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
             QApplication::processEvents();
         }
     }

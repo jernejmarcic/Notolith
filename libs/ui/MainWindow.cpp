@@ -642,12 +642,16 @@ void MainWindow::followLink(const QString &target)
         statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
 }
 
-void MainWindow::applyEditorSettings(MarkdownEditor *editor)
+MarkdownEditor::Mode MainWindow::defaultMode() const
 {
     const QString mode = m_settings.text(QStringLiteral("editor.defaultMode"));
-    editor->setMode(mode == QLatin1String("source")    ? MarkdownEditor::Mode::Source
-                    : mode == QLatin1String("reading") ? MarkdownEditor::Mode::Reading
-                                                        : MarkdownEditor::Mode::LivePreview);
+    return mode == QLatin1String("source")    ? MarkdownEditor::Mode::Source
+           : mode == QLatin1String("reading") ? MarkdownEditor::Mode::Reading
+                                               : MarkdownEditor::Mode::LivePreview;
+}
+
+void MainWindow::applyEditorSettings(MarkdownEditor *editor)
+{
     editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
     editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
     editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
@@ -704,6 +708,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
 
 void MainWindow::configureEditor(MarkdownEditor *editor)
 {
+    editor->setMode(defaultMode());
     editor->setTheme(m_theme);
     applyEditorSettings(editor);
     editor->setKeyBindings(m_editorBindings);
@@ -1295,7 +1300,9 @@ void MainWindow::buildActions()
         });
 #endif
     add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
-        QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
+        QStringLiteral("Ctrl+E"), &MainWindow::toggleReadingView);
+    add(QStringLiteral("editor:toggle-source"), tr("Toggle Live Preview/Source mode"), QString(),
+        &MainWindow::toggleSourceMode);
     add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
         [this] { newNoteIn(QString()); });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
@@ -1558,12 +1565,30 @@ void MainWindow::openCommandPalette()
     m_palette->popUp();
 }
 
-void MainWindow::toggleEditingMode()
+void MainWindow::toggleReadingView()
 {
-    const bool source = m_active->editor->mode() == MarkdownEditor::Mode::Source;
-    m_active->editor->setMode(source ? MarkdownEditor::Mode::LivePreview
-                             : MarkdownEditor::Mode::Source);
-    statusBar()->showMessage(source ? tr("Live preview") : tr("Source mode"), 2000);
+    MarkdownEditor *editor = m_active->editor;
+    if (editor->mode() == MarkdownEditor::Mode::Reading) {
+        editor->setMode(m_active->editingMode);
+        return;
+    }
+    m_active->editingMode = editor->mode();
+    editor->setMode(MarkdownEditor::Mode::Reading);
+}
+
+void MainWindow::toggleSourceMode()
+{
+    const auto flipped = [](MarkdownEditor::Mode mode) {
+        return mode == MarkdownEditor::Mode::Source ? MarkdownEditor::Mode::LivePreview : MarkdownEditor::Mode::Source;
+    };
+    MarkdownEditor *editor = m_active->editor;
+    m_active->editingMode = flipped(editor->mode() == MarkdownEditor::Mode::Reading ? m_active->editingMode
+                                                                                     : editor->mode());
+    if (editor->mode() != MarkdownEditor::Mode::Reading)
+        editor->setMode(m_active->editingMode);
+    statusBar()->showMessage(m_active->editingMode == MarkdownEditor::Mode::Source ? tr("Source mode")
+                                                                                    : tr("Live preview"),
+                             2000);
 }
 
 void MainWindow::openSettings()
@@ -1647,6 +1672,11 @@ void MainWindow::applySettings()
 
     for (const auto &leaf : m_leaves)
         applyEditorSettings(leaf->editor);
+    if (const QString mode = m_settings.text(QStringLiteral("editor.defaultMode")); mode != m_appliedDefaultMode) {
+        m_appliedDefaultMode = mode;
+        for (const auto &leaf : m_leaves)
+            leaf->editor->setMode(defaultMode());
+    }
     updateSpelling();
     updateNoteHistory();
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json

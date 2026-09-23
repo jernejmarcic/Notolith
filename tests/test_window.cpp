@@ -1896,3 +1896,42 @@ TEST_F(WindowTest, TheCorePluginsSwitchesReachTheEditor)
     }
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
+{
+    QTemporaryDir config; // the switch below is the user's
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    QAction *reading = window.findChild<QAction *>(QStringLiteral("markdown:toggle-preview"));
+    QAction *source = window.findChild<QAction *>(QStringLiteral("editor:toggle-source"));
+    ASSERT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
+
+    reading->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
+    reading->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
+
+    source->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Source);
+    reading->trigger();
+    reading->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Source) << "back to the mode it left";
+
+    // A settings pass - any switch on the settings page - keeps the tab
+    // where it is.
+    reading->trigger();
+    window.show();
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    noteAppC::ToggleSwitch *wordCount = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return (wordCount = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.wordCount")));
+    }));
+    wordCount->click();
+    wordCount->click();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
+    qputenv("XDG_CONFIG_HOME", previous);
+}

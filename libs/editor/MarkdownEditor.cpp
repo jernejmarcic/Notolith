@@ -1822,10 +1822,11 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     // ever gets a look at it.
     if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
         return layoutImage(view, *embed, path);
-    // Obsidian's audio and video formats.
+    // Obsidian's audio and video formats, and the two Ogg audio spellings
+    // its list leaves out (the freedesktop sounds are .oga).
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
                                       QStringLiteral("ogg"), QStringLiteral("3gp"), QStringLiteral("flac"),
-                                      QStringLiteral("opus")};
+                                      QStringLiteral("opus"), QStringLiteral("oga")};
     static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
     if (m_features.mediaEmbeds && (audio.contains(suffix) || video.contains(suffix)))
