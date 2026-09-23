@@ -11,10 +11,13 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMouseEvent>
+#include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
 #include <QStackedWidget>
@@ -24,6 +27,8 @@
 #include <QToolButton>
 #include <QTreeView>
 #include <QVBoxLayout>
+
+#include <memory>
 
 #include "BacklinksPane.h"
 #include "Icons.h"
@@ -114,6 +119,10 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_switcher, &QuickSwitcher::accepted, this, &MainWindow::openRelative);
 
     buildActions();
+    // Installed on the application, not just this window, because the
+    // mouse's back/forward side buttons have to work no matter which child
+    // widget - editor, tree, a sidebar pane - happens to be under the cursor.
+    qApp->installEventFilter(this);
     applySettings();
     // Baseline context so the settings page works even before any vault
     // ever opens; openVault()/closeVault()/openSingleFile() replace it.
@@ -161,6 +170,16 @@ QWidget *MainWindow::buildHeaderBar()
                                             tr("Toggle sidebar (Ctrl+Alt+S)"), 18);
     connect(sidebarToggle, &QToolButton::clicked, this, &MainWindow::toggleSidebar);
 
+    m_backButton = iconButton(QStringLiteral("headerBackButton"), QStringLiteral("arrow-left"),
+                              tr("Back (Alt+Left)"), 18);
+    connect(m_backButton, &QToolButton::clicked, this, &MainWindow::goBack);
+    m_backButton->setEnabled(false);
+
+    m_forwardButton = iconButton(QStringLiteral("headerForwardButton"), QStringLiteral("arrow-right"),
+                                 tr("Forward (Alt+Right)"), 18);
+    connect(m_forwardButton, &QToolButton::clicked, this, &MainWindow::goForward);
+    m_forwardButton->setEnabled(false);
+
     m_vaultMenuButton = new QToolButton(m_headerBar);
     m_vaultMenuButton->setObjectName(QStringLiteral("vaultMenuButton"));
     m_vaultMenuButton->setText(tr("No vault"));
@@ -176,7 +195,10 @@ QWidget *MainWindow::buildHeaderBar()
     m_headerSearch->setPlaceholderText(tr("Search or jump to..."));
     m_headerSearch->setMaximumWidth(420);
     m_headerSearch->setClearButtonEnabled(true);
-    m_headerSearch->installEventFilter(this);
+    // No installEventFilter() call of its own needed: the application-wide
+    // filter installed in the constructor already sees every widget's
+    // events, and installing a second one here on top of it would run
+    // eventFilter() - and so openQuickSwitcher() - twice for the same event.
     connect(m_headerSearch, &QLineEdit::returnPressed, this, &MainWindow::openQuickSwitcher);
 
     QToolButton *newNote = iconButton(QStringLiteral("headerNewNoteButton"), QStringLiteral("plus"),
@@ -194,6 +216,8 @@ QWidget *MainWindow::buildHeaderBar()
     connect(settingsButton, &QToolButton::clicked, this, &MainWindow::openSettings);
 
     layout->addWidget(sidebarToggle);
+    layout->addWidget(m_backButton);
+    layout->addWidget(m_forwardButton);
     layout->addWidget(m_vaultMenuButton);
     layout->addStretch(1);
     layout->addWidget(m_headerSearch);
@@ -282,10 +306,19 @@ QWidget *MainWindow::buildSidebar()
     m_tree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_tree->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_tree->setContextMenuPolicy(Qt::CustomContextMenu);
+    // Obsidian toggles a folder on a single click; Qt's own double-click
+    // expand would add a third toggle on top of the two clicks a double-click
+    // is already made of (see onTreeClicked()), so it is switched off here
+    // rather than fought with afterwards.
+    m_tree->setExpandsOnDoubleClick(false);
+    // Enter/Return toggling a folder is handled in eventFilter(), which the
+    // application-wide filter installed in the constructor already routes
+    // this widget's key events through - a second, tree-specific
+    // installEventFilter() here would just run that same check twice.
     for (int column = 1; column < m_files->columnCount(); ++column)
         m_tree->hideColumn(column);
     connect(m_tree, &QTreeView::activated, this, &MainWindow::onTreeActivated);
-    connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeActivated);
+    connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeClicked);
     connect(m_tree, &QTreeView::customContextMenuRequested, this,
            &MainWindow::showTreeContextMenu);
     // QFileSystemModel fills a directory on a worker thread, so the root
@@ -337,7 +370,10 @@ QWidget *MainWindow::buildMainArea()
     m_inlineTitle->setVisible(false);
 
     m_editor = new MarkdownEditor(editorArea);
-    m_editor->installEventFilter(this); // keeps the inline title on its column
+    // Its Resize events reach eventFilter() (which keeps the inline title on
+    // its column) through the application-wide filter installed in the
+    // constructor; a second filter installed here on the widget itself would
+    // just run that same check twice per resize.
     m_editor->setEnabled(false);
     connect(m_editor, &MarkdownEditor::modificationChanged,
             this, &MainWindow::onModificationChanged);
@@ -498,10 +534,44 @@ void MainWindow::buildActions()
     add(QStringLiteral("Ctrl+N"), [this] { newNoteIn(QString()); });
     add(QStringLiteral("Ctrl+,"), &MainWindow::openSettings);
     add(QStringLiteral("Ctrl+Q"), &MainWindow::close);
+    add(QStringLiteral("Alt+Left"), &MainWindow::goBack);
+    add(QStringLiteral("Alt+Right"), &MainWindow::goForward);
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    // Installed on the whole application (see the constructor), so this sees
+    // a side-button click no matter which widget the mouse happens to be
+    // over - the editor, the tree, a sidebar pane.
+    if (event->type() == QEvent::MouseButtonPress) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        const bool isNavButton =
+            mouseEvent->button() == Qt::BackButton || mouseEvent->button() == Qt::ForwardButton;
+        auto *widget = qobject_cast<QWidget *>(watched);
+        if (isNavButton && widget && widget->window() == this) {
+            if (mouseEvent->button() == Qt::BackButton)
+                goBack();
+            else
+                goForward();
+            return true;
+        }
+    }
+
+    if (watched == m_tree && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            const QModelIndex current = m_tree->currentIndex();
+            if (current.isValid() && m_files->isDir(current)) {
+                // Consumed here, before QTreeView's own keyPressEvent can run
+                // and emit activated() for the same key press - which would
+                // toggle the folder a second time on top of this one.
+                leaveSettings();
+                m_tree->setExpanded(current, !m_tree->isExpanded(current));
+                return true;
+            }
+        }
+    }
+
     if (watched == m_headerSearch && event->type() == QEvent::FocusIn)
         openQuickSwitcher();
     // The editor changes width when the window resizes, when a sidebar is
@@ -559,6 +629,12 @@ void MainWindow::closeSettings()
     m_mainStack->setCurrentIndex(0);
     if (m_editor->isEnabled())
         m_editor->setFocus();
+}
+
+void MainWindow::leaveSettings()
+{
+    if (m_mainStack->currentIndex() != 0)
+        closeSettings();
 }
 
 void MainWindow::openRelative(const QString &relativePath)
@@ -743,6 +819,7 @@ void MainWindow::reloadSettings(const QString &vaultRoot)
 
 void MainWindow::clearOpenNote()
 {
+    rememberCurrentPosition();
     m_notePath.clear();
     m_note = Note{};
     m_editor->setNoteText(QString());
@@ -774,6 +851,7 @@ void MainWindow::openVault(const QString &path)
     m_openMode = OpenMode::Vault;
     m_vault = vault;
     clearOpenNote();
+    resetHistory();
 
     m_sidebar->setVisible(true);
     m_rightSidebar->setVisible(true);
@@ -803,6 +881,7 @@ void MainWindow::closeVault()
     m_vault = Vault();
     m_index.close();
     clearOpenNote();
+    resetHistory();
 
     m_tree->setRootIndex(QModelIndex());
     m_files->setRootPath(QString());
@@ -824,6 +903,7 @@ void MainWindow::openSingleFile(const QString &path)
     m_vault = Vault();
     m_index.close();
     clearOpenNote();
+    resetHistory();
 
     m_sidebar->setVisible(false);
     m_rightSidebar->setVisible(false);
@@ -850,10 +930,20 @@ void MainWindow::openTarget(const LaunchTarget &target)
         // Nothing named on the command line: pick up where the last session
         // left off, or stay an empty window.
         const QString last = m_settings.recentVaults().value(0);
-        if (!last.isEmpty() && QFileInfo(last).isDir())
+        if (!last.isEmpty() && QFileInfo(last).isDir()) {
             openVault(last);
-        else
+            // And within that vault, whichever note was open when it was
+            // last used - the most recently remembered position that still
+            // lives under this vault's root.
+            for (const QString &candidate : m_settings.rememberedNotes()) {
+                if (m_vault.contains(candidate) && QFileInfo(candidate).exists()) {
+                    openNote(candidate);
+                    break;
+                }
+            }
+        } else {
             updateTitle();
+        }
         break;
     }
     }
@@ -881,13 +971,35 @@ void MainWindow::paintEvent(QPaintEvent *event)
 
 void MainWindow::onTreeActivated(const QModelIndex &index)
 {
-    if (m_files->isDir(index))
+    // A folder toggles from onTreeClicked() (mouse) or the Enter-key handling
+    // in eventFilter() (keyboard), never from here: activated() also fires on
+    // top of a double-click's own two clicks and on top of Enter's own key
+    // event, and toggling in both places would toggle it twice.
+    if (!index.isValid() || m_files->isDir(index))
         return;
-    openNote(m_files->filePath(index));
+    openNote(m_files->filePath(index), NavSource::Tree);
 }
 
-void MainWindow::openNote(const QString &rawPath)
+void MainWindow::onTreeClicked(const QModelIndex &index)
 {
+    if (!index.isValid())
+        return;
+    if (m_files->isDir(index)) {
+        leaveSettings();
+        m_tree->setExpanded(index, !m_tree->isExpanded(index));
+        return;
+    }
+    onTreeActivated(index);
+}
+
+bool MainWindow::openNote(const QString &rawPath, NavSource source)
+{
+    // Any navigation - the tree, the switcher, a link, history - leaves the
+    // settings page if it was open, even below, where a same-path or
+    // not-a-note early return means nothing else here runs: a click behind an
+    // overlay must not load invisibly behind it.
+    leaveSettings();
+
     // A caller outside the tree view - the screenshot tool, a future
     // command-line argument - may hand this a path relative to the working
     // directory. Index::backlinks/outgoingLinks resolve against the vault
@@ -897,27 +1009,49 @@ void MainWindow::openNote(const QString &rawPath)
     // downstream has to guess.
     const QString path = QFileInfo(rawPath).absoluteFilePath();
     if (path == m_notePath)
-        return;
+        return true;
     if (!Vault::isNote(path)) {
-        statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
-                                     .arg(QFileInfo(path).fileName()),
-                                 4000);
-        return;
+        if (source != NavSource::History) {
+            statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
+                                         .arg(QFileInfo(path).fileName()),
+                                     4000);
+        }
+        return false;
     }
     if (!maybeSave())
-        return;
+        return false;
 
     Note note;
     QString error;
     if (!Vault::read(path, note, &error)) {
-        QMessageBox::warning(this, tr("Open note"), tr("Could not read %1:\n%2").arg(path, error));
-        return;
+        // Replaying history over a note that has since been deleted or
+        // renamed is not an error, just a dead end to skip past.
+        if (source != NavSource::History)
+            QMessageBox::warning(this, tr("Open note"), tr("Could not read %1:\n%2").arg(path, error));
+        return false;
+    }
+
+    // The note being left keeps its place - in memory for the rest of this
+    // session, and on disk from here - before anything about it changes.
+    rememberCurrentPosition();
+
+    if (source != NavSource::History) {
+        // A fresh navigation discards whatever "forward" existed past here,
+        // the way a browser does when you follow a new link after going back.
+        while (m_history.size() > m_historyIndex + 1)
+            m_history.removeLast();
+        m_history.append(path);
+        m_historyIndex = m_history.size() - 1;
     }
 
     m_note = note;
     m_notePath = path;
     m_editor->setEnabled(true);
     m_editor->setNoteText(m_note.text);
+    if (const auto position = m_settings.notePosition(path)) {
+        m_editor->setCursorOffset(qMin(position->cursor, qsizetype(m_note.text.size())));
+        m_editor->verticalScrollBar()->setValue(position->scroll);
+    }
     m_editor->setFocus();
 
     const QString title = QFileInfo(path).completeBaseName();
@@ -954,6 +1088,94 @@ void MainWindow::openNote(const QString &rawPath)
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
+
+    // The tree already shows its own row selected; every other route in -
+    // switcher, link, history - reveals the note there instead of leaving the
+    // sidebar pointed at whatever was open before.
+    if (source != NavSource::Tree)
+        revealInTree(path);
+    if (source != NavSource::History)
+        updateHistoryButtons();
+    return true;
+}
+
+void MainWindow::rememberCurrentPosition()
+{
+    if (m_notePath.isEmpty())
+        return;
+    m_settings.setNotePosition(m_notePath, m_editor->cursorOffset(),
+                               m_editor->verticalScrollBar()->value());
+    m_settings.save();
+}
+
+void MainWindow::revealInTree(const QString &path)
+{
+    if (!m_tree || !m_vault.isValid())
+        return;
+    const QModelIndex index = m_files->index(path);
+    if (!index.isValid()) {
+        // QFileSystemModel fills each directory lazily on a worker thread, so
+        // a note revealed right after a vault switch may have no index yet.
+        // Wait for its own directory to finish loading and try once more; the
+        // connection disconnects itself once that happens, so it does not
+        // linger listening for a directory nobody cares about any more.
+        const QString dirPath = QFileInfo(path).absolutePath();
+        auto connection = std::make_shared<QMetaObject::Connection>();
+        *connection = connect(m_files, &QFileSystemModel::directoryLoaded, this,
+                              [this, path, dirPath, connection](const QString &loaded) {
+            if (loaded != dirPath)
+                return;
+            QObject::disconnect(*connection);
+            // The user may have navigated elsewhere by the time this fires.
+            if (path == m_notePath)
+                revealInTree(path);
+        });
+        return;
+    }
+    for (QModelIndex parent = m_files->parent(index); parent.isValid();
+        parent = m_files->parent(parent))
+        m_tree->expand(parent);
+    m_tree->setCurrentIndex(index);
+    if (auto *selection = m_tree->selectionModel())
+        selection->select(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    m_tree->scrollTo(index);
+}
+
+void MainWindow::updateHistoryButtons()
+{
+    if (m_backButton)
+        m_backButton->setEnabled(m_historyIndex > 0);
+    if (m_forwardButton)
+        m_forwardButton->setEnabled(m_historyIndex >= 0 && m_historyIndex < m_history.size() - 1);
+}
+
+void MainWindow::resetHistory()
+{
+    m_history.clear();
+    m_historyIndex = -1;
+    updateHistoryButtons();
+}
+
+void MainWindow::goBack()
+{
+    for (int i = m_historyIndex - 1; i >= 0; --i) {
+        if (openNote(m_history.at(i), NavSource::History)) {
+            m_historyIndex = i;
+            updateHistoryButtons();
+            return;
+        }
+    }
+}
+
+void MainWindow::goForward()
+{
+    for (int i = m_historyIndex + 1; i < m_history.size(); ++i) {
+        if (openNote(m_history.at(i), NavSource::History)) {
+            m_historyIndex = i;
+            updateHistoryButtons();
+            return;
+        }
+    }
 }
 
 bool MainWindow::save()
@@ -1050,6 +1272,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         event->ignore();
         return;
     }
+    rememberCurrentPosition();
     m_settings.save();
     QSettings settings;
     settings.setValue(kGeometry, saveGeometry());

@@ -224,6 +224,39 @@ Timing benchNoteOpen(MainWindow &window, const QString &notePath, const QString 
 /// paint the affected block. A standalone MarkdownEditor, the same widget
 /// tests/test_editor.cpp drives for the 8 ms budget - this adds the paint
 /// that assertion does not measure.
+/// A keystroke through the whole window, not a bare editor: whatever the
+/// shell has connected to the editor, and the application-wide event filter
+/// that catches the mouse's back and forward buttons, are all on the path a
+/// person's keystroke actually takes. The bare-editor row cannot see them.
+Timing benchWindowKeystroke(const QString &vaultPath, const QString &notePath, int runs)
+{
+    auto window = std::make_unique<MainWindow>();
+    window->resize(1180, 760);
+    window->openVault(vaultPath);
+    window->openNote(notePath);
+    window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+
+    MarkdownEditor *editor = window->editor();
+    const qsizetype middle = editor->noteText().size() / 2;
+    editor->setCursorOffset(middle);
+    editor->enterBlockAt(middle);
+    paintedFrame(editor);
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClick(editor, Qt::Key_X);
+        const QImage frame = paintedFrame(editor);
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Keystroke through the window"),
+                  QStringLiteral("%1 kB note").arg(QFileInfo(notePath).size() / 1024), samples);
+}
+
 Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 {
     auto editor = std::make_unique<MarkdownEditor>();
@@ -598,6 +631,7 @@ int main(int argc, char *argv[])
     // 3: keystroke latency, same sizes.
     for (int kb : sizesKB)
         timings << benchKeystroke(buildNote(kb), QStringLiteral("%1 kB note").arg(kb), 30);
+    timings << benchWindowKeystroke(vaultPath, sizedNotes.value(200), 30);
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);

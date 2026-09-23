@@ -5,6 +5,8 @@
 #include <QVariant>
 #include <QVariantMap>
 
+#include <optional>
+
 namespace noteAppC {
 
 /// How the app was launched. It decides how much chrome there is, whether
@@ -92,6 +94,21 @@ public:
     QStringList recentVaults() const;
     QStringList recentFiles() const;
     void noteOpened(const QString &vaultRoot, const QString &filePath);
+
+    /// A note's caret offset and vertical scroll pixel, as last recorded by
+    /// setNotePosition().
+    struct NotePosition {
+        qint64 cursor = 0;
+        int scroll = 0;
+    };
+    /// Unset when `path` was never recorded, or has aged out of the cap.
+    std::optional<NotePosition> notePosition(const QString &path) const;
+    /// Remembers where `path` was left, evicting the oldest entry once more
+    /// than 50 notes are tracked. Written to `vaults.ini` by save(), the same
+    /// as recentVaults/recentFiles - never settings.ini, never the vault.
+    void setNotePosition(const QString &path, qint64 cursor, int scroll);
+    /// Every note with a remembered position, most recently visited first.
+    QStringList rememberedNotes() const;
 
     /// Reads Obsidian's own `app.json` and `appearance.json` from a vault and
     /// maps them onto noteAppC's keys. Public so the tests can check the

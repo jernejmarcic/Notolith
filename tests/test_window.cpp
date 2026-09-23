@@ -9,12 +9,14 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileSystemModel>
 #include <QFile>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTest>
@@ -32,6 +34,7 @@
 #include "Vault.h"
 
 using noteAppC::Index;
+using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
 using noteAppC::MarkdownEditor;
 
@@ -442,6 +445,299 @@ TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTrashAndClearsTheEditor)
     auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_FALSE(editor->isEnabled());
+}
+
+TEST_F(WindowTest, ClickingATreeRowLeavesSettingsEvenWhenTheNoteIsAlreadyOpen)
+{
+    write(QStringLiteral("Second.md"), "# Second\n");
+
+    MainWindow window;
+    QSignalSpy loaded(window.findChild<QFileSystemModel *>(), &QFileSystemModel::directoryLoaded);
+    window.openVault(dir.path());
+    ASSERT_TRUE(loaded.wait(5000));
+    window.openNote(path(QStringLiteral("Welcome.md")));
+
+    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
+    ASSERT_NE(stack, nullptr);
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+
+    // Welcome.md is already open - openNote() used to return before ever
+    // switching the stack back, so clicking the open note did nothing.
+    const QModelIndex welcome = model->index(path(QStringLiteral("Welcome.md")));
+    ASSERT_TRUE(welcome.isValid());
+    window.openSettings();
+    ASSERT_EQ(stack->currentIndex(), 1);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeActivated", Q_ARG(QModelIndex, welcome)));
+    EXPECT_EQ(stack->currentIndex(), 0);
+
+    // A different note also leaves settings, and opens it.
+    const QModelIndex second = model->index(path(QStringLiteral("Second.md")));
+    ASSERT_TRUE(second.isValid());
+    window.openSettings();
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeActivated", Q_ARG(QModelIndex, second)));
+    EXPECT_EQ(stack->currentIndex(), 0);
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
+
+    // A folder never reaches openNote() at all, so it needs its own check.
+    const QModelIndex projects = model->index(path(QStringLiteral("Projects")));
+    ASSERT_TRUE(projects.isValid());
+    window.openSettings();
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
+    EXPECT_EQ(stack->currentIndex(), 0);
+}
+
+TEST_F(WindowTest, ClickingAFolderTogglesItAndActivatedDoesNotToggleItAgain)
+{
+    MainWindow window;
+    QSignalSpy loaded(window.findChild<QFileSystemModel *>(), &QFileSystemModel::directoryLoaded);
+    window.openVault(dir.path());
+    ASSERT_TRUE(loaded.wait(5000));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    // Qt's own double-click expansion would add a third toggle on top of the
+    // two plain clicks a double-click is made of; it must stay off.
+    EXPECT_FALSE(tree->expandsOnDoubleClick());
+
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+    const QModelIndex projects = model->index(path(QStringLiteral("Projects")));
+    ASSERT_TRUE(projects.isValid());
+    EXPECT_FALSE(tree->isExpanded(projects));
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
+    EXPECT_TRUE(tree->isExpanded(projects));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
+    EXPECT_FALSE(tree->isExpanded(projects));
+
+    // A double-click is, from Qt's point of view, two ordinary clicks (each
+    // toggling once here) plus one activated() on top of the second - which
+    // must be a no-op for a folder, or the pair above would not cancel out.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeActivated", Q_ARG(QModelIndex, projects)));
+    EXPECT_FALSE(tree->isExpanded(projects));
+
+    // Return, with the folder current, toggles it exactly once too.
+    tree->setCurrentIndex(projects);
+    QTest::keyClick(tree, Qt::Key_Return);
+    EXPECT_TRUE(tree->isExpanded(projects));
+}
+
+TEST_F(WindowTest, BackAndForwardNavigateHistoryAndDisableAtTheEnds)
+{
+    write(QStringLiteral("Second.md"), "# Second\n");
+    write(QStringLiteral("Third.md"), "# Third\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.openNote(path(QStringLiteral("Second.md")));
+    window.openNote(path(QStringLiteral("Third.md")));
+
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    auto *back = window.findChild<QToolButton *>(QStringLiteral("headerBackButton"));
+    auto *forward = window.findChild<QToolButton *>(QStringLiteral("headerForwardButton"));
+    ASSERT_NE(back, nullptr);
+    ASSERT_NE(forward, nullptr);
+    EXPECT_TRUE(back->isEnabled());
+    EXPECT_FALSE(forward->isEnabled());
+
+    window.goBack();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
+    EXPECT_TRUE(back->isEnabled());
+    EXPECT_TRUE(forward->isEnabled());
+
+    window.goBack();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_FALSE(back->isEnabled()); // nowhere further back to go
+
+    window.goForward();
+    window.goForward();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Third\n"));
+    EXPECT_FALSE(forward->isEnabled()); // nowhere further forward to go
+
+    // Opening a note from history must not itself push a new entry: going
+    // back twice from the end still lands on the first note opened, not on
+    // some duplicate further down a lengthened list.
+    window.goBack();
+    window.goBack();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_FALSE(back->isEnabled());
+}
+
+TEST_F(WindowTest, GoingBackSkipsAHistoryEntryThatWasDeleted)
+{
+    write(QStringLiteral("Second.md"), "# Second\n");
+    write(QStringLiteral("Third.md"), "# Third\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.openNote(path(QStringLiteral("Second.md")));
+    window.openNote(path(QStringLiteral("Third.md")));
+
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Second.md"))));
+
+    // history is [Welcome, Second, Third]; Second is gone, so going back from
+    // Third must land on Welcome without popping a warning dialog.
+    window.goBack();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_EQ(QApplication::activeModalWidget(), nullptr);
+}
+
+TEST_F(WindowTest, MouseBackButtonNavigatesHistoryFromAnyWidget)
+{
+    write(QStringLiteral("Second.md"), "# Second\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.openNote(path(QStringLiteral("Second.md")));
+
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    ASSERT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
+
+    // The filter is installed on the application (see MainWindow's
+    // constructor), so the click is delivered to the editor here and still
+    // has to reach MainWindow rather than only working on one specific
+    // widget.
+    QTest::mouseClick(editor, Qt::BackButton);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    QTest::mouseClick(editor, Qt::ForwardButton);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
+}
+
+TEST_F(WindowTest, AltLeftAndAltRightNavigateHistory)
+{
+    write(QStringLiteral("Second.md"), "# Second\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.openNote(path(QStringLiteral("Second.md")));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+
+    QTest::keyClick(&window, Qt::Key_Left, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    QTest::keyClick(&window, Qt::Key_Right, Qt::AltModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
+}
+
+TEST_F(WindowTest, ReopeningANoteRestoresCaretAndScroll)
+{
+    QString longText;
+    for (int i = 0; i < 500; ++i)
+        longText += QStringLiteral("line %1\n").arg(i);
+    write(QStringLiteral("Long.md"), longText.toUtf8());
+    write(QStringLiteral("Second.md"), "# Second\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Long.md")));
+
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(200);
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    const int scrolled = editor->verticalScrollBar()->value();
+    ASSERT_GT(scrolled, 0);
+
+    window.openNote(path(QStringLiteral("Second.md")));
+    EXPECT_EQ(editor->cursorOffset(), 0); // a fresh note starts at the top
+
+    window.openNote(path(QStringLiteral("Long.md")));
+    EXPECT_EQ(editor->cursorOffset(), 200);
+    EXPECT_EQ(editor->verticalScrollBar()->value(), scrolled);
+}
+
+TEST_F(WindowTest, LaunchWithNoArgumentReopensTheLastVaultAndNote)
+{
+    const QByteArray previousConfigHome = qgetenv("XDG_CONFIG_HOME");
+    QTemporaryDir configHome;
+    ASSERT_TRUE(configHome.isValid());
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+
+    {
+        MainWindow first;
+        first.openVault(dir.path());
+        first.openNote(path(QStringLiteral("Welcome.md")));
+        // A real quit records the position and saves it; close() delivers
+        // the same QCloseEvent without needing a shown, on-screen window.
+        first.close();
+    }
+
+    MainWindow second;
+    second.openTarget(LaunchTarget{});
+
+    EXPECT_EQ(second.windowTitle().contains(QDir(dir.path()).dirName()), true);
+    auto *editor = second.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    qputenv("XDG_CONFIG_HOME", previousConfigHome);
+}
+
+TEST_F(WindowTest, OpeningANoteFromOutsideTheTreeRevealsItThere)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    // No wait for QFileSystemModel here on purpose: revealInTree() has to
+    // cope with the nested folder not being loaded yet on its own.
+    window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    ASSERT_NE(model, nullptr);
+
+    QModelIndex current;
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 5000) {
+        QCoreApplication::processEvents();
+        current = tree->currentIndex();
+        if (current.isValid())
+            break;
+    }
+    ASSERT_TRUE(current.isValid());
+    EXPECT_EQ(model->filePath(current), path(QStringLiteral("Projects/Crlf.md")));
+    EXPECT_TRUE(tree->isExpanded(model->parent(current)));
+}
+
+TEST_F(WindowTest, CtrlCommaOpensSettingsAndEscapeCloses)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
+    ASSERT_NE(stack, nullptr);
+    ASSERT_EQ(stack->currentIndex(), 0);
+
+    QTest::keyClick(&window, Qt::Key_Comma, Qt::ControlModifier);
+    EXPECT_EQ(stack->currentIndex(), 1);
+
+    auto *settingsPage = window.findChild<QWidget *>(QStringLiteral("settingsPage"));
+    ASSERT_NE(settingsPage, nullptr);
+    QTest::keyClick(settingsPage, Qt::Key_Escape);
+    EXPECT_EQ(stack->currentIndex(), 0);
 }
 
 int main(int argc, char **argv)

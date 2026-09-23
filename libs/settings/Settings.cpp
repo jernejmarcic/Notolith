@@ -53,6 +53,7 @@ const QVariantMap &defaults()
         // Remembered between launches
         {QStringLiteral("state.recentVaults"), QStringList()},
         {QStringLiteral("state.recentFiles"), QStringList()},
+        {QStringLiteral("state.notePositions"), QStringList()},
     };
     return map;
 }
@@ -295,6 +296,11 @@ void take(QVariantMap &out, const QJsonObject &object, const char *obsidianKey,
     if (!value.isUndefined() && !value.isNull())
         out.insert(key, value.toVariant());
 }
+
+/// Separates the three fields of one `state.notePositions` entry. A tab,
+/// because a path can hold a comma - the character `textOf`/`valueOf` already
+/// use to join and split the list itself - but essentially never holds a tab.
+constexpr QChar kPositionField = QLatin1Char('\t');
 
 } // namespace
 
@@ -551,6 +557,40 @@ void Settings::noteOpened(const QString &vaultRoot, const QString &filePath)
     };
     setValue(QStringLiteral("state.recentVaults"), push(recentVaults(), vaultRoot));
     setValue(QStringLiteral("state.recentFiles"), push(recentFiles(), filePath));
+}
+
+std::optional<Settings::NotePosition> Settings::notePosition(const QString &path) const
+{
+    for (const QString &entry : value(QStringLiteral("state.notePositions")).toStringList()) {
+        const QStringList fields = entry.split(kPositionField);
+        if (fields.size() == 3 && fields.at(0) == path)
+            return NotePosition{fields.at(1).toLongLong(), fields.at(2).toInt()};
+    }
+    return std::nullopt;
+}
+
+void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll)
+{
+    if (path.isEmpty())
+        return;
+    QStringList positions = value(QStringLiteral("state.notePositions")).toStringList();
+    const QString prefix = path + kPositionField;
+    for (qsizetype i = positions.size() - 1; i >= 0; --i) {
+        if (positions.at(i).startsWith(prefix))
+            positions.removeAt(i);
+    }
+    positions.prepend(prefix + QString::number(cursor) + kPositionField + QString::number(scroll));
+    while (positions.size() > 50)
+        positions.removeLast();
+    setValue(QStringLiteral("state.notePositions"), positions);
+}
+
+QStringList Settings::rememberedNotes() const
+{
+    QStringList paths;
+    for (const QString &entry : value(QStringLiteral("state.notePositions")).toStringList())
+        paths.append(entry.section(kPositionField, 0, 0));
+    return paths;
 }
 
 } // namespace noteAppC

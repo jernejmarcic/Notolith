@@ -232,7 +232,25 @@ Jernej's rule: a new feature goes here and the current task carries on.
       4. a listing inside a callout wraps where Obsidian scrolls it;
       5. Nerd Font glyph icons (arrives with the icon lane).
 
+### Next, after tabs
+
+- [ ] **The word count is O(document) on every keystroke.** `textChanged` ->
+      `MainWindow::updateWordCount` -> `MarkdownEditor::wordCount()` scans the
+      whole note. A keystroke through the window costs 0.33 ms at 200 kB
+      against 0.24 ms for a bare editor; this is the likely bulk of the
+      difference (to be confirmed by re-measuring after the fix). Count on the
+      parse thread, which already reads the whole text after a typing pause,
+      and publish the number with the decorations.
+
 ### Later
+
+- [ ] **Latent: decorations other than syntax, styles, blocks and properties
+      are not shifted between a keystroke and the reparse** - callouts,
+      maths, embeds, list items, tables, code fences. Invisible today because
+      blocks below an edit keep their cached layout; it would show if such a
+      block were laid out inside the 20 ms debounce. Fixing it adds to the
+      per-keystroke O(document) passes, so do it together with making those
+      passes proportional to the edit. `ShiftTest` guards the visible case.
 
 - [ ] **Custom themes from a CSS file.** Half there: `libs/theme/Scheme`
       already imports an Obsidian theme's CSS - `var()` and `hsl()` resolved,

@@ -257,3 +257,39 @@ TEST(Settings, whatTheAppRemembersGoesInItsOwnFile)
     ASSERT_TRUE(index.open(QIODevice::ReadOnly | QIODevice::Text));
     EXPECT_TRUE(QString::fromUtf8(index.readAll()).contains(QStringLiteral("/vaults/mine")));
 }
+
+TEST(Settings, NotePositionSurvivesASaveAndLoadAndEvictsPastFifty)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    EXPECT_FALSE(settings.notePosition(QStringLiteral("/vaults/mine/Note.md")).has_value());
+
+    settings.setNotePosition(QStringLiteral("/vaults/mine/Note.md"), 42, 900);
+    ASSERT_TRUE(settings.save());
+
+    Settings reloaded = Settings::load();
+    const auto position = reloaded.notePosition(QStringLiteral("/vaults/mine/Note.md"));
+    ASSERT_TRUE(position.has_value());
+    EXPECT_EQ(position->cursor, 42);
+    EXPECT_EQ(position->scroll, 900);
+    EXPECT_EQ(reloaded.rememberedNotes().value(0), QStringLiteral("/vaults/mine/Note.md"));
+
+    // Recording the same note again replaces its entry rather than adding a
+    // second one, and moves it back to the front.
+    reloaded.setNotePosition(QStringLiteral("/other/Note.md"), 1, 1);
+    reloaded.setNotePosition(QStringLiteral("/vaults/mine/Note.md"), 7, 3);
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/vaults/mine/Note.md"))->cursor, 7);
+    EXPECT_EQ(reloaded.rememberedNotes().value(0), QStringLiteral("/vaults/mine/Note.md"));
+    EXPECT_EQ(reloaded.rememberedNotes().size(), 2);
+
+    // The cap keeps the file from growing without bound across a long-lived
+    // vault: the 51st note pushes the oldest out.
+    Settings capped = Settings::load();
+    for (int i = 0; i < 51; ++i)
+        capped.setNotePosition(QStringLiteral("/vaults/mine/Note%1.md").arg(i), i, i);
+    EXPECT_EQ(capped.rememberedNotes().size(), 50);
+    EXPECT_EQ(capped.rememberedNotes().first(), QStringLiteral("/vaults/mine/Note50.md"));
+    EXPECT_FALSE(capped.notePosition(QStringLiteral("/vaults/mine/Note0.md")).has_value());
+}
