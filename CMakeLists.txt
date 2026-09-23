@@ -149,7 +149,12 @@ if(NOTEAPPC_WITH_BASES)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
-add_subdirectory(tools)
+# The screenshot tool, the index CLI and the bench harness are desktop
+# developer tools, not part of the app; on Android they would need their own
+# packaging for no benefit, so they simply do not build there.
+if(NOT ANDROID)
+    add_subdirectory(tools)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -158,11 +163,15 @@ endif()
 
 # Installing matters for one reason: a .desktop file is what lets a file
 # manager open a loose .md with noteAppC, which is the whole point of
-# single-file mode.
-include(GNUInstallDirs)
-install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES packaging/noteAppC.desktop
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-# What software centres and Flatpak read to describe the app.
-install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+# single-file mode - meaningless on Android, where qt_add_executable() makes
+# noteAppC a MODULE target instead of an executable and this same
+# install(TARGETS) would need a LIBRARY DESTINATION it has no use for.
+if(NOT ANDROID)
+    include(GNUInstallDirs)
+    install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES packaging/noteAppC.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    # What software centres and Flatpak read to describe the app.
+    install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
+endif()
