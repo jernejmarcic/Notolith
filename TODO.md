@@ -265,7 +265,11 @@ Jernej's rule: a new feature goes here and the current task carries on.
       version, after patching md4qt's four 6.8-only conversions at fetch
       (`cmake/patch-md4qt.sh`). noteAppC's own code uses no 6.8+ API.
 - [ ] The actual Android build, and a touch mode for the editor.
-- [ ] A 5 000-line fenced code block is still one block, so typing in it
-      relays every line, like lists did before they were split. Measure it.
+- [ ] **Typing in a long code block is over budget.** Measured with a paint:
+      100 lines 2.15 ms, 1 000 lines 14.8 ms, 5 000 lines 25.7 ms, against
+      8 ms. One block, relaid whole, and the highlighter re-colours the whole
+      listing each time. Harder than lists: KSyntaxHighlighting carries state
+      from line to line, so a split needs incremental highlighting that stops
+      once the state converges. Measure layout against highlighting first.
 - [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
       blitting, the Wayland buffer measurement - see above.

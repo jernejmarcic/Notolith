@@ -7,6 +7,12 @@ project(noteAppC
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# No C++20 modules anywhere in this project - every file uses #include - so
+# CMake's module scanning is pure overhead: a scan step per source and a dyndep
+# file per target. It is also what crashed ninja 1.13.2 on a no-op rebuild, an
+# assertion in Plan::RefreshDyndepDependents, which made a failed build look
+# like a successful one to anything that only read its tail.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Svg Sql Concurrent Network)
