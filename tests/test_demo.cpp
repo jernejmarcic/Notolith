@@ -16,6 +16,7 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QSignalSpy>
+#include <QTest>
 #include <QTemporaryDir>
 
 #include <algorithm>
@@ -87,9 +88,14 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
     clock.start();
 
     MainWindow window;
-    QSignalSpy indexed(window.index(), &Index::changed);
     window.openVault(vaultPath());
-    ASSERT_TRUE(indexed.wait(15000)) << "index never finished";
+    // Every note indexed, however warm the cache was: a warm one says
+    // Index::changed only inside openVault, before a spy could wait for it.
+    const QStringList all = demoFiles();
+    const qsizetype notes = std::count_if(all.cbegin(), all.cend(), [](const QString &file) {
+        return file.endsWith(QLatin1String(".md"));
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(window.index()->noteCount() >= notes, 15000);
     window.resize(1280, 900);
     window.show();
     QApplication::processEvents();
