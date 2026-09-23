@@ -102,10 +102,11 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       blocks without a text layout); tables are now edited in place, cell by
       cell, as in Obsidian (TableCells.cpp). Callouts, quotes, headings,
       rules, links, embeds, code, tasks already opened on a click.
+  - [x] Table row and column commands (insert, delete, move), palette and
+        right-click menu.
   - [ ] Table cells: a selection across cells is not drawn inside the
-        rendered table; column/row add, delete and move commands (Advanced
-        Tables has them); a row with fewer cells than the header has no
-        place to click for the missing ones.
+        rendered table; a row with fewer cells than the header has no place
+        to click for the missing ones.
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
 - [x] Lockbox approval: a person approves a device enrolling by lockbox,
