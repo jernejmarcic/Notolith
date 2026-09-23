@@ -78,6 +78,15 @@ endif()
 # (libs/ext/publish/). No new external dependency: it only draws on
 # libraries this project already links (markdown, index, render, theme).
 option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publish)" ON)
+# Another Tier 1 module: opens a vault's PDFs in a tab instead of handing
+# them to the system viewer - continuous scroll, zoom, find, outline, links,
+# and annotation (highlight/underline/strike-out/ink/note/box) saved into the
+# PDF itself. Needs poppler-qt6 for more than PDF embeds do (annotations,
+# text extraction, outline, links), so libs/ext/pdfview is only added once
+# libs/render has looked for it (see NOTEAPPC_WITH_PDF above) and found the
+# PkgConfig::POPPLER_QT6 target - this option on top lets it be switched off
+# on its own even when embeds stay on.
+option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -181,6 +190,10 @@ if(NOTEAPPC_WITH_EPUB AND TARGET PkgConfig::LIBARCHIVE AND noteappc_have_litehtm
 endif()
 if(NOTEAPPC_WITH_PUBLISH)
     add_subdirectory(libs/ext/publish)
+endif()
+get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
+if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
+    add_subdirectory(libs/ext/pdfview)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

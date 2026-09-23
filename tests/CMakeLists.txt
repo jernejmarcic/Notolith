@@ -126,6 +126,13 @@ target_link_libraries(test_plugins PRIVATE noteAppC_vault noteAppC_ui Qt6::Test 
 add_test(NAME plugins COMMAND test_plugins)
 set_tests_properties(plugins PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+if(TARGET noteAppC_pdfview)
+    add_executable(test_pdfview test_pdfview.cpp)
+    target_link_libraries(test_pdfview PRIVATE noteAppC_pdfview Qt6::Test GTest::gtest)
+    add_test(NAME pdfview COMMAND test_pdfview)
+    set_tests_properties(pdfview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person

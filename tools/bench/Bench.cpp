@@ -53,6 +53,11 @@
 #include "MarkdownEditor.h"
 #include "SettingsPage.h"
 
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+#include "PdfDocument.h"
+#include "PdfPagesArea.h"
+#endif
+
 using namespace noteAppC;
 
 namespace {
@@ -732,6 +737,171 @@ Timing benchPdfScroll(const QString &scratchPath, QSize viewport = QSize(1180, 7
                   samples);
 }
 
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+// --- libs/ext/pdfview's own rows: a PDF opened as a tab, not an embed -----
+
+/// A 500-page PDF with real body text on every page - built with pdflatex,
+/// not QPdfWriter (buildBenchPdf's own choice for the embed rows above):
+/// the measurement this feeds was specified against pdflatex output, and it
+/// gives every page a heading and two paragraphs to search, select and
+/// highlight against - closer to a document someone would actually
+/// annotate than buildBenchPdf's one line. Empty, with a note on stderr,
+/// when pdflatex is not on PATH or fails, so the caller can skip these rows
+/// rather than fail the whole run over a missing TeX install.
+QString buildLargePdfViewBenchPdf(const QString &dir, int pages = 500)
+{
+    const QString texPath = dir + QStringLiteral("/pdfview-bench.tex");
+    const QString pdfPath = dir + QStringLiteral("/pdfview-bench.pdf");
+    QFile tex(texPath);
+    if (!tex.open(QIODevice::WriteOnly))
+        return {};
+    QTextStream out(&tex);
+    out << "\\documentclass{article}\n\\usepackage[margin=1in]{geometry}\n\\begin{document}\n";
+    for (int page = 1; page <= pages; ++page) {
+        out << "\\section*{Page " << page << "}\n"
+            << "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
+               "tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim "
+               "veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip.\n\n"
+            << "A second paragraph of body text, so the page has more than one line to "
+               "search, select and highlight against, the way a real document would.\n";
+        if (page != pages)
+            out << "\\newpage\n";
+    }
+    out << "\\end{document}\n";
+    tex.close();
+
+    QProcess pdflatex;
+    pdflatex.setWorkingDirectory(dir);
+    pdflatex.setProgram(QStringLiteral("pdflatex"));
+    pdflatex.setArguments({QStringLiteral("-interaction=nonstopmode"), texPath});
+    pdflatex.start();
+    if (!pdflatex.waitForFinished(180000) || !QFileInfo(pdfPath).isFile()) {
+        std::fprintf(stderr, "note: pdflatex not available or failed - skipping the PDF viewer rows\n");
+        return {};
+    }
+    return pdfPath;
+}
+
+/// PDF view open: PdfPagesArea::load() lays out every page from its point
+/// size alone (a metadata read, see PdfDocument::pageSizePoints - the
+/// "pages lay out before any render lands" design tests/test_pdfview.cpp
+/// guards), so this measures to the first PAINTED frame, the same
+/// "usable, not just constructed" bar benchColdStart holds cold start to -
+/// mostly the first visible page's off-UI-thread render (20-50ms/page,
+/// PdfPage.h's own number) landing and being waited for, not the layout.
+Timing benchPdfViewOpen(const QString &pdfPath, int runs)
+{
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        auto area = std::make_unique<PdfPagesArea>();
+        area->resize(1180, 900);
+        QElapsedTimer clock;
+        clock.start();
+        area->load(pdfPath);
+        area->show();
+        for (int wait = 0; wait < 10; ++wait)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        const QImage frame = paintedFrame(area.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("PDF view open"), QStringLiteral("500-page PDF, to first painted frame"),
+                  samples);
+}
+
+/// PDF view scroll: benchPdfScroll's own shape (a page at a time, both
+/// directions) over the continuous-page canvas instead of an embed - every
+/// visible page already rendered and cached by the warm-up loop below, so
+/// this is the raster/composite/annotation-overlay cost alone, not a
+/// render's.
+Timing benchPdfViewScroll(const QString &pdfPath, QSize viewport = QSize(1180, 900))
+{
+    auto area = std::make_unique<PdfPagesArea>();
+    area->resize(viewport);
+    area->load(pdfPath);
+    area->show();
+    for (int i = 0; i < 20; ++i)
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    paintedFrame(area.get()); // untimed warm-up frame
+
+    QScrollBar *bar = area->verticalScrollBar();
+    const int page = qMax(1, bar->pageStep());
+    const int maxValue = bar->maximum();
+
+    std::vector<double> samples;
+    for (int pass = 0; pass < 2; ++pass) {
+        const int step = pass == 0 ? page : -page;
+        int value = pass == 0 ? 0 : maxValue;
+        bar->setValue(value);
+        while (true) {
+            const int next = qBound(0, value + step, maxValue);
+            if (next == value)
+                break;
+            value = next;
+            QElapsedTimer clock;
+            clock.start();
+            bar->setValue(value);
+            const QImage frame = paintedFrame(area.get());
+            (void)frame;
+            samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        }
+    }
+    return reduce(QStringLiteral("Scroll frame"),
+                  QStringLiteral("500-page PDF view, %1 frames, off screen").arg(int(samples.size())),
+                  samples);
+}
+
+/// Annotation save: a realistic session's worth of markup (20 highlights, 5
+/// notes) on a fresh copy of the file each sample. A fresh copy, not one
+/// copy reused across samples: save() reopens the document in place
+/// afterwards (PdfDocument::save's own doc comment), so reusing it would
+/// keep adding to an ever-larger annotation set instead of timing the same
+/// edit every time.
+Timing benchPdfViewSave(const QString &pdfPath, const QString &scratchDir, int runs)
+{
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        const QString copyPath = scratchDir + QStringLiteral("/save-sample-%1.pdf").arg(i);
+        QFile::remove(copyPath);
+        if (!QFile::copy(pdfPath, copyPath))
+            continue;
+
+        PdfDocument doc;
+        if (!doc.load(copyPath))
+            continue;
+        for (int n = 0; n < 20; ++n) {
+            PdfAnnotationData highlight;
+            highlight.kind = PdfAnnotationKind::Highlight;
+            highlight.page = n % doc.pageCount();
+            highlight.quads = {QRectF(0.1, 0.1 + 0.02 * (n % 10), 0.3, 0.02)};
+            highlight.boundary = highlight.quads.first();
+            highlight.color = QColor(255, 235, 59);
+            doc.addAnnotation(highlight);
+        }
+        for (int n = 0; n < 5; ++n) {
+            PdfAnnotationData note;
+            note.kind = PdfAnnotationKind::Note;
+            note.page = n % doc.pageCount();
+            note.boundary = QRectF(0.05, 0.05, 0.02, 0.02);
+            note.contents = QStringLiteral("A bench comment.");
+            doc.addAnnotation(note);
+        }
+
+        QElapsedTimer clock;
+        clock.start();
+        QString error;
+        const bool ok = doc.save(&error);
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        if (!ok)
+            std::fprintf(stderr, "note: bench save failed: %s\n", qPrintable(error));
+    }
+    return reduce(QStringLiteral("Annotation save"),
+                  QStringLiteral("500-page PDF, 25 annotations (20 highlights + 5 notes)"), samples);
+}
+#endif // NOTEAPPC_HAVE_PDFVIEW
+
 /// 4. Scroll frame time: page down through a long note and back up,
 /// timing relayout-of-newly-visible-blocks plus paint for each page - what
 /// the reader actually waits on while scrolling. No budget exists yet;
@@ -1166,6 +1336,17 @@ int main(int argc, char *argv[])
         if (parts.size() == 2)
             timings << benchScroll(5000, QSize(parts.at(0).toInt(), parts.at(1).toInt()));
     }
+
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    // libs/ext/pdfview's own rows: open, scroll and annotation save against
+    // a 500-page PDF built once and reused (or a fresh copy of it, for
+    // save) across the samples below.
+    if (const QString pdfViewBenchPdf = buildLargePdfViewBenchPdf(workDir.path()); !pdfViewBenchPdf.isEmpty()) {
+        timings << benchPdfViewOpen(pdfViewBenchPdf, 5);
+        timings << benchPdfViewScroll(pdfViewBenchPdf);
+        timings << benchPdfViewSave(pdfViewBenchPdf, workDir.path(), 5);
+    }
+#endif
 
     printTable(timings, peakKB, memoryDetail);
     if (parser.isSet(jsonOption))

@@ -71,7 +71,7 @@ QSizeF PdfPage::pageSize(const QString &path, int page)
     return pdfPage ? pdfPage->pageSizeF() : QSizeF();
 }
 
-QImage PdfPage::render(const QString &path, int page, int widthPixels)
+QImage PdfPage::render(const QString &path, int page, int widthPixels, bool hideAnnotations)
 {
     Poppler::Document *document = openCached(path);
     if (!document || page < 0 || page >= document->numPages() || widthPixels <= 0)
@@ -81,12 +81,26 @@ QImage PdfPage::render(const QString &path, int page, int widthPixels)
     if (!pdfPage)
         return {};
 
+    // The hint lives on the (thread-local, cached) Document, shared by every
+    // caller on this thread - toggle it around this one render and restore
+    // it before returning, so a PDF-embed render on the same thread right
+    // after never inherits it.
+    if (hideAnnotations)
+        document->setRenderHint(Poppler::Document::HideAnnotations, true);
+
     // Poppler renders by DPI; 72 is the PDF point, so this is a width ratio.
     const QSizeF size = pdfPage->pageSizeF();
-    if (size.width() <= 0)
+    if (size.width() <= 0) {
+        if (hideAnnotations)
+            document->setRenderHint(Poppler::Document::HideAnnotations, false);
         return {};
+    }
     const double dpi = 72.0 * widthPixels / size.width();
-    return pdfPage->renderToImage(dpi, dpi);
+    const QImage image = pdfPage->renderToImage(dpi, dpi);
+
+    if (hideAnnotations)
+        document->setRenderHint(Poppler::Document::HideAnnotations, false);
+    return image;
 }
 
 #else
@@ -101,7 +115,7 @@ QSizeF PdfPage::pageSize(const QString &, int)
     return {};
 }
 
-QImage PdfPage::render(const QString &, int, int)
+QImage PdfPage::render(const QString &, int, int, bool)
 {
     return {};
 }

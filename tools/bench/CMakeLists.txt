@@ -16,3 +16,11 @@ endif()
 # directory the caller ran it from.
 target_compile_definitions(noteAppC-bench PRIVATE
     NOTEAPPC_GEN_VAULT_SCRIPT="${CMAKE_SOURCE_DIR}/tools/gen_bench_vault.py")
+
+# The PDF viewer's own rows (open, scroll, annotation save) - only in a
+# build that has the module, the same way test_pdfview.cpp only builds
+# under tests/CMakeLists.txt's own "if(TARGET noteAppC_pdfview)".
+if(TARGET noteAppC_pdfview)
+    target_link_libraries(noteAppC-bench PRIVATE noteAppC_pdfview)
+    target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_PDFVIEW)
+endif()
