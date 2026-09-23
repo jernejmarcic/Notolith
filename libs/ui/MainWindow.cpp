@@ -52,6 +52,12 @@
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+#include "CanvasView.h"
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+#include "BaseView.h"
+#endif
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "TagsPane.h"
@@ -621,7 +627,7 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     const QString name = QFileInfo(leaf->notePath).completeBaseName();
-    return leaf->editor->isModified() ? name + QLatin1String(" *") : name;
+    return isModified(leaf) ? name + QLatin1String(" *") : name;
 }
 
 void MainWindow::syncTabs(TabGroup *group)
@@ -785,7 +791,7 @@ void MainWindow::splitActive(Qt::Orientation orientation)
 bool MainWindow::maybeSaveAll()
 {
     for (const auto &leaf : m_leaves) {
-        if (leaf->notePath.isEmpty() || !leaf->editor->isModified())
+        if (leaf->notePath.isEmpty() || !isModified(leaf.get()))
             continue;
         activateLeaf(leaf.get());
         if (!maybeSave())
@@ -1279,7 +1285,7 @@ void MainWindow::applySettings()
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
     for (const auto &leaf : m_leaves) {
-        leaf->inlineTitle->setVisible(!leaf->notePath.isEmpty()
+        leaf->inlineTitle->setVisible(!leaf->notePath.isEmpty() && !leaf->view
                                       && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
     }
 }
@@ -1540,8 +1546,13 @@ void MainWindow::applyTheme()
 
     setFont(m_theme.uiFont());
     m_tree->setFont(m_theme.uiFont());
-    for (const auto &leaf : m_leaves)
+    for (const auto &leaf : m_leaves) {
         leaf->editor->setTheme(m_theme);
+#ifdef NOTEAPPC_HAVE_CANVAS
+        if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
+            canvas->setTheme(m_theme);
+#endif
+    }
     m_tags->setTheme(m_theme);
     m_backlinks->setTheme(m_theme);
     m_search->setTheme(m_theme);
@@ -1892,6 +1903,11 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     const QString path = QFileInfo(rawPath).absoluteFilePath();
     if (path == m_active->notePath)
         return true;
+    if (isViewFile(path)) {
+        if (!maybeSave())
+            return false;
+        return openView(path, source);
+    }
     if (!Vault::isNote(path)) {
         if (source != NavSource::History) {
             statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
@@ -1916,15 +1932,8 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     // The note being left keeps its place - in memory for the rest of this
     // session, and on disk from here - before anything about it changes.
     rememberCurrentPosition();
-
-    if (source != NavSource::History) {
-        // A fresh navigation discards whatever "forward" existed past here,
-        // the way a browser does when you follow a new link after going back.
-        while (m_active->history.size() > m_active->historyIndex + 1)
-            m_active->history.removeLast();
-        m_active->history.append(path);
-        m_active->historyIndex = m_active->history.size() - 1;
-    }
+    pushHistory(path, source);
+    closeView(m_active);
 
     m_active->note = note;
     m_active->notePath = path;
@@ -1960,9 +1969,132 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     return true;
 }
 
+void MainWindow::pushHistory(const QString &path, NavSource source)
+{
+    if (source == NavSource::History)
+        return;
+    // A fresh navigation discards whatever "forward" existed past here, the
+    // way a browser does when you follow a new link after going back.
+    while (m_active->history.size() > m_active->historyIndex + 1)
+        m_active->history.removeLast();
+    m_active->history.append(path);
+    m_active->historyIndex = m_active->history.size() - 1;
+}
+
+bool MainWindow::isViewFile(const QString &path)
+{
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive))
+        return true;
+#endif
+    Q_UNUSED(path);
+    return false;
+}
+
+bool MainWindow::openView(const QString &path, NavSource source)
+{
+    QWidget *view = nullptr;
+    QString error;
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive)) {
+        auto *canvas = new CanvasView(m_active->area);
+        canvas->setTheme(m_theme);
+        canvas->setFileResolver(m_resolveLink);
+        if (!canvas->load(path, &error)) {
+            delete canvas;
+        } else {
+            Leaf *leaf = m_active;
+            connect(canvas, &CanvasView::modificationChanged, this, [this, leaf] {
+                if (leaf == m_active)
+                    updateTitle();
+                else
+                    syncTabs(leaf->group);
+            });
+            connect(canvas, &CanvasView::noteActivated, this, &MainWindow::openRelative);
+            view = canvas;
+        }
+    }
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    if (path.endsWith(QLatin1String(".base"), Qt::CaseInsensitive)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            error = file.errorString();
+        } else {
+            auto *base = new bases::BaseView(m_active->area);
+            base->setIndex(&m_index);
+            base->setVault(&m_vault);
+            if (!base->open(path, QString::fromUtf8(file.readAll()))) {
+                error = base->lastError();
+                delete base;
+            } else {
+                connect(base, &bases::BaseView::noteActivated, this, &MainWindow::openRelative);
+                view = base;
+            }
+        }
+    }
+#endif
+    if (!view) {
+        if (source != NavSource::History)
+            QMessageBox::warning(this, tr("Open"), tr("Could not open %1:\n%2").arg(path, error));
+        return false;
+    }
+
+    rememberCurrentPosition();
+    pushHistory(path, source);
+    closeView(m_active);
+    m_active->note = Note{};
+    m_active->editor->setNoteText(QString());
+    m_active->editor->setEnabled(false);
+    m_active->editor->hide();
+    m_active->inlineTitle->hide();
+    m_active->view = view;
+    static_cast<QVBoxLayout *>(m_active->area->layout())->addWidget(view, 1);
+    m_active->notePath = path;
+    view->setFocus();
+
+    syncTabs(m_active->group);
+    m_backlinks->setNote(path);
+    m_outgoingLinks->setNote(path);
+    m_outline->clear();
+    m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
+    updateTitle();
+    updateWordCount();
+    if (source != NavSource::Tree)
+        revealInTree(path);
+    if (source != NavSource::History)
+        updateHistoryButtons();
+    return true;
+}
+
+void MainWindow::closeView(Leaf *leaf)
+{
+    if (!leaf->view)
+        return;
+    leaf->view->disconnect(this);
+    leaf->view->hide();
+    leaf->view->deleteLater();
+    leaf->view = nullptr;
+    leaf->editor->show();
+    leaf->inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+}
+
+bool MainWindow::isModified(const Leaf *leaf) const
+{
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (auto *canvas = qobject_cast<CanvasView *>(leaf->view))
+        return canvas->isModified();
+#endif
+    return leaf->editor->isModified();
+}
+
 void MainWindow::rememberCurrentPosition()
 {
-    if (m_active->notePath.isEmpty())
+    if (m_active->notePath.isEmpty() || m_active->view)
         return;
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
                                m_active->editor->verticalScrollBar()->value());
@@ -2043,6 +2175,20 @@ bool MainWindow::save()
 {
     if (m_active->notePath.isEmpty())
         return true;
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (auto *canvas = qobject_cast<CanvasView *>(m_active->view)) {
+        QString error;
+        if (!canvas->save(QString(), &error)) {
+            QMessageBox::warning(this, tr("Save"),
+                                 tr("Could not save %1:\n%2").arg(m_active->notePath, error));
+            return false;
+        }
+        statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(m_active->notePath).fileName()), 2000);
+        return true;
+    }
+#endif
+    if (m_active->view)
+        return true; // a base writes each cell edit to its note as it happens
 
     Note note = m_active->note;
     note.text = m_active->editor->noteText();
@@ -2085,7 +2231,7 @@ bool MainWindow::save()
 
 bool MainWindow::maybeSave()
 {
-    if (m_active->notePath.isEmpty() || !m_active->editor->isModified())
+    if (m_active->notePath.isEmpty() || !isModified(m_active))
         return true;
 
     const QString shown =
@@ -2108,7 +2254,7 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    const bool modified = !m_active->notePath.isEmpty() && m_active->editor->isModified();
+    const bool modified = !m_active->notePath.isEmpty() && isModified(m_active);
     QString title;
     if (!m_active->notePath.isEmpty()) {
         title = (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName())

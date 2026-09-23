@@ -29,6 +29,16 @@
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include "CanvasView.h"
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+#include <QTableView>
+#include "BaseView.h"
+#endif
 #include <QSignalSpy>
 #include <QAction>
 #include <QDate>
@@ -554,6 +564,65 @@ TEST_F(WindowTest, DeletingANoteClosesEveryTabShowingIt)
     EXPECT_EQ(tabEditors(window).size(), 1);
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("other\n"));
 }
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+TEST_F(WindowTest, ACanvasOpensInATabAndSavesItsEdits)
+{
+    write(QStringLiteral("Board.canvas"),
+          R"({"nodes":[{"id":"a","type":"text","text":"hi","x":0,"y":0,"width":200,"height":100}],"edges":[]})");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Board"));
+    EXPECT_TRUE(window.editor()->isHidden());
+
+    canvas->createTextNodeAt(QPointF(400, 0));
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Board *"));
+    EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*')));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Board"));
+    const QJsonArray nodes =
+        QJsonDocument::fromJson(readAll(path(QStringLiteral("Board.canvas")))).object().value(QStringLiteral("nodes")).toArray();
+    ASSERT_EQ(nodes.size(), 2);
+    EXPECT_EQ(nodes.at(0).toObject().value(QStringLiteral("text")).toString(), QStringLiteral("hi"));
+
+    // A note in the same tab puts the editor back.
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    flushDeletes();
+    EXPECT_EQ(window.findChild<noteAppC::CanvasView *>(), nullptr);
+    EXPECT_FALSE(window.editor()->isHidden());
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_BASES
+TEST_F(WindowTest, ABaseOpensInATabAndItsRowsOpenNotes)
+{
+    write(QStringLiteral("Task.md"), "---\nstatus: open\n---\nDo it.\n");
+    write(QStringLiteral("Tasks.base"),
+          "filters:\n  and:\n    - status == \"open\"\nviews:\n  - type: table\n    name: Open\n"
+          "    order:\n      - file.name\n      - status\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Tasks.base"))));
+
+    auto *base = window.findChild<noteAppC::bases::BaseView *>();
+    ASSERT_NE(base, nullptr);
+    auto *table = base->findChild<QTableView *>();
+    ASSERT_NE(table, nullptr);
+    ASSERT_EQ(table->model()->rowCount(), 1);
+
+    emit base->noteActivated(QStringLiteral("Task.md"));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("---\nstatus: open\n---\nDo it.\n"));
+    EXPECT_FALSE(window.editor()->isHidden());
+}
+#endif
 
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
 {

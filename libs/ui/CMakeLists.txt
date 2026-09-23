@@ -46,3 +46,13 @@ if(TARGET noteAppC_graph)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_graph)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_GRAPH)
 endif()
+
+if(TARGET noteAppC_canvas)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_canvas)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_CANVAS)
+endif()
+
+if(TARGET noteAppC_bases)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_bases)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
+endif()

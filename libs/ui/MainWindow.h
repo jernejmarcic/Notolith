@@ -142,6 +142,8 @@ private:
         QStringList history;
         int historyIndex = -1;
         TabGroup *group = nullptr;
+        /// A canvas or a base shown in place of the editor, or null.
+        QWidget *view = nullptr;
     };
     /// Tabs in one split: a tab bar over a stack of their editors.
     struct TabGroup {
@@ -170,6 +172,17 @@ private:
     /// only tab while nothing is open in it, which shows no tab at all.
     void syncTabs(TabGroup *group);
     QString tabTitle(const Leaf *leaf) const;
+    /// The editor's modified flag, or the canvas's when the tab shows one.
+    bool isModified(const Leaf *leaf) const;
+    /// A file a tab shows in a view of its own rather than the editor: a
+    /// .canvas or a .base, when those modules are built.
+    static bool isViewFile(const QString &path);
+    /// Shows `path` in the focused tab's view; false when it could not be read.
+    bool openView(const QString &path, NavSource source);
+    /// Puts the editor back in `leaf` in place of its view.
+    void closeView(Leaf *leaf);
+    /// Records a visit in the focused tab's back/forward history.
+    void pushHistory(const QString &path, NavSource source);
     /// Obsidian's close-tab: offers to save, then drops the tab and, with its
     /// last tab, the split. The window's last tab is emptied instead.
     void closeLeaf(Leaf *leaf);

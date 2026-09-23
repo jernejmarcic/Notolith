@@ -409,7 +409,7 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
 
     // Hidden: a change must not re-read the vault, only mark it stale.
     emit index.changed();
-    view.setGraphData({{QStringLiteral("X"), QStringLiteral("X")}}, {});
+    view.setGraphData(nodesFor({QStringLiteral("X")}), {});
     emit index.changed();
     EXPECT_EQ(view.nodeCount(), 1);
 
