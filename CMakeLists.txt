@@ -61,6 +61,14 @@ option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 # `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
 # libs/markdown, so this carries no new external dependency.
 option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
+# Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
+# `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
+# external dependency at this level - only Qt, libdl and bubblewrap when
+# present; NOTEAPPC_WITH_QUICKJS (tools/plugin_host/CMakeLists.txt) is the
+# separate, still-off option for a second, scripted engine. Desktop only,
+# by nature (docs/PLUGINS.md): off on Android regardless of this option,
+# the same as the tools directory it lives under.
+option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-side glue" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -158,13 +166,21 @@ endif()
 if(NOTEAPPC_WITH_BASES)
     add_subdirectory(libs/ext/bases)
 endif()
+if(NOTEAPPC_WITH_PLUGINS)
+    add_subdirectory(libs/ext/plugins)
+endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
-# The screenshot tool, the index CLI and the bench harness are desktop
-# developer tools, not part of the app; on Android they would need their own
-# packaging for no benefit, so they simply do not build there.
+# The screenshot tool, the index CLI, the bench harness and the plugin host
+# (tools/plugin_host) are desktop developer/runtime tools, not part of the
+# app bundle itself; on Android they would need their own packaging for no
+# benefit - and Tier 2 plugins are desktop-only by nature besides - so they
+# simply do not build there.
 if(NOT ANDROID)
     add_subdirectory(tools)
+    if(NOTEAPPC_WITH_PLUGINS)
+        add_subdirectory(examples/plugins)
+    endif()
 endif()
 
 include(CTest)
