@@ -226,10 +226,13 @@ std::unique_ptr<MarkdownEditor> parsedEditorWith(const QString &text)
     return editor;
 }
 
+#ifdef NOTEAPPC_EXPECT_PDF
 /// A real, if minimal, multi-page PDF for the page-argument and layout
 /// tests - built with QPdfWriter (already a project dependency, PdfExport.cpp
 /// uses it) rather than relying on pdflatex being installed, so these tests
-/// run wherever poppler itself does.
+/// run wherever poppler itself does. Every call site is itself behind
+/// NOTEAPPC_EXPECT_PDF (there is nothing to open a PDF with otherwise), so
+/// this is too.
 QString makeTestPdf(const QString &dir, int pages, const QString &name = QStringLiteral("doc.pdf"))
 {
     const QString path = dir + QLatin1Char('/') + name;
@@ -244,6 +247,7 @@ QString makeTestPdf(const QString &dir, int pages, const QString &name = QString
     painter.end();
     return path;
 }
+#endif
 
 } // namespace
 
