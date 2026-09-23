@@ -114,6 +114,10 @@ bool Index::open(const QString &vaultRoot)
     pragma.exec(QStringLiteral("PRAGMA user_version = %1").arg(kSchemaVersion));
 
     loadNames();
+    // A different database is changed contents to anyone reading this one:
+    // when the vault is already indexed, the indexer writes nothing and this
+    // is the only notice a pane gets (the local graph stayed empty).
+    emit changed();
     return true;
 }
 

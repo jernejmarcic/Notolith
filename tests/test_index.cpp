@@ -378,6 +378,21 @@ int main(int argc, char **argv)
 // The full-text table is keyed by the file's id. Nothing reads it until the
 // search grammar lands, so these guard it: a stale or duplicated row would be
 // invisible until Phase 5 and then look like a parser bug.
+TEST_F(IndexTest, OpeningAnAlreadyIndexedVaultSaysTheContentsChanged)
+{
+    {
+        Index first;
+        build(first);
+    }
+    // Everything is current, so the indexer writes nothing and emits no
+    // change of its own: open() is the only notice a listener gets.
+    Index index;
+    QSignalSpy changed(&index, &Index::changed);
+    build(index);
+    EXPECT_GE(changed.count(), 1);
+    EXPECT_GT(index.noteCount(), 0);
+}
+
 TEST_F(IndexTest, ReindexingLeavesOneContentRowPerFile)
 {
     Index index;
