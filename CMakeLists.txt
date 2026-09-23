@@ -33,6 +33,9 @@ FetchContent_Declare(md4qt
     GIT_REPOSITORY https://invent.kde.org/libraries/md4qt.git
     GIT_TAG e48716a41c1cf7f91b130fe3d3cc1c524e3b404a # v5.1.4
     GIT_SHALLOW FALSE
+    # Four implicit conversions Qt 6.8 allows and 6.7 - the Android kit - does
+    # not; see the script.
+    PATCH_COMMAND sh ${CMAKE_CURRENT_LIST_DIR}/cmake/patch-md4qt.sh
     EXCLUDE_FROM_ALL)
 # MicroTeX renders the LaTeX in $$...$$ and $...$. It is not packaged, and it
 # wants tinyxml2, which is not installed either - both are vendored and pinned.

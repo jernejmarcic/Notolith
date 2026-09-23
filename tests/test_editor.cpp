@@ -1154,9 +1154,14 @@ TEST(CodeOptionsTest, LineNumbersIndentTheListingAndLeaveTheBytesAlone)
 
 TEST(PdfPageTest, AvailableAndRefusesWhatIsNotAPdf)
 {
-    // Built against poppler-qt6 here; a permissive build without it reports
-    // itself unavailable rather than pretending.
+    // Available exactly when the build found poppler-qt6; a build without it -
+    // a permissive one, or one for a phone - reports itself unavailable rather
+    // than pretending. The rest holds either way.
+#ifdef NOTEAPPC_EXPECT_PDF
     EXPECT_TRUE(PdfPage::isAvailable());
+#else
+    EXPECT_FALSE(PdfPage::isAvailable());
+#endif
     EXPECT_EQ(PdfPage::pageCount(QStringLiteral("/nonexistent/none.pdf")), 0);
     EXPECT_TRUE(PdfPage::render(QStringLiteral("/nonexistent/none.pdf"), 0, 400).isNull());
     // A real file that is not a PDF must not crash the renderer either.

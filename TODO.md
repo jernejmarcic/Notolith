@@ -261,11 +261,10 @@ Jernej's rule: a new feature goes here and the current task carries on.
 - [x] Mobile groundwork: KF6 SyntaxHighlighting and poppler are optional
       (`NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING`, `NOTEAPPC_WITH_PDF`). Against the
       Android kit's Qt 6.7.3, vault, theme, settings and render build and pass.
-- [ ] **md4qt does not compile against Qt 6.7.3** - four call sites use Qt
-      6.8's implicit `QString`-from-view conversions (listed in
-      `docs/PLATFORMS.md`). Patch them at fetch, the way
-      `cmake/patch-microtex.sh` patches MicroTeX, then finish the 6.7.3 check
-      for markdown, index, editor and ui, which md4qt blocks today.
+- [x] **The whole tree builds and passes on Qt 6.7.3**, the Android kit's
+      version, after patching md4qt's four 6.8-only conversions at fetch
+      (`cmake/patch-md4qt.sh`). noteAppC's own code uses no 6.8+ API.
+- [ ] The actual Android build, and a touch mode for the editor.
 - [ ] A 5 000-line fenced code block is still one block, so typing in it
       relays every line, like lists did before they were split. Measure it.
 - [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by

@@ -77,6 +77,9 @@ if(NOTEAPPC_WITH_PDF)
     endif()
 endif()
 if(TARGET PkgConfig::POPPLER_QT6)
+    # Global, because the imported target is only visible in this directory
+    # and the tests need to know which build they are checking.
+    set_property(GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER TRUE)
     target_link_libraries(noteAppC_render PRIVATE PkgConfig::POPPLER_QT6)
     target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_POPPLER)
     message(STATUS "noteAppC: PDF embeds enabled (poppler-qt6)")

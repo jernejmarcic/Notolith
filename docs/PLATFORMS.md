@@ -133,13 +133,32 @@ session's file ownership):
 | `utils.cpp:138` | same as above, the decimal-entity branch | `QString::fromUcs4(&c, 1)` |
 
 All four are variations on the same change: `QString` gained more ways to be
-built from a view in 6.8. Since these errors are in the vendored dependency
-and cascade (every md4qt translation unit includes `text_stream.h`), nothing
-past it was attempted, so `libs/markdown`/`libs/index`/`libs/editor`/`libs/ui`
-and the app remain **unverified against 6.7.3** - they may or may not have
-6.8+ uses of their own; that is still to check once md4qt itself builds
-against the kit (a newer md4qt release, or a patched fork, since this
-session's scope did not include changing the pinned dependency).
+built from a view in 6.8.
+
+**Resolved the same day.** `cmake/patch-md4qt.sh` applies the four
+replacements when md4qt is fetched, the way `cmake/patch-microtex.sh` already
+patches MicroTeX; each is the explicit spelling of the same conversion and
+compiles on 6.11 too. With it, a fresh build against the 6.7.3 kit, both
+options off, **builds the whole tree and passes all 9 test suites** - and
+still passes all 9 on the system Qt 6.11 with both options on. So noteAppC's
+own code uses no Qt 6.8+ API; md4qt's four conversions were the only
+blockers. The one test that failed on 6.7.3 asserted that PDF support was
+present in a build that had switched it off; it now asserts whichever the
+build chose.
+
+To repeat the check:
+
+```sh
+env -u CFLAGS -u CXXFLAGS cmake -B build-qt673 -G Ninja \
+    -DCMAKE_PREFIX_PATH=$HOME/Documents/AI/.toolchains/Qt/6.7.3/gcc_64 \
+    -DNOTEAPPC_WITH_SYNTAX_HIGHLIGHTING=OFF -DNOTEAPPC_WITH_PDF=OFF
+cmake --build build-qt673
+QT_QPA_PLATFORM=offscreen ctest --test-dir build-qt673
+```
+
+This is the desktop build of the Android kit's Qt, not an Android build: it
+proves the API surface, not that the app runs on a phone. The Android build
+itself, and the touch-mode editor it needs, are the next steps.
 
 **Plugins do not travel.** iOS does not let an app load code it did not ship
 with, and Android only loads native libraries packaged inside the app. So
