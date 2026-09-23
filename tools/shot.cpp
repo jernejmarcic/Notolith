@@ -16,6 +16,7 @@
 #include <QStyleFactory>
 #include <QTimer>
 
+#include "MarkdownEditor.h"
 #include "MainWindow.h"
 #include "Settings.h"
 
@@ -138,6 +139,14 @@ int main(int argc, char *argv[])
             return capture();
         auto *action = window.findChild<QAction *>(command);
         if (!action) {
+            // An editor command ("noteAppC:format-all-tables") runs in the
+            // note on screen.
+            for (auto *editor : window.findChildren<noteAppC::MarkdownEditor *>()) {
+                if (editor->isVisible() && editor->runCommand(command)) {
+                    QTimer::singleShot(600, &app, capture);
+                    return;
+                }
+            }
             qWarning("no command %s", qPrintable(command));
             status = 1;
             return app.quit();

@@ -1082,7 +1082,10 @@ qsizetype MarkdownEditor::blockAt(qsizetype sourceOffset) const
 
 QFont MarkdownEditor::fontFor(const BlockSpan &span) const
 {
-    if (span.kind == BlockSpan::Kind::Code || span.kind == BlockSpan::Kind::Frontmatter) {
+    // A table only ever reaches here as its source, and its pipes line up
+    // only in a font where every character is as wide as the next.
+    if (span.kind == BlockSpan::Kind::Code || span.kind == BlockSpan::Kind::Frontmatter
+        || span.kind == BlockSpan::Kind::Table) {
         QFont font = m_theme.monospaceFont();
         font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt() + 1);
         return font;
@@ -2783,6 +2786,12 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         }
     }
 
+    // A table's source is monospace and its spaces unbreakable, so a wrapped
+    // row breaks at the same column as the rows around it: Qt otherwise hangs
+    // a run of spaces off the end of a line, and a padded row would start
+    // its next line a few columns early. The same length, so offsets hold.
+    if (view.span.kind == BlockSpan::Kind::Table)
+        shown.replace(QLatin1Char(' '), QChar(QChar::Nbsp));
     view.layout = std::make_unique<QTextLayout>(shown);
     view.layout->setCacheEnabled(true);
     // A callout may name its own body font, size and effects; everything else
@@ -2791,10 +2800,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     QTextOption option;
     // `#| wrap: false` is Quarto asking for a listing that does not reflow;
+    // a table's source wraps by the character, not after a pipe (see above);
     // everything else wraps inside the column.
-    option.setWrapMode(view.options && !view.options->wrap
-                           ? QTextOption::NoWrap
-                           : QTextOption::WrapAtWordBoundaryOrAnywhere);
+    option.setWrapMode(view.options && !view.options->wrap              ? QTextOption::NoWrap
+                       : view.span.kind == BlockSpan::Kind::Table ? QTextOption::WrapAnywhere
+                                                                   : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
     QList<QTextLayout::FormatRange> formats = formatsFor(view);
     for (const BlockView::InlineMath &formula : view.inlineMaths) {
