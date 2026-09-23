@@ -8,7 +8,7 @@ TryExec=noteAppC
 # A generic icon until the app has one of its own; see packaging/README.md.
 Icon=accessories-text-editor
 Terminal=false
-Categories=Office;TextEditor;
+Categories=Office;
 MimeType=text/markdown;text/x-markdown;inode/directory;
 Keywords=markdown;notes;wiki;vault;obsidian;
 StartupNotify=true

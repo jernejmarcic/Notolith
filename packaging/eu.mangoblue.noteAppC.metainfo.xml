@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The app id is a placeholder until one is chosen: it is what Flatpak
+     installs under. There is no project_license yet, because no licence has
+     been chosen, and no homepage (appstreamcli warns about that one). -->
+<component type="desktop-application">
+  <id>eu.mangoblue.noteAppC</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>noteAppC</name>
+  <summary>Markdown notes and Obsidian vaults, native and fast</summary>
+  <description>
+    <p>
+      noteAppC reads and edits Markdown notes and Obsidian vaults in a native
+      Qt application: live preview, wikilinks and backlinks, search, tags,
+      callouts, tables, maths, the graph view, canvases and bases, in tabs and
+      splits.
+    </p>
+    <p>
+      A vault stays Obsidian's: settings, hotkeys, bookmarks and layouts are
+      read from its .obsidian folder and never written back, and a note is
+      only ever changed where it was edited.
+    </p>
+  </description>
+  <developer id="eu.mangoblue">
+    <name>Jernej</name>
+  </developer>
+  <launchable type="desktop-id">noteAppC.desktop</launchable>
+  <provides>
+    <binary>noteAppC</binary>
+  </provides>
+  <categories>
+    <category>Office</category>
+  </categories>
+  <keywords>
+    <keyword>markdown</keyword>
+    <keyword>notes</keyword>
+    <keyword>wiki</keyword>
+    <keyword>obsidian</keyword>
+  </keywords>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.1" date="2026-09-23"/>
+  </releases>
+</component>

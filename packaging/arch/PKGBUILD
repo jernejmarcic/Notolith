@@ -1,0 +1,45 @@
+# Builds the noteAppC working tree this file sits in: there is no remote to
+# fetch a release from. makepkg makes src/ and pkg/ beside this file, and
+# ~/Documents is synced to other machines, so point it at /tmp:
+#
+#   cd packaging/arch
+#   BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f
+#
+# The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
+# CMakeLists.txt), so it needs the network.
+
+pkgname=noteappc
+pkgver=0.0.1
+pkgrel=1
+pkgdesc='Markdown notes and Obsidian vaults, native and fast'
+arch=('x86_64' 'aarch64')
+# No licence has been chosen for noteAppC yet.
+license=('LicenseRef-unknown')
+depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'
+         'syntax-highlighting' 'litehtml')
+makedepends=('cmake' 'ninja' 'git' 'gtest')
+optdepends=('hunspell-en_gb: British English spelling'
+            'hunspell-en_us: American English spelling')
+
+build() {
+    # A distribution's makepkg.conf may target the build machine's own CPU
+    # (CachyOS ships -march=native). noteAppC takes no -march at all - it has
+    # to run on any x86-64 or arm64 machine, see docs/PLATFORMS.md - so the
+    # package must not carry one either.
+    CFLAGS=$(printf '%s' "$CFLAGS" | sed -E 's/-m(arch|tune)=[^ ]+//g')
+    CXXFLAGS=$(printf '%s' "$CXXFLAGS" | sed -E 's/-m(arch|tune)=[^ ]+//g')
+    export CFLAGS CXXFLAGS
+    cmake -S "$startdir/../.." -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_TESTING=ON
+    cmake --build build
+}
+
+check() {
+    QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+}
