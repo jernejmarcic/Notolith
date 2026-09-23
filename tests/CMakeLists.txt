@@ -97,7 +97,11 @@ endif()
 
 if(TARGET noteAppC_epub)
     add_executable(test_epub test_epub.cpp)
-    target_link_libraries(test_epub PRIVATE noteAppC_epub noteAppC_render noteAppC_vault
+    # noteAppC_editor: for Lifeline.h (task 1's off-thread chapter render -
+    # EpubView.h now includes it), the same reason noteAppC_render/vault are
+    # already listed here directly rather than relied on transitively
+    # through noteAppC_epub's own PRIVATE link to them.
+    target_link_libraries(test_epub PRIVATE noteAppC_epub noteAppC_render noteAppC_vault noteAppC_editor
                                             PkgConfig::LIBARCHIVE Qt6::Test GTest::gtest)
     add_test(NAME epub COMMAND test_epub)
     set_tests_properties(epub PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

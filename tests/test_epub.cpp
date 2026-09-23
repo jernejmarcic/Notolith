@@ -3,17 +3,25 @@
 // script stripping, a highlight locator's round trip through the sidecar,
 // the sidecar keeping the reader's own note text across re-extraction, and
 // that a render scheduled before the view is destroyed does nothing after.
+// Also: chapter rendering off the UI thread and the stale-render/UAF guards
+// that come with it (task 1), a lazy table of contents (task 2), @font-face
+// registration and CSS url() resource extraction (task 3), and paged mode
+// (task 4) - see docs/PERFORMANCE.md for the measured numbers.
 
 #include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QFontDatabase>
 #include <QTemporaryDir>
 #include <QTest>
 
 #include <archive.h>
 #include <archive_entry.h>
+
+#include "WaitFor.h"
 
 #include "EpubArchive.h"
 #include "EpubDocument.h"
@@ -163,6 +171,97 @@ QString makeEpub2(const QString &dir)
                     {QStringLiteral("toc.ncx"), ncx},
                     {QStringLiteral("ch1.xhtml"), ch1},
                     {QStringLiteral("ch2.xhtml"), ch2}});
+    return path;
+}
+
+/// A book with a huge, two-level table of contents - `volumeCount` top-level
+/// entries, each with `chaptersPerVolume` children - and exactly one real
+/// spine chapter every entry points at (task 2's fixture only needs the tree
+/// shape, not distinct targets for each of possibly thousands of rows).
+QString makeEpubWithHugeToc(const QString &dir, int volumeCount, int chaptersPerVolume)
+{
+    const QString path = QDir(dir).filePath(QStringLiteral("hugetoc.epub"));
+    const QByteArray opf = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='id'>
+  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>
+    <dc:title>Huge Toc Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>
+    <item id='c1' href='text/ch1.xhtml' media-type='application/xhtml+xml'/>
+  </manifest>
+  <spine><itemref idref='c1'/></spine>
+</package>)");
+    const QByteArray ch1 = QByteArrayLiteral("<html><body><p>Only chapter.</p></body></html>");
+
+    QString navBody;
+    for (int v = 0; v < volumeCount; ++v) {
+        navBody += QStringLiteral("<li><a href='text/ch1.xhtml'>Volume %1</a><ol>").arg(v);
+        for (int c = 0; c < chaptersPerVolume; ++c)
+            navBody += QStringLiteral("<li><a href='text/ch1.xhtml'>Volume %1 Chapter %2</a></li>").arg(v).arg(c);
+        navBody += QStringLiteral("</ol></li>");
+    }
+    const QByteArray nav = (QStringLiteral("<?xml version='1.0'?>"
+                                           "<html xmlns='http://www.w3.org/1999/xhtml' "
+                                           "xmlns:epub='http://www.idpf.org/2007/ops'>"
+                                           "<body><nav epub:type='toc'><ol>")
+                            + navBody + QStringLiteral("</ol></nav></body></html>"))
+                               .toUtf8();
+
+    writeZip(path, {{QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+                    {QStringLiteral("META-INF/container.xml"), QByteArray(kContainerXML)},
+                    {QStringLiteral("OEBPS/content.opf"), opf},
+                    {QStringLiteral("OEBPS/nav.xhtml"), nav},
+                    {QStringLiteral("OEBPS/text/ch1.xhtml"), ch1}});
+    return path;
+}
+
+/// A book whose stylesheet declares two `@font-face` rules (one local, one
+/// remote - never fetched) and a `background-image` - task 3's fixture.
+/// `fontBytes` is embedded verbatim as the local font's source; the caller
+/// decides whether that is a real font (to check registration succeeds) or
+/// garbage (to check a failed load still degrades quietly).
+QString makeEpubWithFontAndBackground(const QString &dir, const QByteArray &fontBytes)
+{
+    const QString path = QDir(dir).filePath(QStringLiteral("fontbg.epub"));
+    const QByteArray opf = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<package xmlns='http://www.idpf.org/2007/opf' version='3.0' unique-identifier='id'>
+  <metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>
+    <dc:title>Font And Background Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' properties='nav'/>
+    <item id='c1' href='text/ch1.xhtml' media-type='application/xhtml+xml'/>
+    <item id='css' href='styles/book.css' media-type='text/css'/>
+    <item id='font' href='fonts/test.ttf' media-type='font/ttf'/>
+    <item id='bg' href='images/bg.png' media-type='image/png'/>
+  </manifest>
+  <spine><itemref idref='c1'/></spine>
+</package>)");
+    const QByteArray nav = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<html xmlns='http://www.w3.org/1999/xhtml' xmlns:epub='http://www.idpf.org/2007/ops'>
+<body><nav epub:type='toc'><ol><li><a href='text/ch1.xhtml'>One</a></li></ol></nav></body></html>)");
+    const QByteArray ch1 = QByteArrayLiteral(R"(<?xml version='1.0'?>
+<html xmlns='http://www.w3.org/1999/xhtml'><head>
+  <link rel='stylesheet' href='../styles/book.css'/>
+</head><body><p>Styled chapter text.</p></body></html>)");
+    const QByteArray css = QByteArrayLiteral(
+        "@font-face { font-family: 'EpubTestFont'; src: url('../fonts/test.ttf'); }\n"
+        "@font-face { font-family: 'RemoteFont'; src: url('https://example.com/remote.ttf'); }\n"
+        "body { font-family: 'EpubTestFont'; background-image: url('../images/bg.png'); }\n");
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+
+    writeZip(path, {{QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+                    {QStringLiteral("META-INF/container.xml"), QByteArray(kContainerXML)},
+                    {QStringLiteral("OEBPS/content.opf"), opf},
+                    {QStringLiteral("OEBPS/nav.xhtml"), nav},
+                    {QStringLiteral("OEBPS/text/ch1.xhtml"), ch1},
+                    {QStringLiteral("OEBPS/styles/book.css"), css},
+                    {QStringLiteral("OEBPS/fonts/test.ttf"), fontBytes},
+                    {QStringLiteral("OEBPS/images/bg.png"), png}});
     return path;
 }
 
@@ -410,10 +509,370 @@ TEST(EpubViewTest, NavigatesToALocatorFragment)
     EXPECT_FALSE(view.navigateToFragment(QStringLiteral("epub:99:0-5")));
 }
 
+// --- task 1: chapter rendering moves off the UI thread ----------------------
+
+TEST(EpubViewTest, ChapterRenderRunsOffThreadAndArrivesAsynchronously)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+
+    ASSERT_FALSE(view.chapterCachedForTest(0));
+    view.requestChapterForTest(0);
+    // Not cached yet: the litehtml layout/raster itself never runs inline on
+    // this (the test's, i.e. the UI) thread any more - see
+    // EpubView::requestChapterRender(). A synchronous implementation would
+    // already have this chapter cached by the time the call above returns.
+    EXPECT_FALSE(view.chapterCachedForTest(0));
+    EXPECT_GE(view.pendingRenderCountForTest(), 1);
+
+    WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+    EXPECT_EQ(view.pendingRenderCountForTest(), 0);
+}
+
+TEST(EpubViewTest, ARenderAlreadyInFlightIsNotDuplicated)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+
+    view.requestChapterForTest(0);
+    const int pendingAfterFirst = view.pendingRenderCountForTest();
+    ASSERT_GE(pendingAfterFirst, 1);
+    view.requestChapterForTest(0); // same chapter, still in flight - see m_pendingSpine
+    EXPECT_EQ(view.pendingRenderCountForTest(), pendingAfterFirst);
+
+    WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+}
+
+TEST(EpubViewTest, AStaleRenderFromBeforeAResizeIsDiscardedNotCached)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+
+    view.requestChapterForTest(0);
+    view.resize(300, 250); // invalidateRenders() bumps m_renderEpoch mid-flight
+    view.requestChapterForTest(0); // the fresh request, at the new width
+
+    // Both the stale and the fresh render eventually land; only one chapter
+    // ever ends up cached (deliverChapterRender drops the stale one by
+    // epoch, exactly like a resize the old synchronous code never had to
+    // worry about because nothing was ever in flight to begin with).
+    WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+    WAIT_TRUE(view.pendingRenderCountForTest() == 0, 2000);
+    EXPECT_TRUE(view.chapterCachedForTest(0));
+}
+
+TEST(EpubViewTest, DeletingTheViewWhileAWorkerRenderIsInFlightIsSafe)
+{
+    QTemporaryDir dir;
+    const QString path = makeEpub3(dir.path());
+
+    auto *view = new EpubView;
+    view->resize(500, 400);
+    ASSERT_TRUE(view->load(path));
+    view->requestChapterForTest(0);
+    view->requestChapterForTest(1);
+    // Deleted with a worker render still on its way to m_lifeline->post() -
+    // the exact race Lifeline::end(), called first in ~EpubView, exists for
+    // (see EpubView.cpp and Lifeline.h). If that ordering were broken (end()
+    // moved later, or the worker captured a raw `this` instead of going
+    // through the lifeline) this either crashes or trips ASAN.
+    delete view;
+    QCoreApplication::processEvents();
+    QTest::qWait(80); // long enough for a real machine's worker to finish and try to post
+    QCoreApplication::processEvents();
+    SUCCEED();
+}
+
+// --- task 2: lazy table of contents ------------------------------------
+
+TEST(EpubViewTest, TocIsNotBuiltAtOpenEvenForAHugeBook)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpubWithHugeToc(dir.path(), 20, 100))); // 2000 entries
+
+    EXPECT_FALSE(view.tocBuiltForTest());
+    EXPECT_EQ(view.tocTopLevelCountForTest(), 0);
+}
+
+TEST(EpubViewTest, TocBuildsOnlyTheTopLevelOnFirstShow)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpubWithHugeToc(dir.path(), 20, 100)));
+
+    view.setTocVisibleForTest(true);
+    EXPECT_TRUE(view.tocBuiltForTest());
+    ASSERT_EQ(view.tocTopLevelCountForTest(), 20);
+    // Every volume carries its single placeholder row, not its 100 real
+    // chapters, until it is actually expanded - see populateTocTree().
+    for (int i = 0; i < 20; ++i)
+        EXPECT_EQ(view.tocChildCountForTest(i), 1) << "volume " << i;
+}
+
+TEST(EpubViewTest, TocExpandsOneNodeAtATimeAndOnlyOnce)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpubWithHugeToc(dir.path(), 20, 100)));
+    view.setTocVisibleForTest(true);
+
+    view.expandTocForTest(0);
+    EXPECT_EQ(view.tocChildCountForTest(0), 100);
+    EXPECT_EQ(view.tocChildCountForTest(1), 1); // every other volume untouched
+
+    // The populated guard (onTocExpanded): expanding the same node again
+    // must not duplicate its rows. Broken (commenting out the guard) once
+    // showed 200 children here instead of 100, confirming the test catches
+    // it; restored before committing.
+    view.expandTocForTest(0);
+    EXPECT_EQ(view.tocChildCountForTest(0), 100);
+}
+
+// --- task 3: CSS url() resources - fonts and background images -------------
+
+TEST(EpubViewTest, FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched)
+{
+    QFile fontFile(QStringLiteral("/usr/share/fonts/rnote-fonts/GrapeNuts-Regular.ttf"));
+    if (!fontFile.open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "system font fixture not present on this machine";
+    const QByteArray fontBytes = fontFile.readAll();
+    ASSERT_FALSE(fontBytes.isEmpty());
+
+    // Learn the font's real family name independently of EpubView, so the
+    // assertion below never hardcodes a name that lives inside a system
+    // font file this test does not own.
+    const int probeID = QFontDatabase::addApplicationFontFromData(fontBytes);
+    ASSERT_NE(probeID, -1);
+    const QString family = QFontDatabase::applicationFontFamilies(probeID).value(0);
+    ASSERT_FALSE(family.isEmpty());
+    QFontDatabase::removeApplicationFont(probeID);
+
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpubWithFontAndBackground(dir.path(), fontBytes)));
+
+    EXPECT_EQ(view.registeredFontCountForTest(), 0);
+    view.requestChapterForTest(0);
+    // Registered right here, before this call even returns - not after the
+    // (asynchronous) render lands. That ordering is the point:
+    // QFontDatabase::addApplicationFontFromData is not safe to call from the
+    // litehtml worker thread (see EpubView::registerChapterFonts's comment
+    // and PageBody.h's identical rule for MathRenderer/MicroTeX), so it has
+    // to happen here, synchronously, on the thread that called
+    // requestChapterRender() - never inside the QtConcurrent::run lambda.
+    EXPECT_EQ(view.registeredFontCountForTest(), 1);
+    // An application font also shows up in the regular family list (Qt's
+    // own guarantee), which is what lets create_font()'s plain
+    // QFont(family) (HtmlRenderer.cpp) find it with no EpubView-specific
+    // lookup of its own.
+    EXPECT_TRUE(QFontDatabase::families().contains(family));
+}
+
+TEST(EpubViewTest, RemoteFontFaceIsNeverFetched)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(
+        view.load(makeEpubWithFontAndBackground(dir.path(), QByteArrayLiteral("not a real font file"))));
+
+    view.requestChapterForTest(0);
+    // The fixture always declares two @font-face rules (see
+    // makeEpubWithFontAndBackground) - one local, one remote. Only the
+    // local one is ever attempted; a count of 2 here would mean the remote
+    // one was fetched.
+    EXPECT_EQ(view.registeredFontCountForTest(), 1);
+}
+
+TEST(EpubViewTest, BackgroundImageUrlInCssIsExtractedFromTheArchive)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(
+        view.load(makeEpubWithFontAndBackground(dir.path(), QByteArrayLiteral("not a real font file"))));
+
+    view.requestChapterForTest(0);
+    WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+
+    const QString expected = view.cacheRootForTest() + QStringLiteral("/res/OEBPS/images/bg.png");
+    EXPECT_TRUE(QFileInfo::exists(expected));
+}
+
+// --- task 4: paged mode -----------------------------------------------------
+
+TEST(EpubViewTest, PagedModeTurnsByExactlyOnePageHeight)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 60); // tiny viewport: even this fixture's short chapters span several pages
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+    view.show();
+    QTest::qWait(10);
+
+    view.setPagedModeForTest(true);
+    ASSERT_TRUE(view.pagedModeForTest());
+    EXPECT_EQ(view.scrollValueForTest(), 0);
+
+    const qint64 ph = view.pageHeightForTest();
+    const qint64 step = ph * (view.pagedColumnsForTest() == 2 ? 2 : 1);
+    view.turnPageForTest(1);
+    EXPECT_EQ(view.scrollValueForTest(), step);
+
+    view.turnPageForTest(-1);
+    EXPECT_EQ(view.scrollValueForTest(), 0);
+}
+
+TEST(EpubViewTest, PagedModeNeverScrollsPastTheDocumentBounds)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 60);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+    view.show();
+    QTest::qWait(10);
+    view.setPagedModeForTest(true);
+
+    view.turnPageForTest(-1); // already at the start
+    EXPECT_EQ(view.scrollValueForTest(), 0);
+
+    for (int i = 0; i < 200; ++i)
+        view.turnPageForTest(1); // walk well past the end
+    EXPECT_EQ(view.scrollValueForTest(), view.scrollMaximumForTest());
+}
+
+TEST(EpubViewTest, PagedModeUsesTwoColumnsOnAWideViewAndOneOnANarrowOne)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+
+    view.resize(1200, 600);
+    view.show();
+    QTest::qWait(10);
+    view.setPagedModeForTest(true);
+    EXPECT_EQ(view.pagedColumnsForTest(), 2);
+
+    view.resize(500, 600);
+    QTest::qWait(10);
+    EXPECT_EQ(view.pagedColumnsForTest(), 1);
+}
+
+TEST(EpubViewTest, MarginClicksTurnPagesOnlyInPagedMode)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+    view.show();
+    QTest::qWait(10);
+
+    // Continuous mode: a margin click is just a click, never a page turn.
+    EXPECT_FALSE(view.marginClickForTest(2, 50));
+
+    view.setPagedModeForTest(true);
+    EXPECT_TRUE(view.marginClickForTest(2, 50)); // left margin -> previous (clamped at 0)
+    EXPECT_EQ(view.scrollValueForTest(), 0);
+    EXPECT_TRUE(view.marginClickForTest(498, 50)); // right margin -> next
+    EXPECT_GT(view.scrollValueForTest(), 0);
+    EXPECT_FALSE(view.marginClickForTest(250, 50)); // the middle of the page: not a margin
+}
+
+TEST(EpubViewTest, SwitchingToPagedModePreservesTheReadingPositionApproximately)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+    view.show();
+    QTest::qWait(10);
+
+    ASSERT_TRUE(view.navigateToFragment(QStringLiteral("1"))); // spine index 1
+    const qint64 before = view.scrollValueForTest();
+    ASSERT_GT(before, 0);
+
+    view.setPagedModeForTest(true);
+    // Snapped to the nearest page boundary at or before where continuous
+    // mode left off, not reset to the start of the book - paged mode does
+    // not force a chapter to start on a fresh page (see EpubView's class
+    // comment / the report), so "preserves position" here means "within one
+    // page height of it", not bit-for-bit identical.
+    const qint64 afterPaged = view.scrollValueForTest();
+    EXPECT_GE(afterPaged, 0);
+    EXPECT_LE(before - afterPaged, view.pageHeightForTest());
+
+    view.setPagedModeForTest(false);
+    EXPECT_EQ(view.scrollValueForTest(), afterPaged); // continuous mode does not itself re-snap
+}
+
+TEST(EpubViewTest, HighlightsPaintInPagedModeWithoutCrashing)
+{
+    QTemporaryDir dir;
+    const QString bookPath = makeEpub3(dir.path());
+    EpubHighlight highlight;
+    highlight.locator = {0, 0, 10};
+    highlight.color = QStringLiteral("yellow");
+    highlight.quote = QStringLiteral("This is the");
+    ASSERT_TRUE(EpubHighlights::writeSidecar(EpubHighlights::sidecarPath(bookPath),
+                                             QFileInfo(bookPath).fileName(), QStringLiteral("Test Book Three"),
+                                             {highlight}, nullptr));
+
+    EpubView view;
+    view.resize(500, 60);
+    ASSERT_TRUE(view.load(bookPath));
+    ASSERT_EQ(view.highlights().size(), 1);
+
+    view.setPagedModeForTest(true);
+    view.show();
+    QTest::qWait(60); // a real paint: paintPaged -> paintPage -> paintHighlightsAndSelection
+    SUCCEED();
+}
+
+// --- task 5: a real book, if this machine happens to have one --------------
+
+TEST(EpubViewTest, OpensARealCalibreSampleBookIfPresentOnThisMachine)
+{
+    // Not a downloaded fixture - real .epub files already live under
+    // /usr/share on some machines (calibre's quick-start library). Skips
+    // cleanly where that is not installed rather than failing the suite
+    // over a file this test does not control.
+    const QString path = QStringLiteral("/usr/share/calibre/quick_start/eng.epub");
+    if (!QFileInfo::exists(path))
+        GTEST_SKIP() << "calibre quick-start sample not installed on this machine";
+
+    EpubView view;
+    view.resize(700, 500);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    view.show();
+    QTest::qWait(200); // real, non-trivial litehtml layout - give the worker time to land
+    view.setPagedModeForTest(true);
+    QTest::qWait(80);
+    view.setTocVisibleForTest(true);
+    SUCCEED(); // this test's only job is to not crash/hang on real-world markup
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
+    // EpubPositionStore and EpubView::cacheRootForBook() both fall back to
+    // the real $HOME/.config, $HOME/.cache when XDG_* is unset - this suite
+    // never touches the real home (see the header comment).
+    QTemporaryDir xdgHome;
+    qputenv("XDG_CONFIG_HOME", xdgHome.filePath(QStringLiteral("config")).toUtf8());
+    qputenv("XDG_CACHE_HOME", xdgHome.filePath(QStringLiteral("cache")).toUtf8());
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
