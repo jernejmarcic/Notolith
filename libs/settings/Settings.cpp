@@ -68,6 +68,8 @@ const QVariantMap &defaults()
         {QStringLiteral("templates.folder"), QString()},
         {QStringLiteral("templates.dateFormat"), QStringLiteral("YYYY-MM-DD")},
         {QStringLiteral("templates.timeFormat"), QStringLiteral("HH:mm")},
+        {QStringLiteral("uniqueNote.folder"), QString()},
+        {QStringLiteral("uniqueNote.format"), QStringLiteral("YYYYMMDDHHmm")}, // Obsidian's default
 
         // Remembered between launches
         {QStringLiteral("state.recentVaults"), QStringList()},
@@ -545,6 +547,8 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Open PDFs in a tab to read and annotate: highlight, underline, "
                                        "strike out, ink, notes and boxes, saved into the file."),
          false},
+        {"random-note", QT_TRANSLATE_NOOP("Settings", "Random note"),
+         QT_TRANSLATE_NOOP("Settings", "Open a note picked at random."), true},
         {"publish", QT_TRANSLATE_NOOP("Settings", "Publish"),
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),
@@ -565,6 +569,8 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Insert a note from the templates folder."), true},
         {"word-count", QT_TRANSLATE_NOOP("Settings", "Word count"),
          QT_TRANSLATE_NOOP("Settings", "Show the note's word count in the status bar."), true},
+        {"zk-prefixer", QT_TRANSLATE_NOOP("Settings", "Unique note creator"),
+         QT_TRANSLATE_NOOP("Settings", "Create a note named by the date and time, for a Zettelkasten."), true},
         {"workspaces", QT_TRANSLATE_NOOP("Settings", "Workspaces"),
          QT_TRANSLATE_NOOP("Settings", "Save and load named layouts of tabs and splits."), true},
     };

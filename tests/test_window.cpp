@@ -1625,6 +1625,31 @@ TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
     EXPECT_FALSE(window.openNote(path(QStringLiteral("data.bin"))));
 }
 
+TEST_F(WindowTest, ARandomNoteAndAUniqueNote)
+{
+    write(QStringLiteral("One.md"), "one\n");
+    write(QStringLiteral("Two.md"), "two\n");
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    QDir(dir.path()).mkpath(QStringLiteral("zk"));
+    write(QStringLiteral(".obsidian/zk-prefixer.json"), R"({"folder": "zk", "format": "[ZK-]YYYY"})");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("One.md")));
+
+    auto *random = window.findChild<QAction *>(QStringLiteral("random-note"));
+    ASSERT_NE(random, nullptr);
+    random->trigger();
+    EXPECT_NE(window.editor()->noteText(), QStringLiteral("one\n")); // never the note already open
+
+    auto *unique = window.findChild<QAction *>(QStringLiteral("zk-prefixer"));
+    ASSERT_NE(unique, nullptr);
+    unique->trigger();
+    EXPECT_TRUE(QFileInfo::exists(
+        path(QStringLiteral("zk/ZK-%1.md").arg(QDate::currentDate().year()))));
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);

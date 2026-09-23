@@ -20,6 +20,7 @@
 #include <QImageReader>
 #include <QInputDialog>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
@@ -29,6 +30,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -55,6 +57,7 @@
 #include "MarkdownEditor.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
 #include "OutlinePane.h"
 #include "TemplatePicker.h"
@@ -1471,6 +1474,15 @@ void MainWindow::buildActions()
         QString(), [this] { openDailyNote(-1); });
     add(QStringLiteral("daily-notes:goto-next"), tr("Daily notes: Open next daily note"),
         QString(), [this] { openDailyNote(1); });
+    add(QStringLiteral("random-note"), tr("Random note: Open random note"), QString(), [this] {
+        QStringList notes = m_index.allPaths();
+        if (!m_active->notePath.isEmpty() && m_vault.isValid())
+            notes.removeOne(m_vault.relative(m_active->notePath));
+        if (!notes.isEmpty())
+            openRelative(notes.at(QRandomGenerator::global()->bounded(int(notes.size()))));
+    });
+    add(QStringLiteral("zk-prefixer"), tr("Unique note creator: Create new unique note"), QString(),
+        &MainWindow::createUniqueNote);
     add(QStringLiteral("insert-template"), tr("Templates: Insert template"), QString(),
         &MainWindow::insertTemplate);
     add(QStringLiteral("bookmarks:bookmark-current-view"), tr("Bookmarks: Bookmark this note"),
@@ -1854,6 +1866,29 @@ DailyNotes MainWindow::dailyNotes() const
     if (QFileInfo::exists(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/daily-notes.json"))))
         config = DailyNotes::readConfig(m_vault.root());
     return DailyNotes(m_vault.root(), config);
+}
+
+void MainWindow::createUniqueNote()
+{
+    if (!m_vault.isValid())
+        return;
+    // The vault's own zk-prefixer.json wins, as Obsidian's daily notes do.
+    QString folder = m_settings.text(QStringLiteral("uniqueNote.folder"));
+    QString format = m_settings.text(QStringLiteral("uniqueNote.format"));
+    QFile config(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/zk-prefixer.json")));
+    if (config.open(QIODevice::ReadOnly)) {
+        const QJsonObject json = QJsonDocument::fromJson(config.readAll()).object();
+        folder = json.value(QLatin1String("folder")).toString(folder);
+        if (!json.value(QLatin1String("format")).toString().isEmpty())
+            format = json.value(QLatin1String("format")).toString();
+    }
+    QString error;
+    const QString path =
+        m_vault.createNote(folder, MomentFormat::format(QDateTime::currentDateTime(), format), &error);
+    if (path.isEmpty())
+        QMessageBox::warning(this, tr("Unique note creator"), tr("Could not create the note:\n%1").arg(error));
+    else
+        openNote(path);
 }
 
 void MainWindow::openDailyNote(int step)

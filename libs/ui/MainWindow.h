@@ -304,6 +304,8 @@ private:
     void openRecovery();
     /// Today's daily note (`step` 0), or the one before or after the daily
     /// note that is open (-1, +1), created from its template when missing.
+    /// "Unique note creator": a note named by the time, per zk-prefixer.json.
+    void createUniqueNote();
     void openDailyNote(int step);
     void insertTemplate();
     /// Moves the caret to the heading `subpath` names ("#Heading"), now or,
