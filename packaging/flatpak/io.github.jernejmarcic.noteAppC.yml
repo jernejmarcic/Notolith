@@ -4,7 +4,7 @@
 #
 #   flatpak install --user flathub org.kde.Sdk//6.9 org.kde.Platform//6.9 org.flatpak.Builder
 #   flatpak run org.flatpak.Builder --user --install --force-clean \
-#       --state-dir=/tmp/noteAppC-flatpak-state /tmp/noteAppC-flatpak eu.mangoblue.noteAppC.yml
+#       --state-dir=/tmp/noteAppC-flatpak-state /tmp/noteAppC-flatpak io.github.jernejmarcic.noteAppC.yml
 #
 # Flatpak builds offline, so the three dependencies CMake would fetch are
 # sources here instead, pinned to the same commits as the root CMakeLists.txt,
@@ -13,7 +13,7 @@
 #
 # PDF embeds are off: poppler is not in the KDE runtime and is a large module
 # to build. Everything else is on.
-app-id: eu.mangoblue.noteAppC
+app-id: io.github.jernejmarcic.noteAppC
 runtime: org.kde.Platform
 runtime-version: '6.9'
 sdk: org.kde.Sdk

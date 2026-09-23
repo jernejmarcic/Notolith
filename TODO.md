@@ -415,8 +415,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [ ] **A licence.** None is chosen; the PKGBUILD says `LicenseRef-unknown`
       and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
-- [ ] **An app id** for Flatpak and AppStream: `eu.mangoblue.noteAppC` is a
-      placeholder on the homelab's domain.
+- [ ] **An app id** for Flatpak, AppStream and Android:
+      `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
 - [ ] **An app icon.** The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
 - [ ] **Autosave.** Obsidian saves on its own a moment after typing stops;

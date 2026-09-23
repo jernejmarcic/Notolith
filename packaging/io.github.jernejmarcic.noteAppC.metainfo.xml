@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The app id is a placeholder until one is chosen: it is what Flatpak
-     installs under. There is no project_license yet, because no licence has
+<!-- The app id follows basket's (io.github.jernejmarcic.basket) and is not
+     confirmed yet: it is what Flatpak installs under. There is no project_license yet, because no licence has
      been chosen, and no homepage (appstreamcli warns about that one). -->
 <component type="desktop-application">
-  <id>eu.mangoblue.noteAppC</id>
+  <id>io.github.jernejmarcic.noteAppC</id>
   <metadata_license>CC0-1.0</metadata_license>
   <name>noteAppC</name>
   <summary>Markdown notes and Obsidian vaults, native and fast</summary>
@@ -20,7 +20,7 @@
       only ever changed where it was edited.
     </p>
   </description>
-  <developer id="eu.mangoblue">
+  <developer id="io.github.jernejmarcic">
     <name>Jernej</name>
   </developer>
   <launchable type="desktop-id">noteAppC.desktop</launchable>

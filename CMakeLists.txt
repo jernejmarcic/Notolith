@@ -140,5 +140,5 @@ install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES packaging/noteAppC.desktop
     DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 # What software centres and Flatpak read to describe the app.
-install(FILES packaging/eu.mangoblue.noteAppC.metainfo.xml
+install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
     DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
