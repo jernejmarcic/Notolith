@@ -600,8 +600,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       images are not fetched. Inline `b i u s kbd code mark sup sub` and
       `span style="color:"` map onto text formats. A container of our own:
       Qt Creator's qlitehtml is GPL-3, so it was read, not vendored.
-- [ ] HTML left out: gradients are a flat first stop, borders one colour
-      and no radii, list markers always decimal.
+- [x] HTML left out: gradients, rounded corners, per-side borders and list
+      numerals now drawn. Left: radii with mismatched sides; double, groove,
+      ridge, inset, outset borders draw solid.
 - [x] `canvas:new-file` ("Create new canvas"): an empty `{}` Untitled.canvas.
 - [x] A new-base command: `bases:new-file`, "Bases: Create new base" (2879964).
 - [x] ` ```base ` blocks inside notes, on `BaseView`.
