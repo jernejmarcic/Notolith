@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <QClipboard>
+#include <QScroller>
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QRandomGenerator>
@@ -1341,6 +1342,15 @@ TEST(MathRendererTest, ItsFontsAreReachableAsResources)
                             .toUtf8().constData());
         }
     }
+}
+
+TEST(TouchModeTest, WithoutATouchscreenADragStillSelects)
+{
+    // tests/test_touch.cpp has the other half; this binary has no touchscreen.
+    MarkdownEditor editor;
+    // hasScroller(), not grabbedGesture(): that one answers the same for a
+    // widget nobody grabbed anything on.
+    EXPECT_FALSE(QScroller::hasScroller(editor.viewport()));
 }
 
 int main(int argc, char **argv)

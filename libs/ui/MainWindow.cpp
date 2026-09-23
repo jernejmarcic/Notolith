@@ -23,6 +23,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
@@ -80,6 +81,9 @@ namespace noteAppC {
 
 namespace {
 constexpr auto kGeometry = "window/geometry";
+/// Narrower than this there is no room for a sidebar beside a readable line:
+/// a phone held upright, or a window tiled to a sliver.
+constexpr int kNarrowWidth = 720;
 constexpr auto kSplitter = "window/splitter";
 constexpr auto kRightSidebar = "window/rightSidebar";
 
@@ -2656,6 +2660,24 @@ void MainWindow::updateWordCount()
         m_wordCount->clear(); // a large note, still being counted
     else
         m_wordCount->setText(tr("%n word(s)", nullptr, words));
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    const bool narrow = width() < kNarrowWidth;
+    if (narrow == m_narrow || !m_sidebar || !m_rightSidebar)
+        return;
+    m_narrow = narrow;
+    if (narrow) {
+        m_leftBeforeNarrow = m_sidebar->isVisible();
+        m_rightBeforeNarrow = m_rightSidebar->isVisible();
+        m_sidebar->hide();
+        m_rightSidebar->hide();
+    } else if (m_openMode != OpenMode::SingleFile) {
+        m_sidebar->setVisible(m_leftBeforeNarrow);
+        m_rightSidebar->setVisible(m_rightBeforeNarrow);
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

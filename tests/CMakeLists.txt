@@ -79,6 +79,11 @@ target_link_libraries(test_fuzz PRIVATE noteAppC_editor noteAppC_vault Qt6::Test
 add_test(NAME fuzz COMMAND test_fuzz)
 set_tests_properties(fuzz PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_touch test_touch.cpp)
+target_link_libraries(test_touch PRIVATE noteAppC_editor Qt6::Test GTest::gtest)
+add_test(NAME touch COMMAND test_touch)
+set_tests_properties(touch PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)

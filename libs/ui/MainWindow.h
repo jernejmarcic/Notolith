@@ -98,6 +98,9 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    /// Below a phone's width both sidebars fold away, and come back as they
+    /// were once there is room again.
+    void resizeEvent(QResizeEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -362,6 +365,9 @@ private:
     bool m_spellLoading = false;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
+    bool m_narrow = false;      ///< the sidebars are folded for want of width
+    bool m_leftBeforeNarrow = true;
+    bool m_rightBeforeNarrow = true;
     /// What m_themeWatcher is currently set up for, so watchThemeFiles() can
     /// skip the rescan when nothing that would change it has moved.
     QString m_watchedSchemePath;

@@ -347,6 +347,8 @@ protected:
     void leaveEvent(QEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    /// Selects the word around `offset`, for a double-click or a long press.
+    void selectWordAt(qsizetype offset);
     void wheelEvent(QWheelEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
@@ -963,6 +965,10 @@ private:
     bool m_pressing = false;
     /// Where the last press landed, in source coordinates.
     qsizetype m_pressOffset = 0;
+    /// A finger held still on the text selects the word under it, the way
+    /// a double-click does with a mouse. Only presses from a touchscreen.
+    QTimer m_longPress;
+    QPoint m_pressPoint;
     /// The code block whose label just copied, shown as "Copied" briefly; and
     /// the one under the pointer, which is when a block without a language
     /// shows its "Copy" label at all. Both keyed by the block's source start.

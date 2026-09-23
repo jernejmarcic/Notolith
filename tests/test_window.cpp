@@ -790,6 +790,31 @@ TEST_F(WindowTest, CreateNewCanvasMakesAnEmptyOneAndOpensIt)
 }
 #endif
 
+TEST_F(WindowTest, ANarrowWindowFoldsBothSidebarsAndGivesThemBack)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.resize(1200, 800);
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *left = window.findChild<QWidget *>(QStringLiteral("sidebar"));
+    auto *right = window.findChild<QWidget *>(QStringLiteral("rightSidebar"));
+    ASSERT_TRUE(left->isVisible() && right->isVisible());
+    window.toggleRightSidebar(); // the reader's own choice, to be kept
+    ASSERT_FALSE(right->isVisible());
+
+    window.resize(480, 800); // a phone held upright
+    QApplication::processEvents();
+    EXPECT_FALSE(left->isVisible());
+    EXPECT_FALSE(right->isVisible());
+
+    window.resize(1200, 800);
+    QApplication::processEvents();
+    EXPECT_TRUE(left->isVisible());
+    EXPECT_FALSE(right->isVisible()) << "it was closed before the window narrowed";
+    window.toggleRightSidebar(); // put it back for the next test
+}
+
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
 {
     MainWindow window;

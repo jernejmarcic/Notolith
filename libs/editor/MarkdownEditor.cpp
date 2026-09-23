@@ -22,6 +22,8 @@
 #include <QPainterPath>
 #include <QGuiApplication>
 #include <QScrollBar>
+#include <QScroller>
+#include <QInputDevice>
 #ifdef NOTEAPPC_HAVE_OPENGLWIDGETS
 #include <QOpenGLWidget>
 #endif
@@ -93,6 +95,21 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         connect(icons, &IconsNotifier::iconReady, this, [this] { viewport()->update(); });
     watchStyleFiles();
     setKeyBindings({}); // the built-in keys, until the window hands over its own
+
+    // Touch: a drag scrolls with momentum instead of selecting, and a held
+    // finger selects a word. Only where a touchscreen exists, so a desktop
+    // with a mouse keeps its drag-to-select untouched.
+    const QList<const QInputDevice *> devices = QInputDevice::devices();
+    if (std::any_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
+            return device->type() == QInputDevice::DeviceType::TouchScreen;
+        }))
+        QScroller::grabGesture(viewport(), QScroller::TouchGesture);
+    m_longPress.setSingleShot(true);
+    m_longPress.setInterval(500);
+    connect(&m_longPress, &QTimer::timeout, this, [this] {
+        m_pressing = false;
+        selectWordAt(m_pressOffset);
+    });
 
     // ponytail: the parse is synchronous behind a short debounce. It measures
     // well under the keystroke budget on notes this size; move it to the
@@ -3619,6 +3636,10 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     // found here, not under a layout the first click has since shifted.
     m_pressOffset = offsetAt(event->pos());
     m_pressing = true;
+    if (event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen) {
+        m_pressPoint = event->pos();
+        m_longPress.start();
+    }
     moveCursor(m_pressOffset, event->modifiers().testFlag(Qt::ShiftModifier));
     updateLayout();
     viewport()->update();
@@ -3667,6 +3688,7 @@ QString MarkdownEditor::selectedText() const
 
 void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 {
+    m_longPress.stop();
     if (event->button() != Qt::LeftButton || !m_pressing) {
         QAbstractScrollArea::mouseReleaseEvent(event);
         return;
@@ -3681,6 +3703,12 @@ void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 {
     if (event->buttons().testFlag(Qt::LeftButton)) {
+        if (m_longPress.isActive()) {
+            // A finger always wobbles a little; only a real move is a drag.
+            if ((event->pos() - m_pressPoint).manhattanLength() < 12)
+                return;
+            m_longPress.stop();
+        }
         moveCursor(offsetAt(event->pos()), true);
         return;
     }
@@ -3718,9 +3746,13 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
     // Select the word the first click landed on. By now that click's release
     // may have revealed its block's syntax and moved the text, so the pointer
     // is no longer a reliable way to find the word the reader aimed at.
-    const qsizetype at = m_pressOffset;
-    qsizetype start = at;
-    qsizetype end = at;
+    selectWordAt(m_pressOffset);
+}
+
+void MarkdownEditor::selectWordAt(qsizetype offset)
+{
+    qsizetype start = offset;
+    qsizetype end = offset;
     while (start > 0 && m_text.at(start - 1).isLetterOrNumber())
         --start;
     while (end < m_text.size() && m_text.at(end).isLetterOrNumber())
