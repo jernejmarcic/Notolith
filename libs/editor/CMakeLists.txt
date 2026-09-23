@@ -5,6 +5,7 @@ add_library(noteAppC_editor STATIC
     EditingCommands.cpp
     FindBar.cpp
     FindBar.h
+    HtmlBlock.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
     PdfExport.cpp

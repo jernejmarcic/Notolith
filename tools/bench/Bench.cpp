@@ -103,6 +103,16 @@ QString buildQueryNote()
         "# Notes\n\n```query\ntag:#project\n```\n\nA paragraph to type into, well away from it.\n");
 }
 
+/// A heading, one small HTML block (rendered once and cached by litehtml, or
+/// shown as source in a build with none), and a paragraph to type into - the
+/// same steady-state case buildQueryNote measures for the query block.
+QString buildHtmlNote()
+{
+    return QStringLiteral(
+        "# Notes\n\n<div>\n<b>Bold</b> and <span style=\"color:#3388ff\">a note</span> in a box.\n</div>\n\n"
+        "A paragraph to type into, well away from it.\n");
+}
+
 bool writeNote(const QString &path, const QString &text)
 {
     QDir().mkpath(QFileInfo(path).absolutePath());
@@ -394,6 +404,37 @@ Timing benchQueryKeystroke(int runs)
     }
     return reduce(QStringLiteral("Keystroke to relaid, painted block"),
                   QStringLiteral("note with a rendered query block"), samples);
+}
+
+/// The HTML block renders once (litehtml lays it out and rasterises it into
+/// a cached QImage) on the untimed first frame; this measures what every
+/// other keystroke costs once it has settled, the litehtml equivalent of
+/// benchQueryKeystroke above.
+Timing benchHtmlKeystroke(int runs)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    const QString note = buildHtmlNote();
+    editor->setNoteText(note);
+    paintedFrame(editor.get()); // untimed: renders and caches the HTML block
+
+    const qsizetype caret = note.indexOf(QStringLiteral("A paragraph"));
+    editor->setCursorOffset(caret);
+    editor->enterBlockAt(caret);
+    paintedFrame(editor.get());
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage frame = paintedFrame(editor.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Keystroke to relaid, painted block"),
+                  QStringLiteral("note with a rendered HTML block"), samples);
 }
 
 /// 4. Scroll frame time: page down through a long note and back up,
@@ -796,6 +837,7 @@ int main(int argc, char *argv[])
         timings << benchKeystroke(buildCodeNote(lines),
                                   QStringLiteral("%1-line code block").arg(lines), 30);
     timings << benchQueryKeystroke(30);
+    timings << benchHtmlKeystroke(30);
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);

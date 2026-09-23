@@ -205,6 +205,12 @@ public:
     /// or has the caret inside it and is showing raw source instead.
     QList<QueryResultRow> queryRowsAt(qsizetype offset) const;
 
+    /// The size of the cached image a rendered HTML block containing
+    /// `offset` painted, for the tests - empty when that block is not
+    /// rendered HTML (not a Html block, litehtml unavailable, or the caret
+    /// is inside it and it is showing raw source instead).
+    QSize htmlImageSizeAt(qsizetype offset) const;
+
     /// Colour a link at `sourceOffset` is painted in, for the tests. Invalid
     /// when there is no link there.
     QColor linkColourAt(qsizetype sourceOffset) const;
@@ -483,6 +489,23 @@ private:
         };
         std::vector<QueryRow> queryRows;
 
+        /// Set when this block is a raw HTML block (top-level `<div>`,
+        /// `<table>`, `<details>`... - not inline HTML inside a paragraph)
+        /// rendered by litehtml. It paints through `image` exactly like an
+        /// embed, so nothing else needs to know it came from HtmlRenderer
+        /// rather than an image file; this flag exists only so the "Copy"
+        /// button and tab strip a Code-kind block would otherwise carry
+        /// never gets a chance to (HTML blocks are BlockSpan::Kind::Html,
+        /// which has no such chrome to begin with - kept for symmetry with
+        /// isQuery and in case a future BlockSpan kind needs the same gate).
+        bool isHtml = false;
+        /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
+        /// resolved to a QTextCharFormat by layoutInlineHtml - added to
+        /// formatsIn's output the way spellcheck underlines are. Source
+        /// coordinates; formatsIn converts through `view.map` like every
+        /// other entry there.
+        std::vector<std::pair<Range, QTextCharFormat>> inlineHtmlFormats;
+
         /// One inline `$...$` formula resolved while laying this block out.
         /// `QTextLayout` has no notion of an inline object, so the lone "$"
         /// the DisplayMap left visible carries letter spacing equal to the
@@ -706,6 +729,32 @@ private:
     /// ensureQuerySearch finishes. Ignored if `generation` is no longer the
     /// one on record for `queryText`.
     void deliverQueryResults(const QString &queryText, quint64 generation, QueryResults results);
+
+    // --- HTML blocks and inline HTML, implemented in HtmlBlock.cpp --------
+
+    /// A block that is nothing but raw HTML (`<div>`, `<table>`,
+    /// `<details>`...) at the top level, rendered by litehtml into a cached
+    /// image the way a formula or an embed is. False when litehtml is not
+    /// compiled in (NOTEAPPC_WITH_HTML off, or it was not found), or the
+    /// block has no visible content - either way the source shows instead.
+    bool layoutHtml(BlockView &view);
+    /// Resolves `<img src="...">` against `m_resolver`, the same one embeds
+    /// use, and drops anything with a network scheme - litehtml never
+    /// fetches a remote image. Local paths are rewritten to what the
+    /// resolver returns; everything else about the markup is untouched.
+    QString resolveHtmlImages(const QString &html) const;
+    /// Pairs up inline HTML tags (`<b>...</b>`, `<span style="color:...">
+    /// ...</span>`) within one block into QTextCharFormat runs, hiding the
+    /// tags themselves the way `**bold**`'s asterisks are hidden. Must run
+    /// before `view.map` is built from `hidden`, like layoutInlineMaths.
+    /// Skipped for a block-level HTML span - that is litehtml's job, not
+    /// this pairing pass.
+    void layoutInlineHtml(BlockView &view, QList<Range> &hidden);
+    /// The QTextCharFormat for a recognised inline tag, or nullopt for one
+    /// this pass leaves as raw source (unknown tags, and anything in a
+    /// `style=` attribute besides `color:`). `openTag` is the opening tag's
+    /// own source text, for `<span style="...">`'s colour.
+    std::optional<QTextCharFormat> htmlTagFormat(const QString &name, const QString &openTag) const;
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;

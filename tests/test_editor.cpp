@@ -186,6 +186,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
 #include "Parser.h"
+#include "HtmlRenderer.h"
 #include "MathRenderer.h"
 #include "PdfPage.h"
 
@@ -2616,6 +2617,152 @@ TEST(QueryBlockTest, AStaleDeliveryAfterRefreshIsDropped)
     ASSERT_EQ(rows.size(), 1);
     EXPECT_EQ(rows.first().path, QStringLiteral("Fresh.md"))
         << "the superseded request's answer must not overwrite the current one";
+}
+
+// --- HTML blocks and inline HTML ----------------------------------------------------
+
+TEST(HtmlRendererTest, AvailableExactlyWhenLitehtmlWasFound)
+{
+    // Available exactly when the build found litehtml; a build without it -
+    // NOTEAPPC_WITH_HTML off, or the package missing - reports itself
+    // unavailable rather than pretending, the same contract PdfPage keeps.
+#ifdef NOTEAPPC_EXPECT_HTML
+    EXPECT_TRUE(HtmlRenderer::isAvailable());
+#else
+    EXPECT_FALSE(HtmlRenderer::isAvailable());
+#endif
+}
+
+namespace {
+
+HtmlRenderer::Theme testHtmlTheme()
+{
+    HtmlRenderer::Theme theme;
+    theme.text = QColor(20, 20, 20);
+    theme.background = Qt::white;
+    theme.link = Qt::blue;
+    theme.border = Qt::gray;
+    theme.codeBackground = QColor(230, 230, 230);
+    theme.textFont = QFont(QStringLiteral("sans-serif"), 12);
+    theme.codeFont = QFont(QStringLiteral("monospace"), 12);
+    return theme;
+}
+
+} // namespace
+
+TEST(HtmlRendererTest, ScriptNeverRendersItsText)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml (NOTEAPPC_WITH_HTML off, or the package was not found)";
+
+    const HtmlRenderer::Theme theme = testHtmlTheme();
+    const QImage plain = HtmlRenderer::render(QStringLiteral("<div>Hello</div>"), theme, 300, QString());
+    const QImage withScript = HtmlRenderer::render(
+        QStringLiteral("<div>Hello<script>document.title='pwned';alert(1)</script></div>"), theme, 300,
+        QString());
+    ASSERT_FALSE(plain.isNull());
+    ASSERT_FALSE(withScript.isNull());
+    // Not just "no visible <script> text": pixel-identical, so the tag
+    // contributed nothing at all - not even the layout space a hidden but
+    // present element would still occupy.
+    EXPECT_EQ(plain, withScript) << "a <script> body must never add a pixel to the rendered block";
+}
+
+TEST(HTMLBlockTest, RendersAsANonEmptyCachedImage)
+{
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    const QSize size = editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello")));
+    if (HtmlRenderer::isAvailable()) {
+        EXPECT_GT(size.width(), 0);
+        EXPECT_GT(size.height(), 0);
+    } else {
+        EXPECT_TRUE(size.isEmpty()) << "without litehtml the block falls back to showing its source";
+    }
+}
+
+TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    const qsizetype at = note.indexOf(QStringLiteral("Hello"));
+    ASSERT_FALSE(editor->htmlImageSizeAt(at).isEmpty());
+
+    editor->enterBlockAt(at);
+    EXPECT_TRUE(editor->htmlImageSizeAt(at).isEmpty());
+    EXPECT_EQ(editor->displayText(), note)
+        << "the caret is inside it: raw HTML source, like any other block";
+}
+
+TEST(HTMLBlockTest, OpeningANoteWithNoHTMLConstructsNothingFromLitehtml)
+{
+    const qint64 before = HtmlRenderer::renderCount();
+    auto editor = editorWith(QStringLiteral("# Title\n\nJust **prose**, a [[link]] and `code`.\n"));
+    (void)editor;
+    EXPECT_EQ(HtmlRenderer::renderCount(), before)
+        << "no HTML block in the note: litehtml must never be asked to lay anything out";
+}
+
+TEST(HTMLBlockTest, UnrelatedKeystrokeIsACacheHitNotARebuild)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    ASSERT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
+    const qint64 afterFirstRender = HtmlRenderer::renderCount();
+
+    editor->setCursorOffset(5); // end of "Intro", nowhere near the HTML block
+    QTest::keyClicks(editor.get(), QStringLiteral(" more"));
+    EXPECT_EQ(HtmlRenderer::renderCount(), afterFirstRender)
+        << "an edit outside the block must not rebuild its cached image";
+}
+
+TEST(InlineHtmlTest, RecognisedTagsFormatAndHideTheirMarkup)
+{
+    const QString note = QStringLiteral("Press <kbd>Ctrl</kbd> then <b>Go</b>.\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Press Ctrl then Go.\n"))
+        << "the tags hide, like any other syntax marker";
+
+    const qsizetype ctrl = note.indexOf(QStringLiteral("Ctrl"));
+    EXPECT_EQ(editor->formatAt(ctrl).font().family(), Theme::builtin().monospaceFont().family());
+    const qsizetype go = note.indexOf(QStringLiteral(">Go<")) + 1;
+    EXPECT_GE(editor->formatAt(go).fontWeight(), int(QFont::Bold));
+}
+
+TEST(InlineHtmlTest, SpanStyleColourIsRead)
+{
+    const QString note = QStringLiteral("A <span style=\"color: #ff0000\">warning</span> word.\n");
+    auto editor = editorWith(note);
+    const qsizetype at = note.indexOf(QStringLiteral("warning"));
+    EXPECT_EQ(editor->formatAt(at).foreground().color(), QColor(0xff, 0, 0));
+}
+
+TEST(InlineHtmlTest, AnUnrecognisedTagStaysAsRawSource)
+{
+    // No case in htmlTagFormat matches <marquee>, so layoutInlineHtml never
+    // hides it - the same "leave it alone rather than guess" rule an
+    // unrenderable formula follows.
+    const QString note = QStringLiteral("A <marquee>party</marquee> word.\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(editor->displayText(), note);
+}
+
+TEST(InlineHtmlTest, ABlockLevelElementIsLeftToLayoutHtml)
+{
+    // layoutInlineHtml steps aside entirely for a whole-block HTML span -
+    // pairing tags inside it would fight with litehtml's own rendering of
+    // the same markup.
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    const QString note = QStringLiteral("<div>\n<b>Hello</b>\n</div>\n");
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
 }
 
 // --- page preview ----------------------------------------------------------------

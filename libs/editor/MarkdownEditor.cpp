@@ -1283,6 +1283,11 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         }
         add(span.range, format);
     }
+    // Inline HTML tags layoutInlineHtml recognised and paired: it already
+    // hid the tags themselves, so this is the format for the text between
+    // them (`<b>text</b>` -> "text", bold).
+    for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
+        add(source, htmlFormat);
     return formats;
 }
 
@@ -2472,6 +2477,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.tabGroup = -1;
     view.isQuery = false;
     view.queryRows.clear();
+    view.isHtml = false;
+    view.inlineHtmlFormats.clear();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
     // rest along with the blank lines between them. With the caret anywhere
@@ -2507,6 +2514,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     const bool renderMedia = m_mode != Mode::Source && !view.active;
     if (renderMedia && layoutQuery(view))
         return;
+    if (renderMedia && layoutHtml(view))
+        return;
     if (renderMedia && layoutEmbed(view))
         return;
     if (renderMedia && layoutMath(view))
@@ -2537,6 +2546,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // actually stays hidden depends on MicroTeX being able to draw it,
         // which only the editor knows.
         layoutInlineMaths(view, hidden);
+        layoutInlineHtml(view, hidden);
         layoutAnchorSeparators(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
     }
