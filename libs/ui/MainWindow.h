@@ -308,6 +308,9 @@ private:
     void insertTemplate();
     /// Moves the caret to the heading `subpath` names ("#Heading"), now or,
     /// for a note still being parsed, as soon as its headings arrive.
+    /// Where `subpath` ("Heading", "#Heading", "^block-id") starts in
+    /// `text`, or -1: the heading's line, or the line a block marker ends.
+    static qsizetype subpathOffset(const QString &text, const QString &subpath);
     void jumpToHeading(const QString &subpath);
     /// The vault's own Obsidian configuration when it has one, else noteAppC's.
     class DailyNotes dailyNotes() const;

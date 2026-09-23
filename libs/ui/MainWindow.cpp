@@ -705,7 +705,10 @@ void MainWindow::followLink(const QString &target)
     const QString name = hash < 0 ? target : target.left(hash);
     const QString fragment = hash < 0 ? QString() : target.mid(hash + 1);
     if (name.isEmpty()) {
-        jumpToHeading(fragment);
+        if (!fragment.startsWith(QLatin1Char('^')))
+            jumpToHeading(fragment);
+        else if (const qsizetype at = subpathOffset(m_active->editor->noteText(), fragment); at >= 0)
+            m_active->editor->setCursorOffset(at);
         return;
     }
     const QString resolved = m_index.resolve(name, m_active->notePath);
@@ -717,9 +720,13 @@ void MainWindow::followLink(const QString &target)
         openNote(m_vault.absolute(resolved), NavSource::Other, fragment);
         return;
     }
-    // ponytail: a ^block-id fragment opens the note at its top; jump to the block when asked.
-    if (openNote(m_vault.absolute(resolved)) && !fragment.isEmpty() && !fragment.startsWith(QLatin1Char('^')))
+    if (!openNote(m_vault.absolute(resolved)) || fragment.isEmpty())
+        return;
+    if (!fragment.startsWith(QLatin1Char('^'))) {
         jumpToHeading(fragment);
+    } else if (const qsizetype at = subpathOffset(m_active->editor->noteText(), fragment); at >= 0) {
+        m_active->editor->setCursorOffset(at);
+    }
 }
 
 MarkdownEditor::Mode MainWindow::defaultMode() const
@@ -1885,6 +1892,27 @@ void MainWindow::insertTemplate()
     m_templatePicker->popUp(QFileInfo(m_active->notePath).completeBaseName());
 }
 
+qsizetype MainWindow::subpathOffset(const QString &text, const QString &subpath)
+{
+    const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
+    if (wanted.isEmpty())
+        return -1;
+    const Metadata metadata = Parser().parseAll(text).metadata;
+    if (wanted.startsWith(QLatin1Char('^'))) {
+        // The line the marker ends, where Obsidian's block starts to show.
+        for (const BlockId &block : metadata.blockIds) {
+            if (block.id.compare(wanted.mid(1), Qt::CaseInsensitive) == 0)
+                return text.lastIndexOf(QLatin1Char('\n'), qMax<qsizetype>(0, block.range.start - 1)) + 1;
+        }
+        return -1;
+    }
+    for (const Heading &heading : metadata.headings) {
+        if (heading.text.compare(wanted, Qt::CaseInsensitive) == 0)
+            return heading.range.start;
+    }
+    return -1;
+}
+
 void MainWindow::jumpToHeading(const QString &subpath)
 {
     const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
@@ -2000,20 +2028,7 @@ void MainWindow::showPagePreview()
     if (!Vault::isNote(path) || !Vault::read(path, note))
         return;
 
-    qsizetype offset = 0;
-    if (subpath.startsWith(QLatin1Char('^'))) {
-        const qsizetype at = note.text.indexOf(QLatin1Char(' ') + subpath);
-        if (at >= 0)
-            offset = note.text.lastIndexOf(QLatin1Char('\n'), at) + 1;
-    } else if (!subpath.isEmpty()) {
-        for (const Heading &heading : Parser().parseAll(note.text).metadata.headings) {
-            if (heading.text.compare(subpath, Qt::CaseInsensitive) == 0) {
-                offset = heading.range.start;
-                break;
-            }
-        }
-    }
-    pagePreview()->showNote(note.text, offset, m_previewPos);
+    pagePreview()->showNote(note.text, qMax<qsizetype>(0, subpathOffset(note.text, subpath)), m_previewPos);
 }
 
 PagePreview *MainWindow::pagePreview()
@@ -2283,6 +2298,7 @@ void MainWindow::publishSite()
         publish::Options options;
         options.outputDir = folder;
         options.onlyMarked = onlyMarked;
+        options.siteName = vault.name();
         result.ok = publisher.publish(options, {}, &result.error);
         result.counts = publisher.counts();
         return result;

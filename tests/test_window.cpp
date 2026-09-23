@@ -1574,6 +1574,26 @@ TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
     WAIT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part two")), 2000);
 }
 
+TEST_F(WindowTest, ALinkToABlockOpensTheNoteAtThatBlock)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\nThe second part. ^part\n\n- a list\n- here\n\n^list\n");
+    write(QStringLiteral("Linking.md"), "See it.\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    emit window.editor()->linkActivated(QStringLiteral("Other#^part"));
+    const QString shown = window.editor()->noteText();
+    ASSERT_TRUE(shown.startsWith(QLatin1String("# Other")));
+    EXPECT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("The second part")));
+
+    // A marker on a line of its own, after a list; and within the note itself.
+    emit window.editor()->linkActivated(QStringLiteral("#^list"));
+    EXPECT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("^list")));
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);
