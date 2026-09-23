@@ -119,9 +119,9 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       rules, links, embeds, code, tasks already opened on a click.
   - [x] Table row and column commands (insert, delete, move), palette and
         right-click menu.
-  - [ ] Table cells: a selection across cells is not drawn inside the
-        rendered table; a row with fewer cells than the header has no place
-        to click for the missing ones.
+  - [x] Table cells: a selection is drawn inside the rendered table (cells
+        crossed whole are tinted); a short row draws its missing cells, and a
+        click or Tab into one fills the row in first.
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
 - [x] Lockbox approval: a person approves a device enrolling by lockbox,
