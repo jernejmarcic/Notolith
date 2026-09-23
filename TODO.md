@@ -557,8 +557,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Bases list functions: `filter`/`map`/`reduce` with `value`, `index`,
       `acc`; list literals; `flat`; lists of any values; a file's own
       summary formulas over `values` (`values.mean().round(3)`).
-- [ ] Bases left out: link/file/image values,
-      `summaries:`, list-property cells, cards read-only, sort not saved back.
+- [ ] Bases left out: link/file/image values, list-property cells, cards
+      read-only, sort not saved back.
 - [x] Canvas controls as Obsidian's: a drag on empty canvas draws a
       selection box, the wheel pans (Shift sideways), Ctrl+wheel zooms,
       Space- or middle-drag pans; a group carries the cards inside it.
