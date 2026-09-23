@@ -190,6 +190,12 @@ public:
     /// included, since that is what a copy has to carry.
     QString selectedText() const;
     void setCursorOffset(qsizetype offset);
+    /// A touch selection's handle, viewport coordinates; empty when the
+    /// selection has none (it was not made by a finger). For the tests.
+    QRectF touchSelectionHandle(bool end) const
+    {
+        return m_touchHandles && selection().length() > 0 ? selectionHandleRect(end) : QRectF();
+    }
 
     /// What the widget currently shows, block by block. The quickest way to
     /// assert live-preview behaviour, and useful when debugging a layout.
@@ -1627,6 +1633,25 @@ private:
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;
     QPointF cursorPoint() const;
+    /// Where `offset` is drawn, viewport coordinates, top of its line.
+    QPointF pointFor(qsizetype offset) const;
+
+    // --- touch, TouchInput.cpp -------------------------------------------
+    /// `rect` grown by `mouseSlop`, or by a finger's worth when the press
+    /// being handled came from a touchscreen: task boxes, fold arrows,
+    /// chips and the rest are sized for a mouse.
+    QRectF touchable(const QRectF &rect, qreal mouseSlop = 0) const;
+    /// The two selection handles a touch selection shows: `end` false for
+    /// the one at the selection's start. Viewport coordinates.
+    QRectF selectionHandleRect(bool end) const;
+    void paintSelectionHandles(QPainter &painter) const;
+    /// A touch press on a handle starts dragging that end of the selection.
+    bool pressSelectionHandle(const QPoint &point);
+    bool dragSelectionHandle(const QPoint &point);
+    bool releaseSelectionHandle();
+    qreal m_touchSlop = 0;         ///< extra hit margin while a touch press is handled
+    bool m_touchHandles = false;   ///< the selection came from a finger, so it has handles
+    int m_draggingHandle = 0;      ///< -1 the start handle, 1 the end one, 0 none
     void ensureCursorVisible();
 
     void insertText(const QString &text);

@@ -184,7 +184,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         // Paragraph, not Code.
         if (view.embedPanel && view.notebookEligible) {
             const QRectF runRect = notebookRunRectFor(view, left, top);
-            if (runRect.isValid() && runRect.adjusted(-4, -4, 4, 4).contains(point)) {
+            if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
                 runNotebookBlockAt(view.span.range.start);
                 return true;
             }
@@ -192,12 +192,12 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         if (view.isQuery) {
             if (view.queryCollapseRect.isValid()
-                && view.queryCollapseRect.translated(left, top).contains(point)) {
+                && touchable(view.queryCollapseRect.translated(left, top)).contains(point)) {
                 toggleQueryCollapsed(view.span.range.start);
                 return true;
             }
             if (view.querySortRect.isValid()
-                && view.querySortRect.translated(left, top).contains(point)) {
+                && touchable(view.querySortRect.translated(left, top)).contains(point)) {
                 cycleQuerySort(view.span.range.start);
                 return true;
             }
@@ -230,7 +230,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
 
         for (const NestedCallout &nested : view.nested) {
             if (nested.span->foldable
-                && nestedFoldHandleRect(view, nested, left, top).adjusted(-6, -6, 6, 6).contains(point)) {
+                && touchable(nestedFoldHandleRect(view, nested, left, top), 6).contains(point)) {
                 toggleFoldAt(nested.span->range.start);
                 return true;
             }
@@ -239,13 +239,13 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
             if (view.notebookEligible) {
                 const QRectF runRect = notebookRunRectFor(view, left, top);
-                if (runRect.isValid() && runRect.adjusted(-4, -4, 4, 4).contains(point)) {
+                if (runRect.isValid() && touchable(runRect, 4).contains(point)) {
                     runNotebookBlockAt(view.span.range.start);
                     return true;
                 }
             }
             const CodeLabel label = codeLabelOf(view, left, top);
-            if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
+            if (label.visible && touchable(label.rect, 4).contains(point)) {
                 copyCodeBlock(view);
                 return true;
             }
@@ -262,14 +262,14 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             && !m_properties.isEmpty()) {
             const QRectF handle = foldHandleRect(view, left, top);
             // Folded, the single row is the only thing left to click.
-            if (handle.adjusted(-6, -6, 6, 6).contains(point)
+            if (touchable(handle, 6).contains(point)
                 || (view.folded && top <= point.y() && point.y() <= top + view.height)) {
                 setFolded(view, !view.folded);
                 return true;
             }
             for (const PropertyRow &row : view.propertyRows) {
                 if (!row.control.isNull()) {
-                    if (row.control.translated(left, top).adjusted(-4, -4, 4, 4).contains(point)) {
+                    if (touchable(row.control.translated(left, top), 4).contains(point)) {
                         toggleProperty(row.property);
                         return true;
                     }
@@ -277,16 +277,16 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 }
                 const qsizetype at = m_properties.at(row.property).range.start;
                 for (int i = 0; i < row.removers.size(); ++i) {
-                    if (row.removers.at(i).translated(left, top).contains(point)) {
+                    if (touchable(row.removers.at(i).translated(left, top)).contains(point)) {
                         removeListItemAt(at, i);
                         return true;
                     }
                 }
-                if (!row.adder.isNull() && row.adder.translated(left, top).contains(point)
+                if (!row.adder.isNull() && touchable(row.adder.translated(left, top)).contains(point)
                     && addListItemAt(at))
                     return true;
                 for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
-                    if (row.chips.at(i).translated(left, top).contains(point) && editListItemAt(at, i))
+                    if (touchable(row.chips.at(i).translated(left, top)).contains(point) && editListItemAt(at, i))
                         return true;
                 }
                 // The value column of a scalar: click to edit it in place.
@@ -1191,7 +1191,7 @@ const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point
         if (view.span.kind != BlockSpan::Kind::Code || !view.laidOut)
             continue;
         const CodeLabel label = codeLabelOf(view, left, top);
-        if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point))
+        if (label.visible && touchable(label.rect, 4).contains(point))
             return &view;
     }
     return nullptr;
