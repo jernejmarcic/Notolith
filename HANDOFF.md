@@ -45,13 +45,8 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 16 suites pass in the full build and 12 in a build with every optional
-module off (`sh tools/check.sh` runs both):
-
-```
-vault  markdown  index  search  editor  window  theme  icons  spell  graph
-canvas  bases  fuzz  settings  plugins  appstreamtest
-```
+All 26 suites pass in the full build and 15 in a build with every optional
+module off (`sh tools/check.sh` runs both, as of 2026-09-23 evening).
 
 Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`:
 cold start to first painted frame 65 ms (including `openVault`; 42 ms with
@@ -64,6 +59,11 @@ with before and after, is in `docs/PERFORMANCE.md` (18 of them so far).
 Working today, beyond the basics (vault or loose file, live preview / source /
 reading, index, find and replace):
 
+- **Tables** are edited where they are drawn (`libs/editor/TableCells.cpp`)
+  and aligned in the source when left (`libs/markdown/TableFormat`); cell
+  ranges come from `tableRowCells`, not md4qt, which misplaces empty cells.
+- **Notebooks**: code blocks run through a Jupyter kernel
+  (`libs/ext/notebook`, bubblewrap sandbox, output cache outside the note).
 - **Obsidian's note rendering**: per-element syntax reveal, maths (MicroTeX),
   callouts, tables, embeds (notes, images, PDFs, audio, video), heading links,
   editable properties, `query` blocks, raw HTML through litehtml.
