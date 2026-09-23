@@ -87,22 +87,25 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
         note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
         "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
         `![[...]]` inserted. Not built at all yet.
-- [ ] **Tables aligned in the source** (Jernej 2026-09-23: "Tables should be
+- [x] **Tables aligned in the source** (Jernej 2026-09-23: "Tables should be
       auto aligned to look good, even in plain markdown, by adding spaces and
-      other table characters"). Pad every cell to its column's width (display
-      width: wide CJK 2, combining 0), rewrite the delimiter row to match
-      (`|:---|`, `|---:|`, `|:---:|` kept), add missing outer pipes and
-      missing cells. Done when an edited table is left (only the table that
-      was edited: the file stays byte-exact elsewhere), on Tab/Enter inside a
-      table, and by a command "Format table" / "Format all tables". Also:
-      his screenshot shows a 10-column table as raw text in live preview -
-      find out why (caret reveal, or a parse miss).
-- [ ] **Click to edit** (Jernej 2026-09-23: "Clicking on an element should
-      open it to be editable, like in obsidian"). Audit every rendered
-      element - table, callout, display maths, inline maths, embeds, code
-      block, properties, query/base blocks, HTML, rule - for what a click
-      does now against Obsidian's live preview, and make a click reveal the
-      element's source with the caret where clicked (a table: its cells).
+      other table characters"). `formatTable` (libs/markdown/TableFormat):
+      display-width padding (CJK 2, combining 0), delimiter row redrawn with
+      its colons, outer pipes, short rows filled. Runs when the caret leaves
+      a table it edited (only that table; one undo step; "Align tables"
+      setting), and as "Format table" / "Format all tables". A table's
+      source is monospace and wraps by the character so pipes stay in line.
+      His screenshot was the caret-inside case: the table dropped to source.
+- [x] **Click to edit** (Jernej 2026-09-23: "Clicking on an element should
+      open it to be editable, like in obsidian"). Measured every element:
+      display maths and HTML never took a click (fixed: offsetAt skipped
+      blocks without a text layout); tables are now edited in place, cell by
+      cell, as in Obsidian (TableCells.cpp). Callouts, quotes, headings,
+      rules, links, embeds, code, tasks already opened on a click.
+  - [ ] Table cells: a selection across cells is not drawn inside the
+        rendered table; column/row add, delete and move commands (Advanced
+        Tables has them); a row with fewer cells than the header has no
+        place to click for the missing ones.
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
 - [ ] Lockbox approval (a second device enrolled without the password) has
