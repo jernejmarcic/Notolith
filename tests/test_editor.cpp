@@ -186,6 +186,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include "CodeHighlighter.h"
 #include "MarkdownEditor.h"
 #include "Parser.h"
+#include "HtmlRenderer.h"
 #include "MathRenderer.h"
 #include "PdfPage.h"
 
@@ -2440,6 +2441,328 @@ TEST(CommandTest, EveryCommandHasAnIDANameAndRuns)
         editor->enterBlockAt(1);
         EXPECT_TRUE(editor->runCommand(command.id)) << qPrintable(command.id);
     }
+}
+
+// --- query blocks ------------------------------------------------------------------
+
+namespace {
+
+/// A fake `setQueryRunner`: records every search asked for and hands the
+/// test the `deliver` callback instead of calling it, so a test can decide
+/// exactly when - and in what order - results come back, without depending
+/// on a real index or on timing.
+struct FakeQueryRunner {
+    struct Call {
+        QString query;
+        MarkdownEditor::QueryDeliver deliver;
+    };
+    QList<Call> calls;
+
+    void operator()(const QString &query, const MarkdownEditor::QueryDeliver &deliver)
+    {
+        calls.append({query, deliver});
+    }
+};
+
+QueryResult makeQueryResult(const QString &path, int matchCount, const QString &snippet,
+                            qsizetype firstOffset)
+{
+    QueryResult result;
+    result.path = path;
+    result.matchCount = matchCount;
+    result.snippet = snippet;
+    result.firstOffset = firstOffset;
+    if (!snippet.isEmpty())
+        result.snippetHighlights.append({0, qMin<qsizetype>(3, snippet.size())});
+    return result;
+}
+
+/// Runs the queued delivery FakeQueryRunner's callback posts (setQueryRunner
+/// marshals it through QMetaObject::invokeMethod) and lets layout catch up.
+void pumpQueuedDelivery()
+{
+    QCoreApplication::processEvents();
+    QTest::qWait(10);
+    QCoreApplication::processEvents();
+}
+
+} // namespace
+
+TEST(QueryBlockTest, RendersResultsFromAnAsyncRunner)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+
+    const qsizetype queryOffset = note.indexOf(QStringLiteral("foo"));
+    // Rendered but still waiting: the runner was asked, but nothing answered
+    // yet, so there is nothing to click - render must never block on it.
+    ASSERT_EQ(fake.calls.size(), 1);
+    EXPECT_EQ(fake.calls.first().query, QStringLiteral("foo"));
+    EXPECT_TRUE(editor->queryRowsAt(queryOffset).isEmpty());
+
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 3, QStringLiteral("a foo b"), 10),
+                                makeQueryResult(QStringLiteral("Two.md"), 1, QStringLiteral("foo alone"), 4)});
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(queryOffset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("One.md"));
+    EXPECT_EQ(rows.at(0).offset, 10);
+    EXPECT_EQ(rows.at(1).path, QStringLiteral("Two.md"));
+    EXPECT_EQ(rows.at(1).offset, 4);
+
+    // Re-asking for the same text without an intervening edit or
+    // refreshQueries is a cache hit, not a second search.
+    editor->enterBlockAt(1);   // touches the "Intro" block, not the query one
+    editor->enterBlockAt(queryOffset);
+    editor->enterBlockAt(1);
+    EXPECT_EQ(fake.calls.size(), 1);
+}
+
+TEST(QueryBlockTest, CaretInsideRevealsSourceInsteadOfResults)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+    ASSERT_FALSE(editor->queryRowsAt(note.indexOf(QStringLiteral("foo"))).isEmpty());
+
+    editor->enterBlockAt(note.indexOf(QStringLiteral("foo")));
+    // Fences are chrome, never part of displayText() even in source mode
+    // (CodeOptionsTest.LineNumbersIndentTheListingAndLeaveTheBytesAlone makes
+    // the same point) - what matters here is that the raw query text is what
+    // shows, not a rendered result.
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("foo")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("One.md")));
+    EXPECT_TRUE(editor->queryRowsAt(note.indexOf(QStringLiteral("foo"))).isEmpty());
+}
+
+TEST(QueryBlockTest, ClickingARowActivatesItsNoteAndOffset)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    // The default caret (offset 0) starts inside the query block itself,
+    // same as it would in any other block; it has to leave before the block
+    // renders results rather than raw source.
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After")));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        {makeQueryResult(QStringLiteral("Target.md"), 2, QStringLiteral("has foo in it"), 42)});
+    pumpQueuedDelivery();
+
+    const qsizetype queryOffset = note.indexOf(QStringLiteral("foo"));
+    const QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(queryOffset);
+    ASSERT_EQ(rows.size(), 1);
+
+    QSignalSpy activated(editor.get(), &MarkdownEditor::queryResultActivated);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      rows.first().rect.center().toPoint());
+    ASSERT_EQ(activated.size(), 1);
+    EXPECT_EQ(activated.first().at(0).toString(), QStringLiteral("Target.md"));
+    EXPECT_EQ(activated.first().at(1).value<qsizetype>(), 42);
+}
+
+TEST(QueryBlockTest, EditingElsewhereAsksNothingNew)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+
+    editor->setCursorOffset(5); // end of "Intro", nowhere near the query block
+    QTest::keyClicks(editor.get(), QStringLiteral(" more"));
+    EXPECT_EQ(fake.calls.size(), 1) << "a keystroke outside the block must not re-run its search";
+}
+
+TEST(QueryBlockTest, AStaleDeliveryAfterRefreshIsDropped)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    const MarkdownEditor::QueryDeliver firstDeliver = fake.calls.first().deliver;
+
+    // The index changed while the first search was still in flight:
+    // refreshQueries drops the cache and asks again for the same text.
+    editor->refreshQueries();
+    QTest::qWait(250); // past the 200 ms debounce
+    QCoreApplication::processEvents();
+    ASSERT_EQ(fake.calls.size(), 2);
+    EXPECT_EQ(fake.calls.at(1).query, QStringLiteral("foo"));
+    const MarkdownEditor::QueryDeliver secondDeliver = fake.calls.at(1).deliver;
+
+    // The new request answers first (the common case: refreshQueries fires
+    // because something changed, and the fresh search is what a person is
+    // waiting on) and the old, slower one lands after it - a broken
+    // generation check would let this second, stale delivery win simply by
+    // arriving last.
+    secondDeliver({makeQueryResult(QStringLiteral("Fresh.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+    firstDeliver({makeQueryResult(QStringLiteral("Stale.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::QueryResultRow> rows =
+        editor->queryRowsAt(note.indexOf(QStringLiteral("foo")));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.first().path, QStringLiteral("Fresh.md"))
+        << "the superseded request's answer must not overwrite the current one";
+}
+
+// --- HTML blocks and inline HTML ----------------------------------------------------
+
+TEST(HtmlRendererTest, AvailableExactlyWhenLitehtmlWasFound)
+{
+    // Available exactly when the build found litehtml; a build without it -
+    // NOTEAPPC_WITH_HTML off, or the package missing - reports itself
+    // unavailable rather than pretending, the same contract PdfPage keeps.
+#ifdef NOTEAPPC_EXPECT_HTML
+    EXPECT_TRUE(HtmlRenderer::isAvailable());
+#else
+    EXPECT_FALSE(HtmlRenderer::isAvailable());
+#endif
+}
+
+namespace {
+
+HtmlRenderer::Theme testHtmlTheme()
+{
+    HtmlRenderer::Theme theme;
+    theme.text = QColor(20, 20, 20);
+    theme.background = Qt::white;
+    theme.link = Qt::blue;
+    theme.border = Qt::gray;
+    theme.codeBackground = QColor(230, 230, 230);
+    theme.textFont = QFont(QStringLiteral("sans-serif"), 12);
+    theme.codeFont = QFont(QStringLiteral("monospace"), 12);
+    return theme;
+}
+
+} // namespace
+
+TEST(HtmlRendererTest, ScriptNeverRendersItsText)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml (NOTEAPPC_WITH_HTML off, or the package was not found)";
+
+    const HtmlRenderer::Theme theme = testHtmlTheme();
+    const QImage plain = HtmlRenderer::render(QStringLiteral("<div>Hello</div>"), theme, 300, QString());
+    const QImage withScript = HtmlRenderer::render(
+        QStringLiteral("<div>Hello<script>document.title='pwned';alert(1)</script></div>"), theme, 300,
+        QString());
+    ASSERT_FALSE(plain.isNull());
+    ASSERT_FALSE(withScript.isNull());
+    // Not just "no visible <script> text": pixel-identical, so the tag
+    // contributed nothing at all - not even the layout space a hidden but
+    // present element would still occupy.
+    EXPECT_EQ(plain, withScript) << "a <script> body must never add a pixel to the rendered block";
+}
+
+TEST(HTMLBlockTest, RendersAsANonEmptyCachedImage)
+{
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    const QSize size = editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello")));
+    if (HtmlRenderer::isAvailable()) {
+        EXPECT_GT(size.width(), 0);
+        EXPECT_GT(size.height(), 0);
+    } else {
+        EXPECT_TRUE(size.isEmpty()) << "without litehtml the block falls back to showing its source";
+    }
+}
+
+TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    const qsizetype at = note.indexOf(QStringLiteral("Hello"));
+    ASSERT_FALSE(editor->htmlImageSizeAt(at).isEmpty());
+
+    editor->enterBlockAt(at);
+    EXPECT_TRUE(editor->htmlImageSizeAt(at).isEmpty());
+    EXPECT_EQ(editor->displayText(), note)
+        << "the caret is inside it: raw HTML source, like any other block";
+}
+
+TEST(HTMLBlockTest, OpeningANoteWithNoHTMLConstructsNothingFromLitehtml)
+{
+    const qint64 before = HtmlRenderer::renderCount();
+    auto editor = editorWith(QStringLiteral("# Title\n\nJust **prose**, a [[link]] and `code`.\n"));
+    (void)editor;
+    EXPECT_EQ(HtmlRenderer::renderCount(), before)
+        << "no HTML block in the note: litehtml must never be asked to lay anything out";
+}
+
+TEST(HTMLBlockTest, UnrelatedKeystrokeIsACacheHitNotARebuild)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+
+    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    auto editor = editorWith(note);
+    ASSERT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
+    const qint64 afterFirstRender = HtmlRenderer::renderCount();
+
+    editor->setCursorOffset(5); // end of "Intro", nowhere near the HTML block
+    QTest::keyClicks(editor.get(), QStringLiteral(" more"));
+    EXPECT_EQ(HtmlRenderer::renderCount(), afterFirstRender)
+        << "an edit outside the block must not rebuild its cached image";
+}
+
+TEST(InlineHtmlTest, RecognisedTagsFormatAndHideTheirMarkup)
+{
+    const QString note = QStringLiteral("Press <kbd>Ctrl</kbd> then <b>Go</b>.\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Press Ctrl then Go.\n"))
+        << "the tags hide, like any other syntax marker";
+
+    const qsizetype ctrl = note.indexOf(QStringLiteral("Ctrl"));
+    EXPECT_EQ(editor->formatAt(ctrl).font().family(), Theme::builtin().monospaceFont().family());
+    const qsizetype go = note.indexOf(QStringLiteral(">Go<")) + 1;
+    EXPECT_GE(editor->formatAt(go).fontWeight(), int(QFont::Bold));
+}
+
+TEST(InlineHtmlTest, SpanStyleColourIsRead)
+{
+    const QString note = QStringLiteral("A <span style=\"color: #ff0000\">warning</span> word.\n");
+    auto editor = editorWith(note);
+    const qsizetype at = note.indexOf(QStringLiteral("warning"));
+    EXPECT_EQ(editor->formatAt(at).foreground().color(), QColor(0xff, 0, 0));
+}
+
+TEST(InlineHtmlTest, AnUnrecognisedTagStaysAsRawSource)
+{
+    // No case in htmlTagFormat matches <marquee>, so layoutInlineHtml never
+    // hides it - the same "leave it alone rather than guess" rule an
+    // unrenderable formula follows.
+    const QString note = QStringLiteral("A <marquee>party</marquee> word.\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(editor->displayText(), note);
+}
+
+TEST(InlineHtmlTest, ABlockLevelElementIsLeftToLayoutHtml)
+{
+    // layoutInlineHtml steps aside entirely for a whole-block HTML span -
+    // pairing tags inside it would fight with litehtml's own rendering of
+    // the same markup.
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    const QString note = QStringLiteral("<div>\n<b>Hello</b>\n</div>\n");
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
 }
 
 // --- page preview ----------------------------------------------------------------

@@ -44,6 +44,8 @@ qt_add_resources(microtex "microtex_fonts"
 add_library(noteAppC_render STATIC
     CodeHighlighter.cpp
     CodeHighlighter.h
+    HtmlRenderer.cpp
+    HtmlRenderer.h
     MediaPlayback.cpp
     MediaPlayback.h
     PdfPage.cpp
@@ -88,6 +90,32 @@ if(TARGET PkgConfig::POPPLER_QT6)
     message(STATUS "noteAppC: PDF embeds enabled (poppler-qt6)")
 else()
     message(STATUS "noteAppC: poppler-qt6 not found, PDF embeds disabled")
+endif()
+
+# HTML blocks. Optional: litehtml (BSD-3-Clause) plus gumbo is a small,
+# permissive dependency - unlike poppler this is not a licensing trade-off -
+# but a note with no HTML block in it must not pay anything for the option,
+# see HtmlRenderer::isAvailable() and the lazy construction in HtmlBlock.cpp.
+if(NOTEAPPC_WITH_HTML)
+    # A system can carry a version-suffixed litehtml (e.g. litehtml0.9)
+    # alongside the default package, both exporting a target literally
+    # named "litehtml" - CMake's own <name>* glob in config mode can then
+    # resolve plain find_package(litehtml) to whichever one it meets first,
+    # not necessarily the unsuffixed 0.10 this project builds against. Pin
+    # the exact "litehtml" config directory (no glob) first, so this always
+    # finds the same package a litehtml.pc would if litehtml shipped one -
+    # it does not.
+    find_path(litehtml_DIR NAMES litehtmlConfig.cmake
+        PATH_SUFFIXES lib/cmake/litehtml lib64/cmake/litehtml)
+    find_package(litehtml QUIET)
+endif()
+if(TARGET litehtml)
+    set_property(GLOBAL PROPERTY NOTEAPPC_HAVE_LITEHTML TRUE)
+    target_link_libraries(noteAppC_render PRIVATE litehtml)
+    target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_LITEHTML)
+    message(STATUS "noteAppC: HTML blocks enabled (litehtml)")
+else()
+    message(STATUS "noteAppC: litehtml not found, HTML blocks render as source")
 endif()
 
 # Audio and video embeds. Optional: without Qt Multimedia MediaPlayback reports
