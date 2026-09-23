@@ -137,7 +137,7 @@ bool Vault::write(const QString &path, const Note &note, QString *error)
 // --- file operations -----------------------------------------------------
 
 QString Vault::createNote(const QString &folderRelative, const QString &baseName,
-                          QString *error) const
+                          QString *error, const QString &extension, const QString &text) const
 {
     if (!isValid()) {
         if (error)
@@ -156,13 +156,15 @@ QString Vault::createNote(const QString &folderRelative, const QString &baseName
     QString candidate = baseName;
     QString path;
     for (int suffix = 0;; ++suffix) {
-        path = folder.absoluteFilePath(candidate + QLatin1String(".md"));
+        path = folder.absoluteFilePath(candidate + extension);
         if (!QFileInfo::exists(path))
             break;
         candidate = QStringLiteral("%1 %2").arg(baseName).arg(suffix + 1);
     }
 
-    if (!write(path, Note{}, error))
+    Note note;
+    note.text = text;
+    if (!write(path, note, error))
         return {};
     return path;
 }

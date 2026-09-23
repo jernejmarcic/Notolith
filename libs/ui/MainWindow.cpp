@@ -1099,6 +1099,19 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
+#ifdef NOTEAPPC_HAVE_CANVAS
+    add(QStringLiteral("canvas:new-file"), tr("Canvas: Create new canvas"), QString(), [this] {
+        if (!m_vault.isValid())
+            return;
+        QString error;
+        const QString path =
+            m_vault.createNote(QString(), tr("Untitled"), &error, QStringLiteral(".canvas"), QStringLiteral("{}\n"));
+        if (path.isEmpty())
+            QMessageBox::warning(this, tr("New canvas"), tr("Could not create the canvas:\n%1").arg(error));
+        else
+            openNote(path);
+    });
+#endif
 #ifdef NOTEAPPC_HAVE_GRAPH
     add(QStringLiteral("graph:open"), tr("Graph view: Open graph view"), QStringLiteral("Ctrl+G"),
         &MainWindow::openGraph);
@@ -1207,6 +1220,20 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             else
                 activateLeaf(leaf.get()); // clicking into a split focuses its tab
             break;
+        }
+    }
+    if (event->type() == QEvent::MouseButtonRelease
+        && static_cast<QMouseEvent *>(event)->button() == Qt::MiddleButton && m_tree
+        && watched == m_tree->viewport()) {
+        // A middle click opens a file in a new tab, as in Obsidian.
+        const QModelIndex index = m_tree->indexAt(static_cast<QMouseEvent *>(event)->position().toPoint());
+        if (index.isValid() && !m_files->isDir(index)) {
+            const QString path = m_files->filePath(index);
+            if (isViewFile(path) || Vault::isNote(path)) {
+                newTab();
+                openNote(path, NavSource::Tree);
+            }
+            return true;
         }
     }
     if (event->type() == QEvent::MouseButtonRelease

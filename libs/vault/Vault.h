@@ -54,11 +54,13 @@ public:
 
     // --- file operations -------------------------------------------------
 
-    /// Creates an empty note. `folderRelative` may be empty for the vault root.
-    /// Uniquifies like Obsidian: "Untitled", "Untitled 1", "Untitled 2".
+    /// Creates an empty note - or, with another extension, a file holding
+    /// `text` (a new canvas is `{}`). `folderRelative` may be empty for the
+    /// vault root. Uniquifies like Obsidian: "Untitled", "Untitled 1".
     /// Returns the absolute path, or an empty string with `error` filled.
     QString createNote(const QString &folderRelative, const QString &baseName,
-                       QString *error = nullptr) const;
+                       QString *error = nullptr, const QString &extension = QStringLiteral(".md"),
+                       const QString &text = QString()) const;
 
     /// Same uniquifying rule, for a folder.
     QString createFolder(const QString &parentRelative, const QString &baseName,

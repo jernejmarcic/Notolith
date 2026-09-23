@@ -14,6 +14,7 @@
 #include <QElapsedTimer>
 #include <QFileSystemModel>
 #include <QFile>
+#include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -754,6 +755,40 @@ TEST_F(WindowTest, AQueryBlockShowsTheVaultsSearchResults)
     emit editor->queryResultActivated(rows.first().path, rows.first().offset);
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("#project here\n"));
 }
+
+TEST_F(WindowTest, AMiddleClickOnATreeRowOpensItInANewTab)
+{
+    MainWindow window;
+    QSignalSpy loaded(window.findChild<QFileSystemModel *>(), &QFileSystemModel::directoryLoaded);
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    ASSERT_TRUE(!loaded.isEmpty() || loaded.wait(5000)); // may land while exposing
+    window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex welcome = model->index(path(QStringLiteral("Welcome.md")));
+    ASSERT_TRUE(welcome.isValid());
+    QTest::mouseClick(tree->viewport(), Qt::MiddleButton, {}, tree->visualRect(welcome).center());
+
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    EXPECT_EQ(tabTexts(tabs), (QStringList{QStringLiteral("Crlf"), QStringLiteral("Welcome")}));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+#ifdef NOTEAPPC_HAVE_CANVAS
+TEST_F(WindowTest, CreateNewCanvasMakesAnEmptyOneAndOpensIt)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.findChild<QAction *>(QStringLiteral("canvas:new-file"))->trigger();
+    EXPECT_EQ(readAll(path(QStringLiteral("Untitled.canvas"))), QByteArray("{}\n"));
+    EXPECT_NE(window.findChild<noteAppC::CanvasView *>(), nullptr);
+    window.findChild<QAction *>(QStringLiteral("canvas:new-file"))->trigger();
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Untitled 1.canvas"))));
+}
+#endif
 
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)
 {

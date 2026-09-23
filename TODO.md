@@ -395,14 +395,18 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       Qt Creator's qlitehtml is GPL-3, so it was read, not vendored.
 - [ ] HTML left out: gradients are a flat first stop, borders one colour
       and no radii, list markers always decimal.
-- [ ] `canvas:new-file` ("Create new canvas") and a new-base command.
+- [x] `canvas:new-file` ("Create new canvas"): an empty `{}` Untitled.canvas.
+- [ ] A new-base command: Obsidian's id is not in the 1.1.15 list, find it.
 - [ ] ` ```base ` blocks inside notes, on `BaseView`.
 - [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
       `summaries:`, list-property cells, cards read-only, sort not saved back.
 - [ ] Canvas left out: dragging a group does not move what is in it; a file
       node's subpath does not scroll to the heading; plain drag pans, Obsidian
       rubber-bands (Shift here).
-- [ ] Ctrl+click a link, or middle-click a tree row, to open in a new tab.
+- [x] Middle-click a tree row to open it in a new tab.
+- [ ] **For Jernej:** Obsidian opens a link in a new tab on Ctrl+click, but
+      in noteAppC's editing view Ctrl+click is how a link is followed at all
+      (a plain click places the caret). Which should Ctrl+click be?
 - [ ] The unfocused split's tab header could dim, as Obsidian's does.
 - [ ] One note edited in two splits at once diverges; last save wins.
       Obsidian edits one document from every view.
