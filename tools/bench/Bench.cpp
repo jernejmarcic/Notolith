@@ -314,7 +314,7 @@ Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 /// readback, not the drawing. So this shows the widget, drives the scrollbar,
 /// and waits for a real paint event on the viewport each time. Vsync is off,
 /// or every measurement would come back as one refresh interval.
-Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0)
+Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrames = 400)
 {
     struct PaintCounter : QObject {
         int paints = 0;
@@ -354,7 +354,7 @@ Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0)
         bar->setValue(value);
         // Wheel steps would take thousands of frames to cross the note; a few
         // hundred each way is plenty of samples.
-        for (int frames = 0; stepPixels <= 0 || frames < 400; ++frames) {
+        for (int frames = 0; stepPixels <= 0 || frames < maxFrames; ++frames) {
             // The range settles as blocks get their real heights; a value past
             // its end would change nothing, paint nothing, and time out.
             const int next = qBound(0, value + step, bar->maximum());
@@ -567,6 +567,14 @@ int main(int argc, char *argv[])
     parser.addOption(jsonOption);
     parser.addOption(notesOption);
     parser.addOption(gpuOption);
+    // One viewport at a time, so whatever runs the bench - `perf stat -i` on
+    // the compositor, say - can tell the two apart.
+    QCommandLineOption onlyOption(QStringLiteral("only"),
+                                  QStringLiteral("With --gpu, run one viewport: raster or opengl; "
+                                                 "none opens the window and scrolls nothing, as "
+                                                 "a baseline for the compositor's own cost."),
+                                  QStringLiteral("viewport"));
+    parser.addOption(onlyOption);
     parser.addOption(viewportOption);
     parser.process(app);
 
@@ -626,9 +634,18 @@ int main(int argc, char *argv[])
     // those would land on whatever screen someone is working at - so that run
     // is the headless one, and this one does nothing but the comparison.
     if (parser.isSet(gpuOption)) {
-        timings << benchScrollOnScreen(5000, false);
-        timings << benchScrollOnScreen(5000, false, 72); // three lines, one wheel notch
-        if (MarkdownEditor::GPUaccelerationAvailable()) {
+        const QString only = parser.value(onlyOption);
+        const bool raster = only.isEmpty() || only == QLatin1String("raster");
+        const bool opengl = only.isEmpty() || only == QLatin1String("opengl");
+        if (only == QLatin1String("none"))
+            timings << benchScrollOnScreen(5000, false, 72, 0);
+        if (raster) {
+            timings << benchScrollOnScreen(5000, false);
+            timings << benchScrollOnScreen(5000, false, 72); // three lines, one wheel notch
+        }
+        if (!opengl) {
+            // the OpenGL rows are skipped on request
+        } else if (MarkdownEditor::GPUaccelerationAvailable()) {
             timings << benchScrollOnScreen(5000, true);
             timings << benchScrollOnScreen(5000, true, 72);
         } else {

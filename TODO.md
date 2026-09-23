@@ -191,7 +191,10 @@ budget, which this project has already learned once on the index.
       session directory for this work. Jernej runs it; results sync back.
 - [x] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
       viewport: a wheel notch 1.0 -> 0.4-0.65 ms on screen (fix 12).
-- [ ] Measure the Wayland shared-memory buffer transfer the bench cannot see.
+- [x] Measure the Wayland shared-memory buffer transfer the bench cannot see:
+      0.28-0.31 ms of compositor CPU per raster frame at 1180x760 against
+      0.065 ms for OpenGL, in cage (docs/PERFORMANCE.md). Raster still wins
+      in total. Hyprland's own figure would need a window on a real monitor.
 - [x] Mobile groundwork: build the libraries against the Android kit's Qt
       6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
       way poppler already is.

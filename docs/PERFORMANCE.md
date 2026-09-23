@@ -441,12 +441,25 @@ So the order is:
 
 1. **Scroll by blitting.** Done, fix 12: a wheel notch now moves the pixels
    already painted and repaints only the strip that came in.
-2. **Measure the Wayland buffer transfer.** The one real argument for a GPU
-   surface on this machine is not in the table. A raster window on Wayland
-   hands the compositor a shared-memory buffer, which the compositor then
-   uploads; a GL or Vulkan surface stays on the GPU. The bench measures
-   `QPainter` time and cannot see that copy. Until it is measured, nothing
-   says whether it costs frames.
+2. **Measure the Wayland buffer transfer.** Measured 2026-09-23, as a proxy:
+   the compositor's own CPU time while the on-screen bench scrolls, taken
+   with `perf stat -i` on `cage` (its threads only, not the bench inside it),
+   minus a run that opens the window and scrolls nothing. User time only,
+   two runs each, 1180x760:
+
+   | viewport | compositor CPU per frame | the app's own frame |
+   |---|---|---|
+   | raster (shared-memory buffer, uploaded) | 0.28-0.31 ms | 0.34-0.65 ms (wheel) |
+   | OpenGL (the buffer stays on the GPU) | 0.065 ms | 1.56 ms (wheel) |
+
+   So the copy is real - a quarter of a millisecond of someone's CPU per
+   frame at this size, roughly 1.4 ms at 3440x1440 if it scales with the
+   pixels, which is an estimate, not a measurement - but raster still costs
+   less in all, app and compositor together, than OpenGL does here. And it is
+   cage's wlroots GLES2 renderer, not Hyprland; the number to trust would be
+   Hyprland's own, which cannot be taken without a window on a real monitor.
+   Reproduce with `noteAppC-bench --gpu --only none|raster|opengl` under
+   `perf stat -i -e task-clock -- cage -- ...`.
 3. **Then a Vulkan renderer**, only if HiDPI panels matter or step 2 says the
    copy does. It would sit behind the same `editor.gpuAcceleration` setting.
 
