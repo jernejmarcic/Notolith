@@ -18,6 +18,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QScrollBar>
+#include <QSplitter>
 #include <QStackedWidget>
 #include <QTabBar>
 #include <QTest>
@@ -408,6 +409,150 @@ TEST_F(WindowTest, FlatTabShowsTheOpenNoteWithACloseButton)
     ASSERT_NE(editor, nullptr);
     EXPECT_FALSE(editor->isEnabled());
     EXPECT_EQ(tabs->count(), 0);
+}
+
+namespace {
+
+QStringList tabTexts(QTabBar *tabs)
+{
+    QStringList texts;
+    for (int i = 0; i < tabs->count(); ++i)
+        texts << tabs->tabText(i);
+    return texts;
+}
+
+void flushDeletes()
+{
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+/// The tabs' editors: the page preview has one of its own.
+QList<MarkdownEditor *> tabEditors(MainWindow &window)
+{
+    return window.findChild<QSplitter *>(QStringLiteral("workspace"))->findChildren<MarkdownEditor *>();
+}
+
+} // namespace
+
+TEST_F(WindowTest, TabsEachKeepTheirOwnNoteAndCloseToTheirNeighbour)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    EXPECT_EQ(tabTexts(tabs), (QStringList{QStringLiteral("Welcome"), QStringLiteral("New tab")}));
+    EXPECT_EQ(tabs->currentIndex(), 1);
+    window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+    MarkdownEditor *second = window.editor();
+    EXPECT_EQ(tabTexts(tabs), (QStringList{QStringLiteral("Welcome"), QStringLiteral("Crlf")}));
+    EXPECT_EQ(tabEditors(window).size(), 2);
+
+    tabs->setCurrentIndex(0); // a click on the first tab
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:next-tab"))->trigger();
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("one\ntwo\n"));
+
+    // An edit in a tab in the background still marks its own tab.
+    tabs->setCurrentIndex(0);
+    second->setCursorOffset(0);
+    QTest::keyClicks(second, QStringLiteral("x"));
+    EXPECT_EQ(tabs->tabText(1), QStringLiteral("Crlf *"));
+
+    second->setModified(false);
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger(); // Welcome
+    flushDeletes();
+    EXPECT_EQ(tabTexts(tabs), QStringList{QStringLiteral("Crlf")});
+    EXPECT_EQ(window.editor(), second);
+    EXPECT_EQ(tabEditors(window).size(), 1);
+}
+
+TEST_F(WindowTest, SplitRightShowsTheSameNoteAndFollowsItsSave)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *left = window.editor();
+
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    const QList<QTabBar *> bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(bars.size(), 2);
+    MarkdownEditor *right = window.editor();
+    ASSERT_NE(right, left);
+    EXPECT_EQ(right->noteText(), left->noteText());
+    EXPECT_GT(right->mapTo(&window, QPoint()).x(), left->mapTo(&window, QPoint()).x());
+    EXPECT_EQ(tabTexts(bars.at(1)), QStringList{QStringLiteral("Welcome")});
+
+    // Saving one split's edit reloads the other, which has none of its own.
+    right->setCursorOffset(0);
+    QTest::keyClicks(right, QStringLiteral("x"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(left->noteText(), QStringLiteral("x# Welcome\n\nBody.\n"));
+
+    // Focus decides which split the window follows.
+    left->setFocus();
+    QApplication::processEvents();
+    EXPECT_EQ(window.editor(), left);
+
+    // Closing a split's last tab closes the split.
+    right->setFocus();
+    QApplication::processEvents();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    EXPECT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 1);
+    EXPECT_EQ(window.editor(), left);
+}
+
+TEST_F(WindowTest, SplitDownThenRightNestsTheSplits)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:split-horizontal"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    EXPECT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 3);
+    auto *root = window.findChild<QSplitter *>(QStringLiteral("workspace"));
+    ASSERT_NE(root, nullptr);
+    EXPECT_EQ(root->orientation(), Qt::Vertical);
+    ASSERT_EQ(root->count(), 2);
+    auto *nested = qobject_cast<QSplitter *>(root->widget(1));
+    ASSERT_NE(nested, nullptr);
+    EXPECT_EQ(nested->orientation(), Qt::Horizontal);
+    EXPECT_EQ(nested->count(), 2);
+
+    // Closing the newest collapses the nested split back into the root.
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    EXPECT_EQ(root->count(), 2);
+    EXPECT_EQ(qobject_cast<QSplitter *>(root->widget(1)), nullptr);
+}
+
+TEST_F(WindowTest, DeletingANoteClosesEveryTabShowingIt)
+{
+    write(QStringLiteral("Other.md"), "other\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Other.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    ASSERT_EQ(tabEditors(window).size(), 3);
+
+    auto *files = window.findChild<QFileSystemModel *>();
+    const QModelIndex welcome = files->index(path(QStringLiteral("Welcome.md")));
+    ASSERT_TRUE(welcome.isValid());
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "deletePathAt", Q_ARG(QModelIndex, welcome)));
+    flushDeletes();
+    EXPECT_EQ(tabEditors(window).size(), 1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("other\n"));
 }
 
 TEST_F(WindowTest, SidebarFilesRowButtonsCreateNoteAndFolder)

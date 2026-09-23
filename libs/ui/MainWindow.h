@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 
+#include "Hotkeys.h"
 #include "Index.h"
 #include "Indexer.h"
 #include "MarkdownEditor.h"
@@ -15,6 +16,7 @@
 #include "Vault.h"
 
 class QButtonGroup;
+class QSplitter;
 class QFileSystemModel;
 class QFileSystemWatcher;
 class QLabel;
@@ -37,11 +39,11 @@ class QuickSwitcher;
 class SettingsPage;
 class TagsPane;
 
-/// The shell: a header bar in place of Obsidian's ribbon, flat tabs, a file
-/// explorer, a settings page in the main area, and single-file mode for a
-/// note opened with no vault around it. The workspace splits and command
-/// palette are still ahead; the editor engine and settings/theme layers are
-/// not - this class is only the chrome around them.
+/// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
+/// Obsidian's workspace of tabs in splits, a settings page in the main area,
+/// and single-file mode for a note opened with no vault around it. The
+/// command palette is still ahead; this class is only the chrome around the
+/// editor engine and the settings/theme layers.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -84,8 +86,8 @@ public:
     void closeSettings();
     /// Index for the open vault, so views can query links and tags.
     Index *index() { return &m_index; }
-    /// The editor itself, for tools and the benchmark.
-    MarkdownEditor *editor() { return m_editor; }
+    /// The focused tab's editor, for tools and the benchmark.
+    MarkdownEditor *editor() { return m_active->editor; }
     /// Alt+Left, the header's back button, and the mouse's back side button.
     void goBack();
     /// Alt+Right, the header's forward button, and the mouse's forward side
@@ -124,14 +126,70 @@ private slots:
     void deletePathAt(const QModelIndex &index);
 
 private:
+    struct TabGroup;
+    /// One tab: a note in an editor of its own, with its own back/forward
+    /// history, as each of Obsidian's tabs has.
+    struct Leaf {
+        QWidget *area = nullptr; ///< the inline title over the editor
+        MarkdownEditor *editor = nullptr;
+        QLabel *inlineTitle = nullptr;
+        Note note;        ///< line endings and BOM of the open file
+        QString notePath; ///< absolute path, empty when nothing is open
+        /// Absolute paths visited in this tab, oldest first; a fresh
+        /// navigation truncates anything past historyIndex before appending,
+        /// the way a browser's history does once you follow a new link after
+        /// going back. -1 means nothing has been opened yet.
+        QStringList history;
+        int historyIndex = -1;
+        TabGroup *group = nullptr;
+    };
+    /// Tabs in one split: a tab bar over a stack of their editors.
+    struct TabGroup {
+        QWidget *widget = nullptr;
+        QWidget *strip = nullptr;
+        QTabBar *tabs = nullptr;
+        QStackedWidget *stack = nullptr;
+        QList<Leaf *> leaves; ///< in tab order
+    };
+
     QWidget *buildHeaderBar();
     QWidget *buildSidebar();
     QWidget *buildMainArea();
     QWidget *buildRightSidebar();
     void buildActions();
     void applyTheme();
-    /// Keeps the inline title on the same column as the note text.
-    void updateInlineTitleMargins();
+    TabGroup *newGroup();
+    /// A tab in `group`, empty, configured like every other editor.
+    Leaf *newLeaf(TabGroup *group);
+    /// Everything the settings, theme, hotkeys and spelling give an editor,
+    /// for one just made; applySettings() and friends do it for all.
+    void configureEditor(MarkdownEditor *editor);
+    /// Makes `leaf` the tab the window's commands and side panes follow.
+    void activateLeaf(Leaf *leaf);
+    /// Matches `group`'s tab bar to its leaves: a tab each, except a window's
+    /// only tab while nothing is open in it, which shows no tab at all.
+    void syncTabs(TabGroup *group);
+    QString tabTitle(const Leaf *leaf) const;
+    /// Obsidian's close-tab: offers to save, then drops the tab and, with its
+    /// last tab, the split. The window's last tab is emptied instead.
+    void closeLeaf(Leaf *leaf);
+    /// "Split right" (Qt::Horizontal) and "Split down": a new tab group beside
+    /// the focused one, showing the same note.
+    void splitActive(Qt::Orientation orientation);
+    void newTab();
+    /// Ctrl+Tab and Ctrl+Shift+Tab, within the focused split.
+    void cycleTab(int step);
+    /// Offers to save every modified tab. False means the user cancelled.
+    bool maybeSaveAll();
+    /// Back to one empty tab, for a vault switch or close.
+    void resetWorkspace();
+    /// Removes a tab without asking, activating its neighbour.
+    void dropLeaf(Leaf *leaf);
+    void followLink(const QString &target);
+    void applyEditorSettings(MarkdownEditor *editor);
+    QString tabBarStyle() const;
+    /// Keeps `leaf`'s inline title on the same column as its note text.
+    void updateInlineTitleMargins(Leaf *leaf);
     /// Rebuilds `m_theme` from Settings (mode, scheme, accent, font size),
     /// applies it, then every editor/appearance setting that has a live
     /// hook. Called at startup, on any settings-page edit, and whenever the
@@ -249,17 +307,8 @@ private:
     Vault m_vault;
     Index m_index;
     Indexer *m_indexer = nullptr;
-    Note m_note;        ///< line endings and BOM of the open file
-    QString m_notePath; ///< absolute path, empty when nothing is open
     /// What openWhenShown() is waiting to open, cleared by the first paint.
     std::optional<LaunchTarget> m_pendingOpen;
-
-    /// Absolute paths of notes visited this session, oldest first; a fresh
-    /// navigation truncates anything past m_historyIndex before appending, the
-    /// way a browser's history does once you follow a new link after going
-    /// back. -1 means nothing has been opened yet.
-    QStringList m_history;
-    int m_historyIndex = -1;
 
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
@@ -288,10 +337,15 @@ private:
 
     QFileSystemModel *m_files = nullptr;
     QTreeView *m_tree = nullptr;
-    MarkdownEditor *m_editor = nullptr;
-    QTabBar *m_tabs = nullptr;
-    QWidget *m_tabStrip = nullptr;
-    QLabel *m_inlineTitle = nullptr;
+    /// Every tab and split; m_active is the focused tab, never null once the
+    /// main area is built.
+    std::vector<std::unique_ptr<Leaf>> m_leaves;
+    std::vector<std::unique_ptr<TabGroup>> m_groups;
+    Leaf *m_active = nullptr;
+    bool m_syncingTabs = false; ///< syncTabs() is moving tabs: not a user's switch
+    QSplitter *m_workspace = nullptr; ///< the root split
+    Hotkeys::Bindings m_editorBindings; ///< for editors made after applyHotkeys()
+    MarkdownEditor::Spelling m_editorSpelling;
     QLabel *m_wordCount = nullptr;
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;

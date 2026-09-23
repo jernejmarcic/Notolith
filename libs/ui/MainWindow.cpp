@@ -258,7 +258,7 @@ void MainWindow::rebuildVaultMenu()
     if (m_openMode == OpenMode::SingleFile) {
         QAction *openFolder = m_vaultMenu->addAction(tr("Open folder as vault"));
         connect(openFolder, &QAction::triggered, this,
-               [this] { openVault(QFileInfo(m_notePath).absolutePath()); });
+               [this] { openVault(QFileInfo(m_active->notePath).absolutePath()); });
         return;
     }
 
@@ -364,111 +364,44 @@ QWidget *MainWindow::buildMainArea()
     auto *notesPage = new QWidget(this);
     notesPage->setObjectName(QStringLiteral("mainArea"));
 
-    m_tabStrip = new QWidget(notesPage);
-    m_tabStrip->setObjectName(QStringLiteral("tabStrip"));
-    auto *stripLayout = new QHBoxLayout(m_tabStrip);
-    stripLayout->setContentsMargins(6, 4, 6, 0);
-    stripLayout->setSpacing(0);
-
-    m_tabs = new QTabBar(m_tabStrip);
-    m_tabs->setObjectName(QStringLiteral("noteTabs"));
-    m_tabs->setDrawBase(false);
-    m_tabs->setExpanding(false);
-    m_tabs->setMovable(true);
-    m_tabs->setElideMode(Qt::ElideRight);
-    stripLayout->addWidget(m_tabs);
-    stripLayout->addStretch(1);
-
-    auto *editorArea = new QWidget(notesPage);
-    editorArea->setObjectName(QStringLiteral("editorArea"));
-    auto *editorLayout = new QVBoxLayout(editorArea);
-    editorLayout->setContentsMargins(0, 0, 0, 0);
-    editorLayout->setSpacing(0);
-
-    // ponytail: the inline title is a fixed label above the editor, so it does
-    // not scroll away like Obsidian's. It becomes the first block once the
-    // Phase 2 engine owns the layout.
-    m_inlineTitle = new QLabel(editorArea);
-    m_inlineTitle->setObjectName(QStringLiteral("inlineTitle"));
-    m_inlineTitle->setVisible(false);
-
-    m_editor = new MarkdownEditor(editorArea);
-    // Its Resize events reach eventFilter() (which keeps the inline title on
-    // its column) through the application-wide filter installed in the
-    // constructor; a second filter installed here on the widget itself would
-    // just run that same check twice per resize.
-    m_editor->setEnabled(false);
-    connect(m_editor, &MarkdownEditor::modificationChanged,
-            this, &MainWindow::onModificationChanged);
-    // The count comes with each parse. Taking it from textChanged recounted
-    // the whole note on the UI thread for every keystroke.
-    connect(m_editor, &MarkdownEditor::wordCountChanged, this, &MainWindow::updateWordCount);
     const auto resolver = [this](const QString &target) -> QString {
         if (!m_vault.isValid())
             return {};
         // An attachment may not be in the index (it only holds notes), so fall
         // back on the path the note actually wrote.
-        const QString resolved = m_index.resolve(target, m_notePath);
+        const QString resolved = m_index.resolve(target, m_active->notePath);
         if (!resolved.isEmpty())
             return m_vault.absolute(resolved);
         const QString beside =
-            QFileInfo(m_notePath).absolutePath() + QLatin1Char('/') + target;
+            QFileInfo(m_active->notePath).absolutePath() + QLatin1Char('/') + target;
         if (QFileInfo::exists(beside))
             return beside;
         const QString fromRoot = m_vault.absolute(target);
         return QFileInfo::exists(fromRoot) ? fromRoot : QString();
     };
     m_resolveLink = resolver;
-    m_editor->setLinkResolver(resolver);
-    const auto follow = [this](const QString &target) {
-        const QString resolved = m_index.resolve(target, m_notePath);
-        if (!resolved.isEmpty())
-            openRelative(resolved);
-        else
-            statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
-    };
-    connect(m_editor, &MarkdownEditor::linkActivated, this, follow);
 
     m_preview = new PagePreview(this);
     m_preview->setLinkResolver(resolver);
-    connect(m_preview, &PagePreview::linkActivated, this, follow);
+    connect(m_preview, &PagePreview::linkActivated, this, &MainWindow::followLink);
     m_previewDelay.setSingleShot(true);
     m_previewDelay.setInterval(300);
     connect(&m_previewDelay, &QTimer::timeout, this, &MainWindow::showPagePreview);
-    connect(m_editor, &MarkdownEditor::linkHovered, this,
-            [this](const QString &target, const QPoint &globalPos) {
-                if (!m_settings.boolean(QStringLiteral("pagePreview.enabled")))
-                    return;
-                m_previewTarget = target;
-                m_previewPos = globalPos;
-                m_previewDelay.start();
-            });
-    connect(m_editor, &MarkdownEditor::linkHoverEnded, this, [this] {
-        m_previewDelay.stop();
-        m_preview->leaveSoon();
-    });
-    // The outline follows the parse and the caret; m_outline is built with the
-    // right sidebar, after this, so these look it up when they fire.
-    connect(m_editor, &MarkdownEditor::headingsChanged, this, [this] {
-        if (m_outline)
-            m_outline->setHeadings(m_editor->headings());
-    });
-    connect(m_editor, &MarkdownEditor::cursorMoved, this, [this](qsizetype offset) {
-        if (m_outline)
-            m_outline->setCursorOffset(offset);
-    });
     m_templatePicker = new TemplatePicker(this);
     connect(m_templatePicker, &TemplatePicker::templateChosen, this,
-            [this](const QString &text) { m_editor->insertAtCaret(text); });
+            [this](const QString &text) { m_active->editor->insertAtCaret(text); });
 
-    editorLayout->addWidget(m_inlineTitle);
-    editorLayout->addWidget(m_editor, 1);
+    m_workspace = new QSplitter(Qt::Horizontal, notesPage);
+    m_workspace->setObjectName(QStringLiteral("workspace"));
+    m_workspace->setChildrenCollapsible(false);
+    TabGroup *group = newGroup();
+    m_workspace->addWidget(group->widget);
+    activateLeaf(newLeaf(group));
 
     auto *notesLayout = new QVBoxLayout(notesPage);
     notesLayout->setContentsMargins(0, 0, 0, 0);
     notesLayout->setSpacing(0);
-    notesLayout->addWidget(m_tabStrip);
-    notesLayout->addWidget(editorArea, 1);
+    notesLayout->addWidget(m_workspace, 1);
 
     m_settingsPage = new SettingsPage(this);
     connect(m_settingsPage, &SettingsPage::settingChanged, this, &MainWindow::applySettings);
@@ -481,6 +414,393 @@ QWidget *MainWindow::buildMainArea()
     m_mainStack->addWidget(notesPage);
     m_mainStack->addWidget(m_settingsPage);
     return m_mainStack;
+}
+
+QString MainWindow::tabBarStyle() const
+{
+    return QStringLiteral("QTabBar::tab { background: transparent; color: %1; "
+                          "padding: 8px 16px 10px 16px; margin: 0; min-width: 90px; max-width: 260px; "
+                          "border: none; border-bottom: 2px solid transparent; }"
+                          "QTabBar::tab:hover { color: %2; }"
+                          "QTabBar::tab:selected { color: %2; border-bottom: 2px solid %3; }")
+        .arg(m_theme.value(QStringLiteral("--text-muted")),
+             m_theme.value(QStringLiteral("--text-normal")),
+             m_theme.value(QStringLiteral("--interactive-accent")));
+}
+
+MainWindow::TabGroup *MainWindow::newGroup()
+{
+    auto owned = std::make_unique<TabGroup>();
+    TabGroup *group = owned.get();
+    group->widget = new QWidget;
+    group->widget->setObjectName(QStringLiteral("tabGroup"));
+
+    group->strip = new QWidget(group->widget);
+    group->strip->setObjectName(QStringLiteral("tabStrip"));
+    auto *stripLayout = new QHBoxLayout(group->strip);
+    stripLayout->setContentsMargins(6, 4, 6, 0);
+    stripLayout->setSpacing(0);
+    group->tabs = new QTabBar(group->strip);
+    group->tabs->setObjectName(QStringLiteral("noteTabs"));
+    group->tabs->setDrawBase(false);
+    group->tabs->setExpanding(false);
+    group->tabs->setMovable(true);
+    group->tabs->setElideMode(Qt::ElideRight);
+    group->tabs->setStyleSheet(tabBarStyle());
+    stripLayout->addWidget(group->tabs);
+    stripLayout->addStretch(1);
+
+    group->stack = new QStackedWidget(group->widget);
+    auto *layout = new QVBoxLayout(group->widget);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    layout->addWidget(group->strip);
+    layout->addWidget(group->stack, 1);
+
+    connect(group->tabs, &QTabBar::currentChanged, this, [this, group](int index) {
+        if (m_syncingTabs || index < 0 || index >= group->leaves.size())
+            return;
+        activateLeaf(group->leaves.at(index));
+        m_active->editor->setFocus();
+    });
+    connect(group->tabs, &QTabBar::tabMoved, this,
+            [group](int from, int to) { group->leaves.move(from, to); });
+    group->tabs->installEventFilter(this); // a middle click closes a tab
+
+    m_groups.push_back(std::move(owned));
+    return group;
+}
+
+MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
+{
+    auto owned = std::make_unique<Leaf>();
+    Leaf *leaf = owned.get();
+    leaf->group = group;
+    leaf->area = new QWidget(group->stack);
+    leaf->area->setObjectName(QStringLiteral("editorArea"));
+    auto *layout = new QVBoxLayout(leaf->area);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    // ponytail: the inline title is a fixed label above the editor, so it does
+    // not scroll away like Obsidian's. It becomes the first block once the
+    // Phase 2 engine owns the layout.
+    leaf->inlineTitle = new QLabel(leaf->area);
+    leaf->inlineTitle->setObjectName(QStringLiteral("inlineTitle"));
+    leaf->inlineTitle->setVisible(false);
+
+    // Its Resize and FocusIn events reach eventFilter() through the
+    // application-wide filter installed in the constructor.
+    MarkdownEditor *editor = new MarkdownEditor(leaf->area);
+    leaf->editor = editor;
+    editor->setEnabled(false);
+    connect(editor, &MarkdownEditor::modificationChanged, this, [this, leaf] {
+        if (leaf == m_active)
+            updateTitle();
+        else
+            syncTabs(leaf->group);
+    });
+    // The count comes with each parse. Taking it from textChanged recounted
+    // the whole note on the UI thread for every keystroke.
+    connect(editor, &MarkdownEditor::wordCountChanged, this, [this, leaf] {
+        if (leaf == m_active)
+            updateWordCount();
+    });
+    editor->setLinkResolver(m_resolveLink);
+    connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
+    connect(editor, &MarkdownEditor::linkHovered, this,
+            [this](const QString &target, const QPoint &globalPos) {
+                if (!m_settings.boolean(QStringLiteral("pagePreview.enabled")))
+                    return;
+                m_previewTarget = target;
+                m_previewPos = globalPos;
+                m_previewDelay.start();
+            });
+    connect(editor, &MarkdownEditor::linkHoverEnded, this, [this] {
+        m_previewDelay.stop();
+        m_preview->leaveSoon();
+    });
+    // The outline follows the parse and the caret; m_outline is built with the
+    // right sidebar, after the first tab, so these look it up when they fire.
+    connect(editor, &MarkdownEditor::headingsChanged, this, [this, leaf] {
+        if (m_outline && leaf == m_active)
+            m_outline->setHeadings(leaf->editor->headings());
+    });
+    connect(editor, &MarkdownEditor::cursorMoved, this, [this, leaf](qsizetype offset) {
+        if (m_outline && leaf == m_active)
+            m_outline->setCursorOffset(offset);
+    });
+
+    layout->addWidget(leaf->inlineTitle);
+    layout->addWidget(editor, 1);
+    group->stack->addWidget(leaf->area);
+    group->leaves.append(leaf);
+    m_leaves.push_back(std::move(owned));
+    configureEditor(editor);
+    syncTabs(group);
+    return leaf;
+}
+
+void MainWindow::followLink(const QString &target)
+{
+    const QString resolved = m_index.resolve(target, m_active->notePath);
+    if (!resolved.isEmpty())
+        openRelative(resolved);
+    else
+        statusBar()->showMessage(tr("%1 is not in this vault yet").arg(target), 3000);
+}
+
+void MainWindow::applyEditorSettings(MarkdownEditor *editor)
+{
+    const QString mode = m_settings.text(QStringLiteral("editor.defaultMode"));
+    editor->setMode(mode == QLatin1String("source")    ? MarkdownEditor::Mode::Source
+                    : mode == QLatin1String("reading") ? MarkdownEditor::Mode::Reading
+                                                        : MarkdownEditor::Mode::LivePreview);
+    editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
+    editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
+    editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
+    editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
+    editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
+    editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
+    editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
+    editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
+    editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+}
+
+void MainWindow::configureEditor(MarkdownEditor *editor)
+{
+    editor->setTheme(m_theme);
+    applyEditorSettings(editor);
+    editor->setKeyBindings(m_editorBindings);
+    if (m_spellHanded)
+        editor->setSpelling(m_editorSpelling);
+    if (m_index.isOpen())
+        editor->setLinkTargets(m_index.linkTargets());
+}
+
+void MainWindow::activateLeaf(Leaf *leaf)
+{
+    if (!leaf || leaf == m_active)
+        return;
+    m_active = leaf;
+    TabGroup *group = leaf->group;
+    group->stack->setCurrentWidget(leaf->area);
+    const int index = group->leaves.indexOf(leaf);
+    if (index < group->tabs->count()) {
+        const QSignalBlocker blocker(group->tabs);
+        group->tabs->setCurrentIndex(index);
+    }
+    // The side panes are built after the first tab, which is activated before
+    // there are any.
+    if (!m_backlinks)
+        return;
+    const QString &path = leaf->notePath;
+    m_backlinks->setNote(path);
+    m_outgoingLinks->setNote(path);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    m_localGraph->setCurrentNote(m_vault.isValid() && !path.isEmpty() ? m_vault.relative(path)
+                                                                      : QString());
+#endif
+    if (path.isEmpty()) {
+        m_outline->clear();
+    } else {
+        m_outline->setHeadings(leaf->editor->headings());
+        m_outline->setCursorOffset(leaf->editor->cursorOffset());
+        m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
+        revealInTree(path);
+    }
+    updateTitle();
+    updateWordCount();
+    updateHistoryButtons();
+}
+
+QString MainWindow::tabTitle(const Leaf *leaf) const
+{
+    if (leaf->notePath.isEmpty())
+        return tr("New tab");
+    const QString name = QFileInfo(leaf->notePath).completeBaseName();
+    return leaf->editor->isModified() ? name + QLatin1String(" *") : name;
+}
+
+void MainWindow::syncTabs(TabGroup *group)
+{
+    const bool soleEmpty = m_leaves.size() == 1 && group->leaves.size() == 1
+                        && group->leaves.constFirst()->notePath.isEmpty();
+    const int wanted = soleEmpty ? 0 : int(group->leaves.size());
+    m_syncingTabs = true;
+    while (group->tabs->count() > wanted) {
+        // setTabButton() reparents the close button to the tab bar but
+        // removeTab() does not delete it, so it would otherwise linger as an
+        // invisible orphan every time a tab is closed. Later, not now: this
+        // may run inside that very button's clicked().
+        if (QWidget *button = group->tabs->tabButton(group->tabs->count() - 1, QTabBar::RightSide))
+            button->deleteLater();
+        group->tabs->removeTab(group->tabs->count() - 1);
+    }
+    while (group->tabs->count() < wanted) {
+        const int index = group->tabs->addTab(QString());
+        // The style's own close glyph pulls from the desktop icon theme and
+        // can come out looking nothing like the rest of the app (a red
+        // "document-close" square on this box); a Lucide icon through the
+        // same tinting path as every other button keeps it consistent.
+        QToolButton *closeButton =
+            iconButton(QStringLiteral("tabCloseButton"), QStringLiteral("x"), tr("Close"), 12);
+        // applyTheme() only re-icons buttons that already exist when it
+        // runs; this one is born between theme applications, so it needs
+        // its first icon set directly or it sits there with none at all.
+        closeButton->setIcon(
+            Icons::icon(QStringLiteral("x"), m_theme.color(QStringLiteral("--text-muted")), 12));
+        connect(closeButton, &QToolButton::clicked, this, [this, group, closeButton] {
+            // Looked up at click time: tabs move.
+            for (int i = 0; i < group->tabs->count(); ++i) {
+                if (group->tabs->tabButton(i, QTabBar::RightSide) == closeButton) {
+                    closeLeaf(group->leaves.at(i));
+                    return;
+                }
+            }
+        });
+        group->tabs->setTabButton(index, QTabBar::RightSide, closeButton);
+    }
+    for (int i = 0; i < wanted; ++i)
+        group->tabs->setTabText(i, tabTitle(group->leaves.at(i)));
+    const int active = group->leaves.indexOf(m_active);
+    if (active >= 0 && active < wanted)
+        group->tabs->setCurrentIndex(active);
+    m_syncingTabs = false;
+    group->strip->setVisible(m_openMode != OpenMode::SingleFile);
+}
+
+void MainWindow::dropLeaf(Leaf *leaf)
+{
+    TabGroup *group = leaf->group;
+    const int index = group->leaves.indexOf(leaf);
+    group->leaves.removeAt(index);
+    // Nothing of this tab may call back in once it is gone: its lambdas hold
+    // the Leaf pointer.
+    leaf->editor->disconnect(this);
+    group->stack->removeWidget(leaf->area);
+    leaf->area->hide();
+    leaf->area->deleteLater();
+
+    Leaf *next = nullptr;
+    if (!group->leaves.isEmpty()) {
+        next = group->leaves.at(qMin(index, int(group->leaves.size()) - 1));
+    } else {
+        // The split goes with its last tab, and a split left holding one
+        // child hands it to its own parent.
+        auto *parent = qobject_cast<QSplitter *>(group->widget->parentWidget());
+        group->widget->hide();
+        group->widget->setParent(nullptr);
+        group->widget->deleteLater();
+        while (parent && parent != m_workspace && parent->count() == 1) {
+            auto *grandparent = qobject_cast<QSplitter *>(parent->parentWidget());
+            QWidget *only = parent->widget(0);
+            grandparent->replaceWidget(grandparent->indexOf(parent), only);
+            only->show();
+            parent->deleteLater();
+            parent = grandparent;
+        }
+        std::erase_if(m_groups, [group](const auto &owned) { return owned.get() == group; });
+        group = nullptr;
+    }
+    std::erase_if(m_leaves, [leaf](const auto &owned) { return owned.get() == leaf; });
+    if (m_active == leaf)
+        m_active = nullptr;
+    if (!next)
+        next = m_leaves.front().get();
+    activateLeaf(next);
+    if (group)
+        syncTabs(group);
+    syncTabs(next->group);
+}
+
+void MainWindow::closeLeaf(Leaf *leaf)
+{
+    activateLeaf(leaf);
+    if (!maybeSave())
+        return;
+    if (m_leaves.size() == 1) {
+        clearOpenNote();
+        updateTitle();
+        updateWordCount();
+        return;
+    }
+    rememberCurrentPosition();
+    dropLeaf(leaf);
+    m_active->editor->setFocus();
+}
+
+void MainWindow::newTab()
+{
+    activateLeaf(newLeaf(m_active->group));
+    syncTabs(m_active->group);
+    m_active->editor->setFocus();
+}
+
+void MainWindow::cycleTab(int step)
+{
+    const QList<Leaf *> &leaves = m_active->group->leaves;
+    if (leaves.size() < 2)
+        return;
+    const int index = (leaves.indexOf(m_active) + step + int(leaves.size())) % int(leaves.size());
+    activateLeaf(leaves.at(index));
+    m_active->editor->setFocus();
+}
+
+void MainWindow::splitActive(Qt::Orientation orientation)
+{
+    TabGroup *from = m_active->group;
+    const QString path = m_active->notePath;
+    TabGroup *group = newGroup();
+    auto *parent = qobject_cast<QSplitter *>(from->widget->parentWidget());
+    const int at = parent->indexOf(from->widget);
+    if (parent->count() == 1 || parent->orientation() == orientation) {
+        parent->setOrientation(orientation);
+        parent->insertWidget(at + 1, group->widget);
+    } else {
+        auto *split = new QSplitter(orientation);
+        split->setChildrenCollapsible(false);
+        parent->replaceWidget(at, split);
+        split->addWidget(from->widget);
+        split->addWidget(group->widget);
+        from->widget->show();
+    }
+    // Share the space evenly between the old split and the new one.
+    auto *holder = qobject_cast<QSplitter *>(group->widget->parentWidget());
+    const int index = holder->indexOf(group->widget);
+    QList<int> sizes = holder->sizes();
+    const int half = (sizes.value(index - 1) + sizes.value(index)) / 2;
+    sizes[index - 1] = half;
+    sizes[index] = half;
+    holder->setSizes(sizes);
+
+    activateLeaf(newLeaf(group));
+    if (!path.isEmpty())
+        openNote(path);
+    m_active->editor->setFocus();
+}
+
+bool MainWindow::maybeSaveAll()
+{
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath.isEmpty() || !leaf->editor->isModified())
+            continue;
+        activateLeaf(leaf.get());
+        if (!maybeSave())
+            return false;
+    }
+    return true;
+}
+
+void MainWindow::resetWorkspace()
+{
+    while (m_leaves.size() > 1) {
+        Leaf *last = m_leaves.back().get();
+        activateLeaf(last);
+        rememberCurrentPosition();
+        dropLeaf(last);
+    }
+    clearOpenNote();
 }
 
 QToolButton *MainWindow::rightSidebarTabButton(QWidget *parent, const QString &objectName,
@@ -541,8 +861,8 @@ QWidget *MainWindow::buildRightSidebar()
 
     m_outline = new OutlinePane(m_rightSidebar);
     connect(m_outline, &OutlinePane::jumpRequested, this, [this](qsizetype offset) {
-        m_editor->setCursorOffset(offset);
-        m_editor->setFocus();
+        m_active->editor->setCursorOffset(offset);
+        m_active->editor->setFocus();
     });
 
     m_bookmarks = new BookmarksPane(m_rightSidebar);
@@ -560,8 +880,8 @@ QWidget *MainWindow::buildRightSidebar()
     connect(m_search, &SearchPane::matchActivated, this,
             [this](const QString &relativePath, qsizetype offset) {
                 openRelative(relativePath);
-                m_editor->setCursorOffset(offset);
-                m_editor->setFocus();
+                m_active->editor->setCursorOffset(offset);
+                m_active->editor->setFocus();
             });
 
     m_rightPanes = new QStackedWidget(m_rightSidebar);
@@ -656,6 +976,18 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+Alt+S"), &MainWindow::toggleSidebar);
     add(QStringLiteral("app:toggle-right-sidebar"), tr("Toggle right sidebar"),
         QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
+    add(QStringLiteral("workspace:new-tab"), tr("New tab"), QStringLiteral("Ctrl+T"),
+        &MainWindow::newTab);
+    add(QStringLiteral("workspace:close"), tr("Close current tab"), QStringLiteral("Ctrl+W"),
+        [this] { closeLeaf(m_active); });
+    add(QStringLiteral("workspace:split-vertical"), tr("Split right"), QString(),
+        [this] { splitActive(Qt::Horizontal); });
+    add(QStringLiteral("workspace:split-horizontal"), tr("Split down"), QString(),
+        [this] { splitActive(Qt::Vertical); });
+    add(QStringLiteral("workspace:next-tab"), tr("Go to next tab"), QStringLiteral("Ctrl+Tab"),
+        [this] { cycleTab(1); });
+    add(QStringLiteral("workspace:previous-tab"), tr("Go to previous tab"),
+        QStringLiteral("Ctrl+Shift+Tab"), [this] { cycleTab(-1); });
     add(QStringLiteral("switcher:open"), tr("Quick switcher: Open quick switcher"),
         QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
@@ -691,9 +1023,9 @@ void MainWindow::buildActions()
         &MainWindow::insertTemplate);
     add(QStringLiteral("bookmarks:bookmark-current-view"), tr("Bookmarks: Bookmark this note"),
         QString(), [this] {
-            if (m_vault.isValid() && !m_notePath.isEmpty())
-                m_bookmarks->bookmarkNote(m_vault.relative(m_notePath),
-                                          QFileInfo(m_notePath).completeBaseName());
+            if (m_vault.isValid() && !m_active->notePath.isEmpty())
+                m_bookmarks->bookmarkNote(m_vault.relative(m_active->notePath),
+                                          QFileInfo(m_active->notePath).completeBaseName());
         });
 
     QList<SettingsPage::HotkeyCommand> rebindable;
@@ -715,7 +1047,9 @@ void MainWindow::applyHotkeys()
                                  ? *own
                                  : QList<QKeySequence>{QKeySequence(action->data().toString())});
     }
-    m_editor->setKeyBindings(bindings);
+    m_editorBindings = bindings;
+    for (const auto &leaf : m_leaves)
+        leaf->editor->setKeyBindings(bindings);
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -757,18 +1091,37 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     // The editor changes width when the window resizes, when a sidebar is
     // toggled and in single-file mode, and the title has to keep following
     // its column through all three.
-    if (watched == m_editor && event->type() == QEvent::Resize)
-        updateInlineTitleMargins();
+    if (event->type() == QEvent::Resize || event->type() == QEvent::FocusIn) {
+        for (const auto &leaf : m_leaves) {
+            if (watched != leaf->editor)
+                continue;
+            if (event->type() == QEvent::Resize)
+                updateInlineTitleMargins(leaf.get());
+            else
+                activateLeaf(leaf.get()); // clicking into a split focuses its tab
+            break;
+        }
+    }
+    if (event->type() == QEvent::MouseButtonRelease
+        && static_cast<QMouseEvent *>(event)->button() == Qt::MiddleButton) {
+        for (const auto &group : m_groups) {
+            if (watched != group->tabs)
+                continue;
+            const int index = group->tabs->tabAt(static_cast<QMouseEvent *>(event)->position().toPoint());
+            if (index >= 0 && index < group->leaves.size()) {
+                closeLeaf(group->leaves.at(index));
+                return true;
+            }
+        }
+    }
     return QMainWindow::eventFilter(watched, event);
 }
 
-void MainWindow::updateInlineTitleMargins()
+void MainWindow::updateInlineTitleMargins(Leaf *leaf)
 {
-    if (!m_editor || !m_inlineTitle)
-        return;
     const int column = m_theme.value(QStringLiteral("--file-line-width")).toInt();
-    const int side = qMax(24, (m_editor->width() - column) / 2);
-    m_inlineTitle->setContentsMargins(side, 32, side, 0);
+    const int side = qMax(24, (leaf->editor->width() - column) / 2);
+    leaf->inlineTitle->setContentsMargins(side, 32, side, 0);
 }
 
 void MainWindow::toggleSidebar()
@@ -817,7 +1170,7 @@ void MainWindow::openGraph()
         connect(m_graph, &GraphView::noteActivated, this, &MainWindow::openRelative);
         m_mainStack->addWidget(m_graph);
     }
-    m_graph->setCurrentNote(m_vault.isValid() && !m_notePath.isEmpty() ? m_vault.relative(m_notePath)
+    m_graph->setCurrentNote(m_vault.isValid() && !m_active->notePath.isEmpty() ? m_vault.relative(m_active->notePath)
                                                                       : QString());
     m_mainStack->setCurrentWidget(m_graph);
     m_graph->setFocus();
@@ -834,8 +1187,8 @@ void MainWindow::openQuickSwitcher()
 
 void MainWindow::toggleEditingMode()
 {
-    const bool source = m_editor->mode() == MarkdownEditor::Mode::Source;
-    m_editor->setMode(source ? MarkdownEditor::Mode::LivePreview
+    const bool source = m_active->editor->mode() == MarkdownEditor::Mode::Source;
+    m_active->editor->setMode(source ? MarkdownEditor::Mode::LivePreview
                              : MarkdownEditor::Mode::Source);
     statusBar()->showMessage(source ? tr("Live preview") : tr("Source mode"), 2000);
 }
@@ -849,8 +1202,8 @@ void MainWindow::closeSettings()
 {
     m_settings.save();
     m_mainStack->setCurrentIndex(0);
-    if (m_editor->isEnabled())
-        m_editor->setFocus();
+    if (m_active->editor->isEnabled())
+        m_active->editor->setFocus();
 }
 
 void MainWindow::leaveSettings()
@@ -870,14 +1223,17 @@ void MainWindow::openRelative(const QString &relativePath)
 
 void MainWindow::onIndexChanged()
 {
-    m_editor->setLinkTargets(m_index.linkTargets());
-    // Before this, a note opened while the vault was first indexed showed
-    // every link as missing until it was next edited.
-    m_editor->refreshLinkStatus();
+    const QStringList targets = m_index.linkTargets();
+    for (const auto &leaf : m_leaves) {
+        leaf->editor->setLinkTargets(targets);
+        // Before this, a note opened while the vault was first indexed showed
+        // every link as missing until it was next edited.
+        leaf->editor->refreshLinkStatus();
+    }
     m_backlinks->refresh();
     m_tags->refresh();
     m_outgoingLinks->refresh();
-    if (m_index.isOpen() && m_notePath.isEmpty())
+    if (m_index.isOpen() && m_active->notePath.isEmpty())
         m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }
 
@@ -916,24 +1272,15 @@ void MainWindow::applySettings()
     m_theme = themeFromSettings();
     applyTheme();
 
-    const QString mode = m_settings.text(QStringLiteral("editor.defaultMode"));
-    m_editor->setMode(mode == QLatin1String("source")    ? MarkdownEditor::Mode::Source
-                      : mode == QLatin1String("reading") ? MarkdownEditor::Mode::Reading
-                                                          : MarkdownEditor::Mode::LivePreview);
-    m_editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
-    m_editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
-    m_editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
-    m_editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
-    m_editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
-    m_editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
-    m_editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
-    m_editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
-    m_editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+    for (const auto &leaf : m_leaves)
+        applyEditorSettings(leaf->editor);
     updateSpelling();
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
-    m_inlineTitle->setVisible(!m_notePath.isEmpty()
-                              && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+    for (const auto &leaf : m_leaves) {
+        leaf->inlineTitle->setVisible(!leaf->notePath.isEmpty()
+                                      && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+    }
 }
 
 DailyNotes MainWindow::dailyNotes() const
@@ -968,11 +1315,11 @@ void MainWindow::openDailyNote(int step)
         // ponytail: finds its date by trying the year either side, since an
         // arbitrary format need not parse back into a date.
         for (int days = 0; days <= 366; ++days) {
-            if (daily.pathFor(date.addDays(-days)) == m_notePath) {
+            if (daily.pathFor(date.addDays(-days)) == m_active->notePath) {
                 date = date.addDays(-days);
                 break;
             }
-            if (daily.pathFor(date.addDays(days)) == m_notePath) {
+            if (daily.pathFor(date.addDays(days)) == m_active->notePath) {
                 date = date.addDays(days);
                 break;
             }
@@ -989,7 +1336,7 @@ void MainWindow::openDailyNote(int step)
 
 void MainWindow::insertTemplate()
 {
-    if (!m_vault.isValid() || m_notePath.isEmpty())
+    if (!m_vault.isValid() || m_active->notePath.isEmpty())
         return;
     Templates::Config config;
     config.folder = m_settings.text(QStringLiteral("templates.folder"));
@@ -998,7 +1345,7 @@ void MainWindow::insertTemplate()
     if (QFileInfo::exists(QDir(m_vault.root()).filePath(QStringLiteral(".obsidian/templates.json"))))
         config = Templates::readConfig(m_vault.root());
     m_templatePicker->setTemplates(Templates(m_vault.root(), config));
-    m_templatePicker->popUp(QFileInfo(m_notePath).completeBaseName());
+    m_templatePicker->popUp(QFileInfo(m_active->notePath).completeBaseName());
 }
 
 void MainWindow::jumpToHeading(const QString &subpath)
@@ -1007,9 +1354,9 @@ void MainWindow::jumpToHeading(const QString &subpath)
     if (wanted.isEmpty())
         return;
     const auto jump = [this, wanted] {
-        for (const Heading &heading : m_editor->headings()) {
+        for (const Heading &heading : m_active->editor->headings()) {
             if (heading.text.compare(wanted, Qt::CaseInsensitive) == 0) {
-                m_editor->setCursorOffset(heading.range.start);
+                m_active->editor->setCursorOffset(heading.range.start);
                 return true;
             }
         }
@@ -1019,7 +1366,7 @@ void MainWindow::jumpToHeading(const QString &subpath)
         return;
     // A big note's headings come with its parse, off the UI thread.
     auto connection = std::make_shared<QMetaObject::Connection>();
-    *connection = connect(m_editor, &MarkdownEditor::headingsChanged, this, [this, jump, connection] {
+    *connection = connect(m_active->editor, &MarkdownEditor::headingsChanged, this, [this, jump, connection] {
         jump();
         disconnect(*connection);
     });
@@ -1027,19 +1374,19 @@ void MainWindow::jumpToHeading(const QString &subpath)
 
 void MainWindow::exportPdf()
 {
-    if (m_notePath.isEmpty())
+    if (m_active->notePath.isEmpty())
         return;
     ExportPdfDialog options(this);
     if (options.exec() != QDialog::Accepted)
         return;
-    const QFileInfo note(m_notePath);
+    const QFileInfo note(m_active->notePath);
     const QString target = QFileDialog::getSaveFileName(
         this, tr("Export to PDF"), note.dir().filePath(note.completeBaseName() + QStringLiteral(".pdf")),
         tr("PDF (*.pdf)"));
     if (target.isEmpty())
         return;
     QString error;
-    if (MarkdownEditor::exportPdf(target, m_editor->noteText(), note.completeBaseName(),
+    if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
                                   m_resolveLink, options.options(), &error))
         statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(target).fileName()), 3000);
     else
@@ -1058,7 +1405,7 @@ void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
 {
     // The open note first saves what is in the editor, so that is what the
     // snapshot below keeps rather than what was last written.
-    if (notePath == m_notePath && !save())
+    if (notePath == m_active->notePath && !save())
         return;
     Note note;
     QString error;
@@ -1074,9 +1421,9 @@ void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
     }
     if (m_vault.isValid())
         m_indexer->reindex(notePath);
-    if (notePath == m_notePath) {
-        m_note = note;
-        m_editor->setNoteText(text);
+    if (notePath == m_active->notePath) {
+        m_active->note = note;
+        m_active->editor->setNoteText(text);
     }
     statusBar()->showMessage(tr("Restored %1").arg(QFileInfo(notePath).fileName()), 3000);
 }
@@ -1087,9 +1434,9 @@ void MainWindow::showPagePreview()
     const qsizetype hash = m_previewTarget.indexOf(QLatin1Char('#'));
     const QString name = hash >= 0 ? m_previewTarget.left(hash) : m_previewTarget;
     const QString subpath = hash >= 0 ? m_previewTarget.mid(hash + 1).trimmed() : QString();
-    QString path = m_notePath;
+    QString path = m_active->notePath;
     if (!name.isEmpty()) {
-        const QString relative = m_index.resolve(name, m_notePath);
+        const QString relative = m_index.resolve(name, m_active->notePath);
         if (relative.isEmpty())
             return; // nothing there yet to preview
         path = m_vault.absolute(relative);
@@ -1119,8 +1466,10 @@ void MainWindow::updateSpelling()
 {
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
     if (!m_settings.boolean(QStringLiteral("editor.spellcheck"))) {
-        if (m_spellHanded)
-            m_editor->setSpelling({});
+        if (m_spellHanded) {
+            for (const auto &leaf : m_leaves)
+                leaf->editor->setSpelling({});
+        }
         m_spellHanded = false;
         return;
     }
@@ -1130,9 +1479,11 @@ void MainWindow::updateSpelling()
         if (m_spellHanded || m_spell->languages().isEmpty())
             return;
         const std::shared_ptr<SpellChecker> spell = m_spell;
-        m_editor->setSpelling({[spell](const QString &word) { return spell->isCorrect(word); },
-                               [spell](const QString &word) { return spell->suggestions(word); },
-                               [spell](const QString &word) { spell->addWord(word); }});
+        m_editorSpelling = {[spell](const QString &word) { return spell->isCorrect(word); },
+                            [spell](const QString &word) { return spell->suggestions(word); },
+                            [spell](const QString &word) { spell->addWord(word); }};
+        for (const auto &leaf : m_leaves)
+            leaf->editor->setSpelling(m_editorSpelling);
         m_spellHanded = true;
         return;
     }
@@ -1188,7 +1539,8 @@ void MainWindow::applyTheme()
 
     setFont(m_theme.uiFont());
     m_tree->setFont(m_theme.uiFont());
-    m_editor->setTheme(m_theme);
+    for (const auto &leaf : m_leaves)
+        leaf->editor->setTheme(m_theme);
     m_tags->setTheme(m_theme);
     m_backlinks->setTheme(m_theme);
     m_search->setTheme(m_theme);
@@ -1203,7 +1555,8 @@ void MainWindow::applyTheme()
         m_settingsPage->applyTheme(m_theme);
 
     // The inline title shares the editor's centred column.
-    updateInlineTitleMargins();
+    for (const auto &leaf : m_leaves)
+        updateInlineTitleMargins(leaf.get());
 
     // Local overrides for what the app-wide stylesheet (Theme::styleSheet(),
     // still shaped around Obsidian's ribbon-and-flat-tab chrome) does not
@@ -1227,15 +1580,8 @@ void MainWindow::applyTheme()
             .arg(m_theme.value(QStringLiteral("--background-modifier-form-field")),
                 m_theme.value(QStringLiteral("--interactive-accent"))));
 
-    m_tabs->setStyleSheet(
-        QStringLiteral("QTabBar::tab { background: transparent; color: %1; "
-                      "padding: 8px 16px 10px 16px; margin: 0; min-width: 90px; max-width: 260px; "
-                      "border: none; border-bottom: 2px solid transparent; }"
-                      "QTabBar::tab:hover { color: %2; }"
-                      "QTabBar::tab:selected { color: %2; border-bottom: 2px solid %3; }")
-            .arg(m_theme.value(QStringLiteral("--text-muted")),
-                m_theme.value(QStringLiteral("--text-normal")),
-                m_theme.value(QStringLiteral("--interactive-accent"))));
+    for (const auto &group : m_groups)
+        group->tabs->setStyleSheet(tabBarStyle());
 
     if (auto *tabRow = findChild<QWidget *>(QStringLiteral("rightSidebarTabs"))) {
         tabRow->setStyleSheet(
@@ -1343,19 +1689,12 @@ void MainWindow::reloadThemeFiles()
 void MainWindow::clearOpenNote()
 {
     rememberCurrentPosition();
-    m_notePath.clear();
-    m_note = Note{};
-    m_editor->setNoteText(QString());
-    m_editor->setEnabled(false);
-    m_inlineTitle->setVisible(false);
-    while (m_tabs->count() > 0) {
-        // setTabButton() reparents the close button to the tab bar but
-        // removeTab() does not delete it, so it would otherwise linger as an
-        // invisible orphan every time a note is closed.
-        if (QWidget *button = m_tabs->tabButton(0, QTabBar::RightSide))
-            button->deleteLater();
-        m_tabs->removeTab(0);
-    }
+    m_active->notePath.clear();
+    m_active->note = Note{};
+    m_active->editor->setNoteText(QString());
+    m_active->editor->setEnabled(false);
+    m_active->inlineTitle->setVisible(false);
+    syncTabs(m_active->group);
     m_backlinks->setNote(QString());
     m_outgoingLinks->setNote(QString());
 #ifdef NOTEAPPC_HAVE_GRAPH
@@ -1366,7 +1705,7 @@ void MainWindow::clearOpenNote()
 
 void MainWindow::openVault(const QString &path)
 {
-    if (!maybeSave())
+    if (!maybeSaveAll())
         return;
 
     Vault vault(path);
@@ -1377,12 +1716,12 @@ void MainWindow::openVault(const QString &path)
 
     m_openMode = OpenMode::Vault;
     m_vault = vault;
-    clearOpenNote();
+    resetWorkspace();
     resetHistory();
 
     m_sidebar->setVisible(true);
     m_rightSidebar->setVisible(true);
-    m_tabStrip->setVisible(true);
+    syncTabs(m_active->group);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     m_indexer->setVault(m_vault);
@@ -1406,13 +1745,13 @@ void MainWindow::openVault(const QString &path)
 
 void MainWindow::closeVault()
 {
-    if (!maybeSave())
+    if (!maybeSaveAll())
         return;
 
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
     m_index.close();
-    clearOpenNote();
+    resetWorkspace();
     resetHistory();
 
     m_tree->setRootIndex(QModelIndex());
@@ -1429,18 +1768,18 @@ void MainWindow::closeVault()
 
 void MainWindow::openSingleFile(const QString &path)
 {
-    if (!maybeSave())
+    if (!maybeSaveAll())
         return;
 
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
     m_index.close();
-    clearOpenNote();
+    resetWorkspace();
     resetHistory();
 
     m_sidebar->setVisible(false);
     m_rightSidebar->setVisible(false);
-    m_tabStrip->setVisible(false);
+    syncTabs(m_active->group);
 
     reloadSettings(QString());
     applySettings();
@@ -1547,10 +1886,10 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     // directory. Index::backlinks/outgoingLinks resolve against the vault
     // root with QDir::relativeFilePath, which silently misreads a relative
     // input as relative to the vault instead of the cwd, so every pane that
-    // keys off m_notePath comes up empty. Normalise once, here, so nothing
+    // keys off m_active->notePath comes up empty. Normalise once, here, so nothing
     // downstream has to guess.
     const QString path = QFileInfo(rawPath).absoluteFilePath();
-    if (path == m_notePath)
+    if (path == m_active->notePath)
         return true;
     if (!Vault::isNote(path)) {
         if (source != NavSource::History) {
@@ -1580,50 +1919,26 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     if (source != NavSource::History) {
         // A fresh navigation discards whatever "forward" existed past here,
         // the way a browser does when you follow a new link after going back.
-        while (m_history.size() > m_historyIndex + 1)
-            m_history.removeLast();
-        m_history.append(path);
-        m_historyIndex = m_history.size() - 1;
+        while (m_active->history.size() > m_active->historyIndex + 1)
+            m_active->history.removeLast();
+        m_active->history.append(path);
+        m_active->historyIndex = m_active->history.size() - 1;
     }
 
-    m_note = note;
-    m_notePath = path;
-    m_editor->setEnabled(true);
-    m_editor->setNoteText(m_note.text);
+    m_active->note = note;
+    m_active->notePath = path;
+    m_active->editor->setEnabled(true);
+    m_active->editor->setNoteText(m_active->note.text);
     if (const auto position = m_settings.notePosition(path)) {
-        m_editor->setCursorOffset(qMin(position->cursor, qsizetype(m_note.text.size())));
-        m_editor->verticalScrollBar()->setValue(position->scroll);
+        m_active->editor->setCursorOffset(qMin(position->cursor, qsizetype(m_active->note.text.size())));
+        m_active->editor->verticalScrollBar()->setValue(position->scroll);
     }
-    m_editor->setFocus();
+    m_active->editor->setFocus();
 
     const QString title = QFileInfo(path).completeBaseName();
-    m_inlineTitle->setText(title);
-    m_inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
-    // ponytail: one tab until Phase 4 brings the workspace tree.
-    if (m_tabs->count() == 0) {
-        m_tabs->addTab(title);
-        // The style's own close glyph pulls from the desktop icon theme and
-        // can come out looking nothing like the rest of the app (a red
-        // "document-close" square on this box); a Lucide icon through the
-        // same tinting path as every other button keeps it consistent.
-        QToolButton *closeButton = iconButton(QStringLiteral("tabCloseButton"),
-                                              QStringLiteral("x"), tr("Close"), 12);
-        // applyTheme() only re-icons buttons that already exist when it
-        // runs; this one is born between theme applications, so it needs
-        // its first icon set directly or it sits there with none at all.
-        closeButton->setIcon(
-            Icons::icon(QStringLiteral("x"), m_theme.color(QStringLiteral("--text-muted")), 12));
-        connect(closeButton, &QToolButton::clicked, this, [this] {
-            if (!maybeSave())
-                return;
-            clearOpenNote();
-            updateTitle();
-            updateWordCount();
-        });
-        m_tabs->setTabButton(0, QTabBar::RightSide, closeButton);
-    } else {
-        m_tabs->setTabText(0, title);
-    }
+    m_active->inlineTitle->setText(title);
+    m_active->inlineTitle->setVisible(m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+    syncTabs(m_active->group);
 
     m_backlinks->setNote(path);
     m_outgoingLinks->setNote(path);
@@ -1646,10 +1961,10 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
 
 void MainWindow::rememberCurrentPosition()
 {
-    if (m_notePath.isEmpty())
+    if (m_active->notePath.isEmpty())
         return;
-    m_settings.setNotePosition(m_notePath, m_editor->cursorOffset(),
-                               m_editor->verticalScrollBar()->value());
+    m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
+                               m_active->editor->verticalScrollBar()->value());
     m_settings.save();
 }
 
@@ -1672,7 +1987,7 @@ void MainWindow::revealInTree(const QString &path)
                 return;
             QObject::disconnect(*connection);
             // The user may have navigated elsewhere by the time this fires.
-            if (path == m_notePath)
+            if (path == m_active->notePath)
                 revealInTree(path);
         });
         return;
@@ -1689,23 +2004,23 @@ void MainWindow::revealInTree(const QString &path)
 void MainWindow::updateHistoryButtons()
 {
     if (m_backButton)
-        m_backButton->setEnabled(m_historyIndex > 0);
+        m_backButton->setEnabled(m_active->historyIndex > 0);
     if (m_forwardButton)
-        m_forwardButton->setEnabled(m_historyIndex >= 0 && m_historyIndex < m_history.size() - 1);
+        m_forwardButton->setEnabled(m_active->historyIndex >= 0 && m_active->historyIndex < m_active->history.size() - 1);
 }
 
 void MainWindow::resetHistory()
 {
-    m_history.clear();
-    m_historyIndex = -1;
+    m_active->history.clear();
+    m_active->historyIndex = -1;
     updateHistoryButtons();
 }
 
 void MainWindow::goBack()
 {
-    for (int i = m_historyIndex - 1; i >= 0; --i) {
-        if (openNote(m_history.at(i), NavSource::History)) {
-            m_historyIndex = i;
+    for (int i = m_active->historyIndex - 1; i >= 0; --i) {
+        if (openNote(m_active->history.at(i), NavSource::History)) {
+            m_active->historyIndex = i;
             updateHistoryButtons();
             return;
         }
@@ -1714,9 +2029,9 @@ void MainWindow::goBack()
 
 void MainWindow::goForward()
 {
-    for (int i = m_historyIndex + 1; i < m_history.size(); ++i) {
-        if (openNote(m_history.at(i), NavSource::History)) {
-            m_historyIndex = i;
+    for (int i = m_active->historyIndex + 1; i < m_active->history.size(); ++i) {
+        if (openNote(m_active->history.at(i), NavSource::History)) {
+            m_active->historyIndex = i;
             updateHistoryButtons();
             return;
         }
@@ -1725,44 +2040,55 @@ void MainWindow::goForward()
 
 bool MainWindow::save()
 {
-    if (m_notePath.isEmpty())
+    if (m_active->notePath.isEmpty())
         return true;
 
-    Note note = m_note;
-    note.text = m_editor->noteText();
+    Note note = m_active->note;
+    note.text = m_active->editor->noteText();
 
     // File recovery, for notes in a vault only: a stray note leaves nothing
     // behind. The first save of a note keeps what it held before, too.
-    const bool snapshots = m_vault.isValid() && m_vault.contains(m_notePath);
-    if (snapshots && Snapshots::versions(m_notePath).isEmpty() && note.text != m_note.text)
-        Snapshots::record(m_notePath, m_note.text, 0);
+    const bool snapshots = m_vault.isValid() && m_vault.contains(m_active->notePath);
+    if (snapshots && Snapshots::versions(m_active->notePath).isEmpty() && note.text != m_active->note.text)
+        Snapshots::record(m_active->notePath, m_active->note.text, 0);
 
     QString error;
-    if (!Vault::write(m_notePath, note, &error)) {
-        QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(m_notePath, error));
+    if (!Vault::write(m_active->notePath, note, &error)) {
+        QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(m_active->notePath, error));
         return false;
     }
 
     if (snapshots)
-        Snapshots::record(m_notePath, note.text,
+        Snapshots::record(m_active->notePath, note.text,
                           qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000);
-    m_note = note;
-    m_editor->setModified(false);
-    statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(m_notePath)
-                                                                   : QFileInfo(m_notePath).fileName()),
+    m_active->note = note;
+    m_active->editor->setModified(false);
+    // The same note in another split follows the save, unless it holds edits
+    // of its own. ponytail: those two then diverge and the last save wins;
+    // Obsidian edits one document from every view of it.
+    for (const auto &leaf : m_leaves) {
+        if (leaf.get() == m_active || leaf->notePath != m_active->notePath || leaf->editor->isModified())
+            continue;
+        const qsizetype caret = leaf->editor->cursorOffset();
+        leaf->note = note;
+        leaf->editor->setNoteText(note.text);
+        leaf->editor->setCursorOffset(qMin(caret, qsizetype(note.text.size())));
+    }
+    statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(m_active->notePath)
+                                                                   : QFileInfo(m_active->notePath).fileName()),
                              2000);
     if (m_vault.isValid())
-        m_indexer->reindex(m_notePath);
+        m_indexer->reindex(m_active->notePath);
     return true;
 }
 
 bool MainWindow::maybeSave()
 {
-    if (m_notePath.isEmpty() || !m_editor->isModified())
+    if (m_active->notePath.isEmpty() || !m_active->editor->isModified())
         return true;
 
     const QString shown =
-        m_vault.isValid() ? m_vault.relative(m_notePath) : QFileInfo(m_notePath).fileName();
+        m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
     const auto answer = QMessageBox::question(
         this, tr("Unsaved changes"), tr("Save changes to %1?").arg(shown),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
@@ -1781,10 +2107,10 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    const bool modified = !m_notePath.isEmpty() && m_editor->isModified();
+    const bool modified = !m_active->notePath.isEmpty() && m_active->editor->isModified();
     QString title;
-    if (!m_notePath.isEmpty()) {
-        title = (m_vault.isValid() ? m_vault.relative(m_notePath) : QFileInfo(m_notePath).fileName())
+    if (!m_active->notePath.isEmpty()) {
+        title = (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName())
               + QLatin1String(" - ");
     }
     if (m_vault.isValid())
@@ -1792,15 +2118,12 @@ void MainWindow::updateTitle()
     title += QStringLiteral("noteAppC");
     setWindowTitle(modified ? QLatin1Char('*') + title : title);
 
-    if (m_tabs->count() > 0) {
-        const QString tab = QFileInfo(m_notePath).completeBaseName();
-        m_tabs->setTabText(0, modified ? tab + QLatin1String(" *") : tab);
-    }
+    syncTabs(m_active->group);
     m_vaultLabel->setText(m_vault.isValid() ? m_vault.name() : tr("No vault open"));
 
     if (m_vaultMenuButton) {
-        if (m_openMode == OpenMode::SingleFile && !m_notePath.isEmpty())
-            m_vaultMenuButton->setText(QFileInfo(m_notePath).fileName());
+        if (m_openMode == OpenMode::SingleFile && !m_active->notePath.isEmpty())
+            m_vaultMenuButton->setText(QFileInfo(m_active->notePath).fileName());
         else
             m_vaultMenuButton->setText(m_vault.isValid() ? m_vault.name() : tr("No vault"));
     }
@@ -1808,11 +2131,11 @@ void MainWindow::updateTitle()
 
 void MainWindow::updateWordCount()
 {
-    if (m_notePath.isEmpty()) {
+    if (m_active->notePath.isEmpty()) {
         m_wordCount->clear();
         return;
     }
-    const int words = m_editor->wordCount();
+    const int words = m_active->editor->wordCount();
     if (words < 0)
         m_wordCount->clear(); // a large note, still being counted
     else
@@ -1821,11 +2144,15 @@ void MainWindow::updateWordCount()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (!maybeSave()) {
+    if (!maybeSaveAll()) {
         event->ignore();
         return;
     }
-    rememberCurrentPosition();
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->notePath.isEmpty())
+            m_settings.setNotePosition(leaf->notePath, leaf->editor->cursorOffset(),
+                                       leaf->editor->verticalScrollBar()->value());
+    }
     m_settings.save();
     QSettings settings;
     settings.setValue(kGeometry, saveGeometry());
@@ -1933,19 +2260,20 @@ void MainWindow::renamePathAt(const QModelIndex &index)
         }
     }
 
-    // The open note may be the renamed item itself, or nested inside a
+    // A tab's note may be the renamed item itself, or nested inside a
     // renamed folder; either way its path just moved under it.
-    if (!m_notePath.isEmpty()) {
-        if (m_notePath == oldPath) {
-            m_notePath = newPath;
-            const QString title = QFileInfo(m_notePath).completeBaseName();
-            m_inlineTitle->setText(title);
-            if (m_tabs->count() > 0)
-                m_tabs->setTabText(0, title);
-        } else if (isDir && m_notePath.startsWith(oldPath + QLatin1Char('/'))) {
-            m_notePath.replace(0, oldPath.size(), newPath);
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath.isEmpty())
+            continue;
+        if (leaf->notePath == oldPath) {
+            leaf->notePath = newPath;
+            leaf->inlineTitle->setText(QFileInfo(newPath).completeBaseName());
+        } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
+            leaf->notePath.replace(0, oldPath.size(), newPath);
         }
     }
+    for (const auto &group : m_groups)
+        syncTabs(group.get());
 
     // Picks up the moved path(s) under their new name and drops the old
     // ones, notes and attachments alike - simpler and just as correct as
@@ -1976,9 +2304,20 @@ void MainWindow::deletePathAt(const QModelIndex &index)
         return;
     }
 
-    if (!m_notePath.isEmpty()
-        && (m_notePath == path || m_notePath.startsWith(path + QLatin1Char('/')))) {
-        clearOpenNote();
+    // Obsidian closes the tabs of what was deleted.
+    QList<Leaf *> gone;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->notePath.isEmpty()
+            && (leaf->notePath == path || leaf->notePath.startsWith(path + QLatin1Char('/'))))
+            gone << leaf.get();
+    }
+    for (Leaf *leaf : std::as_const(gone)) {
+        if (m_leaves.size() > 1) {
+            dropLeaf(leaf);
+        } else {
+            activateLeaf(leaf);
+            clearOpenNote();
+        }
     }
     m_indexer->rebuild();
     updateTitle();
