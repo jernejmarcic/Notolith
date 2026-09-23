@@ -10,6 +10,38 @@ updated: 2026-09-22
 `HANDOFF.md` is the cold-start document and the long list. This file is the
 work in flight.
 
+## Roadmap: the Notes app of `~/Projects/Ideas.md`
+
+Jernej, 2026-09-23: "In general you are expanding to building the app detialed
+in ~/Projects/ideas.md with all the specified features. Put items in the TODO
+in a way that most suits the work, but do not stop untill all work is done."
+So noteAppC grows into the whole "Notes app" section. In the order it will be
+built; each stage's detail is in its own section further down.
+
+| # | stage | state |
+|---|---|---|
+| 1 | Obsidian's features (the base everything else sits on) | done, but for the command palette (deferred by Jernej) |
+| 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | next |
+| 3 | Every non-core feature switchable off at run time, costing nothing when off | next |
+| 4 | `demo/`, a vault under 5 MB that exercises every feature | grows with each stage |
+| 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
+| 6 | Publishing: the vault as a static website (Obsidian Publish style) | todo |
+| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | todo (poppler writes PDF annotations; EPUB via libarchive) |
+| 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | todo (quickjs-ng fetched pinned, as md4qt is) |
+| 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | todo, on stage 8 |
+| 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | todo |
+| 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; **for Jernej:** Ideas.md names yrs (Rust) - a C++ CRDT keeps the C/C++-only rule, and is the plan unless you say otherwise |
+| 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
+| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | last feature stage |
+| 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
+
+Standing decisions the spec left open, kept as they are unless Jernej says
+otherwise: **Qt Widgets, not Qt Quick** - the spec prefers Quick for GPU
+composition, but Quick means QML, whose binding engine is JavaScript, and the
+C/C++-only rule came first; raster measured faster than the OpenGL viewport
+on this machine (docs/PERFORMANCE.md), which stays available as an option.
+**JavaScript only in plugins**, in their own process, never in the app.
+
 ## Done this session
 
 - [x] Establish true state: clean tree at `669af14`, all 7 suites green on
