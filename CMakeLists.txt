@@ -40,6 +40,10 @@ endif()
 # dependencies, so unlike spellcheck there is nothing to detect - the option
 # alone decides whether libs/ext/graph is built at all.
 option(NOTEAPPC_WITH_GRAPH "Build the graph view (libs/ext/graph)" ON)
+# Another Tier 1 module: Obsidian's infinite canvas over the open JSON
+# Canvas format. No external dependency - only Qt and the editor library, to
+# reuse MarkdownEditor for a node's Markdown.
+option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -103,6 +107,9 @@ if(TARGET PkgConfig::HUNSPELL)
 endif()
 if(NOTEAPPC_WITH_GRAPH)
     add_subdirectory(libs/ext/graph)
+endif()
+if(NOTEAPPC_WITH_CANVAS)
+    add_subdirectory(libs/ext/canvas)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
