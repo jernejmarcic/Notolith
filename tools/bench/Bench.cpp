@@ -33,6 +33,7 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QTextStream>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cstdio>
@@ -43,6 +44,12 @@
 
 #include "Index.h"
 #include "MainWindow.h"
+
+#ifdef NOTEAPPC_HAVE_EPUB
+#include "EpubView.h"
+#include <archive.h>
+#include <archive_entry.h>
+#endif
 #include "MarkdownEditor.h"
 
 using namespace noteAppC;
@@ -514,6 +521,138 @@ QString buildBenchPdf(const QString &dir, int pages = 30)
 /// Poppler::Document avoids reopening the file once per page - so once the
 /// embed has settled this measures every *other* keystroke's cost with a
 /// many-page PDF on screen, not the rendering itself.
+#ifdef NOTEAPPC_HAVE_EPUB
+// --- EPUB: open time and scroll frame time, on a book big enough for the
+// chapter cache (kMaxCachedChapters in EpubView.h) to actually evict. ------
+
+/// A zip with `chapterCount` chapters of `paragraphsPerChapter` paragraphs
+/// each, in `dir` - the same libarchive write path tests/test_epub.cpp
+/// builds its fixtures with. A real EPUB was also tried (the ones under
+/// /usr/share/calibre/quick_start/ on a machine that has Calibre installed),
+/// but this tool has to run the same way on any machine, so the bench book
+/// is synthesised the way gen_bench_vault.py synthesises a vault.
+QString buildBenchEpub(const QString &dir, int chapterCount, int paragraphsPerChapter)
+{
+    const QString path = QDir(dir).filePath(QStringLiteral("bench.epub"));
+    archive *archiveHandle = archive_write_new();
+    archive_write_set_format_zip(archiveHandle);
+    if (archive_write_open_filename(archiveHandle, path.toUtf8().constData()) != ARCHIVE_OK) {
+        archive_write_free(archiveHandle);
+        return {};
+    }
+
+    const auto addEntry = [&](const QString &name, const QByteArray &bytes) {
+        archive_entry *entry = archive_entry_new();
+        archive_entry_set_pathname(entry, name.toUtf8().constData());
+        archive_entry_set_size(entry, bytes.size());
+        archive_entry_set_filetype(entry, AE_IFREG);
+        archive_entry_set_perm(entry, 0644);
+        archive_write_header(archiveHandle, entry);
+        archive_write_data(archiveHandle, bytes.constData(), size_t(bytes.size()));
+        archive_entry_free(entry);
+    };
+
+    addEntry(QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip"));
+    addEntry(QStringLiteral("META-INF/container.xml"),
+             QByteArrayLiteral("<?xml version='1.0'?><container "
+                               "xmlns='urn:oasis:names:tc:opendocument:xmlns:container' "
+                               "version='1.0'><rootfiles><rootfile full-path='content.opf' "
+                               "media-type='application/oebps-package+xml'/></rootfiles></container>"));
+
+    QString manifest;
+    QString spine;
+    QString navItems;
+    for (int c = 0; c < chapterCount; ++c) {
+        QString body;
+        for (int p = 0; p < paragraphsPerChapter; ++p) {
+            body += QStringLiteral(
+                        "<p>Paragraph %1 of chapter %2. It runs long enough to wrap across a "
+                        "line or two, with <b>bold</b> and <i>italic</i> words mixed in so the "
+                        "text-run map has more than one font to track, the way a real book's "
+                        "typography does.</p>\n")
+                        .arg(p)
+                        .arg(c);
+        }
+        addEntry(QStringLiteral("ch%1.xhtml").arg(c),
+                 QStringLiteral("<html><body><h1>Chapter %1</h1>%2</body></html>").arg(c).arg(body).toUtf8());
+        manifest += QStringLiteral("<item id='c%1' href='ch%1.xhtml' media-type='application/xhtml+xml'/>\n")
+                        .arg(c);
+        spine += QStringLiteral("<itemref idref='c%1'/>\n").arg(c);
+        navItems += QStringLiteral("<li><a href='ch%1.xhtml'>Chapter %1</a></li>\n").arg(c);
+    }
+    addEntry(QStringLiteral("nav.xhtml"),
+             QStringLiteral("<html xmlns:epub='http://www.idpf.org/2007/ops'><body>"
+                            "<nav epub:type='toc'><ol>%1</ol></nav></body></html>")
+                 .arg(navItems)
+                 .toUtf8());
+    manifest += QStringLiteral("<item id='nav' href='nav.xhtml' media-type='application/xhtml+xml' "
+                               "properties='nav'/>\n");
+    addEntry(QStringLiteral("content.opf"),
+             QStringLiteral("<package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
+                            "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+                            "<dc:title>Bench Book</dc:title></metadata>"
+                            "<manifest>%1</manifest><spine>%2</spine></package>")
+                 .arg(manifest, spine)
+                 .toUtf8());
+
+    archive_write_close(archiveHandle);
+    archive_write_free(archiveHandle);
+    return path;
+}
+
+Timing benchEpubOpen(const QString &path, int runs)
+{
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        auto view = std::make_unique<EpubView>();
+        view->resize(1000, 800);
+        QElapsedTimer clock;
+        clock.start();
+        QString error;
+        view->load(path, &error);
+        view->show();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        const QImage frame = paintedFrame(view.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("EPUB: open to first painted frame"),
+                  QStringLiteral("bench book, %1 kB").arg(QFileInfo(path).size() / 1024), samples);
+}
+
+/// benchScroll's own shape (see below): a wheel notch at a time, painted
+/// frame timed - past enough chapters that the cache (kMaxCachedChapters)
+/// evicts and re-renders, not just blits what is already there.
+Timing benchEpubScroll(const QString &path, int steps)
+{
+    EpubView view;
+    view.resize(1000, 800);
+    QString error;
+    view.load(path, &error);
+    view.show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    paintedFrame(&view); // untimed warm-up frame
+
+    std::vector<double> samples;
+    samples.reserve(size_t(steps));
+    for (int i = 0; i < steps; ++i) {
+        QWheelEvent wheel(QPointF(500, 400), view.mapToGlobal(QPoint(500, 400)), QPoint(), QPoint(0, -240),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QElapsedTimer clock;
+        clock.start();
+        QCoreApplication::sendEvent(&view, &wheel);
+        const QImage frame = paintedFrame(&view);
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("EPUB: scroll frame"),
+                  QStringLiteral("%1 frames through the bench book, off screen").arg(int(samples.size())),
+                  samples);
+}
+#endif // NOTEAPPC_HAVE_EPUB
+
 Timing benchPdfKeystroke(const QString &scratchPath, int runs)
 {
     const QString pdfPath = buildBenchPdf(scratchPath);
@@ -1001,6 +1140,15 @@ int main(int argc, char *argv[])
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);
     timings << benchPdfScroll(workDir.path());
+#ifdef NOTEAPPC_HAVE_EPUB
+    {
+        const QString epubPath = buildBenchEpub(workDir.path(), 150, 6);
+        if (!epubPath.isEmpty()) {
+            timings << benchEpubOpen(epubPath, 7);
+            timings << benchEpubScroll(epubPath, 60);
+        }
+    }
+#endif
     if (parser.isSet(viewportOption)) {
         const QStringList parts = parser.value(viewportOption).split(QLatin1Char('x'));
         if (parts.size() == 2)
