@@ -246,6 +246,20 @@ void MarkdownEditor::insertCompletion(const QString &completion)
 
 MarkdownEditor::~MarkdownEditor()
 {
+    // PDF/.tex renders and hooked file embeds run on QtConcurrent's pool and
+    // find their way back here through QMetaObject::invokeMethod(this, ...)
+    // - safe against a delivery arriving after destruction (Qt drops a
+    // queued call whose context is already gone), but not against the call
+    // to invokeMethod itself racing a delete: nothing stops a worker thread
+    // from finishing its render just as this destructor runs, and reading
+    // `this->thread()` on a half- or fully-destroyed object is a plain
+    // use-after-free, not something the queued-connection guarantee covers.
+    // Dropping the last reference to m_alive first means every such
+    // in-flight lambda's own weak_ptr::expired() check - taken before it
+    // ever touches `this` - turns true right here, before anything else
+    // about this object stops being valid.
+    m_alive.reset();
+
     // An open property editor is a child widget, and Qt deletes children
     // after this object's members are gone: losing focus as it went, it
     // would call back into an editor that no longer exists. Cut it loose now.
@@ -1771,6 +1785,11 @@ const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
     return nullptr;
 }
 
+void MarkdownEditor::hideWholeBlockText(BlockView &view)
+{
+    view.map = DisplayMap::build(m_text, view.span.range, {view.span.range});
+}
+
 bool MarkdownEditor::layoutEmbed(BlockView &view)
 {
     view.image = QPixmap();
@@ -1795,7 +1814,11 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QByteArrayList images = QImageReader::supportedImageFormats();
 
-    if (images.contains(suffix.toUtf8()))
+    // Some installs register a PDF-reading QImageIOHandler (a thumbnailer
+    // plugin, commonly), which would otherwise steal every PDF into a flat
+    // one-page raster here before the richer, page-aware PdfPage path below
+    // ever gets a look at it.
+    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
         return layoutImage(view, *embed, path);
     // Obsidian's audio and video formats.
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
@@ -1841,6 +1864,7 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     view.layout.reset();
     view.cells.clear();
     view.height = height;
+    hideWholeBlockText(view);
     view.laidOut = true;
     return true;
 }
@@ -1993,8 +2017,6 @@ bool MarkdownEditor::layoutMath(BlockView &view)
 
 void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
 {
-    if (!m_features.maths)
-        return; // the "$" stays visible ink, exactly as an unrenderable formula's does
     if (m_decorations.maths.isEmpty())
         return; // the common case: nothing to check, so nothing to render
 
@@ -2007,11 +2029,16 @@ void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
             continue;
 
         // The parser hid this exact range unconditionally; find it so it can
-        // be dropped again if the formula turns out not to render.
+        // be dropped again if the formula turns out not to render - which,
+        // with the feature off, it never even tries to.
         const Range hideRange{math.formula.start, math.range.end};
         auto it = std::find(hidden.begin(), hidden.end(), hideRange);
         if (it == hidden.end())
             continue;
+        if (!m_features.maths) {
+            hidden.erase(it);
+            continue;
+        }
 
         const QString latex = m_text.mid(math.formula.start, math.formula.length()).trimmed();
         const QString key = QStringLiteral("inlineMath|%1|%2|%3")
@@ -2324,6 +2351,7 @@ bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool vide
     view.cells.clear();
     view.textTop = codeHeaderHeight();
     view.height = view.textTop + mediaScreenRect(view, 0, 0).height() + kMediaControls;
+    hideWholeBlockText(view);
     view.laidOut = true;
     return true;
 }

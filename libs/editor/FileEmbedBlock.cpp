@@ -216,6 +216,7 @@ bool MarkdownEditor::layoutFileCard(BlockView &view, const EmbedSpan &embed, con
     constexpr qreal kCardHeight = 52;
     view.fileCardRect = QRectF(0, 0, contentWidth(), kCardHeight);
     view.height = kCardHeight;
+    hideWholeBlockText(view);
     view.laidOut = true;
     return true;
 }
@@ -295,10 +296,19 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
         // only place that touches m_fileEmbedCache or a BlockView, and it
         // always does so marshalled onto this object's own thread, the same
         // contract setQueryRunner documents for its own deliver callback.
-        renderer(path, embed.subpath, width, [this, key, generation](QImage image) {
+        // `guard` is m_alive's weak_ptr, checked before either lambda
+        // touches `this` - see ~MarkdownEditor's comment for why a
+        // QueuedConnection's own "dropped if destroyed" guarantee is not
+        // enough when the call to invokeMethod itself can race a delete.
+        const std::weak_ptr<char> guard = m_alive;
+        renderer(path, embed.subpath, width, [this, guard, key, generation](QImage image) {
+            if (guard.expired())
+                return;
             QMetaObject::invokeMethod(
                 this,
-                [this, key, generation, image = std::move(image)]() mutable {
+                [this, guard, key, generation, image = std::move(image)]() mutable {
+                    if (guard.expired())
+                        return;
                     deliverFileEmbed(key, generation, std::move(image));
                 },
                 Qt::QueuedConnection);
@@ -311,6 +321,7 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
     view.cells.clear();
     view.textTop = codeHeaderHeight();
     view.imagePath = path; // deliverFileEmbed's own way to find this block again
+    hideWholeBlockText(view);
 
     if (it->pending || it->image.isNull()) {
         view.image = QPixmap();
@@ -358,7 +369,15 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
 void MarkdownEditor::collectTextEmbeds(const BlockView &view, QList<Range> &hidden,
                                        QList<const EmbedSpan *> &found) const
 {
+    // An embed alone in its block already had its own chance through
+    // layoutEmbed; if that failed - a disabled feature, a path that does not
+    // resolve, a missing file - the right fallback is the paragraph's own
+    // plain link text, the way Obsidian shows an embed it cannot resolve
+    // either, not an upgrade to a trailing file card.
+    const EmbedSpan *sole = soleEmbedOf(view);
     for (const EmbedSpan &embed : m_decorations.embeds) {
+        if (&embed == sole)
+            continue;
         if (!view.span.range.contains(embed.range.start)
             || !view.span.range.contains(embed.range.end))
             continue;
@@ -383,7 +402,10 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
 
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QByteArrayList images = QImageReader::supportedImageFormats();
-    if (images.contains(suffix.toUtf8())) {
+    // See the same guard in layoutEmbed: some installs can technically
+    // decode a PDF as a flat image, but a PDF page always goes through the
+    // richer, page-aware path below instead.
+    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8())) {
         QPixmap pixmap = m_images.value(path);
         if (pixmap.isNull()) {
             pixmap = QPixmap(path);
@@ -532,6 +554,31 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
             painter.restore();
         }
     }
+}
+
+bool MarkdownEditor::isFileCardAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return false;
+    return m_blocks[size_t(index)].isFileCard;
+}
+
+int MarkdownEditor::embedCellCountAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return 0;
+    return int(m_blocks[size_t(index)].embedCells.size());
+}
+
+QString MarkdownEditor::panelTextAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return QString();
+    const BlockView &view = m_blocks[size_t(index)];
+    return view.layout ? view.layout->text() : QString();
 }
 
 bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,

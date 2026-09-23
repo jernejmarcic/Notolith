@@ -78,6 +78,7 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
         view.layout.reset();
         view.cells.clear();
         view.height = height + 12;
+        hideWholeBlockText(view);
         view.laidOut = true;
         return true;
     }
@@ -139,6 +140,7 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
     view.embedLabel = label;
     view.embedPanel = true;
     view.textTop = codeHeaderHeight();
+    hideWholeBlockText(view); // every path below returns true - see the comment on hideWholeBlockText
 
     if (!args.ok()) {
         view.pdfError = args.error;
@@ -262,11 +264,21 @@ QPixmap MarkdownEditor::ensurePdfPageAsync(const QString &path, qint64 mtime, in
     it = m_pdfPageCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    (void)QtConcurrent::run([this, key, generation, path, page, width] {
+    // `guard` is m_alive's own weak_ptr: checked on the worker thread before
+    // this ever calls back into `this`, so a render that outlives the editor
+    // (the tab was closed, say) is simply dropped rather than touching freed
+    // memory - see ~MarkdownEditor's comment on why the QueuedConnection
+    // context guarantee alone does not cover this.
+    const std::weak_ptr<char> guard = m_alive;
+    (void)QtConcurrent::run([this, guard, key, generation, path, page, width] {
         QImage image = PdfPage::render(path, page, width);
+        if (guard.expired())
+            return;
         QMetaObject::invokeMethod(
             this,
-            [this, key, generation, path, image = std::move(image)]() mutable {
+            [this, guard, key, generation, path, image = std::move(image)]() mutable {
+                if (guard.expired())
+                    return;
                 deliverPdfPage(key, generation, path, std::move(image));
             },
             Qt::QueuedConnection);
@@ -316,11 +328,16 @@ const MarkdownEditor::TexCacheEntry &MarkdownEditor::ensureTexCompiled(const QSt
     it = m_texCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    (void)QtConcurrent::run([this, key, generation, path] {
+    const std::weak_ptr<char> guard = m_alive; // see ensurePdfPageAsync's own comment
+    (void)QtConcurrent::run([this, guard, key, generation, path] {
         TexCompiler::Result result = TexCompiler::compile(path);
+        if (guard.expired())
+            return;
         QMetaObject::invokeMethod(
             this,
-            [this, key, generation, result = std::move(result)]() mutable {
+            [this, guard, key, generation, result = std::move(result)]() mutable {
+                if (guard.expired())
+                    return;
                 deliverTexCompiled(key, generation, std::move(result));
             },
             Qt::QueuedConnection);

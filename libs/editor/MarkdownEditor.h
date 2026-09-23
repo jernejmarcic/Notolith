@@ -359,6 +359,21 @@ public:
     /// collapsed state - never written to the note.
     void pdfSlideStep(qsizetype offset, int direction);
 
+    /// For the tests: whether the block containing `offset` rendered as a
+    /// file card (icon, name, size) - the fallback for a binary file, or any
+    /// file with no richer renderer.
+    bool isFileCardAt(qsizetype offset) const;
+    /// How many embeds the block containing `offset` rendered as trailing
+    /// cells - see layoutEmbedRow's comment. 0 outside such a block.
+    int embedCellCountAt(qsizetype offset) const;
+    /// For the tests: the raw text a block containing `offset` drew through
+    /// its own substituted QTextLayout - a source-file listing, a note
+    /// embed's panel, a `.tex` compile's error log, a query block's message
+    /// - none of which flow through view.map the way ordinary note text
+    /// does, so displayText() (which reads only the map) cannot see them.
+    /// Empty when that block has no such layout.
+    QString panelTextAt(qsizetype offset) const;
+
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
     /// one switch, on by default the way Obsidian ships them.
@@ -883,6 +898,14 @@ private:
     /// Closes the property editor, writing what it holds when `commit`.
     void finishPropertyEdit(bool commit);
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// Every whole-block embed kind (image, PDF, .tex, media, a file card, a
+    /// hooked renderer) paints from its own fields, not from `view.layout` -
+    /// but `view.map` still has to say the block's whole source is hidden,
+    /// or displayText() (and anything else that reads the map rather than
+    /// the paint output) sees whatever the block's *previous* layout left
+    /// behind, stale, instead of nothing. Called once the kind is settled,
+    /// before `view.laidOut = true`.
+    void hideWholeBlockText(BlockView &view);
     /// The embed that fills this block on its own, or nullptr.
     const EmbedSpan *soleEmbedOf(const BlockView &view) const;
     /// A block that is nothing but an embed: an image, a PDF page, a note, a
@@ -932,6 +955,11 @@ private:
     };
     QHash<QString, PdfPageCacheEntry> m_pdfPageCache; ///< "path|mtime|page|width" -> its render
     quint64 m_pdfGeneration = 0;
+    /// A liveness token for every async PDF/.tex/hooked-file-embed lambda:
+    /// captured by weak_ptr, checked before the lambda ever touches `this`.
+    /// Reset to null first thing in ~MarkdownEditor - see that destructor's
+    /// own comment for why a QueuedConnection alone is not enough here.
+    std::shared_ptr<char> m_alive = std::make_shared<char>();
     /// A slides-layout embed's current page, by the block's own source start
     /// - like m_queryCollapsed, session-only and never written to the note.
     QHash<qsizetype, int> m_pdfSlideIndex;
