@@ -302,3 +302,49 @@ Jernej's rule: a new feature goes here and the current task carries on.
       as the caret is anywhere inside; check before changing anything.
 - [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
       blitting, the Wayland buffer measurement - see above.
+
+## Requested 2026-09-23: the rest of Obsidian
+
+Jernej, on the list of what is not built yet: "Command pallete is ok fo rlater,
+the rest should be done". So everything below, the command palette deferred.
+Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
+`/tmp` with capped jobs (starbase-1 froze once and swappiness is still 100).
+
+### Wave 1
+- [ ] **Search** (lane A): Obsidian's search grammar - words, "phrases", OR,
+      -negation, ( ), path: file: tag: line: block: section: task:
+      task-todo: task-done: content: match-case: ignore-case:, /regex/ - over
+      the FTS5 table; a search pane; the tags pane hands a tag to it.
+- [ ] **Unlinked mentions** in the backlinks pane (lane A).
+- [ ] **Outline** pane (lane B): the note's headings, click to jump.
+- [ ] **Bookmarks** (lane B): notes, headings, searches, groups; reads
+      `.obsidian/bookmarks.json`, keeps its own copy outside the vault.
+- [ ] **Daily notes** (lane B): today's note from folder, format and template,
+      `.obsidian/daily-notes.json` honoured.
+- [ ] **Templates** (lane B): insert from the templates folder, `{{title}}`
+      `{{date}}` `{{time}}` and `{{date:FORMAT}}`.
+- [ ] **Graph view** (lane C), a Tier 1 module like spellcheck: global and
+      local, force layout that holds 5 000 nodes at 60 fps, `graph.json` options.
+- [ ] **Hotkeys** (me): a command registry every action goes through, and
+      `hotkeys.json` (Obsidian's format) to rebind them. The palette sits on
+      the same registry later.
+
+### Wave 2
+- [ ] File recovery: snapshots on save, a browser to restore from.
+- [ ] Page preview: a rendered popup over a link.
+- [ ] Audio and video embeds (Qt Multimedia, optional).
+- [ ] `query` blocks, on the wave 1 search.
+- [ ] PDF export of the reading view.
+
+### Wave 3
+- [ ] Split panes and workspaces.
+- [ ] Canvas (JSON Canvas).
+- [ ] Bases (`.base` table and list views, filters, sort, formulas).
+- [ ] HTML blocks through litehtml.
+
+### Wave 4
+- [ ] Packaging: AppImage, Flatpak manifest, `PKGBUILD` without `-march`.
+- [ ] A local check script in place of CI (there is no remote): build, all
+      suites, the perf guards, the round-trip fuzz.
+- [ ] The Android build, and a touch mode for the editor.
+
