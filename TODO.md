@@ -367,8 +367,8 @@ scrolliong through pages, it can make them like a slide".
       off the UI thread, cached by content, `-no-shell-escape`, rlimits, and
       in a bubblewrap sandbox that sees only the system and its own
       directory (4038601).
-- [ ] An embedded note is a plain-text panel; Obsidian draws it formatted.
-      Render it through the editor's own block layout.
+- [x] An embedded note is drawn formatted: its slice through a reading-view
+      editor into an image a turn after layout (445bf8d).
 - [ ] An embed inside running text trails its line as a row (bare
       QTextLayout has no inline objects); a canvas embed is a picture, not
       interactive; `![[x.base#View]]` shows the first view.
@@ -386,7 +386,7 @@ the features existing decreases it".
 - [x] Note history in git: every save a commit, stored outside the vault (no
       dotfile in it), per-note history browsable with diffs and restorable.
       0.093 ms a save; libgit2 in process, on one thread of its own.
-- [ ] Every non-core feature switchable off at run time (Obsidian's core
+- [x] Every non-core feature switchable off at run time (Obsidian's core
       plugins page, and the vault's `.obsidian/core-plugins.json` read),
       and when off it costs nothing: not built, not connected, not refreshed.
   - [x] `Settings::features()`: 18 switches, `plugins.<camelCase>`; both forms
@@ -414,7 +414,7 @@ to test all features. This does not have to be in TMP, and should be called
 demo. You can actually built in now if you want. But for more extreme testing
 work in tmp." And: "after ALL is done, see if you can topimize anything".
 
-- [ ] `demo/` in the project: a vault under 5 MB with a note (or file) for
+- [x] `demo/` in the project: a vault under 5 MB with a note (or file) for
       every feature - rendering, links and embeds of every kind, PDFs with
       page arguments, `.tex`, canvases, bases, `query` and `base` blocks,
       HTML, callouts, code styles, maths, media, daily notes, templates,
@@ -511,8 +511,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       and highlighted snippets in the note, off the UI thread, cached per
       query, refreshed on index changes; a result opens its note at the
       match. 0.10 ms per unrelated keystroke with one on screen.
-- [ ] Obsidian frames an embedded search with a header ("N results",
-      collapse, sort); the block shows the results alone.
+- [x] Obsidian frames an embedded search with a header ("N results",
+      collapse, sort): there, checked on the demo vault 2026-09-23.
 - [x] PDF export of the reading view (`workspace:export-pdf`): Obsidian's
       options - file name as title, A3/A4/A5/Legal/Letter/Tabloid,
       orientation, margin presets, downscale - light theme on white paper,
@@ -544,7 +544,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       and no radii, list markers always decimal.
 - [x] `canvas:new-file` ("Create new canvas"): an empty `{}` Untitled.canvas.
 - [ ] A new-base command: Obsidian's id is not in the 1.1.15 list, find it.
-- [ ] ` ```base ` blocks inside notes, on `BaseView`.
+- [x] ` ```base ` blocks inside notes, on `BaseView`.
 - [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
       `summaries:`, list-property cells, cards read-only, sort not saved back.
 - [x] Canvas controls as Obsidian's: a drag on empty canvas draws a
