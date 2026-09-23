@@ -39,7 +39,7 @@ built; each stage's detail is in its own section further down.
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
-| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | last feature stage |
+| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands. Left: runnable `![[file.py]]` embeds, per-block tier option |
 | 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
 
 Standing decisions the spec left open, kept as they are unless Jernej says
@@ -78,12 +78,31 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       them. A `:::` fence's attributes are no longer tags. Index schema 5.
 - [x] Images, audio and video open in a tab of their own.
 - [ ] **After the notebook lane merges (it owns libs/editor now):**
+  - [x] Lists (Jernej 2026-09-23): nested markers no longer overlap their
+        text, "-"/"*"/"+" drawn distinctly, Word-style 1.1/1.2 numbering as
+        a setting ("Outline numbering"), lists nest inside quotes/callouts.
   - [ ] Footnotes in the editor: references as superscript numbers, the
         definitions as Obsidian shows them (reading view: a list at the end).
   - [ ] Paste and drop: an image pasted (Ctrl+V) or a file dropped into a
         note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
         "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
         `![[...]]` inserted. Not built at all yet.
+- [ ] **Tables aligned in the source** (Jernej 2026-09-23: "Tables should be
+      auto aligned to look good, even in plain markdown, by adding spaces and
+      other table characters"). Pad every cell to its column's width (display
+      width: wide CJK 2, combining 0), rewrite the delimiter row to match
+      (`|:---|`, `|---:|`, `|:---:|` kept), add missing outer pipes and
+      missing cells. Done when an edited table is left (only the table that
+      was edited: the file stays byte-exact elsewhere), on Tab/Enter inside a
+      table, and by a command "Format table" / "Format all tables". Also:
+      his screenshot shows a 10-column table as raw text in live preview -
+      find out why (caret reveal, or a parse miss).
+- [ ] **Click to edit** (Jernej 2026-09-23: "Clicking on an element should
+      open it to be editable, like in obsidian"). Audit every rendered
+      element - table, callout, display maths, inline maths, embeds, code
+      block, properties, query/base blocks, HTML, rule - for what a click
+      does now against Obsidian's live preview, and make a click reveal the
+      element's source with the caret where clicked (a table: its cells).
 - [ ] Sync asks the password every session: keep the derived keys in the
       keyring instead, once Jernej says the keyring is where they belong.
 - [ ] Lockbox approval (a second device enrolled without the password) has
@@ -607,10 +626,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Unique note creator (`zk-prefixer`): a note named by a timestamp.
 - [x] Properties view (`properties`): every property in the vault, with counts;
       search gained `[property]` / `[property:value]` for its clicks.
-- [ ] Slides (`slides`): present a note, slides split at `---`.
-- [ ] Note composer (`note-composer`): merge a note into another; extract the
+- [x] Slides (`slides`): present a note, slides split at `---`.
+- [x] Note composer (`note-composer`): merge a note into another; extract the
       selection into a new note, leaving a link or an embed.
-- [ ] Audio recorder (`audio-recorder`): record into an attachment, embed it.
+- [x] Audio recorder (`audio-recorder`): record into an attachment, embed it.
 - [ ] Slash commands (`slash-command`): "/" in the editor lists commands -
       editor-side, after the notebook lane.
 - [ ] Footnotes view: a pane of the note's footnotes.

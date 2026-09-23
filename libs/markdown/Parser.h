@@ -39,4 +39,10 @@ private:
     std::unique_ptr<Private> d;
 };
 
+/// The cells of one table row, GFM's way: the line, after any quote or
+/// callout markers, split at every unescaped "|", each cell without the
+/// spaces around it. An empty cell is an empty range inside its gap, where
+/// typing into it lands - md4qt puts one on the pipe that closes it.
+QList<Range> tableRowCells(const QString &text, qsizetype lineStart, qsizetype lineEnd);
+
 } // namespace noteAppC
