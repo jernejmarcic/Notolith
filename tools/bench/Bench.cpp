@@ -44,6 +44,7 @@
 #include "Index.h"
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
+#include "SettingsPage.h"
 
 using namespace noteAppC;
 
@@ -983,6 +984,17 @@ int main(int argc, char *argv[])
                                  [&] { (void)index.search(QStringLiteral("zyxwvu")); });
             timings << benchCall(QStringLiteral("Every note for a base"), QStringLiteral("allNotesForBases"), 5,
                                  [&] { (void)index.allNotesForBases(); });
+        }
+
+        // What every switch on the settings page costs: the page reports a
+        // change and the window applies every setting, with a big note open.
+        window->openNote(sizedNotes.value(1024));
+        paintedFrame(window.get());
+        if (auto *page = window->findChild<SettingsPage *>()) {
+            timings << benchCall(QStringLiteral("Settings pass"), QStringLiteral("1024 kB note open"), 9, [&] {
+                emit page->settingChanged();
+                (void)paintedFrame(window.get());
+            });
         }
     }
 

@@ -27,6 +27,8 @@ public:
     static Theme builtin(Mode mode = Mode::Dark);
 
     Mode mode() const { return m_mode; }
+    /// Same tokens, pins and fonts: what applying either would draw alike.
+    bool operator==(const Theme &) const = default;
     bool isDark() const { return m_mode != Mode::Light; }
     bool isOled() const { return m_mode == Mode::Oled; }
 

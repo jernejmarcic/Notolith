@@ -4,6 +4,9 @@
 #include <QWidget>
 
 #include <functional>
+#include <optional>
+
+#include "Theme.h"
 
 class QVBoxLayout;
 class QListWidget;
@@ -16,7 +19,6 @@ class QShowEvent;
 namespace noteAppC {
 
 class Settings;
-class Theme;
 
 /// The settings page: left nav (Appearance, Editor, Files and links, About)
 /// beside scrolling rows of label+description and a control, read and
@@ -64,6 +66,7 @@ protected:
 private:
     void rebuild();
     bool m_needsRebuild = true;
+    std::optional<Theme> m_theme; ///< the last applied, for rows a rebuild makes
 
     QWidget *buildAppearancePage();
     QWidget *buildEditorPage();

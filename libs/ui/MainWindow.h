@@ -449,6 +449,7 @@ private:
     /// The default mode last applied to every tab: a settings pass changes
     /// an open tab's mode only when this setting is what changed.
     QString m_appliedDefaultMode;
+    bool m_themeApplied = false; ///< applySettings has styled the window once
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

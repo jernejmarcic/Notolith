@@ -446,6 +446,17 @@ memory 376 MB to 196 MB; the 3 000-note timer's worst wait 6 ms. A scan that
 stop() cancels drops what it had queued: its names never reach the next
 vault's table (`IndexerThreadTest`).
 
+### 19. Every switch restyled the whole window
+
+A settings switch runs `applySettings`, and it restyled the application
+(`setStyleSheet` over every widget) and gave every open editor its theme again,
+which relays out every block: 21.6 ms with a 1 MB note open, for a switch that
+changes neither. `Theme` now compares, and the restyle waits for the theme
+itself to change; a pane built by a switch takes the theme when it is built,
+and the settings page re-themes the rows it rebuilds (they had kept the
+default colours until the next restyle). Settings pass, 1 MB note open: 21.6 ms
+to 1.6 ms (bench row "Settings pass").
+
 ## Tried and not adopted
 
 ### OpenGL viewport

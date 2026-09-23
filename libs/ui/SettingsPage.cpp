@@ -106,6 +106,8 @@ void SettingsPage::rebuild()
     m_pages->addWidget(buildAboutPage());
     m_nav->setCurrentRow(row < m_pages->count() ? row : 0);
     refreshRowDecorations();
+    if (m_theme)
+        applyTheme(*m_theme); // the rows just made were not there for the last one
 }
 
 void SettingsPage::keyPressEvent(QKeyEvent *event)
@@ -760,6 +762,7 @@ void SettingsPage::changed()
 
 void SettingsPage::applyTheme(const Theme &theme)
 {
+    m_theme = theme;
     for (ToggleSwitch *toggle : findChildren<ToggleSwitch *>())
         toggle->setTheme(theme);
 

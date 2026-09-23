@@ -1025,6 +1025,7 @@ void MainWindow::applyFeatures()
         {"global-search", m_search,
          [this, parent] {
              m_search = new SearchPane(parent);
+             m_search->setTheme(m_theme); // applyTheme runs only when the theme changes
              m_search->setIndex(&m_index);
              connect(m_search, &SearchPane::matchActivated, this,
                      [this](const QString &relativePath, qsizetype offset) {
@@ -1038,6 +1039,7 @@ void MainWindow::applyFeatures()
         {"backlink", m_backlinks,
          [this, parent] {
              m_backlinks = new BacklinksPane(parent);
+             m_backlinks->setTheme(m_theme);
              m_backlinks->setIndex(&m_index);
              connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
              return m_backlinks.data();
@@ -1046,6 +1048,7 @@ void MainWindow::applyFeatures()
         {"tag-pane", m_tags,
          [this, parent] {
              m_tags = new TagsPane(parent);
+             m_tags->setTheme(m_theme);
              m_tags->setIndex(&m_index);
              // A tag opens a search for it, as in Obsidian; tag: already
              // finds the nested tags beneath it.
@@ -1057,6 +1060,7 @@ void MainWindow::applyFeatures()
         {"outgoing-link", m_outgoingLinks,
          [this, parent] {
              m_outgoingLinks = new OutgoingLinksPane(parent);
+             m_outgoingLinks->setTheme(m_theme);
              m_outgoingLinks->setIndex(&m_index);
              connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
              return m_outgoingLinks.data();
@@ -1094,6 +1098,7 @@ void MainWindow::applyFeatures()
              m_localGraph = new GraphView(parent);
              m_localGraph->setObjectName(QStringLiteral("localGraph"));
              m_localGraph->setLocalGraph(true);
+             m_localGraph->setTheme(m_theme);
              m_localGraph->setIndex(&m_index);
              connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
              return m_localGraph.data();
@@ -1666,9 +1671,17 @@ Theme MainWindow::themeFromSettings() const
 
 void MainWindow::applySettings()
 {
-    m_theme = themeFromSettings();
+    // Every switch on the settings page comes here, and restyling the window
+    // and relaying out every open note was most of it - 17 ms with a 1 MB
+    // note open - so that waits for the theme itself to change.
+    const Theme theme = themeFromSettings();
+    const bool restyle = !m_themeApplied || !(theme == m_theme);
+    m_theme = theme;
     applyFeatures(); // first, so a pane it builds is themed below
-    applyTheme();
+    if (restyle) {
+        applyTheme();
+        m_themeApplied = true;
+    }
 
     for (const auto &leaf : m_leaves)
         applyEditorSettings(leaf->editor);
