@@ -36,6 +36,10 @@ if(NOTEAPPC_WITH_SPELLCHECK)
         pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
     endif()
 endif()
+# The second Tier 1 module: Obsidian's infinite canvas over the open JSON
+# Canvas format. No external dependency - only Qt and the editor library, to
+# reuse MarkdownEditor for a node's Markdown.
+option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -96,6 +100,9 @@ add_subdirectory(libs/theme)
 add_subdirectory(libs/settings)
 if(TARGET PkgConfig::HUNSPELL)
     add_subdirectory(libs/ext/spell)
+endif()
+if(NOTEAPPC_WITH_CANVAS)
+    add_subdirectory(libs/ext/canvas)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
