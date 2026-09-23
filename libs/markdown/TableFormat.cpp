@@ -1,5 +1,7 @@
 #include "TableFormat.h"
 
+#include "Parser.h"
+
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -49,59 +51,25 @@ int displayWidth(const QString &text)
     return width;
 }
 
-/// The prefix every line of a table inside a blockquote/callout carries:
-/// nested "> " markers, plus whatever indentation sits around them. Kept
-/// verbatim on output - it is not table syntax, it belongs to the container.
-const QRegularExpression &linePrefixRe()
+/// The prefix a table line carries inside a quote or callout: its ">"
+/// markers and the indentation around them. Kept verbatim; it belongs to
+/// the container, not the table.
+qsizetype prefixLength(const QString &line)
 {
-    static const QRegularExpression re(QStringLiteral("^((?:[ \\t]*>)*[ \\t]*)"));
-    return re;
+    qsizetype i = 0;
+    while (i < line.size() && (line.at(i) == QLatin1Char('>') || line.at(i).isSpace()))
+        ++i;
+    return i;
 }
 
-/// Splits a table row on `|`, the GFM way: `\|` is the only escape, and it
-/// stays in the cell verbatim rather than being unescaped.
-QStringList splitCells(const QString &row)
+/// One row's cells, split by the parser's own rule (tableRowCells), so the
+/// formatter and the editor can never disagree about where a cell ends.
+QStringList parseRow(const QString &line)
 {
     QStringList cells;
-    QString cur;
-    bool escaped = false;
-    for (const QChar c : row) {
-        if (escaped) {
-            cur += c;
-            escaped = false;
-        } else if (c == QLatin1Char('\\')) {
-            cur += c;
-            escaped = true;
-        } else if (c == QLatin1Char('|')) {
-            cells << cur;
-            cur.clear();
-        } else {
-            cur += c;
-        }
-    }
-    cells << cur;
+    for (const Range &cell : tableRowCells(line, 0, line.size()))
+        cells << line.mid(cell.start, cell.length());
     return cells;
-}
-
-bool endsWithUnescapedPipe(const QString &s)
-{
-    if (!s.endsWith(QLatin1Char('|')))
-        return false;
-    int backslashes = 0;
-    for (qsizetype i = s.size() - 2; i >= 0 && s.at(i) == QLatin1Char('\\'); --i)
-        ++backslashes;
-    return backslashes % 2 == 0;
-}
-
-/// One data/header row's cells, with the row's optional outer pipes gone.
-QStringList parseRow(const QString &rest)
-{
-    QString row = rest.trimmed();
-    if (row.startsWith(QLatin1Char('|')))
-        row = row.mid(1);
-    if (endsWithUnescapedPipe(row))
-        row.chop(1);
-    return splitCells(row);
 }
 
 QString delimiterCell(int width, ColumnAlign align)
@@ -151,7 +119,7 @@ QString formatTable(const QString &table)
     QList<Line> tableLines;
     int tableEnd = lines.size();
     for (int i = 0; i < lines.size(); ++i) {
-        const QString prefix = linePrefixRe().match(lines[i]).captured(1);
+        const QString prefix = lines[i].left(prefixLength(lines[i]));
         const QString rest = lines[i].mid(prefix.size());
         if (!rest.contains(QLatin1Char('|'))) {
             tableEnd = i;
@@ -165,7 +133,7 @@ QString formatTable(const QString &table)
     QList<QStringList> rows;
     rows.reserve(tableLines.size());
     for (const Line &line : tableLines)
-        rows.append(parseRow(line.rest));
+        rows.append(parseRow(line.prefix + line.rest));
 
     // The delimiter row (line 2) decides both validity and alignment.
     static const QRegularExpression delimiterRe(QStringLiteral("^(:?)-+(:?)$"));
