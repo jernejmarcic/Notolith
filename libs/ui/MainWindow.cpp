@@ -31,6 +31,7 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollBar>
@@ -57,6 +58,7 @@
 #include "MarkdownEditor.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
+#include "Frontmatter.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
 #include "OutlinePane.h"
@@ -95,6 +97,7 @@
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
 #include "BaseEditorTable.h"
+#include "BaseFile.h"
 #include "BaseView.h"
 #endif
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -1414,6 +1417,25 @@ void MainWindow::buildActions()
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
 #ifdef NOTEAPPC_HAVE_CANVAS
+#ifdef NOTEAPPC_HAVE_BASES
+    // ponytail: Obsidian's own id for this command is unconfirmed; this one
+    // follows canvas:new-file's shape. A hotkeys.json naming another will not bind.
+    add(QStringLiteral("bases:new-file"), tr("Bases: Create new base"), QString(), [this] {
+        if (!m_vault.isValid())
+            return;
+        QString error;
+        const QString path = m_vault.createNote(QString(), tr("Untitled"), &error, QStringLiteral(".base"),
+                                                bases::BaseFile::newFileTemplate());
+        if (path.isEmpty())
+            QMessageBox::warning(this, tr("New base"), tr("Could not create the base:\n%1").arg(error));
+        else
+            openNote(path);
+    });
+#endif
+    add(QStringLiteral("note-composer:merge-file"), tr("Note composer: Merge current file with another file"),
+        QString(), &MainWindow::mergeCurrentNote);
+    add(QStringLiteral("note-composer:split-file"), tr("Note composer: Extract current selection"), QString(),
+        &MainWindow::extractSelection);
     add(QStringLiteral("canvas:new-file"), tr("Canvas: Create new canvas"), QString(), [this] {
         if (!m_vault.isValid())
             return;
@@ -1909,6 +1931,116 @@ void MainWindow::startPresentation()
     m_mainStack->setCurrentWidget(m_slides);
     showFullScreen();
     m_slides->present(SlidesView::split(text), int(SlidesView::split(before).size()) - 1);
+}
+
+void MainWindow::mergeCurrentNote()
+{
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath) || !save())
+        return;
+    const QString source = m_active->notePath;
+    QStringList notes = m_index.allPaths();
+    notes.removeOne(m_vault.relative(source));
+    auto *picker = new QuickSwitcher(this);
+    picker->setObjectName(QStringLiteral("mergePicker"));
+    picker->setPlaceholder(tr("Merge %1 into...").arg(QFileInfo(source).completeBaseName()));
+    picker->setCandidates(notes);
+    connect(picker, &QuickSwitcher::accepted, this, [this, source, picker](const QString &target) {
+        picker->deleteLater();
+        mergeNote(source, m_vault.absolute(target));
+    });
+    connect(picker, &QDialog::rejected, picker, &QObject::deleteLater);
+    picker->popUp();
+}
+
+bool MainWindow::mergeNote(const QString &source, const QString &target)
+{
+    // What the target's tabs hold unsaved is its text too.
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath == target && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
+            return false;
+    }
+    Note from;
+    Note into;
+    QString error;
+    if (!Vault::read(source, from, &error) || !Vault::read(target, into, &error)) {
+        QMessageBox::warning(this, tr("Merge"), error);
+        return false;
+    }
+    // The body only: the source's properties would be a second frontmatter
+    // in the middle of the target.
+    const Range frontmatter = Frontmatter::find(from.text);
+    QString body = from.text.mid(frontmatter.isValid() ? frontmatter.end : 0);
+    while (body.startsWith(QLatin1Char('\n')))
+        body.remove(0, 1);
+    if (!into.text.isEmpty() && !into.text.endsWith(QLatin1Char('\n')))
+        into.text += QLatin1Char('\n');
+    into.text += (into.text.isEmpty() ? QString() : QStringLiteral("\n")) + body;
+    if (!into.text.endsWith(QLatin1Char('\n')))
+        into.text += QLatin1Char('\n');
+    if (!Vault::write(target, into, &error)) {
+        QMessageBox::warning(this, tr("Merge"), error);
+        return false;
+    }
+    // Links to the merged note lead to where its text went, as a rename's do.
+    if (m_index.isOpen())
+        m_index.updateLinksAfterRename(m_vault.relative(source), m_vault.relative(target), m_vault, &error);
+    if (!m_vault.moveToTrash(source, &error)) {
+        QMessageBox::warning(this, tr("Merge"), tr("Merged, but %1 stays:\n%2").arg(QFileInfo(source).fileName(), error));
+        return false;
+    }
+    openNote(target);
+    QList<Leaf *> gone;
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath == source)
+            gone << leaf.get();
+    }
+    for (Leaf *leaf : std::as_const(gone))
+        dropLeaf(leaf);
+    m_indexer->rebuild();
+    return true;
+}
+
+void MainWindow::extractSelection()
+{
+    if (!m_vault.isValid() || m_active->view || !m_vault.contains(m_active->notePath))
+        return;
+    MarkdownEditor *editor = m_active->editor;
+    const QString selection = editor->selectedText();
+    if (selection.trimmed().isEmpty()) {
+        statusBar()->showMessage(tr("Select the text to extract first"), 3000);
+        return;
+    }
+    // Named after its first heading, else its first line, as Obsidian does.
+    QString suggested;
+    for (const Heading &heading : Parser().parseAll(selection).metadata.headings) {
+        suggested = heading.text;
+        break;
+    }
+    if (suggested.isEmpty())
+        suggested = selection.trimmed().section(QLatin1Char('\n'), 0, 0);
+    static const QRegularExpression forbidden(QStringLiteral(R"([\[\]#^|\\/:*?"<>])"));
+    suggested = suggested.remove(forbidden).simplified().left(60);
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, tr("Extract selection"), tr("New note name:"), QLineEdit::Normal,
+                                               suggested, &ok)
+                             .remove(forbidden)
+                             .simplified();
+    if (!ok || name.isEmpty())
+        return;
+    QString error;
+    const QString folder = m_vault.relative(QFileInfo(m_active->notePath).absolutePath());
+    const QString path =
+        m_vault.createNote(folder == QLatin1String(".") ? QString() : folder, name, &error, QStringLiteral(".md"),
+                           selection.endsWith(QLatin1Char('\n')) ? selection : selection + QLatin1Char('\n'));
+    if (path.isEmpty()) {
+        QMessageBox::warning(this, tr("Extract selection"), error);
+        return;
+    }
+    // What stays behind: a link to it, or an embed that still shows it.
+    const bool embed = m_settings.text(QStringLiteral("noteComposer.replaceWith")) == QLatin1String("embed");
+    editor->insertAtCaret((embed ? QStringLiteral("![[") : QStringLiteral("[[")) + QFileInfo(path).completeBaseName()
+                          + QStringLiteral("]]"));
+    m_indexer->rebuild();
 }
 
 void MainWindow::createUniqueNote()

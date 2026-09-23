@@ -69,6 +69,7 @@ const QVariantMap &defaults()
         {QStringLiteral("templates.dateFormat"), QStringLiteral("YYYY-MM-DD")},
         {QStringLiteral("templates.timeFormat"), QStringLiteral("HH:mm")},
         {QStringLiteral("uniqueNote.folder"), QString()},
+        {QStringLiteral("noteComposer.replaceWith"), QStringLiteral("link")}, // or "embed"
         {QStringLiteral("uniqueNote.format"), QStringLiteral("YYYYMMDDHHmm")}, // Obsidian's default
 
         // Remembered between launches
@@ -535,6 +536,9 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Keep every save of a note as a git commit, outside the vault, to "
                                        "browse and restore with \"Show this note's history\"."),
          false},
+        {"note-composer", QT_TRANSLATE_NOOP("Settings", "Note composer"),
+         QT_TRANSLATE_NOOP("Settings", "Merge a note into another, and extract a selection into a new note."),
+         true},
         {"outgoing-link", QT_TRANSLATE_NOOP("Settings", "Outgoing links"),
          QT_TRANSLATE_NOOP("Settings", "Show the links in this note in the right sidebar."), true},
         {"outline", QT_TRANSLATE_NOOP("Settings", "Outline"),

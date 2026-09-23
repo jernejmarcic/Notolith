@@ -1682,6 +1682,62 @@ TEST_F(WindowTest, SlidesSplitAtRulesAndStepWithTheKeys)
     WAIT_TRUE(!slides->isVisible() && window.editor()->isVisible(), 1000);
 }
 
+TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
+{
+    write(QStringLiteral("A.md"), "---\nx: 1\n---\nAlpha\n");
+    write(QStringLiteral("B.md"), "Bravo\n");
+    write(QStringLiteral("C.md"), "See [[A]]\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("A.md")));
+
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    auto *picker = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker"));
+    ASSERT_NE(picker, nullptr);
+    emit picker->accepted(QStringLiteral("B.md"));
+
+    QFile merged(path(QStringLiteral("B.md")));
+    ASSERT_TRUE(merged.open(QIODevice::ReadOnly));
+    EXPECT_EQ(merged.readAll(), QByteArray("Bravo\n\nAlpha\n")); // the body, not a second frontmatter
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("A.md"))));
+    QFile linking(path(QStringLiteral("C.md")));
+    ASSERT_TRUE(linking.open(QIODevice::ReadOnly));
+    EXPECT_EQ(linking.readAll(), QByteArray("See [[B]]\n"));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("Bravo\n\nAlpha\n"));
+}
+
+TEST_F(WindowTest, NoteComposerExtractsTheSelectionIntoANewNote)
+{
+    write(QStringLiteral("Long.md"), "Intro\n# Part\nbody\nend\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Long.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().indexOf(QLatin1String("# Part")));
+    for (int i = 0; i < 12; ++i) // "# Part\nbody\n"
+        QTest::keyClick(editor, Qt::Key_Right, Qt::ShiftModifier);
+    ASSERT_EQ(editor->selectedText(), QStringLiteral("# Part\nbody\n"));
+
+    // The name dialog, answered as soon as it is up.
+    QTimer::singleShot(0, [] {
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            if (auto *dialog = qobject_cast<QInputDialog *>(top)) {
+                EXPECT_EQ(dialog->textValue(), QStringLiteral("Part")); // named by its heading
+                dialog->accept();
+            }
+        }
+    });
+    window.findChild<QAction *>(QStringLiteral("note-composer:split-file"))->trigger();
+    QFile part(path(QStringLiteral("Part.md")));
+    ASSERT_TRUE(part.open(QIODevice::ReadOnly));
+    EXPECT_EQ(part.readAll(), QByteArray("# Part\nbody\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("Intro\n[[Part]]end\n"));
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);

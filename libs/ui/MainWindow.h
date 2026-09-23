@@ -310,6 +310,13 @@ private:
     void startPresentation();
     /// "Unique note creator": a note named by the time, per zk-prefixer.json.
     void createUniqueNote();
+    /// Note composer: the current note appended to one picked, its links
+    /// following it there, and it moved to the trash.
+    void mergeCurrentNote();
+    bool mergeNote(const QString &source, const QString &target);
+    /// Note composer: the selection moved into a new note beside this one,
+    /// a link (or, set so, an embed) left in its place.
+    void extractSelection();
     void openDailyNote(int step);
     void insertTemplate();
     /// Moves the caret to the heading `subpath` names ("#Heading"), now or,
