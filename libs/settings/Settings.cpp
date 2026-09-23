@@ -549,6 +549,8 @@ const QList<Settings::Feature> &Settings::features()
          false},
         {"random-note", QT_TRANSLATE_NOOP("Settings", "Random note"),
          QT_TRANSLATE_NOOP("Settings", "Open a note picked at random."), true},
+        {"properties", QT_TRANSLATE_NOOP("Settings", "Properties view"),
+         QT_TRANSLATE_NOOP("Settings", "Show every property in the vault in the right sidebar."), true},
         {"publish", QT_TRANSLATE_NOOP("Settings", "Publish"),
          QT_TRANSLATE_NOOP("Settings", "Export the vault, or its notes marked publish: true, as a static "
                                        "website."),

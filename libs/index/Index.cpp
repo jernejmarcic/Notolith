@@ -613,6 +613,16 @@ QStringList Index::allTags() const
     return tags;
 }
 
+QList<Index::PropertyCount> Index::propertyCounts() const
+{
+    QList<PropertyCount> counts;
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT key, MIN(type), COUNT(DISTINCT file) FROM props GROUP BY key ORDER BY key"));
+    while (query.next())
+        counts.append({query.value(0).toString(), Property::Type(query.value(1).toInt()), query.value(2).toInt()});
+    return counts;
+}
+
 QString Index::resolve(const QString &target, const QString &fromPath) const
 {
     QString wanted = normaliseTarget(target);

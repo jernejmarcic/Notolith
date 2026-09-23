@@ -103,6 +103,7 @@
 #include "NoteHistoryDialog.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
+#include "PropertiesPane.h"
 #include "TagsPane.h"
 
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
@@ -1174,6 +1175,16 @@ void MainWindow::applyFeatures()
              return m_tags.data();
          },
          "tagsTabButton", "tags", tr("Tags")},
+        {"properties", m_properties,
+         [this, parent] {
+             m_properties = new PropertiesPane(parent);
+             m_properties->setTheme(m_theme);
+             m_properties->setIndex(&m_index);
+             connect(m_properties, &PropertiesPane::propertyActivated, this,
+                     [this](const QString &key) { openSearch(QStringLiteral("[%1]").arg(key)); });
+             return m_properties.data();
+         },
+         "propertiesTabButton", "clipboard-list", tr("All properties")},
         {"outgoing-link", m_outgoingLinks,
          [this, parent] {
              m_outgoingLinks = new OutgoingLinksPane(parent);
@@ -2405,6 +2416,8 @@ void MainWindow::applyTheme()
     }
     if (m_tags)
         m_tags->setTheme(m_theme);
+    if (m_properties)
+        m_properties->setTheme(m_theme);
     if (m_backlinks)
         m_backlinks->setTheme(m_theme);
     if (m_search)

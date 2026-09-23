@@ -104,6 +104,14 @@ public:
     int attachmentCount() const;
     QStringList allPaths() const;
     QStringList allTags() const;
+    /// Every property key in the vault, with the type it was first seen
+    /// with and how many notes carry it - Obsidian's "All properties".
+    struct PropertyCount {
+        QString key;
+        Property::Type type = Property::Type::Text;
+        int notes = 0;
+    };
+    QList<PropertyCount> propertyCounts() const;
 
     /// Obsidian's resolution order: exact path, then shortest unique
     /// basename, then alias, then frontmatter id. `fromPath` breaks ties in

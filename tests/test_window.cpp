@@ -36,6 +36,7 @@
 
 #include "WaitFor.h"
 #include "MarkdownEditor.h"
+#include "PropertiesPane.h"
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
@@ -1969,6 +1970,24 @@ TEST_F(WindowTest, AFeatureSwitchedOffIsNotBuiltAndItsCommandsStop)
     EXPECT_NE(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
 #endif
     qputenv("XDG_CONFIG_HOME", previous);
+}
+
+TEST_F(WindowTest, ThePropertiesViewListsEveryPropertyWithItsCount)
+{
+    write(QStringLiteral("A.md"), "---\nstatus: draft\ntags: [x]\n---\nA\n");
+    write(QStringLiteral("B.md"), "---\nstatus: done\n---\nB\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    auto *pane = window.findChild<noteAppC::PropertiesPane *>();
+    ASSERT_NE(pane, nullptr);
+    auto *list = pane->findChild<QTreeWidget *>();
+    ASSERT_NE(list, nullptr);
+    WAIT_TRUE(list->topLevelItemCount() == 2, 2000);
+    EXPECT_EQ(list->topLevelItem(0)->text(0), QStringLiteral("status")); // two notes, first
+    EXPECT_EQ(list->topLevelItem(0)->text(1), QStringLiteral("2"));
+    EXPECT_EQ(list->topLevelItem(1)->text(0), QStringLiteral("tags"));
 }
 
 TEST_F(WindowTest, AVaultsCorePluginsDecideWhatIsBuilt)

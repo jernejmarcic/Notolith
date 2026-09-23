@@ -12,6 +12,8 @@ add_library(noteAppC_ui STATIC
     QuickSwitcher.h
     BacklinksPane.cpp
     BacklinksPane.h
+    PropertiesPane.cpp
+    PropertiesPane.h
     TagsPane.cpp
     TagsPane.h
     OutgoingLinksPane.cpp

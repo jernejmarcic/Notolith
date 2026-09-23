@@ -49,6 +49,7 @@ class QuickSwitcher;
 class SearchPane;
 class SettingsPage;
 class TagsPane;
+class PropertiesPane;
 
 /// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
 /// Obsidian's workspace of tabs in splits, a settings page in the main area,
@@ -481,6 +482,7 @@ private:
     QPointer<GraphView> m_localGraph;
     QPointer<BacklinksPane> m_backlinks;
     QPointer<TagsPane> m_tags;
+    QPointer<PropertiesPane> m_properties;
     QPointer<OutgoingLinksPane> m_outgoingLinks;
     QPointer<OutlinePane> m_outline;
     QPointer<BookmarksPane> m_bookmarks;
