@@ -99,7 +99,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
             return;
         ParseJob job = m_parseWatcher.result();
         setWordCount(job.words);
-        adoptDecorations(std::move(job.decorations), std::move(job.properties));
+        adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
         m_parsedVersion = job.version;
         // The buffer moved on while we were parsing: go round again.
         if (m_parsedVersion != m_textVersion)
@@ -249,7 +249,7 @@ void MarkdownEditor::setNoteText(const QString &text)
     // rather than flickering through it.
     if (text.size() > kAsyncParseThreshold) {
         setWordCount(-1); // not counted until the parse comes back
-        adoptDecorations({}, {});
+        adoptDecorations({}, {}, {});
         startParse();
     } else {
         reparse();
@@ -657,7 +657,8 @@ void MarkdownEditor::reparse()
     sortDecorations(result.decorations);
     m_parsedVersion = m_textVersion;
     setWordCount(result.metadata.wordCount);
-    adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties));
+    adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties),
+                     std::move(result.metadata.headings));
 }
 
 void MarkdownEditor::startParse()
@@ -672,6 +673,7 @@ void MarkdownEditor::startParse()
         ParseJob job;
         job.decorations = std::move(result.decorations);
         job.properties = std::move(result.metadata.properties);
+        job.headings = std::move(result.metadata.headings);
         job.words = result.metadata.wordCount;
         sortDecorations(job.decorations);
         job.version = version;
@@ -679,10 +681,12 @@ void MarkdownEditor::startParse()
     }));
 }
 
-void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> properties)
+void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> properties,
+                                      QList<Heading> headings)
 {
     m_decorations = std::move(decorations);
     m_properties = std::move(properties);
+    m_headings = std::move(headings);
     m_lines = SourceMap(m_text);
     collectTabGroups();
     rebuildBlocks();
@@ -690,6 +694,7 @@ void MarkdownEditor::adoptDecorations(Decorations decorations, QList<Property> p
     invalidateLayouts();
     updateLayout();
     viewport()->update();
+    emit headingsChanged();
 }
 
 void MarkdownEditor::indexDecorations()
