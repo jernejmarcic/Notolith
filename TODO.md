@@ -163,7 +163,10 @@ budget, which this project has already learned once on the index.
       for the en_GB locale. Slovenian is not in the Arch repositories; its
       `sl_SI.aff`/`.dic` from LibreOffice's dictionaries work dropped into
       `~/.local/share/hunspell/`, with `sl` added to `LANGUAGE`.
-- [ ] A listing inside a callout wraps; Obsidian scrolls it.
+- [ ] **Verify first**: a listing inside a callout wraps here. The claim
+      that Obsidian scrolls it was mine and unchecked; the session notes say
+      Obsidian's live preview wraps too, and only its reading view is thought
+      to scroll. Nothing to change until someone looks.
 - [x] Property values: text, number, date and date-time edit in place (click
       the value; Enter or clicking away keeps it, Escape drops it). Written
       through yaml-cpp, quoted only when needed, and refused when it would
@@ -171,7 +174,7 @@ budget, which this project has already learned once on the index.
 - [x] List properties: a chip's cross removes it, the space after the chips
       adds one. Rewritten in the style written (block or flow), other items
       kept byte for byte; a list with a comment in it stays read-only.
-- [ ] Editing an existing list item in place (today: remove and add).
+- [x] Editing an existing list item in place: click its text.
 - [ ] Measure against Obsidian itself. Not installed here.
 
 ## Requested 2026-09-23
@@ -246,7 +249,7 @@ Jernej's rule: a new feature goes here and the current task carries on.
          comment in `MarkdownEditor.h` wrongly says it reloads on theme change.
          Watch the file, and `codeblocks.ini` with it;
       3. nested callouts cannot fold - only the outermost has a handle;
-      4. a listing inside a callout wraps where Obsidian scrolls it;
+      4. a listing inside a callout wraps - see "Verify first" above;
       5. Nerd Font glyph icons (arrives with the icon lane).
 
 ### Next, after tabs

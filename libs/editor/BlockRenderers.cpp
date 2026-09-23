@@ -218,6 +218,10 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 if (!row.adder.isNull() && row.adder.translated(left, top).contains(point)
                     && addListItemAt(at))
                     return true;
+                for (int i = 0; i < row.chips.size() && !row.removers.isEmpty(); ++i) {
+                    if (row.chips.at(i).translated(left, top).contains(point) && editListItemAt(at, i))
+                        return true;
+                }
                 // The value column of a scalar: click to edit it in place.
                 const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
                 if (m_properties.at(row.property).type != Property::Type::List
@@ -529,7 +533,26 @@ bool MarkdownEditor::editPropertyAt(qsizetype sourceOffset)
     if (!row)
         return false;
     openPropertyEditor(index, row->rect.translated(contentLeft(), top).adjusted(kKeyColumn - 4, 0, 0, 0),
-                       m_properties.at(index).values.value(0), false);
+                       m_properties.at(index).values.value(0), kEditValue);
+    return true;
+}
+
+bool MarkdownEditor::editListItemAt(qsizetype sourceOffset, int item)
+{
+    if (m_mode == Mode::Source || m_mode == Mode::Reading)
+        return false;
+    finishPropertyEdit(true);
+    const int index = propertyAt(sourceOffset);
+    if (index < 0 || !listIsRewritable(m_properties.at(index)))
+        return false;
+    qreal top = 0;
+    const PropertyRow *row = propertyRowOf(index, &top);
+    if (!row || item < 0 || item >= row->chips.size())
+        return false;
+    // Over the chip, wide enough to type into.
+    QRectF cell = row->chips.at(item).translated(contentLeft(), top);
+    cell.setWidth(qMax<qreal>(cell.width(), 140));
+    openPropertyEditor(index, cell, m_properties.at(index).values.value(item), item);
     return true;
 }
 
@@ -545,7 +568,7 @@ bool MarkdownEditor::addListItemAt(qsizetype sourceOffset)
     const PropertyRow *row = propertyRowOf(index, &top);
     if (!row || row->adder.isNull())
         return false;
-    openPropertyEditor(index, row->adder.translated(contentLeft(), top), QString(), true);
+    openPropertyEditor(index, row->adder.translated(contentLeft(), top), QString(), kEditNewItem);
     return true;
 }
 
@@ -585,7 +608,7 @@ bool MarkdownEditor::replaceListEntry(int index, const QStringList &raws, const 
 }
 
 void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QString &text,
-                                        bool addsItem)
+                                        int item)
 {
     auto *edit = new QLineEdit(viewport());
     edit->setFrame(false);
@@ -603,7 +626,7 @@ void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QSt
     connect(edit, &QLineEdit::editingFinished, this, [this] { finishPropertyEdit(true); });
     m_propertyEdit = edit;
     m_editedKey = m_properties.at(index).key;
-    m_editAddsItem = addsItem;
+    m_editedItem = item;
     edit->show();
     edit->setFocus();
 }
@@ -631,12 +654,22 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
                                        });
     if (property == m_properties.end())
         return;
-    if (m_editAddsItem) {
+    if (m_editedItem != kEditValue) {
         const std::optional<QString> item = Frontmatter::scalarFor(typed, Property::Type::Text);
         if (typed.trimmed().isEmpty() || !item || !listIsRewritable(*property))
+            return; // an item emptied out is removed with its cross, not here
+        QStringList raws = property->raw;
+        QStringList values = property->values;
+        if (m_editedItem == kEditNewItem) {
+            raws << *item;
+            values << typed.trimmed();
+        } else if (m_editedItem < raws.size() && typed.trimmed() != values.at(m_editedItem)) {
+            raws[m_editedItem] = *item;
+            values[m_editedItem] = typed.trimmed();
+        } else {
             return;
-        replaceListEntry(int(property - m_properties.begin()), property->raw + QStringList{*item},
-                         property->values + QStringList{typed.trimmed()});
+        }
+        replaceListEntry(int(property - m_properties.begin()), raws, values);
         return;
     }
     if (typed == property->values.value(0))

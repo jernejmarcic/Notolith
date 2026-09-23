@@ -72,6 +72,8 @@ public:
     /// safely - see Frontmatter::rewriteList.
     bool addListItemAt(qsizetype sourceOffset);
     bool removeListItemAt(qsizetype sourceOffset, int item);
+    /// Opens an editor over item `item` of a list property, to change it.
+    bool editListItemAt(qsizetype sourceOffset, int item);
     Mode mode() const { return m_mode; }
 
     /// Replaces the buffer and clears undo. Returns the caret to the top.
@@ -539,7 +541,7 @@ private:
     /// The laid-out row of property `index`, and the table's top in viewport
     /// coordinates; null when the table is folded or not laid out.
     const PropertyRow *propertyRowOf(int index, qreal *top) const;
-    void openPropertyEditor(int index, const QRectF &cell, const QString &text, bool addsItem);
+    void openPropertyEditor(int index, const QRectF &cell, const QString &text, int item);
     /// Writes a list property's items back, as one undo step.
     bool replaceListEntry(int index, const QStringList &raws, const QStringList &values);
     /// Closes the property editor, writing what it holds when `commit`.
@@ -702,7 +704,11 @@ private:
     /// key it edits: a reparse can renumber the properties under it.
     QPointer<QLineEdit> m_propertyEdit;
     QString m_editedKey;
-    bool m_editAddsItem = false; ///< the editor adds a list item rather than replacing a value
+    /// What the open editor writes: the scalar value (kEditValue), a new list
+    /// item (kEditNewItem), or list item n.
+    int m_editedItem = -1;
+    static constexpr int kEditValue = -1;
+    static constexpr int kEditNewItem = -2;
     /// Where the last updateLayout() moved blocks from, in document y; +inf
     /// when nothing moved. A scroll can reuse the pixels on screen only if
     /// nothing on screen moved.

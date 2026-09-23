@@ -2265,6 +2265,16 @@ TEST(PropertyEditTest, AListLosesAndGainsItems)
     EXPECT_EQ(editor->noteText(), note);
 }
 
+TEST(PropertyEditTest, AListItemIsChangedInPlace)
+{
+    const QString note = QStringLiteral("---\ntags:\n  - one\n  - two\n---\n");
+    auto editor = editorWith(note);
+    ASSERT_TRUE(editor->editListItemAt(note.indexOf(QLatin1String("tags")), 1));
+    EXPECT_EQ(editor->findChild<QLineEdit *>()->text(), QStringLiteral("two"));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("#2"), Qt::Key_Return));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("---\ntags:\n  - one\n  - \"#2\"\n---\n"));
+}
+
 TEST(PropertyEditTest, AFlowListStaysAFlowList)
 {
     const QString note = QStringLiteral("---\ntags: [a, b]\n---\n");
