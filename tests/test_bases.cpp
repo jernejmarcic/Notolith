@@ -396,6 +396,55 @@ BaseFile parseOrDie(const QString &yaml)
 
 } // namespace
 
+TEST(BaseSummaryTest, EachBuiltInSummaryOverItsKindOfColumn)
+{
+    const QList<Value> numbers = {Value::ofNumber(4), Value::ofNumber(1), Value::empty(), Value::ofNumber(7),
+                                  Value::ofNumber(4)};
+    EXPECT_EQ(summarize(QStringLiteral("Sum"), numbers), QStringLiteral("16"));
+    EXPECT_EQ(summarize(QStringLiteral("Average"), numbers), QStringLiteral("4"));
+    EXPECT_EQ(summarize(QStringLiteral("Min"), numbers), QStringLiteral("1"));
+    EXPECT_EQ(summarize(QStringLiteral("max"), numbers), QStringLiteral("7")) << "case-insensitive";
+    EXPECT_EQ(summarize(QStringLiteral("Range"), numbers), QStringLiteral("6"));
+    EXPECT_EQ(summarize(QStringLiteral("Median"), numbers), QStringLiteral("4"));
+    EXPECT_EQ(summarize(QStringLiteral("Stddev"), {Value::ofNumber(2), Value::ofNumber(4)}), QStringLiteral("1"));
+    EXPECT_EQ(summarize(QStringLiteral("Average"), {Value::ofNumber(1), Value::ofNumber(1), Value::ofNumber(2)}),
+              QStringLiteral("1.333"));
+    EXPECT_EQ(summarize(QStringLiteral("Empty"), numbers), QStringLiteral("1"));
+    EXPECT_EQ(summarize(QStringLiteral("Filled"), numbers), QStringLiteral("4"));
+    EXPECT_EQ(summarize(QStringLiteral("Unique"), numbers), QStringLiteral("3"));
+
+    const QDateTime first(QDate(2026, 9, 1), QTime(0, 0));
+    const QList<Value> dates = {Value::ofDate(first.addDays(9)), Value::ofDate(first)};
+    EXPECT_EQ(summarize(QStringLiteral("Earliest"), dates), Value::ofDate(first).toDisplayString());
+    EXPECT_EQ(summarize(QStringLiteral("Latest"), dates), Value::ofDate(first.addDays(9)).toDisplayString());
+    EXPECT_EQ(summarize(QStringLiteral("Range"), dates), QStringLiteral("9 days"));
+
+    const QList<Value> checks = {Value::ofBool(true), Value::ofBool(false), Value::ofBool(true)};
+    EXPECT_EQ(summarize(QStringLiteral("Checked"), checks), QStringLiteral("2"));
+    EXPECT_EQ(summarize(QStringLiteral("Unchecked"), checks), QStringLiteral("1"));
+
+    EXPECT_TRUE(summarize(QStringLiteral("customAverage"), numbers).isEmpty()) << "a file's own formula";
+    EXPECT_TRUE(summarize(QStringLiteral("Sum"), {}).isEmpty());
+}
+
+TEST(BaseSummaryTest, AViewsSummariesFollowItsFilteredRows)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    order: [file.name, price]\n"
+        "    filters:\n      and:\n        - 'price > 2'\n"
+        "    summaries:\n      price: Sum\n"));
+    QList<Row> rows;
+    for (int i = 1; i <= 4; ++i) {
+        Row r = makeRow(QStringLiteral("N%1").arg(i));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(i));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    EXPECT_EQ(query.summaryOf(QStringLiteral("price")), QStringLiteral("7")); // 3 + 4
+    EXPECT_TRUE(query.summaryOf(QStringLiteral("file.name")).isEmpty());
+}
+
 TEST(BaseQueryTest, FiltersRows)
 {
     const BaseFile file = parseOrDie(QStringLiteral(

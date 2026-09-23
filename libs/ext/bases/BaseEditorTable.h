@@ -29,6 +29,7 @@ struct BaseEditorTable {
     int shownView = 0;     ///< index into viewNames/headers/rows came from
     QStringList headers;   ///< the shown view's column headers
     QList<BaseEditorRow> rows;
+    QStringList summaries; ///< one per column when the view has any, else empty
     QString error;
 };
 

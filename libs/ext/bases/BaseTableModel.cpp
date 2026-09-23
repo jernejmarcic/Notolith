@@ -1,5 +1,8 @@
 #include "BaseTableModel.h"
 
+#include <QApplication>
+#include <QPalette>
+
 #include "BaseQuery.h"
 #include "Frontmatter.h"
 #include "Index.h"
@@ -59,7 +62,17 @@ void BaseTableModel::refresh()
 int BaseTableModel::rowCount(const QModelIndex &parent) const
 {
     if (parent.isValid() || !m_query) return 0;
-    return int(m_query->resultRows().size());
+    return int(m_query->resultRows().size()) + (hasFooter() ? 1 : 0);
+}
+
+bool BaseTableModel::hasFooter() const
+{
+    return m_query && !m_query->view().summaries.isEmpty();
+}
+
+bool BaseTableModel::isFooter(int row) const
+{
+    return hasFooter() && row == int(m_query->resultRows().size());
 }
 
 int BaseTableModel::columnCount(const QModelIndex &parent) const
@@ -91,6 +104,14 @@ QVariant BaseTableModel::data(const QModelIndex &index, int role) const
 {
     if (!m_query || !index.isValid())
         return {};
+    if (isFooter(index.row())) {
+        // The view's summaries, a last row under its columns, as Obsidian's.
+        if (role == Qt::DisplayRole)
+            return m_query->summaryOf(propertyReferenceAt(index.column()));
+        if (role == Qt::ForegroundRole)
+            return QApplication::palette().brush(QPalette::PlaceholderText);
+        return {};
+    }
     const qsizetype rowIndex = m_query->resultRows().at(index.row());
     const QString ref = propertyReferenceAt(index.column());
     const Value value = m_query->valueOf(rowIndex, ref);
@@ -110,6 +131,8 @@ Qt::ItemFlags BaseTableModel::flags(const QModelIndex &index) const
 {
     if (!index.isValid())
         return Qt::NoItemFlags;
+    if (isFooter(index.row()))
+        return Qt::ItemIsEnabled;
     Qt::ItemFlags f = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
     const QString ref = propertyReferenceAt(index.column());
     if (m_index && m_vault && isNoteProperty(ref)) {

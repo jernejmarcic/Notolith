@@ -545,6 +545,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] `canvas:new-file` ("Create new canvas"): an empty `{}` Untitled.canvas.
 - [ ] A new-base command: Obsidian's id is not in the 1.1.15 list, find it.
 - [x] ` ```base ` blocks inside notes, on `BaseView`.
+- [x] Bases `summaries:` - every built-in (Average ... Unique), a footer row in
+      the base view and in a base block. A file's own summary formulas over
+      `values` wait on list values in the expression language.
 - [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
       `summaries:`, list-property cells, cards read-only, sort not saved back.
 - [x] Canvas controls as Obsidian's: a drag on empty canvas draws a

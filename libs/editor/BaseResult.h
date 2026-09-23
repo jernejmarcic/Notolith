@@ -29,6 +29,7 @@ struct BaseTableData {
     int shownView = 0;
     QStringList headers;
     QList<BaseTableRow> rows;
+    QStringList summaries; ///< one per column when the view has any, else empty
     QString error;
 };
 

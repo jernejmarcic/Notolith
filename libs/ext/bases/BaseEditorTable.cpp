@@ -51,6 +51,10 @@ BaseEditorTable evaluateBaseForEditor(const QString &yamlText, const QList<Index
         row.notePath = query.rows().at(rowIndex).notePath;
         table.rows.append(std::move(row));
     }
+    if (!query.view().summaries.isEmpty()) {
+        for (const QString &reference : order)
+            table.summaries << query.summaryOf(reference);
+    }
     return table;
 }
 

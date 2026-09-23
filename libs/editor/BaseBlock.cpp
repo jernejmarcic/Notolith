@@ -251,7 +251,10 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
     const bool truncated = entry.results.rows.size() > kMaxRows;
     const int shownRows = truncated ? kMaxRows : int(entry.results.rows.size());
     const int summaryRow = truncated ? shownRows + 1 : -1;
-    const int totalRows = (truncated ? summaryRow : shownRows) + 1; // +1 for the header row
+    // The view's `summaries:`, a footer under its columns, as Obsidian's.
+    const bool footer = !entry.results.summaries.isEmpty();
+    const int footerRow = footer ? (truncated ? summaryRow : shownRows) + 1 : -1;
+    const int totalRows = (footer ? footerRow : (truncated ? summaryRow : shownRows)) + 1; // +1 for the header row
 
     const QFont font = m_theme.textFont();
     const qreal cellLineHeight = QFontMetricsF(font).height() * 1.4;
@@ -299,6 +302,8 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
         addCell(summaryRow, 0, tr("and %1 more").arg(entry.results.rows.size() - kMaxRows), false,
                mutedColour);
     }
+    for (int c = 0; footer && c < columns && c < entry.results.summaries.size(); ++c)
+        addCell(footerRow, c, entry.results.summaries.at(c), false, mutedColour);
 
     // Obsidian does not squeeze a table into the readable column - see
     // layoutTable's own comment, which this mirrors exactly.
@@ -350,7 +355,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
     // Only a data row's first cell opens its note - BaseTableModel::
     // isNameColumn's choice for the real widget, mirrored here.
     for (const Cell &cell : cells) {
-        if (cell.column != 0 || cell.row == 0 || cell.row == summaryRow)
+        if (cell.column != 0 || cell.row == 0 || cell.row == summaryRow || cell.row == footerRow)
             continue;
         const int dataIndex = cell.row - 1;
         if (dataIndex < 0 || dataIndex >= shownRows)

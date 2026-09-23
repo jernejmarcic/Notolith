@@ -128,6 +128,12 @@ QList<ViewConfig> parseViews(const YAML::Node &node)
         // this module's best inference, not a confirmed spelling.
         if (entry["image"] && entry["image"].IsScalar())
             view.imageProperty = scalarOf(entry["image"]);
+        if (entry["summaries"] && entry["summaries"].IsMap()) {
+            for (const auto &item : entry["summaries"]) {
+                if (item.first.IsScalar() && item.second.IsScalar())
+                    view.summaries.insert(scalarOf(item.first), scalarOf(item.second));
+            }
+        }
         out << view;
     }
     return out;

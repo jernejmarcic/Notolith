@@ -1,5 +1,11 @@
 #include "BaseQuery.h"
 
+#include <cmath>
+
+#include <numeric>
+
+#include <QSet>
+
 #include "Vault.h"
 
 #include <QFileInfo>
@@ -287,6 +293,99 @@ Value BaseQuery::valueOf(qsizetype rowIndex, const QString &propertyReference) c
         return Value::empty();
     }
     return v;
+}
+
+QString BaseQuery::summaryOf(const QString &propertyReference) const
+{
+    const QString name = view().summaries.value(propertyReference);
+    if (name.isEmpty())
+        return {};
+    QList<Value> values;
+    values.reserve(m_result.size());
+    for (const qsizetype row : m_result)
+        values << valueOf(row, propertyReference);
+    return summarize(name, values);
+}
+
+QString summarize(const QString &name, const QList<Value> &values)
+{
+    const QString key = name.toLower();
+    const auto blank = [](const Value &value) {
+        return value.isEmpty() || (value.type == Value::Type::String && value.text.isEmpty())
+            || (value.type == Value::Type::List && value.list.isEmpty());
+    };
+    const auto count = [&values](auto keep) {
+        return QString::number(std::count_if(values.cbegin(), values.cend(), keep));
+    };
+    if (key == QLatin1String("empty"))
+        return count(blank);
+    if (key == QLatin1String("filled"))
+        return count([&](const Value &value) { return !blank(value); });
+    if (key == QLatin1String("unique")) {
+        QSet<QString> seen;
+        for (const Value &value : values) {
+            if (!blank(value))
+                seen.insert(value.toDisplayString());
+        }
+        return QString::number(seen.size());
+    }
+    if (key == QLatin1String("checked"))
+        return count([](const Value &value) { return value.type == Value::Type::Bool && value.boolean; });
+    if (key == QLatin1String("unchecked"))
+        return count([](const Value &value) { return value.type == Value::Type::Bool && !value.boolean; });
+
+    QList<double> numbers;
+    QList<QDateTime> dates;
+    for (const Value &value : values) {
+        if (value.type == Value::Type::Number && std::isfinite(value.number))
+            numbers << value.number;
+        else if (value.type == Value::Type::Date && value.date.isValid())
+            dates << value.date;
+    }
+    if (dates.size() > numbers.size()) { // a date column
+        if (dates.isEmpty())
+            return {};
+        std::sort(dates.begin(), dates.end());
+        if (key == QLatin1String("earliest"))
+            return Value::ofDate(dates.constFirst()).toDisplayString();
+        if (key == QLatin1String("latest"))
+            return Value::ofDate(dates.constLast()).toDisplayString();
+        if (key == QLatin1String("range")) {
+            const qint64 days = dates.constFirst().daysTo(dates.constLast());
+            return days == 1 ? QStringLiteral("1 day") : QStringLiteral("%1 days").arg(days);
+        }
+        return {};
+    }
+    if (numbers.isEmpty())
+        return {};
+    std::sort(numbers.begin(), numbers.end());
+    const double sum = std::accumulate(numbers.cbegin(), numbers.cend(), 0.0);
+    const double mean = sum / double(numbers.size());
+    // To three places, as Obsidian's own example summary rounds a mean.
+    const auto shown = [](double number) {
+        return Value::ofNumber(std::round(number * 1000) / 1000).toDisplayString();
+    };
+    if (key == QLatin1String("sum"))
+        return shown(sum);
+    if (key == QLatin1String("average"))
+        return shown(mean);
+    if (key == QLatin1String("min"))
+        return shown(numbers.constFirst());
+    if (key == QLatin1String("max"))
+        return shown(numbers.constLast());
+    if (key == QLatin1String("range"))
+        return shown(numbers.constLast() - numbers.constFirst());
+    if (key == QLatin1String("median")) {
+        const qsizetype middle = numbers.size() / 2;
+        return shown(numbers.size() % 2 ? numbers.at(middle) : (numbers.at(middle - 1) + numbers.at(middle)) / 2);
+    }
+    if (key == QLatin1String("stddev")) {
+        double squares = 0;
+        for (const double number : std::as_const(numbers))
+            squares += (number - mean) * (number - mean);
+        return shown(std::sqrt(squares / double(numbers.size()))); // over the column, not a sample
+    }
+    return {};
 }
 
 void BaseQuery::sortBy(const QString &propertyReference, SortDirection direction)

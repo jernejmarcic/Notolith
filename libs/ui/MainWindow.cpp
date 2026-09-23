@@ -617,6 +617,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             result.viewNames = table.viewNames;
             result.shownView = table.shownView;
             result.headers = table.headers;
+            result.summaries = table.summaries;
             result.error = table.error;
             for (const bases::BaseEditorRow &row : table.rows)
                 result.rows.append({row.cells, row.notePath});

@@ -22,6 +22,13 @@ namespace noteAppC::bases {
 /// reads it.
 Row rowFromNote(const Index::BaseNote &note);
 
+/// One of Obsidian's built-in summaries over a column's values, as the
+/// footer shows it: Average, Min, Max, Sum, Range, Median, Stddev (numbers),
+/// Earliest, Latest, Range (dates), Checked, Unchecked (checkboxes), Empty,
+/// Filled, Unique (anything). Case-insensitive; "" for a name it does not
+/// know or a column with nothing to summarise.
+QString summarize(const QString &name, const QList<Value> &values);
+
 /// Filters, sorts, groups and limits a `.base` file's rows for one of its
 /// views. Independent of Index and Vault beyond `rowFromNote` above: tests
 /// can hand it synthetic rows directly, which is what makes the 20 000-row
@@ -58,6 +65,11 @@ public:
     /// `note.x`/a bare key, or `formula.x`, resolving formulas (with cycle
     /// protection) the same way a filter or a formula-of-a-formula would.
     Value valueOf(qsizetype rowIndex, const QString &propertyReference) const;
+    /// The view's summary for `propertyReference` over resultRows(), "" when
+    /// the view gives it none. ponytail: built-in summaries only - a file's
+    /// own `summaries:` formulas are over `values`, a list the expression
+    /// language cannot yet hold; such a summary shows nothing.
+    QString summaryOf(const QString &propertyReference) const;
 
     /// Re-orders resultRows() by an arbitrary property - a clicked table
     /// header - without touching the view's own configured sort or the

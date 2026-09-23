@@ -22,6 +22,9 @@ views:
     sort:
       - property: rating
         direction: DESC
+    summaries:
+      rating: Average
+      file.name: Filled
 
   - type: table
     name: By category, grouped

@@ -61,6 +61,9 @@ struct ViewConfig {
     int limit = -1;       ///< -1: unlimited
     BaseGroupBy groupBy;
     QString imageProperty; ///< cards only: cover-image property, "" = none
+    /// `summaries:`: property reference -> a built-in summary's name
+    /// ("Average", "Sum", "Earliest", "Filled", ...), shown under its column.
+    QHash<QString, QString> summaries;
 };
 
 /// A `.base` file: YAML conforming to Obsidian's Bases schema. Parses the

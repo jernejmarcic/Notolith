@@ -53,6 +53,9 @@ public:
     /// True when `column`'s property reference is the note's own name
     /// (`file.name`) - BaseView makes that specific cell open the note.
     bool isNameColumn(int column) const;
+    /// A last row of the view's summaries, under the notes, when it has any.
+    bool hasFooter() const;
+    bool isFooter(int row) const;
     /// The column showing `propertyReference`, or -1.
     int columnOf(const QString &propertyReference) const;
 
