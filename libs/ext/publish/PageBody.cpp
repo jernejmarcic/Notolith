@@ -323,7 +323,7 @@ private:
             return QStringLiteral("<div class=\"math-block\">")
                   + renderMath(note.decorations.maths.at(node.dataIndex), note) + QStringLiteral("</div>\n");
         case BlockNode::HtmlBlock:
-            return renderRawHtml(note.text.mid(node.range.start, node.range.length()), true);
+            return renderRawHtml(stripHiddenRanges(node.range, note), true);
         case BlockNode::ListGroup:
             return renderListRun(node.range, note);
         case BlockNode::Heading: {
@@ -334,8 +334,23 @@ private:
                   .arg(level)
                   .arg(anchor, emitInline(h.textRange, note));
         }
-        case BlockNode::Paragraph:
-            return QStringLiteral("<p>") + emitInline(node.range, note) + QStringLiteral("</p>\n");
+        case BlockNode::Paragraph: {
+            // A callout/container header line is its own one-line paragraph
+            // whenever the very next line starts a different block (a fenced
+            // code block, a table, ...) rather than continuing the same
+            // prose - decorations.syntax hides the whole line (see
+            // detectCallout()), so this paragraph's inline content comes
+            // back empty and an empty <p></p> would otherwise sit at the top
+            // of the callout's body for no reason.
+            const QString content = emitInline(node.range, note);
+            if (content.trimmed().isEmpty())
+                return {};
+            // A <div> (a note/heading/block embed) is not legal inside a
+            // <p> - see soleEmbedSpan().
+            if (soleEmbedSpan(node.range, note))
+                return content + QStringLiteral("\n");
+            return QStringLiteral("<p>") + content + QStringLiteral("</p>\n");
+        }
         }
         return {};
     }
@@ -442,10 +457,24 @@ private:
         const QString title = QStringLiteral("<span class=\"callout-icon\">%1</span>"
                                              "<span class=\"callout-title-text\">%2</span>")
                                   .arg(icon, escapeHtml(callout.title));
+        // A depth>0 (nested) callout only has its "[!type]" marker hidden by
+        // the parser, not the rest of its header line - deliberately, so the
+        // live editor can keep the title inline in its own paragraph layout.
+        // This renderer draws the title separately instead, so everything
+        // from the end of the marker to the end of the title (the
+        // connecting space included, not just titleRange itself) goes onto
+        // m_extraHides for exactly this body's rendering, or the title would
+        // appear twice: once here, once as leftover body text. A no-op for a
+        // depth-0 callout, whose whole header line is already hidden.
+        const bool pushedHide = callout.titleRange.isValid() && callout.marker.isValid();
+        if (pushedHide)
+            m_extraHides.append({callout.marker.end, callout.titleRange.end});
         const QString body = QStringLiteral("<div class=\"callout-content\">")
                              + emitRegion(callout.range, note, /*includeHeadings=*/false,
                                          BlockNode::Callout, calloutIndex)
                              + QStringLiteral("</div>");
+        if (pushedHide)
+            m_extraHides.removeLast();
         const QString dataType = escapeAttr(callout.type);
 
         if (callout.foldable) {
@@ -472,6 +501,53 @@ private:
         return svg;
     }
 
+    /// A range's raw source with every overlapping decorations.syntax span
+    /// removed - what a code fence, raw HTML block or maths formula needs
+    /// for its *literal* text, as opposed to emitInline()'s hide-and-style
+    /// walk. Without this, a code fence (or formula, or HTML block) sitting
+    /// inside a blockquote/callout would carry every line's "> " quote
+    /// marker as literal text: CommonMark dequotes a blockquote's lines
+    /// before parsing what is inside it, but the *ranges* Decorations
+    /// reports still point into the original, still-quoted source, since
+    /// that is the only text a rename or an editor's cursor can work with.
+    ///
+    /// `excludeSelfContaining`: an *inline* formula's whole text is itself
+    /// one decorations.syntax entry (see the comment on Parser.cpp's inline
+    /// maths handling: the editor hides the source and draws a formula image
+    /// over it), which would otherwise strip the formula down to nothing.
+    /// Skipping any hide that fully contains `range` tells that case apart
+    /// from a real quote marker or a callout title, neither of which can
+    /// ever span the whole thing they sit inside.
+    QString stripHiddenRanges(const Range &range, const ParsedNote &note, bool excludeSelfContaining = false)
+    {
+        if (!range.isValid())
+            return {};
+        QList<Range> hides;
+        const auto collect = [&](const Range &r) {
+            if (!range.overlaps(r))
+                return;
+            if (excludeSelfContaining && r.start <= range.start && r.end >= range.end)
+                return;
+            hides.append(clip(r, range));
+        };
+        for (const Range &r : note.decorations.syntax)
+            collect(r);
+        for (const Range &r : m_extraHides)
+            collect(r);
+        std::sort(hides.begin(), hides.end(),
+                 [](const Range &a, const Range &b) { return a.start < b.start; });
+        QString out;
+        qsizetype pos = range.start;
+        for (const Range &hide : std::as_const(hides)) {
+            if (hide.start > pos)
+                out += note.text.mid(pos, hide.start - pos);
+            pos = qMax(pos, hide.end);
+        }
+        if (pos < range.end)
+            out += note.text.mid(pos, range.end - pos);
+        return out;
+    }
+
     // --- code fences -----------------------------------------------------
 
     const CodeOptions *optionsFor(const Range &content, const ParsedNote &note)
@@ -485,7 +561,7 @@ private:
 
     QString renderCodeFence(const CodeFenceSpan &fence, const ParsedNote &note)
     {
-        const QString text = note.text.mid(fence.content.start, fence.content.length());
+        const QString text = stripHiddenRanges(fence.content, note);
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
 
@@ -621,7 +697,7 @@ private:
     /// replace in Publisher.cpp can never hit the wrong spot.
     QString renderMath(const MathSpan &math, const ParsedNote &note)
     {
-        const QString formula = note.text.mid(math.formula.start, math.formula.length());
+        const QString formula = stripHiddenRanges(math.formula, note, /*excludeSelfContaining=*/true);
         const QString token = QStringLiteral("\x01math-%1\x01").arg(m_formulas.size());
         m_formulas.append({token, formula, math.display ? 20.0 : 16.0});
         return token;
@@ -719,6 +795,15 @@ private:
             if (range.overlaps(r))
                 hides.append(clip(r, range));
         }
+        // A nested callout's title text is not itself parser-hidden syntax
+        // (only its "[!type]" marker is - see the comment in renderCallout()
+        // on why a depth>0 header is not a whole hidden line the way a
+        // top-level one is); m_extraHides is how it still disappears from
+        // its own body instead of appearing twice.
+        for (const Range &r : m_extraHides) {
+            if (range.overlaps(r))
+                hides.append(clip(r, range));
+        }
         std::sort(hides.begin(), hides.end(),
                  [](const Range &a, const Range &b) { return a.start < b.start; });
 
@@ -769,8 +854,7 @@ private:
             return QStringLiteral("<del>") + emitInline(node.range, note, node.kind, node.dataIndex)
                   + QStringLiteral("</del>");
         case InlineNode::Code:
-            return QStringLiteral("<code>")
-                  + escapeHtml(note.text.mid(node.range.start, node.range.length()))
+            return QStringLiteral("<code>") + escapeHtml(stripHiddenRanges(node.range, note))
                   + QStringLiteral("</code>");
         case InlineNode::Highlight:
             return QStringLiteral("<mark>") + emitInline(node.range, note, node.kind, node.dataIndex)
@@ -778,7 +862,7 @@ private:
         case InlineNode::Tag:
             return renderTag(note.decorations.styles.at(node.dataIndex).payload);
         case InlineNode::Html:
-            return renderRawHtml(note.text.mid(node.range.start, node.range.length()), false);
+            return renderRawHtml(stripHiddenRanges(node.range, note), false);
         case InlineNode::Math:
             return renderMath(note.decorations.maths.at(node.dataIndex), note);
         case InlineNode::Link:
@@ -822,6 +906,48 @@ private:
         r.isNote = noteAppC::Vault::isNote(resolved);
         r.published = r.isNote && m_env.notes.contains(resolved);
         return r;
+    }
+
+    /// The one embed a paragraph is nothing but, or nullptr. A note/heading/
+    /// block embed renders a <div>, which cannot legally sit inside a <p> -
+    /// this is what tells renderBlockNode() to skip that wrapper for exactly
+    /// this shape (`![[Note]]` alone on its own line is the common case: an
+    /// embed always starts its own paragraph, since CommonMark never merges
+    /// two "lines" that would parse as different block starts).
+    const StyleSpan *soleEmbedSpan(const Range &range, const ParsedNote &note) const
+    {
+        const StyleSpan *found = nullptr;
+        for (const StyleSpan &s : note.decorations.styles) {
+            if (s.kind != StyleSpan::Kind::Link || !within(s.range, range))
+                continue;
+            const Link *link = linkFor(s, note);
+            if (!link || !link->embed)
+                continue;
+            if (found)
+                return nullptr; // more than one embed: keep the safe, always-valid <p> wrapping
+            found = &s;
+        }
+        if (!found)
+            return nullptr;
+
+        QList<Range> occupied = {found->range};
+        for (const Range &r : note.decorations.syntax)
+            if (range.overlaps(r))
+                occupied.append(clip(r, range));
+        for (const Range &r : m_extraHides)
+            if (range.overlaps(r))
+                occupied.append(clip(r, range));
+        std::sort(occupied.begin(), occupied.end(),
+                 [](const Range &a, const Range &b) { return a.start < b.start; });
+        qsizetype pos = range.start;
+        for (const Range &r : std::as_const(occupied)) {
+            if (r.start > pos && !note.text.mid(pos, r.start - pos).trimmed().isEmpty())
+                return nullptr; // real text alongside the embed
+            pos = qMax(pos, r.end);
+        }
+        if (pos < range.end && !note.text.mid(pos, range.end - pos).trimmed().isEmpty())
+            return nullptr;
+        return found;
     }
 
     /// Finds the metadata.links entry a StyleSpan::Kind::Link points at, by
@@ -1070,6 +1196,7 @@ private:
     int m_embedDepth = 0;
     int m_blockDepth = 0;
     int m_inlineDepth = 0;
+    QList<Range> m_extraHides;
     QHash<QString, int> m_headingAnchors;
     QHash<QString, QString> m_iconCache;
     QList<TokenStyle> m_codeStyles;
