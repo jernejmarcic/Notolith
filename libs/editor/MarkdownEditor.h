@@ -501,6 +501,30 @@ public:
     /// keep their standard keys, as they do in Obsidian.
     void setKeyBindings(const QHash<QString, QList<QKeySequence>> &bindings);
 
+    // --- slash commands, implemented in SlashCommands.cpp ------------------
+    // Obsidian's `slash-command`: "/" at the start of a line or after
+    // whitespace lists commands, fuzzy filtered by what follows it. The
+    // editor does not know what a command is - MainWindow hands it a source
+    // (window actions and editor commands) and a way to run one by id.
+
+    /// One row of the popup: `keys` is already formatted for display (as
+    /// QuickSwitcher's command palette shows its own hotkeys), empty for an
+    /// unbound command.
+    struct SlashCommand {
+        QString id;
+        QString name;
+        QString keys;
+    };
+    /// Called once, when the popup opens - not per keystroke.
+    using SlashCommandSource = std::function<QList<SlashCommand>()>;
+    /// A null `source` turns the feature off: "/" is then just a character,
+    /// at no cost to a note that never opens the popup.
+    void setSlashCommands(SlashCommandSource source, std::function<void(const QString &id)> run);
+    /// Whether the popup is currently up - for tests; the window never asks.
+    bool slashPopupVisible() const;
+    /// The popup's current rows, filtered and ranked, top first - for tests.
+    QStringList slashSuggestions() const;
+
     void toggleBold();      ///< Ctrl+B
     void toggleItalic();    ///< Ctrl+I
     void toggleHighlight(); ///< Ctrl+Shift+H
@@ -1499,6 +1523,16 @@ private:
     void updateSuggestions();
     void insertCompletion(const QString &completion);
 
+    // --- slash commands, implemented in SlashCommands.cpp ------------------
+    /// Text typed after the nearest "/" that opens the popup (line start or
+    /// after whitespace, not inside code, inline code or maths); unset when
+    /// the caret is not in one, which also closes it.
+    std::optional<QString> slashPrefix() const;
+    void updateSlashSuggestions();
+    void insertSlashCompletion(const QString &name);
+    void ensureSlashCompleter();
+    bool cursorInCodeOrMath() const;
+
     QList<QTextLayout::FormatRange> formatsFor(BlockView &view);
     /// A wavy underline under each word of `view` the dictionary rejects.
     void appendSpellingFormats(const BlockView &view, QList<QTextLayout::FormatRange> &formats) const;
@@ -1681,6 +1715,14 @@ private:
     FindBar *m_findBar = nullptr;
 
     QCompleter *m_completer = nullptr;
+
+    // --- slash commands ------------------------------------------------
+    SlashCommandSource m_slashSource;
+    std::function<void(const QString &id)> m_runSlashCommand;
+    QCompleter *m_slashCompleter = nullptr; ///< built lazily: null while unused
+    QList<SlashCommand> m_slashCache;       ///< fetched when the popup opens
+    QHash<QString, QString> m_slashIDs;     ///< the open popup's name -> id
+
     QTimer m_parseTimer;
     /// The parse runs off the UI thread; a generation counter says whether the
     /// result still describes the text in the buffer.
