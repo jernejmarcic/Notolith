@@ -44,11 +44,14 @@ qt_add_resources(microtex "microtex_fonts"
 add_library(noteAppC_render STATIC
     CodeHighlighter.cpp
     CodeHighlighter.h
+    MediaPlayback.cpp
+    MediaPlayback.h
     PdfPage.cpp
     PdfPage.h
     MathRenderer.cpp
     MathRenderer.h)
 
+set_target_properties(noteAppC_render PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_render
     PUBLIC Qt6::Gui noteAppC_theme
@@ -86,3 +89,17 @@ if(TARGET PkgConfig::POPPLER_QT6)
 else()
     message(STATUS "noteAppC: poppler-qt6 not found, PDF embeds disabled")
 endif()
+
+# Audio and video embeds. Optional: without Qt Multimedia MediaPlayback reports
+# itself unavailable and an embed offers to open the file instead.
+if(NOTEAPPC_WITH_MEDIA)
+    find_package(Qt6 QUIET COMPONENTS Multimedia)
+endif()
+if(TARGET Qt6::Multimedia)
+    target_link_libraries(noteAppC_render PRIVATE Qt6::Multimedia)
+    target_compile_definitions(noteAppC_render PRIVATE NOTEAPPC_HAVE_MEDIA)
+    message(STATUS "noteAppC: audio and video embeds enabled (Qt Multimedia)")
+else()
+    message(STATUS "noteAppC: audio and video embeds open the file instead (no Qt Multimedia)")
+endif()
+

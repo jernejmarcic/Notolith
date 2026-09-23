@@ -429,6 +429,9 @@ private:
         QString embedLabel;
         /// Draw the code panel and header behind this block.
         bool embedPanel = false;
+        /// An audio or video embed's file: the block is a player card.
+        QString mediaPath;
+        bool mediaVideo = false;
 
         /// One inline `$...$` formula resolved while laying this block out.
         /// `QTextLayout` has no notion of an inline object, so the lone "$"
@@ -759,6 +762,17 @@ private:
     /// and a PDF page both paint through this.
     void paintBlocks(QPainter &painter, qreal scroll, qreal exposedTop, qreal exposedBottom) const;
     CodeHighlighter m_code;
+    /// Plays audio and video embeds; made on first use, one file at a time.
+    class MediaPlayback *m_media = nullptr;
+    bool layoutMedia(BlockView &view, const QString &path, bool video);
+    void paintMedia(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// A player card's parts, in viewport coordinates: the picture (empty for
+    /// audio), the play button and the progress bar.
+    QRectF mediaScreenRect(const BlockView &view, qreal left, qreal top) const;
+    QRectF mediaButtonRect(const BlockView &view, qreal left, qreal top) const;
+    QRectF mediaBarRect(const BlockView &view, qreal left, qreal top) const;
+    /// Play, pause or seek, for a click at `point` on a player card.
+    bool handleMediaClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
     /// The link a preview was asked for, so the signals fire on changes only.
     QString m_previewLink;
     void updateLinkHover(const QPoint &viewportPoint, bool control, const QPoint &globalPos);

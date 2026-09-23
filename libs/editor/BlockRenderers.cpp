@@ -168,6 +168,9 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         if (!view.laidOut)
             continue;
 
+        if (handleMediaClick(view, point, left, top))
+            return true;
+
         for (const NestedCallout &nested : view.nested) {
             if (nested.span->foldable
                 && nestedFoldHandleRect(view, nested, left, top).adjusted(-6, -6, 6, 6).contains(point)) {

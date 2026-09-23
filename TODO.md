@@ -341,7 +341,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       heading or block the link names; Ctrl held while editing, plain hover
       in reading view, as Obsidian. Links inside it can be followed.
       Notes only for now - Obsidian also previews images and PDFs.
-- [ ] Audio and video embeds (Qt Multimedia, optional).
+- [x] Audio and video embeds: a player card (play/pause, seek bar, clock;
+      video frames painted into the block), Qt Multimedia optional behind
+      `NOTEAPPC_WITH_MEDIA` - without it a click opens the file. No poster
+      frame before play yet.
 - [ ] `query` blocks, on the wave 1 search.
 - [x] PDF export of the reading view (`workspace:export-pdf`): Obsidian's
       options - file name as title, A3/A4/A5/Legal/Letter/Tabloid,

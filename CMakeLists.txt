@@ -26,6 +26,7 @@ qt_standard_project_setup()
 # it is installed but built against a Qt too new to link with that kit.
 option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
 option(NOTEAPPC_WITH_PDF "Embed PDFs with poppler-qt6" ON)
+option(NOTEAPPC_WITH_MEDIA "Play audio and video embeds with Qt Multimedia" ON)
 # The first Tier 1 module (docs/PLUGINS.md). Off, or without hunspell, the app
 # has no spellcheck code at all and its settings row does not appear.
 option(NOTEAPPC_WITH_SPELLCHECK "Underline misspelt words with hunspell" ON)

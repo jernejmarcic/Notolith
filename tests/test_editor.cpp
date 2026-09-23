@@ -2518,6 +2518,26 @@ TEST(PdfExportTest, ALongNoteBecomesSeveralPages)
     EXPECT_GE(QString::fromLatin1(pdf).count(pageObject), 3) << "120 paragraphs on A4";
 }
 
+// --- audio and video ------------------------------------------------------------
+
+TEST(MediaEmbedTest, AudioAndVideoBecomePlayerCards)
+{
+    // The card's file only has to resolve for the layout; playing it is the
+    // media backend's business.
+    const auto heightOf = [](const QString &note) {
+        auto editor = std::make_unique<MarkdownEditor>();
+        editor->resize(900, 600);
+        editor->setLinkResolver([](const QString &target) { return QStringLiteral("/nowhere/") + target; });
+        editor->setNoteText(note);
+        return editor->documentHeight();
+    };
+    const qreal audio = heightOf(QStringLiteral("![[song.mp3]]\n"));
+    const qreal video = heightOf(QStringLiteral("![[clip.mp4]]\n"));
+    const qreal plain = heightOf(QStringLiteral("song.mp3\n"));
+    EXPECT_GT(audio, plain) << "an audio embed is a card with a header and controls";
+    EXPECT_GT(video, audio + 200) << "a video card has a picture above its controls";
+}
+
 // --- links to headings -------------------------------------------------------
 
 TEST(HeadingLinkTest, ANoteAndHeadingReadAsNoteThenHeading)

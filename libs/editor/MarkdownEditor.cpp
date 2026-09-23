@@ -1,6 +1,7 @@
 #include "MarkdownEditor.h"
 
 #include "Icons.h"
+#include "MediaPlayback.h"
 #include "PdfPage.h"
 #include "Vault.h"
 
@@ -11,6 +12,8 @@
 #include <QFileSystemWatcher>
 #include <QCompleter>
 #include <QCursor>
+#include <QUrl>
+#include <QDesktopServices>
 #include <QKeyEvent>
 #include <QLinearGradient>
 #include <QWheelEvent>
@@ -236,6 +239,8 @@ void MarkdownEditor::setMode(Mode mode)
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
+    if (m_media)
+        m_media->stop();
     m_text = text;
     ++m_textVersion;
     m_cursor = m_anchor = 0;
@@ -1720,6 +1725,8 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.imagePath.clear();
     view.embedLabel.clear();
     view.embedPanel = false;
+    view.mediaPath.clear();
+    view.mediaVideo = false;
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed || !m_resolver)
@@ -1734,6 +1741,14 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
 
     if (images.contains(suffix.toUtf8()))
         return layoutImage(view, *embed, path);
+    // Obsidian's audio and video formats.
+    static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
+                                      QStringLiteral("ogg"), QStringLiteral("3gp"), QStringLiteral("flac"),
+                                      QStringLiteral("opus")};
+    static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
+                                      QStringLiteral("mov"), QStringLiteral("mkv")};
+    if (audio.contains(suffix) || video.contains(suffix))
+        return layoutMedia(view, path, video.contains(suffix));
     if (suffix == QLatin1String("pdf"))
         return layoutPdf(view, *embed, path);
     // A note embed is rendered by the transclusion path, not here.
@@ -2251,6 +2266,162 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     painter.fillRect(QRectF(barX, top + view.height + 2, barWidth, 3), bar);
 }
 
+namespace {
+
+constexpr qreal kMediaControls = 36;
+
+QString clockOf(qint64 milliseconds)
+{
+    const qint64 seconds = qMax<qint64>(0, milliseconds / 1000);
+    return seconds >= 3600 ? QStringLiteral("%1:%2:%3")
+                                 .arg(seconds / 3600)
+                                 .arg((seconds / 60) % 60, 2, 10, QLatin1Char('0'))
+                                 .arg(seconds % 60, 2, 10, QLatin1Char('0'))
+                           : QStringLiteral("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10,
+                                                                          QLatin1Char('0'));
+}
+
+} // namespace
+
+bool MarkdownEditor::layoutMedia(BlockView &view, const QString &path, bool video)
+{
+    view.mediaPath = path;
+    view.mediaVideo = video;
+    view.embedLabel = QFileInfo(path).fileName();
+    view.embedPanel = true;
+    view.layout.reset();
+    view.cells.clear();
+    view.textTop = codeHeaderHeight();
+    view.height = view.textTop + mediaScreenRect(view, 0, 0).height() + kMediaControls;
+    view.laidOut = true;
+    return true;
+}
+
+QRectF MarkdownEditor::mediaScreenRect(const BlockView &view, qreal left, qreal top) const
+{
+    if (!view.mediaVideo)
+        return QRectF(left, top + view.textTop, contentWidth(), 0);
+    const qreal height = qMin<qreal>(contentWidth() * 9.0 / 16.0, 420);
+    return QRectF(left, top + view.textTop, contentWidth(), height);
+}
+
+QRectF MarkdownEditor::mediaButtonRect(const BlockView &view, qreal left, qreal top) const
+{
+    const qreal y = mediaScreenRect(view, left, top).bottom() + (kMediaControls - 24) / 2;
+    return QRectF(left, y, 24, 24);
+}
+
+QRectF MarkdownEditor::mediaBarRect(const BlockView &view, qreal left, qreal top) const
+{
+    const qreal y = mediaScreenRect(view, left, top).bottom() + kMediaControls / 2 - 2;
+    return QRectF(left + 36, y, qMax<qreal>(40, contentWidth() - 36 - 110), 4);
+}
+
+void MarkdownEditor::paintMedia(QPainter &painter, const BlockView &view, qreal left,
+                                qreal top) const
+{
+    const bool current = m_media && m_media->path() == view.mediaPath;
+    const bool playing = current && m_media->isPlaying();
+    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
+
+    painter.save();
+    const QRectF screen = mediaScreenRect(view, left, top);
+    if (view.mediaVideo) {
+        painter.fillRect(screen, Qt::black);
+        const QImage frame = current ? m_media->frame() : QImage();
+        if (!frame.isNull()) {
+            // Letterboxed into the card, keeping the picture's own shape.
+            const QSizeF fitted = QSizeF(frame.size()).scaled(screen.size(), Qt::KeepAspectRatio);
+            const QRectF target(screen.center() - QPointF(fitted.width() / 2, fitted.height() / 2), fitted);
+            painter.drawImage(target, frame);
+        } else {
+            QPainterPath triangle;
+            const QPointF c = screen.center();
+            triangle.addPolygon(QPolygonF({c + QPointF(-14, -18), c + QPointF(20, 0), c + QPointF(-14, 18)}));
+            painter.fillPath(triangle, QColor(255, 255, 255, 170));
+        }
+    }
+
+    // Drawn, not an icon, so it matches the text at any size.
+    const QRectF button = mediaButtonRect(view, left, top);
+    QPainterPath glyph;
+    if (!MediaPlayback::isAvailable()) {
+        glyph.addRect(QRectF()); // nothing: the label below says what a click does
+    } else if (playing) {
+        glyph.addRect(QRectF(button.left() + 6, button.top() + 5, 4, 14));
+        glyph.addRect(QRectF(button.left() + 14, button.top() + 5, 4, 14));
+    } else {
+        glyph.addPolygon(QPolygonF({button.topLeft() + QPointF(7, 5), button.topLeft() + QPointF(19, 12),
+                                    button.topLeft() + QPointF(7, 19)}));
+    }
+    painter.fillPath(glyph, muted);
+
+    QFont small = m_theme.uiFont();
+    small.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    painter.setFont(small);
+    painter.setPen(muted);
+    const QRectF bar = mediaBarRect(view, left, top);
+    if (!MediaPlayback::isAvailable()) {
+        painter.drawText(QRectF(left, bar.center().y() - 10, contentWidth(), 20),
+                         Qt::AlignVCenter | Qt::AlignLeft, tr("Click to open it with its own player"));
+        painter.restore();
+        return;
+    }
+    QColor track = muted;
+    track.setAlphaF(0.3f);
+    painter.fillRect(bar, track);
+    const qint64 duration = current ? m_media->duration() : 0;
+    const qint64 position = current ? m_media->position() : 0;
+    if (duration > 0)
+        painter.fillRect(QRectF(bar.left(), bar.top(), bar.width() * position / duration, bar.height()), accent);
+    painter.drawText(QRectF(bar.right() + 10, bar.center().y() - 10, 100, 20),
+                     Qt::AlignVCenter | Qt::AlignLeft,
+                     duration > 0 ? clockOf(position) + QStringLiteral(" / ") + clockOf(duration)
+                                  : QStringLiteral("0:00"));
+    painter.restore();
+}
+
+bool MarkdownEditor::handleMediaClick(const BlockView &view, const QPoint &point, qreal left,
+                                      qreal top)
+{
+    if (view.mediaPath.isEmpty())
+        return false;
+    const QRectF bar = mediaBarRect(view, left, top).adjusted(0, -8, 0, 8);
+    const bool onButton = mediaButtonRect(view, left, top).adjusted(-4, -4, 4, 4).contains(point)
+                          || mediaScreenRect(view, left, top).contains(point);
+    if (!onButton && !bar.contains(point))
+        return false;
+    if (!MediaPlayback::isAvailable()) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(view.mediaPath));
+        return true;
+    }
+    if (!m_media) {
+        m_media = new MediaPlayback(this);
+        // Only the playing card repaints as it plays, not the whole view.
+        connect(m_media, &MediaPlayback::changed, this, [this] {
+            const qreal scroll = verticalScrollBar()->value();
+            for (const BlockView &block : m_blocks) {
+                if (block.mediaPath == m_media->path()) {
+                    viewport()->update(QRect(0, int(block.y - scroll) - 8, viewport()->width(),
+                                             int(block.height) + 16));
+                }
+            }
+        });
+    }
+    const bool current = m_media->path() == view.mediaPath;
+    if (bar.contains(point) && current && m_media->duration() > 0) {
+        const qreal fraction = qBound<qreal>(0, (point.x() - bar.left()) / bar.width(), 1);
+        m_media->seek(qint64(fraction * m_media->duration()));
+    } else if (current && m_media->isPlaying()) {
+        m_media->pause();
+    } else {
+        m_media->play(view.mediaPath);
+    }
+    viewport()->update();
+    return true;
+}
+
 void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left,
                                       qreal top) const
 {
@@ -2705,6 +2876,10 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         if (view.embedPanel)
             paintEmbedChrome(painter, view, left, top);
+        if (!view.mediaPath.isEmpty()) {
+            paintMedia(painter, view, left, top);
+            continue;
+        }
 
         if (!view.image.isNull()) {
             const qreal imageX =
