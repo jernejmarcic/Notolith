@@ -19,6 +19,10 @@ struct PluginCommand {
     QString commandID;
     QString qualifiedID;
     QString pluginName;
+    /// From plugin.ini's `[commands]` section, or empty when the plugin
+    /// declared none - MainWindow falls back to "pluginName: commandID" in
+    /// that case (docs/PLUGINS.md's MainWindow snippet shows both).
+    QString title;
 };
 
 /// What the Community plugins settings page shows for one installed

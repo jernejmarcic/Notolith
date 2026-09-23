@@ -55,6 +55,14 @@ const char *host_active_note_text()
     return buffer.constData();
 }
 
+const char *host_active_selection_text()
+{
+    static QByteArray buffer;
+    const PluginMessage response = g_io->request(QStringLiteral("note.activeSelection"), {});
+    buffer = response.ok ? response.result.value(QStringLiteral("text")).toString().toUtf8() : QByteArray();
+    return buffer.constData();
+}
+
 const char *host_read_note(const char *vaultPath)
 {
     static QByteArray buffer;
@@ -134,6 +142,7 @@ const noteappc_host kHostTable = {
     NOTEAPPC_PLUGIN_API,
     host_active_note_path,
     host_active_note_text,
+    host_active_selection_text,
     host_read_note,
     host_list_notes,
     host_replace_selection,

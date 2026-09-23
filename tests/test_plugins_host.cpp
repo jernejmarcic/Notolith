@@ -60,6 +60,7 @@ PluginAppCallbacks callbacksReturning(const QString &activeText, QString *lastNo
     PluginAppCallbacks callbacks;
     callbacks.activeNotePath = [] { return QStringLiteral("Note.md"); };
     callbacks.activeNoteText = [activeText] { return activeText; };
+    callbacks.activeSelectionText = [] { return QString(); };
     callbacks.readNote = [](const QString &) { return QString(); };
     callbacks.listNotes = [] { return QStringList(); };
     callbacks.replaceSelection = [](const QString &) { return true; };
@@ -95,6 +96,52 @@ TEST(PluginManifestTest, ListsWithSeveralItemsKeepEveryItem)
     EXPECT_EQ(manifest.commands(),
               (QStringList{QStringLiteral("count-words"), QStringLiteral("hang"), QStringLiteral("crash")}));
     EXPECT_EQ(manifest.codeBlockLanguages(), QStringList{QStringLiteral("calc")});
+}
+
+TEST(PluginManifestTest, ParsesCommandTitlesTimeoutMsAndEnvPassthrough)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QFile ini(dir.filePath(QStringLiteral("plugin.ini")));
+    ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
+    ini.write(QByteArrayLiteral(
+        "[plugin]\n"
+        "id = titled\n"
+        "library = libtitled.so\n"
+        "timeout-ms = 250000\n"
+        "env-passthrough = ANTHROPIC_API_KEY, OPENAI_API_KEY\n"
+        "[provides]\n"
+        "commands = summarize\n"
+        "[commands]\n"
+        "summarize = Summarize this note\n"));
+    ini.close();
+
+    const PluginManifest manifest = PluginManifest::load(dir.path());
+    ASSERT_TRUE(manifest.isValid()) << manifest.error().toStdString();
+    EXPECT_EQ(manifest.commandTitle(QStringLiteral("summarize")), QStringLiteral("Summarize this note"));
+    EXPECT_TRUE(manifest.commandTitle(QStringLiteral("no-such-command")).isEmpty());
+    EXPECT_EQ(manifest.requestTimeoutMs(), 250000);
+    EXPECT_EQ(manifest.envPassthrough(),
+              (QStringList{QStringLiteral("ANTHROPIC_API_KEY"), QStringLiteral("OPENAI_API_KEY")}));
+}
+
+TEST(PluginManifestTest, TimeoutMsIsClampedAndZeroMeansUseTheDefault)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QFile ini(dir.filePath(QStringLiteral("plugin.ini")));
+    ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
+    ini.write(QByteArrayLiteral("[plugin]\nid = clamped\nlibrary = libclamped.so\ntimeout-ms = 999999999\n"));
+    ini.close();
+    EXPECT_EQ(PluginManifest::load(dir.path()).requestTimeoutMs(), 300000);
+
+    QTemporaryDir dirUnset;
+    ASSERT_TRUE(dirUnset.isValid());
+    QFile iniUnset(dirUnset.filePath(QStringLiteral("plugin.ini")));
+    ASSERT_TRUE(iniUnset.open(QIODevice::WriteOnly));
+    iniUnset.write(QByteArrayLiteral("[plugin]\nid = unset\nlibrary = libunset.so\n"));
+    iniUnset.close();
+    EXPECT_EQ(PluginManifest::load(dirUnset.path()).requestTimeoutMs(), 0);
 }
 
 TEST(PluginProtocolFraming, RoundTripsEveryMessageKind)
@@ -322,6 +369,50 @@ TEST_F(PluginHostTest, AHangingCommandIsKilledByItsTimeoutAndTheHostRestartsOnNe
     });
     ASSERT_TRUE(waitUntil([&] { return secondDone; }));
     EXPECT_TRUE(secondOk);
+
+    host.stop();
+}
+
+TEST(PluginHostManifestTimeoutTest, ADeclaredTimeoutMsOverridesTheDefaultWithoutTheTestingHook)
+{
+    // A plugin.ini's own `timeout-ms` (docs/PLUGINS.md, "Timeouts") has to
+    // take effect from the constructor alone - setRequestTimeoutMsForTesting
+    // exists only so a *different* test does not need to wait out a real
+    // one, and must never be what makes this path work. A fresh copy of
+    // word-stats's already-built library, next to a plugin.ini that
+    // declares a 300ms budget instead of word-stats's own (none, so the
+    // 4000ms default): "hang" must be killed well under 4000ms.
+    QTemporaryDir pluginDir;
+    ASSERT_TRUE(pluginDir.isValid());
+    ASSERT_TRUE(QFile::copy(wordStatsDir() + QStringLiteral("/libword-stats.so"),
+                            pluginDir.filePath(QStringLiteral("libword-stats.so"))));
+    QFile ini(pluginDir.filePath(QStringLiteral("plugin.ini")));
+    ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
+    ini.write(QByteArrayLiteral("[plugin]\nid = word-stats\nlibrary = libword-stats.so\napi = 2\n"
+                                "timeout-ms = 1200\n[provides]\ncommands = hang\n"));
+    ini.close();
+
+    const PluginManifest manifest = PluginManifest::load(pluginDir.path());
+    ASSERT_TRUE(manifest.isValid()) << manifest.error().toStdString();
+    ASSERT_EQ(manifest.requestTimeoutMs(), 1200);
+
+    PluginHost host(manifest, {PluginPermission::ReadNotes}, callbacksReturning(QStringLiteral("x")));
+    QElapsedTimer clock;
+    clock.start();
+    bool done = false;
+    bool ok = true;
+    QString error;
+    host.runCommand(QStringLiteral("hang"), [&](bool o, const QJsonObject &, const QString &e) {
+        ok = o;
+        error = e;
+        done = true;
+    });
+    ASSERT_TRUE(waitUntil([&] { return done; }, 5000));
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(error.contains(QStringLiteral("timed out"))) << error.toStdString();
+    // Well under the 4000ms default - proves the manifest's 300ms was the
+    // timeout actually armed, not the built-in one.
+    EXPECT_LT(clock.elapsed(), 3000);
 
     host.stop();
 }

@@ -170,6 +170,7 @@ QList<PluginCommand> PluginRegistry::commands() const
             command.commandID = commandID;
             command.qualifiedID = it.key() + QLatin1Char(':') + commandID;
             command.pluginName = it.value().name();
+            command.title = it.value().commandTitle(commandID);
             out << command;
         }
     }

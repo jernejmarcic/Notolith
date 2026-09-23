@@ -46,6 +46,12 @@ PluginHost::PluginHost(PluginManifest manifest, QSet<PluginPermission> grantedPe
     , m_granted(std::move(grantedPermissions))
     , m_callbacks(std::move(callbacks))
 {
+    // A plugin whose calls legitimately run long (an AI plugin waiting on a
+    // language model) declares its own budget instead of living with the
+    // 4000ms default meant for a word-count or a small render - already
+    // clamped to [1000, 300000] by PluginManifest::load().
+    if (const int declared = m_manifest.requestTimeoutMs(); declared > 0)
+        m_requestTimeoutMs = declared;
 }
 
 PluginHost::~PluginHost()
@@ -108,6 +114,20 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     // it backwards.
     const QString hostBinaryDir = QFileInfo(hostBinary).absolutePath();
 
+    // A plugin's own config file (docs/PLUGINS.md's AI plugin: "outside the
+    // vault", e.g. $XDG_CONFIG_HOME/noteAppC/ai.ini) - computed from the
+    // app's own, unsandboxed environment, the same fallback
+    // PluginRegistry::configPath() uses, so the bind's source and the value
+    // handed to the sandboxed process below name the same directory. Nothing
+    // secret ever lives in this directory (the hard "no secrets on disk"
+    // rule - an API key travels only as an env var, forwarded separately
+    // below), so read access across the whole noteAppC config tree is an
+    // acceptable, much simpler alternative to a per-plugin subdirectory.
+    QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME");
+    if (configHome.isEmpty())
+        configHome = QDir::homePath() + QStringLiteral("/.config");
+    const QString noteAppCConfigDir = configHome + QStringLiteral("/noteAppC");
+
     *program = bwrap;
     QStringList args = {
         QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
@@ -123,6 +143,9 @@ QStringList PluginHost::sandboxArguments(QString *program) const
         // plugin.ini, any assets it shipped), never a place it writes.
         QStringLiteral("--ro-bind"), pluginDir, pluginDir,
         QStringLiteral("--ro-bind"), hostBinaryDir, hostBinaryDir,
+        // -try: most plugins have no config file at all, and bwrap's plain
+        // --ro-bind refuses to start when its source does not exist.
+        QStringLiteral("--ro-bind-try"), noteAppCConfigDir, noteAppCConfigDir,
         QStringLiteral("--unshare-user-try"), QStringLiteral("--unshare-ipc"),
         QStringLiteral("--unshare-pid"), QStringLiteral("--unshare-uts"),
         QStringLiteral("--unshare-cgroup-try"),
@@ -138,7 +161,28 @@ QStringList PluginHost::sandboxArguments(QString *program) const
         // unset rather than just missing a directory, so it points at the
         // sandbox's own private, empty tmpfs instead of leaking the real one.
         << QStringLiteral("--setenv") << QStringLiteral("HOME") << QStringLiteral("/tmp")
-        << QStringLiteral("--die-with-parent") << QStringLiteral("--new-session")
+        // So a plugin that reads its own config file resolves the same path
+        // the --ro-bind-try above just mounted, rather than falling back to
+        // $HOME/.config (which above is the sandbox's empty /tmp, not the
+        // real one).
+        << QStringLiteral("--setenv") << QStringLiteral("XDG_CONFIG_HOME") << configHome;
+    // A secret (an API key) never sits in a file (the config bind above is
+    // read-only and this codebase writes no secrets to disk anywhere), so a
+    // plugin that needs one reads it from the app's own real environment
+    // instead - but --clearenv just wiped that, so it has to be forwarded by
+    // name. Only the names plugin.ini's `[plugin] env-passthrough` declares,
+    // and only once network is actually granted: forwarding an API key to a
+    // plugin that cannot reach the network anyway has no upside and every
+    // downside. This is what makes docs/PLUGINS.md's AI plugin's "the key
+    // itself is never written to any file by the plugin" possible at all.
+    if (permissionGranted(PluginPermission::Network)) {
+        for (const QString &name : m_manifest.envPassthrough()) {
+            const QString value = qEnvironmentVariable(name.toUtf8().constData());
+            if (!value.isEmpty())
+                args << QStringLiteral("--setenv") << name << value;
+        }
+    }
+    args << QStringLiteral("--die-with-parent") << QStringLiteral("--new-session")
         << QStringLiteral("--chdir") << pluginDir << QStringLiteral("--") << hostBinary
         << QStringLiteral("--plugin") << pluginDir;
     return args;
@@ -405,6 +449,14 @@ void PluginHost::handleHostRequest(const PluginMessage &request)
             return refuseHostRequest(request.id, method, PluginPermission::ReadNotes);
         QJsonObject result;
         result.insert(QStringLiteral("text"), m_callbacks.activeNoteText ? m_callbacks.activeNoteText() : QString());
+        return reply(result);
+    }
+    if (method == QLatin1String("note.activeSelection")) {
+        if (!permissionGranted(PluginPermission::ReadNotes))
+            return refuseHostRequest(request.id, method, PluginPermission::ReadNotes);
+        QJsonObject result;
+        result.insert(QStringLiteral("text"),
+                      m_callbacks.activeSelectionText ? m_callbacks.activeSelectionText() : QString());
         return reply(result);
     }
     if (method == QLatin1String("note.read")) {
