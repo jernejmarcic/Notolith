@@ -29,7 +29,20 @@ public:
         QByteArray wrappedNoteKey;
         qint64 localMtime = 0;    ///< of the vault file, for the scanner's cheap check
         qint64 localSize = 0;
-        QByteArray localHash;     ///< fingerprint of the last-synced plaintext
+        QByteArray localHash;     ///< fingerprint of what SyncScanner last saw on disk - scanner dedup only
+        /// Fingerprint of the content as of the last confirmed sync
+        /// (fast-forward, clean merge, or a self-echo - see
+        /// SyncEngine::applyRecord). Deliberately a separate field from
+        /// localHash and updated only by applyRecord, never by
+        /// queueLocalChange: the two answer different questions ("have I
+        /// already queued this content to push" vs "do local and the
+        /// three-way merge base actually agree") and updating them
+        /// together let a device's own local edit look "unchanged" to its
+        /// own merge check the moment it was scanned, before the push
+        /// that edit caused had even reached the server - a real bug
+        /// caught by tests/test_sync.cpp's disjoint-line-merge case,
+        /// where it silently discarded the other device's edit.
+        QByteArray syncedHash;
         bool deleted = false;     ///< last known state was a delete
     };
 

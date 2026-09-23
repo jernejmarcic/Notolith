@@ -61,19 +61,26 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
         const qint64 size = info.size();
         seen.insert(relative);
 
-        const auto existing = known.find(relative);
-        if (existing != known.end()) {
-            known.erase(existing);
-            if (existing->localMtime == mtime && existing->localSize == size)
+        const auto existingIt = known.find(relative);
+        if (existingIt != known.end()) {
+            // Copied out before erase(): QHash::erase() invalidates the
+            // iterator immediately, and this entry's fields were still
+            // needed right below - a bug caught by
+            // SyncScannerTest.NewNoteIsCreatedAndUnchangedNoteIsSkipped
+            // reading them straight after erase() and getting whatever
+            // the freed/reused node happened to hold.
+            const SyncJournal::Entity existing = existingIt.value();
+            known.erase(existingIt);
+            if (existing.localMtime == mtime && existing.localSize == size)
                 continue; // cheap path: stat matched, no content read at all
             const QByteArray hash = hashFile(absolute, contentKey);
-            if (hash == existing->localHash)
+            if (hash == existing.localHash)
                 continue; // touched but byte-identical (e.g. a re-save with no change)
             Change change;
             change.kind = Change::Modified;
-            change.entityID = existing->entityID;
+            change.entityID = existing.entityID;
             change.path = relative;
-            change.entityType = existing->entityType;
+            change.entityType = existing.entityType;
             change.mtime = mtime;
             change.size = size;
             change.hash = hash;

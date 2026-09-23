@@ -73,7 +73,8 @@ void SyncJournal::open(const QString &vaultRoot)
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS entities ("
                                   "entityID BLOB PRIMARY KEY, path TEXT, entityType TEXT, "
                                   "itemsKeyID BLOB, wrappedNoteKey BLOB, "
-                                  "localMtime INTEGER, localSize INTEGER, localHash BLOB, deleted INTEGER)"))
+                                  "localMtime INTEGER, localSize INTEGER, localHash BLOB, syncedHash BLOB, "
+                                  "deleted INTEGER)"))
         && exec(q, QStringLiteral("CREATE INDEX IF NOT EXISTS entities_path ON entities(path)"))
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS outbox ("
                                   "seq INTEGER PRIMARY KEY AUTOINCREMENT, entityID BLOB, recordID BLOB, "
@@ -143,12 +144,13 @@ SyncJournal::Entity entityFromQuery(const QSqlQuery &q)
     entity.localMtime = q.value(5).toLongLong();
     entity.localSize = q.value(6).toLongLong();
     entity.localHash = q.value(7).toByteArray();
-    entity.deleted = q.value(8).toInt() != 0;
+    entity.syncedHash = q.value(8).toByteArray();
+    entity.deleted = q.value(9).toInt() != 0;
     return entity;
 }
 
-constexpr const char *kEntityColumns =
-    "entityID, path, entityType, itemsKeyID, wrappedNoteKey, localMtime, localSize, localHash, deleted";
+constexpr const char *kEntityColumns = "entityID, path, entityType, itemsKeyID, wrappedNoteKey, localMtime, "
+                                       "localSize, localHash, syncedHash, deleted";
 
 } // namespace
 
@@ -188,11 +190,11 @@ void SyncJournal::putEntity(const Entity &entity)
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "INSERT INTO entities(entityID, path, entityType, itemsKeyID, wrappedNoteKey, "
-        "localMtime, localSize, localHash, deleted) VALUES(?,?,?,?,?,?,?,?,?) "
+        "localMtime, localSize, localHash, syncedHash, deleted) VALUES(?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(entityID) DO UPDATE SET path=excluded.path, entityType=excluded.entityType, "
         "itemsKeyID=excluded.itemsKeyID, wrappedNoteKey=excluded.wrappedNoteKey, "
         "localMtime=excluded.localMtime, localSize=excluded.localSize, localHash=excluded.localHash, "
-        "deleted=excluded.deleted"));
+        "syncedHash=excluded.syncedHash, deleted=excluded.deleted"));
     q.addBindValue(entity.entityID);
     q.addBindValue(entity.path);
     q.addBindValue(entity.entityType);
@@ -201,6 +203,7 @@ void SyncJournal::putEntity(const Entity &entity)
     q.addBindValue(entity.localMtime);
     q.addBindValue(entity.localSize);
     q.addBindValue(entity.localHash);
+    q.addBindValue(entity.syncedHash);
     q.addBindValue(entity.deleted ? 1 : 0);
     q.exec();
 }

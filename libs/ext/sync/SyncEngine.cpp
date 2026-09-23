@@ -3,12 +3,15 @@
 #include <algorithm>
 
 #include <QDateTime>
+#include <QDir>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QScopeGuard>
+#include <QTimer>
 
 #include <qt6keychain/keychain.h>
 
@@ -96,11 +99,21 @@ bool writeRawFile(const QString &path, const QByteArray &bytes)
 /// Runs a QKeychain job to completion on the calling thread's own event
 /// loop (SyncEngine's worker thread - see the class comment in
 /// SyncEngine.h) rather than wiring up finished()/error() by hand for one
-/// call site each.
+/// call site each. A watchdog timeout, matching SyncClient::callRaw()'s
+/// own 15 s one: an unresponsive secret-service D-Bus backend must not
+/// hang the sync thread forever (and, since this runs inside runCycle()'s
+/// m_inCycle window, must not hang the destructor's teardown either).
 void runKeychainJob(QKeychain::Job *job)
 {
     QEventLoop loop;
     QObject::connect(job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
+    // ponytail: on a genuine timeout the stack-allocated job in
+    // loadDeviceIdentity() is destroyed with its D-Bus call still
+    // in flight - a late reply is simply dropped (QKeychain does not
+    // deliver into a destroyed QObject). Upgrade to a heap-allocated,
+    // deleteLater()-based job if a backend that hangs this long in
+    // practice turns up.
+    QTimer::singleShot(15000, &loop, &QEventLoop::quit);
     job->start();
     loop.exec();
 }
@@ -157,6 +170,11 @@ void SyncEngine::noteChanged()
         Qt::QueuedConnection);
 }
 
+void SyncEngine::syncNow()
+{
+    QMetaObject::invokeMethod(this, &SyncEngine::runCycle, Qt::QueuedConnection);
+}
+
 void SyncEngine::setStatus(Status status, const QString &message)
 {
     emit statusChanged(status, message);
@@ -195,7 +213,23 @@ void SyncEngine::stopOnWorker()
 {
     m_debounce->stop();
     m_periodic->stop();
-    m_running = false;
+    m_running = false; // checked at the top of runCycle() and by the caller below
+    if (m_inCycle) {
+        // A cycle is paused right now inside a nested event loop
+        // (SyncClient's HTTP wait, or loadDeviceIdentity()'s keychain
+        // wait) on this very thread - reentrant, because that nested loop
+        // pumps this thread's whole event queue, including whatever
+        // queued or blocking-queued call reached stopOnWorker() itself.
+        // Tearing down m_journal/m_client here would yank them out from
+        // under the call chain that is about to resume and use them
+        // (caught under AddressSanitizer - see the m_inCycle comment in
+        // SyncEngine.h). m_running=false above is enough for now: the
+        // cycle's steps never re-check it mid-flight, so it runs to a
+        // harmless completion (nothing left to schedule - the timers are
+        // already stopped) and calls stopOnWorker() again itself, below,
+        // finishing the teardown for real once m_inCycle is false.
+        return;
+    }
     SyncCrypto::wipe(m_loginKey);
     SyncCrypto::wipe(m_wrapKey);
     SyncCrypto::wipe(m_contentKey);
@@ -213,8 +247,14 @@ void SyncEngine::stopOnWorker()
 
 void SyncEngine::runCycle()
 {
-    if (!m_running)
+    if (!m_running || m_inCycle)
         return;
+    m_inCycle = true;
+    const auto done = qScopeGuard([this] {
+        m_inCycle = false;
+        if (!m_running)
+            stopOnWorker(); // deferred from a reentrant stop() while this cycle was in flight
+    });
     setStatus(Status::SigningIn);
     if (!ensureSession())
         return; // status already set inside
@@ -465,6 +505,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     QByteArray itemsKeyID = activeKey->itemsKeyID;
     QByteArray wrappedNoteKey;
     QByteArray noteKey;
+    QByteArray syncedHash; // carried over from the existing entity, if any - see the field's own comment
 
     if (change.kind == SyncScanner::Change::Created) {
         entityID = SyncCrypto::randomID();
@@ -477,6 +518,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
             return; // scanner referenced an entity this journal has never seen - next scan recovers
         itemsKeyID = existing->itemsKeyID;
         wrappedNoteKey = existing->wrappedNoteKey;
+        syncedHash = existing->syncedHash;
         const auto key = itemsKeyID == activeKey->itemsKeyID ? activeKey : m_journal->itemsKey(itemsKeyID);
         if (!key)
             return;
@@ -549,11 +591,17 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     entity.wrappedNoteKey = wrappedNoteKey;
     entity.localMtime = change.mtime;
     entity.localSize = change.size;
-    entity.localHash = change.hash;
+    entity.localHash = change.hash; // scanner dedup only
+    entity.syncedHash = syncedHash; // unchanged by a local edit - see the field's own comment in SyncJournal.h
     entity.deleted = false;
     m_journal->putEntity(entity);
-    if (change.entityType == QStringLiteral("note"))
-        m_journal->writeBase(entityID, text);
+    // Deliberately no writeBase() here: the base (and syncedHash above)
+    // record what this device and the server last agreed on, and a local
+    // edit that has not even been pushed yet has not agreed on anything.
+    // applyRecord() advances both once a push is confirmed - including a
+    // self-echo of this very push, which is how the common single-device
+    // case still ends up with an up-to-date base without ever touching it
+    // here.
 }
 
 int SyncEngine::pushOutbox()
@@ -621,6 +669,74 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     const auto existing = m_journal->entity(record.entityID);
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
+    const bool isSelfEcho = record.deviceID == m_journal->deviceID();
+
+    if (remote.op == QStringLiteral("delete")) {
+        if (isSelfEcho) {
+            // queueLocalChange() already removed the entity when it
+            // pushed this delete - nothing left to confirm.
+            ++*pulled;
+            return;
+        }
+        QByteArray localBytes;
+        bool hasLocalFile = false;
+        if (existing) {
+            QFile f(existingPath);
+            hasLocalFile = f.open(QIODevice::ReadOnly);
+            if (hasLocalFile)
+                localBytes = f.readAll();
+        }
+        // An edit beats a delete, in both directions (docs/SYNC.md): only
+        // remove the file when nothing local disagrees with the delete.
+        const bool localChanged =
+            existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+        if (!localChanged && hasLocalFile)
+            m_vault.moveToTrash(existingPath);
+        m_journal->removeEntity(record.entityID);
+        ++*pulled;
+        return;
+    }
+
+    if (isSelfEcho) {
+        // Confirms a push this device already made - never re-derive file
+        // content from this record's payload, which may already be stale
+        // by now if an earlier record in this same pull batch triggered a
+        // merge (docs/SYNC.md's own note on why a clean merge is not
+        // itself re-pushed: this is the other half of that - the device
+        // that pushed the raw edit has to recognise its own echo as
+        // "already accounted for" rather than as new remote content).
+        // Just mark whatever is on disk right now as the synced state.
+        if (!existing) {
+            ++*pulled; // queueLocalChange always creates the entity before pushing - nothing to confirm
+            return;
+        }
+        QByteArray syncedHash;
+        bool hasLocalFile = false;
+        if (existing->entityType == QStringLiteral("note")) {
+            Note onDisk;
+            hasLocalFile = Vault::read(existingPath, onDisk);
+            if (hasLocalFile) {
+                syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
+                m_journal->writeBase(record.entityID, onDisk.text);
+            }
+        } else {
+            QFile f(existingPath);
+            hasLocalFile = f.open(QIODevice::ReadOnly);
+            if (hasLocalFile)
+                syncedHash = SyncCrypto::contentAddress(m_contentKey, f.readAll());
+        }
+        if (hasLocalFile) {
+            const QFileInfo info(existingPath);
+            SyncJournal::Entity entity = *existing;
+            entity.localMtime = info.lastModified().toMSecsSinceEpoch();
+            entity.localSize = info.size();
+            entity.localHash = syncedHash;
+            entity.syncedHash = syncedHash;
+            m_journal->putEntity(entity);
+        }
+        ++*pulled;
+        return;
+    }
 
     QByteArray localBytes;
     bool hasLocalFile = false;
@@ -631,17 +747,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             localBytes = f.readAll();
     }
     const bool localChanged =
-        existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->localHash);
-
-    if (remote.op == QStringLiteral("delete")) {
-        // An edit beats a delete, in both directions (docs/SYNC.md): only
-        // remove the file when nothing local disagrees with the delete.
-        if (!localChanged && hasLocalFile)
-            m_vault.moveToTrash(existingPath);
-        m_journal->removeEntity(record.entityID);
-        ++*pulled;
-        return;
-    }
+        existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
 
     QString remoteText = remote.body;
     QByteArray remoteRaw;
@@ -662,6 +768,11 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     }
 
     const QString targetPath = m_vault.absolute(remote.path);
+    // A remote rename/move into a folder this device has never had may
+    // name a directory that does not exist here yet - Vault::write() and
+    // QFile::rename() do not create parent directories, so this does.
+    // Covers the conflict-copy path below too: same directory as `remote.path`.
+    QDir().mkpath(QFileInfo(targetPath).path());
     bool wroteConflict = false;
 
     if (!localChanged) {
@@ -712,6 +823,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     entity.localMtime = info.lastModified().toMSecsSinceEpoch();
     entity.localSize = info.size();
     entity.localHash = SyncCrypto::contentAddress(m_contentKey, finalBytes);
+    entity.syncedHash = entity.localHash; // fast-forward and clean-merge both leave local and synced in agreement
     entity.deleted = false;
     m_journal->putEntity(entity);
     if (remote.entityType == QStringLiteral("note"))

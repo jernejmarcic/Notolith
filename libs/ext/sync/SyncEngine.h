@@ -72,6 +72,12 @@ public:
     /// the next debounced scan. No I/O on this call.
     void noteChanged();
 
+    /// Runs a cycle right away instead of waiting for the debounce or
+    /// periodic timer - what the `sync:sync-now` command triggers, and
+    /// what tests use so they are not stuck waiting out a multi-second
+    /// timer for every assertion.
+    void syncNow();
+
     /// Change the account password (docs/SYNC.md "Password change"): the
     /// caller must already be signed in this session.
     void changePassword(const QString &newPassword);
@@ -110,6 +116,19 @@ private:
     PasswordPrompt m_prompt;
     bool m_viaLockbox = false;
     bool m_running = false;
+    /// True for the whole duration of one runCycle(). A cycle spends most
+    /// of its time inside a nested QEventLoop (SyncClient's HTTP calls,
+    /// loadDeviceIdentity()'s keychain job) - the *same* worker thread's
+    /// event loop, so a stop() or the destructor's
+    /// Qt::BlockingQueuedConnection to stopOnWorker() would otherwise be
+    /// delivered and processed reentrantly, mid-cycle, nulling m_journal
+    /// and m_client out from under the call chain that is about to resume
+    /// and use them. Caught by tests/test_sync.cpp under
+    /// AddressSanitizer: a cycle stuck waiting on the OS keychain,
+    /// interrupted by the test's own engine destructor firing on a
+    /// timeout. stopOnWorker() checks this and defers the actual teardown
+    /// - see its own comment.
+    bool m_inCycle = false;
 
     // Session-only key material (docs/SYNC.md "Deriving masterKey") -
     // never written to disk, zeroed in stopOnWorker().
