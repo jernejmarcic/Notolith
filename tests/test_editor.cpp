@@ -2401,6 +2401,45 @@ TEST(SpellingTest, TheMenuReplacesTheWordOrLearnsIt)
     EXPECT_FALSE(underlined(*editor, at));
 }
 
+// --- commands and their keys ---------------------------------------------------
+
+TEST(CommandTest, AKeyCanBeMovedToAnotherCommandOrTakenAway)
+{
+    const QString note = QStringLiteral("word\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(0);
+    for (int i = 0; i < 4; ++i)
+        QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier); // "word"
+
+    // Bold moves to Ctrl+Shift+B, and Ctrl+B is left doing nothing.
+    editor->setKeyBindings({{QStringLiteral("editor:toggle-bold"),
+                             {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B)}}});
+    QTest::keyClick(editor.get(), Qt::Key_B, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), note);
+    QTest::keyClick(editor.get(), Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("**word**\n"));
+
+    // An empty list unbinds; the command still runs by its id.
+    editor->setKeyBindings({{QStringLiteral("editor:toggle-italics"), {}}});
+    const QString bolded = editor->noteText();
+    QTest::keyClick(editor.get(), Qt::Key_I, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), bolded);
+    EXPECT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-italics")));
+    EXPECT_NE(editor->noteText(), bolded);
+    EXPECT_FALSE(editor->runCommand(QStringLiteral("no:such-command")));
+}
+
+TEST(CommandTest, EveryCommandHasAnIDANameAndRuns)
+{
+    for (const MarkdownEditor::Command &command : MarkdownEditor::commands()) {
+        EXPECT_TRUE(command.id.contains(QLatin1Char(':'))) << qPrintable(command.id);
+        EXPECT_FALSE(command.name.isEmpty()) << qPrintable(command.id);
+        auto editor = editorWith(QStringLiteral("one\ntwo\n"));
+        editor->enterBlockAt(1);
+        EXPECT_TRUE(editor->runCommand(command.id)) << qPrintable(command.id);
+    }
+}
+
 // --- links to headings -------------------------------------------------------
 
 TEST(HeadingLinkTest, ANoteAndHeadingReadAsNoteThenHeading)

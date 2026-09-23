@@ -7,6 +7,11 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include "Hotkeys.h"
+#include <QKeySequence>
+#include <QJsonObject>
+#include <QJsonDocument>
+#include <QJsonArray>
 
 #include "Settings.h"
 
@@ -293,3 +298,67 @@ TEST(Settings, NotePositionSurvivesASaveAndLoadAndEvictsPastFifty)
     EXPECT_EQ(capped.rememberedNotes().first(), QStringLiteral("/vaults/mine/Note50.md"));
     EXPECT_FALSE(capped.notePosition(QStringLiteral("/vaults/mine/Note0.md")).has_value());
 }
+
+// --- hotkeys ------------------------------------------------------------------
+
+TEST(Hotkeys, ReadsObsidiansFormat)
+{
+    // Obsidian's own spelling: "Mod" is Ctrl on Linux, keys named as a browser
+    // names them.
+    const QJsonArray keys = QJsonDocument::fromJson(R"([
+        {"modifiers": ["Mod", "Shift"], "key": "B"},
+        {"modifiers": ["Alt"], "key": "ArrowUp"},
+        {"modifiers": ["Mod"], "key": "Enter"},
+        {"modifiers": ["Mod"], "key": ","}
+    ])").array();
+    const QList<QKeySequence> read = noteAppC::Hotkeys::fromJSON(keys);
+    ASSERT_EQ(read.size(), 4);
+    EXPECT_EQ(read.at(0), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B));
+    EXPECT_EQ(read.at(1), QKeySequence(Qt::ALT | Qt::Key_Up));
+    EXPECT_EQ(read.at(2), QKeySequence(Qt::CTRL | Qt::Key_Return));
+    EXPECT_EQ(read.at(3), QKeySequence(Qt::CTRL | Qt::Key_Comma));
+    // And back, in the same spelling, so the file stays Obsidian's.
+    EXPECT_EQ(noteAppC::Hotkeys::fromJSON(noteAppC::Hotkeys::toJSON(read)), read);
+    EXPECT_EQ(noteAppC::Hotkeys::toJSON(read).at(1).toObject().value(QStringLiteral("key")).toString(),
+              QStringLiteral("ArrowUp"));
+}
+
+TEST(Hotkeys, noteAppCsOwnFileWinsOverTheVaultsAndIsTheOnlyOneWritten)
+{
+    QTemporaryDir home;
+    QTemporaryDir vault;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(vault.path()).mkpath(QStringLiteral(".obsidian")));
+    const QString obsidian = QDir(vault.path()).filePath(QStringLiteral(".obsidian/hotkeys.json"));
+    {
+        QFile file(obsidian);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(R"({"editor:toggle-bold": [{"modifiers": ["Mod", "Shift"], "key": "B"}],
+                       "app:open-settings": [{"modifiers": ["Mod"], "key": "P"}]})");
+    }
+    const QByteArray before = [&] {
+        QFile file(obsidian);
+        return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    }();
+
+    noteAppC::Hotkeys::Bindings own;
+    own.insert(QStringLiteral("app:open-settings"), {QKeySequence(Qt::CTRL | Qt::Key_Semicolon)});
+    own.insert(QStringLiteral("editor:toggle-italics"), {}); // unbound
+    ASSERT_TRUE(noteAppC::Hotkeys::save(own));
+
+    const noteAppC::Hotkeys::Bindings bindings = noteAppC::Hotkeys::load(vault.path());
+    EXPECT_EQ(bindings.value(QStringLiteral("editor:toggle-bold")),
+              QList{QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_B)}) << "the vault's own key";
+    EXPECT_EQ(bindings.value(QStringLiteral("app:open-settings")),
+              QList{QKeySequence(Qt::CTRL | Qt::Key_Semicolon)}) << "noteAppC's file wins";
+    EXPECT_TRUE(bindings.contains(QStringLiteral("editor:toggle-italics")));
+    EXPECT_TRUE(bindings.value(QStringLiteral("editor:toggle-italics")).isEmpty()) << "unbound";
+    EXPECT_EQ(noteAppC::Hotkeys::loadOwn().size(), 2);
+
+    QFile file(obsidian);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), before) << "the vault's file is never written";
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+

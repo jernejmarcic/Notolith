@@ -1,0 +1,35 @@
+#pragma once
+
+#include <QHash>
+#include <QJsonArray>
+#include <QKeySequence>
+#include <QList>
+#include <QString>
+
+namespace noteAppC {
+
+/// Keyboard shortcuts, in Obsidian's own `hotkeys.json` format: a command id
+/// mapped to a list of `{"modifiers": ["Mod", "Shift"], "key": "B"}`, where
+/// "Mod" is Ctrl on Linux and an empty list unbinds the command.
+///
+/// Two files, the later winning per command: the vault's
+/// `.obsidian/hotkeys.json`, read when present so an Obsidian user keeps their
+/// keys, and noteAppC's own `~/.config/noteAppC/hotkeys.json`, which is the
+/// only one ever written. A command in neither keeps its built-in keys.
+class Hotkeys {
+public:
+    using Bindings = QHash<QString, QList<QKeySequence>>;
+
+    static Bindings load(const QString &vaultRoot = {});
+    /// noteAppC's own file alone: what the settings page has changed.
+    static Bindings loadOwn();
+    /// Writes `bindings` as noteAppC's own file. Only what differs from the
+    /// built-in keys belongs in it; the caller decides that.
+    static bool save(const Bindings &bindings);
+    static QString filePath();
+
+    static QList<QKeySequence> fromJSON(const QJsonArray &keys);
+    static QJsonArray toJSON(const QList<QKeySequence> &keys);
+};
+
+} // namespace noteAppC

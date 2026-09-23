@@ -87,6 +87,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     if (auto *icons = qobject_cast<IconsNotifier *>(Icons::notifier()))
         connect(icons, &IconsNotifier::iconReady, this, [this] { viewport()->update(); });
     watchStyleFiles();
+    setKeyBindings({}); // the built-in keys, until the window hands over its own
 
     // ponytail: the parse is synchronous behind a short debounce. It measures
     // well under the keystroke budget on notes this size; move it to the
@@ -3115,6 +3116,71 @@ void MarkdownEditor::redo()
 
 // --- events ---------------------------------------------------------------
 
+const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
+{
+    // Obsidian's ids where it has the command; its own name for the few it
+    // does not. Obsidian binds fewer of these by default - the keys are the
+    // ones this editor always had.
+    static const QList<Command> table = {
+        {QStringLiteral("editor:toggle-bold"), tr("Toggle bold"), {QKeySequence(Qt::CTRL | Qt::Key_B)}},
+        {QStringLiteral("editor:toggle-italics"), tr("Toggle italics"), {QKeySequence(Qt::CTRL | Qt::Key_I)}},
+        {QStringLiteral("editor:toggle-highlight"), tr("Toggle highlight"),
+         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H)}},
+        {QStringLiteral("editor:insert-link"), tr("Insert Markdown link"), {QKeySequence(Qt::CTRL | Qt::Key_K)}},
+        {QStringLiteral("editor:toggle-checklist-status"), tr("Toggle checkbox status"),
+         {QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)}},
+        {QStringLiteral("editor:open-search"), tr("Search current file"), {QKeySequence(Qt::CTRL | Qt::Key_F)}},
+        {QStringLiteral("editor:open-search-replace"), tr("Search and replace in current file"),
+         {QKeySequence(Qt::CTRL | Qt::Key_H)}},
+        {QStringLiteral("editor:swap-line-up"), tr("Move line up"), {QKeySequence(Qt::ALT | Qt::Key_Up)}},
+        {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
+        {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
+         {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+    };
+    return table;
+}
+
+bool MarkdownEditor::runCommand(const QString &id)
+{
+    if (m_mode == Mode::Reading && id != QLatin1String("editor:open-search"))
+        return false; // nothing to edit; searching still works
+    if (id == QLatin1String("editor:toggle-bold"))
+        toggleBold();
+    else if (id == QLatin1String("editor:toggle-italics"))
+        toggleItalic();
+    else if (id == QLatin1String("editor:toggle-highlight"))
+        toggleHighlight();
+    else if (id == QLatin1String("editor:insert-link"))
+        insertLink();
+    else if (id == QLatin1String("editor:toggle-checklist-status"))
+        toggleTaskAtCursor();
+    else if (id == QLatin1String("editor:open-search"))
+        showFind(false);
+    else if (id == QLatin1String("editor:open-search-replace"))
+        showFind(true);
+    else if (id == QLatin1String("editor:swap-line-up"))
+        moveLines(-1);
+    else if (id == QLatin1String("editor:swap-line-down"))
+        moveLines(1);
+    else if (id == QLatin1String("noteAppC:duplicate-lines"))
+        duplicateLines();
+    else
+        return false;
+    return true;
+}
+
+void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &bindings)
+{
+    m_keymap.clear();
+    for (const Command &command : commands()) {
+        const auto own = bindings.constFind(command.id);
+        for (const QKeySequence &keys : own != bindings.constEnd() ? *own : command.keys) {
+            if (!keys.isEmpty())
+                m_keymap.insert(keys[0].toCombined(), command.id);
+        }
+    }
+}
+
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
     if (m_completer->popup()->isVisible()) {
@@ -3139,51 +3205,15 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         updateLayout();
     }
 
-    const bool alt = event->modifiers().testFlag(Qt::AltModifier);
-    if (alt && !control) {
-        switch (event->key()) {
-        case Qt::Key_Up:
-            moveLines(-1);
-            return;
-        case Qt::Key_Down:
-            moveLines(1);
-            return;
-        default:
-            break;
-        }
-    }
+    // Rebindable commands first, then the keys every text field has.
+    const QKeyCombination pressed(event->modifiers() & ~Qt::KeypadModifier,
+                                  Qt::Key(event->key()));
+    const auto bound = m_keymap.constFind(pressed.toCombined());
+    if (bound != m_keymap.constEnd() && runCommand(*bound))
+        return;
 
     if (control) {
         switch (event->key()) {
-        case Qt::Key_Return:
-        case Qt::Key_Enter:
-            toggleTaskAtCursor();
-            return;
-        case Qt::Key_B:
-            toggleBold();
-            return;
-        case Qt::Key_I:
-            toggleItalic();
-            return;
-        case Qt::Key_K:
-            insertLink();
-            return;
-        case Qt::Key_H:
-            if (shift) {
-                toggleHighlight();
-                return;
-            }
-            showFind(true);
-            return;
-        case Qt::Key_F:
-            showFind(false);
-            return;
-        case Qt::Key_D:
-            if (shift) {
-                duplicateLines();
-                return;
-            }
-            break;
         case Qt::Key_Z:
             shift ? redo() : undo();
             return;
@@ -3269,7 +3299,13 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         break;
     }
 
-    if (!event->text().isEmpty() && event->text().at(0).isPrint()) {
+    // A shortcut nobody holds types nothing: Ctrl+B unbound does nothing, as
+    // in Obsidian, rather than typing "b". Ctrl+Alt stays text, because some
+    // layouts report AltGr that way.
+    const Qt::KeyboardModifiers held = event->modifiers();
+    const bool shortcut = (held & (Qt::ControlModifier | Qt::MetaModifier))
+                          && !held.testFlag(Qt::AltModifier);
+    if (!shortcut && !event->text().isEmpty() && event->text().at(0).isPrint()) {
         // Auto-pairing owns the brackets and quotes, "[[" included: the first
         // "[" opens "[]", the second sees the "]" ahead of it and opens
         // another, so the suggester still gets its "[[]]".

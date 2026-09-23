@@ -1,4 +1,6 @@
 add_library(noteAppC_settings STATIC
+    Hotkeys.cpp
+    Hotkeys.h
     Settings.cpp
     Settings.h)
 

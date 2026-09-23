@@ -26,6 +26,7 @@
 
 #include "MarkdownEditor.h"
 #include <QSignalSpy>
+#include <QAction>
 #include <QTemporaryDir>
 #include <QTreeView>
 #include <QTreeWidget>
@@ -876,3 +877,27 @@ int main(int argc, char **argv)
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
+
+TEST_F(WindowTest, AVaultsObsidianHotkeysRebindTheWindowAndTheEditor)
+{
+    // An Obsidian user's keys come with their vault: read, never written.
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/hotkeys.json"),
+          R"({"app:open-settings": [{"modifiers": ["Mod", "Shift"], "key": "P"}],
+              "editor:toggle-bold": [{"modifiers": ["Mod", "Shift"], "key": "B"}]})");
+    MainWindow window;
+    window.openVault(dir.path());
+
+    auto *settings = window.findChild<QAction *>(QStringLiteral("app:open-settings"));
+    ASSERT_NE(settings, nullptr);
+    EXPECT_EQ(settings->shortcut(), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
+
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->enterBlockAt(2);
+    for (int i = 0; i < 7; ++i)
+        QTest::keyClick(editor, Qt::Key_Right, Qt::ShiftModifier); // "Welcome"
+    QTest::keyClick(editor, Qt::Key_B, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# **Welcome**")));
+}
+

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QKeySequence>
 #include <QWidget>
 
 #include <functional>
@@ -36,12 +37,22 @@ public:
     void setContext(Settings *settings, const QString &vaultRoot);
     void applyTheme(const Theme &theme);
 
+    /// A command the Hotkeys page can rebind, with its built-in keys.
+    struct HotkeyCommand {
+        QString id;
+        QString name;
+        QList<QKeySequence> builtIn;
+    };
+    void setCommands(const QList<HotkeyCommand> &commands);
+
 signals:
     /// A row wrote to `settings`; MainWindow re-applies live and will save()
     /// on close.
     void settingChanged();
     /// Escape, or the header's close affordance.
     void closeRequested();
+    /// The Hotkeys page wrote noteAppC's hotkeys.json.
+    void hotkeysChanged();
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
@@ -56,6 +67,11 @@ private:
     QWidget *buildEditorPage();
     QWidget *buildFilesPage();
     QWidget *buildAboutPage();
+    QWidget *buildHotkeysPage();
+    /// The keys `id` has now: noteAppC's own file, else the vault's
+    /// Obsidian file, else the built-in ones.
+    QList<QKeySequence> effectiveKeys(const HotkeyCommand &command) const;
+    QList<HotkeyCommand> m_commands;
 
     /// One row: label + muted description on the left, `control` on the
     /// right, a "Reset" button that appears when any of `keys` differs from

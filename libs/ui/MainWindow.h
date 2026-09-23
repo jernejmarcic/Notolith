@@ -148,6 +148,10 @@ private:
     /// scheme has changed since the last call, so this costs nothing on the
     /// settings-page keystroke path.
     void watchThemeFiles();
+    /// Gives every command its keys: noteAppC's hotkeys.json over the vault's
+    /// Obsidian one over the built-in keys, for the window's commands and the
+    /// editor's alike.
+    void applyHotkeys();
     /// Spelling for the editor, from the spellcheck module when it is compiled
     /// in: the dictionaries load on the thread pool once the window has been
     /// painted, and the editor gets them when they are ready. A no-op in a
@@ -232,6 +236,9 @@ private:
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
+    /// The window's commands, each an action named by its command id and
+    /// carrying its built-in keys as data.
+    QList<QAction *> m_commands;
 
     std::shared_ptr<SpellChecker> m_spell;
     bool m_spellLoading = false;

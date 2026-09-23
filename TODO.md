@@ -325,9 +325,11 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       `{{date}}` `{{time}}` and `{{date:FORMAT}}`.
 - [ ] **Graph view** (lane C), a Tier 1 module like spellcheck: global and
       local, force layout that holds 5 000 nodes at 60 fps, `graph.json` options.
-- [ ] **Hotkeys** (me): a command registry every action goes through, and
-      `hotkeys.json` (Obsidian's format) to rebind them. The palette sits on
-      the same registry later.
+- [x] **Hotkeys**: every window command is an action named by its Obsidian
+      id, the editor's shortcuts are a table of commands (`runCommand`,
+      `setKeyBindings`), keys come from noteAppC's `hotkeys.json` over the
+      vault's Obsidian one over the built-in ones, and Settings > Hotkeys
+      rebinds, shows clashes and resets. The palette sits on this later.
 
 ### Wave 2
 - [ ] File recovery: snapshots on save, a browser to restore from.

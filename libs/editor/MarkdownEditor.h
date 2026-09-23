@@ -6,6 +6,7 @@
 #include <QFutureWatcher>
 #include <QHash>
 #include <QIcon>
+#include <QKeySequence>
 #include <QPixmap>
 #include <QPointer>
 #include <QTextLayout>
@@ -190,6 +191,21 @@ public:
     // --- editing commands -------------------------------------------------
     // Bound to the same keys Obsidian uses; public so the Phase 4 command
     // palette can reach them without a second implementation.
+
+    /// One editing command, under the id Obsidian gives it where it has one,
+    /// so a `hotkeys.json` written for Obsidian rebinds it here as well.
+    struct Command {
+        QString id;
+        QString name;
+        QList<QKeySequence> keys; ///< the built-in binding
+    };
+    static const QList<Command> &commands();
+    /// Runs the command with this id. False when there is no such command.
+    bool runCommand(const QString &id);
+    /// Keys by command id, over the built-in ones; an empty list unbinds.
+    /// Undo, redo, copy, cut, paste and select all are not commands: they
+    /// keep their standard keys, as they do in Obsidian.
+    void setKeyBindings(const QHash<QString, QList<QKeySequence>> &bindings);
 
     void toggleBold();      ///< Ctrl+B
     void toggleItalic();    ///< Ctrl+I
@@ -699,6 +715,9 @@ private:
     void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
+    /// A key combination, as QKeyCombination::toCombined(), to the command
+    /// it runs.
+    QHash<int, QString> m_keymap;
     Spelling m_spelling;
     /// The inline editor over a property value, while one is open, and the
     /// key it edits: a reparse can renumber the properties under it.

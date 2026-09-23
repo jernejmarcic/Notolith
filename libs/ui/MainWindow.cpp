@@ -33,6 +33,7 @@
 #include <memory>
 
 #include "BacklinksPane.h"
+#include "Hotkeys.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "OutgoingLinksPane.h"
@@ -422,6 +423,7 @@ QWidget *MainWindow::buildMainArea()
 
     m_settingsPage = new SettingsPage(this);
     connect(m_settingsPage, &SettingsPage::settingChanged, this, &MainWindow::applySettings);
+    connect(m_settingsPage, &SettingsPage::hotkeysChanged, this, &MainWindow::applyHotkeys);
     connect(m_settingsPage, &SettingsPage::closeRequested, this, &MainWindow::closeSettings);
 
     m_mainStack = new QStackedWidget(this);
@@ -526,26 +528,62 @@ QWidget *MainWindow::buildRightSidebar()
 
 void MainWindow::buildActions()
 {
-    // No menu bar: Obsidian has none, and Phase 4 replaces these with the
-    // command palette and its hotkeys.
-    const auto add = [this](const QString &shortcut, auto slot) {
-        auto *action = new QAction(this);
-        action->setShortcut(QKeySequence(shortcut));
+    // No menu bar: Obsidian has none. Every command is an action named by its
+    // Obsidian command id, so a hotkeys.json rebinds it and the command
+    // palette, when it comes, lists the same set.
+    const auto add = [this](const QString &id, const QString &name, const QString &keys,
+                            auto slot) {
+        auto *action = new QAction(name, this);
+        action->setObjectName(id);
+        action->setData(keys); // the built-in binding, for applyHotkeys()
+        action->setShortcut(QKeySequence(keys));
         action->setShortcutContext(Qt::WindowShortcut);
         connect(action, &QAction::triggered, this, slot);
         addAction(action);
+        m_commands << action;
     };
-    add(QStringLiteral("Ctrl+Shift+O"), &MainWindow::chooseVault);
-    add(QStringLiteral("Ctrl+S"), [this] { save(); });
-    add(QStringLiteral("Ctrl+Alt+S"), &MainWindow::toggleSidebar);
-    add(QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
-    add(QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
-    add(QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
-    add(QStringLiteral("Ctrl+N"), [this] { newNoteIn(QString()); });
-    add(QStringLiteral("Ctrl+,"), &MainWindow::openSettings);
-    add(QStringLiteral("Ctrl+Q"), &MainWindow::close);
-    add(QStringLiteral("Alt+Left"), &MainWindow::goBack);
-    add(QStringLiteral("Alt+Right"), &MainWindow::goForward);
+    add(QStringLiteral("app:open-vault"), tr("Open another vault"), QStringLiteral("Ctrl+Shift+O"),
+        &MainWindow::chooseVault);
+    add(QStringLiteral("editor:save-file"), tr("Save current file"), QStringLiteral("Ctrl+S"),
+        [this] { save(); });
+    add(QStringLiteral("app:toggle-left-sidebar"), tr("Toggle left sidebar"),
+        QStringLiteral("Ctrl+Alt+S"), &MainWindow::toggleSidebar);
+    add(QStringLiteral("app:toggle-right-sidebar"), tr("Toggle right sidebar"),
+        QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
+    add(QStringLiteral("switcher:open"), tr("Quick switcher: Open quick switcher"),
+        QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
+    add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
+        QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
+    add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
+        [this] { newNoteIn(QString()); });
+    add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
+        &MainWindow::openSettings);
+    add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
+    add(QStringLiteral("app:go-back"), tr("Navigate back"), QStringLiteral("Alt+Left"),
+        &MainWindow::goBack);
+    add(QStringLiteral("app:go-forward"), tr("Navigate forward"), QStringLiteral("Alt+Right"),
+        &MainWindow::goForward);
+
+    QList<SettingsPage::HotkeyCommand> rebindable;
+    for (const QAction *action : std::as_const(m_commands))
+        rebindable << SettingsPage::HotkeyCommand{action->objectName(), action->text(),
+                                                  {QKeySequence(action->data().toString())}};
+    for (const MarkdownEditor::Command &command : MarkdownEditor::commands())
+        rebindable << SettingsPage::HotkeyCommand{command.id, command.name, command.keys};
+    m_settingsPage->setCommands(rebindable);
+    applyHotkeys();
+}
+
+void MainWindow::applyHotkeys()
+{
+    const Hotkeys::Bindings bindings = Hotkeys::load(m_vault.isValid() ? m_vault.root() : QString());
+    for (QAction *action : std::as_const(m_commands)) {
+        const auto own = bindings.constFind(action->objectName());
+        action->setShortcuts(own != bindings.constEnd()
+                                 ? *own
+                                 : QList<QKeySequence>{QKeySequence(action->data().toString())});
+    }
+    m_editor->setKeyBindings(bindings);
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
@@ -715,6 +753,7 @@ void MainWindow::applySettings()
     m_editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     m_editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
     updateSpelling();
+    applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));

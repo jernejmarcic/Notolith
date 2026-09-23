@@ -7,6 +7,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QKeyEvent>
+#include <QKeySequenceEdit>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 
+#include "Hotkeys.h"
 #include "Scheme.h"
 #include "Settings.h"
 #include "Theme.h"
@@ -48,7 +50,8 @@ SettingsPage::SettingsPage(QWidget *parent)
     m_nav->setObjectName(QStringLiteral("settingsNav"));
     m_nav->setFixedWidth(200);
     m_nav->setFrameShape(QFrame::NoFrame);
-    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("About")});
+    m_nav->addItems({tr("Appearance"), tr("Editor"), tr("Files and links"), tr("Hotkeys"),
+                     tr("About")});
 
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("settingsPages"));
@@ -93,6 +96,7 @@ void SettingsPage::rebuild()
     m_pages->addWidget(buildAppearancePage());
     m_pages->addWidget(buildEditorPage());
     m_pages->addWidget(buildFilesPage());
+    m_pages->addWidget(buildHotkeysPage());
     m_pages->addWidget(buildAboutPage());
     m_nav->setCurrentRow(row < m_pages->count() ? row : 0);
     refreshRowDecorations();
@@ -485,6 +489,139 @@ QWidget *SettingsPage::buildFilesPage()
                 tr("Rewrite every link that points at a note when it is renamed or moved."));
 
     layout->addStretch(1);
+    return scrollWrap(page);
+}
+
+void SettingsPage::setCommands(const QList<HotkeyCommand> &commands)
+{
+    m_commands = commands;
+    std::sort(m_commands.begin(), m_commands.end(),
+              [](const HotkeyCommand &l, const HotkeyCommand &r) {
+                  return l.name.localeAwareCompare(r.name) < 0;
+              });
+    m_needsRebuild = true;
+    if (isVisible())
+        rebuild();
+}
+
+QList<QKeySequence> SettingsPage::effectiveKeys(const HotkeyCommand &command) const
+{
+    const Hotkeys::Bindings bindings = Hotkeys::load(m_vaultRoot);
+    const auto found = bindings.constFind(command.id);
+    return found != bindings.constEnd() ? *found : command.builtIn;
+}
+
+QWidget *SettingsPage::buildHotkeysPage()
+{
+    auto *page = new QWidget;
+    page->setObjectName(QStringLiteral("settingsHotkeysPage"));
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(28, 20, 28, 20);
+    layout->setSpacing(0);
+
+    auto *filter = new QLineEdit(page);
+    filter->setObjectName(QStringLiteral("settingsHotkeysFilter"));
+    filter->setPlaceholderText(tr("Filter commands..."));
+    filter->setClearButtonEnabled(true);
+    layout->addWidget(filter);
+    layout->addSpacing(8);
+
+    // Who holds which key, so a clash shows on both commands' rows.
+    const Hotkeys::Bindings own = Hotkeys::loadOwn();
+    QHash<int, QStringList> holders;
+    QHash<QString, QList<QKeySequence>> current;
+    for (const HotkeyCommand &command : std::as_const(m_commands)) {
+        current.insert(command.id, effectiveKeys(command));
+        for (const QKeySequence &keys : current.value(command.id)) {
+            if (!keys.isEmpty())
+                holders[keys[0].toCombined()] << command.name;
+        }
+    }
+
+    QList<QWidget *> rows;
+    for (const HotkeyCommand &command : std::as_const(m_commands)) {
+        auto *row = new QWidget(page);
+        row->setObjectName(QStringLiteral("settingsRow"));
+        row->setProperty("commandText", (command.name + QLatin1Char(' ') + command.id).toLower());
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 10, 0, 10);
+        rowLayout->setSpacing(16);
+
+        QString description = command.id;
+        for (const QKeySequence &keys : current.value(command.id)) {
+            if (keys.isEmpty())
+                continue;
+            QStringList others = holders.value(keys[0].toCombined());
+            others.removeOne(command.name);
+            if (!others.isEmpty())
+                description += tr(" - %1 is also bound to %2")
+                                   .arg(keys.toString(QKeySequence::NativeText), others.join(tr(", ")));
+        }
+        auto *text = new QWidget(row);
+        auto *textLayout = new QVBoxLayout(text);
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(2);
+        auto *label = new QLabel(command.name, text);
+        label->setObjectName(QStringLiteral("settingsRowLabel"));
+        auto *id = new QLabel(description, text);
+        id->setObjectName(QStringLiteral("settingsRowDescription"));
+        id->setWordWrap(true);
+        textLayout->addWidget(label);
+        textLayout->addWidget(id);
+
+        auto *edit = new QKeySequenceEdit(row);
+        edit->setObjectName(QStringLiteral("settingsHotkeyEdit"));
+        edit->setMaximumSequenceLength(1); // one chord, as Obsidian takes
+        edit->setClearButtonEnabled(true);
+        const QList<QKeySequence> keys = current.value(command.id);
+        edit->setKeySequence(keys.isEmpty() ? QKeySequence() : keys.first());
+        edit->setMinimumWidth(110);
+
+        auto *reset = new QToolButton(row);
+        reset->setObjectName(QStringLiteral("settingsResetButton"));
+        reset->setText(tr("Reset"));
+        reset->setAutoRaise(true);
+        reset->setCursor(Qt::PointingHandCursor);
+        reset->setVisible(own.contains(command.id));
+
+        const QString commandID = command.id;
+        connect(edit, &QKeySequenceEdit::editingFinished, this, [this, edit, commandID] {
+            Hotkeys::Bindings bindings = Hotkeys::loadOwn();
+            const QKeySequence keys = edit->keySequence();
+            bindings.insert(commandID, keys.isEmpty() ? QList<QKeySequence>() : QList{keys});
+            Hotkeys::save(bindings);
+            emit hotkeysChanged();
+            m_needsRebuild = true; // clash notes and Reset buttons follow on reopen
+        });
+        connect(reset, &QToolButton::clicked, this, [this, commandID] {
+            Hotkeys::Bindings bindings = Hotkeys::loadOwn();
+            bindings.remove(commandID);
+            Hotkeys::save(bindings);
+            emit hotkeysChanged();
+            rebuild();
+        });
+
+        rowLayout->addWidget(text, 1);
+        rowLayout->addWidget(reset, 0);
+        rowLayout->addWidget(edit, 0);
+        layout->addWidget(row);
+        auto *hairline = new QFrame(page);
+        hairline->setObjectName(QStringLiteral("settingsHairline"));
+        hairline->setFixedHeight(1);
+        layout->addWidget(hairline);
+        rows << row << hairline;
+    }
+    layout->addStretch(1);
+
+    connect(filter, &QLineEdit::textChanged, page, [rows](const QString &text) {
+        const QString needle = text.trimmed().toLower();
+        for (int i = 0; i + 1 < rows.size(); i += 2) {
+            const bool shown =
+                needle.isEmpty() || rows.at(i)->property("commandText").toString().contains(needle);
+            rows.at(i)->setVisible(shown);
+            rows.at(i + 1)->setVisible(shown);
+        }
+    });
     return scrollWrap(page);
 }
 
