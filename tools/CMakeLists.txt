@@ -7,3 +7,8 @@ target_link_libraries(noteAppC_index_cli PRIVATE noteAppC_index noteAppC_vault)
 
 # The performance harness: the numbers every optimisation has to beat.
 add_subdirectory(bench)
+
+# The out-of-process plugin host (docs/PLUGINS.md, Tier 2).
+if(NOTEAPPC_WITH_PLUGINS)
+    add_subdirectory(plugin_host)
+endif()
