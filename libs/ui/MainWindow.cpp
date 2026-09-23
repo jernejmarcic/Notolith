@@ -954,7 +954,8 @@ QWidget *MainWindow::buildRightSidebar()
     group->addButton(searchTab, m_rightPanes->indexOf(m_search));
     for (QToolButton *tab : {searchTab, backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab})
         tabLayout->addWidget(tab);
-    if (m_localGraph) {
+#ifdef NOTEAPPC_HAVE_GRAPH
+    {
         QToolButton *graphTab = rightSidebarTabButton(
             tabRow, QStringLiteral("localGraphTabButton"), QStringLiteral("git-fork"),
             tr("Local graph"), tr("Local graph"), m_rightPanes->indexOf(m_localGraph));
@@ -962,6 +963,7 @@ QWidget *MainWindow::buildRightSidebar()
         group->addButton(graphTab, m_rightPanes->indexOf(m_localGraph));
         tabLayout->addWidget(graphTab);
     }
+#endif
     tabLayout->addStretch(1);
     backlinksTab->setChecked(true);
 
