@@ -17,6 +17,7 @@ add_library(noteAppC_editor STATIC
     NotebookEmbed.cpp
     PasteDrop.cpp
     TableCells.cpp
+    TouchInput.cpp
     PdfEmbedBlock.cpp
     PdfExport.cpp
     QueryBlock.cpp

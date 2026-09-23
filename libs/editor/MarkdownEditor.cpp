@@ -110,6 +110,8 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     connect(&m_longPress, &QTimer::timeout, this, [this] {
         m_pressing = false;
         selectWordAt(m_pressOffset);
+        m_touchHandles = true; // a finger's selection is adjusted by its handles
+        viewport()->update();
     });
 
     // ponytail: the parse is synchronous behind a short debounce. It measures
@@ -3366,17 +3368,28 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
                              QPointF(point.x(), point.y() + lineHeight));
         }
     }
+    paintSelectionHandles(painter);
 }
 
 QPointF MarkdownEditor::cursorPoint() const
 {
-    const qsizetype index = blockAt(m_cursor);
+    return pointFor(m_cursor);
+}
+
+QPointF MarkdownEditor::pointFor(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return {};
     const BlockView &view = m_blocks.at(size_t(index));
-    if (const Cell *cell = caretCell(view); cell && cell->layout) {
+    const Cell *cell = nullptr;
+    for (const Cell &candidate : view.cells) {
+        if (candidate.source.isValid() && candidate.source.start <= offset && offset <= candidate.source.end)
+            cell = &candidate;
+    }
+    if (cell && cell->layout) {
         const int length = int(cell->layout->text().size());
-        const int display = qBound(0, int(cell->map.toDisplay(m_cursor)) - cell->lead, length);
+        const int display = qBound(0, int(cell->map.toDisplay(offset)) - cell->lead, length);
         const QTextLine line = cell->layout->lineForTextPosition(display);
         const QPointF origin = cellTextOrigin(view, *cell);
         return QPointF(contentLeft() + origin.x() + (line.isValid() ? line.cursorToX(display) : 0),
@@ -3385,7 +3398,7 @@ QPointF MarkdownEditor::cursorPoint() const
     if (!view.layout)
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
-    const qsizetype display = view.map.toDisplay(m_cursor);
+    const qsizetype display = view.map.toDisplay(offset);
     const QTextLine line = view.layout->lineForTextPosition(int(display));
     if (!line.isValid())
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
@@ -4141,6 +4154,13 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         QAbstractScrollArea::mousePressEvent(event);
         return;
     }
+    // A finger is bigger than a pointer: every small target grows for it.
+    const bool touch = event->pointingDevice()
+                       && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen;
+    m_touchSlop = touch ? 10 : 0;
+    if (touch && pressSelectionHandle(event->pos()))
+        return;
+    m_touchHandles = false;
 
     const QString target = linkAt(event->pos());
     if (!target.isEmpty() && event->modifiers().testFlag(Qt::ControlModifier)) {
@@ -4167,7 +4187,7 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
             if (std::any_of(view.revealed.cbegin(), view.revealed.cend(),
                             [&item](const Range &range) { return range.overlaps(item.marker); }))
                 continue;
-            if (checkboxRect(view, item).adjusted(-3, -3, 3, 3).contains(event->pos())) {
+            if (touchable(checkboxRect(view, item), 3).contains(event->pos())) {
                 toggleTask(item);
                 return;
             }
@@ -4236,6 +4256,8 @@ QString MarkdownEditor::selectedText() const
 void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 {
     m_longPress.stop();
+    if (releaseSelectionHandle())
+        return;
     if (event->button() != Qt::LeftButton || !m_pressing) {
         QAbstractScrollArea::mouseReleaseEvent(event);
         return;
@@ -4249,6 +4271,8 @@ void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 
 void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 {
+    if (dragSelectionHandle(event->pos()))
+        return;
     if (event->buttons().testFlag(Qt::LeftButton)) {
         if (m_longPress.isActive()) {
             // A finger always wobbles a little; only a real move is a drag.

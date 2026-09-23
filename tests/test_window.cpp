@@ -1515,6 +1515,46 @@ TEST(PublishDialogTest, AsksForAFolderAndARealHomeNote)
     EXPECT_EQ(choices.theme, 2);
 }
 
+TEST_F(WindowTest, NarrowSidebarsOpenAsDrawersOverTheNote)
+{
+    MainWindow window;
+    window.resize(1180, 760);
+    window.show();
+    auto *splitter = window.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    ASSERT_NE(splitter, nullptr);
+    const int panes = splitter->count();
+    window.resize(500, 760); // a phone held upright
+    QApplication::processEvents();
+
+    auto *toggle = window.findChild<QAction *>(QStringLiteral("app:toggle-left-sidebar"));
+    ASSERT_NE(toggle, nullptr);
+    toggle->trigger();
+    auto *scrim = window.findChild<QWidget *>(QStringLiteral("drawerScrim"));
+    ASSERT_NE(scrim, nullptr);
+    EXPECT_TRUE(scrim->isVisible());
+    EXPECT_EQ(splitter->count(), panes - 1) << "the drawer is over the note, not beside it";
+    QWidget *drawer = nullptr;
+    for (QWidget *child : window.centralWidget()->findChildren<QWidget *>(Qt::FindDirectChildrenOnly)) {
+        if (child != scrim && child->isVisible() && child->geometry().left() == scrim->geometry().left()
+            && child->width() < scrim->width())
+            drawer = child;
+    }
+    ASSERT_NE(drawer, nullptr);
+    EXPECT_LE(drawer->width(), 320);
+
+    // A tap on the dimmed note closes it and puts it back in the splitter.
+    QTest::mouseClick(scrim, Qt::LeftButton, {}, QPoint(scrim->width() - 10, 50));
+    EXPECT_FALSE(scrim->isVisible());
+    EXPECT_EQ(splitter->count(), panes);
+
+    // Wide again: sidebars sit beside the note as before.
+    toggle->trigger();
+    window.resize(1180, 760);
+    QApplication::processEvents();
+    EXPECT_FALSE(scrim->isVisible());
+    EXPECT_EQ(splitter->count(), panes);
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

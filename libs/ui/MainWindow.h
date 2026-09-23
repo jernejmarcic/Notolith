@@ -465,6 +465,13 @@ private:
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width
+    /// Narrow, a sidebar opens as a drawer over the note: lifted out of the
+    /// splitter, a dimmed layer behind it that closes it when tapped.
+    void openDrawer(QWidget *side);
+    void closeDrawer();
+    QWidget *m_drawer = nullptr;
+    QWidget *m_scrim = nullptr;
+    int m_drawerIndex = -1;
     bool m_leftBeforeNarrow = true;
     bool m_rightBeforeNarrow = true;
     /// What m_themeWatcher is currently set up for, so watchThemeFiles() can

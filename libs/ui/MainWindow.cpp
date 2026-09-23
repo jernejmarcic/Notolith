@@ -1747,6 +1747,10 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
     // Installed on the whole application (see the constructor), so this sees
     // a side-button click no matter which widget the mouse happens to be
     // over - the editor, the tree, a sidebar pane.
+    if (event->type() == QEvent::MouseButtonPress && watched == m_scrim && m_drawer) {
+        closeDrawer(); // a tap beside the drawer puts it away
+        return true;
+    }
     if (event->type() == QEvent::MouseButtonPress) {
         auto *mouseEvent = static_cast<QMouseEvent *>(event);
         const bool isNavButton =
@@ -1830,13 +1834,60 @@ void MainWindow::updateInlineTitleMargins(Leaf *leaf)
 
 void MainWindow::toggleSidebar()
 {
+    if (m_narrow) {
+        m_drawer == m_sidebar ? closeDrawer() : openDrawer(m_sidebar);
+        return;
+    }
     m_sidebar->setVisible(!m_sidebar->isVisible());
 }
 
 void MainWindow::toggleRightSidebar()
 {
+    if (m_narrow) {
+        m_drawer == m_rightSidebar ? closeDrawer() : openDrawer(m_rightSidebar);
+        return;
+    }
     m_rightSidebar->setVisible(!m_rightSidebar->isVisible());
     QSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
+}
+
+void MainWindow::openDrawer(QWidget *side)
+{
+    auto *splitter = findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    closeDrawer();
+    if (!splitter || splitter->indexOf(side) < 0)
+        return;
+    m_drawerIndex = splitter->indexOf(side);
+    if (!m_scrim) {
+        m_scrim = new QWidget(centralWidget());
+        m_scrim->setObjectName(QStringLiteral("drawerScrim"));
+        m_scrim->setAttribute(Qt::WA_StyledBackground);
+        m_scrim->setStyleSheet(QStringLiteral("#drawerScrim { background: rgba(0, 0, 0, 0.45); }"));
+    }
+    // Over the note area only; the header bar, with the buttons that open
+    // and close it, stays reachable.
+    const QRect area = splitter->geometry();
+    m_scrim->setGeometry(area);
+    m_scrim->show();
+    m_scrim->raise();
+    side->setParent(centralWidget());
+    const int width = qMin(320, int(area.width() * 0.85));
+    side->setGeometry(side == m_sidebar ? area.x() : area.right() - width + 1, area.y(), width, area.height());
+    side->show();
+    side->raise();
+    m_drawer = side;
+}
+
+void MainWindow::closeDrawer()
+{
+    if (!m_drawer)
+        return;
+    QWidget *side = std::exchange(m_drawer, nullptr);
+    side->hide();
+    if (auto *splitter = findChild<QSplitter *>(QStringLiteral("mainSplitter")))
+        splitter->insertWidget(m_drawerIndex, side); // back where it came from, folded
+    if (m_scrim)
+        m_scrim->hide();
 }
 
 void MainWindow::showRightPane(QWidget *pane)
@@ -3187,8 +3238,10 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     // Any navigation - the tree, the switcher, a link, history - leaves the
     // settings page if it was open, even below, where a same-path or
     // not-a-note early return means nothing else here runs: a click behind an
-    // overlay must not load invisibly behind it.
+    // overlay must not load invisibly behind it. A drawer picked from goes
+    // away too, as on a phone.
     leaveSettings();
+    closeDrawer();
 
     // A caller outside the tree view - the screenshot tool, a future
     // command-line argument - may hand this a path relative to the working
@@ -4125,8 +4178,11 @@ void MainWindow::resizeEvent(QResizeEvent *event)
 {
     QMainWindow::resizeEvent(event);
     const bool narrow = width() < kNarrowWidth;
+    if (m_drawer && narrow == m_narrow)
+        openDrawer(m_drawer); // laid out again for the new size
     if (narrow == m_narrow || !m_sidebar || !m_rightSidebar)
         return;
+    closeDrawer();
     m_narrow = narrow;
     if (narrow) {
         m_leftBeforeNarrow = m_sidebar->isVisible();
