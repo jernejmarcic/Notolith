@@ -372,8 +372,8 @@ scrolliong through pages, it can make them like a slide".
 - [ ] An embed inside running text trails its line as a row (bare
       QTextLayout has no inline objects); a canvas embed is a picture, not
       interactive; `![[x.base#View]]` shows the first view.
-- [ ] PDF placeholders size every page on the UI thread once per file
-      (`pdfMetadata`): measure a 500-page PDF, and size only the pages shown.
+- [x] PDF placeholders size every page on the UI thread once per file:
+      measured 2.5 ms for 500 pages (poppler 26.08), so it stays.
 
 ## Requested 2026-09-23, afternoon: history and switches
 
