@@ -152,7 +152,6 @@ signals:
 private:
     bool createSchema();
     /// Drops every table, for when the cache's schema version is not ours.
-    void dropSchema();
     void loadNames();
     void indexNames(qint64 fileId, const QString &path, const QStringList &names);
     void forgetNames(const QString &path);
@@ -161,6 +160,9 @@ private:
     QString rebasedTarget(const QString &oldTarget, const QString &oldRelative,
                           const QString &newRelative) const;
     bool basenameStillUnique(const QString &basename, const QString &excludePath) const;
+    /// PRAGMA user_version of the database at `databasePath`; 0 when it
+    /// cannot be read.
+    static int storedVersion(const QString &databasePath);
 
     /// The engine behind search() and unlinkedMentions(): narrows the FTS5
     /// table, loads whatever metadata the query needs, and calls `onMatch`

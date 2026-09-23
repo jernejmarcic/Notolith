@@ -8,6 +8,8 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QSignalSpy>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
@@ -378,6 +380,33 @@ int main(int argc, char **argv)
 // The full-text table is keyed by the file's id. Nothing reads it until the
 // search grammar lands, so these guard it: a stale or duplicated row would be
 // invisible until Phase 5 and then look like a parser bug.
+TEST_F(IndexTest, ACacheFromAnOlderSchemaIsRebuiltNotTrusted)
+{
+    // What a machine still holds from before links gained `tname`: version 2,
+    // the old table, rows the new queries cannot read.
+    const QString cache = Index::cachePathFor(dir.path());
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(cache).absolutePath()));
+    {
+        QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("old-cache"));
+        old.setDatabaseName(cache);
+        ASSERT_TRUE(old.open());
+        QSqlQuery query(old);
+        ASSERT_TRUE(query.exec(QStringLiteral("CREATE TABLE files (id INTEGER PRIMARY KEY, path TEXT UNIQUE, "
+                                              "mtime INTEGER, size INTEGER, hash BLOB, words INTEGER)")));
+        ASSERT_TRUE(query.exec(QStringLiteral("CREATE TABLE links (file INTEGER, target TEXT, subpath TEXT, "
+                                              "alias TEXT, embed INTEGER, wiki INTEGER, external INTEGER, "
+                                              "start INTEGER, finish INTEGER, tstart INTEGER, tfinish INTEGER)")));
+        ASSERT_TRUE(query.exec(QStringLiteral("PRAGMA user_version = 2")));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("old-cache"));
+
+    Index index;
+    build(index);
+    ASSERT_TRUE(index.isOpen());
+    EXPECT_GT(index.noteCount(), 0) << "the indexer ran";
+    EXPECT_FALSE(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).isEmpty());
+}
+
 TEST_F(IndexTest, OpeningAnAlreadyIndexedVaultSaysTheContentsChanged)
 {
     {

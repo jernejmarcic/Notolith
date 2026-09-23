@@ -4,6 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -89,10 +90,22 @@ bool Index::open(const QString &vaultRoot)
         return false;
     }
 
+    // A cache written by another schema version is deleted, not migrated:
+    // it is rebuildable from the vault at any time, and dropping its tables
+    // in place failed silently (a DROP while the version query's statement
+    // was still open is "table is locked"), after which createSchema() tripped
+    // over the old columns and every backlink query ran against a table
+    // without them - for good, since the indexer never ran either.
+    if (QFileInfo::exists(m_databasePath) && storedVersion(m_databasePath) != kSchemaVersion) {
+        for (const QString &suffix : {QString(), QStringLiteral("-wal"), QStringLiteral("-shm")})
+            QFile::remove(m_databasePath + suffix);
+    }
+
     m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
     m_db.setDatabaseName(m_databasePath);
     if (!m_db.open()) {
         m_error = m_db.lastError().text();
+        close();
         return false;
     }
 
@@ -103,14 +116,10 @@ bool Index::open(const QString &vaultRoot)
     pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
     pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
 
-    int version = 0;
-    if (pragma.exec(QStringLiteral("PRAGMA user_version")) && pragma.next())
-        version = pragma.value(0).toInt();
-    if (version != kSchemaVersion)
-        dropSchema();
-
-    if (!createSchema())
+    if (!createSchema()) {
+        close(); // isOpen() must not say yes to a database nothing can use
         return false;
+    }
     pragma.exec(QStringLiteral("PRAGMA user_version = %1").arg(kSchemaVersion));
 
     loadNames();
@@ -189,16 +198,21 @@ bool Index::createSchema()
     return true;
 }
 
-void Index::dropSchema()
+int Index::storedVersion(const QString &databasePath)
 {
-    QSqlQuery query(m_db);
-    for (const QString &table : {QStringLiteral("content"), QStringLiteral("names"),
-                                 QStringLiteral("props"), QStringLiteral("tasks"),
-                                 QStringLiteral("blocks"), QStringLiteral("tags"),
-                                 QStringLiteral("links"), QStringLiteral("headings"),
-                                 QStringLiteral("files")}) {
-        query.exec(QStringLiteral("DROP TABLE IF EXISTS ") + table);
+    const QString name = QStringLiteral("noteAppC-version-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    int version = 0;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+        db.setDatabaseName(databasePath);
+        if (db.open()) {
+            QSqlQuery query(db);
+            if (query.exec(QStringLiteral("PRAGMA user_version")) && query.next())
+                version = query.value(0).toInt();
+        }
     }
+    QSqlDatabase::removeDatabase(name);
+    return version;
 }
 
 void Index::loadNames()
