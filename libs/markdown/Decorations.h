@@ -24,6 +24,10 @@ struct StyleSpan {
         CodeBlock,
         Math,
         Html,
+        /// A footnote reference `[^label]`/`^[text]`, or a definition's
+        /// `[^label]:` marker - `range` is the whole reference, or just the
+        /// definition's marker (not its body). Inline, like a link.
+        Footnote,
     };
 
     Kind kind = Kind::Bold;
@@ -201,6 +205,10 @@ struct FootnoteDefinition {
     QString label;
     Range range;   ///< the whole definition, marker included
     Range content; ///< after "[^label]: "
+    /// The number of the footnote that references this label, matching
+    /// `FootnoteSpan::number` - 0 if nothing in the note references it, in
+    /// which case live preview and reading view leave it as written.
+    int number = 0;
 };
 
 /// Everything the editor needs that the index does not: which ranges are

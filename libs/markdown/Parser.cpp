@@ -784,6 +784,26 @@ void scanFootnotes(const QString &text, const QList<Range> &masked, Decorations 
                                                        : numbers.insert(span.label, ++next).value();
     }
     decorations.footnotes = found;
+    for (FootnoteDefinition &definition : decorations.footnoteDefinitions)
+        definition.number = numbers.value(definition.label, 0);
+
+    // The editor shows a reference as its number, superscript, and a
+    // definition's marker as a small muted number - neither is real text
+    // DisplayMap can substitute, so one carrier character (the opening "["
+    // or "^") is left visible and the rest hidden like any other syntax;
+    // the editor paints the number over the carrier. Only markers on a line
+    // the caret is not touching stay hidden, the same as bold or a link.
+    for (const FootnoteSpan &span : found) {
+        decorations.syntax.append({span.range.start + 1, span.range.end});
+        decorations.styles.append({StyleSpan::Kind::Footnote, span.range, 0, span.label, {}, {}});
+    }
+    for (const FootnoteDefinition &definition : decorations.footnoteDefinitions) {
+        if (definition.number <= 0)
+            continue; // never referenced: shown as written, nothing to number
+        const Range marker{definition.range.start, definition.content.start};
+        decorations.syntax.append({marker.start + 1, marker.end});
+        decorations.styles.append({StyleSpan::Kind::Footnote, marker, 0, definition.label, {}, {}});
+    }
 }
 
 void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
