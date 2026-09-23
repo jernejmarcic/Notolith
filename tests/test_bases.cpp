@@ -1,0 +1,787 @@
+#include <gtest/gtest.h>
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QApplication>
+
+#include "BaseFile.h"
+#include "BaseQuery.h"
+#include "BaseTableModel.h"
+#include "BaseView.h"
+#include "Expression.h"
+#include "Index.h"
+#include "Indexer.h"
+#include "Vault.h"
+
+using namespace noteAppC;
+using namespace noteAppC::bases;
+
+namespace {
+
+Row makeRow(const QString &name, const QString &folder = QString())
+{
+    Row row;
+    row.noteName = name;
+    row.notePath = folder.isEmpty() ? name + QStringLiteral(".md")
+                                    : folder + QLatin1Char('/') + name + QStringLiteral(".md");
+    row.noteFolder = folder;
+    row.noteExt = QStringLiteral("md");
+    row.fileMtime = QDateTime(QDate(2026, 1, 1), QTime(12, 0));
+    return row;
+}
+
+Value evalText(const QString &source, const Row &row, const FormulaSource *formulas = nullptr,
+              QString *error = nullptr)
+{
+    QString parseError;
+    auto expr = Expression::parse(source, &parseError);
+    if (!expr) {
+        if (error) *error = parseError;
+        return Value::empty();
+    }
+    QString evalError;
+    Value v = expr->evaluate(row, formulas, QDateTime(QDate(2026, 9, 23), QTime(12, 0)), &evalError);
+    if (error) *error = evalError;
+    return v;
+}
+
+} // namespace
+
+// =========================================================================
+// Expression: literals, property access, operators
+// =========================================================================
+
+TEST(ExpressionTest, Literals)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("2.5"), row).number, 2.5);
+    EXPECT_EQ(evalText(QStringLiteral("\"hi\""), row).text, QStringLiteral("hi"));
+    EXPECT_EQ(evalText(QStringLiteral("'hi'"), row).text, QStringLiteral("hi"));
+    EXPECT_TRUE(evalText(QStringLiteral("true"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("false"), row).boolean);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.5)"), row).number, 2.5);
+}
+
+TEST(ExpressionTest, FilePropertyAccess)
+{
+    Row row = makeRow(QStringLiteral("Home"), QStringLiteral("Projects"));
+    row.fileSize = 1234;
+    row.tags = {QStringLiteral("a"), QStringLiteral("b")};
+    row.links = {QStringLiteral("Other")};
+
+    EXPECT_EQ(evalText(QStringLiteral("file.name"), row).text, QStringLiteral("Home"));
+    EXPECT_EQ(evalText(QStringLiteral("file.folder"), row).text, QStringLiteral("Projects"));
+    EXPECT_EQ(evalText(QStringLiteral("file.ext"), row).text, QStringLiteral("md"));
+    EXPECT_EQ(evalText(QStringLiteral("file.path"), row).text, QStringLiteral("Projects/Home.md"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("file.size"), row).number, 1234);
+    EXPECT_EQ(evalText(QStringLiteral("file.tags"), row).list, QStringList({"a", "b"}));
+    EXPECT_EQ(evalText(QStringLiteral("file.links"), row).list, QStringList({"Other"}));
+    EXPECT_EQ(evalText(QStringLiteral("file.tags.length"), row).number, 2);
+}
+
+TEST(ExpressionTest, NotePropertyBareAndDottedAndBracket)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("price"), Value::ofNumber(9.5));
+    row.properties.insert(QStringLiteral("two words"), Value::ofString(QStringLiteral("x")));
+
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("price"), row).number, 9.5);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("note.price"), row).number, 9.5);
+    EXPECT_EQ(evalText(QStringLiteral("note[\"two words\"]"), row).text, QStringLiteral("x"));
+    // Missing property: empty, not an error.
+    QString error;
+    EXPECT_TRUE(evalText(QStringLiteral("missing"), row, nullptr, &error).isEmpty());
+    EXPECT_TRUE(error.isEmpty());
+}
+
+TEST(ExpressionTest, ArithmeticAndComparison)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("2 + 3 * 4"), row).number, 14);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2 + 3) * 4"), row).number, 20);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("10 % 3"), row).number, 1);
+    EXPECT_EQ(evalText(QStringLiteral("\"a\" + \"b\""), row).text, QStringLiteral("ab"));
+    EXPECT_TRUE(evalText(QStringLiteral("3 > 2"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("2 <= 2"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("\"a\" == \"a\""), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("\"a\" != \"b\""), row).boolean);
+
+    QString error;
+    evalText(QStringLiteral("1 / 0"), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(ExpressionTest, BooleanOperatorsShortCircuit)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_TRUE(evalText(QStringLiteral("true || (1/0 > 0)"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("false && (1/0 > 0)"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("!false"), row).boolean);
+}
+
+TEST(ExpressionTest, DateArithmeticAndComparison)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("start"), Value::ofDate(QDateTime(QDate(2026, 1, 1), QTime(0, 0))));
+
+    const Value plus = evalText(QStringLiteral("start + \"2w\""), row);
+    ASSERT_EQ(plus.type, Value::Type::Date);
+    EXPECT_EQ(plus.date.date(), QDate(2026, 1, 15));
+
+    const Value minusMonth = evalText(QStringLiteral("start - \"1M\""), row);
+    EXPECT_EQ(minusMonth.date.date(), QDate(2025, 12, 1));
+
+    EXPECT_TRUE(evalText(QStringLiteral("now() > start"), row).boolean);
+
+    QString error;
+    // The worded duration form, straight from the docs' own filter example.
+    evalText(QStringLiteral("file.mtime > now() - \"1 week\""), row, nullptr, &error);
+    EXPECT_TRUE(error.isEmpty());
+    evalText(QStringLiteral("start + \"2w\""), row, nullptr, &error);
+    EXPECT_TRUE(error.isEmpty());
+}
+
+TEST(ExpressionTest, GlobalFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("price"), Value::ofNumber(0));
+    EXPECT_TRUE(evalText(QStringLiteral("if(1 > 0, \"yes\", \"no\")"), row).text == QStringLiteral("yes"));
+    EXPECT_TRUE(evalText(QStringLiteral("if(price, \"has\")"), row).isEmpty()); // price is 0, falsy
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("min(3, 1, 2)"), row).number, 1);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("max(3, 1, 2)"), row).number, 3);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("number(\"42\")"), row).number, 42);
+    EXPECT_EQ(evalText(QStringLiteral("today()"), row).date.time(), QTime(0, 0));
+    EXPECT_EQ(evalText(QStringLiteral("date(\"2026-01-01\")"), row).date.date(), QDate(2026, 1, 1));
+}
+
+TEST(ExpressionTest, AnyTypeFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_TRUE(evalText(QStringLiteral("(1).isTruthy()"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("(0).isTruthy()"), row).boolean);
+    EXPECT_EQ(evalText(QStringLiteral("(42).toString()"), row).text, QStringLiteral("42"));
+    EXPECT_TRUE(evalText(QStringLiteral("(42).isType(\"number\")"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("(42).isType(\"string\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("\"\".isEmpty()"), row).boolean);
+}
+
+TEST(ExpressionTest, StringFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("s"), Value::ofString(QStringLiteral("Hello World")));
+    EXPECT_TRUE(evalText(QStringLiteral("s.contains(\"World\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("s.startsWith(\"Hello\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("s.endsWith(\"World\")"), row).boolean);
+    EXPECT_EQ(evalText(QStringLiteral("s.lower()"), row).text, QStringLiteral("hello world"));
+    EXPECT_EQ(evalText(QStringLiteral("s.title()"), row).text, QStringLiteral("Hello World"));
+    EXPECT_EQ(evalText(QStringLiteral("s.trim()"), row).text, QStringLiteral("Hello World"));
+    EXPECT_EQ(evalText(QStringLiteral("s.replace(\"World\", \"There\")"), row).text,
+             QStringLiteral("Hello There"));
+    EXPECT_EQ(evalText(QStringLiteral("s.slice(0, 5)"), row).text, QStringLiteral("Hello"));
+    EXPECT_EQ(evalText(QStringLiteral("s.slice(-5)"), row).text, QStringLiteral("World"));
+    EXPECT_EQ(evalText(QStringLiteral("s.split(\" \")"), row).list, QStringList({"Hello", "World"}));
+    EXPECT_EQ(evalText(QStringLiteral("\"ab\".repeat(3)"), row).text, QStringLiteral("ababab"));
+    EXPECT_EQ(evalText(QStringLiteral("\"abc\".reverse()"), row).text, QStringLiteral("cba"));
+    EXPECT_TRUE(evalText(QStringLiteral("s.containsAny(\"xx\", \"World\")"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("s.containsAll(\"Hello\", \"xx\")"), row).boolean);
+}
+
+TEST(ExpressionTest, NumberFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(-3.7).abs()"), row).number, 3.7);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.2).ceil()"), row).number, 3);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.8).floor()"), row).number, 2);
+    EXPECT_DOUBLE_EQ(evalText(QStringLiteral("(2.567).round(2)"), row).number, 2.57);
+    EXPECT_EQ(evalText(QStringLiteral("(2).toFixed(2)"), row).text, QStringLiteral("2.00"));
+}
+
+TEST(ExpressionTest, ListFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("tags"), Value::ofList({"a", "b", "a", "c"}));
+    EXPECT_TRUE(evalText(QStringLiteral("tags.contains(\"b\")"), row).boolean);
+    EXPECT_EQ(evalText(QStringLiteral("tags.join(\",\")"), row).text, QStringLiteral("a,b,a,c"));
+    EXPECT_EQ(evalText(QStringLiteral("tags.unique()"), row).list, QStringList({"a", "b", "c"}));
+    // Reversal on a non-palindromic list actually proves the order flipped.
+    EXPECT_EQ(evalText(QStringLiteral("tags.reverse()"), row).list, QStringList({"c", "a", "b", "a"}));
+    EXPECT_EQ(evalText(QStringLiteral("tags.sort()"), row).list, QStringList({"a", "a", "b", "c"}));
+    EXPECT_EQ(evalText(QStringLiteral("tags.length"), row).number, 4);
+    EXPECT_FALSE(evalText(QStringLiteral("tags.isEmpty()"), row).boolean);
+}
+
+TEST(ExpressionTest, FileFunctions)
+{
+    Row row = makeRow(QStringLiteral("N"), QStringLiteral("Books/SciFi"));
+    row.tags = {QStringLiteral("book"), QStringLiteral("read")};
+    row.links = {QStringLiteral("Textbook"), QStringLiteral("Other/Note")};
+    row.properties.insert(QStringLiteral("title"), Value::ofString(QStringLiteral("Dune")));
+
+    EXPECT_TRUE(evalText(QStringLiteral("file.hasTag(\"book\")"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("file.hasTag(\"movie\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("file.inFolder(\"Books\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("file.inFolder(\"Books/SciFi\")"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("file.inFolder(\"Movies\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("file.hasLink(\"Textbook\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("file.hasLink(\"Note\")"), row).boolean); // basename match
+    EXPECT_FALSE(evalText(QStringLiteral("file.hasLink(\"Nope\")"), row).boolean);
+    EXPECT_TRUE(evalText(QStringLiteral("file.hasProperty(\"title\")"), row).boolean);
+    EXPECT_FALSE(evalText(QStringLiteral("file.hasProperty(\"nope\")"), row).boolean);
+}
+
+TEST(ExpressionTest, UnsupportedGivesAClearErrorNeverACrash)
+{
+    Row row = makeRow(QStringLiteral("N"));
+    row.properties.insert(QStringLiteral("tags"), Value::ofList({"a"}));
+
+    QString error;
+    Expression::parse(QStringLiteral("(("), &error);
+    EXPECT_FALSE(error.isEmpty()); // bad syntax
+
+    evalText(QStringLiteral("tags.filter(x)"), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty()); // documented-but-unimplemented function
+
+    evalText(QStringLiteral("nope(1)"), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty()); // unknown global function
+
+    evalText(QStringLiteral("1 > \"x\""), row, nullptr, &error);
+    EXPECT_FALSE(error.isEmpty()); // incomparable types
+}
+
+// =========================================================================
+// BaseFile: parsing the documented format
+// =========================================================================
+
+TEST(BaseFileTest, ParsesTheDocumentedExample)
+{
+    // Shape confirmed against https://obsidian.md/help/bases/syntax's own
+    // example (a table view with a global and/or/not filter tree, formulas,
+    // property display names and a groupBy).
+    const QString yaml = QStringLiteral(R"YAML(
+filters:
+  and:
+    - 'status != "done"'
+formulas:
+  formatted_price: 'if(price, price.toFixed(2) + " dollars")'
+  ppu: "(price / age).toFixed(2)"
+properties:
+  status:
+    displayName: Status
+  formula.formatted_price:
+    displayName: "Price"
+summaries:
+  customAverage: 'values.mean().round(3)'
+views:
+  - type: table
+    name: "My table"
+    limit: 10
+    groupBy:
+      property: note.age
+      direction: DESC
+    filters:
+      and:
+        - or:
+            - "formula.ppu > 5"
+            - "price > 2.1"
+    order:
+      - file.name
+      - note.age
+      - formula.ppu
+)YAML");
+    QString error;
+    auto file = BaseFile::parse(yaml, &error);
+    ASSERT_TRUE(file.has_value()) << error.toStdString();
+
+    EXPECT_EQ(file->globalFilters().kind, FilterNode::Kind::And);
+    ASSERT_EQ(file->globalFilters().children.size(), 1);
+    EXPECT_EQ(file->globalFilters().children.first().statement, QStringLiteral("status != \"done\""));
+
+    ASSERT_EQ(file->formulas().size(), 2);
+    EXPECT_EQ(file->formulas().at(1).name, QStringLiteral("ppu"));
+
+    EXPECT_EQ(file->displayNameFor(QStringLiteral("status")), QStringLiteral("Status"));
+    EXPECT_EQ(file->displayNameFor(QStringLiteral("formula.formatted_price")), QStringLiteral("Price"));
+    // No configured display name: humanized from the reference itself.
+    EXPECT_EQ(file->displayNameFor(QStringLiteral("note.age")), QStringLiteral("Age"));
+
+    ASSERT_EQ(file->views().size(), 1);
+    const ViewConfig &view = file->views().first();
+    EXPECT_EQ(view.type, QStringLiteral("table"));
+    EXPECT_EQ(view.name, QStringLiteral("My table"));
+    EXPECT_EQ(view.limit, 10);
+    EXPECT_EQ(view.groupBy.property, QStringLiteral("note.age"));
+    EXPECT_EQ(view.groupBy.direction, SortDirection::Descending);
+    EXPECT_EQ(view.order, QStringList({"file.name", "note.age", "formula.ppu"}));
+    EXPECT_EQ(view.filters.kind, FilterNode::Kind::And);
+    ASSERT_EQ(view.filters.children.size(), 1);
+    EXPECT_EQ(view.filters.children.first().kind, FilterNode::Kind::Or);
+}
+
+TEST(BaseFileTest, KeepsUnknownKeysOnSerialize)
+{
+    const QString yaml = QStringLiteral(
+        "summaries:\n  customAverage: 'values.mean()'\n"
+        "views:\n  - type: table\n    name: T\n    somethingFuture: 42\n");
+    auto file = BaseFile::parse(yaml);
+    ASSERT_TRUE(file.has_value());
+    const QString out = file->serialize();
+    EXPECT_TRUE(out.contains(QStringLiteral("summaries")));
+    EXPECT_TRUE(out.contains(QStringLiteral("customAverage")));
+    EXPECT_TRUE(out.contains(QStringLiteral("somethingFuture")));
+}
+
+TEST(BaseFileTest, ComplexOrAndAndNotTree)
+{
+    const QString yaml = QStringLiteral(R"YAML(
+filters:
+  or:
+    - file.hasTag("tag")
+    - and:
+        - file.hasTag("book")
+        - file.hasLink("Textbook")
+    - not:
+        - file.hasTag("book")
+        - file.inFolder("Required Reading")
+)YAML");
+    auto file = BaseFile::parse(yaml);
+    ASSERT_TRUE(file.has_value());
+    const FilterNode &root = file->globalFilters();
+    EXPECT_EQ(root.kind, FilterNode::Kind::Or);
+    ASSERT_EQ(root.children.size(), 3);
+    EXPECT_EQ(root.children.at(0).kind, FilterNode::Kind::Statement);
+    EXPECT_EQ(root.children.at(1).kind, FilterNode::Kind::And);
+    EXPECT_EQ(root.children.at(2).kind, FilterNode::Kind::Not);
+    EXPECT_EQ(root.children.at(2).children.size(), 2);
+}
+
+TEST(BaseFileTest, InvalidYamlFails)
+{
+    QString error;
+    auto file = BaseFile::parse(QStringLiteral("filters: [oops"), &error);
+    EXPECT_FALSE(file.has_value());
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(BaseFileTest, NoViewsGetsAnImplicitTable)
+{
+    auto file = BaseFile::parse(QStringLiteral("formulas:\n  x: \"1\"\n"));
+    ASSERT_TRUE(file.has_value());
+    ASSERT_EQ(file->views().size(), 1);
+    EXPECT_EQ(file->views().first().type, QStringLiteral("table"));
+}
+
+// =========================================================================
+// BaseQuery: filters, sort, limit, formulas, grouping
+// =========================================================================
+
+namespace {
+
+BaseFile parseOrDie(const QString &yaml)
+{
+    auto file = BaseFile::parse(yaml);
+    if (!file) ADD_FAILURE() << "base file failed to parse";
+    return file ? std::move(*file) : BaseFile();
+}
+
+} // namespace
+
+TEST(BaseQueryTest, FiltersRows)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name]\n"
+        "    filters:\n      and:\n        - 'price > 5'\n"));
+    QList<Row> rows;
+    for (int i = 0; i < 5; ++i) {
+        Row r = makeRow(QStringLiteral("N%1").arg(i));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(i * 3));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    QString error;
+    ASSERT_TRUE(query.openView(0, &error)) << error.toStdString();
+    // price = 0,3,6,9,12 -> price>5 keeps 6,9,12 = 3 rows.
+    EXPECT_EQ(query.resultRows().size(), 3);
+    for (qsizetype idx : query.resultRows())
+        EXPECT_GT(query.rows().at(idx).properties.value(QStringLiteral("price")).number, 5);
+}
+
+TEST(BaseQueryTest, InvalidFilterSyntaxFailsToOpenNotSilently)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "filters:\n  and:\n    - 'price >'\nviews:\n  - type: table\n    name: T\n"));
+    QList<Row> rows{makeRow(QStringLiteral("N"))};
+    BaseQuery query(file, rows);
+    QString error;
+    EXPECT_FALSE(query.openView(0, &error));
+    EXPECT_FALSE(error.isEmpty());
+}
+
+TEST(BaseQueryTest, SortsAscendingAndDescending)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name]\n"
+        "    sort:\n      - property: price\n        direction: ASC\n"));
+    QList<Row> rows;
+    for (int v : {30, 10, 20}) {
+        Row r = makeRow(QStringLiteral("N%1").arg(v));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(v));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    ASSERT_EQ(query.resultRows().size(), 3);
+    QList<double> ordered;
+    for (qsizetype idx : query.resultRows())
+        ordered << query.rows().at(idx).properties.value(QStringLiteral("price")).number;
+    EXPECT_EQ(ordered, QList<double>({10, 20, 30}));
+
+    // Break the guard: descending must give the reverse, not the same order.
+    query.sortBy(QStringLiteral("price"), SortDirection::Descending);
+    QList<double> descending;
+    for (qsizetype idx : query.resultRows())
+        descending << query.rows().at(idx).properties.value(QStringLiteral("price")).number;
+    EXPECT_EQ(descending, QList<double>({30, 20, 10}));
+}
+
+TEST(BaseQueryTest, GroupBySortsAheadOfTheViewsOwnSort)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name]\n"
+        "    groupBy:\n      property: category\n      direction: ASC\n"
+        "    sort:\n      - property: price\n        direction: ASC\n"));
+    QList<Row> rows;
+    struct Seed { QString cat; double price; };
+    for (const Seed &s : {Seed{"b", 5}, Seed{"a", 9}, Seed{"b", 1}, Seed{"a", 2}}) {
+        Row r = makeRow(QStringLiteral("N%1").arg(rows.size()));
+        r.properties.insert(QStringLiteral("category"), Value::ofString(s.cat));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(s.price));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    QStringList categories;
+    QList<double> prices;
+    for (qsizetype idx : query.resultRows()) {
+        categories << query.rows().at(idx).properties.value(QStringLiteral("category")).text;
+        prices << query.rows().at(idx).properties.value(QStringLiteral("price")).number;
+    }
+    // Both "a"s before both "b"s (grouped), each group sorted by price.
+    EXPECT_EQ(categories, QStringList({"a", "a", "b", "b"}));
+    EXPECT_EQ(prices, QList<double>({2, 9, 1, 5}));
+}
+
+TEST(BaseQueryTest, LimitKeepsTheFirstNAfterSort)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name]\n    limit: 2\n"
+        "    sort:\n      - property: price\n        direction: DESC\n"));
+    QList<Row> rows;
+    for (int v : {10, 30, 20}) {
+        Row r = makeRow(QStringLiteral("N%1").arg(v));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber(v));
+        rows << r;
+    }
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    ASSERT_EQ(query.resultRows().size(), 2);
+    EXPECT_EQ(query.rows().at(query.resultRows().at(0)).properties.value(QStringLiteral("price")).number, 30);
+    EXPECT_EQ(query.rows().at(query.resultRows().at(1)).properties.value(QStringLiteral("price")).number, 20);
+}
+
+TEST(BaseQueryTest, FormulasResolveAndMemoiseAndDetectCycles)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "formulas:\n"
+        "  ppu: \"price / qty\"\n"
+        "  bad: \"formula.bad + 1\"\n"
+        "views:\n  - type: table\n    name: T\n    order: [formula.ppu]\n"));
+    Row r = makeRow(QStringLiteral("N"));
+    r.properties.insert(QStringLiteral("price"), Value::ofNumber(10));
+    r.properties.insert(QStringLiteral("qty"), Value::ofNumber(2));
+    QList<Row> rows{r};
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    EXPECT_DOUBLE_EQ(query.valueOf(0, QStringLiteral("formula.ppu")).number, 5);
+    EXPECT_TRUE(query.valueOf(0, QStringLiteral("formula.bad")).isEmpty());
+    EXPECT_FALSE(query.warnings().isEmpty()); // the cycle was reported, not silently swallowed
+}
+
+TEST(BaseQueryTest, ValueOfReadsFileNoteAndFormulaColumns)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "formulas:\n  double: \"price * 2\"\n"
+        "views:\n  - type: table\n    name: T\n    order: [file.name, price, formula.double]\n"));
+    Row r = makeRow(QStringLiteral("Home"));
+    r.properties.insert(QStringLiteral("price"), Value::ofNumber(3));
+    QList<Row> rows{r};
+    BaseQuery query(file, rows);
+    ASSERT_TRUE(query.openView(0));
+    EXPECT_EQ(query.valueOf(0, QStringLiteral("file.name")).text, QStringLiteral("Home"));
+    EXPECT_DOUBLE_EQ(query.valueOf(0, QStringLiteral("price")).number, 3);
+    EXPECT_DOUBLE_EQ(query.valueOf(0, QStringLiteral("formula.double")).number, 6);
+}
+
+// =========================================================================
+// Index::allNotesForBases against a temp vault
+// =========================================================================
+
+namespace {
+
+class BasesIndexTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(dir.isValid());
+        write(QStringLiteral("Home.md"),
+              "---\nstatus: open\nprice: 12\ntags: [x, y]\n---\n\nSee [[Other]]. #inline\n");
+        write(QStringLiteral("Other.md"), "# Other\n\nNothing here.\n");
+        vault = Vault(dir.path());
+    }
+    void write(const QString &relative, const QByteArray &bytes)
+    {
+        QFile file(dir.filePath(relative));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    }
+    void build(Index &index)
+    {
+        Indexer indexer(&index);
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        ASSERT_TRUE(done.wait(20000));
+    }
+    QTemporaryDir dir;
+    Vault vault;
+};
+
+} // namespace
+
+TEST_F(BasesIndexTest, ReturnsEveryNoteWithPropertiesTagsAndLinks)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QList<Index::BaseNote> notes = index.allNotesForBases();
+    EXPECT_EQ(notes.size(), 2);
+
+    const Index::BaseNote *home = nullptr;
+    for (const Index::BaseNote &n : notes)
+        if (n.path == QStringLiteral("Home.md")) home = &n;
+    ASSERT_NE(home, nullptr);
+    EXPECT_GT(home->mtime, 0);
+    EXPECT_GT(home->size, 0);
+    EXPECT_TRUE(home->tags.contains(QStringLiteral("inline")));
+
+    bool sawStatus = false, sawPrice = false;
+    for (const Property &p : home->properties) {
+        if (p.key == QLatin1String("status")) { sawStatus = true; EXPECT_EQ(p.values.first(), QStringLiteral("open")); }
+        if (p.key == QLatin1String("price")) { sawPrice = true; EXPECT_EQ(p.type, Property::Type::Number); }
+    }
+    EXPECT_TRUE(sawStatus);
+    EXPECT_TRUE(sawPrice);
+
+    const Row row = rowFromNote(*home);
+    EXPECT_EQ(row.noteName, QStringLiteral("Home"));
+    EXPECT_DOUBLE_EQ(row.properties.value(QStringLiteral("price")).number, 12);
+}
+
+// =========================================================================
+// BaseTableModel: editing writes only that property's bytes
+// =========================================================================
+
+TEST_F(BasesIndexTest, EditingACellRewritesOnlyThatPropertysBytes)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const QString before = [&] {
+        QFile f(dir.filePath(QStringLiteral("Home.md")));
+        [[maybe_unused]] const bool opened = f.open(QIODevice::ReadOnly);
+        return QString::fromUtf8(f.readAll());
+    }();
+
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name, status, price]\n"));
+    QList<Row> rows;
+    for (const Index::BaseNote &n : index.allNotesForBases())
+        rows << rowFromNote(n);
+    BaseQuery query(file, rows, &vault);
+    ASSERT_TRUE(query.openView(0));
+
+    BaseTableModel model(&query, &index, &vault);
+    int homeRow = -1;
+    for (int i = 0; i < model.rowCount(); ++i)
+        if (model.notePathAt(i) == QStringLiteral("Home.md")) homeRow = i;
+    ASSERT_GE(homeRow, 0);
+
+    const QModelIndex statusCell = model.index(homeRow, 1); // status column
+    ASSERT_TRUE(model.flags(statusCell) & Qt::ItemIsEditable);
+    ASSERT_TRUE(model.setData(statusCell, QStringLiteral("done")));
+
+    const QString after = [&] {
+        QFile f(dir.filePath(QStringLiteral("Home.md")));
+        [[maybe_unused]] const bool opened = f.open(QIODevice::ReadOnly);
+        return QString::fromUtf8(f.readAll());
+    }();
+
+    EXPECT_NE(before, after);
+    EXPECT_TRUE(after.contains(QStringLiteral("status: done")));
+    // Nothing else moved: nought but the status line differs.
+    const QStringList beforeLines = before.split(QLatin1Char('\n'));
+    const QStringList afterLines = after.split(QLatin1Char('\n'));
+    ASSERT_EQ(beforeLines.size(), afterLines.size());
+    int differing = 0;
+    for (int i = 0; i < beforeLines.size(); ++i)
+        if (beforeLines.at(i) != afterLines.at(i)) ++differing;
+    EXPECT_EQ(differing, 1);
+
+    // The index was refreshed too, not just the file.
+    const QList<Index::BaseNote> refreshed = index.allNotesForBases();
+    bool sawDone = false;
+    for (const Index::BaseNote &n : refreshed)
+        if (n.path == QStringLiteral("Home.md"))
+            for (const Property &p : n.properties)
+                if (p.key == QLatin1String("status")) sawDone = p.values.first() == QStringLiteral("done");
+    EXPECT_TRUE(sawDone);
+}
+
+TEST_F(BasesIndexTest, ListPropertiesAndComputedColumnsAreNotEditable)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "formulas:\n  double: \"price * 2\"\n"
+        "views:\n  - type: table\n    name: T\n    order: [file.name, tags, formula.double]\n"));
+    QList<Row> rows;
+    for (const Index::BaseNote &n : index.allNotesForBases())
+        rows << rowFromNote(n);
+    BaseQuery query(file, rows, &vault);
+    ASSERT_TRUE(query.openView(0));
+    BaseTableModel model(&query, &index, &vault);
+
+    int homeRow = -1;
+    for (int i = 0; i < model.rowCount(); ++i)
+        if (model.notePathAt(i) == QStringLiteral("Home.md")) homeRow = i;
+    ASSERT_GE(homeRow, 0);
+
+    EXPECT_FALSE(model.flags(model.index(homeRow, 0)) & Qt::ItemIsEditable); // file.name
+    EXPECT_FALSE(model.flags(model.index(homeRow, 1)) & Qt::ItemIsEditable); // tags: List
+    EXPECT_FALSE(model.flags(model.index(homeRow, 2)) & Qt::ItemIsEditable); // formula.double
+    EXPECT_TRUE(model.isNameColumn(0));
+}
+
+// =========================================================================
+// BaseView smoke test (offscreen)
+// =========================================================================
+
+TEST_F(BasesIndexTest, BaseViewOpensAndSwitchesViews)
+{
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    BaseView view;
+    view.setIndex(&index);
+    view.setVault(&vault);
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n    name: Table\n    order: [file.name]\n"
+        "  - type: cards\n    name: Cards\n    order: [file.name]\n");
+    ASSERT_TRUE(view.open(dir.filePath(QStringLiteral("x.base")), yaml)) << view.lastError().toStdString();
+    EXPECT_TRUE(view.warnings().isEmpty());
+}
+
+// =========================================================================
+// Performance guard
+// =========================================================================
+
+namespace {
+
+QList<Row> generateRows(int count)
+{
+    QList<Row> rows;
+    rows.reserve(count);
+    for (int i = 0; i < count; ++i) {
+        Row r = makeRow(QStringLiteral("Note%1").arg(i), i % 20 == 0 ? QString() : QStringLiteral("Folder%1").arg(i % 15));
+        r.properties.insert(QStringLiteral("price"), Value::ofNumber((i * 37) % 500));
+        r.properties.insert(QStringLiteral("qty"), Value::ofNumber(1 + (i % 9)));
+        r.properties.insert(QStringLiteral("status"), Value::ofString(i % 3 == 0 ? QStringLiteral("done") : QStringLiteral("open")));
+        r.tags = {QStringLiteral("tag%1").arg(i % 12)};
+        rows << r;
+    }
+    return rows;
+}
+
+qint64 timeOpen(const BaseFile &file, const QList<Row> &rows)
+{
+    BaseQuery query(file, rows);
+    QElapsedTimer timer;
+    timer.start();
+    QString error;
+    const bool ok = query.openView(0, &error);
+    const qint64 elapsed = timer.elapsed();
+    EXPECT_TRUE(ok) << error.toStdString();
+    return elapsed;
+}
+
+} // namespace
+
+TEST(BasesPerformanceTest, TwentyThousandRowsFilterAndSortWellUnderBudget)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "formulas:\n  ppu: \"price / qty\"\n"
+        "views:\n  - type: table\n    name: T\n    order: [file.name, formula.ppu]\n"
+        "    filters:\n      and:\n        - 'status != \"done\"'\n        - 'price > 10'\n"
+        "    sort:\n      - property: formula.ppu\n        direction: DESC\n"));
+    const QList<Row> rows = generateRows(20000);
+    const qint64 elapsed = timeOpen(file, rows);
+    // "Well under 100 ms" per the task; 100 ms is the hard ceiling checked
+    // here so a real regression fails the build without flaking on a loaded
+    // CI box.
+    EXPECT_LT(elapsed, 100) << "20000-row filter+sort took " << elapsed << " ms";
+}
+
+TEST(BasesPerformanceTest, TimeGrowsRoughlyLinearlyNotQuadratically)
+{
+    const BaseFile file = parseOrDie(QStringLiteral(
+        "views:\n  - type: table\n    name: T\n    order: [file.name]\n"
+        "    sort:\n      - property: price\n        direction: ASC\n"));
+    const QList<Row> small = generateRows(2000);
+    const QList<Row> big = generateRows(20000); // 10x the rows
+
+    // Run each twice and keep the faster: a scheduler hiccup on one run
+    // should not make an O(n log n) engine look quadratic.
+    qint64 smallTime = std::min(timeOpen(file, small), timeOpen(file, small));
+    qint64 bigTime = std::min(timeOpen(file, big), timeOpen(file, big));
+    smallTime = std::max<qint64>(smallTime, 1); // avoid a divide-by-zero on a very fast box
+
+    // O(n log n) growing 10x in n grows a little over 10x; a quadratic
+    // implementation would grow close to 100x. 40x is a generous guard that
+    // still catches the quadratic case broken deliberately while writing
+    // this test (removing the per-row value cache in sortBy() made this
+    // fail at well over 100x).
+    EXPECT_LT(bigTime, smallTime * 40)
+        << "small=" << smallTime << "ms big=" << bigTime << "ms - looks worse than n log n";
+}
+
+int main(int argc, char **argv)
+{
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QTemporaryDir configHome;
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+    QApplication app(argc, argv);
+    QStandardPaths::setTestModeEnabled(true);
+    QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
+    QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
+}

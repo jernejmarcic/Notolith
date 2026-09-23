@@ -36,6 +36,10 @@ if(NOTEAPPC_WITH_SPELLCHECK)
         pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
     endif()
 endif()
+# Another Tier 1 module: database-like table/card views over a vault from a
+# `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
+# libs/markdown, so this carries no new external dependency.
+option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
 
 add_compile_options(-Wall -Wextra)
 
@@ -96,6 +100,9 @@ add_subdirectory(libs/theme)
 add_subdirectory(libs/settings)
 if(TARGET PkgConfig::HUNSPELL)
     add_subdirectory(libs/ext/spell)
+endif()
+if(NOTEAPPC_WITH_BASES)
+    add_subdirectory(libs/ext/bases)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

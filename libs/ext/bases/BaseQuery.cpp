@@ -1,0 +1,328 @@
+#include "BaseQuery.h"
+
+#include "Vault.h"
+
+#include <QFileInfo>
+
+#include <algorithm>
+
+namespace noteAppC::bases {
+
+namespace {
+
+/// A `FilterNode` tree, rendered as one expression string so it can be
+/// compiled and evaluated through the ordinary Expression parser instead of
+/// this module needing a second tree-walking evaluator just for filters.
+QString filterExpressionText(const FilterNode &node)
+{
+    switch (node.kind) {
+    case FilterNode::Kind::Statement:
+        return QStringLiteral("(") + node.statement + QLatin1Char(')');
+    case FilterNode::Kind::And:
+    case FilterNode::Kind::Or: {
+        if (node.children.isEmpty())
+            return QStringLiteral("true"); // and/or of nothing: no constraint
+        QStringList parts;
+        for (const FilterNode &child : node.children)
+            parts << filterExpressionText(child);
+        const QString glue = node.kind == FilterNode::Kind::And ? QStringLiteral(" && ")
+                                                                 : QStringLiteral(" || ");
+        return QLatin1Char('(') + parts.join(glue) + QLatin1Char(')');
+    }
+    case FilterNode::Kind::Not: {
+        QStringList parts;
+        for (const FilterNode &child : node.children)
+            parts << filterExpressionText(child);
+        // not: [A, B] means "not both", i.e. !(A && B); not: [] negates the
+        // vacuous "no constraint" true, which excludes every row - the safer
+        // reading of a filter that is presumably not meant to be empty.
+        const QString inner = parts.isEmpty() ? QStringLiteral("true") : parts.join(QStringLiteral(" && "));
+        return QStringLiteral("!(") + inner + QLatin1Char(')');
+    }
+    }
+    return QStringLiteral("true");
+}
+
+Value valueFromProperty(const Property &property)
+{
+    if (property.values.isEmpty())
+        return Value::empty();
+    switch (property.type) {
+    case Property::Type::List:
+        return Value::ofList(property.values);
+    case Property::Type::Number: {
+        bool ok = false;
+        const double n = property.values.first().toDouble(&ok);
+        return ok ? Value::ofNumber(n) : Value::empty();
+    }
+    case Property::Type::Checkbox:
+        return Value::ofBool(property.values.first().compare(QLatin1String("true"), Qt::CaseInsensitive) == 0);
+    case Property::Type::Date: {
+        const QDate d = QDate::fromString(property.values.first(), Qt::ISODate);
+        return d.isValid() ? Value::ofDate(QDateTime(d, QTime(0, 0))) : Value::empty();
+    }
+    case Property::Type::DateTime: {
+        const QDateTime dt = QDateTime::fromString(property.values.first(), Qt::ISODate);
+        return dt.isValid() ? Value::ofDate(dt) : Value::empty();
+    }
+    case Property::Type::Text:
+    case Property::Type::Unknown:
+    default:
+        return Value::ofString(property.values.first());
+    }
+}
+
+} // namespace
+
+Row rowFromNote(const Index::BaseNote &note)
+{
+    Row row;
+    row.notePath = note.path;
+    const QFileInfo info(note.path); // string splitting only - the path is not opened
+    row.noteName = info.completeBaseName();
+    row.noteExt = info.suffix();
+    row.noteFolder = info.path() == QLatin1String(".") ? QString() : info.path();
+    row.fileSize = note.size;
+    row.fileMtime = QDateTime::fromMSecsSinceEpoch(note.mtime);
+    row.tags = note.tags;
+    row.links = note.linkTargets;
+    for (const Property &property : note.properties)
+        row.properties.insert(property.key.toCaseFolded(), valueFromProperty(property));
+    return row;
+}
+
+// --- BaseQuery::Resolver ------------------------------------------------
+
+/// Resolves `formula.x` for whichever row Evaluator is currently working on.
+/// Per-row memoization means a formula referenced twice while evaluating one
+/// row (once in a filter, once in an `order:` column, say) is computed once;
+/// `m_resolving` catches a cycle - direct or through another formula -
+/// before it becomes infinite recursion.
+class BaseQuery::Resolver : public FormulaSource {
+public:
+    explicit Resolver(BaseQuery *owner) : m_owner(owner) {}
+
+    void beginRow(qsizetype rowIndex)
+    {
+        if (rowIndex != m_currentRow) {
+            m_memo.clear();
+            m_currentRow = rowIndex;
+        }
+    }
+    void setNow(const QDateTime &now) { m_now = now; }
+
+    Value resolveFormula(const QString &name, const Row &row, QString *error) const override
+    {
+        if (const auto it = m_memo.constFind(name); it != m_memo.constEnd()) {
+            if (error) error->clear();
+            return it.value();
+        }
+        if (m_resolving.contains(name)) {
+            if (error) *error = QStringLiteral("circular formula reference: formula.%1").arg(name);
+            return Value::empty();
+        }
+        const BaseFormula *definition = nullptr;
+        for (const BaseFormula &f : m_owner->m_file.formulas()) {
+            if (f.name == name) { definition = &f; break; }
+        }
+        if (!definition) {
+            if (error) *error = QStringLiteral("unknown formula 'formula.%1'").arg(name);
+            return Value::empty();
+        }
+        const std::shared_ptr<Expression> expr = compileFormula(name, definition->expression);
+        if (!expr) {
+            if (error) *error = QStringLiteral("formula.%1: invalid expression").arg(name);
+            return Value::empty();
+        }
+        m_resolving.insert(name);
+        QString innerError;
+        const Value v = expr->evaluate(row, this, m_now, &innerError);
+        m_resolving.remove(name);
+        if (!innerError.isEmpty()) {
+            if (error) *error = QStringLiteral("formula.%1: %2").arg(name, innerError);
+            return Value::empty();
+        }
+        if (error) error->clear();
+        m_memo.insert(name, v);
+        return v;
+    }
+
+private:
+    std::shared_ptr<Expression> compileFormula(const QString &name, const QString &text) const
+    {
+        if (const auto it = m_compiledFormulas.constFind(name); it != m_compiledFormulas.constEnd())
+            return it.value();
+        QString parseError;
+        std::shared_ptr<Expression> expr(Expression::parse(text, &parseError).release());
+        // Cached even when null, so a broken formula is reported once and
+        // not re-parsed for every row that references it.
+        m_compiledFormulas.insert(name, expr);
+        return expr;
+    }
+
+    BaseQuery *m_owner;
+    QDateTime m_now;
+    qsizetype m_currentRow = -1;
+    mutable QHash<QString, Value> m_memo;
+    mutable QSet<QString> m_resolving;
+    mutable QHash<QString, std::shared_ptr<Expression>> m_compiledFormulas;
+};
+
+// --- BaseQuery ------------------------------------------------------------
+
+BaseQuery::BaseQuery(const BaseFile &file, QList<Row> rows, const Vault *vault)
+    : m_file(file), m_rows(std::move(rows)), m_vault(vault), m_resolver(std::make_unique<Resolver>(this))
+{
+}
+
+BaseQuery::~BaseQuery() = default;
+
+const ViewConfig &BaseQuery::view() const { return m_file.views().at(m_viewIndex); }
+
+std::shared_ptr<Expression> BaseQuery::compiled(const QString &text) const
+{
+    if (const auto it = m_compiled.constFind(text); it != m_compiled.constEnd())
+        return it.value();
+    QString error;
+    std::shared_ptr<Expression> expr(Expression::parse(text, &error).release());
+    if (!expr)
+        warnOnce(QStringLiteral("\"%1\": %2").arg(text, error));
+    m_compiled.insert(text, expr);
+    return expr;
+}
+
+void BaseQuery::warnOnce(const QString &message) const
+{
+    if (!m_warnings.contains(message))
+        m_warnings << message;
+}
+
+bool BaseQuery::referencesCtime(const QString &text) const
+{
+    return text.contains(QLatin1String("ctime"));
+}
+
+bool BaseQuery::openView(int viewIndex, QString *error)
+{
+    m_result.clear();
+    m_warnings.clear();
+    m_now = QDateTime::currentDateTime();
+    m_resolver->setNow(m_now);
+
+    if (viewIndex < 0 || viewIndex >= m_file.views().size()) {
+        if (error) *error = QStringLiteral("no such view");
+        return false;
+    }
+    m_viewIndex = viewIndex;
+    const ViewConfig &v = view();
+
+    // file.ctime is not in the index (see Index.h's BaseNote), so it costs a
+    // stat() per note - paid once here, and only for a view that might read
+    // it, never for one that does not.
+    bool needsCtime = referencesCtime(filterExpressionText(m_file.globalFilters()))
+                     || referencesCtime(filterExpressionText(v.filters));
+    for (const QString &column : v.order) needsCtime = needsCtime || referencesCtime(column);
+    for (const BaseSort &s : v.sort) needsCtime = needsCtime || referencesCtime(s.property);
+    if (v.groupBy.isSet()) needsCtime = needsCtime || referencesCtime(v.groupBy.property);
+    for (const BaseFormula &f : m_file.formulas()) needsCtime = needsCtime || referencesCtime(f.expression);
+    if (needsCtime && m_vault) {
+        for (Row &row : m_rows) {
+            if (!row.fileCtime.isValid())
+                row.fileCtime = QFileInfo(m_vault->absolute(row.notePath)).birthTime();
+        }
+    }
+
+    const bool trivial = m_file.globalFilters().matchesEverything() && v.filters.matchesEverything();
+    std::shared_ptr<Expression> filterExpr;
+    if (!trivial) {
+        const QString filterText = QStringLiteral("(%1) && (%2)")
+            .arg(filterExpressionText(m_file.globalFilters()), filterExpressionText(v.filters));
+        filterExpr = compiled(filterText);
+        if (!filterExpr) {
+            if (error) *error = QStringLiteral("view '%1' has an invalid filter").arg(v.name);
+            return false;
+        }
+    }
+
+    m_result.reserve(m_rows.size());
+    for (qsizetype i = 0; i < m_rows.size(); ++i) {
+        if (filterExpr) {
+            m_resolver->beginRow(i);
+            QString rowError;
+            const Value matched = filterExpr->evaluate(m_rows[i], m_resolver.get(), m_now, &rowError);
+            if (!rowError.isEmpty()) { warnOnce(rowError); continue; }
+            if (!matched.truthy()) continue;
+        }
+        m_result << i;
+    }
+
+    // Applied least-significant-key first: each stable_sort only reorders
+    // ties left by the one before it, so the LAST call here ends up the
+    // most significant key - which is why groupBy runs after the sort list,
+    // and the sort list itself runs back to front.
+    for (auto it = v.sort.crbegin(); it != v.sort.crend(); ++it)
+        sortBy(it->property, it->direction);
+    if (v.groupBy.isSet())
+        sortBy(v.groupBy.property, v.groupBy.direction);
+
+    if (v.limit >= 0 && m_result.size() > v.limit)
+        m_result = m_result.mid(0, v.limit);
+
+    if (error) error->clear();
+    return true;
+}
+
+Value BaseQuery::valueOf(qsizetype rowIndex, const QString &propertyReference) const
+{
+    if (rowIndex < 0 || rowIndex >= m_rows.size())
+        return Value::empty();
+    const std::shared_ptr<Expression> expr = compiled(propertyReference);
+    if (!expr)
+        return Value::empty();
+    m_resolver->beginRow(rowIndex);
+    QString error;
+    Value v = expr->evaluate(m_rows[rowIndex], m_resolver.get(), m_now, &error);
+    if (!error.isEmpty()) {
+        warnOnce(error);
+        return Value::empty();
+    }
+    return v;
+}
+
+void BaseQuery::sortBy(const QString &propertyReference, SortDirection direction)
+{
+    const std::shared_ptr<Expression> expr = compiled(propertyReference);
+
+    // Each row's value is computed once for this pass, not once per
+    // comparison - std::stable_sort makes O(n log n) comparisons.
+    QHash<qsizetype, Value> values;
+    values.reserve(int(m_result.size()));
+    for (qsizetype idx : std::as_const(m_result)) {
+        if (!expr) { values.insert(idx, Value::empty()); continue; }
+        m_resolver->beginRow(idx);
+        QString rowError;
+        Value v = expr->evaluate(m_rows[idx], m_resolver.get(), m_now, &rowError);
+        if (!rowError.isEmpty()) { warnOnce(rowError); v = Value::empty(); }
+        values.insert(idx, v);
+    }
+
+    std::stable_sort(m_result.begin(), m_result.end(), [&](qsizetype a, qsizetype b) {
+        const Value &va = values.value(a);
+        const Value &vb = values.value(b);
+        if (va.isEmpty() != vb.isEmpty())
+            return !va.isEmpty(); // blanks last, regardless of direction
+        if (va.isEmpty())
+            return false;
+        const int cmp = compareForSort(va, vb);
+        return direction == SortDirection::Ascending ? cmp < 0 : cmp > 0;
+    });
+}
+
+QString BaseQuery::groupKeyOf(qsizetype rowIndex) const
+{
+    if (m_viewIndex < 0 || !view().groupBy.isSet())
+        return QString();
+    return valueOf(rowIndex, view().groupBy.property).toDisplayString();
+}
+
+} // namespace noteAppC::bases
