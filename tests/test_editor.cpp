@@ -14,6 +14,7 @@
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <cstdio>
@@ -21,6 +22,7 @@
 
 #include <memory>
 
+#include "WaitFor.h"
 #include "DisplayMap.h"
 
 using namespace noteAppC;
@@ -183,6 +185,7 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include <QFontDatabase>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QtConcurrent>
 #include <QTest>
 
 #include <utility>
@@ -1669,6 +1672,36 @@ TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)
     EXPECT_FALSE(block->panelTextAt(0).contains(QStringLiteral("First section body")));
 }
 
+TEST(CodeBlockHookTest, APluginLanguageIsDrawnAsItsRendererAnswers)
+{
+    auto editor = editorWith(QStringLiteral("```calc\n2+2\n```\n\n```text\nplain\n```\n\nafter\n"));
+    editor->setCursorOffset(editor->noteText().size()); // off both fences
+    const qsizetype calc = editor->noteText().indexOf(QLatin1String("2+2"));
+    QStringList asked;
+    editor->setCodeBlockRenderer({QStringLiteral("CALC")}, [&](const QString &language, const QString &source, int width,
+                                                               const QString &theme, const auto &deliver) {
+        asked << language + QLatin1Char('|') + source.trimmed() + QLatin1Char('|') + theme;
+        QImage image(width, 30, QImage::Format_ARGB32);
+        image.fill(Qt::red);
+        // From another thread, as a plugin host's answer arrives.
+        (void)QtConcurrent::run([deliver, image] { deliver({false, QString(), image}); });
+    });
+    WAIT_TRUE(!editor->embedImageSizeAt(calc).isEmpty(), 2000);
+    EXPECT_EQ(editor->embedImageSizeAt(calc).height(), 30);
+    EXPECT_EQ(asked, QStringList{QStringLiteral("calc|2+2|dark")});
+    // Another language stays a listing.
+    EXPECT_TRUE(editor->embedImageSizeAt(editor->noteText().indexOf(QLatin1String("plain"))).isEmpty());
+
+    // Markdown text is drawn formatted; unregistering brings the listing back.
+    editor->setCodeBlockRenderer({QStringLiteral("calc")}, [](const QString &, const QString &, int, const QString &,
+                                                              const auto &deliver) {
+        deliver({true, QStringLiteral("**4**"), QImage()});
+    });
+    WAIT_TRUE(!editor->embedImageSizeAt(calc).isEmpty(), 2000);
+    editor->setCodeBlockRenderer({QStringLiteral("calc")}, nullptr);
+    EXPECT_TRUE(editor->embedImageSizeAt(calc).isEmpty());
+}
+
 TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
 {
     QTemporaryDir dir;
@@ -1685,7 +1718,7 @@ TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
     EXPECT_TRUE(editor->panelTextAt(0).contains(QStringLiteral("bold")));
     EXPECT_TRUE(editor->embedImageSizeAt(0).isEmpty());
     // ...which replaces it a turn of the event loop later.
-    QTRY_VERIFY_WITH_TIMEOUT(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
     EXPECT_TRUE(editor->panelTextAt(0).isEmpty());
     EXPECT_GT(editor->embedImageSizeAt(0).height(), 20);
 }

@@ -2557,6 +2557,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.embedCells.clear();
     view.isFileCard = false;
     view.isHtml = false;
+    view.isPluginBlock = false;
+    view.codeBlockKey.clear();
+    view.embedPanel = false;
+    view.embedLabel.clear();
     view.inlineHtmlFormats.clear();
 
     // A tab group shows one of its fences under a strip of tabs, and hides the
@@ -2594,6 +2598,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderMedia && layoutQuery(view))
         return;
     if (renderMedia && layoutBase(view))
+        return;
+    if (renderMedia && layoutPluginCode(view))
         return;
     if (renderMedia && layoutHtml(view))
         return;
@@ -2956,7 +2962,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             painter.setPen(text);
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
             paintCodeChrome(painter, view, left, top);
             painter.setPen(text);
         }

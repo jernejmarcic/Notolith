@@ -17,7 +17,7 @@ target_link_libraries(test_search PRIVATE noteAppC_index GTest::gtest GTest::gte
 add_test(NAME search COMMAND test_search)
 
 add_executable(test_editor test_editor.cpp)
-target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Test GTest::gtest)
 get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
 if(noteappc_have_poppler)
     target_compile_definitions(test_editor PRIVATE NOTEAPPC_EXPECT_PDF)

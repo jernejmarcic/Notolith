@@ -342,6 +342,23 @@ public:
                                                   int width, const std::function<void(QImage)> &deliver)>;
     void setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer);
 
+    /// A fenced code block in a language a plugin renders: shown as the
+    /// renderer's answer instead of a listing. The same contract as
+    /// setFileEmbedRenderer - `deliver` from any thread, at most once, a
+    /// placeholder until then - cached by language, width, theme and source.
+    /// `text` is drawn as Markdown, `image` as it is; neither falls back to
+    /// the listing. Languages match case-insensitive; a null renderer
+    /// unregisters them. `theme` is "dark" or "light".
+    struct CodeBlockResult {
+        bool isMarkdown = true;
+        QString text;
+        QImage image;
+    };
+    using CodeBlockRenderer =
+        std::function<void(const QString &language, const QString &source, int width, const QString &theme,
+                           const std::function<void(CodeBlockResult)> &deliver)>;
+    void setCodeBlockRenderer(const QStringList &languages, CodeBlockRenderer renderer);
+
     /// A PDF (or compiled `.tex`) embed's state, for the tests - a click on
     /// its previous/next controls is exercised through pdfSlideStep rather
     /// than a synthesised QMouseEvent, the same way toggleQueryCollapsed
@@ -732,6 +749,10 @@ private:
         /// which has no such chrome to begin with - kept for symmetry with
         /// isQuery and in case a future BlockSpan kind needs the same gate).
         bool isHtml = false;
+        /// Set when a plugin draws this fence (CodeBlockHook.cpp): no
+        /// listing chrome, and codeBlockKey finds it again on delivery.
+        bool isPluginBlock = false;
+        QString codeBlockKey;
         /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
         /// resolved to a QTextCharFormat by layoutInlineHtml - added to
         /// formatsIn's output the way spellcheck underlines are. Source
@@ -1026,6 +1047,18 @@ private:
     QHash<QString, FileEmbedCacheEntry> m_fileEmbedCache; ///< "path|mtime|subpath|width" -> result
     quint64 m_fileEmbedGeneration = 0;
     void deliverFileEmbed(const QString &key, quint64 generation, QImage image);
+
+    /// CodeBlockHook.cpp: a fence in a language setCodeBlockRenderer has.
+    bool layoutPluginCode(BlockView &view);
+    void deliverCodeBlock(const QString &key, quint64 generation, CodeBlockResult result);
+    QHash<QString, CodeBlockRenderer> m_codeBlockRenderers; ///< lowercase language -> renderer
+    struct CodeBlockCacheEntry {
+        QImage image;
+        bool pending = true;
+        quint64 generation = 0;
+    };
+    QHash<QString, CodeBlockCacheEntry> m_codeBlockCache; ///< "language|width|theme|source" -> result
+    quint64 m_codeBlockGeneration = 0;
 
     /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
     /// note's own text (or the named section of it), in a panel like a

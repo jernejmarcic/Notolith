@@ -223,7 +223,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             }
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
             const CodeLabel label = codeLabelOf(view, left, top);
             if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
                 copyCodeBlock(view);

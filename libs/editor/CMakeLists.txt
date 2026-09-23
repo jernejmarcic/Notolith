@@ -5,6 +5,7 @@ add_library(noteAppC_editor STATIC
     DisplayMap.cpp
     DisplayMap.h
     EditingCommands.cpp
+    CodeBlockHook.cpp
     FileEmbedBlock.cpp
     FindBar.cpp
     FindBar.h
