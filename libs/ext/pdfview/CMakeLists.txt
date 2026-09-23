@@ -21,6 +21,8 @@ add_library(noteAppC_pdfview STATIC
     PdfDocument.h
     PdfExtract.cpp
     PdfExtract.h
+    PdfPagesArea.cpp
+    PdfPagesArea.h
     PdfRecovery.cpp
     PdfRecovery.h)
 
