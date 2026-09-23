@@ -208,6 +208,9 @@ private:
     /// "Search: Search in all files": the search pane, focused, with `query`
     /// run when one is given (a tag, a bookmarked search).
     void openSearch(const QString &query = QString());
+    /// "Graph view: Open graph view", in the main area; again returns to the
+    /// note. Built on first use: nothing optional before first paint.
+    void openGraph();
     /// (Re)builds the vault menu button's popup just before it shows, since
     /// its contents depend on OpenMode and the current vault.
     void rebuildVaultMenu();
@@ -296,6 +299,8 @@ private:
     QStackedWidget *m_rightPanes = nullptr;
     QButtonGroup *m_rightTabs = nullptr; ///< button ids are m_rightPanes indexes
     class SearchPane *m_search = nullptr;
+    class GraphView *m_graph = nullptr;      ///< null until first opened, and without the module
+    class GraphView *m_localGraph = nullptr; ///< null without the module
     BacklinksPane *m_backlinks = nullptr;
     TagsPane *m_tags = nullptr;
     OutgoingLinksPane *m_outgoingLinks = nullptr;

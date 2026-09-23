@@ -41,6 +41,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/folder-open.svg
     icons/folder-plus.svg
     icons/folder.svg
+    icons/git-fork.svg
     icons/hash.svg
     icons/info.svg
     icons/keyboard.svg

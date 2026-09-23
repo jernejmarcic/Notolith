@@ -41,3 +41,8 @@ if(TARGET noteAppC_spell)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SPELLCHECK)
 endif()
+
+if(TARGET noteAppC_graph)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_graph)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_GRAPH)
+endif()

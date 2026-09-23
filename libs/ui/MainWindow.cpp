@@ -49,6 +49,9 @@
 #include "Parser.h"
 #include "QuickSwitcher.h"
 #include "SearchPane.h"
+#ifdef NOTEAPPC_HAVE_GRAPH
+#include "GraphView.h"
+#endif
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "TagsPane.h"
@@ -569,6 +572,15 @@ QWidget *MainWindow::buildRightSidebar()
     m_rightPanes->addWidget(m_outline);
     m_rightPanes->addWidget(m_bookmarks);
     m_rightPanes->addWidget(m_search);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    // Cheap while hidden: GraphView reads the index only once it is shown.
+    m_localGraph = new GraphView(m_rightSidebar);
+    m_localGraph->setObjectName(QStringLiteral("localGraph"));
+    m_localGraph->setLocalGraph(true);
+    m_localGraph->setIndex(&m_index);
+    connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
+    m_rightPanes->addWidget(m_localGraph);
+#endif
 
     auto *group = new QButtonGroup(tabRow);
     group->setExclusive(true);
@@ -601,6 +613,14 @@ QWidget *MainWindow::buildRightSidebar()
     group->addButton(searchTab, m_rightPanes->indexOf(m_search));
     for (QToolButton *tab : {searchTab, backlinksTab, tagsTab, outgoingTab, outlineTab, bookmarksTab})
         tabLayout->addWidget(tab);
+    if (m_localGraph) {
+        QToolButton *graphTab = rightSidebarTabButton(
+            tabRow, QStringLiteral("localGraphTabButton"), QStringLiteral("git-fork"),
+            tr("Local graph"), tr("Local graph"), m_rightPanes->indexOf(m_localGraph));
+        graphTab->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        group->addButton(graphTab, m_rightPanes->indexOf(m_localGraph));
+        tabLayout->addWidget(graphTab);
+    }
     tabLayout->addStretch(1);
     backlinksTab->setChecked(true);
 
@@ -640,6 +660,12 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
+#ifdef NOTEAPPC_HAVE_GRAPH
+    add(QStringLiteral("graph:open"), tr("Graph view: Open graph view"), QStringLiteral("Ctrl+G"),
+        &MainWindow::openGraph);
+    add(QStringLiteral("graph:open-local"), tr("Graph view: Open local graph"), QString(),
+        [this] { showRightPane(m_localGraph); });
+#endif
     add(QStringLiteral("markdown:toggle-preview"), tr("Toggle reading view"),
         QStringLiteral("Ctrl+E"), &MainWindow::toggleEditingMode);
     add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
@@ -774,6 +800,30 @@ void MainWindow::openSearch(const QString &query)
     m_search->setFocus();
 }
 
+void MainWindow::openGraph()
+{
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_graph && m_mainStack->currentWidget() == m_graph) {
+        leaveSettings();
+        return;
+    }
+    if (!m_graph) {
+        m_graph = new GraphView(m_mainStack);
+        m_graph->setObjectName(QStringLiteral("graphView"));
+        m_graph->setTheme(m_theme);
+        if (m_vault.isValid())
+            m_graph->setOptions(GraphOptions::readFromVault(m_vault.root()));
+        m_graph->setIndex(&m_index);
+        connect(m_graph, &GraphView::noteActivated, this, &MainWindow::openRelative);
+        m_mainStack->addWidget(m_graph);
+    }
+    m_graph->setCurrentNote(m_vault.isValid() && !m_notePath.isEmpty() ? m_vault.relative(m_notePath)
+                                                                      : QString());
+    m_mainStack->setCurrentWidget(m_graph);
+    m_graph->setFocus();
+#endif
+}
+
 void MainWindow::openQuickSwitcher()
 {
     if (!m_vault.isValid())
@@ -805,8 +855,11 @@ void MainWindow::closeSettings()
 
 void MainWindow::leaveSettings()
 {
-    if (m_mainStack->currentIndex() != 0)
+    // Also leaves the graph view, the main area's other page.
+    if (m_mainStack->currentWidget() == m_settingsPage)
         closeSettings();
+    else
+        m_mainStack->setCurrentIndex(0);
 }
 
 void MainWindow::openRelative(const QString &relativePath)
@@ -1139,6 +1192,11 @@ void MainWindow::applyTheme()
     m_tags->setTheme(m_theme);
     m_backlinks->setTheme(m_theme);
     m_search->setTheme(m_theme);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    m_localGraph->setTheme(m_theme);
+    if (m_graph)
+        m_graph->setTheme(m_theme);
+#endif
     m_preview->applyTheme(m_theme);
     m_outgoingLinks->setTheme(m_theme);
     if (m_settingsPage)
@@ -1300,6 +1358,9 @@ void MainWindow::clearOpenNote()
     }
     m_backlinks->setNote(QString());
     m_outgoingLinks->setNote(QString());
+#ifdef NOTEAPPC_HAVE_GRAPH
+    m_localGraph->setCurrentNote(QString());
+#endif
     m_outline->clear();
 }
 
@@ -1330,6 +1391,10 @@ void MainWindow::openVault(const QString &path)
     m_settings.noteOpened(m_vault.root(), QString());
     applySettings();
     m_bookmarks->setVaultRoot(m_vault.root());
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_graph)
+        m_graph->setOptions(GraphOptions::readFromVault(m_vault.root()));
+#endif
 
     statusBar()->showMessage(m_vault.hasObsidianConfig()
                                  ? tr("Vault opened - Obsidian settings found")
@@ -1562,6 +1627,9 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
 
     m_backlinks->setNote(path);
     m_outgoingLinks->setNote(path);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    m_localGraph->setCurrentNote(m_vault.isValid() ? m_vault.relative(path) : QString());
+#endif
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();

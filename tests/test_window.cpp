@@ -25,6 +25,9 @@
 #include <QToolButton>
 
 #include "MarkdownEditor.h"
+#ifdef NOTEAPPC_HAVE_GRAPH
+#include "GraphView.h"
+#endif
 #include <QSignalSpy>
 #include <QAction>
 #include <QDate>
@@ -249,6 +252,68 @@ TEST_F(WindowTest, SearchInAllFilesShowsTheSearchPaneAndFocusesItsBox)
     EXPECT_TRUE(search->isVisible());
     EXPECT_EQ(QApplication::focusWidget(), search->findChild<QLineEdit *>());
 }
+
+#ifdef NOTEAPPC_HAVE_GRAPH
+using noteAppC::GraphView;
+
+TEST_F(WindowTest, GraphViewOpensInTheMainAreaAndANodeOpensItsNote)
+{
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "b\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    EXPECT_EQ(window.findChild<GraphView *>(QStringLiteral("graphView")), nullptr); // not before first use
+    auto *command = window.findChild<QAction *>(QStringLiteral("graph:open"));
+    ASSERT_NE(command, nullptr);
+    command->trigger();
+    auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+    ASSERT_NE(graph, nullptr);
+    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
+    EXPECT_EQ(stack->currentWidget(), graph);
+    EXPECT_TRUE(graph->containsNode(QStringLiteral("A.md")));
+    EXPECT_TRUE(graph->containsNode(QStringLiteral("B.md")));
+
+    emit graph->noteActivated(QStringLiteral("B.md"));
+    EXPECT_EQ(stack->currentIndex(), 0);
+    EXPECT_EQ(window.findChild<MarkdownEditor *>()->noteText(), QStringLiteral("b\n"));
+
+    command->trigger();
+    EXPECT_EQ(stack->currentWidget(), graph);
+    command->trigger(); // again: back to the note
+    EXPECT_EQ(stack->currentIndex(), 0);
+}
+
+TEST_F(WindowTest, LocalGraphFollowsTheOpenNote)
+{
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "[[C]]\n");
+    write(QStringLiteral("C.md"), "c\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("A.md")));
+
+    window.findChild<QAction *>(QStringLiteral("graph:open-local"))->trigger();
+    auto *local = window.findChild<GraphView *>(QStringLiteral("localGraph"));
+    ASSERT_NE(local, nullptr);
+    EXPECT_TRUE(local->isVisible());
+    EXPECT_TRUE(window.findChild<QToolButton *>(QStringLiteral("localGraphTabButton"))->isChecked());
+    EXPECT_TRUE(local->containsNode(QStringLiteral("B.md")));
+    EXPECT_FALSE(local->containsNode(QStringLiteral("C.md"))); // two hops away
+
+    window.openNote(path(QStringLiteral("C.md")));
+    EXPECT_TRUE(local->containsNode(QStringLiteral("B.md")));
+    EXPECT_FALSE(local->containsNode(QStringLiteral("A.md")));
+}
+#endif
 
 TEST_F(WindowTest, OutgoingLinksPaneGroupsByTargetAndFlagsUnresolved)
 {
