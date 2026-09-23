@@ -358,6 +358,32 @@ the features existing decreases it".
       preview, file recovery, daily notes, templates, query and HTML blocks,
       spellcheck, word count, workspace restore - and measure off against on.
 
+## Requested 2026-09-23, afternoon: notebooks, last of all
+
+Jernej: "when everything is said and done, implement the juypter notebook like
+features that I are fouind in the ~/Projects/ideas.md spec" (the Notes app
+section, "Code execution (Jupyter-style, tiered sandbox)"), and "Work
+atuonomously"; "If there are blockers due to stuff not being insatlled, just
+work on work that isn't blocked".
+
+What the spec asks for:
+- [ ] Run a code block through a **Jupyter kernel**: a client of the
+      messaging protocol (ZeroMQ, five sockets), so any installed kernel is a
+      language. The frontend stays language-agnostic.
+- [ ] **Per-block options as `#|` lines inside the fence** (Quarto's
+      hash-pipe): valid comments in the block's language, so the `.md` stays
+      clean CommonMark.
+- [ ] **Output cached in a sidecar**, never in the `.md` (Quarto's freeze
+      model): shown under the block, kept across launches.
+- [ ] **Runnable code-file embeds**: `![[file.py]]` runs the file and shows its
+      cached output below.
+- [ ] **Tiered sandbox**, chosen per block by trust: tier 0 host-direct
+      (opt-in), tier 1 bubblewrap/nsjail with seccomp and Landlock (the
+      desktop default); gVisor, Firecracker and WASM tiers later (server and
+      mobile).
+- [ ] Check what is installed before building on it (libzmq, a kernel such as
+      ipykernel, bubblewrap); leave anything missing for Jernej.
+
 ## Requested 2026-09-23: the rest of Obsidian
 
 Jernej, on the list of what is not built yet: "Command pallete is ok fo rlater,
