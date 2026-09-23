@@ -1,0 +1,19 @@
+{
+  "showTags": true,
+  "showAttachments": false,
+  "hideUnresolved": false,
+  "showOrphans": true,
+  "showArrow": false,
+  "textFadeMultiplier": 0.0,
+  "nodeSizeMultiplier": 1.0,
+  "lineSizeMultiplier": 1.0,
+  "centerStrength": 0.5,
+  "repelStrength": 10.0,
+  "linkStrength": 1.0,
+  "linkDistance": 250.0,
+  "colorGroups": [
+    { "query": "tag:#embeds", "color": { "a": 1, "rgb": 5017087 } },
+    { "query": "path:Library", "color": { "a": 1, "rgb": 16734815 } },
+    { "query": "tag:#backlinks OR tag:#links", "color": { "a": 1, "rgb": 8191868 } }
+  ]
+}

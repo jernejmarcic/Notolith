@@ -1,0 +1,128 @@
+{
+  "nodes": [
+    {
+      "id": "text-intro",
+      "type": "text",
+      "x": -460,
+      "y": -260,
+      "width": 320,
+      "height": 140,
+      "color": "4",
+      "text": "# Canvas demo\n\nText cards, note cards (with and without a subpath), a file (image) card, a link card, two groups, and edges of every kind: labelled, coloured, from specific sides, with both arrow ends set explicitly."
+    },
+    {
+      "id": "text-note",
+      "type": "text",
+      "x": -460,
+      "y": 40,
+      "width": 260,
+      "height": 100,
+      "text": "A second plain text card, downstream of the intro."
+    },
+    {
+      "id": "file-target",
+      "type": "file",
+      "x": -60,
+      "y": -260,
+      "width": 260,
+      "height": 120,
+      "file": "Links/Target Note.md"
+    },
+    {
+      "id": "file-hub-subpath",
+      "type": "file",
+      "x": -60,
+      "y": -100,
+      "width": 260,
+      "height": 120,
+      "file": "Backlinks/Hub.md",
+      "subpath": "#Linked mentions"
+    },
+    {
+      "id": "file-image",
+      "type": "file",
+      "x": -60,
+      "y": 60,
+      "width": 220,
+      "height": 180,
+      "file": "Embeds/assets/nvim-logo.png"
+    },
+    {
+      "id": "link-obsidian",
+      "type": "link",
+      "x": 280,
+      "y": -260,
+      "width": 260,
+      "height": 100,
+      "url": "https://obsidian.md"
+    },
+    {
+      "id": "group-notes",
+      "type": "group",
+      "x": -100,
+      "y": -300,
+      "width": 340,
+      "height": 460,
+      "label": "Vault references",
+      "color": "2"
+    },
+    {
+      "id": "group-external",
+      "type": "group",
+      "x": 260,
+      "y": -300,
+      "width": 300,
+      "height": 160,
+      "label": "External",
+      "color": "#9b59b6"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-intro-note",
+      "fromNode": "text-intro",
+      "fromSide": "bottom",
+      "toNode": "text-note",
+      "toSide": "top",
+      "label": "downstream"
+    },
+    {
+      "id": "edge-note-target",
+      "fromNode": "text-note",
+      "fromSide": "right",
+      "toNode": "file-target",
+      "toSide": "left",
+      "color": "1",
+      "label": "opens"
+    },
+    {
+      "id": "edge-target-hub",
+      "fromNode": "file-target",
+      "fromSide": "bottom",
+      "toNode": "file-hub-subpath",
+      "toSide": "top",
+      "color": "3"
+    },
+    {
+      "id": "edge-hub-image",
+      "fromNode": "file-hub-subpath",
+      "fromSide": "bottom",
+      "toNode": "file-image",
+      "toSide": "top",
+      "fromEnd": "none",
+      "toEnd": "arrow",
+      "label": "attachment"
+    },
+    {
+      "id": "edge-both-arrows",
+      "fromNode": "file-image",
+      "fromSide": "right",
+      "toNode": "link-obsidian",
+      "toSide": "left",
+      "fromEnd": "arrow",
+      "toEnd": "arrow",
+      "color": "5",
+      "label": "both ends arrowed"
+    }
+  ]
+}

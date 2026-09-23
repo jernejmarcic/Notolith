@@ -1,0 +1,8 @@
+{
+  "workspace:split-vertical": [
+    { "modifiers": ["Mod", "Alt"], "key": "V" }
+  ],
+  "daily-notes": [
+    { "modifiers": ["Mod", "Shift"], "key": "D" }
+  ]
+}

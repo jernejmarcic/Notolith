@@ -1,0 +1,59 @@
+filters:
+  and:
+    - 'file.inFolder("Library/Books")'
+    - 'status != "shelved"'
+formulas:
+  ppu: "(price / pages).toFixed(3)"
+  expensive: "price > 25"
+properties:
+  status:
+    displayName: Status
+  formula.ppu:
+    displayName: "Price per page"
+views:
+  - type: table
+    name: All (minus shelved)
+    order:
+      - file.name
+      - author
+      - category
+      - status
+      - rating
+    sort:
+      - property: rating
+        direction: DESC
+
+  - type: table
+    name: By category, grouped
+    filters:
+      and:
+        - "rating >= 4"
+    order:
+      - file.name
+      - category
+      - pages
+      - formula.ppu
+    groupBy:
+      property: category
+      direction: ASC
+    sort:
+      - property: formula.ppu
+        direction: ASC
+
+  - type: table
+    name: Reading now
+    filters:
+      and:
+        - 'status = "reading"'
+    order:
+      - file.name
+      - author
+      - pages
+    limit: 10
+
+  - type: cards
+    name: Everything, as cards
+    order:
+      - file.name
+      - author
+      - rating

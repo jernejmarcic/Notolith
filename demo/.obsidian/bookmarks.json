@@ -1,0 +1,36 @@
+{
+  "items": [
+    {
+      "type": "file",
+      "path": "Welcome.md",
+      "title": "Welcome"
+    },
+    {
+      "type": "file",
+      "path": "Callouts/Callouts.md",
+      "subpath": "#Nested, each with its own colour",
+      "title": "Nested callouts"
+    },
+    {
+      "type": "search",
+      "query": "tag:#embeds",
+      "title": "All embed notes"
+    },
+    {
+      "type": "group",
+      "title": "Reference",
+      "items": [
+        {
+          "type": "file",
+          "path": "Links/Target Note.md",
+          "title": "Target Note"
+        },
+        {
+          "type": "file",
+          "path": "Library/Library.md",
+          "title": "Library"
+        }
+      ]
+    }
+  ]
+}
