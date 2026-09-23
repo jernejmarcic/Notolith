@@ -61,6 +61,21 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       operator, radical, delimiter, matrix bracket and roman glyph.
       `cmake/patch-microtex.sh` carries it.
 
+## Resumed 2026-09-23, night (after the session limit)
+
+- [x] The other session's four unfinished lanes finished and merged:
+      slash commands (keys now handled by the editor itself; wired, off by
+      default), paste and drop (a drop needs its drag accepted first; the
+      window saves into the attachment folder), runnable `![[script.py]]`
+      embeds with `eval`/`echo`/`sandbox` (an embed laid out before the
+      runner now becomes runnable), footnotes in the editor (its
+      FootnoteMarks.cpp had never been written) and the Footnotes view.
+- [x] A note's `#| sandbox: host` runs outside the sandbox only when
+      Settings allows it (off by default).
+- [x] test_window crashed one run in six in libcrypto: libgit2 was
+      initialised and shut down per note history, racing across threads.
+- [x] A table command outside a table failed the every-command test.
+
 ## Merged 2026-09-23, evening
 
 - [x] Lanes J (publish), K1 (PDF viewer), P (plugins) and S (sync) merged
@@ -81,9 +96,9 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
   - [x] Lists (Jernej 2026-09-23): nested markers no longer overlap their
         text, "-"/"*"/"+" drawn distinctly, Word-style 1.1/1.2 numbering as
         a setting ("Outline numbering"), lists nest inside quotes/callouts.
-  - [ ] Footnotes in the editor: references as superscript numbers, the
+  - [x] Footnotes in the editor: references as superscript numbers, the
         definitions as Obsidian shows them (reading view: a list at the end).
-  - [ ] Paste and drop: an image pasted (Ctrl+V) or a file dropped into a
+  - [x] Paste and drop: an image pasted (Ctrl+V) or a file dropped into a
         note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
         "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
         `![[...]]` inserted. Not built at all yet.
@@ -636,9 +651,10 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] Note composer (`note-composer`): merge a note into another; extract the
       selection into a new note, leaving a link or an embed.
 - [x] Audio recorder (`audio-recorder`): record into an attachment, embed it.
-- [ ] Slash commands (`slash-command`): "/" in the editor lists commands -
-      editor-side, after the notebook lane.
-- [ ] Footnotes view: a pane of the note's footnotes.
+- [x] Slash commands (`slash-command`): "/" in the editor lists commands; off by
+      default, as Obsidian ships it.
+- [x] Footnotes view: a pane of the note's footnotes; the editor draws footnotes
+      as numbers and reading view lists them at the end.
 - Not built: Web viewer (it needs a web engine, and C/C++-only rules that
   out), Format converter and Markdown importer (one-off migration tools).
 
