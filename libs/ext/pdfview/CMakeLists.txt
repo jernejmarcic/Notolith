@@ -24,7 +24,9 @@ add_library(noteAppC_pdfview STATIC
     PdfPagesArea.cpp
     PdfPagesArea.h
     PdfRecovery.cpp
-    PdfRecovery.h)
+    PdfRecovery.h
+    PdfView.cpp
+    PdfView.h)
 
 set_target_properties(noteAppC_pdfview PROPERTIES AUTOMOC ON)
 
