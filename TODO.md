@@ -366,11 +366,39 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       pages broken between blocks.
 
 ### Wave 3
-- [ ] Split panes and workspaces.
-- [ ] Canvas (JSON Canvas) - lane D running in `/tmp/noteAppC-canvas`.
-- [ ] Bases (`.base` table and list views, filters, sort, formulas) - lane E
-      running in `/tmp/noteAppC-bases`.
-- [ ] HTML blocks through litehtml.
+- [x] Tabs and splits: each tab its own editor and history; new tab, close,
+      close others, next/previous, go to tab 1-8/last, split right/down,
+      nested; a split closes with its last tab; deleting a note closes its
+      tabs; the same note in two splits follows a save.
+- [x] Workspaces: the layout reopens with the vault (Obsidian's
+      workspace.json read until noteAppC saves its own, never written);
+      background tabs load when first shown; named layouts - save, load,
+      delete, save-and-load.
+- [x] Canvas (JSON Canvas, lane D): model that keeps unknown keys and the
+      exact bytes when untouched, pan/zoom, groups, edges, Markdown and file
+      nodes rendered by the editor, editing with undo; opens in a tab, framed.
+      1 000 nodes pan in 4-5 ms.
+- [x] Bases (lane E): `.base` filters, formulas, table and card views, sort,
+      group, limit, an expression language in C++; editing a cell writes
+      only that property. Opens in a tab. 20 000 rows filter+sort in 71 ms.
+- [ ] `query` blocks and HTML blocks (litehtml) - lane F running in
+      `/tmp/noteAppC-editor`.
+- [ ] `canvas:new-file` ("Create new canvas") and a new-base command.
+- [ ] ` ```base ` blocks inside notes, on `BaseView`.
+- [ ] Bases left out: `list.filter/map/reduce`, link/file/image values,
+      `summaries:`, list-property cells, cards read-only, sort not saved back.
+- [ ] Canvas left out: dragging a group does not move what is in it; a file
+      node's subpath does not scroll to the heading; plain drag pans, Obsidian
+      rubber-bands (Shift here).
+- [ ] Ctrl+click a link, or middle-click a tree row, to open in a new tab.
+- [ ] The unfocused split's tab header could dim, as Obsidian's does.
+- [ ] One note edited in two splits at once diverges; last save wins.
+      Obsidian edits one document from every view.
+
+### For Jernej to decide
+- [ ] **Autosave.** Obsidian saves on its own a moment after typing stops;
+      noteAppC asks on close ("Save changes to X?"). Tabs make that prompt
+      come more often. Autosave like Obsidian?
 
 ### Wave 4
 - [ ] Packaging: AppImage, Flatpak manifest, `PKGBUILD` without `-march`.

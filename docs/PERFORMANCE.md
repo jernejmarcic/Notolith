@@ -378,6 +378,47 @@ loop also reads the live scroll maximum now: once real heights shrank the
 range, a step past the end changed nothing, painted nothing, and waited out
 the 200 ms ceiling - a fifth of all frames in the first run.
 
+### 13. Search read every matching body before confirming the first
+
+`Index::search()` selected `rowid, path, body ... ORDER BY path`, and SQLite's
+sorter copies every selected column of every match: a common word over 20 000
+notes sorted 20 000 bodies so that 200 could be confirmed. The sorted query now
+carries `rowid, path`, and each body is read by rowid only while fewer than
+`limit` notes have matched. `noteAppC-bench`, 20 000 notes, a query matching
+every note: 18.1 ms to 6.4 ms. A rare word: 0.05 ms either way. The search
+runs on the thread pool, so neither ever reaches the UI thread.
+
+### 14. The link suggester sized 60 000 rows on every theme pass
+
+Each editor's `[[` suggester is a `QCompleter` over every link target in the
+vault, about three names per note. Any application-wide style change - every
+settings pass runs one, including the one when a vault opens - re-laid out its
+hidden popup, and a `QListView` without uniform item sizes measures each row:
+157 ms of a 20 000-note cold start, and again for every tab's editor. The rows
+are one line each, so `setUniformItemSizes(true)` loses nothing. Cold start,
+20 000 notes: 475 ms to 335 ms (the 475 included a double refresh, fix 15,
+that made the suggester's list exist before the theme pass).
+
+### 15. Two emitters of one refresh
+
+Three panes listen to `Index::changed` themselves, and the window's own
+handler refreshed all three again, so each save queried them twice. Once
+`Index::open()` began to report a new vault (the graph and search panes need
+it), the indexer's `finished()` calling the same handler made that twice per
+vault open as well. And each pane rebuilt its list on every settings pass,
+the tags pane's being a query over every tag in the vault. Now one refresh per
+change, and a theme pass rebuilds a pane only when a colour it paints with
+changed. Cold start, 20 000 notes: 335 ms to 285 ms; 303 ms before this
+session's features, which added a local graph, a search pane and tabs to it.
+
+### 16. A graph nobody can see
+
+`GraphView` re-read every file and link in the vault on each `Index::changed`
+(every save) and rebuilt the local graph on each note switch, whether or not
+it was on screen. Hidden, it now only marks itself stale and catches up in
+`showEvent()`. The sidebar's local graph is built at startup for this reason
+alone: it costs nothing until its tab is opened.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -509,6 +550,11 @@ Each of these produced a wrong number at least once in this project.
   calls `openVault` synchronously, so it scales with the vault: 44 ms on 200
   notes, 64 ms on 2 000. This page once gave 47 ms under a 2 000-note heading;
   building that same commit again gave 64 ms, so nothing had regressed.
+- **A regression that is really a second copy of a cost.** Cold start went
+  from 303 to 518 ms after one change; the change was cheap, but it moved an
+  existing 210 ms refresh earlier, where it ran a second time, and made the
+  next theme pass pay for a list it had just filled. Phase timings inside
+  `openVault` found it in two runs; guessing would not have.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.
