@@ -34,7 +34,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench) | 47 ms | - |
+| cold start to first painted frame (bench, includes `openVault`) | 64 ms | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
@@ -42,7 +42,8 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | note open, 1 MB | 11.3 ms (readable; styled ~140 ms later) | - |
 | keystroke to relaid, painted block, 200 kB | 0.24 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.21 ms | 8 ms |
-| keystroke, 1 MB | 0.64 ms | 8 ms |
+| keystroke, 1 MB | 0.71 ms | 8 ms |
+| keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
 | cold index, 20 000 notes | 3.6 s | 5 s |
@@ -96,6 +97,8 @@ probes. The screenshot tool and the bench now set it themselves.
 | `MarkdownEditorTest.OpeningALargeNoteIsFast` | a 200 kB note opens in under 300 ms |
 | `MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate` | time to readable grows slower than the text |
 | `ParserPerfTest.ParsingStaysLinearInFileSize` | 5x the text costs under 10x the parse |
+| `ListPerfTest.TypingInALongListDoesNotDependOnItsLength` | 5 000 items type and reveal inside 8 ms, and within 4x of 100 |
+| `CodeBlockPerfTest.TypingInALongCodeBlockStaysInBudget` | 5 000 lines inside 8 ms, and within 4x of 100, after the parse has landed |
 
 The last one used to live in the editor tests. When the parse moved off the UI
 thread it started measuring the layout path instead, and would have gone on
@@ -253,6 +256,59 @@ application-wide event filter, so every event passes through
 `MainWindow::eventFilter`. With the word count gone the window row sits at the
 bare editor's number, so the filter costs nothing measurable.
 
+### 10. A long code block was laid out whole on every keystroke
+
+A fence was one block however long it was, so a keystroke in it laid out and
+highlighted the entire listing. Release build (`-O3`), keystroke plus paint:
+
+| lines | before | after |
+|---|---|---|
+| 100 | 2.7 ms | 1.10 ms |
+| 1 000 | 26 ms | 1.10 ms |
+| 5 000 | 158 ms | 1.16 ms |
+
+The first measurement of 5 000 lines said 25.7 ms, and was wrong: above
+128 kB the parse is async, and neither the bench nor the new test waited for
+it, so both timed an unhighlighted paragraph. See the pitfalls below.
+
+perf put about two thirds of the time in `QTextLine::layout_helper`, shaping
+with HarfBuzz, and the highlighter under 4%. Taken apart on 5 000 lines: 35 ms
+to highlight, 21 ms to lay out as plain text, but 112 ms to lay out with the
+45 000 format ranges the highlighter produced - more than linear, since 1 000
+lines took 14 ms.
+
+Two changes:
+
+- **The highlighter's formats are built once per Kate format.**
+  `KSyntaxHighlighting::AbstractHighlighter::theme()` returns a copy, and
+  `applyFormat` asked for it up to seven times per token. A `QTextCharFormat`
+  per `Format::id()` is now cached: highlighting 5 000 lines 35 ms -> 21 ms.
+- **A fence longer than 32 lines is split into 32-line blocks,** as a list
+  became one block per item (`kCodePieceLines`). An edit relays out one piece,
+  and a reparse relays out only the pieces near the viewport. The fence's
+  chrome is drawn across its pieces - each paints its own band of one panel,
+  the header, label and tabs go on the first, the caption on the last, line
+  numbers carry on - and folding, copying and the hover label act on the
+  whole fence. The caret anywhere in it reveals every piece.
+
+Highlighting has to cross the pieces: a `/*` in one piece colours the next.
+`CodeHighlighter::State` wraps KSyntaxHighlighting's line state, and each
+piece records the state it ended in. A piece is highlighted from the end state
+of the one before; when its own end state changes, the next piece is marked
+stale and every later piece already laid out loses its layout, to be redone as
+it comes into view. A state that converges again stops the redoing there, so
+ordinary typing re-highlights one piece. States survive a reparse for pieces
+whose text did not move, which matters: after typing near line 4 500 of 5 000,
+the parse landing costs 3.25 ms with its paint, where re-highlighting the
+listing from the top to reach the viewport would be about 20 ms.
+
+Found on the way, and fixed separately in `43e96b5`: `applyEdit` shifted the
+edited block's end twice, so until the reparse a block drew the start of the
+next one as well - a flicker of duplicated text on every keystroke.
+
+Not covered: a long listing inside a callout is still part of the callout's
+single layout.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -364,6 +420,16 @@ Each of these produced a wrong number at least once in this project.
   label's pixels land on its exact colour, and how many depends on Qt's glyph
   cache - a test passed alone and failed every time after another test had
   drawn text. Count pixels a channel clearly dominates instead.
+- **Timing the placeholder.** Above 128 kB a note is plain paragraphs until
+  its async parse lands. The code block row, and the first version of its
+  test, never waited for it, and reported 25.7 ms for a 5 000-line listing
+  whose real cost was 158 ms. The bench's keystroke rows now wait for the
+  parse; so the 200 kB and 1 MB rows, which had been timing plain paragraphs
+  since the async parse went in, read a little higher and are now true.
+- **A row that depends on something it does not name.** The cold start row
+  calls `openVault` synchronously, so it scales with the vault: 44 ms on 200
+  notes, 64 ms on 2 000. This page once gave 47 ms under a 2 000-note heading;
+  building that same commit again gave 64 ms, so nothing had regressed.
 - **A hypothesis is not a measurement.** Font enumeration was the suspect for
   constructor cost and measured 0.0 ms; the settings page, which nobody
   suspected, was 12 ms.

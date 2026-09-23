@@ -44,6 +44,10 @@ constexpr qreal kListIndent = 26;
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
 constexpr int kTypingBurstMs = 500;
+/// A fence longer than this is split into blocks of this many lines. Laying
+/// out and highlighting 32 lines costs about a millisecond; the whole of a
+/// 5 000-line listing cost 158 ms, and it was redone on every keystroke.
+constexpr qsizetype kCodePieceLines = 32;
 
 qreal headingScale(int level)
 {
@@ -574,6 +578,21 @@ QString MarkdownEditor::displayText() const
     return parts.join(QString());
 }
 
+QTextCharFormat MarkdownEditor::formatAt(qsizetype sourceOffset) const
+{
+    const qsizetype index = blockAt(sourceOffset);
+    if (index < 0 || !m_blocks[size_t(index)].layout)
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    const qsizetype shown = view.map.toDisplay(sourceOffset);
+    QTextCharFormat merged;
+    for (const QTextLayout::FormatRange &range : view.layout->formats()) {
+        if (range.start <= shown && shown < range.start + range.length)
+            merged.merge(range.format);
+    }
+    return merged;
+}
+
 void MarkdownEditor::enterBlockAt(qsizetype offset)
 {
     m_interacted = true;
@@ -825,10 +844,54 @@ void MarkdownEditor::rebuildBlocks()
             }
             view.span.range.start = from;
         }
+        // A long fence becomes pieces of kCodePieceLines lines, for the same
+        // reason. Its chrome is drawn across them, and each piece carries on
+        // highlighting from the state the one before it ended in.
+        if (span.kind == BlockSpan::Kind::Code) {
+            const qsizetype firstLine = m_lines.lineAt(view.span.range.start);
+            const qsizetype lastLine =
+                m_lines.lineAt(qMax(view.span.range.start, view.span.range.end - 1));
+            const int pieces = int((lastLine - firstLine) / kCodePieceLines) + 1;
+            qsizetype from = view.span.range.start;
+            for (int piece = 0; piece + 1 < pieces; ++piece) {
+                const qsizetype to = m_lines.lineStart(firstLine + (piece + 1) * kCodePieceLines);
+                BlockView part;
+                part.span = {BlockSpan::Kind::Code, {from, to}, span.level};
+                part.piece = piece;
+                part.pieces = pieces;
+                blocks.push_back(std::move(part));
+                from = to;
+            }
+            view.span.range.start = from;
+            view.piece = pieces - 1;
+            view.pieces = pieces;
+        }
         blocks.push_back(std::move(view));
         cursor = view.span.range.end;
     }
     addGap(cursor, m_text.size());
+
+    // Every parse rebuilds the blocks. A piece keeps the highlighter state the
+    // old piece ending where it ends had, so a listing is not re-highlighted
+    // from its top to show the piece on screen - and that state is still
+    // valid when the old piece covered exactly the same text.
+    for (BlockView &view : blocks) {
+        if (view.pieces <= 1)
+            continue;
+        const qsizetype at = view.span.range.end - 1;
+        auto it = std::upper_bound(m_blocks.cbegin(), m_blocks.cend(), at,
+                                   [](qsizetype offset, const BlockView &old) {
+                                       return offset < old.span.range.start;
+                                   });
+        if (it == m_blocks.cbegin())
+            continue;
+        --it;
+        if (it->pieces <= 1 || it->span.range.end != view.span.range.end)
+            continue;
+        view.codeEnd = it->codeEnd;
+        view.codeEndValid = it->codeEndValid && it->piece == view.piece
+                            && it->span.range.start == view.span.range.start;
+    }
 
     if (blocks.empty()) {
         BlockView view;
@@ -904,7 +967,7 @@ QFont MarkdownEditor::fontFor(const BlockSpan &span) const
     return font;
 }
 
-QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(const BlockView &view) const
+QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(BlockView &view)
 {
     QList<QTextLayout::FormatRange> formats = formatsIn(view, view.span.range, view.map);
     formats += codeFormatsFor(view);
@@ -1038,9 +1101,12 @@ Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) co
         ++content.start;
 
     if (language) {
-        for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        // The listing's style span starts in the fence's first piece, so only
+        // that piece's slice of the decorations holds it.
+        const BlockView &first = firstPiece(view);
+        for (int i = first.firstStyle; i < first.lastStyle; ++i) {
             const StyleSpan &span = m_decorations.styles.at(i);
-            if (span.kind == StyleSpan::Kind::CodeBlock && span.range.overlaps(view.span.range)) {
+            if (span.kind == StyleSpan::Kind::CodeBlock && span.range.overlaps(first.span.range)) {
                 *language = span.payload;
                 break;
             }
@@ -1049,18 +1115,14 @@ Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) co
     return content;
 }
 
-QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &view) const
+QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Code)
         return nestedCodeFormatsFor(view);
 
-    QString language;
-    const Range content = codeContentOf(view, &language);
-    if (!content.isValid() || content.length() <= 0 || language.isEmpty())
-        return {};
-
-    const QString code = m_text.mid(content.start, content.length());
-    QList<QTextLayout::FormatRange> formats = m_code.highlight(code, language);
+    updateCodeStatesBefore(view);
+    Range content;
+    QList<QTextLayout::FormatRange> formats = highlightPiece(view, &content);
 
     // Highlighter offsets are relative to the code; the layout wants display
     // offsets. Nothing inside a fence is ever hidden, so the shift is uniform.
@@ -1068,6 +1130,49 @@ QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(const BlockView &
     for (QTextLayout::FormatRange &range : formats)
         range.start += int(shift);
     return formats;
+}
+
+QList<QTextLayout::FormatRange> MarkdownEditor::highlightPiece(BlockView &view, Range *content)
+{
+    QString language;
+    *content = codeContentOf(view, &language);
+    CodeHighlighter::State state =
+        view.piece > 0 ? (&view - 1)->codeEnd : CodeHighlighter::State();
+    QList<QTextLayout::FormatRange> formats;
+    if (content->isValid() && content->length() > 0 && !language.isEmpty())
+        formats = m_code.highlight(m_text.mid(content->start, content->length()), language, &state);
+    if (view.pieces <= 1)
+        return formats;
+
+    const bool moved = !(state == view.codeEnd);
+    view.codeEnd = state;
+    view.codeEndValid = true;
+    if (moved && view.piece + 1 < view.pieces) {
+        // The next piece starts from somewhere else now - a comment opened
+        // here, say - so its own end state is stale, and every later piece
+        // already laid out may be showing colours that no longer hold.
+        // Clearing their layouts is cheap; they are redone as they come into
+        // view, and a state that converges again stops the redoing there.
+        (&view + 1)->codeEndValid = false;
+        for (BlockView *later = &view + 1; later <= &lastPiece(view); ++later) {
+            if (!later->laidOut)
+                continue;
+            later->layout.reset();
+            later->laidOut = false;
+            later->heightEstimated = true; // keep the height it had meanwhile
+        }
+    }
+    return formats;
+}
+
+void MarkdownEditor::updateCodeStatesBefore(BlockView &view)
+{
+    for (BlockView *piece = &view - view.piece; piece != &view; ++piece) {
+        if (piece->codeEndValid)
+            continue;
+        Range content;
+        highlightPiece(*piece, &content);
+    }
 }
 
 /// Syntax highlighting for a fence that lives inside a callout or a
@@ -2105,11 +2210,13 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // below it; an empty callout still shows its title.
         view.textTop = calloutHeaderHeight(view.calloutStyle);
         view.height = height;
-    } else if (view.options || view.tabGroup >= 0) {
+    } else if ((view.options || view.tabGroup >= 0) && view.piece == 0) {
         view.textTop = codeHeaderHeight(); // the `#|` header, or the tab strip
     }
 
-    view.folded = isFoldable(view) && m_folds.value(view.span.range.start, defaultFoldOf(view));
+    // A folded fence folds all of its pieces; only the first keeps its header.
+    view.folded = isFoldable(view)
+                  && m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
     view.height = view.folded ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
     view.laidOut = true;
@@ -2123,6 +2230,12 @@ void MarkdownEditor::updateLayout()
     // Obsidian keeps the caret's own block raw even when the pane loses
     // focus, so interaction - not focus - is what reveals it.
     const TabGroup *caretGroup = caretTabGroup();
+    // The caret's block, or for a long fence its first piece: the caret
+    // anywhere in a fence shows the whole of it as written.
+    const qsizetype caretFirst =
+        m_activeBlock >= 0 && m_activeBlock < qsizetype(m_blocks.size())
+            ? m_activeBlock - m_blocks[size_t(m_activeBlock)].piece
+            : -1;
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
         const bool inCaretGroup = caretGroup && view.span.range.start >= caretGroup->span.start
@@ -2137,7 +2250,7 @@ void MarkdownEditor::updateLayout()
         // it stays rendered, as in Obsidian, and while the mouse button is
         // held nothing changes at all: revealing the syntax mid-drag moved the
         // text out from under the pointer, so the selection chased it.
-        bool active = m_mode == Mode::LivePreview && m_interacted && i == m_activeBlock
+        bool active = m_mode == Mode::LivePreview && m_interacted && i - view.piece == caretFirst
                       && selection().length() == 0;
         if (m_pressing)
             active = view.active;
@@ -2555,6 +2668,7 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
         view.layout.reset();
         view.laidOut = false;
         view.heightEstimated = false;
+        view.codeEndValid = false;
     }
 
     m_cursor = m_anchor = at + inserted.size();
@@ -2913,7 +3027,7 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
         if (view.y - 8 > y)
             break;
         if (view.span.kind == BlockSpan::Kind::Code && y <= view.y + view.height + 8) {
-            hovered = view.span.range.start;
+            hovered = firstPiece(view).span.range.start;
             break;
         }
     }

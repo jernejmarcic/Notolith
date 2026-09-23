@@ -85,7 +85,7 @@ bool MarkdownEditor::defaultFoldOf(const BlockView &view) const
 
 void MarkdownEditor::setFolded(const BlockView &view, bool folded)
 {
-    m_folds.insert(view.span.range.start, folded);
+    m_folds.insert(firstPiece(view).span.range.start, folded);
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -107,7 +107,7 @@ void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return;
     const BlockView &view = m_blocks.at(size_t(index));
-    setFolded(view, !m_folds.value(view.span.range.start, defaultFoldOf(view)));
+    setFolded(view, !m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view)));
 }
 
 bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
@@ -120,7 +120,7 @@ bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return false;
     const BlockView &view = m_blocks.at(size_t(index));
-    return m_folds.value(view.span.range.start, defaultFoldOf(view));
+    return m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
 }
 
 QRectF MarkdownEditor::foldHandleRect(const BlockView &view, qreal left, qreal top) const
@@ -442,8 +442,10 @@ void MarkdownEditor::toggleProperty(int index)
 
 const CodeOptions *MarkdownEditor::codeOptionsFor(const BlockView &view) const
 {
+    // Every piece of a long fence takes the options its first line declares.
+    const qsizetype start = firstPiece(view).span.range.start;
     for (const CodeOptions &options : m_decorations.codeOptions) {
-        if (options.block.start == view.span.range.start)
+        if (options.block.start == start)
             return &options;
     }
     return nullptr;
@@ -456,7 +458,8 @@ qreal MarkdownEditor::codeHeaderHeight() const
 
 qreal MarkdownEditor::codeCaptionHeight(const BlockView &view) const
 {
-    if (!view.options || view.options->caption.isEmpty() || view.folded)
+    if (!view.options || view.options->caption.isEmpty() || view.folded
+        || view.piece != view.pieces - 1)
         return 0;
     return lineHeightFor({BlockSpan::Kind::Code, {0, 0}, 0}) * 1.4;
 }
@@ -465,8 +468,16 @@ qreal MarkdownEditor::codeGutterWidth(const BlockView &view) const
 {
     if (!view.options || !view.options->lineNumbers || !view.layout)
         return 0;
-    const int last = view.options->firstLine
-                     + int(view.map.text().count(QLatin1Char('\n')));
+    // Every piece of a fence has to agree on the width, so a long one counts
+    // its source lines - fences and `#|` lines too, which can only overcount
+    // by a digit at a power of ten.
+    const BlockView &first = firstPiece(view);
+    const BlockView &closing = lastPiece(view);
+    const int lines = view.pieces > 1
+                          ? int(m_lines.lineAt(closing.span.range.end - 1)
+                                - m_lines.lineAt(first.span.range.start))
+                          : int(view.map.text().count(QLatin1Char('\n')));
+    const int last = view.options->firstLine + lines;
     return QFontMetricsF(fontFor(view.span)).horizontalAdvance(QLatin1Char('0'))
                * qMax(2, QString::number(last).size())
            + 14;
@@ -693,7 +704,7 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
                                                             qreal top) const
 {
     std::vector<TabRect> tabs;
-    if (view.tabGroup < 0 || view.tabGroup >= int(m_tabGroups.size()))
+    if (view.tabGroup < 0 || view.tabGroup >= int(m_tabGroups.size()) || view.piece > 0)
         return tabs;
     const TabGroup &group = m_tabGroups.at(size_t(view.tabGroup));
     const int selected = selectedTabOf(group);
@@ -735,6 +746,8 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
                                                       qreal top) const
 {
     CodeLabel label;
+    if (view.piece > 0)
+        return label; // a long fence's label is on its first piece
     const LanguageStyle style = codeStyleOf(view);
     const bool copied = m_copiedBlock == view.span.range.start;
     const bool hovered = m_hoveredCodeBlock == view.span.range.start;
@@ -802,14 +815,16 @@ const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point
 void MarkdownEditor::copyCodeBlock(const BlockView &view)
 {
     // The listing as the reader sees it: no fences, no language tag, and no
-    // `#|` option lines, which codeContentOf already leaves out.
-    const Range content = codeContentOf(view, nullptr);
+    // `#|` option lines, which codeContentOf already leaves out. All of it,
+    // for a fence long enough to be in pieces.
+    const Range content{codeContentOf(firstPiece(view), nullptr).start,
+                        codeContentOf(lastPiece(view), nullptr).end};
     QString code = m_text.mid(content.start, content.length());
     if (code.endsWith(QLatin1Char('\n')))
         code.chop(1);
     QGuiApplication::clipboard()->setText(code);
 
-    m_copiedBlock = view.span.range.start;
+    m_copiedBlock = firstPiece(view).span.range.start;
     const qsizetype copied = m_copiedBlock;
     QTimer::singleShot(1500, this, [this, copied] {
         if (m_copiedBlock == copied) {
@@ -842,26 +857,58 @@ void MarkdownEditor::paintCodeLabel(QPainter &painter, const BlockView &view, qr
 void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {
-    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    // One panel behind the whole fence. A long fence is several pieces, and
+    // each paints only its own band of that panel, so they join seamlessly.
+    const BlockView &first = firstPiece(view);
+    const BlockView &closing = lastPiece(view);
+    const bool isFirst = view.piece == 0;
+    const bool isLast = view.piece == view.pieces - 1;
+    const qreal fenceTop = top - (view.y - first.y);
+    const QRectF panel(left - 14, fenceTop - 8, contentWidth() + 28,
+                       closing.y + closing.height - first.y + 16);
+
+    painter.save();
+    if (view.pieces > 1) {
+        const qreal bandTop = isFirst ? panel.top() : top;
+        const qreal bandBottom = isLast ? panel.bottom() : top + view.height;
+        painter.setClipRect(QRectF(panel.left(), bandTop, panel.width(), bandBottom - bandTop));
+    }
     QPainterPath rounded;
     rounded.addRoundedRect(panel, 6, 6);
     painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
 
-    QString language;
-    codeContentOf(view, &language);
+    if (isFirst)
+        paintCodeHeader(painter, view, left, top, panel);
+    if (view.options && !view.folded)
+        paintCodeRows(painter, view, left, top, panel);
 
-    QFont badgeFont = m_theme.uiFont();
-    badgeFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
-    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    const qreal caption = codeCaptionHeight(view);
+    if (caption > 0) {
+        QFont captionFont = m_theme.textFont();
+        captionFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+        captionFont.setItalic(true);
+        painter.setFont(captionFont);
+        painter.setPen(m_theme.color(QStringLiteral("--text-muted")));
+        painter.drawText(QRectF(left, panel.bottom() - 8 - caption, contentWidth(), caption),
+                         Qt::AlignVCenter | Qt::AlignLeft, view.options->caption);
+    }
+    painter.restore();
+}
 
+void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, qreal left,
+                                     qreal top, const QRectF &panel) const
+{
     if (!view.options && view.tabGroup < 0) {
         // No `#|` options and no tabs: the label alone, in the corner.
         paintCodeLabel(painter, view, left, top);
         return;
     }
 
-    painter.save();
+    QFont badgeFont = m_theme.uiFont();
+    badgeFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
+    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+
     // The header strip: title on the left, language on the right, and a
     // hairline under it when there is a listing below.
     const QRectF header(panel.left(), panel.top(), panel.width(), view.textTop + 8);
@@ -901,75 +948,66 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
                                  accent);
         }
         paintCodeLabel(painter, view, left, top);
-        if (!view.options) {
-            painter.restore();
-            return; // no `#|` options, so no highlighted rows or line numbers
-        }
-    } else {
-        painter.setFont(badgeFont);
-        painter.setPen(muted);
-        const QRectF titleRect(header.left() + 14, header.top(),
-                               header.width() - 36 - kFoldHandle, header.height());
-        painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
-        paintCodeLabel(painter, view, left, top);
-        paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
-    }
-
-    if (view.folded) {
-        painter.restore();
         return;
     }
 
+    painter.setFont(badgeFont);
+    painter.setPen(muted);
+    const QRectF titleRect(header.left() + 14, header.top(), header.width() - 36 - kFoldHandle,
+                           header.height());
+    painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
+    paintCodeLabel(painter, view, left, top);
+    paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
+}
+
+void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qreal left,
+                                   qreal top, const QRectF &panel) const
+{
     // Highlighted rows and the line-number gutter, both counted in display
     // lines: the `#|` lines themselves are hidden, so line 1 is the first line
-    // of the listing.
+    // of the listing. A later piece of a long fence counts on from where the
+    // pieces before it stopped.
+    if (!view.layout)
+        return;
+    int sourceLine = 0;
+    if (view.piece > 0) {
+        sourceLine = int(m_lines.lineAt(view.span.range.start)
+                         - m_lines.lineAt(codeContentOf(firstPiece(view), nullptr).start));
+    }
+
+    // `--text-highlight-bg` is meant for a run of words; a whole row of it
+    // would drown the listing, so it goes on at a fraction of its alpha.
+    QColor tint = findHighlightColor();
+    tint.setAlphaF(m_theme.isDark() ? 0.13f : 0.22f);
+    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
+
     const qreal textTop = top + view.textTop;
-    if (view.layout) {
-        // `--text-highlight-bg` is meant for a run of words; a whole row of it
-        // would drown the listing, so it goes on at a fraction of its alpha.
-        QColor tint = findHighlightColor();
-        tint.setAlphaF(m_theme.isDark() ? 0.13f : 0.22f);
+    const qreal gutter = codeGutterWidth(view);
+    painter.setFont(fontFor(view.span));
+    qsizetype previousStart = -1;
+    for (int i = 0; i < view.layout->lineCount(); ++i) {
+        const QTextLine line = view.layout->lineAt(i);
+        const qsizetype start = view.map.toSource(line.textStart());
+        const bool wrapped = previousStart >= 0
+                             && !QStringView(m_text)
+                                     .mid(previousStart, start - previousStart)
+                                     .contains(QLatin1Char('\n'));
+        if (i > 0 && !wrapped)
+            ++sourceLine;
+        previousStart = start;
 
-        const qreal gutter = codeGutterWidth(view);
-        painter.setFont(fontFor(view.span));
-        int sourceLine = 0;
-        qsizetype previousStart = -1;
-        for (int i = 0; i < view.layout->lineCount(); ++i) {
-            const QTextLine line = view.layout->lineAt(i);
-            const qsizetype start = view.map.toSource(line.textStart());
-            const bool wrapped = previousStart >= 0
-                                 && !QStringView(m_text)
-                                         .mid(previousStart, start - previousStart)
-                                         .contains(QLatin1Char('\n'));
-            if (i > 0 && !wrapped)
-                ++sourceLine;
-            previousStart = start;
-
-            if (view.options->highlight.contains(sourceLine + 1)) {
-                painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(),
-                                        line.height()),
-                                 tint);
-            }
-            if (gutter > 0 && (i == 0 || !wrapped)) {
-                painter.setPen(faint);
-                painter.drawText(QRectF(left, textTop + line.y(), gutter - 10, line.height()),
-                                 Qt::AlignRight | Qt::AlignVCenter,
-                                 QString::number(view.options->firstLine + sourceLine));
-            }
+        if (view.options->highlight.contains(sourceLine + 1)) {
+            painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(),
+                                    line.height()),
+                             tint);
+        }
+        if (gutter > 0 && (i == 0 || !wrapped)) {
+            painter.setPen(faint);
+            painter.drawText(QRectF(left, textTop + line.y(), gutter - 10, line.height()),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             QString::number(view.options->firstLine + sourceLine));
         }
     }
-
-    const qreal caption = codeCaptionHeight(view);
-    if (caption > 0) {
-        QFont captionFont = m_theme.textFont();
-        captionFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
-        captionFont.setItalic(true);
-        painter.setFont(captionFont);
-        painter.setPen(muted);
-        painter.drawText(QRectF(left, panel.bottom() - 8 - caption, contentWidth(), caption),
-                         Qt::AlignVCenter | Qt::AlignLeft, view.options->caption);
-    }
-    painter.restore();
 }
 
 } // namespace noteAppC

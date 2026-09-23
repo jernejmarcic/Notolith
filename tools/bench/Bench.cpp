@@ -27,6 +27,7 @@
 #include <QScrollBar>
 #include <QStyleFactory>
 #include <QTemporaryDir>
+#include <QSignalSpy>
 #include <QTest>
 #include <QTextStream>
 
@@ -78,6 +79,16 @@ QString buildLongNote(int lines)
                     .arg(i);
     }
     return text;
+}
+
+/// One fenced C++ listing of `lines` lines under a heading: the case a
+/// list split does not help, since a fence is one block however long it is.
+QString buildCodeNote(int lines)
+{
+    QString text = QStringLiteral("# Listing\n\n```cpp\n");
+    for (int i = 0; i < lines; ++i)
+        text += QStringLiteral("int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
+    return text + QStringLiteral("```\n");
 }
 
 bool writeNote(const QString &path, const QString &text)
@@ -261,7 +272,17 @@ Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 {
     auto editor = std::make_unique<MarkdownEditor>();
     editor->resize(900, 600);
+    // Above 128 kB the parse runs on the thread pool; timed before it lands,
+    // a note is still plain paragraphs, and a keystroke measures those. The
+    // count goes out as -1 at once and for real with the parse.
+    QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
     editor->setNoteText(noteText);
+    while (parsed.isEmpty() || parsed.last().at(0).toInt() < 0) {
+        if (!parsed.wait(30000)) {
+            std::fprintf(stderr, "the parse of \"%s\" never came back\n", qPrintable(detail));
+            break;
+        }
+    }
     editor->setCursorOffset(noteText.size() / 2);
     editor->enterBlockAt(noteText.size() / 2);
     // One untimed frame so the first sample is not also paying for the
@@ -632,6 +653,9 @@ int main(int argc, char *argv[])
     for (int kb : sizesKB)
         timings << benchKeystroke(buildNote(kb), QStringLiteral("%1 kB note").arg(kb), 30);
     timings << benchWindowKeystroke(vaultPath, sizedNotes.value(200), 30);
+    for (int lines : {100, 1000, 5000})
+        timings << benchKeystroke(buildCodeNote(lines),
+                                  QStringLiteral("%1-line code block").arg(lines), 30);
 
     // 4: scroll frame time over a 5 000-line note.
     timings << benchScroll(5000);

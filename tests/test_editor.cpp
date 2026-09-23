@@ -4,7 +4,9 @@
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QRandomGenerator>
+#include <QSignalSpy>
 
+#include <algorithm>
 #include <cstdio>
 
 #include <memory>
@@ -1904,3 +1906,199 @@ TEST(ListPerfTest, TypingInALongListDoesNotDependOnItsLength)
     EXPECT_LT(longTyping, qMax(1.0, shortTyping) * 4);
 }
 
+TEST(CodeBlockPerfTest, TypingInALongCodeBlockStaysInBudget)
+{
+    // A fence was one block however long it was, relaid and re-highlighted
+    // whole on every keystroke: 26 ms at 1 000 lines, and the async parse
+    // hid how much worse 5 000 was. Median of several keystrokes, each with a
+    // paint after it.
+    const auto measure = [](int lines) {
+        QString note = QStringLiteral("# Listing\n\n```cpp\n");
+        for (int i = 0; i < lines; ++i)
+            note += QStringLiteral("int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
+        note += QStringLiteral("```\n");
+        // Above kAsyncParseThreshold the parse runs on the thread pool, and a
+        // listing measured before it lands is an unhighlighted paragraph:
+        // the first version of this guard timed exactly that.
+        auto editor = std::make_unique<MarkdownEditor>();
+        editor->resize(900, 600);
+        QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
+        editor->setNoteText(note);
+        // -1 goes out at once, meaning "not counted yet"; the count follows
+        // with the parse.
+        while (parsed.isEmpty() || parsed.last().at(0).toInt() < 0)
+            if (!parsed.wait(10000))
+                return -1.0; // never parsed: fails the budget check below
+        const qsizetype middle = note.indexOf(QStringLiteral("value%1 ").arg(lines / 2));
+        editor->setCursorOffset(middle);
+        editor->enterBlockAt(middle);
+        editor->grab();
+
+        std::vector<double> samples;
+        for (int i = 0; i < 9; ++i) {
+            QElapsedTimer clock;
+            clock.start();
+            QTest::keyClick(editor.get(), Qt::Key_Y);
+            editor->grab();
+            samples.push_back(clock.nsecsElapsed() / 1e6);
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2];
+    };
+
+    const double shortTyping = measure(100);
+    const double longTyping = measure(5000);
+    ASSERT_GE(longTyping, 0.0) << "the parse never came back";
+    std::printf("[ PERF     ] code block of 100 lines: type %.2f ms; of 5000: %.2f ms\n",
+                shortTyping, longTyping);
+
+    EXPECT_LT(longTyping, 8.0);
+    // Relaying out the whole listing was about 60 times the short one. What
+    // is left grows with the note through the per-keystroke O(document)
+    // passes, which weigh more in an unoptimised build: 1.1x in Release,
+    // 3.7x at -O0 without highlighting. Eight catches the one that matters.
+    EXPECT_LT(longTyping, qMax(1.0, shortTyping) * 8);
+}
+
+// --- long fences, in pieces --------------------------------------------------
+
+namespace {
+
+/// A C++ fence of `lines` numbered lines, with a block comment running from
+/// line `open` to line `close` - long enough that the comment crosses from
+/// one piece into the next ones.
+QString longFence(int lines, int open, int close)
+{
+    QString note = QStringLiteral("Before.\n\n```cpp\n");
+    for (int i = 0; i < lines; ++i) {
+        if (i == open)
+            note += QStringLiteral("/* comment opens\n");
+        else if (i == close)
+            note += QStringLiteral("comment closes */\n");
+        else
+            note += QStringLiteral("int value%1 = %1;\n").arg(i);
+    }
+    return note + QStringLiteral("```\n\nAfter.\n");
+}
+
+QColor colourAt(const MarkdownEditor &editor, qsizetype offset)
+{
+    return editor.formatAt(offset).foreground().color();
+}
+
+} // namespace
+
+TEST(CodePieceTest, AnOpenCommentColoursTheLaterPiecesToo)
+{
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+    const QString note = longFence(100, 5, 80);
+    auto editor = editorWith(note);
+    const qsizetype opener = note.indexOf(QLatin1String("/* comment"));
+    const qsizetype inside = note.indexOf(QLatin1String("int value50"));
+    const qsizetype after = note.indexOf(QLatin1String("int value90"));
+    editor->enterBlockAt(opener + 3);
+    editor->grab();
+    const QColor comment = colourAt(*editor, opener + 3);
+    const QColor keyword = colourAt(*editor, note.indexOf(QLatin1String("int value0")) + 1);
+    ASSERT_NE(comment, keyword) << "the highlighter tells a comment from a type";
+
+    editor->enterBlockAt(after); // lays the last lines out, wherever they are
+    editor->grab();
+    EXPECT_EQ(colourAt(*editor, inside + 1), comment) << "line 50 is inside the comment";
+    EXPECT_EQ(colourAt(*editor, after + 1), keyword) << "line 90 is after it";
+}
+
+TEST(CodePieceTest, RemovingTheOpenerRecoloursTheLaterPiecesAtOnce)
+{
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+    const QString note = longFence(100, 5, 80);
+    auto editor = editorWith(note);
+    const qsizetype opener = note.indexOf(QLatin1String("/* comment"));
+    const qsizetype inside = note.indexOf(QLatin1String("int value50"));
+    editor->enterBlockAt(opener + 2);
+    editor->grab();
+    const QColor keyword = colourAt(*editor, note.indexOf(QLatin1String("int value0")) + 1);
+    ASSERT_NE(colourAt(*editor, inside + 1), keyword) << "line 50 starts in the comment";
+
+    // Backspace twice: "/*" is gone, before the reparse has had its 20 ms.
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    editor->grab();
+    EXPECT_EQ(colourAt(*editor, inside - 1), keyword)
+        << "a piece below the edit kept the colours of a comment that is gone";
+}
+
+TEST(CodePieceTest, APieceLaidOutEarlierFarBelowIsRecolouredToo)
+{
+    // Only the piece after the edit is relaid at once; one further down that
+    // was laid out on an earlier visit still holds the old colours, and has
+    // to lose them rather than show them when the reader scrolls back.
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+    const QString note = longFence(300, 5, 290);
+    auto editor = editorWith(note);
+    const qsizetype opener = note.indexOf(QLatin1String("/* comment"));
+    const qsizetype far = note.indexOf(QLatin1String("int value250"));
+    editor->enterBlockAt(opener + 2);
+    editor->grab();
+    const QColor comment = colourAt(*editor, opener + 3);
+    const QColor keyword = colourAt(*editor, note.indexOf(QLatin1String("int value0")) + 1);
+
+    editor->enterBlockAt(far);
+    editor->grab();
+    ASSERT_EQ(colourAt(*editor, far + 1), comment) << "line 250 starts in the comment";
+
+    editor->enterBlockAt(opener + 2);
+    editor->grab();
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    editor->grab();
+
+    editor->enterBlockAt(far - 2);
+    editor->grab();
+    EXPECT_EQ(colourAt(*editor, far - 1), keyword) << "line 250 kept the comment's colour";
+}
+
+TEST(CodePieceTest, TheCaretAnywhereRevealsEveryPiece)
+{
+    // With the caret in the fence its options show as written - they are on
+    // the first piece, and the caret is two pieces further down. C++ takes
+    // Quarto's `//|` for them.
+    const QString note = QString(longFence(100, 5, 80))
+                             .replace(QStringLiteral("```cpp\n"),
+                                      QStringLiteral("```cpp\n//| title: t\n"));
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("//| title")));
+    editor->enterBlockAt(note.indexOf(QLatin1String("int value90")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("//| title: t")));
+}
+
+TEST(CodePieceTest, CopyingTakesTheWholeListing)
+{
+    const QString note = longFence(100, 5, 80);
+    auto editor = editorWith(note);
+    // A title puts the label in a header strip the sweep can find.
+    const QString titled = QString(note).replace(QStringLiteral("```cpp\n"),
+                                                 QStringLiteral("```cpp\n//| title: t\n"));
+    editor->setNoteText(titled);
+    ASSERT_TRUE(clickLabelUntilCopied(*editor));
+    const qsizetype from = titled.indexOf(QLatin1String("int value0"));
+    const qsizetype to = titled.lastIndexOf(QLatin1String("\n```"));
+    EXPECT_EQ(QGuiApplication::clipboard()->text(), titled.mid(from, to - from));
+}
+
+TEST(CodePieceTest, FoldingFoldsEveryPiece)
+{
+    const QString note = QString(longFence(100, 5, 80))
+                             .replace(QStringLiteral("```cpp\n"),
+                                      QStringLiteral("```cpp\n//| title: t\n//| fold: true\n"));
+    auto editor = editorWith(note);
+    const qsizetype late = note.indexOf(QLatin1String("int value90"));
+    EXPECT_TRUE(editor->isFoldedAt(late));
+    const qreal folded = editor->documentHeight();
+    editor->toggleFoldAt(late);
+    EXPECT_FALSE(editor->isFoldedAt(late));
+    EXPECT_GT(editor->documentHeight(), folded + 100 * 10) << "a hundred lines came back";
+}

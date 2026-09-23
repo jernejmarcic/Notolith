@@ -116,6 +116,10 @@ public:
     /// What the widget currently shows, block by block. The quickest way to
     /// assert live-preview behaviour, and useful when debugging a layout.
     QString displayText() const;
+    /// The character format laid out at `sourceOffset`, merged from every
+    /// range covering it; empty when its block has no layout yet. The way to
+    /// assert what colour a token got without comparing pixels.
+    QTextCharFormat formatAt(qsizetype sourceOffset) const;
 
     /// Height of the whole note as it is currently laid out. What the scroll
     /// bar is built from, and the only honest way to assert block spacing.
@@ -290,6 +294,18 @@ private:
         /// Tracked so the caret crossing a group's edge relays out the whole
         /// group, not only the block it landed in.
         bool inCaretGroup = false;
+        /// A fence longer than kCodePieceLines is split into pieces of that
+        /// many lines, each a block of its own, so an edit relays out one
+        /// piece and not the whole listing. The fence's chrome is drawn across
+        /// its pieces: header, label and tabs on the first, caption on the
+        /// last. A fence that fits, and every other block, is piece 0 of 1.
+        int piece = 0;
+        int pieces = 1;
+        /// Where highlighting stood at the end of this piece, the state the
+        /// next one starts from. Valid when it was worked out from this
+        /// piece's current text and the end state of the piece before it.
+        CodeHighlighter::State codeEnd;
+        bool codeEndValid = false;
         /// The caret's block, in a kind that reveals per element: the syntax
         /// ranges the caret has uncovered. Kept so a caret moving within the
         /// block relays it out only when this actually changes.
@@ -362,6 +378,13 @@ private:
     /// The panel, the header strip, the line-number gutter and the highlighted
     /// rows of a fenced code block.
     void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The first piece's share of the chrome: the `#|` header, the tab strip
+    /// or just the label, over `panel`, which spans the whole fence.
+    void paintCodeHeader(QPainter &painter, const BlockView &view, qreal left, qreal top,
+                         const QRectF &panel) const;
+    /// `#| highlight` rows and `#| line-numbers` for one piece.
+    void paintCodeRows(QPainter &painter, const BlockView &view, qreal left, qreal top,
+                       const QRectF &panel) const;
     QRectF bandOf(const BlockView &view, const Range &source) const;
 
     /// The label on the side of a code block's header: its language's style
@@ -557,13 +580,27 @@ private:
     void updateSuggestions();
     void insertCompletion(const QString &completion);
 
-    QList<QTextLayout::FormatRange> formatsFor(const BlockView &view) const;
+    QList<QTextLayout::FormatRange> formatsFor(BlockView &view);
     /// Kate-definition colours for a fenced code block, in the coordinates of
-    /// that block's display string.
-    QList<QTextLayout::FormatRange> codeFormatsFor(const BlockView &view) const;
+    /// that block's display string. Not const: a piece records the state it
+    /// ended in, for the piece after it.
+    QList<QTextLayout::FormatRange> codeFormatsFor(BlockView &view);
+    /// Highlights one piece from the end state of the piece before it and
+    /// records where it ended; the formats are relative to `*content`.
+    QList<QTextLayout::FormatRange> highlightPiece(BlockView &view, Range *content);
+    /// Brings the end state of every piece before `view` up to date, so
+    /// `view` can start from the one just before it.
+    void updateCodeStatesBefore(BlockView &view);
+    const BlockView &firstPiece(const BlockView &view) const { return *(&view - view.piece); }
+    const BlockView &lastPiece(const BlockView &view) const
+    {
+        return *(&view - view.piece + view.pieces - 1);
+    }
     QList<QTextLayout::FormatRange> nestedCodeFormatsFor(const BlockView &view) const;
     QList<BlockSpan> plainParagraphs() const;
     /// The code between the fences, and the language the fence declared.
+    /// For one piece of a long fence: that piece's share of the code, and the
+    /// fence's language.
     Range codeContentOf(const BlockView &view, QString *language) const;
     QFont fontFor(const BlockSpan &span) const;
 
