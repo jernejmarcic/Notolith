@@ -33,11 +33,9 @@ struct StyleSpan {
 
     /// For Kind::Link on a wikilink to a heading or a block
     /// (`[[Note#Heading]]`, `[[Note#^block-id]]`): the "#" character alone,
-    /// in source coordinates. Obsidian shows "Note > Heading" and the
-    /// referenced block's own text in place of the raw anchor; today's
-    /// DisplayMap can only hide a range, never substitute text for it, so
-    /// live preview still shows the anchor as written until that groundwork
-    /// is built. Invalid for a link with no subpath.
+    /// in source coordinates. Live preview draws a heading link's "#" as
+    /// " > ", which is how Obsidian shows "Note > Heading"; a block reference
+    /// is still shown as written. Invalid for a link with no subpath.
     Range anchorHash;
     /// The text right after `anchorHash`: the heading name, or "^block-id"
     /// with the caret kept. Invalid along with `anchorHash` when there is no

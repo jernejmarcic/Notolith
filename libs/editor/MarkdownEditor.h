@@ -146,6 +146,9 @@ public:
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
+    /// The index changed, so a link drawn as pointing nowhere may point
+    /// somewhere now, or the reverse. Relays out only if one did.
+    void refreshLinkStatus();
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -345,6 +348,16 @@ private:
             QSize imageSize;
         };
         std::vector<InlineMath> inlineMaths;
+        /// A heading link's "#", which Obsidian shows as " > " between the
+        /// note and the heading. The same trick as inline maths: the "#"
+        /// stays, in invisible ink and as wide as the separator, and the paint
+        /// step draws the separator over it.
+        struct AnchorSeparator {
+            qsizetype sourcePos = 0;
+            qsizetype displayPos = 0;
+            QColor colour;
+        };
+        std::vector<AnchorSeparator> separators;
     };
 
     /// Parses on the calling thread. Used when the whole note changes.
@@ -501,6 +514,13 @@ private:
     /// Draws the images `layoutInlineMaths` recorded, once the block's own
     /// QTextLayout exists and can say which line each one's "$" landed on.
     void paintInlineMaths(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// `[[Note#Heading]]` reads "Note > Heading" and `[[#Heading]]` reads
+    /// "Heading", as they do in Obsidian, while the link is rendered. Hides a
+    /// same-note link's "#" and records the others' separators, so it must run
+    /// before `view.map` is built from `hidden`.
+    void layoutAnchorSeparators(BlockView &view, QList<Range> &hidden);
+    void paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
+                               qreal top) const;
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
@@ -530,6 +550,7 @@ private:
     /// dim it the way Obsidian does. Cached per parse: the resolver reaches
     /// the index, and a note full of links is laid out on every keystroke.
     bool isUnresolvedLink(const QString &target) const;
+    bool resolvesToNothing(const QString &target) const;
 
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;

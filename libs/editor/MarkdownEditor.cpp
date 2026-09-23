@@ -925,14 +925,38 @@ bool MarkdownEditor::isUnresolvedLink(const QString &target) const
     if (cached != m_unresolved.constEnd())
         return *cached;
 
+    const bool missing = resolvesToNothing(target);
+    m_unresolved.insert(target, missing);
+    return missing;
+}
+
+bool MarkdownEditor::resolvesToNothing(const QString &target) const
+{
     // The subpath is not part of what resolves to a file.
     QString name = target;
     const qsizetype hash = name.indexOf(QLatin1Char('#'));
     if (hash >= 0)
         name.truncate(hash);
-    const bool missing = !name.isEmpty() && m_resolver(name).isEmpty();
-    m_unresolved.insert(target, missing);
-    return missing;
+    return !name.isEmpty() && m_resolver(name).isEmpty();
+}
+
+void MarkdownEditor::refreshLinkStatus()
+{
+    // Only the targets already drawn are asked again, and only a link that
+    // changed sides costs a relayout - the index changes on every save.
+    if (!m_resolver)
+        return;
+    bool changed = false;
+    for (auto it = m_unresolved.begin(); it != m_unresolved.end(); ++it) {
+        const bool missing = resolvesToNothing(it.key());
+        changed = changed || missing != it.value();
+        it.value() = missing;
+    }
+    if (!changed)
+        return;
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
 }
 
 qsizetype MarkdownEditor::blockAt(qsizetype sourceOffset) const
@@ -1799,6 +1823,55 @@ void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
     }
 }
 
+void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidden)
+{
+    const auto hides = [&hidden](qsizetype at) {
+        return std::any_of(hidden.cbegin(), hidden.cend(),
+                           [at](const Range &range) { return range.contains(at); });
+    };
+    for (int i = view.firstStyle; i < view.lastStyle; ++i) {
+        const StyleSpan &span = m_decorations.styles.at(i);
+        if (span.kind != StyleSpan::Kind::Link || !span.anchorHash.isValid()
+            || !span.anchorText.isValid() || span.anchorText.length() <= 0)
+            continue;
+        // A block reference stays as written: what Obsidian shows for one is
+        // not recorded anywhere this was checked.
+        if (m_text.at(span.anchorText.start) == QLatin1Char('^'))
+            continue;
+        // Only a rendered link: with the caret inside it its brackets show,
+        // and so does its "#". An alias has hidden the "#" already.
+        if (!hides(span.range.start) || hides(span.anchorHash.start))
+            continue;
+        if (span.payload.isEmpty()) {
+            hidden.append(span.anchorHash); // [[#Heading]]: this note's own heading
+            continue;
+        }
+        view.separators.push_back(
+            {span.anchorHash.start, 0,
+             m_theme.color(isUnresolvedLink(span.payload) ? QStringLiteral("--link-unresolved-color")
+                                                           : QStringLiteral("--text-accent"))});
+    }
+}
+
+void MarkdownEditor::paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
+                                           qreal top) const
+{
+    if (view.separators.empty() || !view.layout)
+        return;
+    painter.save();
+    painter.setFont(view.layout->font());
+    for (const BlockView::AnchorSeparator &separator : view.separators) {
+        const QTextLine line = view.layout->lineForTextPosition(int(separator.displayPos));
+        if (!line.isValid())
+            continue;
+        painter.setPen(separator.colour);
+        painter.drawText(QPointF(left + line.cursorToX(int(separator.displayPos)),
+                                 top + line.y() + line.ascent()),
+                         QStringLiteral(" > "));
+    }
+    painter.restore();
+}
+
 void MarkdownEditor::paintInlineMaths(QPainter &painter, const BlockView &view, qreal left,
                                       qreal top) const
 {
@@ -2048,6 +2121,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.textTop = 0;
     view.folded = false;
     view.inlineMaths.clear();
+    view.separators.clear();
     view.tabHidden = false;
     view.tabGroup = -1;
 
@@ -2112,12 +2186,15 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // actually stays hidden depends on MicroTeX being able to draw it,
         // which only the editor knows.
         layoutInlineMaths(view, hidden);
+        layoutAnchorSeparators(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);
     for (BlockView::InlineMath &formula : view.inlineMaths)
         formula.displayPos = view.map.toDisplay(formula.sourcePos);
+    for (BlockView::AnchorSeparator &separator : view.separators)
+        separator.displayPos = view.map.toDisplay(separator.sourcePos);
 
     // QTextLayout lays out one paragraph and ignores "\n"; U+2028 is the
     // character it does break on. Same length, so every display offset the
@@ -2180,6 +2257,18 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                     - QFontMetricsF(view.layout->font())
                                           .horizontalAdvance(QLatin1Char('$')));
         formats.append({int(formula.displayPos), 1, format});
+    }
+    if (!view.separators.empty()) {
+        // ponytail: measured in the block's font; a "#" inside bold or italic
+        // text is a little off from the separator painted over it.
+        const QFontMetricsF metrics(view.layout->font());
+        QTextCharFormat format;
+        format.setForeground(Qt::transparent);
+        format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+        format.setFontLetterSpacing(metrics.horizontalAdvance(QStringLiteral(" > "))
+                                    - metrics.horizontalAdvance(QLatin1Char('#')));
+        for (const BlockView::AnchorSeparator &separator : view.separators)
+            formats.append({int(separator.displayPos), 1, format});
     }
     view.layout->setFormats(formats);
 
@@ -2481,6 +2570,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
             }
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
             paintInlineMaths(painter, view, left + indent, top + drop);
+            paintAnchorSeparators(painter, view, left + indent, top + drop);
             paintListMarkers(painter, view, left + indent, top + drop);
             paintGutter(painter, view, top + drop);
             if (clip)

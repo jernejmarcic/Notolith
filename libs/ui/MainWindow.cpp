@@ -650,6 +650,9 @@ void MainWindow::openRelative(const QString &relativePath)
 void MainWindow::onIndexChanged()
 {
     m_editor->setLinkTargets(m_index.linkTargets());
+    // Before this, a note opened while the vault was first indexed showed
+    // every link as missing until it was next edited.
+    m_editor->refreshLinkStatus();
     m_backlinks->refresh();
     m_tags->refresh();
     m_outgoingLinks->refresh();

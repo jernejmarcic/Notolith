@@ -147,9 +147,12 @@ budget, which this project has already learned once on the index.
       that avoids teaching DisplayMap to substitute text: hide all but one
       character of the formula and give that character an absolute letter
       spacing equal to the image width, then paint the image at its x.
-- [ ] **The editor half of `Note > Heading` links.** The parser now records
-      `anchorHash` and `anchorText`; DisplayMap still only hides, never
-      replaces.
+- [x] **`Note > Heading` links.** `[[Note#Heading]]` reads "Note > Heading"
+      and `[[#Heading]]` reads "Heading", as the Obsidian forum confirms for
+      both views. No DisplayMap substitution needed: the "#" stays, invisible
+      and as wide as " > ", which is painted over it.
+- [ ] How Obsidian displays a block reference `[[Note#^id]]` is not recorded
+      anywhere checked; shown as written until someone looks.
 - [ ] `editor.spellcheck` has no dictionary behind it. hunspell is in PLAN.md
       and is not a dependency yet.
 - [ ] A listing inside a callout wraps; Obsidian scrolls it.

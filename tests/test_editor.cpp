@@ -2147,6 +2147,68 @@ TEST(CodePieceTest, FoldingFoldsEveryPiece)
     EXPECT_GT(editor->documentHeight(), folded + 100 * 10) << "a hundred lines came back";
 }
 
+// --- links to headings -------------------------------------------------------
+
+TEST(HeadingLinkTest, ANoteAndHeadingReadAsNoteThenHeading)
+{
+    // Obsidian shows [[Note#Heading]] as "Note > Heading". The "#" stays in
+    // the display text, in invisible ink and as wide as " > ", which the
+    // paint step draws over it.
+    const QString note = QStringLiteral("See [[Note#Heading]] here.\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("See Note#Heading here.\n"));
+    const QTextCharFormat hash = editor->formatAt(note.indexOf(QLatin1Char('#')));
+    EXPECT_EQ(hash.foreground().color().alpha(), 0) << "the \"#\" is drawn over, not shown";
+    EXPECT_GT(hash.fontLetterSpacing(), 0.0) << "and leaves room for \" > \"";
+}
+
+TEST(HeadingLinkTest, AHeadingInTheSameNoteReadsAsTheHeading)
+{
+    auto editor = editorWith(QStringLiteral("See [[#Heading]] here.\n"));
+    EXPECT_EQ(editor->displayText(), QStringLiteral("See Heading here.\n"));
+}
+
+TEST(HeadingLinkTest, TheCaretInsideShowsTheLinkAsWritten)
+{
+    const QString note = QStringLiteral("See [[Note#Heading]] here.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QLatin1String("Head")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("[[Note#Heading]]")));
+    EXPECT_NE(editor->formatAt(note.indexOf(QLatin1Char('#'))).foreground().color().alpha(), 0);
+}
+
+TEST(HeadingLinkTest, BlockReferencesAndAliasesAreLeftAlone)
+{
+    const QString block = QStringLiteral("See [[Note#^id]] here.\n");
+    auto blockEditor = editorWith(block);
+    EXPECT_EQ(blockEditor->displayText(), QStringLiteral("See Note#^id here.\n"));
+    EXPECT_NE(blockEditor->formatAt(block.indexOf(QLatin1Char('#'))).foreground().color().alpha(), 0);
+
+    auto aliased = editorWith(QStringLiteral("See [[Note#Heading|the part]] here.\n"));
+    EXPECT_EQ(aliased->displayText(), QStringLiteral("See the part here.\n"));
+}
+
+TEST(HeadingLinkTest, ALinkRecoloursWhenItsNoteAppears)
+{
+    // A link drawn before its note was indexed stayed "missing" until the
+    // next edit: nothing told the editor the index had changed.
+    bool exists = false;
+    const QString note = QStringLiteral("See [[Other]] here.\n");
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    editor->setLinkResolver([&exists](const QString &target) {
+        return exists && target == QLatin1String("Other") ? QStringLiteral("/v/Other.md")
+                                                           : QString();
+    });
+    editor->setNoteText(note);
+    const qsizetype at = note.indexOf(QLatin1String("Other")) + 1;
+    const QColor missing = editor->formatAt(at).foreground().color();
+
+    exists = true;
+    editor->refreshLinkStatus();
+    EXPECT_NE(editor->formatAt(at).foreground().color(), missing);
+}
+
 // --- scrolling -------------------------------------------------------------
 
 TEST(ScrollTest, AScrolledFrameMatchesAFreshOne)
