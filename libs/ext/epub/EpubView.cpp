@@ -1,6 +1,7 @@
 #include "EpubView.h"
 
 #include "FindBar.h"
+#include "Icons.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -50,7 +51,7 @@ void EpubView::buildChrome()
     headerLayout->setContentsMargins(8, 4, 8, 4);
 
     m_tocButton = new QToolButton(m_header);
-    m_tocButton->setText(QStringLiteral("☰")); // trigram-for-heaven / hamburger glyph, no icon theme needed
+    m_tocButton->setProperty("iconName", QStringLiteral("list")); // drawn in applyThemeToChrome
     m_tocButton->setCheckable(true);
     m_tocButton->setToolTip(tr("Table of contents"));
     connect(m_tocButton, &QToolButton::toggled, this, &EpubView::setTocVisible);
@@ -73,7 +74,7 @@ void EpubView::buildChrome()
     headerLayout->addWidget(m_fontUpButton);
 
     m_findButton = new QToolButton(m_header);
-    m_findButton->setText(QStringLiteral("\U0001F50D")); // magnifying glass
+    m_findButton->setProperty("iconName", QStringLiteral("search"));
     m_findButton->setToolTip(tr("Find in book (Ctrl+F)"));
     connect(m_findButton, &QToolButton::clicked, this, &EpubView::toggleFind);
     headerLayout->addWidget(m_findButton);
@@ -164,8 +165,12 @@ void EpubView::applyThemeToChrome()
                                              "QToolButton:checked, QToolButton:pressed { background: %3; }")
                                   .arg(text.name(), border.name(),
                                        m_theme.color(QStringLiteral("--background-modifier-hover")).name());
-    for (QToolButton *button : {m_tocButton, m_fontDownButton, m_fontUpButton, m_findButton, m_extractButton})
+    for (QToolButton *button : {m_tocButton, m_fontDownButton, m_fontUpButton, m_findButton, m_extractButton}) {
         button->setStyleSheet(buttonCss);
+        // The app's own Lucide icons, in the text's colour, as everywhere else.
+        if (const QString icon = button->property("iconName").toString(); !icon.isEmpty())
+            button->setIcon(Icons::icon(icon, text, 16));
+    }
     m_header->update();
     if (m_findBar)
         m_findBar->setTheme(m_theme);

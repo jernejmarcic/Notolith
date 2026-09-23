@@ -59,6 +59,11 @@ if(TARGET noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
 endif()
 
+if(TARGET noteAppC_epub)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_epub)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_EPUB)
+endif()
+
 if(TARGET noteAppC_history)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_history)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_HISTORY)

@@ -44,8 +44,15 @@ QString vaultPath()
 QStringList demoFiles()
 {
     QStringList files;
-    QDirIterator it(vaultPath(), {QStringLiteral("*.md"), QStringLiteral("*.canvas"), QStringLiteral("*.base")},
-                    QDir::Files, QDirIterator::Subdirectories);
+    // Only what this build can open: a minimal build has no canvas or bases.
+    QStringList kinds{QStringLiteral("*.md")};
+#ifdef NOTEAPPC_HAVE_CANVAS
+    kinds << QStringLiteral("*.canvas");
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    kinds << QStringLiteral("*.base");
+#endif
+    QDirIterator it(vaultPath(), kinds, QDir::Files, QDirIterator::Subdirectories);
     while (it.hasNext())
         files << it.next();
     std::sort(files.begin(), files.end());

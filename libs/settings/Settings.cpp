@@ -513,6 +513,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Render an embedded .tex file: maths through MicroTeX, a whole document "
                                        "compiled by the TeX installed, in a sandbox."),
          false},
+        {"epub-reader", QT_TRANSLATE_NOOP("Settings", "EPUB reader"),
+         QT_TRANSLATE_NOOP("Settings", "Open .epub books in a tab, with highlights and notes kept in a note "
+                                       "beside the book."),
+         false},
         {"file-recovery", QT_TRANSLATE_NOOP("Settings", "File recovery"),
          QT_TRANSLATE_NOOP("Settings", "Keep snapshots of notes as they are saved, outside the vault."), true},
         {"graph", QT_TRANSLATE_NOOP("Settings", "Graph view"),

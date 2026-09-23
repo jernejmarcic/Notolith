@@ -20,11 +20,17 @@ cores=$(nproc)
 jobs=$((cores > 8 ? 8 : cores))
 
 cap() {
+    # A cgroup where systemd will make one. A user manager can refuse a
+    # transient scope - starbase-1's did, on and off, for an afternoon - and
+    # systemd-run then exits 1 without running anything; an address-space
+    # limit per process still stops one runaway. A build that really failed
+    # exits 1 too, and running it again once changes nothing.
     if command -v systemd-run >/dev/null 2>&1; then
-        systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 "$@"
-    else
-        "$@"
+        status=0
+        systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 "$@" || status=$?
+        [ "$status" -eq 1 ] || return "$status"
     fi
+    (ulimit -v 12000000 && "$@")
 }
 
 check() {

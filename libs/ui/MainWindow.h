@@ -71,7 +71,9 @@ public:
     /// declined, or (only tolerated for NavSource::History, where the entry
     /// is simply skipped rather than erroring) deleted or renamed since it was
     /// visited.
-    bool openNote(const QString &path, NavSource source = NavSource::Other);
+    /// `fragment`, without the '#', is where in a view file to open: a
+    /// book's position, a PDF's `page=N`.
+    bool openNote(const QString &path, NavSource source = NavSource::Other, const QString &fragment = QString());
     /// Dispatches on `target.mode`: a vault (plus note), one file with no
     /// vault around it, or nothing - in which case the most recent vault is
     /// restored, if there is one.
@@ -205,7 +207,7 @@ private:
     /// another: no question while another tab keeps the same document.
     bool maybeLeave();
     /// Shows `path` in the focused tab's view; false when it could not be read.
-    bool openView(const QString &path, NavSource source);
+    bool openView(const QString &path, NavSource source, const QString &fragment = QString());
     /// Puts the editor back in `leaf` in place of its view.
     void closeView(Leaf *leaf);
     /// Records a visit in the focused tab's back/forward history.

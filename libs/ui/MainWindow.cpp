@@ -66,6 +66,9 @@
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
+#ifdef NOTEAPPC_HAVE_EPUB
+#include "EpubView.h"
+#endif
 #ifdef NOTEAPPC_HAVE_CANVAS
 #include "CanvasView.h"
 #endif
@@ -652,6 +655,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
 
 void MainWindow::followLink(const QString &target)
 {
+    // A link into a view file keeps its fragment for the view - a book's
+    // place, a PDF's page; a note's heading goes the usual way.
+    if (const qsizetype hash = target.indexOf(QLatin1Char('#')); hash > 0 && isViewFile(target.left(hash))) {
+        const QString file = m_index.resolve(target.left(hash), m_active->notePath);
+        if (!file.isEmpty()) {
+            openNote(m_vault.absolute(file), NavSource::Other, target.mid(hash + 1));
+            return;
+        }
+    }
     const QString resolved = m_index.resolve(target, m_active->notePath);
     if (!resolved.isEmpty())
         openRelative(resolved);
@@ -2359,7 +2371,7 @@ void MainWindow::onTreeClicked(const QModelIndex &index)
     onTreeActivated(index);
 }
 
-bool MainWindow::openNote(const QString &rawPath, NavSource source)
+bool MainWindow::openNote(const QString &rawPath, NavSource source, const QString &fragment)
 {
     // Any navigation - the tree, the switcher, a link, history - leaves the
     // settings page if it was open, even below, where a same-path or
@@ -2380,7 +2392,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     if (isViewFile(path)) {
         if (!maybeLeave())
             return false;
-        return openView(path, source);
+        return openView(path, source, fragment);
     }
     if (!Vault::isNote(path)) {
         if (source != NavSource::History) {
@@ -2484,6 +2496,7 @@ QJsonObject MainWindow::layoutJSON() const
             if (!path.isEmpty() && m_vault.isValid()) {
                 const QString type = path.endsWith(QLatin1String(".canvas")) ? QStringLiteral("canvas")
                                    : path.endsWith(QLatin1String(".base"))   ? QStringLiteral("bases")
+                                   : path.endsWith(QLatin1String(".epub"))   ? QStringLiteral("epub")
                                                                             : QStringLiteral("markdown");
                 view = {{QStringLiteral("type"), type},
                         {QStringLiteral("state"), QJsonObject{{QStringLiteral("file"), m_vault.relative(path)}}}};
@@ -2557,7 +2570,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
                     view.value(QStringLiteral("state")).toObject().value(QStringLiteral("file")).toString();
                 const QString kind = view.value(QStringLiteral("type")).toString();
                 const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
-                                || kind == QLatin1String("bases");
+                                || kind == QLatin1String("bases") || kind == QLatin1String("epub");
                 if (opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)))
                     leaf->pendingPath = m_vault.absolute(file);
                 byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
@@ -2788,6 +2801,10 @@ QList<MainWindow::Leaf *> MainWindow::viewsOfSameNote(const Leaf *leaf) const
 
 bool MainWindow::isViewFile(const QString &path) const
 {
+#ifdef NOTEAPPC_HAVE_EPUB
+    if (path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive))
+        return featureOn("epub-reader");
+#endif
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive))
         return featureOn("canvas");
@@ -2800,10 +2817,27 @@ bool MainWindow::isViewFile(const QString &path) const
     return false;
 }
 
-bool MainWindow::openView(const QString &path, NavSource source)
+bool MainWindow::openView(const QString &path, NavSource source, const QString &fragment)
 {
     QWidget *view = nullptr;
     QString error;
+#ifdef NOTEAPPC_HAVE_EPUB
+    if (path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive)) {
+        auto *epub = new EpubView(m_active->area);
+        epub->setTheme(m_theme);
+        if (!epub->load(path, &error)) {
+            delete epub;
+        } else {
+            if (!fragment.isEmpty())
+                epub->navigateToFragment(fragment);
+            connect(epub, &EpubView::noteActivated, this, &MainWindow::openRelative);
+            connect(epub, &EpubView::statusMessage, this,
+                    [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
+            view = epub;
+        }
+    }
+#endif
+    Q_UNUSED(fragment);
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive)) {
         auto *canvas = new CanvasView(m_active->area);

@@ -556,6 +556,9 @@ QWidget *SettingsPage::buildCorePluginsPage()
 #ifndef NOTEAPPC_HAVE_HISTORY
         "note-history",
 #endif
+#ifndef NOTEAPPC_HAVE_EPUB
+        "epub-reader",
+#endif
     };
     if (!PdfPage::isAvailable())
         missing << "pdf-embeds";
