@@ -1136,12 +1136,8 @@ TEST(ColonFenceTest, AdjacentContainersLeaveAGapForTheBlankLineBetween)
 
 TEST(LinkTest, HeadingAndBlockAnchorsRecordTheirSourceRanges)
 {
-    // Parser-side groundwork only: today's DisplayMap can hide a range but
-    // never substitute text for it, so live preview still shows the raw
-    // "#Details" or "^anchor" rather than Obsidian's "> Details" or the
-    // referenced block's text. Recording exactly where the "#" and the
-    // anchor text sit is what a future substitution pass needs; actually
-    // performing that substitution is not implemented here.
+    // Where the "#" and the anchor text sit: the editor draws a heading
+    // link's "#" as " > " (HeadingLinkTest in test_editor.cpp).
     const auto linkStyle = [](const Decorations &decorations) -> const StyleSpan * {
         for (const StyleSpan &span : decorations.styles) {
             if (span.kind == StyleSpan::Kind::Link)
@@ -1151,19 +1147,23 @@ TEST(LinkTest, HeadingAndBlockAnchorsRecordTheirSourceRanges)
     };
 
     const QString heading = QStringLiteral("See [[Second note#Details]] please.\n");
-    const StyleSpan *headingLink = linkStyle(decorationsOf(heading));
+    // Kept, not a temporary: the span pointer points into it.
+    const Decorations headingDecorations = decorationsOf(heading);
+    const StyleSpan *headingLink = linkStyle(headingDecorations);
     ASSERT_NE(headingLink, nullptr);
     EXPECT_EQ(sliceOf(heading, headingLink->anchorHash), QStringLiteral("#"));
     EXPECT_EQ(sliceOf(heading, headingLink->anchorText), QStringLiteral("Details"));
 
     const QString block = QStringLiteral("See [[Second note#^anchor]] please.\n");
-    const StyleSpan *blockLink = linkStyle(decorationsOf(block));
+    const Decorations blockDecorations = decorationsOf(block);
+    const StyleSpan *blockLink = linkStyle(blockDecorations);
     ASSERT_NE(blockLink, nullptr);
     EXPECT_EQ(sliceOf(block, blockLink->anchorHash), QStringLiteral("#"));
     EXPECT_EQ(sliceOf(block, blockLink->anchorText), QStringLiteral("^anchor"));
 
     // No subpath, no anchor.
-    const StyleSpan *plainLink = linkStyle(decorationsOf(QStringLiteral("See [[Second note]].\n")));
+    const Decorations plainDecorations = decorationsOf(QStringLiteral("See [[Second note]].\n"));
+    const StyleSpan *plainLink = linkStyle(plainDecorations);
     ASSERT_NE(plainLink, nullptr);
     EXPECT_FALSE(plainLink->anchorHash.isValid());
     EXPECT_FALSE(plainLink->anchorText.isValid());
