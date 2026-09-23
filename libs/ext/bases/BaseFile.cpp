@@ -2,6 +2,10 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <QRegularExpression>
+
+#include <vector>
+
 namespace noteAppC::bases {
 
 namespace {
@@ -139,7 +143,155 @@ QList<ViewConfig> parseViews(const YAML::Node &node)
     return out;
 }
 
+// --- rewriteViewSort: a minimal, comment-preserving text edit ------------
+//
+// yaml-cpp's own Node::Mark() gives every scalar's (line, column, byte pos)
+// in the *original* source, which is enough to find "the sort: key's whole
+// line-block" and "the next sibling's line" without a hand-rolled YAML
+// scanner - the surgery works entirely in std::string byte offsets (never
+// QString UTF-16 indices, which Mark().pos does not match against non-ASCII
+// text) and never touches YAML::Emitter, so nothing it does not understand
+// - a comment, an odd indent someone chose by hand - moves.
+
+struct OrderedKey {
+    std::string name;
+    long lineStart = -1; ///< byte offset of the first character on the key's line (its own indent included)
+    long column = -1;
+};
+
+/// `node`'s own top-level scalar keys, in source order, with where each
+/// one's line begins. std::nullopt on anything this module will not try to
+/// edit around: a flow mapping, a non-scalar key, or sibling keys sitting at
+/// different columns (yaml-cpp allows it; a person hand-editing a `.base`
+/// file is not expected to).
+///
+/// `lineStart` is deliberately not validated to be "plain spaces then the
+/// key": a view map's *first* key normally shares its line with the
+/// sequence's own `- ` (`  - type: table`), and that is not something to
+/// reject - it is the ordinary way a `.base` file is written. What that
+/// shape rules out is using that particular key's lineStart to *remove* a
+/// span of text (the `- ` would go with it); rewriteViewSort below checks
+/// for exactly that case, once, at the one place it matters, rather than
+/// this function refusing the whole view over its very first key.
+std::optional<std::vector<OrderedKey>> orderedMapKeys(const YAML::Node &node)
+{
+    if (!node.IsMap())
+        return std::nullopt;
+    std::vector<OrderedKey> keys;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+        if (!it->first.IsScalar())
+            return std::nullopt;
+        const YAML::Mark mark = it->first.Mark();
+        if (mark.pos < 0 || mark.column < 0 || mark.pos < mark.column)
+            return std::nullopt;
+        keys.push_back({it->first.Scalar(), mark.pos - mark.column, mark.column});
+    }
+    if (keys.empty())
+        return std::nullopt;
+    for (const OrderedKey &k : keys) {
+        if (k.column != keys.front().column)
+            return std::nullopt; // exotic indentation: bail rather than corrupt it
+    }
+    return keys;
+}
+
+/// A property reference as a plain YAML scalar, quoted only if it needs to
+/// be (a bare key with a space, say) - `file.name`/`formula.x`/most
+/// frontmatter keys never do.
+std::string yamlSafeScalar(const QString &text)
+{
+    static const QRegularExpression plain(QStringLiteral("^[A-Za-z_][A-Za-z0-9_.\\-]*$"));
+    if (plain.match(text).hasMatch())
+        return text.toStdString();
+    QString escaped = text;
+    escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    return "\"" + escaped.toStdString() + "\"";
+}
+
 } // namespace
+
+std::optional<QString> BaseFile::rewriteViewSort(const QString &yamlText, int viewIndex,
+                                                  const QString &propertyReference, SortDirection direction)
+{
+    const std::string source = yamlText.toStdString();
+    YAML::Node root;
+    try {
+        root = YAML::Load(source);
+    } catch (const YAML::Exception &) {
+        return std::nullopt;
+    }
+    if (!root.IsMap())
+        return std::nullopt;
+    const YAML::Node views = root["views"];
+    if (!views.IsSequence() || viewIndex < 0 || viewIndex >= int(views.size()))
+        return std::nullopt;
+    const YAML::Node view = views[viewIndex];
+    const std::optional<std::vector<OrderedKey>> viewKeys = orderedMapKeys(view);
+    if (!viewKeys)
+        return std::nullopt;
+
+    // Where this view's own last key ends: the next view's line, else the
+    // next top-level key after "views" (root's own keys, same technique),
+    // else end of file.
+    long viewEndBoundary = long(source.size());
+    if (viewIndex + 1 < int(views.size())) {
+        const YAML::Mark next = views[viewIndex + 1].Mark();
+        if (next.pos < 0 || next.column < 0 || next.pos < next.column)
+            return std::nullopt;
+        viewEndBoundary = next.pos - next.column;
+    } else if (const std::optional<std::vector<OrderedKey>> rootKeys = orderedMapKeys(root)) {
+        for (std::size_t i = 0; i < rootKeys->size(); ++i) {
+            if (rootKeys->at(i).name == "views") {
+                if (i + 1 < rootKeys->size())
+                    viewEndBoundary = rootKeys->at(i + 1).lineStart;
+                break;
+            }
+        }
+    }
+    // A root this exotic (non-scalar top-level keys, say) but a plain-shaped
+    // view is still safe to edit: fall back to end-of-file rather than bail.
+
+    long removeStart = -1, removeEnd = -1, insertAt = -1;
+    for (std::size_t i = 0; i < viewKeys->size(); ++i) {
+        if (viewKeys->at(i).name == "sort") {
+            if (i == 0) {
+                // This key's line starts with the sequence's own "- ", not
+                // plain indentation (see orderedMapKeys) - removing "from
+                // the start of this line" would delete the view's own list
+                // marker along with it. Vanishingly rare (`sort:` is almost
+                // never a view's first field) and not worth the extra
+                // bookkeeping to rewrite in place instead of bailing.
+                return std::nullopt;
+            }
+            removeStart = viewKeys->at(i).lineStart;
+            removeEnd = (i + 1 < viewKeys->size()) ? viewKeys->at(i + 1).lineStart : viewEndBoundary;
+            break;
+        }
+    }
+    if (removeStart < 0)
+        insertAt = viewEndBoundary; // no existing sort: - append after this view's last key
+
+    const int keyIndent = int(viewKeys->front().column);
+    const std::string direction8 = direction == SortDirection::Descending ? "DESC" : "ASC";
+    std::string block = std::string(std::size_t(keyIndent), ' ') + "sort:\n"
+                       + std::string(std::size_t(keyIndent + 2), ' ') + "- property: " + yamlSafeScalar(propertyReference) + "\n"
+                       + std::string(std::size_t(keyIndent + 4), ' ') + "direction: " + direction8 + "\n";
+
+    std::string result;
+    if (removeStart >= 0) {
+        result = source.substr(0, std::size_t(removeStart)) + block + source.substr(std::size_t(removeEnd));
+    } else {
+        if (insertAt > 0 && insertAt == long(source.size()) && !source.empty() && source.back() != '\n')
+            block = "\n" + block;
+        result = source.substr(0, std::size_t(insertAt)) + block + source.substr(std::size_t(insertAt));
+    }
+    return QString::fromStdString(result);
+}
+
+QString BaseFile::newFileTemplate()
+{
+    return QStringLiteral("views:\n  - type: table\n");
+}
 
 struct BaseFile::Impl {
     YAML::Node root;

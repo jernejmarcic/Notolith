@@ -472,6 +472,30 @@ QDateTime applyDuration(const QDateTime &base, const Duration &d, int sign)
 
 // --- value helpers -----------------------------------------------------
 
+/// The form `file.hasLink()`, Link equality and `.linksTo()` all compare
+/// link targets in: no `./`, no `.md`, case-folded.
+QString normaliseLinkTarget(QString target)
+{
+    target = target.trimmed();
+    while (target.startsWith(QLatin1String("./"))) target.remove(0, 2);
+    if (target.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) target.chop(3);
+    return target.toCaseFolded();
+}
+QString basenameOfLink(const QString &target)
+{
+    const qsizetype slash = target.lastIndexOf(u'/');
+    return slash < 0 ? target : target.mid(slash + 1);
+}
+/// True when `a` and `b` name the same file: by full (normalised) path, or
+/// by one being the other's basename - the same "Textbook" ==
+/// "Books/Textbook" leniency `file.hasLink()` already gives a bare wikilink
+/// target versus a note's full vault path.
+bool linkTargetsMatch(const QString &a, const QString &b)
+{
+    const QString na = normaliseLinkTarget(a), nb = normaliseLinkTarget(b);
+    return na == nb || basenameOfLink(na) == nb || na == basenameOfLink(nb);
+}
+
 std::optional<double> coerceNumber(const Value &v)
 {
     switch (v.type) {
@@ -498,9 +522,16 @@ bool valuesEqual(const Value &a, const Value &b)
         case Value::Type::String: return a.text == b.text;
         case Value::Type::Date: return a.date == b.date;
         case Value::Type::List: return a.strings() == b.strings();
+        // "equivalent as long as they point to the same file, or ... their
+        // link text must be identical" (obsidian.md/help/bases/syntax).
+        case Value::Type::Link: return linkTargetsMatch(a.text, b.text);
         default: return true;
         }
     }
+    // A Link compared to anything else (a plain string, say) falls through
+    // to the display-string fallback below - "Links can be compared to
+    // files such as file or this" (both Links here) already goes through
+    // the same-type branch above.
     if (const auto na = coerceNumber(a), nb = coerceNumber(b); na && nb)
         return *na == *nb;
     return a.toDisplayString() == b.toDisplayString();
@@ -655,6 +686,10 @@ private:
             // `values`, ahead of any property of the same name.
             if (const auto local = m_locals.constFind(head); local != m_locals.constEnd())
                 return *local;
+            // A reserved identifier, not a property lookup - "author == this"
+            // is how the docs' own link-equality example reads.
+            if (head == QLatin1String("this"))
+                return Value::ofLink(m_row.notePath, m_row.noteName);
             if (head == QLatin1String("file") || head == QLatin1String("note")
                 || head == QLatin1String("formula"))
                 return fail(QStringLiteral("'%1' is not a value by itself").arg(head));
@@ -693,7 +728,13 @@ private:
             return m_row.fileCtime.isValid() ? Value::ofDate(m_row.fileCtime) : Value::empty();
         if (key == QLatin1String("mtime")) return Value::ofDate(m_row.fileMtime);
         if (key == QLatin1String("tags")) return Value::ofList(m_row.tags);
-        if (key == QLatin1String("links")) return Value::ofList(m_row.links);
+        if (key == QLatin1String("links")) {
+            QList<Value> items;
+            items.reserve(m_row.links.size());
+            for (const QString &target : m_row.links)
+                items << Value::ofLink(target);
+            return Value::ofValues(std::move(items));
+        }
         return fail(QStringLiteral("unknown file property 'file.%1'").arg(key));
     }
 
@@ -841,10 +882,9 @@ private:
         }
         if (name == QLatin1String("hasLink")) {
             if (args.size() != 1) return fail(QStringLiteral("file.hasLink() takes one argument"));
-            const QString wanted = normaliseLinkTarget(args.first().toDisplayString());
+            const QString wanted = args.first().toDisplayString();
             for (const QString &link : m_row.links) {
-                const QString norm = normaliseLinkTarget(link);
-                if (norm == wanted || basenameOf(norm) == wanted || norm == basenameOf(wanted))
+                if (linkTargetsMatch(link, wanted))
                     return Value::ofBool(true);
             }
             return Value::ofBool(false);
@@ -853,20 +893,11 @@ private:
             if (args.size() != 1) return fail(QStringLiteral("file.hasProperty() takes one argument"));
             return Value::ofBool(m_row.properties.contains(args.first().toDisplayString().toCaseFolded()));
         }
+        if (name == QLatin1String("asLink")) {
+            if (args.size() > 1) return fail(QStringLiteral("file.asLink() takes at most one argument"));
+            return Value::ofLink(m_row.notePath, args.isEmpty() ? m_row.noteName : args.first().toDisplayString());
+        }
         return fail(QStringLiteral("unknown function 'file.%1'").arg(name));
-    }
-
-    static QString normaliseLinkTarget(QString target)
-    {
-        target = target.trimmed();
-        while (target.startsWith(QLatin1String("./"))) target.remove(0, 2);
-        if (target.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) target.chop(3);
-        return target.toCaseFolded();
-    }
-    static QString basenameOf(const QString &target)
-    {
-        const qsizetype slash = target.lastIndexOf(u'/');
-        return slash < 0 ? target : target.mid(slash + 1);
     }
 
     Value dispatchGlobal(const QString &name, const std::vector<std::unique_ptr<Node>> &argNodes)
@@ -919,6 +950,12 @@ private:
             const auto n = coerceNumber(args.first());
             return n ? Value::ofNumber(*n) : Value::empty();
         }
+        if (name == QLatin1String("link")) {
+            if (args.isEmpty() || args.size() > 2)
+                return fail(QStringLiteral("link() takes one or two arguments"));
+            return Value::ofLink(args.first().toDisplayString(),
+                                 args.size() > 1 ? args.at(1).toDisplayString() : QString());
+        }
         return fail(QStringLiteral("unknown function '%1'").arg(name));
     }
 
@@ -949,10 +986,29 @@ private:
         case Value::Type::Number: return dispatchNumber(receiver.number, name, args);
         case Value::Type::Date: return dispatchDate(receiver.date, name, args);
         case Value::Type::List: return dispatchList(receiver.list, name, args);
+        case Value::Type::Link: return dispatchLink(receiver, name, args);
         default:
             return fail(QStringLiteral("no function '%1' for a %2 value")
                            .arg(name, Value::typeName(receiver.type)));
         }
+    }
+
+    Value dispatchLink(const Value &link, const QString &name, const QList<Value> &args)
+    {
+        // File folded into Link (see Value.h): ".asFile()" is identity.
+        if (name == QLatin1String("asFile")) return link;
+        if (name == QLatin1String("linksTo")) {
+            if (!needArgs(args, 1, name)) return Value::empty();
+            const QString wanted = args.first().type == Value::Type::Link ? args.first().text
+                                                                          : args.first().toDisplayString();
+            if (!m_formulas) return Value::ofBool(false); // no data source wired: nothing to check
+            for (const QString &outgoing : m_formulas->outgoingLinksOf(link.text)) {
+                if (linkTargetsMatch(outgoing, wanted))
+                    return Value::ofBool(true);
+            }
+            return Value::ofBool(false);
+        }
+        return fail(QStringLiteral("no function 'link.%1'").arg(name));
     }
 
     static bool isEmptyValue(const Value &v)
@@ -964,6 +1020,7 @@ private:
         case Value::Type::String: return v.text.isEmpty();
         case Value::Type::Date: return !v.date.isValid();
         case Value::Type::List: return v.list.isEmpty();
+        case Value::Type::Link: return v.text.isEmpty();
         }
         return true;
     }
@@ -1043,19 +1100,26 @@ private:
 
     Value dispatchList(const QList<Value> &list, const QString &name, const QList<Value> &args)
     {
-        // Membership compares text, as it always has: a tag "2" and a
-        // number 2 are the same entry to a person reading the note.
-        const QStringList text = Value::ofValues(list).strings();
+        // Membership compares by value (valuesEqual): a tag "2" and a number
+        // 2 are still the same entry (both stringify the same when the types
+        // differ), and a list of Links checks `.contains(this)` by the file
+        // it resolves to - "authors.contains(this)" is the docs' own example
+        // - not by display text, which an alias could give a different value.
+        const auto has = [&list](const Value &needle) {
+            for (const Value &item : list) if (valuesEqual(item, needle)) return true;
+            return false;
+        };
         if (name == QLatin1String("contains"))
-            return needArgs(args, 1, name) ? Value::ofBool(text.contains(args[0].toDisplayString())) : Value::empty();
+            return needArgs(args, 1, name) ? Value::ofBool(has(args[0])) : Value::empty();
         if (name == QLatin1String("containsAll")) {
-            for (const Value &v : args) if (!text.contains(v.toDisplayString())) return Value::ofBool(false);
+            for (const Value &v : args) if (!has(v)) return Value::ofBool(false);
             return Value::ofBool(true);
         }
         if (name == QLatin1String("containsAny")) {
-            for (const Value &v : args) if (text.contains(v.toDisplayString())) return Value::ofBool(true);
+            for (const Value &v : args) if (has(v)) return Value::ofBool(true);
             return Value::ofBool(false);
         }
+        const QStringList text = Value::ofValues(list).strings();
         if (name == QLatin1String("join"))
             return needArgs(args, 1, name) ? Value::ofString(text.join(args[0].toDisplayString()))
                                            : Value::empty();

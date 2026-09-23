@@ -46,6 +46,15 @@ public:
     /// with no error for a formula whose own expression evaluated to
     /// Value::empty().
     virtual Value resolveFormula(const QString &name, const Row &row, QString *error) const = 0;
+
+    /// `link.linksTo(file)`'s data: the raw outgoing link targets (the same
+    /// shape as `file.links`) of whichever row `linkText` resolves to - by
+    /// path or by basename, the same fuzzy match `file.hasLink()` already
+    /// uses. Empty when nothing resolves, including when a caller (a plain
+    /// FormulaSource in a test, say) never overrides this - `linksTo()` then
+    /// answers false rather than failing the whole expression, which is the
+    /// right default for "no data source was wired for this".
+    virtual QStringList outgoingLinksOf(const QString &linkText) const { Q_UNUSED(linkText); return {}; }
 };
 
 /// One parsed expression - property access, literals, arithmetic,
@@ -56,11 +65,13 @@ public:
 /// https://obsidian.md/help/bases/functions:
 ///  - property access: `note.x` / bare `x`, `note["x"]`, `file.name`,
 ///    `file.path`, `file.folder`, `file.ext`, `file.size`, `file.ctime`,
-///    `file.mtime`, `file.tags`, `file.links`, `formula.x`;
+///    `file.mtime`, `file.tags`, `file.links`, `formula.x`, `this` (a Link
+///    to the row's own file, so `author == this` works);
 ///  - literals: numbers, `"strings"`/'strings', `true`/`false`;
 ///  - operators: `+ - * / %`, `== != > < >= <=`, `&& || !`, parentheses;
 ///  - date arithmetic: `date +/- "duration"` and `date - date`;
-///  - global functions: `if` `now` `today` `date` `min` `max` `number`;
+///  - global functions: `if` `now` `today` `date` `min` `max` `number`
+///    `link(path, display?)`;
 ///  - any-type: `isTruthy` `isType` `toString`;
 ///  - string: `contains` `containsAll` `containsAny` `endsWith` `isEmpty`
 ///    `lower` `replace` `repeat` `reverse` `slice` `split` `startsWith`
@@ -72,15 +83,27 @@ public:
 ///    Obsidian's own shorthand for a list's size, seen in the docs' formula
 ///    examples), `filter(expr)` `map(expr)` `reduce(expr, initial)` with
 ///    `value`, `index` and `acc` bound, list literals `[1, "a"]`, and
-///    `mean` `sum` `min` `max` for a summary's `values`;
+///    `mean` `sum` `min` `max` for a summary's `values`; `contains`/
+///    `containsAll`/`containsAny` compare by value, so a list of Links
+///    checks `.contains(this)` by the file it resolves to, not its text;
 ///  - file: `file.hasTag(...)` `file.inFolder(...)` `file.hasLink(...)`
-///    `file.hasProperty(...)`.
+///    `file.hasProperty(...)` `file.asLink(display?)`;
+///  - link: a bracketed property value (`[[Note]]`, `[[Note|Alias]]`, or a
+///    list of them) is a Link automatically, the same as `file.links`'
+///    elements; `==`/`!=` compare by the file they resolve to (falling back
+///    to their text when neither side resolves), `.asFile()` (returns the
+///    same Link - see Value.h's Type::Link), `.linksTo(file)`.
 ///
 /// Not implemented - each is a clear "unsupported" parse or evaluate error,
-/// never a crash: `link`/`file`/`icon`/`html`/`image`
-/// object values and their methods, `object` values, `escapeHTML`,
-/// `random`, regular-expression arguments to `replace`/`split`
-/// (a plain-string needle/separator works).
+/// never a crash: `icon`/`html`/`image` object values and their methods (a
+/// Link stands in for Obsidian's separate `file`/`link` split, see Value.h,
+/// but icon/html/image are not modelled at all), `object` values,
+/// `escapeHTML`, `random`, `file.embeds`/`file.backlinks` (the index this
+/// module reads does not carry embeds separately from links, and backlinks
+/// - Obsidian's own docs call it "performance heavy" - would need a
+/// database query per row, off the thread that owns it; see the module
+/// report), regular-expression arguments to `replace`/`split` (a
+/// plain-string needle/separator works).
 class Expression {
 public:
     /// Parses `source`. Null with `*error` filled on a syntax error or a

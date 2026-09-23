@@ -17,14 +17,24 @@ namespace noteAppC::bases {
 /// lists of strings, but `map()` makes numbers, and `reduce()` has to add
 /// them rather than join their text.
 struct Value {
-    enum class Type { Empty, Bool, Number, String, Date, List };
+    /// `Link` is a note (or URL) reference - `[[Note]]`, `file.links`,
+    /// `link()`, `file.asLink()`, `this` - and also stands in for Obsidian's
+    /// separate `File` type: `.asFile()` returns the same Link unchanged (a
+    /// File is "only usable in specific functions" per the docs, and every
+    /// one of those - `==`, `.asLink()` - already works the same way on a
+    /// Link here), so this module has one reference type, not two.
+    enum class Type { Empty, Bool, Number, String, Date, List, Link };
 
     Type type = Type::Empty;
     bool boolean = false;
     double number = 0.0;
-    QString text;
+    QString text;      ///< String: the text. Link: the raw target, as typed.
     QDateTime date;
     QList<Value> list;
+    /// Link only: an explicit alias (`[[target|display]]`, `link(x, "y")`).
+    /// Empty means "no alias" - toDisplayString() then shows `text` itself,
+    /// the same as Obsidian rendering an un-aliased `[[target]]`.
+    QString linkDisplay;
 
     Value() = default;
     static Value empty() { return Value(); }
@@ -32,6 +42,14 @@ struct Value {
     static Value ofNumber(double n) { Value v; v.type = Type::Number; v.number = n; return v; }
     static Value ofString(QString s) { Value v; v.type = Type::String; v.text = std::move(s); return v; }
     static Value ofDate(QDateTime d) { Value v; v.type = Type::Date; v.date = std::move(d); return v; }
+    static Value ofLink(QString target, QString display = QString())
+    {
+        Value v;
+        v.type = Type::Link;
+        v.text = std::move(target);
+        v.linkDisplay = std::move(display);
+        return v;
+    }
     static Value ofList(const QStringList &l)
     {
         Value v;
@@ -65,6 +83,7 @@ struct Value {
         case Type::String: return !text.isEmpty();
         case Type::Date: return date.isValid();
         case Type::List: return !list.isEmpty();
+        case Type::Link: return !text.isEmpty();
         }
         return false;
     }
@@ -84,6 +103,7 @@ struct Value {
         case Type::String: return text;
         case Type::Date: return date.toString(Qt::ISODate);
         case Type::List: return strings().join(QStringLiteral(", "));
+        case Type::Link: return linkDisplay.isEmpty() ? text : linkDisplay;
         }
         return {};
     }
@@ -97,6 +117,7 @@ struct Value {
         case Type::String: return QLatin1String("string");
         case Type::Date: return QLatin1String("date");
         case Type::List: return QLatin1String("list");
+        case Type::Link: return QLatin1String("link");
         }
         return QLatin1String("empty");
     }
@@ -122,6 +143,7 @@ inline int compareForSort(const Value &a, const Value &b)
         case Value::Type::String: return a.text.compare(b.text);
         case Value::Type::Date: return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
         case Value::Type::List: return a.strings().join(QLatin1Char(',')).compare(b.strings().join(QLatin1Char(',')));
+        case Value::Type::Link: return a.toDisplayString().compare(b.toDisplayString());
         }
     }
     return a.toDisplayString().compare(b.toDisplayString());

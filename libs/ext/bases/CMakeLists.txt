@@ -11,6 +11,8 @@ add_library(noteAppC_bases STATIC
     BaseQuery.cpp
     BaseTableModel.h
     BaseTableModel.cpp
+    BaseCellDelegate.h
+    BaseCellDelegate.cpp
     BaseView.h
     BaseView.cpp
     BaseEditorTable.h

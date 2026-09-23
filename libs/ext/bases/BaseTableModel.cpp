@@ -124,7 +124,25 @@ QVariant BaseTableModel::data(const QModelIndex &index, int role) const
             return {}; // shown as a checkbox, not text
         return value.toDisplayString();
     }
+    if (role == ChipRole) {
+        if (value.type == Value::Type::List) {
+            QList<BaseChip> chips;
+            chips.reserve(value.list.size());
+            for (const Value &item : value.list)
+                chips << BaseChip{item.toDisplayString(), item.type == Value::Type::Link};
+            return QVariant::fromValue(chips);
+        }
+        if (value.type == Value::Type::Link)
+            return QVariant::fromValue(QList<BaseChip>{BaseChip{value.toDisplayString(), true}});
+    }
     return {};
+}
+
+Value BaseTableModel::valueAt(int row, int column) const
+{
+    if (!m_query || row < 0 || row >= m_query->resultRows().size())
+        return Value::empty();
+    return m_query->valueOf(m_query->resultRows().at(row), propertyReferenceAt(column));
 }
 
 Qt::ItemFlags BaseTableModel::flags(const QModelIndex &index) const
@@ -140,7 +158,7 @@ Qt::ItemFlags BaseTableModel::flags(const QModelIndex &index) const
         const Value value = m_query->valueOf(rowIndex, ref);
         if (value.type == Value::Type::Bool)
             f |= Qt::ItemIsUserCheckable;
-        else if (value.type != Value::Type::List)
+        else
             f |= Qt::ItemIsEditable;
     }
     return f;
@@ -216,21 +234,41 @@ bool BaseTableModel::writePropertyEdit(const QString &relativePath, const QStrin
         if (error) *error = QStringLiteral("'%1' is not a frontmatter property on this note yet").arg(key);
         return false;
     }
-    if (target->type == Property::Type::List) {
-        if (error) *error = QStringLiteral("'%1' is a list property; edit it from the properties panel").arg(key);
-        return false;
-    }
 
-    const std::optional<QString> scalar = Frontmatter::scalarFor(newText, target->type);
-    if (!scalar) {
-        if (error) *error = QStringLiteral("\"%1\" is not a valid value for '%2'").arg(newText, key);
-        return false;
-    }
-    const std::optional<QString> rewritten =
-        rewriteScalarEntry(QStringView(note.text).mid(target->range.start, target->range.length()), *scalar);
-    if (!rewritten) {
-        if (error) *error = QStringLiteral("'%1' cannot be rewritten from the table (a multi-line value)").arg(key);
-        return false;
+    std::optional<QString> rewritten;
+    if (target->type == Property::Type::List) {
+        // The default cell editor hands back one comma-joined line (see
+        // BaseTableModel::data()'s EditRole) - split it back into items and
+        // rewrite through the same list path the properties panel itself
+        // uses (Frontmatter::rewriteList), so only this property's bytes
+        // change. A comma inside an item cannot round-trip this way; that
+        // is the corner this table editor cuts, not a general list editor.
+        QStringList raws;
+        for (const QString &part : newText.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            const std::optional<QString> scalar = Frontmatter::scalarFor(part.trimmed(), Property::Type::Text);
+            if (!scalar) {
+                if (error) *error = QStringLiteral("\"%1\" is not a valid list item").arg(part.trimmed());
+                return false;
+            }
+            raws << *scalar;
+        }
+        rewritten = Frontmatter::rewriteList(
+            QStringView(note.text).mid(target->range.start, target->range.length()), raws);
+        if (!rewritten) {
+            if (error) *error = QStringLiteral("'%1' cannot be rewritten from the table (not a plain list)").arg(key);
+            return false;
+        }
+    } else {
+        const std::optional<QString> scalar = Frontmatter::scalarFor(newText, target->type);
+        if (!scalar) {
+            if (error) *error = QStringLiteral("\"%1\" is not a valid value for '%2'").arg(newText, key);
+            return false;
+        }
+        rewritten = rewriteScalarEntry(QStringView(note.text).mid(target->range.start, target->range.length()), *scalar);
+        if (!rewritten) {
+            if (error) *error = QStringLiteral("'%1' cannot be rewritten from the table (a multi-line value)").arg(key);
+            return false;
+        }
     }
 
     note.text.replace(target->range.start, target->range.length(), *rewritten);
