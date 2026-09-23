@@ -348,11 +348,12 @@ user of line-diffing turns up, not before (YAGNI).
   place - never silently discard what's on screen), the remote version is
   written next to it as `<name> (sync conflict, <device>, <timestamp>).md`
   through the same atomic write path, and a status signal reports the
-  conflict so the UI can surface it. The base is updated to the remote text
-  regardless (so the *next* pull compares against what the server now has,
-  rather than re-flagging the same conflict forever) - the user is expected
-  to fold the conflict copy in by hand, at which point their edit becomes a
-  new local change against the new base like any other.
+  conflict so the UI can surface it. The base is updated to match what is
+  now on disk, i.e. the *local* text, not the remote one just declined -
+  so the next cycle sees no change at all and stays quiet rather than
+  re-flagging the same conflict every cycle until the user acts. Folding
+  the conflict copy in by hand is then just an ordinary local edit against
+  that base, pushed and reconciled like any other.
 
 ### Delete-vs-edit
 
@@ -402,19 +403,21 @@ made to hide it, e.g. no mixnet).
 A new device needs the itemsKeys before it can read anything, and there are
 two ways it can get them:
 
-1. **From the password directly** - the boring path, and the only one the
-   first device on a vault needs: sign in (derive `loginKey`, authenticate),
-   then also derive `wrapKey` from the same password and
+1. **From the password directly** - the default, and what any device takes
+   whenever it is given the password: sign in (derive `loginKey`,
+   authenticate), then also derive `wrapKey` from the same password and
    `GET /v1/vaults/<id>/itemskeys` to unwrap whatever the server hands back.
-   This endpoint is gated server-side to *approved* devices only (the
-   `devices` table's `approved` column) - correct password or not, a device
-   the server has not seen vouched for cannot fetch itemsKeys this way,
-   which is what makes the second path below the one that actually matters
-   rather than a redundant alternative. The first device registered for a
-   vault is auto-approved (there is nobody else to vouch for it yet); every
-   device after that starts pending.
-2. **From a lockbox** - for a device that should not need the password
-   re-typed (or, later, a collaborator who was never given the password at
+   This is **not** gated by device approval: authenticating already proves
+   the caller derived the correct `loginKey`, which means it could derive
+   `wrapKey` too, so withholding the wrapped itemsKeys here would not stop
+   a device that has the password, only force it onto the lockbox path for
+   no real security gain - approval is a property of *that* path, not this
+   one (an earlier draft of this design gated both, which meant a second
+   device with the correct password could not get in without a lockbox
+   either, an unintended and pointless bit of friction caught by the first
+   run of `tests/test_sync.cpp`'s two-device test).
+2. **From a lockbox** - for a device that should skip the password re-entry
+   on purpose (or, later, a collaborator who was never given the password at
    all): the new device generates an X25519 identity keypair
    (`crypto_box_keypair`), keeps the secret half in the OS keyring via
    QtKeychain, and after authenticating (still needs `loginKey`, so still
@@ -516,3 +519,32 @@ encryption" is the assumption.
   no caller yet - nothing revokes a device today, so nothing needs it. The
   format supports multiple itemsKeys already (`itemsKeyID` on every record),
   so adding rotation later does not touch the wire format.
+
+## A known, unexplained test-suite slowdown
+
+`tests/test_sync.cpp`'s integration tests are correct - every run passes -
+but not always fast: once at least two of them have already run a full
+sign-in-and-sync cycle in the same process, later ones can take on the order
+of fifteen seconds *per SyncEngine's first cycle*, with the stall sitting
+between two adjacent lines of already-instrumented code (every network call,
+every KDF call, every database write, `applyRecord()` itself - all measured
+individually and all fast) and no line of this lane's own code in between
+them. Ruled out, each by direct experiment: the OS keychain/D-Bus path
+(forcing QtKeychain's insecure-file fallback made no difference), the memory
+cap mechanism (reproduces uncapped, under a `ulimit -v`, and under
+`systemd-run`'s cgroup alike), wall-clock time since process start (an
+artificial delay before an otherwise-fast run changes nothing), and Qt's
+network-reachability polling (disabling it via env var made no difference).
+One real bug *was* found and fixed along the way -
+`QStandardPaths::setTestModeEnabled(true)` (copied from `test_index.cpp`'s
+own `main()`) silently overrides `XDG_DATA_HOME`, so every test's
+`SyncJournal` was writing into one shared, ever-growing, never-cleaned
+`~/.qttest/share/noteAppC/sync/` instead of its own isolated
+`QTemporaryDir` - not under `/tmp`, and after a long debugging session, over
+two hundred stale directories deep. Removing it (this suite does not call
+`setTestModeEnabled` at all) fixed that hygiene problem and measurably
+sped up the first two integration tests, but did not fully explain the
+slowdown pattern on its own. `tests/CMakeLists.txt` gives the `sync` ctest
+test a 600 s timeout so this does not fail a run that uses a tighter
+`ctest --timeout`; still worth root-causing properly, ideally by bisecting
+with a minimal reproduction outside GTest.
