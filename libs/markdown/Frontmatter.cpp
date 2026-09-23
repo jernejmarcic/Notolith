@@ -183,6 +183,63 @@ std::optional<QString> Frontmatter::scalarFor(const QString &value, Property::Ty
     return QString::fromStdString(emitter.c_str());
 }
 
+std::optional<QString> Frontmatter::rewriteList(QStringView entry, const QStringList &items)
+{
+    QList<QStringView> lines;
+    QList<qsizetype> ends; // where each line's newline is, or the end
+    for (qsizetype from = 0; from < entry.size();) {
+        qsizetype end = entry.indexOf(u'\n', from);
+        if (end < 0)
+            end = entry.size();
+        lines << entry.mid(from, end - from);
+        ends << end;
+        from = end + 1;
+    }
+    if (lines.isEmpty())
+        return std::nullopt;
+    const QStringView keyLine = lines.first();
+    const qsizetype colon = keyLine.indexOf(u':');
+    if (colon <= 0)
+        return std::nullopt;
+    const QString key = keyLine.left(colon + 1).toString();
+    const QStringView rest = keyLine.mid(colon + 1).trimmed();
+
+    // Blank lines after the entry belong to the gap before the next key: the
+    // text after its last line is kept exactly as it was.
+    qsizetype last = lines.size() - 1;
+    while (last > 0 && lines.at(last).trimmed().isEmpty())
+        --last;
+    const QString tail = entry.mid(ends.at(last)).toString();
+    const auto finish = [&tail](const QString &written) { return written + tail; };
+
+    if (rest.startsWith(u'[')) {
+        // Flow style: one line, nothing after the closing bracket.
+        if (last != 0 || !rest.endsWith(u']') || rest.contains(u'#'))
+            return std::nullopt;
+        return finish(key + QStringLiteral(" [") + items.join(QStringLiteral(", ")) + QLatin1Char(']'));
+    }
+    if (!rest.isEmpty())
+        return std::nullopt;
+
+    // Block style: every line after the key is "<indent>- <item>".
+    static const QRegularExpression itemLine(QStringLiteral("^(\\s+|)- \\S"));
+    QString indent = QStringLiteral("  ");
+    for (qsizetype i = 1; i <= last; ++i) {
+        const QString line = lines.at(i).toString();
+        const QRegularExpressionMatch match = itemLine.match(line);
+        if (!match.hasMatch() || line.contains(QLatin1String(" #")))
+            return std::nullopt;
+        if (i == 1)
+            indent = match.captured(1);
+    }
+    if (items.isEmpty())
+        return finish(key + QStringLiteral(" []"));
+    QString written = key;
+    for (const QString &item : items)
+        written += QLatin1Char('\n') + indent + QStringLiteral("- ") + item;
+    return finish(written);
+}
+
 void Frontmatter::parse(const QString &text, const Range &block, Metadata &out)
 {
     out.frontmatter = block;

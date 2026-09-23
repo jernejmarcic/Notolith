@@ -35,6 +35,15 @@ public:
     /// date or date-time that is not one is refused. Only those four types
     /// can be written this way.
     static std::optional<QString> scalarFor(const QString &value, Property::Type type);
+
+    /// `entry` - one list property's lines, key included, as its Property's
+    /// range covers them - rewritten to hold `items`, each already YAML (as
+    /// written, or from scalarFor), in the style it was written in: a block
+    /// of `- item` lines at the same indent, or a flow `[a, b]`. An empty
+    /// list becomes `key: []`, which still reads back as a list. Nothing, when
+    /// the entry holds anything else: a comment, a nested value, a flow list
+    /// run over lines.
+    static std::optional<QString> rewriteList(QStringView entry, const QStringList &items);
 };
 
 } // namespace noteAppC

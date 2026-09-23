@@ -67,6 +67,11 @@ public:
     /// cannot be rewritten safely: a list, a checkbox (which toggles), or one
     /// that is quoted across lines, carries a comment, or spans several lines.
     bool editPropertyAt(qsizetype sourceOffset);
+    /// For a list property: opens an editor after its items that adds one,
+    /// or removes item `item`. False when the list cannot be rewritten
+    /// safely - see Frontmatter::rewriteList.
+    bool addListItemAt(qsizetype sourceOffset);
+    bool removeListItemAt(qsizetype sourceOffset, int item);
     Mode mode() const { return m_mode; }
 
     /// Replaces the buffer and clears undo. Returns the caret to the top.
@@ -257,6 +262,8 @@ private:
         QRectF rect;          ///< the whole row
         QRectF control;       ///< the checkbox, when the value is one
         QList<QRectF> chips;  ///< one box per item of a list value
+        QList<QRectF> removers; ///< each chip's "x", when the list can be changed
+        QRectF adder;           ///< the space after the chips that adds an item
     };
 
     /// One cell of a rendered table.
@@ -527,6 +534,14 @@ private:
     /// The key's line, and where on it the value is, when its value can be
     /// replaced without touching anything else; both invalid otherwise.
     Range editableValueOf(const Property &property) const;
+    bool listIsRewritable(const Property &property) const;
+    int propertyAt(qsizetype sourceOffset) const;
+    /// The laid-out row of property `index`, and the table's top in viewport
+    /// coordinates; null when the table is folded or not laid out.
+    const PropertyRow *propertyRowOf(int index, qreal *top) const;
+    void openPropertyEditor(int index, const QRectF &cell, const QString &text, bool addsItem);
+    /// Writes a list property's items back, as one undo step.
+    bool replaceListEntry(int index, const QStringList &raws, const QStringList &values);
     /// Closes the property editor, writing what it holds when `commit`.
     void finishPropertyEdit(bool commit);
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -687,6 +702,7 @@ private:
     /// key it edits: a reparse can renumber the properties under it.
     QPointer<QLineEdit> m_propertyEdit;
     QString m_editedKey;
+    bool m_editAddsItem = false; ///< the editor adds a list item rather than replacing a value
     /// Where the last updateLayout() moved blocks from, in document y; +inf
     /// when nothing moved. A scroll can reuse the pixels on screen only if
     /// nothing on screen moved.

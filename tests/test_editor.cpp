@@ -2244,6 +2244,72 @@ TEST(PropertyEditTest, ClickingAValueOpensItsEditor)
     EXPECT_EQ(edit->text(), QStringLiteral("Old"));
 }
 
+TEST(PropertyEditTest, AListLosesAndGainsItems)
+{
+    const QString note = QStringLiteral("---\ntags:\n  - a\n  - 'b'\nnext: 1\n---\n\nBody\n");
+    auto editor = editorWith(note);
+    const qsizetype tags = note.indexOf(QLatin1String("tags"));
+
+    ASSERT_TRUE(editor->removeListItemAt(tags, 0));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("---\ntags:\n  - 'b'\nnext: 1\n---\n\nBody\n"))
+        << "the other item kept exactly as written";
+
+    ASSERT_TRUE(editor->addListItemAt(tags));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("c: d"), Qt::Key_Return));
+    EXPECT_EQ(editor->noteText(),
+              QStringLiteral("---\ntags:\n  - 'b'\n  - \"c: d\"\nnext: 1\n---\n\nBody\n"));
+
+    // Each change is one undo step.
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), note);
+}
+
+TEST(PropertyEditTest, AFlowListStaysAFlowList)
+{
+    const QString note = QStringLiteral("---\ntags: [a, b]\n---\n");
+    auto editor = editorWith(note);
+    ASSERT_TRUE(editor->addListItemAt(note.indexOf(QLatin1String("tags"))));
+    ASSERT_TRUE(typeIntoPropertyEditor(*editor, QStringLiteral("c"), Qt::Key_Return));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("---\ntags: [a, b, c]\n---\n"));
+}
+
+TEST(PropertyEditTest, AListWithACommentIsLeftAlone)
+{
+    const QString note = QStringLiteral("---\ntags:\n  - a # keep\n  - b\n---\n");
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->addListItemAt(note.indexOf(QLatin1String("tags"))));
+    EXPECT_FALSE(editor->removeListItemAt(note.indexOf(QLatin1String("tags")), 1));
+    EXPECT_EQ(editor->noteText(), note);
+}
+
+TEST(PropertyEditTest, ClickingAChipsCrossRemovesIt)
+{
+    const QString note = QStringLiteral("---\ntags:\n  - alpha\n  - beta\n---\n\nBody\n");
+    auto editor = editorWith(note);
+    const int viewport = editor->viewport()->width();
+    const int column = qMax(120, qMin(viewport - 48, 700));
+    const int left = qMax(24, (viewport - column) / 2);
+    // Across the first chip line, right of the key column, until something
+    // changes: only a cross changes the note.
+    for (int y = 4; y < 60 && editor->noteText() == note; y += 2) {
+        for (int x = left + 180; x < left + 420 && editor->noteText() == note; x += 2)
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, y));
+    }
+    EXPECT_EQ(editor->noteText(), QStringLiteral("---\ntags:\n  - beta\n---\n\nBody\n"));
+}
+
+TEST(PropertyEditTest, ClosingTheEditorWithAValueOpenIsSafe)
+{
+    // The open line edit outlived the editor's members and called back into
+    // them as it lost focus: a heap corruption on closing a note mid-edit.
+    auto editor = editorWith(kPropertiesNote);
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+    ASSERT_TRUE(editor->editPropertyAt(kPropertiesNote.indexOf(QLatin1String("title"))));
+    editor.reset(); // must not crash, under ASan or without it
+}
+
 // --- spelling ------------------------------------------------------------------
 
 namespace {

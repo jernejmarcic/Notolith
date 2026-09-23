@@ -168,8 +168,10 @@ budget, which this project has already learned once on the index.
       the value; Enter or clicking away keeps it, Escape drops it). Written
       through yaml-cpp, quoted only when needed, and refused when it would
       change the type or touch anything else on the line.
-- [ ] List properties are still read-only chips: adding, removing and
-      editing an item.
+- [x] List properties: a chip's cross removes it, the space after the chips
+      adds one. Rewritten in the style written (block or flow), other items
+      kept byte for byte; a list with a comment in it stays read-only.
+- [ ] Editing an existing list item in place (today: remove and add).
 - [ ] Measure against Obsidian itself. Not installed here.
 
 ## Requested 2026-09-23

@@ -29,6 +29,11 @@ namespace {
 constexpr qreal kKeyColumn = 180;
 /// Air on either side of a chip's text.
 constexpr qreal kChipPadding = 8;
+/// Room at a chip's right end for the "x" that removes it.
+constexpr qreal kChipRemover = 12;
+/// The narrowest the space after a list's chips may be and still take a click
+/// that adds an item; any less and it moves to a line of its own.
+constexpr qreal kChipAdder = 60;
 /// The disclosure triangle, and the margin it sits in.
 constexpr qreal kFoldHandle = 14;
 
@@ -203,10 +208,20 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                     }
                     continue;
                 }
+                const qsizetype at = m_properties.at(row.property).range.start;
+                for (int i = 0; i < row.removers.size(); ++i) {
+                    if (row.removers.at(i).translated(left, top).contains(point)) {
+                        removeListItemAt(at, i);
+                        return true;
+                    }
+                }
+                if (!row.adder.isNull() && row.adder.translated(left, top).contains(point)
+                    && addListItemAt(at))
+                    return true;
                 // The value column of a scalar: click to edit it in place.
                 const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
-                if (row.chips.isEmpty() && value.contains(point)
-                    && editPropertyAt(m_properties.at(row.property).range.start))
+                if (m_properties.at(row.property).type != Property::Type::List
+                    && value.contains(point) && editPropertyAt(at))
                     return true;
             }
             continue;
@@ -274,16 +289,30 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
             const qreal box = metrics.height() * 0.8;
             row.control = QRectF(kKeyColumn, y + (rowHeight - box) / 2, box, box);
         } else if (property.type == Property::Type::List) {
+            // Only a list that can be rewritten gets the controls to change it.
+            const bool editable = listIsRewritable(property);
             qreal x = kKeyColumn;
             qreal chipTop = y + (rowHeight - chipHeight) / 2;
             for (const QString &value : property.values) {
-                const qreal width = metrics.horizontalAdvance(oneLine(value)) + 2 * kChipPadding;
+                const qreal width = metrics.horizontalAdvance(oneLine(value)) + 2 * kChipPadding
+                                    + (editable ? kChipRemover : 0);
                 if (x > kKeyColumn && x + width > kKeyColumn + valueWidth) {
                     x = kKeyColumn;
                     chipTop += chipHeight + 4;
                 }
                 row.chips.append(QRectF(x, chipTop, width, chipHeight));
+                if (editable) {
+                    row.removers.append(QRectF(x + width - kChipPadding - kChipRemover + 2,
+                                               chipTop, kChipRemover + 4, chipHeight));
+                }
                 x += width + 6;
+            }
+            if (editable) {
+                if (x > kKeyColumn && x + kChipAdder > kKeyColumn + valueWidth) {
+                    x = kKeyColumn;
+                    chipTop += chipHeight + 4;
+                }
+                row.adder = QRectF(x, chipTop, kKeyColumn + valueWidth - x, chipHeight);
             }
             height = qMax(rowHeight, chipTop + chipHeight + (rowHeight - chipHeight) / 2 - y);
         }
@@ -354,12 +383,22 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
             continue;
         }
 
-        if (!row.chips.isEmpty()) {
+        if (property.type == Property::Type::List) {
             for (int i = 0; i < row.chips.size(); ++i) {
-                const QRectF box = row.chips.at(i).translated(left, top);
+                QRectF box = row.chips.at(i).translated(left, top);
                 QPainterPath rounded;
                 rounded.addRoundedRect(box, 4, 4);
                 painter.fillPath(rounded, chip);
+                if (i < row.removers.size()) {
+                    // A small cross, drawn so it matches the text at any size.
+                    const QRectF cross = row.removers.at(i).translated(left, top);
+                    const QPointF centre = cross.center() - QPointF(2, 0);
+                    const qreal arm = 3;
+                    painter.setPen(QPen(faint, 1.2));
+                    painter.drawLine(centre + QPointF(-arm, -arm), centre + QPointF(arm, arm));
+                    painter.drawLine(centre + QPointF(-arm, arm), centre + QPointF(arm, -arm));
+                    box.setRight(box.right() - kChipRemover);
+                }
                 painter.setPen(normal);
                 painter.drawText(box, Qt::AlignCenter, oneLine(property.values.value(i)));
             }
@@ -444,36 +483,110 @@ Range MarkdownEditor::editableValueOf(const Property &property) const
     return {at, at + raw.size()};
 }
 
+bool MarkdownEditor::listIsRewritable(const Property &property) const
+{
+    if (property.type != Property::Type::List || !property.range.isValid())
+        return false;
+    const QStringView entry = QStringView(m_text).mid(property.range.start, property.range.length());
+    return Frontmatter::rewriteList(entry, property.raw).has_value();
+}
+
+const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qreal *top) const
+{
+    for (const BlockView &view : m_blocks) {
+        if (view.span.kind != BlockSpan::Kind::Frontmatter || view.propertyRows.empty()
+            || view.folded)
+            continue;
+        for (const PropertyRow &row : view.propertyRows) {
+            if (row.property == index) {
+                *top = view.y - verticalScrollBar()->value();
+                return &row;
+            }
+        }
+    }
+    return nullptr;
+}
+
+int MarkdownEditor::propertyAt(qsizetype sourceOffset) const
+{
+    for (int i = 0; i < m_properties.size(); ++i) {
+        if (m_properties.at(i).range.contains(sourceOffset))
+            return i;
+    }
+    return -1;
+}
+
 bool MarkdownEditor::editPropertyAt(qsizetype sourceOffset)
 {
     if (m_mode == Mode::Source || m_mode == Mode::Reading)
         return false;
     finishPropertyEdit(true);
-    const auto property = std::find_if(m_properties.cbegin(), m_properties.cend(),
-                                       [sourceOffset](const Property &candidate) {
-                                           return candidate.range.contains(sourceOffset);
-                                       });
-    if (property == m_properties.cend() || !editableValueOf(*property).isValid())
+    const int index = propertyAt(sourceOffset);
+    if (index < 0 || !editableValueOf(m_properties.at(index)).isValid())
         return false;
-    const int index = int(property - m_properties.cbegin());
+    qreal top = 0;
+    const PropertyRow *row = propertyRowOf(index, &top);
+    if (!row)
+        return false;
+    openPropertyEditor(index, row->rect.translated(contentLeft(), top).adjusted(kKeyColumn - 4, 0, 0, 0),
+                       m_properties.at(index).values.value(0), false);
+    return true;
+}
 
-    // The row it sits in, where the value column starts.
-    const BlockView *table = nullptr;
-    for (const BlockView &view : m_blocks) {
-        if (view.span.kind == BlockSpan::Kind::Frontmatter && !view.propertyRows.empty()) {
-            table = &view;
-            break;
-        }
-    }
-    if (!table || table->folded)
+bool MarkdownEditor::addListItemAt(qsizetype sourceOffset)
+{
+    if (m_mode == Mode::Source || m_mode == Mode::Reading)
         return false;
-    const auto row = std::find_if(table->propertyRows.cbegin(), table->propertyRows.cend(),
-                                  [index](const PropertyRow &r) { return r.property == index; });
-    if (row == table->propertyRows.cend())
+    finishPropertyEdit(true);
+    const int index = propertyAt(sourceOffset);
+    if (index < 0 || !listIsRewritable(m_properties.at(index)))
         return false;
-    const qreal top = table->y - verticalScrollBar()->value();
-    const QRectF cell = row->rect.translated(contentLeft(), top).adjusted(kKeyColumn - 4, 0, 0, 0);
+    qreal top = 0;
+    const PropertyRow *row = propertyRowOf(index, &top);
+    if (!row || row->adder.isNull())
+        return false;
+    openPropertyEditor(index, row->adder.translated(contentLeft(), top), QString(), true);
+    return true;
+}
 
+bool MarkdownEditor::removeListItemAt(qsizetype sourceOffset, int item)
+{
+    const int index = propertyAt(sourceOffset);
+    if (index < 0 || !listIsRewritable(m_properties.at(index))
+        || item < 0 || item >= m_properties.at(index).raw.size())
+        return false;
+    QStringList raws = m_properties.at(index).raw;
+    raws.removeAt(item);
+    QStringList values = m_properties.at(index).values;
+    values.removeAt(item);
+    return replaceListEntry(index, raws, values);
+}
+
+bool MarkdownEditor::replaceListEntry(int index, const QStringList &raws, const QStringList &values)
+{
+    Property &property = m_properties[index];
+    const Range range = property.range;
+    const std::optional<QString> entry = Frontmatter::rewriteList(
+        QStringView(m_text).mid(range.start, range.length()), raws);
+    if (!entry)
+        return false;
+    // Before the edit: applying it relays the table out, and the chips are
+    // laid out from these.
+    property.raw = raws;
+    property.values = values;
+    const qsizetype delta = entry->size() - range.length();
+    const qsizetype anchor = m_anchor >= range.end ? m_anchor + delta : m_anchor;
+    const qsizetype caret = m_cursor >= range.end ? m_cursor + delta : m_cursor;
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(range.start, range.length(), *entry);
+    setSelectionRange(anchor, caret);
+    return true;
+}
+
+void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QString &text,
+                                        bool addsItem)
+{
     auto *edit = new QLineEdit(viewport());
     edit->setFrame(false);
     edit->setFont(m_theme.textFont());
@@ -483,16 +596,16 @@ bool MarkdownEditor::editPropertyAt(qsizetype sourceOffset)
     palette.setColor(QPalette::Highlight, m_theme.color(QStringLiteral("--interactive-accent")));
     edit->setPalette(palette);
     edit->setGeometry(cell.toRect());
-    edit->setText(property->values.value(0));
+    edit->setText(text);
     edit->selectAll();
     edit->installEventFilter(this);
     // Enter, or the focus going elsewhere, keeps what was typed.
     connect(edit, &QLineEdit::editingFinished, this, [this] { finishPropertyEdit(true); });
     m_propertyEdit = edit;
-    m_editedKey = property->key;
+    m_editedKey = m_properties.at(index).key;
+    m_editAddsItem = addsItem;
     edit->show();
     edit->setFocus();
-    return true;
 }
 
 void MarkdownEditor::finishPropertyEdit(bool commit)
@@ -516,7 +629,17 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
                                        [this](const Property &candidate) {
                                            return candidate.key == m_editedKey;
                                        });
-    if (property == m_properties.end() || typed == property->values.value(0))
+    if (property == m_properties.end())
+        return;
+    if (m_editAddsItem) {
+        const std::optional<QString> item = Frontmatter::scalarFor(typed, Property::Type::Text);
+        if (typed.trimmed().isEmpty() || !item || !listIsRewritable(*property))
+            return;
+        replaceListEntry(int(property - m_properties.begin()), property->raw + QStringList{*item},
+                         property->values + QStringList{typed.trimmed()});
+        return;
+    }
+    if (typed == property->values.value(0))
         return;
     const Range value = editableValueOf(*property);
     const std::optional<QString> yaml = Frontmatter::scalarFor(typed, property->type);

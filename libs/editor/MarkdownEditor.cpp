@@ -22,6 +22,7 @@
 #endif
 #include <QFileInfo>
 #include <QImageReader>
+#include <QLineEdit>
 #include <QLocale>
 #include <QMenu>
 #include <QRegularExpression>
@@ -193,6 +194,14 @@ void MarkdownEditor::insertCompletion(const QString &completion)
 
 MarkdownEditor::~MarkdownEditor()
 {
+    // An open property editor is a child widget, and Qt deletes children
+    // after this object's members are gone: losing focus as it went, it
+    // would call back into an editor that no longer exists. Cut it loose now.
+    if (m_propertyEdit) {
+        m_propertyEdit->disconnect(this);
+        m_propertyEdit->removeEventFilter(this);
+        delete m_propertyEdit.data();
+    }
     if (m_parseWatcher.isRunning())
         m_parseWatcher.waitForFinished();
 }

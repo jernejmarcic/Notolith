@@ -123,6 +123,39 @@ TEST(FrontmatterTest, AWrittenValueReadsBackTheSame)
     EXPECT_FALSE(Frontmatter::scalarFor(QStringLiteral("a"), Property::Type::List));
 }
 
+TEST(FrontmatterTest, AListIsRewrittenInTheStyleItWasWrittenIn)
+{
+    const QString block = QStringLiteral("tags:\n    - one\n    - 'two'\n\n");
+    EXPECT_EQ(Frontmatter::rewriteList(block, {QStringLiteral("one"), QStringLiteral("'two'"),
+                                               QStringLiteral("three")}),
+              QStringLiteral("tags:\n    - one\n    - 'two'\n    - three\n\n"))
+        << "indent kept, items kept as written, the blank line after left where it was";
+    EXPECT_EQ(Frontmatter::rewriteList(block, {QStringLiteral("'two'")}),
+              QStringLiteral("tags:\n    - 'two'\n\n"));
+    EXPECT_EQ(Frontmatter::rewriteList(block, {}), QStringLiteral("tags: []\n\n"));
+
+    EXPECT_EQ(Frontmatter::rewriteList(QStringLiteral("tags: [a, b]\n"), {QStringLiteral("a")}),
+              QStringLiteral("tags: [a]\n"));
+    EXPECT_EQ(Frontmatter::rewriteList(QStringLiteral("tags: []\n"), {QStringLiteral("x")}),
+              QStringLiteral("tags: [x]\n"));
+
+    EXPECT_FALSE(Frontmatter::rewriteList(QStringLiteral("tags:\n  - a # why\n"), {}));
+    EXPECT_FALSE(Frontmatter::rewriteList(QStringLiteral("tags:\n  # note\n  - a\n"), {}));
+    EXPECT_FALSE(Frontmatter::rewriteList(QStringLiteral("tags:\n  - a:\n      b\n"), {}));
+    EXPECT_FALSE(Frontmatter::rewriteList(QStringLiteral("tags: [a,\n  b]\n"), {}));
+
+    // What comes out reads back as the same list.
+    const QString text = QStringLiteral("---\n%1---\n")
+                             .arg(*Frontmatter::rewriteList(block, {QStringLiteral("one"),
+                                                                    *Frontmatter::scalarFor(QStringLiteral("a: b"),
+                                                                                            Property::Type::Text)}));
+    Metadata metadata;
+    Frontmatter::parse(text, Frontmatter::find(text), metadata);
+    ASSERT_EQ(metadata.properties.size(), 1);
+    EXPECT_EQ(metadata.properties.first().type, Property::Type::List);
+    EXPECT_EQ(metadata.properties.first().values, (QStringList{QStringLiteral("one"), QStringLiteral("a: b")}));
+}
+
 TEST(FrontmatterTest, FoundOnlyAtTheTop)
 {
     EXPECT_TRUE(Frontmatter::find(QStringLiteral("---\na: 1\n---\nbody\n")).isValid());
