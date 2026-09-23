@@ -833,6 +833,32 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.mediaEmbeds = featureOn("media-embeds");
     features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);
+    // "/" commands: the palette's own list, the window's then the editor's,
+    // fetched when the popup opens. Off, "/" is a character like any other.
+    if (!featureOn("slash-command")) {
+        editor->setSlashCommands(nullptr, nullptr);
+    } else {
+        editor->setSlashCommands(
+            [this] {
+                QList<MarkdownEditor::SlashCommand> commands;
+                const auto keysOf = [](const QList<QKeySequence> &keys) {
+                    return keys.isEmpty() ? QString() : keys.constFirst().toString(QKeySequence::NativeText);
+                };
+                for (const QAction *action : std::as_const(m_commands)) {
+                    if (action->isEnabled() && action->objectName() != QLatin1String("command-palette:open"))
+                        commands.append({action->objectName(), action->text(), keysOf(action->shortcuts())});
+                }
+                for (const MarkdownEditor::Command &command : MarkdownEditor::commands())
+                    commands.append({command.id, command.name, keysOf(m_editorBindings.value(command.id, command.keys))});
+                return commands;
+            },
+            [this, editor](const QString &id) {
+                if (auto *action = findChild<QAction *>(id, Qt::FindDirectChildrenOnly))
+                    action->trigger();
+                else
+                    editor->runCommand(id);
+            });
+    }
 #ifdef NOTEAPPC_HAVE_CANVAS
     // A canvas embed is the canvas drawn into an image, framed to its cards
     // - the editor cannot hold a widget in its text. Drawn a turn later, so

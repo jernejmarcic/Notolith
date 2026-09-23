@@ -81,7 +81,10 @@ const QVariantMap &defaults()
     };
     // Core plugins: every feature on until a person or the vault says not.
     for (const Settings::Feature &feature : Settings::features())
-        map.insert(Settings::featureKey(feature.id), QByteArray(feature.id) != "community-plugins");
+        // Off until asked for: another program's code, and a "/" menu that
+        // Obsidian also ships switched off.
+        map.insert(Settings::featureKey(feature.id),
+                   QByteArray(feature.id) != "community-plugins" && QByteArray(feature.id) != "slash-command");
     return map;
     }();
     return map;
@@ -574,6 +577,9 @@ const QList<Settings::Feature> &Settings::features()
          true},
         {"slides", QT_TRANSLATE_NOOP("Settings", "Slides"),
          QT_TRANSLATE_NOOP("Settings", "Present a note full screen, one slide per part between --- rules."),
+         true},
+        {"slash-command", QT_TRANSLATE_NOOP("Settings", "Slash commands"),
+         QT_TRANSLATE_NOOP("Settings", "Type \"/\" at the start of a line or after a space to run a command."),
          true},
         {"switcher", QT_TRANSLATE_NOOP("Settings", "Quick switcher"),
          QT_TRANSLATE_NOOP("Settings", "Jump to any note by name with Ctrl+O."), true},

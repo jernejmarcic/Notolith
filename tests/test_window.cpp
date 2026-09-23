@@ -1767,6 +1767,32 @@ TEST_F(WindowTest, NoteComposerExtractsTheSelectionIntoANewNote)
     EXPECT_EQ(editor->noteText(), QStringLiteral("Intro\n[[Part]]end\n"));
 }
 
+TEST_F(WindowTest, SlashCommandsListTheWindowsCommandsWhenSwitchedOn)
+{
+    write(QStringLiteral("Note.md"), "\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Note.md")));
+    MarkdownEditor *editor = window.editor();
+    QTest::keyClicks(editor, QStringLiteral("/"));
+    EXPECT_FALSE(editor->slashPopupVisible()) << "off by default, as in Obsidian";
+
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.slashCommand"), true);
+    ASSERT_TRUE(on.save());
+    MainWindow second;
+    second.openVault(dir.path());
+    second.openNote(path(QStringLiteral("Note.md")));
+    editor = second.editor();
+    QTest::keyClicks(editor, QStringLiteral("/rand"));
+    ASSERT_TRUE(editor->slashPopupVisible());
+    EXPECT_TRUE(editor->slashSuggestions().contains(QStringLiteral("Random note: Open random note")));
+    QTest::keyClick(editor, Qt::Key_Escape);
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.slashCommand"), false);
+    ASSERT_TRUE(off.save());
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);
