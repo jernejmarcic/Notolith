@@ -95,6 +95,21 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # by nature (docs/PLUGINS.md): off on Android regardless of this option,
 # the same as the tools directory it lives under.
 option(NOTEAPPC_WITH_PLUGINS "Build the out-of-process plugin host and its app-side glue" ON)
+# Another Tier 1 module: local-first sync to an optional server, end-to-end
+# encrypted (docs/SYNC.md). Needs libsodium for the crypto and Qt6Keychain
+# for the device identity key it keeps in the OS keyring; without either the
+# option is silently off, same as spellcheck without hunspell.
+option(NOTEAPPC_WITH_SYNC "Build sync to an optional end-to-end encrypted server (libs/ext/sync)" ON)
+if(NOTEAPPC_WITH_SYNC)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+    endif()
+    find_package(Qt6Keychain QUIET)
+    # The reference server (tools/sync_server) only, never the client
+    # library - a desktop build has no business linking an HTTP server.
+    find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
+endif()
 
 add_compile_options(-Wall -Wextra)
 
@@ -205,6 +220,9 @@ if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
 endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)
+endif()
+if(TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
+    add_subdirectory(libs/ext/sync)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

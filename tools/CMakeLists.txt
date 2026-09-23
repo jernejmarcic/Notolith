@@ -20,3 +20,7 @@ add_subdirectory(bench)
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(plugin_host)
 endif()
+# The reference sync server (docs/SYNC.md), built alongside libs/ext/sync.
+if(TARGET noteAppC_sync AND TARGET Qt6::HttpServer)
+    add_subdirectory(sync_server)
+endif()
