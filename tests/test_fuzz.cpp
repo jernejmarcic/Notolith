@@ -104,7 +104,12 @@ TEST(FuzzTest, RandomEditsKeepTheEditorsTextAndUndoPutsItBack)
             const qsizetype at = qsizetype(rng.bounded(quint32(model.size() + 1)));
             editor.setCursorOffset(at);
             if (rng.bounded(3) == 0 && at < model.size()) {
+                const QString before = editor.noteText();
                 QTest::keyClick(&editor, Qt::Key_Delete);
+                // The one Delete that deletes nothing by design: at the end of
+                // a drawn table's cell, where it would eat the pipe.
+                if (editor.noteText() == before && editor.tableRenderedAt(at))
+                    continue;
                 model.remove(at, 1);
             } else {
                 const QString text = typed.at(int(rng.bounded(qsizetype(typed.size()))));
