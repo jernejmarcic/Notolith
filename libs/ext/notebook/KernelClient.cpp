@@ -7,16 +7,38 @@
 
 #include <zmq.h>
 
+#include <cerrno>
+
 namespace noteAppC::notebook {
 
 namespace {
+
+/// Retries a zmq_* call across a spurious EINTR - a signal interrupting the
+/// underlying blocking syscall, which a multi-threaded Qt app sees often
+/// (QProcess's own SIGCHLD handling is enough) - rather than treating an
+/// interrupted call as a real failure. Found by hand, not guessed at: the
+/// first version of this loop `break`d the whole run() loop on any negative
+/// return, which under real load intermittently killed the worker thread
+/// mid-run and made every message after that point vanish. `fn` follows
+/// zmq's own convention: >= 0 is success, -1 with zmq_errno() set is not.
+template <typename Fn>
+int zmqRetryEINTR(Fn &&fn)
+{
+    while (true) {
+        const int rc = fn();
+        if (rc >= 0 || zmq_errno() != EINTR)
+            return rc;
+    }
+}
 
 bool sendFrames(void *socket, const QList<QByteArray> &frames)
 {
     for (qsizetype i = 0; i < frames.size(); ++i) {
         const int flags = (i + 1 < frames.size()) ? ZMQ_SNDMORE : 0;
         const QByteArray &frame = frames.at(i);
-        if (zmq_send(socket, frame.constData(), size_t(frame.size()), flags) < 0)
+        const int rc = zmqRetryEINTR(
+            [&] { return zmq_send(socket, frame.constData(), size_t(frame.size()), flags); });
+        if (rc < 0)
             return false;
     }
     return true;
@@ -30,7 +52,7 @@ QList<QByteArray> recvFrames(void *socket)
     while (true) {
         zmq_msg_t msg;
         zmq_msg_init(&msg);
-        if (zmq_msg_recv(&msg, socket, 0) < 0) {
+        if (zmqRetryEINTR([&] { return zmq_msg_recv(&msg, socket, 0); }) < 0) {
             zmq_msg_close(&msg);
             break;
         }
@@ -166,6 +188,40 @@ void KernelClient::run()
     zmq_connect(iopub, iopubEp.constData());
     zmq_connect(hb, hbEp.constData());
 
+    // The classic ZMQ PUB/SUB "slow joiner" problem, confirmed by hand (a
+    // Python jupyter_client script never hits it - it awaits kernel_info
+    // first, which this client does not send - and looping this client
+    // alone showed the very first execute_request's iopub side going
+    // missing on roughly one run in three): a SUB's subscription takes a
+    // moment to reach the kernel's XPUB iopub socket, and anything the
+    // kernel publishes before it arrives - the busy/idle status for a
+    // request sent immediately after connecting, say - is dropped with no
+    // redelivery. ipykernel's own fix for this is an "iopub_welcome"
+    // message, sent once a fresh subscription is actually registered
+    // (ipykernel/iostream.py, IOPubThread._send_welcome_message) - waited
+    // for here, once, before the outbox is ever drained, so execute()'s
+    // first request cannot win a race that was never fixed. A kernel that
+    // never sends one (an older ipykernel, a non-Python kernel) just falls
+    // through once the timeout passes rather than hanging the connection.
+    {
+        QElapsedTimer readyClock;
+        readyClock.start();
+        bool sawWelcome = false;
+        while (!sawWelcome && readyClock.elapsed() < 3000 && !m_stopRequested.load()) {
+            zmq_pollitem_t readyItem{iopub, 0, ZMQ_POLLIN, 0};
+            const int rc = zmqRetryEINTR([&] { return zmq_poll(&readyItem, 1, 100); });
+            if (rc <= 0 || !(readyItem.revents & ZMQ_POLLIN))
+                continue;
+            KernelMessage welcome;
+            if (!decodeMessage(recvFrames(iopub), m_info.key, &welcome))
+                continue;
+            if (welcome.msgType() == QLatin1String("iopub_welcome"))
+                sawWelcome = true;
+            else
+                dispatchIopub(welcome); // some other message arrived first: still real, not dropped
+        }
+    }
+
     QElapsedTimer sinceHeartbeat;
     sinceHeartbeat.start();
     bool hbAwaiting = false;
@@ -185,7 +241,7 @@ void KernelClient::run()
         }
 
         if (!hbAwaiting && sinceHeartbeat.elapsed() > 1000) {
-            zmq_send(hb, "ping", 4, 0);
+            zmqRetryEINTR([&] { return zmq_send(hb, "ping", 4, 0); });
             hbAwaiting = true;
             sinceHeartbeat.restart();
         }
@@ -196,8 +252,16 @@ void KernelClient::run()
             {iopub, 0, ZMQ_POLLIN, 0},
             {hb, 0, ZMQ_POLLIN, 0},
         };
-        if (zmq_poll(items, 4, 50) < 0)
-            break; // context torn down under us, or a genuine error - either way, stop
+        // Same zmqRetryEINTR sendFrames/recvFrames use: the first version of
+        // this call `break`d the whole run() loop on any negative return,
+        // which under real load intermittently killed this thread mid-run
+        // (a QProcess's own SIGCHLD is enough to interrupt the syscall -
+        // this thread shares a process with every QProcess the app starts)
+        // and made every message after that point vanish. Caught by
+        // looping the end-to-end test, not by inspection.
+        const int pollResult = zmqRetryEINTR([&] { return zmq_poll(items, 4, 50); });
+        if (pollResult < 0)
+            break; // a genuine error (e.g. ETERM: the context was destroyed under us)
 
         for (void *socket : {shell, control}) {
             const bool isShell = socket == shell;
@@ -233,7 +297,8 @@ void KernelClient::run()
         }
         if (items[3].revents & ZMQ_POLLIN) {
             char buf[64];
-            zmq_recv(hb, buf, sizeof(buf), 0); // the pong's payload is not checked, only its arrival
+            // The pong's payload is not checked, only its arrival.
+            zmqRetryEINTR([&] { return zmq_recv(hb, buf, sizeof(buf), 0); });
             hbAwaiting = false;
             if (!hbAlive) {
                 hbAlive = true;

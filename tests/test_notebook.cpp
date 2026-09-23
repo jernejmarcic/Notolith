@@ -260,6 +260,10 @@ TEST(NotebookEndToEndTest, RealPython3Kernel)
     // kernel work together, not only the sandbox alone (NotebookSandboxTest)
     // or only the protocol alone (a Host-tier run would not catch a bind
     // the kernel actually needs and the sandbox left out).
+    // The desktop default tier, so this also proves the sandbox and the
+    // kernel work together, not only the sandbox alone (NotebookSandboxTest)
+    // or only the protocol alone (a Host-tier run would not catch a bind
+    // the kernel actually needs and the sandbox left out).
     request.tier = SandboxTier::Bubblewrap;
 
     const auto runAndWait = [&](const QString &code, int timeoutMs = 15000) {
