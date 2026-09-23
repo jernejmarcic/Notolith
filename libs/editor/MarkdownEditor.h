@@ -207,6 +207,7 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void scrollContentsBy(int dx, int dy) override;
     void resizeEvent(QResizeEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
@@ -618,6 +619,10 @@ private:
     void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
+    /// Where the last updateLayout() moved blocks from, in document y; +inf
+    /// when nothing moved. A scroll can reuse the pixels on screen only if
+    /// nothing on screen moved.
+    qreal m_movedFrom = 0;
     MathRenderer m_math;
     std::function<QString(const QString &)> m_resolver;
     mutable QHash<QString, QPixmap> m_images;

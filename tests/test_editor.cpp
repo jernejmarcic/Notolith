@@ -5,6 +5,8 @@
 #include <QGuiApplication>
 #include <QRandomGenerator>
 #include <QSignalSpy>
+#include <QScrollBar>
+#include <QScreen>
 
 #include <algorithm>
 #include <cstdio>
@@ -2144,3 +2146,38 @@ TEST(CodePieceTest, FoldingFoldsEveryPiece)
     EXPECT_FALSE(editor->isFoldedAt(late));
     EXPECT_GT(editor->documentHeight(), folded + 100 * 10) << "a hundred lines came back";
 }
+
+// --- scrolling -------------------------------------------------------------
+
+TEST(ScrollTest, AScrolledFrameMatchesAFreshOne)
+{
+    // A small scroll moves the pixels already on screen and paints only the
+    // strip that came in. Whatever that leaves on screen has to be exactly
+    // what painting the whole frame would have drawn.
+    QString note;
+    for (int i = 0; i < 400; ++i) {
+        if (i % 12 == 0)
+            note += QStringLiteral("## Section %1\n\n").arg(i / 12);
+        note += QStringLiteral("Line %1 with **bold**, `code` and a [[link %1]].\n").arg(i);
+        if (i % 30 == 29)
+            note += QStringLiteral("\n```cpp\nint x = %1;\n```\n\n").arg(i);
+    }
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor);
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+
+    QScrollBar *bar = editor->verticalScrollBar();
+    for (int step = 0; step < 60; ++step) {
+        bar->setValue(bar->value() + (step < 40 ? 37 : -53)); // odd sizes, both ways
+        QCoreApplication::processEvents();
+    }
+    QCoreApplication::processEvents();
+
+    QScreen *screen = editor->screen();
+    const QImage shown = screen->grabWindow(editor->winId()).toImage().convertToFormat(QImage::Format_RGB32);
+    const QImage fresh = editor->grab().toImage().convertToFormat(QImage::Format_RGB32);
+    ASSERT_EQ(shown.size(), fresh.size());
+    EXPECT_TRUE(shown == fresh) << "what the scroll left on screen differs from a full repaint";
+}
+

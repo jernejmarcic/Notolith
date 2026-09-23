@@ -79,9 +79,6 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
     horizontalScrollBar()->setRange(0, 0);
-    connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this] {
-        updateLayout(); // blocks scrolling into view need their real layout
-    });
     // An icon given as an https URL arrives after the first paint. Without
     // this it stayed blank until something unrelated happened to repaint.
     if (auto *icons = qobject_cast<IconsNotifier *>(Icons::notifier()))
@@ -2257,6 +2254,7 @@ void MarkdownEditor::updateLayout()
 
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
+    m_movedFrom = qInf();
     qreal y = m_topPadding;
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
@@ -2281,10 +2279,15 @@ void MarkdownEditor::updateLayout()
             view.heightEstimated = false;
         }
 
+        if (view.y != y && m_movedFrom > y)
+            m_movedFrom = y;
         view.y = y;
         if (!view.laidOut && !view.heightEstimated) {
+            const qreal before = view.height;
             view.height = estimatedHeight(view);
             view.heightEstimated = true;
+            if (view.height != before && m_movedFrom > y)
+                m_movedFrom = y;
         }
         y += view.height + kBlockSpacing;
     }
@@ -2325,6 +2328,7 @@ void MarkdownEditor::updateLayout()
 
     // Only what follows a block whose height changed moves.
     if (firstChanged >= 0) {
+        m_movedFrom = qMin(m_movedFrom, m_blocks[size_t(firstChanged)].y);
         qreal y = firstChanged == 0 ? m_topPadding
                                     : m_blocks[size_t(firstChanged - 1)].y
                                           + m_blocks[size_t(firstChanged - 1)].height
@@ -2343,6 +2347,22 @@ void MarkdownEditor::updateLayout()
     updateScrollRange();
 }
 
+void MarkdownEditor::scrollContentsBy(int dx, int dy)
+{
+    updateLayout(); // blocks scrolling into view need their real layout
+
+    // A wheel notch moves most of the screen by a few lines, and unless the
+    // layout just moved something that is on screen those pixels are still
+    // right: move them, and paint only the strip that came in. An OpenGL
+    // viewport has no backing store to move pixels in, so it repaints.
+    const bool settled = m_movedFrom > verticalScrollBar()->value() + viewport()->height();
+    const bool raster = !qobject_cast<QOpenGLWidget *>(viewport());
+    if (dx == 0 && qAbs(dy) < viewport()->height() && settled && raster)
+        viewport()->scroll(0, dy, viewport()->rect());
+    else
+        viewport()->update();
+}
+
 void MarkdownEditor::updateScrollRange()
 {
     const int page = viewport()->height();
@@ -2353,11 +2373,17 @@ void MarkdownEditor::updateScrollRange()
 
 // --- painting -------------------------------------------------------------
 
-void MarkdownEditor::paintEvent(QPaintEvent *)
+void MarkdownEditor::paintEvent(QPaintEvent *event)
 {
     QPainter painter(viewport());
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(viewport()->rect(), m_theme.color(QStringLiteral("--background-primary")));
+    // After a scroll only the strip that came into view is exposed; blocks
+    // outside it are skipped rather than drawn and clipped away. The margin
+    // covers what a block paints past its own edges, like a code panel's.
+    const QRect exposed = event->rect();
+    const qreal exposedTop = exposed.top() - 16;
+    const qreal exposedBottom = exposed.bottom() + 16;
+    painter.fillRect(exposed, m_theme.color(QStringLiteral("--background-primary")));
 
     const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
@@ -2367,11 +2393,14 @@ void MarkdownEditor::paintEvent(QPaintEvent *)
     const Range selected = selection();
     painter.setPen(text);
 
-    for (const BlockView &view : m_blocks) {
+    const auto firstExposed = std::partition_point(
+        m_blocks.cbegin(), m_blocks.cend(), [scroll, exposedTop](const BlockView &view) {
+            return view.y - scroll + view.height < exposedTop;
+        });
+    for (auto it = firstExposed; it != m_blocks.cend(); ++it) {
+        const BlockView &view = *it;
         const qreal top = view.y - scroll;
-        if (top + view.height < 0)
-            continue;
-        if (top > viewport()->height())
+        if (top > exposedBottom)
             break;
         if (view.tabHidden)
             continue;

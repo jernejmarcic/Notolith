@@ -314,7 +314,7 @@ Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 /// readback, not the drawing. So this shows the widget, drives the scrollbar,
 /// and waits for a real paint event on the viewport each time. Vsync is off,
 /// or every measurement would come back as one refresh interval.
-Timing benchScrollOnScreen(int lines, bool gpu)
+Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0)
 {
     struct PaintCounter : QObject {
         int paints = 0;
@@ -342,7 +342,9 @@ Timing benchScrollOnScreen(int lines, bool gpu)
         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
     QScrollBar *bar = editor->verticalScrollBar();
-    const int page = qMax(1, bar->pageStep());
+    // A page at a time by default; a wheel moves a few lines instead, which
+    // is the case where most of the frame is already on screen.
+    const int page = stepPixels > 0 ? stepPixels : qMax(1, bar->pageStep());
     const int maxValue = bar->maximum();
 
     std::vector<double> samples;
@@ -350,16 +352,19 @@ Timing benchScrollOnScreen(int lines, bool gpu)
         const int step = pass == 0 ? page : -page;
         int value = pass == 0 ? 0 : maxValue;
         bar->setValue(value);
-        while (true) {
-            const int next = qBound(0, value + step, maxValue);
-            if (next == value)
+        // Wheel steps would take thousands of frames to cross the note; a few
+        // hundred each way is plenty of samples.
+        for (int frames = 0; stepPixels <= 0 || frames < 400; ++frames) {
+            // The range settles as blocks get their real heights; a value past
+            // its end would change nothing, paint nothing, and time out.
+            const int next = qBound(0, value + step, bar->maximum());
+            if (next == bar->value())
                 break;
             value = next;
             const int before = counter.paints;
             QElapsedTimer clock;
             clock.start();
-            bar->setValue(value);
-            editor->viewport()->update();
+            bar->setValue(value); // repaints what it has to, and only that
             // Spin until the viewport has actually repainted, with a ceiling
             // so a dropped frame cannot hang the run.
             while (counter.paints == before && clock.elapsed() < 200)
@@ -369,8 +374,10 @@ Timing benchScrollOnScreen(int lines, bool gpu)
     }
     return reduce(gpu ? QStringLiteral("Scroll frame, OpenGL viewport")
                       : QStringLiteral("Scroll frame, raster viewport"),
-                  QStringLiteral("%1-line note, %2 frames, on screen")
+                  QStringLiteral("%1-line note, %2, %3 frames, on screen")
                       .arg(lines)
+                      .arg(stepPixels > 0 ? QStringLiteral("%1 px steps").arg(stepPixels)
+                                          : QStringLiteral("page steps"))
                       .arg(int(samples.size())),
                   samples);
 }
@@ -620,10 +627,13 @@ int main(int argc, char *argv[])
     // is the headless one, and this one does nothing but the comparison.
     if (parser.isSet(gpuOption)) {
         timings << benchScrollOnScreen(5000, false);
-        if (MarkdownEditor::GPUaccelerationAvailable())
+        timings << benchScrollOnScreen(5000, false, 72); // three lines, one wheel notch
+        if (MarkdownEditor::GPUaccelerationAvailable()) {
             timings << benchScrollOnScreen(5000, true);
-        else
+            timings << benchScrollOnScreen(5000, true, 72);
+        } else {
             std::fprintf(stderr, "note: no GL context available, skipping the OpenGL run\n");
+        }
         printTable(timings, 0, QStringLiteral("not measured in a --gpu run"));
         return 0;
     }

@@ -45,6 +45,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | keystroke, 1 MB | 0.44 ms | 8 ms |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | scroll frame, 1180x760 | 0.36 ms | - |
+| scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
 | cold index, 20 000 notes | 3.6 s | 5 s |
 | peak RSS, vault plus a 1 MB note | ~200 MB | - |
@@ -345,6 +346,38 @@ wrapping and click positions on blocks below an edit were also read at stale
 offsets for those 20 ms. That costs back about 0.05 ms at 1 MB, included
 above.
 
+### 12. A wheel notch repainted the whole viewport
+
+`QAbstractScrollArea` repaints everything on any scroll. The editor now
+overrides `scrollContentsBy`: when the step is smaller than the viewport and
+the layout that runs with it moved nothing on screen, `viewport()->scroll()`
+moves the painted pixels and only the exposed strip is painted, and
+`paintEvent` finds the blocks in that strip by binary search instead of
+walking to them. A page step, a layout that moved something visible, and the
+OpenGL viewport all still repaint whole.
+
+On screen in headless `cage`, 5 000-line note, 1180x760, median of 800 frames:
+
+| | before | after |
+|---|---|---|
+| raster, 72 px steps (one wheel notch) | 1.00 ms | 0.40-0.65 ms |
+| raster, page steps | 1.6 ms | 1.35-1.6 ms |
+| OpenGL, 72 px steps | 1.7 ms | 1.7 ms |
+
+The "after" runs came out bimodal, 0.40 or 0.65, across four runs; they were
+taken while a parallel Android build was compiling, so contention is the
+likely reason (see the pitfalls). Either way under two thirds of before.
+
+`ScrollTest.AScrolledFrameMatchesAFreshOne` scrolls in odd-sized steps both
+ways, then compares the backing store - what the blits actually left on
+screen - against a full repaint. It fails when the blit is off by one pixel.
+
+The on-screen bench gained the wheel-step rows, and lost a forced
+`viewport()->update()` after each step that would have hidden the blit. Its
+loop also reads the live scroll maximum now: once real heights shrank the
+range, a step past the end changed nothing, painted nothing, and waited out
+the 200 ms ceiling - a fifth of all frames in the first run.
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -406,11 +439,8 @@ and beyond.
 
 So the order is:
 
-1. **Scroll by blitting.** The bench scrolls a whole page per frame, which is
-   the worst case. A wheel or touchpad scrolls a few lines, and
-   `QWidget::scroll()` moves the pixels already painted and repaints only the
-   exposed strip. Pure raster, a small change, and it attacks exactly the cost
-   the table above measures.
+1. **Scroll by blitting.** Done, fix 12: a wheel notch now moves the pixels
+   already painted and repaints only the strip that came in.
 2. **Measure the Wayland buffer transfer.** The one real argument for a GPU
    surface on this machine is not in the table. A raster window on Wayland
    hands the compositor a shared-memory buffer, which the compositor then
@@ -477,7 +507,7 @@ Each of these produced a wrong number at least once in this project.
   placement pass. 0.44 ms in all at 1 MB. Proportional to the edit would take
   offsets stored relative to something, which is a bigger change than the
   numbers ask for yet.
-- Scroll by blitting, and the Wayland buffer measurement, above.
+- The Wayland buffer measurement, above.
 - Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
   path to first paint.
 - Nothing has been measured against Obsidian itself: it is not installed here.

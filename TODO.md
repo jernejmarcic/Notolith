@@ -168,8 +168,8 @@ budget, which this project has already learned once on the index.
       floor: `docs/PLATFORMS.md`. No `-march` anywhere, no x86-only code.
 - [ ] **Run `bench-here.sh` on shuttlepod-1 and runabout.** In the brain's
       session directory for this work. Jernej runs it; results sync back.
-- [ ] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
-      viewport - the first thing to do before any Vulkan work.
+- [x] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
+      viewport: a wheel notch 1.0 -> 0.4-0.65 ms on screen (fix 12).
 - [ ] Measure the Wayland shared-memory buffer transfer the bench cannot see.
 - [x] Mobile groundwork: build the libraries against the Android kit's Qt
       6.7.3 to find any 6.8+ API; make KF6 SyntaxHighlighting optional the
