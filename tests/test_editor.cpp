@@ -2442,6 +2442,182 @@ TEST(CommandTest, EveryCommandHasAnIDANameAndRuns)
     }
 }
 
+// --- query blocks ------------------------------------------------------------------
+
+namespace {
+
+/// A fake `setQueryRunner`: records every search asked for and hands the
+/// test the `deliver` callback instead of calling it, so a test can decide
+/// exactly when - and in what order - results come back, without depending
+/// on a real index or on timing.
+struct FakeQueryRunner {
+    struct Call {
+        QString query;
+        MarkdownEditor::QueryDeliver deliver;
+    };
+    QList<Call> calls;
+
+    void operator()(const QString &query, const MarkdownEditor::QueryDeliver &deliver)
+    {
+        calls.append({query, deliver});
+    }
+};
+
+QueryResult makeQueryResult(const QString &path, int matchCount, const QString &snippet,
+                            qsizetype firstOffset)
+{
+    QueryResult result;
+    result.path = path;
+    result.matchCount = matchCount;
+    result.snippet = snippet;
+    result.firstOffset = firstOffset;
+    if (!snippet.isEmpty())
+        result.snippetHighlights.append({0, qMin<qsizetype>(3, snippet.size())});
+    return result;
+}
+
+/// Runs the queued delivery FakeQueryRunner's callback posts (setQueryRunner
+/// marshals it through QMetaObject::invokeMethod) and lets layout catch up.
+void pumpQueuedDelivery()
+{
+    QCoreApplication::processEvents();
+    QTest::qWait(10);
+    QCoreApplication::processEvents();
+}
+
+} // namespace
+
+TEST(QueryBlockTest, RendersResultsFromAnAsyncRunner)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+
+    const qsizetype queryOffset = note.indexOf(QStringLiteral("foo"));
+    // Rendered but still waiting: the runner was asked, but nothing answered
+    // yet, so there is nothing to click - render must never block on it.
+    ASSERT_EQ(fake.calls.size(), 1);
+    EXPECT_EQ(fake.calls.first().query, QStringLiteral("foo"));
+    EXPECT_TRUE(editor->queryRowsAt(queryOffset).isEmpty());
+
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 3, QStringLiteral("a foo b"), 10),
+                                makeQueryResult(QStringLiteral("Two.md"), 1, QStringLiteral("foo alone"), 4)});
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(queryOffset);
+    ASSERT_EQ(rows.size(), 2);
+    EXPECT_EQ(rows.at(0).path, QStringLiteral("One.md"));
+    EXPECT_EQ(rows.at(0).offset, 10);
+    EXPECT_EQ(rows.at(1).path, QStringLiteral("Two.md"));
+    EXPECT_EQ(rows.at(1).offset, 4);
+
+    // Re-asking for the same text without an intervening edit or
+    // refreshQueries is a cache hit, not a second search.
+    editor->enterBlockAt(1);   // touches the "Intro" block, not the query one
+    editor->enterBlockAt(queryOffset);
+    editor->enterBlockAt(1);
+    EXPECT_EQ(fake.calls.size(), 1);
+}
+
+TEST(QueryBlockTest, CaretInsideRevealsSourceInsteadOfResults)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+    ASSERT_FALSE(editor->queryRowsAt(note.indexOf(QStringLiteral("foo"))).isEmpty());
+
+    editor->enterBlockAt(note.indexOf(QStringLiteral("foo")));
+    // Fences are chrome, never part of displayText() even in source mode
+    // (CodeOptionsTest.LineNumbersIndentTheListingAndLeaveTheBytesAlone makes
+    // the same point) - what matters here is that the raw query text is what
+    // shows, not a rendered result.
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("foo")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("One.md")));
+    EXPECT_TRUE(editor->queryRowsAt(note.indexOf(QStringLiteral("foo"))).isEmpty());
+}
+
+TEST(QueryBlockTest, ClickingARowActivatesItsNoteAndOffset)
+{
+    const QString note = QStringLiteral("```query\nfoo\n```\n\nAfter\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    // The default caret (offset 0) starts inside the query block itself,
+    // same as it would in any other block; it has to leave before the block
+    // renders results rather than raw source.
+    editor->enterBlockAt(note.indexOf(QStringLiteral("After")));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver(
+        {makeQueryResult(QStringLiteral("Target.md"), 2, QStringLiteral("has foo in it"), 42)});
+    pumpQueuedDelivery();
+
+    const qsizetype queryOffset = note.indexOf(QStringLiteral("foo"));
+    const QList<MarkdownEditor::QueryResultRow> rows = editor->queryRowsAt(queryOffset);
+    ASSERT_EQ(rows.size(), 1);
+
+    QSignalSpy activated(editor.get(), &MarkdownEditor::queryResultActivated);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      rows.first().rect.center().toPoint());
+    ASSERT_EQ(activated.size(), 1);
+    EXPECT_EQ(activated.first().at(0).toString(), QStringLiteral("Target.md"));
+    EXPECT_EQ(activated.first().at(1).value<qsizetype>(), 42);
+}
+
+TEST(QueryBlockTest, EditingElsewhereAsksNothingNew)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+
+    editor->setCursorOffset(5); // end of "Intro", nowhere near the query block
+    QTest::keyClicks(editor.get(), QStringLiteral(" more"));
+    EXPECT_EQ(fake.calls.size(), 1) << "a keystroke outside the block must not re-run its search";
+}
+
+TEST(QueryBlockTest, AStaleDeliveryAfterRefreshIsDropped)
+{
+    const QString note = QStringLiteral("Intro\n\n```query\nfoo\n```\n");
+    auto editor = editorWith(note);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    const MarkdownEditor::QueryDeliver firstDeliver = fake.calls.first().deliver;
+
+    // The index changed while the first search was still in flight:
+    // refreshQueries drops the cache and asks again for the same text.
+    editor->refreshQueries();
+    QTest::qWait(250); // past the 200 ms debounce
+    QCoreApplication::processEvents();
+    ASSERT_EQ(fake.calls.size(), 2);
+    EXPECT_EQ(fake.calls.at(1).query, QStringLiteral("foo"));
+    const MarkdownEditor::QueryDeliver secondDeliver = fake.calls.at(1).deliver;
+
+    // The new request answers first (the common case: refreshQueries fires
+    // because something changed, and the fresh search is what a person is
+    // waiting on) and the old, slower one lands after it - a broken
+    // generation check would let this second, stale delivery win simply by
+    // arriving last.
+    secondDeliver({makeQueryResult(QStringLiteral("Fresh.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+    firstDeliver({makeQueryResult(QStringLiteral("Stale.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+
+    const QList<MarkdownEditor::QueryResultRow> rows =
+        editor->queryRowsAt(note.indexOf(QStringLiteral("foo")));
+    ASSERT_EQ(rows.size(), 1);
+    EXPECT_EQ(rows.first().path, QStringLiteral("Fresh.md"))
+        << "the superseded request's answer must not overwrite the current one";
+}
+
 // --- page preview ----------------------------------------------------------------
 
 namespace {

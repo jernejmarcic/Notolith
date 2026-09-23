@@ -31,6 +31,7 @@ class QFileSystemWatcher;
 #include "Parser.h"
 #include "CalloutStyle.h"
 #include "LanguageStyle.h"
+#include "QueryResult.h"
 #include "Theme.h"
 
 class QLineEdit;
@@ -190,6 +191,20 @@ public:
     /// What a click on a tab does; public for tests and for a keyboard command.
     void selectCodeTab(qsizetype sourceOffset, int member);
 
+    /// One rendered row of a ```` ```query ```` block's results: `rect` in
+    /// viewport coordinates, matching what a click there activates - public
+    /// so the tests can click a specific result without reimplementing its
+    /// layout by hand the way firstCheckboxPoint does for a fixed one.
+    struct QueryResultRow {
+        QRectF rect;
+        QString path;
+        qsizetype offset = 0;
+    };
+    /// The rendered rows of the query block containing `offset`. Empty when
+    /// that block is not a query block, is still searching, found nothing,
+    /// or has the caret inside it and is showing raw source instead.
+    QList<QueryResultRow> queryRowsAt(qsizetype offset) const;
+
     /// Colour a link at `sourceOffset` is painted in, for the tests. Invalid
     /// when there is no link there.
     QColor linkColourAt(qsizetype sourceOffset) const;
@@ -206,6 +221,24 @@ public:
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
+
+    /// Delivers the results of one ```query``` block's search, in the order
+    /// found; called from any thread. See setQueryRunner.
+    using QueryDeliver = std::function<void(QueryResults)>;
+    /// Runs `query` and calls `deliver` exactly once with the results, from
+    /// any thread - the editor marshals back onto its own thread before
+    /// touching a block, so the window never has to. Supplied by the window,
+    /// which owns the index; the editor never links libs/index (the module
+    /// boundary docs/PLUGINS.md sets out). A search over 20 000 notes takes
+    /// about 6 ms (docs/PERFORMANCE.md), but this is still asynchronous:
+    /// layout must never wait on it, so a block shows "Searching..." until
+    /// `deliver` is called.
+    void setQueryRunner(std::function<void(const QString &query, const QueryDeliver &deliver)> runner);
+    /// The index changed: every rendered ```query``` block's search is
+    /// dropped from the cache and asked again. Debounced, so a burst of
+    /// index updates (Index::changed can fire once per save) costs one
+    /// search per visible block, not one per change.
+    void refreshQueries();
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -293,6 +326,9 @@ signals:
     void linkHovered(const QString &target, const QPoint &globalPos);
     /// It left that link, or let go of it by leaving the editor.
     void linkHoverEnded();
+    /// A result in a rendered ```query``` block was clicked: `relativePath`
+    /// is the note it matched, `offset` the first match inside it.
+    void queryResultActivated(const QString &relativePath, qsizetype offset);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -432,6 +468,20 @@ private:
         /// An audio or video embed's file: the block is a player card.
         QString mediaPath;
         bool mediaVideo = false;
+
+        /// Set when this block is a fenced ```query``` block rendered as
+        /// search results: paintBlocks and handleBlockClick both skip the
+        /// ordinary code-listing chrome (panel, "Copy", tabs) for it.
+        bool isQuery = false;
+        /// One clickable result row, in block-local coordinates (add `left`
+        /// and `top` to place it in the viewport, the way every other rect
+        /// on a BlockView already does).
+        struct QueryRow {
+            QRectF rect;
+            QString path;
+            qsizetype offset = 0;
+        };
+        std::vector<QueryRow> queryRows;
 
         /// One inline `$...$` formula resolved while laying this block out.
         /// `QTextLayout` has no notion of an inline object, so the lone "$"
@@ -632,6 +682,30 @@ private:
     void layoutAnchorSeparators(BlockView &view, QList<Range> &hidden);
     void paintAnchorSeparators(QPainter &painter, const BlockView &view, qreal left,
                                qreal top) const;
+
+    // --- query blocks, implemented in QueryBlock.cpp -----------------------
+
+    /// A fenced ```` ```query ```` block: renders its search results (a note
+    /// list with match counts and highlighted snippets) instead of the query
+    /// text, the way live preview renders any other block - false for every
+    /// other fence, which falls through to the ordinary code listing.
+    bool layoutQuery(BlockView &view);
+    /// The cached entry for `queryText`, starting a search through
+    /// m_queryRunner when there is none yet. Never blocks: a block shows
+    /// "Searching..." until deliverQueryResults lands.
+    struct QueryCacheEntry {
+        QueryResults results;
+        bool pending = true;
+        /// Bumped each time a search for this text is (re)started, so a
+        /// delivery from a superseded request - refreshQueries restarted one
+        /// while it was still in flight - is recognised as stale and dropped.
+        quint64 generation = 0;
+    };
+    const QueryCacheEntry &ensureQuerySearch(const QString &queryText);
+    /// Called back (marshalled onto this thread) when a search started by
+    /// ensureQuerySearch finishes. Ignored if `generation` is no longer the
+    /// one on record for `queryText`.
+    void deliverQueryResults(const QString &queryText, quint64 generation, QueryResults results);
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;
@@ -797,6 +871,13 @@ private:
     std::function<QString(const QString &)> m_resolver;
     mutable QHash<QString, QPixmap> m_images;
     Mode m_mode = Mode::LivePreview;
+
+    std::function<void(const QString &, const QueryDeliver &)> m_queryRunner;
+    QHash<QString, QueryCacheEntry> m_queryCache; ///< query text -> its last search
+    quint64 m_queryGeneration = 0;
+    /// Debounces refreshQueries(): Index::changed can fire once per save, and
+    /// a burst of them should cost one re-search per block, not one each.
+    QTimer *m_queryRefreshTimer = nullptr;
 
     QString m_text;
     SourceMap m_lines; ///< line starts, for the gutter

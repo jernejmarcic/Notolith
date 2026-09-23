@@ -171,6 +171,21 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
         if (handleMediaClick(view, point, left, top))
             return true;
 
+        if (view.isQuery) {
+            for (const BlockView::QueryRow &row : view.queryRows) {
+                if (row.rect.translated(left, top).contains(point)) {
+                    emit queryResultActivated(row.path, row.offset);
+                    return true;
+                }
+            }
+            // Anywhere else in a rendered query block: consumed rather than
+            // falling through to offsetAt(), which has no source text of its
+            // own to put a caret in - the block only shows raw source again
+            // once the caret reaches it by keyboard, the way a formula does.
+            if (view.laidOut && top <= point.y() && point.y() <= top + view.height)
+                return true;
+        }
+
         for (const NestedCallout &nested : view.nested) {
             if (nested.span->foldable
                 && nestedFoldHandleRect(view, nested, left, top).adjusted(-6, -6, 6, 6).contains(point)) {
@@ -179,7 +194,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             }
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery) {
             const CodeLabel label = codeLabelOf(view, left, top);
             if (label.visible && label.rect.adjusted(-4, -3, 4, 3).contains(point)) {
                 copyCodeBlock(view);
