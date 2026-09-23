@@ -20,7 +20,7 @@ built; each stage's detail is in its own section further down.
 
 | # | stage | state |
 |---|---|---|
-| 1 | Obsidian's features (the base everything else sits on) | done, but for the command palette (deferred by Jernej) |
+| 1 | Obsidian's features (the base everything else sits on) | done; the command palette (Ctrl+P) landed 2026-09-23 |
 | 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | next |
 | 3 | Every non-core feature switchable off at run time, costing nothing when off | in progress: panes, views, commands done; editor blocks wait on stage 2 |
 | 4 | `demo/`, a vault under 5 MB that exercises every feature | grows with each stage |

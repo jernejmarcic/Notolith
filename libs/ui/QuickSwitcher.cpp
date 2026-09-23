@@ -3,6 +3,8 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QPainter>
+#include <QStyledItemDelegate>
 #include <QVBoxLayout>
 #include <algorithm>
 
@@ -12,7 +14,26 @@ namespace noteAppC {
 
 namespace {
 constexpr int kMaxResults = 60;
-}
+constexpr int kDetailRole = Qt::UserRole + 1;
+
+/// A row's detail - a command's hotkey - drawn muted at its right edge.
+class DetailDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyledItemDelegate::paint(painter, option, index);
+        const QString detail = index.data(kDetailRole).toString();
+        if (detail.isEmpty())
+            return;
+        painter->save();
+        painter->setPen(option.palette.color(QPalette::PlaceholderText));
+        painter->drawText(option.rect.adjusted(0, 0, -8, 0), Qt::AlignRight | Qt::AlignVCenter, detail);
+        painter->restore();
+    }
+};
+} // namespace
 
 QuickSwitcher::QuickSwitcher(QWidget *parent)
     : QDialog(parent, Qt::Popup)
@@ -46,9 +67,12 @@ QuickSwitcher::QuickSwitcher(QWidget *parent)
     resize(560, 380);
 }
 
-void QuickSwitcher::setCandidates(const QStringList &candidates)
+void QuickSwitcher::setCandidates(const QStringList &candidates, const QStringList &details)
 {
     m_candidates = candidates;
+    m_details = details;
+    if (!details.isEmpty() && !dynamic_cast<DetailDelegate *>(m_results->itemDelegate()))
+        m_results->setItemDelegate(new DetailDelegate(m_results));
     refill();
 }
 
@@ -73,21 +97,23 @@ void QuickSwitcher::refill()
 {
     const QString query = m_query->text();
 
-    QList<QPair<int, QString>> ranked;
+    QList<QPair<int, qsizetype>> ranked;
     ranked.reserve(m_candidates.size());
-    for (const QString &candidate : m_candidates) {
-        const auto match = Fuzzy::score(query, candidate);
+    for (qsizetype i = 0; i < m_candidates.size(); ++i) {
+        const auto match = Fuzzy::score(query, m_candidates.at(i));
         if (match.matched)
-            ranked.append({match.score, candidate});
+            ranked.append({match.score, i});
     }
     std::stable_sort(ranked.begin(), ranked.end(),
                      [](const auto &l, const auto &r) { return l.first > r.first; });
 
     m_results->clear();
-    for (const auto &[score, candidate] : ranked) {
+    for (const auto &[score, i] : ranked) {
         if (m_results->count() >= kMaxResults)
             break;
-        m_results->addItem(candidate);
+        auto *item = new QListWidgetItem(m_candidates.at(i), m_results);
+        if (i < m_details.size())
+            item->setData(kDetailRole, m_details.at(i));
     }
     if (m_results->count() > 0)
         m_results->setCurrentRow(0);

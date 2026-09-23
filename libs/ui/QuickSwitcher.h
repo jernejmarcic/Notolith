@@ -9,16 +9,17 @@ class QListWidget;
 namespace noteAppC {
 
 /// Obsidian's quick switcher: type, see the best matches, Enter to open.
-/// One widget, several data sources - the `[[` suggester and the Phase 4
-/// command palette reuse it.
+/// The command palette is the same widget over command names.
 class QuickSwitcher : public QDialog {
     Q_OBJECT
 
 public:
     explicit QuickSwitcher(QWidget *parent = nullptr);
 
-    /// `candidates` are ranked by Fuzzy::score as the query changes.
-    void setCandidates(const QStringList &candidates);
+    /// `candidates` are ranked by Fuzzy::score as the query changes; with no
+    /// query they keep the order given. `details`, when given, is one muted
+    /// right-aligned text per candidate (the palette's hotkeys).
+    void setCandidates(const QStringList &candidates, const QStringList &details = {});
     void setPlaceholder(const QString &text);
 
     /// Shows centred on the parent with an empty query.
@@ -37,6 +38,7 @@ private:
     QLineEdit *m_query = nullptr;
     QListWidget *m_results = nullptr;
     QStringList m_candidates;
+    QStringList m_details;
 };
 
 } // namespace noteAppC

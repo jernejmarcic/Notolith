@@ -1225,6 +1225,8 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+Shift+Tab"), [this] { cycleTab(-1); });
     add(QStringLiteral("switcher:open"), tr("Quick switcher: Open quick switcher"),
         QStringLiteral("Ctrl+O"), &MainWindow::openQuickSwitcher);
+    add(QStringLiteral("command-palette:open"), tr("Command palette: Open command palette"),
+        QStringLiteral("Ctrl+P"), &MainWindow::openCommandPalette);
     add(QStringLiteral("global-search:open"), tr("Search: Search in all files"),
         QStringLiteral("Ctrl+Shift+F"), [this] { openSearch(); });
 #ifdef NOTEAPPC_HAVE_CANVAS
@@ -1453,6 +1455,64 @@ void MainWindow::openQuickSwitcher()
         return;
     m_switcher->setCandidates(m_index.allPaths());
     m_switcher->popUp();
+}
+
+void MainWindow::openCommandPalette()
+{
+    // Built the first time it is wanted: a session that never opens it pays
+    // nothing for it.
+    if (!m_palette) {
+        m_palette = new QuickSwitcher(this);
+        m_palette->setObjectName(QStringLiteral("commandPalette"));
+        m_palette->setPlaceholder(tr("Select a command..."));
+        connect(m_palette, &QuickSwitcher::accepted, this, [this](const QString &name) {
+            const QString id = m_paletteIDs.value(name);
+            if (id.isEmpty())
+                return;
+            m_recentCommands.removeAll(id);
+            m_recentCommands.prepend(id);
+            if (auto *action = findChild<QAction *>(id, Qt::FindDirectChildrenOnly)) {
+                action->trigger();
+                return;
+            }
+            m_active->editor->setFocus();
+            m_active->editor->runCommand(id);
+        });
+    }
+
+    struct Entry {
+        QString id;
+        QString name;
+        QList<QKeySequence> keys;
+    };
+    QList<Entry> entries;
+    for (const QAction *action : std::as_const(m_commands)) {
+        if (action->isEnabled() && action->objectName() != QLatin1String("command-palette:open"))
+            entries.append({action->objectName(), action->text(), action->shortcuts()});
+    }
+    // Editing commands only while a note is open for editing, as in Obsidian.
+    if (!m_active->notePath.isEmpty() && !m_active->view) {
+        for (const MarkdownEditor::Command &command : MarkdownEditor::commands())
+            entries.append({command.id, command.name, m_editorBindings.value(command.id, command.keys)});
+    }
+    std::stable_sort(entries.begin(), entries.end(), [this](const Entry &l, const Entry &r) {
+        const auto rank = [this](const Entry &entry) {
+            const qsizetype at = m_recentCommands.indexOf(entry.id);
+            return at < 0 ? m_recentCommands.size() : at;
+        };
+        return rank(l) < rank(r);
+    });
+
+    QStringList names;
+    QStringList keys;
+    m_paletteIDs.clear();
+    for (const Entry &entry : std::as_const(entries)) {
+        names << entry.name;
+        keys << (entry.keys.isEmpty() ? QString() : entry.keys.constFirst().toString(QKeySequence::NativeText));
+        m_paletteIDs.insert(entry.name, entry.id);
+    }
+    m_palette->setCandidates(names, keys);
+    m_palette->popUp();
 }
 
 void MainWindow::toggleEditingMode()

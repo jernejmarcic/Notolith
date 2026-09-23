@@ -50,9 +50,9 @@ class TagsPane;
 
 /// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
 /// Obsidian's workspace of tabs in splits, a settings page in the main area,
-/// and single-file mode for a note opened with no vault around it. The
-/// command palette is still ahead; this class is only the chrome around the
-/// editor engine and the settings/theme layers.
+/// and single-file mode for a note opened with no vault around it. This
+/// class is only the chrome around the editor engine and the settings/theme
+/// layers.
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -90,6 +90,9 @@ public:
     void toggleSidebar();
     void toggleRightSidebar();
     void openQuickSwitcher();
+    /// Obsidian's command palette: every command the window can run now, the
+    /// focused note's editing commands with them, most recently used first.
+    void openCommandPalette();
     /// Obsidian's Ctrl+E: live preview <-> source.
     void toggleEditingMode();
     void openSettings();
@@ -436,6 +439,9 @@ private:
     QPointer<BookmarksPane> m_bookmarks;
     class TemplatePicker *m_templatePicker = nullptr;
     QuickSwitcher *m_switcher = nullptr;
+    QuickSwitcher *m_palette = nullptr; ///< null until first opened
+    QHash<QString, QString> m_paletteIDs; ///< shown name -> command id, as last listed
+    QStringList m_recentCommands;         ///< ids, most recent first, this session
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

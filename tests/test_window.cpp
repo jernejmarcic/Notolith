@@ -62,6 +62,7 @@
 #include "BookmarksPane.h"
 #include "BacklinksPane.h"
 #include "ToggleSwitch.h"
+#include "QuickSwitcher.h"
 #include "Snapshots.h"
 #include "RecoveryDialog.h"
 #include "Settings.h"
@@ -1813,4 +1814,43 @@ TEST_F(WindowTest, AVaultsCorePluginsDecideWhatIsBuilt)
     EXPECT_EQ(window.findChild<noteAppC::CanvasView *>(), nullptr);
     EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("canvas:new-file"))->isEnabled());
 #endif
+}
+
+TEST_F(WindowTest, TheCommandPaletteRunsCommandsAndPutsTheLastFirst)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette")), nullptr)
+        << "built only when first opened";
+    auto *rightSidebar = window.findChild<QWidget *>(QStringLiteral("rightSidebar"));
+    const bool wasVisible = rightSidebar->isVisible();
+
+    const auto run = [&window](const QString &typed) {
+        window.findChild<QAction *>(QStringLiteral("command-palette:open"))->trigger();
+        auto *palette = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette"));
+        auto *query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+        QTest::keyClicks(query, typed);
+        QTest::keyClick(query, Qt::Key_Return);
+        return palette;
+    };
+    auto *palette = run(QStringLiteral("toggle right"));
+    ASSERT_NE(palette, nullptr);
+    EXPECT_NE(rightSidebar->isVisible(), wasVisible);
+
+    // Opened again with nothing typed, the command just run leads.
+    window.findChild<QAction *>(QStringLiteral("command-palette:open"))->trigger();
+    auto *results = palette->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"));
+    ASSERT_GT(results->count(), 0);
+    EXPECT_EQ(results->item(0)->text(), QStringLiteral("Toggle right sidebar"));
+    palette->hide();
+
+    // An editing command reaches the note's editor.
+    MarkdownEditor *editor = window.editor();
+    editor->enterBlockAt(2);
+    for (int i = 0; i < 7; ++i)
+        QTest::keyClick(editor, Qt::Key_Right, Qt::ShiftModifier); // "Welcome"
+    run(QStringLiteral("toggle bold"));
+    EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# **Welcome**")));
 }

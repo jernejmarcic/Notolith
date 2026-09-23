@@ -494,6 +494,8 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Open .base files and base code blocks as tables of notes."), true},
         {"bookmarks", QT_TRANSLATE_NOOP("Settings", "Bookmarks"),
          QT_TRANSLATE_NOOP("Settings", "Bookmark notes, headings and searches in the right sidebar."), true},
+        {"command-palette", QT_TRANSLATE_NOOP("Settings", "Command palette"),
+         QT_TRANSLATE_NOOP("Settings", "Run any command by name with Ctrl+P."), true},
         {"canvas", QT_TRANSLATE_NOOP("Settings", "Canvas"),
          QT_TRANSLATE_NOOP("Settings", "Open .canvas files as boards of cards and connections."), true},
         {"daily-notes", QT_TRANSLATE_NOOP("Settings", "Daily notes"),

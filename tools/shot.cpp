@@ -12,6 +12,7 @@
 #include <QTemporaryDir>
 #include <QImage>
 #include <QLineEdit>
+#include <QPainter>
 #include <QStyleFactory>
 #include <QTimer>
 
@@ -116,7 +117,15 @@ int main(int argc, char *argv[])
 
     int status = 0;
     const auto capture = [&] {
-        const QImage shot = window.grab().toImage();
+        QImage shot = window.grab().toImage();
+        // A popup - the switcher, the command palette - is a window of its
+        // own, which grabbing the main window leaves out.
+        QPainter painter(&shot);
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            if (top != &window && top->isVisible() && top->windowType() == Qt::Popup)
+                painter.drawPixmap(window.mapFromGlobal(top->mapToGlobal(QPoint(0, 0))), top->grab());
+        }
+        painter.end();
         if (!shot.save(args.at(3))) {
             qWarning("could not write %s", qPrintable(args.at(3)));
             status = 1;
