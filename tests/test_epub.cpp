@@ -12,6 +12,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -861,6 +862,91 @@ TEST(EpubViewTest, OpensARealCalibreSampleBookIfPresentOnThisMachine)
     QTest::qWait(80);
     view.setTocVisibleForTest(true);
     SUCCEED(); // this test's only job is to not crash/hang on real-world markup
+}
+
+// --- measured numbers for the report ----------------------------------
+
+// These three print through fprintf(stderr, ...) - the project's own
+// throwaway-probe convention (see docs/PERFORMANCE.md's "Measuring"
+// section) - alongside a loose sanity bound each (ratios/orders of
+// magnitude, not tight budgets - PERFORMANCE.md rule 3), so they stay
+// useful as regression smoke without becoming flaky wall-clock guards.
+
+TEST(EpubViewTest, PerfChapterRenderDispatchStaysOffTheUiThread)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+
+    QElapsedTimer timer;
+    timer.start();
+    view.requestChapterForTest(0);
+    const qint64 dispatchMs = timer.elapsed();
+    // The UI thread's own share of task 1's ~11 ms/chapter litehtml cost is
+    // now just building the request and handing it to QtConcurrent::run -
+    // not the layout/raster itself, which used to be the whole 11 ms spent
+    // right here before this task.
+    EXPECT_LT(dispatchMs, 5);
+
+    timer.restart();
+    WAIT_TRUE(view.chapterCachedForTest(0), 2000);
+    const qint64 totalMs = timer.elapsed();
+    fprintf(stderr,
+            "[epub perf] chapter render: dispatch (blocks the UI thread) %lld ms, "
+            "total incl. worker (does not block it) %lld ms - before this task both numbers were "
+            "the same ~11 ms, all on the UI thread\n",
+            (long long)dispatchMs, (long long)totalMs);
+}
+
+TEST(EpubViewTest, PerfPageTurnReturnsImmediately)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 60);
+    ASSERT_TRUE(view.load(makeEpub3(dir.path())));
+    view.show();
+    QTest::qWait(10);
+    view.setPagedModeForTest(true);
+
+    QElapsedTimer timer;
+    timer.start();
+    view.turnPageForTest(1);
+    const qint64 turnMs = timer.elapsed();
+    EXPECT_LT(turnMs, 5);
+    fprintf(stderr,
+            "[epub perf] page turn: %lld ms (a position update; painting the target page is a "
+            "separate, worker-backed repaint - see PerfChapterRenderDispatchStaysOffTheUiThread)\n",
+            (long long)turnMs);
+}
+
+TEST(EpubViewTest, PerfTocBuildOnAHugeToc)
+{
+    QTemporaryDir dir;
+    EpubView view;
+    view.resize(500, 400);
+    ASSERT_TRUE(view.load(makeEpubWithHugeToc(dir.path(), 20, 100))); // 2000 entries
+
+    QElapsedTimer timer;
+    timer.start();
+    view.setTocVisibleForTest(true); // top level only: 20 rows
+    const qint64 firstShowMs = timer.elapsed();
+    EXPECT_LT(firstShowMs, 50);
+
+    timer.restart();
+    view.expandTocForTest(0); // one volume's 100 rows
+    const qint64 oneExpandMs = timer.elapsed();
+
+    timer.restart();
+    for (int i = 1; i < 20; ++i)
+        view.expandTocForTest(i); // the other 19 volumes - what an eager build would have done at open()
+    const qint64 restMs = timer.elapsed();
+
+    fprintf(stderr,
+            "[epub perf] TOC (2000 entries, 20 volumes x 100 chapters): open() pays 0 (deferred); "
+            "first show (20 rows) %lld ms; one volume (100 rows) %lld ms; "
+            "remaining 19 volumes (1900 rows, what eager open() used to pay) %lld ms\n",
+            (long long)firstShowMs, (long long)oneExpandMs, (long long)restMs);
 }
 
 int main(int argc, char **argv)
