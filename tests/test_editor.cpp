@@ -1707,6 +1707,23 @@ TEST(ShiftTest, ACalloutBelowTheCaretKeepsItsPanelWhileTyping)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+TEST(ShiftTest, TypingDoesNotRunIntoTheNextBlock)
+{
+    // The edited block's end was shifted twice, once by shiftRanges and once
+    // more by applyEdit, so until the reparse it showed the start of the next
+    // block as well - a flicker of duplicated text on every keystroke.
+    const QString note = QStringLiteral("abc\n\ndef **x**\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(1);
+    editor->grab();
+    for (int i = 0; i < 5; ++i) {
+        QTest::keyClick(editor.get(), Qt::Key_Y);
+        editor->grab();
+    }
+    // Before the parse has had its 20 ms.
+    EXPECT_EQ(editor->displayText(), QStringLiteral("ayyyyybc\n\ndef x\n"));
+}
+
 // --- code block tabs ---------------------------------------------------------
 
 namespace {

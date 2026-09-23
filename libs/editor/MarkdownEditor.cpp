@@ -2544,16 +2544,17 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     ++m_textVersion;
     m_lines = SourceMap(m_text); // the gutter needs current line starts
     const qsizetype delta = inserted.size() - removed;
+    // shiftRanges already moves the end of the block the edit is in; moving it
+    // here as well once made that block run on into the next one, drawn twice
+    // for the 20 ms until the reparse. An edit that keeps the length still
+    // changes the text, so the block relays out either way.
     shiftRanges(at + removed, delta);
-    if (delta != 0) {
-        const qsizetype index = blockAt(at);
-        if (index >= 0 && index < qsizetype(m_blocks.size())) {
-            BlockView &view = m_blocks[size_t(index)];
-            view.span.range.end += delta;
-            view.layout.reset();
-            view.laidOut = false;
-            view.heightEstimated = false;
-        }
+    const qsizetype index = blockAt(at);
+    if (index >= 0 && index < qsizetype(m_blocks.size())) {
+        BlockView &view = m_blocks[size_t(index)];
+        view.layout.reset();
+        view.laidOut = false;
+        view.heightEstimated = false;
     }
 
     m_cursor = m_anchor = at + inserted.size();
