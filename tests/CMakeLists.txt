@@ -84,6 +84,12 @@ target_link_libraries(test_touch PRIVATE noteAppC_editor Qt6::Test GTest::gtest)
 add_test(NAME touch COMMAND test_touch)
 set_tests_properties(touch PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+if(TARGET noteAppC_history)
+    add_executable(test_history test_history.cpp)
+    target_link_libraries(test_history PRIVATE noteAppC_history Qt6::Core GTest::gtest GTest::gtest_main)
+    add_test(NAME history COMMAND test_history)
+endif()
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)
