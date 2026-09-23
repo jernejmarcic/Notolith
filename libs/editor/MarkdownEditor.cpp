@@ -161,6 +161,30 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
     viewport()->update();
 }
 
+void MarkdownEditor::setFeatures(const Features &features)
+{
+    m_features = features;
+    // A rare, administrative call - not the keystroke path - so relaying out
+    // every block rather than picking out just the ones a flag touches is
+    // the simple and correct choice, not a slow one that happens to work.
+    m_pdfPageCache.clear();
+    m_texCache.clear();
+    m_fileEmbedCache.clear();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer)
+{
+    for (const QString &suffix : suffixes)
+        m_fileEmbedRenderers.insert(suffix.toLower(), renderer);
+    m_fileEmbedCache.clear();
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
 void MarkdownEditor::setLinkTargets(const QStringList &targets)
 {
     if (auto *model = qobject_cast<QStringListModel *>(m_completer->model()))
@@ -1755,6 +1779,10 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.embedPanel = false;
     view.mediaPath.clear();
     view.mediaVideo = false;
+    view.isPdfEmbed = false;
+    view.pdfCells.clear();
+    view.pdfError.clear();
+    view.isFileCard = false;
 
     const EmbedSpan *embed = soleEmbedOf(view);
     if (!embed || !m_resolver)
@@ -1775,13 +1803,19 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
                                       QStringLiteral("opus")};
     static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
-    if (audio.contains(suffix) || video.contains(suffix))
+    if (m_features.mediaEmbeds && (audio.contains(suffix) || video.contains(suffix)))
         return layoutMedia(view, path, video.contains(suffix));
-    if (suffix == QLatin1String("pdf"))
+    if (m_features.PDFembeds && suffix == QLatin1String("pdf"))
         return layoutPdf(view, *embed, path);
-    // A note embed is rendered by the transclusion path, not here.
+    if (m_features.texEmbeds && suffix == QLatin1String("tex"))
+        return layoutTexEmbed(view, *embed, path);
+    if (!m_features.fileEmbeds)
+        return false; // falls through to the paragraph's plain link text
+
     if (Vault::isNote(path))
-        return false;
+        return layoutNoteEmbed(view, *embed, path);
+    if (m_fileEmbedRenderers.contains(suffix))
+        return layoutHookedFileEmbed(view, *embed, path);
     return layoutSourceFile(view, *embed, path);
 }
 
@@ -1811,47 +1845,6 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     return true;
 }
 
-bool MarkdownEditor::layoutPdf(BlockView &view, const EmbedSpan &embed, const QString &path)
-{
-    // Obsidian addresses a page with `#page=3`; page one otherwise.
-    int page = 0;
-    static const QRegularExpression pageRef(QStringLiteral("#page=(\\d+)"),
-                                            QRegularExpression::CaseInsensitiveOption);
-    const auto match = pageRef.match(embed.subpath);
-    if (match.hasMatch())
-        page = qMax(0, match.captured(1).toInt() - 1);
-
-    const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
-    const QString key = QStringLiteral("%1|%2|%3").arg(path).arg(page).arg(width);
-
-    QPixmap pixmap = m_images.value(key);
-    if (pixmap.isNull()) {
-        const QImage rendered = PdfPage::render(path, page, width);
-        if (rendered.isNull())
-            return false;
-        pixmap = QPixmap::fromImage(rendered);
-        m_images.insert(key, pixmap);
-    }
-
-    const int height = embed.height > 0
-                           ? embed.height
-                           : int(qreal(width) * pixmap.height() / qMax(1, pixmap.width()));
-
-    view.image = pixmap;
-    view.imageSize = QSize(width, height);
-    view.imagePath = path;
-    view.embedLabel = PdfPage::pageCount(path) > 1
-                          ? tr("%1  -  page %2").arg(QFileInfo(path).fileName()).arg(page + 1)
-                          : QFileInfo(path).fileName();
-    view.embedPanel = true;
-    view.layout.reset();
-    view.cells.clear();
-    view.textTop = codeHeaderHeight();
-    view.height = height + view.textTop;
-    view.laidOut = true;
-    return true;
-}
-
 bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
                                       const QString &path)
 {
@@ -1859,6 +1852,11 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     QFileInfo info(path);
     if (!info.isFile())
         return false;
+    // Never a binary file's bytes as text: a card (icon, name, size) opens
+    // it instead - the same fallback Obsidian's own "unsupported file" embed
+    // shows.
+    if (isBinaryFile(path))
+        return layoutFileCard(view, embed, path);
 
     view.embedLabel = info.fileName();
     view.embedPanel = true;
@@ -1953,6 +1951,9 @@ const MathSpan *MarkdownEditor::displayMathOf(const BlockView &view) const
 
 bool MarkdownEditor::layoutMath(BlockView &view)
 {
+    if (!m_features.maths)
+        return false; // shows as source - no MicroTeX call, no image cached
+
     const MathSpan *math = displayMathOf(view);
     if (!math)
         return false;
@@ -1992,6 +1993,8 @@ bool MarkdownEditor::layoutMath(BlockView &view)
 
 void MarkdownEditor::layoutInlineMaths(BlockView &view, QList<Range> &hidden)
 {
+    if (!m_features.maths)
+        return; // the "$" stays visible ink, exactly as an unrenderable formula's does
     if (m_decorations.maths.isEmpty())
         return; // the common case: nothing to check, so nothing to render
 
@@ -2506,6 +2509,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.isBase = false;
     view.baseViewName.clear();
     view.baseRows.clear();
+    view.embedCells.clear();
+    view.isFileCard = false;
     view.isHtml = false;
     view.inlineHtmlFormats.clear();
 
@@ -2566,6 +2571,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
     view.caretWord = view.active ? wordAtCaret() : Range{};
     QList<Range> hidden;
+    // Embeds inside this block that layoutEmbed did not already render whole
+    // - several sharing a paragraph, or one mixed in with running text; see
+    // collectTextEmbeds and layoutEmbedRow's comment in the header for why
+    // these become trailing rows rather than true inline objects.
+    QList<const EmbedSpan *> textEmbeds;
     if (!reveal) {
         hidden.reserve(view.lastSyntax - view.firstSyntax);
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
@@ -2580,6 +2590,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         layoutInlineHtml(view, hidden);
         layoutAnchorSeparators(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
+        if (renderMedia && m_features.fileEmbeds)
+            collectTextEmbeds(view, hidden, textEmbeds);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
                       : DisplayMap::build(m_text, view.span.range, hidden);
@@ -2709,6 +2721,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                   && m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
     view.height = view.folded ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
+    // Trailing rows for any embed this block could not render whole -
+    // appended after the paragraph's own text rather than spliced in after
+    // each embed's own line; see the comment on collectTextEmbeds.
+    if (!textEmbeds.isEmpty() && !view.folded)
+        appendEmbedRows(view, textEmbeds);
     view.laidOut = true;
 }
 
@@ -2918,9 +2935,22 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             }
         }
         appendFindHighlights(view, selectionRanges);
+        // Several embeds sharing this block, or one mixed in with running
+        // text: their rows trail whichever of the branches below paints the
+        // block's own text (or nothing, in the rare case a block is nothing
+        // but embeds and blank lines).
+        paintEmbedCells(painter, view, left, top);
 
         if (view.embedPanel)
             paintEmbedChrome(painter, view, left, top);
+        if (view.isPdfEmbed) {
+            paintPdfEmbed(painter, view, left, top);
+            continue;
+        }
+        if (view.isFileCard) {
+            paintFileCard(painter, view, left, top);
+            continue;
+        }
         if (!view.mediaPath.isEmpty()) {
             paintMedia(painter, view, left, top);
             continue;

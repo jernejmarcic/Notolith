@@ -48,8 +48,12 @@ add_library(noteAppC_render STATIC
     HtmlRenderer.h
     MediaPlayback.cpp
     MediaPlayback.h
+    PdfArgs.cpp
+    PdfArgs.h
     PdfPage.cpp
     PdfPage.h
+    TexCompiler.cpp
+    TexCompiler.h
     MathRenderer.cpp
     MathRenderer.h)
 

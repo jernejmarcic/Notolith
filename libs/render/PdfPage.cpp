@@ -1,5 +1,7 @@
 #include "PdfPage.h"
 
+#include <QFileInfo>
+
 #ifdef NOTEAPPC_HAVE_POPPLER
 #include <poppler-qt6.h>
 #endif
@@ -29,17 +31,49 @@ std::unique_ptr<Poppler::Document> open(const QString &path)
     return document;
 }
 
+/// One `Poppler::Document` per thread, reopened only when the path or its
+/// mtime changes - see the class comment in PdfPage.h. `thread_local` makes
+/// this safe without a lock: nothing outside the owning thread ever touches
+/// this instance.
+Poppler::Document *openCached(const QString &path)
+{
+    struct Cached {
+        QString path;
+        qint64 mtime = 0;
+        std::unique_ptr<Poppler::Document> document;
+    };
+    thread_local Cached cache;
+
+    const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
+    if (cache.document && cache.path == path && cache.mtime == mtime)
+        return cache.document.get();
+
+    cache.document = open(path);
+    cache.path = path;
+    cache.mtime = mtime;
+    return cache.document.get();
+}
+
 } // namespace
 
 int PdfPage::pageCount(const QString &path)
 {
-    const auto document = open(path);
+    Poppler::Document *document = openCached(path);
     return document ? document->numPages() : 0;
+}
+
+QSizeF PdfPage::pageSize(const QString &path, int page)
+{
+    Poppler::Document *document = openCached(path);
+    if (!document || page < 0 || page >= document->numPages())
+        return {};
+    const std::unique_ptr<Poppler::Page> pdfPage(document->page(page));
+    return pdfPage ? pdfPage->pageSizeF() : QSizeF();
 }
 
 QImage PdfPage::render(const QString &path, int page, int widthPixels)
 {
-    const auto document = open(path);
+    Poppler::Document *document = openCached(path);
     if (!document || page < 0 || page >= document->numPages() || widthPixels <= 0)
         return {};
 
@@ -60,6 +94,11 @@ QImage PdfPage::render(const QString &path, int page, int widthPixels)
 int PdfPage::pageCount(const QString &)
 {
     return 0;
+}
+
+QSizeF PdfPage::pageSize(const QString &, int)
+{
+    return {};
 }
 
 QImage PdfPage::render(const QString &, int, int)

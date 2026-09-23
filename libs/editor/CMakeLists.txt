@@ -5,11 +5,13 @@ add_library(noteAppC_editor STATIC
     DisplayMap.cpp
     DisplayMap.h
     EditingCommands.cpp
+    FileEmbedBlock.cpp
     FindBar.cpp
     FindBar.h
     HtmlBlock.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
+    PdfEmbedBlock.cpp
     PdfExport.cpp
     QueryBlock.cpp
     QueryResult.h)
