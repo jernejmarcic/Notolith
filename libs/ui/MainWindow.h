@@ -199,6 +199,11 @@ private:
     /// A file a tab shows in a view of its own rather than the editor: a
     /// .canvas or a .base, when those modules are built and switched on.
     bool isViewFile(const QString &path) const;
+    /// The other tabs showing the note `leaf` shows in the editor.
+    QList<Leaf *> viewsOfSameNote(const Leaf *leaf) const;
+    /// maybeSave() for the focused tab leaving its note - closed, or opening
+    /// another: no question while another tab keeps the same document.
+    bool maybeLeave();
     /// Shows `path` in the focused tab's view; false when it could not be read.
     bool openView(const QString &path, NavSource source);
     /// Puts the editor back in `leaf` in place of its view.

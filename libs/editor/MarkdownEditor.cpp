@@ -3399,12 +3399,17 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
         view.codeEndValid = false;
     }
 
-    m_cursor = m_anchor = at + inserted.size();
-    m_activeBlock = blockAt(m_cursor);
+    if (!m_applyingExternal) {
+        m_cursor = m_anchor = at + inserted.size();
+        m_activeBlock = blockAt(m_cursor);
+    }
 
     setModified(true);
     updateLayout();
-    ensureCursorVisible();
+    if (!m_applyingExternal) {
+        ensureCursorVisible();
+        emit edited(at, removed, inserted);
+    }
     m_parseTimer.start(); // the real parse catches up when typing pauses
     // Only while the find bar is actually searching: a keystroke with no
     // query must not pay for a document scan.
@@ -3450,12 +3455,14 @@ void MarkdownEditor::undo()
         return;
     m_redo.append({m_text, m_cursor});
     const Snapshot snapshot = m_undo.takeLast();
+    const qsizetype before = m_text.size();
     m_text = snapshot.text;
     ++m_textVersion;
     m_cursor = m_anchor = qBound<qsizetype>(0, snapshot.cursor, m_text.size());
     setModified(true);
     reparse();
     emit textChanged();
+    emit edited(0, before, m_text);
     viewport()->update();
 }
 
@@ -3465,12 +3472,46 @@ void MarkdownEditor::redo()
         return;
     m_undo.append({m_text, m_cursor});
     const Snapshot snapshot = m_redo.takeLast();
+    const qsizetype before = m_text.size();
     m_text = snapshot.text;
     ++m_textVersion;
     m_cursor = m_anchor = qBound<qsizetype>(0, snapshot.cursor, m_text.size());
     setModified(true);
     reparse();
     emit textChanged();
+    emit edited(0, before, m_text);
+    viewport()->update();
+}
+
+void MarkdownEditor::applyExternalEdit(qsizetype at, qsizetype removed, const QString &inserted)
+{
+    at = qBound<qsizetype>(0, at, m_text.size());
+    removed = qBound<qsizetype>(0, removed, m_text.size() - at);
+    m_undo.clear();
+    m_redo.clear();
+    const auto follow = [&](qsizetype offset) {
+        if (offset >= at + removed)
+            return offset + inserted.size() - removed;
+        return offset > at ? at + inserted.size() : offset;
+    };
+    const qsizetype cursor = follow(m_cursor);
+    const qsizetype anchor = follow(m_anchor);
+    if (at == 0 && removed == m_text.size()) {
+        // An undo or redo over there: the whole text, as undo() takes it.
+        m_text = inserted;
+        ++m_textVersion;
+        m_cursor = m_anchor = qMin(m_cursor, m_text.size());
+        setModified(true);
+        reparse();
+        emit textChanged();
+    } else {
+        m_applyingExternal = true;
+        applyEdit(at, removed, inserted);
+        m_applyingExternal = false;
+    }
+    m_cursor = qMin(cursor, m_text.size());
+    m_anchor = qMin(anchor, m_text.size());
+    m_activeBlock = blockAt(m_cursor);
     viewport()->update();
 }
 

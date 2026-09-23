@@ -1935,3 +1935,51 @@ TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
     EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+TEST_F(WindowTest, ANoteInTwoTabsIsOneDocument)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *first = window.editor();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    MarkdownEditor *second = window.editor();
+    ASSERT_NE(first, second);
+
+    // An edit in either is made in the other.
+    second->setCursorOffset(second->noteText().size());
+    QTest::keyClicks(second, QStringLiteral("more"));
+    EXPECT_EQ(first->noteText(), second->noteText());
+    EXPECT_TRUE(first->noteText().endsWith(QLatin1String("more")));
+    first->setCursorOffset(0);
+    QTest::keyClicks(first, QStringLiteral("# "));
+    EXPECT_EQ(first->noteText(), second->noteText());
+    EXPECT_EQ(second->cursorOffset(), second->noteText().size()) << "its caret kept its place";
+    QTest::keyClick(first, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(first->noteText(), second->noteText()) << "an undo too";
+
+    // A third tab opened on it shows the unsaved document, not the file.
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(window.editor()->noteText(), first->noteText());
+    EXPECT_TRUE(window.editor()->isModified());
+
+    // Closing one of them asks nothing: the others still hold it.
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            box->button(QMessageBox::Cancel)->click();
+        }
+    });
+    watch.start(20);
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    EXPECT_FALSE(asked);
+
+    // One save is every view's.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_FALSE(first->isModified());
+    EXPECT_FALSE(second->isModified());
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), first->noteText().toUtf8());
+}

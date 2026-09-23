@@ -542,6 +542,13 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         else
             syncTabs(leaf->group);
     });
+    // One note in several tabs is one document, as in Obsidian: an edit in
+    // one is made in the others, so neither save can undo the other's work.
+    connect(editor, &MarkdownEditor::edited, this,
+            [this, leaf](qsizetype at, qsizetype removed, const QString &inserted) {
+                for (Leaf *other : viewsOfSameNote(leaf))
+                    other->editor->applyExternalEdit(at, removed, inserted);
+            });
     // The count comes with each parse. Taking it from textChanged recounted
     // the whole note on the UI thread for every keystroke.
     connect(editor, &MarkdownEditor::wordCountChanged, this, [this, leaf] {
@@ -864,7 +871,7 @@ void MainWindow::dropLeaf(Leaf *leaf)
 void MainWindow::closeLeaf(Leaf *leaf)
 {
     activateLeaf(leaf);
-    if (!maybeSave())
+    if (!maybeLeave())
         return;
     if (m_leaves.size() == 1) {
         clearOpenNote();
@@ -929,14 +936,23 @@ void MainWindow::splitActive(Qt::Orientation orientation)
 
 bool MainWindow::maybeSaveAll()
 {
+    QSet<QString> asked; // a note in two tabs is one document, asked about once
     for (const auto &leaf : m_leaves) {
-        if (leaf->notePath.isEmpty() || !isModified(leaf.get()))
+        if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || asked.contains(leaf->notePath))
             continue;
+        asked.insert(leaf->notePath);
         activateLeaf(leaf.get());
         if (!maybeSave())
             return false;
     }
     return true;
+}
+
+bool MainWindow::maybeLeave()
+{
+    // Another tab still holds the same document: this one can go, or move
+    // on to another note, without losing anything.
+    return !viewsOfSameNote(m_active).isEmpty() || maybeSave();
 }
 
 void MainWindow::resetWorkspace()
@@ -2352,7 +2368,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     if (path == m_active->notePath)
         return true;
     if (isViewFile(path)) {
-        if (!maybeSave())
+        if (!maybeLeave())
             return false;
         return openView(path, source);
     }
@@ -2364,7 +2380,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
         }
         return false;
     }
-    if (!maybeSave())
+    if (!maybeLeave())
         return false;
 
     Note note;
@@ -2386,7 +2402,12 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source)
     m_active->note = note;
     m_active->notePath = path;
     m_active->editor->setEnabled(true);
-    m_active->editor->setNoteText(m_active->note.text);
+    // Open in another tab already: that document, unsaved edits and all,
+    // not the older bytes on disk.
+    const QList<Leaf *> others = viewsOfSameNote(m_active);
+    m_active->editor->setNoteText(others.isEmpty() ? m_active->note.text : others.constFirst()->editor->noteText());
+    if (!others.isEmpty())
+        m_active->editor->setModified(others.constFirst()->editor->isModified());
     if (const auto position = m_settings.notePosition(path)) {
         m_active->editor->setCursorOffset(qMin(position->cursor, qsizetype(m_active->note.text.size())));
         m_active->editor->verticalScrollBar()->setValue(position->scroll);
@@ -2743,6 +2764,18 @@ void MainWindow::pushHistory(const QString &path, NavSource source)
     m_active->historyIndex = m_active->history.size() - 1;
 }
 
+QList<MainWindow::Leaf *> MainWindow::viewsOfSameNote(const Leaf *leaf) const
+{
+    QList<Leaf *> views;
+    if (!leaf || leaf->notePath.isEmpty() || leaf->view)
+        return views;
+    for (const auto &other : m_leaves) {
+        if (other.get() != leaf && !other->view && other->notePath == leaf->notePath)
+            views << other.get();
+    }
+    return views;
+}
+
 bool MainWindow::isViewFile(const QString &path) const
 {
 #ifdef NOTEAPPC_HAVE_CANVAS
@@ -2974,14 +3007,15 @@ bool MainWindow::save()
     recordHistory(m_active->notePath, note.text);
     m_active->note = note;
     m_active->editor->setModified(false);
-    // The same note in another split follows the save, unless it holds edits
-    // of its own. ponytail: those two then diverge and the last save wins;
-    // Obsidian edits one document from every view of it.
-    for (const auto &leaf : m_leaves) {
-        if (leaf.get() == m_active || leaf->notePath != m_active->notePath || leaf->editor->isModified())
-            continue;
-        const qsizetype caret = leaf->editor->cursorOffset();
+    // Every other tab on this note shows this same document, so this saved
+    // it too.
+    for (Leaf *leaf : viewsOfSameNote(m_active)) {
         leaf->note = note;
+        if (leaf->editor->noteText() == note.text) {
+            leaf->editor->setModified(false);
+            continue;
+        }
+        const qsizetype caret = leaf->editor->cursorOffset();
         leaf->editor->setNoteText(note.text);
         leaf->editor->setCursorOffset(qMin(caret, qsizetype(note.text.size())));
     }

@@ -398,6 +398,10 @@ public:
     };
     static const QList<Command> &commands();
     /// Runs the command with this id. False when there is no such command.
+    /// An edit another view of the same note made: the text follows, this
+    /// view's caret keeps its place in it, and its own undo history - which
+    /// no longer describes the text - is dropped.
+    void applyExternalEdit(qsizetype at, qsizetype removed, const QString &inserted);
     bool runCommand(const QString &id);
     /// Keys by command id, over the built-in ones; an empty list unbinds.
     /// Undo, redo, copy, cut, paste and select all are not commands: they
@@ -456,6 +460,10 @@ signals:
     /// the outline pane only rebuilds a QTreeWidget from it.
     void headingsChanged();
     void textChanged();
+    /// Every change to the text, as one edit - typing, a paste, an undo (a
+    /// whole-text replacement) - for another view of the same note to make
+    /// with applyExternalEdit(). Not for setNoteText or applyExternalEdit.
+    void edited(qsizetype at, qsizetype removed, const QString &inserted);
     void modificationChanged(bool modified);
     void linkActivated(const QString &target);
     void cursorMoved(qsizetype offset);
@@ -1186,6 +1194,7 @@ private:
     /// not need a reparse before the caret's block can be redrawn.
     void shiftRanges(qsizetype at, qsizetype delta);
     void applyEdit(qsizetype at, qsizetype removed, const QString &inserted);
+    bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()
     void updateScrollRange();
     int contentLeft() const;
     int contentWidth() const;

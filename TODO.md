@@ -556,8 +556,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       in noteAppC's editing view Ctrl+click is how a link is followed at all
       (a plain click places the caret). Which should Ctrl+click be?
 - [x] Only the focused split's tab is accented, as in Obsidian.
-- [ ] One note edited in two splits at once diverges; last save wins.
-      Obsidian edits one document from every view.
+- [x] One note in several tabs is one document: every edit (and undo) is
+      made in the others, a new tab adopts the unsaved text, one save is
+      every view's, closing one view asks nothing.
 
 ### For Jernej to decide
 - [ ] **A licence.** None is chosen; the PKGBUILD says `LicenseRef-unknown`
