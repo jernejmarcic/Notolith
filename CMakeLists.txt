@@ -124,6 +124,15 @@ if(NOTEAPPC_WITH_SYNC)
     # library - a desktop build has no business linking an HTTP server.
     find_package(Qt6 6.5 QUIET COMPONENTS HttpServer)
 endif()
+# Encrypted notes (docs/ENCRYPTION.md): `.mdlock` files decrypted in memory
+# only. Needs libsodium, the same as sync; without it the option is off.
+option(NOTEAPPC_WITH_ENCRYPTION "Build encrypted notes (libs/ext/crypt)" ON)
+if(NOTEAPPC_WITH_ENCRYPTION AND NOT TARGET PkgConfig::SODIUM)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+    endif()
+endif()
 # The last Tier 1 module: Jupyter-style code execution in notes
 # (libs/ext/notebook) - a client of the Jupyter messaging protocol over
 # ZeroMQ, so any installed kernel (ipykernel, a Julia or R kernel...) is a
@@ -249,6 +258,9 @@ if(NOTEAPPC_WITH_PLUGINS)
 endif()
 if(TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
     add_subdirectory(libs/ext/sync)
+endif()
+if(NOTEAPPC_WITH_ENCRYPTION AND TARGET PkgConfig::SODIUM)
+    add_subdirectory(libs/ext/crypt)
 endif()
 if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
     add_subdirectory(libs/ext/notebook)

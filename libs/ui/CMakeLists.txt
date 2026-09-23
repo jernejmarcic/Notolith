@@ -67,6 +67,11 @@ if(TARGET noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
 endif()
 
+if(TARGET noteAppC_crypt)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_crypt)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_ENCRYPTION)
+endif()
+
 if(TARGET noteAppC_notebook)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_notebook)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_NOTEBOOK)
