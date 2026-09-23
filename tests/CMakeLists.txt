@@ -44,6 +44,13 @@ if(TARGET noteAppC_spell)
     add_test(NAME spell COMMAND test_spell)
 endif()
 
+if(TARGET noteAppC_graph)
+    add_executable(test_graph test_graph.cpp)
+    target_link_libraries(test_graph PRIVATE noteAppC_graph noteAppC_index noteAppC_vault Qt6::Test GTest::gtest)
+    add_test(NAME graph COMMAND test_graph)
+    set_tests_properties(graph PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
 add_test(NAME settings COMMAND test_settings)
