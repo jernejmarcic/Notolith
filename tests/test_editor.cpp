@@ -1986,6 +1986,67 @@ TEST(ListLabelTest, CountedNumbersAndWordStyleOutlines)
     EXPECT_TRUE(editor->listLabel(bullet).isEmpty());
 }
 
+namespace {
+const QString kFootnoteNote = QStringLiteral(
+    "Text.[^a] Inline.^[Right here.] Again.[^a]\n\n[^a]: The body.\n\nAfter.\n");
+}
+
+TEST(FootnoteTest, ReferencesAndDefinitionsAreDrawnAsNumbers)
+{
+    auto editor = editorWith(kFootnoteNote);
+    editor->resize(900, 600);
+    editor->show();
+    editor->setCursorOffset(kFootnoteNote.size()); // on "After.", off every footnote
+    QApplication::processEvents();
+    EXPECT_EQ(editor->footnoteMarkTexts(),
+              (QStringList{QStringLiteral("1"), QStringLiteral("2"), QStringLiteral("1"), QStringLiteral("1. ")}));
+    const auto entries = editor->footnotes();
+    ASSERT_EQ(entries.size(), 2);
+    EXPECT_EQ(entries.at(0).label, QStringLiteral("a"));
+    EXPECT_EQ(entries.at(0).preview, QStringLiteral("The body."));
+    EXPECT_EQ(entries.at(1).preview, QStringLiteral("Right here."));
+
+    // The caret inside a footnote shows that one as written, as Obsidian does.
+    editor->setCursorOffset(kFootnoteNote.indexOf(QStringLiteral("Right")));
+    QTest::keyClick(editor.get(), Qt::Key_Right); // a person's caret, not a program's
+    QApplication::processEvents();
+    EXPECT_FALSE(editor->footnoteMarkTexts().contains(QStringLiteral("2")));
+}
+
+TEST(FootnoteTest, ReadingViewListsTheDefinitionsAtTheEnd)
+{
+    auto editor = editorWith(kFootnoteNote);
+    editor->resize(900, 600);
+    editor->show();
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    QApplication::processEvents();
+    EXPECT_EQ(editor->footnotesListRowCount(), 1); // one definition; the inline one lives in its sentence
+    EXPECT_FALSE(editor->footnoteMarkTexts().contains(QStringLiteral("1. "))) << "the definition itself is not shown";
+    editor->setMode(MarkdownEditor::Mode::LivePreview);
+    QApplication::processEvents();
+    EXPECT_EQ(editor->footnotesListRowCount(), 0);
+}
+
+TEST(FootnoteTest, CtrlClickOnAReferenceGoesToItsDefinition)
+{
+    auto editor = editorWith(kFootnoteNote);
+    editor->resize(900, 600);
+    editor->show();
+    editor->setCursorOffset(kFootnoteNote.size());
+    QApplication::processEvents();
+    const qsizetype body = kFootnoteNote.indexOf(QStringLiteral("The body."));
+    bool jumped = false;
+    for (int y = 2; y < 60 && !jumped; y += 2) {
+        for (int x = 2; x < 400 && !jumped; x += 2) {
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::ControlModifier, QPoint(x, y));
+            jumped = editor->cursorOffset() == body;
+            if (!jumped)
+                editor->setCursorOffset(kFootnoteNote.size());
+        }
+    }
+    EXPECT_TRUE(jumped);
+}
+
 TEST(RuleTest, AThematicBreakIsDrawnAsALine)
 {
     auto editor = editorWith(QStringLiteral("above\n\n---\n\nbelow\n"));
