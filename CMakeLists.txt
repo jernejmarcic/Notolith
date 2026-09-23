@@ -60,7 +60,18 @@ option(NOTEAPPC_WITH_CANVAS "Open and edit .canvas files (JSON Canvas)" ON)
 # Another Tier 1 module: database-like table/card views over a vault from a
 # `.base` file (libs/ext/bases/). yaml-cpp is already a dependency of
 # libs/markdown, so this carries no new external dependency.
-option(NOTEAPPC_WITH_BASES "Database-like table and card views from .base files" ON)
+# Another Tier 1 module: local-first sync to an optional server, end-to-end
+# encrypted (docs/SYNC.md). Needs libsodium for the crypto and Qt6Keychain
+# for the device identity key it keeps in the OS keyring; without either the
+# option is silently off, same as spellcheck without hunspell.
+option(NOTEAPPC_WITH_SYNC "Build sync to an optional end-to-end encrypted server (libs/ext/sync)" ON)
+if(NOTEAPPC_WITH_SYNC)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+    endif()
+    find_package(Qt6Keychain QUIET)
+endif()
 
 add_compile_options(-Wall -Wextra)
 
@@ -157,6 +168,9 @@ if(NOTEAPPC_WITH_CANVAS)
 endif()
 if(NOTEAPPC_WITH_BASES)
     add_subdirectory(libs/ext/bases)
+endif()
+if(TARGET PkgConfig::SODIUM AND TARGET Qt6Keychain::Qt6Keychain)
+    add_subdirectory(libs/ext/sync)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
