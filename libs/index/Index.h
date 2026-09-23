@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 
 #include <QHash>
 #include <QObject>
@@ -26,8 +27,9 @@ struct Backlink {
 /// $XDG_CACHE_HOME, the way Obsidian also keeps its cache outside the vault.
 ///
 /// Owns link resolution too, because resolving needs the same name table the
-/// database already maintains. Single threaded: parsing happens on a pool,
-/// every write lands here.
+/// database already maintains. Used from the thread that opened it, but for
+/// search() and a Writer: the indexer parses on a pool and writes through a
+/// Writer of its own, off this thread.
 class Index : public QObject {
     Q_OBJECT
 
@@ -47,17 +49,50 @@ public:
     /// somewhere temporary.
     static QString cachePathFor(const QString &vaultRoot);
 
+    /// The vault open() was given, absolute.
+    QString vaultRoot() const { return m_vaultRoot; }
+
     // --- writing -------------------------------------------------------
 
+    /// One transaction and one changed() for many put()s.
     void beginBatch();
     void endBatch();
     void put(const Metadata &metadata, const QString &body);
-    /// Records a non-note file so `![[image.png]]` resolves. Attachments carry
-    /// no metadata and no full-text content, only their names.
-    void putAttachment(const QString &path, qint64 mtime, qint64 size);
     void remove(const QString &path);
     /// mtime and size of what the cache holds, for skipping unchanged files.
     bool isCurrent(const QString &path, qint64 mtime, qint64 size) const;
+
+    /// A second connection to an open cache, for another thread: the
+    /// indexer's scan writes through one. It changes the database only. The
+    /// names each write returns reach the name table through setNames(), on
+    /// the Index's thread, and changed() waits for notifyChanged(); WAL lets
+    /// the Index read in the meantime. Paths are absolute, as for put().
+    class Writer {
+    public:
+        Writer(const QString &databasePath, const QString &vaultRoot);
+        ~Writer();
+        bool isOpen() const;
+        bool isCurrent(const QString &path, qint64 mtime, qint64 size);
+        /// Notes only, vault-relative, as Index::allPaths().
+        QStringList allPaths();
+        void begin();
+        void commit();
+        /// Each returns the names the file now answers to, for setNames().
+        QStringList put(const Metadata &metadata, const QString &body);
+        /// A non-note file, so `![[image.png]]` resolves: no metadata and no
+        /// full-text content, only its names.
+        QStringList putAttachment(const QString &path, qint64 mtime, qint64 size);
+        void remove(const QString &path);
+
+    private:
+        struct Private;
+        std::unique_ptr<Private> d;
+    };
+    /// What a Writer wrote for `relative`: the names it answers to, or none
+    /// once it is removed.
+    void setNames(const QString &relative, const QStringList &names);
+    /// changed(), for a Writer's work once all of it has landed.
+    void notifyChanged() { emit changed(); }
 
     // --- reading -------------------------------------------------------
 
@@ -158,7 +193,7 @@ private:
     bool createSchema();
     /// Drops every table, for when the cache's schema version is not ours.
     void loadNames();
-    void indexNames(qint64 fileId, const QString &path, const QStringList &names);
+    void rememberNames(const QString &path, const QStringList &names);
     void forgetNames(const QString &path);
     /// The new text for one link's target, keeping its basename-vs-path shape
     /// (a basename only when it stays unique) and any leading "./"/".md".

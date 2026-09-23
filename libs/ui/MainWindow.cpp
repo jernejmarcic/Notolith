@@ -122,8 +122,10 @@ QString rgbaString(const QColor &color, double alpha)
 
 MainWindow::~MainWindow()
 {
-    // Searches for ```query blocks run on the pool against m_index, and the
-    // history's last saves may still be on their way to disk.
+    // The indexer's scan, which posts to the index, stops first. Searches
+    // for ```query blocks run on the pool against m_index, and the history's
+    // last saves may still be on their way to disk.
+    m_indexer->stop();
     QThreadPool::globalInstance()->waitForDone();
     m_historyPool.waitForDone();
 }
@@ -2058,6 +2060,7 @@ void MainWindow::closeVault()
     saveLayout();
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
+    m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
     resetWorkspace();
     resetHistory();
@@ -2083,6 +2086,7 @@ void MainWindow::openSingleFile(const QString &path)
     saveLayout();
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
+    m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
     resetWorkspace();
     resetHistory();

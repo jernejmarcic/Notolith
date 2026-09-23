@@ -47,7 +47,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| cold index, 20 000 notes | 3.6 s | 5 s |
+| cold index, 20 000 notes | 0.98 s | 5 s |
 | peak RSS, vault plus a 1 MB note | ~200 MB | - |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
@@ -429,6 +429,22 @@ panes off and 156 ms with them on. Now only the front matter is parsed, and
 the outgoing links pane no longer reads the note when it has no links. Note
 open with the panes on, 20 000-note vault: 13 / 27 / 156 ms at 50 / 200 /
 1 024 kB to 7.5 / 3.2 / 19 ms; unlinked mentions 0.33 to 0.16 ms.
+
+### 18. The indexer wrote on the UI thread
+
+A scan parsed across the pool, but each result came back to the UI thread as
+a queued call that wrote the note to SQLite there. On a cold index those calls
+arrived faster than the loop ran them, so it did nothing else: a 3 000-note
+index kept a 5 ms timer waiting 506 ms. And `openVault` asked the cache about
+every file on the UI thread before the scan began. Now the whole scan - walk,
+`isCurrent`, attachments, removals, writes - runs on a thread of its own with
+its own connection (`Index::Writer`); the UI thread takes only each 256-note
+chunk's names and progress, and one `changed()` at the end. The writer's
+statements are prepared once, not per row, which halved the write cost.
+20 000 notes: cold start 277 ms to 65 ms, cold index 1.97 s to 0.98 s, peak
+memory 376 MB to 196 MB; the 3 000-note timer's worst wait 6 ms. A scan that
+stop() cancels drops what it had queued: its names never reach the next
+vault's table (`IndexerThreadTest`).
 
 ## Tried and not adopted
 

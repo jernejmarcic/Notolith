@@ -1,6 +1,7 @@
 #include "Index.h"
 
 #include <algorithm>
+#include <optional>
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -56,6 +57,165 @@ QString targetName(const QString &target)
     const qsizetype slash = value.lastIndexOf(QLatin1Char('/'));
     return foldCase(slash < 0 ? value : value.mid(slash + 1));
 }
+
+/// Every name a note answers to: its link names, and its vault-relative path
+/// with and without ".md", since a link may also spell those.
+QStringList noteNames(const QString &relative, const Metadata &metadata)
+{
+    QStringList names = metadata.linkNames();
+    names << relative;
+    if (relative.endsWith(QLatin1String(".md")))
+        names << relative.chopped(3);
+    names.removeDuplicates();
+    return names;
+}
+
+/// An attachment answers to its file name and to its path, both with the
+/// extension, which is how Obsidian resolves `![[image.png]]`.
+QStringList attachmentNames(const QString &relative)
+{
+    QStringList names{QFileInfo(relative).fileName(), relative};
+    names.removeDuplicates();
+    return names;
+}
+
+/// Every statement one file's rows need, prepared once on one connection:
+/// the indexer's Writer keeps one for a whole scan, put() makes one for a
+/// note. Preparing each row's statement anew was most of a cold index's
+/// write time (Qt rewrites the placeholders on every prepare).
+class NoteRows {
+public:
+    explicit NoteRows(const QSqlDatabase &db)
+        : m_findFile(db)
+        , m_deleteContent(db)
+        , m_deleteFile(db)
+        , m_insertFile(db)
+        , m_insertHeading(db)
+        , m_insertLink(db)
+        , m_insertTag(db)
+        , m_insertBlock(db)
+        , m_insertTask(db)
+        , m_insertProperty(db)
+        , m_insertName(db)
+        , m_insertContent(db)
+    {
+        m_findFile.prepare(QStringLiteral("SELECT id FROM files WHERE path = ?"));
+        m_deleteContent.prepare(QStringLiteral("DELETE FROM content WHERE rowid = ?"));
+        m_deleteFile.prepare(QStringLiteral("DELETE FROM files WHERE id = ?"));
+        m_insertFile.prepare(
+            QStringLiteral("INSERT INTO files(path, mtime, size, hash, words) VALUES(?, ?, ?, ?, ?)"));
+        m_insertHeading.prepare(QStringLiteral(
+            "INSERT INTO headings(file, level, text, start, finish) VALUES(?, ?, ?, ?, ?)"));
+        m_insertLink.prepare(QStringLiteral(
+            "INSERT INTO links(file, target, tname, subpath, alias, embed, wiki, external, start, "
+            "finish, tstart, tfinish) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"));
+        m_insertTag.prepare(QStringLiteral("INSERT INTO tags(file, name, start, finish) VALUES(?, ?, ?, ?)"));
+        m_insertBlock.prepare(
+            QStringLiteral("INSERT INTO blocks(file, block, start, finish) VALUES(?, ?, ?, ?)"));
+        m_insertTask.prepare(
+            QStringLiteral("INSERT INTO tasks(file, done, text, start, finish) VALUES(?, ?, ?, ?, ?)"));
+        m_insertProperty.prepare(
+            QStringLiteral("INSERT INTO props(file, key, type, value) VALUES(?, ?, ?, ?)"));
+        m_insertName.prepare(QStringLiteral("INSERT INTO names(file, name, folded) VALUES(?, ?, ?)"));
+        m_insertContent.prepare(QStringLiteral("INSERT INTO content(rowid, path, body) VALUES(?, ?, ?)"));
+    }
+
+    /// Drops what the cache holds for `relative`. One indexed lookup first:
+    /// on a cold build nothing is cached yet, and every note would otherwise
+    /// pay for two deletes that match no rows.
+    void erase(const QString &relative)
+    {
+        m_findFile.bindValue(0, relative);
+        if (!m_findFile.exec() || !m_findFile.next())
+            return;
+        const qint64 fileID = m_findFile.value(0).toLongLong();
+        m_findFile.finish();
+        run(m_deleteContent, {fileID});
+        run(m_deleteFile, {fileID}); // the rest cascade
+    }
+
+    bool insertNote(const QString &relative, const Metadata &metadata, const QString &body,
+                    const QStringList &names, QString *error)
+    {
+        const qint64 fileID =
+            insertFile({relative, metadata.mtime, metadata.size, metadata.hash, metadata.wordCount}, error);
+        if (fileID < 0)
+            return false;
+        for (const Heading &heading : metadata.headings)
+            run(m_insertHeading, {fileID, heading.level, heading.text, heading.range.start, heading.range.end});
+        for (const Link &link : metadata.links) {
+            run(m_insertLink, {fileID, link.target, link.external ? QString() : targetName(link.target),
+                               link.subpath, link.alias, link.embed, link.wiki, link.external,
+                               link.range.start, link.range.end, link.targetRange.start, link.targetRange.end});
+        }
+        for (const Tag &tag : metadata.tags)
+            run(m_insertTag, {fileID, tag.name, tag.range.start, tag.range.end});
+        for (const BlockId &block : metadata.blockIds)
+            run(m_insertBlock, {fileID, block.id, block.range.start, block.range.end});
+        for (const Task &task : metadata.tasks)
+            run(m_insertTask, {fileID, task.done, task.text, task.range.start, task.range.end});
+        for (const Property &property : metadata.properties) {
+            run(m_insertProperty,
+                {fileID, property.key, int(property.type), property.values.join(QLatin1Char('\n'))});
+        }
+        insertNames(fileID, names);
+        // The rowid is the file's id, so a delete is a rowid lookup rather
+        // than a scan of the whole full-text table. That scan was quadratic:
+        // 20 000 notes took 39.8 s to index, against a 5 s budget.
+        run(m_insertContent, {fileID, relative, body});
+        return true;
+    }
+
+    bool insertAttachment(const QString &relative, qint64 mtime, qint64 size, const QStringList &names,
+                          QString *error)
+    {
+        // No hash and words -1: what tells an attachment from a note.
+        const qint64 fileID = insertFile({relative, mtime, size, QVariant(), -1}, error);
+        if (fileID < 0)
+            return false;
+        insertNames(fileID, names);
+        return true;
+    }
+
+private:
+    static bool run(QSqlQuery &query, const QVariantList &values)
+    {
+        for (int i = 0; i < values.size(); ++i)
+            query.bindValue(i, values.at(i));
+        return query.exec();
+    }
+
+    qint64 insertFile(const QVariantList &values, QString *error)
+    {
+        if (!run(m_insertFile, values)) {
+            if (error)
+                *error = m_insertFile.lastError().text();
+            return -1;
+        }
+        return m_insertFile.lastInsertId().toLongLong();
+    }
+
+    void insertNames(qint64 fileID, const QStringList &names)
+    {
+        for (const QString &name : names) {
+            if (!name.isEmpty())
+                run(m_insertName, {fileID, name, foldCase(name)});
+        }
+    }
+
+    QSqlQuery m_findFile;
+    QSqlQuery m_deleteContent;
+    QSqlQuery m_deleteFile;
+    QSqlQuery m_insertFile;
+    QSqlQuery m_insertHeading;
+    QSqlQuery m_insertLink;
+    QSqlQuery m_insertTag;
+    QSqlQuery m_insertBlock;
+    QSqlQuery m_insertTask;
+    QSqlQuery m_insertProperty;
+    QSqlQuery m_insertName;
+    QSqlQuery m_insertContent;
+};
 
 } // namespace
 
@@ -232,23 +392,6 @@ void Index::loadNames()
     }
 }
 
-void Index::beginBatch()
-{
-    if (!m_inBatch && m_db.isOpen()) {
-        m_db.transaction();
-        m_inBatch = true;
-    }
-}
-
-void Index::endBatch()
-{
-    if (m_inBatch) {
-        m_db.commit();
-        m_inBatch = false;
-        emit changed();
-    }
-}
-
 bool Index::isCurrent(const QString &path, qint64 mtime, qint64 size) const
 {
     QSqlQuery query(m_db);
@@ -272,19 +415,36 @@ void Index::forgetNames(const QString &path)
     m_pathNames.remove(path);
 }
 
-void Index::indexNames(qint64 fileId, const QString &path, const QStringList &names)
+void Index::rememberNames(const QString &path, const QStringList &names)
 {
-    QSqlQuery query(m_db);
     for (const QString &name : names) {
         if (name.isEmpty())
             continue;
-        query.prepare(QStringLiteral("INSERT INTO names(file, name, folded) VALUES(?, ?, ?)"));
-        query.addBindValue(fileId);
-        query.addBindValue(name);
-        query.addBindValue(foldCase(name));
-        query.exec();
         m_names[foldCase(name)].append(path);
         m_pathNames[path].append(name);
+    }
+}
+
+void Index::setNames(const QString &relative, const QStringList &names)
+{
+    forgetNames(relative);
+    rememberNames(relative, names);
+}
+
+void Index::beginBatch()
+{
+    if (!m_inBatch && m_db.isOpen()) {
+        m_db.transaction();
+        m_inBatch = true;
+    }
+}
+
+void Index::endBatch()
+{
+    if (m_inBatch) {
+        m_db.commit();
+        m_inBatch = false;
+        emit changed();
     }
 }
 
@@ -292,107 +452,14 @@ void Index::put(const Metadata &metadata, const QString &body)
 {
     if (!m_db.isOpen())
         return;
-
     const QString path = QDir(m_vaultRoot).relativeFilePath(metadata.path);
-    remove(metadata.path);
-
-    QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
-        "INSERT INTO files(path, mtime, size, hash, words) VALUES(?, ?, ?, ?, ?)"));
-    query.addBindValue(path);
-    query.addBindValue(metadata.mtime);
-    query.addBindValue(metadata.size);
-    query.addBindValue(metadata.hash);
-    query.addBindValue(metadata.wordCount);
-    if (!query.exec()) {
-        m_error = query.lastError().text();
+    NoteRows rows(m_db);
+    rows.erase(path);
+    forgetNames(path);
+    const QStringList names = noteNames(path, metadata);
+    if (!rows.insertNote(path, metadata, body, names, &m_error))
         return;
-    }
-    const qint64 fileId = query.lastInsertId().toLongLong();
-
-    const auto insert = [&](const QString &sql, const QVariantList &values) {
-        QSqlQuery statement(m_db);
-        statement.prepare(sql);
-        for (const QVariant &value : values)
-            statement.addBindValue(value);
-        statement.exec();
-    };
-
-    for (const Heading &heading : metadata.headings) {
-        insert(QStringLiteral("INSERT INTO headings(file, level, text, start, finish) "
-                              "VALUES(?, ?, ?, ?, ?)"),
-               {fileId, heading.level, heading.text, heading.range.start, heading.range.end});
-    }
-    for (const Link &link : metadata.links) {
-        insert(QStringLiteral("INSERT INTO links(file, target, tname, subpath, alias, embed, "
-                              "wiki, external, start, finish, tstart, tfinish) "
-                              "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
-               {fileId, link.target, link.external ? QString() : targetName(link.target),
-                link.subpath, link.alias, link.embed, link.wiki,
-                link.external, link.range.start, link.range.end,
-                link.targetRange.start, link.targetRange.end});
-    }
-    for (const Tag &tag : metadata.tags) {
-        insert(QStringLiteral("INSERT INTO tags(file, name, start, finish) VALUES(?, ?, ?, ?)"),
-               {fileId, tag.name, tag.range.start, tag.range.end});
-    }
-    for (const BlockId &block : metadata.blockIds) {
-        insert(QStringLiteral("INSERT INTO blocks(file, block, start, finish) VALUES(?, ?, ?, ?)"),
-               {fileId, block.id, block.range.start, block.range.end});
-    }
-    for (const Task &task : metadata.tasks) {
-        insert(QStringLiteral("INSERT INTO tasks(file, done, text, start, finish) "
-                              "VALUES(?, ?, ?, ?, ?)"),
-               {fileId, task.done, task.text, task.range.start, task.range.end});
-    }
-    for (const Property &property : metadata.properties) {
-        insert(QStringLiteral("INSERT INTO props(file, key, type, value) VALUES(?, ?, ?, ?)"),
-               {fileId, property.key, int(property.type), property.values.join(QLatin1Char('\n'))});
-    }
-
-    QStringList names = metadata.linkNames();
-    // A link may also spell the vault-relative path, with or without folders.
-    names << path;
-    if (path.endsWith(QLatin1String(".md")))
-        names << path.chopped(3);
-    names.removeDuplicates();
-    indexNames(fileId, path, names);
-
-    // The rowid is the file's id, so a delete is a rowid lookup rather than a
-    // scan of the whole full-text table. That scan was quadratic: 20 000 notes
-    // took 39.8 s to index, against a 5 s budget.
-    insert(QStringLiteral("INSERT INTO content(rowid, path, body) VALUES(?, ?, ?)"),
-           {fileId, path, body});
-
-    if (!m_inBatch)
-        emit changed();
-}
-
-void Index::putAttachment(const QString &path, qint64 mtime, qint64 size)
-{
-    if (!m_db.isOpen())
-        return;
-
-    const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
-    remove(path);
-
-    QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
-        "INSERT INTO files(path, mtime, size, hash, words) VALUES(?, ?, ?, NULL, -1)"));
-    query.addBindValue(relative);
-    query.addBindValue(mtime);
-    query.addBindValue(size);
-    if (!query.exec()) {
-        m_error = query.lastError().text();
-        return;
-    }
-
-    // An attachment answers to its file name and to its path, both with the
-    // extension, which is how Obsidian resolves `![[image.png]]`.
-    QStringList names{QFileInfo(relative).fileName(), relative};
-    names.removeDuplicates();
-    indexNames(query.lastInsertId().toLongLong(), relative, names);
-
+    rememberNames(path, names);
     if (!m_inBatch)
         emit changed();
 }
@@ -402,27 +469,101 @@ void Index::remove(const QString &path)
     if (!m_db.isOpen())
         return;
     const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
-
-    // One indexed lookup first: on a cold build nothing is cached yet, so
-    // every note would otherwise pay for two deletes that match no rows.
-    QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("SELECT id FROM files WHERE path = ?"));
-    query.addBindValue(relative);
-    if (!query.exec() || !query.next()) {
-        forgetNames(relative);
-        return;
-    }
-    const qint64 fileID = query.value(0).toLongLong();
-
-    query.prepare(QStringLiteral("DELETE FROM content WHERE rowid = ?"));
-    query.addBindValue(fileID);
-    query.exec();
-
-    query.prepare(QStringLiteral("DELETE FROM files WHERE id = ?"));
-    query.addBindValue(fileID);
-    query.exec();
-
+    NoteRows(m_db).erase(relative);
     forgetNames(relative);
+}
+
+struct Index::Writer::Private {
+    QString connection;
+    QString vaultRoot;
+    QSqlDatabase db;
+    std::optional<NoteRows> rows;
+    QSqlQuery current;
+
+    QString relative(const QString &path) const { return QDir(vaultRoot).relativeFilePath(path); }
+};
+
+Index::Writer::Writer(const QString &databasePath, const QString &vaultRoot)
+    : d(std::make_unique<Private>())
+{
+    d->vaultRoot = vaultRoot;
+    d->connection =
+        QStringLiteral("noteAppC-writer-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    d->db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), d->connection);
+    d->db.setDatabaseName(databasePath);
+    if (!d->db.open())
+        return;
+    // WAL is the file's own, set by open(); these two are the connection's.
+    QSqlQuery pragma(d->db);
+    pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
+    pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    d->rows.emplace(d->db);
+    d->current = QSqlQuery(d->db);
+    d->current.prepare(QStringLiteral("SELECT mtime, size FROM files WHERE path = ?"));
+}
+
+Index::Writer::~Writer()
+{
+    d->rows.reset();
+    d->current = QSqlQuery();
+    d->db.close();
+    d->db = QSqlDatabase();
+    QSqlDatabase::removeDatabase(d->connection);
+}
+
+bool Index::Writer::isOpen() const
+{
+    return d->db.isOpen();
+}
+
+bool Index::Writer::isCurrent(const QString &path, qint64 mtime, qint64 size)
+{
+    d->current.bindValue(0, d->relative(path));
+    const bool same = d->current.exec() && d->current.next() && d->current.value(0).toLongLong() == mtime
+                   && d->current.value(1).toLongLong() == size;
+    d->current.finish();
+    return same;
+}
+
+QStringList Index::Writer::allPaths()
+{
+    QStringList paths;
+    QSqlQuery query(d->db);
+    query.exec(QStringLiteral("SELECT path FROM files WHERE words >= 0 ORDER BY path"));
+    while (query.next())
+        paths << query.value(0).toString();
+    return paths;
+}
+
+void Index::Writer::begin()
+{
+    d->db.transaction();
+}
+
+void Index::Writer::commit()
+{
+    d->db.commit();
+}
+
+QStringList Index::Writer::put(const Metadata &metadata, const QString &body)
+{
+    const QString relative = d->relative(metadata.path);
+    d->rows->erase(relative);
+    const QStringList names = noteNames(relative, metadata);
+    return d->rows->insertNote(relative, metadata, body, names, nullptr) ? names : QStringList();
+}
+
+QStringList Index::Writer::putAttachment(const QString &path, qint64 mtime, qint64 size)
+{
+    const QString relative = d->relative(path);
+    d->rows->erase(relative);
+    const QStringList names = attachmentNames(relative);
+    return d->rows->insertAttachment(relative, mtime, size, names, nullptr) ? names : QStringList();
+}
+
+void Index::Writer::remove(const QString &path)
+{
+    d->rows->erase(d->relative(path));
 }
 
 int Index::contentRowCount() const

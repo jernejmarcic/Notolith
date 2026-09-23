@@ -398,10 +398,9 @@ the features existing decreases it".
   - [ ] Query blocks (Search off), base blocks (Bases off) and the embeds of
         stage 2 as editor features: wire `MarkdownEditor::setFeatures` when
         lane I merges. Spellcheck already has its own switch.
-  - [ ] Found by the measurement: the indexer posts one result per note to
-        the UI thread and writes it to SQLite there, 0.18 ms each, so a cold
-        index of 20 000 notes keeps the event loop busy for seconds. Write on
-        a worker connection and post progress in batches.
+  - [x] Found by the measurement: the indexer wrote every note to SQLite on
+        the UI thread. The scan now runs on its own thread and connection
+        (PERFORMANCE.md fix 18): 20 000-note cold start 277 to 65 ms.
 
 ## Requested 2026-09-23, afternoon: a demo vault, and a last pass
 

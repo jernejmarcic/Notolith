@@ -54,11 +54,12 @@ canvas  bases  fuzz  settings  plugins  appstreamtest
 ```
 
 Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`:
-cold start to first painted frame 278 ms (including `openVault`), note open
-1.7 / 13 / 27 / 150 ms at 1 / 50 / 200 / 1 024 kB and 3.7 ms for a vault note
-with every side pane filled, keystroke 0.2-0.5 ms, a search 0.05-6.4 ms off the
-UI thread, unlinked mentions 0.3 ms. Every fix behind the numbers, with before
-and after, is in `docs/PERFORMANCE.md` (16 of them so far).
+cold start to first painted frame 65 ms (including `openVault`; 42 ms with
+every optional feature off), cold index 0.98 s, note open 1.5 / 8.2 / 3.3 /
+21 ms at 1 / 50 / 200 / 1 024 kB and 3.7 ms for a vault note with every side
+pane filled, keystroke 0.2-0.5 ms, a search 0.05-6.4 ms off the UI thread,
+unlinked mentions 0.16 ms, peak memory 196 MB. Every fix behind the numbers,
+with before and after, is in `docs/PERFORMANCE.md` (18 of them so far).
 
 Working today, beyond the basics (vault or loose file, live preview / source /
 reading, index, find and replace):

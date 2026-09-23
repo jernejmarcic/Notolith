@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <thread>
 
 #include <QCoreApplication>
 #include <QDir>
@@ -12,6 +13,7 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include "Fuzzy.h"
 #include "Index.h"
@@ -657,4 +659,77 @@ TEST(SearchPerfTest, SearchTimeScalesWithVaultSizeNotQuadratically)
                 small, smallMs, large, largeMs, sizeRatio, timeRatio);
 
     EXPECT_LT(timeRatio, sizeRatio * 2.0);
+}
+
+namespace {
+
+void writeNotes(const QTemporaryDir &dir, const QString &prefix, int count)
+{
+    for (int i = 0; i < count; ++i) {
+        QFile file(dir.filePath(QStringLiteral("%1%2.md").arg(prefix).arg(i)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        // Rows in most of the tables, as a real note has: what a write costs.
+        QString text = QStringLiteral("---\ntags: [a, b]\nstatus: draft\n---\n# %1 %2\n\n").arg(prefix).arg(i);
+        for (int link = 1; link <= 8; ++link)
+            text += QStringLiteral("## Part %1\n\nSee [[%2%3]] #t%1 and text to index.\n- [ ] task %1\n\n")
+                        .arg(link)
+                        .arg(prefix)
+                        .arg(i + link);
+        file.write(text.toUtf8());
+    }
+}
+
+} // namespace
+
+TEST(IndexerThreadTest, AColdIndexLeavesTheEventLoopFree)
+{
+    // The scan writes on a thread of its own and the Index's thread takes
+    // only each chunk's names. Writing every note there held the loop for
+    // the whole index, 0.18 ms a note (docs/PERFORMANCE.md, fix 18).
+    QTemporaryDir dir;
+    writeNotes(dir, QStringLiteral("Note"), 3000);
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(Vault(dir.path()));
+
+    QElapsedTimer beat;
+    qint64 worst = 0;
+    QTimer heartbeat;
+    heartbeat.setInterval(5);
+    QObject::connect(&heartbeat, &QTimer::timeout, [&] { worst = std::max(worst, beat.restart()); });
+    beat.start();
+    heartbeat.start();
+    ASSERT_TRUE(done.wait(60000));
+    heartbeat.stop();
+
+    EXPECT_EQ(index.noteCount(), 3000);
+    EXPECT_EQ(index.resolve(QStringLiteral("Note2999")), QStringLiteral("Note2999.md"));
+    std::printf("[ PERF     ] cold index of 3000 notes: longest wait between 5 ms beats %lld ms\n",
+                static_cast<long long>(worst));
+    EXPECT_LT(worst, 40);
+}
+
+TEST(IndexerThreadTest, AScanStoppedByAVaultSwitchLeavesNothingBehind)
+{
+    QTemporaryDir old;
+    writeNotes(old, QStringLiteral("Old"), 3000);
+    QTemporaryDir fresh;
+    writeNotes(fresh, QStringLiteral("New"), 1);
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(Vault(old.path()));
+    // Long enough for the scan to have queued chunks the loop has not run.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    indexer.setVault(Vault(fresh.path()));
+    ASSERT_TRUE(done.wait(20000));
+    QCoreApplication::processEvents(); // anything the old scan still had queued
+
+    EXPECT_EQ(done.size(), 1) << "the stopped scan never reports";
+    int leaked = 0;
+    for (int i = 0; i < 3000; ++i)
+        leaked += !index.resolve(QStringLiteral("Old%1").arg(i)).isEmpty();
+    EXPECT_EQ(leaked, 0) << "names from the old vault's scan";
+    EXPECT_EQ(index.resolve(QStringLiteral("New0")), QStringLiteral("New0.md"));
 }
