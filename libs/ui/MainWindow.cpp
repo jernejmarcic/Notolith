@@ -111,6 +111,24 @@
 namespace noteAppC {
 
 namespace {
+
+/// "image", "audio", "video", or empty: the files Obsidian opens in a tab
+/// of their own, by the lists the editor's embeds use (layoutEmbed).
+QString mediaKindOf(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    static const QByteArrayList images = QImageReader::supportedImageFormats();
+    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
+        return QStringLiteral("image");
+    static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
+                                      QStringLiteral("ogg"), QStringLiteral("3gp"), QStringLiteral("flac"),
+                                      QStringLiteral("opus"), QStringLiteral("oga")};
+    if (audio.contains(suffix))
+        return QStringLiteral("audio");
+    static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
+                                      QStringLiteral("mov"), QStringLiteral("mkv")};
+    return video.contains(suffix) ? QStringLiteral("video") : QString();
+}
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
 /// a phone held upright, or a window tiled to a sliver.
@@ -2347,6 +2365,8 @@ void MainWindow::applyTheme()
         if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
             pdf->setTheme(m_theme);
 #endif
+        if (auto *media = qobject_cast<MarkdownEditor *>(leaf->view))
+            media->setTheme(m_theme);
     }
     if (m_tags)
         m_tags->setTheme(m_theme);
@@ -2824,6 +2844,7 @@ QJsonObject MainWindow::layoutJSON() const
                                    : path.endsWith(QLatin1String(".base"))   ? QStringLiteral("bases")
                                    : path.endsWith(QLatin1String(".epub"))   ? QStringLiteral("epub")
                                    : path.endsWith(QLatin1String(".pdf"))    ? QStringLiteral("pdf")
+                                   : !mediaKindOf(path).isEmpty()            ? mediaKindOf(path)
                                                                             : QStringLiteral("markdown");
                 view = {{QStringLiteral("type"), type},
                         {QStringLiteral("state"), QJsonObject{{QStringLiteral("file"), m_vault.relative(path)}}}};
@@ -2898,7 +2919,8 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
                 const QString kind = view.value(QStringLiteral("type")).toString();
                 const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
                                 || kind == QLatin1String("bases") || kind == QLatin1String("epub")
-                                || kind == QLatin1String("pdf");
+                                || kind == QLatin1String("pdf") || kind == QLatin1String("image")
+                                || kind == QLatin1String("audio") || kind == QLatin1String("video");
                 if (opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)))
                     leaf->pendingPath = m_vault.absolute(file);
                 byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
@@ -3207,8 +3229,8 @@ bool MainWindow::isViewFile(const QString &path) const
     if (path.endsWith(QLatin1String(".pdf"), Qt::CaseInsensitive))
         return featureOn("pdf-viewer");
 #endif
-    Q_UNUSED(path);
-    return false;
+    const QString media = mediaKindOf(path);
+    return media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds"));
 }
 
 bool MainWindow::openView(const QString &path, NavSource source, const QString &fragment)
@@ -3254,6 +3276,19 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
         }
     }
 #endif
+    if (!view && !mediaKindOf(path).isEmpty()) {
+        // An image, a recording or a film is its own embed, alone, in
+        // reading view: the same drawing and player a note gives it.
+        auto *media = new MarkdownEditor(m_active->area);
+        media->setObjectName(QStringLiteral("mediaView"));
+        media->setTheme(m_theme);
+        media->setFeatures(m_active->editor->features());
+        media->setLinkResolver(m_resolveLink);
+        media->setMode(MarkdownEditor::Mode::Reading);
+        media->setNoteText(QStringLiteral("![[") + (m_vault.contains(path) ? m_vault.relative(path) : path)
+                           + QStringLiteral("]]\n"));
+        view = media;
+    }
     Q_UNUSED(fragment);
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive)) {

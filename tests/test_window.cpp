@@ -1594,6 +1594,37 @@ TEST_F(WindowTest, ALinkToABlockOpensTheNoteAtThatBlock)
     EXPECT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("^list")));
 }
 
+TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
+{
+    QImage picture(400, 200, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    MainWindow window;
+    window.openVault(dir.path());
+    window.resize(1000, 700);
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    auto *media = window.findChild<MarkdownEditor *>(QStringLiteral("mediaView"));
+    ASSERT_NE(media, nullptr);
+    WAIT_TRUE(media->isVisibleTo(&window), 1000); // a layout shows a new child a turn later
+    EXPECT_EQ(media->mode(), MarkdownEditor::Mode::Reading);
+    // Drawn: the picture's own colour is on screen.
+    const auto drawn = [media] {
+        const QImage shot = media->grab().toImage();
+        for (int y = 0; y < shot.height(); y += 4) {
+            for (int x = 0; x < shot.width(); x += 4) {
+                if (shot.pixelColor(x, y) == QColor(Qt::darkCyan))
+                    return true;
+            }
+        }
+        return false;
+    };
+    WAIT_TRUE(drawn(), 3000);
+    // A file of no kind noteAppC opens still says so, and opens nothing.
+    write(QStringLiteral("data.bin"), "\x01\x02");
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("data.bin"))));
+}
+
 TEST_F(WindowTest, APagePreviewShowsALinkedImage)
 {
     QImage picture(800, 400, QImage::Format_RGB32);
