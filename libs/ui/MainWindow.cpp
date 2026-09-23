@@ -41,6 +41,12 @@
 #include "SettingsPage.h"
 #include "TagsPane.h"
 
+#ifdef NOTEAPPC_HAVE_SPELLCHECK
+#include "SpellChecker.h"
+#include <QFutureWatcher>
+#include <QtConcurrent>
+#endif
+
 namespace noteAppC {
 
 namespace {
@@ -708,9 +714,52 @@ void MainWindow::applySettings()
     m_editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     m_editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     m_editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+    updateSpelling();
 
     m_inlineTitle->setVisible(!m_notePath.isEmpty()
                               && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
+}
+
+void MainWindow::updateSpelling()
+{
+#ifdef NOTEAPPC_HAVE_SPELLCHECK
+    if (!m_settings.boolean(QStringLiteral("editor.spellcheck"))) {
+        if (m_spellHanded)
+            m_editor->setSpelling({});
+        m_spellHanded = false;
+        return;
+    }
+    if (m_spell) {
+        // Handed over once; every later settings change would otherwise lay
+        // the note out again for nothing. No dictionary, nothing to hand.
+        if (m_spellHanded || m_spell->languages().isEmpty())
+            return;
+        const std::shared_ptr<SpellChecker> spell = m_spell;
+        m_editor->setSpelling({[spell](const QString &word) { return spell->isCorrect(word); },
+                               [spell](const QString &word) { return spell->suggestions(word); },
+                               [spell](const QString &word) { spell->addWord(word); }});
+        m_spellHanded = true;
+        return;
+    }
+    if (m_spellLoading || !m_painted)
+        return;
+    m_spellLoading = true;
+    auto *watcher = new QFutureWatcher<std::shared_ptr<SpellChecker>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        m_spell = watcher->result();
+        m_spellLoading = false;
+        watcher->deleteLater();
+        if (m_spell->languages().isEmpty()) {
+            statusBar()->showMessage(
+                tr("Spellcheck is on, but there is no hunspell dictionary for %1")
+                    .arg(SpellChecker::systemLanguages().join(QStringLiteral(", "))),
+                8000);
+        }
+        updateSpelling();
+    });
+    watcher->setFuture(QtConcurrent::run(
+        [] { return std::make_shared<SpellChecker>(SpellChecker::systemLanguages()); }));
+#endif
 }
 
 void MainWindow::applyTheme()
@@ -1018,7 +1067,10 @@ void MainWindow::openTarget(const LaunchTarget &target)
         break;
     }
     }
-    watchThemeFiles(); // after the first paint: openWhenShown queued this call
+    // After the first paint: openWhenShown queued this call.
+    m_painted = true;
+    watchThemeFiles();
+    updateSpelling();
 }
 
 void MainWindow::openWhenShown(const LaunchTarget &target)

@@ -20,3 +20,8 @@ target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets noteAppC_vault noteAppC_theme noteAppC_index
     noteAppC_editor noteAppC_settings)
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
+
+if(TARGET noteAppC_spell)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_spell Qt6::Concurrent)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SPELLCHECK)
+endif()

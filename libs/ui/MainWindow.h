@@ -2,6 +2,7 @@
 
 #include <QMainWindow>
 
+#include <memory>
 #include <optional>
 
 #include "Index.h"
@@ -23,6 +24,8 @@ class QToolButton;
 class QTreeView;
 
 namespace noteAppC {
+
+class SpellChecker;
 
 class BacklinksPane;
 class MarkdownEditor;
@@ -145,6 +148,11 @@ private:
     /// scheme has changed since the last call, so this costs nothing on the
     /// settings-page keystroke path.
     void watchThemeFiles();
+    /// Spelling for the editor, from the spellcheck module when it is compiled
+    /// in: the dictionaries load on the thread pool once the window has been
+    /// painted, and the editor gets them when they are ready. A no-op in a
+    /// build without the module.
+    void updateSpelling();
     /// QFileSystemWatcher fired: re-applies the theme, puts back any watch a
     /// save-by-rename dropped, and refreshes the settings page's scheme list
     /// if it is open.
@@ -224,6 +232,11 @@ private:
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.
     QFileSystemWatcher *m_themeWatcher = nullptr;
+
+    std::shared_ptr<SpellChecker> m_spell;
+    bool m_spellLoading = false;
+    bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
+    bool m_painted = false;     ///< optional work waits for the first paint
     /// What m_themeWatcher is currently set up for, so watchThemeFiles() can
     /// skip the rescan when nothing that would change it has moved.
     QString m_watchedSchemePath;

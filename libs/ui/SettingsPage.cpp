@@ -448,11 +448,13 @@ QWidget *SettingsPage::buildEditorPage()
 
     addToggleRow(layout, QStringLiteral("editor.strictLineBreaks"), tr("Strict line breaks"),
                 tr("Treat every newline as a line break, the way CommonMark does."));
-    // The one setting here that still does nothing: there is no dictionary
-    // behind it. hunspell is in PLAN.md and is not a dependency yet, so the
-    // row stores its value and waits rather than pretending.
+#ifdef NOTEAPPC_HAVE_SPELLCHECK
+    // Only in a build with the spellcheck module: without it there is nothing
+    // behind the switch, and a switch that does nothing is worse than none.
     addToggleRow(layout, QStringLiteral("editor.spellcheck"), tr("Spellcheck"),
-                tr("Underline words the dictionary does not recognise."));
+                tr("Underline words the dictionary does not recognise. Uses the hunspell "
+                   "dictionaries installed for your system's languages."));
+#endif
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),

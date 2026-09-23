@@ -23,6 +23,8 @@
 #include <QFileInfo>
 #include <QImageReader>
 #include <QLocale>
+#include <QMenu>
+#include <QRegularExpression>
 #include <QStringListModel>
 #include <QtConcurrent>
 #include <QTextLine>
@@ -995,7 +997,162 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(BlockView &view)
 {
     QList<QTextLayout::FormatRange> formats = formatsIn(view, view.span.range, view.map);
     formats += codeFormatsFor(view);
+    appendSpellingFormats(view, formats);
     return formats;
+}
+
+void MarkdownEditor::setSpelling(Spelling spelling)
+{
+    m_spelling = std::move(spelling);
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+QList<Range> MarkdownEditor::checkedWordsOf(const BlockView &view) const
+{
+    QList<Range> words;
+    switch (view.span.kind) {
+    case BlockSpan::Kind::Paragraph:
+    case BlockSpan::Kind::Heading:
+    case BlockSpan::Kind::List:
+    case BlockSpan::Kind::Quote:
+    case BlockSpan::Kind::Callout:
+        break;
+    default:
+        return words; // code, maths, tables, properties: not prose
+    }
+    if (m_mode == Mode::Source)
+        return words;
+
+    // A run of letters, with apostrophes inside it ("don't"), standing on its
+    // own: part of "abc123" or "snake_case" is not a word to check.
+    static const QRegularExpression word(QStringLiteral(
+        "(?<![\\p{L}\\p{M}\\p{N}_])[\\p{L}\\p{M}]+(?:['\u2019][\\p{L}\\p{M}]+)*"
+        "(?![\\p{L}\\p{M}\\p{N}_])"));
+    const QString &shown = view.map.text();
+    for (auto match = word.globalMatch(shown); match.hasNext();) {
+        const QRegularExpressionMatch found = match.next();
+        const Range source{view.map.toSource(found.capturedStart()),
+                           view.map.toSource(found.capturedEnd())};
+        // A hidden marker inside it ("wo**rd**"): replacing it would lose the
+        // marker, so it is left alone.
+        if (source.length() != found.capturedLength())
+            continue;
+        // Not the word being typed: it is not finished yet.
+        if (view.active && view.caretWord.isValid() && source.overlaps(view.caretWord))
+            continue;
+        bool skip = false;
+        for (int i = view.firstStyle; i < view.lastStyle && !skip; ++i) {
+            const StyleSpan &span = m_decorations.styles.at(i);
+            if (!span.range.overlaps(source))
+                continue;
+            switch (span.kind) {
+            case StyleSpan::Kind::InlineCode:
+            case StyleSpan::Kind::CodeBlock:
+            case StyleSpan::Kind::Link:
+            case StyleSpan::Kind::Tag:
+            case StyleSpan::Kind::Math:
+            case StyleSpan::Kind::Html:
+                skip = true;
+                break;
+            default:
+                break;
+            }
+        }
+        if (!skip)
+            words.append(source);
+    }
+    return words;
+}
+
+Range MarkdownEditor::wordAtCaret() const
+{
+    if (!m_spelling.isCorrect)
+        return {};
+    const auto inWord = [](QChar c) {
+        return c.isLetterOrNumber() || c.isMark() || c == QLatin1Char('\'')
+               || c == QChar(0x2019) || c == QLatin1Char('_');
+    };
+    qsizetype start = m_cursor;
+    while (start > 0 && inWord(m_text.at(start - 1)))
+        --start;
+    qsizetype end = m_cursor;
+    while (end < m_text.size() && inWord(m_text.at(end)))
+        ++end;
+    return start < end ? Range{start, end} : Range{};
+}
+
+void MarkdownEditor::appendSpellingFormats(const BlockView &view,
+                                           QList<QTextLayout::FormatRange> &formats) const
+{
+    if (!m_spelling.isCorrect)
+        return;
+    QTextCharFormat underline;
+    underline.setUnderlineStyle(QTextCharFormat::SpellCheckUnderline);
+    underline.setUnderlineColor(m_theme.color(QStringLiteral("--text-error")));
+    for (const Range &source : checkedWordsOf(view)) {
+        if (m_spelling.isCorrect(m_text.mid(source.start, source.length())))
+            continue;
+        const Range shown = view.map.toDisplay(source);
+        formats.append({int(shown.start), int(shown.length()), underline});
+    }
+}
+
+std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
+{
+    if (!m_spelling.isCorrect)
+        return nullptr;
+    const qsizetype index = blockAt(sourceOffset);
+    if (index < 0)
+        return nullptr;
+    const BlockView &view = m_blocks[size_t(index)];
+    if (!view.laidOut)
+        return nullptr;
+    for (const Range &source : checkedWordsOf(view)) {
+        if (sourceOffset < source.start || sourceOffset > source.end)
+            continue;
+        const QString misspelt = m_text.mid(source.start, source.length());
+        if (m_spelling.isCorrect(misspelt))
+            return nullptr;
+
+        auto menu = std::make_unique<QMenu>(this);
+        const QStringList suggestions =
+            m_spelling.suggestions ? m_spelling.suggestions(misspelt) : QStringList();
+        for (const QString &suggestion : suggestions) {
+            connect(menu->addAction(suggestion), &QAction::triggered, this,
+                    [this, source, misspelt, suggestion] {
+                        // Only if the word is still there: the menu may have
+                        // stayed open over a reparse.
+                        if (m_text.mid(source.start, source.length()) != misspelt)
+                            return;
+                        pushUndo();
+                        m_lastEdit.invalidate();
+                        applyEdit(source.start, source.length(), suggestion);
+                    });
+        }
+        if (suggestions.isEmpty())
+            menu->addAction(tr("No suggestions"))->setEnabled(false);
+        if (m_spelling.addWord) {
+            menu->addSeparator();
+            connect(menu->addAction(tr("Add \"%1\" to dictionary").arg(misspelt)),
+                    &QAction::triggered, this, [this, misspelt] {
+                        m_spelling.addWord(misspelt);
+                        invalidateLayouts();
+                        updateLayout();
+                        viewport()->update();
+                    });
+        }
+        return menu;
+    }
+    return nullptr;
+}
+
+void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
+{
+    const QPoint point = viewport()->mapFrom(this, event->pos());
+    if (std::unique_ptr<QMenu> menu = spellingMenuAt(offsetAt(point)))
+        menu->exec(event->globalPos());
 }
 
 QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
@@ -2176,6 +2333,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     const bool reveal = m_mode == Mode::Source
                         || (m_mode == Mode::LivePreview && view.active && !perElement);
     view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
+    view.caretWord = view.active ? wordAtCaret() : Range{};
     QList<Range> hidden;
     if (!reveal) {
         hidden.reserve(view.lastSyntax - view.firstSyntax);
@@ -2363,8 +2521,9 @@ void MarkdownEditor::updateLayout()
             view.layout.reset();
             view.laidOut = false;
             view.heightEstimated = false;
-        } else if (active && view.laidOut && !revealsWholeBlock(view)
-                   && revealedSyntax(view) != view.revealed) {
+        } else if (active && view.laidOut
+                   && ((!revealsWholeBlock(view) && revealedSyntax(view) != view.revealed)
+                       || !(wordAtCaret() == view.caretWord))) {
             view.layout.reset();
             view.laidOut = false;
             view.heightEstimated = false;

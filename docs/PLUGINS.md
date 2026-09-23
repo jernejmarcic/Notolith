@@ -172,9 +172,14 @@ Everything a note-taking app is for, and nothing it is not:
 
 ## Order of building, when it is time
 
-1. Move the first optional feature - spellcheck is the obvious one, since its
-   setting already exists and does nothing - into `libs/ext/spell/` behind
-   `NOTEAPPC_WITH_SPELLCHECK`. That establishes Tier 1 with one real module.
+1. **Done 2026-09-23.** Spellcheck is the first Tier 1 module:
+   `libs/ext/spell/` (hunspell) behind `NOTEAPPC_WITH_SPELLCHECK`, on by
+   default and dropped when hunspell is not found. The editor does not link
+   it - the window hands the editor three callbacks (is this word correct,
+   suggestions, add a word), so the editor library is the same with or
+   without the module. The dictionaries load on the thread pool after the
+   first paint, and the settings row exists only in a build that has the
+   module. It is the pattern the next module copies.
 2. Tier 2 only when there is a first real plugin to build against. An API
    designed with no client is an API designed wrong. With a mobile app
    planned, Tier 1 is also the only tier that reaches every platform, which

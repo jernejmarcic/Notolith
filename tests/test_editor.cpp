@@ -5,6 +5,7 @@
 #include <QGuiApplication>
 #include <QRandomGenerator>
 #include <QLineEdit>
+#include <QMenu>
 #include <QSignalSpy>
 #include <QScrollBar>
 #include <QScreen>
@@ -2241,6 +2242,87 @@ TEST(PropertyEditTest, ClickingAValueOpensItsEditor)
     }
     ASSERT_TRUE(edit) << "no value editor near the top of the table";
     EXPECT_EQ(edit->text(), QStringLiteral("Old"));
+}
+
+// --- spelling ------------------------------------------------------------------
+
+namespace {
+
+/// A dictionary of a few words, given the way the window gives the real one.
+struct FakeSpelling {
+    QStringList known = {QStringLiteral("good"), QStringLiteral("words"),
+                         QStringLiteral("here"), QStringLiteral("and"), QStringLiteral("don't")};
+    QStringList added;
+    MarkdownEditor::Spelling spelling()
+    {
+        return {[this](const QString &word) { return known.contains(word) || added.contains(word); },
+                [](const QString &) { return QStringList{QStringLiteral("words")}; },
+                [this](const QString &word) { added << word; }};
+    }
+};
+
+bool underlined(const MarkdownEditor &editor, qsizetype offset)
+{
+    return editor.formatAt(offset).underlineStyle() == QTextCharFormat::SpellCheckUnderline;
+}
+
+} // namespace
+
+TEST(SpellingTest, UnderlinesProseAndLeavesCodeLinksAndTagsAlone)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral(
+        "good wrds here and `codee` and [[Linkk]] and #tagg and don't x2y\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+
+    EXPECT_TRUE(underlined(*editor, note.indexOf(QLatin1String("wrds")) + 1));
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("good")) + 1));
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("codee")) + 1)) << "inline code";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("Linkk")) + 1)) << "a link";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("tagg")) + 1)) << "a tag";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("don't")) + 1)) << "an apostrophe";
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("x2y")))) << "not a word";
+
+    editor->setSpelling({});
+    EXPECT_FALSE(underlined(*editor, note.indexOf(QLatin1String("wrds")) + 1)) << "switched off";
+}
+
+TEST(SpellingTest, TheWordBeingTypedIsNotUnderlinedYet)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype inside = note.indexOf(QLatin1String("wrds")) + 2;
+    editor->enterBlockAt(inside);
+    EXPECT_FALSE(underlined(*editor, inside));
+    editor->enterBlockAt(note.indexOf(QLatin1String("here")) + 2);
+    EXPECT_TRUE(underlined(*editor, inside)) << "finished once the caret leaves it";
+}
+
+TEST(SpellingTest, TheMenuReplacesTheWordOrLearnsIt)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype at = note.indexOf(QLatin1String("wrds")) + 1;
+    EXPECT_FALSE(editor->spellingMenuAt(note.indexOf(QLatin1String("good")))) << "a correct word";
+
+    std::unique_ptr<QMenu> menu = editor->spellingMenuAt(at);
+    ASSERT_TRUE(menu);
+    ASSERT_FALSE(menu->actions().isEmpty());
+    EXPECT_EQ(menu->actions().first()->text(), QStringLiteral("words"));
+    menu->actions().first()->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("good words here\n"));
+
+    editor->setNoteText(note);
+    menu = editor->spellingMenuAt(at);
+    ASSERT_TRUE(menu);
+    menu->actions().last()->trigger(); // "Add to dictionary"
+    EXPECT_EQ(dictionary.added, QStringList{QStringLiteral("wrds")});
+    EXPECT_FALSE(underlined(*editor, at));
 }
 
 // --- links to headings -------------------------------------------------------

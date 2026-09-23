@@ -153,8 +153,16 @@ budget, which this project has already learned once on the index.
       and as wide as " > ", which is painted over it.
 - [ ] How Obsidian displays a block reference `[[Note#^id]]` is not recorded
       anywhere checked; shown as written until someone looks.
-- [ ] `editor.spellcheck` has no dictionary behind it. hunspell is in PLAN.md
-      and is not a dependency yet.
+- [x] Spellcheck: the first Tier 1 module, `libs/ext/spell/` (hunspell),
+      behind `NOTEAPPC_WITH_SPELLCHECK`. Wavy underline on prose (not code,
+      links, tags, maths, or the word being typed), right click for
+      suggestions and "Add to dictionary" (`~/.config/noteAppC/dictionary.txt`).
+      Dictionaries follow the system languages and load after the first paint.
+- [ ] **Jernej: starbase-1 has no hunspell dictionary**, so spellcheck shows
+      a status message and underlines nothing. `sudo pacman -S hunspell-en_gb`
+      for the en_GB locale. Slovenian is not in the Arch repositories; its
+      `sl_SI.aff`/`.dic` from LibreOffice's dictionaries work dropped into
+      `~/.local/share/hunspell/`, with `sl` added to `LANGUAGE`.
 - [ ] A listing inside a callout wraps; Obsidian scrolls it.
 - [x] Property values: text, number, date and date-time edit in place (click
       the value; Enter or clicking away keeps it, Escape drops it). Written

@@ -30,6 +30,9 @@ class QFileSystemWatcher;
 #include "LanguageStyle.h"
 #include "Theme.h"
 
+class QLineEdit;
+class QMenu;
+
 namespace noteAppC {
 
 /// How far a callout inside a callout steps in. Wide enough for its own icon,
@@ -95,6 +98,20 @@ public:
 
     /// Whether Ctrl+K on a selection writes `[[Note]]` or `[Note](Note.md)`.
     void setUseWikilinks(bool on);
+
+    /// Spelling, from the spellcheck module when it is compiled in and
+    /// switched on. The editor only asks; it never links a dictionary. An
+    /// empty one - no `isCorrect` - turns underlining off.
+    struct Spelling {
+        std::function<bool(const QString &)> isCorrect;
+        std::function<QStringList(const QString &)> suggestions;
+        std::function<void(const QString &)> addWord;
+    };
+    void setSpelling(Spelling spelling);
+    /// The menu a right click on a misspelt word at `sourceOffset` opens:
+    /// its suggestions, then "Add to dictionary". Null anywhere else. Built
+    /// rather than shown, so it can be tested.
+    std::unique_ptr<QMenu> spellingMenuAt(qsizetype sourceOffset);
     bool useWikilinks() const { return m_useWikilinks; }
 
     /// Paints the viewport through OpenGL instead of Qt's raster engine.
@@ -219,6 +236,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
     void resizeEvent(QResizeEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
@@ -322,6 +340,10 @@ private:
         /// ranges the caret has uncovered. Kept so a caret moving within the
         /// block relays it out only when this actually changes.
         QList<Range> revealed;
+        /// The word spelling skipped because the caret was in it. Kept so
+        /// the caret moving on to another word relays the block out and the
+        /// finished one is checked.
+        Range caretWord;
         /// Set when this block is a fenced code block carrying `#|` options.
         const CodeOptions *options = nullptr;
         /// Filled instead of `layout` when this is the frontmatter and live
@@ -619,6 +641,13 @@ private:
     void insertCompletion(const QString &completion);
 
     QList<QTextLayout::FormatRange> formatsFor(BlockView &view);
+    /// A wavy underline under each word of `view` the dictionary rejects.
+    void appendSpellingFormats(const BlockView &view, QList<QTextLayout::FormatRange> &formats) const;
+    /// The words of `view` spelling looks at, in source coordinates: prose
+    /// only, never code, links, tags or maths, and not the word being typed.
+    QList<Range> checkedWordsOf(const BlockView &view) const;
+    /// The word the caret is in or just after, while spelling is on.
+    Range wordAtCaret() const;
     /// Kate-definition colours for a fenced code block, in the coordinates of
     /// that block's display string. Not const: a piece records the state it
     /// ended in, for the piece after it.
@@ -653,9 +682,10 @@ private:
     void reloadStyleFiles();
     Parser m_parser;
     CodeHighlighter m_code;
+    Spelling m_spelling;
     /// The inline editor over a property value, while one is open, and the
     /// key it edits: a reparse can renumber the properties under it.
-    QPointer<class QLineEdit> m_propertyEdit;
+    QPointer<QLineEdit> m_propertyEdit;
     QString m_editedKey;
     /// Where the last updateLayout() moved blocks from, in document y; +inf
     /// when nothing moved. A scroll can reuse the pixels on screen only if

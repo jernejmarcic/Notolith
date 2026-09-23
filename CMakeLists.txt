@@ -26,6 +26,15 @@ qt_standard_project_setup()
 # it is installed but built against a Qt too new to link with that kit.
 option(NOTEAPPC_WITH_SYNTAX_HIGHLIGHTING "Colour fenced code blocks with KF6 SyntaxHighlighting" ON)
 option(NOTEAPPC_WITH_PDF "Embed PDFs with poppler-qt6" ON)
+# The first Tier 1 module (docs/PLUGINS.md). Off, or without hunspell, the app
+# has no spellcheck code at all and its settings row does not appear.
+option(NOTEAPPC_WITH_SPELLCHECK "Underline misspelt words with hunspell" ON)
+if(NOTEAPPC_WITH_SPELLCHECK)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(HUNSPELL QUIET IMPORTED_TARGET hunspell)
+    endif()
+endif()
 
 add_compile_options(-Wall -Wextra)
 
@@ -84,6 +93,9 @@ add_subdirectory(libs/render)
 add_subdirectory(libs/editor)
 add_subdirectory(libs/theme)
 add_subdirectory(libs/settings)
+if(TARGET PkgConfig::HUNSPELL)
+    add_subdirectory(libs/ext/spell)
+endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
 add_subdirectory(tools)
