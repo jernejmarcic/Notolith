@@ -1,0 +1,296 @@
+#include "DirectRunner.h"
+
+#include <QElapsedTimer>
+#include <QFile>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QRegularExpression>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QTimer>
+
+#include <memory>
+
+namespace noteAppC::notebook {
+
+namespace {
+
+/// How a language runs: the file its source is written to, the tool that
+/// must be installed, and the command line, run in the block's own
+/// temporary directory. `%f` is the file, `%d` the directory.
+struct Recipe {
+    QStringList names;
+    QString file;
+    QString tool;
+    QStringList command;
+};
+
+// Python prints the value of a last bare expression, as a notebook cell does.
+constexpr char kPythonCell[] = R"(import ast, sys
+path = sys.argv[1]
+tree = ast.parse(open(path).read(), path)
+last = tree.body.pop() if tree.body and isinstance(tree.body[-1], ast.Expr) else None
+scope = {"__name__": "__main__"}
+exec(compile(tree, path, "exec"), scope)
+if last is not None:
+    value = eval(compile(ast.Expression(last.value), path, "eval"), scope)
+    if value is not None:
+        print(repr(value))
+)";
+
+const QList<Recipe> &recipes()
+{
+    static const QList<Recipe> list = {
+        {{QStringLiteral("python"), QStringLiteral("python3"), QStringLiteral("py")}, QStringLiteral("cell.py"),
+         QStringLiteral("python3"), {QStringLiteral("python3"), QStringLiteral("-c"), QString::fromLatin1(kPythonCell), QStringLiteral("%f")}},
+        // Haskell through ghci, which prints every expression's value; a
+        // block with a `main` is a program and goes to runghc instead.
+        {{QStringLiteral("haskell"), QStringLiteral("hs")}, QStringLiteral("cell.ghci"), QStringLiteral("ghci"),
+         {QStringLiteral("ghci"), QStringLiteral("-v0"), QStringLiteral("-ignore-dot-ghci"), QStringLiteral("-ghci-script"), QStringLiteral("%f"), QStringLiteral("-e"), QStringLiteral("return ()")}},
+        {{QStringLiteral("bash"), QStringLiteral("sh"), QStringLiteral("shell"), QStringLiteral("zsh")}, QStringLiteral("cell.sh"),
+         QStringLiteral("bash"), {QStringLiteral("bash"), QStringLiteral("%f")}},
+        {{QStringLiteral("javascript"), QStringLiteral("js"), QStringLiteral("node")}, QStringLiteral("cell.js"),
+         QStringLiteral("node"), {QStringLiteral("node"), QStringLiteral("%f")}},
+        {{QStringLiteral("ruby"), QStringLiteral("rb")}, QStringLiteral("cell.rb"), QStringLiteral("ruby"), {QStringLiteral("ruby"), QStringLiteral("%f")}},
+        {{QStringLiteral("perl"), QStringLiteral("pl")}, QStringLiteral("cell.pl"), QStringLiteral("perl"), {QStringLiteral("perl"), QStringLiteral("%f")}},
+        {{QStringLiteral("lua")}, QStringLiteral("cell.lua"), QStringLiteral("lua"), {QStringLiteral("lua"), QStringLiteral("%f")}},
+        {{QStringLiteral("c")}, QStringLiteral("cell.c"), QStringLiteral("gcc"),
+         {QStringLiteral("sh"), QStringLiteral("-c"), QStringLiteral("gcc -O1 -o \"$1/cell\" \"$1/cell.c\" -lm && \"$1/cell\""), QStringLiteral("sh"), QStringLiteral("%d")}},
+        {{QStringLiteral("cpp"), QStringLiteral("c++"), QStringLiteral("cxx")}, QStringLiteral("cell.cpp"), QStringLiteral("g++"),
+         {QStringLiteral("sh"), QStringLiteral("-c"), QStringLiteral("g++ -std=c++20 -O1 -o \"$1/cell\" \"$1/cell.cpp\" && \"$1/cell\""), QStringLiteral("sh"), QStringLiteral("%d")}},
+        {{QStringLiteral("rust"), QStringLiteral("rs")}, QStringLiteral("cell.rs"), QStringLiteral("rustc"),
+         {QStringLiteral("sh"), QStringLiteral("-c"), QStringLiteral("rustc -O -o \"$1/cell\" \"$1/cell.rs\" && \"$1/cell\""), QStringLiteral("sh"), QStringLiteral("%d")}},
+        {{QStringLiteral("java")}, QStringLiteral("Main.java"), QStringLiteral("java"), {QStringLiteral("java"), QStringLiteral("%f")}},
+    };
+    return list;
+}
+
+const Recipe *recipeFor(const QString &language)
+{
+    const QString wanted = language.trimmed().toLower();
+    for (const Recipe &recipe : recipes()) {
+        if (recipe.names.contains(wanted))
+            return &recipe;
+    }
+    return nullptr;
+}
+
+/// A Haskell block as a ghci script: each top-level declaration or
+/// expression one input, a multi-line one wrapped in :{ :} so ghci reads it
+/// whole.
+QString ghciScript(const QString &source)
+{
+    QStringList chunks;
+    QStringList current;
+    const auto flush = [&] {
+        while (!current.isEmpty() && current.last().trimmed().isEmpty())
+            current.removeLast();
+        if (current.size() == 1)
+            chunks << current.first();
+        else if (!current.isEmpty())
+            chunks << QStringLiteral(":{\n") + current.join(QLatin1Char('\n')) + QStringLiteral("\n:}");
+        current.clear();
+    };
+    for (const QString &line : source.split(QLatin1Char('\n'))) {
+        const bool continues = line.isEmpty() || line.at(0).isSpace();
+        if (!continues)
+            flush();
+        if (!current.isEmpty() || !line.trimmed().isEmpty())
+            current << line;
+    }
+    flush();
+    return chunks.join(QLatin1Char('\n')) + QLatin1Char('\n');
+}
+
+QString withoutAnsi(QString text)
+{
+    static const QRegularExpression ansi(QStringLiteral("\x1b\\[[0-9;?]*[ -/]*[@-~]"));
+    return text.remove(ansi);
+}
+
+constexpr qint64 kMaxOutput = 1 << 20; // a runaway print loop stops here
+
+} // namespace
+
+struct DirectRunner::Running {
+    QString language;
+    std::unique_ptr<QTemporaryDir> dir;
+    QProcess *process = nullptr;
+    QTimer timeout;
+    QElapsedTimer clock;
+    Deliver deliver;
+    bool timedOut = false;
+    bool interrupted = false;
+};
+
+DirectRunner::DirectRunner(QObject *parent)
+    : QObject(parent)
+{
+}
+
+DirectRunner::~DirectRunner()
+{
+    for (Running *running : std::as_const(m_running)) {
+        running->process->disconnect();
+        running->process->kill();
+        running->process->waitForFinished(1000);
+        delete running;
+    }
+}
+
+QString DirectRunner::toolFor(const QString &language)
+{
+    const Recipe *recipe = recipeFor(language);
+    return recipe ? recipe->tool : QString();
+}
+
+bool DirectRunner::canRun(const QString &language)
+{
+    const QString tool = toolFor(language);
+    return !tool.isEmpty() && !QStandardPaths::findExecutable(tool).isEmpty();
+}
+
+void DirectRunner::run(const Request &request, const Deliver &deliver)
+{
+    const auto fail = [this, deliver](const QString &error) {
+        NotebookRunResult result;
+        result.hasRun = true;
+        result.ok = false;
+        result.kernelError = error;
+        QTimer::singleShot(0, this, [deliver, result] { deliver(result); });
+    };
+    const Recipe *recipe = recipeFor(request.language);
+    if (!recipe)
+        return fail(tr("noteAppC does not know how to run \"%1\"").arg(request.language));
+    if (!canRun(request.language))
+        return fail(tr("%1 is not installed, so \"%2\" blocks cannot run").arg(recipe->tool, request.language));
+
+    auto *running = new Running;
+    running->language = request.language.trimmed().toLower();
+    running->deliver = deliver;
+    running->dir = std::make_unique<QTemporaryDir>();
+    if (!running->dir->isValid()) {
+        delete running;
+        return fail(tr("no temporary directory to run in"));
+    }
+    const QString dir = running->dir->path();
+
+    // Haskell with a `main` is a program; without, a ghci session.
+    Recipe chosen = *recipe;
+    QString text = request.source;
+    if (chosen.tool == QLatin1String("ghci")) {
+        static const QRegularExpression main(QStringLiteral("^main\\s*(::|=)"), QRegularExpression::MultilineOption);
+        if (main.match(text).hasMatch()) {
+            chosen.file = QStringLiteral("cell.hs");
+            chosen.command = {QStringLiteral("runghc"), QStringLiteral("%f")};
+        } else {
+            text = ghciScript(text);
+        }
+    }
+    const QString file = dir + QLatin1Char('/') + chosen.file;
+    {
+        QFile out(file);
+        if (!out.open(QIODevice::WriteOnly)) {
+            delete running;
+            return fail(tr("could not write the block to run it"));
+        }
+        out.write(text.toUtf8());
+    }
+
+    QStringList command;
+    for (const QString &part : std::as_const(chosen.command)) {
+        QString arg = part;
+        arg.replace(QStringLiteral("%f"), file);
+        arg.replace(QStringLiteral("%d"), dir);
+        command << arg;
+    }
+    SandboxRequest sandbox;
+    sandbox.runtimeDir = dir;
+    sandbox.readOnlyBinds = request.readOnlyBinds;
+    QString program;
+    QStringList args;
+    SandboxTier used = SandboxTier::Host;
+    wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used);
+
+    running->process = new QProcess(this);
+    running->process->setProgram(program);
+    running->process->setArguments(args);
+    running->process->setWorkingDirectory(dir);
+    // Nothing of the real home: caches and histories land in the throwaway
+    // directory.
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("HOME"), dir);
+    env.insert(QStringLiteral("TMPDIR"), dir);
+    running->process->setProcessEnvironment(env);
+    running->process->setStandardInputFile(QProcess::nullDevice());
+
+    connect(running->process, &QProcess::readyReadStandardOutput, this, [running] {
+        if (running->process->bytesAvailable() > kMaxOutput)
+            running->process->kill();
+    });
+    connect(running->process, &QProcess::finished, this, [this, running](int code, QProcess::ExitStatus status) {
+        NotebookRunResult result;
+        result.hasRun = true;
+        result.wallMs = running->clock.elapsed();
+        const QString out = withoutAnsi(QString::fromUtf8(running->process->readAllStandardOutput().left(kMaxOutput)));
+        const QString err = withoutAnsi(QString::fromUtf8(running->process->readAllStandardError().left(kMaxOutput)));
+        if (!out.isEmpty())
+            result.outputs.append({NotebookOutput::Kind::Text, out, {}, {}, {}, {}});
+        // ghci reports a failed expression on stderr and still exits 0.
+        const bool ghciFailed = toolFor(running->language) == QLatin1String("ghci")
+                                && err.contains(QLatin1String("error"));
+        result.ok = status == QProcess::NormalExit && code == 0 && !running->timedOut && !ghciFailed;
+        if (!result.ok || !err.trimmed().isEmpty()) {
+            NotebookOutput error;
+            error.kind = result.ok ? NotebookOutput::Kind::Text : NotebookOutput::Kind::Error;
+            error.ename = running->timedOut      ? tr("Timed out")
+                          : running->interrupted ? tr("Interrupted")
+                                                 : tr("Exit code %1").arg(code);
+            error.evalue = running->timedOut ? tr("stopped after %1 s").arg(running->timeout.interval() / 1000)
+                                             : QString();
+            // "ZeroDivisionError: division by zero", the way a traceback ends,
+            // names it better than an exit code does.
+            static const QRegularExpression named(QStringLiteral("^(\\w+(?:Error|Exception)): ?(.*)$"),
+                                                  QRegularExpression::MultilineOption);
+            QRegularExpressionMatch last;
+            for (auto it = named.globalMatch(err); it.hasNext();)
+                last = it.next();
+            if (!running->timedOut && !running->interrupted && last.hasMatch()) {
+                error.ename = last.captured(1);
+                error.evalue = last.captured(2);
+            }
+            error.text = err;
+            error.traceback = err.split(QLatin1Char('\n'));
+            result.outputs.append(error);
+        }
+        m_running.removeOne(running);
+        const Deliver deliver = running->deliver;
+        running->process->deleteLater();
+        delete running;
+        deliver(result);
+    });
+    running->timeout.setSingleShot(true);
+    running->timeout.setInterval(request.timeoutMs);
+    connect(&running->timeout, &QTimer::timeout, this, [running] {
+        running->timedOut = true;
+        running->process->kill();
+    });
+
+    m_running.append(running);
+    running->clock.start();
+    running->timeout.start();
+    running->process->start();
+}
+
+void DirectRunner::interrupt(const QString &language)
+{
+    const QString wanted = language.trimmed().toLower();
+    for (Running *running : std::as_const(m_running)) {
+        if (wanted.isEmpty() || running->language == wanted) {
+            running->interrupted = true;
+            running->process->kill();
+        }
+    }
+}
+
+} // namespace noteAppC::notebook

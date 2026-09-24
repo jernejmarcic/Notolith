@@ -498,6 +498,7 @@ public:
         bool running = false;
         bool ok = true;
         QRectF runRect;
+        QRectF labelRect; ///< the language label beside it, the same coordinates
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
     /// Whether the table holding `offset` is drawn as a table rather than

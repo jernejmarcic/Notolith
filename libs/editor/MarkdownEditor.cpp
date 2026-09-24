@@ -2702,6 +2702,15 @@ MarkdownEditor::BlockView *MarkdownEditor::scrollableTableAt(const QPoint &viewp
 
 void MarkdownEditor::layoutBlock(BlockView &view)
 {
+    // Whatever this block drew rendered last time goes: a block being edited
+    // shows its source, and a PDF, a video or a card left over from before
+    // would be painted over that source and the blocks below it.
+    view.isPdfEmbed = false;
+    view.pdfCells.clear();
+    view.pdfError.clear();
+    view.mediaPath.clear();
+    view.mediaVideo = false;
+    view.imagePath.clear();
     view.cells.clear();
     view.callout = nullptr;
     view.options = nullptr;

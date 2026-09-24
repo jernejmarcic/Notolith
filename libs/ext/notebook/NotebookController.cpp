@@ -64,6 +64,27 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         return;
     }
 
+    // The system's own interpreter or compiler first: one short process, no
+    // kernel to install or keep running. A Jupyter kernel only for a
+    // language noteAppC does not know how to run itself.
+    const QString tool = DirectRunner::toolFor(request.language);
+    if (!request.useKernel
+        && (!tool.isEmpty() || !kernelSpecsByLanguage().contains(request.language.trimmed().toLower()))) {
+        if (!m_direct)
+            m_direct = new DirectRunner(this);
+        DirectRunner::Request direct;
+        direct.language = request.language;
+        direct.source = request.source;
+        direct.tier = request.tier;
+        direct.readOnlyBinds = request.extraReadOnlyBinds;
+        m_direct->run(direct, [cacheKey, deliver](NotebookRunResult result) {
+            if (result.kernelError.isEmpty())
+                writeNotebookCache(cacheKey, result);
+            deliver(result);
+        });
+        return;
+    }
+
     QString error;
     KernelSession *session = ensureKernel(request, &error);
     if (!session) {
@@ -219,6 +240,8 @@ void NotebookController::failInFlight(KernelSession *session, const QString &err
 
 void NotebookController::interruptKernel(const QString &language)
 {
+    if (m_direct)
+        m_direct->interrupt(language);
     const auto it = m_kernels.find(language.trimmed().toLower());
     if (it == m_kernels.end())
         return;

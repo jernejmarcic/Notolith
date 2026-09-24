@@ -4764,3 +4764,76 @@ TEST(FileEmbedTest, AnEncryptedNoteEmbedsAsACardNeverItsBytes)
     EXPECT_FALSE(editor->displayText().contains(QStringLiteral("ciphertext")));
 }
 
+
+#ifdef NOTEAPPC_EXPECT_PDF
+TEST(PdfPageTest, EditingAnEmbedsLineShowsItsSourceNotThePdf)
+{
+    QTemporaryDir dir;
+    const QString pdf = makeTestPdf(dir.path(), 3);
+    const QString note = QStringLiteral("# Lecture\n\n![[doc.pdf]]\n\nSumming the integers\n");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([&](const QString &) { return pdf; });
+    editor->setCursorOffset(note.size());
+    editor->show();
+    const qsizetype embed = note.indexOf(QStringLiteral("![["));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->pdfEmbedInfoAt(embed).isPdfEmbed; }, 3000));
+    const qreal rendered = editor->documentHeight();
+
+    // The caret on the embed's line: its source, and nothing of the PDF.
+    editor->enterBlockAt(embed + 3);
+    QTest::qWait(50);
+    EXPECT_FALSE(editor->pdfEmbedInfoAt(embed).isPdfEmbed);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("![[doc.pdf]]")));
+    EXPECT_LT(editor->documentHeight(), rendered) << "the page's height went with it";
+
+    // Off the line again: the PDF is back.
+    editor->setCursorOffset(note.size());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->pdfEmbedInfoAt(embed).isPdfEmbed; }, 3000));
+}
+#endif
+
+#ifdef NOTEAPPC_EXPECT_PDF
+TEST(PdfPageTest, AClickOnAnEmbeddedPdfOpensItsSource)
+{
+    QTemporaryDir dir;
+    const QString pdf = makeTestPdf(dir.path(), 3);
+    const QString note = QStringLiteral("# Lecture\n\n![[doc.pdf]]\n\nSumming the integers\n");
+    const qsizetype embed = note.indexOf(QStringLiteral("![["));
+    int opened = 0;
+    int tried = 0;
+    for (int y = 60; y < 700; y += 20) {
+        auto editor = editorWith(note);
+        editor->setLinkResolver([&](const QString &) { return pdf; });
+        editor->setCursorOffset(note.size());
+        editor->show();
+        if (!QTest::qWaitFor([&] { return editor->pdfEmbedInfoAt(embed).isPdfEmbed; }, 3000))
+            continue;
+        const QRect page = editor->viewport()->rect();
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(page.width() / 2, y));
+        QTest::qWait(20);
+        if (editor->cursorOffset() >= embed && editor->cursorOffset() <= embed + 11) {
+            ++opened;
+            EXPECT_TRUE(editor->displayText().contains(QStringLiteral("![[doc.pdf]]")));
+        }
+        ++tried;
+    }
+    EXPECT_GE(opened, 5) << "a click on the page itself opens the embed for editing";
+}
+#endif
+
+TEST(NotebookBlockTest, TheRunControlSitsBesideTheLanguageNotOnIt)
+{
+    const QString note = QStringLiteral("```haskell\nsum [1..10]\n```\n\nafter\n");
+    auto editor = editorWith(note);
+    editor->setNotebookRunner([](const QString &, const QString &, bool, const MarkdownEditor::NotebookRunOptions &,
+                                 const MarkdownEditor::NotebookDeliver &deliver) {
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    editor->setCursorOffset(note.size());
+    editor->show();
+    QTest::qWait(50);
+    const auto info = editor->notebookInfoAt(note.indexOf(QStringLiteral("sum")));
+    ASSERT_TRUE(info.eligible);
+    ASSERT_TRUE(info.labelRect.isValid());
+    EXPECT_FALSE(info.runRect.intersects(info.labelRect)) << "the icon covers the language name";
+}
