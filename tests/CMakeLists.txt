@@ -143,6 +143,13 @@ endif()
 # installed, so the minimal environment still passes; TIMEOUT is generous
 # because a kernel process really does take on the order of a second to
 # import and become ready.
+if(TARGET noteAppC_crypt)
+    add_executable(test_crypt test_crypt.cpp)
+    target_link_libraries(test_crypt PRIVATE noteAppC_crypt Qt6::Test GTest::gtest)
+    add_test(NAME crypt COMMAND test_crypt)
+    set_tests_properties(crypt PROPERTIES TIMEOUT 120)
+endif()
+
 if(TARGET noteAppC_notebook)
     add_executable(test_notebook test_notebook.cpp)
     target_link_libraries(test_notebook PRIVATE noteAppC_notebook Qt6::Test GTest::gtest)

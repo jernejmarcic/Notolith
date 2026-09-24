@@ -34,6 +34,9 @@ public:
     /// Extensions APP opens in the editor. Obsidian only treats `.md` as a
     /// note; `.markdown` is accepted on read because some vaults carry it.
     static bool isNote(const QString &path);
+    /// A note encrypted on disk, `Name.mdlock` (libs/ext/crypt). Not a note
+    /// to anything that reads files: only the window opens one, in memory.
+    static bool isEncryptedNote(const QString &path);
 
     /// Path relative to the vault root, for display and for link resolution.
     QString relative(const QString &absolutePath) const;
@@ -61,6 +64,8 @@ public:
     /// Writes through a temporary file and rename(2), restoring the line
     /// endings and BOM recorded in `note`.
     static bool write(const QString &path, const Note &note, QString *error = nullptr);
+    /// The same atomic replace for bytes already encoded - an encrypted note.
+    static bool writeBytes(const QString &path, const QByteArray &bytes, QString *error = nullptr);
 
     /// Round-trip helper used by the tests: the exact bytes `note` would write.
     static QByteArray encode(const Note &note);

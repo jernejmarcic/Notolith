@@ -51,6 +51,8 @@ const QVariantMap &defaults()
 
         // Files and links
         {QStringLiteral("files.attachmentFolder"), QString()},
+        {QStringLiteral("encryption.unlockAtStartup"), false}, // false: asked when an encrypted note opens
+        {QStringLiteral("encryption.autoLockMinutes"), 15},
         {QStringLiteral("files.confirmDelete"), true},
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("sync.serverURL"), QString()},
@@ -547,6 +549,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Keep every save of a note as a git commit, outside the vault, to "
                                        "browse and restore with \"Show this note's history\"."),
          false},
+        {"encrypted-notes", QT_TRANSLATE_NOOP("Settings", "Encrypted notes"),
+         QT_TRANSLATE_NOOP("Settings", "Notes kept encrypted on disk (.mdlock) and decrypted only in memory, "
+                                       "opened with a password."),
+         true},
         {"note-composer", QT_TRANSLATE_NOOP("Settings", "Note composer"),
          QT_TRANSLATE_NOOP("Settings", "Merge a note into another, and extract a selection into a new note."),
          true},

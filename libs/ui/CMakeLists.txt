@@ -3,6 +3,8 @@ add_library(noteAppC_ui STATIC
     ExportPdfDialog.cpp
     ExportPdfDialog.h
     PublishDialog.cpp
+    PasswordDialog.cpp
+    PasswordDialog.h
     PublishDialog.h
     MainWindow.cpp
     MainWindow.h
@@ -65,6 +67,11 @@ endif()
 if(TARGET noteAppC_bases)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_bases)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_BASES)
+endif()
+
+if(TARGET noteAppC_crypt)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_crypt)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_ENCRYPTION)
 endif()
 
 if(TARGET noteAppC_notebook)

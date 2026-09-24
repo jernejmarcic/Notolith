@@ -651,7 +651,10 @@ QString Index::resolve(const QString &target, const QString &fromPath) const
         }
     }
 
-    const QStringList candidates = m_names.value(foldCase(wanted));
+    QStringList candidates = m_names.value(foldCase(wanted));
+    // [[Secret]] still finds Secret.md once it is Secret.mdlock.
+    if (candidates.isEmpty())
+        candidates = m_names.value(foldCase(wanted + QStringLiteral(".mdlock")));
     if (candidates.isEmpty())
         return {};
     if (candidates.size() == 1)

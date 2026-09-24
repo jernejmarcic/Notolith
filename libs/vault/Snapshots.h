@@ -34,6 +34,9 @@ public:
     static QStringList notes();
     /// Newest first.
     static QList<Version> versions(const QString &notePath);
+    /// Deletes every version of `notePath`: a note just encrypted must not
+    /// leave its plaintext here.
+    static bool forget(const QString &notePath);
     static QString read(const Version &version);
     /// Deletes versions older than `keepMs`; returns how many went.
     static int prune(qint64 keepMs, qint64 nowMs = 0);

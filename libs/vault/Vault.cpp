@@ -51,6 +51,11 @@ bool Vault::hasObsidianConfig() const
     return QFileInfo(m_root + QLatin1String("/.obsidian")).isDir();
 }
 
+bool Vault::isEncryptedNote(const QString &path)
+{
+    return QFileInfo(path).suffix().compare(QLatin1String("mdlock"), Qt::CaseInsensitive) == 0;
+}
+
 bool Vault::isNote(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
@@ -163,13 +168,17 @@ bool Vault::read(const QString &path, Note &out, QString *error)
 
 bool Vault::write(const QString &path, const Note &note, QString *error)
 {
+    return writeBytes(path, encode(note), error);
+}
+
+bool Vault::writeBytes(const QString &path, const QByteArray &bytes, QString *error)
+{
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly)) {
         if (error)
             *error = file.errorString();
         return false;
     }
-    const QByteArray bytes = encode(note);
     if (file.write(bytes) != bytes.size() || !file.commit()) {
         if (error)
             *error = file.errorString();
@@ -269,7 +278,7 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
     }
 
     // A note keeps its extension; a folder has none to keep.
-    const QString newFileName = (info.isFile() && isNote(absolutePath))
+    const QString newFileName = (info.isFile() && (isNote(absolutePath) || isEncryptedNote(absolutePath)))
                                     ? newBaseName + QLatin1Char('.') + info.suffix()
                                     : newBaseName;
     const QString newPath = QDir(info.absolutePath()).absoluteFilePath(newFileName);

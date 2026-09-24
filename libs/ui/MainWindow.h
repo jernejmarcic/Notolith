@@ -38,6 +38,9 @@ class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
 class AudioRecorder;
+namespace crypt {
+class EncryptionSession;
+}
 namespace notebook {
 class NotebookController;
 }
@@ -121,6 +124,10 @@ public:
     /// Alt+Right, the header's forward button, and the mouse's forward side
     /// button.
     void goForward();
+
+    /// Encrypted notes: what asks for the password, in place of the dialog.
+    /// For the tests. `creating` true when the password is being set.
+    void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -318,6 +325,27 @@ private:
     /// Note composer: the current note appended to one picked, its links
     /// following it there, and it moved to the trash.
     void mergeCurrentNote();
+
+    // --- encrypted notes (docs/ENCRYPTION.md) ------------------------------
+    /// Any note, read or written: an encrypted one is decrypted into `out`
+    /// in memory only, asking for the password if the session is locked,
+    /// and sealed again on write. Cancelling the password fails quietly.
+    bool readNote(const QString &path, Note &out, QString *error);
+    bool writeNote(const QString &path, const Note &note, QString *error);
+    /// The bytes of an encrypted note of this vault, preferring `path`: what
+    /// a typed password is checked against. Empty when there is none yet.
+    QByteArray encryptionSample(const QString &path = QString()) const;
+    /// The editor shows an encrypted note: nothing of it reaches a plugin,
+    /// a kernel's output cache, a snapshot or the note history.
+    bool showsEncryptedNote(const MarkdownEditor *editor) const;
+    void encryptCurrentNote();
+    void decryptCurrentNote();
+    void newEncryptedNote();
+    void changeEncryptionPassword();
+    /// Saves every encrypted note that is open (the keys are still there),
+    /// then, `close`, closes them: what locking does.
+    void saveEncryptedLeaves();
+    void closeEncryptedLeaves();
     /// Audio recorder: records into the attachment folder and embeds the
     /// file in the note it was started from once stopped.
     void startRecording();
@@ -496,6 +524,7 @@ private:
     AudioRecorder *m_recorder = nullptr; ///< made on the first recording
     /// Made when the first block runs; owns one kernel per language.
     notebook::NotebookController *m_notebook = nullptr;
+    crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;
     QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for

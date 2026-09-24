@@ -1555,6 +1555,167 @@ TEST_F(WindowTest, NarrowSidebarsOpenAsDrawersOverTheNote)
     EXPECT_EQ(splitter->count(), panes);
 }
 
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+namespace {
+
+/// Clicks the button labelled `text` on the next modal message box.
+void clickNextBox(const QString &text)
+{
+    QTimer::singleShot(0, [text] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            for (QAbstractButton *button : box->buttons()) {
+                if (button->text() == text)
+                    button->click();
+            }
+        }
+    });
+}
+
+/// Closes whatever modal box comes up while it lives: a warning a test
+/// expects, whenever it appears.
+struct ModalCloser {
+    QTimer timer;
+    ModalCloser()
+    {
+        QObject::connect(&timer, &QTimer::timeout, [] {
+            if (QWidget *box = QApplication::activeModalWidget())
+                box->close();
+        });
+        timer.start(20);
+    }
+};
+
+QByteArray bytesOf(const QString &path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+} // namespace
+
+TEST_F(WindowTest, AnEncryptedNoteNeverReachesTheDiskInPlainText)
+{
+    MainWindow window;
+    int asked = 0;
+    window.setEncryptionPromptForTests([&asked](bool, bool) {
+        ++asked;
+        return QStringLiteral("correct horse battery");
+    });
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    window.editor()->setCursorOffset(window.editor()->noteText().size());
+    QTest::keyClicks(window.editor(), QStringLiteral("TOPSECRET"));
+    window.findChild<QAction *>(QStringLiteral("editor:save-file"))->trigger(); // a plain save first: file recovery keeps a snapshot
+
+    clickNextBox(QStringLiteral("Encrypt"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    const QString locked = path(QStringLiteral("Welcome.mdlock"));
+    ASSERT_TRUE(QFileInfo::exists(locked));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_EQ(asked, 1); // the first encrypted note sets the password
+    EXPECT_FALSE(bytesOf(locked).contains("TOPSECRET"));
+    EXPECT_FALSE(bytesOf(locked).contains("Body."));
+    EXPECT_TRUE(noteAppC::Snapshots::versions(path(QStringLiteral("Welcome.md"))).isEmpty())
+        << "the plaintext snapshots went with the plain file";
+
+    // Edited and saved again: still only ciphertext, and still no snapshot.
+    QTest::keyClicks(window.editor(), QStringLiteral(" MORESECRET"));
+    window.findChild<QAction *>(QStringLiteral("editor:save-file"))->trigger();
+    EXPECT_FALSE(bytesOf(locked).contains("MORESECRET"));
+    EXPECT_TRUE(noteAppC::Snapshots::versions(locked).isEmpty());
+    EXPECT_EQ(asked, 1) << "unlocked for the session";
+
+    // Locked: the tab closes. Opened again: asked again, then the text is back.
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+    EXPECT_FALSE(window.editor()->noteText().contains(QStringLiteral("TOPSECRET")));
+    ASSERT_TRUE(window.openNote(locked));
+    EXPECT_EQ(asked, 2);
+    EXPECT_TRUE(window.editor()->noteText().contains(QStringLiteral("TOPSECRET MORESECRET")));
+}
+
+TEST_F(WindowTest, AWrongOrCancelledPasswordOpensNothing)
+{
+    MainWindow window;
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("the right one, long"); });
+    window.openVault(dir.path());
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+    const QString locked = path(QStringLiteral("Untitled.mdlock"));
+    ASSERT_TRUE(QFileInfo::exists(locked));
+    QTest::keyClicks(window.editor(), QStringLiteral("hidden"));
+    window.findChild<QAction *>(QStringLiteral("editor:save-file"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("wrong"); });
+    {
+        ModalCloser closer; // "Wrong password" is reported in a box
+        EXPECT_FALSE(window.openNote(locked));
+    }
+    window.setEncryptionPromptForTests([](bool, bool) { return QString(); });
+    EXPECT_FALSE(window.openNote(locked));
+    EXPECT_FALSE(window.editor()->noteText().contains(QStringLiteral("hidden")));
+}
+
+TEST_F(WindowTest, UnlockOnStartupAsksWhenTheVaultOpensNotLater)
+{
+    const QByteArray previousConfigHome = qgetenv("XDG_CONFIG_HOME");
+    QTemporaryDir configHome;
+    qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+    {
+        MainWindow first;
+        first.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("a long password"); });
+        first.openVault(dir.path());
+        ASSERT_TRUE(first.openNote(path(QStringLiteral("Welcome.md"))));
+        clickNextBox(QStringLiteral("Encrypt"));
+        first.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+        ASSERT_TRUE(QFileInfo::exists(path(QStringLiteral("Welcome.mdlock"))));
+    }
+    noteAppC::Settings settings = noteAppC::Settings::load();
+    settings.setValue(QStringLiteral("encryption.unlockAtStartup"), true);
+    ASSERT_TRUE(settings.save());
+
+    MainWindow second;
+    int asked = 0;
+    second.setEncryptionPromptForTests([&asked](bool creating, bool) {
+        EXPECT_FALSE(creating);
+        ++asked;
+        return QStringLiteral("a long password");
+    });
+    second.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return asked == 1; }, 2000)) << "asked as the vault opened";
+    ASSERT_TRUE(second.openNote(path(QStringLiteral("Welcome.mdlock"))));
+    EXPECT_EQ(asked, 1) << "and not again on opening the note";
+    EXPECT_TRUE(second.editor()->noteText().contains(QStringLiteral("Body.")));
+    qputenv("XDG_CONFIG_HOME", previousConfigHome);
+}
+
+TEST_F(WindowTest, ChangingThePasswordReencryptsEveryNote)
+{
+    MainWindow window;
+    QString password = QStringLiteral("first password");
+    window.setEncryptionPromptForTests([&password](bool, bool) { return password; });
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    clickNextBox(QStringLiteral("Encrypt"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    const QString locked = path(QStringLiteral("Welcome.mdlock"));
+    const QByteArray before = bytesOf(locked);
+
+    password = QStringLiteral("second password");
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:change-password"))->trigger();
+    EXPECT_NE(bytesOf(locked), before);
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+    password = QStringLiteral("first password");
+    {
+        ModalCloser closer;
+        EXPECT_FALSE(window.openNote(locked)) << "the old password no longer opens it";
+    }
+    password = QStringLiteral("second password");
+    ASSERT_TRUE(window.openNote(locked));
+    EXPECT_TRUE(window.editor()->noteText().contains(QStringLiteral("Body.")));
+}
+#endif
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -1566,6 +1727,11 @@ int main(int argc, char **argv)
     // file and, on any test that saves, write to it.
     QTemporaryDir configHome;
     qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+    // File recovery snapshots and the index cache too: never the real ones.
+    QTemporaryDir dataHome;
+    QTemporaryDir cacheHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
