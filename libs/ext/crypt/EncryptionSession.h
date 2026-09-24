@@ -29,6 +29,8 @@ public:
     ~EncryptionSession() override;
 
     void setPrompt(PasswordPrompt prompt) { m_prompt = std::move(prompt); }
+    /// A new password asked through the same prompt; empty when cancelled.
+    QString askNewPassword() const { return m_prompt ? m_prompt(true, false) : QString(); }
     /// Params for keys this session creates. Tests lower them.
     void setParams(Params params) { m_params = params; }
     /// Minutes without activity before it locks by itself; 0 never.
@@ -57,6 +59,9 @@ public:
     void lock();
 
 signals:
+    /// About to lock, the keys still here: the last chance to save what is
+    /// open.
+    void aboutToLock();
     /// Locked, by lock() or by the idle timer: every decrypted note must
     /// leave memory now.
     void locked();

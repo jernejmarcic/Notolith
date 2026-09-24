@@ -1,4 +1,5 @@
 #include "Snapshots.h"
+#include "Vault.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -38,6 +39,11 @@ bool writeFile(const QString &path, const QByteArray &bytes)
 
 } // namespace
 
+bool Snapshots::forget(const QString &notePath)
+{
+    return QDir(noteDirectory(notePath)).removeRecursively();
+}
+
 QString Snapshots::directory()
 {
     // Data, not cache: a cache may be cleared at will, and these are the
@@ -51,6 +57,9 @@ QString Snapshots::directory()
 bool Snapshots::record(const QString &notePath, const QString &text, qint64 minimumIntervalMs,
                        qint64 nowMs)
 {
+    // An encrypted note's text never reaches the disk, here included.
+    if (Vault::isEncryptedNote(notePath))
+        return false;
     const qint64 now = nowOr(nowMs);
     const QList<Version> existing = versions(notePath);
     if (!existing.isEmpty()) {

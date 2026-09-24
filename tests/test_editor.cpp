@@ -4745,3 +4745,22 @@ TEST(TableCellTest, ASelectionAcrossCellsIsDrawnInThem)
     const QImage after = editor->viewport()->grab().toImage();
     EXPECT_NE(before, after) << "the selection left the drawn table unchanged";
 }
+
+TEST(FileEmbedTest, AnEncryptedNoteEmbedsAsACardNeverItsBytes)
+{
+    QTemporaryDir dir;
+    const QString locked = dir.filePath(QStringLiteral("Secret.mdlock"));
+    {
+        QFile file(locked);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("NAPCLOCK\x01\x01 text-looking ciphertext with no zero byte");
+    }
+    auto editor = editorWith(QStringLiteral("![[Secret]]\n\nafter\n"));
+    editor->setLinkResolver([&](const QString &) { return locked; });
+    editor->setCursorOffset(editor->noteText().size()); // off the embed's line
+    editor->show();
+    QTest::qWait(50);
+    EXPECT_FALSE(editor->panelTextAt(0).contains(QStringLiteral("NAPCLOCK")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("ciphertext")));
+}
+

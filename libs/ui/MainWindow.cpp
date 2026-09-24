@@ -71,6 +71,10 @@
 #include "TemplatePicker.h"
 #include "Templates.h"
 #include "PublishDialog.h"
+#include "PasswordDialog.h"
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+#include "EncryptionSession.h"
+#endif
 #include "ExportPdfDialog.h"
 #include "PagePreview.h"
 #include "PdfPage.h"
@@ -203,6 +207,16 @@ MainWindow::MainWindow(QWidget *parent)
 {
     m_autosave.setSingleShot(true);
     m_autosave.setInterval(2000); // Obsidian's pause, near enough
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    // Encrypted notes: nothing happens until one is opened or made.
+    m_encryption = new crypt::EncryptionSession(this);
+    m_encryption->setPrompt([this](bool creating, bool retry) { return PasswordDialog::ask(this, creating, retry); });
+    connect(m_encryption, &crypt::EncryptionSession::aboutToLock, this, &MainWindow::saveEncryptedLeaves);
+    connect(m_encryption, &crypt::EncryptionSession::locked, this, [this] {
+        closeEncryptedLeaves();
+        statusBar()->showMessage(tr("Encrypted notes locked"), 4000);
+    });
+#endif
     connect(&m_autosave, &QTimer::timeout, this, &MainWindow::autosave);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
@@ -701,9 +715,18 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // Code blocks through a Jupyter kernel. A lookup (forceRun false) only
     // reads the output cache; the controller, and any kernel, exist only
     // once something is run.
-    editor->setNotebookRunner([this](const QString &language, const QString &source, bool forceRun,
+    editor->setNotebookRunner([this, editor](const QString &language, const QString &source, bool forceRun,
                                      const MarkdownEditor::NotebookRunOptions &options,
                                      const MarkdownEditor::NotebookDeliver &deliver) {
+        // Its output would be cached on disk, and a kernel is another process.
+        if (showsEncryptedNote(editor)) {
+            MarkdownEditor::NotebookRunResult refused;
+            refused.hasRun = forceRun;
+            refused.kernelError = forceRun ? tr("Code does not run in an encrypted note: its output would be kept on disk")
+                                           : QString();
+            deliver(refused);
+            return;
+        }
         if (!m_notebook)
             m_notebook = new notebook::NotebookController(this);
         notebook::NotebookController::RunRequest request;
@@ -960,7 +983,8 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
             return QString();
         // Already in the vault: a link to it, copied nowhere.
         if (m_vault.isValid() && m_vault.contains(info.absoluteFilePath())) {
-            return Vault::isNote(source) ? QStringLiteral("[[") + info.completeBaseName() + QStringLiteral("]]")
+            return Vault::isNote(source) || Vault::isEncryptedNote(source)
+                       ? QStringLiteral("[[") + info.completeBaseName() + QStringLiteral("]]")
                                          : QStringLiteral("![[") + info.fileName() + QStringLiteral("]]");
         }
         const QString note = noteOf();
@@ -1621,6 +1645,18 @@ void MainWindow::buildActions()
         if (m_recorder)
             m_recorder->stop();
     });
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    add(QStringLiteral("encrypted-notes:encrypt"), tr("Encrypted notes: Encrypt this note"), QString(),
+        &MainWindow::encryptCurrentNote);
+    add(QStringLiteral("encrypted-notes:decrypt"), tr("Encrypted notes: Decrypt this note"), QString(),
+        &MainWindow::decryptCurrentNote);
+    add(QStringLiteral("encrypted-notes:new"), tr("Encrypted notes: New encrypted note"), QString(),
+        &MainWindow::newEncryptedNote);
+    add(QStringLiteral("encrypted-notes:lock"), tr("Encrypted notes: Lock encrypted notes"), QString(),
+        [this] { m_encryption->lock(); });
+    add(QStringLiteral("encrypted-notes:change-password"), tr("Encrypted notes: Change password"), QString(),
+        &MainWindow::changeEncryptionPassword);
+#endif
     add(QStringLiteral("note-composer:merge-file"), tr("Note composer: Merge current file with another file"),
         QString(), &MainWindow::mergeCurrentNote);
     add(QStringLiteral("note-composer:split-file"), tr("Note composer: Extract current selection"), QString(),
@@ -1744,6 +1780,11 @@ void MainWindow::applyHotkeys()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    // A person at the keys keeps unlocked notes from timing out.
+    if (m_encryption && (event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress))
+        m_encryption->noteActivity();
+#endif
     // Installed on the whole application (see the constructor), so this sees
     // a side-button click no matter which widget the mouse happens to be
     // over - the editor, the tree, a sidebar pane.
@@ -1803,7 +1844,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         const QModelIndex index = m_tree->indexAt(static_cast<QMouseEvent *>(event)->position().toPoint());
         if (index.isValid() && !m_files->isDir(index)) {
             const QString path = m_files->filePath(index);
-            if (isViewFile(path) || Vault::isNote(path)) {
+            if (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path)) {
                 newTab();
                 openNote(path, NavSource::Tree);
             }
@@ -2111,6 +2152,11 @@ void MainWindow::applySettings()
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
     applyFeatures(); // first, so a pane it builds is themed below
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    m_encryption->setAutoLockMinutes(m_settings.integer(QStringLiteral("encryption.autoLockMinutes")));
+    if (!featureOn("encrypted-notes"))
+        m_encryption->lock();
+#endif
     if (restyle) {
         applyTheme();
         m_themeApplied = true;
@@ -2631,7 +2677,9 @@ void MainWindow::syncPlugins(bool rescan)
             return m_active && !m_active->view ? m_active->editor->noteText() : QString();
         };
         callbacks.activeSelectionText = [this] {
-            return m_active && !m_active->view ? m_active->editor->selectedText() : QString();
+            // A plugin never reads an encrypted note: the AI one would send it on.
+            return m_active && !m_active->view && !showsEncryptedNote(m_active->editor) ? m_active->editor->selectedText()
+                                                                                        : QString();
         };
         callbacks.readNote = [this](const QString &relative) {
             const QString path = m_vault.confinedNotePath(relative);
@@ -2742,17 +2790,29 @@ void MainWindow::syncPlugins(bool rescan)
                 });
         };
     }
+    // A plugin's fence in an encrypted note is never handed to the plugin.
+    const auto guarded = [this, renderer](MarkdownEditor *editor) -> MarkdownEditor::CodeBlockRenderer {
+        return [this, renderer, editor](const QString &language, const QString &source, int width,
+                                        const QString &theme,
+                                        const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+            if (showsEncryptedNote(editor)) {
+                deliver({true, tr("*Plugins do not see encrypted notes.*"), QImage()});
+                return;
+            }
+            renderer(language, source, width, theme, deliver);
+        };
+    };
     for (const auto &leaf : m_leaves) {
         if (!m_pluginLanguages.isEmpty())
             leaf->editor->setCodeBlockRenderer(m_pluginLanguages, nullptr);
         if (renderer)
-            leaf->editor->setCodeBlockRenderer(languages, renderer);
+            leaf->editor->setCodeBlockRenderer(languages, guarded(leaf->editor));
     }
     m_pluginLanguages = languages;
     m_applyPluginRenderer = nullptr;
     if (renderer)
-        m_applyPluginRenderer = [languages, renderer](MarkdownEditor *editor) {
-            editor->setCodeBlockRenderer(languages, renderer);
+        m_applyPluginRenderer = [languages, guarded](MarkdownEditor *editor) {
+            editor->setCodeBlockRenderer(languages, guarded(editor));
         };
 #else
     Q_UNUSED(rescan);
@@ -3090,12 +3150,25 @@ void MainWindow::openVault(const QString &path)
                              4000);
     updateTitle();
     updateWordCount();
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    // "On startup" rather than on first open: asked once the window is up.
+    if (featureOn("encrypted-notes") && m_settings.boolean(QStringLiteral("encryption.unlockAtStartup"))) {
+        QTimer::singleShot(0, this, [this] {
+            const QByteArray sample = encryptionSample();
+            if (!sample.isEmpty() && !m_encryption->isUnlocked())
+                m_encryption->unlock(sample);
+        });
+    }
+#endif
 }
 
 void MainWindow::closeVault()
 {
     if (!maybeSaveAll())
         return;
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    m_encryption->lock(); // another vault, another password
+#endif
 
     saveLayout();
     m_openMode = OpenMode::Empty;
@@ -3258,7 +3331,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
             return false;
         return openView(path, source, fragment);
     }
-    if (!Vault::isNote(path)) {
+    if (!Vault::isNote(path) && !Vault::isEncryptedNote(path)) {
         if (source != NavSource::History) {
             statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
                                          .arg(QFileInfo(path).fileName()),
@@ -3271,10 +3344,11 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
 
     Note note;
     QString error;
-    if (!Vault::read(path, note, &error)) {
+    if (!readNote(path, note, &error)) {
         // Replaying history over a note that has since been deleted or
-        // renamed is not an error, just a dead end to skip past.
-        if (source != NavSource::History)
+        // renamed is not an error, just a dead end to skip past; a password
+        // prompt cancelled is not one either.
+        if (source != NavSource::History && !error.isEmpty())
             QMessageBox::warning(this, tr("Open note"), tr("Could not read %1:\n%2").arg(path, error));
         return false;
     }
@@ -3661,6 +3735,8 @@ void MainWindow::syncSignIn()
 
 void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
 {
+    if (Vault::isEncryptedNote(absolutePath))
+        return; // its text never reaches the disk, git history included
 #ifdef NOTEAPPC_HAVE_HISTORY
     if (!m_noteHistory || !m_vault.contains(absolutePath))
         return;
@@ -4008,6 +4084,296 @@ bool MainWindow::save()
     return saveLeaf(m_active, false);
 }
 
+// --- encrypted notes (docs/ENCRYPTION.md) ------------------------------------
+
+bool MainWindow::readNote(const QString &path, Note &out, QString *error)
+{
+    if (!Vault::isEncryptedNote(path))
+        return Vault::read(path, out, error);
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    if (!featureOn("encrypted-notes")) {
+        if (error)
+            *error = tr("Encrypted notes are switched off in Core plugins");
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error)
+            *error = file.errorString();
+        return false;
+    }
+    std::optional<QByteArray> plain = m_encryption->open(file.readAll(), error);
+    if (!plain)
+        return false;
+    out = Vault::decode(*plain);
+    crypt::wipe(*plain);
+    return true;
+#else
+    if (error)
+        *error = tr("This build of noteAppC cannot open encrypted notes");
+    return false;
+#endif
+}
+
+bool MainWindow::writeNote(const QString &path, const Note &note, QString *error)
+{
+    if (!Vault::isEncryptedNote(path))
+        return Vault::write(path, note, error);
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    QByteArray plain = Vault::encode(note);
+    const QByteArray sealed = m_encryption->seal(plain, encryptionSample(path), error);
+    crypt::wipe(plain);
+    return !sealed.isEmpty() && Vault::writeBytes(path, sealed, error);
+#else
+    if (error)
+        *error = tr("This build of noteAppC cannot write encrypted notes");
+    return false;
+#endif
+}
+
+QByteArray MainWindow::encryptionSample(const QString &path) const
+{
+    const auto bytesOf = [](const QString &file) {
+        QFile source(file);
+        return source.open(QIODevice::ReadOnly) ? source.readAll() : QByteArray();
+    };
+    if (!path.isEmpty() && QFileInfo::exists(path))
+        return bytesOf(path);
+    if (!m_vault.isValid())
+        return {};
+    QDirIterator files(m_vault.root(), {QStringLiteral("*.mdlock")}, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QByteArray bytes = bytesOf(files.next());
+        if (!bytes.isEmpty())
+            return bytes;
+    }
+    return {};
+}
+
+bool MainWindow::showsEncryptedNote(const MarkdownEditor *editor) const
+{
+    for (const auto &leaf : m_leaves) {
+        if (leaf->editor == editor)
+            return Vault::isEncryptedNote(leaf->notePath);
+    }
+    return false;
+}
+
+void MainWindow::setEncryptionPromptForTests(std::function<QString(bool, bool)> prompt)
+{
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    m_encryption->setPrompt(std::move(prompt));
+#else
+    Q_UNUSED(prompt);
+#endif
+}
+
+void MainWindow::saveEncryptedLeaves()
+{
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && Vault::isEncryptedNote(leaf->notePath) && leaf->editor->isModified())
+            saveLeaf(leaf.get(), true);
+    }
+}
+
+void MainWindow::closeEncryptedLeaves()
+{
+    QList<Leaf *> encrypted;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && Vault::isEncryptedNote(leaf->notePath))
+            encrypted << leaf.get();
+    }
+    for (Leaf *leaf : std::as_const(encrypted)) {
+        // One that could not be saved stays, rather than losing its edits.
+        if (leaf->editor->isModified()) {
+            QMessageBox::warning(this, tr("Encrypted notes locked"),
+                                 tr("%1 could not be saved, so it stays open. Save it to encrypt it again.")
+                                     .arg(QFileInfo(leaf->notePath).completeBaseName()));
+            continue;
+        }
+        closeLeaf(leaf);
+    }
+}
+
+namespace {
+
+/// Every tab on `from` shows `to` from now on: a note that was encrypted or
+/// decrypted is the same document under another name.
+template<typename Leaves>
+void retarget(Leaves &leaves, const QString &from, const QString &to)
+{
+    for (const auto &leaf : leaves) {
+        if (leaf->notePath == from)
+            leaf->notePath = to;
+    }
+}
+
+} // namespace
+
+void MainWindow::encryptCurrentNote()
+{
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    const QString from = m_active->notePath;
+    if (!m_vault.isValid() || m_active->view || !Vault::isNote(from) || !m_vault.contains(from)) {
+        statusBar()->showMessage(tr("Only a note in a vault can be encrypted"), 4000);
+        return;
+    }
+    const QFileInfo info(from);
+    const QString to = info.dir().filePath(info.completeBaseName() + QStringLiteral(".mdlock"));
+    if (QFileInfo::exists(to)) {
+        QMessageBox::warning(this, tr("Encrypt note"), tr("%1 already exists.").arg(QFileInfo(to).fileName()));
+        return;
+    }
+    QMessageBox ask(QMessageBox::Question, tr("Encrypt note"),
+                    tr("Encrypt %1? Its text is kept only encrypted on disk and is readable only with the "
+                       "password, in this app.\n\nThe plain file is deleted, and so are its file recovery "
+                       "snapshots. Copies made before now stay where they are: the note history, backups, "
+                       "disk snapshots and other devices.")
+                        .arg(info.completeBaseName()),
+                    QMessageBox::Cancel, this);
+    QPushButton *encrypt = ask.addButton(tr("Encrypt"), QMessageBox::AcceptRole);
+    ask.exec();
+    if (ask.clickedButton() != encrypt)
+        return;
+
+    Note note = m_active->note;
+    note.text = m_active->editor->noteText();
+    QString error;
+    if (!writeNote(to, note, &error)) {
+        if (!error.isEmpty())
+            QMessageBox::warning(this, tr("Encrypt note"), tr("Could not encrypt it:\n%1").arg(error));
+        QFile::remove(to);
+        return;
+    }
+    // Read it back before the plain file goes: a note is never lost to this.
+    Note check;
+    if (!readNote(to, check, &error) || check.text != note.text) {
+        QFile::remove(to);
+        QMessageBox::warning(this, tr("Encrypt note"), tr("The encrypted copy did not read back; nothing was changed."));
+        return;
+    }
+    Snapshots::forget(from);
+    QFile::remove(from);
+    retarget(m_leaves, from, to);
+    m_active->note = note;
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath == to)
+            leaf->editor->setModified(false);
+    }
+    updateTitle();
+    statusBar()->showMessage(tr("Encrypted %1").arg(info.completeBaseName()), 4000);
+#endif
+}
+
+void MainWindow::decryptCurrentNote()
+{
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    const QString from = m_active->notePath;
+    if (m_active->view || !Vault::isEncryptedNote(from))
+        return;
+    const QFileInfo info(from);
+    const QString to = info.dir().filePath(info.completeBaseName() + QStringLiteral(".md"));
+    if (QFileInfo::exists(to)) {
+        QMessageBox::warning(this, tr("Decrypt note"), tr("%1 already exists.").arg(QFileInfo(to).fileName()));
+        return;
+    }
+    if (QMessageBox::question(this, tr("Decrypt note"),
+                              tr("Decrypt %1? Its text is written to disk unencrypted.").arg(info.completeBaseName()))
+        != QMessageBox::Yes)
+        return;
+    Note note = m_active->note;
+    note.text = m_active->editor->noteText();
+    QString error;
+    if (!Vault::write(to, note, &error)) {
+        QMessageBox::warning(this, tr("Decrypt note"), tr("Could not write it:\n%1").arg(error));
+        return;
+    }
+    QFile::remove(from);
+    retarget(m_leaves, from, to);
+    m_active->note = note;
+    for (const auto &leaf : m_leaves) {
+        if (leaf->notePath == to)
+            leaf->editor->setModified(false);
+    }
+    updateTitle();
+#endif
+}
+
+void MainWindow::newEncryptedNote()
+{
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    if (!m_vault.isValid())
+        return;
+    const QString folder = !m_active->view && m_vault.contains(m_active->notePath)
+                               ? QFileInfo(m_active->notePath).absolutePath()
+                               : m_vault.root();
+    QString path = QDir(folder).filePath(tr("Untitled") + QStringLiteral(".mdlock"));
+    for (int n = 1; QFileInfo::exists(path); ++n)
+        path = QDir(folder).filePath(tr("Untitled %1").arg(n) + QStringLiteral(".mdlock"));
+    QString error;
+    if (!writeNote(path, Note{}, &error)) {
+        if (!error.isEmpty())
+            QMessageBox::warning(this, tr("New encrypted note"), error);
+        return;
+    }
+    openNote(path);
+#endif
+}
+
+void MainWindow::changeEncryptionPassword()
+{
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+    const QByteArray sample = encryptionSample();
+    if (sample.isEmpty()) {
+        statusBar()->showMessage(tr("There are no encrypted notes yet"), 4000);
+        return;
+    }
+    if (!m_encryption->isUnlocked() && !m_encryption->unlock(sample))
+        return;
+    saveEncryptedLeaves(); // what is on disk is what gets re-sealed
+
+    // Every note opened with the current password first; nothing changes
+    // unless all of them do.
+    QList<QPair<QString, QByteArray>> notes;
+    QDirIterator files(m_vault.root(), {QStringLiteral("*.mdlock")}, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString path = files.next();
+        QFile file(path);
+        std::optional<QByteArray> plain = file.open(QIODevice::ReadOnly) ? m_encryption->open(file.readAll())
+                                                                         : std::nullopt;
+        if (!plain) {
+            for (auto &[_, text] : notes)
+                crypt::wipe(text);
+            QMessageBox::warning(this, tr("Change password"),
+                                 tr("%1 does not open with the current password, so nothing was changed.")
+                                     .arg(m_vault.relative(path)));
+            return;
+        }
+        notes.append({path, *plain});
+        crypt::wipe(*plain);
+    }
+    const QString password = m_encryption->askNewPassword();
+    if (password.isEmpty() || !m_encryption->rekey(password)) {
+        for (auto &[_, text] : notes)
+            crypt::wipe(text);
+        return;
+    }
+    int failed = 0;
+    for (auto &[path, text] : notes) {
+        const QByteArray sealed = m_encryption->seal(text, QByteArray());
+        if (sealed.isEmpty() || !Vault::writeBytes(path, sealed))
+            ++failed;
+        crypt::wipe(text);
+    }
+    if (failed > 0)
+        QMessageBox::warning(this, tr("Change password"),
+                             tr("%n note(s) could not be re-encrypted and still open with the old password.", nullptr,
+                                failed));
+    else
+        statusBar()->showMessage(tr("Password changed for %n encrypted note(s)", nullptr, int(notes.size())), 5000);
+#endif
+}
+
 bool MainWindow::saveLeaf(Leaf *target, bool quiet)
 {
     if (target->notePath.isEmpty())
@@ -4043,14 +4409,18 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     note.text = target->editor->noteText();
 
     // File recovery, for notes in a vault only: a stray note leaves nothing
-    // behind. The first save of a note keeps what it held before, too.
+    // behind. The first save of a note keeps what it held before, too. An
+    // encrypted note keeps nothing there: its text never reaches the disk.
+    const bool encrypted = Vault::isEncryptedNote(target->notePath);
     const bool snapshots =
-        featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(target->notePath);
+        !encrypted && featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(target->notePath);
     if (snapshots && Snapshots::versions(target->notePath).isEmpty() && note.text != target->note.text)
         Snapshots::record(target->notePath, target->note.text, 0);
 
     QString error;
-    if (!Vault::write(target->notePath, note, &error)) {
+    if (!writeNote(target->notePath, note, &error)) {
+        if (error.isEmpty())
+            error = tr("the password was not given, so it could not be encrypted");
         reportSaveError(target->notePath, error, quiet);
         return false;
     }

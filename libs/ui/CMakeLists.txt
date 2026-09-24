@@ -3,6 +3,8 @@ add_library(noteAppC_ui STATIC
     ExportPdfDialog.cpp
     ExportPdfDialog.h
     PublishDialog.cpp
+    PasswordDialog.cpp
+    PasswordDialog.h
     PublishDialog.h
     MainWindow.cpp
     MainWindow.h

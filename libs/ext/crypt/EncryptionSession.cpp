@@ -80,11 +80,8 @@ bool EncryptionSession::unlock(const QByteArray &sample, QString *error)
     }
     for (int attempt = 0; attempt < 3; ++attempt) {
         const QString password = m_prompt ? m_prompt(sample.isEmpty(), attempt > 0) : QString();
-        if (password.isEmpty()) {
-            if (error)
-                *error = tr("Cancelled");
-            return false;
-        }
+        if (password.isEmpty())
+            return false; // cancelled: nothing to report
         if (sample.isEmpty()) {
             // A new password: the first salt of this vault.
             Key key = derive(password, newSalt(), m_params);
@@ -153,6 +150,8 @@ void EncryptionSession::lock()
 {
     m_idle.stop();
     const bool was = isUnlocked();
+    if (was)
+        emit aboutToLock();
     if (m_password)
         sodium_free(m_password); // zeroes it first
     m_password = nullptr;

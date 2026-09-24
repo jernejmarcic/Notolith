@@ -174,6 +174,13 @@ std::optional<QByteArray> open(const Key &key, const QByteArray &file)
     return plain;
 }
 
+void wipe(QByteArray &bytes)
+{
+    if (!bytes.isEmpty())
+        sodium_memzero(bytes.data(), size_t(bytes.size()));
+    bytes.clear();
+}
+
 void setDumpable(bool dumpable)
 {
 #ifdef Q_OS_LINUX

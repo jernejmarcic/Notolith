@@ -234,6 +234,9 @@ QString MarkdownEditor::embedThemeTag() const
 
 bool MarkdownEditor::isBinaryFile(const QString &path) const
 {
+    // An encrypted note is ciphertext: a card with its name, never its bytes.
+    if (Vault::isEncryptedNote(path))
+        return true;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return false;

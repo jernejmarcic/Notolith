@@ -75,6 +75,10 @@ QByteArray seal(const Key &key, const QByteArray &plaintext);
 /// was changed.
 std::optional<QByteArray> open(const Key &key, const QByteArray &file);
 
+/// Zeroes `bytes` in place, in a way the compiler cannot skip: decrypted
+/// text on its way into or out of an editor.
+void wipe(QByteArray &bytes);
+
 /// While anything is unlocked, the process cannot be dumped to disk (Linux:
 /// no core file, no ptrace attach by another user's process).
 void setDumpable(bool dumpable);

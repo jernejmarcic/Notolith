@@ -89,6 +89,19 @@ TEST_F(IndexTest, IgnoresDotDirectoriesAndNonNotes)
                                              QStringLiteral("Projects/noteAppC.md")}));
 }
 
+TEST_F(IndexTest, ALinkFindsANoteThatWasEncrypted)
+{
+    QFile locked(dir.filePath(QStringLiteral("Secret.mdlock")));
+    ASSERT_TRUE(locked.open(QIODevice::WriteOnly));
+    locked.write("NAPCLOCK...");
+    locked.close();
+    Index index;
+    build(index);
+    // [[Secret]] written when it was Secret.md keeps working.
+    EXPECT_EQ(index.resolve(QStringLiteral("Secret")), QStringLiteral("Secret.mdlock"));
+    EXPECT_EQ(index.resolve(QStringLiteral("Home")), QStringLiteral("Home.md"));
+}
+
 TEST_F(IndexTest, ResolvesNamesPathsAliasesAndIds)
 {
     Index index;
