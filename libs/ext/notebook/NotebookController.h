@@ -7,6 +7,7 @@
 // callback is a thin adapter over run() below (see docs on that seam in
 // MarkdownEditor.h and the wiring snippet in the lane's own report).
 
+#include "DirectRunner.h"
 #include "KernelClient.h"
 #include "KernelProcess.h"
 #include "KernelSpec.h"
@@ -39,6 +40,9 @@ public:
         /// `source` already is the file's contents by the time this is
         /// called - this is only for a script that reads *sibling* files).
         QStringList extraReadOnlyBinds;
+        /// Through the language's Jupyter kernel even when the system's own
+        /// tool could run it: what the kernel's end-to-end test asks for.
+        bool useKernel = false;
     };
     using Deliver = std::function<void(NotebookRunResult)>;
 
@@ -103,6 +107,7 @@ private:
     /// two lookups for the price of a Big-O nobody will notice at "one
     /// kernel per language".
     std::map<QString, std::unique_ptr<KernelSession>> m_kernels;
+    DirectRunner *m_direct = nullptr; ///< made on the first run that needs it
 };
 
 } // namespace noteAppC::notebook

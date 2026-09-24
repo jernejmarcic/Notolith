@@ -130,6 +130,19 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
 - [x] Publish from the window: one dialog for folder, site name, home
       note, which notes and theme, remembered per vault (d397dc3).
 
+## Reported by Jernej 2026-09-24, from the real app
+
+- [x] "Not juypter kernel, should use system itself, or in a docker, most
+      offecient way": blocks run with the system's own tools, sandboxed
+      (DirectRunner); Jupyter only for a language with no recipe. Docker is
+      not installed, so not built. docs/NOTEBOOKS.md.
+- [x] The run control and its error icon covered the language label.
+- [x] "Bad covering title" / "Cant edit the PDF embedd" / "When editing make
+      sure that the rendered displayed element is not rendered, whjen editing
+      the line that causes that": one bug - a block being edited kept its
+      rendered PDF (or video, or card) state from before and painted it over
+      its own source and the blocks below. Every layout now starts clean.
+
 ## Found 2026-09-24, not yet fixed
 
 - [ ] **test_demo crashed once in poppler** under a parallel ctest (1 in

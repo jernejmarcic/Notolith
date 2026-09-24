@@ -329,11 +329,11 @@ QRectF MarkdownEditor::notebookRunRectFor(const BlockView &view, qreal left, qre
     // The header row every notebook-eligible block gets (view.textTop was
     // set to codeHeaderHeight() for exactly this reason - see layoutBlock).
     const qreal y = panel.top() + (view.textTop + 8 - size) / 2;
-    // Left of the fold handle and the label codeLabelOf draws in the same
-    // corner - both only apply once `#|` options exist, which a
-    // notebook-only block need not have, so this never has to share the
-    // corner with them; when it does, it simply sits further left still.
-    const qreal right = panel.right() - 22 - kFoldHandle - size;
+    // Left of the language label codeLabelOf draws at the header's right
+    // end, never on it: placed by the label's own width, since a fixed
+    // offset put the icon over the start of "haskell".
+    const CodeLabel label = codeLabelOf(view, left, top);
+    const qreal right = label.rect.isValid() ? label.rect.left() - 8 - size : panel.right() - 22 - kFoldHandle - size;
     return QRectF(right, y, size, size);
 }
 
@@ -418,6 +418,7 @@ MarkdownEditor::NotebookBlockInfo MarkdownEditor::notebookInfoAt(qsizetype offse
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
     info.runRect = notebookRunRectFor(view, left, top);
+    info.labelRect = codeLabelOf(view, left, top).rect;
     return info;
 }
 

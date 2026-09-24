@@ -9,12 +9,15 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <optional>
+#include <QStandardPaths>
 #include <QDir>
 #include <QFile>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QTest>
 
+#include "DirectRunner.h"
 #include "KernelSpec.h"
 #include "NotebookCache.h"
 #include "NotebookController.h"
@@ -265,6 +268,7 @@ TEST(NotebookEndToEndTest, RealPython3Kernel)
     // or only the protocol alone (a Host-tier run would not catch a bind
     // the kernel actually needs and the sandbox left out).
     request.tier = SandboxTier::Bubblewrap;
+    request.useKernel = true; // python would otherwise run without a kernel
 
     const auto runAndWait = [&](const QString &code, int timeoutMs = 15000) {
         struct Outcome {
@@ -342,6 +346,127 @@ TEST(NotebookEndToEndTest, RealPython3Kernel)
     EXPECT_FALSE(afterRestart.ok); // NameError: the new kernel never saw `x`
 
     controller.shutdownAll();
+}
+
+// --- the system's own tools, no kernel (DirectRunner) -----------------------
+
+namespace {
+
+/// Runs `source` and waits for the answer; nullopt if none came.
+std::optional<NotebookRunResult> runDirect(const QString &language, const QString &source,
+                                           SandboxTier tier = SandboxTier::Bubblewrap, int timeoutMs = 30'000)
+{
+    DirectRunner runner;
+    std::optional<NotebookRunResult> result;
+    DirectRunner::Request request;
+    request.language = language;
+    request.source = source;
+    request.tier = tier;
+    request.timeoutMs = timeoutMs;
+    runner.run(request, [&result](NotebookRunResult r) { result = r; });
+    QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
+    return result;
+}
+
+QString textOf(const NotebookRunResult &result)
+{
+    QString text;
+    for (const NotebookOutput &output : result.outputs)
+        text += output.kind == NotebookOutput::Kind::Error ? output.traceback.join(QLatin1Char('\n')) : output.text;
+    return text;
+}
+
+} // namespace
+
+TEST(DirectRunnerTest, HaskellExpressionsPrintTheirValue)
+{
+    if (!DirectRunner::canRun(QStringLiteral("haskell")))
+        GTEST_SKIP() << "ghci is not installed";
+    // Jernej's own block, and a definition used by a later line.
+    const auto result = runDirect(QStringLiteral("haskell"), QStringLiteral("sum[1..10]\n\nsquare x =\n  x * x\nsquare 7\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("55\n49\n"));
+}
+
+TEST(DirectRunnerTest, AHaskellProgramWithMainRuns)
+{
+    if (!DirectRunner::canRun(QStringLiteral("haskell")) || QStandardPaths::findExecutable(QStringLiteral("runghc")).isEmpty())
+        GTEST_SKIP() << "runghc is not installed";
+    const auto result = runDirect(QStringLiteral("haskell"), QStringLiteral("main :: IO ()\nmain = print (product [1..5])\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(textOf(*result), QStringLiteral("120\n"));
+}
+
+TEST(DirectRunnerTest, PythonsLastExpressionPrintsAndErrorsAreErrors)
+{
+    if (!DirectRunner::canRun(QStringLiteral("python")))
+        GTEST_SKIP() << "python3 is not installed";
+    auto result = runDirect(QStringLiteral("python"), QStringLiteral("x = 20\nprint('side')\nx + 1\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok);
+    EXPECT_EQ(textOf(*result), QStringLiteral("side\n21\n"));
+
+    result = runDirect(QStringLiteral("python"), QStringLiteral("1 / 0\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->ok);
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral("ZeroDivisionError")));
+    const auto error = std::find_if(result->outputs.cbegin(), result->outputs.cend(),
+                                    [](const NotebookOutput &o) { return o.kind == NotebookOutput::Kind::Error; });
+    ASSERT_NE(error, result->outputs.cend());
+    EXPECT_EQ(error->ename, QStringLiteral("ZeroDivisionError")); // named as the traceback names it
+    EXPECT_EQ(error->evalue, QStringLiteral("division by zero"));
+
+    result = runDirect(QStringLiteral("haskell"), QStringLiteral("undefinedName + 1\n"));
+    if (DirectRunner::canRun(QStringLiteral("haskell"))) {
+        ASSERT_TRUE(result.has_value());
+        EXPECT_FALSE(result->ok) << "ghci exits 0 on an error; it is still one";
+    }
+}
+
+TEST(DirectRunnerTest, ACBlockIsCompiledAndRun)
+{
+    if (!DirectRunner::canRun(QStringLiteral("c")))
+        GTEST_SKIP() << "gcc is not installed";
+    const auto result = runDirect(QStringLiteral("c"), QStringLiteral("#include <stdio.h>\nint main(void) { printf(\"%d\\n\", 6 * 7); }\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("42\n"));
+}
+
+TEST(DirectRunnerTest, ARunawayBlockIsStoppedAndAnUnknownLanguageSaysSo)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")))
+        GTEST_SKIP() << "bash is not installed";
+    const auto slow = runDirect(QStringLiteral("bash"), QStringLiteral("sleep 30\n"), SandboxTier::Bubblewrap, 500);
+    ASSERT_TRUE(slow.has_value());
+    EXPECT_FALSE(slow->ok);
+    EXPECT_LT(slow->wallMs, 5000);
+
+    const auto unknown = runDirect(QStringLiteral("brainfuck"), QStringLiteral("+"));
+    ASSERT_TRUE(unknown.has_value());
+    EXPECT_FALSE(unknown->kernelError.isEmpty());
+}
+
+TEST(DirectRunnerTest, TheSandboxKeepsOtherFilesOut)
+{
+    if (!DirectRunner::canRun(QStringLiteral("bash")) || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "bash or bwrap is not installed";
+    // A host /tmp file: the sandbox's /tmp is a fresh empty one, and nothing
+    // outside the block's own directory is bound in.
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    QFile secret(outside.filePath(QStringLiteral("secret.txt")));
+    ASSERT_TRUE(secret.open(QIODevice::WriteOnly));
+    secret.write("do not read");
+    secret.close();
+    const auto result = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1' || echo refused\n").arg(secret.fileName()));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(textOf(*result).contains(QStringLiteral("do not read")));
+    // The host tier, opted into, does read it: the sandbox is what stopped it.
+    const auto host = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1'\n").arg(secret.fileName()), SandboxTier::Host);
+    ASSERT_TRUE(host.has_value());
+    EXPECT_TRUE(textOf(*host).contains(QStringLiteral("do not read")));
 }
 
 int main(int argc, char **argv)

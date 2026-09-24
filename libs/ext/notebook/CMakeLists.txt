@@ -17,6 +17,8 @@ add_library(noteAppC_notebook STATIC
     NotebookCache.h
     NotebookCache.cpp
     NotebookController.h
+    DirectRunner.h
+    DirectRunner.cpp
     NotebookController.cpp)
 
 # KernelClient is a QThread and NotebookController a QObject, both with
