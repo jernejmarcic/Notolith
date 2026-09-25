@@ -609,6 +609,9 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
   - [x] Cold start, pdfview and search phases: no regression (cold start
         57 -> 44 ms; search, unlinked mentions, settings pass within noise;
         500-page PDF opens in 6.1 ms, scrolls at 0.79 ms a frame).
+  - [ ] Cold index, 20 000 notes, read 1.24 s against a documented 0.98 s
+        with another build running: re-measure on a quiet machine
+        (`noteAppC-bench --notes 20000 --phase start`) before chasing it.
 
 ## Requested 2026-09-23, afternoon: notebooks, last of all
 
