@@ -38,12 +38,10 @@ struct SandboxAvailability {
 };
 SandboxAvailability detectSandboxAvailability();
 
-/// Wraps `program`+`args` for `tier`. Falls back to SandboxTier::Host (and
-/// returns that in `*usedTier`, so a caller can tell the caller-visible
-/// trust level actually applied) when Bubblewrap was asked for but `bwrap`
-/// is not on PATH - the same silent fallback TexCompiler::compile and
-/// PluginHost::sandboxArguments already use, logged by the caller rather
-/// than failing the launch outright.
+/// Wraps `program`+`args` for `tier`. When Bubblewrap was asked for and
+/// `bwrap` is not on PATH, `*outProgram` comes back empty and the caller
+/// refuses the run: a block never falls back to running as the user unless
+/// it asked for SandboxTier::Host (which Settings has to allow).
 ///
 /// With `filterFD` set, tier 1 also gets a syscall filter (see
 /// compileSyscallFilter in the .cpp), handed to bwrap as `--seccomp N`:

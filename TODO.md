@@ -594,13 +594,12 @@ What the spec asks for:
       what it would restrict. Left: the server/mobile tiers, and the same
       filter for PluginHost and TexCompiler's bwrap (needs a home both
       libraries link).
-- [ ] **Without bubblewrap, everything that runs in a sandbox runs as the
+- [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
-      (TexCompiler) and tier 1 code blocks (wrapCommand) all fall back to
-      the host. The Arch package now depends on bubblewrap; a build from
-      source still does this. A plugin, or a block asking for tier 1, should
-      refuse to start and say why, unless Settings allows running without
-      the sandbox.
+      (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to
+      the host. Now each refuses and says to install bubblewrap; no setting,
+      since a block that wants the host has tier 0 (which Settings must
+      allow). The Arch package depends on bubblewrap.
 - [x] Check what is installed before building on it (libzmq, a kernel such as
       ipykernel, bubblewrap); leave anything missing for Jernej.
 

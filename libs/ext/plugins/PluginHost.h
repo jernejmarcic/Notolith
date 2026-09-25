@@ -143,6 +143,7 @@ private:
     Timing m_timing;
     QElapsedTimer m_sinceFailure;
     bool m_hasFailed = false;
+    QString m_startError; ///< why the host was not started at all, if it was refused
     // Default for a plugin whose manifest declares no `timeout-ms` - the
     // constructor body overrides this from PluginManifest::requestTimeoutMs()
     // when one is declared (docs/PLUGINS.md, "Timeouts": an AI-style plugin
