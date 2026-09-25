@@ -27,6 +27,7 @@
 #include "WaitFor.h"
 
 #include <algorithm>
+#include <unistd.h>
 #include <memory>
 
 using namespace noteAppC::notebook;
@@ -242,6 +243,46 @@ TEST(NotebookSandboxTest, Tier1AllowsReadingInsideTheRuntimeDir)
     EXPECT_EQ(sandboxed.readAllStandardOutput(), QByteArrayLiteral("fine"));
 }
 
+TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
+{
+    if (!detectSandboxAvailability().bubblewrap)
+        GTEST_SKIP() << "bubblewrap not installed";
+
+    QTemporaryDir runtimeDir;
+    ASSERT_TRUE(runtimeDir.isValid());
+    SandboxRequest request;
+    request.runtimeDir = runtimeDir.path();
+    const auto run = [&](const QStringList &command) {
+        QString program;
+        QStringList args;
+        SandboxTier used;
+        int filterFD = -1;
+        wrapCommand(SandboxTier::Bubblewrap, command.first(), command.mid(1), request, &program,
+                    &args, &used, &filterFD);
+        if (filterFD < 0)
+            return -2;
+        QProcess sandboxed;
+        sandboxed.setChildProcessModifier([filterFD] { keepInChild(filterFD); });
+        sandboxed.start(program, args);
+        close(filterFD);
+        return sandboxed.waitForFinished(5000) ? sandboxed.exitCode() : -3;
+    };
+
+    const int plain = run({QStringLiteral("/usr/bin/true")});
+    if (plain == -2)
+        GTEST_SKIP() << "built without libseccomp";
+    EXPECT_EQ(plain, 0) << "the filter must not stop an ordinary program";
+    // Without the filter a nested user namespace works inside bwrap (checked
+    // by hand on starbase-1), and with it every capability comes back.
+    EXPECT_NE(run({QStringLiteral("/usr/bin/unshare"), QStringLiteral("-U"),
+                   QStringLiteral("/usr/bin/true")}),
+              0);
+    // Threads and fork still work: clone without CLONE_NEWUSER is allowed.
+    EXPECT_EQ(run({QStringLiteral("/usr/bin/sh"), QStringLiteral("-c"),
+                   QStringLiteral("/usr/bin/true & wait")}),
+              0);
+}
+
 // --- a real python3 kernel, end to end ----------------------------------------
 
 TEST(NotebookEndToEndTest, RealPython3Kernel)
@@ -364,7 +405,7 @@ std::optional<NotebookRunResult> runDirect(const QString &language, const QStrin
     request.tier = tier;
     request.timeoutMs = timeoutMs;
     runner.run(request, [&result](NotebookRunResult r) { result = r; });
-    QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
+    (void)QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
     return result;
 }
 

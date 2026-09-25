@@ -11,6 +11,8 @@
 
 #include <memory>
 
+#include <unistd.h>
+
 namespace noteAppC::notebook {
 
 namespace {
@@ -210,7 +212,9 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     QString program;
     QStringList args;
     SandboxTier used = SandboxTier::Host;
-    wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used);
+    int filterFD = -1;
+    wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used,
+                &filterFD);
 
     running->process = new QProcess(this);
     running->process->setProgram(program);
@@ -223,6 +227,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     env.insert(QStringLiteral("TMPDIR"), dir);
     running->process->setProcessEnvironment(env);
     running->process->setStandardInputFile(QProcess::nullDevice());
+    running->process->setChildProcessModifier([filterFD] { keepInChild(filterFD); });
 
     connect(running->process, &QProcess::readyReadStandardOutput, this, [running] {
         if (running->process->bytesAvailable() > kMaxOutput)
@@ -280,6 +285,9 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     running->clock.start();
     running->timeout.start();
     running->process->start();
+    // The fork has happened; bwrap holds its own copy of the filter.
+    if (filterFD >= 0)
+        close(filterFD);
 }
 
 void DirectRunner::interrupt(const QString &language)

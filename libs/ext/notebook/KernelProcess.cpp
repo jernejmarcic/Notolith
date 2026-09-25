@@ -11,6 +11,7 @@
 
 #include <csignal>
 #include <sys/resource.h>
+#include <unistd.h>
 
 namespace noteAppC::notebook {
 
@@ -88,7 +89,9 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     SandboxRequest request;
     request.runtimeDir = dir;
     request.readOnlyBinds = extraReadOnlyBinds;
-    wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed);
+    int filterFD = -1;
+    wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed,
+                &filterFD);
 
     m_process = std::make_unique<QProcess>();
     m_process->setProgram(program);
@@ -106,14 +109,18 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     // interpreter, not a small out-of-process command - but still a ceiling:
     // a runaway `while True: x = x + [0]*10**6` is killed, not left to
     // pressure the rest of the machine.
-    m_process->setChildProcessModifier([] {
+    m_process->setChildProcessModifier([filterFD] {
         rlimit memory{4ULL * 1024 * 1024 * 1024, 4ULL * 1024 * 1024 * 1024};
         setrlimit(RLIMIT_AS, &memory);
+        keepInChild(filterFD);
     });
     connect(m_process.get(), &QProcess::finished, this,
            [this](int exitCode, QProcess::ExitStatus) { emit finished(exitCode); });
 
     m_process->start();
+    // The fork has happened; bwrap holds its own copy of the filter.
+    if (filterFD >= 0)
+        close(filterFD);
     if (!m_process->waitForStarted(5000)) {
         m_error = QStringLiteral("kernel process did not start: %1").arg(m_process->errorString());
         m_process.reset();

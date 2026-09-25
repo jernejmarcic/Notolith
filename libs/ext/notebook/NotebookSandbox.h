@@ -44,8 +44,19 @@ SandboxAvailability detectSandboxAvailability();
 /// is not on PATH - the same silent fallback TexCompiler::compile and
 /// PluginHost::sandboxArguments already use, logged by the caller rather
 /// than failing the launch outright.
+///
+/// With `filterFD` set, tier 1 also gets a syscall filter (see
+/// compileSyscallFilter in the .cpp), handed to bwrap as `--seccomp N`:
+/// `*filterFD` is then an open, close-on-exec descriptor the caller keeps
+/// open in the child (keepInChild, from its child process modifier) and
+/// closes once QProcess::start has returned; -1 when there is no filter
+/// (a build without libseccomp, or tier 0).
 void wrapCommand(SandboxTier tier, const QString &program, const QStringList &args,
                  const SandboxRequest &request, QString *outProgram, QStringList *outArgs,
-                 SandboxTier *usedTier);
+                 SandboxTier *usedTier, int *filterFD = nullptr);
+
+/// For a child process modifier, between fork and exec: lets `fd` through
+/// the exec. Async-signal-safe; does nothing for -1.
+void keepInChild(int fd);
 
 } // namespace noteAppC::notebook
