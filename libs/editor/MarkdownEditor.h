@@ -472,9 +472,12 @@ public:
     /// file card (icon, name, size) - the fallback for a binary file, or any
     /// file with no richer renderer.
     bool isFileCardAt(qsizetype offset) const;
-    /// How many embeds the block containing `offset` rendered as trailing
-    /// cells - see layoutEmbedRow's comment. 0 outside such a block.
+    /// How many embeds the block containing `offset` rendered inline - see
+    /// collectTextEmbeds' comment. 0 outside such a block.
     int embedCellCountAt(qsizetype offset) const;
+    /// For the tests: where that block's `cell`-th inline embed sits,
+    /// block-local.
+    QRectF embedCellRectAt(qsizetype offset, int cell) const;
     /// For the tests: the raw text a block containing `offset` drew through
     /// its own substituted QTextLayout - a source-file listing, a note
     /// embed's panel, a `.tex` compile's error log, a query block's message
@@ -852,11 +855,10 @@ private:
         QRectF fileCardRect; ///< block-local; the whole card is the click target
 
         /// One embedded file inside a block that holds more than one embed,
-        /// or mixes an embed with running text - see layoutEmbedRow's
-        /// comment for why these are laid out as trailing rows rather than
-        /// truly inline. Built by the same per-kind logic a sole whole-block
-        /// embed uses, addressed by its own rect instead of the block's
-        /// single set of fields above.
+        /// or mixes an embed with running text, drawn inline - see
+        /// collectTextEmbeds' comment. Built by the same per-kind logic a
+        /// sole whole-block embed uses, addressed by its own rect instead of
+        /// the block's single set of fields above.
         struct EmbedCell {
             Range source; ///< the `![[...]]` span, for a click
             QRectF rect;    ///< block-local
@@ -1394,17 +1396,15 @@ private:
     /// several, or a sentence with one in the middle, showed literal link
     /// text for every embed instead of the file.
     ///
-    /// What this actually builds: `view.embedCells`, one row per source line
-    /// that carries an embed (several embeds sharing a line sit side by side
-    /// in that row), appended after the block's own text - not spliced in
-    /// after that exact line. QTextLayout, used bare here rather than
-    /// through QTextDocument, has no inline-object registration to hook a
-    /// widget into a specific line the way Obsidian's CodeMirror does; doing
-    /// that would mean hand-rolling line-by-line height injection into
-    /// layoutBlock's shared layout loop, which every other block kind also
-    /// runs through. ponytail: rows trail the paragraph instead of
-    /// interleaving with it; upgrade path is in layoutBlock's own comment,
-    /// next to where the trailing rows are appended.
+    /// What this actually builds: `view.embedCells`, each one inline where
+    /// its source sits. QTextLayout, used bare, has no inline objects, so the
+    /// embed's "!" stays in the text as a carrier (the rest is hidden): no
+    /// ink, and letter spacing that reserves exactly the cell's width - the
+    /// trick inline maths uses. A line holding a cell taller than the text
+    /// grows by the difference (textEmbedHeightOn, in layoutBlock's line
+    /// loop), and placeTextEmbeds puts each cell on its carrier once the
+    /// layout is done. Several embeds on one line sit side by side at their
+    /// own size and wrap like words, as in Obsidian.
     ///
     /// Each cell reuses layoutImage's and layoutPdf's own caches (a thumbnail
     /// is not rendered twice just because the same file is both a sole embed
@@ -1413,7 +1413,10 @@ private:
     /// their own richer treatment is what a *sole* embed still gets.
     void collectTextEmbeds(const BlockView &view, QList<Range> &hidden,
                            QList<const EmbedSpan *> &found) const;
-    void appendEmbedRows(BlockView &view, const QList<const EmbedSpan *> &embeds);
+    void prepareTextEmbeds(BlockView &view, const QList<const EmbedSpan *> &embeds,
+                           QList<QTextLayout::FormatRange> &formats);
+    qreal textEmbedHeightOn(const BlockView &view, const QTextLine &line) const;
+    void placeTextEmbeds(BlockView &view, qreal lineHeight);
     BlockView::EmbedCell buildEmbedCell(const EmbedSpan &embed, qreal maxWidth);
     void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,

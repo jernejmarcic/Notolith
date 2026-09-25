@@ -2862,9 +2862,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.caretWord = view.active ? wordAtCaret() : Range{};
     QList<Range> hidden;
     // Embeds inside this block that layoutEmbed did not already render whole
-    // - several sharing a paragraph, or one mixed in with running text; see
-    // collectTextEmbeds and layoutEmbedRow's comment in the header for why
-    // these become trailing rows rather than true inline objects.
+    // - several sharing a paragraph, or one mixed in with running text,
+    // drawn inline; see collectTextEmbeds' comment in the header.
     QList<const EmbedSpan *> textEmbeds;
     if (!reveal) {
         hidden.reserve(view.lastSyntax - view.firstSyntax);
@@ -2989,6 +2988,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                           .horizontalAdvance(m_text.at(mark.sourcePos)));
         formats.append({int(mark.displayPos), 1, format});
     }
+    prepareTextEmbeds(view, textEmbeds, formats);
     view.layout->setFormats(formats);
 
     // A list's lines, and a list's inside a quote or callout outside source
@@ -3019,8 +3019,13 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                   : (view.span.kind == BlockSpan::Kind::List ? kListIndent : codeGutter));
         line.setLineWidth(contentWidth() - indent
                           - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
-        line.setPosition(QPointF(indent, height));
-        height += lineHeight;
+        // A line carrying an inline embed taller than its text grows above
+        // the text to hold it.
+        const qreal grow = view.embedCells.empty()
+                               ? 0
+                               : qMax<qreal>(0, textEmbedHeightOn(view, line) - lineHeight);
+        line.setPosition(QPointF(indent, height + grow));
+        height += lineHeight + grow;
     }
     view.layout->endLayout();
     view.height = qMax(height, lineHeight);
@@ -3049,11 +3054,10 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // see the `view.notebookEligible` block just under this one.
     view.height = (view.folded || notebookEchoHidden) ? 0 : view.height + codeCaptionHeight(view);
     view.height += view.textTop;
-    // Trailing rows for any embed this block could not render whole -
-    // appended after the paragraph's own text rather than spliced in after
-    // each embed's own line; see the comment on collectTextEmbeds.
-    if (!textEmbeds.isEmpty() && !view.folded)
-        appendEmbedRows(view, textEmbeds);
+    if (view.folded)
+        view.embedCells.clear();
+    else
+        placeTextEmbeds(view, lineHeight);
     // A notebook block's output, below its own listing - never in place of
     // it, unlike layoutPluginCode's fences. Only the first piece carries it
     // (view.notebookEligible is only ever set there), and a folded fence
@@ -3297,9 +3301,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         }
         appendFindHighlights(view, selectionRanges);
         // Several embeds sharing this block, or one mixed in with running
-        // text: their rows trail whichever of the branches below paints the
-        // block's own text (or nothing, in the rare case a block is nothing
-        // but embeds and blank lines).
+        // text: drawn inline, under the text's invisible carriers.
         paintEmbedCells(painter, view, left, top);
 
         if (view.embedPanel) {

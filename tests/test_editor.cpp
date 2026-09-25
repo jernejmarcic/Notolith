@@ -1932,6 +1932,39 @@ TEST(MultiEmbedTest, AnEmbedInsideRunningTextStillRenders)
     // range was hidden, not the words around it.
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("see")));
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("here")));
+    // The "!" carries the image, so both spaces around it survive.
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("see ! here")));
+    // Inline: after "see " on the first line, not a row under the text.
+    const QRectF cell = editor->embedCellRectAt(0, 0);
+    EXPECT_GT(cell.left(), 10);
+    EXPECT_LT(cell.top(), 20);
+    EXPECT_EQ(cell.size(), QSizeF(20, 20));
+
+    // The caret inside the embed shows its source instead.
+    editor->enterBlockAt(8);
+    EXPECT_EQ(editor->embedCellCountAt(0), 0);
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("![[inline.png]]")));
+}
+
+TEST(MultiEmbedTest, ATallInlineEmbedGrowsItsLineAndTheTextAfterItFollowsOnIt)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QImage image(40, 120, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    const QString path = dir.filePath(QStringLiteral("tall.png"));
+    ASSERT_TRUE(image.save(path));
+
+    auto editor = editorWith(QStringLiteral("one ![[tall.png]] two ![[tall.png]] three\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 2);
+    const QRectF first = editor->embedCellRectAt(0, 0);
+    const QRectF second = editor->embedCellRectAt(0, 1);
+    // Side by side on one line, both from its top, the second after "two".
+    EXPECT_EQ(first.top(), second.top());
+    EXPECT_GT(second.left(), first.right() + 10);
+    EXPECT_GE(first.top(), 0);
 }
 
 // --- note embeds: whole, #Heading, #^block ----------------------------------
