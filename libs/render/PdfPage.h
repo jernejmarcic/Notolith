@@ -4,6 +4,10 @@
 #include <QSizeF>
 #include <QString>
 
+namespace Poppler {
+class Document;
+}
+
 namespace noteAppC {
 
 /// One page of a PDF, rendered to an image through poppler-qt6.
@@ -21,9 +25,11 @@ namespace noteAppC {
 /// One thing separate Documents do not cover: poppler itself keeps a couple
 /// of color-management globals (`GfxState::sRGBProfile`,
 /// `GfxXYZ2DisplayTransforms::XYZProfile`) that are process-wide and filled
-/// in, unguarded, by whichever thread's render reaches them first. `render`
-/// forces that first fill-in to happen alone, before any concurrent render
-/// can race it - see the comment on `warmUpColorManagement` in the .cpp.
+/// in, unguarded, by whichever thread's render reaches them first - and
+/// text extraction builds the same state. `render` forces that first
+/// fill-in to happen alone, before any concurrent render can race it; code
+/// that drives its own Poppler::Document calls `warmUp` first. See the
+/// comment on `warmUp` in the .cpp.
 class PdfPage {
 public:
     /// 0 when the file is not a PDF poppler can open.
@@ -47,6 +53,11 @@ public:
     /// Every other caller (PDF embeds) keeps the default and gets poppler's
     /// own rendering, unchanged.
     static QImage render(const QString &path, int page, int widthPixels, bool hideAnnotations = false);
+
+    /// For code that renders or extracts text through its own
+    /// Poppler::Document: run once before it, on any thread. Cheap after
+    /// the first call in the process.
+    static void warmUp(Poppler::Document *document);
 
     /// False in a build configured without poppler.
     static bool isAvailable();
