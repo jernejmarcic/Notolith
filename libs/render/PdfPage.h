@@ -17,6 +17,13 @@ namespace noteAppC {
 /// thread-local storage rather than reopened on every call - a burst of page
 /// requests for the same document, which a column or grid layout produces,
 /// pays to open the file once per thread rather than once per page.
+///
+/// One thing separate Documents do not cover: poppler itself keeps a couple
+/// of color-management globals (`GfxState::sRGBProfile`,
+/// `GfxXYZ2DisplayTransforms::XYZProfile`) that are process-wide and filled
+/// in, unguarded, by whichever thread's render reaches them first. `render`
+/// forces that first fill-in to happen alone, before any concurrent render
+/// can race it - see the comment on `warmUpColorManagement` in the .cpp.
 class PdfPage {
 public:
     /// 0 when the file is not a PDF poppler can open.

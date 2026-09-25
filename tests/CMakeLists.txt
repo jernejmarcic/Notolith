@@ -28,6 +28,16 @@ if(noteappc_have_litehtml)
 endif()
 add_test(NAME editor COMMAND test_editor)
 
+# Its own executable, deliberately: see test_pdfpage_race.cpp's header
+# comment on why this needs to be the first thing in its process to touch
+# PdfPage::render.
+if(noteappc_have_poppler)
+    add_executable(test_pdfpage_race test_pdfpage_race.cpp)
+    target_link_libraries(test_pdfpage_race PRIVATE noteAppC_render Qt6::Widgets GTest::gtest)
+    add_test(NAME pdfpage_race COMMAND test_pdfpage_race)
+    set_tests_properties(pdfpage_race PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME window COMMAND test_window)

@@ -4,6 +4,7 @@
 
 #ifdef NOTEAPPC_HAVE_POPPLER
 #include <poppler-qt6.h>
+#include <mutex>
 #endif
 
 namespace noteAppC {
@@ -54,6 +55,33 @@ Poppler::Document *openCached(const QString &path)
     return cache.document.get();
 }
 
+/// Poppler's own GfxState.cc lazily fills in two process-global statics the
+/// first time any page is rendered: `GfxState::sRGBProfile` and
+/// `GfxXYZ2DisplayTransforms::XYZProfile` (both `std::shared_ptr`s wrapping
+/// an lcms2 profile), each behind an unguarded `if (!profile) profile =
+/// ...;`. Every render builds a `GfxState` (`Page::displaySlice` -> `Gfx` ->
+/// `GfxState`), so this is not a per-Document detail - it sits underneath
+/// every `Poppler::Document`, in every thread, in the whole process. A
+/// `Poppler::Document` is fine one-per-thread as poppler's own docs say, but
+/// that does not cover this: the first renders across several worker
+/// threads (this file's own `openCached` guarantees separate Documents, not
+/// separate processes) can race on writing the same shared_ptr, tearing its
+/// internal pointer and crashing later on a garbage address deep in
+/// `GfxXYZ2DisplayTransforms` - see TODO.md's "test_demo crashed once in
+/// poppler". `std::call_once` runs one tiny render, alone, the first time
+/// any thread reaches here; every later render, on any thread, concurrent or
+/// not, then finds both statics already set and never written to again, so
+/// reading them is safe without any lock of our own.
+void warmUpColorManagement(Poppler::Document *document)
+{
+    static std::once_flag warmed;
+    std::call_once(warmed, [document] {
+        const std::unique_ptr<Poppler::Page> page(document->page(0));
+        if (page)
+            page->renderToImage(1, 1, 0, 0, 1, 1);
+    });
+}
+
 } // namespace
 
 int PdfPage::pageCount(const QString &path)
@@ -76,6 +104,8 @@ QImage PdfPage::render(const QString &path, int page, int widthPixels, bool hide
     Poppler::Document *document = openCached(path);
     if (!document || page < 0 || page >= document->numPages() || widthPixels <= 0)
         return {};
+
+    warmUpColorManagement(document);
 
     const std::unique_ptr<Poppler::Page> pdfPage(document->page(page));
     if (!pdfPage)
