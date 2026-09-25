@@ -616,6 +616,8 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
   - [ ] Cold index, 20 000 notes, read 1.24 s against a documented 0.98 s
         with another build running: re-measure on a quiet machine
         (`noteAppC-bench --notes 20000 --phase start`) before chasing it.
+        2026-09-25 evening: 1.30 s, but a game held 7 of 24 cores; still
+        not a fair reading. Compare against 8fe9ee9^ side by side when idle.
 
 ## Requested 2026-09-23, afternoon: notebooks, last of all
 
@@ -646,7 +648,8 @@ What the spec asks for:
       ptrace, keyring, bpf, io_uring, module loading or TIOCSTI. Landlock
       left out on purpose: the mount and network namespaces already cover
       what it would restrict. The same filter now covers the plugin host
-      and TeX too (libs/sandbox). Left: the server/mobile tiers.
+      and TeX too (libs/sandbox). Left: the server/mobile tiers, blocked:
+      no wasmtime, wasmer, runsc or firecracker on starbase-1.
 - [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
       (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to
