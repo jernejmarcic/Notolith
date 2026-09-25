@@ -961,7 +961,10 @@ void MarkdownEditor::rebuildBlocks()
         // A long fence becomes pieces of kCodePieceLines lines, for the same
         // reason. Its chrome is drawn across them, and each piece carries on
         // highlighting from the state the one before it ended in.
-        if (span.kind == BlockSpan::Kind::Code) {
+        // A long callout too: a listing inside one was part of its single
+        // layout, 89 ms a keystroke at 2 000 lines. Its panel is drawn across
+        // the pieces, its title on the first.
+        if (span.kind == BlockSpan::Kind::Code || span.kind == BlockSpan::Kind::Callout) {
             const qsizetype firstLine = m_lines.lineAt(view.span.range.start);
             const qsizetype lastLine =
                 m_lines.lineAt(qMax(view.span.range.start, view.span.range.end - 1));
@@ -970,7 +973,7 @@ void MarkdownEditor::rebuildBlocks()
             for (int piece = 0; piece + 1 < pieces; ++piece) {
                 const qsizetype to = m_lines.lineStart(firstLine + (piece + 1) * kCodePieceLines);
                 BlockView part;
-                part.span = {BlockSpan::Kind::Code, {from, to}, span.level};
+                part.span = {span.kind, {from, to}, span.level};
                 part.piece = piece;
                 part.pieces = pieces;
                 blocks.push_back(std::move(part));
@@ -1519,7 +1522,12 @@ QList<QTextLayout::FormatRange> MarkdownEditor::nestedCodeFormatsFor(const Block
             || !span.range.overlaps(view.span.range))
             continue;
 
-        const Range range = view.map.toDisplay(span.range);
+        // ponytail: a listing that began in an earlier piece of a long callout
+        // is highlighted from this piece's first line, so a comment opened
+        // before it is not carried over; carry CodeHighlighter::State across
+        // callout pieces as fences do if that shows up.
+        const Range clipped{qMax(span.range.start, view.span.range.start), qMin(span.range.end, view.span.range.end)};
+        const Range range = view.map.toDisplay(clipped);
         if (range.length() <= 0 || range.end > shown.size())
             continue;
         QList<QTextLayout::FormatRange> tokens =
@@ -1837,8 +1845,9 @@ int MarkdownEditor::nestingDepthAt(const BlockView &view, qsizetype source) cons
 
 const CalloutSpan *MarkdownEditor::calloutFor(const BlockView &view) const
 {
+    const qsizetype start = firstPiece(view).span.range.start; // a long callout is in pieces
     for (const CalloutSpan &callout : m_decorations.callouts) {
-        if (callout.range.start == view.span.range.start)
+        if (callout.range.start == start)
             return &callout;
     }
     return nullptr;
@@ -1856,11 +1865,22 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
         return;
 
     const CalloutStyle &style = view.calloutStyle;
-    const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
+    // A callout in pieces is one panel: each piece draws its slice of it, the
+    // rounded corners only where the panel really begins and ends.
+    const bool first = view.piece == 0;
+    const bool last = view.piece == view.pieces - 1 || view.pieces <= 1;
+    const QRectF slice(left - 14, first ? top - 8 : top, contentWidth() + 28,
+                       view.height + (first ? 8 : 0) + (last ? 8 : 0));
+    const QRectF panel = slice.adjusted(0, first ? 0 : -16, 0, last ? 0 : 16);
     QPainterPath rounded;
     rounded.addRoundedRect(panel, 6, 6);
+    painter.save();
+    painter.setClipRect(slice, Qt::IntersectClip);
     painter.fillPath(rounded, style.background);
     painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), style.bar);
+    painter.restore();
+    if (!first)
+        return; // the title, icon and fold arrow are the first piece's
 
     // The icon keeps one size whatever it is, so a photograph and a glyph line
     // up in the same column. Only a Lucide glyph is recoloured; a user's own
@@ -2904,7 +2924,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.nested.clear();
     if (view.callout) {
         for (const CalloutSpan &callout : m_decorations.callouts) {
-            if (callout.depth > 0 && view.span.range.contains(callout.range.start))
+            // One that began in an earlier piece still covers lines of this.
+            if (callout.depth > 0 && callout.range.overlaps(view.span.range))
                 view.nested.push_back(
                     {&callout,
                      m_calloutStyles.resolve(callout.type, callout.attributes, m_theme)});
@@ -3012,8 +3033,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
 
     if (view.callout) {
         // The title line is drawn by the callout header, so the body starts
-        // below it; an empty callout still shows its title.
-        view.textTop = calloutHeaderHeight(view.calloutStyle);
+        // below it; an empty callout still shows its title. A later piece
+        // carries on the body.
+        view.textTop = view.piece == 0 ? calloutHeaderHeight(view.calloutStyle) : 0;
         view.height = height;
     } else if ((view.options || view.tabGroup >= 0 || view.notebookEligible) && view.piece == 0) {
         view.textTop = codeHeaderHeight(); // the `#|` header, the tab strip, or the run control

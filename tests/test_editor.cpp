@@ -3089,6 +3089,41 @@ TEST(CodeBlockPerfTest, TypingInALongCodeBlockStaysInBudget)
     EXPECT_LT(longTyping, qMax(1.0, shortTyping) * 8);
 }
 
+TEST(CodeBlockPerfTest, TypingInALongListingInsideACalloutStaysInBudget)
+{
+    // A fence inside a callout was part of the callout's one layout, so a
+    // keystroke in it relaid out the whole listing.
+    const auto measure = [](int lines) {
+        QString note = QStringLiteral("# Listing\n\n> [!note] Code\n> ```cpp\n");
+        for (int i = 0; i < lines; ++i)
+            note += QStringLiteral("> int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
+        note += QStringLiteral("> ```\n");
+        auto editor = parsedEditorWith(note);
+        if (!editor)
+            return -1.0;
+        const qsizetype middle = note.indexOf(QStringLiteral("value%1 ").arg(lines / 2));
+        editor->setCursorOffset(middle);
+        editor->enterBlockAt(middle);
+        editor->grab();
+        std::vector<double> samples;
+        for (int i = 0; i < 9; ++i) {
+            QElapsedTimer clock;
+            clock.start();
+            QTest::keyClick(editor.get(), Qt::Key_Y);
+            editor->grab();
+            samples.push_back(clock.nsecsElapsed() / 1e6);
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2];
+    };
+    const double shortTyping = measure(100);
+    const double longTyping = measure(2000);
+    ASSERT_GE(longTyping, 0.0) << "the parse never came back";
+    std::printf("[ PERF     ] callout listing of 100 lines: type %.2f ms; of 2000: %.2f ms\n",
+                shortTyping, longTyping);
+    EXPECT_LT(longTyping, 8.0);
+}
+
 // --- long fences, in pieces --------------------------------------------------
 
 namespace {
