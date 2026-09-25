@@ -473,8 +473,8 @@ Jernej's rule: a new feature goes here and the current task carries on.
       with the caret on them, which also means the language tag can only be
       edited from its own line. I believe Obsidian shows both fences as soon
       as the caret is anywhere inside; check before changing anything.
-- [ ] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
-      blitting, the Wayland buffer measurement - see above.
+- [x] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
+      blitting, the Wayland buffer measurement - each done, see above.
 
 ## Requested 2026-09-23, afternoon: embeds
 
