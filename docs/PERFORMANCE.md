@@ -34,7 +34,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench, includes `openVault`) | 57 ms | - |
+| cold start to first painted frame (bench, includes `openVault`) | 44 ms (stage 14) | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
