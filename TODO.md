@@ -583,8 +583,13 @@ What the spec asks for:
       desktop default); gVisor, Firecracker and WASM tiers later (server and
       mobile).
       Built: tier 0 (`#| sandbox: host`, honoured only when Settings allows)
-      and tier 1 bubblewrap. Left: seccomp and Landlock inside tier 1, and
-      the server/mobile tiers.
+      and tier 1 bubblewrap, now with a seccomp denylist (libseccomp,
+      optional at build time; bwrap `--seccomp`): no new namespaces, mounts,
+      ptrace, keyring, bpf, io_uring, module loading or TIOCSTI. Landlock
+      left out on purpose: the mount and network namespaces already cover
+      what it would restrict. Left: the server/mobile tiers, and the same
+      filter for PluginHost and TexCompiler's bwrap (needs a home both
+      libraries link).
 - [x] Check what is installed before building on it (libzmq, a kernel such as
       ipykernel, bubblewrap); leave anything missing for Jernej.
 

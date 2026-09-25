@@ -34,7 +34,10 @@ traceback names it (`ZeroDivisionError: division by zero`).
 
 By default a block runs under bubblewrap: `/usr` and `/etc` read-only, a
 fresh empty `/tmp`, no network, and nothing of the home directory - only
-its own temporary directory, which is its `HOME` too. `#| sandbox: host` in
+its own temporary directory, which is its `HOME` too. Built with libseccomp,
+it also cannot make namespaces or mounts, ptrace, reach the kernel keyring,
+load BPF or modules, use io_uring, or type into the terminal (`TIOCSTI`):
+those calls answer "operation not permitted". `#| sandbox: host` in
 the block asks to run as you, unsandboxed; it is refused unless allowed in
 settings.
 
