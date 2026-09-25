@@ -30,6 +30,22 @@
 
 namespace noteAppC {
 
+namespace {
+
+// The cache (and the in-flight request) is keyed on the YAML together with
+// the requested view, not the YAML alone: two embeds of the same .base file
+// asking for different views must evaluate, cache and deliver separately.
+// Left as plain concatenation, the way FileEmbedBlock.cpp's own cache keys
+// are built, rather than a QPair - one QHash<QString, ...> already exists
+// for the no-view case and this keeps it exactly as it was for `viewName`
+// empty (a fence, or an embed with no fragment).
+QString baseCacheKey(const QString &yamlText, const QString &viewName)
+{
+    return viewName.isEmpty() ? yamlText : yamlText + QLatin1Char('\x1e') + viewName;
+}
+
+} // namespace
+
 QList<MarkdownEditor::BaseRowRect> MarkdownEditor::baseRowsAt(qsizetype offset) const
 {
     QList<BaseRowRect> rows;
@@ -48,7 +64,7 @@ QList<MarkdownEditor::BaseRowRect> MarkdownEditor::baseRowsAt(qsizetype offset) 
 }
 
 void MarkdownEditor::setBaseRunner(
-    std::function<void(const QString &, const BaseDeliver &)> runner)
+    std::function<void(const QString &, const QString &, const BaseDeliver &)> runner)
 {
     m_baseRunner = std::move(runner);
     // Every cache entry was answered by the old runner, or is still waiting
@@ -99,16 +115,18 @@ void MarkdownEditor::refreshBases()
     m_baseRefreshTimer->start(); // restarts: a burst of index changes costs one refresh
 }
 
-const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QString &yamlText)
+const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QString &yamlText,
+                                                                        const QString &viewName)
 {
-    auto it = m_baseCache.find(yamlText);
+    const QString key = baseCacheKey(yamlText, viewName);
+    auto it = m_baseCache.find(key);
     if (it != m_baseCache.end())
         return *it;
 
     BaseCacheEntry entry;
     entry.pending = true;
     entry.generation = ++m_baseGeneration;
-    it = m_baseCache.insert(yamlText, entry);
+    it = m_baseCache.insert(key, entry);
 
     if (m_baseRunner) {
         const quint64 generation = entry.generation;
@@ -117,19 +135,22 @@ const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QSt
         // the delivery is marshalled back onto this object's own thread
         // before it touches m_baseCache or a single BlockView, through
         // m_lifeline: the editor may be gone by the time the base is ready.
-        m_baseRunner(yamlText, [this, lifeline = m_lifeline, yamlText, generation](BaseTableData results) {
-            lifeline->post(this, [this, yamlText, generation, results = std::move(results)]() mutable {
-                deliverBaseResults(yamlText, generation, std::move(results));
-            });
-        });
+        m_baseRunner(yamlText, viewName,
+                     [this, lifeline = m_lifeline, yamlText, viewName, generation](BaseTableData results) {
+                         lifeline->post(this, [this, yamlText, viewName, generation,
+                                               results = std::move(results)]() mutable {
+                             deliverBaseResults(yamlText, viewName, generation, std::move(results));
+                         });
+                     });
     }
     return *it;
 }
 
-void MarkdownEditor::deliverBaseResults(const QString &yamlText, quint64 generation,
-                                        BaseTableData results)
+void MarkdownEditor::deliverBaseResults(const QString &yamlText, const QString &viewName,
+                                        quint64 generation, BaseTableData results)
 {
-    auto it = m_baseCache.find(yamlText);
+    const QString key = baseCacheKey(yamlText, viewName);
+    auto it = m_baseCache.find(key);
     // Not the entry's current generation: refreshBases (or a fresh
     // setBaseRunner) started a newer evaluation for the same text while this
     // one was still in flight - see deliverQueryResults, the same check for
@@ -141,7 +162,7 @@ void MarkdownEditor::deliverBaseResults(const QString &yamlText, quint64 generat
 
     bool touched = false;
     for (BlockView &block : m_blocks) {
-        if (!block.isBase || block.baseYAML != yamlText)
+        if (!block.isBase || block.baseYAML != yamlText || block.baseRequestedView != viewName)
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -168,7 +189,7 @@ bool MarkdownEditor::layoutBase(BlockView &view)
     return layoutBaseTable(view, m_text.mid(fence->content.start, fence->content.length()).trimmed());
 }
 
-bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
+bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName)
 {
     view.isBase = true;
     view.image = QPixmap();
@@ -176,6 +197,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
     view.baseRows.clear();
     view.baseViewName.clear();
     view.baseYAML = yamlText;
+    view.baseRequestedView = viewName;
 
     const QColor mutedColour = m_theme.color(QStringLiteral("--text-muted"));
     const QColor errorColour = m_theme.color(QStringLiteral("--text-error"));
@@ -221,7 +243,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText)
     if (!m_baseRunner)
         return plainMessage(tr("No base source connected"), mutedColour);
 
-    const BaseCacheEntry &entry = ensureBaseSearch(yamlText);
+    const BaseCacheEntry &entry = ensureBaseSearch(yamlText, viewName);
     if (entry.pending)
         return plainMessage(tr("Loading base…"), mutedColour);
     if (!entry.results.error.isEmpty())

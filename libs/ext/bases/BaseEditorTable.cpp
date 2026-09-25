@@ -5,7 +5,7 @@
 namespace noteAppC::bases {
 
 BaseEditorTable evaluateBaseForEditor(const QString &yamlText, const QList<Index::BaseNote> &notes,
-                                      const Vault *vault, int viewIndex)
+                                      const Vault *vault, int viewIndex, const QString &viewName)
 {
     BaseEditorTable table;
 
@@ -23,7 +23,17 @@ BaseEditorTable evaluateBaseForEditor(const QString &yamlText, const QList<Index
     }
     // BaseFile::parse never returns a file with zero views (an empty
     // `views:` gets the same implicit "All notes" table Obsidian shows), so
-    // table.viewNames is never empty here.
+    // table.viewNames is never empty here. A name takes priority over the
+    // index - it is what an embed's own #fragment names - and an unmatched
+    // one falls through to the index rule below rather than erroring.
+    if (!viewName.isEmpty()) {
+        for (int i = 0; i < table.viewNames.size(); ++i) {
+            if (table.viewNames.at(i).compare(viewName, Qt::CaseInsensitive) == 0) {
+                viewIndex = i;
+                break;
+            }
+        }
+    }
     table.shownView = (viewIndex >= 0 && viewIndex < file->views().size()) ? viewIndex : 0;
 
     QList<Row> rows;

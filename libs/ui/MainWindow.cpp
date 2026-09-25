@@ -767,10 +767,11 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // ```base blocks: the notes and the evaluation both on the pool (the
     // notes are 54 ms on 20 000); the vault is copied here, on the UI
     // thread, where the editor asks.
-    editor->setBaseRunner([this, index](const QString &YAMLtext, const MarkdownEditor::BaseDeliver &deliver) {
-        (void)QtConcurrent::run([index, vault = m_vault, YAMLtext, deliver] {
-            const bases::BaseEditorTable table =
-                bases::evaluateBaseForEditor(YAMLtext, index->allNotesForBases(), &vault);
+    editor->setBaseRunner([this, index](const QString &YAMLtext, const QString &viewName,
+                                        const MarkdownEditor::BaseDeliver &deliver) {
+        (void)QtConcurrent::run([index, vault = m_vault, YAMLtext, viewName, deliver] {
+            const bases::BaseEditorTable table = bases::evaluateBaseForEditor(
+                YAMLtext, index->allNotesForBases(), &vault, -1, viewName);
             BaseTableData result;
             result.viewNames = table.viewNames;
             result.shownView = table.shownView;

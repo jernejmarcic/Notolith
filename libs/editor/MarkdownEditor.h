@@ -330,14 +330,20 @@ public:
     /// called from any thread - see setQueryRunner, whose contract this
     /// mirrors field for field.
     using BaseDeliver = std::function<void(BaseTableData)>;
-    /// Runs `yamlText` (a ```` ```base ```` block's own content) and calls
-    /// `deliver` exactly once with the result, from any thread. Supplied by
-    /// the window, which owns the index and vault; the editor never links
-    /// libs/ext/bases (docs/PLUGINS.md's module boundary) - see
-    /// bases::evaluateBaseForEditor, which is what a real runner calls.
-    /// Layout never waits on it: a block shows "Loading..." until `deliver`
-    /// is called, the same contract setQueryRunner keeps for a search.
-    void setBaseRunner(std::function<void(const QString &yamlText, const BaseDeliver &deliver)> runner);
+    /// Runs `yamlText` (a ```` ```base ```` block's own content, or a
+    /// `.base` file embed's) and calls `deliver` exactly once with the
+    /// result, from any thread. `viewName` is the view to show - a `.base`
+    /// embed's `#fragment`, empty for a fenced block (always the first
+    /// view) and for an embed with no fragment. Supplied by the window,
+    /// which owns the index and vault; the editor never links libs/ext/bases
+    /// (docs/PLUGINS.md's module boundary) - see bases::evaluateBaseForEditor,
+    /// which is what a real runner calls with `viewName` passed straight
+    /// through. Layout never waits on it: a block shows "Loading..." until
+    /// `deliver` is called, the same contract setQueryRunner keeps for a
+    /// search.
+    void setBaseRunner(
+        std::function<void(const QString &yamlText, const QString &viewName, const BaseDeliver &deliver)>
+            runner);
     /// The index changed: every rendered ```` ```base ```` block's table is
     /// dropped from the cache and evaluated again. Debounced like
     /// refreshQueries().
@@ -905,6 +911,13 @@ private:
         /// nothing extra (an error or a still-loading block shows its
         /// message instead of a table; see layoutBase).
         QString baseViewName;
+        /// The view requested for this block - a `.base` embed's
+        /// `#fragment`, or empty for a fenced ```` ```base ```` block and for
+        /// an embed with no fragment. Part of the cache key alongside
+        /// baseYAML, and what deliverBaseResults matches a block back on, so
+        /// two embeds of the same file asking for different views never
+        /// share a result.
+        QString baseRequestedView;
         QString baseYAML; ///< what the table shows: a fence's text, or a .base file's
         /// One clickable row's first cell, block-local coordinates - only
         /// the name column opens its note, mirroring
@@ -1508,8 +1521,10 @@ private:
     /// ```query``` block. False for every other fence.
     bool layoutBase(BlockView &view);
     /// A base's table for `yamlText`, for a ```base fence and for an
-    /// embedded .base file alike.
-    bool layoutBaseTable(BlockView &view, const QString &yamlText);
+    /// embedded .base file alike. `viewName` is the view an embed's
+    /// `#fragment` names (Decorations' EmbedSpan::subpath, "#" stripped);
+    /// empty for a fence, which has no fragment to name one.
+    bool layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName = QString());
     /// A .base file's text, read again only when its mtime moves.
     QHash<QString, QPair<qint64, QString>> m_baseFiles;
     /// The view's name (if any) above the grid, then paintTable for the
@@ -1522,11 +1537,13 @@ private:
         bool pending = true;
         quint64 generation = 0;
     };
-    const BaseCacheEntry &ensureBaseSearch(const QString &yamlText);
+    const BaseCacheEntry &ensureBaseSearch(const QString &yamlText, const QString &viewName = QString());
     /// Called back (marshalled onto this thread) when an evaluation started
     /// by ensureBaseSearch finishes. Ignored if `generation` is no longer
-    /// the one on record for `yamlText`. Mirrors deliverQueryResults.
-    void deliverBaseResults(const QString &yamlText, quint64 generation, BaseTableData results);
+    /// the one on record for `yamlText`/`viewName`. Mirrors
+    /// deliverQueryResults.
+    void deliverBaseResults(const QString &yamlText, const QString &viewName, quint64 generation,
+                            BaseTableData results);
 
     // --- HTML blocks and inline HTML, implemented in HtmlBlock.cpp --------
 
@@ -1818,8 +1835,8 @@ private:
     QHash<qsizetype, bool> m_queryCollapsed;
     QHash<qsizetype, bool> m_queryNameSort;
 
-    std::function<void(const QString &, const BaseDeliver &)> m_baseRunner;
-    QHash<QString, BaseCacheEntry> m_baseCache; ///< YAML text -> its last evaluation
+    std::function<void(const QString &, const QString &, const BaseDeliver &)> m_baseRunner;
+    QHash<QString, BaseCacheEntry> m_baseCache; ///< yamlText[+view] -> its last evaluation
     quint64 m_baseGeneration = 0;
     /// Debounces refreshBases(), the same reason m_queryRefreshTimer does.
     QTimer *m_baseRefreshTimer = nullptr;
