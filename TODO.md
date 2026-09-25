@@ -401,7 +401,8 @@ Jernej's rule: a new feature goes here and the current task carries on.
       `` ```python tab="Python" `` then `` ```cpp tab="C++" ``. A bare `tab`
       labels the tab with the language's style name. Any other text between
       them ends the group. Obsidian shows them as separate blocks, unchanged.
-- [ ] **Callout gaps**, all verified 2026-09-23 - 1, 2, 3 and 5 done; 4 open:
+- [x] **Callout gaps**, all verified 2026-09-23 - all done but 4, which is
+      the "Verify first" item above and needs Obsidian to compare with:
       1. a remote `https://` icon never appears until something else repaints:
          nothing listens to `Icons::notifier()`'s `iconReady`;
       2. editing `callouts.ini` needs a restart - it is read once, and a
