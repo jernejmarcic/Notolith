@@ -505,8 +505,12 @@ scrolliong through pages, it can make them like a slide".
       a taller cell grows to fit it. Several on a line sit side by side at
       their own size and wrap like words; the caret inside one shows its
       source.
-- [ ] A canvas embed is a picture, not interactive; `![[x.base#View]]`
-      shows the first view.
+- [ ] A canvas embed is a picture, not interactive.
+- [x] `![[x.base#View]]` now renders the named view: the embed's `#fragment`
+      is threaded through as a view name (MarkdownEditor's m_baseRunner,
+      ensureBaseSearch/deliverBaseResults keyed on yamlText+view,
+      evaluateBaseForEditor's new viewName param); an unmatched name falls
+      back to the first view, and a ```base fence (no fragment) is unaffected.
 - [x] PDF placeholders size every page on the UI thread once per file:
       measured 2.5 ms for 500 pages (poppler 26.08), so it stays.
 

@@ -1545,6 +1545,38 @@ TEST(BaseEditorTableTest, OutOfRangeViewIndexFallsBackToTheFirstView)
     EXPECT_EQ(table.rows.size(), 1);
 }
 
+TEST(BaseEditorTableTest, ViewNameSelectsThatViewCaseInsensitively)
+{
+    // ![[Books.base#Reading]] - the fragment after "#" names a view; the
+    // editor passes it straight through as viewName rather than resolving
+    // it to an index itself, so this is where the name lookup happens.
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n    name: To read\n    order: [file.name]\n"
+        "  - type: table\n    name: Reading\n    order: [file.name, price]\n");
+    Index::BaseNote note = makeBaseNote(QStringLiteral("A.md"));
+    addProperty(note, QStringLiteral("price"), Property::Type::Number, {QStringLiteral("12")});
+
+    const bases::BaseEditorTable table =
+        bases::evaluateBaseForEditor(yaml, {note}, nullptr, -1, QStringLiteral("reading"));
+    EXPECT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    EXPECT_EQ(table.shownView, 1);
+    ASSERT_EQ(table.headers.size(), 2);
+    EXPECT_EQ(table.headers.at(1), QStringLiteral("Price"));
+}
+
+TEST(BaseEditorTableTest, UnknownViewNameFallsBackToTheFirstView)
+{
+    const QString yaml = QStringLiteral(
+        "views:\n"
+        "  - type: table\n    name: To read\n    order: [file.name]\n"
+        "  - type: table\n    name: Reading\n    order: [file.name, price]\n");
+    const bases::BaseEditorTable table = bases::evaluateBaseForEditor(
+        yaml, {makeBaseNote(QStringLiteral("A.md"))}, nullptr, -1, QStringLiteral("Archived"));
+    EXPECT_TRUE(table.error.isEmpty()) << table.error.toStdString();
+    EXPECT_EQ(table.shownView, 0);
+}
+
 TEST(BaseEditorTableTest, NoViewsGetsTheImplicitAllNotesTableWithNoColumns)
 {
     // BaseFile::parse gives a base with no `views:` one implicit unfiltered

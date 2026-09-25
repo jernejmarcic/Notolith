@@ -443,7 +443,7 @@ Timing benchBaseKeystroke(int runs)
     const QString note = buildBaseNote();
     editor->setNoteText(note);
 
-    editor->setBaseRunner([](const QString &, const MarkdownEditor::BaseDeliver &deliver) {
+    editor->setBaseRunner([](const QString &, const QString &, const MarkdownEditor::BaseDeliver &deliver) {
         BaseTableData table;
         table.viewNames = {QStringLiteral("Table")};
         table.shownView = 0;

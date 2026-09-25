@@ -3907,13 +3907,15 @@ namespace {
 struct FakeBaseRunner {
     struct Call {
         QString yamlText;
+        QString viewName;
         MarkdownEditor::BaseDeliver deliver;
     };
     QList<Call> calls;
 
-    void operator()(const QString &yamlText, const MarkdownEditor::BaseDeliver &deliver)
+    void operator()(const QString &yamlText, const QString &viewName,
+                    const MarkdownEditor::BaseDeliver &deliver)
     {
-        calls.append({yamlText, deliver});
+        calls.append({yamlText, viewName, deliver});
     }
 };
 
@@ -4050,6 +4052,45 @@ TEST(BaseBlockTest, AStaleDeliveryAfterRefreshIsDropped)
     ASSERT_EQ(rows.size(), 1);
     EXPECT_EQ(rows.first().path, QStringLiteral("Fresh.md"))
         << "the superseded request's answer must not overwrite the current one";
+}
+
+TEST(BaseBlockTest, FileEmbedFragmentNamesTheRequestedView)
+{
+    // ![[Books.base#Reading]] (obsidian.md/help/bases, "Embed a base"): the
+    // fragment after "#" is a view name, not a heading/block reference the
+    // way a note embed's is - MarkdownEditor only has to carry it through to
+    // the runner unchanged; which view it selects is evaluateBaseForEditor's
+    // job (BaseEditorTableTest.ViewNameSelectsThatViewCaseInsensitively).
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("Books.base"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("views:\n  - name: Reading\n    order: [file.name]\n");
+    }
+
+    auto editor = editorWith(QStringLiteral("![[Books.base#Reading]]\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+
+    ASSERT_EQ(fake.calls.size(), 1);
+    EXPECT_EQ(fake.calls.first().viewName, QStringLiteral("Reading"));
+}
+
+TEST(BaseBlockTest, FencedBlockAsksForNoParticularView)
+{
+    // The other half of the same change: a ```base fence has no fragment to
+    // name a view with, so it must keep asking for the default (empty
+    // viewName, first view) exactly as before this feature existed.
+    const QString note = QStringLiteral("```base\nviews:\n  - order: [file.name]\n```\n");
+    auto editor = editorWith(note);
+    FakeBaseRunner fake;
+    editor->setBaseRunner(std::ref(fake));
+
+    ASSERT_EQ(fake.calls.size(), 1);
+    EXPECT_TRUE(fake.calls.first().viewName.isEmpty());
 }
 
 // --- HTML blocks and inline HTML ----------------------------------------------------

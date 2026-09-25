@@ -33,13 +33,19 @@ struct BaseEditorTable {
     QString error;
 };
 
-/// Parses `yamlText` (BaseFile::parse), evaluates `viewIndex`'s view
-/// (BaseQuery - filters, sort, limit all applied) against `notes`, and
-/// formats every cell the same way BaseTableModel::data() does for its
-/// Qt::DisplayRole - Value::toDisplayString() - so this is a second
-/// *renderer* for the same evaluated values, never a second implementation
-/// of what a column shows. `viewIndex` out of range (including the default,
-/// -1) falls back to the first view.
+/// Parses `yamlText` (BaseFile::parse), evaluates a view (BaseQuery -
+/// filters, sort, limit all applied) against `notes`, and formats every cell
+/// the same way BaseTableModel::data() does for its Qt::DisplayRole -
+/// Value::toDisplayString() - so this is a second *renderer* for the same
+/// evaluated values, never a second implementation of what a column shows.
+///
+/// The view comes from `viewName` when it names one (`![[x.base#Reading]]`'s
+/// fragment, case-insensitive - Obsidian's own embed syntax), else from
+/// `viewIndex` (a ```` ```base ```` block has no fragment to name one, so it
+/// always passes the default). Either an unmatched `viewName` or a
+/// `viewIndex` out of range (including the default, -1) falls back to the
+/// first view - the file's own order is always a defined answer, so there is
+/// never a reason to show an error for a view that just does not exist.
 ///
 /// Free of QWidget - unlike BaseView/BaseTableModel, everything this touches
 /// (BaseFile, BaseQuery, Value) already is - so it can run on a worker
@@ -51,6 +57,7 @@ struct BaseEditorTable {
 /// used only by BaseQuery to stat() file.ctime, and only if a sort/filter
 /// actually reads it - see BaseQuery's own constructor.
 BaseEditorTable evaluateBaseForEditor(const QString &yamlText, const QList<Index::BaseNote> &notes,
-                                      const Vault *vault = nullptr, int viewIndex = -1);
+                                      const Vault *vault = nullptr, int viewIndex = -1,
+                                      const QString &viewName = QString());
 
 } // namespace noteAppC::bases

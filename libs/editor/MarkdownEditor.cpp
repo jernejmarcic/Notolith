@@ -2004,7 +2004,14 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
             cached = m_baseFiles.insert(path, {mtime, text});
         }
         hideWholeBlockText(view);
-        return layoutBaseTable(view, cached->second.trimmed());
+        // Obsidian's own embed syntax for a view: ![[Books.base#Reading]] -
+        // the fragment after "#" names it, the same slot a note embed's
+        // heading/block reference uses (see noteEmbedSlice). An unmatched
+        // name falls back to the file's first view, in evaluateBaseForEditor.
+        QString viewName = embed->subpath;
+        if (viewName.startsWith(QLatin1Char('#')))
+            viewName.remove(0, 1);
+        return layoutBaseTable(view, cached->second.trimmed(), viewName);
     }
     if (m_fileEmbedRenderers.contains(suffix))
         return layoutHookedFileEmbed(view, *embed, path);
