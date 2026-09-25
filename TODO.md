@@ -603,8 +603,9 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
   - [x] `noteAppC-bench --phase NAME` to profile one phase at a time.
   - [x] `Index::noteCount` in the open profile: the bench's own
         `waitForIndex` polling, untimed; the app emits `changed` once a scan.
-  - [ ] 50 kB open is 7.1 ms of md4qt parse (synchronous below 128 kB);
-        profile the parser itself.
+  - [x] 50 kB open is 7.1 ms of md4qt parse (synchronous below 128 kB).
+        Profiled: flat, md4qt internals (ParagraphParser::process 3.9%,
+        ObsidianSyntax::scan 0.8%); no change worth its risk.
   - [ ] Cold start, pdfview and search phases, on a quiet machine.
 
 ## Requested 2026-09-23, afternoon: notebooks, last of all
