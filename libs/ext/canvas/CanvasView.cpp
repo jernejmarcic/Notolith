@@ -326,6 +326,25 @@ bool CanvasView::eventFilter(QObject *watched, QEvent *event)
     return QWidget::eventFilter(watched, event);
 }
 
+void CanvasView::zoomAbout(const QPoint &viewportPoint, int angleDeltaY)
+{
+    const QPointF before = mapToCanvas(viewportPoint);
+    const qreal factor = std::pow(1.0015, angleDeltaY);
+    m_zoom = qBound(kMinZoom, m_zoom * factor, kMaxZoom);
+    m_origin = before - QPointF(viewportPoint) / m_zoom;
+    if (m_textEditor)
+        positionTextEditor();
+    update();
+}
+
+void CanvasView::panBy(const QPointF &pixelDelta)
+{
+    m_origin -= pixelDelta / m_zoom;
+    if (m_textEditor)
+        positionTextEditor();
+    update();
+}
+
 void CanvasView::wheelEvent(QWheelEvent *event)
 {
     // Obsidian's canvas: the wheel pans, Shift turns it sideways, and Ctrl
@@ -333,20 +352,14 @@ void CanvasView::wheelEvent(QWheelEvent *event)
     // deltas pan as they come; a mouse wheel's degrees are halved into
     // pixels the way the editor's tables pan.
     if (event->modifiers().testFlag(Qt::ControlModifier) || m_spaceHeld) {
-        const QPointF before = mapToCanvas(event->position().toPoint());
-        const qreal factor = std::pow(1.0015, event->angleDelta().y());
-        m_zoom = qBound(kMinZoom, m_zoom * factor, kMaxZoom);
-        m_origin = before - QPointF(event->position()) / m_zoom;
+        zoomAbout(event->position().toPoint(), event->angleDelta().y());
     } else {
         QPointF delta = event->pixelDelta().isNull() ? QPointF(event->angleDelta()) / 2.0
                                                     : QPointF(event->pixelDelta());
         if (event->modifiers().testFlag(Qt::ShiftModifier) && qFuzzyIsNull(delta.x()))
             delta = QPointF(delta.y(), 0);
-        m_origin -= delta / m_zoom;
+        panBy(delta);
     }
-    if (m_textEditor)
-        positionTextEditor();
-    update();
     event->accept();
 }
 

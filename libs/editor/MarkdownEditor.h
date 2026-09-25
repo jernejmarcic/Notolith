@@ -383,6 +383,36 @@ public:
                                                   int width, const std::function<void(QImage)> &deliver)>;
     void setFileEmbedRenderer(const QStringList &suffixes, FileEmbedRenderer renderer);
 
+    /// Mouse/wheel input landing on a hooked embed's own image, forwarded so
+    /// its renderer can pan, zoom and open things without the editor knowing
+    /// what kind of file it is - `.canvas`'s own read-only view inside a
+    /// note. `localPoint` is relative to the embed's own top-left, in the
+    /// same (unscaled) pixel space FileEmbedRenderer's own `width` sized the
+    /// image to. A null `image` in the result leaves the block painted as it
+    /// was; a Wheel event answered that way is also left unaccepted, so the
+    /// editor's own handling - scrolling the note - runs instead, which is
+    /// how an embed avoids ever leaving the page stuck. A non-empty
+    /// `openPath` is a vault-relative path, emitted as fileEmbedActivated()
+    /// exactly the shape baseRowActivated's own relativePath already is.
+    struct FileEmbedInputResult {
+        QImage image;
+        QString openPath;
+    };
+    enum class FileEmbedInputKind { Wheel, Drag, Click, DoubleClick };
+    struct FileEmbedInputEvent {
+        FileEmbedInputKind kind = FileEmbedInputKind::Click;
+        QPoint localPoint;
+        /// Wheel: angleDelta. Drag: the viewport-pixel move since the last
+        /// Drag event of the same gesture (or since the press that started
+        /// it). Unused otherwise.
+        QPoint delta;
+        Qt::KeyboardModifiers modifiers;
+    };
+    using FileEmbedInputHandler =
+        std::function<FileEmbedInputResult(const QString &path, const QString &subpath,
+                                           const FileEmbedInputEvent &event)>;
+    void setFileEmbedInputHandler(const QStringList &suffixes, FileEmbedInputHandler handler);
+
     /// A fenced code block in a language a plugin renders: shown as the
     /// renderer's answer instead of a listing. The same contract as
     /// setFileEmbedRenderer - `deliver` from any thread, at most once, a
@@ -494,6 +524,11 @@ public:
     /// The size an embed drawn as an image (a formatted note, a canvas)
     /// shows at; empty while it is text or a placeholder. For the tests.
     QSize embedImageSizeAt(qsizetype offset) const;
+    /// The same image's rect, in viewport coordinates - the same rect
+    /// hookedEmbedBlockAt hit-tests wheel/drag/click against - so a test can
+    /// send one there without reimplementing this layout by hand. Null
+    /// outside a hooked embed with an image.
+    QRect hookedEmbedImageRectAt(qsizetype offset) const;
 
     /// A notebook block's state at `offset` (NotebookBlock.cpp) - default
     /// (`eligible` false) outside a fenced code block, when the notebooks
@@ -669,6 +704,11 @@ signals:
     /// note, it does not point at a place inside it the way a search match
     /// does.
     void baseRowActivated(const QString &relativePath);
+    /// A card in a hooked embed's own image was clicked, or empty space in
+    /// one was double-clicked - `.canvas`'s own cards and its own file,
+    /// opened the same way every other pane's noteActivated already is:
+    /// MainWindow connects this straight to openRelative().
+    void fileEmbedActivated(const QString &relativePath);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -815,6 +855,11 @@ private:
         QSize imageSize;
         bool imageCentred = false;
         QString imagePath;
+        /// The embed's own subpath/fragment (`![[x.canvas#frag]]`'s
+        /// `#frag`), empty for none - kept alongside imagePath so a hooked
+        /// embed's input handler can be called with the same two strings
+        /// its renderer already was.
+        QString embedSubpath;
         /// Filename shown in the header strip of a source-file or PDF embed.
         QString embedLabel;
         /// Draw the code panel and header behind this block.
@@ -1325,6 +1370,34 @@ private:
     QHash<QString, FileEmbedCacheEntry> m_fileEmbedCache; ///< "path|mtime|subpath|width" -> result
     quint64 m_fileEmbedGeneration = 0;
     void deliverFileEmbed(const QString &key, quint64 generation, QImage image);
+    /// setFileEmbedInputHandler's own table, keyed the same way
+    /// m_fileEmbedRenderers is.
+    QHash<QString, FileEmbedInputHandler> m_fileEmbedInputHandlers;
+    /// The same "path|mtime|subpath|width|theme" key layoutHookedFileEmbed's
+    /// cache uses, factored out so an interactive update
+    /// (applyFileEmbedInput) can find and overwrite the very same entry -
+    /// without that, an edit elsewhere in the note would relay the block out
+    /// from the stale, pre-interaction image the cache still had.
+    QString fileEmbedCacheKey(const QString &path, const QString &subpath, int width) const;
+    /// A hooked embed's own image, in viewport coordinates - hookedEmbedImageRectAt's
+    /// own work, shared with hookedEmbedBlockAt and embedLocalPoint so the
+    /// hit-test, the local-point conversion and the public accessor all
+    /// agree on the very same rect.
+    QRectF hookedEmbedImageRect(const BlockView &view) const;
+    /// The block under `viewportPoint` if it is a hooked embed with an input
+    /// handler registered for its suffix, else -1 - including a hooked embed
+    /// with no handler (a `.base` block, say), which is untouched by any of
+    /// this and behaves exactly as it does today.
+    qsizetype hookedEmbedBlockAt(const QPoint &viewportPoint) const;
+    /// `viewportPoint` translated into that block's own local space - the
+    /// same origin FileEmbedInputEvent::localPoint is measured from.
+    QPoint embedLocalPoint(qsizetype blockIndex, const QPoint &viewportPoint) const;
+    /// Runs `event` through the block's input handler; updates its image and
+    /// cache entry in place (no relayout - the size never changes) and/or
+    /// emits fileEmbedActivated() for whatever it answered. The return value
+    /// is only wheelEvent's business: declined, a plain wheel keeps
+    /// scrolling the note instead.
+    bool applyFileEmbedInput(qsizetype blockIndex, const FileEmbedInputEvent &event);
 
     /// CodeBlockHook.cpp: a fence in a language setCodeBlockRenderer has.
     bool layoutPluginCode(BlockView &view);
@@ -1885,6 +1958,18 @@ private:
     /// a double-click does with a mouse. Only presses from a touchscreen.
     QTimer m_longPress;
     QPoint m_pressPoint;
+    /// A press-drag-release gesture that started on a hooked embed's own
+    /// image, tracked instead of the normal caret/selection: which block
+    /// (m_blocks is only ever rebuilt by an edit, never by this drag
+    /// itself), the point the last Drag event was measured from, and
+    /// whether it moved past a click - a plain click on a card opens it, a
+    /// real drag only pans.
+    struct EmbedDrag {
+        qsizetype blockIndex = -1;
+        QPoint startPoint;
+        QPoint lastPoint;
+        bool moved = false;
+    } m_embedDrag;
     /// The code block whose label just copied, shown as "Copied" briefly; and
     /// the one under the pointer, which is when a block without a language
     /// shows its "Copy" label at all. Both keyed by the block's source start.

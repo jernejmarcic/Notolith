@@ -709,6 +709,13 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_active->editor->setFocus();
             });
     connect(&m_index, &Index::changed, editor, &MarkdownEditor::refreshQueries);
+    // A hooked embed's own card (a `.canvas`'s file node) or its own file
+    // (double-clicking empty space in one) opened the same way every other
+    // pane's noteActivated already is.
+    connect(editor, &MarkdownEditor::fileEmbedActivated, this, [this](const QString &relativePath) {
+        openRelative(relativePath);
+        m_active->editor->setFocus();
+    });
     if (m_applyPluginRenderer)
         m_applyPluginRenderer(editor); // plugin fences in a new tab too
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
@@ -851,6 +858,53 @@ MarkdownEditor::Mode MainWindow::defaultMode() const
                                                : MarkdownEditor::Mode::LivePreview;
 }
 
+#ifdef NOTEAPPC_HAVE_CANVAS
+namespace {
+QString canvasEmbedKey(MarkdownEditor *editor, const QString &path, const QString &subpath)
+{
+    return QString::number(quintptr(editor)) + QLatin1Char('|') + path + QLatin1Char('|') + subpath;
+}
+}
+
+CanvasView &MainWindow::canvasEmbedView(MarkdownEditor *editor, const QString &path, const QString &subpath)
+{
+    const QString key = canvasEmbedKey(editor, path, subpath);
+    auto it = m_canvasEmbedViews.find(key);
+    if (it == m_canvasEmbedViews.end()) {
+        auto canvas = std::make_shared<CanvasView>();
+        canvas->load(path);
+        it = m_canvasEmbedViews.insert(key, std::move(canvas));
+        // The note that asked for this view is what bounds its lifetime -
+        // "until the note is closed" - not the file it happens to embed,
+        // which may still be open elsewhere. dropLeaf() erases this entry
+        // when that happens; a whole-window close takes m_canvasEmbedViews
+        // (an ordinary member) with it regardless, so nothing leaks past the
+        // window either way. Cleanup is deliberately not hooked to editor's
+        // own destroyed(): that fires while a widget tree is unwound, which
+        // can be well after MainWindow's own members - this one included -
+        // are already gone.
+    }
+    return *it.value();
+}
+
+CanvasView *MainWindow::canvasEmbedViewIfExists(MarkdownEditor *editor, const QString &path,
+                                                const QString &subpath) const
+{
+    const auto it = m_canvasEmbedViews.constFind(canvasEmbedKey(editor, path, subpath));
+    return it == m_canvasEmbedViews.constEnd() ? nullptr : it.value().get();
+}
+
+QImage MainWindow::renderCanvasEmbed(CanvasView &canvas) const
+{
+    const qreal ratio = devicePixelRatioF();
+    QImage image(canvas.size() * ratio, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(ratio);
+    image.fill(Qt::transparent);
+    canvas.render(&image);
+    return image;
+}
+#endif
+
 void MainWindow::applyEditorSettings(MarkdownEditor *editor)
 {
     editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
@@ -904,35 +958,80 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     }
 #ifdef NOTEAPPC_HAVE_CANVAS
     // A canvas embed is the canvas drawn into an image, framed to its cards
-    // - the editor cannot hold a widget in its text. Drawn a turn later, so
+    // - the editor cannot hold a widget in its text - but it keeps its own
+    // CanvasView underneath, hidden and never shown, for as long as this
+    // editor stays open: wheel/drag interaction (below) reuses its pan, zoom
+    // and already-loaded document instead of reloading the file and
+    // snapping back to fitToContent on every tick. Drawn a turn later, so
     // the note paints first with the box in place.
     const MarkdownEditor::FileEmbedRenderer canvasEmbed =
-        [this](const QString &path, const QString &, int width, const std::function<void(QImage)> &deliver) {
-            QTimer::singleShot(0, this, [this, path, width, deliver] {
-                CanvasView canvas;
-                canvas.setTheme(m_theme);
-                canvas.setFileResolver(m_resolveLink);
-                if (!canvas.load(path)) {
+        [this, editor](const QString &path, const QString &subpath, int width,
+                       const std::function<void(QImage)> &deliver) {
+            QTimer::singleShot(0, this, [this, editor, path, subpath, width, deliver] {
+                CanvasView &canvas = canvasEmbedView(editor, path, subpath);
+                if (canvas.path().isEmpty()) {
                     deliver({});
                     return;
                 }
-                // Its own shape, within reason, so the cards are not
-                // shrunk past reading to fit a letterbox.
+                canvas.setTheme(m_theme);
+                canvas.setFileResolver(m_resolveLink);
+                // Its own shape, within reason, so the cards are not shrunk
+                // past reading to fit a letterbox - resizing does not touch
+                // whatever pan/zoom a previous interaction left it at
+                // (CanvasView's own resizeEvent leaves them alone), and
+                // load() already arranged for the very first render to
+                // fitToContent on its own (m_fitPending, spent by the first
+                // paintEvent a render() triggers).
                 const QRectF bounds = canvas.contentBounds();
                 const qreal aspect = bounds.isEmpty() ? 0.5625 : bounds.height() / bounds.width();
                 canvas.resize(width, qRound(width * qBound(0.3, aspect, 1.0)));
                 canvas.setAlwaysDrawContent(true);
-                canvas.fitToContent();
-                const qreal ratio = devicePixelRatioF();
-                QImage image(canvas.size() * ratio, QImage::Format_ARGB32_Premultiplied);
-                image.setDevicePixelRatio(ratio);
-                image.fill(Qt::transparent);
-                canvas.render(&image);
-                deliver(image);
+                deliver(renderCanvasEmbed(canvas));
             });
         };
     editor->setFileEmbedRenderer({QStringLiteral("canvas")},
                                  featureOn("canvas") ? canvasEmbed : MarkdownEditor::FileEmbedRenderer());
+
+    // Wheel (Ctrl zooms about the pointer; a plain wheel is declined so the
+    // note scrolls instead - CanvasView's own wheelEvent draws that same
+    // line for the real, editable canvas), drag (pans) and click (opens a
+    // card, or - on empty space - the canvas file itself) over the embed's
+    // own image, all against the same live CanvasView the renderer above
+    // keeps for it.
+    const MarkdownEditor::FileEmbedInputHandler canvasInput =
+        [this, editor](const QString &path, const QString &subpath,
+                       const MarkdownEditor::FileEmbedInputEvent &event) {
+            MarkdownEditor::FileEmbedInputResult result;
+            CanvasView *canvas = canvasEmbedViewIfExists(editor, path, subpath);
+            if (!canvas)
+                return result; // an interaction cannot outrun its own first render
+            switch (event.kind) {
+            case MarkdownEditor::FileEmbedInputKind::Wheel:
+                if (!event.modifiers.testFlag(Qt::ControlModifier))
+                    return result; // declined: the note scrolls instead
+                canvas->zoomAbout(event.localPoint, event.delta.y());
+                result.image = renderCanvasEmbed(*canvas);
+                break;
+            case MarkdownEditor::FileEmbedInputKind::Drag:
+                canvas->panBy(QPointF(event.delta));
+                result.image = renderCanvasEmbed(*canvas);
+                break;
+            case MarkdownEditor::FileEmbedInputKind::Click:
+                if (const QString hitID = canvas->nodeAt(event.localPoint); !hitID.isEmpty()) {
+                    if (const CanvasNode *node = canvas->document().node(hitID);
+                        node && node->type() == CanvasNodeType::File && !node->file().isEmpty())
+                        result.openPath = node->file();
+                }
+                break;
+            case MarkdownEditor::FileEmbedInputKind::DoubleClick:
+                if (canvas->nodeAt(event.localPoint).isEmpty())
+                    result.openPath = m_vault.relative(path); // empty space: open the canvas itself
+                break;
+            }
+            return result;
+        };
+    editor->setFileEmbedInputHandler({QStringLiteral("canvas")},
+                                     featureOn("canvas") ? canvasInput : MarkdownEditor::FileEmbedInputHandler());
 #endif
 }
 
@@ -1107,6 +1206,17 @@ void MainWindow::dropLeaf(Leaf *leaf)
     // Nothing of this tab may call back in once it is gone: its lambdas hold
     // the Leaf pointer.
     leaf->editor->disconnect(this);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    // Its own canvas embeds' view state goes with it too - "until the note
+    // is closed" means this, not whenever Qt gets around to deleting the
+    // now-detached editor.
+    {
+        const QString prefix = QString::number(quintptr(leaf->editor)) + QLatin1Char('|');
+        for (auto it = m_canvasEmbedViews.begin(); it != m_canvasEmbedViews.end();) {
+            it = it.key().startsWith(prefix) ? m_canvasEmbedViews.erase(it) : std::next(it);
+        }
+    }
+#endif
     group->stack->removeWidget(leaf->area);
     leaf->area->hide();
     leaf->area->deleteLater();

@@ -70,6 +70,15 @@ public:
     /// Changes the zoom level about the viewport's centre; clamped to the
     /// same range the wheel is. For tests and for a future zoom control.
     void setZoom(qreal zoom);
+    /// Zooms about a viewport point by one wheel step - wheelEvent's own
+    /// Ctrl/Space branch, factored out so a read-only embedded view of this
+    /// same canvas (a note's `![[x.canvas]]`) can zoom about the pointer
+    /// without duplicating the maths.
+    void zoomAbout(const QPoint &viewportPoint, int angleDeltaY);
+    /// Pans by a viewport-pixel delta - wheelEvent's own plain branch,
+    /// factored out for the same reason; also what a drag over the
+    /// embedded view above uses to pan, one incremental delta at a time.
+    void panBy(const QPointF &pixelDelta);
     /// Zooms and pans so every node shows, at most at 100%.
     void fitToContent();
     /// The canvas-space box around every node; null for an empty canvas.

@@ -200,6 +200,19 @@ void MarkdownEditor::setFileEmbedRenderer(const QStringList &suffixes, FileEmbed
     viewport()->update();
 }
 
+void MarkdownEditor::setFileEmbedInputHandler(const QStringList &suffixes, FileEmbedInputHandler handler)
+{
+    // Unlike setFileEmbedRenderer, registering or dropping a handler never
+    // changes what is drawn - only whether it answers to a mouse - so
+    // nothing here needs a relayout.
+    for (const QString &suffix : suffixes) {
+        if (handler)
+            m_fileEmbedInputHandlers.insert(suffix.toLower(), handler);
+        else
+            m_fileEmbedInputHandlers.remove(suffix.toLower());
+    }
+}
+
 void MarkdownEditor::setLinkTargets(const QStringList &targets)
 {
     if (auto *model = qobject_cast<QStringListModel *>(m_completer->model()))
@@ -4210,6 +4223,17 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
     m_touchHandles = false;
 
+    // A hooked embed's own image (a `.canvas`, say) takes the press instead
+    // of the caret: a plain click may open a card on release, and a drag
+    // pans it - neither is a place the caret can land.
+    if (const qsizetype embed = hookedEmbedBlockAt(event->pos()); embed >= 0) {
+        m_embedDrag.blockIndex = embed;
+        m_embedDrag.startPoint = event->pos();
+        m_embedDrag.lastPoint = event->pos();
+        m_embedDrag.moved = false;
+        return;
+    }
+
     const QString target = linkAt(event->pos());
     if (!target.isEmpty() && event->modifiers().testFlag(Qt::ControlModifier)) {
         emit linkActivated(target);
@@ -4304,6 +4328,17 @@ QString MarkdownEditor::selectedText() const
 void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 {
     m_longPress.stop();
+    if (m_embedDrag.blockIndex >= 0) {
+        const qsizetype block = m_embedDrag.blockIndex;
+        const bool wasClick = !m_embedDrag.moved;
+        const QPoint pos = event->pos();
+        m_embedDrag = EmbedDrag{};
+        if (wasClick && event->button() == Qt::LeftButton) {
+            applyFileEmbedInput(block, {FileEmbedInputKind::Click, embedLocalPoint(block, pos),
+                                        {}, event->modifiers()});
+        }
+        return;
+    }
     if (releaseSelectionHandle())
         return;
     if (event->button() != Qt::LeftButton || !m_pressing) {
@@ -4319,6 +4354,23 @@ void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 
 void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_embedDrag.blockIndex >= 0) {
+        if (!event->buttons().testFlag(Qt::LeftButton)) {
+            m_embedDrag = EmbedDrag{}; // the release was missed - it left the window, say
+            return;
+        }
+        if (!m_embedDrag.moved
+            && (event->pos() - m_embedDrag.startPoint).manhattanLength() >= 4)
+            m_embedDrag.moved = true;
+        const QPoint delta = event->pos() - m_embedDrag.lastPoint;
+        if (m_embedDrag.moved && !delta.isNull()) {
+            applyFileEmbedInput(m_embedDrag.blockIndex,
+                                {FileEmbedInputKind::Drag, embedLocalPoint(m_embedDrag.blockIndex, event->pos()),
+                                 delta, event->modifiers()});
+            m_embedDrag.lastPoint = event->pos();
+        }
+        return;
+    }
     if (dragSelectionHandle(event->pos()))
         return;
     if (event->buttons().testFlag(Qt::LeftButton)) {
@@ -4356,6 +4408,16 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 
 void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
 {
+    // Empty space in a hooked embed's own image opens the file itself
+    // (a card there already opened on the first click's release, above); a
+    // card falls through this unused, harmlessly, since it already handled
+    // the preceding single click.
+    if (const qsizetype embed = hookedEmbedBlockAt(event->pos()); embed >= 0) {
+        applyFileEmbedInput(embed, {FileEmbedInputKind::DoubleClick, embedLocalPoint(embed, event->pos()),
+                                    {}, event->modifiers()});
+        return;
+    }
+
     const QString target = linkAt(event->pos());
     if (!target.isEmpty()) {
         emit linkActivated(target);
@@ -4382,7 +4444,19 @@ void MarkdownEditor::selectWordAt(qsizetype offset)
 
 void MarkdownEditor::wheelEvent(QWheelEvent *event)
 {
-    BlockView *table = scrollableTableAt(event->position().toPoint());
+    const QPoint pos = event->position().toPoint();
+    if (const qsizetype embed = hookedEmbedBlockAt(pos); embed >= 0) {
+        const FileEmbedInputEvent input{FileEmbedInputKind::Wheel, embedLocalPoint(embed, pos),
+                                        event->angleDelta(), event->modifiers()};
+        if (applyFileEmbedInput(embed, input)) {
+            event->accept();
+            return;
+        }
+        // Declined - no Ctrl held, most likely - so falling through below
+        // scrolls the note itself; an embed must never leave the page stuck.
+    }
+
+    BlockView *table = scrollableTableAt(pos);
     if (table) {
         // A horizontal wheel, or shift with a vertical one, pans the table -
         // the gesture Obsidian answers to.

@@ -21,6 +21,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QRegularExpression>
+#include <QScrollBar>
 #include <QStringDecoder>
 #include <QTextLine>
 #include <QTimer>
@@ -335,6 +336,17 @@ bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &po
 
 // --- .canvas, .base and anything else the window hooked up -----------------
 
+QString MarkdownEditor::fileEmbedCacheKey(const QString &path, const QString &subpath, int width) const
+{
+    const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
+    return QStringLiteral("%1|%2|%3|%4|%5")
+        .arg(path)
+        .arg(mtime)
+        .arg(subpath)
+        .arg(width)
+        .arg(embedThemeTag()); // the colours are drawn into the image
+}
+
 bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &embed,
                                            const QString &path)
 {
@@ -344,13 +356,7 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
         return false;
 
     const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
-    const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
-    const QString key = QStringLiteral("%1|%2|%3|%4|%5")
-                            .arg(path)
-                            .arg(mtime)
-                            .arg(embed.subpath)
-                            .arg(width)
-                            .arg(embedThemeTag()); // the colours are drawn into the image
+    const QString key = fileEmbedCacheKey(path, embed.subpath, width);
 
     auto it = m_fileEmbedCache.find(key);
     if (it == m_fileEmbedCache.end()) {
@@ -377,6 +383,7 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
     view.cells.clear();
     view.textTop = codeHeaderHeight();
     view.imagePath = path; // deliverFileEmbed's own way to find this block again
+    view.embedSubpath = embed.subpath;
     hideWholeBlockText(view);
 
     if (it->pending || it->image.isNull()) {
@@ -418,6 +425,72 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
         updateLayout();
         viewport()->update();
     }
+}
+
+// --- live interaction over a hooked embed's own image -----------------------
+
+QRectF MarkdownEditor::hookedEmbedImageRect(const BlockView &view) const
+{
+    const qreal top = view.y - verticalScrollBar()->value();
+    return QRectF(contentLeft(), top + view.textTop, view.imageSize.width(), view.imageSize.height());
+}
+
+QRect MarkdownEditor::hookedEmbedImageRectAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty())
+        return {};
+    return hookedEmbedImageRect(view).toRect();
+}
+
+qsizetype MarkdownEditor::hookedEmbedBlockAt(const QPoint &viewportPoint) const
+{
+    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
+        const BlockView &view = m_blocks[size_t(i)];
+        if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty()
+            || view.isPdfEmbed || view.isFileCard || !view.mediaPath.isEmpty())
+            continue;
+        if (!m_fileEmbedInputHandlers.contains(QFileInfo(view.imagePath).suffix().toLower()))
+            continue;
+        if (hookedEmbedImageRect(view).contains(viewportPoint))
+            return i;
+    }
+    return -1;
+}
+
+QPoint MarkdownEditor::embedLocalPoint(qsizetype blockIndex, const QPoint &viewportPoint) const
+{
+    return viewportPoint - hookedEmbedImageRect(m_blocks[size_t(blockIndex)]).topLeft().toPoint();
+}
+
+bool MarkdownEditor::applyFileEmbedInput(qsizetype blockIndex, const FileEmbedInputEvent &event)
+{
+    if (blockIndex < 0 || size_t(blockIndex) >= m_blocks.size())
+        return false; // the gesture outlived a relayout - vanishingly rare, and harmless to drop
+    BlockView &view = m_blocks[size_t(blockIndex)];
+    auto it = m_fileEmbedInputHandlers.find(QFileInfo(view.imagePath).suffix().toLower());
+    if (it == m_fileEmbedInputHandlers.end())
+        return false;
+
+    const FileEmbedInputResult result = it.value()(view.imagePath, view.embedSubpath, event);
+    if (!result.image.isNull()) {
+        view.image = QPixmap::fromImage(result.image);
+        // Kept in the same cache entry layoutHookedFileEmbed reads from, so
+        // an unrelated edit elsewhere in the note - which rebuilds every
+        // BlockView from scratch - relays this one out from the view state
+        // just interacted with, not the stale image it was cold-rendered
+        // with.
+        const QString key = fileEmbedCacheKey(view.imagePath, view.embedSubpath, view.imageSize.width());
+        if (auto cacheIt = m_fileEmbedCache.find(key); cacheIt != m_fileEmbedCache.end())
+            cacheIt->image = result.image;
+        viewport()->update();
+    }
+    if (!result.openPath.isEmpty())
+        emit fileEmbedActivated(result.openPath);
+    return !result.image.isNull() || !result.openPath.isEmpty();
 }
 
 // --- several embeds sharing a block, or one mixed with running text --------
