@@ -67,6 +67,16 @@ TEST_F(SpellTest, ABareLanguageFindsARegion)
     EXPECT_TRUE(SpellChecker({QStringLiteral("zz")}).isCorrect(QStringLiteral("helo")));
 }
 
+TEST_F(SpellTest, ABareLanguageAfterItsRegionLoadsNothingMore)
+{
+    // en_GB then en, as QLocale::uiLanguages() lists them: "en" found
+    // en_AG, on Arch a symlink to the en_GB files, and loaded them twice.
+    write("xx_AA.aff", "SET UTF-8\n");
+    write("xx_AA.dic", "1\nhello\n");
+    EXPECT_EQ(SpellChecker({QStringLiteral("xx_TEST"), QStringLiteral("xx")}).languages(),
+              QStringList{QStringLiteral("xx_TEST")});
+}
+
 TEST_F(SpellTest, AnAddedWordIsKeptForNextTime)
 {
     {

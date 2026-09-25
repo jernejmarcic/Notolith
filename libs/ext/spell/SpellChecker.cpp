@@ -6,6 +6,8 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QLocale>
+
+#include <algorithm>
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QStringDecoder>
@@ -79,13 +81,20 @@ SpellChecker::SpellChecker(const QStringList &languages)
     for (const QString &language : languages) {
         // An exact dictionary, or for a bare language the first of its
         // regions: "en" finds en_GB.dic or en_US.dic, whichever is there.
+        // A bare language already covered by one of its regions needs no
+        // second dictionary: "en" after en_GB would load en_AG, which on Arch
+        // is a symlink to the same en_GB-large files.
+        const bool bare = !language.contains(QLatin1Char('_'));
+        if (bare && std::any_of(loaded.cbegin(), loaded.cend(), [&](const QString &name) {
+                return name.startsWith(language + QLatin1Char('_'));
+            }))
+            continue;
         QString aff;
         QString dic;
         for (const QString &directory : directories) {
             const QDir dir(directory);
             const QStringList names =
-                language.contains(QLatin1Char('_'))
-                    ? QStringList{language + QStringLiteral(".dic")}
+                !bare ? QStringList{language + QStringLiteral(".dic")}
                     : dir.entryList({language + QStringLiteral("_*.dic")}, QDir::Files, QDir::Name);
             for (const QString &name : names) {
                 const QString base = dir.filePath(QFileInfo(name).completeBaseName());

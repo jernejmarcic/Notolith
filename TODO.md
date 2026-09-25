@@ -348,8 +348,10 @@ budget, which this project has already learned once on the index.
       links, tags, maths, or the word being typed), right click for
       suggestions and "Add to dictionary" (`~/.config/noteAppC/dictionary.txt`).
       Dictionaries follow the system languages and load after the first paint.
-- [ ] **Jernej: starbase-1 has no hunspell dictionary**, so spellcheck shows
-      a status message and underlines nothing. `sudo pacman -S hunspell-en_gb`
+- [x] **Jernej: starbase-1 has no hunspell dictionary**, so spellcheck shows
+      a status message and underlines nothing. Installed 2026-09-25
+      (hunspell, hunspell-en_gb); en_GB loads and flags "sentance". A bare
+      "en" after en_GB no longer loads en_AG, a symlink to the same files. `sudo pacman -S hunspell-en_gb`
       for the en_GB locale. Slovenian is not in the Arch repositories; its
       `sl_SI.aff`/`.dic` from LibreOffice's dictionaries work dropped into
       `~/.local/share/hunspell/`, with `sl` added to `LANGUAGE`.
