@@ -1,5 +1,7 @@
 #include "DirectRunner.h"
 
+#include "SyscallFilter.h"
+
 #include <QElapsedTimer>
 #include <QFile>
 #include <QProcess>
@@ -231,7 +233,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     env.insert(QStringLiteral("TMPDIR"), dir);
     running->process->setProcessEnvironment(env);
     running->process->setStandardInputFile(QProcess::nullDevice());
-    running->process->setChildProcessModifier([filterFD] { keepInChild(filterFD); });
+    running->process->setChildProcessModifier([filterFD] { sandbox::keepInChild(filterFD); });
 
     connect(running->process, &QProcess::readyReadStandardOutput, this, [running] {
         if (running->process->bytesAvailable() > kMaxOutput)

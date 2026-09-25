@@ -1,5 +1,7 @@
 #include "PluginHost.h"
 
+#include "SyscallFilter.h"
+
 #include <noteappc/plugin.h>
 
 #include <QCoreApplication>
@@ -11,6 +13,7 @@
 #include <QTimer>
 
 #include <sys/resource.h>
+#include <unistd.h>
 
 namespace noteAppC {
 
@@ -207,18 +210,21 @@ void PluginHost::ensureStarted()
         return;
     }
     m_startError.clear();
+    QStringList sandboxed = arguments;
+    const int filterFD = sandbox::addSyscallFilter(sandboxed);
     m_process = std::make_unique<QProcess>();
     m_reader = PluginFrameReader();
     m_process->setProgram(program);
-    m_process->setArguments(arguments);
+    m_process->setArguments(sandboxed);
     // Between fork and exec, so it applies whether or not bwrap is in the
     // chain (rlimits survive execve) - see TexCompiler::compile for the
     // pattern this copies.
-    m_process->setChildProcessModifier([] {
+    m_process->setChildProcessModifier([filterFD] {
         rlimit memory{kMemoryLimitBytes, kMemoryLimitBytes};
         setrlimit(RLIMIT_AS, &memory);
         rlimit files{kOpenFileLimit, kOpenFileLimit};
         setrlimit(RLIMIT_NOFILE, &files);
+        sandbox::keepInChild(filterFD);
     });
 
     connect(m_process.get(), &QProcess::readyReadStandardOutput, this, &PluginHost::handleReadyRead);
@@ -239,6 +245,9 @@ void PluginHost::ensureStarted()
     QElapsedTimer startClock;
     startClock.start();
     m_process->start();
+    // The fork has happened; bwrap holds its own copy of the filter.
+    if (filterFD >= 0)
+        close(filterFD);
 
     QJsonArray permissions;
     for (const PluginPermission permission : m_granted)

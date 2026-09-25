@@ -1,5 +1,7 @@
 #include "KernelProcess.h"
 
+#include "SyscallFilter.h"
+
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -116,7 +118,7 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     m_process->setChildProcessModifier([filterFD] {
         rlimit memory{4ULL * 1024 * 1024 * 1024, 4ULL * 1024 * 1024 * 1024};
         setrlimit(RLIMIT_AS, &memory);
-        keepInChild(filterFD);
+        sandbox::keepInChild(filterFD);
     });
     connect(m_process.get(), &QProcess::finished, this,
            [this](int exitCode, QProcess::ExitStatus) { emit finished(exitCode); });

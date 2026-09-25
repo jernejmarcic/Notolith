@@ -23,6 +23,7 @@
 #include "NotebookController.h"
 #include "NotebookMessage.h"
 #include "NotebookSandbox.h"
+#include "SyscallFilter.h"
 
 #include "WaitFor.h"
 
@@ -284,7 +285,7 @@ TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
         if (filterFD < 0)
             return -2;
         QProcess sandboxed;
-        sandboxed.setChildProcessModifier([filterFD] { keepInChild(filterFD); });
+        sandboxed.setChildProcessModifier([filterFD] { noteAppC::sandbox::keepInChild(filterFD); });
         sandboxed.start(program, args);
         close(filterFD);
         return sandboxed.waitForFinished(5000) ? sandboxed.exitCode() : -3;

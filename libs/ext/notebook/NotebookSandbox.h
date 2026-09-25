@@ -43,18 +43,13 @@ SandboxAvailability detectSandboxAvailability();
 /// refuses the run: a block never falls back to running as the user unless
 /// it asked for SandboxTier::Host (which Settings has to allow).
 ///
-/// With `filterFD` set, tier 1 also gets a syscall filter (see
-/// compileSyscallFilter in the .cpp), handed to bwrap as `--seccomp N`:
-/// `*filterFD` is then an open, close-on-exec descriptor the caller keeps
-/// open in the child (keepInChild, from its child process modifier) and
-/// closes once QProcess::start has returned; -1 when there is no filter
-/// (a build without libseccomp, or tier 0).
+/// With `filterFD` set, tier 1 also gets the syscall filter
+/// (sandbox::addSyscallFilter): `*filterFD` is its descriptor, for the
+/// caller to keep open in the child and close after start; -1 when there is
+/// no filter (a build without libseccomp, or tier 0).
 void wrapCommand(SandboxTier tier, const QString &program, const QStringList &args,
                  const SandboxRequest &request, QString *outProgram, QStringList *outArgs,
                  SandboxTier *usedTier, int *filterFD = nullptr);
 
-/// For a child process modifier, between fork and exec: lets `fd` through
-/// the exec. Async-signal-safe; does nothing for -1.
-void keepInChild(int fd);
 
 } // namespace noteAppC::notebook
