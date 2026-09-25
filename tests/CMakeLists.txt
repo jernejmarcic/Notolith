@@ -162,7 +162,7 @@ endif()
 
 if(TARGET noteAppC_notebook)
     add_executable(test_notebook test_notebook.cpp)
-    target_link_libraries(test_notebook PRIVATE noteAppC_notebook Qt6::Test GTest::gtest)
+    target_link_libraries(test_notebook PRIVATE noteAppC_notebook noteAppC_sandbox Qt6::Test GTest::gtest)
     add_test(NAME notebook COMMAND test_notebook)
     set_tests_properties(notebook PROPERTIES TIMEOUT 60)
 endif()

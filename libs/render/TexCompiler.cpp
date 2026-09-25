@@ -1,5 +1,7 @@
 #include "TexCompiler.h"
 
+#include "SyscallFilter.h"
+
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -9,6 +11,7 @@
 #include <QTemporaryDir>
 
 #include <sys/resource.h>
+#include <unistd.h>
 
 namespace noteAppC {
 
@@ -111,15 +114,7 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
     process.setWorkingDirectory(work.path());
     process.setStandardInputFile(QProcess::nullDevice());
     process.setProcessChannelMode(QProcess::MergedChannels);
-    // A memory and CPU ceiling in the child, applied between fork and exec -
-    // a runaway or hostile document is capped before it can touch the
-    // machine noteAppC runs on, not after.
-    process.setChildProcessModifier([] {
-        rlimit memory{2ULL * 1024 * 1024 * 1024, 2ULL * 1024 * 1024 * 1024};
-        setrlimit(RLIMIT_AS, &memory);
-        rlimit cpu{25, 30};
-        setrlimit(RLIMIT_CPU, &cpu);
-    });
+    int filterFD = -1;
     QString program = engine;
     QStringList arguments = {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
                              QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
@@ -148,13 +143,27 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
                                 QStringLiteral("--"), engine}
                   + arguments;
         program = bwrap;
+        filterFD = sandbox::addSyscallFilter(arguments);
     } else {
         // Refused rather than run bare: \input would read any file of the
         // user's into the PDF.
         result.error = QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap");
         return result;
     }
+    // A memory and CPU ceiling in the child, applied between fork and exec -
+    // a runaway or hostile document is capped before it can touch the
+    // machine noteAppC runs on, not after.
+    process.setChildProcessModifier([filterFD] {
+        rlimit memory{2ULL * 1024 * 1024 * 1024, 2ULL * 1024 * 1024 * 1024};
+        setrlimit(RLIMIT_AS, &memory);
+        rlimit cpu{25, 30};
+        setrlimit(RLIMIT_CPU, &cpu);
+        sandbox::keepInChild(filterFD);
+    });
     process.start(program, arguments);
+    // The fork has happened; bwrap holds its own copy of the filter.
+    if (filterFD >= 0)
+        close(filterFD);
 
     bool finished = process.waitForFinished(30000);
     if (!finished) {

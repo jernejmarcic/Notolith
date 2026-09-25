@@ -143,10 +143,14 @@ if(NOTEAPPC_WITH_NOTEBOOK)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
         pkg_check_modules(ZMQ QUIET IMPORTED_TARGET libzmq)
-        # Optional: tier 1's syscall filter. Without it tier 1 is
-        # bubblewrap's namespaces alone.
-        pkg_check_modules(SECCOMP QUIET IMPORTED_TARGET libseccomp)
     endif()
+endif()
+
+# Optional: the syscall filter every bubblewrap sandbox gets (libs/sandbox).
+# Without it the sandboxes are bubblewrap's namespaces alone.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(SECCOMP QUIET IMPORTED_TARGET libseccomp)
 endif()
 
 add_compile_options(-Wall -Wextra)
@@ -226,6 +230,7 @@ endif()
 add_subdirectory(libs/vault)
 add_subdirectory(libs/markdown)
 add_subdirectory(libs/index)
+add_subdirectory(libs/sandbox)
 add_subdirectory(libs/render)
 add_subdirectory(libs/editor)
 add_subdirectory(libs/theme)

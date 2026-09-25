@@ -25,8 +25,4 @@ add_library(noteAppC_notebook STATIC
 # signals - needs moc, like every other Q_OBJECT library under libs/.
 set_target_properties(noteAppC_notebook PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_notebook PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_notebook PUBLIC Qt6::Core PRIVATE PkgConfig::ZMQ)
-if(TARGET PkgConfig::SECCOMP)
-    target_link_libraries(noteAppC_notebook PRIVATE PkgConfig::SECCOMP)
-    target_compile_definitions(noteAppC_notebook PRIVATE NOTEAPPC_HAVE_SECCOMP)
-endif()
+target_link_libraries(noteAppC_notebook PUBLIC Qt6::Core PRIVATE PkgConfig::ZMQ noteAppC_sandbox)

@@ -625,9 +625,8 @@ What the spec asks for:
       optional at build time; bwrap `--seccomp`): no new namespaces, mounts,
       ptrace, keyring, bpf, io_uring, module loading or TIOCSTI. Landlock
       left out on purpose: the mount and network namespaces already cover
-      what it would restrict. Left: the server/mobile tiers, and the same
-      filter for PluginHost and TexCompiler's bwrap (needs a home both
-      libraries link).
+      what it would restrict. The same filter now covers the plugin host
+      and TeX too (libs/sandbox). Left: the server/mobile tiers.
 - [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
       (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to
