@@ -148,6 +148,11 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
                                 QStringLiteral("--"), engine}
                   + arguments;
         program = bwrap;
+    } else {
+        // Refused rather than run bare: \input would read any file of the
+        // user's into the PDF.
+        result.error = QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap");
+        return result;
     }
     process.start(program, arguments);
 

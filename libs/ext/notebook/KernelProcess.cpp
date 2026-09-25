@@ -92,6 +92,10 @@ bool KernelProcess::start(const KernelSpec &spec, SandboxTier tier, const QStrin
     int filterFD = -1;
     wrapCommand(tier, argv.constFirst(), argv.mid(1), request, &program, &args, &m_tierUsed,
                 &filterFD);
+    if (program.isEmpty()) {
+        m_error = QStringLiteral("code runs only inside bubblewrap's sandbox; install bubblewrap");
+        return false;
+    }
 
     m_process = std::make_unique<QProcess>();
     m_process->setProgram(program);

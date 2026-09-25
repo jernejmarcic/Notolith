@@ -4,6 +4,8 @@
 
 #ifdef NOTEAPPC_HAVE_POPPLER
 #include <poppler-qt6.h>
+#include <atomic>
+#include <mutex>
 #endif
 
 namespace noteAppC {
@@ -56,6 +58,41 @@ Poppler::Document *openCached(const QString &path)
 
 } // namespace
 
+/// Poppler's own GfxState.cc lazily fills in two process-global statics the
+/// first time any page is rendered: `GfxState::sRGBProfile` and
+/// `GfxXYZ2DisplayTransforms::XYZProfile` (both `std::shared_ptr`s wrapping
+/// an lcms2 profile), each behind an unguarded `if (!profile) profile =
+/// ...;`. Every render builds a `GfxState` (`Page::displaySlice` -> `Gfx` ->
+/// `GfxState`), so this is not a per-Document detail - it sits underneath
+/// every `Poppler::Document`, in every thread, in the whole process. A
+/// `Poppler::Document` is fine one-per-thread as poppler's own docs say, but
+/// that does not cover this: the first renders across several worker
+/// threads (this file's own `openCached` guarantees separate Documents, not
+/// separate processes) can race on writing the same shared_ptr, tearing its
+/// internal pointer and crashing later on a garbage address deep in
+/// `GfxXYZ2DisplayTransforms` - see TODO.md's "test_demo crashed once in
+/// poppler". One tiny render runs, alone, the first time any thread
+/// reaches here; every later render, on any thread, concurrent or
+/// not, then finds both statics already set and never written to again, so
+/// reading them is safe without any lock of our own.
+void PdfPage::warmUp(Poppler::Document *document)
+{
+    // Latched only once a page has really been drawn: a document with no
+    // page to draw leaves it for the next one.
+    static std::atomic<bool> warmed = false;
+    static std::mutex lock;
+    if (warmed.load(std::memory_order_acquire) || !document)
+        return;
+    const std::lock_guard<std::mutex> hold(lock);
+    if (warmed.load(std::memory_order_relaxed))
+        return;
+    const std::unique_ptr<Poppler::Page> page(document->page(0));
+    if (!page)
+        return;
+    page->renderToImage(1, 1, 0, 0, 1, 1);
+    warmed.store(true, std::memory_order_release);
+}
+
 int PdfPage::pageCount(const QString &path)
 {
     Poppler::Document *document = openCached(path);
@@ -76,6 +113,8 @@ QImage PdfPage::render(const QString &path, int page, int widthPixels, bool hide
     Poppler::Document *document = openCached(path);
     if (!document || page < 0 || page >= document->numPages() || widthPixels <= 0)
         return {};
+
+    warmUp(document);
 
     const std::unique_ptr<Poppler::Page> pdfPage(document->page(page));
     if (!pdfPage)

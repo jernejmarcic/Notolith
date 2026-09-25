@@ -277,6 +277,31 @@ protected:
     PluginManifest manifest;
 };
 
+TEST_F(PluginHostTest, WithoutBubblewrapAPluginRefusesToStart)
+{
+    // No bwrap on PATH: the plugin must not run bare, with the whole home
+    // directory in reach.
+    const QByteArray path = qgetenv("PATH");
+    QTemporaryDir empty;
+    ASSERT_TRUE(empty.isValid());
+    qputenv("PATH", empty.path().toUtf8());
+    PluginHost host(manifest, {PluginPermission::ReadNotes},
+                    callbacksReturning(QStringLiteral("three little words"), nullptr));
+    bool done = false;
+    bool ok = true;
+    QString error;
+    host.runCommand(QStringLiteral("count-words"), [&](bool success, const QJsonObject &, const QString &why) {
+        ok = success;
+        error = why;
+        done = true;
+    });
+    qputenv("PATH", path);
+    ASSERT_TRUE(done) << "refused at once, not after a timeout";
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(error.contains(QLatin1String("bubblewrap"))) << error.toStdString();
+    EXPECT_EQ(host.state(), PluginHost::State::Crashed);
+}
+
 TEST_F(PluginHostTest, RunsACommandAndRendersACodeBlockEndToEnd)
 {
     QString notice;

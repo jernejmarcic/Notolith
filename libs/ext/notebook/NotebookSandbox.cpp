@@ -109,10 +109,18 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     if (filterFD)
         *filterFD = -1;
     const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
-    if (tier != SandboxTier::Bubblewrap || bwrap.isEmpty()) {
+    if (tier != SandboxTier::Bubblewrap) {
         *outProgram = program;
         *outArgs = args;
         *usedTier = SandboxTier::Host;
+        return;
+    }
+    if (bwrap.isEmpty()) {
+        // Refused, never quietly run as the user: a block that did not ask
+        // for tier 0 does not get it.
+        outProgram->clear();
+        outArgs->clear();
+        *usedTier = SandboxTier::Bubblewrap;
         return;
     }
 

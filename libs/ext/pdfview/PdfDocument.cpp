@@ -16,6 +16,7 @@
 // stroke visibly thicker than a 2pt rectangle border at the same render
 // scale).
 #include "PdfDocument.h"
+#include "PdfPage.h"
 #include "PdfRecovery.h"
 
 #include <poppler-qt6.h>
@@ -238,6 +239,9 @@ Document *openForSearch(const QString &path)
     cache.document = Document::load(path);
     cache.path = path;
     cache.mtime = mtime;
+    // Searching builds the same process-wide poppler state a render does.
+    if (cache.document)
+        PdfPage::warmUp(cache.document.get());
     return cache.document.get();
 }
 
@@ -261,6 +265,8 @@ bool PdfDocument::load(const QString &path, QString *error)
     }
     doc->setRenderHint(Document::Antialiasing, true);
     doc->setRenderHint(Document::TextAntialiasing, true);
+    // Its text is read on this thread while pages render on workers.
+    PdfPage::warmUp(doc.get());
     m_doc = std::move(doc);
     m_path = path;
     m_modified = false;

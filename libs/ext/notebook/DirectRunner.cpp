@@ -215,6 +215,10 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     int filterFD = -1;
     wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used,
                 &filterFD);
+    if (program.isEmpty()) {
+        delete running;
+        return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
+    }
 
     running->process = new QProcess(this);
     running->process->setProgram(program);

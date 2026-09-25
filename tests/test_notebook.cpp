@@ -243,6 +243,28 @@ TEST(NotebookSandboxTest, Tier1AllowsReadingInsideTheRuntimeDir)
     EXPECT_EQ(sandboxed.readAllStandardOutput(), QByteArrayLiteral("fine"));
 }
 
+TEST(NotebookSandboxTest, WithoutBubblewrapTier1IsRefusedNotRunAsTheUser)
+{
+    const QByteArray path = qgetenv("PATH");
+    QTemporaryDir empty;
+    ASSERT_TRUE(empty.isValid());
+    qputenv("PATH", empty.path().toUtf8());
+    SandboxRequest request;
+    request.runtimeDir = empty.path();
+    QString program;
+    QStringList args;
+    SandboxTier used = SandboxTier::Host;
+    wrapCommand(SandboxTier::Bubblewrap, QStringLiteral("/usr/bin/true"), {}, request, &program, &args,
+                &used);
+    const QString refused = program;
+    // Tier 0, which a block has to ask for and Settings has to allow, is
+    // unchanged.
+    wrapCommand(SandboxTier::Host, QStringLiteral("/usr/bin/true"), {}, request, &program, &args, &used);
+    qputenv("PATH", path);
+    EXPECT_TRUE(refused.isEmpty());
+    EXPECT_EQ(program, QStringLiteral("/usr/bin/true"));
+}
+
 TEST(NotebookSandboxTest, Tier1FiltersTheSyscallsThatLeaveANamespace)
 {
     if (!detectSandboxAvailability().bubblewrap)

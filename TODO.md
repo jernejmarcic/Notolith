@@ -143,17 +143,51 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
       rendered PDF (or video, or card) state from before and painted it over
       its own source and the blocks below. Every layout now starts clean.
 
-## Found 2026-09-24, not yet fixed
+## Found 2026-09-24, fixed 2026-09-25
 
-- [ ] **test_demo crashed once in poppler** under a parallel ctest (1 in
+- [x] **test_demo crashed once in poppler** under a parallel ctest (1 in
       several full runs; 0 in 40 lone runs): SIGSEGV jumping to a garbage
       address from `GfxXYZ2DisplayTransforms` <- `GfxState` <- `Gfx` <-
       `Page::displaySlice` <- `Poppler::Page::renderToImage` <-
-      `PdfPage::render` (libs/render/PdfPage.cpp). Looks like use-after-free
-      rather than a plain race: 400 concurrent renders of the demo's PDF in
-      8 threads never crashed. Suspect: thread-local cached Documents freed
-      as idle pool threads expire. Core: `coredumpctl info` on starbase-1,
-      2026-09-24 01:15.
+      `PdfPage::render` (libs/render/PdfPage.cpp). Root cause pinned down by
+      reading poppler 26.08.0's own GfxState.cc (this system's poppler
+      package, confirmed built with lcms2/USE_CMS via `ldd`): every render
+      builds a `GfxState`, and both `GfxState::sRGBProfile` and
+      `GfxXYZ2DisplayTransforms::XYZProfile` are process-global
+      `std::shared_ptr` statics, each lazily filled in by an *unguarded*
+      `if (!profile) profile = ...;` in the respective constructor - not a
+      thread_local, not behind any mutex, shared by every thread in the
+      process regardless of which `Poppler::Document` (or how many) each
+      thread owns. PdfPage.cpp's thread-local Document-per-thread cache -
+      exactly what poppler-qt6's own docs ask for - does not cover this: it
+      keeps Documents from being shared unsafely, but these two statics sit
+      *underneath* every Document. The first renders across several worker
+      threads (test_demo's vault walk fans PDF renders out over
+      `QThreadPool::globalInstance()` via `QtConcurrent::run`, one call per
+      embed/page) can race on writing the same shared_ptr, tearing its
+      internal pointer; a later read through it jumps to a garbage address -
+      exactly the observed crash site. Not a per-thread-Document lifetime bug
+      and not GlobalParams - it is poppler's own color-management globals.
+      No core dump was left to inspect (`coredumpctl list test_demo` found
+      nothing on this machine on 2026-09-25; systemd-coredump's retention had
+      already rotated it out, crowded out by much larger Wine/Steam dumps
+      logged the same day).
+      Fixed in libs/render/PdfPage.cpp: `warmUpColorManagement()`, gated by a
+      `std::once_flag`, runs one tiny (1x1) render alone the first time any
+      thread reaches `PdfPage::render`; every other call - concurrent or not,
+      then and for the rest of the process - finds both statics already set
+      and never written to again, so reading them needs no lock of ours.
+      Regression test: `tests/test_pdfpage_race.cpp` (new `test_pdfpage_race`
+      ctest target, poppler builds only) fires 16 threads at
+      `PdfPage::render` released together on a spin-gate, as the *first*
+      thing to touch PdfPage in that process - deterministic given the fix,
+      since `call_once` genuinely serializes the one racy window. Full
+      suite: 100% passed (both the normal and the minimal build), test_demo
+      alone x30 all passed, full `ctest -j8` x3 - 2 of 3 all green, 1 of 3
+      had an unrelated `index` (libs/index/Indexer) flake under `-j8`
+      contention that does not reproduce standalone and touches no
+      poppler/PdfPage code - pre-existing, not part of this diff, left for
+      whoever picks up Indexer next.
 
 ## Encrypted notes, requested by Jernej 2026-09-24
 
@@ -594,13 +628,12 @@ What the spec asks for:
       what it would restrict. Left: the server/mobile tiers, and the same
       filter for PluginHost and TexCompiler's bwrap (needs a home both
       libraries link).
-- [ ] **Without bubblewrap, everything that runs in a sandbox runs as the
+- [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
-      (TexCompiler) and tier 1 code blocks (wrapCommand) all fall back to
-      the host. The Arch package now depends on bubblewrap; a build from
-      source still does this. A plugin, or a block asking for tier 1, should
-      refuse to start and say why, unless Settings allows running without
-      the sandbox.
+      (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to
+      the host. Now each refuses and says to install bubblewrap; no setting,
+      since a block that wants the host has tier 0 (which Settings must
+      allow). The Arch package depends on bubblewrap.
 - [x] Check what is installed before building on it (libzmq, a kernel such as
       ipykernel, bubblewrap); leave anything missing for Jernej.
 

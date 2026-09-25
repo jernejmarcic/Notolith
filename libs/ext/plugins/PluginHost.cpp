@@ -93,12 +93,11 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
 
     if (bwrap.isEmpty()) {
-        // No bubblewrap on this system: run the host directly. The rlimits
-        // in the child-process modifier still apply either way; only the
-        // filesystem/namespace isolation is lost. TexCompiler falls back
-        // the same way.
-        *program = hostBinary;
-        return {QStringLiteral("--plugin"), pluginDir};
+        // No bubblewrap on this system: the plugin does not run at all.
+        // Running it bare would hand third-party code the whole home
+        // directory; ensureStarted says why instead.
+        program->clear();
+        return {};
     }
 
     // An installed noteAppC-plugin-host lives under /usr and is already
@@ -195,10 +194,21 @@ void PluginHost::ensureStarted()
             return; // still backing off - caller's request fails below, no process to write to
     }
 
-    m_process = std::make_unique<QProcess>();
-    m_reader = PluginFrameReader();
     QString program;
     const QStringList arguments = sandboxArguments(&program);
+    if (program.isEmpty()) {
+        m_startError = QStringLiteral("plugins run only inside bubblewrap's sandbox; install bubblewrap");
+        if (m_callbacks.log)
+            m_callbacks.log(m_manifest.id(), m_startError);
+        m_process.reset();
+        m_hasFailed = true;
+        m_sinceFailure.start();
+        setState(State::Crashed);
+        return;
+    }
+    m_startError.clear();
+    m_process = std::make_unique<QProcess>();
+    m_reader = PluginFrameReader();
     m_process->setProgram(program);
     m_process->setArguments(arguments);
     // Between fork and exec, so it applies whether or not bwrap is in the
@@ -305,7 +315,9 @@ void PluginHost::runCommand(const QString &commandID, const ResultCallback &call
     ensureStarted();
     if (!m_process) {
         if (callback)
-            callback(false, {}, QStringLiteral("plugin host is restarting, try again shortly"));
+            callback(false, {}, m_startError.isEmpty()
+                                    ? QStringLiteral("plugin host is restarting, try again shortly")
+                                    : m_startError);
         return;
     }
     QJsonObject params;
@@ -320,7 +332,9 @@ void PluginHost::renderCodeBlock(const QString &language, const QString &source,
     ensureStarted();
     if (!m_process) {
         if (callback)
-            callback(false, {}, QStringLiteral("plugin host is restarting, try again shortly"));
+            callback(false, {}, m_startError.isEmpty()
+                                    ? QStringLiteral("plugin host is restarting, try again shortly")
+                                    : m_startError);
         return;
     }
     QJsonObject params;
