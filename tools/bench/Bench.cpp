@@ -43,6 +43,8 @@
 #include <QSurfaceFormat>
 
 #include "Index.h"
+#include "Indexer.h"
+#include "Vault.h"
 #include "MainWindow.h"
 
 #ifdef NOTEAPPC_HAVE_EPUB
@@ -256,6 +258,28 @@ Timing benchColdStart(const QString &vaultPath, int runs)
         samples.push_back(double(clock.nsecsElapsed()) / 1e6);
     }
     return reduce(QStringLiteral("Cold start to first painted frame"), QString(), samples);
+}
+
+/// A full scan into an empty cache, as on a vault's first open: the time the
+/// indexer itself reports. Deletes the vault's index cache before each run, so
+/// only ever called on the generated vault.
+Timing benchColdIndex(const QString &vaultPath, int runs)
+{
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    const QString cache = Index::cachePathFor(vaultPath);
+    for (int i = 0; i < runs; ++i) {
+        for (const QString &suffix : {QString(), QStringLiteral("-wal"), QStringLiteral("-shm")})
+            QFile::remove(cache + suffix);
+        Index index;
+        Indexer indexer(&index);
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(Vault(vaultPath));
+        if (!done.wait(180000))
+            break;
+        samples.push_back(double(done.first().at(1).toLongLong()));
+    }
+    return reduce(QStringLiteral("Cold index"), QStringLiteral("empty cache, whole vault"), samples);
 }
 
 /// 2. Note open: MainWindow::openNote(path) to a laid-out, painted frame.
@@ -1271,8 +1295,11 @@ int main(int argc, char *argv[])
 
     // 1: cold start. Constructing MainWindow is the most expensive single
     // sample here, so this runs the fewest times.
-    if (runs("start"))
+    if (runs("start")) {
         timings << benchColdStart(vaultPath, 7);
+        if (args.isEmpty()) // a vault given on the command line keeps its cache
+            timings << benchColdIndex(vaultPath, 3);
+    }
 
     // 2: note open, one MainWindow reused across sizes - a session opens
     // many notes in one window, it does not restart between them.
