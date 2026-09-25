@@ -34,6 +34,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QToolButton>
+#include <QWheelEvent>
 
 #include "WaitFor.h"
 #include "MarkdownEditor.h"
@@ -627,6 +628,60 @@ TEST_F(WindowTest, ACanvasOpensInATabAndSavesItsEdits)
     EXPECT_EQ(window.findChild<noteAppC::CanvasView *>(), nullptr);
     EXPECT_FALSE(window.editor()->isHidden());
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, ACanvasEmbedsFileCardOpensItsNoteOnAPlainClick)
+{
+    write(QStringLiteral("Target.md"), "# Target\n\nBody.\n");
+    write(QStringLiteral("Board.canvas"),
+          R"({"nodes":[{"id":"a","type":"file","file":"Target.md","x":0,"y":0,"width":200,"height":100}],)"
+          R"("edges":[]})");
+    write(QStringLiteral("Note.md"), "![[Board.canvas]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Note.md"))));
+
+    MarkdownEditor *editor = window.editor();
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+    const QRect rect = editor->hookedEmbedImageRectAt(0);
+    ASSERT_FALSE(rect.isEmpty());
+
+    // A Ctrl+wheel over the embed is accepted: it zoomed the embed rather
+    // than leaving the note's own scroll stuck or moving it instead.
+    QWheelEvent zoomWheel(QPointF(rect.center()), QPointF(rect.center()), QPoint(0, 0), QPoint(0, 240),
+                         Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(editor->viewport(), &zoomWheel);
+    EXPECT_TRUE(zoomWheel.isAccepted());
+
+    // fitToContent() centres the sole node in the embed's frame, so its own
+    // centre is inside the card regardless of exactly how it was sized.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, rect.center());
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Target\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, DoubleClickingEmptyCanvasEmbedSpaceOpensTheCanvasFileItself)
+{
+    write(QStringLiteral("Target.md"), "# Target\n\nBody.\n");
+    write(QStringLiteral("Board.canvas"),
+          R"({"nodes":[{"id":"a","type":"file","file":"Target.md","x":0,"y":0,"width":200,"height":100}],)"
+          R"("edges":[]})");
+    write(QStringLiteral("Note.md"), "![[Board.canvas]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Note.md"))));
+
+    MarkdownEditor *editor = window.editor();
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+    const QRect rect = editor->hookedEmbedImageRectAt(0);
+    ASSERT_FALSE(rect.isEmpty());
+
+    // fitToContent() always leaves a margin around the content, so a corner
+    // is background no matter how the sole node above ended up sized.
+    QTest::mouseDClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, rect.topLeft() + QPoint(5, 5));
+
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+    EXPECT_EQ(canvas->path(), path(QStringLiteral("Board.canvas")));
 }
 #endif
 

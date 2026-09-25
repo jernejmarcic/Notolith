@@ -539,7 +539,11 @@ scrolliong through pages, it can make them like a slide".
       a taller cell grows to fit it. Several on a line sit side by side at
       their own size and wrap like words; the caret inside one shows its
       source.
-- [ ] A canvas embed is a picture, not interactive.
+- [x] A canvas embed is a picture, not interactive: each embed now keeps its
+      own hidden, persistent CanvasView (Ctrl+wheel zooms about the pointer,
+      a drag pans, a card click opens it, empty-space double-click opens the
+      `.canvas` file); plain wheel is declined so the note still scrolls.
+      Re-render measured at 0.58 ms on a 50-card canvas.
 - [x] `![[x.base#View]]` now renders the named view: the embed's `#fragment`
       is threaded through as a view name (MarkdownEditor's m_baseRunner,
       ensureBaseSearch/deliverBaseResults keyed on yamlText+view,

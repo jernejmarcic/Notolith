@@ -2154,6 +2154,150 @@ TEST(NoteEmbedTest, ANoteEmbedIsDrawnFormattedAMomentLater)
     EXPECT_GT(editor->embedImageSizeAt(0).height(), 20);
 }
 
+// --- a hooked embed's own input: wheel, drag, click (setFileEmbedInputHandler) --
+
+namespace {
+/// A registered renderer that answers with one fixed-colour image, delivered
+/// through the same queued path the real one (deliverFileEmbed) uses, so a
+/// test still needs a WAIT_TRUE turn for the cold render exactly like every
+/// other hooked/async embed test does.
+void registerFixedImageEmbed(MarkdownEditor *editor, const QString &suffix)
+{
+    editor->setFileEmbedRenderer({suffix}, [](const QString &, const QString &, int width,
+                                              const std::function<void(QImage)> &deliver) {
+        QImage image(width, 200, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::red);
+        deliver(image);
+    });
+}
+} // namespace
+
+TEST(HookedEmbedInputTest, CtrlWheelIsForwardedAndAcceptedWhilePlainWheelIsDeclined)
+{
+    // Tall enough to scroll: the plain-wheel half of this test needs
+    // somewhere for the note itself to go.
+    QString text = QStringLiteral("![[board.plane]]\n\n");
+    for (int i = 0; i < 60; ++i)
+        text += QStringLiteral("Paragraph %1.\n\n").arg(i);
+    auto editor = editorWith(text);
+    editor->setLinkResolver([](const QString &) { return QStringLiteral("board.plane"); });
+    registerFixedImageEmbed(editor.get(), QStringLiteral("plane"));
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+
+    struct Call {
+        MarkdownEditor::FileEmbedInputKind kind;
+        QPoint delta;
+        Qt::KeyboardModifiers modifiers;
+    };
+    QList<Call> calls;
+    editor->setFileEmbedInputHandler(
+        {QStringLiteral("plane")},
+        [&calls](const QString &, const QString &, const MarkdownEditor::FileEmbedInputEvent &event) {
+            calls.append({event.kind, event.delta, event.modifiers});
+            MarkdownEditor::FileEmbedInputResult result;
+            if (event.kind == MarkdownEditor::FileEmbedInputKind::Wheel
+                && !event.modifiers.testFlag(Qt::ControlModifier))
+                return result; // declined: a plain wheel is not this embed's to keep
+            result.image = QImage(4, 4, QImage::Format_ARGB32_Premultiplied);
+            result.image.fill(Qt::blue);
+            return result;
+        });
+
+    const QRect rect = editor->hookedEmbedImageRectAt(0);
+    ASSERT_FALSE(rect.isEmpty());
+    const QPoint centre = rect.center();
+
+    QWheelEvent ctrlWheel(QPointF(centre), QPointF(centre), QPoint(0, 0), QPoint(0, 240), Qt::NoButton,
+                         Qt::ControlModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(editor->viewport(), &ctrlWheel);
+    ASSERT_EQ(calls.size(), 1);
+    EXPECT_EQ(calls.last().kind, MarkdownEditor::FileEmbedInputKind::Wheel);
+    EXPECT_EQ(calls.last().modifiers, Qt::ControlModifier);
+    EXPECT_TRUE(ctrlWheel.isAccepted()) << "a Ctrl+wheel the embed used must not also scroll the note";
+
+    const int scrollBefore = editor->verticalScrollBar()->value();
+    QWheelEvent plainWheel(QPointF(centre), QPointF(centre), QPoint(0, 0), QPoint(0, -240), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(editor->viewport(), &plainWheel);
+    ASSERT_EQ(calls.size(), 2);
+    EXPECT_EQ(calls.last().kind, MarkdownEditor::FileEmbedInputKind::Wheel);
+    EXPECT_EQ(calls.last().modifiers, Qt::KeyboardModifiers());
+    // Declined by the handler above, so the editor's own wheelEvent falls
+    // through to its normal handling instead of leaving the page stuck.
+    EXPECT_NE(editor->verticalScrollBar()->value(), scrollBefore);
+}
+
+TEST(HookedEmbedInputTest, ADragPansInsteadOfSelectingAndAPlainClickOpensACard)
+{
+    auto editor = editorWith(QStringLiteral("![[board.plane]]\n"));
+    editor->setLinkResolver([](const QString &) { return QStringLiteral("board.plane"); });
+    registerFixedImageEmbed(editor.get(), QStringLiteral("plane"));
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+
+    QList<QPoint> drags;
+    QString clickedPath;
+    editor->setFileEmbedInputHandler(
+        {QStringLiteral("plane")},
+        [&](const QString &, const QString &, const MarkdownEditor::FileEmbedInputEvent &event) {
+            MarkdownEditor::FileEmbedInputResult result;
+            if (event.kind == MarkdownEditor::FileEmbedInputKind::Drag) {
+                drags.append(event.delta);
+                result.image = QImage(4, 4, QImage::Format_ARGB32_Premultiplied);
+            } else if (event.kind == MarkdownEditor::FileEmbedInputKind::Click) {
+                result.openPath = QStringLiteral("Card.md");
+            }
+            return result;
+        });
+
+    QString activated;
+    QObject::connect(editor.get(), &MarkdownEditor::fileEmbedActivated,
+                     [&](const QString &path) { activated = path; });
+
+    const QRect rect = editor->hookedEmbedImageRectAt(0);
+    const QPoint start = rect.center();
+    const QPoint moved = start + QPoint(30, 12);
+
+    QTest::mousePress(editor->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+    QMouseEvent move(QEvent::MouseMove, moved, editor->viewport()->mapToGlobal(moved), Qt::NoButton,
+                     Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor->viewport(), &move);
+    QTest::mouseRelease(editor->viewport(), Qt::LeftButton, Qt::NoModifier, moved);
+
+    ASSERT_FALSE(drags.isEmpty()) << "a real drag pans the embed";
+    EXPECT_EQ(drags.first(), QPoint(30, 12));
+    EXPECT_TRUE(editor->selectedText().isEmpty()) << "a drag over the embed must not select the note's text";
+    EXPECT_TRUE(activated.isEmpty()) << "a drag is not a click";
+
+    // A plain click (no movement) on the same embed opens its card instead.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, start);
+    EXPECT_EQ(activated, QStringLiteral("Card.md"));
+}
+
+TEST(HookedEmbedInputTest, DoubleClickingEmptyEmbedSpaceOpensTheFileItself)
+{
+    auto editor = editorWith(QStringLiteral("![[board.plane]]\n"));
+    editor->setLinkResolver([](const QString &) { return QStringLiteral("board.plane"); });
+    registerFixedImageEmbed(editor.get(), QStringLiteral("plane"));
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 2000);
+
+    editor->setFileEmbedInputHandler(
+        {QStringLiteral("plane")},
+        [](const QString &, const QString &, const MarkdownEditor::FileEmbedInputEvent &event) {
+            MarkdownEditor::FileEmbedInputResult result;
+            if (event.kind == MarkdownEditor::FileEmbedInputKind::DoubleClick)
+                result.openPath = QStringLiteral("board.plane");
+            return result;
+        });
+
+    QString activated;
+    QObject::connect(editor.get(), &MarkdownEditor::fileEmbedActivated,
+                     [&](const QString &path) { activated = path; });
+
+    const QPoint centre = editor->hookedEmbedImageRectAt(0).center();
+    QTest::mouseDClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, centre);
+    EXPECT_EQ(activated, QStringLiteral("board.plane"));
+}
+
 // --- feature switches: one on/off pair per feature --------------------------
 
 TEST(FeaturesTest, QueryBlocksToggle)

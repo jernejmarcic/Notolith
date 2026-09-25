@@ -59,6 +59,9 @@ class TagsPane;
 class PropertiesPane;
 class FootnotesPane;
 class SlidesView;
+#ifdef NOTEAPPC_HAVE_CANVAS
+class CanvasView;
+#endif
 
 /// The shell: a header bar in place of Obsidian's ribbon, a file explorer,
 /// Obsidian's workspace of tabs in splits, a settings page in the main area,
@@ -468,6 +471,28 @@ private:
     /// Resolves a link as the open note sees it; the editor, the preview and
     /// PDF export all use it.
     std::function<QString(const QString &)> m_resolveLink;
+#ifdef NOTEAPPC_HAVE_CANVAS
+    /// One hidden, never-shown CanvasView per `.canvas` embed an open editor
+    /// asked to draw, keyed by that editor and the file/subpath it embeds -
+    /// kept alive between renders so a wheel or a drag reuses its own pan,
+    /// zoom and loaded document instead of reloading the file from scratch,
+    /// and so the embed's view state really does last "until the note is
+    /// closed": erased only when the editor that asked for it is destroyed.
+    /// shared_ptr, not unique_ptr: QHash detaches its nodes through a copy
+    /// constructor, which a unique_ptr value has none of.
+    QHash<QString, std::shared_ptr<CanvasView>> m_canvasEmbedViews;
+    /// Finds or creates the entry above, loading `path` the first time.
+    CanvasView &canvasEmbedView(MarkdownEditor *editor, const QString &path, const QString &subpath);
+    /// The same lookup, but for the input-handler side: an interaction can
+    /// only ever land on an embed that has already been rendered once, so a
+    /// miss here (an edit racing a click, say) is just declined.
+    CanvasView *canvasEmbedViewIfExists(MarkdownEditor *editor, const QString &path,
+                                       const QString &subpath) const;
+    /// Rasterises `canvas`'s current view - its own size, zoom and origin -
+    /// at this window's device pixel ratio. What both the cold render and
+    /// every interactive re-render call.
+    QImage renderCanvasEmbed(CanvasView &canvas) const;
+#endif
     /// A moment's pause before a preview opens, so sweeping the pointer across
     /// a paragraph of links does not flash one up for each.
     QTimer m_previewDelay;
