@@ -38,8 +38,8 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
-| note open, 200 kB | 2.2 ms (readable; styled ~26 ms later) | 300 ms |
-| note open, 1 MB | 11.3 ms (readable; styled ~140 ms later) | - |
+| note open, 200 kB | 3.9 ms (readable; styled ~26 ms later) | 300 ms |
+| note open, 1 MB | 11.9 ms (readable; styled ~140 ms later) | - |
 | keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
 | keystroke, 1 MB | 0.44 ms | 8 ms |
@@ -48,7 +48,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
 | cold index, 20 000 notes | 0.98 s | 5 s |
-| peak RSS, vault plus a 1 MB note | ~200 MB | - |
+| peak RSS, vault plus a 1 MB note | 233 MB (stage 14) | - |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
@@ -60,6 +60,7 @@ See [the async parse](#8-a-big-note-is-shown-before-it-is-parsed).
 cmake --build /tmp/noteAppC-build
 /tmp/noteAppC-build/tools/bench/noteAppC-bench                     # the table, headless
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, scroll, pdfview
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 3440x1440
 QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
@@ -533,6 +534,41 @@ path - so the render cache, hit-testing and highlight painting needed no
 changes to work in both modes. Page-turn cost above; column count picked
 from viewport width (`kTwoColumnMinWidth`, 900 px). See "Guards in the test
 suite" above for the regression tests this fix added.
+
+### 21. Stage 14: a note's blocks were moved every time the list grew
+
+`rebuildBlocks` pushed each block straight into a `std::vector<BlockView>`
+with no reserve. A `BlockView` is 1.6 kB (layout, cells, callout style, code
+state), so every regrowth moved every block built so far: under `perf` the
+move constructor, the destructor and `_M_realloc_append` were a quarter of
+the open phase. The spans are now cut into a vector of small parts first,
+and the views are built once in a vector sized for them. The same pass read
+`view.span` after `std::move(view)`, which worked only because the span is
+trivially copyable; the part is now read before it is stored.
+
+Two side fixes from the same run. `OutgoingLinksPane` passed an empty path
+to `Vault::read` when a note had no links, and Qt warned about it on every
+note open (83 warnings a run). `PdfView`, `PdfPagesArea`, `EpubView` and
+`SlidesView` held a default-constructed `Theme` until `setTheme` was called,
+whose zero font sizes produced 4 602 `QFont::setPixelSize` warnings a
+pdfview run; they now start from `Theme::builtin(Dark)`, as the editor and
+the window already did.
+
+`noteAppC-bench --phase <memory|start|open|keystroke|scroll|pdfview>` runs
+one phase, so a profile covers only what it is about.
+
+| note open | before | after |
+|---|---|---|
+| 1 kB | 2.3 ms | 3.2 ms |
+| 50 kB | 11.3 ms | 12.0 ms |
+| 200 kB | 6.3 ms | 3.9 ms |
+| 1 MB | 38.6 ms | 11.9 ms |
+| peak RSS | 262 MB | 233 MB |
+
+The 1 kB and 50 kB rows are within run-to-run noise with another build
+running on the machine. Of the 50 kB open, 7.1 ms is md4qt's parse, run
+synchronously below the 128 kB threshold; the blocks, layout and panes are
+the other 2 ms, and the first frame the rest.
 
 ## Tried and not adopted
 

@@ -167,7 +167,7 @@ private:
 
     PdfDocument m_document;
     QUndoStack m_undo;
-    Theme m_theme;
+    Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     std::shared_ptr<Lifeline> m_lifeline;
 
     QList<QSizeF> m_pageSizePoints; ///< cached at load, points

@@ -596,6 +596,16 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
       stay generated under /tmp.
 - [ ] Once everything else is done: a profiling and optimisation pass over
       the whole app, measured before and after (docs/PERFORMANCE.md).
+  - [x] Note open and memory: `rebuildBlocks` built 1.6 kB views into an
+        unreserved vector (1 MB open 38.6 -> 11.9 ms, RSS 262 -> 233 MB).
+  - [x] Qt warnings in the bench: empty-path read in the outgoing-links
+        pane, zero font sizes from default themes in PDF/EPUB/slides views.
+  - [x] `noteAppC-bench --phase NAME` to profile one phase at a time.
+  - [x] `Index::noteCount` in the open profile: the bench's own
+        `waitForIndex` polling, untimed; the app emits `changed` once a scan.
+  - [ ] 50 kB open is 7.1 ms of md4qt parse (synchronous below 128 kB);
+        profile the parser itself.
+  - [ ] Cold start, pdfview and search phases, on a quiet machine.
 
 ## Requested 2026-09-23, afternoon: notebooks, last of all
 

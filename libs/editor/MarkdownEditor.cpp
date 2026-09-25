@@ -909,14 +909,20 @@ void MarkdownEditor::rebuildBlocks()
     std::sort(spans.begin(), spans.end(),
               [](const BlockSpan &l, const BlockSpan &r) { return l.range.start < r.range.start; });
 
-    std::vector<BlockView> blocks;
+    // The spans are cut up first and the views built once, in a vector sized
+    // for them: a BlockView is 1.6 kB, and growing a vector of them moved
+    // every one built so far, a fifth of opening a 1 MB note.
+    struct Part {
+        BlockSpan span;
+        int piece = 0;
+        int pieces = 1;
+    };
+    std::vector<Part> parts;
+    parts.reserve(spans.size() * 2 + 1);
     qsizetype cursor = 0;
     const auto addGap = [&](qsizetype from, qsizetype to) {
-        if (to <= from)
-            return;
-        BlockView view;
-        view.span = {BlockSpan::Kind::Paragraph, {from, to}, 0};
-        blocks.push_back(std::move(view));
+        if (to > from)
+            parts.push_back({{BlockSpan::Kind::Paragraph, {from, to}, 0}});
     };
 
     for (const BlockSpan &span : std::as_const(spans)) {
@@ -924,8 +930,7 @@ void MarkdownEditor::rebuildBlocks()
             continue; // nested or overlapping: the outer block owns it
         addGap(cursor, span.range.start);
 
-        BlockView view;
-        view.span = span;
+        Part view{span};
         // A block owns the newline that ends it, so the blank lines left over
         // in the gap are exactly the blank lines the file has.
         if (view.span.range.end < m_text.size()
@@ -951,9 +956,7 @@ void MarkdownEditor::rebuildBlocks()
                 const qsizetype lineStart = m_lines.lineStart(m_lines.lineAt(item->range.start));
                 if (lineStart <= from)
                     continue;
-                BlockView part;
-                part.span = {BlockSpan::Kind::List, {from, lineStart}, span.level};
-                blocks.push_back(std::move(part));
+                parts.push_back({{BlockSpan::Kind::List, {from, lineStart}, span.level}});
                 from = lineStart;
             }
             view.span.range.start = from;
@@ -972,21 +975,26 @@ void MarkdownEditor::rebuildBlocks()
             qsizetype from = view.span.range.start;
             for (int piece = 0; piece + 1 < pieces; ++piece) {
                 const qsizetype to = m_lines.lineStart(firstLine + (piece + 1) * kCodePieceLines);
-                BlockView part;
-                part.span = {span.kind, {from, to}, span.level};
-                part.piece = piece;
-                part.pieces = pieces;
-                blocks.push_back(std::move(part));
+                parts.push_back({{span.kind, {from, to}, span.level}, piece, pieces});
                 from = to;
             }
             view.span.range.start = from;
             view.piece = pieces - 1;
             view.pieces = pieces;
         }
-        blocks.push_back(std::move(view));
         cursor = view.span.range.end;
+        parts.push_back(view);
     }
     addGap(cursor, m_text.size());
+
+    std::vector<BlockView> blocks;
+    blocks.reserve(parts.size() + 1); // + a footnotes list
+    blocks.resize(parts.size());
+    for (std::size_t i = 0; i < parts.size(); ++i) {
+        blocks[i].span = parts[i].span;
+        blocks[i].piece = parts[i].piece;
+        blocks[i].pieces = parts[i].pieces;
+    }
 
     // Every parse rebuilds the blocks. A piece keeps the highlighter state the
     // old piece ending where it ends had, so a listing is not re-highlighted

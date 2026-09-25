@@ -46,7 +46,7 @@ private:
     void showSlide(int index);
     void applyScale();
 
-    Theme m_theme;
+    Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     QStringList m_slides;
     int m_current = 0;
     int m_scaledFor = 0; ///< the text size m_editor was last given
