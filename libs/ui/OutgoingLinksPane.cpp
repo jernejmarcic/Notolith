@@ -32,7 +32,7 @@ struct NoteSource {
     explicit NoteSource(const QString &notePath)
     {
         Note note;
-        if (Vault::read(notePath, note)) {
+        if (!notePath.isEmpty() && Vault::read(notePath, note)) {
             text = note.text;
             map = SourceMap(text);
         }

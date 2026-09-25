@@ -83,7 +83,7 @@ private:
     QAction *m_toolRectangle = nullptr;
     QAction *m_outlineToggle = nullptr;
 
-    Theme m_theme;
+    Theme m_theme = Theme::builtin(Theme::Mode::Dark);
 };
 
 } // namespace noteAppC

@@ -3,7 +3,7 @@
 // can be tuned before it is measured" - this tool only measures, on the
 // offscreen QPA platform, the same way tools/shot.cpp does.
 //
-//   noteAppC-bench [--json] [--notes N] [vault]
+//   noteAppC-bench [--json] [--notes N] [--phase NAME] [vault]
 //
 // With no vault argument, one is generated with tools/gen_bench_vault.py
 // into a temporary directory that is deleted on exit, so nothing gets
@@ -1064,7 +1064,9 @@ void printTable(const QList<Timing> &timings, qint64 peakKB, const QString &memo
                    .arg(t.worstMs, 10, 'f', 2);
     }
     out << "\n";
-    if (peakKB >= 0) {
+    if (peakKB == 0) {
+        // --phase left the memory run out
+    } else if (peakKB > 0) {
         out << QStringLiteral("Peak resident memory (VmHWM): %1 MB - %2, 1 run "
                               "(a high-water mark does not average)\n")
                    .arg(peakKB / 1024.0, 0, 'f', 1)
@@ -1176,7 +1178,15 @@ int main(int argc, char *argv[])
                                   QStringLiteral("viewport"));
     parser.addOption(onlyOption);
     parser.addOption(viewportOption);
+    // One phase alone, so `perf record` sees only it.
+    QCommandLineOption phaseOption(QStringLiteral("phase"),
+                                   QStringLiteral("Run one phase: memory, start, open, keystroke, scroll "
+                                                  "or pdfview."),
+                                   QStringLiteral("name"));
+    parser.addOption(phaseOption);
     parser.process(app);
+    const QString phase = parser.value(phaseOption);
+    const auto runs = [&phase](const char *name) { return phase.isEmpty() || phase == QLatin1String(name); };
 
     const QStringList args = parser.positionalArguments();
     const int noteCount = parser.value(notesOption).toInt();
@@ -1256,16 +1266,17 @@ int main(int argc, char *argv[])
     }
 
     // 5 first: see the comment on benchMemory for why.
-    const qint64 peakKB = benchMemory(vaultPath, sizedNotes.value(1024));
+    const qint64 peakKB = runs("memory") ? benchMemory(vaultPath, sizedNotes.value(1024)) : 0;
     const QString memoryDetail = QStringLiteral("vault (%1 notes) + 1024 kB note").arg(noteCount);
 
     // 1: cold start. Constructing MainWindow is the most expensive single
     // sample here, so this runs the fewest times.
-    timings << benchColdStart(vaultPath, 7);
+    if (runs("start"))
+        timings << benchColdStart(vaultPath, 7);
 
     // 2: note open, one MainWindow reused across sizes - a session opens
     // many notes in one window, it does not restart between them.
-    {
+    if (runs("open")) {
         auto window = std::make_unique<MainWindow>();
         window->openVault(vaultPath);
         window->show();
@@ -1308,22 +1319,26 @@ int main(int argc, char *argv[])
     }
 
     // 3: keystroke latency, same sizes.
-    for (int kb : sizesKB)
-        timings << benchKeystroke(buildNote(kb), QStringLiteral("%1 kB note").arg(kb), 30);
-    timings << benchWindowKeystroke(vaultPath, sizedNotes.value(200), 30);
-    for (int lines : {100, 1000, 5000})
-        timings << benchKeystroke(buildCodeNote(lines),
-                                  QStringLiteral("%1-line code block").arg(lines), 30);
-    timings << benchQueryKeystroke(30);
-    timings << benchBaseKeystroke(30);
-    timings << benchHtmlKeystroke(30);
-    timings << benchPdfKeystroke(workDir.path(), 30);
+    if (runs("keystroke")) {
+        for (int kb : sizesKB)
+            timings << benchKeystroke(buildNote(kb), QStringLiteral("%1 kB note").arg(kb), 30);
+        timings << benchWindowKeystroke(vaultPath, sizedNotes.value(200), 30);
+        for (int lines : {100, 1000, 5000})
+            timings << benchKeystroke(buildCodeNote(lines),
+                                      QStringLiteral("%1-line code block").arg(lines), 30);
+        timings << benchQueryKeystroke(30);
+        timings << benchBaseKeystroke(30);
+        timings << benchHtmlKeystroke(30);
+        timings << benchPdfKeystroke(workDir.path(), 30);
+    }
 
     // 4: scroll frame time over a 5 000-line note.
-    timings << benchScroll(5000);
-    timings << benchPdfScroll(workDir.path());
+    if (runs("scroll")) {
+        timings << benchScroll(5000);
+        timings << benchPdfScroll(workDir.path());
+    }
 #ifdef NOTEAPPC_HAVE_EPUB
-    {
+    if (runs("scroll")) {
         const QString epubPath = buildBenchEpub(workDir.path(), 150, 6);
         if (!epubPath.isEmpty()) {
             timings << benchEpubOpen(epubPath, 7);
@@ -1331,7 +1346,7 @@ int main(int argc, char *argv[])
         }
     }
 #endif
-    if (parser.isSet(viewportOption)) {
+    if (parser.isSet(viewportOption) && runs("scroll")) {
         const QStringList parts = parser.value(viewportOption).split(QLatin1Char('x'));
         if (parts.size() == 2)
             timings << benchScroll(5000, QSize(parts.at(0).toInt(), parts.at(1).toInt()));
@@ -1341,7 +1356,8 @@ int main(int argc, char *argv[])
     // libs/ext/pdfview's own rows: open, scroll and annotation save against
     // a 500-page PDF built once and reused (or a fresh copy of it, for
     // save) across the samples below.
-    if (const QString pdfViewBenchPdf = buildLargePdfViewBenchPdf(workDir.path()); !pdfViewBenchPdf.isEmpty()) {
+    if (const QString pdfViewBenchPdf = runs("pdfview") ? buildLargePdfViewBenchPdf(workDir.path()) : QString();
+        !pdfViewBenchPdf.isEmpty()) {
         timings << benchPdfViewOpen(pdfViewBenchPdf, 5);
         timings << benchPdfViewScroll(pdfViewBenchPdf);
         timings << benchPdfViewSave(pdfViewBenchPdf, workDir.path(), 5);

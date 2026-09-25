@@ -311,7 +311,7 @@ private:
     bool pagedMode() const { return m_readingMode == ReadingMode::Paged; }
 
     EpubDocument m_document;
-    Theme m_theme;
+    Theme m_theme = Theme::builtin(Theme::Mode::Dark);
     QString m_cacheRoot;
 
     int m_fontPercent = 100;
