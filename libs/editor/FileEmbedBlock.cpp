@@ -4,9 +4,8 @@
 /// setFileEmbedRenderer), and any other file at all, which becomes a small
 /// card rather than ever showing its bytes as text. Also where a block that
 /// holds more than one embed, or an embed mixed with running text, gets its
-/// embeds actually rendered - see layoutEmbedRow's comment on BlockView in
-/// MarkdownEditor.h and the one on collectTextEmbeds below for why that is a
-/// trailing row rather than truly inline.
+/// embeds drawn inline - see the comment on collectTextEmbeds in
+/// MarkdownEditor.h.
 
 #include "MarkdownEditor.h"
 
@@ -438,8 +437,18 @@ void MarkdownEditor::collectTextEmbeds(const BlockView &view, QList<Range> &hidd
         if (!view.span.range.contains(embed.range.start)
             || !view.span.range.contains(embed.range.end))
             continue;
+        // The caret inside one shows its source, to edit it.
+        if (view.active && m_cursor > embed.range.start && m_cursor < embed.range.end)
+            continue;
         found.append(&embed);
-        hidden.append(embed.range);
+        // The "!" stays, as the carrier prepareTextEmbeds reserves the
+        // cell's room on - so the embed's own syntax markers ("![[", "]]"),
+        // already hidden, go first, or the carrier would be the next
+        // visible character after it.
+        hidden.removeIf([&](const Range &marker) {
+            return marker.start >= embed.range.start && marker.end <= embed.range.end;
+        });
+        hidden.append({embed.range.start + 1, embed.range.end});
     }
 }
 
@@ -527,42 +536,63 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
     return cell;
 }
 
-void MarkdownEditor::appendEmbedRows(BlockView &view, const QList<const EmbedSpan *> &embeds)
+// A template only because EmbedCell is private to the editor.
+template <typename Cell>
+static qreal cellHeight(const Cell &cell)
+{
+    return cell.rect.height() + (cell.panel && !cell.label.isEmpty() ? 18 : 0);
+}
+
+void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedSpan *> &embeds,
+                                       QList<QTextLayout::FormatRange> &formats)
 {
     view.embedCells.clear();
     if (embeds.isEmpty())
         return;
 
-    qreal y = view.height;
-    constexpr qreal rowGap = 8;
-    constexpr qreal cellGap = 8;
-    qsizetype i = 0;
-    while (i < embeds.size()) {
-        qsizetype j = i + 1;
-        // Embeds with nothing but the source's own inline whitespace between
-        // them - no newline - share a row, the way Obsidian shows several
-        // embeds written on one line side by side.
-        while (j < embeds.size()
-              && !m_text.mid(embeds.at(j - 1)->range.end,
-                             embeds.at(j)->range.start - embeds.at(j - 1)->range.end)
-                      .contains(QLatin1Char('\n')))
-            ++j;
-
-        const qsizetype count = j - i;
-        const qreal cellWidth = (contentWidth() - cellGap * (count - 1)) / qreal(count);
-        qreal rowHeight = 0;
-        qreal x = 0;
-        for (qsizetype k = i; k < j; ++k) {
-            BlockView::EmbedCell cell = buildEmbedCell(*embeds.at(k), cellWidth);
-            cell.rect.moveTo(x, y);
-            rowHeight = qMax(rowHeight, cell.rect.height());
-            x += cellWidth + cellGap;
-            view.embedCells.push_back(std::move(cell));
-        }
-        y += rowHeight + rowGap;
-        i = j;
+    // ponytail: one width budget for the whole block; a full-width cell on
+    // an indented line (a list item, a nested callout) runs past its right
+    // edge. Per-line budgets if anyone embeds full-width files in lists.
+    const qreal maxWidth = contentWidth() - (view.callout ? 28 : 0);
+    const qreal bang = QFontMetricsF(view.layout->font()).horizontalAdvance(QLatin1Char('!'));
+    for (const EmbedSpan *embed : embeds) {
+        BlockView::EmbedCell cell = buildEmbedCell(*embed, maxWidth);
+        QTextCharFormat format;
+        format.setForeground(Qt::transparent);
+        format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
+        format.setFontLetterSpacing(cell.rect.width() - bang);
+        formats.append({int(view.map.toDisplay(embed->range.start)), 1, format});
+        view.embedCells.push_back(std::move(cell));
     }
-    view.height = y;
+}
+
+qreal MarkdownEditor::textEmbedHeightOn(const BlockView &view, const QTextLine &line) const
+{
+    qreal tallest = 0;
+    for (const BlockView::EmbedCell &cell : view.embedCells) {
+        const qsizetype carrier = view.map.toDisplay(cell.source.start);
+        if (carrier >= line.textStart() && carrier < line.textStart() + line.textLength())
+            tallest = qMax(tallest, cellHeight(cell));
+    }
+    return tallest;
+}
+
+void MarkdownEditor::placeTextEmbeds(BlockView &view, qreal lineHeight)
+{
+    // The same origin the paint step draws the text at.
+    const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
+    for (BlockView::EmbedCell &cell : view.embedCells) {
+        const int carrier = int(view.map.toDisplay(cell.source.start));
+        const QTextLine line = view.layout->lineForTextPosition(carrier);
+        if (!line.isValid())
+            continue;
+        // A tall cell sits on the line's text bottom (the line grew above
+        // it to make room); a short one is centred on the text.
+        const qreal height = cellHeight(cell);
+        const qreal y = height > lineHeight ? line.y() + lineHeight - height
+                                            : line.y() + (lineHeight - height) / 2;
+        cell.rect.moveTo(indent + line.cursorToX(carrier), view.textTop + y);
+    }
 }
 
 void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, qreal left,
@@ -615,6 +645,16 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
             painter.restore();
         }
     }
+}
+
+QRectF MarkdownEditor::embedCellRectAt(qsizetype offset, int cell) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    return cell >= 0 && size_t(cell) < view.embedCells.size() ? view.embedCells[size_t(cell)].rect
+                                                               : QRectF();
 }
 
 bool MarkdownEditor::isFileCardAt(qsizetype offset) const

@@ -904,12 +904,21 @@ void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &vie
             continue;
 
         const qreal inset = left + 14 + kCalloutIndent * (nested.span->depth - 1);
-        const QRectF panel(inset, top + view.textTop + band.y() - 4,
-                           qMax(qreal(40), left + contentWidth() - 14 - inset),
-                           band.height() + 8);
+        // One that carries on from the piece above, or into the one below,
+        // runs flush to that edge with square corners there, so the pieces
+        // meet without a seam - the outer callout's own rule in paintCallout.
+        const bool opens = nested.span->range.start >= view.span.range.start;
+        const bool closes = nested.span->range.end <= view.span.range.end;
+        const qreal panelTop = top + view.textTop + band.y() - (opens ? 4 : 0);
+        const qreal panelBottom = closes ? top + view.textTop + band.bottom() + 4 : top + view.height;
+        const QRectF panel(inset, panelTop, qMax(qreal(40), left + contentWidth() - 14 - inset),
+                           panelBottom - panelTop);
         QPainterPath rounded;
-        rounded.addRoundedRect(panel, 6, 6);
+        rounded.addRoundedRect(panel.adjusted(0, opens ? 0 : -8, 0, closes ? 0 : 8), 6, 6);
+        painter.save();
+        painter.setClipRect(panel, Qt::IntersectClip);
         painter.fillPath(rounded, nested.style.background);
+        painter.restore();
         painter.fillRect(QRectF(panel.left(), panel.top(), 3, panel.height()), nested.style.bar);
 
         // The icon goes in the step the nesting indent opened up, so it never
@@ -927,7 +936,7 @@ void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &vie
                                   iconSize, iconSize);
             icon.paint(&painter, iconRect.toRect());
         }
-        if (nested.span->foldable) {
+        if (nested.span->foldable && title.height() > 0) {
             paintFoldArrow(painter, nestedFoldHandleRect(view, nested, left, top),
                            m_folds.value(nested.span->range.start, nested.span->collapsed),
                            nested.style.bar);

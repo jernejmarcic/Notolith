@@ -460,7 +460,12 @@ Jernej's rule: a new feature goes here and the current task carries on.
       once it converges, and its formats are cached per Kate format. Written
       up as fix 10 in `docs/PERFORMANCE.md`; guarded by `CodeBlockPerfTest`
       and `CodePieceTest`.
-- [ ] A long listing inside a callout is still part of one layout.
+- [x] A long listing inside a callout is still part of one layout. A
+      callout is now split into 32-line pieces like a fence; typing in a
+      2000-line listing inside one went from 88.85 ms to 0.70 ms a key
+      (`CodeBlockPerfTest.TypingInALongListingInsideACalloutStaysInBudget`).
+      ponytail: the highlighter's state is not carried across a callout's
+      pieces, so a construct spanning a piece boundary restarts there.
 - [ ] **Verify first: does the caret in a code block show its fences?**
       Here it does not - md4qt's code block covers the listing alone, so the
       two fence lines sit in the gap blocks either side and are revealed only
@@ -493,9 +498,14 @@ scrolliong through pages, it can make them like a slide".
       directory (4038601).
 - [x] An embedded note is drawn formatted: its slice through a reading-view
       editor into an image a turn after layout (445bf8d).
-- [ ] An embed inside running text trails its line as a row (bare
-      QTextLayout has no inline objects); a canvas embed is a picture, not
-      interactive; `![[x.base#View]]` shows the first view.
+- [x] An embed inside running text trails its line as a row. Now inline:
+      the embed's "!" stays as an invisible carrier whose letter spacing
+      reserves the cell's width (the inline-maths trick), and a line holding
+      a taller cell grows to fit it. Several on a line sit side by side at
+      their own size and wrap like words; the caret inside one shows its
+      source.
+- [ ] A canvas embed is a picture, not interactive; `![[x.base#View]]`
+      shows the first view.
 - [x] PDF placeholders size every page on the UI thread once per file:
       measured 2.5 ms for 500 pages (poppler 26.08), so it stays.
 
