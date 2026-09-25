@@ -18,8 +18,11 @@ void ForceLayout::reset(int nodeCount, const QList<std::pair<int, int>> &edges)
 
     // A disc rather than a grid or all-at-the-origin: a grid biases the first
     // few steps toward its axes, and stacking everyone at (0,0) makes the
-    // very first repulsion step divide by ~0 for every pair.
-    QRandomGenerator *rng = QRandomGenerator::global();
+    // very first repulsion step divide by ~0 for every pair. Seeded, so the
+    // same graph lays out the same way every time: a global generator made
+    // the settling test pass or fail by the draw.
+    QRandomGenerator seeded(quint32(nodeCount) * 2654435761u + 1);
+    QRandomGenerator *rng = &seeded;
     const double spread = std::sqrt(double(std::max(1, nodeCount))) * 40.0;
     for (int i = 0; i < nodeCount; ++i) {
         const double angle = rng->generateDouble() * 2.0 * M_PI;
