@@ -39,7 +39,7 @@ built; each stage's detail is in its own section further down.
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
-| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands. Left: runnable `![[file.py]]` embeds, per-block tier option |
+| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands; 2026-10-01: shared kernels, rich output, more `#|` options, stale output, timeouts. Left: completion/inspect, `.ipynb`, tiers 2-3 (not installed) |
 | 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
 
 Standing decisions the spec left open, kept as they are unless Jernej says
@@ -841,7 +841,11 @@ optimal as it can be".
       `proofread`; ai.ini `translate-to`, `translate-from`, `translate-model`;
       TranslateGemma's own prompt when the model is translategemma; an
       OpenAI-compatible server with no `api-key-env` (Ollama's /v1) sends no key.
-- [ ] Vim keybindings in the editor (off by default, a setting).
+- [x] Vim keybindings in the editor (off by default, `editor.vimMode`; docs/EDITOR.md).
+      Left: text objects, named registers, marks, macros, block visual, `%`,
+      `>` `<`, `:s`.
+- [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Left: tab completion
+      and inspect (needs a popup), `.ipynb` files, `input()`, tiers 2-3.
 - [ ] Audit: every embeddable kind renders inline; notebook features against
       Ideas.md; split editors on one note; front matter/properties survive
       every save path; encrypted notes round-trip through the app.
