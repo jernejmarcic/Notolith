@@ -3328,7 +3328,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
         QList<QTextLayout::FormatRange> selectionRanges;
         // Vim's block selection is several column strips, not one span.
-        const bool strips = m_vim.enabled && !m_vim.overrideBlocks.isEmpty() && selected.length() > 0;
+        const bool strips = m_vim.enabled && !m_vim.overrideBlocks.isEmpty() && selected.length() > 0
+                            && m_cursor == m_vim.overrideCursor && m_anchor == m_vim.overrideAnchor;
         const QList<Range> parts = strips ? m_vim.overrideBlocks : QList<Range>{selected};
         for (const Range &part : parts) {
             if (part.length() <= 0 || !part.overlaps(view.span.range))
