@@ -738,6 +738,12 @@ bool MarkdownEditor::isFileCardAt(qsizetype offset) const
     return m_blocks[size_t(index)].isFileCard;
 }
 
+bool MarkdownEditor::isMediaCardAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    return index >= 0 && index < qsizetype(m_blocks.size()) && !m_blocks[size_t(index)].mediaPath.isEmpty();
+}
+
 int MarkdownEditor::embedCellCountAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);

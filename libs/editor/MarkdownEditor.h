@@ -530,6 +530,8 @@ public:
     /// file card (icon, name, size) - the fallback for a binary file, or any
     /// file with no richer renderer.
     bool isFileCardAt(qsizetype offset) const;
+    /// For the tests: whether that block is an audio or video player card.
+    bool isMediaCardAt(qsizetype offset) const;
     /// How many embeds the block containing `offset` rendered inline - see
     /// collectTextEmbeds' comment. 0 outside such a block.
     int embedCellCountAt(qsizetype offset) const;

@@ -218,6 +218,14 @@ MainWindow::MainWindow(QWidget *parent)
     });
 #endif
     connect(&m_autosave, &QTimer::timeout, this, &MainWindow::autosave);
+    m_noteWatcher = new QFileSystemWatcher(this);
+    m_noteChanges.setSingleShot(true);
+    m_noteChanges.setInterval(100); // a write in place can come in more than one go
+    connect(m_noteWatcher, &QFileSystemWatcher::fileChanged, this, [this](const QString &path) {
+        m_changedNotes.insert(path);
+        m_noteChanges.start();
+    });
+    connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
@@ -2717,29 +2725,28 @@ void MainWindow::openRecovery()
 
 void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
 {
-    // The open note first saves what is in the editor, so that is what the
-    // snapshot below keeps rather than what was last written.
-    if (notePath == m_active->notePath && !save())
-        return;
+    // Any tab on the note first saves what is in its editor, so that is
+    // what the snapshot below keeps rather than what was last written.
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && leaf->notePath == notePath && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
+            return;
+    }
     Note note;
     QString error;
-    if (!Vault::read(notePath, note, &error)) {
+    if (!readNote(notePath, note, &error)) {
         QMessageBox::warning(this, tr("Restore"), tr("Could not read %1:\n%2").arg(notePath, error));
         return;
     }
     Snapshots::record(notePath, note.text, 0);
     note.text = text; // its line endings and BOM stay as the file has them
-    if (!Vault::write(notePath, note, &error)) {
+    if (!writeNote(notePath, note, &error)) {
         QMessageBox::warning(this, tr("Restore"), tr("Could not write %1:\n%2").arg(notePath, error));
         return;
     }
     recordHistory(notePath, text);
     if (m_vault.isValid())
         m_indexer->reindex(notePath);
-    if (notePath == m_active->notePath) {
-        m_active->note = note;
-        m_active->editor->setNoteText(text);
-    }
+    showDiskNote(notePath, note); // every tab on it, not only the focused one
     statusBar()->showMessage(tr("Restored %1").arg(QFileInfo(notePath).fileName()), 3000);
 }
 
@@ -2865,7 +2872,8 @@ void MainWindow::syncPlugins(bool rescan)
                        : QString();
         };
         callbacks.activeNoteText = [this] {
-            return m_active && !m_active->view ? m_active->editor->noteText() : QString();
+            return m_active && !m_active->view && !showsEncryptedNote(m_active->editor) ? m_active->editor->noteText()
+                                                                                        : QString();
         };
         callbacks.activeSelectionText = [this] {
             // A plugin never reads an encrypted note: the AI one would send it on.
@@ -3571,6 +3579,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     syncTabs(m_active->group);
 
     showNoteInPanes(path);
+    watchOpenNotes();
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
@@ -4455,6 +4464,7 @@ void MainWindow::encryptCurrentNote()
     Snapshots::forget(from);
     QFile::remove(from);
     retarget(m_leaves, from, to);
+    watchOpenNotes();
     m_active->note = note;
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == to)
@@ -4490,6 +4500,7 @@ void MainWindow::decryptCurrentNote()
     }
     QFile::remove(from);
     retarget(m_leaves, from, to);
+    watchOpenNotes();
     m_active->note = note;
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == to)
@@ -4634,20 +4645,10 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     if (m_sync)
         m_sync->noteChanged();
 #endif
-    target->note = note;
-    target->editor->setModified(false);
     // Every other tab on this note shows this same document, so this saved
     // it too.
-    for (Leaf *leaf : viewsOfSameNote(target)) {
-        leaf->note = note;
-        if (leaf->editor->noteText() == note.text) {
-            leaf->editor->setModified(false);
-            continue;
-        }
-        const qsizetype caret = leaf->editor->cursorOffset();
-        leaf->editor->setNoteText(note.text);
-        leaf->editor->setCursorOffset(qMin(caret, qsizetype(note.text.size())));
-    }
+    showDiskNote(target->notePath, note);
+    watchOpenNotes(); // a note saved for the first time
     if (!quiet) {
         statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(target->notePath)
                                                                        : QFileInfo(target->notePath).fileName()),
@@ -4656,6 +4657,103 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     if (m_vault.isValid())
         m_indexer->reindex(target->notePath);
     return true;
+}
+
+void MainWindow::showDiskNote(const QString &path, const Note &note)
+{
+    for (const auto &leaf : m_leaves) {
+        if (leaf->view || leaf->notePath != path)
+            continue;
+        leaf->note = note;
+        MarkdownEditor *editor = leaf->editor;
+        const QString &shown = editor->noteText();
+        if (shown != note.text) {
+            // Only the part that differs, so the caret and the scroll stay
+            // where they are, as they do for an edit made in another tab.
+            const qsizetype most = qMin(shown.size(), note.text.size());
+            qsizetype head = 0;
+            while (head < most && shown.at(head) == note.text.at(head))
+                ++head;
+            qsizetype tail = 0;
+            while (tail < most - head && shown.at(shown.size() - 1 - tail) == note.text.at(note.text.size() - 1 - tail))
+                ++tail;
+            editor->applyExternalEdit(head, shown.size() - head - tail,
+                                      note.text.mid(head, note.text.size() - head - tail));
+        }
+        editor->setModified(false);
+    }
+}
+
+void MainWindow::watchOpenNotes()
+{
+    QStringList wanted;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && !leaf->notePath.isEmpty() && !wanted.contains(leaf->notePath))
+            wanted << leaf->notePath;
+    }
+    const QStringList watched = m_noteWatcher->files();
+    QStringList gone;
+    for (const QString &path : watched) {
+        if (!wanted.contains(path))
+            gone << path;
+    }
+    QStringList added;
+    for (const QString &path : std::as_const(wanted)) {
+        if (!watched.contains(path) && QFileInfo::exists(path))
+            added << path;
+    }
+    if (!gone.isEmpty())
+        m_noteWatcher->removePaths(gone);
+    if (!added.isEmpty())
+        m_noteWatcher->addPaths(added);
+}
+
+void MainWindow::reloadChangedNotes()
+{
+    watchOpenNotes(); // a file replaced by a rename dropped out of the watch
+    for (const QString &path : std::exchange(m_changedNotes, {})) {
+        const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
+            return !leaf->view && leaf->notePath == path;
+        });
+        // Closed since, or gone for now: a rename over it, or a delete the
+        // next save puts back.
+        if (first == m_leaves.cend() || !QFileInfo::exists(path))
+            continue;
+        const bool encrypted = Vault::isEncryptedNote(path);
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+        if (encrypted && !m_encryption->isUnlocked())
+            continue; // never a password prompt out of nowhere
+#endif
+        // ponytail: every own save is read back to tell it apart from a
+        // change (under 1 ms at 200 kB); compare size and mtime first if a
+        // note ever gets big enough for that to show.
+        Note disk;
+        if (!readNote(path, disk, nullptr))
+            continue;
+        const Note &known = (*first)->note;
+        if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom)
+            continue; // this window's own save
+        if (!isModified(first->get())) {
+            showDiskNote(path, disk);
+            continue;
+        }
+        // ponytail: what is being typed wins and the next save writes it;
+        // the version on disk goes to file recovery. A three-way merge
+        // (libs/ext/sync's SyncMerge) if that ever is not enough.
+        const bool kept = !encrypted && featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(path)
+                       && Snapshots::record(path, disk.text, 0);
+        for (const auto &leaf : m_leaves) {
+            if (!leaf->view && leaf->notePath == path)
+                leaf->note = disk;
+        }
+        const QString name = QFileInfo(path).fileName();
+        statusBar()->showMessage(
+            kept ? tr("%1 changed on disk while it was being edited: the edits are kept, the other version is "
+                      "in file recovery")
+                       .arg(name)
+                 : tr("%1 changed on disk while it was being edited: the edits are kept").arg(name),
+            8000);
+    }
 }
 
 void MainWindow::reportSaveError(const QString &path, const QString &error, bool quiet)
@@ -4927,6 +5025,7 @@ void MainWindow::renamePathAt(const QModelIndex &index)
     }
     for (const auto &group : m_groups)
         syncTabs(group.get());
+    watchOpenNotes();
 
     // Picks up the moved path(s) under their new name and drops the old
     // ones, notes and attachments alike - simpler and just as correct as

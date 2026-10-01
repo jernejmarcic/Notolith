@@ -4,6 +4,7 @@
 #include <QMainWindow>
 #include <QPointer>
 #include <QThreadPool>
+#include <QSet>
 #include <QTimer>
 
 #include <functional>
@@ -391,6 +392,14 @@ private:
     /// Saves `leaf`'s note; `quiet` for autosave: no "Saved" message, and a
     /// failure in the status bar rather than a box.
     bool saveLeaf(Leaf *leaf, bool quiet);
+    /// `note` is what `path` holds on disk now: every tab showing it takes
+    /// it, carets and scroll kept, and is unmodified after.
+    void showDiskNote(const QString &path, const Note &note);
+    /// Points m_noteWatcher at the file of every open note.
+    void watchOpenNotes();
+    /// An open note changed on disk - sync, a plugin, a link update, another
+    /// editor: its tabs show the change, so no autosave writes over it.
+    void reloadChangedNotes();
     void reportSaveError(const QString &path, const QString &error, bool quiet);
     /// Every tab with unsaved changes, a moment after typing stops.
     void autosave();
@@ -587,6 +596,9 @@ QLabel *m_vimStatus = nullptr;
     QString m_appliedDefaultMode;
     bool m_themeApplied = false; ///< applySettings has styled the window once
     QTimer m_autosave; ///< restarted by every edit
+    QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
+    QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires
+    QTimer m_noteChanges;
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

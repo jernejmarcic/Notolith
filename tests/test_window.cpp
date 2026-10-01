@@ -15,6 +15,7 @@
 #include <QComboBox>
 #include <QPlainTextEdit>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
 #include <QFile>
@@ -25,11 +26,15 @@
 #include <QLineEdit>
 #include <QDialog>
 #include <QPushButton>
+#include <QPainter>
+#include <QPdfWriter>
+#include <QImage>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QScrollBar>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QTabBar>
 #include <QTest>
 #include <QTimer>
@@ -68,6 +73,10 @@
 #include <QTreeWidget>
 
 #include "Index.h"
+#include "CodeHighlighter.h"
+#include "HtmlRenderer.h"
+#include "MathRenderer.h"
+#include "PdfPage.h"
 #include "PublishDialog.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
@@ -2788,3 +2797,572 @@ TEST_F(WindowTest, ANotesBlocksShareOneKernelWhenTheSettingIsOn)
     config.save();
 }
 #endif
+
+// --- one note in two panes, and what reaches it from outside ----------------
+
+namespace {
+
+/// The two editors of a split made on `relative`: the first, then the new one.
+std::pair<MarkdownEditor *, MarkdownEditor *> splitOn(MainWindow &window, const QString &path)
+{
+    window.openNote(path);
+    MarkdownEditor *first = window.editor();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    return {first, window.editor()};
+}
+
+void overwrite(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(file.write(bytes), bytes.size());
+}
+
+/// What a sync client or another editor does: a new file renamed over it.
+void replaceByRename(const QString &path, const QByteArray &bytes)
+{
+    const QString temporary = path + QStringLiteral(".incoming");
+    overwrite(temporary, bytes);
+    ASSERT_EQ(std::rename(QFile::encodeName(temporary).constData(), QFile::encodeName(path).constData()), 0);
+}
+
+} // namespace
+
+TEST_F(WindowTest, EditsInEitherPaneAutosaveAndClosingOneKeepsTheOther)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Welcome.md")));
+    ASSERT_NE(left, right);
+    left->setCursorOffset(0);
+    QTest::keyClicks(left, QStringLiteral("L"));
+    right->setCursorOffset(right->noteText().size());
+    QTest::keyClicks(right, QStringLiteral("R"));
+    ASSERT_EQ(left->noteText(), QStringLiteral("L# Welcome\n\nBody.\nR"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("L# Welcome\n\nBody.\nR"));
+
+    // The right pane goes; the left one still saves what is typed in it.
+    right->setFocus();
+    QApplication::processEvents();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    ASSERT_EQ(window.editor(), left);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("!"));
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("L# Welcome\n\nBody.\nR!"));
+}
+
+TEST_F(WindowTest, RenamingANoteOpenInTwoPanesMovesBothAndKeepsItsLineEndings)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Projects/Crlf.md")));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Projects/Crlf.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Moved"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Projects/Moved.md"))));
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs")))
+        EXPECT_EQ(tabTexts(bar), QStringList{QStringLiteral("Moved")});
+
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("three"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Moved.md"))), QByteArray("one\r\ntwo\r\nthree"));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Projects/Crlf.md")))) << "nothing saved to the old name";
+}
+
+TEST_F(WindowTest, AChangeOnDiskReachesEveryPaneAndIsNotSavedOver)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    auto [left, right] = splitOn(window, note);
+    right->setCursorOffset(3);
+
+    // A sync client's way: a new file renamed over the old one.
+    replaceByRename(note, "# Welcome\n\nChanged by sync.\n");
+    WAIT_TRUE(left->noteText() == QStringLiteral("# Welcome\n\nChanged by sync.\n"), 3000);
+    EXPECT_EQ(right->noteText(), left->noteText());
+    EXPECT_FALSE(left->isModified());
+    EXPECT_FALSE(right->isModified());
+    EXPECT_EQ(right->cursorOffset(), 3) << "the caret keeps its place";
+
+    // Another editor's way: the same file written in place. Still watched,
+    // although the rename above replaced the file being watched.
+    overwrite(note, "# Welcome\n\nChanged in place.\n");
+    WAIT_TRUE(left->noteText() == QStringLiteral("# Welcome\n\nChanged in place.\n"), 3000);
+    EXPECT_EQ(right->noteText(), left->noteText());
+
+    // Typing after it saves on top of it, not over it.
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("typed"));
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nChanged in place.\ntyped"));
+}
+
+TEST_F(WindowTest, ItsOwnSavesAreNotTakenForAChangeOnDisk)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("abc"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    QTest::qWait(400); // the watcher's own notice of that save
+    EXPECT_EQ(editor->cursorOffset(), editor->noteText().size());
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_FALSE(editor->noteText().endsWith(QLatin1String("abc"))) << "the undo history is still there";
+}
+
+TEST_F(WindowTest, AChangeOnDiskUnderUnsavedTypingKeepsBoth)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("mine"));
+    overwrite(note, "# Welcome\n\nTheirs.\n");
+    // What was typed stays, and is what gets saved...
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nBody.\nmine"));
+    // ...but the other version is not lost: file recovery holds it.
+    bool kept = false;
+    for (const auto &version : noteAppC::Snapshots::versions(note))
+        kept = kept || noteAppC::Snapshots::read(version) == QStringLiteral("# Welcome\n\nTheirs.\n");
+    EXPECT_TRUE(kept);
+}
+
+TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)
+{
+    const QString note = path(QStringLiteral("Both.md"));
+    write(QStringLiteral("Both.md"), "\xEF\xBB\xBFnew\r\nbody\r\n");
+    noteAppC::Snapshots::record(note, QStringLiteral("old\nbody\n"), 0);
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, note);
+
+    window.findChild<QAction *>(QStringLiteral("file-recovery:open"))->trigger();
+    auto *dialog = window.findChild<noteAppC::RecoveryDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    auto *notes = dialog->findChild<QListWidget *>(QStringLiteral("recoveryNotes"));
+    for (int i = 0; i < notes->count(); ++i) {
+        if (notes->item(i)->text() == QStringLiteral("Both.md"))
+            notes->setCurrentRow(i);
+    }
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    for (QPushButton *button : dialog->findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("Restore"))
+            button->click();
+    }
+    EXPECT_EQ(readAll(note), QByteArray("\xEF\xBB\xBFold\r\nbody\r\n"));
+    EXPECT_EQ(right->noteText(), QStringLiteral("old\nbody\n"));
+    EXPECT_EQ(left->noteText(), QStringLiteral("old\nbody\n")) << "the pane that was not focused too";
+
+    // Typing in the other pane builds on the restored text.
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("more"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("\xEF\xBB\xBFold\r\nbody\r\nmore"));
+}
+
+TEST_F(WindowTest, FrontMatterBomLineEndingsAndALastLineSurviveEverySave)
+{
+    // A BOM, CRLF, YAML with a comment, a quoted value and a list, and no
+    // newline at the end: every save keeps each byte nobody edited.
+    const QByteArray original = "\xEF\xBB\xBF---\r\n"
+                                "tags: [alpha, beta]\r\n"
+                                "aliases:\r\n"
+                                "  - Other name # kept\r\n"
+                                "title: \"Quoted: yes\"\r\n"
+                                "status: draft\r\n"
+                                "---\r\n"
+                                "Body without a newline";
+    write(QStringLiteral("Meta.md"), original);
+    const QString note = path(QStringLiteral("Meta.md"));
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    window.resize(1000, 700);
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+
+    // Explicit save of an untouched note: nothing changes.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), original);
+
+    // Autosave of a typed edit.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(note), original + "!");
+
+    // A property edited in its table: that value, and only it.
+    const qsizetype status = editor->noteText().indexOf(QLatin1String("status"));
+    ASSERT_TRUE(editor->editPropertyAt(status));
+    auto *field = editor->viewport()->findChild<QLineEdit *>();
+    ASSERT_NE(field, nullptr);
+    field->setText(QStringLiteral("final"));
+    QTest::keyClick(field, Qt::Key_Return);
+    WAIT_TRUE(!editor->isModified(), 5000);
+    QByteArray expected = original + "!";
+    expected.replace("status: draft", "status: final");
+    EXPECT_EQ(readAll(note), expected);
+
+    // The index reads the saved front matter: the alias resolves.
+    WAIT_TRUE(!window.index()->resolve(QStringLiteral("Other name")).isEmpty(), 5000);
+    EXPECT_EQ(QFileInfo(window.index()->resolve(QStringLiteral("Other name"))).fileName(), QStringLiteral("Meta.md"));
+}
+
+TEST_F(WindowTest, ALinkRewrittenByARenameReachesTheOpenNoteThatHoldsIt)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Source.md"), "See [[Target]].\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Source.md")));
+    MarkdownEditor *editor = window.editor();
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    WAIT_TRUE(editor->noteText() == QStringLiteral("See [[Renamed]].\n"), 3000);
+
+    // The next autosave keeps the rewritten link instead of the old one.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Source.md"))), QByteArray("See [[Renamed]].\nx"));
+}
+
+// --- encrypted notes: two panes, every place plaintext could land ------------
+
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+namespace {
+
+/// Every file under `root` that holds `needle`, any case.
+QStringList filesHolding(const QString &root, const QByteArray &needle)
+{
+    QStringList found;
+    QDirIterator it(root, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString file = it.next();
+        QFile in(file);
+        if (in.open(QIODevice::ReadOnly) && in.readAll().toLower().contains(needle.toLower()))
+            found << file;
+    }
+    return found;
+}
+
+} // namespace
+
+TEST_F(WindowTest, AnEncryptedNoteInTwoPanesSavesOnlyCiphertextAnywhere)
+{
+    const QByteArray secret = "zqxjunlikelyword";
+    // A word of a plain note does reach the index cache: the scan below
+    // would see the secret if it were there.
+    write(QStringLiteral("Plain.md"), "zqxjcontrolword\n");
+    int asked = 0;
+    {
+        MainWindow window;
+        window.setEncryptionPromptForTests([&asked](bool, bool) {
+            ++asked;
+            return QStringLiteral("correct horse battery");
+        });
+        QSignalSpy indexed(window.index(), &Index::changed);
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+        const QString locked = path(QStringLiteral("Untitled.mdlock"));
+        ASSERT_EQ(window.editor()->noteText(), QString());
+        MarkdownEditor *left = window.editor();
+        window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+        MarkdownEditor *right = window.editor();
+        ASSERT_NE(left, right);
+
+        // Typed in one pane, autosaved, shown in both: ciphertext on disk.
+        QTest::keyClicks(right, QString::fromLatin1(secret) + QStringLiteral(" alpha"));
+        EXPECT_EQ(left->noteText(), right->noteText());
+        const QByteArray before = bytesOf(locked);
+        WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+        EXPECT_NE(bytesOf(locked), before);
+        EXPECT_FALSE(bytesOf(locked).contains(secret));
+        EXPECT_EQ(asked, 1) << "one password for the session, not one per pane or save";
+
+        // The index has nothing to find, the search pane nothing to show.
+        QTest::qWait(500);
+        EXPECT_TRUE(window.index()->search(QString::fromLatin1(secret)).isEmpty());
+
+        // Typed in the other pane, then locked before the autosave: the lock
+        // saves it first, then closes both.
+        left->setCursorOffset(left->noteText().size());
+        QTest::keyClicks(left, QStringLiteral(" beta"));
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+        flushDeletes();
+        for (MarkdownEditor *editor : tabEditors(window)) {
+            EXPECT_FALSE(editor->noteText().contains(QString::fromLatin1(secret)));
+            QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+            EXPECT_FALSE(editor->noteText().contains(QString::fromLatin1(secret))) << "nothing to undo back";
+        }
+        ASSERT_TRUE(window.openNote(locked));
+        EXPECT_EQ(asked, 2);
+        EXPECT_EQ(window.editor()->noteText(), QString::fromLatin1(secret) + QStringLiteral(" alpha beta"));
+    }
+    // Nowhere: not the vault (temporary files included), the index cache,
+    // file recovery, the note history, settings or the workspace.
+    EXPECT_EQ(filesHolding(dir.path(), secret), QStringList());
+    for (const char *home : {"XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"})
+        EXPECT_EQ(filesHolding(qEnvironmentVariable(home), secret), QStringList()) << home;
+    EXPECT_FALSE(filesHolding(qEnvironmentVariable("XDG_CACHE_HOME"), "zqxjcontrolword").isEmpty());
+}
+#endif
+
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+TEST_F(WindowTest, EncryptingANoteInTwoPanesKeepsBothAndItsLineEndingsComeBackDecrypted)
+{
+    MainWindow window;
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("a long password"); });
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Projects/Crlf.md")));
+    clickNextBox(QStringLiteral("Encrypt"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    const QString locked = path(QStringLiteral("Projects/Crlf.mdlock"));
+    ASSERT_TRUE(QFileInfo::exists(locked));
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs")))
+        EXPECT_EQ(tabTexts(bar), QStringList{QStringLiteral("Crlf")});
+
+    // The pane that did not encrypt it saves to the encrypted file.
+    const QByteArray before = bytesOf(locked);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("three"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_NE(bytesOf(locked), before);
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Projects/Crlf.md"))));
+
+    // Decrypted again: the CRLF went through the ciphertext and back.
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:decrypt"))->trigger();
+    EXPECT_FALSE(QFileInfo::exists(locked));
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Crlf.md"))), QByteArray("one\r\ntwo\r\nthree"));
+}
+#endif
+
+#if defined(NOTEAPPC_HAVE_ENCRYPTION) && defined(NOTEAPPC_WORD_STATS_PLUGIN_DIR)
+TEST_F(WindowTest, APluginReadsNothingOfAnEncryptedNote)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
+    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/word-stats");
+    ASSERT_TRUE(QDir().mkpath(installed));
+    for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libword-stats.so")})
+        ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR "/") + file, installed + u'/' + file));
+    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC/plugins.ini");
+    {
+        QSettings config(grants, QSettings::IniFormat);
+        config.setValue(QStringLiteral("word-stats/enabled"), true);
+        config.setValue(QStringLiteral("word-stats/permissions.readNotes"), true);
+    }
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.communityPlugins"), true);
+    ASSERT_TRUE(on.save());
+    write(QStringLiteral("Three.md"), "one two three\n");
+    {
+        MainWindow window;
+        window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("a long password"); });
+        window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+        window.show();
+        WAIT_TRUE(window.findChild<QAction *>(QStringLiteral("word-stats:count-words")), 5000);
+        QAction *count = window.findChild<QAction *>(QStringLiteral("word-stats:count-words"));
+        const auto notice = [&window] { return window.statusBar()->currentMessage(); };
+
+        // A plain note: the plugin reads its text.
+        window.openNote(path(QStringLiteral("Three.md")));
+        count->trigger();
+        QTest::qWaitFor([&] { return notice() == QStringLiteral("3 words"); }, 5000);
+        ASSERT_EQ(notice(), QStringLiteral("3 words"));
+
+        // An encrypted one: it reads nothing.
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+        QTest::keyClicks(window.editor(), QStringLiteral("secret words here"));
+        window.statusBar()->clearMessage();
+        count->trigger();
+        WAIT_TRUE(notice().endsWith(QLatin1String(" words")), 5000);
+        EXPECT_EQ(notice(), QStringLiteral("0 words"));
+    }
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.communityPlugins"), false);
+    ASSERT_TRUE(off.save());
+    QFile::remove(grants);
+    qputenv("XDG_DATA_HOME", previous);
+}
+#endif
+
+// --- every kind of block and embed renders inline, through the real window ---
+
+TEST_F(WindowTest, EveryKindOfBlockAndEmbedRendersInline)
+{
+    {
+        QImage picture(200, 120, QImage::Format_RGB32);
+        picture.fill(QColor(255, 0, 0));
+        ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+        QPdfWriter pdf(path(QStringLiteral("doc.pdf")));
+        QPainter painter(&pdf);
+        painter.drawText(100, 100, QStringLiteral("page one"));
+    }
+    write(QStringLiteral("Other.md"), "Intro of other.\n\n# Part two\n\nThe second part. ^blk\n");
+    write(QStringLiteral("song.mp3"), "not really audio");
+    write(QStringLiteral("clip.mp4"), "not really video");
+    write(QStringLiteral("book.epub"), QByteArray("PK\x03\x04", 4) + QByteArray(64, '\0')); // a zip, as a book is
+    write(QStringLiteral("Tagged.md"), "#project here\n");
+#ifdef NOTEAPPC_HAVE_CANVAS
+    write(QStringLiteral("Board.canvas"),
+          R"({"nodes":[{"id":"a","type":"text","text":"card","x":0,"y":0,"width":200,"height":100}],"edges":[]})");
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    write(QStringLiteral("Tasks.base"), "views:\n  - type: table\n    order: [file.name]\n");
+#endif
+    write(QStringLiteral("Plain.md"), "intro\n\nplain\n\nafter\n");
+
+    using Probe = std::function<bool(MarkdownEditor *, qsizetype)>;
+    struct Kind {
+        QString name;
+        QString markdown; ///< goes between "intro" and "after"
+        QString anchor;   ///< where in it the probe looks
+        Probe rendered;
+    };
+    const auto image = [](MarkdownEditor *e, qsizetype at) { return !e->embedImageSizeAt(at).isEmpty(); };
+    const auto paintsRed = [](MarkdownEditor *e, qsizetype) {
+        const QImage shown = e->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        int red = 0;
+        for (int y = 0; y < shown.height(); y += 4) {
+            for (int x = 0; x < shown.width(); x += 4)
+                red += shown.pixel(x, y) == qRgb(255, 0, 0);
+        }
+        return red > 100; // the picture itself, not a red underline
+    };
+    const auto shownWithout = [](const QString &source) {
+        return [source](MarkdownEditor *e, qsizetype) { return !e->displayText().contains(source); };
+    };
+    qreal plainHeight = 0;
+    QList<Kind> kinds = {
+        {QStringLiteral("image"), QStringLiteral("![[pic.png]]"), QStringLiteral("!"), paintsRed},
+        {QStringLiteral("note"), QStringLiteral("![[Other]]"), QStringLiteral("!"), image},
+        {QStringLiteral("note heading"), QStringLiteral("![[Other#Part two]]"), QStringLiteral("!"), image},
+        {QStringLiteral("note block"), QStringLiteral("![[Other#^blk]]"), QStringLiteral("!"), image},
+        {QStringLiteral("audio"), QStringLiteral("![[song.mp3]]"), QStringLiteral("!"),
+         [&plainHeight](MarkdownEditor *e, qsizetype at) {
+             return e->isMediaCardAt(at) && e->documentHeight() > plainHeight + 20;
+         }},
+        {QStringLiteral("video"), QStringLiteral("![[clip.mp4]]"), QStringLiteral("!"),
+         [&plainHeight](MarkdownEditor *e, qsizetype at) {
+             return e->isMediaCardAt(at) && e->documentHeight() > plainHeight + 200;
+         }},
+        {QStringLiteral("epub, as a card"), QStringLiteral("![[book.epub]]"), QStringLiteral("!"),
+         [](MarkdownEditor *e, qsizetype at) { return e->isFileCardAt(at); }},
+        {QStringLiteral("callout"), QStringLiteral("> [!note] Title\n> Callout body."), QStringLiteral(">"),
+         shownWithout(QStringLiteral("[!note]"))},
+        {QStringLiteral("table"), QStringLiteral("| a | b |\n|---|---|\n| 1 | 2 |"), QStringLiteral("|"),
+         [](MarkdownEditor *e, qsizetype at) { return e->tableRenderedAt(at); }},
+        {QStringLiteral("task"), QStringLiteral("- [ ] a task"), QStringLiteral("-"),
+         shownWithout(QStringLiteral("[ ]"))},
+        {QStringLiteral("footnote"), QStringLiteral("Text[^1].\n\n[^1]: The note."), QStringLiteral("T"),
+         [](MarkdownEditor *e, qsizetype) { return e->footnoteMarkTexts().contains(QStringLiteral("1")); }},
+        {QStringLiteral("query"), QStringLiteral("```query\ntag:#project\n```"), QStringLiteral("tag:"),
+         [](MarkdownEditor *e, qsizetype at) { return !e->queryRowsAt(at).isEmpty(); }},
+    };
+    if (noteAppC::PdfPage::isAvailable()) {
+        kinds.append({QStringLiteral("pdf"), QStringLiteral("![[doc.pdf]]"), QStringLiteral("!"),
+                      [](MarkdownEditor *e, qsizetype at) {
+                          const auto info = e->pdfEmbedInfoAt(at);
+                          return info.isPdfEmbed && info.pageCount == 1 && info.error.isEmpty();
+                      }});
+    }
+    if (noteAppC::MathRenderer::isAvailable()) {
+        kinds.append({QStringLiteral("display maths"), QStringLiteral("$$\nE = mc^2\n$$"), QStringLiteral("E"),
+                      shownWithout(QStringLiteral("E = mc^2"))});
+        kinds.append({QStringLiteral("inline maths"), QStringLiteral("Inline $e^{i\\pi}$ maths."),
+                      QStringLiteral("I"), shownWithout(QStringLiteral("\\pi"))});
+    }
+    if (noteAppC::CodeHighlighter::isAvailable()) {
+        kinds.append({QStringLiteral("highlighted code"), QStringLiteral("```cpp\nreturn 42;\n```"),
+                      QStringLiteral("return"), [](MarkdownEditor *e, qsizetype at) {
+                          const QColor code = e->formatAt(at).foreground().color();
+                          const QColor prose = e->formatAt(0).foreground().color();
+                          return e->formatAt(at).hasProperty(QTextFormat::ForegroundBrush) && code != prose;
+                      }});
+    }
+    if (noteAppC::HtmlRenderer::isAvailable()) {
+        kinds.append({QStringLiteral("html block"), QStringLiteral("<div style=\"color: red\">An HTML block</div>"),
+                      QStringLiteral("<"),
+                      [](MarkdownEditor *e, qsizetype at) { return !e->htmlImageSizeAt(at).isEmpty(); }});
+    }
+#ifdef NOTEAPPC_HAVE_CANVAS
+    kinds.append({QStringLiteral("canvas"), QStringLiteral("![[Board.canvas]]"), QStringLiteral("!"), image});
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    kinds.append({QStringLiteral("base"), QStringLiteral("![[Tasks.base]]"), QStringLiteral("!"),
+                  [](MarkdownEditor *e, qsizetype at) { return !e->baseRowsAt(at).isEmpty(); }});
+#endif
+    for (int i = 0; i < kinds.size(); ++i)
+        write(QStringLiteral("Kind %1.md").arg(i), ("intro\n\n" + kinds.at(i).markdown + "\n\nafter\n").toUtf8());
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.resize(1200, 900);
+    window.show(); // layout, and so rendering, only happens in a shown widget
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Plain.md"))));
+    QTest::qWait(50);
+    plainHeight = window.editor()->documentHeight();
+
+    for (int i = 0; i < kinds.size(); ++i) {
+        const Kind &kind = kinds.at(i);
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Kind %1.md").arg(i))));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(0); // in "intro": the block itself is not being edited
+        const qsizetype at = editor->noteText().indexOf(kind.anchor, 7);
+        EXPECT_TRUE(QTest::qWaitFor([&] { return kind.rendered(editor, at); }, 5000))
+            << kind.name.toStdString() << " is not rendered inline: " << editor->displayText().toStdString();
+    }
+
+    // Properties are the note's first block, so they have a note of their own.
+    write(QStringLiteral("Props.md"), "---\nstatus: draft\n---\nintro\n");
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Props.md"))));
+    window.editor()->setCursorOffset(window.editor()->noteText().size());
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !window.editor()->displayText().contains(QStringLiteral("status:")); },
+                                3000))
+        << "properties are not a table";
+}
