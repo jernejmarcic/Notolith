@@ -45,6 +45,11 @@ public:
     /// later) so a caller can match iopub/shell replies to this call from
     /// the moment it returns.
     QString execute(const QString &code);
+    /// Queues a complete_request / inspect_request for `code` with the caret
+    /// at `cursorPos` (Unicode code points, as the protocol counts); returns
+    /// its msg_id. The answer is introspectionReplyReceived.
+    QString complete(const QString &code, int cursorPos);
+    QString inspect(const QString &code, int cursorPos);
     /// A control-channel interrupt_request, for a "message" interrupt-mode
     /// kernel. The installed python3 kernelspec uses "signal" mode instead
     /// (KernelProcess::interrupt(), SIGINT) - NotebookController sends both,
@@ -63,6 +68,8 @@ signals:
     void clearOutputReceived(QString parentMsgID); ///< iopub "clear_output": tqdm, IPython.display.clear_output
     void errorReceived(QString parentMsgID, QString ename, QString evalue, QStringList traceback);
     void executeReplyReceived(QString parentMsgID, bool ok, int executionCount);
+    /// shell "complete_reply" / "inspect_reply": `msgType` says which.
+    void introspectionReplyReceived(QString parentMsgID, QString msgType, QJsonObject content);
 
 protected:
     void run() override;

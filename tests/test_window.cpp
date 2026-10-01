@@ -2796,6 +2796,66 @@ TEST_F(WindowTest, ANotesBlocksShareOneKernelWhenTheSettingIsOn)
     config.setValue(QStringLiteral("notebooks.sharedKernel"), false);
     config.save();
 }
+
+// Ctrl+Space in a block lists what the note's own kernel knows - once a block
+// has started it; before that the key asks for nothing and starts nothing.
+TEST_F(WindowTest, CtrlSpaceCompletesFromTheNotesKernelOnceOneIsRunning)
+{
+    if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                  QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
+        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
+    ASSERT_TRUE(config.save());
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    write(QStringLiteral("Complete.md"),
+          QStringLiteral("```python\nvalue_alpha = 1\nvalue_beta = '%1'\n```\n\n```python\nvalue_\n```\n\nend\n")
+              .arg(marker).toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Complete.md")));
+        MarkdownEditor *editor = window.editor();
+        const qsizetype caret = editor->noteText().indexOf(QStringLiteral("value_\n")) + 6;
+        editor->setCursorOffset(caret);
+        QTest::keyClick(editor, Qt::Key_Space, Qt::ControlModifier);
+        QTest::qWait(150);
+        EXPECT_TRUE(editor->notebookCompletionRows().isEmpty()) << "no kernel is running yet";
+
+        editor->setCursorOffset(editor->noteText().size());
+        QTest::qWait(150);
+        const qsizetype first = editor->noteText().indexOf(QStringLiteral("value_alpha"));
+        ASSERT_TRUE(editor->runNotebookBlockAt(first));
+        ASSERT_TRUE(QTest::qWaitFor(
+            [&] {
+                const auto info = editor->notebookInfoAt(first);
+                return info.hasRun && !info.running;
+            },
+            30000));
+
+        editor->setCursorOffset(caret);
+        QTest::keyClick(editor, Qt::Key_Space, Qt::ControlModifier);
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookCompletionRows().isEmpty(); }, 20000));
+        const QStringList rows = editor->notebookCompletionRows();
+        EXPECT_TRUE(rows.contains(QStringLiteral("value_alpha")) && rows.contains(QStringLiteral("value_beta"))) << rows.join(QLatin1Char(',')).toStdString();
+        const int beta = int(rows.indexOf(QStringLiteral("value_beta")));
+        for (int i = 0; i < beta; ++i)
+            QTest::keyClick(editor, Qt::Key_Down);
+        QTest::keyClick(editor, Qt::Key_Return);
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("value_beta\n```\n\nend")));
+
+        // Shift+Tab on a name: its documentation.
+        editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("value_beta\n```\n\nend")) + 10);
+        QTest::keyClick(editor, Qt::Key_Backtab, Qt::ShiftModifier);
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookInspectText().isEmpty(); }, 20000));
+        EXPECT_TRUE(editor->notebookInspectText().contains(marker));
+        QTest::keyClick(editor, Qt::Key_Escape);
+    }
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), false);
+    config.save();
+}
 #endif
 
 // --- one note in two panes, and what reaches it from outside ----------------
@@ -2944,6 +3004,71 @@ TEST_F(WindowTest, AChangeOnDiskUnderUnsavedTypingKeepsBoth)
     for (const auto &version : noteAppC::Snapshots::versions(note))
         kept = kept || noteAppC::Snapshots::read(version) == QStringLiteral("# Welcome\n\nTheirs.\n");
     EXPECT_TRUE(kept);
+}
+
+TEST_F(WindowTest, ANoteDeletedAndRecreatedOutsideIsWatchedAgain)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QFile::remove(note));
+    QTest::qWait(300);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n")) << "a delete changes nothing shown";
+
+    overwrite(note, "# Welcome\n\nBack.\n"); // recreated, with nothing saved from this window since
+    WAIT_TRUE(editor->noteText() == QStringLiteral("# Welcome\n\nBack.\n"), 3000);
+    EXPECT_FALSE(editor->isModified());
+    overwrite(note, "# Welcome\n\nBack again.\n"); // and its new file is watched like the first was
+    WAIT_TRUE(editor->noteText() == QStringLiteral("# Welcome\n\nBack again.\n"), 3000);
+}
+
+TEST_F(WindowTest, ANoteMovedOutsideIsFollowedWithItsCaretAndUnsavedEdits)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    const QString moved = path(QStringLiteral("Projects/Elsewhere.md"));
+    auto [left, right] = splitOn(window, note);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("typed"));
+    ASSERT_TRUE(left->isModified());
+    const int caret = left->cursorOffset();
+    ASSERT_TRUE(QFile::rename(note, moved));
+
+    // Both panes follow, and the autosave then writes the new name, not the old.
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Elsewhere")), 3000);
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(left->cursorOffset(), caret);
+    EXPECT_EQ(readAll(moved), QByteArray("# Welcome\n\nBody.\ntyped"));
+    EXPECT_FALSE(QFile::exists(note)) << "the old name is not recreated";
+    EXPECT_EQ(right->noteText(), left->noteText());
+}
+
+TEST_F(WindowTest, ANoteMovedAndChangedOutsideStaysOnItsOldNameAndIsNotSavedBack)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("typed")); // unsaved when it goes
+    ASSERT_TRUE(editor->isModified());
+    ASSERT_TRUE(QFile::rename(note, path(QStringLiteral("Projects/Other.md"))));
+    overwrite(path(QStringLiteral("Projects/Other.md")), "# Something else\n");
+    WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")), 4000);
+    EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("Welcome.md")));
+    // Well past the autosave: the old name is not written back on its own...
+    QTest::qWait(3500);
+    EXPECT_FALSE(QFile::exists(note));
+    EXPECT_TRUE(editor->isModified());
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Other.md"))), QByteArray("# Something else\n"));
+    // ...but saving it by hand is the person's choice.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nBody.\ntyped"));
+    EXPECT_FALSE(editor->isModified());
 }
 
 TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)

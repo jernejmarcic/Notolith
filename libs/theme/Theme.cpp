@@ -700,7 +700,7 @@ QListWidget#quickSwitcherResults::item:selected {
 }
 
 /* The [[ suggester popup */
-QCompleter QAbstractItemView, QListView#completerPopup {
+QCompleter QAbstractItemView, QListView#completerPopup, QListView#notebookCompletePopup {
     background: %{--background-secondary};
     border: 1px solid %{--background-modifier-border};
     border-radius: %{--radius-m}px;
@@ -709,13 +709,23 @@ QCompleter QAbstractItemView, QListView#completerPopup {
     font-size: %{--font-ui-small}px;
     outline: none;
 }
-QCompleter QAbstractItemView::item, QListView#completerPopup::item {
+QCompleter QAbstractItemView::item, QListView#completerPopup::item, QListView#notebookCompletePopup::item {
     padding: 5px 8px;
     border-radius: %{--radius-s}px;
 }
-QCompleter QAbstractItemView::item:selected, QListView#completerPopup::item:selected {
+QCompleter QAbstractItemView::item:selected, QListView#completerPopup::item:selected,
+QListView#notebookCompletePopup::item:selected {
     background: %{--interactive-accent};
     color: %{--text-on-accent};
+}
+
+/* Documentation popup of a notebook block (Shift+Tab) */
+QPlainTextEdit#notebookInspect {
+    background: %{--background-secondary};
+    color: %{--text-normal};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 6px;
 }
 
 /* Chrome -------------------------------------------------------------- */

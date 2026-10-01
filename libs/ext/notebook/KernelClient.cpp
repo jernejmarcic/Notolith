@@ -125,6 +125,29 @@ QString KernelClient::execute(const QString &code)
     return header.value(QStringLiteral("msg_id")).toString();
 }
 
+QString KernelClient::complete(const QString &code, int cursorPos)
+{
+    QJsonObject content;
+    content.insert(QStringLiteral("code"), code);
+    content.insert(QStringLiteral("cursor_pos"), cursorPos);
+    const QJsonObject header = newHeader(QStringLiteral("complete_request"), m_session, m_username);
+    QMutexLocker lock(&m_mutex);
+    m_outbox.append({Channel::Shell, buildMessage(header, {}, {}, content)});
+    return header.value(QStringLiteral("msg_id")).toString();
+}
+
+QString KernelClient::inspect(const QString &code, int cursorPos)
+{
+    QJsonObject content;
+    content.insert(QStringLiteral("code"), code);
+    content.insert(QStringLiteral("cursor_pos"), cursorPos);
+    content.insert(QStringLiteral("detail_level"), 0);
+    const QJsonObject header = newHeader(QStringLiteral("inspect_request"), m_session, m_username);
+    QMutexLocker lock(&m_mutex);
+    m_outbox.append({Channel::Shell, buildMessage(header, {}, {}, content)});
+    return header.value(QStringLiteral("msg_id")).toString();
+}
+
 void KernelClient::requestInterrupt()
 {
     const QJsonObject header = newHeader(QStringLiteral("interrupt_request"), m_session, m_username);
@@ -136,6 +159,10 @@ void KernelClient::requestInterrupt()
 void KernelClient::dispatchShellOrControl(const KernelMessage &message)
 {
     const QString type = message.msgType();
+    if (type == QLatin1String("complete_reply") || type == QLatin1String("inspect_reply")) {
+        emit introspectionReplyReceived(message.parentMsgID(), type, message.content());
+        return;
+    }
     if (type != QLatin1String("execute_reply"))
         return; // interrupt_reply and friends: nothing here needs them yet
     const QJsonObject content = message.content();

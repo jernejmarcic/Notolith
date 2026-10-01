@@ -202,6 +202,31 @@ MainWindow::~MainWindow()
     m_historyPool.waitForDone();
 }
 
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+namespace {
+
+/// Which kernel (if any) a block with `options` runs in: the note's shared
+/// one, a named kernelspec, or none. Variables that live on between blocks:
+/// one kernel per note, when the block (`#| kernel: on`, or a kernelspec's
+/// name) or the setting asks for it. Otherwise each block is its own short
+/// process.
+void chooseKernel(notebook::NotebookController::RunRequest &request,
+                  const MarkdownEditor::NotebookRunOptions &options, const QString &notePath,
+                  bool sharedByDefault)
+{
+    const QString kernel = options.kernel;
+    if (kernel == QLatin1String("on") || (kernel.isEmpty() && sharedByDefault)) {
+        request.useKernel = true;
+    } else if (!kernel.isEmpty() && kernel != QLatin1String("off")) {
+        request.kernelName = kernel;
+    }
+    if (request.useKernel || !request.kernelName.isEmpty())
+        request.scope = options.scope.isEmpty() ? notePath : options.scope;
+}
+
+} // namespace
+#endif
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -225,7 +250,13 @@ MainWindow::MainWindow(QWidget *parent)
         m_changedNotes.insert(path);
         m_noteChanges.start();
     });
+    // A folder changing is how a deleted-and-recreated note, or a moved one,
+    // shows: the file's own watch dies with the file.
+    connect(m_noteWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_noteChanges.start(); });
     connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
+    m_lostRetry.setSingleShot(true);
+    m_lostRetry.setInterval(1000);
+    connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
@@ -795,18 +826,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             request.extraReadOnlyBinds = {options.workingDir};
         request.cache = options.cache;
         request.timeoutMs = options.timeoutSeconds * 1000;
-        // Variables that live on between blocks: one kernel per note, when
-        // the block (`#| kernel: on`, or a kernelspec's name) or the setting
-        // asks for it. Otherwise each block is its own short process.
-        const bool sharedByDefault = m_settings.boolean(QStringLiteral("notebooks.sharedKernel"));
-        const QString kernel = options.kernel;
-        if (kernel == QLatin1String("on") || (kernel.isEmpty() && sharedByDefault)) {
-            request.useKernel = true;
-        } else if (!kernel.isEmpty() && kernel != QLatin1String("off")) {
-            request.kernelName = kernel;
-        }
-        if (request.useKernel || !request.kernelName.isEmpty())
-            request.scope = options.scope.isEmpty() ? notePathOf(editor) : options.scope;
+        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
@@ -827,6 +847,31 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             }
             deliver(shown);
         });
+    });
+    // Ctrl+Space / Shift+Tab: the kernel a block would run in, if it is already
+    // running - never started for this.
+    editor->setNotebookIntrospector([this, editor](const QString &language, const QString &code, qsizetype cursor,
+                                                   bool inspect, const MarkdownEditor::NotebookRunOptions &options,
+                                                   const MarkdownEditor::NotebookIntrospectionDeliver &deliver) {
+        if (!m_notebook || showsEncryptedNote(editor))
+            return false;
+        notebook::NotebookController::RunRequest request;
+        request.language = language;
+        request.tier = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
+                           ? notebook::SandboxTier::Host
+                           : notebook::SandboxTier::Bubblewrap;
+        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
+        if (!request.useKernel && request.kernelName.isEmpty())
+            return false;
+        return m_notebook->introspect(request, code, cursor, inspect,
+                                      [deliver](const notebook::NotebookController::Introspection &answer) {
+                                          MarkdownEditor::NotebookIntrospection shown;
+                                          shown.matches = answer.matches;
+                                          shown.from = answer.from;
+                                          shown.to = answer.to;
+                                          shown.text = answer.text;
+                                          deliver(shown);
+                                      });
     });
     // A click on a running block's stop control.
     connect(editor, &MarkdownEditor::notebookInterruptRequested, this, [this, editor](const QString &language) {
@@ -4659,6 +4704,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     return true;
 }
 
+
 void MainWindow::showDiskNote(const QString &path, const Note &note)
 {
     for (const auto &leaf : m_leaves) {
@@ -4687,20 +4733,34 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
 void MainWindow::watchOpenNotes()
 {
     QStringList wanted;
+    QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        if (!leaf->view && !leaf->notePath.isEmpty() && !wanted.contains(leaf->notePath))
-            wanted << leaf->notePath;
+        if (leaf->view || leaf->notePath.isEmpty() || wanted.contains(leaf->notePath))
+            continue;
+        wanted << leaf->notePath;
+        const QString folder = QFileInfo(leaf->notePath).absolutePath();
+        if (!wantedFolders.contains(folder))
+            wantedFolders << folder;
     }
     const QStringList watched = m_noteWatcher->files();
+    const QStringList watchedFolders = m_noteWatcher->directories();
     QStringList gone;
+    QStringList added;
     for (const QString &path : watched) {
         if (!wanted.contains(path))
             gone << path;
     }
-    QStringList added;
+    for (const QString &folder : watchedFolders) {
+        if (!wantedFolders.contains(folder))
+            gone << folder;
+    }
     for (const QString &path : std::as_const(wanted)) {
         if (!watched.contains(path) && QFileInfo::exists(path))
             added << path;
+    }
+    for (const QString &folder : std::as_const(wantedFolders)) {
+        if (!watchedFolders.contains(folder) && QFileInfo::exists(folder))
+            added << folder;
     }
     if (!gone.isEmpty())
         m_noteWatcher->removePaths(gone);
@@ -4708,9 +4768,108 @@ void MainWindow::watchOpenNotes()
         m_noteWatcher->addPaths(added);
 }
 
+QString MainWindow::findMovedNote(const QString &lost, const Note &known)
+{
+    // ponytail: a walk of the vault's files by size, once per lost note after the
+    // grace (tens of ms at 20 000 notes, only when a note really went); look the
+    // size up in the Index instead if folders of notes are ever moved by hand.
+    if (!m_vault.isValid() || !m_vault.contains(lost) || Vault::isEncryptedNote(lost))
+        return {};
+    // A move keeps the bytes: same size first, so only a look-alike is read.
+    const qint64 size = Vault::encode(known).size();
+    QStringList open;
+    for (const auto &leaf : m_leaves)
+        open << leaf->notePath;
+    QString found;
+    QDirIterator files(m_vault.root(), {QStringLiteral("*.") + QFileInfo(lost).suffix()}, QDir::Files,
+                       QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString candidate = files.next();
+        if (candidate == lost || files.fileInfo().size() != size || open.contains(candidate))
+            continue;
+        Note note;
+        if (!readNote(candidate, note, nullptr) || note.text != known.text || note.crlf != known.crlf
+            || note.bom != known.bom)
+            continue;
+        if (!found.isEmpty())
+            return {}; // two copies: which one it became is a guess
+        found = candidate;
+    }
+    return found;
+}
+
+void MainWindow::followLostNotes(bool final)
+{
+    QStringList open;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && !leaf->notePath.isEmpty() && !open.contains(leaf->notePath))
+            open << leaf->notePath;
+    }
+    for (auto it = m_lostNotes.begin(); it != m_lostNotes.end();) // closed since
+        it = open.contains(it.key()) ? std::next(it) : m_lostNotes.erase(it);
+    for (const QString &path : std::as_const(open)) {
+        if (QFileInfo::exists(path)) {
+            // Back, as a rewrite or a recreation: read like any other change.
+            if (m_lostNotes.remove(path)) {
+                m_changedNotes.insert(path);
+                m_noteChanges.start();
+            }
+            continue;
+        }
+        if (m_lostNotes.value(path, false))
+            continue; // already reported
+        if (!final) {
+            // A sync client deletes before it writes, and a move is found by
+            // looking through the vault: not before the grace is over.
+            m_lostNotes.insert(path, false);
+            if (!m_lostRetry.isActive())
+                m_lostRetry.start();
+            continue;
+        }
+        const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
+            return !leaf->view && leaf->notePath == path;
+        });
+        const QString moved = findMovedNote(path, (*first)->note);
+        if (!moved.isEmpty()) {
+            m_lostNotes.remove(path);
+            // The caret, the scroll and what is typed stay: only the name changes.
+            for (const auto &leaf : m_leaves) {
+                if (!leaf->view && leaf->notePath == path) {
+                    leaf->notePath = moved;
+                    leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
+                }
+            }
+#ifdef NOTEAPPC_HAVE_HISTORY
+            if (m_noteHistory && m_vault.contains(moved)) {
+                const std::shared_ptr<NoteHistory> history = m_noteHistory;
+                const QString from = m_vault.relative(path);
+                const QString to = m_vault.relative(moved);
+                m_historyPool.start([history, from, to] { history->rename(from, to); });
+            }
+#endif
+            for (const auto &group : m_groups)
+                syncTabs(group.get());
+            watchOpenNotes();
+            updateTitle();
+            statusBar()->showMessage(tr("%1 was moved outside the app: following it to %2")
+                                         .arg(QFileInfo(path).fileName(), m_vault.relative(moved)),
+                                     6000);
+            notifyPlugins("note-renamed", moved);
+        } else {
+            m_lostNotes[path] = true; // autosave leaves it alone from here
+            statusBar()->showMessage(
+                tr("%1 is gone from disk (deleted or moved outside the app): it is not saved again until you "
+                   "save it yourself")
+                    .arg(QFileInfo(path).fileName()),
+                10000);
+        }
+    }
+}
+
 void MainWindow::reloadChangedNotes()
 {
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
+    followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
@@ -4773,6 +4932,8 @@ void MainWindow::autosave()
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))
             continue;
+        if (m_lostNotes.value(leaf->notePath, false))
+            continue; // gone from disk and not found: writing it back is for the person to decide
         saved.insert(leaf->notePath);
         saveLeaf(leaf.get(), true);
     }

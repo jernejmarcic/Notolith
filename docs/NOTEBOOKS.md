@@ -63,6 +63,33 @@ control (`[*]` while it runs again). Commands (all under "Notebooks:"):
 A kernel that dies (the code called `exit()`) tells the running block so, and
 the next run starts a new one.
 
+## Completion and documentation
+
+With the caret in a code block whose note already has a running kernel for
+that language (the kernel a run of that block would use: the same note, tier
+and `#| kernel:`), **Ctrl+Space** lists what the kernel completes at the caret
+and **Shift+Tab** shows the documentation of what is under it (Jupyter's own
+keys). Nothing starts a kernel for this: with none running, Ctrl+Space says so
+and Shift+Tab does what it does everywhere else (outdent a list item).
+
+The completion list is the theme's popup: Up/Down move, Enter or Tab take the
+match (it replaces the token the kernel named), Esc closes, as does typing on
+- the list is for the caret it was asked at. A single match is inserted at
+once, as in Jupyter. The documentation is a small read-only box under the
+caret (above it near the screen's edge) that closes on Esc, a click, another
+key or the editor losing focus.
+
+Both are `complete_request` / `inspect_request` on the kernel's shell channel,
+sent from the kernel thread and answered on the event loop, so nothing waits
+on the kernel; a reply for a caret or text that has moved on is dropped, a newer
+question of the same kind cancels the older, and a kernel busy for over 4 s
+with a long cell is not waited for. Off with the "Notebooks" core plugin (and
+with `NOTEAPPC_WITH_NOTEBOOK` off nothing of this is built into the window);
+the editor itself only tests a pointer on each key press. Shift+Tab could only
+be this because the editor now keeps Tab and Shift+Tab for itself
+(`focusNextPrevChild` is false): before, a window with other widgets in it moved
+the focus on and neither key reached the editor's list indent either.
+
 ## Options in the fence
 
 `#|` lines at the head of a block, in the language's own comment syntax, so
@@ -127,7 +154,8 @@ extensions: py, js, sh, rb, pl, lua, c, cpp, hs, java, rs, go.
   none of runsc, firecracker or a wasm runtime is installed.
 - `input()` from a block: the kernel is told stdin is not available, so it
   raises instead of waiting for a person.
-- Tab completion and inspection (`complete_request`, `inspect_request`) in
-  the editor, and `.ipynb` files.
+- `.ipynb` files. Completion and documentation show only what the kernel
+  returns as plain text (no rich Jupyter signatures), and the list is not
+  filtered further as you type.
 - A kernel for Haskell or the other languages the system's own tool covers:
   none installed here, so those stay one process per block.
