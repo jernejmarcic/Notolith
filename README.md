@@ -15,7 +15,10 @@ command palette is the one large piece deferred; `TODO.md` has the rest.
   file recovery snapshots with a diff. An open note changed on disk (sync, a
   plugin, a link update, another editor) shows the change in every tab; if
   it was being edited, the edits win and the other version goes to file
-  recovery.
+  recovery. A note deleted and recreated outside is read again; one moved or
+  renamed outside (found by its unchanged content, exactly one match in the
+  vault) is followed, caret and unsaved edits kept; if it cannot be found the
+  tab stays on the old name and says so.
 - **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
   Obsidian's link resolution order. 20 000 notes cold-indexed in 3.6 s.
 - **Editor** - one engine, three modes: live preview, source and reading.
