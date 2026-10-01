@@ -225,7 +225,13 @@ MainWindow::MainWindow(QWidget *parent)
         m_changedNotes.insert(path);
         m_noteChanges.start();
     });
+    // A folder changing is how a deleted-and-recreated note, or a moved one,
+    // shows: the file's own watch dies with the file.
+    connect(m_noteWatcher, &QFileSystemWatcher::directoryChanged, this, [this] { m_noteChanges.start(); });
     connect(&m_noteChanges, &QTimer::timeout, this, &MainWindow::reloadChangedNotes);
+    m_lostRetry.setSingleShot(true);
+    m_lostRetry.setInterval(1000);
+    connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
@@ -4687,20 +4693,34 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
 void MainWindow::watchOpenNotes()
 {
     QStringList wanted;
+    QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        if (!leaf->view && !leaf->notePath.isEmpty() && !wanted.contains(leaf->notePath))
-            wanted << leaf->notePath;
+        if (leaf->view || leaf->notePath.isEmpty() || wanted.contains(leaf->notePath))
+            continue;
+        wanted << leaf->notePath;
+        const QString folder = QFileInfo(leaf->notePath).absolutePath();
+        if (!wantedFolders.contains(folder))
+            wantedFolders << folder;
     }
     const QStringList watched = m_noteWatcher->files();
+    const QStringList watchedFolders = m_noteWatcher->directories();
     QStringList gone;
+    QStringList added;
     for (const QString &path : watched) {
         if (!wanted.contains(path))
             gone << path;
     }
-    QStringList added;
+    for (const QString &folder : watchedFolders) {
+        if (!wantedFolders.contains(folder))
+            gone << folder;
+    }
     for (const QString &path : std::as_const(wanted)) {
         if (!watched.contains(path) && QFileInfo::exists(path))
             added << path;
+    }
+    for (const QString &folder : std::as_const(wantedFolders)) {
+        if (!watchedFolders.contains(folder) && QFileInfo::exists(folder))
+            added << folder;
     }
     if (!gone.isEmpty())
         m_noteWatcher->removePaths(gone);
@@ -4708,9 +4728,98 @@ void MainWindow::watchOpenNotes()
         m_noteWatcher->addPaths(added);
 }
 
+QString MainWindow::findMovedNote(const QString &lost, const Note &known)
+{
+    if (!m_vault.isValid() || !m_vault.contains(lost) || Vault::isEncryptedNote(lost))
+        return {};
+    // A move keeps the bytes: same size first, so only a look-alike is read.
+    const qint64 size = Vault::encode(known).size();
+    QStringList open;
+    for (const auto &leaf : m_leaves)
+        open << leaf->notePath;
+    QString found;
+    QDirIterator files(m_vault.root(), {QStringLiteral("*.") + QFileInfo(lost).suffix()}, QDir::Files,
+                       QDirIterator::Subdirectories);
+    while (files.hasNext()) {
+        const QString candidate = files.next();
+        if (candidate == lost || files.fileInfo().size() != size || open.contains(candidate))
+            continue;
+        Note note;
+        if (!readNote(candidate, note, nullptr) || note.text != known.text || note.crlf != known.crlf
+            || note.bom != known.bom)
+            continue;
+        if (!found.isEmpty())
+            return {}; // two copies: which one it became is a guess
+        found = candidate;
+    }
+    return found;
+}
+
+void MainWindow::followLostNotes(bool final)
+{
+    QStringList open;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && !leaf->notePath.isEmpty() && !open.contains(leaf->notePath))
+            open << leaf->notePath;
+    }
+    for (auto it = m_lostNotes.begin(); it != m_lostNotes.end();) // closed since
+        it = open.contains(it.key()) ? std::next(it) : m_lostNotes.erase(it);
+    for (const QString &path : std::as_const(open)) {
+        if (QFileInfo::exists(path)) {
+            // Back, as a rewrite or a recreation: read like any other change.
+            if (m_lostNotes.remove(path)) {
+                m_changedNotes.insert(path);
+                m_noteChanges.start();
+            }
+            continue;
+        }
+        if (m_lostNotes.contains(path) && (final ? m_lostNotes.value(path) : true))
+            continue; // already looked at once, or reported
+        m_lostNotes.insert(path, false);
+        const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
+            return !leaf->view && leaf->notePath == path;
+        });
+        const QString moved = findMovedNote(path, (*first)->note);
+        if (!moved.isEmpty()) {
+            m_lostNotes.remove(path);
+            // The caret, the scroll and what is typed stay: only the name changes.
+            for (const auto &leaf : m_leaves) {
+                if (!leaf->view && leaf->notePath == path) {
+                    leaf->notePath = moved;
+                    leaf->inlineTitle->setText(QFileInfo(moved).completeBaseName());
+                }
+            }
+#ifdef NOTEAPPC_HAVE_HISTORY
+            if (m_noteHistory && m_vault.contains(moved)) {
+                const std::shared_ptr<NoteHistory> history = m_noteHistory;
+                const QString from = m_vault.relative(path);
+                const QString to = m_vault.relative(moved);
+                m_historyPool.start([history, from, to] { history->rename(from, to); });
+            }
+#endif
+            for (const auto &group : m_groups)
+                syncTabs(group.get());
+            watchOpenNotes();
+            updateTitle();
+            statusBar()->showMessage(tr("%1 was moved outside the app: following it to %2")
+                                         .arg(QFileInfo(path).fileName(), m_vault.relative(moved)),
+                                     6000);
+        } else if (final) {
+            m_lostNotes[path] = true;
+            statusBar()->showMessage(
+                tr("%1 is gone from disk (deleted or moved outside the app); saving it writes it there again")
+                    .arg(QFileInfo(path).fileName()),
+                10000);
+        } else {
+            m_lostRetry.start(); // a sync client may write the new name a moment after the old one goes
+        }
+    }
+}
+
 void MainWindow::reloadChangedNotes()
 {
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
+    followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;

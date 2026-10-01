@@ -395,8 +395,17 @@ private:
     /// `note` is what `path` holds on disk now: every tab showing it takes
     /// it, carets and scroll kept, and is unmodified after.
     void showDiskNote(const QString &path, const Note &note);
-    /// Points m_noteWatcher at the file of every open note.
+    /// Points m_noteWatcher at the file of every open note, and at its folder:
+    /// the folder is what reports a delete-and-recreate or a move.
     void watchOpenNotes();
+    /// Open notes whose file is gone: one that came back is reloaded, one that
+    /// turns up elsewhere in the vault byte-identical was moved - its tabs
+    /// follow it - and one that does not is reported once (`final`: after the
+    /// grace a sync client's delete-then-write needs).
+    void followLostNotes(bool final);
+    /// Where the vault now holds `known` (what `lost` held), or nothing when
+    /// that is not exactly one file.
+    QString findMovedNote(const QString &lost, const Note &known);
     /// An open note changed on disk - sync, a plugin, a link update, another
     /// editor: its tabs show the change, so no autosave writes over it.
     void reloadChangedNotes();
@@ -599,6 +608,8 @@ QLabel *m_vimStatus = nullptr;
     QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
     QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires
     QTimer m_noteChanges;
+    QHash<QString, bool> m_lostNotes; ///< open notes whose file is gone -> reported
+    QTimer m_lostRetry;               ///< one more look before reporting
 
     QWidget *m_headerBar = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;

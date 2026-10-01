@@ -2946,6 +2946,60 @@ TEST_F(WindowTest, AChangeOnDiskUnderUnsavedTypingKeepsBoth)
     EXPECT_TRUE(kept);
 }
 
+TEST_F(WindowTest, ANoteDeletedAndRecreatedOutsideIsWatchedAgain)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QFile::remove(note));
+    QTest::qWait(300);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Welcome\n\nBody.\n")) << "a delete changes nothing shown";
+
+    overwrite(note, "# Welcome\n\nBack.\n"); // recreated, with nothing saved from this window since
+    WAIT_TRUE(editor->noteText() == QStringLiteral("# Welcome\n\nBack.\n"), 3000);
+    EXPECT_FALSE(editor->isModified());
+    overwrite(note, "# Welcome\n\nBack again.\n"); // and its new file is watched like the first was
+    WAIT_TRUE(editor->noteText() == QStringLiteral("# Welcome\n\nBack again.\n"), 3000);
+}
+
+TEST_F(WindowTest, ANoteMovedOutsideIsFollowedWithItsCaretAndUnsavedEdits)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    const QString moved = path(QStringLiteral("Projects/Elsewhere.md"));
+    auto [left, right] = splitOn(window, note);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("typed"));
+    ASSERT_TRUE(left->isModified());
+    const int caret = left->cursorOffset();
+    ASSERT_TRUE(QFile::rename(note, moved));
+
+    // Both panes follow, and the autosave then writes the new name, not the old.
+    WAIT_TRUE(window.windowTitle().contains(QStringLiteral("Elsewhere")), 3000);
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(left->cursorOffset(), caret);
+    EXPECT_EQ(readAll(moved), QByteArray("# Welcome\n\nBody.\ntyped"));
+    EXPECT_FALSE(QFile::exists(note)) << "the old name is not recreated";
+    EXPECT_EQ(right->noteText(), left->noteText());
+}
+
+TEST_F(WindowTest, ANoteMovedAndChangedOutsideStaysOnItsOldNameWithANotice)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    ASSERT_TRUE(QFile::rename(note, path(QStringLiteral("Projects/Other.md"))));
+    overwrite(path(QStringLiteral("Projects/Other.md")), "# Something else\n");
+    WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")), 4000);
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
+    QTest::qWait(300);
+    EXPECT_FALSE(QFile::exists(note)) << "nothing writes the old name back";
+}
+
 TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)
 {
     const QString note = path(QStringLiteral("Both.md"));
