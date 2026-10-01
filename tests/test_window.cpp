@@ -2429,6 +2429,53 @@ TEST_F(WindowTest, AFeatureSwitchedOffIsNotBuiltAndItsCommandsStop)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// Vim mode is a setting, off until chosen; on, the status bar shows the mode
+// and :w saves the note through the window's own save.
+TEST_F(WindowTest, VimModeFollowsItsSettingShowsItsModeAndSaves)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    MainWindow window;
+    window.show(); // the settings page builds its rows when shown
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    auto *label = window.findChild<QLabel *>(QStringLiteral("vimStatus"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_FALSE(editor->vimMode());
+    EXPECT_FALSE(label->isVisible());
+
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    noteAppC::ToggleSwitch *toggle = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
+                    QStringLiteral("settingsToggle_editor.vimMode")));
+    }));
+    toggle->click();
+    EXPECT_TRUE(editor->vimMode());
+    EXPECT_TRUE(label->isVisible());
+    EXPECT_EQ(label->text(), QStringLiteral("-- NORMAL --"));
+
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*')));
+    QTest::keyClicks(editor, QStringLiteral(":w"));
+    EXPECT_EQ(label->text(), QStringLiteral(":w"));
+    QTest::keyClick(editor, Qt::Key_Return);
+    EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray(" Welcome\n\nBody.\n"));
+
+    QTest::keyClicks(editor, QStringLiteral("i"));
+    EXPECT_EQ(label->text(), QStringLiteral("-- INSERT --"));
+
+    toggle->click(); // off again: the label goes, typing is plain
+    EXPECT_FALSE(editor->vimMode());
+    EXPECT_FALSE(label->isVisible());
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 TEST_F(WindowTest, ThePropertiesViewListsEveryPropertyWithItsCount)
 {
     write(QStringLiteral("A.md"), "---\nstatus: draft\ntags: [x]\n---\nA\n");

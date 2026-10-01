@@ -21,6 +21,9 @@ command palette is the one large piece deferred; `TODO.md` has the rest.
 - **Rendered** - Obsidian's element-by-element syntax reveal, callouts,
   tables, maths, embeds of notes, images, PDFs, audio and video, editable
   properties, `query` blocks, raw HTML (litehtml), syntax-highlighted code.
+- **Vim mode** - optional (Settings > Editor): normal, insert and visual
+  modes, counts, operators and motions, `.`, `/` search, `:w` and `:q`.
+  `docs/EDITOR.md`.
 - **Workspace** - tabs and nested splits, each tab with its own history; the
   layout comes back with the vault, and named layouts save and load.
 - **Core plugins** - search with Obsidian's grammar, backlinks and unlinked

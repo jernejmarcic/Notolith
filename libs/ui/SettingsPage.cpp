@@ -477,6 +477,10 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Close brackets and quotes as you type, and wrap a selection instead of "
                    "replacing it."));
 
+    addToggleRow(layout, QStringLiteral("editor.vimMode"), tr("Vim key bindings"),
+                tr("Edit modally: Escape for normal mode, i to type, hjkl, w b e, d c y, "
+                   "counts, visual mode, / search and :w :q. Off, the editor is unchanged. "
+                   "See docs/EDITOR.md."));
     addToggleRow(layout, QStringLiteral("editor.strictLineBreaks"), tr("Strict line breaks"),
                 tr("Treat every newline as a line break, the way CommonMark does."));
 #ifdef NOTEAPPC_HAVE_SPELLCHECK

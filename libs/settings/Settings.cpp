@@ -44,6 +44,7 @@ const QVariantMap &defaults()
         {QStringLiteral("fileRecovery.interval"), 5}, // minutes, Obsidian's default
         {QStringLiteral("fileRecovery.keepDays"), 7},
         {QStringLiteral("editor.autoPairs"), true},
+        {QStringLiteral("editor.vimMode"), false},
         {QStringLiteral("editor.showIndentGuides"), true},
         {QStringLiteral("editor.outlineNumbering"), false},
         {QStringLiteral("editor.alignTables"), true},

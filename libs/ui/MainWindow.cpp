@@ -243,6 +243,9 @@ MainWindow::MainWindow(QWidget *parent)
     setCentralWidget(central);
 
     m_wordCount = new QLabel(this);
+    m_vimStatus = new QLabel(this);
+    m_vimStatus->setObjectName(QStringLiteral("vimStatus"));
+    m_vimStatus->hide();
     m_vaultLabel = new QLabel(this);
     m_syncStatus = new QLabel(this);
     m_syncStatus->setObjectName(QStringLiteral("syncStatus"));
@@ -253,6 +256,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_recordingStatus->setObjectName(QStringLiteral("recordingStatus"));
     m_recordingStatus->hide();
     statusBar()->addPermanentWidget(m_recordingStatus);
+    statusBar()->addPermanentWidget(m_vimStatus);
     statusBar()->addPermanentWidget(m_wordCount);
     statusBar()->addPermanentWidget(m_vaultLabel);
     statusBar()->setSizeGripEnabled(false);
@@ -680,6 +684,22 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (m_outline && leaf == m_active)
             m_outline->setCursorOffset(offset);
     });
+    // Vim mode: its mode line sits in the status bar, and :w / :q are the
+    // window's save and close for this tab.
+    connect(editor, &MarkdownEditor::vimStatusChanged, this, [this, leaf] {
+        if (leaf == m_active)
+            updateVimStatus();
+    });
+    connect(editor, &MarkdownEditor::vimSaveRequested, this, [this, leaf] { saveLeaf(leaf, false); });
+    connect(editor, &MarkdownEditor::vimCloseRequested, this, [this, leaf] {
+        // Queued: the editor is still inside the key event that asked, and
+        // closing the tab deletes it.
+        QMetaObject::invokeMethod(this, [this, leaf] {
+            if (std::any_of(m_leaves.cbegin(), m_leaves.cend(),
+                            [leaf](const auto &open) { return open.get() == leaf; }))
+                closeLeaf(leaf);
+        }, Qt::QueuedConnection);
+    });
     connect(editor, &MarkdownEditor::footnotesChanged, this, [this, leaf] {
         if (m_footnotes && leaf == m_active)
             m_footnotes->setFootnotes(leaf->editor->footnotes());
@@ -947,6 +967,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setContentWidth(m_settings.integer(QStringLiteral("editor.contentWidth")));
     editor->setLineNumbers(m_settings.boolean(QStringLiteral("editor.lineNumbers")));
     editor->setAutoPairs(m_settings.boolean(QStringLiteral("editor.autoPairs")));
+    editor->setVimMode(m_settings.boolean(QStringLiteral("editor.vimMode")));
     editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
     editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
     editor->setOutlineNumbering(m_settings.boolean(QStringLiteral("editor.outlineNumbering")));
@@ -4709,8 +4730,16 @@ void MainWindow::updateTitle()
     }
 }
 
+void MainWindow::updateVimStatus()
+{
+    const QString status = m_active ? m_active->editor->vimStatus() : QString();
+    m_vimStatus->setText(status);
+    m_vimStatus->setVisible(!status.isEmpty());
+}
+
 void MainWindow::updateWordCount()
 {
+    updateVimStatus(); // both are "the status bar, for the tab now in front"
     // A canvas or a base has no words of its own to count.
     if (m_active->notePath.isEmpty() || m_active->view || !featureOn("word-count")) {
         m_wordCount->clear();
