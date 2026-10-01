@@ -798,7 +798,7 @@ private:
     /// register belongs to one buffer. The logic is VimEngine, in VimMode.cpp,
     /// a short-lived friend built per keystroke.
     struct VimState {
-        enum class Mode { Normal, Insert, Visual, VisualLine };
+        enum class Mode { Normal, Insert, Visual, VisualLine, VisualBlock };
         bool enabled = false;
         Mode mode = Mode::Normal;
         int count = 0;  ///< typed before the operator
@@ -817,6 +817,38 @@ private:
         bool keepGoal = false;
         QString reg;            ///< the unnamed register; not the clipboard
         bool regLinewise = false;
+        bool regBlock = false;  ///< the unnamed register holds a column block
+        /// a-z and 0: text, and whether it is lines (1) or a block (2)
+        struct Register {
+            QString text;
+            int kind = 0;
+        };
+        QHash<QChar, Register> regs;
+        QChar regName;          ///< chosen by "x for the next command
+        QHash<QChar, qsizetype> marks; ///< a-z, ' (before the last jump), < and >
+        QChar markChar;         ///< the mark ' or ` is going to
+        /// A macro key as typed: replayed by sending it to the editor again.
+        struct MacroKey {
+            int key = 0;
+            int modifiers = 0;
+            QString text;
+        };
+        QHash<QChar, QList<MacroKey>> macros;
+        QChar recording;        ///< the register q is recording into
+        QList<MacroKey> recorded;
+        QChar lastMacro;
+        int macroDepth = 0;     ///< @ inside a macro: bounded
+        /// Block-visual insert (I, A, c): the typed text is copied to the
+        /// other lines when the insert ends.
+        struct BlockInsert {
+            bool active = false;
+            qsizetype firstLine = 0; ///< offset of the first line's start
+            int lines = 0;
+            qsizetype column = 0;
+            bool append = false;     ///< pad short lines (A) rather than skip them
+            bool toEnd = false;      ///< $A: each line's own end
+        } block;
+        QList<Range> overrideBlocks; ///< the columns a block selection paints
         QString lastSearch;
         bool searchForward = true;
         QChar findKind, findChar; ///< last f/F/t/T, for ; and ,

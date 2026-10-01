@@ -652,6 +652,626 @@ TEST(VimTest, TheCaretIsABlockInNormalModeAndABarInInsertMode)
     EXPECT_EQ(bar, withoutVim) << "insert mode draws the editor's own caret";
 }
 
+// --- text objects, % * #, > <, registers, marks, macros, block-visual, :s -------------
+
+TEST(VimTest, WordObjects)
+{
+    {
+        Vim v(QStringLiteral("foo bar baz\n"), 5);
+        v.keys(QStringLiteral("ciwX"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("foo X baz\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo bar baz\n"), 5);
+        v.keys(QStringLiteral("daw"));
+        EXPECT_EQ(v.text(), QStringLiteral("foo baz\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo bar\n"), 5);
+        v.keys(QStringLiteral("daw")); // no space after: the one before goes
+        EXPECT_EQ(v.text(), QStringLiteral("foo\n"));
+    }
+    {
+        Vim v(QStringLiteral("a b c d\n"));
+        v.keys(QStringLiteral("d2aw"));
+        EXPECT_EQ(v.text(), QStringLiteral("c d\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo   bar\n"), 4);
+        v.keys(QStringLiteral("diw")); // on space: the space
+        EXPECT_EQ(v.text(), QStringLiteral("foobar\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo-bar baz\n"), 1);
+        v.keys(QStringLiteral("diW"));
+        EXPECT_EQ(v.text(), QStringLiteral(" baz\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo-bar baz\n"), 1);
+        v.keys(QStringLiteral("diw"));
+        EXPECT_EQ(v.text(), QStringLiteral("-bar baz\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo bar baz\n"), 5);
+        v.keys(QStringLiteral("viw"));
+        EXPECT_EQ(v.editor.selectedText(), QStringLiteral("bar"));
+        v.esc();
+        v.keys(QStringLiteral("vawy"));
+        v.keys(QStringLiteral("$p"));
+        EXPECT_EQ(v.text(), QStringLiteral("foo bar bazbar \n"));
+    }
+    {
+        Vim v(QStringLiteral("foo bar baz\n"));
+        v.keys(QStringLiteral("ciwX"));
+        v.esc();
+        v.keys(QStringLiteral("w."));
+        EXPECT_EQ(v.text(), QStringLiteral("X X baz\n")); // . repeats the object too
+    }
+}
+
+TEST(VimTest, SentenceObjects)
+{
+    {
+        Vim v(QStringLiteral("One. Two three. Four.\n"), 6);
+        v.keys(QStringLiteral("dis"));
+        EXPECT_EQ(v.text(), QStringLiteral("One.  Four.\n"));
+    }
+    {
+        Vim v(QStringLiteral("One. Two three. Four.\n"), 6);
+        v.keys(QStringLiteral("das"));
+        EXPECT_EQ(v.text(), QStringLiteral("One. Four.\n"));
+    }
+    {
+        Vim v(QStringLiteral("One. Two three. Four.\n"), 18);
+        v.keys(QStringLiteral("das")); // the last: the space before goes
+        EXPECT_EQ(v.text(), QStringLiteral("One. Two three.\n"));
+    }
+}
+
+TEST(VimTest, ParagraphObjects)
+{
+    {
+        Vim v(QStringLiteral("a\nb\n\nc\nd\n\ne\n"), 2);
+        v.keys(QStringLiteral("dip"));
+        EXPECT_EQ(v.text(), QStringLiteral("\nc\nd\n\ne\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\n\nc\nd\n\ne\n"), 2);
+        v.keys(QStringLiteral("dap"));
+        EXPECT_EQ(v.text(), QStringLiteral("c\nd\n\ne\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\n\nc\nd\n\ne\n"), 10);
+        v.keys(QStringLiteral("dap")); // the last paragraph: the blank line before goes
+        EXPECT_EQ(v.text(), QStringLiteral("a\nb\n\nc\nd\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\n\nc\n"), 0);
+        v.keys(QStringLiteral("vip"));
+        EXPECT_EQ(v.mode(), QStringLiteral("visual line"));
+        EXPECT_EQ(v.editor.selectedText(), QStringLiteral("a\nb"));
+    }
+}
+
+TEST(VimTest, QuoteObjects)
+{
+    {
+        Vim v(QStringLiteral("say \"hello world\" now\n"), 7);
+        v.keys(QStringLiteral("ci\"X"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("say \"X\" now\n"));
+    }
+    {
+        Vim v(QStringLiteral("say \"hello world\" now\n"));
+        v.keys(QStringLiteral("di\"")); // not inside one: the first after the caret
+        EXPECT_EQ(v.text(), QStringLiteral("say \"\" now\n"));
+    }
+    {
+        Vim v(QStringLiteral("say \"hello world\" now\n"), 7);
+        v.keys(QStringLiteral("da\""));
+        EXPECT_EQ(v.text(), QStringLiteral("say now\n"));
+    }
+    {
+        Vim v(QStringLiteral("a 'b c' d `e f` g\n"), 4);
+        v.keys(QStringLiteral("di'"));
+        EXPECT_EQ(v.text(), QStringLiteral("a '' d `e f` g\n"));
+        v.keys(QStringLiteral("f`ci`Z"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("a '' d `Z` g\n"));
+    }
+    {
+        Vim v(QStringLiteral("a \"b\\\"c\" d\n"), 4);
+        v.keys(QStringLiteral("di\"")); // the escaped quote does not end it
+        EXPECT_EQ(v.text(), QStringLiteral("a \"\" d\n"));
+    }
+}
+
+TEST(VimTest, BracketObjects)
+{
+    const QString nested = QStringLiteral("f(a, (b), c) x\n");
+    {
+        Vim v(nested, 6);
+        v.keys(QStringLiteral("di("));
+        EXPECT_EQ(v.text(), QStringLiteral("f(a, (), c) x\n"));
+    }
+    {
+        Vim v(nested, 6);
+        v.keys(QStringLiteral("d2i("));
+        EXPECT_EQ(v.text(), QStringLiteral("f() x\n"));
+    }
+    {
+        Vim v(nested, 6);
+        v.keys(QStringLiteral("dab"));
+        EXPECT_EQ(v.text(), QStringLiteral("f(a, , c) x\n"));
+    }
+    {
+        Vim v(nested, 7); // on the closing bracket
+        v.keys(QStringLiteral("da)"));
+        EXPECT_EQ(v.text(), QStringLiteral("f(a, , c) x\n"));
+    }
+    {
+        Vim v(QStringLiteral("x[1, 2] <a> {b}\n"), 3);
+        v.keys(QStringLiteral("ci[Q"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("x[Q] <a> {b}\n"));
+        v.keys(QStringLiteral("fadi>"));
+        EXPECT_EQ(v.text(), QStringLiteral("x[Q] <> {b}\n"));
+        v.keys(QStringLiteral("fbdiB"));
+        EXPECT_EQ(v.text(), QStringLiteral("x[Q] <> {}\n"));
+    }
+    {
+        Vim v(QStringLiteral("fn {\n  a\n  b\n}\n"), 7);
+        v.keys(QStringLiteral("di{")); // brackets on their own lines: the lines between
+        EXPECT_EQ(v.text(), QStringLiteral("fn {\n}\n"));
+    }
+    {
+        Vim v(QStringLiteral("fn {\n  a\n  b\n}\n"), 7);
+        v.keys(QStringLiteral("ci{X"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("fn {\nX\n}\n"));
+    }
+    {
+        Vim v(QStringLiteral("no brackets\n"), 3);
+        v.keys(QStringLiteral("di("));
+        EXPECT_EQ(v.text(), QStringLiteral("no brackets\n"));
+    }
+    {
+        Vim v(QStringLiteral("g(foo bar)\n"), 4);
+        v.keys(QStringLiteral("vi("));
+        EXPECT_EQ(v.editor.selectedText(), QStringLiteral("foo bar"));
+        v.esc();
+        v.keys(QStringLiteral("ya(P"));
+        EXPECT_EQ(v.text(), QStringLiteral("g(foo bar)(foo bar)\n"));
+    }
+}
+
+TEST(VimTest, PercentJumpsToTheMatchingBracket)
+{
+    Vim v(QStringLiteral("x (a [b] {c})\n"));
+    v.keys(QStringLiteral("%")); // the first bracket on the line
+    EXPECT_EQ(v.cursor(), 12);
+    v.keys(QStringLiteral("%"));
+    EXPECT_EQ(v.cursor(), 2);
+    v.keys(QStringLiteral("fb%"));
+    EXPECT_EQ(v.cursor(), 5); // from b the first bracket ahead is ], whose partner is [
+    v.keys(QStringLiteral("0d%"));
+    EXPECT_EQ(v.text(), QStringLiteral("\n"));
+}
+
+TEST(VimTest, PercentOverMultipleLines)
+{
+    Vim v(QStringLiteral("{\n  (a)\n}\n"));
+    v.keys(QStringLiteral("%"));
+    EXPECT_EQ(v.cursor(), 8);
+    v.keys(QStringLiteral("%"));
+    EXPECT_EQ(v.cursor(), 0);
+}
+
+TEST(VimTest, IndentAndOutdent)
+{
+    {
+        Vim v(QStringLiteral("a\nb\n"));
+        v.keys(QStringLiteral(">>"));
+        EXPECT_EQ(v.text(), QStringLiteral("    a\nb\n"));
+        EXPECT_EQ(v.cursor(), 4);
+        v.keys(QStringLiteral("<<"));
+        EXPECT_EQ(v.text(), QStringLiteral("a\nb\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\n\nb\nc\n"));
+        v.keys(QStringLiteral("3>>")); // empty lines stay empty
+        EXPECT_EQ(v.text(), QStringLiteral("    a\n\n    b\nc\n"));
+        v.keys(QStringLiteral("u"));
+        EXPECT_EQ(v.text(), QStringLiteral("a\n\nb\nc\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\nc\n"));
+        v.keys(QStringLiteral(">j"));
+        EXPECT_EQ(v.text(), QStringLiteral("    a\n    b\nc\n"));
+        v.keys(QStringLiteral("gg>ip"));
+        EXPECT_EQ(v.text(), QStringLiteral("        a\n        b\n    c\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\nc\n"));
+        v.editor.setTabWidth(2);
+        v.keys(QStringLiteral("Vj>"));
+        EXPECT_EQ(v.text(), QStringLiteral("  a\n  b\nc\n"));
+        EXPECT_EQ(v.mode(), QStringLiteral("normal"));
+        v.keys(QStringLiteral("gg"));
+        v.keys(QStringLiteral("Vj2>"));
+        EXPECT_EQ(v.text(), QStringLiteral("      a\n      b\nc\n"));
+        v.keys(QStringLiteral("gg"));
+        v.keys(QStringLiteral("Vj<"));
+        EXPECT_EQ(v.text(), QStringLiteral("    a\n    b\nc\n"));
+    }
+    {
+        Vim v(QStringLiteral("\tfoo\n  bar\n"));
+        v.keys(QStringLiteral("<<"));
+        EXPECT_EQ(v.text(), QStringLiteral("foo\n  bar\n")); // a tab counts as one level
+        v.keys(QStringLiteral("j<<"));
+        EXPECT_EQ(v.text(), QStringLiteral("foo\nbar\n"));
+    }
+}
+
+TEST(VimTest, NamedRegisters)
+{
+    {
+        Vim v(QStringLiteral("one\ntwo\n"));
+        v.keys(QStringLiteral("\"ayyj\"byy"));
+        v.keys(QStringLiteral("\"ap"));
+        EXPECT_EQ(v.text(), QStringLiteral("one\ntwo\none\n"));
+        v.keys(QStringLiteral("\"bP"));
+        EXPECT_EQ(v.text(), QStringLiteral("one\ntwo\ntwo\none\n"));
+        v.keys(QStringLiteral("\"Ayy")); // appends the current line ("two") to a
+        v.keys(QStringLiteral("G\"ap"));
+        EXPECT_EQ(v.text(), QStringLiteral("one\ntwo\ntwo\none\none\ntwo\n"));
+    }
+    {
+        Vim v(QStringLiteral("foo bar\n"));
+        v.keys(QStringLiteral("yiwwdiw")); // the delete overwrites "" but not "0
+        v.keys(QStringLiteral("\"0P"));
+        EXPECT_EQ(v.text(), QStringLiteral("foofoo \n"));
+        v.keys(QStringLiteral("u"));
+        v.keys(QStringLiteral("\"\"P"));
+        EXPECT_EQ(v.text(), QStringLiteral("foobar \n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\n"));
+        v.keys(QStringLiteral("yyj\"_ddp")); // the black hole keeps what was yanked
+        EXPECT_EQ(v.text(), QStringLiteral("a\na\n"));
+    }
+    {
+        Vim v(QStringLiteral("abc def\n"));
+        v.keys(QStringLiteral("\"xdw"));
+        v.keys(QStringLiteral("\"xp"));
+        EXPECT_EQ(v.text(), QStringLiteral("dabc ef\n"));
+    }
+}
+
+TEST(VimTest, ClipboardRegister)
+{
+    {
+        Vim v(QStringLiteral("one\ntwo\n"));
+        v.keys(QStringLiteral("\"+yy"));
+        EXPECT_EQ(QApplication::clipboard()->text(), QStringLiteral("one\n"));
+        v.keys(QStringLiteral("\"+yiw"));
+        EXPECT_EQ(QApplication::clipboard()->text(), QStringLiteral("one"));
+    }
+    {
+        QApplication::clipboard()->setText(QStringLiteral("clip"));
+        Vim v(QStringLiteral("ab\n"));
+        v.keys(QStringLiteral("\"+p"));
+        EXPECT_EQ(v.text(), QStringLiteral("aclipb\n"));
+    }
+    {
+        QApplication::clipboard()->setText(QStringLiteral("line\n"));
+        Vim v(QStringLiteral("ab\n"));
+        v.keys(QStringLiteral("\"*p")); // text ending in a newline goes in as a line
+        EXPECT_EQ(v.text(), QStringLiteral("ab\nline\n"));
+    }
+    {
+        QApplication::clipboard()->setText(QStringLiteral("keep"));
+        Vim v(QStringLiteral("ab\n"));
+        v.keys(QStringLiteral("yy"));
+        EXPECT_EQ(QApplication::clipboard()->text(), QStringLiteral("keep")); // plain yanks stay off it
+    }
+}
+
+TEST(VimTest, Marks)
+{
+    {
+        Vim v(QStringLiteral("one\ntwo\nthree\nfour\n"), 2);
+        v.keys(QStringLiteral("ma"));
+        v.keys(QStringLiteral("G'a"));
+        EXPECT_EQ(v.cursor(), 0); // ' goes to the line's first non-blank
+        v.keys(QStringLiteral("G`a"));
+        EXPECT_EQ(v.cursor(), 2); // ` to the exact place
+    }
+    {
+        Vim v(QStringLiteral("one\ntwo\nthree\nfour\n"));
+        v.keys(QStringLiteral("majjd'a")); // a linewise motion
+        EXPECT_EQ(v.text(), QStringLiteral("four\n"));
+    }
+    {
+        Vim v(QStringLiteral("one two\n"));
+        v.keys(QStringLiteral("wmb0d`b")); // a characterwise one
+        EXPECT_EQ(v.text(), QStringLiteral("two\n"));
+    }
+    {
+        Vim v(QStringLiteral("one\ntwo\nthree\n"));
+        v.keys(QStringLiteral("jma"));
+        v.keys(QStringLiteral("ggOnew"));
+        v.esc();
+        v.keys(QStringLiteral("'a")); // the mark moved with its text
+        EXPECT_EQ(v.cursor(), v.text().indexOf(QStringLiteral("two")));
+    }
+    {
+        Vim v(QStringLiteral("one\ntwo\nthree\n"));
+        v.keys(QStringLiteral("G``"));
+        EXPECT_EQ(v.cursor(), 0); // back to where the jump began
+        v.keys(QStringLiteral("''"));
+        EXPECT_EQ(v.cursor(), v.text().indexOf(QStringLiteral("three")));
+    }
+    {
+        Vim v(QStringLiteral("one\n"));
+        v.keys(QStringLiteral("'z"));
+        EXPECT_TRUE(v.editor.vimStatus().startsWith(QStringLiteral("E20")));
+    }
+}
+
+TEST(VimTest, Macros)
+{
+    {
+        Vim v(QStringLiteral("a\nb\nc\nd\n"));
+        v.keys(QStringLiteral("qa"));
+        EXPECT_TRUE(v.editor.vimStatus().contains(QStringLiteral("recording @a")));
+        v.keys(QStringLiteral("A!"));
+        v.esc();
+        v.keys(QStringLiteral("jq"));
+        EXPECT_FALSE(v.editor.vimStatus().contains(QStringLiteral("recording")));
+        EXPECT_EQ(v.text(), QStringLiteral("a!\nb\nc\nd\n"));
+        v.keys(QStringLiteral("@a"));
+        EXPECT_EQ(v.text(), QStringLiteral("a!\nb!\nc\nd\n"));
+        v.keys(QStringLiteral("@@"));
+        EXPECT_EQ(v.text(), QStringLiteral("a!\nb!\nc!\nd\n"));
+        v.keys(QStringLiteral("u")); // the replayed insert is one undo step
+        EXPECT_EQ(v.text(), QStringLiteral("a!\nb!\nc\nd\n"));
+    }
+    {
+        Vim v(QStringLiteral("1\n2\n3\n4\n5\n"));
+        v.keys(QStringLiteral("qqI-"));
+        v.esc();
+        v.keys(QStringLiteral("jq"));
+        v.keys(QStringLiteral("3@q"));
+        EXPECT_EQ(v.text(), QStringLiteral("-1\n-2\n-3\n-4\n5\n"));
+    }
+    {
+        Vim v(QStringLiteral("one two three\n"));
+        v.keys(QStringLiteral("qwdwq")); // normal-mode commands only
+        v.keys(QStringLiteral("@w"));
+        EXPECT_EQ(v.text(), QStringLiteral("three\n"));
+    }
+    {
+        Vim v(QStringLiteral("x\n"));
+        v.keys(QStringLiteral("qaAy"));
+        v.esc();
+        v.keys(QStringLiteral("q"));
+        v.keys(QStringLiteral("qAAz"));
+        v.esc();
+        v.keys(QStringLiteral("q")); // qA appends to a
+        EXPECT_EQ(v.text(), QStringLiteral("xyz\n"));
+        v.keys(QStringLiteral("@a"));
+        EXPECT_EQ(v.text(), QStringLiteral("xyzyz\n"));
+    }
+    {
+        Vim v(QStringLiteral("x\n"));
+        v.keys(QStringLiteral("@b")); // nothing recorded: nothing happens
+        EXPECT_EQ(v.text(), QStringLiteral("x\n"));
+        v.keys(QStringLiteral("qaq")); // an empty macro that runs itself
+        v.keys(QStringLiteral("qa@aq"));
+        v.keys(QStringLiteral("@a"));
+        EXPECT_EQ(v.text(), QStringLiteral("x\n"));
+    }
+}
+
+TEST(VimTest, BlockVisualDelete)
+{
+    Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+    v.key(Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(v.mode(), QStringLiteral("visual block"));
+    v.keys(QStringLiteral("jl"));
+    EXPECT_EQ(v.editor.vimStatus(), QStringLiteral("-- VISUAL BLOCK --"));
+    v.keys(QStringLiteral("d"));
+    EXPECT_EQ(v.text(), QStringLiteral("ad\neh\nijkl\n"));
+    EXPECT_EQ(v.mode(), QStringLiteral("normal"));
+    v.keys(QStringLiteral("u")); // one undo step for the whole block
+    EXPECT_EQ(v.text(), QStringLiteral("abcd\nefgh\nijkl\n"));
+}
+
+TEST(VimTest, BlockVisualYankAndPaste)
+{
+    Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+    v.key(Qt::Key_V, Qt::ControlModifier);
+    v.keys(QStringLiteral("jly"));
+    EXPECT_EQ(v.cursor(), 1);
+    v.keys(QStringLiteral("jjp")); // a block goes in as a block, adding lines it needs
+    EXPECT_EQ(v.text(), QStringLiteral("abcd\nefgh\nijbckl\n  fg\n"));
+}
+
+TEST(VimTest, BlockVisualInsertAndAppend)
+{
+    {
+        Vim v(QStringLiteral("abcd\nefgh\nijkl\n"));
+        v.key(Qt::Key_V, Qt::ControlModifier);
+        v.keys(QStringLiteral("jjIX"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("Xabcd\nXefgh\nXijkl\n"));
+        EXPECT_EQ(v.cursor(), 0);
+        v.keys(QStringLiteral("u"));
+        EXPECT_EQ(v.text(), QStringLiteral("abcd\nefgh\nijkl\n"));
+    }
+    {
+        Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+        v.key(Qt::Key_V, Qt::ControlModifier);
+        v.keys(QStringLiteral("jjlA!"));
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("abc!d\nefg!h\nijk!l\n"));
+    }
+    {
+        Vim v(QStringLiteral("abcd\nx\nefgh\n"), 3);
+        v.key(Qt::Key_V, Qt::ControlModifier);
+        v.keys(QStringLiteral("jjA!")); // a short line is padded out to the block
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("abcd!\nx   !\nefgh!\n"));
+    }
+    {
+        Vim v(QStringLiteral("ab\nabcd\nx\n"));
+        v.key(Qt::Key_V, Qt::ControlModifier);
+        v.keys(QStringLiteral("jj$A;")); // $A: every line's own end
+        v.esc();
+        EXPECT_EQ(v.text(), QStringLiteral("ab;\nabcd;\nx;\n"));
+    }
+}
+
+TEST(VimTest, BlockVisualChange)
+{
+    Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+    v.key(Qt::Key_V, Qt::ControlModifier);
+    v.keys(QStringLiteral("jlcZ"));
+    v.esc();
+    EXPECT_EQ(v.text(), QStringLiteral("aZd\neZh\nijkl\n"));
+}
+
+TEST(VimTest, BlockVisualIsPaintedAsStrips)
+{
+    // Same corners, same text: a block draws two short strips, a characterwise
+    // selection draws the span between them, so the pictures differ.
+    Vim block(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+    block.key(Qt::Key_V, Qt::ControlModifier);
+    block.keys(QStringLiteral("jl"));
+    Vim span(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+    span.keys(QStringLiteral("vjl"));
+    EXPECT_NE(block.editor.viewport()->grab().toImage(), span.editor.viewport()->grab().toImage());
+    block.esc();
+    EXPECT_EQ(block.mode(), QStringLiteral("normal"));
+}
+
+TEST(VimTest, BlockVisualShift)
+{
+    Vim v(QStringLiteral("a\nb\nc\n"));
+    v.key(Qt::Key_V, Qt::ControlModifier);
+    v.keys(QStringLiteral("j>"));
+    EXPECT_EQ(v.text(), QStringLiteral("    a\n    b\nc\n"));
+}
+
+TEST(VimTest, SubstituteOnALine)
+{
+    Vim v(QStringLiteral("foo foo\nfoo bar\nbaz\n"));
+    v.keys(QStringLiteral(":s/foo/X/"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.text(), QStringLiteral("X foo\nfoo bar\nbaz\n"));
+    v.keys(QStringLiteral(":s/foo/Y/g"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.text(), QStringLiteral("X Y\nfoo bar\nbaz\n"));
+    v.keys(QStringLiteral("u"));
+    EXPECT_EQ(v.text(), QStringLiteral("X foo\nfoo bar\nbaz\n"));
+    v.keys(QStringLiteral(":s/nothing/Z/"));
+    v.key(Qt::Key_Return);
+    EXPECT_TRUE(v.editor.vimStatus().startsWith(QStringLiteral("E486")));
+    EXPECT_EQ(v.text(), QStringLiteral("X foo\nfoo bar\nbaz\n"));
+}
+
+TEST(VimTest, SubstituteWithRanges)
+{
+    const auto run = [](const QString &text, const QString &keys) {
+        Vim v(text);
+        v.keys(keys);
+        v.key(Qt::Key_Return);
+        return v.text();
+    };
+    EXPECT_EQ(run(QStringLiteral("foo foo\nfoo bar\nbaz\n"), QStringLiteral(":%s/foo/[&]/g")),
+              QStringLiteral("[foo] [foo]\n[foo] bar\nbaz\n"));
+    EXPECT_EQ(run(QStringLiteral("a a\nb a\nc a\nd a\n"), QStringLiteral(":2,3s/a/A/")),
+              QStringLiteral("a a\nb A\nc A\nd a\n"));
+    EXPECT_EQ(run(QStringLiteral("a\na\na\na\n"), QStringLiteral(":2,$s/a/b/")),
+              QStringLiteral("a\nb\nb\nb\n"));
+    EXPECT_EQ(run(QStringLiteral("a\na\na\na\n"), QStringLiteral(":.,+1s/a/b/")),
+              QStringLiteral("b\nb\na\na\n"));
+    EXPECT_EQ(run(QStringLiteral("foo bar\n"), QStringLiteral(":s/(\\w+) (\\w+)/\\2 \\1/")),
+              QStringLiteral("bar foo\n"));
+    EXPECT_EQ(run(QStringLiteral("a/b\n"), QStringLiteral(":s#/#-#")), QStringLiteral("a-b\n"));
+    EXPECT_EQ(run(QStringLiteral("a/b\n"), QStringLiteral(":s/\\//-/")), QStringLiteral("a-b\n"));
+    EXPECT_EQ(run(QStringLiteral("Foo foo\n"), QStringLiteral(":s/foo/x/gi")), QStringLiteral("x x\n"));
+    EXPECT_EQ(run(QStringLiteral("Foo foo\n"), QStringLiteral(":s/foo/x/g")), QStringLiteral("Foo x\n"));
+    EXPECT_EQ(run(QStringLiteral("a\nb\n"), QStringLiteral(":%s/^/> /")), QStringLiteral("> a\n> b\n"));
+    EXPECT_EQ(run(QStringLiteral("a,b\n"), QStringLiteral(":s/,/\\r/")), QStringLiteral("a\nb\n"));
+    EXPECT_EQ(run(QStringLiteral("a\nb\n"), QStringLiteral(":$s/b/c/")), QStringLiteral("a\nc\n"));
+}
+
+TEST(VimTest, SubstituteOverTheVisualSelection)
+{
+    Vim v(QStringLiteral("foo\nboo\nzoo\n"));
+    v.keys(QStringLiteral("Vj:"));
+    EXPECT_EQ(v.editor.vimStatus(), QStringLiteral(":'<,'>"));
+    v.keys(QStringLiteral("s/o/0/"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.text(), QStringLiteral("f0o\nb0o\nzoo\n"));
+    EXPECT_EQ(v.mode(), QStringLiteral("normal"));
+}
+
+TEST(VimTest, SubstituteWithMarkRanges)
+{
+    Vim v(QStringLiteral("a\nb\nc\nd\n"));
+    v.keys(QStringLiteral("jmajmb"));
+    v.keys(QStringLiteral(":'a,'bs/$/!/"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.text(), QStringLiteral("a\nb!\nc!\nd\n"));
+}
+
+TEST(VimTest, ExLineJumpsWithAddresses)
+{
+    Vim v(QStringLiteral("a\nb\nc\nd\n"));
+    v.keys(QStringLiteral(":$"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.cursor(), 6);
+    v.keys(QStringLiteral(":2"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.cursor(), 2);
+    v.keys(QStringLiteral(":.+1"));
+    v.key(Qt::Key_Return);
+    EXPECT_EQ(v.cursor(), 4);
+}
+
+TEST(VimTest, StarAndHashSearchTheWordUnderTheCaret)
+{
+    Vim v(QStringLiteral("foo bar foo baz foo\nfoobar\n"));
+    v.keys(QStringLiteral("*"));
+    EXPECT_EQ(v.cursor(), 8); // whole words only: foobar is not foo
+    v.keys(QStringLiteral("*"));
+    EXPECT_EQ(v.cursor(), 16);
+    v.keys(QStringLiteral("*"));
+    EXPECT_EQ(v.cursor(), 0); // wraps
+    v.keys(QStringLiteral("n"));
+    EXPECT_EQ(v.cursor(), 8);
+    v.keys(QStringLiteral("#"));
+    EXPECT_EQ(v.cursor(), 0);
+    v.keys(QStringLiteral("l#")); // from inside a word, not that word again
+    EXPECT_EQ(v.cursor(), 16);
+    v.keys(QStringLiteral("0w*"));
+    EXPECT_EQ(v.cursor(), 4); // bar occurs once: stays
+}
+
+TEST(VimTest, StarWithAnOperatorAndACount)
+{
+    Vim v(QStringLiteral("a x a x a\n"));
+    v.keys(QStringLiteral("2*"));
+    EXPECT_EQ(v.cursor(), 8);
+    v.keys(QStringLiteral("0d*"));
+    EXPECT_EQ(v.text(), QStringLiteral("a x a\n"));
+}
+
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

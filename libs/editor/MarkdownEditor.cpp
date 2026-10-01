@@ -3327,10 +3327,16 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             continue; // the header is all a folded block shows
 
         QList<QTextLayout::FormatRange> selectionRanges;
-        if (selected.length() > 0 && selected.overlaps(view.span.range)) {
+        // Vim's block selection is several column strips, not one span.
+        const bool strips = m_vim.enabled && !m_vim.overrideBlocks.isEmpty() && selected.length() > 0
+                            && m_cursor == m_vim.overrideCursor && m_anchor == m_vim.overrideAnchor;
+        const QList<Range> parts = strips ? m_vim.overrideBlocks : QList<Range>{selected};
+        for (const Range &part : parts) {
+            if (part.length() <= 0 || !part.overlaps(view.span.range))
+                continue;
             const Range shown = view.map.toDisplay(
-                {qMax(selected.start, view.span.range.start),
-                 qMin(selected.end, view.span.range.end)});
+                {qMax(part.start, view.span.range.start),
+                 qMin(part.end, view.span.range.end)});
             if (shown.length() > 0) {
                 QTextLayout::FormatRange range;
                 range.start = int(shown.start);
@@ -3824,6 +3830,14 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
 {
     m_text.remove(at, removed);
     m_text.insert(at, inserted);
+    if (m_vim.enabled && !m_vim.marks.isEmpty()) { // vim's marks follow their text
+        for (qsizetype &mark : m_vim.marks) {
+            if (mark >= at + removed)
+                mark += inserted.size() - removed;
+            else if (mark > at)
+                mark = at;
+        }
+    }
 
     // The caret's block is shown raw, so a stale decoration inside it changes
     // nothing on screen; every other block is untouched by this edit. Shifting
