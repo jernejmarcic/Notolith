@@ -28,6 +28,11 @@ if(noteappc_have_litehtml)
 endif()
 add_test(NAME editor COMMAND test_editor)
 
+# Vim mode drives the editor with key events only; no window is shown.
+add_executable(test_vim test_vim.cpp)
+target_link_libraries(test_vim PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME vim COMMAND test_vim)
+
 # Its own executable, deliberately: see test_pdfpage_race.cpp's header
 # comment on why this needs to be the first thing in its process to touch
 # PdfPage::render.

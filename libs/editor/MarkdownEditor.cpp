@@ -351,6 +351,17 @@ void MarkdownEditor::setNoteText(const QString &text)
         updateFindMatches();
     setModified(false);
     verticalScrollBar()->setValue(0);
+    if (m_vim.enabled) { // a new buffer: back to normal mode, the register kept
+        VimState fresh;
+        fresh.enabled = true;
+        fresh.reg = m_vim.reg;
+        fresh.regLinewise = m_vim.regLinewise;
+        fresh.lastSearch = m_vim.lastSearch;
+        fresh.searchForward = m_vim.searchForward;
+        fresh.lastStatus = m_vim.lastStatus;
+        m_vim = fresh;
+        emitVimStatus();
+    }
     viewport()->update();
 }
 
@@ -3123,7 +3134,7 @@ void MarkdownEditor::updateLayout()
     // nothing changes at all: revealing the syntax mid-drag moved the text out
     // from under the pointer, so the selection chased it.
     const bool bareCaret =
-        m_mode == Mode::LivePreview && m_interacted && selection().length() == 0;
+        m_mode == Mode::LivePreview && m_interacted && (m_vim.enabled || selection().length() == 0);
 
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
@@ -3423,10 +3434,24 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
         const QPointF point = cursorPoint();
         if (!point.isNull() || m_cursor == 0) {
-            painter.setPen(QPen(m_theme.color(QStringLiteral("--text-normal")), 2));
             const qreal lineHeight = QFontMetricsF(font()).height() * 1.4;
-            painter.drawLine(QPointF(point.x(), point.y()),
-                             QPointF(point.x(), point.y() + lineHeight));
+            if (m_vim.enabled && m_vim.mode != VimState::Mode::Insert) {
+                // Normal and visual mode: a block over the character the
+                // next command acts on, as wide as that character is drawn.
+                qreal width = QFontMetricsF(font()).averageCharWidth();
+                if (m_cursor < m_text.size() && m_text.at(m_cursor) != QLatin1Char('\n')) {
+                    const QPointF after = pointFor(m_cursor + 1);
+                    if (!after.isNull() && qAbs(after.y() - point.y()) < 1 && after.x() > point.x())
+                        width = after.x() - point.x();
+                }
+                QColor block = m_theme.color(QStringLiteral("--text-normal"));
+                block.setAlphaF(0.55f);
+                painter.fillRect(QRectF(point.x(), point.y(), width, lineHeight), block);
+            } else {
+                painter.setPen(QPen(m_theme.color(QStringLiteral("--text-normal")), 2));
+                painter.drawLine(QPointF(point.x(), point.y()),
+                                 QPointF(point.x(), point.y() + lineHeight));
+            }
         }
     }
     paintSelectionHandles(painter);
@@ -3678,6 +3703,8 @@ void MarkdownEditor::moveVertically(int lines, bool keepAnchor)
 
 Range MarkdownEditor::selection() const
 {
+    if (m_vim.overrideRange.isValid() && m_cursor == m_vim.overrideCursor && m_anchor == m_vim.overrideAnchor)
+        return m_vim.overrideRange;
     return {qMin(m_cursor, m_anchor), qMax(m_cursor, m_anchor)};
 }
 
@@ -3685,6 +3712,8 @@ Range MarkdownEditor::selection() const
 
 void MarkdownEditor::pushUndo()
 {
+    if (m_vim.hold) // a vim insert session: one step, taken when it began
+        return;
     // Typing bursts collapse into one undo step, as in every other editor.
     // A command that invalidated the timer is saying it is not part of one.
     if (!m_undo.isEmpty() && m_lastEdit.isValid() && m_lastEdit.elapsed() < kTypingBurstMs) {
@@ -4084,6 +4113,10 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         m_interacted = true;
         updateLayout();
     }
+    // Vim mode (VimMode.cpp). Off, this is the only cost; in insert mode it
+    // claims Escape and nothing else.
+    if (m_vim.enabled && m_mode != Mode::Reading && handleVimKey(event))
+        return;
 
     // Rebindable commands first, then the keys every text field has.
     const QKeyCombination pressed(event->modifiers() & ~Qt::KeypadModifier,
@@ -4498,6 +4531,12 @@ void MarkdownEditor::focusOutEvent(QFocusEvent *event)
 
 void MarkdownEditor::inputMethodEvent(QInputMethodEvent *event)
 {
+    // Vim's normal and visual modes take keys as commands: composed text
+    // would be typed into the note without an insert.
+    if (m_vim.enabled && m_vim.mode != VimState::Mode::Insert) {
+        event->accept();
+        return;
+    }
     if (!event->commitString().isEmpty())
         insertText(event->commitString());
     event->accept();

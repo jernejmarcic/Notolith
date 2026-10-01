@@ -394,6 +394,7 @@ private:
     void autosave();
     void updateTitle();
     void updateWordCount();
+void updateVimStatus();
     void onIndexChanged();
     /// Opens a vault-relative path from the index or the switcher.
     void openRelative(const QString &relativePath);
@@ -544,6 +545,7 @@ private:
     Hotkeys::Bindings m_editorBindings; ///< for editors made after applyHotkeys()
     MarkdownEditor::Spelling m_editorSpelling;
     QLabel *m_wordCount = nullptr;
+QLabel *m_vimStatus = nullptr;
     QLabel *m_syncStatus = nullptr;
     QLabel *m_recordingStatus = nullptr;
     AudioRecorder *m_recorder = nullptr; ///< made on the first recording

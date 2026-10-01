@@ -49,6 +49,8 @@ class QMenu;
 
 namespace noteAppC {
 
+class VimEngine;
+
 /// How far a callout inside a callout steps in. Wide enough for its own icon,
 /// which is drawn in the space this opens up. Shared, because the layout sets
 /// the indent and the renderers draw into it.
@@ -563,6 +565,21 @@ public:
     void setAutoPairs(bool on) { m_autoPairs = on; }
     bool autoPairs() const { return m_autoPairs; }
 
+    // --- vim mode, VimMode.cpp --------------------------------------------
+    // Optional modal editing: off by default, and off it is one bool test in
+    // keyPressEvent. Insert mode passes every key through to the ordinary
+    // handling below, so IME, auto-pairs and the rebindable shortcuts are
+    // untouched there.
+
+    /// Switches modal editing on or off. A fresh editor starts in normal mode.
+    void setVimMode(bool on);
+    bool vimMode() const { return m_vim.enabled; }
+    /// "normal", "insert", "visual" or "visual line"; empty with vim mode off.
+    QString vimModeName() const;
+    /// What the status bar shows: "-- INSERT --", the keys of a half-typed
+    /// command, a `:` or `/` line being typed, or an error. Empty when off.
+    QString vimStatus() const;
+
     // --- editing commands -------------------------------------------------
     // Bound to the same keys Obsidian uses; public so the Phase 4 command
     // palette can reach them without a second implementation.
@@ -672,6 +689,12 @@ public:
     int footnotesListRowCount() const;
 
 signals:
+    /// vimStatus() changed: a mode switch, a pending key, a `:` line.
+    void vimStatusChanged(const QString &status);
+    /// `:w` (and `:wq`, `:x`): the window saves this note.
+    void vimSaveRequested();
+    /// `:q` (and `:wq`, `:x`): the window closes this note's tab.
+    void vimCloseRequested();
     /// The word count moved. It is published with each parse, so it lags a
     /// keystroke by the parse debounce instead of costing the keystroke.
     void wordCountChanged(int words);
@@ -735,6 +758,48 @@ protected:
     QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
 
 private:
+    friend class VimEngine;
+
+    /// Everything modal editing remembers, in the editor because a count or a
+    /// register belongs to one buffer. The logic is VimEngine, in VimMode.cpp,
+    /// a short-lived friend built per keystroke.
+    struct VimState {
+        enum class Mode { Normal, Insert, Visual, VisualLine };
+        bool enabled = false;
+        Mode mode = Mode::Normal;
+        int count = 0;  ///< typed before the operator
+        int count2 = 0; ///< typed after it: 2d3w is 6 words
+        QChar op;       ///< d, c or y, waiting for its motion
+        QChar pending;  ///< g, r, f, F, t or T, waiting for one more key
+        QChar cmdKind;  ///< ':', '/' or '?' while that line is being typed
+        QString cmdline;
+        QString message;
+        QString keys;   ///< the command typed so far, for `.`
+        QString lastChange; ///< the last change's keys, replayed by `.`
+        QString lastInserted;
+        bool recordInsert = false;
+        bool replaying = false;
+        qsizetype goalCol = -1; ///< column j and k aim for
+        bool keepGoal = false;
+        QString reg;            ///< the unnamed register; not the clipboard
+        bool regLinewise = false;
+        QString lastSearch;
+        bool searchForward = true;
+        QChar findKind, findChar; ///< last f/F/t/T, for ; and ,
+        qsizetype insertStart = 0;
+        bool hold = false; ///< an insert session is one undo step: pushUndo waits
+        /// Visual mode's selection as drawn and edited, which is not the
+        /// anchor-to-caret span: it includes the character under the caret, or
+        /// whole lines. Honoured only while the caret and anchor are where
+        /// the mode left them, so a mouse click quietly cancels it.
+        Range overrideRange{-1, -1};
+        qsizetype overrideCursor = -1;
+        qsizetype overrideAnchor = -1;
+        QString lastStatus;
+    } m_vim;
+    bool handleVimKey(QKeyEvent *event);
+    void emitVimStatus();
+
     /// One row of the frontmatter properties table: the key and its type icon
     /// on the left, the typed value on the right. Rectangles are relative to
     /// the block's own origin, like a table Cell's.
