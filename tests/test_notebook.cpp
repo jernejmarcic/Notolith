@@ -575,6 +575,27 @@ TEST(NotebookKernelFeatureTest, RichOutputsComeBackInOrderAndInTheirRichestForm)
     controller.shutdownAll();
 }
 
+TEST(NotebookKernelFeatureTest, AMatplotlibFigureComesBackAsAPicture)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    QProcess probe;
+    probe.start(QStringLiteral("python3"), {QStringLiteral("-c"), QStringLiteral("import matplotlib, matplotlib_inline")});
+    if (!probe.waitForFinished(20000) || probe.exitCode() != 0)
+        GTEST_SKIP() << "matplotlib is not installed";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookRunResult plot = runThrough(
+        controller, kernelRequest(),
+        QStringLiteral("import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])\nplt.show()"), 60000);
+    ASSERT_TRUE(plot.ok) << plot.kernelError.toStdString();
+    const bool hasPicture = std::any_of(plot.outputs.cbegin(), plot.outputs.cend(), [](const NotebookOutput &output) {
+        return output.kind == NotebookOutput::Kind::ImagePng && output.imageBytes.startsWith("\x89PNG");
+    });
+    EXPECT_TRUE(hasPicture);
+    controller.shutdownAll();
+}
+
 TEST(NotebookKernelFeatureTest, ATimedOutRunIsInterruptedAndADeadKernelIsReplaced)
 {
     if (!pythonKernelAvailable())
