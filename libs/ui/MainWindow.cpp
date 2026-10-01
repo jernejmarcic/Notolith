@@ -4943,14 +4943,17 @@ bool MainWindow::maybeSave()
 {
     if (m_active->notePath.isEmpty() || !isModified(m_active))
         return true;
-    // Obsidian's way: what is typed is kept, never asked about.
-    if (m_settings.boolean(QStringLiteral("files.autosave")))
+    // Obsidian's way: what is typed is kept, never asked about - unless the
+    // file is gone and was not found, where saving would bring it back.
+    const bool lost = m_lostNotes.value(m_active->notePath, false);
+    if (!lost && m_settings.boolean(QStringLiteral("files.autosave")))
         return saveLeaf(m_active, true);
 
     const QString shown =
         m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
     const auto answer = QMessageBox::question(
-        this, tr("Unsaved changes"), tr("Save changes to %1?").arg(shown),
+        this, tr("Unsaved changes"),
+        lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown),
         QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
 
     if (answer == QMessageBox::Cancel)

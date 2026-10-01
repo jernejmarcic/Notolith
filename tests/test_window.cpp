@@ -3071,6 +3071,31 @@ TEST_F(WindowTest, ANoteMovedAndChangedOutsideStaysOnItsOldNameAndIsNotSavedBack
     EXPECT_FALSE(editor->isModified());
 }
 
+// Leaving a lost note asks, even with autosave on: saving would recreate it.
+TEST_F(WindowTest, LeavingANoteGoneFromDiskAsksBeforeWritingItBack)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    QTest::keyClicks(window.editor(), QStringLiteral("typed"));
+    ASSERT_TRUE(QFile::rename(note, path(QStringLiteral("Projects/Other.md"))));
+    overwrite(path(QStringLiteral("Projects/Other.md")), "# Something else\n");
+    WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")), 4000);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            box->button(QMessageBox::Discard)->click();
+        }
+    });
+    watch.start(20);
+    window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+    EXPECT_TRUE(asked);
+    EXPECT_FALSE(QFile::exists(note));
+}
+
 TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)
 {
     const QString note = path(QStringLiteral("Both.md"));
