@@ -3,6 +3,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -122,6 +123,32 @@ TEST(VaultIo, EditKeepsTheFilesLineEndings)
     ASSERT_TRUE(Vault::write(path, note, &error));
 
     EXPECT_EQ(readAll(path), QByteArray("one\r\nthree\r\n"));
+}
+
+// A save replaces the file atomically; what the file was besides its bytes
+// stays: a symlink stays a link to the same file, and the mode is kept.
+TEST(VaultIo, ASaveKeepsASymlinkAndTheFilesMode)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString target = dir.filePath(QStringLiteral("elsewhere.md"));
+    const QString link = dir.filePath(QStringLiteral("linked.md"));
+    {
+        QFile file(target);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("old\n");
+    }
+    ASSERT_TRUE(QFile::setPermissions(target, QFile::ReadOwner | QFile::WriteOwner));
+    ASSERT_TRUE(QFile::link(target, link));
+
+    Note note;
+    note.text = QStringLiteral("new\n");
+    QString error;
+    ASSERT_TRUE(Vault::write(link, note, &error)) << error.toStdString();
+    EXPECT_TRUE(QFileInfo(link).isSymLink());
+    EXPECT_EQ(readAll(target), QByteArray("new\n"));
+    const QFileDevice::Permissions mode = QFile::permissions(target) & 0xF0FF; // owner, group, other
+    EXPECT_EQ(mode, QFile::ReadOwner | QFile::WriteOwner);
 }
 
 TEST(VaultIo, ReadReportsAMissingFile)
