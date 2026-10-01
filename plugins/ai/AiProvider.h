@@ -26,6 +26,18 @@ struct AiResult {
 /// malformed response: every JSON access is a safe, defaulting Qt lookup.
 AiResult runChat(const AiConfig &config, const QString &systemPrompt, const QString &userPrompt);
 
+/// A system prompt (may be empty) and the user message for one call.
+struct ChatPrompt {
+    QString system;
+    QString user;
+};
+
+/// The prompt for translating `text` from `from` to `to` (each "Name
+/// (code)" or a bare name; `from` empty means detect it). A TranslateGemma
+/// model gets the one user message it was trained on and no system prompt;
+/// that template names the source, so an empty `from` is Slovenian there.
+ChatPrompt translationPrompt(const QString &model, const QString &from, const QString &to, const QString &text);
+
 /// GET `/api/tags` (Ollama only - the only one of the three whose API
 /// exposes what is locally installed). `ok == false` with `error` set to
 /// say so when `config.provider` is not Ollama, before any request is made.
