@@ -615,7 +615,8 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
   - [x] Cold start, pdfview and search phases: no regression (cold start
         57 -> 44 ms; search, unlinked mentions, settings pass within noise;
         500-page PDF opens in 6.1 ms, scrolls at 0.79 ms a frame).
-  - [ ] Cold index, 20 000 notes, read 1.24 s against a documented 0.98 s
+  - [x] 2026-10-01, quiet machine: 0.95 s. No regression; the readings below were load.
+        Cold index, 20 000 notes, read 1.24 s against a documented 0.98 s
         with another build running: re-measure on a quiet machine
         (`noteAppC-bench --notes 20000 --phase start`) before chasing it.
         2026-09-25 evening: 1.30 s, but a game held 7 of 24 cores; still
@@ -858,4 +859,8 @@ optimal as it can be".
       cost of a torn file on a crash - yours to decide); a note renamed or
       moved outside the app is not followed; a note deleted then recreated
       outside is not re-watched until its next open.
-- [ ] Last: optimisation pass over the whole app.
+- [x] Last: optimisation pass. Quiet 20 000-note bench after every merge:
+      cold start 32 ms, cold index 0.95 s, 1 MB open 11.9 ms, keystroke
+      0.2-0.5 ms (code block 1.2 ms), scroll frame 0.45 ms, RSS 227 MB - all
+      far inside budget, nothing worth a change found. Bases' 62 ms note read
+      is already on the pool.

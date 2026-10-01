@@ -34,7 +34,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench, includes `openVault`) | 44 ms (stage 14) | - |
+| cold start to first painted frame (bench, includes `openVault`) | 32 ms (2026-10-01, 20 000 notes, quiet) | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.1 ms | 300 ms |
 | note open, 50 kB | 6.9 ms | 300 ms |
@@ -47,8 +47,8 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| cold index, 20 000 notes | 1.24 s (stage 14, another build running; was 0.98 s) | 5 s |
-| peak RSS, vault plus a 1 MB note | 233 MB (stage 14) | - |
+| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine) | 5 s |
+| peak RSS, vault plus a 1 MB note | 227 MB (2026-10-01) | - |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
