@@ -734,29 +734,58 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(refused);
             return;
         }
-        if (!m_notebook)
+        if (!m_notebook) {
             m_notebook = new notebook::NotebookController(this);
+            connect(m_notebook, &notebook::NotebookController::kernelStateChanged, this,
+                    [this](const QString &kernelLanguage, bool running) {
+                        statusBar()->showMessage(running ? tr("Started the %1 kernel").arg(kernelLanguage)
+                                                         : tr("Stopped the %1 kernel").arg(kernelLanguage),
+                                                 3000);
+                    });
+        }
+        const bool host = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
+        const notebook::SandboxTier tier = host ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
+        // Forgetting a block's output: the sidecar entry goes, nothing runs.
+        if (options.clear) {
+            notebook::removeNotebookCache(notebook::notebookCacheKey(language, source, tier));
+            deliver(MarkdownEditor::NotebookRunResult());
+            return;
+        }
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
         // `#| sandbox: host` is the note asking, and a note can come from
         // anyone: it leaves the sandbox only when the person has allowed that
         // in settings. A runnable embed's own folder is bound read-only.
-        const bool host = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
         if (options.sandboxHost && !host && forceRun) {
             statusBar()->showMessage(tr("This block asks to run outside the sandbox; it runs inside it unless "
                                         "Settings allows that"),
                                      6000);
         }
-        request.tier = host ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
+        request.tier = tier;
         if (!options.workingDir.isEmpty())
             request.extraReadOnlyBinds = {options.workingDir};
+        request.cache = options.cache;
+        request.timeoutMs = options.timeoutSeconds * 1000;
+        // Variables that live on between blocks: one kernel per note, when
+        // the block (`#| kernel: on`, or a kernelspec's name) or the setting
+        // asks for it. Otherwise each block is its own short process.
+        const bool sharedByDefault = m_settings.boolean(QStringLiteral("notebooks.sharedKernel"));
+        const QString kernel = options.kernel;
+        if (kernel == QLatin1String("on") || (kernel.isEmpty() && sharedByDefault)) {
+            request.useKernel = true;
+        } else if (!kernel.isEmpty() && kernel != QLatin1String("off")) {
+            request.kernelName = kernel;
+        }
+        if (request.useKernel || !request.kernelName.isEmpty())
+            request.scope = options.scope.isEmpty() ? notePathOf(editor) : options.scope;
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
             shown.ok = result.ok;
             shown.wallMs = result.wallMs;
             shown.kernelError = result.kernelError;
+            shown.executionCount = result.executionCount;
             for (const notebook::NotebookOutput &output : result.outputs) {
                 MarkdownEditor::NotebookOutput cell;
                 cell.kind = MarkdownEditor::NotebookOutput::Kind(int(output.kind));
@@ -764,10 +793,17 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 cell.imageBytes = output.imageBytes;
                 cell.ename = output.ename;
                 cell.traceback = output.traceback;
+                cell.isStderr = output.isStderr;
+                cell.alt = output.alt;
                 shown.outputs.append(cell);
             }
             deliver(shown);
         });
+    });
+    // A click on a running block's stop control.
+    connect(editor, &MarkdownEditor::notebookInterruptRequested, this, [this, editor](const QString &language) {
+        if (m_notebook)
+            m_notebook->interruptKernel(language, notePathOf(editor));
     });
 #endif
 #ifdef NOTEAPPC_HAVE_BASES
@@ -1740,15 +1776,38 @@ void MainWindow::buildActions()
         if (!m_active->view && m_active->editor->runAllNotebookBlocks() == 0)
             statusBar()->showMessage(tr("No code block here can run"), 3000);
     });
-    // The kernel of the block at the cursor: one kernel per language.
+    add(QStringLiteral("notebooks:run-above"), tr("Notebooks: Run every code block down to the cursor"), QString(),
+        [this] {
+            if (!m_active->view)
+                m_active->editor->runNotebookBlocksUpTo(m_active->editor->cursorOffset());
+        });
+    // The kernel of the block at the cursor, in this note: a note has one
+    // kernel per language, so what one block set the next one sees.
     add(QStringLiteral("notebooks:interrupt"), tr("Notebooks: Interrupt the kernel"), QString(), [this] {
         if (m_notebook && !m_active->view)
-            m_notebook->interruptKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()));
+            m_notebook->interruptKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()),
+                                        m_active->notePath);
     });
     add(QStringLiteral("notebooks:restart"), tr("Notebooks: Restart the kernel"), QString(), [this] {
         if (m_notebook && !m_active->view)
-            m_notebook->restartKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()));
+            m_notebook->restartKernel(m_active->editor->codeLanguageAt(m_active->editor->cursorOffset()),
+                                      m_active->notePath);
     });
+    // Jupyter's "restart and run all": clean kernels, then every block in order.
+    add(QStringLiteral("notebooks:restart-run-all"), tr("Notebooks: Restart the kernel and run every code block"),
+        QString(), [this] {
+            if (m_active->view)
+                return;
+            if (m_notebook)
+                m_notebook->restartKernel(QString(), m_active->notePath); // every language's, in this note
+            if (m_active->editor->runAllNotebookBlocks() == 0)
+                statusBar()->showMessage(tr("No code block here can run"), 3000);
+        });
+    add(QStringLiteral("notebooks:clear-outputs"), tr("Notebooks: Clear the output of every code block"), QString(),
+        [this] {
+            if (!m_active->view)
+                statusBar()->showMessage(tr("Cleared %1 outputs").arg(m_active->editor->clearNotebookOutputs()), 3000);
+        });
 #endif
     add(QStringLiteral("audio-recorder:start"), tr("Audio recorder: Start recording audio"), QString(),
         &MainWindow::startRecording);
@@ -4268,6 +4327,15 @@ bool MainWindow::showsEncryptedNote(const MarkdownEditor *editor) const
             return Vault::isEncryptedNote(leaf->notePath);
     }
     return false;
+}
+
+QString MainWindow::notePathOf(const MarkdownEditor *editor) const
+{
+    for (const auto &leaf : m_leaves) {
+        if (leaf->editor == editor)
+            return leaf->notePath;
+    }
+    return {};
 }
 
 void MainWindow::setEncryptionPromptForTests(std::function<QString(bool, bool)> prompt)

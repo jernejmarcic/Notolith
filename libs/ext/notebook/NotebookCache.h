@@ -23,19 +23,27 @@
 namespace noteAppC::notebook {
 
 struct NotebookOutput {
-    enum class Kind { Text, Markdown, ImagePng, ImageSvg, Error };
+    /// New kinds go on the end: MainWindow hands them to the editor's own
+    /// enum by number, and the cache names them (kindName).
+    enum class Kind { Text, Markdown, ImagePng, ImageSvg, Error, Html };
     Kind kind = Kind::Text;
-    QString text;         ///< text/plain or text/markdown source, or an SVG's XML
-    QByteArray imageBytes; ///< Kind::ImagePng only
+    QString text;         ///< text/plain or text/markdown source, an SVG's XML, or HTML
+    QByteArray imageBytes; ///< Kind::ImagePng only (a PNG or a JPEG: the editor tells them apart)
     QString ename;         ///< Kind::Error only
     QString evalue;
     QStringList traceback;
+    bool isStderr = false; ///< Kind::Text only: the stream was stderr (or a warning), drawn as one
+    QString alt;           ///< Kind::Html only: its text/plain twin, for a build without litehtml
+    QString displayID;     ///< display_data's transient display_id; update_display_data replaces by it
 };
 
 struct NotebookRunResult {
     bool hasRun = false; ///< false: never run and nothing cached - a block shows nothing extra
     bool ok = true;       ///< the execute_reply's status; false if the cell raised
     qint64 wallMs = -1;
+    /// The kernel's own execution_count (`In [3]`); 0 for a run with no
+    /// kernel behind it, which has no such number.
+    int executionCount = 0;
     QList<NotebookOutput> outputs;
     /// A kernel-level problem (no kernel for this language, the kernel would
     /// not start) - distinct from `!ok`, which means the *code* raised.
@@ -62,6 +70,9 @@ NotebookRunResult readNotebookCache(const QString &key);
 /// forced true regardless of the caller's own value - only a result that
 /// actually ran is ever written.
 void writeNotebookCache(const QString &key, NotebookRunResult result);
+
+/// Forgets `key`'s cached result ("Clear the output"). A key with none is fine.
+void removeNotebookCache(const QString &key);
 
 /// `$XDG_CACHE_HOME/noteAppC/notebook`, or `~/.cache/noteAppC/notebook` when
 /// unset - exposed for the tests, which redirect XDG_CACHE_HOME rather than

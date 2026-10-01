@@ -254,6 +254,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         if (!result.ok || !err.trimmed().isEmpty()) {
             NotebookOutput error;
             error.kind = result.ok ? NotebookOutput::Kind::Text : NotebookOutput::Kind::Error;
+            error.isStderr = result.ok; // a warning on a run that worked: drawn as stderr
             error.ename = running->timedOut      ? tr("Timed out")
                           : running->interrupted ? tr("Interrupted")
                                                  : tr("Exit code %1").arg(code);

@@ -117,9 +117,10 @@ struct EmbedSpan {
 /// `#|` option lines at the head of a fenced code block (PLAN.md 16.2), where
 /// `#` is whatever the language uses for a line comment.
 ///
-/// Stage 13's rest gives three of Quarto's execution keys real meaning -
-/// `eval`, `echo` and noteAppC's own `sandbox` (not a Quarto key at all).
-/// `output`, `warning` and `error` still just fall into `extra` and go no
+/// Stage 13's rest gives Quarto's execution keys real meaning - `eval`,
+/// `echo`, `output`, `include`, `cache` - and noteAppC's own `sandbox`,
+/// `timeout` and `kernel` (not Quarto keys at all).
+/// `warning` and `error` still just fall into `extra` and go no
 /// further; they are here only so a Quarto notebook still renders instead of
 /// showing its options as the first lines of the listing.
 struct CodeOptions {
@@ -138,6 +139,17 @@ struct CodeOptions {
     /// `sandbox: host` - tier 0, opt-in: the kernel runs as the user, unsandboxed.
     /// Anything else (absent, or `bubblewrap`) is the tier-1 default.
     bool sandboxHost = false;
+    /// `output: false` - the block still runs and is cached, its output is
+    /// just not shown (Quarto's key). `include: false` is echo and output both.
+    bool output = true;
+    /// `cache: false` - nothing is kept: a reopened note shows no output and a
+    /// run is not written to the cache. Quarto's key, but there it is opt-in.
+    bool cache = true;
+    int timeoutSeconds = 0; ///< `timeout: 5` - stop a run after 5 s; 0 is the default limit
+    /// `kernel:` - empty for the setting's choice, "off" to run with the system's
+    /// own tool, "on" for the language's Jupyter kernel shared by the note's
+    /// blocks, or a kernelspec's name (`python3`) to pick that one.
+    QString kernel;
     QMap<QString, QString> extra; ///< every key with no meaning here, as written
 };
 

@@ -412,6 +412,256 @@ TEST(NotebookEndToEndTest, RealPython3Kernel)
     controller.shutdownAll();
 }
 
+// --- Jupyter features: shared state, rich output, timeouts ------------------
+
+namespace {
+
+/// Runs `code` through the controller and waits for its answer.
+NotebookRunResult runThrough(NotebookController &controller, NotebookController::RunRequest request,
+                             const QString &code, int timeoutMs = 20000)
+{
+    struct Outcome {
+        bool delivered = false;
+        NotebookRunResult result;
+    };
+    auto outcome = std::make_shared<Outcome>();
+    request.source = code;
+    controller.run(request, true, [outcome](NotebookRunResult result) {
+        outcome->result = std::move(result);
+        outcome->delivered = true;
+    });
+    EXPECT_TRUE(QTest::qWaitFor([&] { return outcome->delivered; }, timeoutMs))
+        << "timed out waiting for a reply to: " << code.toStdString();
+    return outcome->result;
+}
+
+NotebookController::RunRequest kernelRequest(const QString &scope = QString())
+{
+    NotebookController::RunRequest request;
+    request.language = QStringLiteral("python");
+    request.useKernel = true;
+    request.tier = SandboxTier::Bubblewrap;
+    request.scope = scope;
+    return request;
+}
+
+/// Isolated runtime and cache directories for a test that starts kernels.
+struct KernelTestDirs {
+    QTemporaryDir runtimeRoot;
+    QTemporaryDir cacheHome;
+    KernelTestDirs()
+    {
+        qputenv("JUPYTER_RUNTIME_DIR", runtimeRoot.path().toUtf8());
+        qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    }
+};
+
+QString joinedText(const NotebookRunResult &result)
+{
+    QString text;
+    for (const NotebookOutput &output : result.outputs)
+        text += output.text;
+    return text;
+}
+
+} // namespace
+
+TEST(NotebookKernelFeatureTest, ABlocksVariablesLiveOnInItsNotesKernelOnly)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    NotebookController controller;
+
+    const NotebookRunResult first = runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("x = 41"));
+    ASSERT_TRUE(first.kernelError.isEmpty()) << first.kernelError.toStdString();
+    EXPECT_GT(first.executionCount, 0);
+
+    // The same note's next block sees x, and the count goes up.
+    const NotebookRunResult second = runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("print(x + 1)"));
+    EXPECT_EQ(joinedText(second).trimmed(), QStringLiteral("42"));
+    EXPECT_EQ(second.executionCount, first.executionCount + 1);
+
+    // Another note has its own kernel.
+    const NotebookRunResult other = runThrough(controller, kernelRequest(QStringLiteral("b.md")), QStringLiteral("print(x)"));
+    EXPECT_FALSE(other.ok);
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("a.md")), 1);
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("b.md")), 1);
+    EXPECT_EQ(controller.runningKernelCount(), 2);
+
+    // Restarting one note's kernel forgets its variables and leaves the other's alone.
+    runThrough(controller, kernelRequest(QStringLiteral("b.md")), QStringLiteral("y = 7"));
+    controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md"));
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("a.md")), 0);
+    EXPECT_FALSE(runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("print(x)")).ok);
+    EXPECT_EQ(joinedText(runThrough(controller, kernelRequest(QStringLiteral("b.md")), QStringLiteral("print(y)"))).trimmed(),
+              QStringLiteral("7"));
+
+    // The sandbox tier is part of which kernel it is: a host block never sees
+    // a sandboxed kernel's variables, nor the other way round.
+    NotebookController::RunRequest host = kernelRequest(QStringLiteral("b.md"));
+    host.tier = SandboxTier::Host;
+    EXPECT_FALSE(runThrough(controller, host, QStringLiteral("print(y)")).ok);
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("b.md")), 2);
+    EXPECT_TRUE(runThrough(controller, host, QStringLiteral("z = 1\nprint(z)")).ok);
+
+    controller.shutdownAll();
+}
+
+TEST(NotebookKernelFeatureTest, RichOutputsComeBackInOrderAndInTheirRichestForm)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookController::RunRequest request = kernelRequest();
+
+    // stdout, stderr, stdout: three outputs in the order printed, the middle one a warning.
+    NotebookRunResult streams = runThrough(
+        controller, request, QStringLiteral("import sys\nprint('out', flush=True)\nprint('err', file=sys.stderr, flush=True)\nprint('again', flush=True)"));
+    ASSERT_EQ(streams.outputs.size(), 3);
+    EXPECT_FALSE(streams.outputs[0].isStderr);
+    EXPECT_TRUE(streams.outputs[1].isStderr);
+    EXPECT_EQ(streams.outputs[1].text.trimmed(), QStringLiteral("err"));
+    EXPECT_EQ(streams.outputs[2].text.trimmed(), QStringLiteral("again"));
+
+    // A progress bar's carriage returns leave the last state.
+    const NotebookRunResult progress = runThrough(controller, request, QStringLiteral("print('10%\\r20%\\r30%')"));
+    EXPECT_EQ(joinedText(progress).trimmed(), QStringLiteral("30%"));
+
+    // HTML keeps its markup and its plain twin; LaTeX goes to the maths renderer as $$..$$.
+    const NotebookRunResult html = runThrough(
+        controller, request, QStringLiteral("from IPython.display import HTML, Latex, display\ndisplay(HTML('<b>hi</b>'))\ndisplay(Latex(r'\\frac{1}{2}'))"));
+    ASSERT_EQ(html.outputs.size(), 2);
+    EXPECT_EQ(html.outputs[0].kind, NotebookOutput::Kind::Html);
+    EXPECT_EQ(html.outputs[0].text, QStringLiteral("<b>hi</b>"));
+    EXPECT_FALSE(html.outputs[0].alt.isEmpty());
+    EXPECT_EQ(html.outputs[1].kind, NotebookOutput::Kind::Markdown);
+    EXPECT_TRUE(html.outputs[1].text.startsWith(QStringLiteral("$$")));
+    EXPECT_TRUE(html.outputs[1].text.contains(QStringLiteral("\\frac{1}{2}")));
+
+    // A picture: a 1x1 PNG.
+    const NotebookRunResult image = runThrough(
+        controller, request,
+        QStringLiteral("import base64\nfrom IPython.display import Image, display\n"
+                       "display(Image(data=base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==')))"));
+    ASSERT_EQ(image.outputs.size(), 1);
+    EXPECT_EQ(image.outputs[0].kind, NotebookOutput::Kind::ImagePng);
+    EXPECT_GT(image.outputs[0].imageBytes.size(), 20);
+
+    // clear_output drops what came before it; update_display_data redraws in place.
+    const NotebookRunResult cleared = runThrough(
+        controller, request, QStringLiteral("from IPython.display import clear_output\nprint('gone')\nclear_output()\nprint('kept')"));
+    EXPECT_EQ(joinedText(cleared).trimmed(), QStringLiteral("kept"));
+    const NotebookRunResult updated = runThrough(
+        controller, request, QStringLiteral("h = display('one', display_id=True)\nh.update('two')"));
+    ASSERT_EQ(updated.outputs.size(), 1);
+    EXPECT_TRUE(updated.outputs[0].text.contains(QStringLiteral("two")));
+
+    // What was shown is what the sidecar keeps for the next opening.
+    const QString key = notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('kept-in-sidecar')"));
+    EXPECT_FALSE(readNotebookCache(key).hasRun);
+    runThrough(controller, request, QStringLiteral("print('kept-in-sidecar')"));
+    const NotebookRunResult cached = readNotebookCache(key);
+    EXPECT_TRUE(cached.hasRun);
+    EXPECT_GT(cached.executionCount, 0);
+    EXPECT_EQ(joinedText(cached).trimmed(), QStringLiteral("kept-in-sidecar"));
+    // `#| cache: false`: run, shown, not kept.
+    NotebookController::RunRequest uncached = request;
+    uncached.cache = false;
+    runThrough(controller, uncached, QStringLiteral("print('not-kept')"));
+    EXPECT_FALSE(readNotebookCache(notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('not-kept')"))).hasRun);
+
+    controller.shutdownAll();
+}
+
+TEST(NotebookKernelFeatureTest, AMatplotlibFigureComesBackAsAPicture)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    QProcess probe;
+    probe.start(QStringLiteral("python3"), {QStringLiteral("-c"), QStringLiteral("import matplotlib, matplotlib_inline")});
+    if (!probe.waitForFinished(20000) || probe.exitCode() != 0)
+        GTEST_SKIP() << "matplotlib is not installed";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookRunResult plot = runThrough(
+        controller, kernelRequest(),
+        QStringLiteral("import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])\nplt.show()"), 60000);
+    ASSERT_TRUE(plot.ok) << plot.kernelError.toStdString();
+    const bool hasPicture = std::any_of(plot.outputs.cbegin(), plot.outputs.cend(), [](const NotebookOutput &output) {
+        return output.kind == NotebookOutput::Kind::ImagePng && output.imageBytes.startsWith("\x89PNG");
+    });
+    EXPECT_TRUE(hasPicture);
+    controller.shutdownAll();
+}
+
+TEST(NotebookKernelFeatureTest, ATimedOutRunIsInterruptedAndADeadKernelIsReplaced)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    NotebookController::RunRequest request = kernelRequest();
+
+    request.timeoutMs = 700;
+    const NotebookRunResult slow = runThrough(controller, request, QStringLiteral("import time\ntime.sleep(60)"), 30000);
+    EXPECT_FALSE(slow.ok);
+    ASSERT_FALSE(slow.outputs.isEmpty());
+    EXPECT_EQ(slow.outputs.last().kind, NotebookOutput::Kind::Error);
+    EXPECT_EQ(slow.outputs.last().ename, QStringLiteral("Timed out"));
+    request.timeoutMs = 0;
+
+    // The kernel survived the interrupt.
+    EXPECT_EQ(joinedText(runThrough(controller, request, QStringLiteral("print('alive')"))).trimmed(), QStringLiteral("alive"));
+
+    // Code that kills its own kernel: the block is told, and the next run gets a new one.
+    const NotebookRunResult died = runThrough(controller, request, QStringLiteral("import os\nos._exit(3)"), 30000);
+    EXPECT_FALSE(died.kernelError.isEmpty());
+    EXPECT_EQ(joinedText(runThrough(controller, request, QStringLiteral("print('reborn')"), 30000)).trimmed(),
+              QStringLiteral("reborn"));
+
+    // A kernel chosen by its spec's name; one that is not installed says so.
+    NotebookController::RunRequest named = request;
+    named.useKernel = false;
+    named.kernelName = QStringLiteral("python3");
+    EXPECT_EQ(joinedText(runThrough(controller, named, QStringLiteral("print('by name')"))).trimmed(), QStringLiteral("by name"));
+    named.kernelName = QStringLiteral("no-such-kernel");
+    EXPECT_FALSE(runThrough(controller, named, QStringLiteral("1")).kernelError.isEmpty());
+
+    controller.shutdownAll();
+}
+
+TEST(NotebookKernelFeatureTest, TheSidecarKeepsTheNewOutputFields)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    NotebookRunResult result;
+    result.ok = true;
+    result.executionCount = 9;
+    NotebookOutput warning;
+    warning.text = QStringLiteral("careful");
+    warning.isStderr = true;
+    NotebookOutput html;
+    html.kind = NotebookOutput::Kind::Html;
+    html.text = QStringLiteral("<i>x</i>");
+    html.alt = QStringLiteral("x");
+    result.outputs = {warning, html};
+    const QString key = notebookCacheKey(QStringLiteral("python"), QStringLiteral("sidecar"));
+    writeNotebookCache(key, result);
+
+    const NotebookRunResult back = readNotebookCache(key);
+    ASSERT_EQ(back.outputs.size(), 2);
+    EXPECT_EQ(back.executionCount, 9);
+    EXPECT_TRUE(back.outputs[0].isStderr);
+    EXPECT_EQ(back.outputs[1].kind, NotebookOutput::Kind::Html);
+    EXPECT_EQ(back.outputs[1].alt, QStringLiteral("x"));
+
+    removeNotebookCache(key);
+    EXPECT_FALSE(readNotebookCache(key).hasRun);
+    removeNotebookCache(key); // nothing there is fine
+}
+
 // --- the system's own tools, no kernel (DirectRunner) -----------------------
 
 namespace {
@@ -538,4 +788,40 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+TEST(DirectRunnerTest, ATimeoutOnTheBlockStopsItAndAWarningIsStderr)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    NotebookController controller;
+    NotebookController::RunRequest request;
+    request.language = QStringLiteral("bash");
+    request.tier = SandboxTier::Bubblewrap;
+
+    request.timeoutMs = 400;
+    const NotebookRunResult slow = runThrough(controller, request, QStringLiteral("sleep 30"), 30000);
+    EXPECT_FALSE(slow.ok);
+    ASSERT_FALSE(slow.outputs.isEmpty());
+    EXPECT_EQ(slow.outputs.last().ename, QStringLiteral("Timed out"));
+
+    request.timeoutMs = 0;
+    const NotebookRunResult warned = runThrough(controller, request, QStringLiteral("echo fine; echo careful >&2"));
+    EXPECT_TRUE(warned.ok);
+    ASSERT_EQ(warned.outputs.size(), 2);
+    EXPECT_FALSE(warned.outputs[0].isStderr);
+    EXPECT_TRUE(warned.outputs[1].isStderr);
+
+    // `#| cache: false`: a lookup finds nothing even for a block that ran before.
+    const auto lookup = [&](bool cache) {
+        NotebookController::RunRequest probe = request;
+        probe.source = QStringLiteral("echo fine; echo careful >&2");
+        probe.cache = cache;
+        std::optional<NotebookRunResult> found;
+        controller.run(probe, false, [&](NotebookRunResult result) { found = result; });
+        EXPECT_TRUE(QTest::qWaitFor([&] { return found.has_value(); }, 2000));
+        return found.value_or(NotebookRunResult());
+    };
+    EXPECT_TRUE(lookup(true).hasRun);
+    EXPECT_FALSE(lookup(false).hasRun);
 }

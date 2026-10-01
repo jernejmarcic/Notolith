@@ -17,6 +17,7 @@
 
 #include "MarkdownEditor.h"
 
+#include "HtmlRenderer.h"
 #include "Icons.h"
 
 #include <QPainter>
@@ -77,8 +78,7 @@ void MarkdownEditor::setNotebookRunner(NotebookRunner runner)
 }
 
 const MarkdownEditor::NotebookCacheEntry &MarkdownEditor::ensureNotebookResult(
-    const QString &key, const QString &language, const QString &source, const QString &workingDir,
-    bool sandboxHost)
+    const QString &key, const QString &language, const QString &source, const NotebookRunOptions &options)
 {
     auto it = m_notebookCache.find(key);
     if (it != m_notebookCache.end())
@@ -91,9 +91,6 @@ const MarkdownEditor::NotebookCacheEntry &MarkdownEditor::ensureNotebookResult(
 
     if (m_notebookRunner) {
         const quint64 generation = entry.generation;
-        NotebookRunOptions options;
-        options.sandboxHost = sandboxHost;
-        options.workingDir = workingDir;
         // forceRun=false: a cache-only lookup. Opening a note must never
         // start a kernel by itself - see the module header comment above.
         m_notebookRunner(language, source, false, options,
@@ -178,7 +175,7 @@ QPixmap MarkdownEditor::renderNotebookImage(const NotebookOutput &output, int wi
     }
     case NotebookOutput::Kind::ImagePng: {
         QImage image;
-        if (!image.loadFromData(output.imageBytes, "PNG"))
+        if (!image.loadFromData(output.imageBytes)) // PNG or JPEG: the data says which
             return {};
         return QPixmap::fromImage(image);
     }
@@ -198,6 +195,24 @@ QPixmap MarkdownEditor::renderNotebookImage(const NotebookOutput &output, int wi
         renderer.render(&painter, QRectF(0, 0, w, h));
         painter.end();
         return QPixmap::fromImage(image);
+    }
+    case NotebookOutput::Kind::Html: {
+        // The same litehtml the note's own HTML blocks use: scripts stripped,
+        // nothing fetched. Null without it (or for markup with nothing to
+        // see), and appendNotebookOutput then falls back to the plain text.
+        if (!m_features.HTMLblocks || !HtmlRenderer::isAvailable() || output.text.trimmed().isEmpty())
+            return {};
+        HtmlRenderer::Theme theme;
+        theme.text = m_theme.color(QStringLiteral("--text-normal"));
+        theme.background = m_theme.color(QStringLiteral("--background-primary"));
+        theme.link = m_theme.color(QStringLiteral("--text-accent"));
+        theme.border = m_theme.color(QStringLiteral("--background-modifier-border"));
+        theme.codeBackground = m_theme.color(QStringLiteral("--background-primary-alt"));
+        theme.textFont = m_theme.textFont();
+        theme.codeFont = m_theme.monospaceFont();
+        const qreal ratio = devicePixelRatioF();
+        const QImage image = HtmlRenderer::render(output.text, theme, width, QString(), ratio);
+        return image.isNull() ? QPixmap() : QPixmap::fromImage(image);
     }
     case NotebookOutput::Kind::Text:
     case NotebookOutput::Kind::Error:
@@ -222,28 +237,68 @@ void MarkdownEditor::appendNotebookMessage(BlockView &view, const QString &text,
     view.notebookOutputs.push_back(std::move(cell));
 }
 
-void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
-                                          const QString &workingDir, bool sandboxHost)
+MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const BlockView &view) const
 {
+    NotebookRunOptions options;
+    options.sandboxHost = view.notebookSandboxHost;
+    options.workingDir = view.notebookWorkingDir;
+    options.cache = view.notebookCacheOn;
+    options.timeoutSeconds = view.notebookTimeout;
+    options.kernel = view.notebookKernel;
+    return options;
+}
+
+void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
+                                          const QString &blockID, const QString &workingDir,
+                                          const CodeOptions *options)
+{
+    const bool sandboxHost = options && options->sandboxHost;
     // The tier is part of the key: a host-tier and a bubblewrap-tier run of
     // the same source must never share a cached result (this stage's own
     // requirement) - the working directory is not, since it never changes
-    // what the code itself does, only what files sit beside it.
+    // what the code itself does, only what files sit beside it. The kernel
+    // choice is: it changes what state the code runs against.
     const QString key = language.trimmed().toLower() + QLatin1Char('|')
                        + (sandboxHost ? QStringLiteral("host") : QStringLiteral("bwrap"))
-                       + QLatin1Char('|') + source;
+                       + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
     view.notebookKey = key;
     view.notebookLanguage = language;
     view.notebookSource = source;
     view.notebookWorkingDir = workingDir;
     view.notebookSandboxHost = sandboxHost;
+    view.notebookCacheOn = !options || options->cache;
+    view.notebookShowOutput = !options || options->output;
+    view.notebookTimeout = options ? options->timeoutSeconds : 0;
+    view.notebookKernel = options ? options->kernel : QString();
+    view.notebookBlockID = blockID;
     view.notebookOutputs.clear();
     view.notebookOutputTop = view.height;
 
-    const NotebookCacheEntry &lookup = ensureNotebookResult(key, language, source, workingDir, sandboxHost);
+    const NotebookCacheEntry &lookup = ensureNotebookResult(key, language, source, notebookOptionsOf(view));
     view.notebookHasRun = lookup.result.hasRun;
     view.notebookRunning = lookup.running;
     view.notebookOk = lookup.result.ok && lookup.result.kernelError.isEmpty();
+    view.notebookCount = lookup.result.executionCount;
+    view.notebookStale = false;
+
+    // Output that belongs to what the block said last, shown (dimmed, marked)
+    // until it is run again: editing a block must not make its result vanish.
+    QString shownKey = key;
+    if (lookup.result.hasRun) {
+        m_notebookBlockKeys.insert(blockID, key);
+    } else if (!lookup.running) {
+        const QString previous = m_notebookBlockKeys.value(blockID);
+        const auto earlier = previous.isEmpty() || previous == key ? m_notebookCache.constEnd()
+                                                                   : m_notebookCache.constFind(previous);
+        if (earlier != m_notebookCache.constEnd() && earlier->result.hasRun
+            && earlier->result.kernelError.isEmpty()) {
+            shownKey = previous;
+            view.notebookStale = true;
+            view.notebookHasRun = true;
+            view.notebookOk = earlier->result.ok;
+            view.notebookCount = earlier->result.executionCount;
+        }
+    }
 
     if (lookup.running) {
         appendNotebookMessage(view, tr("Running..."), QStringLiteral("--text-muted"));
@@ -253,15 +308,22 @@ void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &langua
         appendNotebookMessage(view, lookup.result.kernelError, QStringLiteral("--text-error"));
         return;
     }
-    if (!lookup.result.hasRun || lookup.result.outputs.isEmpty())
-        return; // never run, or ran clean with nothing to show: no output area at all
+    if (!view.notebookShowOutput)
+        return; // `#| output: false`: it ran (or not), nothing is drawn
+    if (view.notebookStale)
+        appendNotebookMessage(view, tr("Outdated: the code changed since this ran"), QStringLiteral("--text-muted"));
+    {
+        const auto shown = m_notebookCache.constFind(shownKey);
+        if (shown == m_notebookCache.constEnd() || !shown->result.hasRun || shown->result.outputs.isEmpty())
+            return; // never run, or ran clean with nothing to show: no output area at all
+    }
 
     // Mutable from here: rendering an image is a cache fill, not a fresh
     // answer, so it belongs to this layout pass rather than to whatever
     // thread delivered the result.
-    auto it = m_notebookCache.find(key);
+    auto it = m_notebookCache.find(shownKey);
     if (it == m_notebookCache.end())
-        return; // cannot happen (ensureNotebookResult above just inserted or found it)
+        return; // cannot happen (checked just above)
     NotebookCacheEntry &entry = *it;
 
     const int width = int(contentWidth() - 28);
@@ -283,8 +345,9 @@ void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &langua
         qreal cellHeight = 0;
 
         if (output.kind == NotebookOutput::Kind::Text) {
-            cell.layout = buildNotebookTextLayout(stripAnsi(output.text), width,
-                                                  m_theme.color(QStringLiteral("--text-normal")));
+            cell.layout = buildNotebookTextLayout(
+                stripAnsi(output.text), width,
+                m_theme.color(output.isStderr ? QStringLiteral("--color-orange") : QStringLiteral("--text-normal")));
         } else if (output.kind == NotebookOutput::Kind::Error) {
             QString text = output.ename;
             if (!output.text.isEmpty())
@@ -297,6 +360,11 @@ void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &langua
             cell.layout = buildNotebookTextLayout(text, width, m_theme.color(QStringLiteral("--text-error")));
         } else {
             cell.image = i < entry.renderedImages.size() ? entry.renderedImages.at(i) : QPixmap();
+            // HTML with no litehtml to draw it (or nothing to see in it): the
+            // plain text the kernel sent beside it, as a terminal would show.
+            if (cell.image.isNull() && output.kind == NotebookOutput::Kind::Html && !output.alt.isEmpty())
+                cell.layout = buildNotebookTextLayout(stripAnsi(output.alt), width,
+                                                      m_theme.color(QStringLiteral("--text-normal")));
         }
 
         if (cell.layout) {
@@ -347,8 +415,7 @@ void MarkdownEditor::paintNotebookRunControl(QPainter &painter, const BlockView 
     const QColor colour = view.notebookRunning ? m_theme.color(QStringLiteral("--text-muted"))
                           : !view.notebookOk    ? m_theme.color(QStringLiteral("--text-error"))
                                                 : m_theme.color(QStringLiteral("--text-muted"));
-    // "square" (running - nothing here interrupts it; that is a window-level
-    // command, not a per-block click), "triangle-alert" (last run failed) or
+    // "square" (running - a click on it interrupts the run), "triangle-alert" (last run failed) or
     // "play" (idle, including "never run yet"). Icons::icon falls back to
     // nothing drawn for a name the icon set does not have, so an icon-less
     // theme still leaves the rect clickable, just blank.
@@ -364,7 +431,16 @@ void MarkdownEditor::paintNotebookRunControl(QPainter &painter, const BlockView 
 void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left,
                                             qreal top) const
 {
-    if (!view.notebookSandboxHost)
+    // "host" for tier 0, then Jupyter's execution count: [3] after a run in a
+    // kernel, [*] while one runs there.
+    QString text;
+    if (view.notebookSandboxHost)
+        text = tr("host");
+    if (view.notebookRunning && view.notebookCount > 0)
+        text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[*]");
+    else if (view.notebookCount > 0)
+        text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[%1]").arg(view.notebookCount);
+    if (text.isEmpty())
         return;
     const QRectF run = notebookRunRectFor(view, left, top);
     if (!run.isValid())
@@ -372,7 +448,6 @@ void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &
     QFont font = m_theme.uiFont();
     font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
     const QFontMetricsF metrics(font);
-    const QString text = tr("host");
     const qreal width = metrics.horizontalAdvance(text);
     const QRectF rect(run.left() - width - 8, run.top(), width, run.height());
 
@@ -389,6 +464,8 @@ void MarkdownEditor::paintNotebookOutput(QPainter &painter, const BlockView &vie
     if (view.notebookOutputs.empty())
         return;
     painter.save();
+    if (view.notebookStale)
+        painter.setOpacity(0.5); // an earlier run's output, not this code's
     for (const BlockView::NotebookOutputCell &cell : view.notebookOutputs) {
         const QRectF rect = cell.rect.translated(left, top);
         if (cell.layout) {
@@ -415,6 +492,9 @@ MarkdownEditor::NotebookBlockInfo MarkdownEditor::notebookInfoAt(qsizetype offse
     info.hasRun = view.notebookHasRun;
     info.running = view.notebookRunning;
     info.ok = view.notebookOk;
+    info.stale = view.notebookStale;
+    info.executionCount = view.notebookCount;
+    info.outputCellCount = int(view.notebookOutputs.size());
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
     info.runRect = notebookRunRectFor(view, left, top);
@@ -424,10 +504,55 @@ MarkdownEditor::NotebookBlockInfo MarkdownEditor::notebookInfoAt(qsizetype offse
 
 int MarkdownEditor::runAllNotebookBlocks()
 {
+    return runNotebookBlocksUpTo(m_text.size());
+}
+
+int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
+{
     int count = 0;
-    for (const CodeFenceSpan &fence : std::as_const(m_decorations.codeFences))
+    for (const CodeFenceSpan &fence : std::as_const(m_decorations.codeFences)) {
+        if (fence.content.start > offset)
+            break; // in document order: nothing past the cursor's block
         count += runNotebookBlockAt(fence.content.start) ? 1 : 0;
+    }
+    // A runnable `![[script.py]]` is a block too, in the note's order with the
+    // fences; they are run after the fences here, which only matters to a
+    // script that needs a variable a fence set - and a fence cannot hand one
+    // to a file embed anyway.
+    for (const BlockView &view : m_blocks) {
+        if (view.embedPanel && view.notebookEligible && view.span.range.start <= offset)
+            count += runNotebookBlockAt(view.span.range.start) ? 1 : 0;
+    }
     return count;
+}
+
+int MarkdownEditor::clearNotebookOutputs()
+{
+    int cleared = 0;
+    for (BlockView &view : m_blocks) {
+        if (!view.notebookEligible || !m_notebookRunner)
+            continue;
+        NotebookCacheEntry &entry = m_notebookCache[view.notebookKey];
+        const bool had = entry.result.hasRun || view.notebookStale;
+        NotebookRunOptions options = notebookOptionsOf(view);
+        options.clear = true;
+        // The sidecar first (the runner), then what is on screen: an emptied
+        // result with the generation that makes the late delivery count.
+        const QString key = view.notebookKey;
+        const quint64 generation = ++m_notebookGeneration;
+        entry.generation = generation;
+        entry.running = false;
+        entry.pending = false;
+        m_notebookBlockKeys.remove(view.notebookBlockID);
+        m_notebookRunner(view.notebookLanguage, view.notebookSource, false, options,
+                         [this, lifeline = m_lifeline, key, generation](NotebookRunResult result) {
+                             lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
+                                 deliverNotebookResult(key, generation, std::move(result));
+                             });
+                         });
+        cleared += had ? 1 : 0;
+    }
+    return cleared;
 }
 
 QString MarkdownEditor::codeLanguageAt(qsizetype offset) const
@@ -456,13 +581,14 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     const QString language = view.notebookLanguage;
     const QString source = view.notebookSource;
     const QString key = view.notebookKey;
-    NotebookRunOptions options;
-    options.sandboxHost = view.notebookSandboxHost;
-    options.workingDir = view.notebookWorkingDir;
+    const NotebookRunOptions options = notebookOptionsOf(view);
 
     NotebookCacheEntry &entry = m_notebookCache[key]; // inserted fresh if this is the first run
-    if (entry.running)
-        return true; // already in flight - a second click does nothing new
+    if (entry.running) {
+        // The stop control: a second click on a running block interrupts it.
+        emit notebookInterruptRequested(language);
+        return true;
+    }
     entry.running = true;
     entry.pending = false;
     const quint64 generation = ++m_notebookGeneration;

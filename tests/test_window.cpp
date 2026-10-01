@@ -61,7 +61,9 @@
 #include <QSignalSpy>
 #include <QAction>
 #include <QDate>
+#include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <QTreeView>
 #include <QTreeWidget>
 
@@ -2691,3 +2693,51 @@ TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)
     EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\n"));
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+// "Share one kernel between a note's code blocks": through the window's own
+// runner (the settings, the note's path as the kernel's scope, the sandbox),
+// a variable one block sets is there for the next, and the second block shows
+// the kernel's execution count.
+TEST_F(WindowTest, ANotesBlocksShareOneKernelWhenTheSettingIsOn)
+{
+    if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                  QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
+        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
+    ASSERT_TRUE(config.save());
+
+    // A marker in the code: the output cache outlives the run in the test's cache home.
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    write(QStringLiteral("Shared.md"),
+          QStringLiteral("```python\nvalue = 41\n```\n\n```python\nprint(value + 1, '%1')\n```\n\nend\n")
+              .arg(marker).toUtf8());
+    {
+        MainWindow window;
+        window.show(); // blocks are laid out when they are on screen
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Shared.md")));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size()); // off the blocks: they render
+        QTest::qWait(200);
+        const qsizetype second = editor->noteText().indexOf(QStringLiteral("print(value"));
+        ASSERT_TRUE(editor->notebookInfoAt(second).eligible);
+        EXPECT_EQ(editor->runAllNotebookBlocks(), 2);
+        // A NameError would also be an output cell, so the run must be ok.
+        ASSERT_TRUE(QTest::qWaitFor(
+            [&] {
+                const auto info = editor->notebookInfoAt(second);
+                return info.hasRun && !info.running;
+            },
+            30000));
+        const auto info = editor->notebookInfoAt(second);
+        EXPECT_TRUE(info.ok);
+        EXPECT_GE(info.executionCount, 2);
+        EXPECT_EQ(info.outputCellCount, 1);
+    }
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), false);
+    config.save();
+}
+#endif
