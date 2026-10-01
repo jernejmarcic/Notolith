@@ -135,6 +135,10 @@ int translate()
     QString target;
     if (wholeNote) {
         const QString path = QString::fromUtf8(host->active_note_path());
+        if (path.isEmpty()) { // outside the vault: nowhere beside it to write
+            host->show_notice("Translate: select the text - this note is outside the vault.");
+            return 0;
+        }
         const QString to = config.translateTo.trimmed();
         const qsizetype open = to.lastIndexOf(QLatin1Char('('));
         const QString code = open > 0 && to.endsWith(QLatin1Char(')')) ? to.mid(open + 1, to.size() - open - 2) : to;

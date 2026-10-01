@@ -859,8 +859,9 @@ optimal as it can be".
       cost of a torn file on a crash - yours to decide); a note renamed or
       moved outside the app is not followed; a note deleted then recreated
       outside is not re-watched until its next open.
-- [x] Last: optimisation pass. Quiet 20 000-note bench after every merge:
+- [x] Last: optimisation pass. One quiet 20 000-note bench after all merges:
       cold start 32 ms, cold index 0.95 s, 1 MB open 11.9 ms, keystroke
       0.2-0.5 ms (code block 1.2 ms), scroll frame 0.45 ms, RSS 227 MB - all
-      far inside budget, nothing worth a change found. Bases' 62 ms note read
-      is already on the pool.
+      far inside budget. Keystroke medians drifted up a little against stage
+      14 (200 kB 0.22 -> 0.25 ms, code block 1.10 -> 1.19 ms), not chased. Bases'
+      62 ms note read is already on the pool.

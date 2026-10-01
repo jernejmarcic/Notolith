@@ -29,7 +29,7 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 
 ## Where it stands
 
-2 000-note vault, median of several runs, after every fix below:
+Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000:
 
 | what | median | budget |
 |---|---|---|
