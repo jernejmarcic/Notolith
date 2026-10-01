@@ -4062,6 +4062,10 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         const QPoint global = QCursor::pos();
         updateLinkHover(viewport()->mapFromGlobal(global), true, global);
     }
+    // Ctrl+Space and Shift+Tab in a code block with a running kernel, and the
+    // popups they open (NotebookComplete.cpp).
+    if (m_notebookIntrospector && handleNotebookIntrospectKey(event))
+        return;
     // The slash popup's keys are handled here rather than left to QCompleter's
     // own filter on the popup, which only sees them while the popup holds the
     // keyboard - not, for one, when a platform does not give a popup focus.
@@ -4247,6 +4251,8 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 
 void MarkdownEditor::mousePressEvent(QMouseEvent *event)
 {
+    if (m_notebookInspect && m_notebookInspect->isVisible())
+        hideNotebookIntrospection();
     if (event->button() != Qt::LeftButton) {
         QAbstractScrollArea::mousePressEvent(event);
         return;
@@ -4524,9 +4530,16 @@ void MarkdownEditor::focusInEvent(QFocusEvent *event)
     viewport()->update();
 }
 
+bool MarkdownEditor::focusNextPrevChild(bool)
+{
+    return false;
+}
+
 void MarkdownEditor::focusOutEvent(QFocusEvent *event)
 {
     QAbstractScrollArea::focusOutEvent(event);
+    if (m_notebookInspect && m_notebookInspect->isVisible())
+        hideNotebookIntrospection();
     m_blink.stop();
     m_cursorOn = false;
     viewport()->update();

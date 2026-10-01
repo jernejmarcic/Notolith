@@ -14,6 +14,7 @@ add_library(noteAppC_editor STATIC
     MarkdownEditor.cpp
     MarkdownEditor.h
     NotebookBlock.cpp
+    NotebookComplete.cpp
     NotebookEmbed.cpp
     PasteDrop.cpp
     TableCells.cpp

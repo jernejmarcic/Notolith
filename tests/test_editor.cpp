@@ -5342,3 +5342,149 @@ TEST(NotebookBlockTest, TheRunControlSitsBesideTheLanguageNotOnIt)
     ASSERT_TRUE(info.labelRect.isValid());
     EXPECT_FALSE(info.runRect.intersects(info.labelRect)) << "the icon covers the language name";
 }
+
+// Ctrl+Space and Shift+Tab in a code block, with a fake kernel behind the
+// introspector: the real one is exercised by test_notebook and test_window.
+namespace {
+
+struct FakeKernel {
+    bool running = true;
+    QStringList matches{QStringLiteral("value_alpha"), QStringLiteral("value_beta")};
+    QString docs = QStringLiteral("alpha docs");
+    int asked = 0;
+    QString lastLanguage;
+    QString lastCode;
+    qsizetype lastCursor = -1;
+};
+
+void attach(MarkdownEditor &editor, FakeKernel &kernel)
+{
+    editor.setNotebookIntrospector([&kernel](const QString &language, const QString &code, qsizetype cursor,
+                                             bool inspect, const MarkdownEditor::NotebookRunOptions &,
+                                             const MarkdownEditor::NotebookIntrospectionDeliver &deliver) {
+        if (!kernel.running)
+            return false;
+        ++kernel.asked;
+        kernel.lastLanguage = language;
+        kernel.lastCode = code;
+        kernel.lastCursor = cursor;
+        MarkdownEditor::NotebookIntrospection answer;
+        if (inspect) {
+            answer.text = kernel.docs;
+        } else {
+            answer.matches = kernel.matches;
+            // "value_" is what is replaced: the token left of the caret.
+            answer.from = cursor - 6;
+            answer.to = cursor;
+        }
+        QTimer::singleShot(0, [deliver, answer] { deliver(answer); });
+        return true;
+    });
+}
+
+} // namespace
+
+TEST(NotebookCompleteTest, CtrlSpaceListsTheKernelsMatchesAndEnterTakesTheChosenOne)
+{
+    const QString note = QStringLiteral("```python\nvalue_alpha = 1\nvalue_\n```\n");
+    auto editor = editorWith(note);
+    FakeKernel kernel;
+    attach(*editor, kernel);
+    const qsizetype caret = note.indexOf(QStringLiteral("value_\n")) + 6;
+    editor->setCursorOffset(caret);
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookCompletionRows().isEmpty(); }, 2000));
+    EXPECT_EQ(editor->notebookCompletionRows(), kernel.matches);
+    EXPECT_EQ(kernel.lastLanguage, QStringLiteral("python"));
+    EXPECT_EQ(kernel.lastCode, QStringLiteral("value_alpha = 1\nvalue_")); // the listing, without its fences
+    EXPECT_EQ(kernel.lastCursor, qsizetype(kernel.lastCode.size()));
+
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nvalue_alpha = 1\nvalue_beta\n```\n"));
+    EXPECT_EQ(editor->cursorOffset(), qsizetype(note.indexOf(QStringLiteral("value_\n")) + 10));
+}
+
+TEST(NotebookCompleteTest, EscapeAndTypingCloseTheListAndOneMatchIsInsertedAtOnce)
+{
+    const QString note = QStringLiteral("```python\nvalue_\n```\n");
+    auto editor = editorWith(note);
+    FakeKernel kernel;
+    attach(*editor, kernel);
+    editor->setCursorOffset(note.indexOf(QStringLiteral("value_")) + 6);
+
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookCompletionRows().isEmpty(); }, 2000));
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty());
+    EXPECT_EQ(editor->noteText(), note);
+
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookCompletionRows().isEmpty(); }, 2000));
+    QTest::keyClicks(editor.get(), QStringLiteral("x")); // typing carries on in the note
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty());
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("value_x")));
+
+    kernel.matches = {QStringLiteral("value_only")};
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("value_x")) + 6);
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->noteText().contains(QStringLiteral("value_onlyx")); }, 2000));
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty()) << "one way to finish is not a choice";
+}
+
+TEST(NotebookCompleteTest, AReplyForAnEarlierCaretIsDropped)
+{
+    const QString note = QStringLiteral("```python\nvalue_\n```\n");
+    auto editor = editorWith(note);
+    FakeKernel kernel;
+    attach(*editor, kernel);
+    editor->setCursorOffset(note.indexOf(QStringLiteral("value_")) + 6);
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    QTest::keyClicks(editor.get(), QStringLiteral("a")); // before the reply is handled
+    QTest::qWait(100);
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```python\nvalue_a\n```\n"));
+}
+
+TEST(NotebookCompleteTest, ShiftTabShowsTheKernelsDocumentationUntilEscape)
+{
+    const QString note = QStringLiteral("```python\nlen\n```\n");
+    auto editor = editorWith(note);
+    FakeKernel kernel;
+    attach(*editor, kernel);
+    editor->setCursorOffset(note.indexOf(QStringLiteral("len")) + 3);
+    QTest::keyClick(editor.get(), Qt::Key_Backtab, Qt::ShiftModifier);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookInspectText().isEmpty(); }, 2000));
+    EXPECT_EQ(editor->notebookInspectText(), QStringLiteral("alpha docs"));
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+    EXPECT_TRUE(editor->notebookInspectText().isEmpty());
+    EXPECT_EQ(editor->noteText(), note) << "nothing was typed";
+}
+
+TEST(NotebookCompleteTest, WithoutAKernelTheKeysAreOthersAndNothingIsAsked)
+{
+    // Shift+Tab outdents a list item as it always did; Ctrl+Space types nothing.
+    const QString note = QStringLiteral("- a\n  - b\n\n```python\nvalue_\n```\n");
+    auto editor = editorWith(note);
+    FakeKernel kernel;
+    kernel.running = false;
+    attach(*editor, kernel);
+    editor->setCursorOffset(note.indexOf(QStringLiteral("b")) + 1);
+    QTest::keyClick(editor.get(), Qt::Key_Backtab, Qt::ShiftModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- a\n- b\n\n```python\nvalue_\n```\n"));
+
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("value_")) + 6);
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    QTest::keyClick(editor.get(), Qt::Key_Backtab, Qt::ShiftModifier);
+    QTest::qWait(50);
+    EXPECT_TRUE(editor->notebookCompletionRows().isEmpty());
+    EXPECT_TRUE(editor->notebookInspectText().isEmpty());
+    EXPECT_EQ(kernel.asked, 0);
+
+    // Outside a code block the introspector is not asked at all.
+    kernel.running = true;
+    editor->setCursorOffset(2);
+    QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
+    EXPECT_EQ(kernel.asked, 0);
+}

@@ -825,3 +825,96 @@ TEST(DirectRunnerTest, ATimeoutOnTheBlockStopsItAndAWarningIsStderr)
     EXPECT_TRUE(lookup(true).hasRun);
     EXPECT_FALSE(lookup(false).hasRun);
 }
+
+// --- completion and documentation from a running kernel -------------------------
+
+namespace {
+
+/// Asks `controller` for completion or documentation and waits for the answer.
+NotebookController::Introspection introspectThrough(NotebookController &controller,
+                                                    const NotebookController::RunRequest &request,
+                                                    const QString &code, qsizetype cursor, bool inspect,
+                                                    bool *sent = nullptr)
+{
+    struct Outcome {
+        bool delivered = false;
+        NotebookController::Introspection answer;
+    };
+    auto outcome = std::make_shared<Outcome>();
+    const bool asked = controller.introspect(request, code, cursor, inspect,
+                                             [outcome](NotebookController::Introspection answer) {
+                                                 outcome->answer = std::move(answer);
+                                                 outcome->delivered = true;
+                                             });
+    if (sent)
+        *sent = asked;
+    if (asked)
+        EXPECT_TRUE(QTest::qWaitFor([&] { return outcome->delivered; }, 20000)) << "no answer for: " << code.toStdString();
+    return outcome->answer;
+}
+
+} // namespace
+
+TEST(NotebookKernelFeatureTest, CompletionAndDocumentationComeFromTheNotesRunningKernelOnly)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookController::RunRequest request = kernelRequest(QStringLiteral("a.md"));
+
+    // No kernel yet: nothing is asked, and asking does not start one.
+    bool sent = true;
+    introspectThrough(controller, request, QStringLiteral("pri"), 3, false, &sent);
+    EXPECT_FALSE(sent);
+    EXPECT_EQ(controller.runningKernelCount(), 0);
+
+    ASSERT_TRUE(runThrough(controller, request, QStringLiteral("import math\nalpha_value = 1\nalpha_other = 2")).ok);
+
+    // What the note's own cells defined is completed...
+    const QString code = QStringLiteral("alpha_");
+    const auto completion = introspectThrough(controller, request, code, code.size(), false, &sent);
+    ASSERT_TRUE(sent);
+    ASSERT_TRUE(completion.ok);
+    EXPECT_TRUE(completion.matches.contains(QStringLiteral("alpha_value")) || completion.matches.contains(QStringLiteral("alpha_other")));
+    EXPECT_EQ(completion.to, code.size());
+    EXPECT_LE(completion.from, completion.to);
+
+    // ...and documented. The offsets survive a character outside the BMP.
+    const QString emoji = QStringLiteral("s = '\U0001F600'\nmath.sq");
+    const auto after = introspectThrough(controller, request, emoji, emoji.size(), false);
+    ASSERT_TRUE(after.ok);
+    ASSERT_FALSE(after.matches.isEmpty());
+    EXPECT_EQ(after.to, emoji.size());
+    EXPECT_TRUE(emoji.mid(after.from, after.to - after.from).endsWith(QStringLiteral("sq")));
+    const QString docs = QStringLiteral("math.sqrt");
+    const auto documented = introspectThrough(controller, request, docs, docs.size(), true);
+    EXPECT_TRUE(documented.ok);
+    EXPECT_TRUE(documented.text.contains(QStringLiteral("square root"))) << documented.text.toStdString();
+    EXPECT_FALSE(documented.text.contains(QLatin1Char('\x1b'))) << "colour codes are stripped";
+    const auto unknown = introspectThrough(controller, request, QStringLiteral("nothing_by_this_name"), 20, true);
+    EXPECT_TRUE(unknown.text.isEmpty());
+
+    // Another note's kernel is another kernel: not running, so not asked.
+    introspectThrough(controller, kernelRequest(QStringLiteral("b.md")), code, code.size(), false, &sent);
+    EXPECT_FALSE(sent);
+    EXPECT_EQ(controller.runningKernelCount(), 1);
+
+    // A newer question of the same kind makes the older one stale at once.
+    bool firstStale = false;
+    bool secondAnswered = false;
+    ASSERT_TRUE(controller.introspect(request, code, code.size(), false,
+                                      [&](NotebookController::Introspection answer) { firstStale = !answer.ok; }));
+    ASSERT_TRUE(controller.introspect(request, code, code.size(), false,
+                                      [&](NotebookController::Introspection answer) { secondAnswered = answer.ok; }));
+    EXPECT_TRUE(firstStale);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return secondAnswered; }, 20000));
+
+    // A question still waiting when the kernel goes is answered, empty.
+    bool gone = false;
+    ASSERT_TRUE(controller.introspect(request, code, code.size(), false,
+                                      [&](NotebookController::Introspection answer) { gone = !answer.ok; }));
+    controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md"));
+    EXPECT_TRUE(gone);
+    controller.shutdownAll();
+}

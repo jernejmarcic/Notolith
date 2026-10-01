@@ -84,6 +84,25 @@ public:
 
     bool hasRunningKernel(const QString &language) const;
 
+    /// What a kernel answers to complete_request / inspect_request.
+    struct Introspection {
+        bool ok = false;       ///< false: no answer worth showing (cancelled, timed out, kernel gone)
+        QStringList matches;   ///< completion: the candidates
+        qsizetype from = 0;    ///< completion: what they replace, in `code` (UTF-16 offsets)
+        qsizetype to = 0;
+        QString text;          ///< inspect: the documentation, plain text; empty when nothing was found
+    };
+    using DeliverIntrospection = std::function<void(Introspection)>;
+    /// Completion (`inspect` false) or documentation (true) for `code` with the
+    /// caret at `cursor`, asked of the kernel `request` names (language, scope,
+    /// tier, kernel) - and only if that kernel is already running: this never
+    /// starts one. False, with nothing sent, when there is none. The answer
+    /// comes later on the event loop, exactly once; a newer request of the same
+    /// kind to the same kernel cancels the older (it answers ok = false), and
+    /// so does a kernel that is busy for more than a few seconds.
+    bool introspect(const RunRequest &request, const QString &code, qsizetype cursor, bool inspect,
+                    const DeliverIntrospection &deliver);
+
 signals:
     /// A settings/status row can use this later; nothing in this lane reads
     /// it, but it costs nothing idle and is the natural place kernel health
@@ -122,12 +141,19 @@ private:
         KernelSpec spec;
         SandboxTier tierRequested = SandboxTier::Bubblewrap;
         QHash<QString, InFlight> inFlight; ///< by msg_id
+        struct Pending {
+            DeliverIntrospection deliver;
+            bool inspect = false;
+            QString code; ///< to turn the kernel's code point offsets back into QString ones
+        };
+        QHash<QString, Pending> introspections; ///< by msg_id
     };
 
     KernelSession *ensureKernel(const RunRequest &request, QString *error);
     void wireKernel(KernelSession *session);
     void finalizeIfDone(KernelSession *session, QHash<QString, InFlight>::iterator it);
     void failInFlight(KernelSession *session, const QString &error);
+    KernelSession *runningKernelFor(const RunRequest &request);
     void interruptSession(KernelSession *session);
 
     /// std::map, not QHash: QHash's copy-on-write detach needs a copyable

@@ -202,6 +202,31 @@ MainWindow::~MainWindow()
     m_historyPool.waitForDone();
 }
 
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+namespace {
+
+/// Which kernel (if any) a block with `options` runs in: the note's shared
+/// one, a named kernelspec, or none. Variables that live on between blocks:
+/// one kernel per note, when the block (`#| kernel: on`, or a kernelspec's
+/// name) or the setting asks for it. Otherwise each block is its own short
+/// process.
+void chooseKernel(notebook::NotebookController::RunRequest &request,
+                  const MarkdownEditor::NotebookRunOptions &options, const QString &notePath,
+                  bool sharedByDefault)
+{
+    const QString kernel = options.kernel;
+    if (kernel == QLatin1String("on") || (kernel.isEmpty() && sharedByDefault)) {
+        request.useKernel = true;
+    } else if (!kernel.isEmpty() && kernel != QLatin1String("off")) {
+        request.kernelName = kernel;
+    }
+    if (request.useKernel || !request.kernelName.isEmpty())
+        request.scope = options.scope.isEmpty() ? notePath : options.scope;
+}
+
+} // namespace
+#endif
+
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
@@ -801,18 +826,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             request.extraReadOnlyBinds = {options.workingDir};
         request.cache = options.cache;
         request.timeoutMs = options.timeoutSeconds * 1000;
-        // Variables that live on between blocks: one kernel per note, when
-        // the block (`#| kernel: on`, or a kernelspec's name) or the setting
-        // asks for it. Otherwise each block is its own short process.
-        const bool sharedByDefault = m_settings.boolean(QStringLiteral("notebooks.sharedKernel"));
-        const QString kernel = options.kernel;
-        if (kernel == QLatin1String("on") || (kernel.isEmpty() && sharedByDefault)) {
-            request.useKernel = true;
-        } else if (!kernel.isEmpty() && kernel != QLatin1String("off")) {
-            request.kernelName = kernel;
-        }
-        if (request.useKernel || !request.kernelName.isEmpty())
-            request.scope = options.scope.isEmpty() ? notePathOf(editor) : options.scope;
+        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
@@ -833,6 +847,31 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             }
             deliver(shown);
         });
+    });
+    // Ctrl+Space / Shift+Tab: the kernel a block would run in, if it is already
+    // running - never started for this.
+    editor->setNotebookIntrospector([this, editor](const QString &language, const QString &code, qsizetype cursor,
+                                                   bool inspect, const MarkdownEditor::NotebookRunOptions &options,
+                                                   const MarkdownEditor::NotebookIntrospectionDeliver &deliver) {
+        if (!m_notebook || showsEncryptedNote(editor))
+            return false;
+        notebook::NotebookController::RunRequest request;
+        request.language = language;
+        request.tier = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
+                           ? notebook::SandboxTier::Host
+                           : notebook::SandboxTier::Bubblewrap;
+        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
+        if (!request.useKernel && request.kernelName.isEmpty())
+            return false;
+        return m_notebook->introspect(request, code, cursor, inspect,
+                                      [deliver](const notebook::NotebookController::Introspection &answer) {
+                                          MarkdownEditor::NotebookIntrospection shown;
+                                          shown.matches = answer.matches;
+                                          shown.from = answer.from;
+                                          shown.to = answer.to;
+                                          shown.text = answer.text;
+                                          deliver(shown);
+                                      });
     });
     // A click on a running block's stop control.
     connect(editor, &MarkdownEditor::notebookInterruptRequested, this, [this, editor](const QString &language) {
@@ -4664,6 +4703,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
         m_indexer->reindex(target->notePath);
     return true;
 }
+
 
 void MainWindow::showDiskNote(const QString &path, const Note &note)
 {

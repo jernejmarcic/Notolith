@@ -507,6 +507,30 @@ public:
                                               const NotebookDeliver &deliver)>;
     void setNotebookRunner(NotebookRunner runner);
 
+    /// A running kernel's answer to a completion or documentation request.
+    struct NotebookIntrospection {
+        QStringList matches; ///< completion: the candidates, best first
+        qsizetype from = 0;  ///< completion: what they replace, as offsets into the block's code
+        qsizetype to = 0;
+        QString text;        ///< inspect: plain-text documentation; empty when the kernel knows nothing
+    };
+    using NotebookIntrospectionDeliver = std::function<void(NotebookIntrospection)>;
+    /// Asks the language's kernel - already running for this note, never
+    /// started for this - to complete (`inspect` false) or document `code` with
+    /// the caret at `cursor`. Returns false, having sent nothing, when there is
+    /// no such kernel; otherwise `deliver` is called later, once, from any
+    /// thread (an empty answer when the kernel gave none). Supplied by the
+    /// window; null leaves Ctrl+Space and Shift+Tab to their other uses.
+    using NotebookIntrospector = std::function<bool(const QString &language, const QString &code,
+                                                    qsizetype cursor, bool inspect,
+                                                    const NotebookRunOptions &options,
+                                                    const NotebookIntrospectionDeliver &deliver)>;
+    void setNotebookIntrospector(NotebookIntrospector introspector);
+    /// For tests: the open completion popup's rows (empty when closed), and
+    /// the open documentation popup's text.
+    QStringList notebookCompletionRows() const;
+    QString notebookInspectText() const;
+
     /// A PDF (or compiled `.tex`) embed's state, for the tests - a click on
     /// its previous/next controls is exercised through pdfSlideStep rather
     /// than a synthesised QMouseEvent, the same way toggleQueryCollapsed
@@ -1356,6 +1380,10 @@ private:
     /// Closes the property editor, writing what it holds when `commit`.
     void finishPropertyEdit(bool commit);
     bool eventFilter(QObject *watched, QEvent *event) override;
+    /// Tab and Shift+Tab are the editor's (list indent, Jupyter documentation),
+    /// not a move of focus to the next widget: QWidget::event hands them to
+    /// keyPressEvent only when nothing else can take the focus.
+    bool focusNextPrevChild(bool next) override;
     /// Every whole-block embed kind (image, PDF, .tex, media, a file card, a
     /// hooked renderer) paints from its own fields, not from `view.layout` -
     /// but `view.map` still has to say the block's whole source is hidden,
@@ -1539,6 +1567,25 @@ private:
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);
     NotebookRunner m_notebookRunner;
+
+    // --- completion and documentation from a running kernel, NotebookComplete.cpp
+    NotebookIntrospector m_notebookIntrospector;
+    /// Ctrl+Space (completion) or Shift+Tab (documentation) with the caret in a
+    /// code block that has a running kernel. False when it is not one of those,
+    /// so the key goes on to do what it does everywhere else.
+    bool handleNotebookIntrospectKey(QKeyEvent *event);
+    bool requestNotebookIntrospection(bool inspect, bool tellWhenNone);
+    void showNotebookCompletion(const QStringList &matches, qsizetype from, qsizetype to);
+    void showNotebookInspect(const QString &text);
+    void acceptNotebookCompletion(const QString &match);
+    void hideNotebookIntrospection();
+    QCompleter *m_notebookCompleter = nullptr;   ///< built on first use
+    QWidget *m_notebookInspect = nullptr;        ///< built on first use
+    quint64 m_introGeneration = 0;               ///< a reply for an older request is dropped
+    quint64 m_introVersion = 0;                  ///< m_textVersion and caret the request was made at
+    qsizetype m_introCursor = 0;
+    qsizetype m_introFrom = 0;                   ///< absolute range the open popup replaces
+    qsizetype m_introTo = 0;
     struct NotebookCacheEntry {
         NotebookRunResult result;
         bool pending = true;

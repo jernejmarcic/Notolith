@@ -6,6 +6,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <utility>
 
 namespace noteAppC::notebook {
 
@@ -94,6 +95,28 @@ bool overCap(const NotebookRunResult &result)
         bytes += output.imageBytes.size();
     }
     return chars > kMaxTextChars || bytes > kMaxImageBytes;
+}
+
+/// The protocol counts the caret and the replaced range in Unicode code
+/// points, QString in UTF-16 units: the two differ after an emoji.
+int codePointsBefore(const QString &text, qsizetype units)
+{
+    int count = 0;
+    for (qsizetype i = 0; i < units && i < text.size(); ++i) {
+        if (text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate())
+            ++i;
+        ++count;
+    }
+    return count;
+}
+
+qsizetype unitsOfCodePoints(const QString &text, int codePoints)
+{
+    qsizetype i = 0;
+    for (int n = 0; n < codePoints && i < text.size(); ++n) {
+        i += text.at(i).isHighSurrogate() && i + 1 < text.size() && text.at(i + 1).isLowSurrogate() ? 2 : 1;
+    }
+    return i;
 }
 
 } // namespace
@@ -366,6 +389,26 @@ void NotebookController::wireKernel(KernelSession *session)
                it->executionCount = qMax(0, count);
                finalizeIfDone(session, it);
            });
+    connect(client, &KernelClient::introspectionReplyReceived, this,
+           [session](const QString &parent, const QString &type, const QJsonObject &content) {
+               const auto it = session->introspections.find(parent);
+               if (it == session->introspections.end())
+                   return; // cancelled, or timed out: the answer is not wanted any more
+               const KernelSession::Pending pending = it.value();
+               session->introspections.erase(it);
+               Introspection answer;
+               answer.ok = content.value(QStringLiteral("status")).toString() == QLatin1String("ok");
+               if (type == QLatin1String("complete_reply")) {
+                   for (const QJsonValue &match : content.value(QStringLiteral("matches")).toArray())
+                       answer.matches << match.toString();
+                   answer.from = unitsOfCodePoints(pending.code, content.value(QStringLiteral("cursor_start")).toInt());
+                   answer.to = unitsOfCodePoints(pending.code, content.value(QStringLiteral("cursor_end")).toInt());
+               } else if (content.value(QStringLiteral("found")).toBool()) {
+                   answer.text = stripAnsi(content.value(QStringLiteral("data")).toObject()
+                                               .value(QStringLiteral("text/plain")).toString());
+               }
+               pending.deliver(answer);
+           });
     connect(client, &KernelClient::statusChanged, this,
            [this, session](const QString &parent, const QString &state) {
                if (state != QLatin1String("idle"))
@@ -416,6 +459,9 @@ void NotebookController::finalizeIfDone(KernelSession *session, QHash<QString, I
 
 void NotebookController::failInFlight(KernelSession *session, const QString &error)
 {
+    const auto asked = std::exchange(session->introspections, {});
+    for (const auto &entry : asked)
+        entry.deliver(Introspection());
     const QHash<QString, InFlight> pending = session->inFlight;
     session->inFlight.clear();
     for (const InFlight &entry : pending) {
@@ -423,6 +469,54 @@ void NotebookController::failInFlight(KernelSession *session, const QString &err
         result.kernelError = error;
         entry.deliver(result);
     }
+}
+
+NotebookController::KernelSession *NotebookController::runningKernelFor(const RunRequest &request)
+{
+    const QString language = request.language.trimmed().toLower();
+    for (auto &entry : m_kernels) {
+        KernelSession *session = entry.second.get();
+        const bool named = request.kernelName.isEmpty() ? session->language == language
+                                                        : session->spec.name.compare(request.kernelName, Qt::CaseInsensitive) == 0;
+        if (named && session->scope == request.scope && session->tierRequested == request.tier
+            && session->process->isRunning())
+            return session;
+    }
+    return nullptr;
+}
+
+bool NotebookController::introspect(const RunRequest &request, const QString &code, qsizetype cursor,
+                                    bool inspect, const DeliverIntrospection &deliver)
+{
+    KernelSession *session = runningKernelFor(request);
+    if (!session)
+        return false;
+    // One question of each kind at a time: a newer one makes the older stale.
+    for (auto it = session->introspections.begin(); it != session->introspections.end();) {
+        if (it->inspect != inspect) {
+            ++it;
+            continue;
+        }
+        const DeliverIntrospection stale = it->deliver;
+        it = session->introspections.erase(it);
+        stale(Introspection());
+    }
+    const int point = codePointsBefore(code, cursor);
+    const QString msgID = inspect ? session->client->inspect(code, point) : session->client->complete(code, point);
+    session->introspections.insert(msgID, {deliver, inspect, code});
+    // A kernel busy with a long cell answers only when it is done: not worth waiting for.
+    QTimer::singleShot(4000, this, [this, key = session->key, msgID] {
+        const auto kernel = m_kernels.find(key);
+        if (kernel == m_kernels.end())
+            return;
+        const auto it = kernel->second->introspections.find(msgID);
+        if (it == kernel->second->introspections.end())
+            return;
+        const DeliverIntrospection late = it->deliver;
+        kernel->second->introspections.erase(it);
+        late(Introspection());
+    });
+    return true;
 }
 
 void NotebookController::interruptSession(KernelSession *session)
