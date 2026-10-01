@@ -59,8 +59,9 @@ opens these files.
 - The index and search: an encrypted note is indexed by its name only, so
   its links, tags and words are not searchable and it shows no backlinks.
 - Plugins: a plugin's code block in an encrypted note is not handed to the
-  plugin, and a plugin reading the selection gets nothing (the AI plugin
-  would otherwise send it to an API). `readNote` for plugins reads `.md` only.
+  plugin, and a plugin reading the open note's text or its selection gets
+  nothing (the AI plugin would otherwise send it to an API). `readNote` for
+  plugins reads `.md` only.
 - Notebooks: code blocks do not run in an encrypted note, since their output
   is cached on disk.
 - Page preview and embeds show nothing of it.
@@ -79,5 +80,8 @@ opens these files.
 - **Attachments.** Only the note's text is encrypted; an image pasted into an
   encrypted note is saved as a normal file.
 - **The file name** is visible, as with any file.
+- **A change on disk while it is being edited.** An `.mdlock` replaced by
+  sync while its tab has unsaved edits keeps the edits, as a plain note
+  does, but the other version cannot go to file recovery: it is lost.
 - **Links inside an encrypted note** are not rewritten when a linked note is
   renamed, since its text cannot be read without the password.

@@ -2792,7 +2792,8 @@ void MainWindow::syncPlugins(bool rescan)
                        : QString();
         };
         callbacks.activeNoteText = [this] {
-            return m_active && !m_active->view ? m_active->editor->noteText() : QString();
+            return m_active && !m_active->view && !showsEncryptedNote(m_active->editor) ? m_active->editor->noteText()
+                                                                                        : QString();
         };
         callbacks.activeSelectionText = [this] {
             // A plugin never reads an encrypted note: the AI one would send it on.

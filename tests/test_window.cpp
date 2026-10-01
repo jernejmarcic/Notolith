@@ -15,6 +15,7 @@
 #include <QComboBox>
 #include <QPlainTextEdit>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
 #include <QFile>
@@ -30,6 +31,7 @@
 #include <QScrollBar>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QTabBar>
 #include <QTest>
 #include <QTimer>
@@ -2955,3 +2957,136 @@ TEST_F(WindowTest, ALinkRewrittenByARenameReachesTheOpenNoteThatHoldsIt)
     WAIT_TRUE(!editor->isModified(), 5000);
     EXPECT_EQ(readAll(path(QStringLiteral("Source.md"))), QByteArray("See [[Renamed]].\nx"));
 }
+
+// --- encrypted notes: two panes, every place plaintext could land ------------
+
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+namespace {
+
+/// Every file under `root` that holds `needle`, any case.
+QStringList filesHolding(const QString &root, const QByteArray &needle)
+{
+    QStringList found;
+    QDirIterator it(root, QDir::Files | QDir::Hidden | QDir::System, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString file = it.next();
+        QFile in(file);
+        if (in.open(QIODevice::ReadOnly) && in.readAll().toLower().contains(needle.toLower()))
+            found << file;
+    }
+    return found;
+}
+
+} // namespace
+
+TEST_F(WindowTest, AnEncryptedNoteInTwoPanesSavesOnlyCiphertextAnywhere)
+{
+    const QByteArray secret = "zqxjunlikelyword";
+    // A word of a plain note does reach the index cache: the scan below
+    // would see the secret if it were there.
+    write(QStringLiteral("Plain.md"), "zqxjcontrolword\n");
+    int asked = 0;
+    {
+        MainWindow window;
+        window.setEncryptionPromptForTests([&asked](bool, bool) {
+            ++asked;
+            return QStringLiteral("correct horse battery");
+        });
+        QSignalSpy indexed(window.index(), &Index::changed);
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+        const QString locked = path(QStringLiteral("Untitled.mdlock"));
+        ASSERT_EQ(window.editor()->noteText(), QString());
+        MarkdownEditor *left = window.editor();
+        window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+        MarkdownEditor *right = window.editor();
+        ASSERT_NE(left, right);
+
+        // Typed in one pane, autosaved, shown in both: ciphertext on disk.
+        QTest::keyClicks(right, QString::fromLatin1(secret) + QStringLiteral(" alpha"));
+        EXPECT_EQ(left->noteText(), right->noteText());
+        const QByteArray before = bytesOf(locked);
+        WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+        EXPECT_NE(bytesOf(locked), before);
+        EXPECT_FALSE(bytesOf(locked).contains(secret));
+        EXPECT_EQ(asked, 1) << "one password for the session, not one per pane or save";
+
+        // The index has nothing to find, the search pane nothing to show.
+        QTest::qWait(500);
+        EXPECT_TRUE(window.index()->search(QString::fromLatin1(secret)).isEmpty());
+
+        // Typed in the other pane, then locked before the autosave: the lock
+        // saves it first, then closes both.
+        left->setCursorOffset(left->noteText().size());
+        QTest::keyClicks(left, QStringLiteral(" beta"));
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+        flushDeletes();
+        for (MarkdownEditor *editor : tabEditors(window)) {
+            EXPECT_FALSE(editor->noteText().contains(QString::fromLatin1(secret)));
+            QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+            EXPECT_FALSE(editor->noteText().contains(QString::fromLatin1(secret))) << "nothing to undo back";
+        }
+        ASSERT_TRUE(window.openNote(locked));
+        EXPECT_EQ(asked, 2);
+        EXPECT_EQ(window.editor()->noteText(), QString::fromLatin1(secret) + QStringLiteral(" alpha beta"));
+    }
+    // Nowhere: not the vault (temporary files included), the index cache,
+    // file recovery, the note history, settings or the workspace.
+    EXPECT_EQ(filesHolding(dir.path(), secret), QStringList());
+    for (const char *home : {"XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME"})
+        EXPECT_EQ(filesHolding(qEnvironmentVariable(home), secret), QStringList()) << home;
+    EXPECT_FALSE(filesHolding(qEnvironmentVariable("XDG_CACHE_HOME"), "zqxjcontrolword").isEmpty());
+}
+#endif
+
+#if defined(NOTEAPPC_HAVE_ENCRYPTION) && defined(NOTEAPPC_WORD_STATS_PLUGIN_DIR)
+TEST_F(WindowTest, APluginReadsNothingOfAnEncryptedNote)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
+    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/word-stats");
+    ASSERT_TRUE(QDir().mkpath(installed));
+    for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libword-stats.so")})
+        ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_WORD_STATS_PLUGIN_DIR "/") + file, installed + u'/' + file));
+    const QString grants = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC/plugins.ini");
+    {
+        QSettings config(grants, QSettings::IniFormat);
+        config.setValue(QStringLiteral("word-stats/enabled"), true);
+        config.setValue(QStringLiteral("word-stats/permissions.readNotes"), true);
+    }
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.communityPlugins"), true);
+    ASSERT_TRUE(on.save());
+    write(QStringLiteral("Three.md"), "one two three\n");
+    {
+        MainWindow window;
+        window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("a long password"); });
+        window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+        window.show();
+        WAIT_TRUE(window.findChild<QAction *>(QStringLiteral("word-stats:count-words")), 5000);
+        QAction *count = window.findChild<QAction *>(QStringLiteral("word-stats:count-words"));
+        const auto notice = [&window] { return window.statusBar()->currentMessage(); };
+
+        // A plain note: the plugin reads its text.
+        window.openNote(path(QStringLiteral("Three.md")));
+        count->trigger();
+        QTest::qWaitFor([&] { return notice() == QStringLiteral("3 words"); }, 5000);
+        ASSERT_EQ(notice(), QStringLiteral("3 words"));
+
+        // An encrypted one: it reads nothing.
+        window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+        QTest::keyClicks(window.editor(), QStringLiteral("secret words here"));
+        window.statusBar()->clearMessage();
+        count->trigger();
+        WAIT_TRUE(notice().endsWith(QLatin1String(" words")), 5000);
+        EXPECT_EQ(notice(), QStringLiteral("0 words"));
+    }
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.communityPlugins"), false);
+    ASSERT_TRUE(off.save());
+    QFile::remove(grants);
+    qputenv("XDG_DATA_HOME", previous);
+}
+#endif
