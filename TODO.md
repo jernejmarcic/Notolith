@@ -837,7 +837,7 @@ encryption works", "all kinds of things that should be rendered are rendered
 inline", "For code add the code running (the jupyter features) all features
 from ~/Projects/Ideas.md", then "make sure everything is as optimized and as
 optimal as it can be".
-- [ ] AI: `translate` (selection, or the whole note into a new note),
+- [x] AI: `translate` (selection, or the whole note into a new note),
       `proofread`; ai.ini `translate-to`, `translate-from`, `translate-model`;
       TranslateGemma's own prompt when the model is translategemma; an
       OpenAI-compatible server with no `api-key-env` (Ollama's /v1) sends no key.
