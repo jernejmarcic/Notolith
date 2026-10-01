@@ -842,8 +842,9 @@ optimal as it can be".
       TranslateGemma's own prompt when the model is translategemma; an
       OpenAI-compatible server with no `api-key-env` (Ollama's /v1) sends no key.
 - [x] Vim keybindings in the editor (off by default, `editor.vimMode`; docs/EDITOR.md).
-      Left: text objects, named registers, marks, macros, block visual, `%`,
-      `>` `<`, `:s`.
+      2026-10-01 later: text objects, registers, marks, macros, block visual,
+      `%`, `>` `<`, `:s`, `*` `#`. Ctrl+v in normal mode is block visual now.
+      Left (docs/EDITOR.md): `"1`-`"9`, `it`/`at`, visual `J r ~`.
 - [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Left: tab completion
       and inspect (needs a popup), `.ipynb` files, `input()`, tiers 2-3.
 - [x] Audit (tests in test_window/test_sync/test_vault): split panes, metadata
