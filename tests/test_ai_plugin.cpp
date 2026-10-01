@@ -28,6 +28,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QHash>
 #include <QHostAddress>
 #include <QHttpServer>
 #include <QHttpServerRequest>
@@ -245,13 +246,13 @@ TEST(AiProviderTest, AMissingApiKeyEnvNameNeverMakesARequest)
 {
     FakeServer server;
     int hitCount = 0;
-    server.routes().route("/v1/chat/completions", Method::Post, [&](const QHttpServerRequest &) {
+    server.routes().route("/v1/messages", Method::Post, [&](const QHttpServerRequest &) {
         ++hitCount;
         return QHttpServerResponse(QJsonObject{});
     });
 
     AiConfig config;
-    config.provider = Provider::OpenAICompatible;
+    config.provider = Provider::Anthropic;
     config.baseURL = server.baseURL();
     // config.apiKeyEnv left empty - ai.ini never set api-key-env.
 
@@ -259,6 +260,61 @@ TEST(AiProviderTest, AMissingApiKeyEnvNameNeverMakesARequest)
     EXPECT_FALSE(result.ok);
     EXPECT_TRUE(result.error.contains(QStringLiteral("api-key-env"))) << result.error.toStdString();
     EXPECT_EQ(hitCount, 0);
+}
+
+// A local OpenAI-compatible server (Ollama's /v1, llama.cpp) takes no key:
+// no api-key-env means no Authorization header, not a refusal.
+TEST(AiProviderTest, OpenAICompatibleWithNoKeyEnvSendsNoAuthorization)
+{
+    FakeServer server;
+    QByteArray capturedAuth = "unset";
+    server.routes().route("/v1/chat/completions", Method::Post, [&](const QHttpServerRequest &request) {
+        capturedAuth = request.value("Authorization");
+        return QHttpServerResponse(QJsonObject{
+            {QStringLiteral("choices"),
+             QJsonArray{QJsonObject{{QStringLiteral("message"), QJsonObject{{QStringLiteral("content"),
+                                                                            QStringLiteral("local")}}}}}}});
+    });
+
+    AiConfig config;
+    config.provider = Provider::OpenAICompatible;
+    config.baseURL = server.baseURL();
+
+    const AiResult result = runBlocking([&] { return runChat(config, QString(), QStringLiteral("hi")); });
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    EXPECT_EQ(result.text, QStringLiteral("local"));
+    EXPECT_TRUE(capturedAuth.isEmpty()) << capturedAuth.constData();
+}
+
+TEST(AiProviderTest, TranslateGemmaGetsItsOwnTemplateAndNoSystemPrompt)
+{
+    const ChatPrompt prompt = translationPrompt(QStringLiteral("translategemma:27b"), QStringLiteral("Slovenian (sl)"),
+                                                QStringLiteral("English (en)"), QStringLiteral("Dober dan."));
+    EXPECT_TRUE(prompt.system.isEmpty());
+    EXPECT_EQ(prompt.user,
+              QStringLiteral("You are a professional Slovenian (sl) to English (en) translator. Your goal is to "
+                             "accurately convey the meaning and nuances of the original Slovenian text while "
+                             "adhering to English grammar, vocabulary, and cultural sensitivities.\n"
+                             "Produce only the English translation, without any additional explanations or "
+                             "commentary. Please translate the following Slovenian text into English:\n\n\n"
+                             "Dober dan."));
+    // No source given: the template has no "detect" slot, so Slovenian.
+    const ChatPrompt fallback = translationPrompt(QStringLiteral("TranslateGemma"), QString(),
+                                                  QStringLiteral("German (de)"), QStringLiteral("x"));
+    EXPECT_TRUE(fallback.user.startsWith(QStringLiteral("You are a professional Slovenian (sl) to German (de)")));
+    // A percent sign in the text is not an arg() placeholder.
+    EXPECT_TRUE(translationPrompt(QStringLiteral("translategemma"), {}, QStringLiteral("en"), QStringLiteral("100%1"))
+                    .user.endsWith(QStringLiteral("\n\n\n100%1")));
+}
+
+TEST(AiProviderTest, AnyOtherModelGetsASystemPromptAndTheTextAlone)
+{
+    const ChatPrompt prompt = translationPrompt(QStringLiteral("llama3.2"), QString(), QStringLiteral("English (en)"),
+                                                QStringLiteral("Dober dan."));
+    EXPECT_EQ(prompt.user, QStringLiteral("Dober dan."));
+    EXPECT_TRUE(prompt.system.contains(QStringLiteral("detect it"))) << prompt.system.toStdString();
+    EXPECT_TRUE(prompt.system.contains(QStringLiteral("into English."))) << prompt.system.toStdString();
+    EXPECT_FALSE(prompt.system.contains(QStringLiteral("(en)")));
 }
 
 TEST(AiProviderTest, AnUnsetNamedEnvVarNeverMakesARequest)
@@ -639,6 +695,76 @@ TEST_F(AiPluginEndToEndTest, TheApiKeyNeverAppearsInTheConfigFileLogsOrStderr)
 
     host.stop();
     qunsetenv("ANTHROPIC_API_KEY");
+}
+
+TEST_F(AiPluginEndToEndTest, TranslateUsesTheTranslateModelAndReplacesTheSelection)
+{
+    FakeServer server;
+    QJsonObject capturedBody;
+    server.routes().route("/api/chat", Method::Post, [&](const QHttpServerRequest &request) {
+        capturedBody = jsonBody(request);
+        return QHttpServerResponse(QJsonObject{
+            {QStringLiteral("message"), QJsonObject{{QStringLiteral("content"), QStringLiteral("Good day.")}}}});
+    });
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = %1\nmodel = llama3.2\n"
+                              "translate-model = translategemma:27b\ntranslate-to = English (en)\n")
+                   .arg(server.baseURL()));
+
+    QString replaced;
+    PluginAppCallbacks cb = callbacks();
+    cb.replaceSelection = [&](const QString &text) {
+        replaced = text;
+        return true;
+    };
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network},
+                    cb);
+    bool done = false;
+    host.runCommand(QStringLiteral("translate"), [&](bool, const QJsonObject &, const QString &) { done = true; });
+    ASSERT_TRUE(waitUntil([&] { return done; }));
+    EXPECT_EQ(replaced, QStringLiteral("Good day."));
+    EXPECT_EQ(capturedBody.value(QStringLiteral("model")).toString(), QStringLiteral("translategemma:27b"));
+    const QJsonArray messages = capturedBody.value(QStringLiteral("messages")).toArray();
+    ASSERT_EQ(messages.size(), 1); // TranslateGemma: one user message, no system prompt
+    EXPECT_TRUE(messages.at(0).toObject().value(QStringLiteral("content")).toString().endsWith(
+        QStringLiteral("\n\n\nwhat is 2 + 2?")));
+    host.stop();
+}
+
+TEST_F(AiPluginEndToEndTest, TranslateWithNoSelectionWritesANewNoteAndNeverOverwrites)
+{
+    FakeServer server;
+    server.routes().route("/api/chat", Method::Post, [&](const QHttpServerRequest &) {
+        return QHttpServerResponse(QJsonObject{
+            {QStringLiteral("message"), QJsonObject{{QStringLiteral("content"), QStringLiteral("translated")}}}});
+    });
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = %1\ntranslate-to = German (de)\n")
+                   .arg(server.baseURL()));
+
+    QHash<QString, QString> written;
+    QString notice;
+    PluginAppCallbacks cb = callbacks(nullptr, &notice);
+    cb.activeSelectionText = [] { return QString(); };
+    cb.readNote = [&](const QString &path) { return written.value(path); };
+    cb.writeNote = [&](const QString &path, const QString &text) {
+        written.insert(path, text);
+        return true;
+    };
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network},
+                    cb);
+    const auto run = [&] {
+        bool done = false;
+        host.runCommand(QStringLiteral("translate"), [&](bool, const QJsonObject &, const QString &) { done = true; });
+        return waitUntil([&] { return done; });
+    };
+    ASSERT_TRUE(run());
+    EXPECT_EQ(written.value(QStringLiteral("Note (de).md")), QStringLiteral("translated"));
+    EXPECT_EQ(written.size(), 1);
+
+    written[QStringLiteral("Note (de).md")] = QStringLiteral("edited by hand");
+    ASSERT_TRUE(run());
+    EXPECT_EQ(written.value(QStringLiteral("Note (de).md")), QStringLiteral("edited by hand"));
+    EXPECT_TRUE(notice.contains(QStringLiteral("already exists"))) << notice.toStdString();
+    host.stop();
 }
 
 int main(int argc, char **argv)

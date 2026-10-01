@@ -7,6 +7,8 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 
+#include <utility>
+
 namespace noteAppC::ai {
 
 namespace {
@@ -183,6 +185,11 @@ AiResult runChat(const AiConfig &config, const QString &systemPrompt, const QStr
     case Provider::OpenAICompatible:
         url = config.baseURL + QStringLiteral("/v1/chat/completions");
         body.insert(QStringLiteral("messages"), chatMessages(systemPrompt, userPrompt, true));
+        // No api-key-env at all is a local server that takes no key (Ollama's
+        // /v1, llama.cpp, LM Studio). A named variable that is unset still
+        // refuses, below - that is a typo, not a choice.
+        if (config.apiKeyEnv.isEmpty())
+            break;
         if (const QString key = resolveApiKey(config, &keyError); key.isEmpty()) {
             result.error = keyError;
             return result;
@@ -235,6 +242,35 @@ AiResult runChat(const AiConfig &config, const QString &systemPrompt, const QStr
     result.ok = true;
     result.text = text;
     return result;
+}
+
+ChatPrompt translationPrompt(const QString &model, const QString &from, const QString &to, const QString &text)
+{
+    // "Slovenian (sl)" -> {"Slovenian", "sl"}; a bare name is its own code.
+    const auto split = [](const QString &language) {
+        const QString trimmed = language.trimmed();
+        const qsizetype open = trimmed.lastIndexOf(QLatin1Char('('));
+        if (open > 0 && trimmed.endsWith(QLatin1Char(')')))
+            return std::pair{trimmed.left(open).trimmed(), trimmed.mid(open + 1, trimmed.size() - open - 2).trimmed()};
+        return std::pair{trimmed, trimmed};
+    };
+    const auto [toName, toCode] = split(to);
+    if (model.contains(QLatin1String("translategemma"), Qt::CaseInsensitive)) {
+        const auto [fromName, fromCode] = split(from.trimmed().isEmpty() ? QStringLiteral("Slovenian (sl)") : from);
+        return {QString(),
+                QStringLiteral("You are a professional %1 (%2) to %3 (%4) translator. Your goal is to accurately "
+                               "convey the meaning and nuances of the original %1 text while adhering to %3 "
+                               "grammar, vocabulary, and cultural sensitivities.\n"
+                               "Produce only the %3 translation, without any additional explanations or "
+                               "commentary. Please translate the following %1 text into %3:\n\n\n%5")
+                    .arg(fromName, fromCode, toName, toCode, text)};
+    }
+    const QString source = from.trimmed().isEmpty() ? QStringLiteral("the source language (detect it)")
+                                                    : split(from).first;
+    return {QStringLiteral("Translate the user's text from %1 into %2. Keep its Markdown formatting, links and "
+                           "code unchanged. Reply with only the translation, no commentary.")
+                .arg(source, toName),
+            text};
 }
 
 AiModelsResult listOllamaModels(const AiConfig &config)

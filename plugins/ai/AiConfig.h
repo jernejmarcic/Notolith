@@ -21,6 +21,12 @@ struct AiConfig {
     QString model = QStringLiteral("llama3.2");
     QString apiKeyEnv;           ///< empty for Ollama, required for the other two
     int httpTimeoutMs = 120000;  ///< curl's own timeout; keep it under plugin.ini's timeout-ms
+    /// `translate`'s languages, each "Name (code)" or just a name. An empty
+    /// `translateFrom` lets a general model detect the source; TranslateGemma
+    /// has no such slot, so it falls back to Slovenian there (translationPrompt).
+    QString translateTo = QStringLiteral("English (en)");
+    QString translateFrom;
+    QString translateModel;      ///< empty: `model`
 
     /// `$XDG_CONFIG_HOME/noteAppC/ai.ini` - the same fallback
     /// PluginRegistry::configPath() uses, so this resolves to the directory

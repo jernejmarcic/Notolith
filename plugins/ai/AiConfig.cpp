@@ -35,6 +35,9 @@ AiConfig AiConfig::load()
     config.baseURL = ini.value(QStringLiteral("ai/base-url"), config.baseURL).toString();
     config.model = ini.value(QStringLiteral("ai/model"), config.model).toString();
     config.apiKeyEnv = ini.value(QStringLiteral("ai/api-key-env"), config.apiKeyEnv).toString();
+    config.translateTo = ini.value(QStringLiteral("ai/translate-to"), config.translateTo).toString();
+    config.translateFrom = ini.value(QStringLiteral("ai/translate-from")).toString();
+    config.translateModel = ini.value(QStringLiteral("ai/translate-model")).toString();
     // Kept under plugin.ini's own timeout-ms ceiling (300000) with room to
     // spare, so a slow call's own timeout fires first - a clean AiResult
     // error instead of PluginHost killing the whole host process.

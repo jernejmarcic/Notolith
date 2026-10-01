@@ -309,6 +309,26 @@ Everything a note-taking app is for, and nothing it is not:
    `$XDG_CONFIG_HOME/noteAppC/plugins/ai/ai.ini`, outside the vault; the key is read from
    the app's own environment at call time and is never written to a file,
    logged, or put in a URL (`plugins/ai/AiConfig.cpp`, `plugins/ai/AiProvider.cpp`).
+   Added 2026-10-01: `translate` (the selection in place; with nothing
+   selected, the whole note into a new `Note (<code>).md` beside it, refused
+   if that note already exists) and `proofread` (the selection). ai.ini
+   `translate-to` (default `English (en)`), `translate-from` (empty: the model
+   detects it), `translate-model` (empty: `model`). A model whose name holds
+   `translategemma` gets that model's own single-message prompt and no system
+   prompt; its template names the source, so an empty `translate-from` means
+   Slovenian there. `provider = openai` with no `api-key-env` sends no key at
+   all, for a local OpenAI-compatible server - Ollama's own `/v1` is one:
+
+   ```ini
+   [ai]
+   provider = openai
+   base-url = http://localhost:11434
+   model = qwen3.8:latest
+   translate-model = translategemma:27b
+   translate-from = Slovenian (sl)
+   ```
+
+   A named `api-key-env` that is unset still refuses before any request.
 
 ## Decisions that are Jernej's
 

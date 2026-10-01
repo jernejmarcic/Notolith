@@ -115,6 +115,73 @@ int continueWriting()
     return 0;
 }
 
+/// The selection, translated in place; with nothing selected, the whole
+/// note into a new note beside it ("Note (en).md") - never over the original,
+/// and never over a note that already exists.
+int translate()
+{
+    const noteappc_host *host = gPlugin.host();
+    AiConfig config = AiConfig::load();
+    if (!config.translateModel.isEmpty())
+        config.model = config.translateModel;
+    const QString selection = QString::fromUtf8(host->active_selection_text());
+    const bool wholeNote = selection.trimmed().isEmpty();
+    const QString text = wholeNote ? QString::fromUtf8(host->active_note_text()) : selection;
+    if (text.trimmed().isEmpty()) {
+        host->show_notice("Nothing to translate - the note is empty.");
+        return 0;
+    }
+
+    QString target;
+    if (wholeNote) {
+        const QString path = QString::fromUtf8(host->active_note_path());
+        const QString to = config.translateTo.trimmed();
+        const qsizetype open = to.lastIndexOf(QLatin1Char('('));
+        const QString code = open > 0 && to.endsWith(QLatin1Char(')')) ? to.mid(open + 1, to.size() - open - 2) : to;
+        target = (path.endsWith(QLatin1String(".md")) ? path.chopped(3) : path) + QStringLiteral(" (%1).md").arg(code);
+        if (!QString::fromUtf8(host->read_note(target.toUtf8().constData())).isEmpty()) {
+            host->show_notice((QStringLiteral("Translate: ") + target + QStringLiteral(" already exists.")).toUtf8().constData());
+            return 0;
+        }
+    }
+
+    const auto prompt = noteAppC::ai::translationPrompt(config.model, config.translateFrom, config.translateTo, text);
+    const AiResult result = noteAppC::ai::runChat(config, prompt.system, prompt.user);
+    if (!result.ok) {
+        host->show_notice((QStringLiteral("Translate failed: ") + result.error).toUtf8().constData());
+        return 0;
+    }
+    if (!wholeNote) {
+        host->replace_selection(result.text.toUtf8().constData());
+    } else if (host->write_note(target.toUtf8().constData(), result.text.toUtf8().constData()) == 0) {
+        host->show_notice((QStringLiteral("Translated into ") + target).toUtf8().constData());
+    } else {
+        host->show_notice((QStringLiteral("Translate: could not write ") + target).toUtf8().constData());
+    }
+    return 0;
+}
+
+int proofreadSelection()
+{
+    const noteappc_host *host = gPlugin.host();
+    const QString selection = QString::fromUtf8(host->active_selection_text());
+    if (selection.trimmed().isEmpty()) {
+        host->show_notice("Select some text first.");
+        return 0;
+    }
+    const AiResult result = noteAppC::ai::runChat(
+        AiConfig::load(),
+        QStringLiteral("Fix spelling, grammar and punctuation in the given text. Change nothing else: keep its "
+                       "language, wording, Markdown and line breaks. Reply with only the corrected text."),
+        selection);
+    if (!result.ok) {
+        host->show_notice((QStringLiteral("Proofread failed: ") + result.error).toUtf8().constData());
+        return 0;
+    }
+    host->replace_selection(result.text.toUtf8().constData());
+    return 0;
+}
+
 int listModels()
 {
     const noteappc_host *host = gPlugin.host();
@@ -146,6 +213,8 @@ int aiPluginInit()
     gPlugin.onCommand("ask", askAboutSelection);
     gPlugin.onCommand("rewrite", rewriteSelection);
     gPlugin.onCommand("continue", continueWriting);
+    gPlugin.onCommand("translate", translate);
+    gPlugin.onCommand("proofread", proofreadSelection);
     gPlugin.onCommand("list-models", listModels);
     gPlugin.onCodeBlock("ai", renderAiBlock);
     return 0;
