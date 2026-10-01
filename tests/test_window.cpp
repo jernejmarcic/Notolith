@@ -2691,3 +2691,267 @@ TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)
     EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("# Welcome\n\nBody.\n"));
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+// --- one note in two panes, and what reaches it from outside ----------------
+
+namespace {
+
+/// The two editors of a split made on `relative`: the first, then the new one.
+std::pair<MarkdownEditor *, MarkdownEditor *> splitOn(MainWindow &window, const QString &path)
+{
+    window.openNote(path);
+    MarkdownEditor *first = window.editor();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    return {first, window.editor()};
+}
+
+void overwrite(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(file.write(bytes), bytes.size());
+}
+
+/// What a sync client or another editor does: a new file renamed over it.
+void replaceByRename(const QString &path, const QByteArray &bytes)
+{
+    const QString temporary = path + QStringLiteral(".incoming");
+    overwrite(temporary, bytes);
+    ASSERT_EQ(std::rename(QFile::encodeName(temporary).constData(), QFile::encodeName(path).constData()), 0);
+}
+
+} // namespace
+
+TEST_F(WindowTest, EditsInEitherPaneAutosaveAndClosingOneKeepsTheOther)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Welcome.md")));
+    ASSERT_NE(left, right);
+    left->setCursorOffset(0);
+    QTest::keyClicks(left, QStringLiteral("L"));
+    right->setCursorOffset(right->noteText().size());
+    QTest::keyClicks(right, QStringLiteral("R"));
+    ASSERT_EQ(left->noteText(), QStringLiteral("L# Welcome\n\nBody.\nR"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("L# Welcome\n\nBody.\nR"));
+
+    // The right pane goes; the left one still saves what is typed in it.
+    right->setFocus();
+    QApplication::processEvents();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    ASSERT_EQ(window.editor(), left);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("!"));
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Welcome.md"))), QByteArray("L# Welcome\n\nBody.\nR!"));
+}
+
+TEST_F(WindowTest, RenamingANoteOpenInTwoPanesMovesBothAndKeepsItsLineEndings)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Projects/Crlf.md")));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Projects/Crlf.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Moved"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_TRUE(QFile::exists(path(QStringLiteral("Projects/Moved.md"))));
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs")))
+        EXPECT_EQ(tabTexts(bar), QStringList{QStringLiteral("Moved")});
+
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("three"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Moved.md"))), QByteArray("one\r\ntwo\r\nthree"));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Projects/Crlf.md")))) << "nothing saved to the old name";
+}
+
+TEST_F(WindowTest, AChangeOnDiskReachesEveryPaneAndIsNotSavedOver)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    auto [left, right] = splitOn(window, note);
+    right->setCursorOffset(3);
+
+    // A sync client's way: a new file renamed over the old one.
+    replaceByRename(note, "# Welcome\n\nChanged by sync.\n");
+    WAIT_TRUE(left->noteText() == QStringLiteral("# Welcome\n\nChanged by sync.\n"), 3000);
+    EXPECT_EQ(right->noteText(), left->noteText());
+    EXPECT_FALSE(left->isModified());
+    EXPECT_FALSE(right->isModified());
+    EXPECT_EQ(right->cursorOffset(), 3) << "the caret keeps its place";
+
+    // Another editor's way: the same file written in place. Still watched,
+    // although the rename above replaced the file being watched.
+    overwrite(note, "# Welcome\n\nChanged in place.\n");
+    WAIT_TRUE(left->noteText() == QStringLiteral("# Welcome\n\nChanged in place.\n"), 3000);
+    EXPECT_EQ(right->noteText(), left->noteText());
+
+    // Typing after it saves on top of it, not over it.
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("typed"));
+    WAIT_TRUE(!left->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nChanged in place.\ntyped"));
+}
+
+TEST_F(WindowTest, ItsOwnSavesAreNotTakenForAChangeOnDisk)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("abc"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    QTest::qWait(400); // the watcher's own notice of that save
+    EXPECT_EQ(editor->cursorOffset(), editor->noteText().size());
+    QTest::keyClick(editor, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_FALSE(editor->noteText().endsWith(QLatin1String("abc"))) << "the undo history is still there";
+}
+
+TEST_F(WindowTest, AChangeOnDiskUnderUnsavedTypingKeepsBoth)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("mine"));
+    overwrite(note, "# Welcome\n\nTheirs.\n");
+    // What was typed stays, and is what gets saved...
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nBody.\nmine"));
+    // ...but the other version is not lost: file recovery holds it.
+    bool kept = false;
+    for (const auto &version : noteAppC::Snapshots::versions(note))
+        kept = kept || noteAppC::Snapshots::read(version) == QStringLiteral("# Welcome\n\nTheirs.\n");
+    EXPECT_TRUE(kept);
+}
+
+TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)
+{
+    const QString note = path(QStringLiteral("Both.md"));
+    write(QStringLiteral("Both.md"), "\xEF\xBB\xBFnew\r\nbody\r\n");
+    noteAppC::Snapshots::record(note, QStringLiteral("old\nbody\n"), 0);
+    MainWindow window;
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, note);
+
+    window.findChild<QAction *>(QStringLiteral("file-recovery:open"))->trigger();
+    auto *dialog = window.findChild<noteAppC::RecoveryDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    auto *notes = dialog->findChild<QListWidget *>(QStringLiteral("recoveryNotes"));
+    for (int i = 0; i < notes->count(); ++i) {
+        if (notes->item(i)->text() == QStringLiteral("Both.md"))
+            notes->setCurrentRow(i);
+    }
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    for (QPushButton *button : dialog->findChildren<QPushButton *>()) {
+        if (button->text() == QStringLiteral("Restore"))
+            button->click();
+    }
+    EXPECT_EQ(readAll(note), QByteArray("\xEF\xBB\xBFold\r\nbody\r\n"));
+    EXPECT_EQ(right->noteText(), QStringLiteral("old\nbody\n"));
+    EXPECT_EQ(left->noteText(), QStringLiteral("old\nbody\n")) << "the pane that was not focused too";
+
+    // Typing in the other pane builds on the restored text.
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("more"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("\xEF\xBB\xBFold\r\nbody\r\nmore"));
+}
+
+TEST_F(WindowTest, FrontMatterBomLineEndingsAndALastLineSurviveEverySave)
+{
+    // A BOM, CRLF, YAML with a comment, a quoted value and a list, and no
+    // newline at the end: every save keeps each byte nobody edited.
+    const QByteArray original = "\xEF\xBB\xBF---\r\n"
+                                "tags: [alpha, beta]\r\n"
+                                "aliases:\r\n"
+                                "  - Other name # kept\r\n"
+                                "title: \"Quoted: yes\"\r\n"
+                                "status: draft\r\n"
+                                "---\r\n"
+                                "Body without a newline";
+    write(QStringLiteral("Meta.md"), original);
+    const QString note = path(QStringLiteral("Meta.md"));
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    window.resize(1000, 700);
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+
+    // Explicit save of an untouched note: nothing changes.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), original);
+
+    // Autosave of a typed edit.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(note), original + "!");
+
+    // A property edited in its table: that value, and only it.
+    const qsizetype status = editor->noteText().indexOf(QLatin1String("status"));
+    ASSERT_TRUE(editor->editPropertyAt(status));
+    auto *field = editor->viewport()->findChild<QLineEdit *>();
+    ASSERT_NE(field, nullptr);
+    field->setText(QStringLiteral("final"));
+    QTest::keyClick(field, Qt::Key_Return);
+    WAIT_TRUE(!editor->isModified(), 5000);
+    QByteArray expected = original + "!";
+    expected.replace("status: draft", "status: final");
+    EXPECT_EQ(readAll(note), expected);
+
+    // The index reads the saved front matter: the alias resolves.
+    WAIT_TRUE(!window.index()->resolve(QStringLiteral("Other name")).isEmpty(), 5000);
+    EXPECT_EQ(QFileInfo(window.index()->resolve(QStringLiteral("Other name"))).fileName(), QStringLiteral("Meta.md"));
+}
+
+TEST_F(WindowTest, ALinkRewrittenByARenameReachesTheOpenNoteThatHoldsIt)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Source.md"), "See [[Target]].\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Source.md")));
+    MarkdownEditor *editor = window.editor();
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    WAIT_TRUE(editor->noteText() == QStringLiteral("See [[Renamed]].\n"), 3000);
+
+    // The next autosave keeps the rewritten link instead of the old one.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Source.md"))), QByteArray("See [[Renamed]].\nx"));
+}

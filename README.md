@@ -12,7 +12,10 @@ Usable for reading and editing a vault, and most of Obsidian is here. The
 command palette is the one large piece deferred; `TODO.md` has the rest.
 
 - **Vault** - open, file tree, byte-exact atomic save (CRLF and BOM preserved),
-  file recovery snapshots with a diff.
+  file recovery snapshots with a diff. An open note changed on disk (sync, a
+  plugin, a link update, another editor) shows the change in every tab; if
+  it was being edited, the edits win and the other version goes to file
+  recovery.
 - **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
   Obsidian's link resolution order. 20 000 notes cold-indexed in 3.6 s.
 - **Editor** - one engine, three modes: live preview, source and reading.
