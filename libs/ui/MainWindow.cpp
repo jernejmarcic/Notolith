@@ -4635,6 +4635,9 @@ void MainWindow::reloadChangedNotes()
         if (encrypted && !m_encryption->isUnlocked())
             continue; // never a password prompt out of nowhere
 #endif
+        // ponytail: every own save is read back to tell it apart from a
+        // change (under 1 ms at 200 kB); compare size and mtime first if a
+        // note ever gets big enough for that to show.
         Note disk;
         if (!readNote(path, disk, nullptr))
             continue;

@@ -3039,6 +3039,39 @@ TEST_F(WindowTest, AnEncryptedNoteInTwoPanesSavesOnlyCiphertextAnywhere)
 }
 #endif
 
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+TEST_F(WindowTest, EncryptingANoteInTwoPanesKeepsBothAndItsLineEndingsComeBackDecrypted)
+{
+    MainWindow window;
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("a long password"); });
+    window.openVault(dir.path());
+    auto [left, right] = splitOn(window, path(QStringLiteral("Projects/Crlf.md")));
+    clickNextBox(QStringLiteral("Encrypt"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    const QString locked = path(QStringLiteral("Projects/Crlf.mdlock"));
+    ASSERT_TRUE(QFileInfo::exists(locked));
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs")))
+        EXPECT_EQ(tabTexts(bar), QStringList{QStringLiteral("Crlf")});
+
+    // The pane that did not encrypt it saves to the encrypted file.
+    const QByteArray before = bytesOf(locked);
+    left->setCursorOffset(left->noteText().size());
+    QTest::keyClicks(left, QStringLiteral("three"));
+    WAIT_TRUE(!left->isModified() && !right->isModified(), 5000);
+    EXPECT_NE(bytesOf(locked), before);
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Projects/Crlf.md"))));
+
+    // Decrypted again: the CRLF went through the ciphertext and back.
+    QTimer::singleShot(0, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:decrypt"))->trigger();
+    EXPECT_FALSE(QFileInfo::exists(locked));
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Crlf.md"))), QByteArray("one\r\ntwo\r\nthree"));
+}
+#endif
+
 #if defined(NOTEAPPC_HAVE_ENCRYPTION) && defined(NOTEAPPC_WORD_STATS_PLUGIN_DIR)
 TEST_F(WindowTest, APluginReadsNothingOfAnEncryptedNote)
 {
