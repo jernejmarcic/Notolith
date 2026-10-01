@@ -627,6 +627,46 @@ TEST_F(SyncIntegrationTest, OfflineEditsOnDisjointLinesOfTheSameNoteMergeCleanly
     EXPECT_FALSE(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*conflict*")).size());
 }
 
+TEST_F(SyncIntegrationTest, AnEditFromAnotherDeviceKeepsThisFilesLineEndingsAndBom)
+{
+    // Only a note's text travels; how this device's copy ends its lines,
+    // and whether it starts with a BOM, is this copy's own.
+    writeNote(vaultA.path(), QStringLiteral("crlf.md"), QStringLiteral("one\ntwo"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/crlf.md");
+    writeRaw(onB, QByteArrayLiteral("\xEF\xBB\xBFone\r\ntwo"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    // Two edits on A, each pulled on its own: the second comes in on top of
+    // a copy the first left in agreement with the server.
+    for (const QString &text : {QStringLiteral("one\ntwo\nthree"), QStringLiteral("one\ntwo\nthree\nfour")}) {
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+        writeNote(vaultA.path(), QStringLiteral("crlf.md"), text);
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        QByteArray expected = "\xEF\xBB\xBF" + text.toUtf8();
+        expected.replace("\n", "\r\n");
+        QFile file(onB);
+        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+        EXPECT_EQ(file.readAll(), expected);
+    }
+    // And a copy left alone is not pushed again on every sync.
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
 TEST_F(SyncIntegrationTest, ATrueConflictWritesAConflictCopyAndKeepsLocalInPlace)
 {
     writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("alpha\nbeta\ngamma"));
