@@ -26,6 +26,9 @@
 #include <QLineEdit>
 #include <QDialog>
 #include <QPushButton>
+#include <QPainter>
+#include <QPdfWriter>
+#include <QImage>
 #include <QListWidget>
 #include <QMessageBox>
 #include <QScrollBar>
@@ -68,6 +71,10 @@
 #include <QTreeWidget>
 
 #include "Index.h"
+#include "CodeHighlighter.h"
+#include "HtmlRenderer.h"
+#include "MathRenderer.h"
+#include "PdfPage.h"
 #include "PublishDialog.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
@@ -3123,3 +3130,142 @@ TEST_F(WindowTest, APluginReadsNothingOfAnEncryptedNote)
     qputenv("XDG_DATA_HOME", previous);
 }
 #endif
+
+// --- every kind of block and embed renders inline, through the real window ---
+
+TEST_F(WindowTest, EveryKindOfBlockAndEmbedRendersInline)
+{
+    {
+        QImage picture(200, 120, QImage::Format_RGB32);
+        picture.fill(QColor(255, 0, 0));
+        ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+        QPdfWriter pdf(path(QStringLiteral("doc.pdf")));
+        QPainter painter(&pdf);
+        painter.drawText(100, 100, QStringLiteral("page one"));
+    }
+    write(QStringLiteral("Other.md"), "Intro of other.\n\n# Part two\n\nThe second part. ^blk\n");
+    write(QStringLiteral("song.mp3"), "not really audio");
+    write(QStringLiteral("clip.mp4"), "not really video");
+    write(QStringLiteral("book.epub"), QByteArray("PK\x03\x04", 4) + QByteArray(64, '\0')); // a zip, as a book is
+    write(QStringLiteral("Tagged.md"), "#project here\n");
+#ifdef NOTEAPPC_HAVE_CANVAS
+    write(QStringLiteral("Board.canvas"),
+          R"({"nodes":[{"id":"a","type":"text","text":"card","x":0,"y":0,"width":200,"height":100}],"edges":[]})");
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    write(QStringLiteral("Tasks.base"), "views:\n  - type: table\n    order: [file.name]\n");
+#endif
+    write(QStringLiteral("Plain.md"), "intro\n\nplain\n\nafter\n");
+
+    using Probe = std::function<bool(MarkdownEditor *, qsizetype)>;
+    struct Kind {
+        QString name;
+        QString markdown; ///< goes between "intro" and "after"
+        QString anchor;   ///< where in it the probe looks
+        Probe rendered;
+    };
+    const auto image = [](MarkdownEditor *e, qsizetype at) { return !e->embedImageSizeAt(at).isEmpty(); };
+    const auto paintsRed = [](MarkdownEditor *e, qsizetype) {
+        const QImage shown = e->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        int red = 0;
+        for (int y = 0; y < shown.height(); y += 4) {
+            for (int x = 0; x < shown.width(); x += 4)
+                red += shown.pixel(x, y) == qRgb(255, 0, 0);
+        }
+        return red > 100; // the picture itself, not a red underline
+    };
+    const auto shownWithout = [](const QString &source) {
+        return [source](MarkdownEditor *e, qsizetype) { return !e->displayText().contains(source); };
+    };
+    qreal plainHeight = 0;
+    QList<Kind> kinds = {
+        {QStringLiteral("image"), QStringLiteral("![[pic.png]]"), QStringLiteral("!"), paintsRed},
+        {QStringLiteral("note"), QStringLiteral("![[Other]]"), QStringLiteral("!"), image},
+        {QStringLiteral("note heading"), QStringLiteral("![[Other#Part two]]"), QStringLiteral("!"), image},
+        {QStringLiteral("note block"), QStringLiteral("![[Other#^blk]]"), QStringLiteral("!"), image},
+        {QStringLiteral("audio"), QStringLiteral("![[song.mp3]]"), QStringLiteral("!"),
+         [&plainHeight](MarkdownEditor *e, qsizetype at) {
+             return e->isMediaCardAt(at) && e->documentHeight() > plainHeight + 20;
+         }},
+        {QStringLiteral("video"), QStringLiteral("![[clip.mp4]]"), QStringLiteral("!"),
+         [&plainHeight](MarkdownEditor *e, qsizetype at) {
+             return e->isMediaCardAt(at) && e->documentHeight() > plainHeight + 200;
+         }},
+        {QStringLiteral("epub, as a card"), QStringLiteral("![[book.epub]]"), QStringLiteral("!"),
+         [](MarkdownEditor *e, qsizetype at) { return e->isFileCardAt(at); }},
+        {QStringLiteral("callout"), QStringLiteral("> [!note] Title\n> Callout body."), QStringLiteral(">"),
+         shownWithout(QStringLiteral("[!note]"))},
+        {QStringLiteral("table"), QStringLiteral("| a | b |\n|---|---|\n| 1 | 2 |"), QStringLiteral("|"),
+         [](MarkdownEditor *e, qsizetype at) { return e->tableRenderedAt(at); }},
+        {QStringLiteral("task"), QStringLiteral("- [ ] a task"), QStringLiteral("-"),
+         shownWithout(QStringLiteral("[ ]"))},
+        {QStringLiteral("footnote"), QStringLiteral("Text[^1].\n\n[^1]: The note."), QStringLiteral("T"),
+         [](MarkdownEditor *e, qsizetype) { return e->footnoteMarkTexts().contains(QStringLiteral("1")); }},
+        {QStringLiteral("query"), QStringLiteral("```query\ntag:#project\n```"), QStringLiteral("tag:"),
+         [](MarkdownEditor *e, qsizetype at) { return !e->queryRowsAt(at).isEmpty(); }},
+    };
+    if (noteAppC::PdfPage::isAvailable()) {
+        kinds.append({QStringLiteral("pdf"), QStringLiteral("![[doc.pdf]]"), QStringLiteral("!"),
+                      [](MarkdownEditor *e, qsizetype at) {
+                          const auto info = e->pdfEmbedInfoAt(at);
+                          return info.isPdfEmbed && info.pageCount == 1 && info.error.isEmpty();
+                      }});
+    }
+    if (noteAppC::MathRenderer::isAvailable()) {
+        kinds.append({QStringLiteral("display maths"), QStringLiteral("$$\nE = mc^2\n$$"), QStringLiteral("E"),
+                      shownWithout(QStringLiteral("E = mc^2"))});
+        kinds.append({QStringLiteral("inline maths"), QStringLiteral("Inline $e^{i\\pi}$ maths."),
+                      QStringLiteral("I"), shownWithout(QStringLiteral("\\pi"))});
+    }
+    if (noteAppC::CodeHighlighter::isAvailable()) {
+        kinds.append({QStringLiteral("highlighted code"), QStringLiteral("```cpp\nreturn 42;\n```"),
+                      QStringLiteral("return"), [](MarkdownEditor *e, qsizetype at) {
+                          const QColor code = e->formatAt(at).foreground().color();
+                          const QColor prose = e->formatAt(0).foreground().color();
+                          return e->formatAt(at).hasProperty(QTextFormat::ForegroundBrush) && code != prose;
+                      }});
+    }
+    if (noteAppC::HtmlRenderer::isAvailable()) {
+        kinds.append({QStringLiteral("html block"), QStringLiteral("<div style=\"color: red\">An HTML block</div>"),
+                      QStringLiteral("<"),
+                      [](MarkdownEditor *e, qsizetype at) { return !e->htmlImageSizeAt(at).isEmpty(); }});
+    }
+#ifdef NOTEAPPC_HAVE_CANVAS
+    kinds.append({QStringLiteral("canvas"), QStringLiteral("![[Board.canvas]]"), QStringLiteral("!"), image});
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    kinds.append({QStringLiteral("base"), QStringLiteral("![[Tasks.base]]"), QStringLiteral("!"),
+                  [](MarkdownEditor *e, qsizetype at) { return !e->baseRowsAt(at).isEmpty(); }});
+#endif
+    for (int i = 0; i < kinds.size(); ++i)
+        write(QStringLiteral("Kind %1.md").arg(i), ("intro\n\n" + kinds.at(i).markdown + "\n\nafter\n").toUtf8());
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.resize(1200, 900);
+    window.show(); // layout, and so rendering, only happens in a shown widget
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Plain.md"))));
+    QTest::qWait(50);
+    plainHeight = window.editor()->documentHeight();
+
+    for (int i = 0; i < kinds.size(); ++i) {
+        const Kind &kind = kinds.at(i);
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Kind %1.md").arg(i))));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(0); // in "intro": the block itself is not being edited
+        const qsizetype at = editor->noteText().indexOf(kind.anchor, 7);
+        EXPECT_TRUE(QTest::qWaitFor([&] { return kind.rendered(editor, at); }, 5000))
+            << kind.name.toStdString() << " is not rendered inline: " << editor->displayText().toStdString();
+    }
+
+    // Properties are the note's first block, so they have a note of their own.
+    write(QStringLiteral("Props.md"), "---\nstatus: draft\n---\nintro\n");
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Props.md"))));
+    window.editor()->setCursorOffset(window.editor()->noteText().size());
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !window.editor()->displayText().contains(QStringLiteral("status:")); },
+                                3000))
+        << "properties are not a table";
+}
