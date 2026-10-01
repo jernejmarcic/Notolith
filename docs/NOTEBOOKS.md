@@ -85,7 +85,10 @@ on the kernel; a reply for a caret or text that has moved on is dropped, a newer
 question of the same kind cancels the older, and a kernel busy for over 4 s
 with a long cell is not waited for. Off with the "Notebooks" core plugin (and
 with `NOTEAPPC_WITH_NOTEBOOK` off nothing of this is built into the window);
-the editor itself only tests a pointer on each key press.
+the editor itself only tests a pointer on each key press. Shift+Tab could only
+be this because the editor now keeps Tab and Shift+Tab for itself
+(`focusNextPrevChild` is false): before, a window with other widgets in it moved
+the focus on and neither key reached the editor's list indent either.
 
 ## Options in the fence
 

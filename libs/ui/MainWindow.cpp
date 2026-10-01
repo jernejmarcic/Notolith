@@ -4770,6 +4770,9 @@ void MainWindow::watchOpenNotes()
 
 QString MainWindow::findMovedNote(const QString &lost, const Note &known)
 {
+    // ponytail: a walk of the vault's files by size, once per lost note after the
+    // grace (tens of ms at 20 000 notes, only when a note really went); look the
+    // size up in the Index instead if folders of notes are ever moved by hand.
     if (!m_vault.isValid() || !m_vault.contains(lost) || Vault::isEncryptedNote(lost))
         return {};
     // A move keeps the bytes: same size first, so only a look-alike is read.
@@ -4813,9 +4816,16 @@ void MainWindow::followLostNotes(bool final)
             }
             continue;
         }
-        if (m_lostNotes.contains(path) && (final ? m_lostNotes.value(path) : true))
-            continue; // already looked at once, or reported
-        m_lostNotes.insert(path, false);
+        if (m_lostNotes.value(path, false))
+            continue; // already reported
+        if (!final) {
+            // A sync client deletes before it writes, and a move is found by
+            // looking through the vault: not before the grace is over.
+            m_lostNotes.insert(path, false);
+            if (!m_lostRetry.isActive())
+                m_lostRetry.start();
+            continue;
+        }
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
         });
@@ -4844,14 +4854,14 @@ void MainWindow::followLostNotes(bool final)
             statusBar()->showMessage(tr("%1 was moved outside the app: following it to %2")
                                          .arg(QFileInfo(path).fileName(), m_vault.relative(moved)),
                                      6000);
-        } else if (final) {
-            m_lostNotes[path] = true;
+            notifyPlugins("note-renamed", moved);
+        } else {
+            m_lostNotes[path] = true; // autosave leaves it alone from here
             statusBar()->showMessage(
-                tr("%1 is gone from disk (deleted or moved outside the app); saving it writes it there again")
+                tr("%1 is gone from disk (deleted or moved outside the app): it is not saved again until you "
+                   "save it yourself")
                     .arg(QFileInfo(path).fileName()),
                 10000);
-        } else {
-            m_lostRetry.start(); // a sync client may write the new name a moment after the old one goes
         }
     }
 }
@@ -4922,6 +4932,8 @@ void MainWindow::autosave()
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))
             continue;
+        if (m_lostNotes.value(leaf->notePath, false))
+            continue; // gone from disk and not found: writing it back is for the person to decide
         saved.insert(leaf->notePath);
         saveLeaf(leaf.get(), true);
     }

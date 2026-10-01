@@ -230,12 +230,6 @@ void MarkdownEditor::showNotebookInspect(const QString &text)
         m_notebookInspect = view;
     }
     auto *view = static_cast<QPlainTextEdit *>(m_notebookInspect);
-    // Like the completion list and the other popups: the theme's own colours.
-    view->setStyleSheet(QStringLiteral("QPlainTextEdit#notebookInspect { background: %1; color: %2; "
-                                       "border: 1px solid %3; border-radius: 6px; padding: 6px; }")
-                            .arg(m_theme.color(QStringLiteral("--background-secondary")).name(),
-                                 m_theme.color(QStringLiteral("--text-normal")).name(),
-                                 m_theme.color(QStringLiteral("--background-modifier-border")).name()));
     view->setPlainText(text.trimmed());
     const int lineHeight = int(QFontMetricsF(font()).height());
     const QFontMetrics metrics(view->font());

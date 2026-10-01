@@ -719,6 +719,15 @@ QListView#notebookCompletePopup::item:selected {
     color: %{--text-on-accent};
 }
 
+/* Documentation popup of a notebook block (Shift+Tab) */
+QPlainTextEdit#notebookInspect {
+    background: %{--background-secondary};
+    color: %{--text-normal};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 6px;
+}
+
 /* Chrome -------------------------------------------------------------- */
 
 QSplitter::handle {

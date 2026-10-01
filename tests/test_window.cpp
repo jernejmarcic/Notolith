@@ -2846,8 +2846,7 @@ TEST_F(WindowTest, CtrlSpaceCompletesFromTheNotesKernelOnceOneIsRunning)
         QTest::keyClick(editor, Qt::Key_Return);
         EXPECT_TRUE(editor->noteText().contains(QStringLiteral("value_beta\n```\n\nend")));
 
-        // Shift+Tab on a name: its documentation (once the edit has been parsed).
-        QTest::qWait(100);
+        // Shift+Tab on a name: its documentation.
         editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("value_beta\n```\n\nend")) + 10);
         QTest::keyClick(editor, Qt::Key_Backtab, Qt::ShiftModifier);
         ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->notebookInspectText().isEmpty(); }, 20000));
@@ -3047,18 +3046,29 @@ TEST_F(WindowTest, ANoteMovedOutsideIsFollowedWithItsCaretAndUnsavedEdits)
     EXPECT_EQ(right->noteText(), left->noteText());
 }
 
-TEST_F(WindowTest, ANoteMovedAndChangedOutsideStaysOnItsOldNameWithANotice)
+TEST_F(WindowTest, ANoteMovedAndChangedOutsideStaysOnItsOldNameAndIsNotSavedBack)
 {
     MainWindow window;
     window.openVault(dir.path());
     const QString note = path(QStringLiteral("Welcome.md"));
     window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("typed")); // unsaved when it goes
+    ASSERT_TRUE(editor->isModified());
     ASSERT_TRUE(QFile::rename(note, path(QStringLiteral("Projects/Other.md"))));
     overwrite(path(QStringLiteral("Projects/Other.md")), "# Something else\n");
     WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("gone from disk")), 4000);
-    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
-    QTest::qWait(300);
-    EXPECT_FALSE(QFile::exists(note)) << "nothing writes the old name back";
+    EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("Welcome.md")));
+    // Well past the autosave: the old name is not written back on its own...
+    QTest::qWait(3500);
+    EXPECT_FALSE(QFile::exists(note));
+    EXPECT_TRUE(editor->isModified());
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Other.md"))), QByteArray("# Something else\n"));
+    // ...but saving it by hand is the person's choice.
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nBody.\ntyped"));
+    EXPECT_FALSE(editor->isModified());
 }
 
 TEST_F(WindowTest, RestoringASnapshotReachesEveryPaneAndKeepsTheFilesBomAndLineEndings)
