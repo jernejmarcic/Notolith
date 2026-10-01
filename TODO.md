@@ -828,3 +828,21 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       hit targets while a touch press is handled, sidebars as drawers over
       the note below 720 px. Not tried on a real touchscreen yet.
 
+
+## Requested 2026-10-01
+Jernej: "Give it some ollama and A.I integrations using the OpenAI API. Such
+as translating text via LLM", "Add VIM keybindings", "Make sure the multiple
+editors works, and all metadata is properly saved and stuff, make sure the
+encryption works", "all kinds of things that should be rendered are rendered
+inline", "For code add the code running (the jupyter features) all features
+from ~/Projects/Ideas.md", then "make sure everything is as optimized and as
+optimal as it can be".
+- [ ] AI: `translate` (selection, or the whole note into a new note),
+      `proofread`; ai.ini `translate-to`, `translate-from`, `translate-model`;
+      TranslateGemma's own prompt when the model is translategemma; an
+      OpenAI-compatible server with no `api-key-env` (Ollama's /v1) sends no key.
+- [ ] Vim keybindings in the editor (off by default, a setting).
+- [ ] Audit: every embeddable kind renders inline; notebook features against
+      Ideas.md; split editors on one note; front matter/properties survive
+      every save path; encrypted notes round-trip through the app.
+- [ ] Last: optimisation pass over the whole app.
