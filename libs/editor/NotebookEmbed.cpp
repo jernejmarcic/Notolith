@@ -30,6 +30,14 @@ QString languageForExtension(const QString &suffix)
         {QStringLiteral("bash"), QStringLiteral("bash")},
         {QStringLiteral("rs"), QStringLiteral("rust")},
         {QStringLiteral("go"), QStringLiteral("go")},
+        {QStringLiteral("c"), QStringLiteral("c")},
+        {QStringLiteral("cpp"), QStringLiteral("cpp")},
+        {QStringLiteral("cc"), QStringLiteral("cpp")},
+        {QStringLiteral("cxx"), QStringLiteral("cpp")},
+        {QStringLiteral("hs"), QStringLiteral("haskell")},
+        {QStringLiteral("java"), QStringLiteral("java")},
+        {QStringLiteral("lua"), QStringLiteral("lua")},
+        {QStringLiteral("pl"), QStringLiteral("perl")},
     };
     return languages.value(suffix.trimmed().toLower());
 }
@@ -51,7 +59,7 @@ void MarkdownEditor::layoutRunnableEmbed(BlockView &view, const QString &path, c
     // script that opens a sibling file still can. Never `#| sandbox: host`:
     // that option only exists on a fence's own `#|` lines, which a file on
     // disk does not have.
-    appendNotebookOutput(view, language, body, QFileInfo(path).absolutePath(), false);
+    appendNotebookOutput(view, language, body, QStringLiteral("e") + path, QFileInfo(path).absolutePath());
 }
 
 } // namespace noteAppC

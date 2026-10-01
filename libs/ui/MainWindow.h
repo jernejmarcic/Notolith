@@ -341,6 +341,8 @@ private:
     /// The editor shows an encrypted note: nothing of it reaches a plugin,
     /// a kernel's output cache, a snapshot or the note history.
     bool showsEncryptedNote(const MarkdownEditor *editor) const;
+    /// The note an editor shows, for whose kernel its code blocks run in.
+    QString notePathOf(const MarkdownEditor *editor) const;
     void encryptCurrentNote();
     void decryptCurrentNote();
     void newEncryptedNote();

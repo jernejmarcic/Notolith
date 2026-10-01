@@ -57,7 +57,10 @@ signals:
     void statusChanged(QString parentMsgID, QString state);         ///< iopub "status": busy/idle
     void streamOutput(QString parentMsgID, QString streamName, QString text); ///< iopub "stream"
     void executeResultReceived(QString parentMsgID, QJsonObject data, int executionCount);
-    void displayDataReceived(QString parentMsgID, QJsonObject data);          ///< iopub "display_data"
+    /// iopub "display_data" or, `isUpdate`, "update_display_data" (a progress
+    /// bar redrawn in place): `displayID` names the output it replaces.
+    void displayDataReceived(QString parentMsgID, QJsonObject data, QString displayID, bool isUpdate);
+    void clearOutputReceived(QString parentMsgID); ///< iopub "clear_output": tqdm, IPython.display.clear_output
     void errorReceived(QString parentMsgID, QString ename, QString evalue, QStringList traceback);
     void executeReplyReceived(QString parentMsgID, bool ok, int executionCount);
 

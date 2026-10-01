@@ -113,7 +113,9 @@ QString KernelClient::execute(const QString &code)
     content.insert(QStringLiteral("store_history"), true);
     content.insert(QStringLiteral("user_expressions"), QJsonObject());
     content.insert(QStringLiteral("allow_stdin"), false);
-    content.insert(QStringLiteral("stop_on_error"), true);
+    // Blocks are independent cells: one failing must not abort the ones
+    // queued behind it (a "run all" with an error in the middle).
+    content.insert(QStringLiteral("stop_on_error"), false);
 
     const QJsonObject header = newHeader(QStringLiteral("execute_request"), m_session, m_username);
     const KernelMessage message = buildMessage(header, {}, {}, content);
@@ -156,15 +158,19 @@ void KernelClient::dispatchIopub(const KernelMessage &message)
     } else if (type == QLatin1String("execute_result")) {
         emit executeResultReceived(parent, content.value(QStringLiteral("data")).toObject(),
                                    content.value(QStringLiteral("execution_count")).toInt(-1));
-    } else if (type == QLatin1String("display_data")) {
-        emit displayDataReceived(parent, content.value(QStringLiteral("data")).toObject());
+    } else if (type == QLatin1String("display_data") || type == QLatin1String("update_display_data")) {
+        const QString displayID = content.value(QStringLiteral("transient")).toObject()
+                                      .value(QStringLiteral("display_id")).toString();
+        emit displayDataReceived(parent, content.value(QStringLiteral("data")).toObject(), displayID,
+                                 type == QLatin1String("update_display_data"));
+    } else if (type == QLatin1String("clear_output")) {
+        emit clearOutputReceived(parent);
     } else if (type == QLatin1String("error")) {
         emit errorReceived(parent, content.value(QStringLiteral("ename")).toString(),
                            content.value(QStringLiteral("evalue")).toString(), tracebackOf(content));
     }
-    // "execute_input", "clear_output" and the rest: not shown - a notebook
-    // block already shows its own source, and nothing here clears output
-    // mid-run rather than replacing it wholesale once the run finishes.
+    // "execute_input" and the rest: not shown - a block already shows its own
+    // source.
 }
 
 void KernelClient::run()

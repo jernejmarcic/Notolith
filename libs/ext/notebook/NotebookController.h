@@ -41,8 +41,23 @@ public:
         /// called - this is only for a script that reads *sibling* files).
         QStringList extraReadOnlyBinds;
         /// Through the language's Jupyter kernel even when the system's own
-        /// tool could run it: what the kernel's end-to-end test asks for.
+        /// tool could run it: what the kernel's end-to-end test asks for, and
+        /// what a note asks for with `#| kernel: on` (or the setting that
+        /// shares one kernel between a note's blocks).
         bool useKernel = false;
+        /// Whose kernel it is: blocks with the same scope (a note's path),
+        /// tier and kernel share one process, so a variable one block set
+        /// is there for the next. Empty is one kernel for everybody, as a
+        /// single-notebook Jupyter has.
+        QString scope;
+        /// A kernelspec's name (`python3`, `ir`) instead of the one the
+        /// language finds; implies a kernel.
+        QString kernelName;
+        /// 0: the runner's own limit (30 s without a kernel, none with one,
+        /// as in Jupyter, where Interrupt is the way out).
+        int timeoutMs = 0;
+        /// false (`#| cache: false`): a lookup finds nothing and a run is not kept.
+        bool cache = true;
     };
     using Deliver = std::function<void(NotebookRunResult)>;
 
@@ -53,11 +68,15 @@ public:
     void run(const RunRequest &request, bool forceRun, const Deliver &deliver);
 
     /// SIGINT (or, for a kernel that understands it, interrupt_request) to
-    /// `language`'s kernel, if one is running. No effect otherwise.
-    void interruptKernel(const QString &language);
-    /// Stops and relaunches `language`'s kernel; every in-flight request on
-    /// it is delivered a kernel-level error rather than left hanging.
-    void restartKernel(const QString &language);
+    /// `language`'s kernel, if one is running, and stops a run that has no
+    /// kernel. `scope` empty: every note's. No effect otherwise.
+    void interruptKernel(const QString &language, const QString &scope = QString());
+    /// Stops `language`'s kernel (the next run starts a fresh one, with none
+    /// of the old variables); every in-flight request on it is delivered a
+    /// kernel-level error rather than left hanging. `scope` empty: every note's.
+    void restartKernel(const QString &language, const QString &scope = QString());
+    /// How many kernels are running for `scope` (empty: all of them).
+    int runningKernelCount(const QString &scope = QString()) const;
     /// Every kernel this controller owns, stopped. Called once, from
     /// ~MainWindow or equivalent, before the process that owns their
     /// sockets and runtime directories goes away.
@@ -77,6 +96,11 @@ private:
         QElapsedTimer clock;
         QString cacheKey;
         QString language;
+        bool cache = true;
+        bool timedOut = false;
+        bool truncated = false;
+        int timeoutMs = 0;
+        int executionCount = 0;
         NotebookRunResult result;
         // shell (execute_reply) and iopub (status: idle) are separate ZMQ
         // sockets with no ordering guarantee *between* them, only within
@@ -90,6 +114,9 @@ private:
     };
 
     struct KernelSession {
+        QString key;      ///< scope | tier | kernelspec name - m_kernels' own key
+        QString scope;
+        QString language; ///< the spec's, lower-cased
         std::unique_ptr<KernelProcess> process;
         std::unique_ptr<KernelClient> client;
         KernelSpec spec;
@@ -101,6 +128,7 @@ private:
     void wireKernel(KernelSession *session);
     void finalizeIfDone(KernelSession *session, QHash<QString, InFlight>::iterator it);
     void failInFlight(KernelSession *session, const QString &error);
+    void interruptSession(KernelSession *session);
 
     /// std::map, not QHash: QHash's copy-on-write detach needs a copyable
     /// value, and std::unique_ptr<KernelSession> is deliberately not one -

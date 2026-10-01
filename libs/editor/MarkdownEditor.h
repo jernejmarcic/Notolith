@@ -436,12 +436,16 @@ public:
     /// libs/ext/notebook's own NotebookOutput is the source this is built
     /// from, one field at a time, by whatever the window's runner is.
     struct NotebookOutput {
-        enum class Kind { Text, Markdown, ImagePng, ImageSvg, Error };
+        /// The same order as libs/ext/notebook's NotebookOutput::Kind: the
+        /// window converts by number.
+        enum class Kind { Text, Markdown, ImagePng, ImageSvg, Error, Html };
         Kind kind = Kind::Text;
-        QString text;          ///< text/plain (ANSI stripped), text/markdown source, or an error's evalue
-        QByteArray imageBytes; ///< Kind::ImagePng only
+        QString text;          ///< text/plain (ANSI stripped), text/markdown source, HTML, or an error's evalue
+        QByteArray imageBytes; ///< Kind::ImagePng only (PNG or JPEG)
         QString ename;         ///< Kind::Error only
         QStringList traceback; ///< Kind::Error only, ANSI already stripped
+        bool isStderr = false; ///< Kind::Text only: drawn in the error colour
+        QString alt;           ///< Kind::Html only: the plain text shown when litehtml is not built in
     };
     /// A block's last run, or - `hasRun` false - nothing run yet, which is
     /// the normal state for a block nobody has clicked "Run" on.
@@ -451,6 +455,10 @@ public:
         qint64 wallMs = -1;
         QList<NotebookOutput> outputs;
         QString kernelError; ///< no kernel for this language, one that would not start...
+        int executionCount = 0; ///< the kernel's `In [n]`; 0 for a run with no kernel
+        /// Set by the editor, not the runner: this is an earlier run of the
+        /// block, kept on screen after its source changed until it runs again.
+        bool stale = false;
     };
     /// Delivers a block's result exactly once, from any thread - the editor
     /// marshals back onto its own thread before touching a block, the same
@@ -469,6 +477,18 @@ public:
         /// window's job; the editor only names the path). Empty for a
         /// fenced block.
         QString workingDir;
+        /// `#| cache: false`: nothing is read from or written to the sidecar.
+        bool cache = true;
+        /// `#| timeout: N`, in seconds; 0 is the runner's own limit.
+        int timeoutSeconds = 0;
+        /// `#| kernel:` - "" the setting's choice, "off" the system's own
+        /// tool, "on" the language's Jupyter kernel, or a kernelspec's name.
+        QString kernel;
+        /// Which note's kernel: blocks that share it share variables.
+        /// Left empty here; the window fills it from the note it is in.
+        QString scope;
+        /// Remove this block's kept output instead of reading or running it.
+        bool clear = false;
     };
     /// Asks for `language`/`source`'s result. `forceRun` false is a
     /// cache-only lookup that must never start a kernel - what every
@@ -543,6 +563,9 @@ public:
         bool ok = true;
         QRectF runRect;
         QRectF labelRect; ///< the language label beside it, the same coordinates
+        bool stale = false;      ///< showing an earlier run of source that has since changed
+        int executionCount = 0;  ///< the kernel's `In [n]`, 0 for none
+        int outputCellCount = 0; ///< outputs laid out under the block
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
     /// Whether the table holding `offset` is drawn as a table rather than
@@ -554,6 +577,12 @@ public:
     bool runNotebookBlockAt(qsizetype offset);
     /// Every runnable block in the note, top to bottom; how many were asked for.
     int runAllNotebookBlocks();
+    /// Every runnable block from the top of the note to `offset`, the block
+    /// holding it included (Jupyter's "run all above"); how many were asked for.
+    int runNotebookBlocksUpTo(qsizetype offset);
+    /// Forgets every block's output here and in the sidecar (Jupyter's
+    /// "clear all outputs"); how many blocks had any.
+    int clearNotebookOutputs();
     /// The language of the fenced block at `offset`, empty outside one.
     QString codeLanguageAt(qsizetype offset) const;
 
@@ -672,6 +701,9 @@ public:
     int footnotesListRowCount() const;
 
 signals:
+    /// A click on a running block's stop control: the window interrupts the
+    /// kernel (or the process) running `language` in this note.
+    void notebookInterruptRequested(const QString &language);
     /// The word count moved. It is published with each parse, so it lags a
     /// keystroke by the parse debounce instead of costing the keystroke.
     void wordCountChanged(int words);
@@ -1006,6 +1038,13 @@ private:
         QString notebookSource;
         QString notebookWorkingDir;
         bool notebookSandboxHost = false;
+        bool notebookCacheOn = true;
+        bool notebookShowOutput = true; ///< `#| output: false` clears it
+        int notebookTimeout = 0;
+        QString notebookKernel;
+        QString notebookBlockID; ///< "f2" (the third fence) or "e<path>": which block this is across edits
+        bool notebookStale = false; ///< showing an earlier run of different source
+        int notebookCount = 0;      ///< the kernel's execution count, 0 for none
         bool notebookHasRun = false;
         bool notebookRunning = false;
         bool notebookOk = true;
@@ -1417,7 +1456,10 @@ private:
     /// `workingDir`/`sandboxHost` are a runnable embed's folder and a
     /// fenced block's own `#| sandbox:` - see NotebookRunOptions.
     void appendNotebookOutput(BlockView &view, const QString &language, const QString &source,
-                              const QString &workingDir = QString(), bool sandboxHost = false);
+                              const QString &blockID, const QString &workingDir = QString(),
+                              const CodeOptions *options = nullptr);
+    /// The options a run of what `view` last laid out is made with.
+    NotebookRunOptions notebookOptionsOf(const BlockView &view) const;
     void deliverNotebookResult(const QString &key, quint64 generation, NotebookRunResult result);
     /// A Text or Error output, as its own small monospace QTextLayout -
     /// null if `text` ends up empty (an error with no message at all).
@@ -1452,8 +1494,11 @@ private:
     /// the same one-search-per-text idea ensureQuerySearch keeps for a
     /// ```query``` block.
     const NotebookCacheEntry &ensureNotebookResult(const QString &key, const QString &language,
-                                                   const QString &source, const QString &workingDir,
-                                                   bool sandboxHost);
+                                                   const QString &source, const NotebookRunOptions &options);
+    /// blockID -> the cache key it last had output under, so a block whose
+    /// source changed can still show that output, marked stale. In memory
+    /// only, like the cache above: a closed note shows what the sidecar has.
+    QHash<QString, QString> m_notebookBlockKeys;
 
     /// `![[Note]]`, `![[Note#Heading]]` or `![[Note#^block-id]]`: the target
     /// note's own text (or the named section of it), in a panel like a

@@ -1019,6 +1019,39 @@ TEST(CodeOptionTest, PrefixFollowsTheLanguage)
     EXPECT_EQ(rendered(wrong), QStringLiteral("\n#| title: query.sql\nSELECT 1;\n\n"));
 }
 
+TEST(CodeOptionTest, NotebookKeysOutputIncludeCacheTimeoutAndKernel)
+{
+    const auto optionsOf = [](const QString &lines) {
+        const Decorations decorations = decorationsOf(QStringLiteral("```python\n") + lines + QStringLiteral("x = 1\n```\n"));
+        return decorations.codeOptions.isEmpty() ? CodeOptions() : decorations.codeOptions.first();
+    };
+    CodeOptions options = optionsOf(QString());
+    EXPECT_TRUE(options.output);
+    EXPECT_TRUE(options.cache);
+    EXPECT_EQ(options.timeoutSeconds, 0);
+    EXPECT_TRUE(options.kernel.isEmpty());
+
+    options = optionsOf(QStringLiteral("#| output: false\n#| cache: no\n#| timeout: 12\n#| kernel: true\n"));
+    EXPECT_FALSE(options.output);
+    EXPECT_FALSE(options.cache);
+    EXPECT_EQ(options.timeoutSeconds, 12);
+    EXPECT_EQ(options.kernel, QStringLiteral("on"));
+    EXPECT_TRUE(options.echo);
+
+    // Quarto's include: false is echo and output together.
+    options = optionsOf(QStringLiteral("#| include: false\n"));
+    EXPECT_FALSE(options.echo);
+    EXPECT_FALSE(options.output);
+
+    options = optionsOf(QStringLiteral("#| kernel: false\n"));
+    EXPECT_EQ(options.kernel, QStringLiteral("off"));
+    options = optionsOf(QStringLiteral("#| kernel: python3\n"));
+    EXPECT_EQ(options.kernel, QStringLiteral("python3"));
+    // Nonsense falls to the default, not to an error.
+    options = optionsOf(QStringLiteral("#| timeout: soon\n"));
+    EXPECT_EQ(options.timeoutSeconds, 0);
+}
+
 TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
 {
     const QString text = QStringLiteral(

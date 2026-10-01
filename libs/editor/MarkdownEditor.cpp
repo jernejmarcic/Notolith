@@ -3097,8 +3097,11 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             QString source = m_text.mid(content.start, content.length());
             if (source.endsWith(QLatin1Char('\n')))
                 source.chop(1);
-            appendNotebookOutput(view, fence->language, source, QString(),
-                                 view.options && view.options->sandboxHost);
+            // Which fence this is across edits: its place among the note's
+            // fences (a block inserted above shifts it, which at worst shows
+            // a neighbour's old output marked outdated).
+            const QString blockID = QStringLiteral("f%1").arg(fence - m_decorations.codeFences.constData());
+            appendNotebookOutput(view, fence->language, source, blockID, QString(), view.options);
         }
     }
     view.laidOut = true;

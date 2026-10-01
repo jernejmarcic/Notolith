@@ -1514,6 +1514,258 @@ TEST(NotebookBlockTest, CachedOutputReappearsAfterReopeningWithoutAKernel)
     EXPECT_EQ(forceRunCount, 1);
 }
 
+// --- Jupyter-style notebook features (NotebookBlock.cpp) -------------------
+
+namespace {
+
+/// A runner that answers every cache lookup with `lookup` and every real run
+/// with `ran`, recording what it was asked. `deliver` goes through a
+/// zero-length timer, as the real one's contract says.
+struct FakeNotebook {
+    MarkdownEditor::NotebookRunResult lookup;
+    MarkdownEditor::NotebookRunResult ran;
+    QList<MarkdownEditor::NotebookRunOptions> runs;
+    QList<MarkdownEditor::NotebookRunOptions> clears;
+    QStringList runSources;
+    bool holdRuns = false; ///< a run that never finishes: the block stays "running"
+
+    MarkdownEditor::NotebookRunner runner()
+    {
+        return [this](const QString &, const QString &source, bool forceRun,
+                      const MarkdownEditor::NotebookRunOptions &options,
+                      const MarkdownEditor::NotebookDeliver &deliver) {
+            if (options.clear) {
+                clears.append(options);
+                QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult()); });
+                return;
+            }
+            if (forceRun) {
+                runs.append(options);
+                runSources.append(source);
+                if (holdRuns)
+                    return;
+            }
+            const MarkdownEditor::NotebookRunResult answer = forceRun ? ran : lookup;
+            QTimer::singleShot(0, [deliver, answer] { deliver(answer); });
+        };
+    }
+};
+
+MarkdownEditor::NotebookRunResult textRun(const QString &text, int count = 0, bool isStderr = false)
+{
+    MarkdownEditor::NotebookRunResult result;
+    result.hasRun = true;
+    result.executionCount = count;
+    MarkdownEditor::NotebookOutput output;
+    output.text = text;
+    output.isStderr = isStderr;
+    result.outputs.append(output);
+    return result;
+}
+
+} // namespace
+
+TEST(NotebookBlockTest, OutputFalseHidesTheOutputButStillRuns)
+{
+    const QString note = QStringLiteral("```python\n#| output: false\nprint(1)\n```\n\n"
+                                        "```python\nprint(2)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.lookup = textRun(QStringLiteral("x\n"));
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    const auto hidden = editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)")));
+    const auto shown = editor->notebookInfoAt(note.indexOf(QStringLiteral("print(2)")));
+    EXPECT_TRUE(hidden.hasRun);
+    EXPECT_EQ(hidden.outputCellCount, 0);
+    EXPECT_EQ(shown.outputCellCount, 1);
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(1)"))));
+    EXPECT_EQ(fake.runs.size(), 1); // output: false does not stop it running
+}
+
+TEST(NotebookBlockTest, IncludeFalseHidesTheListingAndTheOutput)
+{
+    const QString note = QStringLiteral("```python\n#| include: false\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.lookup = textRun(QStringLiteral("x\n"));
+    editor->setNotebookRunner(fake.runner());
+    editor->setCursorOffset(note.size());
+    QTest::qWait(50);
+    EXPECT_EQ(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).outputCellCount, 0);
+}
+
+TEST(NotebookBlockTest, CacheTimeoutAndKernelOptionsReachTheRunner)
+{
+    const QString note = QStringLiteral("```python\n#| cache: false\n#| timeout: 7\n#| kernel: on\nprint(1)\n```\n\n"
+                                        "```python\n#| kernel: python3\nprint(2)\n```\n\n"
+                                        "```python\nprint(12)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(1)"))));
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(2)"))));
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(12)"))));
+    ASSERT_EQ(fake.runs.size(), 3);
+    EXPECT_FALSE(fake.runs[0].cache);
+    EXPECT_EQ(fake.runs[0].timeoutSeconds, 7);
+    EXPECT_EQ(fake.runs[0].kernel, QStringLiteral("on"));
+    EXPECT_TRUE(fake.runs[1].cache);
+    EXPECT_EQ(fake.runs[1].kernel, QStringLiteral("python3"));
+    EXPECT_TRUE(fake.runs[2].cache);
+    EXPECT_EQ(fake.runs[2].timeoutSeconds, 0);
+    EXPECT_TRUE(fake.runs[2].kernel.isEmpty());
+}
+
+TEST(NotebookBlockTest, TheExecutionCountIsShown)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.lookup = textRun(QStringLiteral("1\n"), 4);
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    EXPECT_EQ(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).executionCount, 4);
+}
+
+TEST(NotebookBlockTest, EditedCodeKeepsItsOldOutputMarkedOutdatedUntilRunAgain)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.ran = textRun(QStringLiteral("2\n"), 2);
+    fake.lookup = textRun(QStringLiteral("1\n"), 1);
+    // Only print(1) has anything cached; the edited source has not been run.
+    editor->setNotebookRunner([&fake](const QString &, const QString &source, bool forceRun,
+                                      const MarkdownEditor::NotebookRunOptions &options,
+                                      const MarkdownEditor::NotebookDeliver &deliver) {
+        const MarkdownEditor::NotebookRunResult answer =
+            forceRun ? fake.ran : (source.contains(QLatin1String("print(1)")) ? fake.lookup : MarkdownEditor::NotebookRunResult());
+        Q_UNUSED(options);
+        QTimer::singleShot(0, [deliver, answer] { deliver(answer); });
+    });
+    QTest::qWait(50);
+    auto info = editor->notebookInfoAt(12);
+    ASSERT_EQ(info.outputCellCount, 1);
+    EXPECT_FALSE(info.stale);
+
+    // Edit the code: the result for the new source does not exist.
+    editor->setNoteText(QStringLiteral("```python\nprint(2)\n```\n"));
+    QTest::qWait(300);
+    info = editor->notebookInfoAt(12);
+    EXPECT_TRUE(info.stale);
+    EXPECT_GE(info.outputCellCount, 2); // the "outdated" line and the old output
+
+    // Running it again replaces the old result.
+    ASSERT_TRUE(editor->runNotebookBlockAt(12));
+    QTest::qWait(100);
+    info = editor->notebookInfoAt(12);
+    EXPECT_FALSE(info.stale);
+    EXPECT_EQ(info.outputCellCount, 1);
+    EXPECT_EQ(info.executionCount, 2);
+}
+
+TEST(NotebookBlockTest, StderrAndHtmlOutputsAreLaidOut)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.lookup = textRun(QStringLiteral("warn\n"), 1, true);
+    MarkdownEditor::NotebookOutput html;
+    html.kind = MarkdownEditor::NotebookOutput::Kind::Html;
+    html.text = QStringLiteral("<table><tr><td>cell</td></tr></table>");
+    html.alt = QStringLiteral("cell");
+    fake.lookup.outputs.append(html);
+    MarkdownEditor::NotebookOutput latex;
+    latex.kind = MarkdownEditor::NotebookOutput::Kind::Markdown;
+    latex.text = QStringLiteral("$$\nx^2\n$$");
+    fake.lookup.outputs.append(latex);
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    // The warning, the table (drawn by litehtml, or as its plain twin), the formula.
+    EXPECT_EQ(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).outputCellCount, 3);
+}
+
+TEST(NotebookBlockTest, ClearingOutputsAsksTheRunnerAndEmptiesTheBlock)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.lookup = textRun(QStringLiteral("1\n"), 1);
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    ASSERT_EQ(editor->notebookInfoAt(12).outputCellCount, 1);
+
+    EXPECT_EQ(editor->clearNotebookOutputs(), 1);
+    QTest::qWait(50);
+    EXPECT_EQ(fake.clears.size(), 1);
+    const auto info = editor->notebookInfoAt(12);
+    EXPECT_FALSE(info.hasRun);
+    EXPECT_EQ(info.outputCellCount, 0);
+}
+
+TEST(NotebookBlockTest, RunToTheCursorStopsThere)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n\n```python\nprint(2)\n```\n\n"
+                                        "```python\nprint(12)\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    EXPECT_EQ(editor->runNotebookBlocksUpTo(note.indexOf(QStringLiteral("print(2)"))), 2);
+    EXPECT_EQ(fake.runSources, (QStringList{QStringLiteral("print(1)"), QStringLiteral("print(2)")}));
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 3);
+}
+
+TEST(NotebookBlockTest, ClickingARunningBlockAsksForAnInterrupt)
+{
+    const QString note = QStringLiteral("```python\nwhile True: pass\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size()); // out of the block: it renders, it does not show its source
+    FakeNotebook fake;
+    fake.holdRuns = true;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(30);
+    QStringList asked;
+    QObject::connect(editor.get(), &MarkdownEditor::notebookInterruptRequested,
+                     [&asked](const QString &language) { asked.append(language); });
+    ASSERT_TRUE(editor->runNotebookBlockAt(12));
+    EXPECT_TRUE(editor->notebookInfoAt(12).running);
+    EXPECT_TRUE(asked.isEmpty());
+    ASSERT_TRUE(editor->runNotebookBlockAt(12)); // the stop control
+    EXPECT_EQ(asked, QStringList{QStringLiteral("python")});
+    EXPECT_EQ(fake.runs.size(), 1);
+}
+
+TEST(NotebookBlockTest, MoreScriptTypesAreRunnableEmbeds)
+{
+    QTemporaryDir dir;
+    for (const char *name : {"a.c", "b.cpp", "c.hs", "d.java", "e.lua", "f.pl"}) {
+        QFile file(dir.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x\n");
+    }
+    for (const char *name : {"a.c", "b.cpp", "c.hs", "d.java", "e.lua", "f.pl"}) {
+        auto editor = editorWith(QStringLiteral("![[%1]]\n\nafter\n").arg(QString::fromLatin1(name)));
+        const QString path = dir.filePath(QString::fromLatin1(name));
+        editor->setLinkResolver([path](const QString &) { return path; });
+        FakeNotebook fake;
+        editor->setNotebookRunner(fake.runner());
+        editor->setCursorOffset(editor->noteText().size());
+        QTest::qWait(20);
+        EXPECT_TRUE(editor->notebookInfoAt(0).eligible) << name;
+    }
+}
+
 TEST(PdfPageTest, AvailableAndRefusesWhatIsNotAPdf)
 {
     // Available exactly when the build found poppler-qt6; a build without it -

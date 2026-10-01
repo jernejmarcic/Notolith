@@ -58,6 +58,9 @@ const QVariantMap &defaults()
         {QStringLiteral("sync.serverURL"), QString()},
         {QStringLiteral("sync.email"), QString()},
         {QStringLiteral("notebooks.allowHostTier"), false}, // a note's "#| sandbox: host" is only a request
+        // false: each block is a short process of the system's own tool. true: a note's blocks share
+        // one Jupyter kernel per language (variables persist, execution counts, rich output) where one is installed.
+        {QStringLiteral("notebooks.sharedKernel"), false},
         {QStringLiteral("editor.gpuAcceleration"), false},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},

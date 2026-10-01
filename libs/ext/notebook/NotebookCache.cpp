@@ -42,6 +42,7 @@ QString kindName(NotebookOutput::Kind kind)
     case NotebookOutput::Kind::ImagePng: return QStringLiteral("image/png");
     case NotebookOutput::Kind::ImageSvg: return QStringLiteral("image/svg");
     case NotebookOutput::Kind::Error: return QStringLiteral("error");
+    case NotebookOutput::Kind::Html: return QStringLiteral("html");
     }
     return QStringLiteral("text");
 }
@@ -56,6 +57,8 @@ NotebookOutput::Kind kindFromName(const QString &name)
         return NotebookOutput::Kind::ImageSvg;
     if (name == QLatin1String("error"))
         return NotebookOutput::Kind::Error;
+    if (name == QLatin1String("html"))
+        return NotebookOutput::Kind::Html;
     return NotebookOutput::Kind::Text;
 }
 
@@ -74,6 +77,7 @@ NotebookRunResult readNotebookCache(const QString &key)
     result.ok = root.value(QStringLiteral("ok")).toBool(true);
     result.wallMs = qint64(root.value(QStringLiteral("wallMs")).toDouble(-1));
     result.kernelError = root.value(QStringLiteral("kernelError")).toString();
+    result.executionCount = root.value(QStringLiteral("count")).toInt();
 
     int imageIndex = 0;
     for (const QJsonValue &value : root.value(QStringLiteral("outputs")).toArray()) {
@@ -83,6 +87,8 @@ NotebookRunResult readNotebookCache(const QString &key)
         output.text = object.value(QStringLiteral("text")).toString();
         output.ename = object.value(QStringLiteral("ename")).toString();
         output.evalue = object.value(QStringLiteral("evalue")).toString();
+        output.isStderr = object.value(QStringLiteral("stderr")).toBool();
+        output.alt = object.value(QStringLiteral("alt")).toString();
         for (const QJsonValue &line : object.value(QStringLiteral("traceback")).toArray())
             output.traceback << line.toString();
         if (output.kind == NotebookOutput::Kind::ImagePng) {
@@ -93,6 +99,11 @@ NotebookRunResult readNotebookCache(const QString &key)
         result.outputs.append(output);
     }
     return result;
+}
+
+void removeNotebookCache(const QString &key)
+{
+    QDir(entryDir(key)).removeRecursively();
 }
 
 void writeNotebookCache(const QString &key, NotebookRunResult result)
@@ -111,6 +122,10 @@ void writeNotebookCache(const QString &key, NotebookRunResult result)
             object.insert(QStringLiteral("ename"), output.ename);
         if (!output.evalue.isEmpty())
             object.insert(QStringLiteral("evalue"), output.evalue);
+        if (output.isStderr)
+            object.insert(QStringLiteral("stderr"), true);
+        if (!output.alt.isEmpty())
+            object.insert(QStringLiteral("alt"), output.alt);
         if (!output.traceback.isEmpty())
             object.insert(QStringLiteral("traceback"), QJsonArray::fromStringList(output.traceback));
         if (output.kind == NotebookOutput::Kind::ImagePng && !output.imageBytes.isEmpty()) {
@@ -124,6 +139,8 @@ void writeNotebookCache(const QString &key, NotebookRunResult result)
     QJsonObject root;
     root.insert(QStringLiteral("ok"), result.ok);
     root.insert(QStringLiteral("wallMs"), double(result.wallMs));
+    if (result.executionCount > 0)
+        root.insert(QStringLiteral("count"), result.executionCount);
     if (!result.kernelError.isEmpty())
         root.insert(QStringLiteral("kernelError"), result.kernelError);
     root.insert(QStringLiteral("outputs"), outputs);

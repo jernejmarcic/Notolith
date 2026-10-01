@@ -623,6 +623,11 @@ QWidget *SettingsPage::buildCorePluginsPage()
     addToggleRow(layout, QStringLiteral("notebooks.allowHostTier"), tr("Let notes run code outside the sandbox"),
                  tr("A code block's \"#| sandbox: host\" runs it as you, with your files. Off, every block "
                     "runs sandboxed whatever it asks."));
+    addToggleRow(layout, QStringLiteral("notebooks.sharedKernel"), tr("Share one kernel between a note's code blocks"),
+                 tr("Like a Jupyter notebook: a variable one block sets is there for the next, and a block's "
+                    "number counts its runs. Needs the language's Jupyter kernel (Python: ipykernel); "
+                    "off, every block is a fresh process of the language's own tool. \"#| kernel: on\" or "
+                    "\"off\" decides for one block."));
 #endif
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over

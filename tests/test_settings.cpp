@@ -65,6 +65,7 @@ TEST(Settings, whatRunsAnotherPersonsCodeIsOffUntilAskedFor)
 {
     const Settings settings;
     EXPECT_FALSE(settings.boolean(QStringLiteral("notebooks.allowHostTier")));
+    EXPECT_FALSE(settings.boolean(QStringLiteral("notebooks.sharedKernel")));
     EXPECT_FALSE(settings.boolean(Settings::featureKey("community-plugins")));
 }
 

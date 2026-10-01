@@ -295,6 +295,13 @@ bool isTrue(const QString &value)
            || value == QLatin1String("1");
 }
 
+bool isFalse(const QString &value)
+{
+    return value.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0
+           || value.compare(QLatin1String("no"), Qt::CaseInsensitive) == 0
+           || value.compare(QLatin1String("off"), Qt::CaseInsensitive) == 0 || value == QLatin1String("0");
+}
+
 /// A value written the way an attribute or an option writes one, with the
 /// quotes that made it one word taken back off.
 QString unquote(QString value)
@@ -387,6 +394,26 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
         options.eval = isTrue(value);
     } else if (key == QLatin1String("echo")) {
         options.echo = isTrue(value);
+    } else if (key == QLatin1String("output")) {
+        options.output = !isFalse(unquote(value));
+    } else if (key == QLatin1String("include")) {
+        // Quarto: include: false is echo: false and output: false together.
+        if (isFalse(unquote(value))) {
+            options.echo = false;
+            options.output = false;
+        }
+    } else if (key == QLatin1String("cache")) {
+        options.cache = !isFalse(unquote(value));
+    } else if (key == QLatin1String("timeout")) {
+        options.timeoutSeconds = qBound(0, unquote(value).toInt(), 86'400);
+    } else if (key == QLatin1String("kernel")) {
+        const QString name = unquote(value).trimmed();
+        if (isFalse(name))
+            options.kernel = QStringLiteral("off");
+        else if (isTrue(name))
+            options.kernel = QStringLiteral("on");
+        else
+            options.kernel = name;
     } else if (key == QLatin1String("sandbox")) {
         // Anything but "host" keeps the tier-1 default rather than failing a
         // typo closed - "bubblewrap" written out, or a future tier's name
