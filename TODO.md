@@ -846,7 +846,15 @@ optimal as it can be".
       `>` `<`, `:s`.
 - [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Left: tab completion
       and inspect (needs a popup), `.ipynb` files, `input()`, tiers 2-3.
-- [ ] Audit: every embeddable kind renders inline; notebook features against
-      Ideas.md; split editors on one note; front matter/properties survive
-      every save path; encrypted notes round-trip through the app.
+- [x] Audit (tests in test_window/test_sync/test_vault): split panes, metadata
+      byte-exact through every save path, encryption leaves no plaintext on
+      disk, every embed kind renders inline. Fixed: outside changes to an open
+      note were overwritten by the next autosave; restore updated one pane
+      only; a plugin's note.activeText leaked an encrypted note's plaintext.
+      Left: Mermaid (no renderer, needs a dependency - yours to pick); EPUB
+      embed is a card (no cover API); every atomic save resets birthTime, so
+      Bases' file.ctime is the last save (writing in place is the cure, at the
+      cost of a torn file on a crash - yours to decide); a note renamed or
+      moved outside the app is not followed; a note deleted then recreated
+      outside is not re-watched until its next open.
 - [ ] Last: optimisation pass over the whole app.
