@@ -13,6 +13,8 @@ add_library(noteAppC_editor STATIC
     HtmlBlock.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
+    MermaidBlock.cpp
+    MermaidBlock.h
     NotebookBlock.cpp
     NotebookComplete.cpp
     NotebookEmbed.cpp
@@ -29,7 +31,7 @@ add_library(noteAppC_editor STATIC
 set_target_properties(noteAppC_editor PROPERTIES AUTOMOC ON)
 
 target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-# Qt6::Svg is NotebookBlock.cpp's own: an image/svg+xml kernel output
+# Qt6::Svg is NotebookBlock.cpp's and MermaidBlock.cpp's own: an image/svg+xml kernel output
 # (matplotlib's default figure format, among others) is rasterised with
 # QSvgRenderer rather than shown as raw markup or skipped.
 # noteAppC_index for Fuzzy::score alone (SlashCommands.cpp): it depends on
