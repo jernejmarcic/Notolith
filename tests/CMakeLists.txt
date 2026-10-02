@@ -28,6 +28,18 @@ if(noteappc_have_litehtml)
 endif()
 add_test(NAME editor COMMAND test_editor)
 
+# HTML edited where it is drawn (HtmlEdit.cpp); the minimal build runs it too.
+add_executable(test_html_edit test_html_edit.cpp)
+target_link_libraries(test_html_edit PRIVATE noteAppC_editor Qt6::Test GTest::gtest)
+get_property(noteappc_have_gumbo GLOBAL PROPERTY NOTEAPPC_HAVE_GUMBO)
+if(noteappc_have_gumbo)
+    target_compile_definitions(test_html_edit PRIVATE NOTEAPPC_EXPECT_HTML_EDIT)
+endif()
+if(noteappc_have_litehtml)
+    target_compile_definitions(test_html_edit PRIVATE NOTEAPPC_EXPECT_HTML)
+endif()
+add_test(NAME html_edit COMMAND test_html_edit)
+
 # Vim mode drives the editor with key events only; no window is shown.
 add_executable(test_vim test_vim.cpp)
 target_link_libraries(test_vim PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)

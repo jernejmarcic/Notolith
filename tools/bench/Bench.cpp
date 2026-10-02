@@ -136,8 +136,18 @@ QString buildBaseNote()
 QString buildHtmlNote()
 {
     return QStringLiteral(
-        "# Notes\n\n<div>\n<b>Bold</b> and <span style=\"color:#3388ff\">a note</span> in a box.\n</div>\n\n"
+        "# Notes\n\n<div style=\"padding: 4px\">\n<b>Bold</b> and <span style=\"color:#3388ff\">a note</span> in a box.\n</div>\n\n"
         "A paragraph to type into, well away from it.\n");
+}
+
+/// A note holding a `rows`-row HTML table, which the editor lays out and
+/// edits itself (HtmlEdit.cpp) rather than handing to litehtml.
+QString buildHtmlTableNote(int rows)
+{
+    QString note = QStringLiteral("# Table\n\n<table>\n  <tr><th>name</th><th>qty</th><th>note</th></tr>\n");
+    for (int r = 0; r < rows; ++r)
+        note += QStringLiteral("  <tr><td>item %1</td><td>%1</td><td>some <b>bold</b> &amp; text</td></tr>\n").arg(r);
+    return note + QStringLiteral("</table>\n\nend\n");
 }
 
 bool writeNote(const QString &path, const QString &text)
@@ -525,6 +535,50 @@ Timing benchHtmlKeystroke(int runs)
     }
     return reduce(QStringLiteral("Keystroke to relaid, painted block"),
                   QStringLiteral("note with a rendered HTML block"), samples);
+}
+
+/// Typing into a cell of a 50-row HTML table: the table relays out as a
+/// grid, as a pipe table does. The second row is the structure pass the
+/// parse 20 ms later runs off the UI thread, timed with a fresh block every
+/// run so gumbo is never served from its cache.
+Timing benchHtmlTableKeystroke(int runs)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    const QString note = buildHtmlTableNote(50);
+    editor->setNoteText(note);
+    paintedFrame(editor.get());
+
+    const qsizetype caret = note.indexOf(QStringLiteral("item 25<")) + 7;
+    editor->setCursorOffset(caret);
+    editor->enterBlockAt(caret);
+    paintedFrame(editor.get());
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        const QImage frame = paintedFrame(editor.get());
+        (void)frame;
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Keystroke to relaid, painted block"),
+                  QStringLiteral("note with a 50-row HTML table, in a cell"), samples);
+}
+
+Timing benchHtmlTableParse(int runs)
+{
+    Parser parser;
+    int run = 0;
+    return benchCall(QStringLiteral("Parse + HTML structure pass (cold)"),
+                     QStringLiteral("note with a 50-row HTML table"), runs, [&] {
+                         QString note = buildHtmlTableNote(50);
+                         note.replace(QStringLiteral("item 0<"), QStringLiteral("item 0 %1<").arg(run++));
+                         Parser::Result result = parser.parseAll(note);
+                         expandEditableHTML(result.decorations, note);
+                     });
 }
 
 /// A multi-page PDF for the embed benchmarks below - QPdfWriter (already a
@@ -1356,6 +1410,8 @@ int main(int argc, char *argv[])
         timings << benchQueryKeystroke(30);
         timings << benchBaseKeystroke(30);
         timings << benchHtmlKeystroke(30);
+        timings << benchHtmlTableKeystroke(30);
+        timings << benchHtmlTableParse(30);
         timings << benchPdfKeystroke(workDir.path(), 30);
     }
 

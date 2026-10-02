@@ -168,7 +168,10 @@ void MarkdownEditor::setFeatures(const Features &features)
 {
     if (features == m_features)
         return; // every settings pass asks, and this relays out every block
+    const bool HTMLchanged = features.HTMLblocks != m_features.HTMLblocks;
     m_features = features;
+    if (HTMLchanged && !m_text.isEmpty())
+        reparse(); // an HTML block's own blocks come from the parse (HtmlEdit.cpp)
     // A rare, administrative call - not the keystroke path - so relaying out
     // every block rather than picking out just the ones a flag touches is
     // the simple and correct choice, not a slow one that happens to work.
@@ -705,7 +708,7 @@ QString MarkdownEditor::displayText() const
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
             hidden.append(m_decorations.syntax.at(i));
         hideFoldedNestedCallouts(view, hidden);
-        parts << DisplayMap::build(m_text, view.span.range, hidden).text();
+        parts << DisplayMap::build(m_text, view.span.range, hidden, m_decorations.substitutions).text();
     }
     return parts.join(QString());
 }
@@ -775,6 +778,8 @@ void MarkdownEditor::reparse()
 {
     m_parseTimer.stop();
     Parser::Result result = m_parser.parseAll(m_text);
+    if (m_features.HTMLblocks)
+        expandEditableHTML(result.decorations, m_text);
     sortDecorations(result.decorations);
     m_parsedVersion = m_textVersion;
     setWordCount(result.metadata.wordCount);
@@ -789,8 +794,11 @@ void MarkdownEditor::startParse()
 
     const QString snapshot = m_text;
     const quint64 version = m_textVersion;
-    m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version] {
+    const bool HTML = m_features.HTMLblocks;
+    m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version, HTML] {
         Parser::Result result = threadParser().parseAll(snapshot);
+        if (HTML)
+            expandEditableHTML(result.decorations, snapshot);
         ParseJob job;
         job.decorations = std::move(result.decorations);
         job.properties = std::move(result.metadata.properties);
@@ -1431,6 +1439,19 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         case StyleSpan::Kind::Html:
             format.setForeground(m_theme.color(QStringLiteral("--color-purple")));
             break;
+        case StyleSpan::Kind::HtmlText: {
+            // `<u>`, `<kbd>`, `<span style="color:...">` in an HTML block the
+            // editor lays out itself (HtmlEdit.cpp), styled as inline HTML is.
+            qsizetype end = 1;
+            while (end < span.payload.size() && span.payload.at(end).isLetterOrNumber())
+                ++end;
+            const std::optional<QTextCharFormat> html = htmlTagFormat(span.payload.mid(1, end - 1).toLower(), span.payload);
+            if (!html)
+                continue;
+            format = *html;
+            break;
+        }
+        case StyleSpan::Kind::HtmlTag:
         case StyleSpan::Kind::Heading:
         case StyleSpan::Kind::Quote:
             continue; // carried by the block font
@@ -2387,7 +2408,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                 if (marker.overlaps(cell.source))
                     hidden.append(marker);
             }
-            cell.map = DisplayMap::build(m_text, cell.source, hidden);
+            // An entity stays one character even in the cell being edited.
+            cell.map = DisplayMap::build(m_text, cell.source, hidden, m_decorations.substitutions);
 
             const QString full = cell.map.text();
             while (cell.lead < full.size() && full.at(cell.lead).isSpace())
@@ -2399,7 +2421,7 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
             cell.layout->setTextOption(wrap);
             QFont cellFont = font;
-            if (r == 0)
+            if (r < table->headerRows)
                 cellFont.setWeight(QFont::DemiBold);
             cell.layout->setFont(cellFont);
             cell.layout->setFormats(formatsIn(view, cell.source, cell.map));
@@ -2470,7 +2492,7 @@ bool MarkdownEditor::layoutTable(BlockView &view)
     }
 
     view.cells = std::move(cells);
-    view.headerRows = 1;
+    view.headerRows = table->headerRows;
     view.tableScroll = qBound<qreal>(0, view.tableScroll,
                                      qMax<qreal>(0, view.tableWidth - contentWidth()));
     view.layout.reset();
@@ -2925,7 +2947,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             hidden.append(view.span.range);
     }
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
-                      : DisplayMap::build(m_text, view.span.range, hidden);
+                      : DisplayMap::build(m_text, view.span.range, hidden, m_decorations.substitutions);
     for (BlockView::InlineMath &formula : view.inlineMaths)
         formula.displayPos = view.map.toDisplay(formula.sourcePos);
     for (BlockView::AnchorSeparator &separator : view.separators)
@@ -3775,6 +3797,12 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
     }
     for (TableSpan &table : m_decorations.tables) {
         shift(table.range);
+        for (Range &row : table.rowElements)
+            shift(row);
+        for (QList<Range> &row : table.cellElements) {
+            for (Range &cell : row)
+                shift(cell);
+        }
         for (QList<Range> &row : table.rows) {
             // Typed at a cell's very start, or into an empty cell, the text
             // is the cell's: it grows rather than moving off.
@@ -3788,6 +3816,32 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
     }
     for (Range &paragraph : m_decorations.paragraphs)
         shift(paragraph);
+    if (!m_decorations.substitutions.isEmpty()) {
+        // One the edit removed is gone; text typed just after one is not
+        // swallowed by it, so its end moves only when past the edit.
+        if (delta < 0) {
+            m_decorations.substitutions.removeIf([at, delta](const Substitution &s) {
+                return s.range.overlaps({at + delta, at});
+            });
+        }
+        for (Substitution &substitution : m_decorations.substitutions) {
+            if (substitution.range.start >= at)
+                substitution.range.start += delta;
+            if (substitution.range.end > at)
+                substitution.range.end += delta;
+        }
+    }
+    for (HtmlTextSpan &span : m_decorations.HTMLtext) {
+        // Typed at its very start, the text is the element's, as for a cell.
+        if (span.content.start > at || (span.content.start == at && delta < 0))
+            span.content.start += delta;
+        if (span.content.end >= at)
+            span.content.end += delta;
+        if (span.openTag.start >= at)
+            span.openTag.start += delta;
+        if (span.openTag.end > at)
+            span.openTag.end += delta;
+    }
     for (EmbedSpan &embed : m_decorations.embeds)
         shift(embed.range);
     for (MathSpan &math : m_decorations.maths) {
@@ -3905,6 +3959,9 @@ void MarkdownEditor::removeSelectionOrChar(int direction)
             toRemove = {m_cursor, m_cursor + 1};
         else
             return;
+        // An entity drawn as one character goes as one, never half of it.
+        if (const Substitution *substitution = shownSubstitution(toRemove.start))
+            toRemove = substitution->range;
     }
 
     pushUndo();
@@ -4189,14 +4246,17 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     switch (event->key()) {
     // In a drawn table the arrows cross from one cell into the next.
+    // An entity is one character on screen, so one step for the caret.
     case Qt::Key_Left: {
-        const qsizetype target = m_cursor > 0 ? m_cursor - 1 : 0;
+        const qsizetype target = stepOverSubstitution(m_cursor > 0 ? m_cursor - 1 : 0, -1);
         moveCursor(shift ? target : snapToTableCell(target, m_cursor), shift);
         return;
     }
-    case Qt::Key_Right:
-        moveCursor(shift ? m_cursor + 1 : snapToTableCell(m_cursor + 1, m_cursor), shift);
+    case Qt::Key_Right: {
+        const qsizetype target = stepOverSubstitution(m_cursor + 1, 1);
+        moveCursor(shift ? target : snapToTableCell(target, m_cursor), shift);
         return;
+    }
     case Qt::Key_Up:
         moveVertically(-1, shift);
         return;
@@ -4223,7 +4283,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        if (!handleListEnter())
+        if (!handleHTMLenter() && !handleListEnter())
             insertText(QStringLiteral("\n"));
         return;
     case Qt::Key_Tab:

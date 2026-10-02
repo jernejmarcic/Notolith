@@ -44,6 +44,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
 | keystroke, 1 MB | 0.44 ms | 8 ms |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
+| keystroke in a cell of a 50-row HTML table (2026-10-02, busy machine) | 1.33 ms | 8 ms |
+| parse plus HTML structure pass, that note, gumbo cache cold (off the UI thread) | 0.24 ms | - |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |

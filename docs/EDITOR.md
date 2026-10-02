@@ -2,7 +2,86 @@
 
 `libs/editor/MarkdownEditor` is the one editing widget: live preview, source
 and reading are three modes of it. This page covers the optional parts of how
-it takes input.
+it takes input: [HTML edited in place](#html-edited-in-place) and
+[Vim key bindings](#vim-key-bindings).
+
+## HTML edited in place
+
+Jernej, 2026-10-02: "For HTML I want rendering of it like in obsidian, but
+unlike obsidian I want it inline editable just like the markdown", and "if its
+a HTML table it should be editable like an actual table element (like in excel
+for example, clicking on cells, etc.)".
+
+`libs/editor/HtmlEdit.cpp`. After every parse, each top-level HTML block is
+read with gumbo (litehtml's own parser, so no new dependency). A block whose
+every tag is in the owned set below becomes the decorations a Markdown note
+gives: `<p>` a paragraph, `<h2>` a heading, `<ul>`/`<ol>` a list with drawn
+bullets or numbers, `<blockquote>` a quote, `<hr>` a rule, `<pre>` a code
+panel, `<table>` a table. Its tags are syntax: hidden, and shown when the caret
+touches them, the way `**` is. A `<table>` is edited by the same code as a
+pipe table (`TableCells.cpp`): click a cell, Tab and Shift+Tab, the arrows,
+Enter down a row or a new row under the last, Backspace that never eats a tag,
+and the row and column commands and menu.
+
+**Owned, edited in place:** `p`, `div` without `style=`, `br`, `h1`-`h6`,
+`ul`, `ol` (`start=` read), `li`, `blockquote` (text, or `<p>`s), `hr`, `pre`
+(with one `code` inside), `table` with `thead` `tbody` `tfoot` `tr` `th` `td`
+(`align=` on the first row's cells read), and inline `b` `strong` `i` `em` `u`
+`s` `del` `strike` `mark` `sub` `sup` `kbd` `code` `a` (`href` is the link)
+`span` (a `style=` holding only `color:`). Other attributes (`class`, `id`)
+are kept and ignored.
+
+**Left to litehtml** (drawn as an image, clicked into it shows its source, as
+before): a block with any other tag (`img`, `svg`, `iframe`, `video`,
+`details`/`summary`, unknown tags), `style=` on anything but a colour span, a
+comment, a table inside a cell or any block inside a cell, text after a nested
+list in an `<li>`, `caption`/`colgroup`, markup gumbo had to repair (misnested
+tags, text stranded in a table), and two block elements on one line
+(`<p>a</p><p>b</p>`): each block element must start its own line, because a
+block of the editor is whole lines.
+
+What it does with the bytes - the file is the truth:
+
+- Typing `&`, `<` or `>` into drawn text writes `&amp;`, `&lt;`, `&gt;`
+  (typing inside a tag the caret has revealed edits the tag, unescaped).
+- An entity (`&amp;`, `&nbsp;`, `&#169;`, every name HTML defines) shows as
+  its character; the caret steps over it as one, and Backspace or Delete
+  removes all of it.
+- Whitespace shows collapsed, HTML's way, and is never rewritten: a run of
+  spaces or a newline shows as one space, but stays in the file as written.
+  CRLF and a BOM are untouched.
+- `<br>` is one character on screen, a line break; the caret steps over it,
+  and it is not revealed under the caret.
+- A line break pasted into a cell becomes a space, as in a pipe table; in other
+  text a `<br>`; in a `<pre>` a newline.
+- Enter in a `<p>` or `<li>` splits it (`</li>\n  <li>`, at the element's own
+  indentation, closed only if it was closed); inside `<b>` or a link, and in a
+  heading, it writes `<br>`.
+- A new row or column copies the table's tag case and indentation and uses
+  `th` in header rows, `td` elsewhere; cells and rows are always closed. An
+  HTML table is never aligned (`TableFormat` is for pipes only).
+- Backspace at the very start of a `<p>` or `<li>` deletes the `>` of its
+  tag, which the caret has revealed by touching it - as Backspace after `**`
+  deletes a `*`. Only a table cell refuses (its edge is a tag).
+- Vim mode's motions (`h`, `l`, `x`) still move by source character, so they
+  can step into an entity; the arrows, Backspace and Delete do not.
+- The cell being edited shows its inline tags as written, as a pipe table's
+  does; its entities stay one character. A `<pre>` under the caret shows its
+  source, as a fence does.
+
+Cost: the structure pass is in the parse (off the UI thread), proportional to
+the block, cached per thread by the block's text, so a keystroke anywhere else
+parses no HTML; a note without HTML pays one test per block. Measured: a
+keystroke in a cell of a 50-row HTML table 1.33 ms (budget 8 ms), the parse
+and structure pass of that note 0.24 ms cold. Off: the `html-blocks`
+feature (`Features::HTMLblocks`) turns this and litehtml off together (source shows);
+`NOTEAPPC_WITH_HTML=OFF` builds without gumbo, and HTML shows as source.
+
+Not done: an HTML heading is not in the outline (headings come from the
+Markdown parse), entities in plain Markdown text are not decoded, a `style=` on
+a cell sends the whole table to litehtml.
+
+Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
 
 ## Vim key bindings
 

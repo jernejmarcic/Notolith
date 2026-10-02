@@ -3,6 +3,7 @@
 #include <QList>
 #include <QString>
 
+#include "Decorations.h"
 #include "SourceMap.h"
 
 namespace noteAppC {
@@ -20,19 +21,26 @@ namespace noteAppC {
 /// map can be built per block and still speak the buffer's coordinates.
 class DisplayMap {
 public:
-    /// One stretch of source that survives into the display string.
+    /// One stretch of source that survives into the display string. A
+    /// substituted run shows `length` characters for `sourceLength` of
+    /// source; a plain one shows its source, so the two are equal.
     struct Run {
         qsizetype displayStart = 0;
         qsizetype sourceStart = 0;
         qsizetype length = 0;
+        qsizetype sourceLength = 0;
+        bool substituted = false;
     };
 
     DisplayMap() = default;
 
     /// `hidden` need not be sorted or disjoint; overlaps are merged and
     /// anything outside `block` is ignored.
+    /// `substitutions` (sorted, disjoint) show as their text instead of their
+    /// source, an entity as its character; a hidden range wins over one.
     static DisplayMap build(const QString &source, const Range &block,
-                            const QList<Range> &hidden);
+                            const QList<Range> &hidden,
+                            const QList<Substitution> &substitutions = {});
 
     /// A map that hides nothing, which is what an active block and source
     /// mode both use.
@@ -48,7 +56,7 @@ public:
 
     /// Source offset -> display offset. A hidden offset collapses to the
     /// boundary that follows it, which is where a cursor should land when the
-    /// text under it disappears.
+    /// text under it disappears; so does one inside a substitution.
     qsizetype toDisplay(qsizetype sourceOffset) const;
 
     bool isHidden(qsizetype sourceOffset) const;
