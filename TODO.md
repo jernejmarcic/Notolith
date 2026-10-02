@@ -874,12 +874,15 @@ optimal as it can be".
       clicking on cells, etc.)". Tags hide like Markdown markers and show
       under the caret; an HTML table is edited cell by cell like a Markdown
       one; what the editor cannot lay out itself stays litehtml.
-      Left: HTML headings not in the outline; vim h/l/x can step into an
-      entity; style= on one cell sends the whole table to litehtml; entities
-      in plain Markdown text are not decoded.
+      2026-10-02 later: HTML headings in outline/index/links, cell style= kept
+      editable (alignment drawn), vim steps over entities, Markdown entities
+      shown decoded. Left: per-cell colour not drawn; entities do not open
+      into source under the caret; `![[Note#Heading]]` and the canvas section
+      picker see Markdown headings only; entity decoder uses md4qt's private
+      MD::s_entityMap (check on md4qt bumps).
 - [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
       app, remember I want speed". `render.mermaid` (on), through mmdr on the
       pool, cached on disk and in memory, nothing at startup (docs/EDITOR.md).
       Waiting on Jernej: `cargo install mermaid-rs-renderer` (asked 2026-10-02);
       then check mmdr's real `-c` keys and dark output. Left: publish/PDF use
-      the cached SVG; disk cache never pruned.
+      the cached SVG. Disk cache pruned (30 days / 50 MB) on first use.
