@@ -874,6 +874,9 @@ optimal as it can be".
       clicking on cells, etc.)". Tags hide like Markdown markers and show
       under the caret; an HTML table is edited cell by cell like a Markdown
       one; what the editor cannot lay out itself stays litehtml.
-- [ ] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
-      app, remember I want speed". A setting, off the UI thread, cached,
-      nothing at startup.
+- [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
+      app, remember I want speed". `render.mermaid` (on), through mmdr on the
+      pool, cached on disk and in memory, nothing at startup (docs/EDITOR.md).
+      Waiting on Jernej: `cargo install mermaid-rs-renderer` (asked 2026-10-02);
+      then check mmdr's real `-c` keys and dark output. Left: publish/PDF use
+      the cached SVG; disk cache never pruned.
