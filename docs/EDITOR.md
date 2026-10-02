@@ -26,14 +26,18 @@ and the row and column commands and menu.
 **Owned, edited in place:** `p`, `div` without `style=`, `br`, `h1`-`h6`,
 `ul`, `ol` (`start=` read), `li`, `blockquote` (text, or `<p>`s), `hr`, `pre`
 (with one `code` inside), `table` with `thead` `tbody` `tfoot` `tr` `th` `td`
-(`align=` on the first row's cells read), and inline `b` `strong` `i` `em` `u`
+(`align=` or a `text-align:` style on the first row's cells read, which
+sets the column's alignment), and inline `b` `strong` `i` `em` `u`
 `s` `del` `strike` `mark` `sub` `sup` `kbd` `code` `a` (`href` is the link)
 `span` (a `style=` holding only `color:`). Other attributes (`class`, `id`)
-are kept and ignored.
+are kept and ignored. A `style=` on a `th` or `td` is accepted when it holds
+only `text-align`, `color`, `background`, `background-color` and
+`font-weight` (a value with a `:` or `url(` is not); only the alignment is
+drawn, the rest stays in the file and is ignored.
 
 **Left to litehtml** (drawn as an image, clicked into it shows its source, as
 before): a block with any other tag (`img`, `svg`, `iframe`, `video`,
-`details`/`summary`, unknown tags), `style=` on anything but a colour span, a
+`details`/`summary`, unknown tags), `style=` on anything but a colour span or such a cell, a
 comment, a table inside a cell or any block inside a cell, text after a nested
 list in an `<li>`, `caption`/`colgroup`, markup gumbo had to repair (misnested
 tags, text stranded in a table), and two block elements on one line
@@ -63,8 +67,9 @@ What it does with the bytes - the file is the truth:
 - Backspace at the very start of a `<p>` or `<li>` deletes the `>` of its
   tag, which the caret has revealed by touching it - as Backspace after `**`
   deletes a `*`. Only a table cell refuses (its edge is a tag).
-- Vim mode's motions (`h`, `l`, `x`) still move by source character, so they
-  can step into an entity; the arrows, Backspace and Delete do not.
+- Vim mode's `h`, `l` and `x` (and an operator over them, `dl`) step over an
+  entity as one character, as the arrows, Backspace and Delete do; `l` stops
+  on a last-on-the-line entity as on any last character.
 - The cell being edited shows its inline tags as written, as a pipe table's
   does; its entities stay one character. A `<pre>` under the caret shows its
   source, as a fence does.
@@ -77,9 +82,30 @@ and structure pass of that note 0.24 ms cold. Off: the `html-blocks`
 feature (`Features::HTMLblocks`) turns this and litehtml off together (source shows);
 `NOTEAPPC_WITH_HTML=OFF` builds without gumbo, and HTML shows as source.
 
-Not done: an HTML heading is not in the outline (headings come from the
-Markdown parse), entities in plain Markdown text are not decoded, a `style=` on
-a cell sends the whole table to litehtml.
+Headings: an `<h1>`-`<h6>` in a top-level HTML block is listed in the outline
+and indexed like a Markdown heading, so `[[Note#Heading]]` finds it and a
+section search sees it. They come from the Parser (`htmlHeadings` in
+`libs/markdown/Parser.cpp`, a scan of the block's text with comments skipped),
+not from the editor's gumbo pass, because the index must agree with the editor
+and has neither gumbo nor the editor's HTML option: they are headings of the
+note however the block is drawn (its own layout, litehtml, or as source). A
+heading inside a quote or a list item is not a top-level block and is not
+listed. The heading text is the content with its tags removed and its entities
+decoded; the heading's range is the element, its text range the content.
+Publish draws the element once, with its HTML block (`tests/test_publish.cpp`).
+`![[Note#Heading]]` (an embedded section) still finds Markdown headings only.
+
+Entities in Markdown text: a CommonMark reference (`&amp;`, `&copy;`, `&#169;`,
+`&#xA9;`, any name md4qt knows) outside code, maths, HTML, links, wikilinks and
+frontmatter, and not escaped with a backslash, shows as its character and is
+one step for the caret, Backspace, Delete and Vim's `h` `l` `x`, exactly as in
+an HTML block (`Parser.cpp`'s `scanEntities`, drawn through DisplayMap's
+substitutions). The source is never rewritten, Source mode shows it as
+written, and typing next to one writes plain text, not an entity. It does not
+open into its source under the caret, as HTML's does not either; delete it and
+type it again to change it. A reference with no `;`, an unknown name, a number
+that is no character and a control character (`&#10;`) show as written. Entities
+inside a Markdown link's text are left as written.
 
 Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
 
@@ -182,7 +208,11 @@ already linked for notebook output).
   pixel ratio. The tool gets 5 s, then is killed.
 - **Cache**: the SVG by a hash of the source and the colours asked for, in
   `$XDG_CACHE_HOME/noteAppC/mermaid`, and in memory. A cached diagram never
-  starts the tool again. Nothing prunes the directory.
+  starts the tool again. The first diagram made or read in a process, once it
+  has been delivered and never at startup, prunes the directory on the render
+  thread: files not used for 30 days go, then the least recently used until
+  50 MB is left (`pruneMermaidCache`). A disk hit counts as a use by touching
+  the file's modification time.
 - **Colours**: the config handed to the tool is Mermaid's own shape
   (`theme`, `themeVariables`) in the app's colours. `mmdr`'s keys are
   unverified, so a run that fails is repeated once without the config, and a

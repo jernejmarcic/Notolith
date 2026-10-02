@@ -95,8 +95,8 @@ struct TableSpan {
     QList<QList<Range>> cellElements; ///< html: each cell, its own tags included
 };
 
-/// Source that live preview shows as other text: an HTML entity as the
-/// character it names, `<br>` as a line break, a collapsed newline as a
+/// Source that live preview shows as other text: an entity reference (`&amp;`)
+/// as the character it names, `<br>` as a line break, a collapsed newline as a
 /// space. The caret steps over one as a single character.
 struct Substitution {
     Range range;
@@ -294,8 +294,9 @@ struct Decorations {
     /// not a footnote, as in Obsidian: it stays text.
     QList<FootnoteSpan> footnotes;
     QList<FootnoteDefinition> footnoteDefinitions;
-    /// Filled by the editor's own pass over HTML blocks (HtmlEdit.cpp), never
-    /// by Parser: sorted by position.
+    /// Entity references in Markdown text come from Parser; those in HTML
+    /// blocks, `<br>` and collapsed whitespace from the editor's own pass over
+    /// them (HtmlEdit.cpp). Disjoint; the editor sorts them by position.
     QList<Substitution> substitutions;
     QList<HtmlTextSpan> HTMLtext;
 

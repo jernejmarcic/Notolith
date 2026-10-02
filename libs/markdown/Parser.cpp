@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include <md4qt/doc.h>
+#include <md4qt/entities_map.h>
 #include <md4qt/parser.h>
 
 #include "Frontmatter.h"
@@ -728,6 +729,100 @@ bool maskedAt(const QList<Range> &masked, qsizetype at)
     return std::any_of(masked.cbegin(), masked.cend(), [at](const Range &range) { return range.contains(at); });
 }
 
+/// The character a reference like `&amp;`, `&#169;` or `&#xA9;` names (";"
+/// included, as CommonMark requires), from md4qt's own table of every name HTML
+/// defines. Empty for an unknown name, a number that is no character, and a
+/// control character: those stay as written.
+QString decodeEntity(QStringView entity)
+{
+    const QStringView body = entity.mid(1, entity.size() - 2);
+    QString decoded;
+    if (body.startsWith(QLatin1Char('#'))) {
+        const bool hex = body.size() > 1 && (body.at(1) == QLatin1Char('x') || body.at(1) == QLatin1Char('X'));
+        bool ok = false;
+        const uint code = hex ? body.mid(2).toUInt(&ok, 16) : body.mid(1).toUInt(&ok, 10);
+        if (!ok || code == 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF))
+            return {};
+        const char32_t point = char32_t(code);
+        decoded = QString::fromUcs4(&point, 1);
+    } else {
+        decoded = MD::s_entityMap.value(entity.toString());
+    }
+    return !decoded.isEmpty() && decoded.at(0).category() == QChar::Other_Control ? QString() : decoded;
+}
+
+const QRegularExpression &entityRe()
+{
+    static const QRegularExpression entity(
+        QStringLiteral("&(#[0-9]{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});"));
+    return entity;
+}
+
+/// CommonMark entity references in the note's own text, as substitutions for
+/// the editor to draw as the character they name. Not in `masked` (code, maths,
+/// HTML, frontmatter, links and the places md4qt left alone), nor after a backslash that
+/// escapes the `&`. HTML blocks have their own pass in the editor.
+void scanEntities(const QString &text, const QList<Range> &masked, Decorations &decorations)
+{
+    if (!text.contains(QLatin1Char('&')))
+        return;
+    for (auto it = entityRe().globalMatchView(text); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        const qsizetype start = match.capturedStart();
+        qsizetype slashes = 0;
+        while (start - slashes > 0 && text.at(start - slashes - 1) == QLatin1Char('\\'))
+            ++slashes;
+        if (slashes % 2 || maskedAt(masked, start))
+            continue;
+        const QString decoded = decodeEntity(match.capturedView(0));
+        if (!decoded.isEmpty())
+            decorations.substitutions.append({{start, match.capturedEnd()}, decoded});
+    }
+}
+
+/// The h1-h6 of a top-level HTML block, for the outline and the index: they
+/// are headings of the note however the editor draws the block (its own
+/// layout, litehtml, or the source), and the Parser knows neither the editor's
+/// HTML option nor gumbo. Comments are not looked into; a heading inside
+/// another block element (nested tags) is found by its own tags.
+void htmlHeadings(const QString &text, const Range &block, QList<Heading> &headings)
+{
+    static const QRegularExpression heading(
+        QStringLiteral("<h([1-6])\\b[^>]*>(.*?)</h\\1\\s*>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression comment(QStringLiteral("<!--.*?(?:-->|$)"),
+                                            QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression tag(QStringLiteral("<[^>]*>"));
+    const QStringView view = QStringView(text).mid(block.start, block.length());
+    if (view.size() < 9 || !view.contains(QLatin1String("</"))) // <h1>x</h1> is the shortest
+        return;
+    QString html = view.toString();
+    for (auto it = comment.globalMatch(html); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        html.replace(match.capturedStart(), match.capturedLength(), QString(match.capturedLength(), QLatin1Char(' ')));
+    }
+    for (auto it = heading.globalMatch(html); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        Heading out;
+        out.level = match.captured(1).toInt();
+        out.range = {block.start + match.capturedStart(), block.start + match.capturedEnd()};
+        out.textRange = {block.start + match.capturedStart(2), block.start + match.capturedEnd(2)};
+        QString inner = match.captured(2);
+        inner.remove(tag);
+        // Entities last to first, so the offsets in front stay true.
+        QList<QRegularExpressionMatch> entities;
+        for (auto e = entityRe().globalMatch(inner); e.hasNext();)
+            entities << e.next();
+        for (auto e = entities.crbegin(); e != entities.crend(); ++e) {
+            const QString decoded = decodeEntity(e->capturedView(0));
+            if (!decoded.isEmpty())
+                inner.replace(e->capturedStart(), e->capturedLength(), decoded);
+        }
+        out.text = inner.simplified();
+        headings.append(out);
+    }
+}
+
 /// `[^label]: text` definitions, `[^label]` references and inline `^[text]`,
 /// outside code, maths and comments. A definition runs on through indented
 /// lines, and through lines that simply continue its paragraph.
@@ -1121,8 +1216,10 @@ void walkItem(MD::Item *item, Walk &walk)
             }
         } else {
             walk.decorations.styles.append({kind, range, 0, {}, {}, {}});
-            if (walk.depth == 0)
+            if (walk.depth == 0) {
                 walk.decorations.blocks.append({BlockSpan::Kind::Html, range, 0});
+                htmlHeadings(*walk.text, range, walk.headings);
+            }
         }
         break;
     }
@@ -1433,6 +1530,14 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     // Before the move, or the spans would be written into a Decorations that
     // is about to be overwritten.
     detectDisplayMath(text, walk.decorations, walk.masked);
+    {
+        // walk.masked already holds each [text](url) whole, so a link's text
+        // and destination keep their references as written.
+        QList<Range> notText = withColonFenceLines(text, walk.masked);
+        for (const Link &link : obsidian.links)
+            notText.append(link.range);
+        scanEntities(text, notText, walk.decorations);
+    }
     result.decorations = std::move(walk.decorations);
     if (frontmatter.isValid()) {
         result.decorations.blocks.prepend({BlockSpan::Kind::Frontmatter, frontmatter, 0});

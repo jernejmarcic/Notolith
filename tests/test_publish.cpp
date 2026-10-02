@@ -258,6 +258,19 @@ TEST(PublishTest, RawHtmlSanitised)
     EXPECT_TRUE(page.contains(QStringLiteral("<u>kept</u>")));
 }
 
+TEST(PublishTest, AnHTMLHeadingIsDrawnOnceAndIsAnIndexedHeading)
+{
+    TestSite site({
+        {QStringLiteral("Note.md"), "# Top\n\n<h2>Sub &amp; more</h2>\n\ntext\n"},
+        {QStringLiteral("Other.md"), "[[Note#Sub & more]]\n"},
+    });
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    ASSERT_FALSE(page.isEmpty());
+    EXPECT_EQ(page.count(QStringLiteral("more</h2>")), 1) << page.toStdString();
+    EXPECT_TRUE(page.contains(QStringLiteral("id=\"top\"")));
+}
+
 // ---------------------------------------------------------------------------
 // Maths, attachments
 

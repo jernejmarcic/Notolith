@@ -38,4 +38,11 @@ MarkdownEditor::CodeBlockRenderer mermaidRenderer(const QString &tool, std::func
 /// hash of the source and the colours asked for.
 QString mermaidCacheDirectory();
 
+/// Drops the SVGs in `directory` not used for `maxDays` days, then the least
+/// recently used until what is left is within `maxBytes`. A cache hit touches
+/// the file's modification time, which is what "used" means here. The renderer
+/// calls it once per process with 30 days and 50 MB, on its worker thread
+/// after the first diagram has been delivered.
+void pruneMermaidCache(const QString &directory, int maxDays, qint64 maxBytes);
+
 } // namespace noteAppC

@@ -516,6 +516,9 @@ private:
 
     Pos ls(Pos p) const { return lineStartOf(t, p); }
     Pos le(Pos p) const { return lineEndOf(t, p); }
+    /// An HTML or Markdown entity drawn as one character is one step for h, l
+    /// and x, as for the arrows: a position inside one moves to its edge.
+    Pos stepOver(Pos p, int direction) const { return m.stepOverSubstitution(p, direction); }
     bool visual() const
     {
         return s.mode == Mode::Visual || s.mode == Mode::VisualLine || s.mode == Mode::VisualBlock;
@@ -1106,12 +1109,17 @@ bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
 
     switch (key.unicode()) {
     case 'h':
-        out.pos = qMax(ls(cur), cur - n);
+        out.pos = cur;
+        for (int i = 0; i < n && out.pos > ls(cur); ++i)
+            out.pos = qMax(ls(cur), stepOver(out.pos - 1, -1));
         return true;
     case 'l': {
         const Pos end = le(cur);
-        const Pos limit = op || end == ls(cur) ? end : end - 1;
-        out.pos = qMin(cur + n, limit);
+        // The block caret sits on the last character, which may be an entity.
+        Pos limit = op || end == ls(cur) ? end : stepOver(end - 1, -1);
+        out.pos = cur;
+        for (int i = 0; i < n && out.pos < limit; ++i)
+            out.pos = qMin(limit, stepOver(out.pos + 1, 1));
         return true;
     }
     case 'j':

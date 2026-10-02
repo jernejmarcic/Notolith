@@ -16,7 +16,8 @@
 /// The boundary (docs/EDITOR.md, "HTML"): owned are p, div without style=,
 /// br, h1-h6, ul/ol/li, blockquote, hr, pre (with a code inside), table
 /// with thead/tbody/tfoot/tr/th/td, and inline b strong i em u s del strike
-/// mark sub sup kbd code a span (style= only as `color:`). A block with
+/// mark sub sup kbd code a span (style= only as `color:`; on a td or th also
+/// text-align, background, font-weight). A block with
 /// anything else - style= on any other tag, img, svg, iframe, details,
 /// a comment, a nested table, misnested tags gumbo had to repair, two blocks
 /// on one line - stays HtmlBlock.cpp's litehtml image and its click-to-source.
@@ -115,6 +116,33 @@ QString decodeEntity(QStringView entity) // "&amp;", ";" included
         return QString::fromUcs4(&point, 1);
     }
     return decodeNamedEntity(body.toString());
+}
+
+/// A cell's style=: `ok` when it holds only text-align, color, background,
+/// background-color and font-weight (a value without `;` or `:`, so no url()),
+/// `align` the text-align value in lower case. Only the alignment is drawn.
+struct CellStyle {
+    bool ok = true;
+    QString align;
+};
+
+CellStyle cellStyle(const QString &style)
+{
+    CellStyle result;
+    for (const QStringView declaration : QStringView(style).split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const qsizetype colon = declaration.indexOf(QLatin1Char(':'));
+        const QString name = declaration.left(qMax<qsizetype>(colon, 0)).trimmed().toString().toLower();
+        const QString value = declaration.mid(colon + 1).trimmed().toString().toLower();
+        if (colon < 0 || value.isEmpty() || value.contains(QLatin1Char(':'))
+            || (name != QLatin1String("text-align") && name != QLatin1String("color")
+                && name != QLatin1String("background") && name != QLatin1String("background-color")
+                && name != QLatin1String("font-weight"))
+            || value.contains(QLatin1String("url(")))
+            result.ok = false;
+        else if (name == QLatin1String("text-align"))
+            result.align = value;
+    }
+    return result;
 }
 
 /// Walks one gumbo tree, collecting what the editor needs. Any construct
@@ -241,10 +269,14 @@ private:
             return {};
         }
         if (gumbo_get_attribute(&element.attributes, "style")) {
-            // Only a span's colour is read; every other style is CSS.
+            // A span's colour is read; a cell's text-align too, and the rest of
+            // its few harmless properties are accepted and left undrawn. Every
+            // other style is CSS the editor cannot lay out.
             static const QRegularExpression colourOnly(
                 QStringLiteral("^\\s*color\\s*:\\s*[^;:]+;?\\s*$"), QRegularExpression::CaseInsensitiveOption);
-            if (element.tag != GUMBO_TAG_SPAN || !colourOnly.match(attribute(node, "style")).hasMatch())
+            const bool cell = element.tag == GUMBO_TAG_TD || element.tag == GUMBO_TAG_TH;
+            if (cell ? !cellStyle(attribute(node, "style")).ok
+                     : element.tag != GUMBO_TAG_SPAN || !colourOnly.match(attribute(node, "style")).hasMatch())
                 m_ok = false;
         }
         const Range tag = openTag(node);
@@ -717,7 +749,9 @@ private:
                 elements << Range{cellTag.start, elementEnd(c)};
                 addTextSpan(c, cellTag, end);
                 if (span.rows.isEmpty()) {
-                    const QString align = attribute(c, "align").toLower();
+                    QString align = attribute(c, "align").toLower();
+                    if (align.isEmpty())
+                        align = cellStyle(attribute(c, "style")).align;
                     span.alignment << (align == QLatin1String("right")    ? Qt::AlignRight
                                        : align == QLatin1String("center") ? Qt::AlignHCenter
                                                                           : Qt::AlignLeft);
