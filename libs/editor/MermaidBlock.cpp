@@ -7,6 +7,7 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -26,6 +27,8 @@
 #include <QThreadPool>
 #include <QtConcurrent>
 
+#include <algorithm>
+#include <atomic>
 #include <memory>
 
 namespace noteAppC {
@@ -34,6 +37,8 @@ namespace {
 
 constexpr int kRunMilliseconds = 5000; ///< a diagram that takes longer is killed
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
+constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
+constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
 
 /// The colours a diagram is asked for, copied off the Theme on the UI thread
 /// so a job never touches it.
@@ -307,6 +312,10 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const Pa
         if (disk.open(QIODevice::ReadOnly)) {
             made.svg = disk.readAll();
             have = !made.svg.isEmpty();
+            // "Used" is the modification time, which relatime would not keep
+            // for the access time; the prune goes by it.
+            if (have)
+                disk.setFileTime(QDateTime::currentDateTime(), QFileDevice::FileModificationTime);
         }
     }
     if (!have) {
@@ -365,6 +374,30 @@ QString mermaidCacheDirectory()
     return cacheRoot();
 }
 
+void pruneMermaidCache(const QString &directory, int maxDays, qint64 maxBytes)
+{
+    QFileInfoList files = QDir(directory).entryInfoList({QStringLiteral("*.svg")}, QDir::Files);
+    const QDateTime cutoff = QDateTime::currentDateTime().addDays(-maxDays);
+    qint64 total = 0;
+    QFileInfoList kept;
+    for (const QFileInfo &file : std::as_const(files)) {
+        if (file.lastModified() < cutoff)
+            QFile::remove(file.absoluteFilePath());
+        else {
+            kept << file;
+            total += file.size();
+        }
+    }
+    std::sort(kept.begin(), kept.end(),
+              [](const QFileInfo &l, const QFileInfo &r) { return l.lastModified() < r.lastModified(); });
+    for (const QFileInfo &file : std::as_const(kept)) {
+        if (total <= maxBytes)
+            break;
+        if (QFile::remove(file.absoluteFilePath()))
+            total -= file.size();
+    }
+}
+
 MarkdownEditor::CodeBlockRenderer mermaidRenderer(const QString &tool, std::function<Theme()> theme)
 {
     auto state = std::make_shared<State>();
@@ -376,6 +409,10 @@ MarkdownEditor::CodeBlockRenderer mermaidRenderer(const QString &tool, std::func
         const qreal ratio = qGuiApp ? qGuiApp->devicePixelRatio() : 1.0;
         (void)QtConcurrent::run(pool(), [state, source, palette, width, ratio, deliver] {
             deliver(make(state, source, palette, width, ratio));
+            // Once per process, after the first diagram is out, never at startup.
+            static std::atomic_flag pruned;
+            if (!pruned.test_and_set())
+                pruneMermaidCache(cacheRoot(), kCacheDays, kCacheBytes);
         });
     };
 }

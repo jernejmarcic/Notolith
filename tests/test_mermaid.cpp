@@ -9,6 +9,7 @@
 #include <memory>
 
 #include <QApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -103,6 +104,52 @@ protected:
 };
 
 } // namespace
+
+// First in the file on purpose: the prune is once per process, and this is the
+// one test that must see it happen.
+TEST_F(MermaidTest, TheCachePrunesOnFirstUseAndNotBefore)
+{
+    const QString cache = dir.filePath(QStringLiteral("cache/noteAppC/mermaid"));
+    ASSERT_TRUE(QDir().mkpath(cache));
+    const auto seed = [&](const QString &name, int daysOld) {
+        QFile file(cache + QLatin1Char('/') + name);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("<svg/>");
+        file.flush(); // or closing it later would stamp the time again
+        file.setFileTime(QDateTime::currentDateTime().addDays(-daysOld), QFileDevice::FileModificationTime);
+        return file.fileName();
+    };
+    const QString stale = seed(QStringLiteral("stale.svg"), 45);
+    const QString fresh = seed(QStringLiteral("fresh.svg"), 2);
+    const auto renderer = rendererFor(fake(QStringLiteral("mmdr")));
+    EXPECT_TRUE(QFile::exists(stale)); // making the renderer prunes nothing
+    ask(renderer, QStringLiteral("graph TD\nA-->B"));
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !QFile::exists(stale); }, 5000));
+    EXPECT_TRUE(QFile::exists(fresh));
+}
+
+TEST(MermaidPruneTest, DropsTheOldAndThenTheLeastRecentlyUsedBeyondTheSize)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const auto seed = [&](const QString &name, int bytes, int daysOld) {
+        QFile file(dir.filePath(name));
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QByteArray(bytes, 'x'));
+        file.flush();
+        file.setFileTime(QDateTime::currentDateTime().addDays(-daysOld), QFileDevice::FileModificationTime);
+    };
+    seed(QStringLiteral("old.svg"), 10, 31);
+    seed(QStringLiteral("a.svg"), 100, 5);
+    seed(QStringLiteral("b.svg"), 100, 3);
+    seed(QStringLiteral("c.svg"), 100, 1);
+    seed(QStringLiteral("note.txt"), 1000, 90); // not the cache's: left alone
+    noteAppC::pruneMermaidCache(dir.path(), 30, 250);
+    QStringList left = QDir(dir.path()).entryList(QDir::Files, QDir::Name);
+    EXPECT_EQ(left, (QStringList{QStringLiteral("b.svg"), QStringLiteral("c.svg"), QStringLiteral("note.txt")}));
+    noteAppC::pruneMermaidCache(dir.path(), 30, 1000); // within both limits: nothing goes
+    EXPECT_EQ(QDir(dir.path()).entryList(QDir::Files).size(), 3);
+}
 
 TEST_F(MermaidTest, ARenderIsAJobOnAnotherThreadNotACallOnTheUIThread)
 {
