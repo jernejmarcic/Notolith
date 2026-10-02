@@ -867,13 +867,16 @@ optimal as it can be".
       62 ms note read is already on the pool.
 
 ## Requested 2026-10-02
-- [ ] HTML in live preview edited where it is drawn. Jernej: "For HTML I want
+- [x] HTML in live preview edited where it is drawn (docs/EDITOR.md "HTML edited in place"; 50-row HTML table keystroke 1.33 ms). Jernej: "For HTML I want
       rendering of it like in obsidian, but unlike obsidian I want it inline
       editable just like the markdown"; "if its a HTML table it should be
       editable like an actual table element (like in excel for example,
       clicking on cells, etc.)". Tags hide like Markdown markers and show
       under the caret; an HTML table is edited cell by cell like a Markdown
       one; what the editor cannot lay out itself stays litehtml.
+      Left: HTML headings not in the outline; vim h/l/x can step into an
+      entity; style= on one cell sends the whole table to litehtml; entities
+      in plain Markdown text are not decoded.
 - [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
       app, remember I want speed". `render.mermaid` (on), through mmdr on the
       pool, cached on disk and in memory, nothing at startup (docs/EDITOR.md).
