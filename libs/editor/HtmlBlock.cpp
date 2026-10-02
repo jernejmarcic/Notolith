@@ -21,6 +21,11 @@
 /// Inline tags are cheaper to map straight onto QTextCharFormat than to ask
 /// litehtml to lay out a few words at a time - see layoutInlineHtml's own
 /// comment for which tags that covers.
+///
+/// A block made only of tags the editor can lay out itself never gets here:
+/// HtmlEdit.cpp turns it into paragraphs, lists and tables edited in place
+/// after the parse. Only what that leaves as BlockSpan::Kind::Html is drawn
+/// by litehtml.
 
 #include "MarkdownEditor.h"
 

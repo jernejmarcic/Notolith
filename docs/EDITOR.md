@@ -60,6 +60,11 @@ What it does with the bytes - the file is the truth:
 - A new row or column copies the table's tag case and indentation and uses
   `th` in header rows, `td` elsewhere; cells and rows are always closed. An
   HTML table is never aligned (`TableFormat` is for pipes only).
+- Backspace at the very start of a `<p>` or `<li>` deletes the `>` of its
+  tag, which the caret has revealed by touching it - as Backspace after `**`
+  deletes a `*`. Only a table cell refuses (its edge is a tag).
+- Vim mode's motions (`h`, `l`, `x`) still move by source character, so they
+  can step into an entity; the arrows, Backspace and Delete do not.
 - The cell being edited shows its inline tags as written, as a pipe table's
   does; its entities stay one character. A `<pre>` under the caret shows its
   source, as a fence does.
