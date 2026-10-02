@@ -9,6 +9,10 @@
 /// Delete at a cell's edge does nothing rather than eat a pipe. A "|" typed
 /// or pasted into a cell is escaped, a line break becomes a space. Source
 /// mode is still where the pipes themselves are edited.
+///
+/// An HTML `<table>` the editor lays out itself (HtmlEdit.cpp) is the same
+/// TableSpan, its cells the text between the tags: everything here applies,
+/// and the few places that write Markdown hand over to an HTML counterpart.
 
 #include "MarkdownEditor.h"
 
@@ -123,8 +127,8 @@ bool MarkdownEditor::formatTables(qsizetype offset)
     if (offset >= 0 && only < 0)
         return false;
     for (qsizetype i = 0; i < m_decorations.tables.size(); ++i) {
-        if (only >= 0 && i != only)
-            continue;
+        if ((only >= 0 && i != only) || m_decorations.tables.at(i).html)
+            continue; // an HTML table's source is left as written
         const Range &range = m_decorations.tables.at(i).range;
         const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
         const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
@@ -198,6 +202,10 @@ void MarkdownEditor::revealCaretCell()
 void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
 {
     const TableSpan &table = *cell.table;
+    if (table.html) {
+        insertHTMLrow(&table - m_decorations.tables.constData(), cell.row, true, column);
+        return;
+    }
     const qsizetype lineEnd = m_lines.lineEnd(m_lines.lineAt(cell.range.start));
     // The new row copies the one it follows up to its first pipe, so a row
     // inside a callout keeps its "> ".
@@ -223,6 +231,8 @@ void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
 QString MarkdownEditor::cellSafe(const QString &text) const
 {
     const Range selected = selection();
+    if (const HtmlTextSpan *html = HTMLtextAt(selected.start); html && selected.end <= html->content.end)
+        return HTMLsafe(text, *html); // an HTML cell or paragraph: `&` is `&amp;`
     const CellRef cell = tableCellAt(selected.start);
     if (cell.row < 0 || selected.end > cell.range.end || !tableRenderedAt(selected.start))
         return text;
@@ -238,6 +248,8 @@ bool MarkdownEditor::fillShortRow(qsizetype table, int row)
     if (table < 0 || table >= m_decorations.tables.size())
         return false;
     const TableSpan &span = m_decorations.tables.at(table);
+    if (span.html)
+        return fillShortHTMLrow(table, row);
     const QList<Range> cells = span.rows.value(row);
     if (cells.isEmpty() || cells.size() >= span.columns)
         return false;
@@ -351,6 +363,8 @@ bool MarkdownEditor::runTableCommand(const QString &id)
     if (cell.row < 0)
         return false;
     const qsizetype index = tableAround(m_cursor);
+    if (m_decorations.tables.at(index).html)
+        return runHTMLtableCommand(id, index, cell.row, cell.column);
     const Range &range = m_decorations.tables.at(index).range;
     const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
     const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));

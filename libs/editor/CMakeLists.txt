@@ -11,6 +11,7 @@ add_library(noteAppC_editor STATIC
     FindBar.h
     FootnoteMarks.cpp
     HtmlBlock.cpp
+    HtmlEdit.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
     NotebookBlock.cpp
@@ -36,6 +37,19 @@ target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # neither noteAppC_editor nor noteAppC_ui, so linking it here is not a cycle,
 # and it is the command palette's own matcher rather than a second one.
 target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg)
+
+# HTML blocks edited in place (HtmlEdit.cpp) take their structure from gumbo,
+# the parser litehtml already pulls in; without it they render as before.
+if(NOTEAPPC_WITH_HTML)
+    find_path(NOTEAPPC_GUMBO_INCLUDE gumbo.h)
+    find_library(NOTEAPPC_GUMBO_LIBRARY gumbo)
+endif()
+if(NOTEAPPC_WITH_HTML AND NOTEAPPC_GUMBO_INCLUDE AND NOTEAPPC_GUMBO_LIBRARY)
+    target_include_directories(noteAppC_editor PRIVATE ${NOTEAPPC_GUMBO_INCLUDE})
+    target_link_libraries(noteAppC_editor PRIVATE ${NOTEAPPC_GUMBO_LIBRARY})
+    target_compile_definitions(noteAppC_editor PRIVATE NOTEAPPC_HAVE_GUMBO)
+    set_property(GLOBAL PROPERTY NOTEAPPC_HAVE_GUMBO TRUE)
+endif()
 
 # An OpenGL viewport, so the GPU question can be answered with a measurement
 # rather than an opinion. Optional: a build without Qt6::OpenGLWidgets simply

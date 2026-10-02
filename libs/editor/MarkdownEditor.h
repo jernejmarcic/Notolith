@@ -51,6 +51,12 @@ namespace noteAppC {
 
 class VimEngine;
 
+/// Turns each HTML block whose every tag the editor can lay out itself into
+/// the paragraphs, headings, lists and tables a Markdown note would give,
+/// tags as syntax (HtmlEdit.cpp). Run on a fresh parse, before it is sorted;
+/// a no-op without gumbo.
+void expandEditableHTML(Decorations &decorations, const QString &text);
+
 /// How far a callout inside a callout steps in. Wide enough for its own icon,
 /// which is drawn in the space this opens up. Shared, because the layout sets
 /// the indent and the renderers draw into it.
@@ -1834,6 +1840,36 @@ private:
     /// `style=` attribute besides `color:`). `openTag` is the opening tag's
     /// own source text, for `<span style="...">`'s colour.
     std::optional<QTextCharFormat> htmlTagFormat(const QString &name, const QString &openTag) const;
+    // --- HTML edited where it is drawn, HtmlEdit.cpp -------------------------
+    /// The substitution (an entity, `<br>`) live preview draws over
+    /// `offset`'s character, or null where the source shows as it is.
+    const Substitution *shownSubstitution(qsizetype offset) const;
+    /// `target` moved out of a drawn substitution, the way it was going: the
+    /// caret steps over `&amp;` as one character.
+    qsizetype stepOverSubstitution(qsizetype target, int direction) const;
+    /// The innermost HTML element whose text holds `offset`, in live preview
+    /// and outside a tag; null anywhere else.
+    const HtmlTextSpan *HTMLtextAt(qsizetype offset) const;
+    /// `text` as source for that element: `& < >` escaped, a line break a
+    /// `<br>` (a space in a cell, kept in a `<pre>`).
+    QString HTMLsafe(const QString &text, const HtmlTextSpan &span) const;
+    /// Enter in HTML text: a new `<p>` or `<li>`, a `<br>` elsewhere.
+    bool handleHTMLenter();
+    struct HTMLtableEdit {
+        qsizetype start = 0;
+        qsizetype removed = 0;
+        QString text;
+    };
+    /// An empty row for an HTML table, written like its row `like`.
+    QString HTMLrowText(const TableSpan &table, int like, bool header) const;
+    /// The whitespace before `offset` on its line, or nullopt if there is text.
+    std::optional<QString> indentBefore(qsizetype offset) const;
+    /// Applies `edits` as one undo step and puts the caret in a cell.
+    bool applyHTMLtableEdits(QList<HTMLtableEdit> edits, qsizetype table, int row, int column);
+    /// The HTML counterparts of TableCells.cpp's row and column edits.
+    bool insertHTMLrow(qsizetype table, int row, bool after, int column);
+    bool fillShortHTMLrow(qsizetype table, int row);
+    bool runHTMLtableCommand(const QString &id, qsizetype table, int row, int column);
     /// True when the newline at `source` joins two lines of one paragraph
     /// rather than breaking them apart.
     bool softBreakAt(qsizetype source) const;

@@ -2593,7 +2593,8 @@ TEST(FeaturesTest, BaseBlocksToggle)
 #ifdef NOTEAPPC_EXPECT_HTML
 TEST(FeaturesTest, HTMLblocksToggle)
 {
-    const QString note = QStringLiteral("<div>hello</div>\n");
+    // style= keeps it litehtml's: a plain <div> the editor lays out itself.
+    const QString note = QStringLiteral("<div style=\"color: red\">hello</div>\n");
     auto editor = editorWith(note);
     ASSERT_TRUE(editor->htmlImageSizeAt(0).isValid()) << "on by default";
 
@@ -4589,7 +4590,9 @@ TEST(HtmlRendererTest, ListMarkersUseTheirNumeralSystem)
 
 TEST(HTMLBlockTest, RendersAsANonEmptyCachedImage)
 {
-    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    // style= is what keeps these blocks litehtml's (HtmlEdit.cpp lays a plain
+    // <div> out itself; tests/test_html_edit.cpp covers that side).
+    const QString note = QStringLiteral("Intro\n\n<div style=\"padding: 4px\">\n<b>Hello</b> world\n</div>\n\nAfter\n");
     auto editor = editorWith(note);
     const QSize size = editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello")));
     if (HtmlRenderer::isAvailable()) {
@@ -4605,7 +4608,7 @@ TEST(HTMLBlockTest, CaretInsideRevealsSourceInsteadOfTheImage)
     if (!HtmlRenderer::isAvailable())
         GTEST_SKIP() << "built without litehtml";
 
-    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    const QString note = QStringLiteral("Intro\n\n<div style=\"padding: 4px\">\n<b>Hello</b> world\n</div>\n\nAfter\n");
     auto editor = editorWith(note);
     const qsizetype at = note.indexOf(QStringLiteral("Hello"));
     ASSERT_FALSE(editor->htmlImageSizeAt(at).isEmpty());
@@ -4630,7 +4633,7 @@ TEST(HTMLBlockTest, UnrelatedKeystrokeIsACacheHitNotARebuild)
     if (!HtmlRenderer::isAvailable())
         GTEST_SKIP() << "built without litehtml";
 
-    const QString note = QStringLiteral("Intro\n\n<div>\n<b>Hello</b> world\n</div>\n\nAfter\n");
+    const QString note = QStringLiteral("Intro\n\n<div style=\"padding: 4px\">\n<b>Hello</b> world\n</div>\n\nAfter\n");
     auto editor = editorWith(note);
     ASSERT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
     const qint64 afterFirstRender = HtmlRenderer::renderCount();
@@ -4679,7 +4682,7 @@ TEST(InlineHtmlTest, ABlockLevelElementIsLeftToLayoutHtml)
     // the same markup.
     if (!HtmlRenderer::isAvailable())
         GTEST_SKIP() << "built without litehtml";
-    const QString note = QStringLiteral("<div>\n<b>Hello</b>\n</div>\n");
+    const QString note = QStringLiteral("<div style=\"margin: 0\">\n<b>Hello</b>\n</div>\n");
     auto editor = editorWith(note);
     EXPECT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Hello"))).isEmpty());
 }

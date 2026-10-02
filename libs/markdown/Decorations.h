@@ -28,6 +28,15 @@ struct StyleSpan {
         /// `[^label]:` marker - `range` is the whole reference, or just the
         /// definition's marker (not its body). Inline, like a link.
         Footnote,
+        /// Inline HTML in a block the editor lays out itself
+        /// (libs/editor/HtmlEdit.cpp): `range` is the element's text,
+        /// `payload` its open tag as written (`<u>`, `<span
+        /// style="color:red">`), styled by MarkdownEditor::htmlTagFormat.
+        HtmlText,
+        /// A tag, or a run of collapsed whitespace, in such a block. Formats
+        /// nothing: it only makes the caret reveal it by touching it, the way
+        /// an inline element's markers are, rather than by being on its line.
+        HtmlTag,
     };
 
     Kind kind = Kind::Bold;
@@ -76,6 +85,32 @@ struct TableSpan {
     int columns = 0;
     QList<Qt::Alignment> alignment; ///< per column
     QList<QList<Range>> rows;       ///< rows.first() is the header
+    int headerRows = 1;             ///< 0 for an HTML table with no `<th>` row
+    /// An HTML `<table>` the editor lays out itself (libs/editor/HtmlEdit.cpp)
+    /// rather than a pipe table: `rows` are the text between each cell's
+    /// tags, and the two lists below are what its row and column commands
+    /// rewrite. Never aligned by TableFormat.
+    bool html = false;
+    QList<Range> rowElements;         ///< html: each `<tr>` through its `</tr>`
+    QList<QList<Range>> cellElements; ///< html: each cell, its own tags included
+};
+
+/// Source that live preview shows as other text: an HTML entity as the
+/// character it names, `<br>` as a line break, a collapsed newline as a
+/// space. The caret steps over one as a single character.
+struct Substitution {
+    Range range;
+    QString text;
+};
+
+/// An element that holds text in an HTML block the editor lays out itself:
+/// a `<p>`, an `<li>`, a heading, a cell, a `<pre>`. Typing in `content`
+/// escapes `&`, `<` and `>`; Enter splits a `<p>` or an `<li>`.
+struct HtmlTextSpan {
+    Range content;  ///< between its tags, a nested list included
+    Range openTag;
+    QString tag;    ///< the name as written, case kept: "li", "P"
+    bool closed = true; ///< written with its end tag
 };
 
 /// A callout: Obsidian's `> [!note] Title` blockquote, and the `:::` container
@@ -259,6 +294,10 @@ struct Decorations {
     /// not a footnote, as in Obsidian: it stays text.
     QList<FootnoteSpan> footnotes;
     QList<FootnoteDefinition> footnoteDefinitions;
+    /// Filled by the editor's own pass over HTML blocks (HtmlEdit.cpp), never
+    /// by Parser: sorted by position.
+    QList<Substitution> substitutions;
+    QList<HtmlTextSpan> HTMLtext;
 
     /// Ranges to hide for the block containing `sourceOffset`, or all of them
     /// when `activeBlock` is not a real offset.
