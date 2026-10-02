@@ -793,9 +793,10 @@ void htmlHeadings(const QString &text, const Range &block, QList<Heading> &headi
     static const QRegularExpression comment(QStringLiteral("<!--.*?(?:-->|$)"),
                                             QRegularExpression::DotMatchesEverythingOption);
     static const QRegularExpression tag(QStringLiteral("<[^>]*>"));
-    QString html = text.mid(block.start, block.length());
-    if (html.size() < 9 || !html.contains(QLatin1String("</"))) // <h1>x</h1> is the shortest
+    const QStringView view = QStringView(text).mid(block.start, block.length());
+    if (view.size() < 9 || !view.contains(QLatin1String("</"))) // <h1>x</h1> is the shortest
         return;
+    QString html = view.toString();
     for (auto it = comment.globalMatch(html); it.hasNext();) {
         const QRegularExpressionMatch match = it.next();
         html.replace(match.capturedStart(), match.capturedLength(), QString(match.capturedLength(), QLatin1Char(' ')));

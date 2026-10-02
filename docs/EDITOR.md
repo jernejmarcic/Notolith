@@ -92,6 +92,7 @@ note however the block is drawn (its own layout, litehtml, or as source). A
 heading inside a quote or a list item is not a top-level block and is not
 listed. The heading text is the content with its tags removed and its entities
 decoded; the heading's range is the element, its text range the content.
+Publish draws the element once, with its HTML block (`tests/test_publish.cpp`).
 `![[Note#Heading]]` (an embedded section) still finds Markdown headings only.
 
 Entities in Markdown text: a CommonMark reference (`&amp;`, `&copy;`, `&#169;`,
