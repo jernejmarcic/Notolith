@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "MarkdownEditor.h"
+#include "Parser.h"
 #include "WaitFor.h"
 
 using namespace noteAppC;
@@ -290,7 +291,119 @@ TEST(HtmlTextTest, ListsHeadingsAndQuotesTakeTheMarkdownLook)
     EXPECT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("Title"))).isValid());
 }
 
+TEST(HtmlTextTest, HTMLHeadingsAreInTheOutlineLikeMarkdownOnes)
+{
+    const QString note = QStringLiteral("# Top\n\n<h2>Sub &amp; <i>x</i></h2>\n\nend\n");
+    auto editor = editorWith(note);
+    const QList<Heading> headings = editor->headings();
+    ASSERT_EQ(headings.size(), 2);
+    EXPECT_EQ(headings.at(1).level, 2);
+    EXPECT_EQ(headings.at(1).text, QStringLiteral("Sub & x"));
+    EXPECT_EQ(headings.at(1).range.start, note.indexOf(QStringLiteral("<h2>")));
+    // And the editor's headings are the parser's, which is what the index stores.
+    const Metadata metadata = Parser().parse(note, QStringLiteral("/vault/Note.md"));
+    ASSERT_EQ(metadata.headings.size(), headings.size());
+    EXPECT_EQ(metadata.headings.at(1).range.start, headings.at(1).range.start);
+}
+
+TEST(HtmlTableTest, AStyleOnACellKeepsTheTableEditable)
+{
+    const QString note = QStringLiteral(
+        "<table>\n<tr><th style=\"text-align:right\">n</th><th style=\"Color: red; BACKGROUND-COLOR:#eee\">q</th></tr>\n"
+        "<tr><td style=\"font-weight:bold\">a</td><td>3</td></tr>\n</table>\n");
+    Decorations decorations = Parser().parseAll(note).decorations;
+    expandEditableHTML(decorations, note);
+    ASSERT_EQ(decorations.tables.size(), 1);
+    EXPECT_EQ(decorations.tables.first().alignment.value(0), Qt::AlignRight);
+    EXPECT_EQ(decorations.tables.first().alignment.value(1), Qt::AlignLeft);
+
+    auto editor = editorWith(QStringLiteral("above\n\n") + note);
+    EXPECT_TRUE(editor->tableRenderedAt(editor->noteText().indexOf(QStringLiteral(">a<")) + 1));
+
+    // Anything else in a cell's style, or a style on a row, is still CSS for litehtml.
+    for (const char *style : {"width:50%", "text-align:right; background:url(x.png)", "color"}) {
+        const QString other = QStringLiteral("<table>\n<tr><td style=\"%1\">a</td></tr>\n</table>\n").arg(QLatin1String(style));
+        Decorations plain = Parser().parseAll(other).decorations;
+        expandEditableHTML(plain, other);
+        EXPECT_TRUE(plain.tables.isEmpty()) << style;
+    }
+}
+
+TEST(HtmlTextTest, VimStepsOverAnHTMLEntityAsOneCharacter)
+{
+    const QString note = QStringLiteral("<p>a &amp;b &copy;</p>\n\nend\n");
+    auto editor = editorWith(note);
+    editor->setVimMode(true);
+    editor->setCursorOffset(3); // a
+    QTest::keyClicks(editor.get(), QStringLiteral("ll"));
+    EXPECT_EQ(editor->cursorOffset(), 5); // on the &
+    QTest::keyClicks(editor.get(), QStringLiteral("l"));
+    EXPECT_EQ(editor->cursorOffset(), 10); // b: past all of &amp;
+    QTest::keyClicks(editor.get(), QStringLiteral("hh"));
+    EXPECT_EQ(editor->cursorOffset(), 4);
+    QTest::keyClicks(editor.get(), QStringLiteral("lx"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("<p>a b &copy;</p>\n\nend\n"));
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText(), note);
+}
+
 #endif // NOTEAPPC_EXPECT_HTML_EDIT
+
+TEST(MarkdownEntityTest, AReferenceShowsAsItsCharacterAndIsOneStep)
+{
+    const QString note = QStringLiteral("a &amp; b &copy; c `&amp;` \\&amp;\n\nend\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QStringLiteral("end")));
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b \u00A9 c &amp; \\&amp;\n")))
+        << editor->displayText().toStdString();
+
+    const qsizetype amp = note.indexOf(QStringLiteral("&amp;"));
+    editor->enterBlockAt(amp);
+    QTest::keyClick(editor.get(), Qt::Key_Right);
+    EXPECT_EQ(editor->cursorOffset(), amp + 5);
+    QTest::keyClick(editor.get(), Qt::Key_Left);
+    EXPECT_EQ(editor->cursorOffset(), amp);
+    QTest::keyClick(editor.get(), Qt::Key_Delete);
+    QString expected = note;
+    expected.remove(amp, 5);
+    EXPECT_EQ(editor->noteText(), expected);
+    settle(*editor);
+
+    const qsizetype copy = expected.indexOf(QStringLiteral("&copy;"));
+    editor->enterBlockAt(copy + 6);
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    expected.remove(copy, 6);
+    EXPECT_EQ(editor->noteText(), expected);
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText(), note);
+
+    // Source mode shows every byte as written.
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b &copy;"))) << editor->displayText().toStdString();
+}
+
+TEST(MarkdownEntityTest, VimStepsOverOneAsOneCharacter)
+{
+    const QString note = QStringLiteral("a &amp;b &copy;\n\nend\n");
+    auto editor = editorWith(note);
+    editor->setVimMode(true);
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("ll"));
+    EXPECT_EQ(editor->cursorOffset(), 2);
+    QTest::keyClicks(editor.get(), QStringLiteral("l"));
+    EXPECT_EQ(editor->cursorOffset(), 7); // b
+    QTest::keyClicks(editor.get(), QStringLiteral("h"));
+    EXPECT_EQ(editor->cursorOffset(), 2);
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a b &copy;\n\nend\n"));
+    // The last character of the line is the entity: l stops on it, x takes all of it.
+    editor->setNoteText(QStringLiteral("a &copy;\n\nend\n"));
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("lllll"));
+    EXPECT_EQ(editor->cursorOffset(), 2);
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a \n\nend\n"));
+}
 
 #ifdef NOTEAPPC_EXPECT_HTML
 TEST(HtmlBoundaryTest, StyleAndImagesStayLitehtml)

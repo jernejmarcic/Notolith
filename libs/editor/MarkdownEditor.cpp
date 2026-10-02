@@ -770,6 +770,9 @@ void sortDecorations(Decorations &decorations)
               [](const Range &l, const Range &r) { return l.start < r.start; });
     std::sort(decorations.styles.begin(), decorations.styles.end(),
               [](const StyleSpan &l, const StyleSpan &r) { return l.range.start < r.range.start; });
+    // The parser's (Markdown entities) and the HTML pass's, appended after.
+    std::sort(decorations.substitutions.begin(), decorations.substitutions.end(),
+              [](const Substitution &l, const Substitution &r) { return l.range.start < r.range.start; });
 }
 
 } // namespace

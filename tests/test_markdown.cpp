@@ -1697,3 +1697,46 @@ TEST(TableFormatTest, RealWorldTableAlignsAndStaysIdempotent)
     ASSERT_EQ(after.tables.size(), 1);
     EXPECT_EQ(before.tables.first().columns, after.tables.first().columns);
 }
+
+// --- HTML headings and entity references -------------------------------------
+
+TEST(HeadingTest, HTMLHeadingsOfATopLevelBlockAreHeadings)
+{
+    const QString text = QStringLiteral(
+        "# One\n\n<div>\n<h2 id=\"x\">Two <b>bold</b> &amp; &#169;</h2>\n<!-- <h3>hidden</h3> -->\n"
+        "<H4>\n  four\n</H4>\n</div>\n\n## Five\n\n> <h5>quoted</h5>\n");
+    const Metadata metadata = parse(text);
+
+    ASSERT_EQ(metadata.headings.size(), 4);
+    EXPECT_EQ(metadata.headings.at(1).level, 2);
+    EXPECT_EQ(metadata.headings.at(1).text, QStringLiteral("Two bold & ©"));
+    EXPECT_EQ(sliceOf(text, metadata.headings.at(1).textRange), QStringLiteral("Two <b>bold</b> &amp; &#169;"));
+    EXPECT_TRUE(sliceOf(text, metadata.headings.at(1).range).startsWith(QStringLiteral("<h2")));
+    EXPECT_EQ(metadata.headings.at(2).level, 4);
+    EXPECT_EQ(metadata.headings.at(2).text, QStringLiteral("four"));
+    // In document order, so the outline and a section search agree.
+    EXPECT_EQ(metadata.headings.at(3).text, QStringLiteral("Five"));
+    // A heading inside a quote is not a top-level block: not listed.
+    for (const Heading &heading : metadata.headings)
+        EXPECT_NE(heading.text, QStringLiteral("quoted"));
+}
+
+TEST(EntityTest, ReferencesInTextAreSubstitutions)
+{
+    const QString text = QStringLiteral(
+        "a &amp; b &copy; c &#169; d &#xA9; e\n\n`&amp;` and \\&amp; and [x](http://a/?q=1&amp;r=2) and "
+        "[[Note&amp;]] &unknown; &amp\n\n```\n&amp;\n```\n\n<p>&amp;</p>\n\n[AT&amp;T](u) kept &amp;\n");
+    const Decorations decorations = Parser().parseAll(text).decorations;
+    QStringList seen;
+    for (const Substitution &substitution : decorations.substitutions) {
+        // Byte-exact: each range is the reference as written.
+        EXPECT_TRUE(sliceOf(text, substitution.range).startsWith(QLatin1Char('&')));
+        EXPECT_TRUE(sliceOf(text, substitution.range).endsWith(QLatin1Char(';')));
+        seen << substitution.text;
+    }
+    // The text's four, then the last; nothing in code, a fence, HTML, an
+    // escape, a link (its text or destination), a wikilink or an unknown name.
+    EXPECT_EQ(seen, (QStringList{QStringLiteral("&"), QStringLiteral("©"), QStringLiteral("©"),
+                                 QStringLiteral("©"), QStringLiteral("&")}))
+        << seen.join(QLatin1Char('|')).toStdString().c_str();
+}
