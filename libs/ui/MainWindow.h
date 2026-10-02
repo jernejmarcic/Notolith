@@ -536,6 +536,10 @@ void updateVimStatus();
     QList<QAction *> m_pluginCommands;
     QStringList m_pluginLanguages;
     std::function<void(MarkdownEditor *)> m_applyPluginRenderer; ///< for an editor made later
+    /// "" when Mermaid is off, else the tool setting; the renderer is rebuilt (forgetting a missing tool)
+    /// only when this changes, and an editor is handed it only when its own "mermaidKey" differs.
+    QString m_mermaidKey;
+    MarkdownEditor::CodeBlockRenderer m_mermaidRenderer;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width

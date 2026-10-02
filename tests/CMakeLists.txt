@@ -62,6 +62,12 @@ if(TARGET noteAppC_plugins)
     add_dependencies(test_window noteAppC-plugin-host word-stats)
 endif()
 
+# Mermaid fences through a fake tool: the renderer alone, in an editor, and by the window's setting.
+add_executable(test_mermaid test_mermaid.cpp)
+target_link_libraries(test_mermaid PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+add_test(NAME mermaid COMMAND test_mermaid)
+set_tests_properties(mermaid PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_demo test_demo.cpp)
 target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo")

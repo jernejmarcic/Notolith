@@ -26,7 +26,8 @@ command palette is the one large piece deferred; `TODO.md` has the rest.
   per keystroke on a 200 kB note, against an 8 ms budget.
 - **Rendered** - Obsidian's element-by-element syntax reveal, callouts,
   tables, maths, embeds of notes, images, PDFs, audio and video, editable
-  properties, `query` blocks, raw HTML (litehtml), syntax-highlighted code.
+  properties, `query` blocks, raw HTML (litehtml), Mermaid diagrams (through
+  `mmdr`, off the UI thread, optional), syntax-highlighted code.
 - **Vim mode** - optional (Settings > Editor): normal, insert and visual
   modes, counts, operators and motions, `.`, `/` search, `:w` and `:q`.
   `docs/EDITOR.md`.
@@ -66,7 +67,9 @@ like a feature not working.
 Requires `qt6-base`, `qt6-svg`, `yaml-cpp`, `cmake`, `ninja`, a C++20
 compiler, and `gtest` for the tests. Optional, each switched off cleanly when
 missing: `qt6-multimedia`, `hunspell`, `poppler-qt6`, `syntax-highlighting`,
-`litehtml`. md4qt, MicroTeX and tinyxml2 are fetched at configure time.
+`litehtml`. At run time only, never needed to build: `mmdr`
+(`cargo install mermaid-rs-renderer`) for Mermaid diagrams, see `docs/EDITOR.md`.
+md4qt, MicroTeX and tinyxml2 are fetched at configure time.
 Packaging recipes (Arch, Flatpak, AppImage) are in `packaging/`.
 
 Render the window to a PNG without a display, which is how the look is

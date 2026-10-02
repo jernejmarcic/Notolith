@@ -63,6 +63,10 @@ const QVariantMap &defaults()
         // one Jupyter kernel per language (variables persist, execution counts, rich output) where one is installed.
         {QStringLiteral("notebooks.sharedKernel"), false},
         {QStringLiteral("editor.gpuAcceleration"), false},
+        // Mermaid diagrams, drawn by an external tool on a thread pool. On is free until a
+        // ```mermaid fence is on screen; the tool is a name looked up on PATH and in ~/.cargo/bin, or a path.
+        {QStringLiteral("render.mermaid"), true},
+        {QStringLiteral("render.mermaidTool"), QStringLiteral("mmdr")},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 

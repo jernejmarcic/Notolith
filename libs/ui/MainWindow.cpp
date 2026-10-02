@@ -58,6 +58,7 @@
 #include "Hotkeys.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
 #include "AudioRecorder.h"
@@ -1040,6 +1041,37 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.mediaEmbeds = featureOn("media-embeds");
     features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);
+    // Mermaid: the renderer is the switch. Off, nothing is registered; on, nothing is looked up or
+    // started until a fence is laid out. Handing it over resets an editor's code blocks, so only
+    // when the setting or the tool changed since this editor last had it.
+    const QString mermaidKey = m_settings.boolean(QStringLiteral("render.mermaid"))
+                                   ? QLatin1Char('1') + m_settings.text(QStringLiteral("render.mermaidTool"))
+                                   : QString();
+    if (mermaidKey != m_mermaidKey) {
+        m_mermaidKey = mermaidKey;
+        m_mermaidRenderer = mermaidKey.isEmpty()
+                                ? MarkdownEditor::CodeBlockRenderer()
+                                : mermaidRenderer(mermaidKey.mid(1), [this] { return m_theme; });
+    }
+    if (editor->property("mermaidKey").toString() != mermaidKey) {
+        editor->setProperty("mermaidKey", mermaidKey);
+        if (!m_mermaidRenderer) {
+            editor->setCodeBlockRenderer({QStringLiteral("mermaid")}, nullptr);
+        } else {
+            // The source goes to a tool that writes it to a temporary file and a cache: not for an encrypted note.
+            editor->setCodeBlockRenderer(
+                {QStringLiteral("mermaid")},
+                [this, editor, renderer = m_mermaidRenderer](
+                    const QString &language, const QString &source, int width, const QString &theme,
+                    const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+                    if (showsEncryptedNote(editor)) {
+                        deliver({true, tr("*Diagrams are not drawn for encrypted notes.*"), QImage()});
+                        return;
+                    }
+                    renderer(language, source, width, theme, deliver);
+                });
+        }
+    }
     // "/" commands: the palette's own list, the window's then the editor's,
     // fetched when the popup opens. Off, "/" is a character like any other.
     if (!featureOn("slash-command")) {

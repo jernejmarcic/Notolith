@@ -78,3 +78,44 @@ span between its corners).
 operators, text objects, registers, marks, macros, block-visual, `:s`, counts,
 undo, mode switches, search, the ex line, IME, the caret);
 `tests/test_window.cpp` covers the setting, the status bar and `:w`.
+
+## Mermaid diagrams
+
+A ```` ```mermaid ```` fence is drawn as its diagram when the caret is outside
+it, and shown as source when the caret is inside, like any rendered block.
+Settings > Core plugins: "Mermaid diagrams" (`render.mermaid`, on by default)
+and "Mermaid tool" (`render.mermaidTool`, default `mmdr`).
+
+The drawing is done by an external program, not linked in: `mmdr`, the
+pure-Rust `mermaid-rs-renderer` crate (`cargo install mermaid-rs-renderer`,
+about 3-5 ms a diagram). noteAppC installs and fetches nothing, and there is
+no CMake option: no compiled-in code depends on it (Qt6::Svg draws the result,
+already linked for notebook output).
+
+- **Startup cost**: reading one bool. Nothing is resolved, spawned or warmed
+  until a mermaid fence is laid out with the setting on. Off, no renderer is
+  registered and a fence is an ordinary code block.
+- **Off the UI thread**: `libs/editor/MermaidBlock.cpp` is a renderer for
+  `MarkdownEditor::setCodeBlockRenderer`, so the fence, its placeholder and its
+  in-memory cache (by width, theme and source) are `CodeBlockHook.cpp`'s. A job
+  runs `mmdr -i in.mmd -o out.svg -c config.json` on a one-thread pool and
+  rasterises the SVG with `QSvgRenderer` at the column width and the display's
+  pixel ratio. The tool gets 5 s, then is killed.
+- **Cache**: the SVG by a hash of the source and the colours asked for, in
+  `$XDG_CACHE_HOME/noteAppC/mermaid`, and in memory. A cached diagram never
+  starts the tool again. Nothing prunes the directory.
+- **Colours**: the config handed to the tool is Mermaid's own shape
+  (`theme`, `themeVariables`) in the app's colours. `mmdr`'s keys are
+  unverified, so a run that fails is repeated once without the config, and a
+  dark theme that gets a light diagram back (its colours are not in the file)
+  has every colour re-lit, hue kept.
+- **No tool, or a failure**: the source shows in a listing with one dim line
+  under it ("Mermaid: install mmdr to render", or the tool's first error
+  line). A missing tool is remembered until the setting changes, so typing
+  does not look for it again; a failure is cached with the source.
+- **Tool lookup**: a bare name is searched on `PATH`, then in `~/.cargo/bin`
+  (a desktop launcher's `PATH` often lacks it); anything with a `/` is a path.
+- **Not drawn**: encrypted notes (the source would go to a temporary file and
+  the cache), PDF export and publish (they show the source), slides.
+
+`tests/test_mermaid.cpp` runs all of this against a fake `mmdr` script.

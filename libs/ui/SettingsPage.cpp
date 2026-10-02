@@ -633,6 +633,13 @@ QWidget *SettingsPage::buildCorePluginsPage()
                     "off, every block is a fresh process of the language's own tool. \"#| kernel: on\" or "
                     "\"off\" decides for one block."));
 #endif
+    addToggleRow(layout, QStringLiteral("render.mermaid"), tr("Mermaid diagrams"),
+                 tr("Draw mermaid code blocks as diagrams, with the tool below, off the main thread and cached. "
+                    "Nothing runs until a diagram is on screen; off, or without the tool, the source shows."));
+    addLineEditRow(layout, QStringLiteral("render.mermaidTool"), tr("Mermaid tool"),
+                   tr("The renderer's name on PATH (also looked for in ~/.cargo/bin) or its full path. "
+                      "mmdr: cargo install mermaid-rs-renderer."),
+                   QStringLiteral("mmdr"));
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over
     // these, so an Obsidian vault behaves here as it did there.
