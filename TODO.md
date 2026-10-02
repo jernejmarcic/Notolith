@@ -865,3 +865,15 @@ optimal as it can be".
       far inside budget. Keystroke medians drifted up a little against stage
       14 (200 kB 0.22 -> 0.25 ms, code block 1.10 -> 1.19 ms), not chased. Bases'
       62 ms note read is already on the pool.
+
+## Requested 2026-10-02
+- [ ] HTML in live preview edited where it is drawn. Jernej: "For HTML I want
+      rendering of it like in obsidian, but unlike obsidian I want it inline
+      editable just like the markdown"; "if its a HTML table it should be
+      editable like an actual table element (like in excel for example,
+      clicking on cells, etc.)". Tags hide like Markdown markers and show
+      under the caret; an HTML table is edited cell by cell like a Markdown
+      one; what the editor cannot lay out itself stays litehtml.
+- [ ] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
+      app, remember I want speed". A setting, off the UI thread, cached,
+      nothing at startup.
