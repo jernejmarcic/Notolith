@@ -32,8 +32,12 @@ sets the column's alignment), and inline `b` `strong` `i` `em` `u`
 `span` (a `style=` holding only `color:`). Other attributes (`class`, `id`)
 are kept and ignored. A `style=` on a `th` or `td` is accepted when it holds
 only `text-align`, `color`, `background`, `background-color` and
-`font-weight` (a value with a `:` or `url(` is not); only the alignment is
-drawn, the rest stays in the file and is ignored.
+`font-weight` (a value with a `:` or `url(` is not), and each is drawn:
+the alignment, `background`/`background-color` as a fill under the cell's text
+(a colour name, `#rgb`, `#rrggbb`, `rgb()` or `rgba()`; anything else, such as
+a shorthand with more than a colour, is not drawn), `color` as the text
+colour, and `font-weight` `bold`, `bolder` or 600 and up as bold. Colours are
+as the author wrote them, with no contrast adjustment for the theme.
 
 **Left to litehtml** (drawn as an image, clicked into it shows its source, as
 before): a block with any other tag (`img`, `svg`, `iframe`, `video`,
@@ -132,15 +136,15 @@ editor's own bar.
 | motions | `h j k l`, `w W b B e E`, `0 ^ $`, `gg G` (`5G` goes to line 5), `{ }`, `f F t T` with `;` and `,`, `n N`, `* #`, `%`, `'x` `` `x ``, `gj gk` (by drawn line, for wrapped paragraphs); arrows, Home and End also work |
 | counts | before a command or a motion: `3w`, `d2w`, `2d3w`, `5x`, `3J`, `4rx` |
 | operators | `d c y > <` with any motion, doubled for a line (`dd cc yy >> <<`, `3>>` is three lines), `D C Y S s x X`; in visual mode `d x y c s > <` (`3>` shifts three times) |
-| text objects | after an operator, or in visual mode: `iw aw iW aW`, `is as`, `ip ap` (lines), `i" a" i' a'` and ``i` a` `` (on the line), and brackets `i( a( ib ab`, `i[ a[`, `i{ a{ iB aB`, `i< a<` (the closing character names them too). A count means that many words, sentences or paragraphs, or that many bracket levels out. `i{` on a block whose braces sit on their own lines takes the lines between |
-| `%` | jumps to the matching `()`, `[]` or `{}`: from the first bracket at or after the caret on the line; works across lines; usable after an operator (`d%`) |
+| text objects | after an operator, or in visual mode: `iw aw iW aW`, `is as`, `it at` (HTML/XML tags: nested, case-insensitive names, void and self-closing tags and comments skipped, attributes may hold `>` in quotes, works inside an HTML block; a count goes that many elements out), `ip ap` (lines), `i" a" i' a'` and ``i` a` `` (on the line), and brackets `i( a( ib ab`, `i[ a[`, `i{ a{ iB aB`, `i< a<` (the closing character names them too). A count means that many words, sentences or paragraphs, or that many bracket levels out. `i{` on a block whose braces sit on their own lines takes the lines between |
+| `%` | jumps to the matching `()`, `[]` or `{}`: from the first bracket at or after the caret on the line; works across lines; usable after an operator (`d%`). With a count, `50%` goes to that percent of the file (linewise, `d50%` works, over 100 fails) |
 | `* #` | search for the whole word under the caret, forward or back; `n` and `N` go on from there |
 | indent | `>` and `<` move lines by the editor's tab width (Settings > Editor), `<` also takes one leading tab; empty lines stay empty |
-| registers | `"a`-`"z` before a yank, delete, change or put (`"ayy`, `"ap`); `"A`-`"Z` append; `"0` is the last yank, `""` the unnamed one; `"_` is the black hole; `"+` and `"*` are the system clipboard (a put from it is lines if the text ends in a newline) |
+| registers | `"a`-`"z` before a yank, delete, change or put (`"ayy`, `"ap`); `"A`-`"Z` append; `"0` is the last yank, `""` the unnamed one; `"1` is the newest delete or change of a line, of several lines, or ending in `% { } n N`, and each one shifts the older ones along to `"9`; `"-` is a smaller delete (within a line, no register named); `"_` is the black hole; `"+` and `"*` are the system clipboard (a put from it is lines if the text ends in a newline) |
 | marks | `ma`-`mz` set; `'a` goes to the line and the backtick form to the exact place, both usable after an operator (`d'a`); `''` returns to where the last jump began (`G gg % n N * # { } :N` and mark jumps are jumps); marks follow edits; `'<` and `'>` are the last visual selection |
 | macros | `qa` ... `q` records into `a` (`qA` appends), `@a` plays it, `@@` plays the last one again, `3@a` three times; the status bar shows `recording @a`. A macro is the keys as typed, so insert-mode typing replays too. One that runs itself stops after 8 levels |
 | block visual | `Ctrl+v`, then motions (`$` runs every line to its end); `d x c y` act on the columns, `I` and `A` insert on the top line and copy the typed text to every line when `Esc` ends it (`I` skips lines too short to reach the block, `A` pads them), `>` `<` shift the lines; a yanked block is put back as a block |
-| put and edit | `p P` (character, line or block, as yanked), `r<char>`, `~`, `J` |
+| put and edit | `p P` (character, line or block, as yanked), `r<char>`, `~`, `J`; in visual mode (characterwise, linewise or block) `J` joins the selected lines (one line: with the next), `r<char>` replaces every selected character (line breaks stay), `~` toggles case, `u` lower-cases and `U` upper-cases the selection |
 | undo | `u`, `Ctrl+r`; each command is one undo step and a whole insert session is one |
 | repeat | `.` repeats the last change, including what was typed in its insert |
 | search | `/pattern`, `?pattern`, `n`, `N`: a regular expression, case-insensitive unless it has a capital; shown with the editor's find highlight, cleared by `:noh` |
@@ -166,11 +170,12 @@ Notes on behaviour that differs from a terminal vim:
 
 ### Not covered
 
-`:set`, a count on `.`, `p` over a visual selection, `J`, `r` and `~` in visual
-mode, numbered registers `"1`-`"9`, a count on `%` (go to N percent), a text
-object that extends an existing visual selection (it replaces it), `it`/`at`
-(tags), `:s` flags other than `g` and `i`, and a macro stopping at its first
-failed motion (it runs on). Block columns count characters, not drawn width, so
+`:set`, a count on `.`, `p` over a visual selection, a text object that
+extends an existing visual selection (it replaces it), `gu`/`gU`/`g~`, `U` as
+line undo, and `:s` flags other than `g` and `i`. A macro stops at its first
+failed motion (`j` on the last line, an `f` that finds nothing, a search with
+no match), but `l` and `h` at a line's edge do not fail as they do in vim.
+Block columns count characters, not drawn width, so
 a tab is one column. In normal and visual mode `Ctrl+v` is block-visual, not
 paste; `Ctrl+V` still pastes in insert mode. Visual mode highlights the
 character under the caret by widening the selection by one, which is also why

@@ -93,6 +93,14 @@ struct TableSpan {
     bool html = false;
     QList<Range> rowElements;         ///< html: each `<tr>` through its `</tr>`
     QList<QList<Range>> cellElements; ///< html: each cell, its own tags included
+    /// An HTML cell's style= as written: CSS colour text for color and
+    /// background (empty when absent), and whether font-weight asks for bold.
+    struct CellLook {
+        QString color;
+        QString background;
+        bool bold = false;
+    };
+    QList<QList<CellLook>> cellLooks; ///< html: parallel to `rows`
 };
 
 /// Source that live preview shows as other text: an entity reference (`&amp;`)

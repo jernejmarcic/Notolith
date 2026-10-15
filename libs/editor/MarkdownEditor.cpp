@@ -2379,6 +2379,30 @@ void MarkdownEditor::paintInlineMaths(QPainter &painter, const BlockView &view, 
     }
 }
 
+namespace {
+
+/// A CSS colour as an HTML cell wrote it: a name, #rgb, #rrggbb, or rgb()/rgba()
+/// with plain numbers. Invalid when it is none of those.
+QColor cssColor(const QString &text)
+{
+    if (text.isEmpty())
+        return {};
+    static const QRegularExpression functional(QStringLiteral(
+        R"(^rgba?\(\s*(\d+)\s*[, ]\s*(\d+)\s*[, ]\s*(\d+)\s*(?:[,/]\s*([\d.]+)\s*)?\)$)"));
+    const QRegularExpressionMatch match = functional.match(text);
+    if (match.hasMatch()) {
+        const QColor color(qMin(255, match.captured(1).toInt()), qMin(255, match.captured(2).toInt()),
+                           qMin(255, match.captured(3).toInt()));
+        QColor out = color;
+        if (!match.captured(4).isEmpty())
+            out.setAlphaF(qBound(0.0, match.captured(4).toDouble(), 1.0));
+        return out;
+    }
+    return QColor::isValidColorName(text) ? QColor::fromString(text) : QColor();
+}
+
+} // namespace
+
 bool MarkdownEditor::layoutTable(BlockView &view)
 {
     view.cells.clear();
@@ -2405,6 +2429,12 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             cell.row = r;
             cell.column = c;
             cell.alignment = table->alignment.value(c, Qt::AlignLeft);
+            if (table->html) { // the cell's own style=
+                const TableSpan::CellLook look = table->cellLooks.value(r).value(c);
+                cell.fill = cssColor(look.background);
+                cell.ink = cssColor(look.color);
+                cell.bold = look.bold;
+            }
 
             // The cell the caret is in shows its source, as any element
             // under the caret does.
@@ -2429,7 +2459,9 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
             cell.layout->setTextOption(wrap);
             QFont cellFont = font;
-            if (r < table->headerRows)
+            if (cell.bold)
+                cellFont.setWeight(QFont::Bold);
+            else if (r < table->headerRows)
                 cellFont.setWeight(QFont::DemiBold);
             cell.layout->setFont(cellFont);
             cell.layout->setFormats(formatsIn(view, cell.source, cell.map));
@@ -2531,6 +2563,8 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
             continue;
         if (cell.row < view.headerRows)
             painter.fillRect(rect, header);
+        if (cell.fill.isValid())
+            painter.fillRect(rect, cell.fill);
         painter.setPen(QPen(border, 1));
         painter.drawRect(rect);
 
@@ -2560,7 +2594,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
             }
         }
 
-        painter.setPen(text);
+        painter.setPen(cell.ink.isValid() ? cell.ink : text);
         // Each cell clips its own text, so a long word cannot bleed into the
         // next column.
         painter.save();

@@ -848,7 +848,7 @@ private:
         QString reg;            ///< the unnamed register; not the clipboard
         bool regLinewise = false;
         bool regBlock = false;  ///< the unnamed register holds a column block
-        /// a-z and 0: text, and whether it is lines (1) or a block (2)
+        /// a-z, 0-9 and -: text, and whether it is lines (1) or a block (2)
         struct Register {
             QString text;
             int kind = 0;
@@ -868,6 +868,8 @@ private:
         QList<MacroKey> recorded;
         QChar lastMacro;
         int macroDepth = 0;     ///< @ inside a macro: bounded
+        bool macroFailed = false; ///< a motion failed while a macro ran: it stops
+        bool regOne = false;    ///< the operator's motion (% { } n N) always fills "1
         /// Block-visual insert (I, A, c): the typed text is copied to the
         /// other lines when the insert ends.
         struct BlockInsert {
@@ -918,6 +920,9 @@ private:
         int row = 0;
         int column = 0;
         int lead = 0; ///< display characters trimmed off the front of `layout`'s text
+        QColor fill;  ///< an HTML cell's background; invalid when it has none
+        QColor ink;   ///< an HTML cell's text colour; invalid when it has none
+        bool bold = false; ///< an HTML cell's font-weight
     };
 
     /// One top-level block: the unit that is laid out, cached and revealed.

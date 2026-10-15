@@ -329,6 +329,33 @@ TEST(HtmlTableTest, AStyleOnACellKeepsTheTableEditable)
     }
 }
 
+TEST(HtmlTableTest, ACellsOwnColourIsDrawn)
+{
+    const auto count = [](const QString &cell, const QColor &color) {
+        auto editor = editorWith(QStringLiteral("above\n\n<table>\n<tr><td%1>apple</td></tr>\n</table>\n\nbelow\n").arg(cell));
+        QTest::qWait(50);
+        const QImage image = editor->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        int n = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x)
+                n += image.pixelColor(x, y) == color;
+        return n;
+    };
+    const QColor red(255, 0, 0), green(0, 255, 0);
+    EXPECT_EQ(count(QString(), red), 0);
+    EXPECT_EQ(count(QString(), green), 0);
+    EXPECT_GT(count(QStringLiteral(" style=\"background: #ff0000\""), red), 1000); // the cell's fill
+    EXPECT_GT(count(QStringLiteral(" style=\"BACKGROUND-COLOR:rgb(255, 0, 0)\""), red), 1000);
+    EXPECT_GT(count(QStringLiteral(" style=\"color:#00ff00\""), green), 20);        // the text
+    EXPECT_EQ(count(QStringLiteral(" style=\"color:#00ff00\""), red), 0);
+    EXPECT_EQ(count(QStringLiteral(" style=\"background:url(x.png)\""), red), 0);   // not an owned style
+    // font-weight changes what is drawn, and a fill leaves the text readable
+    EXPECT_NE(count(QStringLiteral(" style=\"color:#00ff00;font-weight:bold\""), green),
+              count(QStringLiteral(" style=\"color:#00ff00\""), green));
+    EXPECT_EQ(count(QStringLiteral(" style=\"color:#00ff00;font-weight:400\""), green),
+              count(QStringLiteral(" style=\"color:#00ff00\""), green));
+}
+
 TEST(HtmlTextTest, VimStepsOverAnHTMLEntityAsOneCharacter)
 {
     const QString note = QStringLiteral("<p>a &amp;b &copy;</p>\n\nend\n");
