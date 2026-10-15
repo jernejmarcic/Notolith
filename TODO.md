@@ -853,7 +853,7 @@ optimal as it can be".
       disk, every embed kind renders inline. Fixed: outside changes to an open
       note were overwritten by the next autosave; restore updated one pane
       only; a plugin's note.activeText leaked an encrypted note's plaintext.
-      Left: Mermaid (no renderer, needs a dependency - yours to pick); EPUB
+      Left: Mermaid (done 2026-10-02, mmdr); EPUB
       embed is a card (no cover API); every atomic save resets birthTime, so
       Bases' file.ctime is the last save (writing in place is the cure, at the
       cost of a torn file on a crash - yours to decide); a note renamed or
