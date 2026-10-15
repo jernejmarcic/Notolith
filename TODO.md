@@ -33,13 +33,13 @@ built; each stage's detail is in its own section further down.
 | 4 | `demo/`, a vault under 5 MB that exercises every feature | 354 kB, 77 files, `test_demo` opens all of it; grows with each stage |
 | 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
 | 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Left: footnote links, code-tab strips |
-| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: EPUB paged mode, CSS `url()`, image annotation |
+| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: image annotation (EPUB paged mode and CSS `url()` exist: EpubView.cpp, EpubRender.cpp) |
 | 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | done but quickjs-ng: sandboxed host per plugin, C ABI, commands, code blocks, vault events, permissions page. quickjs-ng: "Decide later" |
 | 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | done: `plugins/ai` (Ollama, OpenAI-compatible, Anthropic; key by env var name only), `ai` code blocks, declared per-plugin timeouts. Left: a typed question (no host prompt call yet) |
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
-| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands; 2026-10-01: shared kernels, rich output, more `#|` options, stale output, timeouts. Left: completion/inspect, `.ipynb`, tiers 2-3 (not installed) |
+| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands; 2026-10-01: shared kernels, rich output, more `#|` options, stale output, timeouts. completion/inspect built (NotebookComplete.cpp). Left: `.ipynb`, `input()`, tiers 2-3 (not installed) |
 | 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
 
 Standing decisions the spec left open, kept as they are unless Jernej says
@@ -101,7 +101,7 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
   - [x] Paste and drop: an image pasted (Ctrl+V) or a file dropped into a
         note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
         "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
-        `![[...]]` inserted. Not built at all yet.
+        `![[...]]` inserted. Built since (libs/editor/PasteDrop.cpp, MainWindow attachment saver).
 - [x] **Tables aligned in the source** (Jernej 2026-09-23: "Tables should be
       auto aligned to look good, even in plain markdown, by adding spaces and
       other table characters"). `formatTable` (libs/markdown/TableFormat):
@@ -676,7 +676,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       the FTS5 table; a search pane (first sidebar tab, `global-search:open`,
       Ctrl+Shift+F) off the UI thread; a tag or a bookmarked search opens it;
       a result opens its note at the match. 20 000 notes: a common word
-      6.4 ms, a rare one 0.05 ms. Left: `[property:value]` syntax; `block:`
+      6.4 ms, a rare one 0.05 ms. `[property:value]` landed (Search.cpp PropertyNode); `block:`
       is paragraph-level, not md4qt's blocks; `/regex/` is PCRE2, not JS.
 - [x] **Unlinked mentions** in the backlinks pane (lane A), 0.3 ms per note.
 - [x] Search snippet for a frontmatter tag highlighted the whole frontmatter;
@@ -846,8 +846,8 @@ optimal as it can be".
       2026-10-01 later: text objects, registers, marks, macros, block visual,
       `%`, `>` `<`, `:s`, `*` `#`. Ctrl+v in normal mode is block visual now.
       Left (docs/EDITOR.md): `"1`-`"9`, `it`/`at`, visual `J r ~`.
-- [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Left: tab completion
-      and inspect (needs a popup), `.ipynb` files, `input()`, tiers 2-3.
+- [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Completion and
+      inspect built 2026-10-01. Left: `.ipynb` files, `input()`, tiers 2-3.
 - [x] Audit (tests in test_window/test_sync/test_vault): split panes, metadata
       byte-exact through every save path, encryption leaves no plaintext on
       disk, every embed kind renders inline. Fixed: outside changes to an open
@@ -883,8 +883,8 @@ optimal as it can be".
 - [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
       app, remember I want speed". `render.mermaid` (on), through mmdr on the
       pool, cached on disk and in memory, nothing at startup (docs/EDITOR.md).
-      Waiting on Jernej: `cargo install mermaid-rs-renderer` (asked 2026-10-02);
-      then check mmdr's real `-c` keys and dark output. Left: publish/PDF use
+      mmdr 0.3.1 installed (~/.local/share/cargo/bin, 2026-10-02); lane mermaid2
+      (2026-10-16) checks mmdr's real `-c` keys and dark output. Left: publish/PDF use
       the cached SVG. Disk cache pruned (30 days / 50 MB) on first use.
 
 ## Requested 2026-10-16 (from the running app)
