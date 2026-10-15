@@ -610,11 +610,15 @@ QTabBar::tab:selected {
     color: %{--text-normal};
 }
 
-QLabel#inlineTitle {
+QLineEdit#inlineTitle {
     color: %{--text-normal};
     font-size: 30px;
     font-weight: 700;
     background: %{--background-primary};
+    border: none;
+    padding: 0;
+    selection-background-color: %{--text-selection};
+    selection-color: %{--text-normal};
 }
 
 QPlainTextEdit {
@@ -715,8 +719,8 @@ QCompleter QAbstractItemView::item, QListView#completerPopup::item, QListView#no
 }
 QCompleter QAbstractItemView::item:selected, QListView#completerPopup::item:selected,
 QListView#notebookCompletePopup::item:selected {
-    background: %{--interactive-accent};
-    color: %{--text-on-accent};
+    background: %{--background-modifier-hover};
+    color: %{--text-normal};
 }
 
 /* Documentation popup of a notebook block (Shift+Tab) */
@@ -754,6 +758,20 @@ QMenu::item {
 QMenu::item:selected {
     background: %{--background-modifier-hover};
 }
+QMenu::item:disabled {
+    color: %{--text-faint};
+    background: transparent;
+}
+QMenu::right-arrow {
+    image: url(:/icons/branch-collapsed.svg);
+    width: 12px;
+    height: 12px;
+    margin-right: 6px;
+}
+QMenu::indicator {
+    width: 0;
+    image: none;
+}
 QMenu::separator {
     height: 1px;
     background: %{--background-modifier-border};
@@ -772,6 +790,23 @@ QStatusBar QLabel {
     color: %{--text-faint};
     font-size: %{--font-ui-smaller}px;
     padding: 0 8px;
+}
+QStatusBar QToolButton {
+    color: %{--text-faint};
+    font-size: %{--font-ui-smaller}px;
+    background: transparent;
+    border: none;
+    border-radius: %{--radius-s}px;
+    padding: 2px 6px;
+    margin: 1px 0;
+}
+QStatusBar QToolButton:hover, QStatusBar QToolButton:pressed, QStatusBar QToolButton:open {
+    background: %{--background-modifier-hover};
+    color: %{--text-muted};
+}
+QStatusBar QToolButton::menu-indicator {
+    image: none;
+    width: 0;
 }
 
 QScrollBar:vertical {
@@ -806,16 +841,82 @@ QScrollBar::add-page, QScrollBar::sub-page {
     background: transparent;
 }
 
+/* Inputs of the settings page and of dialogs: Obsidian's rounded fields. */
+QWidget#settingsPage QLineEdit, QWidget#settingsPage QComboBox, QWidget#settingsPage QSpinBox,
+QDialog QLineEdit, QDialog QComboBox, QDialog QSpinBox {
+    background: %{--background-modifier-form-field};
+    color: %{--text-normal};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-s}px;
+    padding: 4px 8px;
+    min-height: 20px;
+    selection-background-color: %{--text-selection};
+    selection-color: %{--text-normal};
+}
+QWidget#settingsPage QLineEdit:focus, QWidget#settingsPage QComboBox:focus, QWidget#settingsPage QSpinBox:focus,
+QDialog QLineEdit:focus, QDialog QComboBox:focus, QDialog QSpinBox:focus {
+    border-color: %{--interactive-accent};
+}
+QWidget#settingsPage QComboBox:hover, QDialog QComboBox:hover {
+    background: %{--interactive-hover};
+}
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+}
+QComboBox::down-arrow {
+    image: url(:/icons/branch-expanded.svg);
+    width: 12px;
+    height: 12px;
+}
+QComboBox QAbstractItemView {
+    background: %{--background-secondary};
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 4px;
+    color: %{--text-normal};
+    outline: none;
+    selection-background-color: %{--background-modifier-hover};
+    selection-color: %{--text-normal};
+}
+QComboBox QAbstractItemView::item {
+    padding: 5px 8px;
+    min-height: 20px;
+    border-radius: %{--radius-s}px;
+}
+QSpinBox::up-button, QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 16px;
+    border: none;
+    background: transparent;
+}
+QSpinBox::up-button { subcontrol-position: top right; }
+QSpinBox::down-button { subcontrol-position: bottom right; }
+QSpinBox::up-arrow {
+    image: url(:/icons/spin-up.svg);
+    width: 10px;
+    height: 10px;
+}
+QSpinBox::down-arrow {
+    image: url(:/icons/branch-expanded.svg);
+    width: 10px;
+    height: 10px;
+}
+
 QPushButton {
     background: %{--interactive-normal};
     color: %{--text-normal};
-    border: none;
+    border: 1px solid transparent;
     border-radius: %{--radius-s}px;
     padding: 6px 14px;
     min-height: %{--input-height}px;
 }
 QPushButton:hover {
     background: %{--interactive-hover};
+}
+QPushButton:focus {
+    border-color: %{--interactive-accent};
+    outline: none;
 }
 QPushButton:default {
     background: %{--interactive-accent};
