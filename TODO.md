@@ -925,6 +925,24 @@ optimal as it can be".
       sitter color, etc. It should work like the super custom callouts kind of,
       at least follow the same philosophy". tree-sitter 0.26 is installed with
       c, lua, markdown, query, vim grammars only.
-- [ ] Study how Obsidian and Zed work with REA, to make the editor better
+- [x] Study how Obsidian and Zed work with REA, to make the editor better
       (Jernej's suggestion); findings feed the lanes, behaviour only, no code
       copied.
+- [ ] Code block tab click relays out the whole note (`selectCodeTab` calls
+      `invalidateLayouts()`); invalidate only the tab group (complex-code lane).
+- [ ] Code hover repaints the whole viewport (`m_hoveredCodeBlock` path); repaint
+      only the old and new block rects (hover-edit lane).
+- [ ] Obsidian `--code-*` and Zed-style `syntax.*` keys as one theme contract, so
+      imported Obsidian themes colour code (complex-code lane).
+- [ ] Tables like Obsidian: insert-table command and slash entry, alignment
+      submenu, duplicate row/column, sort by column (tables lane). Later: row and
+      column drag handles, hover add-row/column buttons, rectangular cell
+      selection.
+- [ ] Status bar word/character count: 200 ms debounce, counts the selection
+      when there is one, skips frontmatter (polish lane acceptance).
+- [ ] Callout context menu: Edit / Copy / Change type / Remove, once the hover
+      edit "Edit block source" item exists.
+- [ ] `DisplayMap::toDisplay` is linear (four loops); binary search like
+      `toSource`. Small gain; whoever touches DisplayMap next.
+- [ ] Audit the 19 `invalidateLayouts()` callers; narrow each to the blocks it
+      changed, if bench resize/fold rows are over 10 ms.
