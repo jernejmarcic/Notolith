@@ -27,6 +27,7 @@
 #ifdef NOTEAPPC_HAVE_PLUGINS
 #include "PluginRegistry.h"
 #endif
+#include "BulletGlyphs.h"
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
 #include "PdfPage.h"
@@ -495,9 +496,29 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
                 tr("Pad a table's cells into straight columns in the file itself when you "
                    "leave a table you edited, so it reads as a table in any text editor."));
-    addToggleRow(layout, QStringLiteral("editor.outlineNumbering"), tr("Outline numbering"),
-                tr("Number nested ordered lists as 1.1, 1.2, 1.2.1, the way a word "
-                   "processor's multilevel list does. The note's text is unchanged."));
+    addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
+                tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "
+                   "1.2.1.), counted from the items they sit in. The note's text is unchanged."),
+                {{tr("As written"), QStringLiteral("plain")},
+                 {tr("Hierarchical"), QStringLiteral("hierarchical")}});
+    addLineEditRow(layout, QStringLiteral("editor.listNumberSuffix"), tr("Number ending"),
+                   tr("What follows a drawn number: \".\", \":\", \")\" or any short text. Empty "
+                      "keeps the delimiter the note was written with. Display only."),
+                   QStringLiteral("."));
+    {
+        // `-`, `*` and `+` are the only bullet markers CommonMark has ("=" is not one).
+        auto *glyphs = new BulletGlyphChooser(this);
+        glyphs->setObjectName(QStringLiteral("settingsBulletGlyphs"));
+        const QString key = QStringLiteral("editor.bulletGlyphs");
+        glyphs->setSpec(m_settings->text(key));
+        connect(glyphs, &BulletGlyphChooser::specChanged, this, [this, key](const QString &spec) {
+            m_settings->setValue(key, spec);
+            changed();
+        });
+        addRow(layout, {key}, tr("Bullet glyphs"),
+               tr("How each bullet marker is drawn in live preview. The note keeps - * +."), glyphs,
+               [this, key, glyphs] { glyphs->setSpec(m_settings->text(key)); });
+    }
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
     addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),

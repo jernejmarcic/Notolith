@@ -29,6 +29,7 @@ class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
 
+#include "BulletGlyphs.h"
 #include "CodeHighlighter.h"
 #include "Lifeline.h"
 #include "MathRenderer.h"
@@ -127,6 +128,15 @@ public:
     /// it edited, as Advanced Tables does. On by default.
     void setAlignTables(bool on) { m_alignTables = on; }
     bool outlineNumbering() const { return m_outlineNumbering; }
+    /// What an ordered number ends in as drawn: "." (the default), ":", ")" or
+    /// anything short. Empty draws the delimiter the note was written with.
+    /// Display only; the file keeps its own.
+    void setListNumberSuffix(const QString &suffix);
+    QString listNumberSuffix() const { return m_listNumberSuffix; }
+    /// The glyph each bullet marker is drawn as, "-=dash,*=dot,+=diamond"
+    /// (BulletGlyphs.h). Display only; the file keeps `-`, `*` and `+`.
+    void setBulletGlyphs(const QString &spec);
+    BulletGlyphMap bulletGlyphs() const { return m_bulletGlyphs; }
     /// What an ordered item's number reads as drawn (for the tests too).
     QString listLabel(const ListItemSpan &item) const;
 
@@ -2003,8 +2013,15 @@ private:
     bool handleAutoPair(QChar typed);
     /// Backspace between an empty pair takes both halves.
     bool deleteAutoPair();
-    /// Enter inside a list item: continue it, or end the list.
-    bool handleListEnter();
+    /// Enter inside a list item: continue it, or end the list. `lineBreak`
+    /// (Shift+Enter) breaks the line inside the item instead.
+    bool handleListEnter(bool lineBreak = false);
+    /// Backspace at the start of an item's text takes the bullet off.
+    bool handleListBackspace();
+    /// Swaps a rewritten list run in as one undo step, splicing only what changed.
+    void commitRun(const Range &run, const QString &before, const QString &after, qsizetype caret);
+    /// A fenced code block holds `offset`: its "- x" lines are code, not items.
+    bool inCodeFenceAt(qsizetype offset) const;
     /// Tab / Shift+Tab on a list item. `direction` is +1 in, -1 out.
     bool handleListIndent(int direction);
     /// The run of consecutive list lines around `offset`: the stretch one
@@ -2177,6 +2194,8 @@ private:
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
     bool m_indentGuides = false;
     bool m_outlineNumbering = false;
+    QString m_listNumberSuffix = QStringLiteral(".");
+    BulletGlyphMap m_bulletGlyphs;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;

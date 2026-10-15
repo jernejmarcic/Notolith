@@ -270,3 +270,8 @@ foreach(test IN LISTS noteappc_tests)
         "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
         "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
 endforeach()
+
+# List editing and display (EditingCommands.cpp, BulletGlyphs.cpp): keys go in as real key events.
+add_executable(test_lists test_lists.cpp)
+target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME lists COMMAND test_lists)

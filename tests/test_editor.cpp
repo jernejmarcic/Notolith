@@ -2262,11 +2262,14 @@ TEST(ListLabelTest, CountedNumbersAndWordStyleOutlines)
     item.shownNumber = 3; // ... as the third item
     item.bullet = QLatin1Char(')');
     item.outline = QStringLiteral("2.3");
-    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3)"));
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3.")) << "the drawn ending is the setting's, not the note's";
+    editor->setListNumberSuffix(QString());
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3)")) << "empty: as written";
+    editor->setListNumberSuffix(QStringLiteral("."));
     editor->setOutlineNumbering(true);
-    EXPECT_EQ(editor->listLabel(item), QStringLiteral("2.3"));
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("2.3."));
     item.outline = QStringLiteral("4"); // the top level keeps its own look
-    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3)"));
+    EXPECT_EQ(editor->listLabel(item), QStringLiteral("3."));
     ListItemSpan bullet;
     EXPECT_TRUE(editor->listLabel(bullet).isEmpty());
 }

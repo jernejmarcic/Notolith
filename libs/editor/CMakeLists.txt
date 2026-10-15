@@ -1,6 +1,8 @@
 add_library(noteAppC_editor STATIC
     BaseBlock.cpp
     BaseResult.h
+    BulletGlyphs.cpp
+    BulletGlyphs.h
     BlockRenderers.cpp
     DisplayMap.cpp
     DisplayMap.h
