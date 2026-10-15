@@ -762,6 +762,8 @@ signals:
     /// The word count moved. It is published with each parse, so it lags a
     /// keystroke by the parse debounce instead of costing the keystroke.
     void wordCountChanged(int words);
+    /// setMode() switched between live preview, source and reading.
+    void modeChanged();
     /// A parse landed, so headings() reflects the current text. Fired even
     /// when the heading list did not actually change - cheap to ignore, and
     /// the outline pane only rebuilds a QTreeWidget from it.

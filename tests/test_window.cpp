@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QLayout>
 #include <QLineEdit>
+#include <QMenu>
 #include <QDialog>
 #include <QPushButton>
 #include <QPainter>
@@ -1111,6 +1112,125 @@ TEST_F(WindowTest, RenamingTheOpenNoteUpdatesLinksAndTheEditorsPath)
     // just Vault::renamePath moving the file.
     EXPECT_EQ(readAll(path(QStringLiteral("Source.md"))), QByteArray("See [[Renamed]].\n"));
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Renamed.md")));
+}
+
+namespace {
+/// The inline title of the tab `editor` is in.
+QLineEdit *titleOf(MarkdownEditor *editor)
+{
+    return editor->parentWidget()->findChild<QLineEdit *>(QStringLiteral("inlineTitle"));
+}
+} // namespace
+
+TEST_F(WindowTest, TheInlineTitleRenamesTheNoteInEveryPaneAndFollowsLinks)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Source.md"), "See [[Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Target.md")));
+    MarkdownEditor *left = window.editor();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    MarkdownEditor *right = window.editor();
+    ASSERT_NE(left, right);
+    QLineEdit *rightTitle = titleOf(right);
+    QLineEdit *leftTitle = titleOf(left);
+    ASSERT_NE(rightTitle, nullptr);
+    ASSERT_NE(leftTitle, nullptr);
+    EXPECT_EQ(rightTitle->text(), QStringLiteral("Target"));
+    EXPECT_FALSE(rightTitle->isReadOnly()) << "a click puts a caret in it";
+
+    // A name Obsidian refuses, an existing note, a dot and nothing at all:
+    // the old title comes back, the file stays, and the status bar says why.
+    for (const QString &bad : {QStringLiteral("a/b"), QStringLiteral("Source"), QStringLiteral(".hidden"),
+                               QStringLiteral("   ")}) {
+        rightTitle->setText(bad);
+        QTest::keyClick(rightTitle, Qt::Key_Return);
+        EXPECT_EQ(rightTitle->text(), QStringLiteral("Target")) << bad.toStdString();
+        EXPECT_TRUE(QFile::exists(path(QStringLiteral("Target.md")))) << bad.toStdString();
+        EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("Could not rename")))
+            << bad.toStdString();
+        window.statusBar()->clearMessage();
+    }
+
+    // Esc gives the edit up.
+    rightTitle->setText(QStringLiteral("Nope"));
+    QTest::keyClick(rightTitle, Qt::Key_Escape);
+    EXPECT_EQ(rightTitle->text(), QStringLiteral("Target"));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Target.md"))));
+
+    // Typing a new name and Enter renames the file through the tree's path.
+    rightTitle->setText(QStringLiteral("Renamed"));
+    QTest::keyClick(rightTitle, Qt::Key_Return);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Target.md"))));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Renamed.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("Source.md"))), QByteArray("See [[Renamed]].\n"));
+    EXPECT_EQ(leftTitle->text(), QStringLiteral("Renamed")) << "the other pane's title follows";
+    EXPECT_EQ(rightTitle->text(), QStringLiteral("Renamed"));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Renamed.md")));
+    EXPECT_TRUE(right->hasFocus()) << "Enter moves on into the note";
+}
+
+TEST_F(WindowTest, TheStatusBarShowsCountsAndSwitchesTheMode)
+{
+    write(QStringLiteral("Target.md"), "---\ntags: [a]\nstatus: draft\n---\nOne two three.\n");
+    write(QStringLiteral("Source.md"), "See [[Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Target.md")));
+    MarkdownEditor *editor = window.editor();
+
+    const auto text = [&window](const char *name) {
+        return window.findChild<QToolButton *>(QLatin1String(name))->text();
+    };
+    WAIT_TRUE(text("backlinkStatus") == QStringLiteral("1 backlink"), 5000);
+    EXPECT_EQ(text("propertyStatus"), QStringLiteral("2 properties"));
+    const auto labels = window.statusBar()->findChildren<QLabel *>();
+    const auto has = [&labels](const QString &wanted) {
+        return std::any_of(labels.begin(), labels.end(), [&wanted](QLabel *label) { return label->text() == wanted; });
+    };
+    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->noteText().size()))), 5000);
+    EXPECT_TRUE(has(QStringLiteral("%1 words").arg(editor->wordCount())));
+    // Typing moves the counts with the next parse, not with a rescan.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("four"));
+    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->noteText().size()))), 5000);
+
+    // The pencil's menu: three modes, the check follows the current one.
+    auto *menu = window.findChild<QMenu *>(QStringLiteral("modeMenu"));
+    ASSERT_NE(menu, nullptr);
+    EXPECT_EQ(menu->actions().size(), 3);
+    const auto checked = [menu]() {
+        for (QAction *action : menu->actions()) {
+            if (action->isChecked())
+                return action->objectName();
+        }
+        return QString();
+    };
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
+    EXPECT_EQ(checked(), QStringLiteral("mode-live"));
+    menu->findChild<QAction *>(QStringLiteral("mode-source"))->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Source);
+    EXPECT_EQ(checked(), QStringLiteral("mode-source"));
+    menu->findChild<QAction *>(QStringLiteral("mode-reading"))->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
+    EXPECT_EQ(checked(), QStringLiteral("mode-reading"));
+    // Ctrl+E from reading returns to what was editing before it.
+    window.toggleReadingView();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::Source);
+    EXPECT_EQ(checked(), QStringLiteral("mode-source")) << "the button follows a shortcut too";
+    menu->findChild<QAction *>(QStringLiteral("mode-live"))->trigger();
+    EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
 }
 
 TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTrashAndClearsTheEditor)

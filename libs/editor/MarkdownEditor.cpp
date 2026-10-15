@@ -326,6 +326,7 @@ void MarkdownEditor::setMode(Mode mode)
     invalidateLayouts();
     updateLayout();
     viewport()->update();
+    emit modeChanged();
 }
 
 void MarkdownEditor::setNoteText(const QString &text)
