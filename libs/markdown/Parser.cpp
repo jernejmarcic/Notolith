@@ -1406,7 +1406,11 @@ void walkItem(MD::Item *item, Walk &walk)
         break;
     }
     case MD::ItemType::TableRow:
-        walkBlock(static_cast<MD::Block *>(item), walk);
+        // A row is an Item holding cells, not a Block: casting it to one read
+        // the cell list through Block's layout (UBSan: downcast of an address
+        // that is not a Block).
+        for (const auto &cell : static_cast<MD::TableRow *>(item)->cells())
+            walkItem(cell.data(), walk);
         break;
     default:
         break;
