@@ -913,3 +913,17 @@ optimal as it can be".
 - [ ] Status bar like Obsidian's ("the bottom thing should be like in
       obsidian"): backlinks, properties, mode icon, words, characters; the
       mode icon opens Reading / Source mode / Live Preview with a check.
+- [ ] Overlapping blocks: two `:::` callouts in a row overlap ("Fix overlapping
+      elements and such"); a check over every demo note that no block rects
+      intersect (bughunt lane).
+- [ ] Hover over a rendered element (callout, embed, table, rendered block)
+      shows the `</>` edit icon, as Obsidian does: "when hovering over rendered
+      elements the code icon should appear to edit the code".
+- [ ] Code blocks, optional "complex mode" beside the default: "It should
+      allow for tabs, icons, custom code color, custom bg color, custom tree
+      sitter color, etc. It should work like the super custom callouts kind of,
+      at least follow the same philosophy". tree-sitter 0.26 is installed with
+      c, lua, markdown, query, vim grammars only.
+- [ ] Study how Obsidian and Zed work with REA, to make the editor better
+      (Jernej's suggestion); findings feed the lanes, behaviour only, no code
+      copied.
