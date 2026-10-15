@@ -46,7 +46,10 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.autoPairs"), true},
         {QStringLiteral("editor.vimMode"), false},
         {QStringLiteral("editor.showIndentGuides"), true},
-        {QStringLiteral("editor.outlineNumbering"), false},
+        // Lists: how ordered numbers and bullets are drawn (display only; the file is CommonMark).
+        {QStringLiteral("editor.listNumberStyle"), QStringLiteral("plain")}, // or "hierarchical": 1., 1.1., 1.2.
+        {QStringLiteral("editor.listNumberSuffix"), QStringLiteral(".")},   // after a drawn number; empty: as written
+        {QStringLiteral("editor.bulletGlyphs"), QStringLiteral("-=dash,*=dot,+=diamond")},
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.tabWidth"), 4},
 

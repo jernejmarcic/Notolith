@@ -109,6 +109,58 @@ inside a Markdown link's text are left as written.
 
 Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
 
+## Lists
+
+Jernej, 2026-10-16, testing the app: "Pressing return after a counter does not
+spawn another like it should", "Numbers should continue logically", "I also
+want different ones (-,*,=) to render differently", and a hierarchical number
+"first number.second number so this would be 1.2.", toggleable, ending in "a ."
+or ":" or literally anything.
+
+**Why Enter did not continue a list.** It did, but only for a bare list: the
+list-line pattern (`EditingCommands.cpp`, `parseListLine`) did not know a quote
+prefix, so `> - x` and `> 1. x` in a quote or callout fell through to a plain
+newline. A line now reads `quote + indent + bullet + spacing + [checkbox]`.
+
+**Keys** (all in `EditingCommands.cpp`, one undo step each, byte-exact apart
+from the numbers they renumber):
+
+| key | on a list item |
+|---|---|
+| Enter | a new item with the same marker and indent (`-`, `*`, `+`, `N.`, `N)`, a task becomes `- [ ] `, inside `> ` too). Ordered counts on and renumbers the items after it. Mid-item it splits the item. An empty item leaves in steps: out of a quote level first (`> - ` becomes `- `), then out one indent level, then the marker goes. |
+| Shift+Enter | a line break inside the item, the text lined up under the first line's; no new bullet |
+| Tab | indents the item from anywhere in it (a tab; four spaces in a quote, where the parser counts columns). An ordered item restarts at 1 in the sub-list, the items below close up. Refused for the first item and for an item already a level below the one above, as CommonMark and Obsidian refuse. |
+| Shift+Tab | outdents; the item continues the parent's numbering |
+| Backspace | at the start of an item's text takes the marker off and leaves the text; the items after it close up |
+
+Tab and Backspace are left alone in a fenced code block and with a selection;
+table cells keep their own Tab (`TableCells.cpp`). Enter in a code fence is a
+plain newline.
+
+Renumbering covers the item's own list run only - its items, the wrapped lines
+and blank lines between them, in the same quote - and only from the edited line
+down, and it stops at the first later sibling that already carries the right number (as Obsidian does): items above it and a different list (another bullet or delimiter, as
+CommonMark counts) are not touched. A 5 000-item list takes about 2 ms.
+
+**Display (live preview only; the file stays CommonMark).** The marker shows
+its real source under the caret, as every marker does. Drawn numbers use
+tabular figures, so a column of them lines up.
+
+| setting | default | what |
+|---|---|---|
+| `editor.listNumberStyle` | `plain` | `plain` draws each list counting on its own (`1.` `2.`); `hierarchical` composes a nested item's number from the items it sits in (`1.` then `1.1.` `1.2.` then `1.2.1.`). Replaces `editor.outlineNumbering`. |
+| `editor.listNumberSuffix` | `.` | what follows a drawn number: `.` `:` `)` or any short text. Empty draws the delimiter the note was written with. |
+| `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
+
+`=` is not a CommonMark list marker (`- [ ]`, `* ` and `+ ` are), so it cannot
+be mapped; the three real ones can. The glyphs are painted in
+`BulletGlyphs.cpp` with the muted text colour; the dash is a rounded bar wider
+than a dot, the dot a filled circle, the diamond a small rhombus.
+
+`tests/test_lists.cpp` covers every key (asserting the whole note, the caret and
+undo), the glyph map, the pixels the editor paints per marker, the number labels
+and the timing.
+
 ## Vim key bindings
 
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).

@@ -73,7 +73,8 @@ QChar pairCloser(QChar open, bool markdown)
 /// while the reader is typing and these commands must not be.
 struct ListLine {
     bool valid = false;
-    QString indent;   ///< the leading whitespace, verbatim
+    QString quote;    ///< "> " or "> > " when the item sits in a quote or callout, verbatim
+    QString indent;   ///< the whitespace between the quote and the bullet, verbatim
     QString bullet;   ///< "-", "*", "+", "1." or "1)"
     QString spacing;  ///< the whitespace after the bullet
     QString checkbox; ///< "[ ] " including its trailing space, or empty
@@ -82,74 +83,135 @@ struct ListLine {
     int number = 0;
     qsizetype checkboxColumn = -1; ///< column of the "[" in the line
     qsizetype contentColumn = 0;   ///< column where the item's own text starts
+
+    /// What makes two items one list: the bullet character, or an ordered
+    /// item's delimiter. CommonMark starts a new list when it changes.
+    QString kind() const { return ordered ? bullet.right(1) : bullet; }
+    /// The item's depth for comparing with its neighbours; a tab counts four.
+    qsizetype width() const
+    {
+        qsizetype width = 0;
+        for (const QChar c : indent)
+            width += c == QLatin1Char('\t') ? 4 : 1;
+        return width;
+    }
 };
 
-ListLine parseListLine(const QString &line)
+ListLine parseListLine(QStringView line)
 {
+    // The quote prefix is `>` with at most one space after it, so a quoted
+    // item's own indentation is what comes after that one space.
     static const QRegularExpression head(QStringLiteral(
-        "^([ \\t]*)([-*+]|\\d+[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
 
-    const auto match = head.match(line);
+    const auto match = head.matchView(line);
     ListLine item;
     if (!match.hasMatch())
         return item;
 
     item.valid = true;
-    item.indent = match.captured(1);
-    item.bullet = match.captured(2);
-    item.spacing = match.captured(3);
-    item.checkbox = match.captured(4);
+    item.quote = match.captured(1);
+    item.indent = match.captured(2);
+    item.bullet = match.captured(3);
+    item.spacing = match.captured(4);
+    item.checkbox = match.captured(5);
     item.ordered = item.bullet.size() > 1;
     item.number = item.ordered ? item.bullet.chopped(1).toInt() : 0;
-    item.done = match.captured(5).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
+    item.done = match.captured(6).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
     if (!item.checkbox.isEmpty())
-        item.checkboxColumn = match.capturedStart(4);
+        item.checkboxColumn = match.capturedStart(5);
     item.contentColumn = match.capturedEnd(0);
     return item;
 }
 
-/// Renumbers the ordered items of a run in place, per indent level. The
-/// outermost level keeps the number it already had, so a list written as
-/// "5. 6. 7." stays at 5; a level that is entered by indenting restarts at 1,
-/// which is what Obsidian does.
-void renumber(QStringList &lines)
+/// Renumbers the ordered items of a run in place, per indent level, from line
+/// `from` down. Lines above it are read, never rewritten: a list written as
+/// "5. 6. 7." stays at 5, and an irregular "1. 1. 1." is left as typed until an
+/// edit reaches it. A level that opens below `from` restarts at 1, which is
+/// what Obsidian does when an item is indented. A line that is not a list item
+/// (a wrapped continuation, or an item whose marker was just removed) is passed
+/// over, so the items after it carry on counting, as CommonMark reads them.
+/// Rewriting stops at the first later item at `stopWidth` that already carries
+/// the number it should (Obsidian does the same), which bounds the cost of an
+/// edit in a long list and leaves what follows as typed.
+void renumber(QStringList &lines, qsizetype from, qsizetype stopWidth = -1)
 {
     struct Level {
         qsizetype width = 0;
         int next = 1;
+        QString kind;
     };
     QList<Level> stack;
 
-    for (QString &line : lines) {
+    for (qsizetype i = 0; i < lines.size(); ++i) {
+        QString &line = lines[i];
         const ListLine item = parseListLine(line);
         if (!item.valid)
             continue;
 
-        const qsizetype width = item.indent.size();
+        const qsizetype width = item.width();
         while (!stack.isEmpty() && stack.last().width > width)
             stack.removeLast();
-        if (stack.isEmpty())
-            stack.append({width, item.number > 0 ? item.number : 1});
-        else if (stack.last().width < width)
-            stack.append({width, 1});
+        const bool rewriting = i >= from;
+        if (stack.isEmpty() || stack.last().width < width) {
+            const int first = !rewriting || stack.isEmpty() ? (item.ordered ? item.number : 1) : 1;
+            stack.append({width, first, item.kind()});
+        } else if (stack.last().kind != item.kind()) {
+            // A new bullet or delimiter is a new list, which counts from its own number.
+            stack.last().kind = item.kind();
+            stack.last().next = qMax(item.number, 1);
+        }
 
         if (!item.ordered)
             continue;
 
         Level &level = stack.last();
-        const QString wanted = QString::number(level.next) + item.bullet.right(1);
-        line.replace(item.indent.size(), item.bullet.size(), wanted);
+        if (rewriting && i > from && width == stopWidth && item.number == level.next)
+            break;
+        if (rewriting) {
+            const QString wanted = QString::number(level.next) + item.bullet.right(1);
+            line.replace(item.quote.size() + item.indent.size(), item.bullet.size(), wanted);
+        } else {
+            level.next = item.number;
+        }
         ++level.next;
     }
 }
 
 /// One level of list indentation. Obsidian's default is a tab, and the
-/// parser counts one tab as one level, so anything else would render nested
-/// items at the wrong depth.
-const QString &indentUnit()
+/// parser counts one tab as one level - except inside a quote, where it
+/// measures columns from the line start and wants spaces.
+QString indentUnit(const ListLine &item)
 {
-    static const QString unit = QStringLiteral("\t");
-    return unit;
+    return item.quote.isEmpty() ? QStringLiteral("\t") : QStringLiteral("    ");
+}
+
+/// How many characters of `item`'s indent one outdent takes off.
+qsizetype outdentWidth(const ListLine &item)
+{
+    const QString unit = indentUnit(item);
+    return item.indent.startsWith(unit) ? unit.size() : qMin<qsizetype>(4, item.indent.size());
+}
+
+/// The kinds of line a list run is made of.
+enum class RunLine { Item, Continuation, Blank, Other };
+
+RunLine classify(QStringView line, const ListLine &base)
+{
+    const ListLine item = parseListLine(line);
+    // Another quote depth is another list.
+    if (item.valid)
+        return item.quote.count(QLatin1Char('>')) == base.quote.count(QLatin1Char('>')) ? RunLine::Item
+                                                                                         : RunLine::Other;
+    static const QRegularExpression quotePrefix(QStringLiteral("^(?:[ \\t]*>[ \\t]?)*"));
+    const auto prefix = quotePrefix.matchView(line);
+    const QStringView quote = line.left(prefix.capturedLength());
+    if (quote.count(u'>') != base.quote.count(QLatin1Char('>')))
+        return RunLine::Other;
+    const QStringView rest = line.mid(quote.size());
+    if (rest.trimmed().isEmpty())
+        return RunLine::Blank;
+    return rest.at(0) == u' ' || rest.at(0) == u'\t' ? RunLine::Continuation : RunLine::Other;
 }
 
 } // namespace
@@ -240,52 +302,122 @@ bool MarkdownEditor::deleteAutoPair()
 
 // --- list continuation ----------------------------------------------------
 
-bool MarkdownEditor::handleListEnter()
+namespace {
+
+/// Splices `lines` over `run` in place of what is there - but only the stretch
+/// that differs, so an edit near the top of a long list does not rewrite (and
+/// re-decorate) all of it, and what did not change stays byte for byte.
+struct RunEdit {
+    qsizetype at;
+    qsizetype removed;
+    QString inserted;
+};
+
+RunEdit diffRun(const QString &before, const QString &after, qsizetype runStart)
+{
+    qsizetype prefix = 0;
+    const qsizetype shortest = qMin(before.size(), after.size());
+    while (prefix < shortest && before.at(prefix) == after.at(prefix))
+        ++prefix;
+    qsizetype suffix = 0;
+    while (suffix < shortest - prefix
+           && before.at(before.size() - 1 - suffix) == after.at(after.size() - 1 - suffix))
+        ++suffix;
+    return {runStart + prefix, before.size() - prefix - suffix,
+            after.mid(prefix, after.size() - prefix - suffix)};
+}
+
+} // namespace
+
+bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
+{
+    // ponytail: reads the debounced decorations, so a fence typed within the
+    // last parse delay is not seen yet; the parse is the upgrade path.
+    // Sorted by start, and a note can hold thousands: the last fence that
+    // begins at or before the offset is the only one that can hold it.
+    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    const auto next = std::upper_bound(fences.cbegin(), fences.cend(), offset,
+                                       [](qsizetype at, const CodeFenceSpan &fence) {
+                                           return at < fence.block.start;
+                                       });
+    for (auto it = next; it != fences.cbegin();) {
+        --it;
+        if (it->block.contains(offset))
+            return true;
+        if (it->block.end < offset && it->depth == 0)
+            break;
+    }
+    return false;
+}
+
+bool MarkdownEditor::handleListEnter(bool lineBreak)
 {
     if (m_mode == Mode::Reading || selection().length() > 0)
         return false;
 
     const qsizetype lineStart = lineStartOf(m_text, m_cursor);
     const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const ListLine item = parseListLine(m_text.mid(lineStart, lineEnd - lineStart));
+    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
     if (!item.valid)
         return false;
     // Enter inside the marker itself is just a newline.
     if (m_cursor < lineStart + item.contentColumn)
         return false;
+    // A listing is text: "- x" inside a fence is code, not a list.
+    if (inCodeFenceAt(m_cursor))
+        return false;
+
+    if (lineBreak) {
+        // Shift+Enter: a line break that stays in this item, its text lined up
+        // under the first line's. No new bullet, no renumbering.
+        insertText(QLatin1Char('\n') + item.quote + item.indent
+                   + QString(item.contentColumn - item.quote.size() - item.indent.size(), QLatin1Char(' ')));
+        return true;
+    }
 
     // The whole run is rewritten in one splice so that the renumbering below
     // is part of the same edit, and so undo takes the caret back in one step.
     const Range run = listRun(m_cursor);
-    QStringList lines = m_text.mid(run.start, run.length()).split(QLatin1Char('\n'));
+    const QString before = m_text.mid(run.start, run.length());
+    QStringList lines = before.split(QLatin1Char('\n'));
     const qsizetype index = m_text.mid(run.start, lineStart - run.start)
                                 .count(QLatin1Char('\n'));
     const qsizetype column = m_cursor - lineStart;
 
     qsizetype caretLine = index;
     qsizetype caretColumn = 0;
+    qsizetype from = index;
+    qsizetype stopWidth = item.width();
 
     const QString content = m_text.mid(lineStart + item.contentColumn,
                                        lineEnd - lineStart - item.contentColumn);
     if (content.trimmed().isEmpty()) {
-        // An empty item ends the list - after stepping out one level first,
-        // if there is a level to step out of.
-        if (!item.indent.isEmpty()) {
-            QString &line = lines[int(index)];
-            const qsizetype removed = line.startsWith(indentUnit())
-                                          ? indentUnit().size()
-                                          : qMin<qsizetype>(4, item.indent.size());
-            line.remove(0, removed);
+        // An empty item leaves the list in steps, as Obsidian does: out of a
+        // quote level first, then out one indent level, then the marker goes.
+        QString &line = lines[int(index)];
+        if (!item.quote.isEmpty()) {
+            const qsizetype last = item.quote.lastIndexOf(QLatin1Char('>'));
+            const qsizetype previous = last > 0 ? item.quote.lastIndexOf(QLatin1Char('>'), last - 1) : -1;
+            qsizetype groupStart = previous < 0 ? 0 : previous + 1;
+            if (previous >= 0 && groupStart < item.quote.size() && item.quote.at(groupStart) == QLatin1Char(' '))
+                ++groupStart;
+            line.remove(groupStart, item.quote.size() - groupStart);
+            caretColumn = item.contentColumn - (item.quote.size() - groupStart);
+            stopWidth = item.width();
+        } else if (!item.indent.isEmpty()) {
+            const qsizetype removed = outdentWidth(item);
+            line.remove(item.quote.size(), removed);
             caretColumn = item.contentColumn - removed;
+            stopWidth = item.width() - removed;
         } else {
-            lines[int(index)].remove(0, item.contentColumn);
-            caretColumn = 0;
+            line.remove(item.quote.size(), item.contentColumn - item.quote.size());
+            caretColumn = item.quote.size();
         }
     } else {
         // Split the item at the caret; what followed becomes the new item.
         const QString tail = lines.at(int(index)).mid(column);
         lines[int(index)].truncate(int(column));
-        QString marker = item.indent;
+        QString marker = item.quote + item.indent;
         marker += item.ordered ? QString::number(item.number + 1) + item.bullet.right(1)
                                : item.bullet;
         marker += item.spacing;
@@ -294,99 +426,160 @@ bool MarkdownEditor::handleListEnter()
         lines.insert(int(index) + 1, marker + tail);
         caretLine = index + 1;
         caretColumn = marker.size();
+        from = index + 1;
     }
 
-    renumber(lines);
+    const qsizetype sizeBefore = lines.at(int(caretLine)).size();
+    renumber(lines, from, stopWidth);
+    // A number can change width (9 to 10), and the caret sits after it.
+    caretColumn += lines.at(int(caretLine)).size() - sizeBefore;
 
     qsizetype caret = run.start;
     for (qsizetype i = 0; i < caretLine; ++i)
         caret += lines.at(int(i)).size() + 1;
     caret += caretColumn;
 
-    pushUndo();
-    m_lastEdit.invalidate();
-    applyEdit(run.start, run.length(), lines.join(QLatin1Char('\n')));
-    setSelectionRange(caret, caret);
+    commitRun(run, before, lines.join(QLatin1Char('\n')), caret);
     return true;
 }
 
 bool MarkdownEditor::handleListIndent(int direction)
 {
-    if (m_mode == Mode::Reading || direction == 0)
+    if (m_mode == Mode::Reading || direction == 0 || selection().length() > 0)
         return false;
 
     const qsizetype lineStart = lineStartOf(m_text, m_cursor);
     const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const ListLine item = parseListLine(m_text.mid(lineStart, lineEnd - lineStart));
-    if (!item.valid)
-        return false;
-    // Tab indents from the marker; further in it is still a tab character.
-    // Shift+Tab has nothing else to mean, so it outdents from anywhere.
-    if (direction > 0 && m_cursor > lineStart + item.contentColumn)
+    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
+    if (!item.valid || inCodeFenceAt(m_cursor))
         return false;
     if (direction < 0 && item.indent.isEmpty())
         return true; // already flush left: swallow the key, change nothing
 
     const Range run = listRun(m_cursor);
-    QStringList lines = m_text.mid(run.start, run.length()).split(QLatin1Char('\n'));
+    const QString before = m_text.mid(run.start, run.length());
+    QStringList lines = before.split(QLatin1Char('\n'));
     const qsizetype index = m_text.mid(run.start, lineStart - run.start)
                                 .count(QLatin1Char('\n'));
-    // CommonMark cannot nest the first item of a list under nothing, and
-    // Obsidian refuses the same keystroke.
-    if (direction > 0 && index == 0)
-        return true;
-
-    QString &line = lines[int(index)];
-    qsizetype shift = 0;
     if (direction > 0) {
-        line.prepend(indentUnit());
-        shift = indentUnit().size();
-    } else {
-        const qsizetype removed = line.startsWith(indentUnit())
-                                      ? indentUnit().size()
-                                      : qMin<qsizetype>(4, item.indent.size());
-        line.remove(0, removed);
-        shift = -removed;
+        // CommonMark cannot nest the first item of a list under nothing, and
+        // Obsidian refuses the same keystroke; nor does it go a level deeper
+        // than the item above it.
+        qsizetype above = index - 1;
+        while (above >= 0 && !parseListLine(lines.at(int(above))).valid)
+            --above;
+        if (above < 0 || item.width() > parseListLine(lines.at(int(above))).width())
+            return true;
     }
 
-    renumber(lines);
+    QString &line = lines[int(index)];
+    const qsizetype sizeBefore = line.size();
+    if (direction > 0)
+        line.insert(item.quote.size(), indentUnit(item));
+    else
+        line.remove(item.quote.size(), outdentWidth(item));
 
+    renumber(lines, index, parseListLine(lines.at(int(index))).width());
+
+    // The caret keeps its place in the text; one inside the marker goes to
+    // where the item's text now starts.
+    const ListLine moved = parseListLine(lines.at(int(index)));
+    const qsizetype oldColumn = m_cursor - lineStart;
+    const qsizetype newColumn = oldColumn < item.contentColumn
+                                    ? (moved.valid ? moved.contentColumn : 0)
+                                    : oldColumn + lines.at(int(index)).size() - sizeBefore;
     qsizetype caret = run.start;
     for (qsizetype i = 0; i < index; ++i)
         caret += lines.at(int(i)).size() + 1;
-    // Renumbering can change the marker's width, so measure it again.
-    const ListLine moved = parseListLine(lines.at(int(index)));
-    caret += qMax<qsizetype>(m_cursor - lineStart + shift,
-                             moved.valid ? moved.contentColumn : 0);
+    caret += newColumn;
 
+    commitRun(run, before, lines.join(QLatin1Char('\n')), caret);
+    return true;
+}
+
+bool MarkdownEditor::handleListBackspace()
+{
+    if (m_mode == Mode::Reading || selection().length() > 0 || m_cursor == 0)
+        return false;
+    // A marker ends in whitespace, and this runs on every Backspace.
+    const QChar before = m_text.at(m_cursor - 1);
+    if (before != QLatin1Char(' ') && before != QLatin1Char('\t'))
+        return false;
+
+    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
+    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
+    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
+    // Only at the very start of the item's text: Backspace there takes the
+    // bullet (or number) off and leaves the text, as Obsidian does.
+    if (!item.valid || m_cursor != lineStart + item.contentColumn || inCodeFenceAt(m_cursor))
+        return false;
+
+    const Range run = listRun(m_cursor);
+    const QString beforeRun = m_text.mid(run.start, run.length());
+    QStringList lines = beforeRun.split(QLatin1Char('\n'));
+    const qsizetype index = m_text.mid(run.start, lineStart - run.start).count(QLatin1Char('\n'));
+    const qsizetype markerStart = item.quote.size() + item.indent.size();
+    lines[int(index)].remove(markerStart, item.contentColumn - markerStart);
+    renumber(lines, index, item.width()); // the items after it close up
+
+    qsizetype caret = run.start + markerStart;
+    for (qsizetype i = 0; i < index; ++i)
+        caret += lines.at(int(i)).size() + 1;
+
+    commitRun(run, beforeRun, lines.join(QLatin1Char('\n')), caret);
+    return true;
+}
+
+void MarkdownEditor::commitRun(const Range &run, const QString &before, const QString &after,
+                               qsizetype caret)
+{
+    // Its own undo step, even straight after typing; undo then takes the
+    // whole structural edit back, text and caret.
+    m_lastEdit.invalidate();
     pushUndo();
     m_lastEdit.invalidate();
-    applyEdit(run.start, run.length(), lines.join(QLatin1Char('\n')));
+    const RunEdit edit = diffRun(before, after, run.start);
+    applyEdit(edit.at, edit.removed, edit.inserted);
     setSelectionRange(caret, caret);
-    return true;
 }
 
 Range MarkdownEditor::listRun(qsizetype offset) const
 {
-    // ponytail: a wrapped continuation line under an item ends the run, so a
-    // list broken across paragraphs renumbers in pieces. Widen this when a
-    // note that does that turns up.
-    qsizetype start = lineStartOf(m_text, offset);
-    while (start > 0) {
-        const qsizetype previous = lineStartOf(m_text, start - 1);
-        if (!parseListLine(m_text.mid(previous, lineEndOf(m_text, previous) - previous)).valid)
+    // The stretch of list items around `offset`, with the wrapped lines and
+    // blank lines between them: a loose or multi-paragraph list is still one
+    // list, and the items after an insert have to count on past them. It
+    // ends at the first line that is neither, or that is in another quote.
+    const qsizetype here = lineStartOf(m_text, offset);
+    const ListLine base = parseListLine(QStringView(m_text).mid(here, lineEndOf(m_text, here) - here));
+    const auto lineAt = [this](qsizetype start) {
+        return QStringView(m_text).mid(start, lineEndOf(m_text, start) - start);
+    };
+
+    qsizetype start = here;
+    qsizetype cursor = here;
+    while (cursor > 0) {
+        const qsizetype previous = lineStartOf(m_text, cursor - 1);
+        const RunLine kind = classify(lineAt(previous), base);
+        if (kind == RunLine::Other)
             break;
-        start = previous;
+        cursor = previous;
+        if (kind == RunLine::Item)
+            start = previous;
     }
 
-    qsizetype end = lineEndOf(m_text, offset);
-    while (end < m_text.size()) {
-        const qsizetype next = end + 1;
-        if (!parseListLine(m_text.mid(next, lineEndOf(m_text, next) - next)).valid)
+    qsizetype end = lineEndOf(m_text, here);
+    qsizetype pending = end; // the end of the last item line seen
+    cursor = end;
+    while (cursor < m_text.size()) {
+        const qsizetype next = cursor + 1;
+        const RunLine kind = classify(lineAt(next), base);
+        if (kind == RunLine::Other)
             break;
-        end = lineEndOf(m_text, next);
+        cursor = lineEndOf(m_text, next);
+        if (kind == RunLine::Item)
+            pending = cursor;
     }
-    return {start, end};
+    return {start, pending};
 }
 
 // --- checkboxes -----------------------------------------------------------

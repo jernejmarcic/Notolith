@@ -396,3 +396,11 @@ TEST(Hotkeys, noteAppCsOwnFileWinsOverTheVaultsAndIsTheOnlyOneWritten)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+
+TEST(SettingsTest, ListDisplayDefaults)
+{
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.listNumberStyle")).toString(), QStringLiteral("plain"));
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.listNumberSuffix")).toString(), QStringLiteral("."));
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.bulletGlyphs")).toString(),
+              QStringLiteral("-=dash,*=dot,+=diamond"));
+}

@@ -1024,7 +1024,9 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setVimMode(m_settings.boolean(QStringLiteral("editor.vimMode")));
     editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
     editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
-    editor->setOutlineNumbering(m_settings.boolean(QStringLiteral("editor.outlineNumbering")));
+    editor->setOutlineNumbering(m_settings.text(QStringLiteral("editor.listNumberStyle")) == QLatin1String("hierarchical"));
+    editor->setListNumberSuffix(m_settings.text(QStringLiteral("editor.listNumberSuffix")));
+    editor->setBulletGlyphs(m_settings.text(QStringLiteral("editor.bulletGlyphs")));
     editor->setAlignTables(m_settings.boolean(QStringLiteral("editor.alignTables")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));

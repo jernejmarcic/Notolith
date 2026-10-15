@@ -479,6 +479,32 @@ void MarkdownEditor::setOutlineNumbering(bool on)
     viewport()->update();
 }
 
+void MarkdownEditor::setListNumberSuffix(const QString &suffix)
+{
+    if (m_listNumberSuffix == suffix)
+        return;
+    m_listNumberSuffix = suffix;
+    // The labels' widths set the lists' columns, as outline numbering's do.
+    for (BlockView &block : m_blocks) {
+        if (block.listTextX.empty())
+            continue;
+        block.layout.reset();
+        block.laidOut = false;
+        block.heightEstimated = false;
+    }
+    updateLayout();
+    viewport()->update();
+}
+
+void MarkdownEditor::setBulletGlyphs(const QString &spec)
+{
+    const BulletGlyphMap map = BulletGlyphMap::parse(spec);
+    if (map == m_bulletGlyphs)
+        return;
+    m_bulletGlyphs = map;
+    viewport()->update(); // drawn in the margin; nothing moves
+}
+
 void MarkdownEditor::setTabWidth(int spaces)
 {
     m_tabWidth = qBound(1, spaces, 8);
@@ -1696,15 +1722,26 @@ std::span<const ListItemSpan> MarkdownEditor::listItemsIn(const Range &block) co
     return {items.constData() + (first - items.cbegin()), size_t(last - first)};
 }
 
+/// Equal-width digits, so a column of numbers lines up as Obsidian's do.
+static QFont tabularFigures(QFont font)
+{
+    font.setFeature(QFont::Tag("tnum"), 1);
+    return font;
+}
+
 QString MarkdownEditor::listLabel(const ListItemSpan &item) const
 {
     if (!item.ordered)
         return {};
-    // Word's multilevel style: "1." at the top, then "1.1", "1.2.1".
+    // Word's multilevel style: "1." at the top, then "1.1.", "1.2.1.".
+    QString body;
     if (m_outlineNumbering && item.outline.contains(QLatin1Char('.')))
-        return item.outline;
-    const int number = item.shownNumber > 0 ? item.shownNumber : item.number;
-    return QString::number(number) + (item.bullet.isNull() ? QLatin1Char('.') : item.bullet);
+        body = item.outline;
+    else
+        body = QString::number(item.shownNumber > 0 ? item.shownNumber : item.number);
+    if (m_listNumberSuffix.isEmpty()) // as the note wrote it
+        return body + (item.bullet.isNull() ? QLatin1Char('.') : item.bullet);
+    return body + m_listNumberSuffix;
 }
 
 void MarkdownEditor::layoutListColumns(BlockView &view) const
@@ -1732,7 +1769,7 @@ void MarkdownEditor::layoutListColumns(BlockView &view) const
     }
 
     // Siblings share a column as wide as their widest label.
-    const QFontMetricsF metrics(fontFor(view.span));
+    const QFontMetricsF metrics(tabularFigures(fontFor(view.span)));
     QHash<qint64, qreal> columns; // (parent, level) -> width
     const auto keyOf = [&](size_t i) { return (qint64(view.listParent[i]) << 16) ^ items[i].indent; };
     for (size_t i = 0; i < items.size(); ++i) {
@@ -1849,29 +1886,17 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         painter.save();
         painter.setPen(muted);
         if (item.ordered) {
-            painter.setFont(view.layout->font());
+            const QFont numbers = tabularFigures(view.layout->font());
+            painter.setFont(numbers);
             const QString label = listLabel(item);
-            const qreal width = QFontMetricsF(view.layout->font()).horizontalAdvance(label);
+            const qreal width = QFontMetricsF(numbers).horizontalAdvance(label);
             painter.drawText(QRectF(textX - 8 - width - 2, baseline, width + 2, line.height()),
                              Qt::AlignRight | Qt::AlignVCenter, label);
         } else {
-            // One look per way of writing a bullet: "-" a dot, "*" a ring,
-            // "+" a square.
-            const QPointF centre(textX - 12, baseline + line.height() / 2);
-            painter.setRenderHint(QPainter::Antialiasing);
-            if (item.bullet == QLatin1Char('*')) {
-                painter.setPen(QPen(muted, 1.2));
-                painter.setBrush(Qt::NoBrush);
-                painter.drawEllipse(centre, 2.6, 2.6);
-            } else if (item.bullet == QLatin1Char('+')) {
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(muted);
-                painter.drawRect(QRectF(centre.x() - 2.2, centre.y() - 2.2, 4.4, 4.4));
-            } else {
-                painter.setPen(Qt::NoPen);
-                painter.setBrush(muted);
-                painter.drawEllipse(centre, 2, 2);
-            }
+            // One look per way of writing a bullet, set in Settings.
+            paintBulletGlyph(painter, m_bulletGlyphs.glyphFor(item.bullet), item.bullet,
+                             QPointF(textX - 12, baseline + line.height() / 2), muted,
+                             view.layout->font());
         }
         painter.restore();
     }
@@ -4299,7 +4324,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     }
     case Qt::Key_Backspace:
-        if (!deleteAutoPair())
+        if (!deleteAutoPair() && !handleListBackspace())
             removeSelectionOrChar(-1);
         updateSuggestions();
         updateSlashSuggestions();
@@ -4309,7 +4334,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        if (!handleHTMLenter() && !handleListEnter())
+        if (!handleHTMLenter() && !handleListEnter(shift))
             insertText(QStringLiteral("\n"));
         return;
     case Qt::Key_Tab:
