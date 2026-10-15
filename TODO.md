@@ -886,3 +886,23 @@ optimal as it can be".
       Waiting on Jernej: `cargo install mermaid-rs-renderer` (asked 2026-10-02);
       then check mmdr's real `-c` keys and dark output. Left: publish/PDF use
       the cached SVG. Disk cache pruned (30 days / 50 MB) on first use.
+
+## Requested 2026-10-16 (from the running app)
+- [x] Caret ran far taller than its line ("Cursor blinker really big"): now the
+      line's own height; the blink repaints only the caret.
+- [ ] Inline title: "Cant click on title to change it like in Obsidian" - click
+      the title over the note, edit, Enter/focus-out renames the file (links
+      updated like any rename), Esc cancels.
+- [ ] Lists: Enter after a list item starts the next item ("Pressing return
+      after a counter ... does not spawn another like it should"); numbers
+      continue ("Numbers should continue logically"); Enter on an empty item
+      ends the list; Tab indents and restarts numbering.
+- [ ] Bullet glyph per marker: "I also want different ones (-,*,=) to render
+      differently ... be creative with that one, setting should have a way to
+      map these". (`=` is no CommonMark marker; `-` `*` `+` are.)
+- [ ] Nested ordered numbers shown hierarchically, "first number.second
+      number so this would be 1.2."; toggleable. The number's terminator shown
+      as `.` or `:` "or literally anything", a setting. Display only: the file
+      keeps CommonMark `1.`.
+- [ ] Refine the look ("Make look prettier" on a popup menu; "the general
+      design is fine, I just want refinements"): menus, popups, small polish.
