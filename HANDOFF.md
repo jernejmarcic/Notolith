@@ -172,6 +172,16 @@ cmake --build /tmp/noteAppC-asan
 ASAN_OPTIONS=detect_leaks=0 QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/noteAppC-asan
 ```
 
+What a clean ASan run still reports, none of it a noteAppC bug (2026-10-16):
+the suites that start a plugin host (`plugins_host`, `ai_plugin`, and
+`WindowTest.APluginReadsNothingOfAnEncryptedNote`) fail because the host is
+started under `RLIMIT_AS`, and ASan maps terabytes of shadow memory; and the
+`*Perf*`/`*Budget*`/`OpeningAMegabyteNoteIsImmediate` timing guards, which
+ASan slows past their limits. `NOTEAPPC_DEMO_SHOTS=<dir>` makes
+`test_demo` write one PNG per demo note and mode there, for looking at; the
+same test fails on any `qWarning` outside its short allowlist and on two
+neighbouring blocks whose painted boxes overlap (`MarkdownEditor::blockBoxes`).
+
 Render the window offscreen, which is how the look gets reviewed without a
 display:
 

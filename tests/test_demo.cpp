@@ -15,12 +15,18 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QImage>
+#include <QListWidget>
+#include <QScrollBar>
 #include <QAction>
+#include <QDir>
 #include <QSignalSpy>
+#include <QTimer>
+#include <QWidget>
 #include <QTest>
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <functional>
 
 #include "WaitFor.h"
 #include "Index.h"
@@ -80,6 +86,83 @@ qint64 totalVaultBytes()
     return total;
 }
 
+// Every qWarning/qCritical/qFatal the walk below emits. A demo file that makes
+// the app complain (a bad regex, a null pixmap, a QObject::connect that found
+// no signal) is a bug even when nothing crashes, and nobody reads the console
+// while a test runs. Collected by a message handler installed in main().
+QStringList g_messages;
+
+void collectMessage(QtMsgType type, const QMessageLogContext &, const QString &message)
+{
+    if (type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg)
+        g_messages << message;
+    else
+        return;
+    fprintf(stderr, "%s\n", qPrintable(message));
+}
+
+// Messages that come from the offscreen platform or the harness rather than
+// from noteAppC, one substring each. Keep it short; anything new is a failure.
+const QStringList &allowedMessages()
+{
+    static const QStringList allowed{
+        // The offscreen QPA plugin has no window manager to propagate hints to.
+        QStringLiteral("This plugin does not support propagateSizeHints"),
+        QStringLiteral("This plugin does not support grabbing the keyboard"),
+        QStringLiteral("This plugin does not support raise()"),
+    };
+    return allowed;
+}
+
+QStringList unexpectedMessages()
+{
+    QStringList bad;
+    for (const QString &message : std::as_const(g_messages)) {
+        const bool allowed = std::any_of(allowedMessages().cbegin(), allowedMessages().cend(),
+                                         [&](const QString &needle) { return message.contains(needle); });
+        if (!allowed)
+            bad << message;
+    }
+    return bad;
+}
+
+// Where two neighbouring blocks' boxes cross, or empty. The note is scrolled
+// through first so every block is laid out for real, not at its estimate.
+QString firstBlockOverlap(MarkdownEditor *editor)
+{
+    QScrollBar *bar = editor->verticalScrollBar();
+    const int step = qMax(100, editor->viewport()->height() / 2);
+    QString found;
+    for (int at = 0; at <= bar->maximum() + step && found.isEmpty(); at += step) {
+        bar->setValue(at);
+        QList<MarkdownEditor::BlockBox> boxes = editor->blockBoxes();
+        boxes.removeIf([](const MarkdownEditor::BlockBox &box) { return box.rect.isEmpty(); });
+        for (qsizetype i = 1; i < boxes.size(); ++i) {
+            if (boxes.at(i).rect.top() < boxes.at(i - 1).rect.bottom() - 0.01) {
+                found = QStringLiteral("block at source %1 starts %2 px inside the one before it")
+                            .arg(boxes.at(i).source.start)
+                            .arg(boxes.at(i - 1).rect.bottom() - boxes.at(i).rect.top());
+                break;
+            }
+        }
+    }
+    bar->setValue(0);
+    return found;
+}
+
+// Writes the grab as <NOTEAPPC_DEMO_SHOTS>/<vault-relative path, / as __>.<mode>.png
+// when that variable is set, for looking at the renders by eye. Scratch only.
+void maybeSaveShot(const QImage &image, const QString &path, const char *mode)
+{
+    const QString dir = qEnvironmentVariable("NOTEAPPC_DEMO_SHOTS");
+    if (dir.isEmpty())
+        return;
+    QDir().mkpath(dir);
+    QString name = QDir(vaultPath()).relativeFilePath(path);
+    name.replace(QLatin1Char('/'), QLatin1String("__"));
+    image.save(QStringLiteral("%1/%2.%3.png").arg(dir, name, QLatin1String(mode)));
+}
+
 } // namespace
 
 TEST(DemoVaultTest, StaysUnderTheFiveMegabyteBudget)
@@ -117,6 +200,7 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
 
     const QStringList files = demoFiles();
     ASSERT_FALSE(files.isEmpty());
+    g_messages.clear();
 
     for (const QString &path : files) {
         SCOPED_TRACE(path.toStdString());
@@ -126,6 +210,7 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
 
         const QImage livePreview = window.grab().toImage();
         EXPECT_FALSE(livePreview.isNull());
+        maybeSaveShot(livePreview, path, "live");
 
         // Reading and live-preview mode only mean anything for a Markdown
         // note - a canvas or base file has no editor mode to switch. Through
@@ -136,11 +221,21 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
             QAction *toggle = window.findChild<QAction *>(QStringLiteral("markdown:toggle-preview"));
             ASSERT_NE(toggle, nullptr);
 
+            EXPECT_EQ(firstBlockOverlap(editor).toStdString(), "") << "live preview";
+            editor->setMode(MarkdownEditor::Mode::Source);
+            QApplication::processEvents();
+            const QImage source = window.grab().toImage();
+            EXPECT_FALSE(source.isNull());
+            maybeSaveShot(source, path, "source");
+            editor->setMode(MarkdownEditor::Mode::LivePreview);
+
             toggle->trigger();
             ASSERT_EQ(editor->mode(), MarkdownEditor::Mode::Reading);
             QApplication::processEvents();
             const QImage reading = window.grab().toImage();
             EXPECT_FALSE(reading.isNull());
+            maybeSaveShot(reading, path, "reading");
+            EXPECT_EQ(firstBlockOverlap(editor).toStdString(), "") << "reading";
 
             toggle->trigger();
             ASSERT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
@@ -150,6 +245,92 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
 
     // "well under a minute" for the whole walk.
     EXPECT_LT(clock.elapsed(), 60000);
+    EXPECT_TRUE(unexpectedMessages().isEmpty()) << unexpectedMessages().join(QLatin1Char('\n')).toStdString();
+}
+
+// Every command in the palette once, on a scratch copy of the vault so an
+// editing command cannot dirty demo/. Modal dialogs (the file pickers, the
+// publish and recovery dialogs) are dismissed by a timer the way a person
+// would press Escape. Commands that leave the process (sync), need hardware
+// (the recorder) or run user code (notebooks) are skipped, and the vault
+// picker is a native dialog this offscreen run cannot answer.
+TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
+{
+    QTemporaryDir copy;
+    ASSERT_TRUE(copy.isValid());
+    const QString root = copy.path() + QStringLiteral("/demo");
+    std::function<void(const QString &, const QString &)> copyTree = [&](const QString &from, const QString &to) {
+        QDir().mkpath(to);
+        const QFileInfoList entries =
+            QDir(from).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+        for (const QFileInfo &entry : entries) {
+            if (entry.isDir())
+                copyTree(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
+            else
+                QFile::copy(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
+        }
+    };
+    copyTree(vaultPath(), root);
+
+    MainWindow window;
+    window.openVault(root);
+    WAIT_TRUE(window.index()->noteCount() > 20, 15000);
+    window.resize(1280, 900);
+    window.show();
+    ASSERT_TRUE(window.openNote(root + QStringLiteral("/Welcome.md")));
+    QApplication::processEvents();
+    g_messages.clear();
+
+    QTimer dismiss;
+    dismiss.setInterval(20);
+    QObject::connect(&dismiss, &QTimer::timeout, [] {
+        if (QWidget *modal = QApplication::activeModalWidget())
+            modal->close();
+    });
+    dismiss.start();
+
+    const QStringList skip{QStringLiteral("app:open-vault"), QStringLiteral("sync:sign-in"),
+                           QStringLiteral("sync:sync-now"), QStringLiteral("audio-recorder:start"),
+                           QStringLiteral("audio-recorder:stop"), QStringLiteral("command-palette:open")};
+    int ran = 0;
+    const auto actions = window.findChildren<QAction *>(Qt::FindDirectChildrenOnly);
+    for (QAction *action : actions) {
+        const QString id = action->objectName();
+        if (!id.contains(QLatin1Char(':')) || skip.contains(id) || id.startsWith(QLatin1String("notebooks:")))
+            continue;
+        if (!action->isEnabled())
+            continue;
+        SCOPED_TRACE(id.toStdString());
+        action->trigger();
+        QApplication::processEvents();
+        window.grab();
+        ++ran;
+    }
+    // Each settings page: the nav builds them lazily, so only showing one
+    // proves it builds and paints.
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    QApplication::processEvents();
+    auto *nav = window.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+    ASSERT_NE(nav, nullptr);
+    for (int row = 0; row < nav->count(); ++row) {
+        nav->setCurrentRow(row);
+        QApplication::processEvents();
+        const QImage page = window.grab().toImage();
+        EXPECT_FALSE(page.isNull());
+        maybeSaveShot(page, vaultPath() + QStringLiteral("/settings-") + nav->item(row)->text(), "page");
+    }
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    // Back to a normal view for the editor's own commands.
+    ASSERT_TRUE(window.openNote(root + QStringLiteral("/Welcome.md")));
+    for (const MarkdownEditor::Command &command : MarkdownEditor::commands()) {
+        SCOPED_TRACE(command.id.toStdString());
+        window.editor()->runCommand(command.id);
+        QApplication::processEvents();
+        ++ran;
+    }
+    window.grab();
+    EXPECT_GT(ran, 40);
+    EXPECT_TRUE(unexpectedMessages().isEmpty()) << unexpectedMessages().join(QLatin1Char('\n')).toStdString();
 }
 
 int main(int argc, char **argv)
@@ -161,6 +342,7 @@ int main(int argc, char **argv)
     // and could write whoever runs it their real settings file.
     QTemporaryDir configHome;
     qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
+    qInstallMessageHandler(collectMessage);
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
