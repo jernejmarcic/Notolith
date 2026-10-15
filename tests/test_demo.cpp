@@ -17,6 +17,7 @@
 #include <QImage>
 #include <QListWidget>
 #include <QScrollBar>
+#include <QAbstractButton>
 #include <QAction>
 #include <QDir>
 #include <QSignalSpy>
@@ -306,6 +307,19 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
         window.grab();
         ++ran;
     }
+    // Every right-sidebar pane (search, backlinks, tags, properties, outline,
+    // ...): each has a tab button, and showing the pane fills it for the note.
+    int panes = 0;
+    for (QAbstractButton *button : window.findChildren<QAbstractButton *>()) {
+        if (!button->objectName().endsWith(QLatin1String("TabButton")))
+            continue;
+        SCOPED_TRACE(button->objectName().toStdString());
+        button->click();
+        QApplication::processEvents();
+        window.grab();
+        ++panes;
+    }
+    EXPECT_GE(panes, 5);
     // Each settings page: the nav builds them lazily, so only showing one
     // proves it builds and paints.
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
