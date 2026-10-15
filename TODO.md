@@ -883,9 +883,10 @@ optimal as it can be".
 - [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
       app, remember I want speed". `render.mermaid` (on), through mmdr on the
       pool, cached on disk and in memory, nothing at startup (docs/EDITOR.md).
-      mmdr 0.3.1 installed (~/.local/share/cargo/bin, 2026-10-02); lane mermaid2
-      (2026-10-16) checks mmdr's real `-c` keys and dark output. Left: publish/PDF use
-      the cached SVG. Disk cache pruned (30 days / 50 MB) on first use.
+      mmdr 0.3.1 installed (~/.local/share/cargo/bin, 2026-10-02). 2026-10-16
+      (lane mermaid2): `-c` colours honoured, run as `mmdr -i - -c cfg`, tool found
+      in cargo dirs, publish/PDF inline the cached SVG. Left: a light published
+      site shows the dark-first cached diagram (RenderEnv has no light mode). Disk cache pruned (30 days / 50 MB) on first use.
 
 ## Requested 2026-10-16 (from the running app)
 - [x] Caret ran far taller than its line ("Cursor blinker really big"): now the
