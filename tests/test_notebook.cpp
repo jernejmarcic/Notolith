@@ -18,6 +18,7 @@
 #include <QTest>
 
 #include "DirectRunner.h"
+#include "KernelProcess.h"
 #include "KernelSpec.h"
 #include "NotebookCache.h"
 #include "NotebookController.h"
@@ -781,6 +782,24 @@ TEST(DirectRunnerTest, TheSandboxKeepsOtherFilesOut)
     const auto host = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1'\n").arg(secret.fileName()), SandboxTier::Host);
     ASSERT_TRUE(host.has_value());
     EXPECT_TRUE(textOf(*host).contains(QStringLiteral("do not read")));
+}
+
+// ASan caught this one: erasing a kernel session killed its process, and
+// QProcess::waitForFinished delivered `finished` into a slot that looked the
+// session up in the very map that was mid-erase. A process being destroyed
+// reports nothing.
+TEST(KernelProcessTest, DestroyingARunningProcessEmitsNoFinished)
+{
+    KernelSpec spec;
+    spec.name = QStringLiteral("sleeper");
+    spec.argv = {QStringLiteral("sleep"), QStringLiteral("30")};
+    auto process = std::make_unique<KernelProcess>();
+    if (!process->start(spec, SandboxTier::Host, {}))
+        GTEST_SKIP() << process->error().toStdString();
+    int finished = 0;
+    QObject::connect(process.get(), &KernelProcess::finished, [&finished](int) { ++finished; });
+    process.reset();
+    EXPECT_EQ(finished, 0);
 }
 
 int main(int argc, char **argv)

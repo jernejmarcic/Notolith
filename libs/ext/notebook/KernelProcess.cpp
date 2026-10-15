@@ -37,6 +37,9 @@ KernelProcess::KernelProcess(QObject *parent) : QObject(parent) { }
 
 KernelProcess::~KernelProcess()
 {
+    // Killing the process delivers its `finished` before this returns, into
+    // slots whose owner is usually in the middle of destroying this object.
+    blockSignals(true);
     stop();
 }
 
