@@ -135,7 +135,12 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     m_blink.setInterval(QApplication::cursorFlashTime() / 2);
     connect(&m_blink, &QTimer::timeout, this, [this] {
         m_cursorOn = !m_cursorOn;
-        viewport()->update();
+        // Only where the caret is, not the whole page twice a second.
+        const QRect caret = m_cursorOn ? caretRect().toAlignedRect().adjusted(-2, -2, 2, 2) : m_caretPainted;
+        if (caret.isEmpty())
+            viewport()->update();
+        else
+            viewport()->update(caret);
     });
 
     m_completer = new QCompleter(new QStringListModel(this), this);
@@ -3465,27 +3470,19 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
 
     paintBlocks(painter, verticalScrollBar()->value(), exposedTop, exposedBottom);
 
+    m_caretPainted = QRect();
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
-        const QPointF point = cursorPoint();
-        if (!point.isNull() || m_cursor == 0) {
-            const qreal lineHeight = QFontMetricsF(font()).height() * 1.4;
+        const QRectF caret = caretRect();
+        if (!caret.isEmpty()) {
             if (m_vim.enabled && m_vim.mode != VimState::Mode::Insert) {
-                // Normal and visual mode: a block over the character the
-                // next command acts on, as wide as that character is drawn.
-                qreal width = QFontMetricsF(font()).averageCharWidth();
-                if (m_cursor < m_text.size() && m_text.at(m_cursor) != QLatin1Char('\n')) {
-                    const QPointF after = pointFor(m_cursor + 1);
-                    if (!after.isNull() && qAbs(after.y() - point.y()) < 1 && after.x() > point.x())
-                        width = after.x() - point.x();
-                }
                 QColor block = m_theme.color(QStringLiteral("--text-normal"));
                 block.setAlphaF(0.55f);
-                painter.fillRect(QRectF(point.x(), point.y(), width, lineHeight), block);
+                painter.fillRect(caret, block);
             } else {
                 painter.setPen(QPen(m_theme.color(QStringLiteral("--text-normal")), 2));
-                painter.drawLine(QPointF(point.x(), point.y()),
-                                 QPointF(point.x(), point.y() + lineHeight));
+                painter.drawLine(caret.topLeft() + QPointF(1, 0), caret.bottomLeft() + QPointF(1, 0));
             }
+            m_caretPainted = caret.toAlignedRect().adjusted(-2, -2, 2, 2);
         }
     }
     paintSelectionHandles(painter);
@@ -3496,7 +3493,29 @@ QPointF MarkdownEditor::cursorPoint() const
     return pointFor(m_cursor);
 }
 
-QPointF MarkdownEditor::pointFor(qsizetype offset) const
+QRectF MarkdownEditor::caretRect() const
+{
+    qreal height = 0;
+    const QPointF point = pointFor(m_cursor, &height);
+    if (point.isNull() && m_cursor != 0)
+        return {};
+    if (height <= 0) // no laid-out line under it: one line of the body text
+        height = QFontMetricsF(font()).height();
+    if (m_vim.enabled && m_vim.mode != VimState::Mode::Insert) {
+        // Normal and visual mode: a block over the character the next
+        // command acts on, as wide as that character is drawn.
+        qreal width = QFontMetricsF(font()).averageCharWidth();
+        if (m_cursor < m_text.size() && m_text.at(m_cursor) != QLatin1Char('\n')) {
+            const QPointF after = pointFor(m_cursor + 1);
+            if (!after.isNull() && qAbs(after.y() - point.y()) < 1 && after.x() > point.x())
+                width = after.x() - point.x();
+        }
+        return QRectF(point.x(), point.y(), width, height);
+    }
+    return QRectF(point.x() - 1, point.y(), 2, height);
+}
+
+QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
 {
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(m_blocks.size()))
@@ -3512,6 +3531,8 @@ QPointF MarkdownEditor::pointFor(qsizetype offset) const
         const int display = qBound(0, int(cell->map.toDisplay(offset)) - cell->lead, length);
         const QTextLine line = cell->layout->lineForTextPosition(display);
         const QPointF origin = cellTextOrigin(view, *cell);
+        if (height && line.isValid())
+            *height = line.height();
         return QPointF(contentLeft() + origin.x() + (line.isValid() ? line.cursorToX(display) : 0),
                        view.y - verticalScrollBar()->value() + origin.y() + (line.isValid() ? line.y() : 0));
     }
@@ -3524,6 +3545,8 @@ QPointF MarkdownEditor::pointFor(qsizetype offset) const
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
     const qreal x = line.cursorToX(int(display));
+    if (height)
+        *height = line.height();
     return QPointF(contentLeft() + x,
                    view.y + view.textTop - verticalScrollBar()->value() + line.y());
 }

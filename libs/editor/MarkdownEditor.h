@@ -1954,8 +1954,12 @@ private:
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;
     QPointF cursorPoint() const;
-    /// Where `offset` is drawn, viewport coordinates, top of its line.
-    QPointF pointFor(qsizetype offset) const;
+    /// Where `offset` is drawn, viewport coordinates, top of its line;
+    /// `height`, when given, gets that line's own height (the caret's).
+    QPointF pointFor(qsizetype offset, qreal *height = nullptr) const;
+    /// The caret's rectangle in viewport coordinates, empty when not drawn.
+    QRectF caretRect() const;
+    QRect m_caretPainted; ///< last caret rectangle drawn, for the blink's update
 
     // --- touch, TouchInput.cpp -------------------------------------------
     /// `rect` grown by `mouseSlop`, or by a finger's worth when the press
