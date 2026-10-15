@@ -641,6 +641,17 @@ public:
     /// command, a `:` or `/` line being typed, or an error. Empty when off.
     QString vimStatus() const;
 
+    /// Every block's painted extent in document coordinates, in source order,
+    /// a callout's panel margin included; empty for a blank line, which draws
+    /// nothing. Blocks laid out as the view stands, so a test scrolls through
+    /// the note first. For tests that check neighbours never overlap.
+    struct BlockBox {
+        QRectF rect;
+        BlockSpan::Kind kind;
+        Range source;
+    };
+    QList<BlockBox> blockBoxes();
+
     // --- editing commands -------------------------------------------------
     // Bound to the same keys Obsidian uses; public so the Phase 4 command
     // palette can reach them without a second implementation.
