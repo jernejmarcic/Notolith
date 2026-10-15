@@ -1,7 +1,8 @@
 // ```mermaid fences: MermaidBlock.cpp's renderer, driven with a fake `mmdr`
 // (a shell script that counts its runs in a file and writes a fixed SVG), on
 // its own and through the editor and the window's `render.mermaid` setting.
-// Nothing here needs the real tool installed.
+// Only TheInstalledMmdrDrawsADarkDiagram needs the real tool: it is skipped
+// when `mmdr` is absent, and fails instead when NOTEAPPC_REQUIRE_TOOLS=1.
 
 #include <gtest/gtest.h>
 
@@ -21,6 +22,7 @@
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
 #include "MermaidBlock.h"
+#include "MermaidCache.h"
 #include "Settings.h"
 #include "Theme.h"
 #include "WaitFor.h"
@@ -47,20 +49,21 @@ protected:
     }
 
     /// A tool at dir/name that appends a line to dir/runs per run, keeps the
-    /// config it was given in dir/config, waits `delay` seconds, and writes
-    /// kSVG to its -o argument. `body` replaces that last part when set.
+    /// config it was given in dir/config, reads the source on stdin, waits
+    /// `delay` seconds, and writes kSVG to stdout (mmdr's `-i - -c config`).
+    /// `body` replaces that last part when set.
     QString fake(const QString &name, const QString &delay = QStringLiteral("0"), const QString &body = QString())
     {
         const QString path = dir.filePath(name);
+        QDir().mkpath(QFileInfo(path).path());
         QFile file(path);
         EXPECT_TRUE(file.open(QIODevice::WriteOnly));
         QString script = QStringLiteral(
-                             "#!/bin/sh\necho run >> '%1'\nout=; cfg=\n"
-                             "while [ $# -gt 0 ]; do case \"$1\" in -o) out=\"$2\";; -c) cfg=\"$2\";; esac; shift; done\n"
-                             "[ -n \"$cfg\" ] && cp \"$cfg\" '%2'\nsleep %3\n")
-                             .arg(runsFile(), dir.filePath(QStringLiteral("config")), delay);
-        script += body.isEmpty() ? QStringLiteral("cat > \"$out\" <<'EOF'\n") + QLatin1String(kSVG) + QStringLiteral("\nEOF\n")
-                                 : body;
+                             "#!/bin/sh\necho run >> '%1'\ncfg=\n"
+                             "while [ $# -gt 0 ]; do case \"$1\" in -c) cfg=\"$2\";; esac; shift; done\n"
+                             "[ -n \"$cfg\" ] && cp \"$cfg\" '%2'\ncat > '%4'\nsleep %3\n")
+                             .arg(runsFile(), dir.filePath(QStringLiteral("config")), delay, dir.filePath(QStringLiteral("stdin")));
+        script += body.isEmpty() ? QStringLiteral("cat <<'EOF'\n") + QLatin1String(kSVG) + QStringLiteral("\nEOF\n") : body;
         file.write(script.toUtf8());
         file.close();
         QFile::setPermissions(path, QFile::permissions(path) | QFile::ExeOwner);
@@ -171,20 +174,69 @@ TEST_F(MermaidTest, TheToolIsGivenTheAppsColours)
     EXPECT_TRUE(json.contains(Theme::builtin().color(QStringLiteral("--background-primary")).name().toUtf8()));
 }
 
-TEST_F(MermaidTest, ALightDiagramInADarkThemeIsRecoloured)
+TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
 {
     ask(rendererFor(fake(QStringLiteral("mmdr"))), QStringLiteral("graph TD\nA-->C"));
-    bool found = false;
-    for (const QFileInfo &info : QDir(noteAppC::mermaidCacheDirectory()).entryInfoList({QStringLiteral("*.svg")})) {
-        QFile file(info.filePath());
-        ASSERT_TRUE(file.open(QIODevice::ReadOnly));
-        const QByteArray svg = file.readAll().toLower();
-        if (svg.contains("<text")) {
-            found = true;
-            EXPECT_FALSE(svg.contains("#ececff")) << "the light fill was kept";
-        }
+    QFile in(dir.filePath(QStringLiteral("stdin")));
+    ASSERT_TRUE(in.open(QIODevice::ReadOnly));
+    EXPECT_EQ(in.readAll(), QByteArray("graph TD\nA-->C"));
+    const QByteArray cached = noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->C"), Theme::builtin(Theme::Mode::Dark));
+    EXPECT_TRUE(cached.contains("#ECECFF")) << "mmdr honours the colours it is given, so the SVG is not re-coloured";
+}
+
+TEST_F(MermaidTest, ResolvesTheToolFromTheCargoHomeBin)
+{
+    // A launcher's PATH has no cargo bin: the stub is only in $CARGO_HOME/bin.
+    const QByteArray oldPath = qgetenv("PATH"), oldCargo = qgetenv("CARGO_HOME");
+    qputenv("PATH", "/usr/bin:/bin");
+    qputenv("CARGO_HOME", dir.filePath(QStringLiteral("cargo")).toUtf8());
+    fake(QStringLiteral("cargo/bin/mmdr"));
+    const auto answer = ask(rendererFor(QStringLiteral("mmdr")), QStringLiteral("graph TD\nA-->I"));
+    qputenv("PATH", oldPath);
+    if (oldCargo.isNull())
+        qunsetenv("CARGO_HOME");
+    else
+        qputenv("CARGO_HOME", oldCargo);
+    EXPECT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+    EXPECT_EQ(runs(), 1);
+}
+
+TEST_F(MermaidTest, PdfExportDrawsTheCachedDiagramAndOtherwiseTheListing)
+{
+    const QString note = QStringLiteral("```mermaid\ngraph TD\nA-->B\n```\n");
+    const auto exportImages = [&] {
+        const QString path = dir.filePath(QStringLiteral("out.pdf"));
+        QString error;
+        EXPECT_TRUE(MarkdownEditor::exportPdf(path, note, QStringLiteral("T"), {}, MarkdownEditor::PdfOptions{}, &error))
+            << qPrintable(error);
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::ReadOnly));
+        return file.readAll().count("/Subtype /Image");
+    };
+    EXPECT_EQ(exportImages(), 0) << "never drawn: the listing";
+    ASSERT_TRUE(noteAppC::mermaidCacheStore(
+        noteAppC::mermaidCachePath(QStringLiteral("graph TD\nA-->B"), noteAppC::mermaidConfig(Theme::builtin(Theme::Mode::Dark))),
+        kSVG));
+    EXPECT_GE(exportImages(), 1) << "drawn in the editor: its image";
+}
+
+TEST_F(MermaidTest, TheInstalledMmdrDrawsADarkDiagram)
+{
+    const auto answer = ask(rendererFor(QStringLiteral("mmdr")),
+                            QStringLiteral("flowchart LR\n  A[Start] --> B{Ok?}\n  B -- yes --> C[Done]\n  B -- no --> D[Retry]"));
+    if (answer->result.isMarkdown) {
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and mmdr gave: " << answer->result.text.toStdString();
+        GTEST_SKIP() << "mmdr is not installed";
     }
-    EXPECT_TRUE(found);
+    const QImage image = answer->result.image;
+    ASSERT_FALSE(image.isNull());
+    EXPECT_LT(image.pixelColor(2, 2).lightnessF(), 0.3) << "the diagram's own background is the theme's dark one";
+    int light = 0;
+    for (int y = 0; y < image.height(); ++y)
+        for (int x = 0; x < image.width(); ++x)
+            light += image.pixelColor(x, y).lightnessF() > 0.6;
+    EXPECT_GT(light, 50) << "light text and lines on it";
 }
 
 TEST_F(MermaidTest, ADiagramIsDrawnInPlaceOfItsFenceAndTheCaretBringsTheSourceBack)
@@ -264,8 +316,8 @@ TEST_F(MermaidTest, AFailingToolShowsTheSourceAndItsFirstErrorLineOnce)
     EXPECT_TRUE(first->result.text.contains(QLatin1String("A--")));
     EXPECT_TRUE(first->result.text.contains(QLatin1String("parse error on line 2")));
     EXPECT_FALSE(first->result.text.contains(QLatin1String("more")));
-    const int afterFirst = runs(); // with the config, and again without it
-    EXPECT_EQ(afterFirst, 2);
+    const int afterFirst = runs(); // the tool's own answer is final: no second run without the config
+    EXPECT_EQ(afterFirst, 1);
     ask(renderer, QStringLiteral("graph TD\nA--"));
     EXPECT_EQ(runs(), afterFirst) << "the failure is cached with the source";
 }
@@ -329,6 +381,8 @@ TEST_F(MermaidWindowTest, OnADiagramIsDrawnInTheWindow)
     const qsizetype fence = editor->noteText().indexOf(QLatin1String("graph"));
     WAIT_TRUE(!editor->embedImageSizeAt(fence).isEmpty(), 5000);
     EXPECT_EQ(runs(), 1);
+    // Publish and PDF export find what the window drew by the fence's content, the same text.
+    EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->B"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
 }
 
 TEST_F(MermaidWindowTest, OffTheSourceShowsAndTheToolIsNeverStarted)

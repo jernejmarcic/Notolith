@@ -192,8 +192,9 @@ Settings > Core plugins: "Mermaid diagrams" (`render.mermaid`, on by default)
 and "Mermaid tool" (`render.mermaidTool`, default `mmdr`).
 
 The drawing is done by an external program, not linked in: `mmdr`, the
-pure-Rust `mermaid-rs-renderer` crate (`cargo install mermaid-rs-renderer`,
-about 3-5 ms a diagram). noteAppC installs and fetches nothing, and there is
+pure-Rust `mermaid-rs-renderer` crate (installed with
+`cargo install mermaid-rs-renderer`; 1-5 ms a diagram, about 300 ms for the very
+first run of a cold binary). noteAppC installs and fetches nothing, and there is
 no CMake option: no compiled-in code depends on it (Qt6::Svg draws the result,
 already linked for notebook output).
 
@@ -203,28 +204,39 @@ already linked for notebook output).
 - **Off the UI thread**: `libs/editor/MermaidBlock.cpp` is a renderer for
   `MarkdownEditor::setCodeBlockRenderer`, so the fence, its placeholder and its
   in-memory cache (by width, theme and source) are `CodeBlockHook.cpp`'s. A job
-  runs `mmdr -i in.mmd -o out.svg -c config.json` on a one-thread pool and
+  runs `mmdr -i - -c config.json` on a one-thread pool (source on stdin, SVG on
+  stdout; `-o -` is not used, 0.3.1 writes a file named `-` for it) and
   rasterises the SVG with `QSvgRenderer` at the column width and the display's
   pixel ratio. The tool gets 5 s, then is killed.
-- **Cache**: the SVG by a hash of the source and the colours asked for, in
-  `$XDG_CACHE_HOME/noteAppC/mermaid`, and in memory. A cached diagram never
-  starts the tool again. The first diagram made or read in a process, once it
-  has been delivered and never at startup, prunes the directory on the render
-  thread: files not used for 30 days go, then the least recently used until
-  50 MB is left (`pruneMermaidCache`). A disk hit counts as a use by touching
-  the file's modification time.
-- **Colours**: the config handed to the tool is Mermaid's own shape
-  (`theme`, `themeVariables`) in the app's colours. `mmdr`'s keys are
-  unverified, so a run that fails is repeated once without the config, and a
-  dark theme that gets a light diagram back (its colours are not in the file)
-  has every colour re-lit, hue kept.
+- **Cache**: `libs/render/MermaidCache.{h,cpp}` (in libs/render because publish
+  does not link the editor). The SVG is kept as
+  `$XDG_CACHE_HOME/noteAppC/mermaid/<hash of source>-<hash of config>.svg`, and in
+  memory. A cached diagram never starts the tool again. The first diagram made
+  or read in a process, once it has been delivered and never at startup, prunes
+  the directory on the render thread: files not used for 30 days go, then the
+  least recently used until 50 MB is left (`pruneMermaidCache`). A disk hit
+  counts as a use by touching the file's modification time.
+- **Colours**: the config handed to the tool is Mermaid's own shape (`theme`,
+  `themeVariables`) in the app's colours. mmdr 0.3.1 honours it: the colours
+  land in the SVG, the background included (`theme` alone equals `-t`), so there
+  is no retry without the config and no re-colouring.
 - **No tool, or a failure**: the source shows in a listing with one dim line
   under it ("Mermaid: install mmdr to render", or the tool's first error
   line). A missing tool is remembered until the setting changes, so typing
   does not look for it again; a failure is cached with the source.
-- **Tool lookup**: a bare name is searched on `PATH`, then in `~/.cargo/bin`
-  (a desktop launcher's `PATH` often lacks it); anything with a `/` is a path.
-- **Not drawn**: encrypted notes (the source would go to a temporary file and
-  the cache), PDF export and publish (they show the source), slides.
+- **Tool lookup**: a bare name is searched on `PATH`, then in `$CARGO_HOME/bin`,
+  `~/.cargo/bin` and `~/.local/share/cargo/bin` (a desktop launcher's `PATH`
+  often lacks them); anything with a `/` is a path.
+- **Publish and PDF export** never start the tool: they use the SVG the editor
+  already cached for that source (the theme's colours if it has them, else the
+  most recently used in any colours - the diagram carries its own background, so
+  a dark one is a dark card on a light page). Publish inlines it as
+  `<div class="mermaid-diagram">` with its ids prefixed per diagram; PDF export
+  draws it as an image. A fence never drawn in the editor is its source, as a
+  code block.
+- **Not drawn**: encrypted notes (the source would go into the cache), slides.
 
-`tests/test_mermaid.cpp` runs all of this against a fake `mmdr` script.
+`tests/test_mermaid.cpp` runs all of this against a fake `mmdr` script, plus
+one test against the installed tool (skipped when absent, a failure under
+`NOTEAPPC_REQUIRE_TOOLS=1`, which the lane check sets); the publish test is in
+`tests/test_publish.cpp`.

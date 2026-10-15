@@ -57,7 +57,9 @@ add_library(noteAppC_render STATIC
     TexCompiler.cpp
     TexCompiler.h
     MathRenderer.cpp
-    MathRenderer.h)
+    MathRenderer.h
+    MermaidCache.cpp
+    MermaidCache.h)
 
 set_target_properties(noteAppC_render PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_render PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -1,5 +1,7 @@
 #include "MarkdownEditor.h"
 
+#include "MermaidBlock.h"
+
 #include <QPainter>
 #include <QPdfWriter>
 #include <QScrollBar>
@@ -53,6 +55,9 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.setReadableLineLength(false);
     editor.setLinkResolver(std::move(resolver));
     editor.setMode(Mode::Reading);
+    // A mermaid fence is the diagram the editor already made (never the tool: an export
+    // waits for nothing); one it never made stays its listing.
+    editor.setCodeBlockRenderer({QStringLiteral("mermaid")}, mermaidCachedRenderer(Theme::builtin(Theme::Mode::Light)));
     const QSize viewport(int(page.width() / scale), int(page.height() / scale));
     editor.resize(viewport);
     editor.setNoteText(printed);
@@ -61,6 +66,11 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     QCoreApplication::processEvents(); // lets that parse land
 
     // Everything laid out, not just what a screen would show.
+    for (BlockView &view : editor.m_blocks) {
+        if (!view.laidOut)
+            editor.layoutBlock(view);
+    }
+    QCoreApplication::processEvents(); // the cached diagrams the layout asked for land, and re-lay-out their blocks
     for (BlockView &view : editor.m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);

@@ -637,8 +637,9 @@ QWidget *SettingsPage::buildCorePluginsPage()
                  tr("Draw mermaid code blocks as diagrams, with the tool below, off the main thread and cached. "
                     "Nothing runs until a diagram is on screen; off, or without the tool, the source shows."));
     addLineEditRow(layout, QStringLiteral("render.mermaidTool"), tr("Mermaid tool"),
-                   tr("The renderer's name on PATH (also looked for in ~/.cargo/bin) or its full path. "
-                      "mmdr: cargo install mermaid-rs-renderer."),
+                   tr("The renderer's name on PATH (also looked for in $CARGO_HOME/bin, ~/.cargo/bin and "
+                      "~/.local/share/cargo/bin) or its full path. Install mmdr with: "
+                      "cargo install mermaid-rs-renderer"),
                    QStringLiteral("mmdr"));
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over

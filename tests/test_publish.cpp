@@ -17,6 +17,7 @@
 #include "Index.h"
 #include "Indexer.h"
 #include "MathRenderer.h"
+#include "MermaidCache.h"
 #include "Publisher.h"
 #include "Vault.h"
 
@@ -286,6 +287,50 @@ TEST(PublishTest, MathsBecomesSvg)
     ASSERT_FALSE(page.isEmpty());
     EXPECT_TRUE(page.contains(QStringLiteral("<svg")));
     EXPECT_FALSE(page.contains(QStringLiteral("math-source")));
+}
+
+// A fence the editor drew is inlined from the cache; publishing never runs mmdr
+// (a stub first on PATH that would leave a file if it did).
+TEST(PublishTest, AMermaidFenceBecomesTheCachedSVGAndNeverStartsTheTool)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME"), oldPath = qgetenv("PATH");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    const QString ran = env.filePath(QStringLiteral("ran"));
+    QDir().mkpath(env.filePath(QStringLiteral("bin")));
+    QFile stub(env.filePath(QStringLiteral("bin/mmdr")));
+    ASSERT_TRUE(stub.open(QIODevice::WriteOnly));
+    stub.write(("#!/bin/sh\necho ran > '" + ran + "'\n").toUtf8());
+    stub.close();
+    QFile::setPermissions(stub.fileName(), QFile::permissions(stub.fileName()) | QFile::ExeOwner);
+    qputenv("PATH", env.filePath(QStringLiteral("bin")).toUtf8() + ":" + oldPath);
+
+    // What the editor stored for this source: the fence content, as the editor asks for it.
+    const QString drawn = QStringLiteral("graph TD\nA-->B");
+    ASSERT_TRUE(mermaidCacheStore(
+        mermaidCachePath(drawn, mermaidConfig(Theme::builtin(Theme::Mode::Dark))),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><defs><marker id=\"arrow-0\"/></defs>"
+        "<text fill=\"url(#arrow-0)\">DRAWNMARK</text></svg>"));
+    TestSite site({
+        {QStringLiteral("Note.md"), "```mermaid\ngraph TD\nA-->B\n```\n\n```mermaid\ngraph TD\nNEVERDRAWN-->B\n```\n"},
+    });
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    qputenv("PATH", oldPath);
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+
+    EXPECT_TRUE(page.contains(QStringLiteral("<div class=\"mermaid-diagram\"><svg"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QStringLiteral("DRAWNMARK")));
+    EXPECT_TRUE(page.contains(QStringLiteral("id=\"mm1-arrow-0\""))) << "ids are made page-unique";
+    EXPECT_TRUE(page.contains(QStringLiteral("url(#mm1-arrow-0)")));
+    // Never drawn in the editor: its source, as an ordinary code block.
+    EXPECT_TRUE(page.contains(QStringLiteral("NEVERDRAWN")));
+    EXPECT_TRUE(page.contains(QStringLiteral("language-mermaid")));
+    EXPECT_FALSE(QFile::exists(ran)) << "publish started mmdr";
 }
 
 TEST(PublishTest, ImageEmbedCopiesOnlyReferencedAttachments)

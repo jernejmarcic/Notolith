@@ -335,6 +335,8 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
   width: 2.5em; color: var(--text-faint); user-select: none; }
 .code-block .line.hl { background: var(--background-modifier-hover); }
 .math-block { text-align: center; margin: 1em 0; overflow-x: auto; }
+.mermaid-diagram { text-align: center; margin: 1em 0; overflow-x: auto; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
 .math-block svg, code.math-source { vertical-align: middle; }
 .embed { border: 1px solid var(--background-modifier-border); border-radius: 6px;
   padding: 8px 12px; margin: 1em 0; }

@@ -10,6 +10,7 @@
 #include <algorithm>
 
 #include "CodeHighlighter.h"
+#include "MermaidCache.h"
 #include "HtmlRenderer.h"
 #include "Slugs.h"
 #include "Theme.h"
@@ -576,11 +577,35 @@ private:
         return nullptr;
     }
 
+    /// The diagram the editor already made for a ```mermaid fence's source,
+    /// inlined, or empty (the fence is then an ordinary code block, its
+    /// source in a <pre>). Publishing never starts mmdr. The SVG's ids are
+    /// prefixed per diagram: mmdr numbers its markers from 0 in every file,
+    /// and ids are page-wide once inlined.
+    QString cachedDiagram(const QString &source)
+    {
+        QByteArray bytes = noteAppC::mermaidCachedSVG(source, m_env.themeDark);
+        QString svg = QString::fromUtf8(bytes).trimmed();
+        if (!svg.startsWith(QLatin1String("<svg")) || svg.contains(QLatin1String("<script"), Qt::CaseInsensitive)
+            || svg.contains(QLatin1String("<foreignObject"), Qt::CaseInsensitive))
+            return QString();
+        const QString prefix = QStringLiteral("mm%1-").arg(++m_diagramCount);
+        svg.replace(QLatin1String(" id=\""), QStringLiteral(" id=\"") + prefix);
+        svg.replace(QLatin1String("url(#"), QStringLiteral("url(#") + prefix);
+        svg.replace(QLatin1String("href=\"#"), QStringLiteral("href=\"#") + prefix);
+        return QStringLiteral("<div class=\"mermaid-diagram\">") + svg + QStringLiteral("</div>\n");
+    }
+
     QString renderCodeFence(const CodeFenceSpan &fence, const ParsedNote &note)
     {
         const QString text = stripHiddenRanges(fence.content, note);
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
+        if (lang.compare(QLatin1String("mermaid"), Qt::CaseInsensitive) == 0) {
+            const QString diagram = cachedDiagram(note.text.mid(fence.content.start, fence.content.length()));
+            if (!diagram.isEmpty())
+                return diagram;
+        }
 
         QString header;
         if (options && !options->title.isEmpty()) {
@@ -1257,6 +1282,7 @@ private:
 
     const ParsedNote *m_topLevel;
     const RenderEnv &m_env;
+    int m_diagramCount = 0;
     QString m_pageOutputPath;
     QSet<QString> m_attachments;
     QSet<QString> m_embedStack;
