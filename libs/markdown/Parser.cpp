@@ -510,11 +510,12 @@ struct FenceToken {
 /// Tokenises the part of a fence line that is not the type or the language:
 /// a callout's `|` slot, a `:::` container's brace or bare form, and a code
 /// fence's info string all write this same shape, so the tokenising lives
-/// here once rather than in each of them.
+/// here once rather than in each of them. A name may contain dots when a `=`
+/// follows (`syntax.keyword=#C678DD`); a bare `.a.b` is still two classes.
 QList<FenceToken> tokeniseFenceSpec(QString spec)
 {
     static const QRegularExpression token(
-        QStringLiteral(R"(([.#]?[\w-]+)(?:[ \t]*=[ \t]*("[^"]*"|'[^']*'|\S+))?)"));
+        QStringLiteral(R"(([.#]?[\w-]+(?:\.[\w-]+)+(?=[ \t]*=)|[.#]?[\w-]+)(?:[ \t]*=[ \t]*("[^"]*"|'[^']*'|\S+))?)"));
 
     spec = spec.trimmed();
     if (spec.startsWith(QLatin1Char('{')) && spec.endsWith(QLatin1Char('}')))

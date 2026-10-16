@@ -57,6 +57,7 @@ TEST(Settings, defaultsAreCompiledIn)
     const Settings settings = Settings::load();
     EXPECT_EQ(settings.text(QStringLiteral("appearance.theme")), QStringLiteral("dark"));
     EXPECT_TRUE(settings.boolean(QStringLiteral("editor.readableLineLength")));
+EXPECT_TRUE(settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
     EXPECT_EQ(settings.integer(QStringLiteral("editor.contentWidth")), 700);
     EXPECT_FALSE(settings.isCustomised(QStringLiteral("appearance.theme")));
 }

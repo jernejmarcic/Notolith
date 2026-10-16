@@ -5,6 +5,44 @@
 
 namespace noteAppC {
 
+std::optional<TokenStyle> TokenStyle::parse(const QString &value)
+{
+    TokenStyle style;
+    bool any = false;
+    for (const QString &word : value.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+        const QString lowered = word.toLower();
+        if (lowered == QLatin1String("bold"))
+            style.bold = true;
+        else if (lowered == QLatin1String("italic"))
+            style.italic = true;
+        else if (lowered == QLatin1String("underline"))
+            style.underline = true;
+        else if (const QColor color = CalloutStyle::parseColor(word); color.isValid() && !style.color.isValid())
+            style.color = color;
+        else
+            return std::nullopt;
+        any = true;
+    }
+    return any ? std::optional<TokenStyle>(style) : std::nullopt;
+}
+
+void LanguageStyle::applyColours(const QMap<QString, QString> &keys)
+{
+    static const QString syntaxPrefix = QStringLiteral("syntax.");
+    for (auto it = keys.cbegin(); it != keys.cend(); ++it) {
+        const QString &key = it.key();
+        if (key == QLatin1String("bg") || key == QLatin1String("fg") || key == QLatin1String("border")) {
+            const QColor colour = CalloutStyle::parseColor(it.value());
+            if (!colour.isValid())
+                continue;
+            (key == QLatin1String("bg") ? bg : key == QLatin1String("fg") ? fg : border) = colour;
+        } else if (key.startsWith(syntaxPrefix) && key.size() > syntaxPrefix.size()) {
+            if (const auto token = TokenStyle::parse(it.value()))
+                syntax.insert(key.mid(syntaxPrefix.size()), *token);
+        }
+    }
+}
+
 QString LanguageStyles::defaultPath()
 {
     return configFilePath(QStringLiteral("codeblocks.ini"));
@@ -61,6 +99,7 @@ LanguageStyle LanguageStyles::resolve(const QString &language) const
     const QString color = merged.value(QStringLiteral("color"));
     if (!color.isEmpty())
         style.color = CalloutStyle::parseColor(color);
+    style.applyColours(merged);
 
     return style;
 }

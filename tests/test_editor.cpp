@@ -196,6 +196,9 @@ TEST(DisplayMapTest, FuzzRoundTrip)
 #include <utility>
 
 #include "CodeHighlighter.h"
+#include "LanguageStyle.h"
+#include "Scheme.h"
+#include "Theme.h"
 #include "Lifeline.h"
 #include "MarkdownEditor.h"
 #include "Parser.h"
@@ -3555,6 +3558,282 @@ TEST(CodeBlockPerfTest, TypingInALongListingInsideACalloutStaysInBudget)
     std::printf("[ PERF     ] callout listing of 100 lines: type %.2f ms; of 2000: %.2f ms\n",
                 shortTyping, longTyping);
     EXPECT_LT(longTyping, 8.0);
+}
+
+// --- complex code blocks: the colour knobs -----------------------------------
+
+namespace {
+
+/// Points XDG_CONFIG_HOME at a throwaway directory holding `codeblocks.ini`
+/// for as long as it lives; editors built meanwhile read it.
+struct CodeblocksHome {
+    QTemporaryDir dir;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+
+    explicit CodeblocksHome(const QByteArray &ini = {})
+    {
+        qputenv("XDG_CONFIG_HOME", dir.path().toUtf8());
+        QDir(dir.path()).mkpath(QStringLiteral("noteAppC"));
+        if (!ini.isEmpty())
+            writeAtomically(QDir(dir.path()).filePath(QStringLiteral("noteAppC/codeblocks.ini")), ini);
+    }
+    ~CodeblocksHome() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
+/// Pixels of the editor as painted now that one channel clearly outweighs the
+/// other two (0 red, 1 green, 2 blue). Text is antialiased, so an exact colour
+/// match undercounts it.
+int dominatedBy(const QImage &image, int channel, int margin = 120)
+{
+    const QImage frame = image.convertToFormat(QImage::Format_RGB32);
+    int count = 0;
+    for (int y = 0; y < frame.height(); ++y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+        for (int x = 0; x < frame.width(); ++x) {
+            const int c[3] = {qRed(row[x]), qGreen(row[x]), qBlue(row[x])};
+            if (c[channel] - qMax(c[(channel + 1) % 3], c[(channel + 2) % 3]) > margin)
+                ++count;
+        }
+    }
+    return count;
+}
+
+int dominatedBy(MarkdownEditor &editor, int channel, int margin = 120)
+{
+    return dominatedBy(editor.grab().toImage(), channel, margin);
+}
+
+TokenStyle tokenColoured(const QColor &colour)
+{
+    TokenStyle style;
+    style.color = colour;
+    return style;
+}
+
+/// The colour of the first token that starts at `start`, invalid if none does.
+QColor tokenColourAt(const QList<QTextLayout::FormatRange> &formats, int start)
+{
+    for (const QTextLayout::FormatRange &range : formats) {
+        if (range.start == start)
+            return range.format.foreground().color();
+    }
+    return {};
+}
+
+} // namespace
+
+TEST(ComplexCodeTest, OffIsByteForByte)
+{
+    const QString note = QStringLiteral("```python\nfoo = print(1) # c\n```\n");
+    QImage plain;
+    {
+        CodeblocksHome none;
+        plain = editorWith(note)->grab().toImage();
+    }
+
+    // Everything configured - section, theme layer - and the setting off.
+    CodeblocksHome home("[python]\nbg = #FF0000ff\nfg = #0000FFff\nborder = #00FF00ff\n"
+                        "syntax.comment = #FFFF00ff italic\nsyntax.function = #00FFFFff\n");
+    Theme themed = Theme::builtin(Theme::Mode::Dark);
+    themed.setToken(QStringLiteral("--syntax-keyword"), QStringLiteral("#FF00FF bold"));
+    themed.setToken(QStringLiteral("--code-string"), QStringLiteral("#FF00FF"));
+    auto off = editorWith(note);
+    off->setTheme(themed);
+    off->setComplexCodeBlocks(false);
+    EXPECT_EQ(off->grab().toImage(), plain) << "off must draw as if nothing were configured";
+
+    off->setComplexCodeBlocks(true);
+    EXPECT_NE(off->grab().toImage(), plain) << "and on must actually show the configuration";
+
+    // Nothing configured, setting on: the same bytes again.
+    CodeblocksHome none;
+    auto unconfigured = editorWith(note);
+    EXPECT_EQ(unconfigured->grab().toImage(), plain);
+
+    // The highlighter itself: no map, an empty map and a map with no entries
+    // are all the format list it always produced.
+    CodeHighlighter highlighter;
+    const QString code = QStringLiteral("foo = print(1) # c\nreturn 'x'\n");
+    const auto reference = highlighter.highlight(code, QStringLiteral("python"));
+    const SyntaxMap empty;
+    const SyntaxMap noEntries({SyntaxStyles()});
+    for (const SyntaxMap *map : {&empty, &noEntries}) {
+        const auto formats = highlighter.highlight(code, QStringLiteral("python"), map);
+        ASSERT_EQ(formats.size(), reference.size());
+        for (qsizetype i = 0; i < formats.size(); ++i) {
+            EXPECT_EQ(formats.at(i).start, reference.at(i).start);
+            EXPECT_EQ(formats.at(i).length, reference.at(i).length);
+            EXPECT_EQ(formats.at(i).format, reference.at(i).format);
+        }
+    }
+}
+
+TEST(ComplexCodeTest, IniSectionColoursThePanel)
+{
+    CodeblocksHome home("[python]\nbg = #FF0000ff\nfg = #0000FFff\nborder = #00FF00ff\n");
+    auto editor = editorWith(QStringLiteral("```python\nfoo\n```\n"));
+    const QImage frame = editor->grab().toImage().convertToFormat(QImage::Format_RGB32);
+
+    // The panel's extent: where the fill is.
+    QRect fill;
+    for (int y = 0; y < frame.height(); ++y) {
+        for (int x = 0; x < frame.width(); ++x) {
+            const QRgb c = frame.pixel(x, y);
+            if (qRed(c) > 240 && qGreen(c) < 20 && qBlue(c) < 20)
+                fill = fill.united(QRect(x, y, 1, 1));
+        }
+    }
+    ASSERT_GT(fill.width(), 300) << "the bg colour filled no panel";
+    const QRgb inside = frame.pixel(fill.left() + 12, fill.top() + 12);
+    EXPECT_EQ(inside & 0xFFFFFF, 0xFF0000u) << "the panel corner is the section's bg";
+    EXPECT_GT(dominatedBy(frame, 1), fill.width()) << "the 1 px border runs along the panel";
+    EXPECT_GT(dominatedBy(frame, 2), 3) << "plain code text takes the section's fg";
+}
+
+TEST(ComplexCodeTest, FenceOverridesIni)
+{
+    CodeblocksHome home("[python]\nbg = #FF0000ff\nfg = #0000FFff\n");
+    auto editor = editorWith(QStringLiteral("```python bg=#00FF00ff fg=#fff\nfoo\n```\n"));
+    const QImage frame = editor->grab().toImage();
+    EXPECT_GT(dominatedBy(frame, 1), 5000) << "the fence's bg wins";
+    EXPECT_LT(dominatedBy(frame, 0), 20) << "the ini's red is gone, not mixed in";
+    EXPECT_EQ(dominatedBy(frame, 2), 0) << "fg=#fff beats the ini's blue";
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("bg=")))
+        << "the attributes are hidden with the fence";
+}
+
+TEST(ComplexCodeTest, FenceSyntaxKeysSurviveTheParser)
+{
+    // `syntax.keyword` is one name with a dot in it; the bare-word flags
+    // around it, and a callout's `.class`, are unchanged.
+    const Decorations decorations = Parser()
+                                        .parseAll(QStringLiteral("```python tab syntax.keyword=\"#C678DD bold\" bg=#123\nx\n```\n"))
+                                        .decorations;
+    ASSERT_EQ(decorations.codeFences.size(), 1);
+    const QMap<QString, QString> &attributes = decorations.codeFences.first().attributes;
+    EXPECT_EQ(attributes.value(QStringLiteral("syntax.keyword")), QStringLiteral("#C678DD bold"));
+    EXPECT_EQ(attributes.value(QStringLiteral("bg")), QStringLiteral("#123"));
+    EXPECT_TRUE(attributes.contains(QStringLiteral("tab")));
+    EXPECT_EQ(attributes.size(), 3);
+}
+
+TEST(ComplexCodeTest, LongestDottedPrefixWins)
+{
+    const QColor red = Qt::red;
+    const QColor blue = Qt::blue;
+    const SyntaxMap map({SyntaxStyles{{QStringLiteral("function"), tokenColoured(red)},
+                                      {QStringLiteral("function.builtin"), tokenColoured(blue)}}});
+    EXPECT_EQ(map.resolve(QStringLiteral("function.builtin"))->color, blue);
+    EXPECT_EQ(map.resolve(QStringLiteral("function.builtin.x"))->color, blue);
+    EXPECT_EQ(map.resolve(QStringLiteral("function.special"))->color, red);
+    EXPECT_EQ(map.resolve(QStringLiteral("function"))->color, red);
+    EXPECT_EQ(map.resolve(QStringLiteral("functionx")), nullptr) << "a cut is always on a dot";
+    EXPECT_EQ(map.resolve(QStringLiteral("keyword")), nullptr);
+
+    // Layer by layer, nearest first: a fence's `keyword` also covers a
+    // `keyword.control` the theme spells out.
+    const SyntaxMap layered({SyntaxStyles{{QStringLiteral("keyword"), tokenColoured(red)}},
+                             SyntaxStyles{{QStringLiteral("keyword.control"), tokenColoured(blue)}}});
+    EXPECT_EQ(layered.resolve(QStringLiteral("keyword.control"))->color, red);
+
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+
+    // And through the highlighter, on whatever capture `print` carries.
+    CodeHighlighter highlighter;
+    const QString code = QStringLiteral("print(1)\n");
+    const SyntaxMap tagging = SyntaxMap::tagging();
+    const auto tagged = highlighter.highlight(code, QStringLiteral("python"), &tagging);
+    QString capture;
+    for (const QTextLayout::FormatRange &range : tagged) {
+        if (range.start == 0)
+            capture = SyntaxMap::captureOf(range.format);
+    }
+    ASSERT_FALSE(capture.isEmpty()) << "print is a token with a capture name";
+
+    const SyntaxMap exact({SyntaxStyles{{capture, tokenColoured(blue)}}});
+    EXPECT_EQ(tokenColourAt(highlighter.highlight(code, QStringLiteral("python"), &exact), 0), blue);
+    const SyntaxMap sibling({SyntaxStyles{{capture + QLatin1Char('x'), tokenColoured(blue)}}});
+    EXPECT_NE(tokenColourAt(highlighter.highlight(code, QStringLiteral("python"), &sibling), 0), blue);
+    if (const qsizetype dot = capture.indexOf(QLatin1Char('.')); dot > 0) {
+        const SyntaxMap parent({SyntaxStyles{{capture.left(dot), tokenColoured(red)}}});
+        EXPECT_EQ(tokenColourAt(highlighter.highlight(code, QStringLiteral("python"), &parent), 0), red);
+    }
+}
+
+TEST(ComplexCodeTest, ObsidianCodeVarsFeedTheDefaultMap)
+{
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+
+    const QHash<QString, QString> tokens = Scheme::parseObsidianCSS(
+        QStringLiteral(".theme-dark { --code-keyword: #FF0000; --code-comment: #00FF00; }"),
+        Theme::Mode::Dark);
+    Theme theme = Theme::builtin(Theme::Mode::Dark);
+    theme.setTokens(tokens);
+    const SyntaxStyles styles = theme.syntaxStyles();
+    ASSERT_TRUE(styles.contains(QStringLiteral("keyword")));
+    EXPECT_EQ(styles.value(QStringLiteral("keyword")).color, QColor(255, 0, 0));
+    EXPECT_EQ(styles.value(QStringLiteral("comment")).color, QColor(0, 255, 0));
+
+    CodeblocksHome none;
+    const QString note = QStringLiteral("```cpp\nreturn x;\n```\n");
+    auto plain = editorWith(note);
+    auto themed = editorWith(note);
+    themed->setTheme(theme);
+    EXPECT_GT(dominatedBy(*themed, 0), dominatedBy(*plain, 0) + 5)
+        << "`return` is a keyword.control and takes the theme's --code-keyword";
+}
+
+TEST(ComplexCodeTest, TabClickRelaysOutOnlyTheGroup)
+{
+    // A tab click used to lay every block of the note out again. Now it is the
+    // group's own blocks, which are the middle of the note's seven.
+    auto editor = editorWith(kTabbedNote);
+    editor->grab();
+    const quint64 wholeNote = editor->layoutCount();
+    const qsizetype group = kTabbedNote.indexOf(QLatin1String("```python"));
+
+    editor->selectCodeTab(group, 1);
+    editor->grab();
+    const quint64 relaid = editor->layoutCount() - wholeNote;
+    EXPECT_GT(relaid, 0u);
+    EXPECT_LT(relaid, wholeNote) << "the paragraphs outside the group were laid out again";
+    EXPECT_LE(relaid, 4u);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("puts(\"hi\")")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("Before.")));
+}
+
+TEST(ComplexCodeTest, TypingInAStyledBlockStaysInBudget)
+{
+    // CodeBlockPerfTest's long listing again, with every colour knob set: the
+    // per-keystroke cost of a map is a signature and a few hash lookups.
+    CodeblocksHome home("[cpp]\nbg = #101820ff\nfg = #D8DEE9ff\nborder = #3776AB80\n"
+                        "syntax.keyword = #C678DD bold\nsyntax.string = #98C379 italic\n"
+                        "syntax.comment = #5C6370 italic\nsyntax.function.builtin = #61AFEF\n");
+    const int lines = 5000;
+    QString note = QStringLiteral("# Listing\n\n```cpp\n");
+    for (int i = 0; i < lines; ++i)
+        note += QStringLiteral("int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
+    note += QStringLiteral("```\n");
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
+    const qsizetype middle = note.indexOf(QStringLiteral("value%1 ").arg(lines / 2));
+    editor->setCursorOffset(middle);
+    editor->enterBlockAt(middle);
+    editor->grab();
+
+    std::vector<double> samples;
+    for (int i = 0; i < 9; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClick(editor.get(), Qt::Key_Y);
+        editor->grab();
+        samples.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    std::sort(samples.begin(), samples.end());
+    std::printf("[ PERF     ] styled code block of %d lines: type %.2f ms\n", lines, samples[4]);
+    EXPECT_LT(samples[4], 8.0);
 }
 
 // --- long fences, in pieces --------------------------------------------------

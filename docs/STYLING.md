@@ -118,6 +118,87 @@ highlights it:
     ```
 ```
 
+### Colours
+
+A block's panel, plain text, border and token colours are the same kind of
+knob as the label colour: set them per language in `codeblocks.ini`, or on one
+fence.
+
+```ini
+[python]
+bg = #1E2A3Aff                    ; panel fill       (default: the theme's code background)
+fg = #D8DEE9ff                    ; plain code text  (default: the normal text colour)
+border = #3776AB80                ; 1 px panel border (default: none)
+syntax.keyword = #C678DD
+syntax.string  = #98C379 italic
+syntax.comment = #5C6370 italic
+syntax.function.builtin = #61AFEF bold
+```
+
+```markdown
+    ```python bg=#112233ff fg=#eee border=#3776AB syntax.keyword="#C678DD bold"
+    print("configure")
+    ```
+```
+
+A `syntax.*` value is a colour followed by any of `bold`, `italic`, `underline`
+(a colour is optional, so `italic` alone keeps the highlighter's colour). No
+size or font: the monospace metrics never change. `inherits` carries these
+keys too, and a fence's keys win over its section's.
+
+**Capture names.** Each token gets a dotted capture name from the highlighter,
+and takes the style of the *longest dotted prefix* some key names:
+`function.builtin` beats `function` for a built-in, `function` covers it when
+there is no `function.builtin`, and `functionx` never matches `function`.
+The names Kate's highlighter produces:
+
+| capture | Kate style | | capture | Kate style |
+|---|---|---|---|---|
+| `keyword` | Keyword | | `number` | DecVal, BaseN, Float |
+| `keyword.control` | ControlFlow | | `constant` | Constant |
+| `operator` | Operator | | `comment` | Comment, CommentVar |
+| `function` | Function | | `comment.doc` | Documentation |
+| `function.builtin` | BuiltIn | | `type` | DataType |
+| `function.special` | Extension | | `namespace` | Import |
+| `variable` | Variable | | `attribute` | Attribute, Annotation |
+| `string` | String, VerbatimString | | `preproc` | Preprocessor |
+| `string.special` | Char, SpecialChar | | `label` | RegionMarker |
+| `string.regex` | SpecialString | | `hint` `warning` `error` | Information, Warning, Alert/Error |
+| `primary` | Others | | | |
+
+A tree-sitter backend would feed its `highlights.scm` capture names into this
+same map, so a config written today keeps working when one is added; there is
+none yet, since Kate already covers 300+ languages without a new dependency.
+
+**A theme's defaults.** The layer under a block's own keys is the theme's. A
+`.json` scheme may carry a top-level `syntax` object (and one inside `dark` or
+`light`) with the same dotted keys, Zed's shape:
+
+```json
+{ "name": "Mine", "syntax": { "keyword": "#C678DD bold", "function.builtin": "#61AFEF" } }
+```
+
+An imported Obsidian theme lands here too: `--code-keyword`, `--code-string`,
+`--code-comment`, `--code-function`, `--code-value` (numbers),
+`--code-property` (variables), `--code-operator`, `--code-punctuation` and
+`--code-tag` are read as the same-named captures. Resolution is layer by layer,
+nearest first: the fence, then the `codeblocks.ini` section, then the theme,
+and within a layer the longest prefix; whatever none of them names keeps the
+highlighter's colour.
+
+A listing nested in a callout or quote takes the language's section and the
+theme, but has no fence of its own to carry attributes.
+
+**Switching it off.** `Code block colours` on the settings page
+(`editor.complexCodeBlocks`, on by default) off draws every block as if none of
+this were configured. With nothing configured it makes no difference at all.
+
+**Publishing.** A site built from a theme that names token colours gets a
+`--code-<capture>` CSS variable and a `.tok-<capture>` rule per token kind the
+page uses (dots become dashes: `.tok-function-builtin`), so a page's own CSS
+can retune a token. Per-language and per-fence colours are a live-editor
+feature and are not published.
+
 ### Tabs
 
 Two or more fences in a row, each marked `tab`, become one block with a tab

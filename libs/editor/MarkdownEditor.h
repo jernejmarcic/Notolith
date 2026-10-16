@@ -127,6 +127,11 @@ public:
     /// A table's source aligned into columns when the caret leaves a table
     /// it edited, as Advanced Tables does. On by default.
     void setAlignTables(bool on) { m_alignTables = on; }
+    /// Colour knobs on code blocks - `bg`, `fg`, `border`, `syntax.*` from
+    /// codeblocks.ini, a fence's own attributes and the theme. On by default;
+    /// off draws every block as if none of it were configured.
+    void setComplexCodeBlocks(bool on);
+    bool complexCodeBlocks() const { return m_complexCodeBlocks; }
     bool outlineNumbering() const { return m_outlineNumbering; }
     /// What an ordered number ends in as drawn: "." (the default), ":", ")" or
     /// anything short. Empty draws the delimiter the note was written with.
@@ -233,6 +238,9 @@ public:
     /// Shows tab `member` of the code tab group containing `sourceOffset`.
     /// What a click on a tab does; public for tests and for a keyboard command.
     void selectCodeTab(qsizetype sourceOffset, int member);
+    /// How many blocks have been laid out since the editor was built. For
+    /// tests: the difference across an action is how much it relaid.
+    quint64 layoutCount() const { return m_layoutCount; }
 
     /// One rendered row of a ```` ```query ```` block's results: `rect` in
     /// viewport coordinates, matching what a click there activates - public
@@ -1326,6 +1334,13 @@ private:
     const CodeFenceSpan *codeFenceOf(const BlockView &view) const;
     LanguageStyle codeStyleOf(const BlockView &view) const;
     LanguageStyle styleOfFence(const CodeFenceSpan &fence) const;
+    /// The same for a listing nested in a callout or quote, which has the
+    /// language and nothing else to go on.
+    LanguageStyle styleOfLanguage(const QString &language) const;
+    /// Token colours for a block styled `style`: its own `syntax.*` over the
+    /// theme's. False (and `*out` untouched) when nothing is configured or the
+    /// setting is off, which is when the highlighter must get no map at all.
+    bool syntaxMapFor(const LanguageStyle &style, SyntaxMap *out) const;
 
     /// NotebookBlock.cpp: a notebook-eligible block's run control, in the
     /// header strip alongside codeLabelOf's own label - recomputed from
@@ -2073,7 +2088,8 @@ private:
     QList<QTextLayout::FormatRange> codeFormatsFor(BlockView &view);
     /// Highlights one piece from the end state of the piece before it and
     /// records where it ended; the formats are relative to `*content`.
-    QList<QTextLayout::FormatRange> highlightPiece(BlockView &view, Range *content);
+    QList<QTextLayout::FormatRange> highlightPiece(BlockView &view, Range *content,
+                                                   QColor *plainText = nullptr);
     /// Brings the end state of every piece before `view` up to date, so
     /// `view` can start from the one just before it.
     void updateCodeStatesBefore(BlockView &view);
@@ -2096,6 +2112,9 @@ private:
     /// these, so an edit has to show without a restart.
     CalloutStyles m_calloutStyles = CalloutStyles::load();
     LanguageStyles m_languageStyles = LanguageStyles::load();
+    bool m_complexCodeBlocks = true;
+    quint64 m_layoutCount = 0;
+    SyntaxStyles m_themeSyntax; ///< m_theme's `syntax` layer, rebuilt in setTheme
     QFileSystemWatcher *m_configWatcher = nullptr;
     void watchStyleFiles();
     void reloadStyleFiles();

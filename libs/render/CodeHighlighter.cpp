@@ -9,9 +9,68 @@
 #include <KSyntaxHighlighting/Theme>
 #endif
 
+#include <QtGlobal>
+
 #include <optional>
 
 namespace noteAppC {
+
+namespace {
+
+/// Where the capture name rides on a mapped format; see SyntaxMap::captureOf.
+constexpr int kCaptureProperty = QTextFormat::UserProperty + 41;
+
+} // namespace
+
+SyntaxMap::SyntaxMap(QList<SyntaxStyles> layers)
+{
+    quint64 hash = 1469598103934665603ULL; // FNV-1a over every key and style
+    const auto mix = [&hash](quint64 value) { hash = (hash ^ value) * 1099511628211ULL; };
+    bool any = false;
+    for (const SyntaxStyles &layer : layers) {
+        if (layer.isEmpty())
+            continue; // an empty layer changes nothing, so it must not change the signature
+        any = true;
+        m_layers.append(layer);
+        mix(0xFFFF);
+        for (auto it = layer.cbegin(); it != layer.cend(); ++it) {
+            mix(qHash(it.key(), 0));
+            mix(it.value().color.isValid() ? quint64(it.value().color.rgba()) + 1 : 0);
+            mix(quint64(it.value().bold) | quint64(it.value().italic) << 1 | quint64(it.value().underline) << 2);
+        }
+    }
+    m_signature = any ? (hash | 1) : 0;
+}
+
+SyntaxMap SyntaxMap::tagging()
+{
+    SyntaxMap map;
+    map.m_signature = 2; // distinct from any hash|1 and from "empty"
+    return map;
+}
+
+const TokenStyle *SyntaxMap::resolve(const QString &capture, QString *matched) const
+{
+    for (const SyntaxStyles &layer : m_layers) {
+        // Longest dotted prefix: drop one trailing segment at a time. The cut
+        // is always on a dot, so `functionx` never reads as `function`.
+        for (QStringView key(capture); !key.isEmpty();) {
+            if (const auto it = layer.constFind(key.toString()); it != layer.cend()) {
+                if (matched)
+                    *matched = it.key();
+                return &it.value();
+            }
+            const qsizetype dot = key.lastIndexOf(QLatin1Char('.'));
+            key = dot < 0 ? QStringView() : key.left(dot);
+        }
+    }
+    return nullptr;
+}
+
+QString SyntaxMap::captureOf(const QTextCharFormat &format)
+{
+    return format.property(kCaptureProperty).toString();
+}
 
 namespace {
 
@@ -23,9 +82,11 @@ class Collector : public KSyntaxHighlighting::AbstractHighlighter {
 public:
     /// Highlights `text` as lines continuing from `state`, and returns the
     /// state the last line ended in.
-    KSyntaxHighlighting::State run(const QString &text, KSyntaxHighlighting::State state)
+    KSyntaxHighlighting::State run(const QString &text, KSyntaxHighlighting::State state,
+                                   const SyntaxMap *map)
     {
         formats.clear();
+        m_map = map && !map->isEmpty() ? map : nullptr;
         m_base = 0;
 
         qsizetype from = 0;
@@ -47,6 +108,7 @@ public:
         AbstractHighlighter::setTheme(theme);
         m_theme = theme;
         m_formats.clear();
+        m_mapped.clear();
     }
 
     QList<QTextLayout::FormatRange> formats;
@@ -60,9 +122,15 @@ protected:
         // One QTextCharFormat per Kate format, built once. theme() returns a
         // copy, and asking it up to seven times per token was most of what
         // highlighting cost.
-        auto cached = m_formats.find(format.id());
-        if (cached == m_formats.end())
-            cached = m_formats.insert(format.id(), charFormatOf(format));
+        //
+        // A map gets a cache of its own, keyed by its signature: ids are
+        // unique per Repository, so (map, id) is all that tells two runs
+        // apart, and a run without a map still reads m_formats exactly as
+        // before. Both go when the theme changes.
+        auto &cache = m_map ? mappedCache() : m_formats;
+        auto cached = cache.find(format.id());
+        if (cached == cache.end())
+            cached = cache.insert(format.id(), m_map ? mappedFormatOf(format) : charFormatOf(format));
         if (!cached->has_value())
             return; // the default text style: nothing to add
 
@@ -74,6 +142,38 @@ protected:
     }
 
 private:
+    using FormatCache = QHash<int, std::optional<QTextCharFormat>>;
+
+    FormatCache &mappedCache()
+    {
+        if (m_mapped.size() > 32)
+            m_mapped.clear(); // a few dozen distinct styles at most are ever live
+        return m_mapped[m_map->signature()];
+    }
+
+    /// charFormatOf() with the map's style laid over it. Plain text has no
+    /// capture and stays untouched; a token the map does not name keeps the
+    /// highlighter's colour but still carries its capture name.
+    std::optional<QTextCharFormat> mappedFormatOf(const KSyntaxHighlighting::Format &format) const
+    {
+        const QString capture = SyntaxMap::captureOf(int(format.textStyle()));
+        if (capture.isEmpty())
+            return charFormatOf(format);
+        QTextCharFormat charFormat = charFormatOf(format).value_or(QTextCharFormat());
+        if (const TokenStyle *style = m_map->resolve(capture)) {
+            if (style->color.isValid())
+                charFormat.setForeground(style->color);
+            if (style->bold)
+                charFormat.setFontWeight(QFont::Bold);
+            if (style->italic)
+                charFormat.setFontItalic(true);
+            if (style->underline)
+                charFormat.setFontUnderline(true);
+        }
+        charFormat.setProperty(kCaptureProperty, capture);
+        return charFormat;
+    }
+
     std::optional<QTextCharFormat> charFormatOf(const KSyntaxHighlighting::Format &format) const
     {
         const KSyntaxHighlighting::Theme &theme = m_theme;
@@ -98,7 +198,9 @@ private:
 
     qsizetype m_base = 0;
     KSyntaxHighlighting::Theme m_theme;
-    QHash<int, std::optional<QTextCharFormat>> m_formats; // by Format::id()
+    FormatCache m_formats;                       // by Format::id()
+    QHash<quint64, FormatCache> m_mapped;        // by SyntaxMap::signature(), then Format::id()
+    const SyntaxMap *m_map = nullptr;            // the run's, null for none
 };
 
 #endif // NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
@@ -137,6 +239,49 @@ const QHash<QString, QString> &aliases()
 }
 
 } // namespace
+
+QString SyntaxMap::captureOf(int kateTextStyle)
+{
+#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
+    using Style = KSyntaxHighlighting::Theme::TextStyle;
+    switch (Style(kateTextStyle)) {
+    case Style::Normal:         break;
+    case Style::Keyword:        return QStringLiteral("keyword");
+    case Style::ControlFlow:    return QStringLiteral("keyword.control");
+    case Style::Operator:       return QStringLiteral("operator");
+    case Style::BuiltIn:        return QStringLiteral("function.builtin");
+    case Style::Extension:      return QStringLiteral("function.special");
+    case Style::Preprocessor:   return QStringLiteral("preproc");
+    case Style::Attribute:
+    case Style::Annotation:     return QStringLiteral("attribute");
+    case Style::Function:       return QStringLiteral("function");
+    case Style::Variable:       return QStringLiteral("variable");
+    case Style::DataType:       return QStringLiteral("type");
+    case Style::Char:
+    case Style::SpecialChar:    return QStringLiteral("string.special");
+    case Style::String:
+    case Style::VerbatimString: return QStringLiteral("string");
+    case Style::SpecialString:  return QStringLiteral("string.regex");
+    case Style::Import:         return QStringLiteral("namespace");
+    case Style::DecVal:
+    case Style::BaseN:
+    case Style::Float:          return QStringLiteral("number");
+    case Style::Constant:       return QStringLiteral("constant");
+    case Style::Comment:
+    case Style::CommentVar:     return QStringLiteral("comment");
+    case Style::Documentation:  return QStringLiteral("comment.doc");
+    case Style::RegionMarker:   return QStringLiteral("label");
+    case Style::Information:    return QStringLiteral("hint");
+    case Style::Warning:        return QStringLiteral("warning");
+    case Style::Alert:
+    case Style::Error:          return QStringLiteral("error");
+    case Style::Others:         return QStringLiteral("primary");
+    }
+#else
+    Q_UNUSED(kateTextStyle);
+#endif
+    return {};
+}
 
 struct CodeHighlighter::Private {
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
@@ -221,15 +366,16 @@ bool CodeHighlighter::knows(const QString &language) const
 }
 
 QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
-                                                           const QString &language) const
+                                                           const QString &language,
+                                                           const SyntaxMap *map) const
 {
     State state;
-    return highlight(text, language, &state);
+    return highlight(text, language, &state, map);
 }
 
 QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
                                                            const QString &language,
-                                                           State *state) const
+                                                           State *state, const SyntaxMap *map) const
 {
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     if (text.isEmpty())
@@ -248,13 +394,14 @@ QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
         d->collector.setDefinition(definition);
     const KSyntaxHighlighting::State start = state->d ? state->d->state : KSyntaxHighlighting::State();
     auto end = std::make_shared<State::Data>();
-    end->state = d->collector.run(text, start);
+    end->state = d->collector.run(text, start, map);
     state->d = std::move(end);
     return d->collector.formats;
 #else
     Q_UNUSED(text);
     Q_UNUSED(language);
     Q_UNUSED(state);
+    Q_UNUSED(map);
     return {};
 #endif
 }

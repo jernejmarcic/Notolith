@@ -982,7 +982,15 @@ void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &v
                                       qMax(qreal(40), contentWidth() - indent - 8),
                                       band.height() + 6),
                                4, 4);
-        painter.fillPath(rounded, panelColour);
+        const LanguageStyle style = styleOfLanguage(span.payload);
+        painter.fillPath(rounded, style.bg.isValid() ? style.bg : panelColour);
+        if (style.border.isValid()) {
+            painter.save();
+            painter.setPen(QPen(style.border, 1));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPath(rounded);
+            painter.restore();
+        }
     }
 }
 
@@ -1011,7 +1019,7 @@ LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
     // Three layers, as callouts have: the language as written, the section
     // codeblocks.ini gives it, then whatever the fence itself says after the
     // language - `name`, `icon` and `color`, the keys codeblocks.ini uses.
-    LanguageStyle style = m_languageStyles.resolve(fence.language);
+    LanguageStyle style = styleOfLanguage(fence.language);
     const QMap<QString, QString> &own = fence.attributes;
     if (!own.value(QStringLiteral("name")).isEmpty())
         style.name = own.value(QStringLiteral("name"));
@@ -1020,7 +1028,38 @@ LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
     const QColor colour = CalloutStyle::parseColor(own.value(QStringLiteral("color")));
     if (colour.isValid())
         style.color = colour;
+    if (m_complexCodeBlocks)
+        style.applyColours(own); // `bg=`, `fg=`, `border=`, `syntax.<capture>=`
     return style;
+}
+
+LanguageStyle MarkdownEditor::styleOfLanguage(const QString &language) const
+{
+    LanguageStyle style = m_languageStyles.resolve(language);
+    if (!m_complexCodeBlocks) {
+        // Off is "as if codeblocks.ini never said any of it".
+        style.bg = style.fg = style.border = QColor();
+        style.syntax.clear();
+    }
+    return style;
+}
+
+bool MarkdownEditor::syntaxMapFor(const LanguageStyle &style, SyntaxMap *out) const
+{
+    if (!m_complexCodeBlocks || (style.syntax.isEmpty() && m_themeSyntax.isEmpty()))
+        return false;
+    *out = SyntaxMap({style.syntax, m_themeSyntax});
+    return !out->isEmpty();
+}
+
+void MarkdownEditor::setComplexCodeBlocks(bool on)
+{
+    if (m_complexCodeBlocks == on)
+        return;
+    m_complexCodeBlocks = on;
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
 }
 
 LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
@@ -1029,7 +1068,7 @@ LanguageStyle MarkdownEditor::codeStyleOf(const BlockView &view) const
         return styleOfFence(*fence);
     QString language;
     codeContentOf(view, &language);
-    return m_languageStyles.resolve(language);
+    return styleOfLanguage(language);
 }
 
 void MarkdownEditor::selectCodeTab(qsizetype sourceOffset, int member)
@@ -1038,7 +1077,16 @@ void MarkdownEditor::selectCodeTab(qsizetype sourceOffset, int member)
     if (!group || member < 0 || member >= group->count)
         return;
     m_selectedTabs.insert(group->span.start, member);
-    invalidateLayouts();
+    // Only the group's own blocks change what they show; relaying out the
+    // whole note for a tab click is what this used to do.
+    for (BlockView &view : m_blocks) {
+        if (view.span.range.start < group->span.start || view.span.range.start >= group->span.end)
+            continue;
+        view.layout.reset();
+        view.laidOut = false;
+        view.heightEstimated = false;
+        view.height = 0;
+    }
     updateLayout();
     viewport()->update();
 }
@@ -1269,7 +1317,10 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
     }
     QPainterPath rounded;
     rounded.addRoundedRect(panel, 6, 6);
-    painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
+    const LanguageStyle style = codeStyleOf(view);
+    painter.fillPath(rounded, style.bg.isValid()
+                                  ? style.bg
+                                  : m_theme.color(QStringLiteral("--background-primary-alt")));
 
     if (isFirst)
         paintCodeHeader(painter, view, left, top, panel);
@@ -1285,6 +1336,13 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
         painter.setPen(m_theme.color(QStringLiteral("--text-muted")));
         painter.drawText(QRectF(left, panel.bottom() - 8 - caption, contentWidth(), caption),
                          Qt::AlignVCenter | Qt::AlignLeft, view.options->caption);
+    }
+    if (style.border.isValid()) {
+        // Half a pixel in, so the 1 px line lands on whole pixels inside the
+        // clip a long fence's pieces paint through.
+        painter.setPen(QPen(style.border, 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(panel.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
     }
     painter.restore();
 }

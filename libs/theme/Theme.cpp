@@ -224,6 +224,34 @@ QString Theme::value(const QString &token) const
     return m_tokens.value(token);
 }
 
+SyntaxStyles Theme::syntaxStyles() const
+{
+    // Obsidian's code variables, spelled as the capture names they cover.
+    static const std::pair<const char *, const char *> aliases[] = {
+        {"--code-keyword", "keyword"},     {"--code-string", "string"},
+        {"--code-comment", "comment"},     {"--code-function", "function"},
+        {"--code-value", "number"},        {"--code-property", "variable"},
+        {"--code-operator", "operator"},   {"--code-punctuation", "punctuation"},
+        {"--code-tag", "tag"},
+    };
+    SyntaxStyles out;
+    for (const auto &[token, capture] : aliases) {
+        const auto it = m_tokens.constFind(QLatin1String(token));
+        if (it == m_tokens.cend())
+            continue;
+        if (const auto style = TokenStyle::parse(it.value()))
+            out.insert(QLatin1String(capture), *style);
+    }
+    static const QString prefix = QStringLiteral("--syntax-");
+    for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
+        if (!it.key().startsWith(prefix))
+            continue;
+        if (const auto style = TokenStyle::parse(it.value()))
+            out.insert(it.key().mid(prefix.size()), *style);
+    }
+    return out;
+}
+
 QColor Theme::parseColor(const QString &text)
 {
     const QString value = text.trimmed();

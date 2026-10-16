@@ -301,6 +301,7 @@ MarkdownEditor::~MarkdownEditor()
 void MarkdownEditor::setTheme(const Theme &theme)
 {
     m_theme = theme;
+    m_themeSyntax = theme.syntaxStyles();
     m_code.setTheme(theme);
     if (m_findBar)
         m_findBar->setTheme(theme);
@@ -1538,25 +1539,46 @@ QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(BlockView &view)
 
     updateCodeStatesBefore(view);
     Range content;
-    QList<QTextLayout::FormatRange> formats = highlightPiece(view, &content);
+    QColor plainText;
+    QList<QTextLayout::FormatRange> formats = highlightPiece(view, &content, &plainText);
 
     // Highlighter offsets are relative to the code; the layout wants display
     // offsets. Nothing inside a fence is ever hidden, so the shift is uniform.
     const qsizetype shift = view.map.toDisplay(content.start);
     for (QTextLayout::FormatRange &range : formats)
         range.start += int(shift);
+    if (plainText.isValid() && content.isValid() && content.length() > 0) {
+        // The block's `fg`: one range under every token, which paint over it.
+        QTextLayout::FormatRange plain;
+        plain.start = int(shift);
+        plain.length = int(content.length());
+        plain.format.setForeground(plainText);
+        formats.prepend(plain);
+    }
     return formats;
 }
 
-QList<QTextLayout::FormatRange> MarkdownEditor::highlightPiece(BlockView &view, Range *content)
+QList<QTextLayout::FormatRange> MarkdownEditor::highlightPiece(BlockView &view, Range *content,
+                                                               QColor *plainText)
 {
     QString language;
     *content = codeContentOf(view, &language);
     CodeHighlighter::State state =
         view.piece > 0 ? (&view - 1)->codeEnd : CodeHighlighter::State();
     QList<QTextLayout::FormatRange> formats;
+    // Nothing configured and the setting off both come out as a null map and
+    // no plain-text colour: the highlighter's own output, untouched.
+    SyntaxMap map;
+    bool mapped = false;
+    if (m_complexCodeBlocks) {
+        const LanguageStyle style = codeStyleOf(view);
+        mapped = syntaxMapFor(style, &map);
+        if (plainText)
+            *plainText = style.fg;
+    }
     if (content->isValid() && content->length() > 0 && !language.isEmpty())
-        formats = m_code.highlight(m_text.mid(content->start, content->length()), language, &state);
+        formats = m_code.highlight(m_text.mid(content->start, content->length()), language, &state,
+                                   mapped ? &map : nullptr);
     if (view.pieces <= 1)
         return formats;
 
@@ -1617,10 +1639,20 @@ QList<QTextLayout::FormatRange> MarkdownEditor::nestedCodeFormatsFor(const Block
         const Range range = view.map.toDisplay(clipped);
         if (range.length() <= 0 || range.end > shown.size())
             continue;
-        QList<QTextLayout::FormatRange> tokens =
-            m_code.highlight(shown.mid(range.start, range.length()), span.payload);
+        SyntaxMap map;
+        const LanguageStyle style = styleOfLanguage(span.payload);
+        const bool mapped = syntaxMapFor(style, &map);
+        QList<QTextLayout::FormatRange> tokens = m_code.highlight(
+            shown.mid(range.start, range.length()), span.payload, mapped ? &map : nullptr);
         for (QTextLayout::FormatRange &token : tokens)
             token.start += int(range.start);
+        if (style.fg.isValid()) {
+            QTextLayout::FormatRange plain;
+            plain.start = int(range.start);
+            plain.length = int(range.length());
+            plain.format.setForeground(style.fg);
+            formats.append(plain);
+        }
         formats += tokens;
     }
     return formats;
@@ -2816,6 +2848,7 @@ MarkdownEditor::BlockView *MarkdownEditor::scrollableTableAt(const QPoint &viewp
 
 void MarkdownEditor::layoutBlock(BlockView &view)
 {
+    ++m_layoutCount;
     // Whatever this block drew rendered last time goes: a block being edited
     // shows its source, and a PDF, a video or a card left over from before
     // would be painted over that source and the blocks below it.
