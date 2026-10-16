@@ -5556,6 +5556,14 @@ void MainWindow::renamePathAt(const QModelIndex &index)
 
 bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error)
 {
+    // The link rewrite below reads each linking note from disk. Typed text
+    // not on disk yet would be written back over it by the next autosave,
+    // [[Old]] and all, so it goes first - whatever files.autosave says, a
+    // rename is an explicit file operation. The watcher then shows the
+    // rewritten note in the open editor.
+    // ponytail: a link typed in the last 2 s is flushed but may not be
+    // indexed yet, so it is not rewritten; wait for the indexer if it matters.
+    autosave();
     const QString oldRelative = m_vault.relative(oldPath);
     QString newPath;
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))

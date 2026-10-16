@@ -1119,6 +1119,8 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         QString subpath;
         bool wiki = true;
         Range targetRange;
+        QString resolved; // the note the link pointed at, old path
+        QString movedTo;  // the same note after the rename
     };
     QHash<QString, QList<Hit>> perFile;
 
@@ -1135,11 +1137,20 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         if (query.isNull(4) || query.isNull(5))
             continue; // indexed before tstart/tfinish existed; rebuild will fix it
 
-        const QString fromAbsolute = vault.absolute(fromPath);
-        if (resolve(target, fromAbsolute) != oldRelative)
+        // oldRelative is a note or a folder: a folder's notes move with it,
+        // each to the same spot under the new name.
+        const QString resolved = resolve(target, vault.absolute(fromPath));
+        QString movedTo;
+        if (resolved == oldRelative)
+            movedTo = newRelative;
+        else if (resolved.startsWith(oldRelative + QLatin1Char('/')))
+            movedTo = newRelative + resolved.mid(oldRelative.size());
+        else
             continue;
 
         Hit hit;
+        hit.resolved = resolved;
+        hit.movedTo = movedTo;
         hit.subpath = query.value(2).toString();
         hit.wiki = query.value(3).toBool();
         hit.targetRange = {query.value(4).toLongLong(), query.value(5).toLongLong()};
@@ -1161,9 +1172,13 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
 
     for (auto it = perFile.constBegin(); it != perFile.constEnd(); ++it) {
         const QString fromPath = it.key();
-        // The renamed note itself has already moved on disk by the time this
-        // runs; every other linking note is still where the index found it.
-        const QString actualRelative = fromPath == oldRelative ? newRelative : fromPath;
+        // The renamed note (or every note under the renamed folder) has
+        // already moved on disk by the time this runs; every other linking
+        // note is still where the index found it.
+        const QString actualRelative =
+            fromPath == oldRelative ? newRelative
+            : fromPath.startsWith(oldRelative + QLatin1Char('/')) ? newRelative + fromPath.mid(oldRelative.size())
+                                                                  : fromPath;
         const QString absolutePath = vault.absolute(actualRelative);
 
         Note note;
@@ -1192,7 +1207,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             const QString decoded =
                 hit.wiki ? rawSlice : QUrl::fromPercentEncoding(rawSlice.toUtf8());
 
-            QString rebased = rebasedTarget(decoded, oldRelative, newRelative);
+            QString rebased = rebasedTarget(decoded, hit.resolved, hit.movedTo);
             if (!hit.wiki)
                 rebased = QString::fromUtf8(QUrl::toPercentEncoding(rebased, "/"));
 

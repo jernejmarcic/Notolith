@@ -367,6 +367,30 @@ protected:
 
 } // namespace
 
+TEST_F(RenameLinksTest, FolderRenameRewritesPathLinksIntoIt)
+{
+    write(QStringLiteral("Folder/A.md"), "# A\n");
+    write(QStringLiteral("Folder/B.md"), "[[Folder/A]] [x](A.md)");
+    write(QStringLiteral("Other.md"), "[[Folder/A]] [[A]] [y](Folder/A.md)");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Folder")), QStringLiteral("Moved"),
+                                 &newPath, &error))
+        << error.toStdString();
+
+    // B.md (itself moved with the folder) and Other.md.
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Folder"), QStringLiteral("Moved"), vault, &error), 2)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Moved/B.md"))), QByteArray("[[Moved/A]] [x](A.md)"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other.md"))),
+              QByteArray("[[Moved/A]] [[A]] [y](Moved/A.md)"));
+}
+
 TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
 {
     write(QStringLiteral("Old Note.md"), "# Old Note\n\nSome content.\n");

@@ -1132,6 +1132,45 @@ TEST_F(WindowTest, RenamingTheOpenNoteUpdatesLinksAndTheEditorsPath)
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Renamed.md")));
 }
 
+TEST_F(WindowTest, RenamingWithAModifiedLinkingNoteOpenKeepsTheLinkRewrite)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "See [[Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Home.md")));
+    auto *editor = window.editor();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    ASSERT_TRUE(editor->isModified()) << "the rename must beat the autosave timer";
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+
+    // The typed text was saved first, so the rewrite worked on it.
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Renamed]].\nx"));
+    // The watcher then brings the rewritten link into the open editor.
+    WAIT_TRUE(editor->noteText().contains(QStringLiteral("[[Renamed]]")), 5000);
+
+    // ...and the next autosave no longer writes [[Target]] back.
+    QTest::keyClicks(editor, QStringLiteral("y"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Renamed]].\nxy"));
+}
+
 namespace {
 /// The inline title of the tab `editor` is in.
 QLineEdit *titleOf(MarkdownEditor *editor)
