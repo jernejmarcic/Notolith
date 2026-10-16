@@ -53,3 +53,15 @@ The pattern is PCRE2 (Qt's `QRegularExpression`), not JavaScript's engine.
 - At most 500 matches per note are highlighted.
 
 Both rules are pinned by `tests/test_search.cpp`.
+
+## Quick switcher
+
+Ctrl+O (`switcher:open`) fuzzy-finds a note by path. It is also "find or
+create", as in Obsidian: Enter with no match, or Shift+Enter with matches
+showing, creates a note named as typed (a trailing `.md` is not doubled) in the
+vault root and opens it. A name with a `/` creates that folder path first. A
+name that is empty or holds `# ^ [ ] | : \`, or a `..` folder, is refused in
+the status bar; an existing name gets a numeric suffix, like New note.
+Obsidian's "default location for new notes" setting is not read yet, so the
+vault root is always the folder. The command palette and the merge picker
+share the widget but never create (`QuickSwitcher::setCreateAllowed`).

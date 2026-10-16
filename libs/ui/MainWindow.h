@@ -160,6 +160,8 @@ private slots:
     // QMetaObject::invokeMethod the same way they already drive save().
 
     void newNoteIn(const QString &folderRelative);
+    /// The quick switcher's "create": a note named as typed, "Folder/Name" too.
+    void createNoteNamed(const QString &typed);
     void newFolderIn(const QString &folderRelative);
     void renamePathAt(const QModelIndex &index);
     /// The rename itself, shared by the tree and the inline title: moves the
