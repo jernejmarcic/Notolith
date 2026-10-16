@@ -68,7 +68,9 @@ What it does with the bytes - the file is the truth:
   (typing inside a tag the caret has revealed edits the tag, unescaped).
 - An entity (`&amp;`, `&nbsp;`, `&#169;`, every name HTML defines) shows as
   its character; the caret steps over it as one, and Backspace or Delete
-  removes all of it.
+  removes all of it. With the caret on it (live preview, no selection) it
+  opens into its source, `&amp;`, and edits as text; it closes again when the
+  caret leaves.
 - Whitespace shows collapsed, HTML's way, and is never rewritten: a run of
   spaces or a newline shows as one space, but stays in the file as written.
   CRLF and a BOM are untouched.
@@ -258,9 +260,9 @@ same pass: up to five levels deep (Obsidian's own limit). A note already being
 drawn around it (it embeds itself, or A embeds B embeds A) and anything past
 the fifth level stays the plain text panel, which is what ends a loop.
 
-Titles follow Obsidian: a whole-note embed carries the note's name over it, a
-`#^id` block embed has none (Obsidian titles an embed only when it has no
-subpath). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
+Titles: a whole-note embed carries the note's name over it, a heading embed
+"Note > Heading", and a `#^id` block embed none (Obsidian shows a block embed
+bare). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
 in Obsidian's live preview) and `[[Note#^id]]` shows as written; a heading
 link shows "Note > Heading".
 

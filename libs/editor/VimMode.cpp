@@ -1213,8 +1213,9 @@ bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
         for (int i = 0; i < n && out.pos < limit; ++i)
             out.pos = qMin(limit, stepOver(out.pos + 1, 1));
         // On the last character it fails, as in vim (an operator's limit is
-        // past it, so `dl` still takes it); an empty line never moves.
-        return out.pos != cur;
+        // past it, so `dl` still takes it); an empty line never moves, and
+        // `x` on one is silent, so only a bare motion fails.
+        return op || out.pos != cur;
     }
     case 'j':
     case 'k': {

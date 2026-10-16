@@ -1099,6 +1099,14 @@ TEST(VimTest, LAndHAtALineEdgeFailARunningMacro)
     }
 }
 
+TEST(VimTest, XOnAnEmptyLineDoesNotEndAMacro)
+{
+    Vim v(QStringLiteral("a\n\nb\n"));
+    v.keys(QStringLiteral("qaxjq")); // deletes a, now on the empty line
+    v.keys(QStringLiteral("2@a"));   // x on the empty line is silent, then b goes
+    EXPECT_EQ(v.text(), QStringLiteral("\n\n\n"));
+}
+
 TEST(VimTest, BlockVisualDelete)
 {
     Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
