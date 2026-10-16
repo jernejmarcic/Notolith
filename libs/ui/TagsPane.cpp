@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QShowEvent>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -163,8 +164,20 @@ void TagsPane::toggleSort()
     refresh();
 }
 
+void TagsPane::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    if (m_stale)
+        refresh();
+}
+
 void TagsPane::refresh()
 {
+    if (!isVisible()) {
+        m_stale = true;
+        return;
+    }
+    m_stale = false;
     m_list->clear();
     if (!m_index || !m_index->isOpen()) {
         m_header->setText(tr("Tags"));

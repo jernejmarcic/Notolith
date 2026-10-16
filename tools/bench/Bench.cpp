@@ -1608,9 +1608,16 @@ int main(int argc, char *argv[])
                                  [&] { (void)index.search(QStringLiteral("zyxwvu")); });
             timings << benchCall(QStringLiteral("Every note for a base"), QStringLiteral("allNotesForBases"), 5,
                                  [&] { (void)index.allNotesForBases(); });
-            if (auto *tags = window->findChild<TagsPane *>())
-                timings << benchCall(QStringLiteral("Tags pane refresh"), QStringLiteral("%1 tags").arg(index.allTags().size()),
+            if (auto *tags = window->findChild<TagsPane *>()) {
+                // A hidden pane only marks itself stale (an index change costs
+                // this); shown, it rebuilds, which is what showing it costs.
+                tags->hide();
+                timings << benchCall(QStringLiteral("Tags pane refresh"), QStringLiteral("hidden, index change"),
                                      5, [&] { tags->refresh(); });
+                tags->show();
+                timings << benchCall(QStringLiteral("Tags pane refresh"), QStringLiteral("%1 tags, shown").arg(index.allTags().size()),
+                                     5, [&] { tags->refresh(); });
+            }
         }
 
         // A notebook's stored outputs go into the output cache when it is read.

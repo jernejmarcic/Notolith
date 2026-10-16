@@ -191,13 +191,10 @@ public:
     /// outgoing link targets, for libs/ext/bases to filter and sort in
     /// memory. Four queries total - files, props, tags, links - never one
     /// per note, the same shape the 20 000-note indexing budget already
-    /// depends on. Its own connection, like search(): 54 ms on 20 000 notes,
-    /// so call it from a worker thread.
+    /// depends on. Its own connections, like search(), so call it from a
+    /// worker thread; the three child tables are read in parallel (half the
+    /// time of reading them one after the other).
     QList<BaseNote> allNotesForBases() const;
-
-private:
-    static QList<BaseNote> readBaseNotes(const QSqlDatabase &db);
-public:
 
 signals:
     void changed();

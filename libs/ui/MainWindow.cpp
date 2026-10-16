@@ -266,6 +266,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(&m_lostRetry, &QTimer::timeout, this, [this] { followLostNotes(true); });
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
+#ifdef NOTEAPPC_HAVE_HISTORY
+    // libgit2's one-time init is 5 ms; the window is built meanwhile.
+    if (featureOn("note-history"))
+        m_historyPool.start([] { NoteHistory::warmUp(); });
+#endif
     m_theme = themeFromSettings();
     // The style sheet before the widgets exist, so each is styled once as it
     // is made: set after them (applyTheme), it re-polished every one, a third

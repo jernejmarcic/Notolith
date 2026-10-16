@@ -1,6 +1,7 @@
 #include "Index.h"
 
 #include <algorithm>
+#include <future>
 #include <optional>
 
 #include <QCryptographicHash>
@@ -1275,76 +1276,99 @@ Index::GraphData Index::graphData() const
 // file is opened, so it costs nothing in a build without the module and
 // nothing at startup in a build with it.
 
+namespace {
+
+/// Runs `read` on a connection of its own, opened and closed on the calling
+/// thread (QSqlDatabase connections are per thread).
+template <typename Read>
+void withConnection(const QString &databasePath, Read read)
+{
+    const QString connectionName =
+        QStringLiteral("noteAppC-bases-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(databasePath);
+        if (db.open())
+            read(db);
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+}
+
+} // namespace
+
 QList<Index::BaseNote> Index::allNotesForBases() const
 {
     QList<BaseNote> notes;
     if (m_databasePath.isEmpty())
         return notes;
-    // A connection of its own, as search() has: 54 ms on 20 000 notes is
-    // worker-thread work, and QSqlDatabase connections are per thread.
-    const QString connectionName =
-        QStringLiteral("noteAppC-bases-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-    {
-        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-        db.setDatabaseName(m_databasePath);
-        if (db.open())
-            notes = readBaseNotes(db);
-    }
-    QSqlDatabase::removeDatabase(connectionName);
-    return notes;
-}
-
-QList<Index::BaseNote> Index::readBaseNotes(const QSqlDatabase &db)
-{
-    QList<BaseNote> notes;
 
     QHash<qint64, qsizetype> rowOf; // file id -> index into notes
-    QSqlQuery files(db);
-    // Attachments carry no properties and are not what a base lists. In path
-    // order, what a view with no `sort:` shows: the rowid order was the
-    // order the indexer happened to walk the disk in.
-    files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0 ORDER BY path"));
-    while (files.next()) {
-        BaseNote note;
-        const qint64 id = files.value(0).toLongLong();
-        note.path = files.value(1).toString();
-        note.mtime = files.value(2).toLongLong();
-        note.size = files.value(3).toLongLong();
-        rowOf.insert(id, notes.size());
-        notes.append(std::move(note));
-    }
+    withConnection(m_databasePath, [&](const QSqlDatabase &db) {
+        QSqlQuery files(db);
+        files.setForwardOnly(true); // no row cache: each row is read once
+        // Attachments carry no properties and are not what a base lists. In
+        // path order, what a view with no `sort:` shows: the rowid order was
+        // the order the indexer happened to walk the disk in.
+        files.exec(QStringLiteral("SELECT id, path, mtime, size FROM files WHERE words >= 0 ORDER BY path"));
+        while (files.next()) {
+            BaseNote note;
+            note.path = files.value(1).toString();
+            note.mtime = files.value(2).toLongLong();
+            note.size = files.value(3).toLongLong();
+            rowOf.insert(files.value(0).toLongLong(), notes.size());
+            notes.append(std::move(note));
+        }
+    });
 
-    QSqlQuery props(db);
-    props.exec(QStringLiteral("SELECT file, key, type, value FROM props"));
-    while (props.next()) {
-        const auto it = rowOf.constFind(props.value(0).toLongLong());
-        if (it == rowOf.constEnd())
-            continue;
-        Property property;
-        property.key = props.value(1).toString();
-        property.type = static_cast<Property::Type>(props.value(2).toInt());
-        // put() joins a list's values with '\n'; an empty join would come
-        // back as one empty string instead of no values at all.
-        const QString value = props.value(3).toString();
-        if (!value.isEmpty())
-            property.values = value.split(QLatin1Char('\n'));
-        notes[it.value()].properties.append(property);
-    }
+    // The three child tables are 60 000 to 100 000 rows each and the cost is
+    // a QVariant per cell, so each is read on its own thread and connection
+    // (WAL lets readers run side by side) into a list indexed like `notes`,
+    // then moved in: 49 ms of queries on 20 000 notes become the slowest one.
+    // std::async rather than the global pool: this may itself run on that
+    // pool, and waiting on a task queued behind it would be a deadlock.
+    const qsizetype rows = notes.size();
+    const auto readEach = [&](const QString &sql, auto onRow) {
+        withConnection(m_databasePath, [&](const QSqlDatabase &db) {
+            QSqlQuery query(db);
+            query.setForwardOnly(true);
+            query.exec(sql);
+            while (query.next()) {
+                const auto it = rowOf.constFind(query.value(0).toLongLong());
+                if (it != rowOf.constEnd())
+                    onRow(it.value(), query);
+            }
+        });
+    };
+    QList<QList<Property>> properties(rows);
+    QList<QStringList> tags(rows);
+    QList<QStringList> linkTargets(rows);
+    auto propsTask = std::async(std::launch::async, [&] {
+        readEach(QStringLiteral("SELECT file, key, type, value FROM props"),
+                 [&](qsizetype row, const QSqlQuery &query) {
+                     Property property;
+                     property.key = query.value(1).toString();
+                     property.type = static_cast<Property::Type>(query.value(2).toInt());
+                     // put() joins a list's values with '\n'; an empty join would
+                     // come back as one empty string instead of no values at all.
+                     const QString value = query.value(3).toString();
+                     if (!value.isEmpty())
+                         property.values = value.split(QLatin1Char('\n'));
+                     properties[row].append(std::move(property));
+                 });
+    });
+    auto tagsTask = std::async(std::launch::async, [&] {
+        readEach(QStringLiteral("SELECT DISTINCT file, name FROM tags"),
+                 [&](qsizetype row, const QSqlQuery &query) { tags[row].append(query.value(1).toString()); });
+    });
+    readEach(QStringLiteral("SELECT file, target FROM links WHERE external = 0 AND target != ''"),
+             [&](qsizetype row, const QSqlQuery &query) { linkTargets[row].append(query.value(1).toString()); });
+    propsTask.get();
+    tagsTask.get();
 
-    QSqlQuery tags(db);
-    tags.exec(QStringLiteral("SELECT DISTINCT file, name FROM tags"));
-    while (tags.next()) {
-        const auto it = rowOf.constFind(tags.value(0).toLongLong());
-        if (it != rowOf.constEnd())
-            notes[it.value()].tags.append(tags.value(1).toString());
-    }
-
-    QSqlQuery links(db);
-    links.exec(QStringLiteral("SELECT file, target FROM links WHERE external = 0 AND target != ''"));
-    while (links.next()) {
-        const auto it = rowOf.constFind(links.value(0).toLongLong());
-        if (it != rowOf.constEnd())
-            notes[it.value()].linkTargets.append(links.value(1).toString());
+    for (qsizetype row = 0; row < rows; ++row) {
+        notes[row].properties = std::move(properties[row]);
+        notes[row].tags = std::move(tags[row]);
+        notes[row].linkTargets = std::move(linkTargets[row]);
     }
     return notes;
 }

@@ -63,15 +63,28 @@ struct NoteHistory::Repository {
     }
 };
 
+/// Once per process, and never shut down: a history's last owner can be a
+/// save still running on the history pool, and its git_libgit2_shutdown()
+/// there tore OpenSSL down while the next vault's init on the UI thread
+/// was loading the system's certificates - a crash one test run in six.
+/// The init is the 5 ms of a cold start that loads those certificates, so
+/// warmUp() lets a worker pay it while the window is built; a static's init
+/// is thread-safe, and whoever needs it first waits for it.
+static void initLibgit2()
+{
+    static const int initialised = git_libgit2_init();
+    Q_UNUSED(initialised);
+}
+
+void NoteHistory::warmUp()
+{
+    initLibgit2();
+}
+
 NoteHistory::NoteHistory(const QString &vaultRoot)
     : m_repo(std::make_unique<Repository>())
 {
-    // Once per process, and never shut down: a history's last owner can be a
-    // save still running on the history pool, and its git_libgit2_shutdown()
-    // there tore OpenSSL down while the next vault's init on the UI thread
-    // was loading the system's certificates - a crash one test run in six.
-    static const int initialised = git_libgit2_init();
-    Q_UNUSED(initialised);
+    initLibgit2();
     m_repo->path = repositoryPathFor(vaultRoot);
     // Only opened here: a vault that is merely looked at leaves nothing on
     // disk. The repository is created by the first record().
