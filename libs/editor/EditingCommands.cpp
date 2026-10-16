@@ -332,10 +332,60 @@ RunEdit diffRun(const QString &before, const QString &after, qsizetype runStart)
 
 } // namespace
 
+namespace {
+
+/// A ``` or ~~~ fence line, behind any quote marks and indent.
+bool isFenceLine(QStringView line)
+{
+    qsizetype at = 0;
+    while (at < line.size() && (line.at(at) == QLatin1Char('>') || line.at(at).isSpace()))
+        ++at;
+    const QStringView rest = line.mid(at);
+    return rest.startsWith(QLatin1String("```")) || rest.startsWith(QLatin1String("~~~"));
+}
+
+} // namespace
+
 bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
 {
-    // ponytail: reads the debounced decorations, so a fence typed within the
-    // last parse delay is not seen yet; the parse is the upgrade path.
+    // The decorations are the parse as of 20 ms ago (shifted by every edit
+    // since), so a fence typed since then is not in them. Read the fence lines
+    // in the unbroken run of lines above the caret: when the parse has seen
+    // all of them (a block starts or ends on each) its answer stands; when
+    // one is new, the parse's state before the oldest fence, flipped once per
+    // fence line, is the answer.
+    // ponytail: only that run (at most 100 lines) is read, so a fence typed
+    // above a blank line the caret has since crossed is missed until the parse
+    // lands; ``` and ~~~ are not told apart.
+    const QStringView text(m_text);
+    qsizetype oldest = -1;
+    int fenceLines = 0;
+    bool unseen = false;
+    constexpr int kLinesLooked = 100; // a 5 000-line listing is not read to its top
+    int looked = 0;
+    for (qsizetype lineStart = lineStartOf(m_text, offset); lineStart > 0 && looked++ < kLinesLooked;) {
+        const qsizetype above = lineStartOf(m_text, lineStart - 1);
+        const qsizetype lineEnd = lineStart - 1;
+        const QStringView line = text.mid(above, lineEnd - above);
+        if (line.trimmed().isEmpty())
+            break;
+        if (isFenceLine(line)) {
+            oldest = above;
+            ++fenceLines;
+            unseen = unseen || std::none_of(m_decorations.codeFences.cbegin(), m_decorations.codeFences.cend(),
+                                            [&](const CodeFenceSpan &fence) {
+                                                return fence.block.start == above || fence.block.end == lineEnd;
+                                            });
+        }
+        lineStart = above;
+    }
+    if (!unseen)
+        return decoratedFenceAt(offset);
+    return (oldest > 0 && decoratedFenceAt(oldest - 1)) != (fenceLines % 2 == 1);
+}
+
+bool MarkdownEditor::decoratedFenceAt(qsizetype offset) const
+{
     // Sorted by start, and a note can hold thousands: the last fence that
     // begins at or before the offset is the only one that can hold it.
     const QList<CodeFenceSpan> &fences = m_decorations.codeFences;

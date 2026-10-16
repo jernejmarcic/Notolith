@@ -262,6 +262,8 @@ private:
     /// and their tabs, the graph, page preview; and disables the commands of
     /// every feature that is off.
     void applyFeatures();
+    /// Tells the indexer whether a `.ipynb` is a note it reads (notebooks on) or a plain file.
+    void updateNotebookIndex();
     /// Community plugins: the registry started or stopped to match the
     /// switch, after the first paint only. `rescan` rebuilds the commands
     /// and code-block languages even when the switch did not move - a

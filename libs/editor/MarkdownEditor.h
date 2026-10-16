@@ -164,6 +164,10 @@ public:
     /// (BulletGlyphs.h). Display only; the file keeps `-`, `*` and `+`.
     void setBulletGlyphs(const QString &spec);
     BulletGlyphMap bulletGlyphs() const { return m_bulletGlyphs; }
+    /// Bullets drawn by nesting depth (dot, ring, square, then again) instead
+    /// of by marker; "typed" glyphs stay as typed. Off by default.
+    void setNestedBulletGlyphs(bool on);
+    bool nestedBulletGlyphs() const { return m_nestedBulletGlyphs; }
     /// What an ordered item's number reads as drawn (for the tests too).
     QString listLabel(const ListItemSpan &item) const;
 
@@ -2214,6 +2218,8 @@ private:
     void commitRun(const Range &run, const QString &before, const QString &after, qsizetype caret);
     /// A fenced code block holds `offset`: its "- x" lines are code, not items.
     bool inCodeFenceAt(qsizetype offset) const;
+    /// The parse's answer alone (no look at fences typed since).
+    bool decoratedFenceAt(qsizetype offset) const;
     /// Tab / Shift+Tab on a list item. `direction` is +1 in, -1 out.
     bool handleListIndent(int direction);
     /// The run of consecutive list lines around `offset`: the stretch one
@@ -2392,6 +2398,7 @@ private:
     bool m_outlineNumbering = false;
     QString m_listNumberSuffix = QStringLiteral(".");
     BulletGlyphMap m_bulletGlyphs;
+    bool m_nestedBulletGlyphs = false;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;

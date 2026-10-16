@@ -9,6 +9,11 @@ namespace noteAppC {
 /// unless the window itself is translucent and frameless. QStyleSheetStyle
 /// polishes through this style, so one polish() covers every QMenu,
 /// QCompleter list and tooltip in the application, the ones made later too.
+///
+/// A checked menu item gets Obsidian's check at the menu's right edge. QSS
+/// styles a menu item itself (the style's drawControl is never asked), and its
+/// `QMenu::indicator` can only sit left of the icon, so the style adds a
+/// transparent overlay to each menu that paints the checks.
 class PopupStyle : public QProxyStyle
 {
 public:

@@ -65,6 +65,10 @@ QString targetName(const QString &target)
 /// with and without ".md", since a link may also spell those.
 QStringList noteNames(const QString &relative, const Metadata &metadata)
 {
+    // A notebook is not Markdown: Obsidian names such a file by its extension,
+    // so `[[Analysis]]` still means Analysis.md and `[[Analysis.ipynb]]` the notebook.
+    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive))
+        return {QFileInfo(relative).fileName(), relative};
     QStringList names = metadata.linkNames();
     names << relative;
     if (relative.endsWith(QLatin1String(".md")))
@@ -502,7 +506,7 @@ Index::Writer::Writer(const QString &databasePath, const QString &vaultRoot)
     pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
     d->rows.emplace(d->db);
     d->current = QSqlQuery(d->db);
-    d->current.prepare(QStringLiteral("SELECT mtime, size FROM files WHERE path = ?"));
+    d->current.prepare(QStringLiteral("SELECT mtime, size, words FROM files WHERE path = ?"));
 }
 
 Index::Writer::~Writer()
@@ -519,11 +523,11 @@ bool Index::Writer::isOpen() const
     return d->db.isOpen();
 }
 
-bool Index::Writer::isCurrent(const QString &path, qint64 mtime, qint64 size)
+bool Index::Writer::isCurrent(const QString &path, qint64 mtime, qint64 size, bool asNote)
 {
     d->current.bindValue(0, d->relative(path));
     const bool same = d->current.exec() && d->current.next() && d->current.value(0).toLongLong() == mtime
-                   && d->current.value(1).toLongLong() == size;
+                   && d->current.value(1).toLongLong() == size && (d->current.value(2).toLongLong() >= 0) == asNote;
     d->current.finish();
     return same;
 }

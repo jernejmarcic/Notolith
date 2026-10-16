@@ -192,11 +192,18 @@ tabular figures, so a column of them lines up.
 | `editor.listNumberStyle` | `plain` | `plain` draws each list counting on its own (`1.` `2.`); `hierarchical` composes a nested item's number from the items it sits in (`1.` then `1.1.` `1.2.` then `1.2.1.`). Replaces `editor.outlineNumbering`. |
 | `editor.listNumberSuffix` | `.` | what follows a drawn number: `.` `:` `)` or any short text. Empty draws the delimiter the note was written with. |
 | `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
+| `editor.bulletGlyphsNested` | off | draw bullets by nesting depth instead of by marker: dot, ring, square, then again. A marker set to `typed` stays as typed. |
 
 `=` is not a CommonMark list marker (`- [ ]`, `* ` and `+ ` are), so it cannot
 be mapped; the three real ones can. The glyphs are painted in
 `BulletGlyphs.cpp` with the muted text colour; the dash is a rounded bar wider
 than a dot, the dot a filled circle, the diamond a small rhombus.
+
+A list continues or ends only outside a code fence. The fence check reads the
+parse (up to 20 ms old) and, for the fence lines in the unbroken run of at most
+100 lines above the caret, any that the parse has not seen yet, so a fence typed
+within that delay counts at once; a fence above a blank line the caret has
+already crossed is seen when the parse lands.
 
 `tests/test_lists.cpp` covers every key (asserting the whole note, the caret and
 undo), the glyph map, the pixels the editor paints per marker, the number labels

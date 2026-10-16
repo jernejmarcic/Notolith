@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <optional>
 
 #include <QElapsedTimer>
 #include <QFileSystemWatcher>
@@ -40,6 +42,16 @@ public:
     /// yet reported: afterwards the Index can be closed or reopened.
     void stop();
 
+    /// A Jupyter notebook's text, from the bytes of its file; nullopt when the
+    /// bytes are not one. With a reader set, `.ipynb` files are notes: indexed
+    /// by that text (so search, links, tags and the quick switcher see what the
+    /// note shows when opened), named by their full file name like any file
+    /// that is not Markdown (`[[Analysis.ipynb]]`). Without one (the default)
+    /// they are attachments, as before. Called on the scan's pool threads.
+    /// Changing it rescans, so the notebooks already in the cache change kind.
+    using NotebookReader = std::function<std::optional<QString>(const QByteArray &)>;
+    void setNotebookReader(NotebookReader reader);
+
     /// Files the vault never indexes: the config directory, the trash, and
     /// anything dot-prefixed.
     static bool isIgnored(const QString &relativePath);
@@ -54,7 +66,8 @@ private:
         QString body;
         bool ok = false;
     };
-    static Parsed parseFile(const QString &path);
+    static Parsed parseFile(const QString &path, const NotebookReader &notebooks);
+    bool isNotebook(const QString &path) const;
 
     /// What a scan tells the Index's thread, a chunk at a time.
     struct Batch {
@@ -66,7 +79,8 @@ private:
     };
     /// `paths` empty means the whole vault.
     void start(const QStringList &paths);
-    void runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath);
+    void runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
+                 const NotebookReader &notebooks);
     void apply(const Batch &batch);
     void rewatch();
     void onDirectoryChanged(const QString &path);
@@ -79,6 +93,7 @@ private:
     bool m_wrote = false;  ///< this scan changed the cache: changed() is due at its end
     bool m_rescan = false; ///< the vault changed during a scan, so walk it again after
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
+    NotebookReader m_notebookReader;
     QFileSystemWatcher m_files;
     QTimer m_debounce;
     QElapsedTimer m_clock;
