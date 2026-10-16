@@ -17,10 +17,11 @@ any x86-64 or arm64 machine (`docs/PLATFORMS.md`).
 | recipe | state |
 |---|---|
 | `arch/PKGBUILD` | built and checked here: `BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f` in `arch/`. Strips the `-march=native` CachyOS puts in makepkg.conf. |
-| `flatpak/io.github.jernejmarcic.noteAppC.yml` | not yet built: needs flatpak-builder (the command is at the top of the file). PDF embeds off, poppler is not in the KDE runtime. |
-| `appimage/build-appimage.sh` | not yet run: downloads linuxdeploy, and needs an app icon first. |
+| `flatpak/io.github.jernejmarcic.noteAppC.yml` | not yet built: needs flatpak-builder (deferred by Jernej 2026-10-16; the command is at the top of the file). PDF embeds off, poppler is not in the KDE runtime. |
+| `appimage/build-appimage.sh` | not yet run: downloads linuxdeploy (deferred by Jernej 2026-10-16). |
 
-Outstanding, all Jernej's to decide (see TODO.md): the app has no icon of its
-own and borrows the freedesktop `accessories-text-editor` name, and the app id `io.github.jernejmarcic.noteAppC` follows basket's
-(`io.github.jernejmarcic.basket`) but is not confirmed. With an icon: put the SVG here as `noteAppC.svg`, set `Icon=noteAppC` in the desktop
-file, and install it to `share/icons/hicolor/scalable/apps/`.
+The icon is `libs/theme/icons/noteAppC.svg` (hand-written SVG), installed to
+`share/icons/hicolor/scalable/apps/` and built into the binary as the
+fallback window icon. Outstanding, Jernej's to decide (see TODO.md): the app id `io.github.jernejmarcic.noteAppC` follows basket's
+(`io.github.jernejmarcic.basket`) but is not confirmed, and the app's name may
+change with it.

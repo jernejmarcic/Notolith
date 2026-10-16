@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 
 #include "MainWindow.h"
 #include "PopupStyle.h"
@@ -13,6 +14,10 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
     QCoreApplication::setApplicationVersion(QStringLiteral(NOTEAPPC_VERSION));
+    // The installed icon by name when the desktop has it, the built-in copy
+    // otherwise; the desktop file name lets a Wayland compositor match the window.
+    QGuiApplication::setDesktopFileName(QStringLiteral("noteAppC"));
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("noteAppC"), QIcon(QStringLiteral(":/icons/noteAppC.svg"))));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(

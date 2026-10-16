@@ -317,6 +317,8 @@ if(NOT ANDROID)
     install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES packaging/noteAppC.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES libs/theme/icons/noteAppC.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
     # What software centres and Flatpak read to describe the app.
     install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)

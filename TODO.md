@@ -816,9 +816,9 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       AppStream, README. Was: none chosen; the PKGBUILD said `LicenseRef-unknown`
       and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
-- [ ] **An app id** for Flatpak, AppStream and Android:
+- [ ] **An app id** (and maybe a new name: Jernej 2026-10-16 asked for name suggestions) for Flatpak, AppStream and Android:
       `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
-- [ ] **An app icon.** The desktop file borrows `accessories-text-editor`;
+- [x] **An app icon.** Hand-written SVG, libs/theme/icons/noteAppC.svg (Jernej 2026-10-16: "Draw an SVG"). Was: The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
 - [x] **Autosave.** Jernej 2026-09-23: "Autosave like Obsidian". A note or
       canvas saves 2 s after the last edit and whenever it is left or closed;
@@ -829,7 +829,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
 - [x] `PKGBUILD` without `-march` (`packaging/arch`): built here into /tmp,
       its `check()` passes all suites under makepkg's flags. AppStream
       metainfo installed and validated.
-- [ ] AppImage and Flatpak recipes. Neither can be built here without
+- [-] AppImage and Flatpak recipes. Deferred: Jernej 2026-10-16 "no flatpak/appimage for now". Neither can be built here without
       installing tools (flatpak-builder, linuxdeploy), which is yours to do.
 - [x] A local check script in place of CI (there is no remote):
       `sh tools/check.sh [--bench]` - the release build and all suites (perf
