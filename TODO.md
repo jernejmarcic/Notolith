@@ -1041,10 +1041,10 @@ optimal as it can be".
 
 ## Fable audit round 2, 2026-10-16
 
-- [ ] Rename while a linking note is open and modified: the rewritten links
+- [x] Rename while a linking note is open and modified: the rewritten links
       are lost to the editor's stale text on the next autosave. Save open
       notes before a rename (lane rename).
-- [ ] Folder rename rewrites no path-form links (`[[Projects/Plan]]`,
+- [x] Folder rename rewrites no path-form links (`[[Projects/Plan]]`,
       `[x](Projects/Plan.md)`); Obsidian does (lane rename).
 - [x] A failed quiet autosave is never retried, and closing then silently
       refuses; retry on the next pause, fall back to the Save/Discard box
