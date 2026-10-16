@@ -1046,10 +1046,10 @@ optimal as it can be".
       notes before a rename (lane rename).
 - [ ] Folder rename rewrites no path-form links (`[[Projects/Plan]]`,
       `[x](Projects/Plan.md)`); Obsidian does (lane rename).
-- [ ] A failed quiet autosave is never retried, and closing then silently
+- [x] A failed quiet autosave is never retried, and closing then silently
       refuses; retry on the next pause, fall back to the Save/Discard box
       (lane autosave).
-- [ ] CanvasRender spins a nested QEventLoop inside paintEvent for a big
+- [x] CanvasRender spins a nested QEventLoop inside paintEvent for a big
       text node (re-entrancy, up to 500 ms on the UI thread); finish the
       parse synchronously instead; same in PdfExport; the canvas-embed
       singleShot holds a raw MarkdownEditor* (lane canvasparse).
@@ -1057,5 +1057,7 @@ optimal as it can be".
       instead of a merge); QSaveFile (lane sync).
 - [x] Licence: GPL-3.0-or-later (Jernej 2026-10-16). LICENSE, PKGBUILD,
       AppStream, README.
-- [ ] Delete the leaked test history repos (Jernej 2026-10-16: only those
-      whose vault no longer exists).
+- [x] Delete the leaked test history repos (Jernej 2026-10-16: only those
+      whose vault no longer exists). Done: 3555 moved to
+      /tmp/noteAppC-history-leaked (gone at reboot); kept Lancaster, demo and
+      one 2026-09-23 repo holding Sensors.md.
