@@ -1310,7 +1310,18 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsFor(BlockView &view)
 void MarkdownEditor::setSpelling(Spelling spelling)
 {
     m_spelling = std::move(spelling);
-    invalidateLayouts();
+    refreshSpelling();
+}
+
+void MarkdownEditor::refreshSpelling()
+{
+    // Only the underlines change, never a height: zeroing the heights, as
+    // invalidateLayouts() does, re-estimated every block above the view and
+    // threw the scroll position back to the top of the block.
+    for (BlockView &view : m_blocks) {
+        view.layout.reset();
+        view.laidOut = false;
+    }
     updateLayout();
     viewport()->update();
 }
@@ -1445,9 +1456,7 @@ std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
             connect(menu->addAction(tr("Add \"%1\" to dictionary").arg(misspelt)),
                     &QAction::triggered, this, [this, misspelt] {
                         m_spelling.addWord(misspelt);
-                        invalidateLayouts();
-                        updateLayout();
-                        viewport()->update();
+                        refreshSpelling();
                     });
         }
         return menu;
@@ -3964,6 +3973,11 @@ void MarkdownEditor::ensureCursorVisible()
     const qsizetype index = blockAt(m_cursor);
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return;
+    // Laid out first if a relayout dropped it: without its lines only the
+    // block's top is known, and a caret deep in a long list would scroll the
+    // view to the top of the list (a word added to the dictionary did that).
+    if (!m_blocks[size_t(index)].laidOut)
+        layoutBlock(m_blocks[size_t(index)]);
     const BlockView &view = m_blocks.at(size_t(index));
     const qreal lineHeight = QFontMetricsF(view.layout ? view.layout->font() : font()).height();
 

@@ -4571,6 +4571,42 @@ TEST(SpellingTest, TheMenuReplacesTheWordOrLearnsIt)
     EXPECT_FALSE(underlined(*editor, at));
 }
 
+TEST(SpellingTest, LearningAWordKeepsTheViewWhereItWas)
+{
+    // One long list is one block: the caret deep inside it, then the word
+    // learnt and the caret placed again (what the click that follows does).
+    FakeSpelling dictionary;
+    QString note;
+    for (int i = 0; i < 60; ++i)
+        note += QStringLiteral("Paragraph %1 above the list.\n\n").arg(i);
+    for (int i = 0; i < 300; ++i)
+        note += QStringLiteral("- item %1 with wrds in it\n").arg(i);
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    editor->show();
+    editor->grab();
+    const qsizetype caret = note.indexOf(QStringLiteral("item 200 ")) + 6; // in the number
+    const qsizetype at = note.indexOf(QLatin1String("wrds"), caret) + 1;
+    editor->enterBlockAt(caret);
+    for (int settle = 0; settle < 3; ++settle) { // estimated heights above become real
+        editor->setCursorOffset(caret);
+        editor->grab();
+    }
+    QScrollBar *bar = editor->verticalScrollBar();
+    const int before = bar->value();
+    ASSERT_GT(before, 0) << "scrolled to the caret, deep in the list";
+    const QRect caretBefore = static_cast<QWidget *>(editor.get())->inputMethodQuery(Qt::ImCursorRectangle).toRect();
+    std::unique_ptr<QMenu> menu = editor->spellingMenuAt(at);
+    ASSERT_TRUE(menu);
+    menu->actions().last()->trigger(); // "Add to dictionary"
+    editor->setCursorOffset(caret);
+    editor->grab();
+    EXPECT_EQ(bar->value(), before) << "the view stays put, not at the top of the list";
+    EXPECT_EQ(static_cast<QWidget *>(editor.get())->inputMethodQuery(Qt::ImCursorRectangle).toRect(), caretBefore)
+        << "and the caret's line with it";
+    EXPECT_FALSE(underlined(*editor, at));
+}
+
 // --- commands and their keys ---------------------------------------------------
 
 TEST(CommandTest, AKeyCanBeMovedToAnotherCommandOrTakenAway)

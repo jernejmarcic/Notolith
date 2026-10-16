@@ -211,6 +211,9 @@ public:
         std::function<void(const QString &)> addWord;
     };
     void setSpelling(Spelling spelling);
+    /// Lays every block out again for new spelling answers (a word added to
+    /// the dictionary), keeping each block's height so the view does not move.
+    void refreshSpelling();
 
     /// Types `text` at the caret, replacing any selection, as one undo step:
     /// how a template or a snippet goes in.

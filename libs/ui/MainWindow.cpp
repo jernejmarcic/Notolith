@@ -3069,7 +3069,12 @@ void MainWindow::updateSpelling()
         const std::shared_ptr<SpellChecker> spell = m_spell;
         m_editorSpelling = {[spell](const QString &word) { return spell->isCorrect(word); },
                             [spell](const QString &word) { return spell->suggestions(word); },
-                            [spell](const QString &word) { spell->addWord(word); }};
+                            [this, spell](const QString &word) {
+                                spell->addWord(word);
+                                // Every open note stops underlining it, not just this one.
+                                for (const auto &leaf : m_leaves)
+                                    leaf->editor->refreshSpelling();
+                            }};
         for (const auto &leaf : m_leaves)
             leaf->editor->setSpelling(m_editorSpelling);
         m_spellHanded = true;
