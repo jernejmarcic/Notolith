@@ -1590,6 +1590,27 @@ TEST(TableFormatTest, CombiningMarkIsZeroWidth)
     EXPECT_EQ(lines.at(3), QLatin1String("| ") + combining + QLatin1String(" |"));
 }
 
+TEST(TableFormatTest, WideAndCombiningCharactersCountByDisplayWidth)
+{
+    // The column is as wide as "abcd" (4); every other cell is padded by its
+    // display width, not its code-unit count: "日本" 4 (no pad), "e" + U+0301 1
+    // (3 pad), U+1F600 2 (2 pad), fullwidth U+FF11 2 (2 pad), halfwidth
+    // katakana U+FF71 1 (3 pad).
+    const QString cjk = QString::fromUcs4(U"\u65E5\u672C");
+    const QString combining = QString::fromUcs4(U"e\u0301");
+    const QString emoji = QString::fromUcs4(U"\U0001F600");
+    const QString fullwidth = QString::fromUcs4(U"\uFF11");
+    const QString halfwidth = QString::fromUcs4(U"\uFF71");
+    const QString input = QStringLiteral("|H|\n|---|\n|abcd|\n|") + cjk + QStringLiteral("|\n|") + combining
+        + QStringLiteral("|\n|") + emoji + QStringLiteral("|\n|") + fullwidth + QStringLiteral("|\n|")
+        + halfwidth + QStringLiteral("|\n");
+    const QString expected = QStringLiteral("| H    |\n| ---- |\n| abcd |\n| ") + cjk
+        + QStringLiteral(" |\n| ") + combining + QStringLiteral("    |\n| ") + emoji
+        + QStringLiteral("   |\n| ") + fullwidth + QStringLiteral("   |\n| ") + halfwidth
+        + QStringLiteral("    |\n");
+    EXPECT_EQ(formatTable(input), expected);
+}
+
 TEST(TableFormatTest, BlockquotePrefixIsPreserved)
 {
     const QString input = QStringLiteral(
