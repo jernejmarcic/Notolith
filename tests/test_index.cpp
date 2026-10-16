@@ -625,6 +625,24 @@ TEST_F(IndexTest, UnlinkedMentionsIncludeAliases)
     EXPECT_TRUE(paths.contains(QStringLiteral("AliasMention.md")));
 }
 
+TEST_F(IndexTest, UnlinkedMentionsReadAFrontMatterLongerThanTheFirstRead)
+{
+    // Only the start of the file is read for its front matter; one that runs
+    // past it, with the alias at its end, is read whole.
+    QByteArray head = "---\nnotes: \"" + QByteArray(40 * 1024, 'x') + "\"\naliases: [Longform]\n---\nbody\n";
+    write(QStringLiteral("Long.md"), head);
+    write(QStringLiteral("LongMention.md"), "Somebody wrote Longform here.\n");
+
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    QStringList paths;
+    for (const SearchResult &result : index.unlinkedMentions(dir.filePath(QStringLiteral("Long.md"))))
+        paths << result.path;
+    EXPECT_TRUE(paths.contains(QStringLiteral("LongMention.md")));
+}
+
 namespace {
 
 /// Builds a vault of `noteCount` notes, every one containing "needle" (so

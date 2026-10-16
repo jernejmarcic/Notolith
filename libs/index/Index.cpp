@@ -953,10 +953,21 @@ QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) cons
     // The note's own title and aliases, re-read from the file rather than
     // trusted from the index - "the file is the truth". From its front
     // matter alone: a whole parse was 130 ms for a 1 MB note, each time the
-    // backlinks pane showed it.
+    // backlinks pane showed it. And only as much of the file as holds the
+    // front matter is read: decoding all of an 11 MB notebook was 60 ms.
     Note note;
-    if (!Vault::read(path, note))
-        return results;
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return results;
+        QByteArray bytes = file.read(16 * 1024);
+        note = Vault::decode(bytes);
+        const Range head = Frontmatter::find(note.text);
+        const bool complete = !note.text.startsWith(QLatin1String("---"))
+                              || (head.isValid() && note.text.at(head.end - 1) == QLatin1Char('\n'));
+        if (!file.atEnd() && !complete)
+            note = Vault::decode(bytes + file.readAll());
+    }
     Metadata own;
     own.path = path;
     Frontmatter::parse(note.text, Frontmatter::find(note.text), own);

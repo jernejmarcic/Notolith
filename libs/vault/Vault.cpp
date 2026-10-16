@@ -139,8 +139,8 @@ Note Vault::decode(const QByteArray &bytes)
         QString withoutCrlf = text;
         withoutCrlf.replace(QLatin1String("\r\n"), QString());
         note.crlf = !withoutCrlf.contains(QLatin1Char('\n'));
+        text.replace(QLatin1String("\r\n"), QLatin1String("\n")); // no match is still a scan of the note
     }
-    text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
 
     note.text = text;
     return note;
