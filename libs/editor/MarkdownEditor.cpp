@@ -3413,15 +3413,18 @@ void MarkdownEditor::updateLayout()
     const qreal top = scroll - viewport()->height();
     const qreal bottom = scroll + 2 * viewport()->height();
     // Real heights move what follows them, which can bring blocks that were
-    // out of range (by their estimates) on screen: those are laid out by the
-    // next pass, until nothing moves. Once, they stayed unlaid - not drawn -
+    // out of range (by their estimates) on screen: the next pass lays out
+    // what is now on screen itself - not the margins, which can wait for the
+    // next call - until nothing moves. Once, those stayed unlaid, not drawn,
     // until something else called this again, which a resize always did.
     // ponytail: capped at eight passes; a note whose estimates are that far
     // off fills in on the next call.
     for (int pass = 0; pass < 8; ++pass) {
+        const qreal passTop = pass == 0 ? top : scroll;
+        const qreal passBottom = pass == 0 ? bottom : scroll + viewport()->height();
         const auto nearTop = std::partition_point(m_blocks.begin(), m_blocks.end(),
-                                                  [top](const BlockView &view) {
-                                                      return view.y + view.height < top;
+                                                  [passTop](const BlockView &view) {
+                                                      return view.y + view.height < passTop;
                                                   });
         const qsizetype from = std::distance(m_blocks.begin(), nearTop);
 
@@ -3441,7 +3444,7 @@ void MarkdownEditor::updateLayout()
         if (caretAbove)
             layOut(m_activeBlock);
         qsizetype i = from;
-        for (; i < qsizetype(m_blocks.size()) && m_blocks[size_t(i)].y <= bottom; ++i)
+        for (; i < qsizetype(m_blocks.size()) && m_blocks[size_t(i)].y <= passBottom; ++i)
             layOut(i);
         if (m_activeBlock >= i && m_activeBlock < qsizetype(m_blocks.size()))
             layOut(m_activeBlock);
