@@ -94,7 +94,7 @@ bool MarkdownEditor::defaultFoldOf(const BlockView &view) const
 void MarkdownEditor::setFolded(const BlockView &view, bool folded)
 {
     m_folds.insert(firstPiece(view).span.range.start, folded);
-    invalidateLayouts();
+    invalidateBlock(blockAt(view.span.range.start)); // what follows it moves, nothing else changes
     updateLayout();
     viewport()->update();
 }
@@ -105,7 +105,7 @@ void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
     for (const CalloutSpan &callout : m_decorations.callouts) {
         if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset) {
             m_folds.insert(sourceOffset, !m_folds.value(sourceOffset, callout.collapsed));
-            invalidateLayouts();
+            invalidateBlock(blockAt(sourceOffset)); // it lives inside its parent's layout
             updateLayout();
             viewport()->update();
             return;

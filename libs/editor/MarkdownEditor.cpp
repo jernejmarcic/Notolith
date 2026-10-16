@@ -35,6 +35,7 @@
 #include <QLocale>
 #include <QMenu>
 #include <QRegularExpression>
+#include <QSet>
 #include <QStringListModel>
 #include <QtConcurrent>
 #include <QTextLine>
@@ -565,17 +566,27 @@ void MarkdownEditor::setReadableLineLength(bool on)
     if (m_readable == on)
         return;
     m_readable = on;
-    invalidateLayouts();
-    updateLayout();
+    relayoutIfWidthChanged();
     viewport()->update();
 }
 
 void MarkdownEditor::setContentWidth(int pixels)
 {
+    if (qMax(200, pixels) == m_contentWidth)
+        return; // every settings pass sets it, and this relaid out every block
     m_contentWidth = qMax(200, pixels);
-    invalidateLayouts();
-    updateLayout();
+    relayoutIfWidthChanged();
     viewport()->update();
+}
+
+void MarkdownEditor::relayoutIfWidthChanged()
+{
+    // Line breaking depends on the text width alone (layouts are in block
+    // coordinates; contentLeft is added at paint), so a window still wider
+    // than the readable line length moves nothing.
+    if (contentWidth() != m_layoutWidth)
+        invalidateLayouts();
+    updateLayout();
 }
 
 bool MarkdownEditor::revealsWholeBlock(const BlockView &view) const
@@ -921,11 +932,27 @@ void MarkdownEditor::indexDecorations()
 
 void MarkdownEditor::invalidateLayouts()
 {
+    m_layoutWidth = contentWidth();
     for (BlockView &view : m_blocks) {
         view.layout.reset();
         view.laidOut = false;
         view.heightEstimated = false;
         view.height = 0;
+    }
+}
+
+void MarkdownEditor::invalidateBlock(qsizetype index)
+{
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return;
+    // Every piece of a long fence or callout: they are laid out as one.
+    const qsizetype first = index - m_blocks[size_t(index)].piece;
+    const qsizetype end = qMin<qsizetype>(qsizetype(m_blocks.size()), first + m_blocks[size_t(first)].pieces);
+    for (qsizetype i = first; i < end; ++i) {
+        BlockView &view = m_blocks[size_t(i)];
+        view.layout.reset();
+        view.laidOut = false;
+        view.heightEstimated = false;
     }
 }
 
@@ -1184,15 +1211,20 @@ void MarkdownEditor::refreshLinkStatus()
     // changed sides costs a relayout - the index changes on every save.
     if (!m_resolver)
         return;
-    bool changed = false;
+    QSet<QString> flipped;
     for (auto it = m_unresolved.begin(); it != m_unresolved.end(); ++it) {
         const bool missing = resolvesToNothing(it.key());
-        changed = changed || missing != it.value();
+        if (missing != it.value())
+            flipped.insert(it.key());
         it.value() = missing;
     }
-    if (!changed)
+    if (flipped.isEmpty())
         return;
-    invalidateLayouts();
+    // Only the blocks with one of those links in them change colour.
+    for (const StyleSpan &span : std::as_const(m_decorations.styles)) {
+        if (span.kind == StyleSpan::Kind::Link && flipped.contains(span.payload))
+            invalidateBlock(blockAt(span.range.start));
+    }
     updateLayout();
     viewport()->update();
 }
@@ -3380,35 +3412,43 @@ void MarkdownEditor::updateLayout()
     const qreal scroll = verticalScrollBar()->value();
     const qreal top = scroll - viewport()->height();
     const qreal bottom = scroll + 2 * viewport()->height();
-    const auto nearTop = std::partition_point(m_blocks.begin(), m_blocks.end(),
-                                              [top](const BlockView &view) {
-                                                  return view.y + view.height < top;
-                                              });
-    const qsizetype from = std::distance(m_blocks.begin(), nearTop);
+    // Real heights move what follows them, which can bring blocks that were
+    // out of range (by their estimates) on screen: those are laid out by the
+    // next pass, until nothing moves. Once, they stayed unlaid - not drawn -
+    // until something else called this again, which a resize always did.
+    // ponytail: capped at eight passes; a note whose estimates are that far
+    // off fills in on the next call.
+    for (int pass = 0; pass < 8; ++pass) {
+        const auto nearTop = std::partition_point(m_blocks.begin(), m_blocks.end(),
+                                                  [top](const BlockView &view) {
+                                                      return view.y + view.height < top;
+                                                  });
+        const qsizetype from = std::distance(m_blocks.begin(), nearTop);
 
-    qsizetype firstChanged = -1;
-    const auto layOut = [this, &firstChanged](qsizetype i) {
-        BlockView &view = m_blocks[size_t(i)];
-        if (view.laidOut)
-            return;
-        const qreal before = view.height;
-        layoutBlock(view);
-        if (!qFuzzyCompare(before + 1, view.height + 1) && (firstChanged < 0 || i < firstChanged))
-            firstChanged = i;
-    };
-    // In index order: laying out a piece of a long fence can clear the
-    // layouts of the pieces after it, and those have to be redone here.
-    const bool caretAbove = m_activeBlock >= 0 && m_activeBlock < from;
-    if (caretAbove)
-        layOut(m_activeBlock);
-    qsizetype i = from;
-    for (; i < qsizetype(m_blocks.size()) && m_blocks[size_t(i)].y <= bottom; ++i)
-        layOut(i);
-    if (m_activeBlock >= i && m_activeBlock < qsizetype(m_blocks.size()))
-        layOut(m_activeBlock);
+        qsizetype firstChanged = -1;
+        const auto layOut = [this, &firstChanged](qsizetype i) {
+            BlockView &view = m_blocks[size_t(i)];
+            if (view.laidOut)
+                return;
+            const qreal before = view.height;
+            layoutBlock(view);
+            if (!qFuzzyCompare(before + 1, view.height + 1) && (firstChanged < 0 || i < firstChanged))
+                firstChanged = i;
+        };
+        // In index order: laying out a piece of a long fence can clear the
+        // layouts of the pieces after it, and those have to be redone here.
+        const bool caretAbove = m_activeBlock >= 0 && m_activeBlock < from;
+        if (caretAbove)
+            layOut(m_activeBlock);
+        qsizetype i = from;
+        for (; i < qsizetype(m_blocks.size()) && m_blocks[size_t(i)].y <= bottom; ++i)
+            layOut(i);
+        if (m_activeBlock >= i && m_activeBlock < qsizetype(m_blocks.size()))
+            layOut(m_activeBlock);
 
-    // Only what follows a block whose height changed moves.
-    if (firstChanged >= 0) {
+        if (firstChanged < 0)
+            break;
+        // Only what follows a block whose height changed moves.
         m_movedFrom = qMin(m_movedFrom, m_blocks[size_t(firstChanged)].y);
         qreal y = firstChanged == 0 ? m_topPadding
                                     : m_blocks[size_t(firstChanged - 1)].y
@@ -3883,9 +3923,8 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
 {
     finishPropertyEdit(true);
     QAbstractScrollArea::resizeEvent(event);
-    // Line breaking depends on the width, so every cached layout is stale.
-    invalidateLayouts();
-    updateLayout();
+    // Also called for the viewport's own resize (a scrollbar showing).
+    relayoutIfWidthChanged();
     positionFindBar();
 }
 

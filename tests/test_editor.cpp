@@ -285,6 +285,31 @@ TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome **bold** text.\n"));
 }
 
+TEST(MarkdownEditorTest, AResizeRewrapsOnlyWhenTheTextWidthChanges)
+{
+    // With readable line length on, a window wider than it keeps every line
+    // break, and is not laid out again; narrower, the text rewraps, and back
+    // to wide it is exactly as it was.
+    QString note;
+    for (int i = 0; i < 12; ++i)
+        note += QStringLiteral("A paragraph long enough to wrap at any width this test uses, and then some more words "
+                               "so a narrow window breaks it over several lines. ").repeated(2)
+                + QStringLiteral("\n\n");
+    auto editor = editorWith(note);
+    editor->resize(1100, 300);
+    (void)editor->grab();
+    const int wide = editor->verticalScrollBar()->maximum();
+    editor->resize(1000, 300);
+    (void)editor->grab();
+    EXPECT_EQ(editor->verticalScrollBar()->maximum(), wide);
+    editor->resize(420, 300);
+    (void)editor->grab();
+    EXPECT_GT(editor->verticalScrollBar()->maximum(), wide);
+    editor->resize(1100, 300);
+    (void)editor->grab();
+    EXPECT_EQ(editor->verticalScrollBar()->maximum(), wide);
+}
+
 TEST(MarkdownEditorTest, SourceModeHidesNothingAndReadingHidesEverything)
 {
     const QString source = QStringLiteral("# Title\n\n[[A link|shown]]\n");
