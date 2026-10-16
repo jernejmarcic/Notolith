@@ -503,6 +503,16 @@ public:
     /// marshals back onto its own thread before touching a block, the same
     /// contract setQueryRunner keeps for a search.
     using NotebookDeliver = std::function<void(NotebookRunResult)>;
+    /// A running block's input(): what it asks, and how the person's answer
+    /// goes back. `ok` false is Esc - the run is interrupted rather than
+    /// answered. NotebookBlock's run passes a handler in the options and the
+    /// editor shows the prompt under the block (NotebookInput.cpp).
+    struct NotebookInputPrompt {
+        QString prompt;
+        bool password = false; ///< getpass: the line is not echoed
+    };
+    using NotebookInputReply = std::function<void(bool ok, const QString &line)>;
+    using NotebookInputHandler = std::function<void(const NotebookInputPrompt &, const NotebookInputReply &)>;
     /// What a run request carries besides the language and source - stage
     /// 13's rest (per-block sandbox tier, runnable embeds). Kept as one
     /// struct rather than growing NotebookRunner's own parameter list again
@@ -528,6 +538,9 @@ public:
         QString scope;
         /// Remove this block's kept output instead of reading or running it.
         bool clear = false;
+        /// Set on a real run (never on a lookup): the runner may call it, from
+        /// any thread, when the code asks for a line. Unset: no stdin.
+        NotebookInputHandler onInput;
     };
     /// Asks for `language`/`source`'s result. `forceRun` false is a
     /// cache-only lookup that must never start a kernel - what every
@@ -563,6 +576,16 @@ public:
                                                     const NotebookRunOptions &options,
                                                     const NotebookIntrospectionDeliver &deliver)>;
     void setNotebookIntrospector(NotebookIntrospector introspector);
+    /// For tests: what the inline input prompt under a running block shows.
+    struct NotebookInputInfo {
+        bool active = false;
+        QString prompt;
+        bool password = false;
+        bool visible = false; ///< the line edit is on screen
+        QRect editRect;       ///< viewport coordinates
+    };
+    NotebookInputInfo notebookInputInfo() const;
+    QLineEdit *notebookInputEdit() const;
     /// For tests: the open completion popup's rows (empty when closed), and
     /// the open documentation popup's text.
     QStringList notebookCompletionRows() const;
@@ -1233,6 +1256,9 @@ private:
         /// listing's own height + caption); == view.height while there is
         /// no output to show.
         qreal notebookOutputTop = 0;
+        /// Where the line edit of a pending input() goes, block-local; empty
+        /// when this block is not the one asking (NotebookInput.cpp).
+        QRectF notebookInputRect;
         /// One output, in the order the kernel produced it. A Text/Error
         /// cell draws through its own QTextLayout (monospace, ANSI already
         /// stripped by the runner); an ImagePng/ImageSvg/Markdown cell
@@ -1690,10 +1716,35 @@ private:
     /// An Image/Markdown/Svg output rendered once to a QPixmap at `width` -
     /// null on a decode failure, which appendNotebookOutput then just skips.
     QPixmap renderNotebookImage(const NotebookOutput &output, int width) const;
+    /// The output rows proper, below which appendNotebookOutput adds the
+    /// prompt row while the block's code is waiting in input().
+    void appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
+                                  const QString &blockID, const QString &workingDir,
+                                  const CodeOptions *options);
     /// The "Running...", or a kernel-level error, single-line message a
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);
     NotebookRunner m_notebookRunner;
+
+    // --- input() from a running block, NotebookInput.cpp ----------------
+    /// One prompt at a time: a kernel asks one question at a time.
+    struct NotebookInputState {
+        QString key;     ///< m_notebookCache key of the block that is asking
+        quint64 generation = 0;
+        QString prompt;
+        bool password = false;
+        NotebookInputReply reply;
+        QPointer<QWidget> edit; ///< a QLineEdit (NotebookInput.cpp); QWidget here so the header needs no QLineEdit
+    };
+    NotebookInputState m_notebookInput;
+    void showNotebookInput(const QString &key, quint64 generation, const NotebookInputPrompt &prompt,
+                           const NotebookInputReply &reply);
+    /// Answers (ok) or cancels the open prompt and takes the line edit away.
+    void finishNotebookInput(bool ok);
+    /// Drops the prompt without answering: the run it belonged to is over.
+    void dropNotebookInput(const QString &key);
+    void appendNotebookInput(BlockView &view);
+    void positionNotebookInput();
 
     // --- completion and documentation from a running kernel, NotebookComplete.cpp
     NotebookIntrospector m_notebookIntrospector;

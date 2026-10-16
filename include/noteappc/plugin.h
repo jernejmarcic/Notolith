@@ -38,8 +38,12 @@ extern "C" {
  * it will load again (every in-tree plugin was, examples/plugins/word-stats/
  * plugin.ini's `api =` bumped alongside) - the whole point of this check is
  * to refuse that mismatch loudly instead of a plugin reading garbage out of
- * a table shaped differently than it expects. */
-#define NOTEAPPC_PLUGIN_API 2
+ * a table shaped differently than it expects.
+ *
+ * 3 (2026-10-16): added noteappc_host::prompt at the end of the table, so a
+ * plugin can ask the person a typed question (the AI plugin's "Ask a
+ * question"). Same rule as 2: rebuild against this header, bump `api =`. */
+#define NOTEAPPC_PLUGIN_API 3
 
 #if defined(_WIN32)
 #define NOTEAPPC_EXPORT __declspec(dllexport)
@@ -117,6 +121,17 @@ typedef struct noteappc_host {
      * line of the app's log, visible on the settings page. */
     void (*show_notice)(const char *utf8);
     void (*log)(const char *utf8);
+
+    /* Asks the person one line of text, in a small dialog the app titles with
+     * the plugin's own name (a plugin cannot pose as the app). `label` is the
+     * question; `password` non-zero masks what is typed; `timeout_ms` is how
+     * long the person has (0: 60 s, never more than 5 min). Returns the text
+     * typed - possibly empty - or NULL when the person cancelled, the time
+     * ran out, or the app has no way to ask. Needs no capability. Blocks the
+     * plugin (not the app) until answered; the app does not count that wait
+     * against the plugin's own request timeout. The string is the host's,
+     * valid until the next host table call, like every other one. */
+    const char *(*prompt)(const char *label, int password, int timeout_ms);
 } noteappc_host;
 
 /* What a plugin offers the host. A NULL function pointer other than

@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTimer>
@@ -545,6 +546,39 @@ void PluginHost::handleHostRequest(const PluginMessage &request)
         QJsonObject result;
         result.insert(QStringLiteral("ok"), ok);
         return reply(result);
+    }
+
+    if (method == QLatin1String("ui.prompt")) {
+        // The person is typing, not the plugin hanging: the per-request kill
+        // timers are held for the wait and start over when it ends.
+        const QString label = request.params.value(QStringLiteral("label")).toString();
+        const bool password = request.params.value(QStringLiteral("password")).toBool();
+        const int asked = request.params.value(QStringLiteral("timeoutMs")).toInt();
+        const int timeoutMs = asked <= 0 ? 60'000 : qMin(asked, 300'000);
+        const qint64 id = request.id;
+        for (Pending &entry : m_pending)
+            entry.timer->stop();
+        // Answered once, by whichever comes first: the person, the app's own
+        // timeout, or the backstop below. The dialog may outlive this host.
+        auto settled = std::make_shared<bool>(false);
+        const QPointer<PluginHost> self(this);
+        const PluginAppCallbacks::PromptDone finish = [self, id, settled](bool ok, const QString &text) {
+            if (*settled || !self)
+                return;
+            *settled = true;
+            for (Pending &entry : self->m_pending)
+                entry.timer->start(self->m_requestTimeoutMs);
+            QJsonObject result;
+            result.insert(QStringLiteral("ok"), ok);
+            result.insert(QStringLiteral("text"), ok ? text : QString());
+            self->sendMessage(PluginMessage::response(id, result));
+        };
+        QTimer::singleShot(timeoutMs + 500, this, [finish] { finish(false, QString()); });
+        if (m_callbacks.askUser)
+            m_callbacks.askUser(m_manifest.name(), label, password, timeoutMs, finish);
+        else
+            finish(false, QString());
+        return;
     }
 
     sendMessage(PluginMessage::errorResponse(request.id, QStringLiteral("unknown-method"),

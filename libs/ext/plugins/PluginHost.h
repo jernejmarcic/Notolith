@@ -35,6 +35,16 @@ struct PluginAppCallbacks {
     std::function<bool(const QString &utf8)> clipboardWrite;    ///< clipboard
     std::function<void(const QString &message)> showNotice;     ///< always allowed
     std::function<void(const QString &pluginID, const QString &message)> log; ///< always allowed
+    /// Always allowed: asks the person one line, `label` the question, in a
+    /// dialog titled `pluginName`. Calls `done(true, text)` once when they
+    /// answer, `done(false, {})` on cancel; the app should give up (and
+    /// close the dialog) after `timeoutMs` itself. PluginHost backs that with
+    /// its own timer, so a callback that never answers still ends the call.
+    /// Unset (headless, tests): the question counts as cancelled.
+    using PromptDone = std::function<void(bool ok, const QString &text)>;
+    std::function<void(const QString &pluginName, const QString &label, bool password, int timeoutMs,
+                       const PromptDone &done)>
+        askUser;
 };
 
 /// One running (or not yet started) `noteAppC-plugin-host` process for one

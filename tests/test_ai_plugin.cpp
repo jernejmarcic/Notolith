@@ -770,6 +770,160 @@ TEST_F(AiPluginEndToEndTest, TranslateWithNoSelectionWritesANewNoteAndNeverOverw
     host.stop();
 }
 
+// --- "AI: Ask a question": the host's typed prompt --------------------------
+
+namespace {
+/// The model's reply, in Ollama's shape, and the last request body it was sent.
+void routeOllamaAnswer(FakeServer &server, const QString &answer, QJsonObject *body, int *hits)
+{
+    server.routes().route("/api/chat", Method::Post, [=](const QHttpServerRequest &request) {
+        if (body)
+            *body = jsonBody(request);
+        if (hits)
+            ++*hits;
+        return QHttpServerResponse(QJsonObject{
+            {QStringLiteral("message"), QJsonObject{{QStringLiteral("content"), answer}}}});
+    });
+}
+} // namespace
+
+TEST_F(AiPluginEndToEndTest, AskAQuestionSendsOnlyTheTypedQuestionAndInsertsTheAnswerAtTheCaret)
+{
+    FakeServer server;
+    QJsonObject body;
+    int hits = 0;
+    routeOllamaAnswer(server, QStringLiteral("Four."), &body, &hits);
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = %1\nmodel = test-model\n").arg(server.baseURL()));
+
+    QString inserted;
+    QString shownLabel;
+    bool shownPassword = true;
+    QString title;
+    PluginAppCallbacks cb = callbacks();
+    cb.activeSelectionText = [] { return QString(); };
+    cb.replaceSelection = [&](const QString &text) {
+        inserted = text;
+        return true;
+    };
+    cb.askUser = [&](const QString &pluginName, const QString &label, bool password, int, const PluginAppCallbacks::PromptDone &done) {
+        title = pluginName;
+        shownLabel = label;
+        shownPassword = password;
+        done(true, QStringLiteral("  what is 2 + 2?  "));
+    };
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network}, cb);
+    bool done = false;
+    bool ok = false;
+    host.runCommand(QStringLiteral("ask-question"), [&](bool o, const QJsonObject &, const QString &) {
+        ok = o;
+        done = true;
+    });
+    ASSERT_TRUE(waitUntil([&] { return done; }));
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(inserted, QStringLiteral("Four."));
+    EXPECT_EQ(title, QStringLiteral("AI")); // the app names the asker, not the plugin
+    EXPECT_FALSE(shownLabel.isEmpty());
+    EXPECT_FALSE(shownPassword);
+    EXPECT_EQ(hits, 1);
+    // Only the question went out: not the note ("Once upon a time"), not a system prompt.
+    const QJsonArray messages = body.value(QStringLiteral("messages")).toArray();
+    ASSERT_EQ(messages.size(), 1);
+    EXPECT_EQ(messages.at(0).toObject().value(QStringLiteral("content")).toString(), QStringLiteral("what is 2 + 2?"));
+    host.stop();
+}
+
+TEST_F(AiPluginEndToEndTest, AskAQuestionNeverOverwritesASelectionAndCancelSendsNothing)
+{
+    FakeServer server;
+    int hits = 0;
+    routeOllamaAnswer(server, QStringLiteral("Four."), nullptr, &hits);
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = %1\n").arg(server.baseURL()));
+
+    QString reply = QStringLiteral("a question");
+    bool answerNothing = false;
+    QStringList replaced;
+    QString notice;
+    PluginAppCallbacks cb = callbacks(nullptr, &notice); // the default selection is "what is 2 + 2?"
+    cb.replaceSelection = [&](const QString &text) {
+        replaced << text;
+        return true;
+    };
+    cb.askUser = [&](const QString &, const QString &, bool, int, const PluginAppCallbacks::PromptDone &done) {
+        done(!answerNothing, reply);
+    };
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network}, cb);
+    const auto run = [&] {
+        bool done = false;
+        host.runCommand(QStringLiteral("ask-question"), [&](bool, const QJsonObject &, const QString &) { done = true; });
+        return waitUntil([&] { return done; });
+    };
+
+    ASSERT_TRUE(run()); // text is selected: shown, never written over it
+    EXPECT_TRUE(replaced.isEmpty());
+    EXPECT_EQ(notice, QStringLiteral("Four."));
+    EXPECT_EQ(hits, 1);
+
+    answerNothing = true; // cancelled
+    ASSERT_TRUE(run());
+    EXPECT_EQ(hits, 1);
+    EXPECT_TRUE(notice.contains(QStringLiteral("cancelled"))) << notice.toStdString();
+
+    answerNothing = false; // OK on an empty line
+    reply = QStringLiteral("   ");
+    ASSERT_TRUE(run());
+    EXPECT_EQ(hits, 1);
+    EXPECT_TRUE(notice.contains(QStringLiteral("nothing typed"))) << notice.toStdString();
+    host.stop();
+}
+
+TEST_F(AiPluginEndToEndTest, AQuestionNobodyAnswersEndsOnItsTimeoutAndWaitingDoesNotKillTheCommand)
+{
+    FakeServer server;
+    int hits = 0;
+    routeOllamaAnswer(server, QStringLiteral("late"), nullptr, &hits);
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = %1\nask-timeout-ms = 1000\n").arg(server.baseURL()));
+
+    int timeoutAsked = 0;
+    PluginAppCallbacks::PromptDone answerLater; // the dialog is still open when the time is up
+    PluginAppCallbacks cb = callbacks();
+    cb.askUser = [&](const QString &, const QString &, bool, int timeoutMs, const PluginAppCallbacks::PromptDone &done) {
+        timeoutAsked = timeoutMs;
+        answerLater = done;
+    };
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network}, cb);
+    // The command's own kill timer is shorter than the wait: it must be held while the person is asked.
+    host.setRequestTimeoutMsForTesting(1200);
+    QElapsedTimer clock;
+    clock.start();
+    bool done = false;
+    bool ok = false;
+    host.runCommand(QStringLiteral("ask-question"), [&](bool o, const QJsonObject &, const QString &) {
+        ok = o;
+        done = true;
+    });
+    ASSERT_TRUE(waitUntil([&] { return done; }, 15000));
+    EXPECT_TRUE(ok) << "a question that timed out is a cancelled command, not a killed one";
+    EXPECT_EQ(timeoutAsked, 1000);
+    EXPECT_GE(clock.elapsed(), 1000); // honoured: the call waited the whole time
+    EXPECT_EQ(hits, 0);
+    ASSERT_TRUE(bool(answerLater));
+    answerLater(true, QStringLiteral("too late")); // a late answer is ignored, not sent twice
+    host.stop();
+}
+
+TEST_F(AiPluginEndToEndTest, WithNoWayToAskAQuestionIsCancelledAtOnce)
+{
+    writeAiIni(QStringLiteral("[ai]\nprovider = ollama\nbase-url = http://127.0.0.1:9\n"));
+    QString notice;
+    PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network},
+                    callbacks(nullptr, &notice)); // no askUser at all
+    bool done = false;
+    host.runCommand(QStringLiteral("ask-question"), [&](bool, const QJsonObject &, const QString &) { done = true; });
+    ASSERT_TRUE(waitUntil([&] { return done; }));
+    EXPECT_TRUE(notice.contains(QStringLiteral("cancelled"))) << notice.toStdString();
+    host.stop();
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
