@@ -5569,6 +5569,7 @@ const QString kTableNote = QStringLiteral("above\n\n| name | qty |\n|---|---:|\n
 /// point it did, or a null point.
 QPoint clickInto(MarkdownEditor &editor, Range range)
 {
+    editor.setTableHandles(false); // a probe over the whole note would press the grips and bars too
     for (int y = 4; y < 400; y += 4) {
         for (int x = 4; x < editor.viewport()->width(); x += 12) {
             QTest::mouseClick(editor.viewport(), Qt::LeftButton, {}, QPoint(x, y));
@@ -5905,6 +5906,7 @@ TEST(TableCellTest, AShortRowGetsItsMissingCellsWhenReached)
     for (int y = 4; y < 200 && !filled; y += 6) {
         for (int x = 4; x < 880 && !filled; x += 40) {
             auto editor = editorWith(note);
+            editor->setTableHandles(false); // the probe would press the add bars too
             editor->show();
             QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(x, y));
             if (editor->noteText() == note)

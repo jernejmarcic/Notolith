@@ -31,7 +31,7 @@ namespace {
 
 constexpr qreal kGripLength = 28;
 constexpr qreal kGripThick = 6;
-constexpr qreal kBarThick = 10;
+constexpr qreal kBarThick = 6;
 constexpr qreal kButtonClear = 22; // the `</>` button's height: the "+" column starts below it
 constexpr int kRowGrip = 1;
 constexpr int kColumnGrip = 2;
@@ -131,7 +131,7 @@ QRectF MarkdownEditor::rowGripRect(const BlockView &view, const TableSpan &table
     const QRectF cell = cellViewRect(view, view.cells[size_t(row) * size_t(table.columns)]);
     const qreal length = qBound<qreal>(12, cell.height() - 8, kGripLength);
     const QRectF grip(contentLeft() - kGripThick / 2, cell.top() + (cell.height() - length) / 2, kGripThick, length);
-    return hit ? grip.adjusted(-5, -2, 5, 2) : grip;
+    return hit ? grip.adjusted(-3, -2, 1, 2) : grip; // not over the cell's own padding
 }
 
 QRectF MarkdownEditor::columnGripRect(const BlockView &view, const TableSpan &table, int column, bool hit) const
@@ -144,21 +144,21 @@ QRectF MarkdownEditor::columnGripRect(const BlockView &view, const TableSpan &ta
         return {};
     const qreal length = qBound<qreal>(12, cell.width() - 8, kGripLength);
     const QRectF grip(middle - length / 2, cell.top() - kGripThick / 2, length, kGripThick);
-    return hit ? grip.adjusted(-2, -5, 2, 5) : grip;
+    return hit ? grip.adjusted(-2, -3, 2, 1) : grip;
 }
 
 QRectF MarkdownEditor::addRowRect(const BlockView &view) const
 {
     const QRectF table = tableViewRect(view);
     // Below a sideways scroll bar when there is one.
-    return QRectF(table.left(), table.bottom() + (view.tableWidth > contentWidth() ? 7 : 2), table.width(), kBarThick);
+    return QRectF(table.left(), table.bottom() + (view.tableWidth > contentWidth() ? 7 : 1), table.width(), kBarThick);
 }
 
 QRectF MarkdownEditor::addColumnRect(const BlockView &view) const
 {
     const QRectF table = tableViewRect(view);
     const qreal top = table.top() + kButtonClear;
-    return QRectF(table.right() + 2, top, kBarThick, qMax<qreal>(0, table.bottom() - top));
+    return QRectF(table.right() + 1, top, kBarThick, qMax<qreal>(0, table.bottom() - top));
 }
 
 QRegion MarkdownEditor::chromeDirty(const TableChrome &chrome, int mask) const
@@ -170,17 +170,18 @@ QRegion MarkdownEditor::chromeDirty(const TableChrome &chrome, int mask) const
     if (!table)
         return {};
     QRegion dirty;
-    const auto add = [&dirty](const QRectF &rect) {
+    // Within the block's 8 px panel, which the `</>` hover repaints anyway.
+    const auto add = [&dirty](const QRectF &rect, int pad) {
         if (!rect.isEmpty())
-            dirty += rect.adjusted(-3, -3, 3, 3).toAlignedRect();
+            dirty += rect.adjusted(-pad, -pad, pad, pad).toAlignedRect();
     };
     if ((mask & kRowGrip) && chrome.row >= 0 && chrome.row < table->rows.size())
-        add(rowGripRect(view, *table, chrome.row, false));
+        add(rowGripRect(view, *table, chrome.row, false), 2);
     if ((mask & kColumnGrip) && chrome.column >= 0 && chrome.column < table->columns)
-        add(columnGripRect(view, *table, chrome.column, false));
+        add(columnGripRect(view, *table, chrome.column, false), 2);
     if (mask & kBars) {
-        add(addRowRect(view));
-        add(addColumnRect(view));
+        add(addRowRect(view), 1);
+        add(addColumnRect(view), 1);
     }
     return dirty;
 }
@@ -290,10 +291,10 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         QColor fill = m_theme.color(QStringLiteral("--background-modifier-hover"));
         fill.setAlphaF(active ? 1.0f : 0.55f);
         painter.setBrush(fill);
-        painter.drawRoundedRect(rect, 3, 3);
+        painter.drawRoundedRect(rect, 2, 2);
         painter.setPen(QPen(active ? accent : quiet, 1.4));
         const QPointF middle = rect.center();
-        const qreal arm = 3;
+        const qreal arm = 2;
         painter.drawLine(QPointF(middle.x() - arm, middle.y()), QPointF(middle.x() + arm, middle.y()));
         painter.drawLine(QPointF(middle.x(), middle.y() - arm), QPointF(middle.x(), middle.y() + arm));
         painter.setPen(Qt::NoPen);
@@ -634,10 +635,11 @@ bool MarkdownEditor::copyCellSelection(bool cut)
     pipe.insert(1, QStringLiteral("| ") + delimiter.join(QStringLiteral(" | ")) + QStringLiteral(" |"));
     const QString markdown = formatTable(pipe.join(QLatin1Char('\n')));
 
+    // Plain text is what a spreadsheet takes: tab-separated. The pipe table is
+    // the markdown flavour, which is what a paste into a table here reads first.
     auto *mime = new QMimeData;
-    mime->setText(markdown);
+    mime->setText(tsv.join(QLatin1Char('\n')));
     mime->setData(QStringLiteral("text/markdown"), markdown.toUtf8());
-    mime->setData(QStringLiteral("text/tab-separated-values"), tsv.join(QLatin1Char('\n')).toUtf8());
     QApplication::clipboard()->setMimeData(mime);
     if (cut)
         clearCellSelection();
@@ -708,8 +710,8 @@ bool MarkdownEditor::pasteIntoCells()
     const QMimeData *mime = QApplication::clipboard()->mimeData();
     if (!mime)
         return false;
-    const QString text = mime->hasFormat(QStringLiteral("text/tab-separated-values"))
-                             ? QString::fromUtf8(mime->data(QStringLiteral("text/tab-separated-values")))
+    const QString text = mime->hasFormat(QStringLiteral("text/markdown"))
+                             ? QString::fromUtf8(mime->data(QStringLiteral("text/markdown")))
                              : mime->text();
     const CellSelection *sel = cellSelection();
     const CellRef cell = tableCellAt(m_cursor);

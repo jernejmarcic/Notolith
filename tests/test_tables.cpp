@@ -513,9 +513,10 @@ TEST(TableHandlesTest, ADragAcrossCellsSelectsARectangleThatCopiesAsATable)
     QTest::keyClick(editor.get(), Qt::Key_C, Qt::ControlModifier);
     const QMimeData *mime = QApplication::clipboard()->mimeData();
     ASSERT_NE(mime, nullptr);
-    EXPECT_EQ(mime->text(), QStringLiteral("| 1   |  2  |\n| --- | :-: |\n| 4   |  5  |"))
-        << "the first row becomes the header, the alignment goes along\n" << mime->text().toStdString();
-    EXPECT_EQ(QString::fromUtf8(mime->data(QStringLiteral("text/tab-separated-values"))), QStringLiteral("1\t2\n4\t5"));
+    const QString markdown = QString::fromUtf8(mime->data(QStringLiteral("text/markdown")));
+    EXPECT_EQ(markdown, QStringLiteral("| 1   |  2  |\n| --- | :-: |\n| 4   |  5  |"))
+        << "the first row becomes the header, the alignment goes along\n" << markdown.toStdString();
+    EXPECT_EQ(mime->text(), QStringLiteral("1\t2\n4\t5")) << "plain text is what a spreadsheet takes";
     EXPECT_EQ(editor->noteText(), kGrid) << "a copy writes nothing";
 }
 
@@ -549,8 +550,7 @@ TEST(TableHandlesTest, DeleteAndCutClearTheCellsAsOneStep)
     drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 1, 1));
     ASSERT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 1));
     QTest::keyClick(editor.get(), Qt::Key_X, Qt::ControlModifier);
-    EXPECT_EQ(QString::fromUtf8(QApplication::clipboard()->mimeData()->data(QStringLiteral("text/tab-separated-values"))),
-              QStringLiteral("1\t2"));
+    EXPECT_EQ(QApplication::clipboard()->mimeData()->text(), QStringLiteral("1\t2"));
     EXPECT_TRUE(pipeRows(*editor).contains(QStringLiteral("|     |     | 3 |"))
                 || pipeRows(*editor).contains(QStringLiteral("|     |     |   3 |")))
         << pipeRows(*editor).toStdString();

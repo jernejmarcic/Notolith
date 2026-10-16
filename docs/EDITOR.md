@@ -427,11 +427,11 @@ Obsidian; none of its code.
   was. Shift+arrows grow and shrink it, Escape drops it, any other key or click
   ends it, and it ends by itself when the text or caret changes.
   - Ctrl+C: the cells as a pipe table (first selected row is the header, the
-    columns' alignment goes along) as `text/plain` and `text/markdown`, and as
-    `text/tab-separated-values` for a spreadsheet. Ctrl+X does that and empties
+    columns' alignment goes along) as `text/markdown`, and as tab-separated
+    values in `text/plain`, which is what a spreadsheet takes. Ctrl+X does that and empties
     the cells; Delete or Backspace empties them. A copy writes nothing; a cut
     or a clear is one undo step.
-  - Ctrl+V: a pipe table (its delimiter row left out) or tab-separated values
+  - Ctrl+V: a pipe table (`text/markdown` first, else the text; its delimiter row left out) or tab-separated values
     goes into the cells from the top-left of the selection, or from the caret's
     cell when none, and adds the rows and columns it needs. One value over a
     selection fills every cell of it. What was pasted is left selected. A word
