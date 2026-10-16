@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <unistd.h>
 #include <cstdio>
 #include <functional>
 
@@ -2986,6 +2987,73 @@ TEST_F(WindowTest, TypingIsSavedAMomentAfterItStopsAndLeavingNeverAsks)
     ASSERT_TRUE(window.openNote(path(QStringLiteral("Projects/Crlf.md"))));
     EXPECT_FALSE(asked);
     EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed more"));
+}
+
+namespace {
+// Makes `dir` read-only (QSaveFile cannot create its temporary file there, so
+// every save fails) and puts it back, so the temp dir can clean itself up.
+struct ReadOnlyDir {
+    explicit ReadOnlyDir(const QString &path) : dir(path)
+    {
+        QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    }
+    ~ReadOnlyDir() { restore(); }
+    void restore() { QFile::setPermissions(dir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner); }
+    QString dir;
+};
+} // namespace
+
+TEST_F(WindowTest, ClosingWithAnAutosaveThatKeepsFailingAsksInsteadOfRefusingSilently)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores directory permissions";
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("typed"));
+    ASSERT_TRUE(editor->isModified());
+
+    ReadOnlyDir readOnly(dir.path());
+    QString boxText;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&boxText] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            boxText = box->text();
+            box->button(QMessageBox::Discard)->click();
+        }
+    });
+    watch.start(20);
+    EXPECT_TRUE(window.close()) << "a save that cannot work must not trap the window";
+    EXPECT_FALSE(boxText.isEmpty()) << "the person is asked, not left with a status-bar line";
+    EXPECT_TRUE(boxText.contains(QStringLiteral("Welcome.md")));
+    watch.stop();
+    readOnly.restore();
+    EXPECT_FALSE(readAll(path(QStringLiteral("Welcome.md"))).contains("typed"));
+}
+
+TEST_F(WindowTest, AFailedAutosaveIsTriedAgainAtTheNextPauseWithoutAnotherEdit)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores directory permissions";
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    ReadOnlyDir readOnly(dir.path());
+    QTest::keyClicks(editor, QStringLiteral("typed"));
+    ASSERT_TRUE(editor->isModified());
+
+    // The first pause fails and says so.
+    WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("Could not save")), 5000);
+    ASSERT_TRUE(editor->isModified());
+
+    // Nobody types again; the folder works again; the next pause saves.
+    readOnly.restore();
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed"));
 }
 
 TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)

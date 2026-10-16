@@ -404,7 +404,8 @@ private:
     /// save-by-rename dropped, and refreshes the settings page's scheme list
     /// if it is open.
     void reloadThemeFiles();
-    /// Offers to save a modified note. False means the user cancelled.
+    /// Offers to save a modified note (with autosave on, saves it, and asks
+    /// only when that fails). False means the user cancelled.
     bool maybeSave();
     /// Saves `leaf`'s note; `quiet` for autosave: no "Saved" message, and a
     /// failure in the status bar rather than a box.
@@ -640,7 +641,8 @@ QLabel *m_vimStatus = nullptr;
     /// an open tab's mode only when this setting is what changed.
     QString m_appliedDefaultMode;
     bool m_themeApplied = false; ///< applySettings has styled the window once
-    QTimer m_autosave; ///< restarted by every edit
+    QTimer m_autosave; ///< restarted by every edit, and by a failed save
+    QString m_lastSaveError; ///< why the last quiet save failed; maybeSave() shows it
     QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
     QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires
     QTimer m_noteChanges;
