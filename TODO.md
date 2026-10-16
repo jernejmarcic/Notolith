@@ -845,7 +845,8 @@ optimal as it can be".
 - [x] Vim keybindings in the editor (off by default, `editor.vimMode`; docs/EDITOR.md).
       2026-10-01 later: text objects, registers, marks, macros, block visual,
       `%`, `>` `<`, `:s`, `*` `#`. Ctrl+v in normal mode is block visual now.
-      Left (docs/EDITOR.md): `"1`-`"9`, `it`/`at`, visual `J r ~`.
+      2026-10-16: `"1`-`"9`, `it`/`at`, visual `J r ~ u U`, `N%`, macro stop on
+      a failed motion. Left: `l`/`h` at a line edge do not fail a macro.
 - [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Completion and
       inspect built 2026-10-01. Left: `.ipynb` files, `input()`, tiers 2-3.
 - [x] Audit (tests in test_window/test_sync/test_vault): split panes, metadata
@@ -876,7 +877,7 @@ optimal as it can be".
       one; what the editor cannot lay out itself stays litehtml.
       2026-10-02 later: HTML headings in outline/index/links, cell style= kept
       editable (alignment drawn), vim steps over entities, Markdown entities
-      shown decoded. Left: per-cell colour not drawn; entities do not open
+      shown decoded. 2026-10-16: cell colour, background, bold drawn. Left: entities do not open
       into source under the caret; `![[Note#Heading]]` and the canvas section
       picker see Markdown headings only; entity decoder uses md4qt's private
       MD::s_entityMap (check on md4qt bumps).
@@ -905,6 +906,9 @@ optimal as it can be".
       number so this would be 1.2."; toggleable. The number's terminator shown
       as `.` or `:` "or literally anything", a setting. Display only: the file
       keeps CommonMark `1.`.
+- [ ] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate fails under load 16
+      (ratio 8.6 vs limit 5.0), passes alone: make it load-robust (best of N,
+      or compare against a same-run baseline) so lane-checks stay meaningful.
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
