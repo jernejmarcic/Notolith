@@ -3084,6 +3084,71 @@ TEST_F(WindowTest, ANotesBlocksShareOneKernelWhenTheSettingIsOn)
     config.save();
 }
 
+// input() from a block, through the window's own runner and a real kernel: the
+// prompt and its line edit appear under the block, Return sends the line back
+// to the running code, and Esc interrupts the run while the kernel lives on.
+TEST_F(WindowTest, InputInABlockIsAskedUnderItAndAnsweredWithReturnOrInterruptedWithEsc)
+{
+    if (QStandardPaths::locateAll(QStandardPaths::GenericDataLocation,
+                                  QStringLiteral("jupyter/kernels/python3/kernel.json")).isEmpty()
+        || QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty()) {
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and no Jupyter python kernel, or no bubblewrap";
+        GTEST_SKIP() << "no Jupyter python kernel, or no bubblewrap, on this machine";
+    }
+    Settings config = Settings::load();
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), true);
+    ASSERT_TRUE(config.save());
+
+    // A marker in the code keeps each run's cached output apart from older runs of the same code.
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    // The assert is the check: a wrong or missing answer is an error cell, an unsuccessful run.
+    write(QStringLiteral("Ask.md"),
+          QStringLiteral("```python\nname = input('Name? ')\nassert name == 'Ada', repr(name)  # %1\n```\n\n"
+                         "```python\nimport getpass\ngetpass.getpass('Secret? ')  # %1\nprint('not reached')\n```\n\nend\n")
+              .arg(marker).toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Ask.md")));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size()); // off the blocks: they render
+        QTest::qWait(200);
+        const QString written = editor->noteText();
+        const qsizetype first = editor->noteText().indexOf(QStringLiteral("name = input"));
+        const qsizetype second = editor->noteText().indexOf(QStringLiteral("import getpass"));
+        ASSERT_TRUE(editor->notebookInfoAt(first).eligible);
+
+        ASSERT_TRUE(editor->runNotebookBlockAt(first));
+        WAIT_TRUE(editor->notebookInputInfo().active && editor->notebookInputInfo().visible, 30000);
+        EXPECT_EQ(editor->notebookInputInfo().prompt, QStringLiteral("Name? "));
+        EXPECT_FALSE(editor->notebookInputInfo().password);
+        EXPECT_TRUE(editor->notebookInfoAt(first).running) << "the run waits for the answer";
+        QLineEdit *edit = editor->notebookInputEdit();
+        ASSERT_NE(edit, nullptr);
+        QTest::keyClicks(edit, QStringLiteral("Ada"));
+        QTest::keyClick(edit, Qt::Key_Return);
+        WAIT_TRUE(!editor->notebookInputInfo().active, 5000);
+        WAIT_TRUE(editor->notebookInfoAt(first).hasRun && !editor->notebookInfoAt(first).running, 30000);
+        EXPECT_TRUE(editor->notebookInfoAt(first).ok) << "the kernel got exactly what was typed";
+        EXPECT_EQ(editor->noteText(), written) << "Return typed no newline into the note";
+
+        // getpass is masked, and Esc is a KeyboardInterrupt in the same kernel.
+        ASSERT_TRUE(editor->runNotebookBlockAt(second));
+        WAIT_TRUE(editor->notebookInputInfo().active && editor->notebookInputInfo().visible, 30000);
+        EXPECT_TRUE(editor->notebookInputInfo().password);
+        EXPECT_EQ(editor->notebookInputEdit()->echoMode(), QLineEdit::Password);
+        QTest::keyClick(editor->notebookInputEdit(), Qt::Key_Escape);
+        WAIT_TRUE(editor->notebookInfoAt(second).hasRun && !editor->notebookInfoAt(second).running, 30000);
+        EXPECT_FALSE(editor->notebookInfoAt(second).ok);
+        EXPECT_FALSE(editor->notebookInputInfo().active);
+        EXPECT_EQ(editor->noteText(), written) << "the note is as written";
+    }
+    config.setValue(QStringLiteral("notebooks.sharedKernel"), false);
+    config.save();
+}
+
 // Ctrl+Space in a block lists what the note's own kernel knows - once a block
 // has started it; before that the key asks for nothing and starts nothing.
 TEST_F(WindowTest, CtrlSpaceCompletesFromTheNotesKernelOnceOneIsRunning)
@@ -3610,6 +3675,87 @@ TEST_F(WindowTest, EncryptingANoteInTwoPanesKeepsBothAndItsLineEndingsComeBackDe
     window.findChild<QAction *>(QStringLiteral("encrypted-notes:decrypt"))->trigger();
     EXPECT_FALSE(QFileInfo::exists(locked));
     EXPECT_EQ(readAll(path(QStringLiteral("Projects/Crlf.md"))), QByteArray("one\r\ntwo\r\nthree"));
+}
+#endif
+
+#ifdef NOTEAPPC_AI_PLUGIN_DIR
+// A plugin's question (host->prompt) is a small dialog of the window's own:
+// OK sends the line back, Esc and the plugin's timeout both answer "cancelled".
+// The AI plugin's "Ask a question" is the real asker; a blank line sent back
+// ends before any network call, so nothing leaves the process.
+TEST_F(WindowTest, APluginsQuestionIsADialogThatOKEscAndTheTimeoutAllAnswer)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    qputenv("NOTEAPPC_PLUGIN_HOST", NOTEAPPC_PLUGIN_HOST_PATH);
+    const QString installed = data.path() + QStringLiteral("/noteAppC/plugins/ai");
+    ASSERT_TRUE(QDir().mkpath(installed));
+    for (const QString file : {QStringLiteral("plugin.ini"), QStringLiteral("libai.so")})
+        ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_AI_PLUGIN_DIR "/") + file, installed + u'/' + file));
+    const QString configHome = qEnvironmentVariable("XDG_CONFIG_HOME") + QStringLiteral("/noteAppC");
+    const QString grants = configHome + QStringLiteral("/plugins.ini");
+    const QString aiConfig = configHome + QStringLiteral("/plugins/ai/ai.ini");
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(aiConfig).absolutePath()));
+    {
+        QFile file(aiConfig);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("[ai]\nask-timeout-ms = 1000\n"); // the plugin's own floor
+        QSettings config(grants, QSettings::IniFormat);
+        config.setValue(QStringLiteral("ai/enabled"), true);
+    }
+    Settings on = Settings::load();
+    on.setValue(QStringLiteral("plugins.communityPlugins"), true);
+    ASSERT_TRUE(on.save());
+    {
+        MainWindow window;
+        window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+        window.show();
+        QAction *ask = nullptr;
+        WAIT_TRUE((ask = window.findChild<QAction *>(QStringLiteral("ai:ask-question"))), 5000);
+        const auto notice = [&window] { return window.statusBar()->currentMessage(); };
+        const auto dialog = [&window] { return window.findChild<QInputDialog *>(); };
+        const auto asked = [&](const char *what) {
+            window.statusBar()->clearMessage();
+            ask->trigger();
+            QTest::qWaitFor([&] { return dialog() != nullptr; }, 15000);
+            EXPECT_NE(dialog(), nullptr) << what;
+            return dialog();
+        };
+
+        // OK with a blank line: answered, nothing typed (a cancel says something else).
+        QInputDialog *box = asked("ok");
+        ASSERT_NE(box, nullptr);
+        EXPECT_EQ(box->windowTitle(), QStringLiteral("AI")) << "the app names the asker";
+        EXPECT_FALSE(box->labelText().isEmpty());
+        EXPECT_EQ(box->textEchoMode(), QLineEdit::Normal);
+        box->setTextValue(QStringLiteral("   "));
+        box->accept();
+        WAIT_TRUE(notice().contains(QStringLiteral("nothing typed")), 15000);
+        WAIT_TRUE(dialog() == nullptr, 5000); // deleted on close
+
+        // Esc: cancelled.
+        box = asked("esc");
+        ASSERT_NE(box, nullptr);
+        QTest::keyClick(box, Qt::Key_Escape);
+        WAIT_TRUE(notice().contains(QStringLiteral("cancelled")), 15000);
+        WAIT_TRUE(dialog() == nullptr, 5000);
+
+        // Nobody answers: the dialog closes itself at the plugin's timeout, and that is a cancel too.
+        box = asked("timeout");
+        ASSERT_NE(box, nullptr);
+        QElapsedTimer waited;
+        waited.start();
+        WAIT_TRUE(notice().contains(QStringLiteral("cancelled")), 15000);
+        EXPECT_GE(waited.elapsed(), 500) << "it was not cancelled at once";
+        EXPECT_EQ(dialog(), nullptr);
+    }
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("plugins.communityPlugins"), false);
+    ASSERT_TRUE(off.save());
+    QFile::remove(grants);
+    QFile::remove(aiConfig);
+    qputenv("XDG_DATA_HOME", previous);
 }
 #endif
 
