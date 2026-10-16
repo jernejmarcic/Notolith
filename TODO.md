@@ -1064,9 +1064,12 @@ optimal as it can be".
 
 ## Requested by Jernej 2026-10-16 night
 
-- [ ] "if you select a word there should be a right click menau, that can
+- [x] "if you select a word there should be a right click menau, that can
       give you stuff like definition, etc." Word/selection context menu:
-      definition, plus Obsidian-style selection actions (plan: Fable, PLAN-word-graph Plan 1).
+      definition, plus Obsidian-style selection actions. Done (lane wordmenu,
+      6c9f09b): menu on every word, suggestions, add/remove dictionary,
+      Format submenu, Look up via DICT (localhost, then dict.org), vault and
+      web search; feature word-lookup.
 - [ ] "There should also be a file graph like obsidian". A graph view exists
       (Ctrl+G, local graph pane) but nothing on screen opens it, and its look
       against Obsidian's is unchecked (plan: Fable).
