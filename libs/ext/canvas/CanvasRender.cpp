@@ -5,7 +5,6 @@
 
 #include "CanvasView.h"
 
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -13,7 +12,6 @@
 #include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
-#include <QTimer>
 
 #include <cmath>
 
@@ -364,14 +362,11 @@ QPixmap CanvasView::renderMarkdownContent(const QString &text, const QSize &phys
     editor.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     editor.resize(physicalSize);
     editor.setNoteText(text);
-    if (editor.wordCount() < 0) {
-        // A large node's text parses on the thread pool, same as a note
-        // pane's does; wait for it to land rather than grabbing blank text.
-        QEventLoop loop;
-        QObject::connect(&editor, &MarkdownEditor::headingsChanged, &loop, &QEventLoop::quit);
-        QTimer::singleShot(500, &loop, &QEventLoop::quit);
-        loop.exec();
-    }
+    // A large node's text parses on the thread pool, same as a note pane's;
+    // take it now rather than grabbing blank text. Not a nested event loop:
+    // this runs inside paintEvent, where a timer or a deferred delete (Ctrl+W)
+    // firing would free the view mid-paint.
+    editor.finishParse();
     return editor.grab();
 }
 

@@ -376,6 +376,12 @@ than the parse did.
 The parse still costs what it cost. It is off the UI thread and no longer in
 front of the reader.
 
+Callers that must hold the parsed note (a canvas card's grab, a PDF export) call
+`MarkdownEditor::finishParse()`: it waits on the pool and adopts the result
+directly. They must not spin a nested `QEventLoop` for it - the canvas card is
+rendered inside `paintEvent`, where a timer or deferred delete (closing the tab)
+firing would free the view mid-paint.
+
 ### 9. The word count, recounted for every keystroke
 
 `c77d7a5`. Every keystroke fired `textChanged`, and the shell answered by

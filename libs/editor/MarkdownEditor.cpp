@@ -132,17 +132,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     m_parseTimer.setSingleShot(true);
     m_parseTimer.setInterval(20);
     connect(&m_parseTimer, &QTimer::timeout, this, &MarkdownEditor::startParse);
-    connect(&m_parseWatcher, &QFutureWatcher<ParseJob>::finished, this, [this] {
-        if (m_parseWatcher.future().resultCount() == 0)
-            return;
-        ParseJob job = m_parseWatcher.result();
-        setWordCount(job.words);
-        adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
-        m_parsedVersion = job.version;
-        // The buffer moved on while we were parsing: go round again.
-        if (m_parsedVersion != m_textVersion)
-            startParse();
-    });
+    connect(&m_parseWatcher, &QFutureWatcher<ParseJob>::finished, this, &MarkdownEditor::adoptParse);
 
     m_blink.setInterval(QApplication::cursorFlashTime() / 2);
     connect(&m_blink, &QTimer::timeout, this, [this] {
@@ -879,10 +869,34 @@ void MarkdownEditor::reparse()
                      std::move(result.metadata.headings));
 }
 
+void MarkdownEditor::finishParse()
+{
+    if (m_parseWatcher.isRunning())
+        m_parseWatcher.waitForFinished(); // blocks the thread, dispatches nothing
+    adoptParse();
+}
+
+void MarkdownEditor::adoptParse()
+{
+    // The finished signal still arrives, queued, after finishParse() took the
+    // result; a parse adopted once is not adopted twice.
+    if (!m_parsePending || m_parseWatcher.future().resultCount() == 0)
+        return;
+    m_parsePending = false;
+    ParseJob job = m_parseWatcher.result();
+    setWordCount(job.words);
+    adoptDecorations(std::move(job.decorations), std::move(job.properties), std::move(job.headings));
+    m_parsedVersion = job.version;
+    // The buffer moved on while we were parsing: go round again.
+    if (m_parsedVersion != m_textVersion)
+        startParse();
+}
+
 void MarkdownEditor::startParse()
 {
     if (m_parseWatcher.isRunning())
         return; // the finished handler starts the next one
+    m_parsePending = true;
 
     const QString snapshot = m_text;
     const quint64 version = m_textVersion;

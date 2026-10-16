@@ -257,6 +257,10 @@ public:
     /// a large note's first parse is still out. Counted on the parse thread,
     /// not per keystroke - wordCountChanged says when it moves.
     int wordCount() const { return m_wordCount; }
+    /// Waits for a large note's pool parse and adopts it now, without running
+    /// the event loop (so no timer, deferred delete or paint fires meanwhile).
+    /// For callers that must have the parsed note in hand: a grab, an export.
+    void finishParse();
     /// Characters in the note, frontmatter excluded (as wordCount is). Cheap:
     /// the text's length less the properties block's.
     qsizetype characterCount() const;
@@ -1388,6 +1392,7 @@ private:
     void reparse();
     /// Starts a parse on the thread pool; the editor never waits for it.
     void startParse();
+    void adoptParse(); ///< takes the finished pool parse, once; see finishParse()
     void adoptDecorations(Decorations decorations, QList<Property> properties, QList<Heading> headings);
     void rebuildBlocks();
     void indexDecorations();
@@ -2640,6 +2645,7 @@ private:
     QFutureWatcher<ParseJob> m_parseWatcher;
     quint64 m_textVersion = 0;
     quint64 m_parsedVersion = 0;
+    bool m_parsePending = false; ///< a pool parse is out and not yet adopted
     bool m_cursorOn = true;
     QTimer m_blink;
 };

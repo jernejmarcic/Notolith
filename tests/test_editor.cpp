@@ -666,6 +666,31 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
     EXPECT_LT(largeMs, 60.0);
 }
 
+TEST(MarkdownEditorTest, FinishParseAdoptsABigNotesParseWithoutRunningTheEventLoop)
+{
+    // A grab inside a paint cannot spin an event loop: a timer or a deferred
+    // delete firing there frees the owner mid-paint. finishParse() waits on
+    // the pool and adopts the parse directly.
+    QString text = QStringLiteral("# Title\n\n");
+    while (text.size() < 200 * 1024)
+        text += QStringLiteral("A paragraph of words to make the note big enough.\n\n");
+    auto editor = editorWith(text);
+    ASSERT_LT(editor->wordCount(), 0); // parse still out
+
+    bool fired = false;
+    QTimer::singleShot(0, editor.get(), [&fired] { fired = true; });
+    editor->finishParse();
+    EXPECT_GT(editor->wordCount(), 0);
+    EXPECT_EQ(editor->headings().size(), 1);
+    EXPECT_FALSE(fired);
+
+    // The finished signal arrives afterwards and finds nothing left to do.
+    QSignalSpy counted(editor.get(), &MarkdownEditor::wordCountChanged);
+    QTest::qWait(50);
+    EXPECT_TRUE(fired);
+    EXPECT_TRUE(counted.isEmpty());
+}
+
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
 {
     // One paragraph across two source lines renders as one flowing line;
