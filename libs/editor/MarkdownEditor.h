@@ -2095,9 +2095,9 @@ private:
     /// first cell, on a paragraph of its own when the caret's line has text.
     void insertTable();
     /// Replaces lines `start`..`end` with the table `text` as one undo step,
-    /// reparses, and lets the caret-leave formatter know there is nothing left
-    /// for it to do.
-    void rewriteTable(qsizetype start, qsizetype end, const QString &text);
+    /// reparses (unless `reparseNow` is false: then the debounced parse does),
+    /// and lets the caret-leave formatter know there is nothing left for it to do.
+    void rewriteTable(qsizetype start, qsizetype end, const QString &text, bool reparseNow = true);
     /// What typing or pasting `text` puts into a drawn table's cell: a pipe
     /// escaped, a line break a space. `text` itself anywhere else.
     QString cellSafe(const QString &text) const;
