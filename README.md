@@ -54,7 +54,7 @@ machine, and a build directory is gigabytes nobody needs copied.
 sh tools/check.sh                         # everything: both configurations, every suite
 cmake -B /tmp/noteAppC-build -G Ninja     # once, and again only if CMakeLists changes
 cmake --build /tmp/noteAppC-build         # after every edit - this is the one you repeat
-ctest --test-dir /tmp/noteAppC-build      # all 32 suites
+ctest --test-dir /tmp/noteAppC-build      # all 35 suites
 /tmp/noteAppC-build/apps/noteAppC/noteAppC            # opens the last vault
 /tmp/noteAppC-build/apps/noteAppC/noteAppC ~/notes    # a vault
 /tmp/noteAppC-build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile

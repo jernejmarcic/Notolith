@@ -991,3 +991,13 @@ Each of these produced a wrong number at least once in this project.
 - `Index::allNotesForBases()` is about 65 ms at 20 000 notes.
 - A keystroke on the 1 MB note is mostly text shaping of the edited block;
   nothing cheap was left in it.
+
+## 2026-10-16 wave A/B: before the overnight wave (6dd2608) vs after (all lanes merged)
+
+Best of three interleaved runs, 20 000 notes, starbase-1 CCD1, load 7-9. No
+row is more than 15% worse. Cold start to first painted frame 35.1 -> 18.8 ms,
+1 MB open 12.65 -> 10.57 ms, settings pass 1.41 -> 0.68 ms, keystroke on the
+1 MB note 0.50 -> 0.53 ms (budget 0.6), peak RSS 229.5 -> 226.3 MB; cold index
+1036 -> 1059 ms (+2%, noise). New rows (tags pane 36.7 ms, notebook open
+34.3 ms, resize/fold/media 0.2-1.4 ms, source table Tab 1.9 ms) have no
+before value.
