@@ -97,7 +97,7 @@ void PagePreview::leaveSoon()
 void PagePreview::applyTheme(const Theme &theme)
 {
     m_editor->setTheme(theme);
-    setStyleSheet(QStringLiteral("QFrame#pagePreview { background: %1; border: 1px solid %2; "
+    setStyleSheet(QStringLiteral("QFrame#pagePreview, QFrame#lookupPopover { background: %1; border: 1px solid %2; "
                                  "border-radius: 6px; }")
                       .arg(theme.color(QStringLiteral("--background-primary")).name(),
                            theme.color(QStringLiteral("--background-modifier-border")).name()));

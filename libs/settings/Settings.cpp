@@ -41,6 +41,8 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.lineNumbers"), true},
         {QStringLiteral("editor.strictLineBreaks"), false},
         {QStringLiteral("editor.spellcheck"), true},
+        {QStringLiteral("lookup.server"), QString()},
+        {QStringLiteral("lookup.webSearchURL"), QStringLiteral("https://duckduckgo.com/?q=%1")},
         {QStringLiteral("fileRecovery.interval"), 5}, // minutes, Obsidian's default
         {QStringLiteral("fileRecovery.keepDays"), 7},
         {QStringLiteral("editor.autoPairs"), true},
@@ -627,6 +629,13 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Insert a note from the templates folder."), true},
         {"word-count", QT_TRANSLATE_NOOP("Settings", "Word count"),
          QT_TRANSLATE_NOOP("Settings", "Show the note's word count in the status bar."), true},
+        {"word-lookup", QT_TRANSLATE_NOOP("Settings", "Look up words"),
+         QT_TRANSLATE_NOOP("Settings", "Right-click a word for its definition from a DICT dictionary "
+                                       "server (RFC 2229). The word alone is sent, in plain text, to "
+                                       "the first server in ~/.dictrc or /etc/dict/dict.conf that "
+                                       "answers, which may be dict.org over the internet. Install "
+                                       "dictd with a database (dict-gcide, dict-wn) to stay offline."),
+         false},
         {"zk-prefixer", QT_TRANSLATE_NOOP("Settings", "Unique note creator"),
          QT_TRANSLATE_NOOP("Settings", "Create a note named by the date and time, for a Zettelkasten."), true},
         {"workspaces", QT_TRANSLATE_NOOP("Settings", "Workspaces"),

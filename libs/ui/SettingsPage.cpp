@@ -491,6 +491,12 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Underline words the dictionary does not recognise. Uses the hunspell "
                    "dictionaries installed for your system's languages."));
 #endif
+    addLineEditRow(layout, QStringLiteral("lookup.server"), tr("Dictionary server"),
+                  tr("host or host:port of a DICT server for \"Look up\"; empty uses "
+                     "/etc/dict/dict.conf (localhost, then dict.org)."),
+                  QStringLiteral("localhost"));
+    addLineEditRow(layout, QStringLiteral("lookup.webSearchURL"), tr("Web search"),
+                  tr("Opened in the browser by \"Search the web\"; %1 is the text. Empty removes the item."));
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
