@@ -19,7 +19,8 @@ sections whose open or folded state is kept like the rest.
   opens a colour dialog, and a remove button; "New group" adds one. First match
   wins; an empty query colours nothing.
 - **Display** - Arrows, Text fade threshold (labels fade in with zoom; the
-  slider moves where), Node size, Link thickness, Animate (off: the layout
+  slider moves where; a small vault opens labelled, a big one shows its
+  labels as you zoom in), Node size, Link thickness, Animate (off: the layout
   settles, up to a quarter second a pass, before the picture moves).
 - **Forces** - Center, Repel, Link force, Link distance.
 

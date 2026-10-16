@@ -1117,7 +1117,7 @@ optimal as it can be".
 - [ ] Demo pane test read the live demo/.obsidian/workspace.json, which the
       app rewrites when Jernej uses the demo; now runs on a copy with
       fixtures/demo-workspace.json. [x] done 5e6734f.
-- [ ] Graph labels: at the opening zoom only the current note is labelled,
+- [x] Graph labels: at the opening zoom only the current note is labelled,
       even in a 4-note vault; Obsidian labels every node at its default
       zoom. Tie the default fade threshold to the fitted zoom (found
       checking the graph merge, 2026-10-16).

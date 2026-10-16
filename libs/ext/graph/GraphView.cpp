@@ -1273,11 +1273,13 @@ QImage GraphView::paintGraph(const FrameInput &in)
     }
 
     // Text fade threshold: labels fade in as the view zooms in (Obsidian's
-    // slider, -3..3, moves where that happens). The threshold t is 1.4 at 0
-    // and scales by 1.3 per step, so -3..3 spans 0.6..3.1; the labels are
-    // invisible below 0.75 t and fully drawn from 1.25 t. A hovered node,
-    // its neighbours and the current note always get theirs.
-    const double fadeThreshold = 1.4 * std::pow(1.3, -options.textFadeMultiplier);
+    // slider, -3..3, moves where that happens). The threshold t is 0.8 at 0
+    // and scales by 1.3 per step, so -3..3 spans 0.36..1.76; the labels are
+    // invisible below 0.75 t and fully drawn from 1.25 t. A small vault fits
+    // at zoom 1 and so opens labelled, as in Obsidian; a big one fits far
+    // out and shows its labels as it is zoomed into. A hovered node, its
+    // neighbours and the current note always get theirs.
+    const double fadeThreshold = 0.8 * std::pow(1.3, -options.textFadeMultiplier);
     const double fadeAlpha = std::clamp((in.zoom - 0.75 * fadeThreshold) / (0.5 * fadeThreshold), 0.0, 1.0);
     painter.setFont(in.font);
 
