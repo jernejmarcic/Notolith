@@ -654,6 +654,12 @@ QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
     // An entity the caret touches shows as written (it is not syntax the
     // parser lists, so the markers below never find it).
     revealed = revealedEntities();
+    // So do the tags of an inline HTML element the caret touches,
+    // `H<sub>2</sub>O`'s pair as a whole, as Obsidian shows them.
+    for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
+        if (caret >= pair.open.start && caret <= pair.close.end)
+            revealed << pair.open << pair.close;
+    }
 
     const qsizetype line = m_lines.lineAt(caret);
     const qsizetype lineStart = m_lines.lineStart(line);

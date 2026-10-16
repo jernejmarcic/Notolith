@@ -138,12 +138,13 @@ QString MarkdownEditor::resolveHtmlImages(const QString &html) const
     return out;
 }
 
-void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
+QList<MarkdownEditor::InlineHTMLpair> MarkdownEditor::inlineHTMLpairs(const BlockView &view) const
 {
+    QList<InlineHTMLpair> pairs;
     // A whole-block HTML element is litehtml's job (layoutHtml, above), not
     // this pairing pass - the two never touch the same span.
     if (view.span.kind == BlockSpan::Kind::Html)
-        return;
+        return pairs;
 
     // Litehtml per inline span was tried first and dropped: a `<kbd>` or a
     // coloured `<span>` is a handful of characters inside a paragraph
@@ -190,11 +191,22 @@ void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
         stack.pop_back();
         const std::optional<QTextCharFormat> format =
             htmlTagFormat(name, m_text.mid(open.range.start, open.range.length()));
-        if (!format)
-            continue;
-        hidden.append(open.range);
-        hidden.append(span.range);
-        view.inlineHtmlFormats.push_back({Range{open.range.end, span.range.start}, *format});
+        if (format)
+            pairs.append({open.range, span.range, *format});
+    }
+    return pairs;
+}
+
+void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
+{
+    // Tags the caret has revealed stay as written, still formatting the text
+    // between them, the way `**bold**` keeps its weight with its asterisks shown.
+    for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
+        if (!view.revealed.contains(pair.open))
+            hidden.append(pair.open);
+        if (!view.revealed.contains(pair.close))
+            hidden.append(pair.close);
+        view.inlineHtmlFormats.push_back({Range{pair.open.end, pair.close.start}, pair.format});
     }
 }
 

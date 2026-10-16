@@ -1070,3 +1070,12 @@ optimal as it can be".
 - [ ] "There should also be a file graph like obsidian". A graph view exists
       (Ctrl+G, local graph pane) but nothing on screen opens it, and its look
       against Obsidian's is unchecked (plan: Fable).
+- [x] Inline HTML formatting (`H<sub>2</sub>O`, `<mark>`, `<u>`, `<kbd>`,
+      coloured `<span>`) reveals its tags while the caret is inside the
+      element, like markdown syntax does in live preview (Jernej 2026-10-16,
+      screenshot of the inline formatting demo).
+- [ ] `<script>` (and every other script-bearing thing) never runs, and a
+      script element shows as source in red and bold, a warning (Jernej
+      2026-10-16: "javascript should never be ran"; only HTML and CSS
+      formatting is followed). Audit: no JS engine linked, litehtml executes
+      nothing, on* attributes and javascript: URLs inert.

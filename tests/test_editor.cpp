@@ -5360,6 +5360,24 @@ TEST(InlineHtmlTest, RecognisedTagsFormatAndHideTheirMarkup)
     EXPECT_GE(editor->formatAt(go).fontWeight(), int(QFont::Bold));
 }
 
+TEST(InlineHtmlTest, TheCaretInsideAnElementRevealsItsTags)
+{
+    const QString note = QStringLiteral("Water is H<sub>2</sub>O and <b>Go</b>.\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QStringLiteral("2<")) + 1); // after the "2"
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Water is H<sub>2</sub>O and Go.\n"))
+        << "that element's pair shows as written, the other stays hidden";
+    EXPECT_EQ(editor->formatAt(note.indexOf(QStringLiteral("Go<"))).fontWeight() >= int(QFont::Bold), true);
+
+    editor->enterBlockAt(note.indexOf(QStringLiteral("Go<")) + 1);
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Water is H2O and <b>Go</b>.\n"));
+    EXPECT_GE(editor->formatAt(note.indexOf(QStringLiteral("Go<"))).fontWeight(), int(QFont::Bold))
+        << "revealed tags still format their text";
+
+    editor->enterBlockAt(note.indexOf(QStringLiteral("is"))); // in the block, outside both
+    EXPECT_EQ(editor->displayText(), QStringLiteral("Water is H2O and Go.\n"));
+}
+
 TEST(InlineHtmlTest, SpanStyleColourIsRead)
 {
     const QString note = QStringLiteral("A <span style=\"color: #ff0000\">warning</span> word.\n");

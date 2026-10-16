@@ -2127,6 +2127,15 @@ private:
     /// Skipped for a block-level HTML span - that is litehtml's job, not
     /// this pairing pass.
     void layoutInlineHtml(BlockView &view, QList<Range> &hidden);
+    /// The recognised, paired inline tags in `view`'s block, in source
+    /// order: what layoutInlineHtml hides, and what revealedSyntax shows
+    /// while the caret touches the element.
+    struct InlineHTMLpair {
+        Range open;
+        Range close;
+        QTextCharFormat format;
+    };
+    QList<InlineHTMLpair> inlineHTMLpairs(const BlockView &view) const;
     /// The QTextCharFormat for a recognised inline tag, or nullopt for one
     /// this pass leaves as raw source (unknown tags, and anything in a
     /// `style=` attribute besides `color:`). `openTag` is the opening tag's
