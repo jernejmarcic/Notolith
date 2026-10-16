@@ -126,6 +126,19 @@ public:
     /// A table's source aligned into columns when the caret leaves a table
     /// it edited, as Advanced Tables does. On by default.
     void setAlignTables(bool on) { m_alignTables = on; }
+    /// The `</>` button over a rendered callout, formula, table, embed or
+    /// plugin block (HoverEdit.cpp). On by default; off tracks no hover.
+    void setHoverEditButton(bool on);
+    /// The button's rect in viewport coordinates, invalid unless the pointer
+    /// is over a block that has one (for the tests too).
+    QRectF editButtonRect() const;
+    /// Selects the whole of the block `blockIndex` (any piece) with the
+    /// caret at its start, which is what shows its source.
+    void editBlockSource(qsizetype blockIndex);
+    qsizetype hoveredBlock() const { return m_hoveredBlock; }
+    /// The panel a block of the one at `sourceOffset` is drawn in (all of a
+    /// long block's pieces), viewport coordinates; the ring is drawn on it.
+    QRectF blockPanelAt(qsizetype sourceOffset) const;
     bool outlineNumbering() const { return m_outlineNumbering; }
     /// What an ordered item's number reads as drawn (for the tests too).
     QString listLabel(const ListItemSpan &item) const;
@@ -1402,6 +1415,26 @@ private:
     /// True when the press landed on a fold handle or a property control, so
     /// the caret must not move.
     bool handleBlockClick(const QPoint &point);
+
+    // --- the `</>` edit button, HoverEdit.cpp ---------------------------
+    /// The first piece of the block whose panel holds the viewport point, or
+    /// -1; one lower_bound on the sorted block list, nothing scanned.
+    qsizetype blockAtPoint(const QPoint &point) const;
+    /// True when the block is drawn as a widget the source of which is not
+    /// on screen: a callout, formula, HTML, plugin, query/base or embed
+    /// block, or a table's grid.
+    bool hasEditButton(const BlockView &view) const;
+    QRectF panelRectOf(qsizetype firstPiece) const;
+    /// The block's whole source, every piece, without the newline that ends it.
+    Range wholeBlockRange(const BlockView &firstPiece) const;
+    QRectF editButtonRectOf(qsizetype firstPiece) const;
+    /// The block under a press on its button, else -1.
+    qsizetype editButtonAt(const QPoint &point) const;
+    /// Tracks the pointer for the code label and the edit button; repaints
+    /// only the panels that changed.
+    void updateHover(const QPoint &point);
+    void clearHover();
+    void paintEditHover(QPainter &painter) const;
     /// Flips a checkbox property, rewriting only that value's bytes.
     void toggleProperty(int index);
     /// The key's line, and where on it the value is, when its value can be
@@ -2210,6 +2243,17 @@ private:
     std::vector<TabGroup> m_tabGroups;
     QHash<qsizetype, int> m_selectedTabs;
     qsizetype m_hoveredCodeBlock = -1;
+    /// HoverEdit.cpp: index in m_blocks of the first piece of the rendered
+    /// block under the pointer that has an edit button, else -1.
+    qsizetype m_hoveredBlock = -1;
+    bool m_hoverEditButton = true;
+    bool m_overEditButton = false;
+    /// What the last hover repaint covered, viewport coordinates.
+    QRect m_hoverRect;
+    /// Start of the block `editBlockSource` selected: while the selection is
+    /// exactly that block it shows its source, as a bare caret in it would.
+    qsizetype m_sourceReveal = -1;
+    Range m_sourceRange; ///< what it selected: the block with its fences
     bool m_autoPairs = true; ///< Obsidian ships both auto-pair settings on
     int m_contentWidth = 700;
     int m_minimumSideMargin = 24;

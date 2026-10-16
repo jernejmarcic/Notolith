@@ -1337,6 +1337,15 @@ void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
             menu->addSeparator();
         addTableActions(*menu, offset);
     }
+    // A callout is edited as source from its menu as from its button.
+    const qsizetype block = blockAtPoint(point);
+    if (block >= 0 && m_blocks[size_t(block)].callout && hasEditButton(m_blocks[size_t(block)])) {
+        if (!menu)
+            menu = std::make_unique<QMenu>(this);
+        else
+            menu->addSeparator();
+        menu->addAction(tr("Edit block source"), this, [this, block] { editBlockSource(block); });
+    }
     if (menu)
         menu->exec(event->globalPos());
 }
@@ -3169,6 +3178,19 @@ void MarkdownEditor::updateLayout()
     const bool bareCaret =
         m_mode == Mode::LivePreview && m_interacted && (m_vim.enabled || selection().length() == 0);
 
+    // The block the edit button selected shows its source for as long as the
+    // selection is exactly that block (HoverEdit.cpp).
+    qsizetype sourceShown = -1;
+    if (m_sourceReveal >= 0) {
+        const qsizetype at = blockAt(m_sourceReveal);
+        const Range selected = selection();
+        if (m_mode == Mode::LivePreview && at >= 0 && m_blocks[size_t(at)].piece == 0
+            && m_cursor == selected.start && m_sourceRange == selected)
+            sourceShown = at;
+        else
+            m_sourceReveal = -1;
+    }
+
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
     m_movedFrom = qInf();
@@ -3183,7 +3205,8 @@ void MarkdownEditor::updateLayout()
             view.laidOut = false;
             view.heightEstimated = false;
         }
-        const bool active = m_pressing ? view.active : bareCaret && i - view.piece == caretFirst;
+        const bool active = m_pressing ? view.active
+                                       : (bareCaret && i - view.piece == caretFirst) || i - view.piece == sourceShown;
         if (active != view.active) {
             view.active = active;
             view.layout.reset();
@@ -3271,6 +3294,15 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // while the table moved away under it.
     finishPropertyEdit(true);
     updateLayout(); // blocks scrolling into view need their real layout
+    // The block under a stationary pointer changes as the content moves: the
+    // ring and button follow their block, so re-aim them (HoverEdit.cpp).
+    m_hoverRect.translate(dx, dy);
+    if (m_hoverEditButton || !m_hoverRect.isNull()) {
+        if (viewport()->underMouse())
+            updateHover(viewport()->mapFromGlobal(QCursor::pos()));
+        else
+            clearHover();
+    }
 
     // A wheel notch moves most of the screen by a few lines, and unless the
     // layout just moved something that is on screen those pixels are still
@@ -3469,6 +3501,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
     painter.fillRect(exposed, m_theme.color(QStringLiteral("--background-primary")));
 
     paintBlocks(painter, verticalScrollBar()->value(), exposedTop, exposedBottom);
+    paintEditHover(painter);
 
     m_caretPainted = QRect();
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
@@ -3655,6 +3688,7 @@ void MarkdownEditor::leaveEvent(QEvent *event)
         m_previewLink.clear();
         emit linkHoverEnded();
     }
+    clearHover();
     QAbstractScrollArea::leaveEvent(event);
 }
 
@@ -4082,6 +4116,7 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
         {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+        {QStringLiteral("noteAppC:edit-block-source"), tr("Edit block source"), {}},
         {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
         {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
         {QStringLiteral("noteAppC:table-insert-row-before"), tr("Table: Insert row before"), {}},
@@ -4122,6 +4157,8 @@ bool MarkdownEditor::runCommand(const QString &id)
         moveLines(1);
     else if (id == QLatin1String("noteAppC:duplicate-lines"))
         duplicateLines();
+    else if (id == QLatin1String("noteAppC:edit-block-source"))
+        editBlockSource(blockAt(m_cursor));
     else if (id == QLatin1String("noteAppC:format-table"))
         formatTables(m_cursor);
     else if (id == QLatin1String("noteAppC:format-all-tables"))
@@ -4365,6 +4402,15 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
     m_touchHandles = false;
 
+    // The `</>` button comes first: over a PDF's controls, a card, a query
+    // block or a hooked embed it is the only thing a press there means.
+    if (!touch) {
+        if (const qsizetype block = editButtonAt(event->pos()); block >= 0) {
+            editBlockSource(block);
+            return;
+        }
+    }
+
     // A hooked embed's own image (a `.canvas`, say) takes the press instead
     // of the caret: a plain click may open a card on release, and a drag
     // pans it - neither is a place the caret can land.
@@ -4525,24 +4571,13 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
         moveCursor(offsetAt(event->pos()), true);
         return;
     }
-    // Which code block the pointer is over, since that is when one without a
-    // language shows its "Copy" label. Only a change repaints.
-    qsizetype hovered = -1;
-    const qreal y = event->position().y() + verticalScrollBar()->value();
-    for (const BlockView &view : m_blocks) {
-        if (view.y - 8 > y)
-            break;
-        if (view.span.kind == BlockSpan::Kind::Code && y <= view.y + view.height + 8) {
-            hovered = firstPiece(view).span.range.start;
-            break;
-        }
-    }
-    if (hovered != m_hoveredCodeBlock) {
-        m_hoveredCodeBlock = hovered;
-        viewport()->update();
-    }
+    // The code block the pointer is over (that is when one without a
+    // language shows its "Copy" label) and the rendered block whose `</>`
+    // button shows (HoverEdit.cpp). Only a change repaints, and only the
+    // panels involved.
+    updateHover(event->pos());
 
-    const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos());
+    const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || m_overEditButton;
     viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::IBeamCursor);
     updateLinkHover(event->pos(), event->modifiers().testFlag(Qt::ControlModifier),
                     event->globalPosition().toPoint());

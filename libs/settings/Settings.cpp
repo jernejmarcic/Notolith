@@ -48,6 +48,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.showIndentGuides"), true},
         {QStringLiteral("editor.outlineNumbering"), false},
         {QStringLiteral("editor.alignTables"), true},
+        {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tabWidth"), 4},
 
         // Files and links

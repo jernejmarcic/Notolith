@@ -11,6 +11,7 @@ add_library(noteAppC_editor STATIC
     FindBar.h
     FootnoteMarks.cpp
     HtmlBlock.cpp
+    HoverEdit.cpp
     HtmlEdit.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h

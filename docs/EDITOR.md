@@ -2,7 +2,8 @@
 
 `libs/editor/MarkdownEditor` is the one editing widget: live preview, source
 and reading are three modes of it. This page covers the optional parts of how
-it takes input: [HTML edited in place](#html-edited-in-place) and
+it takes input: [HTML edited in place](#html-edited-in-place),
+[the `</>` edit button](#the--edit-button-on-rendered-blocks) and
 [Vim key bindings](#vim-key-bindings).
 
 ## HTML edited in place
@@ -108,6 +109,35 @@ that is no character and a control character (`&#10;`) show as written. Entities
 inside a Markdown link's text are left as written.
 
 Tests: `tests/test_html_edit.cpp` (`ctest -R html_edit`).
+
+## The `</>` edit button on rendered blocks
+
+Jernej, 2026-10-16: "when hovering over rendered elements the code icon should
+appear to edit the code". Behaviour is Obsidian's "Edit this block"; the code
+is `libs/editor/HoverEdit.cpp`.
+
+Pointer over a rendered callout (`> [!x]` and `:::`), block formula, HTML
+block, plugin fence (mermaid and the like), `query` / `base` block, note, file,
+PDF or image embed, or a table: the block's panel gets a 1 px ring
+(`--background-modifier-border`, radius `--radius-s`) and a `</>` button at its
+top-right, 4 px in (a foldable callout's button steps left of its fold arrow).
+Clicking the button selects the block's whole source with the caret at its
+start, which shows the source; moving the caret hides it again. A click
+anywhere else in the block behaves as it always did (caret at the click).
+Plain code blocks (they have their own label and Copy), frontmatter and
+notebook output never get one. A table's cells still edit in place; the button
+is the way to its raw pipe text.
+
+Also: right-click a callout for "Edit block source", and the command
+`noteAppC:edit-block-source` (unbound; bind it under Settings > Hotkeys) does
+the same for the caret's block.
+
+Setting `editor.hoverEditButton` (Settings > Editor, on by default). Off, the
+pointer is not tracked for these kinds at all. Hover is a mouse-move path, never
+a keystroke path: one `lower_bound` over the sorted blocks, a repaint of the two
+panels that changed (not the viewport), a painted button, nothing laid out.
+
+Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
 ## Vim key bindings
 

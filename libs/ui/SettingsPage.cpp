@@ -495,6 +495,9 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
                 tr("Pad a table's cells into straight columns in the file itself when you "
                    "leave a table you edited, so it reads as a table in any text editor."));
+    addToggleRow(layout, QStringLiteral("editor.hoverEditButton"), tr("Edit button on rendered blocks"),
+                tr("Show a </> button over a callout, formula, table, embed or other rendered "
+                   "block while the pointer is on it. Clicking it shows the block's source."));
     addToggleRow(layout, QStringLiteral("editor.outlineNumbering"), tr("Outline numbering"),
                 tr("Number nested ordered lists as 1.1, 1.2, 1.2.1, the way a word "
                    "processor's multilevel list does. The note's text is unchanged."));

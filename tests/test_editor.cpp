@@ -5491,3 +5491,193 @@ TEST(NotebookCompleteTest, WithoutAKernelTheKeysAreOthersAndNothingIsAsked)
     QTest::keyClick(editor.get(), Qt::Key_Space, Qt::ControlModifier);
     EXPECT_EQ(kernel.asked, 0);
 }
+
+// --- the `</>` button over rendered blocks (HoverEdit.cpp) ---------------------
+
+namespace {
+
+const QString kHoverNote = QStringLiteral(
+    "intro\n\n> [!note] Title\n> body text\n\nmiddle\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+    "```cpp\nint x;\n```\n\n```query\nfoo\n```\n\nend\n");
+
+QPoint centreOf(const QRectF &rect)
+{
+    return rect.center().toPoint();
+}
+
+/// A pointer move over the viewport. QTest::mouseMove needs an exposed
+/// window; the editor's own handler is what is under test.
+void hoverAt(MarkdownEditor &editor, const QPoint &point)
+{
+    QMouseEvent move(QEvent::MouseMove, QPointF(point), editor.viewport()->mapToGlobal(QPointF(point)),
+                     Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor.viewport(), &move);
+}
+
+/// Records the region of every paint the viewport gets.
+class PaintSpy : public QObject {
+public:
+    QList<QRect> regions;
+
+protected:
+    bool eventFilter(QObject *, QEvent *event) override
+    {
+        if (event->type() == QEvent::Paint)
+            regions.append(static_cast<QPaintEvent *>(event)->region().boundingRect());
+        return false;
+    }
+};
+
+} // namespace
+
+TEST(HoverEditTest, ButtonAppearsOnlyWhileHovered)
+{
+    auto editor = editorWith(kHoverNote);
+    const qsizetype callout = kHoverNote.indexOf(QStringLiteral("body"));
+    EXPECT_FALSE(editor->editButtonRect().isValid());
+
+    hoverAt(*editor, centreOf(editor->blockPanelAt(callout)));
+    ASSERT_TRUE(editor->editButtonRect().isValid());
+    EXPECT_TRUE(editor->blockPanelAt(callout).contains(editor->editButtonRect()));
+
+    hoverAt(*editor, centreOf(editor->blockPanelAt(2)));
+    EXPECT_FALSE(editor->editButtonRect().isValid()) << "a paragraph has none";
+
+    // A table gets one too; a plain code block does not.
+    hoverAt(*editor, centreOf(editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("| 1")))));
+    EXPECT_TRUE(editor->editButtonRect().isValid());
+    hoverAt(*editor, centreOf(editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("int x")))));
+    EXPECT_FALSE(editor->editButtonRect().isValid());
+
+    // Leaving the viewport takes it away.
+    hoverAt(*editor, centreOf(editor->blockPanelAt(callout)));
+    ASSERT_TRUE(editor->editButtonRect().isValid());
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(editor.get(), &leave);
+    EXPECT_FALSE(editor->editButtonRect().isValid());
+}
+
+TEST(HoverEditTest, ClickSelectsTheWholeSource)
+{
+    auto editor = editorWith(kHoverNote);
+    const QString source = QStringLiteral("> [!note] Title\n> body text");
+    const qsizetype start = kHoverNote.indexOf(source);
+    ASSERT_GE(start, 0);
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("[!note]"))) << "rendered";
+
+    hoverAt(*editor, centreOf(editor->blockPanelAt(start)));
+    ASSERT_TRUE(editor->editButtonRect().isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, centreOf(editor->editButtonRect()));
+
+    EXPECT_EQ(editor->selectedText(), source);
+    EXPECT_EQ(editor->cursorOffset(), start) << "caret at the start";
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("[!note]"))) << "source shows";
+    EXPECT_EQ(editor->noteText(), kHoverNote);
+
+    // Typing replaces nothing by surprise: moving the caret hides the source again.
+    QTest::keyClick(editor.get(), Qt::Key_Right);
+    EXPECT_TRUE(editor->selectedText().isEmpty());
+}
+
+TEST(HoverEditTest, ABodyClickStillPutsTheCaretThere)
+{
+    auto editor = editorWith(kHoverNote);
+    const QRectF panel = editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("body")));
+    hoverAt(*editor, centreOf(panel));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, centreOf(panel));
+    EXPECT_TRUE(editor->selectedText().isEmpty());
+}
+
+TEST(HoverEditTest, QueryBlockButtonReachesSource)
+{
+    auto editor = editorWith(kHoverNote);
+    FakeQueryRunner fake;
+    editor->setQueryRunner(std::ref(fake));
+    ASSERT_EQ(fake.calls.size(), 1);
+    fake.calls.first().deliver({makeQueryResult(QStringLiteral("One.md"), 1, QStringLiteral("foo"), 0)});
+    pumpQueuedDelivery();
+    const qsizetype query = kHoverNote.indexOf(QStringLiteral("foo"));
+    ASSERT_FALSE(editor->queryRowsAt(query).isEmpty());
+
+    // Today a click in the body of the block is swallowed.
+    hoverAt(*editor, centreOf(editor->blockPanelAt(query)));
+    ASSERT_TRUE(editor->editButtonRect().isValid());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, centreOf(editor->editButtonRect()));
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("```query\nfoo\n```"));
+    EXPECT_EQ(editor->cursorOffset(), kHoverNote.indexOf(QStringLiteral("```query")));
+}
+
+TEST(HoverEditTest, HoverRepaintsOnlyTheBlock)
+{
+    auto editor = editorWith(kHoverNote);
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+    QCoreApplication::processEvents();
+
+    const QRect callout = editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("body"))).toAlignedRect();
+    const QRect table = editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("| 1"))).toAlignedRect();
+    PaintSpy spy;
+    editor->viewport()->installEventFilter(&spy);
+
+    hoverAt(*editor, centreOf(callout));
+    QCoreApplication::processEvents();
+    hoverAt(*editor, centreOf(table));
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(spy.regions.isEmpty()) << "something repainted";
+    const QRect allowed = callout.united(table);
+    for (const QRect &region : spy.regions)
+        EXPECT_TRUE(allowed.contains(region)) << "repainted outside the two panels";
+    EXPECT_LT(allowed.height(), editor->viewport()->height());
+}
+
+TEST(HoverEditTest, OffMeansNoTracking)
+{
+    auto editor = editorWith(kHoverNote);
+    editor->setHoverEditButton(false);
+    hoverAt(*editor, centreOf(editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("body")))));
+    EXPECT_EQ(editor->hoveredBlock(), -1);
+    EXPECT_FALSE(editor->editButtonRect().isValid());
+
+    editor->setHoverEditButton(true);
+    hoverAt(*editor, centreOf(editor->blockPanelAt(kHoverNote.indexOf(QStringLiteral("body")))));
+    EXPECT_GE(editor->hoveredBlock(), 0);
+}
+
+TEST(HoverEditTest, CommandEditsCaretBlock)
+{
+    auto editor = editorWith(kHoverNote);
+    const qsizetype body = kHoverNote.indexOf(QStringLiteral("body"));
+    editor->setCursorOffset(body);
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("noteAppC:edit-block-source")));
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("> [!note] Title\n> body text"));
+    EXPECT_EQ(editor->cursorOffset(), kHoverNote.indexOf(QStringLiteral("> [!note]")));
+}
+
+TEST(HoverEditTest, EveryRenderedKindSelectsItsWholeSource)
+{
+    const QStringList sources = {
+        QStringLiteral("$$\nx^2 + y^2\n$$"),
+        QStringLiteral("<div>\n<b>hello</b>\n</div>"),
+        QStringLiteral("| a | b |\n|---|---|\n| 1 | 2 |"),
+        QStringLiteral("> [!tip] Outer\n> text\n> > [!bug] Inner\n> > more"),
+    };
+    int clicked = 0;
+    for (const QString &source : sources) {
+        const QString note = QStringLiteral("before\n\n") + source + QStringLiteral("\n\nafter\n");
+        auto editor = editorWith(note);
+        const qsizetype start = note.indexOf(source);
+        hoverAt(*editor, centreOf(editor->blockPanelAt(start + source.size() / 2)));
+        if (!editor->editButtonRect().isValid()) {
+            // A formula or HTML the build cannot draw stays source: nothing to edit.
+            EXPECT_TRUE(source.startsWith(QLatin1Char('$')) || source.startsWith(QLatin1Char('<')))
+                << qPrintable(source);
+            continue;
+        }
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, centreOf(editor->editButtonRect()));
+        EXPECT_EQ(editor->selectedText(), source);
+        EXPECT_EQ(editor->cursorOffset(), start);
+        ++clicked;
+    }
+    std::printf("[ INFO     ] %d of %d kinds had a button\n", clicked, int(sources.size()));
+    EXPECT_GE(clicked, 2); // the table and the callout, whatever the build draws
+}
