@@ -654,6 +654,7 @@ QLabel *m_vimStatus = nullptr;
     QToolButton *m_vaultMenuButton = nullptr;
     QMenu *m_vaultMenu = nullptr;
     QLineEdit *m_headerSearch = nullptr;
+    QToolButton *m_headerGraphButton = nullptr; ///< the ribbon-style graph entry; null without NOTEAPPC_HAVE_GRAPH
     QToolButton *m_backButton = nullptr;
     QToolButton *m_forwardButton = nullptr;
 

@@ -490,6 +490,14 @@ QWidget *MainWindow::buildHeaderBar()
                                       tr("New note (Ctrl+N)"), 18);
     connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
 
+#ifdef NOTEAPPC_HAVE_GRAPH
+    // Obsidian's ribbon has a graph icon; Ctrl+G alone left nothing on screen
+    // that opens it. Hidden with the feature (applyFeatures()).
+    m_headerGraphButton = iconButton(QStringLiteral("headerGraphButton"), QStringLiteral("git-fork"),
+                                     tr("Open graph view (Ctrl+G)"), 18);
+    connect(m_headerGraphButton, &QToolButton::clicked, this, &MainWindow::openGraph);
+#endif
+
     QToolButton *rightSidebarToggle = iconButton(QStringLiteral("headerRightSidebarToggle"),
                                                  QStringLiteral("panel-right"),
                                                  tr("Toggle right sidebar (Ctrl+Alt+R)"), 18);
@@ -508,6 +516,9 @@ QWidget *MainWindow::buildHeaderBar()
     layout->addWidget(m_headerSearch);
     layout->addStretch(1);
     layout->addWidget(newNote);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    layout->addWidget(m_headerGraphButton);
+#endif
     layout->addWidget(rightSidebarToggle);
     layout->addWidget(settingsButton);
     return m_headerBar;
@@ -1834,6 +1845,8 @@ void MainWindow::applyFeatures()
         showNoteInPanes(m_active->notePath);
 
 #ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_headerGraphButton)
+        m_headerGraphButton->setVisible(featureOn("graph"));
     if (m_graph && !featureOn("graph")) {
         if (m_mainStack->currentWidget() == m_graph)
             leaveSettings();

@@ -352,6 +352,27 @@ TEST_F(WindowTest, GraphViewOpensInTheMainAreaAndANodeOpensItsNote)
     EXPECT_EQ(stack->currentIndex(), 0);
 }
 
+// The header carries a graph button: nothing on screen opened the graph before.
+TEST_F(WindowTest, TheHeaderGraphButtonOpensTheGraph)
+{
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "b\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *button = window.findChild<QToolButton *>(QStringLiteral("headerGraphButton"));
+    ASSERT_NE(button, nullptr);
+    EXPECT_TRUE(button->isVisible());
+    button->click();
+    auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+    ASSERT_NE(graph, nullptr);
+    EXPECT_EQ(window.findChild<QStackedWidget *>(QStringLiteral("mainStack"))->currentWidget(), graph);
+}
+
 TEST_F(WindowTest, LocalGraphFollowsTheOpenNote)
 {
     write(QStringLiteral("A.md"), "[[B]]\n");
@@ -2684,7 +2705,9 @@ TEST_F(WindowTest, AFeatureSwitchedOffIsNotBuiltAndItsCommandsStop)
     toggle("plugins.graph")->click();
     EXPECT_EQ(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
     EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("graph:open"))->isEnabled());
+    EXPECT_FALSE(window.findChild<QToolButton *>(QStringLiteral("headerGraphButton"))->isVisible());
     toggle("plugins.graph")->click();
+    EXPECT_TRUE(window.findChild<QToolButton *>(QStringLiteral("headerGraphButton"))->isVisibleTo(&window));
     EXPECT_NE(window.findChild<noteAppC::GraphView *>(QStringLiteral("localGraph")), nullptr);
 #endif
     qputenv("XDG_CONFIG_HOME", previous);
