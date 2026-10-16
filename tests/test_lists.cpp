@@ -12,6 +12,7 @@
 #include "BulletGlyphs.h"
 #include "MarkdownEditor.h"
 #include "Parser.h"
+#include "Perf.h"
 
 using namespace noteAppC;
 
@@ -435,12 +436,17 @@ TEST(ListEnter, ALongListIsRenumberedInAFewMilliseconds)
     QString note;
     for (int i = 1; i <= 5000; ++i)
         note += QString::number(i) + QStringLiteral(". item\n");
-    auto editor = editorWith(note, after(note, QStringLiteral("1. item")));
-    QElapsedTimer timer;
-    timer.start();
-    QTest::keyClick(editor.get(), Qt::Key_Return);
-    const qint64 took = timer.elapsed();
-    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("\n5001. item\n")));
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    // Best of three, each on a fresh editor: load only ever adds time.
+    const qint64 took = perf::bestOf([&] {
+        auto editor = editorWith(note, after(note, QStringLiteral("1. item")));
+        QElapsedTimer timer;
+        timer.start();
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        const qint64 ms = timer.elapsed();
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("\n5001. item\n")));
+        return ms;
+    }, 3, 100);
     printf("enter in a 5000-item list: %lld ms\n", took);
     EXPECT_LT(took, 100);
 }
