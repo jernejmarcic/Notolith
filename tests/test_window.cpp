@@ -93,6 +93,9 @@
 #include "Snapshots.h"
 #include "RecoveryDialog.h"
 #include "Settings.h"
+#ifdef NOTEAPPC_EXPECT_SYNC
+#include "SyncEngine.h"
+#endif
 #include "Vault.h"
 
 using noteAppC::Index;
@@ -1944,6 +1947,21 @@ int main(int argc, char **argv)
     qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
     qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
     QApplication app(argc, argv);
+#ifdef NOTEAPPC_EXPECT_SYNC
+    // A window with sync configured looks in the keyring for this device's
+    // keys as it opens: never the real one (a silent secret-service costs
+    // 15 s a call). An empty in-memory store - nothing is signed in here.
+    static QHash<QString, QByteArray> secrets;
+    noteAppC::SyncEngine::setSecretStore(
+        {[](const QString &key, QByteArray *value) {
+             if (!secrets.contains(key))
+                 return false;
+             *value = secrets.value(key);
+             return true;
+         },
+         [](const QString &key, const QByteArray &value) { return secrets.insert(key, value) != secrets.end(); },
+         [](const QString &key) { return secrets.remove(key) > 0; }});
+#endif
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
     ::testing::InitGoogleTest(&argc, argv);
@@ -2428,9 +2446,11 @@ TEST_F(WindowTest, SyncWaitsForASignInAndNeverAsksOnItsOwn)
     settings.setValue(QStringLiteral("sync.email"), QStringLiteral("me@example.invalid"));
     ASSERT_TRUE(settings.save());
     window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
-    // Configured, but no password this session: no engine, no dialog, no network.
+    // Configured, nothing in the keyring, no password this session: the
+    // engine asks the keyring and finds nothing - no dialog, no network.
     EXPECT_TRUE(status->isVisibleTo(&window));
-    EXPECT_EQ(status->text(), QStringLiteral("Sync: not signed in"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return status->text() == QStringLiteral("Sync: not signed in"); }, 5000))
+        << status->text().toStdString();
     for (const QDialog *dialog : window.findChildren<QDialog *>())
         EXPECT_FALSE(dialog->isVisible()) << dialog->metaObject()->className();
 
