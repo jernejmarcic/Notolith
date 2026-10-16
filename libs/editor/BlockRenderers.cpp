@@ -1187,8 +1187,8 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
                                                       qreal top) const
 {
     CodeLabel label;
-    if (view.piece > 0)
-        return label; // a long fence's label is on its first piece
+    if (view.piece > 0 || plainSource(view))
+        return label; // a long fence's label is on its first piece; plain source has none
     const LanguageStyle style = codeStyleOf(view);
     const bool copied = m_copiedBlock == view.span.range.start;
     const bool hovered = m_hoveredCodeBlock == view.span.range.start;

@@ -373,6 +373,37 @@ TEST(MarkdownEditorTest, SourceModeHidesNothingAndReadingHidesEverything)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nshown\n"));
 }
 
+TEST(SourceModeTest, ACalloutHasNoHeaderAndNeverFoldsItsBody)
+{
+    // Source mode is the text: the callout's panel, title bar and fold are
+    // rendering, so `[!x]-` neither takes a header's height nor hides its body.
+    const QString callout = QStringLiteral("> [!warning]- T\n> body\n");
+    auto editor = editorWith(callout);
+    editor->setMode(MarkdownEditor::Mode::Source);
+    auto plain = editorWith(QStringLiteral("> T\n> body\n"));
+    plain->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_EQ(editor->displayText(), callout);
+    EXPECT_NEAR(editor->documentHeight(), plain->documentHeight(), 1);
+}
+
+TEST(SourceModeTest, ACodeBlockDrawsNoPanel)
+{
+    const QString note = QStringLiteral("```cpp\nint x;\n```\n");
+    auto editor = editorWith(note);
+    editor->setMode(MarkdownEditor::Mode::Source);
+    editor->show();
+    const QImage shot = editor->viewport()->grab().toImage();
+    int y = -1;
+    for (const auto &box : editor->blockBoxes()) {
+        if (box.kind == BlockSpan::Kind::Code)
+            y = int(box.rect.center().y());
+    }
+    ASSERT_GE(y, 0);
+    // 12 px left of the text is inside the panel Live Preview paints (14 px
+    // out) and outside any text: it must be the page.
+    EXPECT_EQ(shot.pixel(editor->textColumn() - 12, y), shot.pixel(2, y));
+}
+
 TEST(MarkdownEditorTest, TypingEditsTheBufferAtTheCaret)
 {
     auto editor = editorWith(QStringLiteral("hello\n"));
@@ -3700,6 +3731,37 @@ TEST(CodeTabTest, TheCaretInsideTheGroupShowsEveryFence)
     const QString shown = editor->displayText();
     EXPECT_TRUE(shown.contains(QLatin1String("print('hi')")));
     EXPECT_TRUE(shown.contains(QLatin1String("puts(\"hi\")")));
+}
+
+TEST(CodeTabTest, TheCaretInsideTheGroupShowsPlainSourceWithoutPanels)
+{
+    auto editor = editorWith(kTabbedNote);
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    ASSERT_TRUE(editor->notebookInfoAt(kTabbedNote.indexOf(QLatin1String("print"))).eligible);
+    const qsizetype puts = kTabbedNote.indexOf(QLatin1String("puts"));
+    editor->enterBlockAt(kTabbedNote.indexOf(QLatin1String("print")));
+
+    // Fences and tab attributes as text; nothing to run until the caret leaves.
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("```python tab=\"Python\"")));
+    EXPECT_TRUE(shown.contains(QLatin1String("```cpp tab")));
+    EXPECT_FALSE(editor->notebookInfoAt(puts).eligible);
+    // The tab that was showing its run control a moment ago loses it too.
+    EXPECT_FALSE(editor->notebookInfoAt(kTabbedNote.indexOf(QLatin1String("print"))).eligible);
+
+    editor->show();
+    const QImage shot = editor->viewport()->grab().toImage();
+    int checked = 0;
+    for (const auto &box : editor->blockBoxes()) {
+        if (box.kind != BlockSpan::Kind::Code)
+            continue;
+        const int y = int(box.rect.center().y());
+        EXPECT_EQ(shot.pixel(editor->textColumn() - 12, y), shot.pixel(2, y)) << "panel behind a member at y=" << y;
+        ++checked;
+    }
+    EXPECT_EQ(checked, 2);
 }
 
 TEST(CodeTabTest, SourceModeShowsEveryFence)

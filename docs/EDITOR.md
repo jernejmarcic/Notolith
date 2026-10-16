@@ -370,6 +370,23 @@ callout wraps in live preview, as Obsidian's does (a language-less listing
 there scrolls on a single unbroken token; here it is broken, which no
 reader has asked about).
 
+A tab group (adjacent fences marked `tab`, see STYLING.md) being edited is
+plain source: with the caret anywhere in it every member shows its fence lines,
+`#|` options and listing as text, no panel, tab strip, run control, gutter or
+caption, and none of its blocks runs ("Run all blocks" skips them) until the
+caret leaves. The listings keep their syntax colours. This is `plainSource()`,
+the one test Source mode shares with it, and `BlockView::inCaretGroup` already
+re-lays the group out when the caret crosses its edge.
+
+## Source mode
+
+Source mode draws the text and nothing rendered: markdown syntax in its own
+colours, listings highlighted, line numbers, indent guides (a setting) and
+heading sizes (text, as in Obsidian's source mode). No code panel, header, run
+control or output, no callout panel, title bar or fold (a `[!x]-` callout shows
+its body), no properties table, tables, embeds, maths, queries or bullets. A
+renderer that forgets to ask `plainSource()` shows up as a panel in Source mode.
+
 ## Vim key bindings
 
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).

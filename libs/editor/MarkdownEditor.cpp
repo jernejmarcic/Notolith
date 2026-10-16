@@ -3274,7 +3274,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         && layoutProperties(view))
         return;
 
-    const bool renderMedia = m_mode != Mode::Source && !view.active;
+    const bool renderMedia = !plainSource(view) && !view.active;
     if (renderMedia && layoutQuery(view))
         return;
     if (renderMedia && layoutBase(view))
@@ -3316,10 +3316,15 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                     && !(view.options && !view.options->eval);
         }
         notebookEchoHidden = view.options && !view.options->echo && !view.active;
+    } else if (plainSource(view)) {
+        // Decided under an earlier state (the tab shown with its run control,
+        // before the caret came into the group): plain source has none.
+        view.notebookEligible = false;
+        view.notebookOutputs.clear();
     }
 
     const bool perElement = m_mode == Mode::LivePreview && view.active && !revealsWholeBlock(view);
-    const bool reveal = m_mode == Mode::Source
+    const bool reveal = plainSource(view)
                         || (m_mode == Mode::LivePreview && view.active && !perElement);
     view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
     view.caretWord = view.active ? wordAtCaret() : Range{};
@@ -3381,7 +3386,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (shown.endsWith(QChar::LineSeparator))
         shown.chop(1);
 
-    view.callout = view.span.kind == BlockSpan::Kind::Callout ? calloutFor(view) : nullptr;
+    view.callout = view.span.kind == BlockSpan::Kind::Callout && !plainSource(view) ? calloutFor(view) : nullptr;
     if (view.callout)
         view.calloutStyle = m_calloutStyles.resolve(view.callout->type, view.callout->attributes,
                                                     m_theme);
@@ -3486,7 +3491,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             nesting + (listX >= 0 ? listX
                                   : (view.span.kind == BlockSpan::Kind::List ? kListIndent : codeGutter));
         line.setLineWidth(contentWidth() - indent
-                          - (view.span.kind == BlockSpan::Kind::Callout ? 28 : 0));
+                          - (view.callout ? 28 : 0));
         // A line carrying an inline embed taller than its text grows above
         // the text to hold it.
         const qreal grow = view.embedCells.empty()
@@ -3810,7 +3815,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             continue;
         }
 
-        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock) {
+        if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock
+            && !plainSource(view)) {
             paintCodeChrome(painter, view, left, top);
             if (view.notebookEligible && !view.folded)
                 paintNotebookOutput(painter, view, left, top);
