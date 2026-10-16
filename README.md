@@ -8,8 +8,8 @@ Plan and feature inventory:
 
 ## Status
 
-Usable for reading and editing a vault, and most of Obsidian is here. The
-command palette is the one large piece deferred; `TODO.md` has the rest.
+Usable for reading and editing a vault, and most of Obsidian is here,
+the command palette (Ctrl+P) included; `TODO.md` has what is left.
 
 - **Vault** - open, file tree, byte-exact atomic save (CRLF and BOM preserved),
   file recovery snapshots with a diff. An open note changed on disk (sync, a
@@ -20,7 +20,7 @@ command palette is the one large piece deferred; `TODO.md` has the rest.
   vault) is followed, caret and unsaved edits kept; if it cannot be found the
   tab stays on the old name and says so.
 - **Index** - SQLite with FTS5, parallel cold build, incremental rescan,
-  Obsidian's link resolution order. 20 000 notes cold-indexed in 3.6 s.
+  Obsidian's link resolution order. 20 000 notes cold-indexed in about 1 s.
 - **Editor** - one engine, three modes: live preview, source and reading.
   Viewport-only layout, incremental edits, parse off the UI thread. 0.2 ms
   per keystroke on a 200 kB note, against an 8 ms budget.
@@ -54,7 +54,7 @@ machine, and a build directory is gigabytes nobody needs copied.
 sh tools/check.sh                         # everything: both configurations, every suite
 cmake -B /tmp/noteAppC-build -G Ninja     # once, and again only if CMakeLists changes
 cmake --build /tmp/noteAppC-build         # after every edit - this is the one you repeat
-ctest --test-dir /tmp/noteAppC-build      # all seventeen suites, about twenty seconds
+ctest --test-dir /tmp/noteAppC-build      # all 32 suites
 /tmp/noteAppC-build/apps/noteAppC/noteAppC            # opens the last vault
 /tmp/noteAppC-build/apps/noteAppC/noteAppC ~/notes    # a vault
 /tmp/noteAppC-build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile

@@ -1,6 +1,6 @@
 # noteAppC handoff
 
-Written 2026-09-22, brought up to date 2026-09-23, so a cold start can pick
+Written 2026-09-22, brought up to date 2026-10-16, so a cold start can pick
 this up without reading a transcript. `TODO.md` is the live task list;
 `docs/PERFORMANCE.md` is the measured record.
 
@@ -45,16 +45,16 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 26 suites pass in the full build and 15 in a build with every optional
-module off (`sh tools/check.sh` runs both, as of 2026-09-23 evening).
+All 32 suites pass in the full build and 19 in a build with every optional
+module off (`sh tools/check.sh` runs both; counts from `ctest -N`, 2026-10-16).
 
-Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`:
-cold start to first painted frame 65 ms (including `openVault`; 42 ms with
-every optional feature off), cold index 0.98 s, note open 1.5 / 8.2 / 3.3 /
-21 ms at 1 / 50 / 200 / 1 024 kB and 3.7 ms for a vault note with every side
-pane filled, keystroke 0.2-0.5 ms, a search 0.05-6.4 ms off the UI thread,
-unlinked mentions 0.16 ms, peak memory 196 MB. Every fix behind the numbers,
-with before and after, is in `docs/PERFORMANCE.md` (18 of them so far).
+Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`,
+medians as of 2026-10-01: cold start to first painted frame 32 ms (including
+`openVault`), cold index 0.95 s, note open 1.1 / 6.9 / 3.9 / 11.9 ms at
+1 / 50 / 200 / 1 024 kB, keystroke 0.17-0.44 ms, a search 0.05-6.4 ms off the
+UI thread, peak memory 227 MB. The table of current numbers, and every fix
+behind them with before and after (21 so far), is in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 Working today, beyond the basics (vault or loose file, live preview / source /
 reading, index, find and replace):
@@ -120,7 +120,6 @@ first shown.
   plugins, Lua scripts, sidebar panes from plugins);
 - run `bench-here.sh` from the brain's session directory on shuttlepod-1 and
   runabout;
-- install a hunspell dictionary on starbase-1 (`hunspell-en_gb`);
 - look in Obsidian at two behaviours nobody could confirm: whether the caret
   in a code block shows its fence lines, and how a block reference
   `[[Note#^id]]` is displayed.
@@ -130,7 +129,8 @@ first shown.
 **The full record is [docs/PERFORMANCE.md](docs/PERFORMANCE.md)**: current
 numbers, every fix with its before and after, what was tried and rejected
 (OpenGL, Vulkan), and the measurement pitfalls this project has already hit.
-What follows is the original index finding, kept for its history.
+What follows is the original index finding, kept for its history; its
+numbers are from the first fix only (20 000 notes 3.57 s, later 0.95 s).
 
 The plan's budget is 20 000 notes cold-indexed in under 5 s. It is met, but
 only after a fix: the full-text table was deleted by a non-indexed column, so
