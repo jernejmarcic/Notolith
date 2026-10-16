@@ -910,6 +910,13 @@ optimal as it can be".
       (ratio 8.6 vs limit 5.0), passes alone: make it load-robust (best of N,
       or compare against a same-run baseline) so lane-checks stay meaningful.
       Now best of three per size.
+- [ ] ASan leftovers (bughunt 2026-10-16): plugin host exits under ASan,
+      probably its 256 MiB RLIMIT_AS (skip the limit when built with
+      -fsanitize=address); test_ai_plugin.cpp:756 callback captures a dead
+      local when the first run() fails (stack-use-after-return). Timing guards
+      fail under ASan by nature (skip them when sanitized).
+- [ ] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
+      later views; check whether that is wanted workspace state.
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
@@ -923,7 +930,7 @@ optimal as it can be".
 - [x] Status bar like Obsidian's ("the bottom thing should be like in
       obsidian"): backlinks, properties, mode icon, words, characters; the
       mode icon opens Reading / Source mode / Live Preview with a check.
-- [ ] Overlapping blocks: two `:::` callouts in a row overlap ("Fix overlapping
+- [x] Overlapping blocks: two `:::` callouts in a row overlap ("Fix overlapping
       elements and such"); a check over every demo note that no block rects
       intersect (bughunt lane).
 - [ ] Hover over a rendered element (callout, embed, table, rendered block)
