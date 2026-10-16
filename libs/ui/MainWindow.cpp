@@ -1841,8 +1841,24 @@ void MainWindow::applyFeatures()
     // here rather than leave the microphone on.
     if (m_recorder && !featureOn("audio-recorder"))
         m_recorder->stop();
+    updateNotebookIndex();
     if (m_painted)
         syncPlugins();
+}
+
+void MainWindow::updateNotebookIndex()
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // With notebooks on, the index reads a .ipynb as the text it opens as; off, it is a plain file.
+    m_indexer->setNotebookReader(featureOn("notebooks")
+                                     ? Indexer::NotebookReader([](const QByteArray &bytes) -> std::optional<QString> {
+                                           notebook::IpynbDocument document;
+                                           if (!notebook::parseIpynb(bytes, &document))
+                                               return std::nullopt;
+                                           return notebook::ipynbMarkdown(document);
+                                       })
+                                     : Indexer::NotebookReader());
+#endif
 }
 
 void MainWindow::showNoteInPanes(const QString &path)
@@ -3569,6 +3585,7 @@ void MainWindow::openVault(const QString &path)
     syncTabs(m_active->group);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
+    updateNotebookIndex(); // before the scan: a vault's notebooks are indexed by the first one
     m_indexer->setVault(m_vault);
 
     reloadSettings(m_vault.root());

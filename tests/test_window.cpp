@@ -2993,6 +2993,51 @@ TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)
     config.save();
 }
 
+// The index reads a notebook as the text it opens as: found by a search whose
+// offsets land in that text, by the quick switcher and by `[[Analysis.ipynb]]`;
+// with the notebooks feature off it is a plain file again, in a cache that
+// was written with the feature on, too.
+TEST_F(WindowTest, ANotebookIsInTheIndexOnlyWhileTheNotebooksFeatureIsOn)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    write(QStringLiteral("Mention.md"), "See [[Analysis.ipynb]].\n");
+    const QString relative = QStringLiteral("Analysis.ipynb");
+    Settings config = Settings::load();
+    ASSERT_TRUE(config.boolean(Settings::featureKey("notebooks"))) << "on by default";
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        WAIT_TRUE(window.index()->resolve(QStringLiteral("Analysis.ipynb")) == relative, 15000); // the names land last
+        EXPECT_TRUE(window.index()->allPaths().contains(relative));
+        EXPECT_EQ(window.index()->findByName(QStringLiteral("analysis.ipy")), QStringList{relative});
+        const auto backlinks = window.index()->backlinks(path(relative));
+        ASSERT_EQ(backlinks.size(), 1);
+        EXPECT_EQ(backlinks.first().fromPath, QStringLiteral("Mention.md"));
+
+        // The match is where the opened note shows the word.
+        const auto found = window.index()->search(QStringLiteral("unicode"));
+        ASSERT_EQ(found.size(), 1);
+        ASSERT_EQ(found.first().path, relative);
+        ASSERT_FALSE(found.first().matches.isEmpty());
+        ASSERT_TRUE(window.openNote(path(relative)));
+        const noteAppC::SearchMatch first = found.first().matches.first();
+        EXPECT_EQ(window.editor()->noteText().mid(first.offset, first.length).toLower(), QStringLiteral("unicode"));
+    }
+    config.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(config.save());
+    {
+        // The same cache, written with the feature on.
+        MainWindow window;
+        window.openVault(dir.path());
+        // The cache still holds it as a note until the scan has seen that it is not one now.
+        WAIT_TRUE(!window.index()->allPaths().contains(relative), 15000);
+        EXPECT_TRUE(window.index()->search(QStringLiteral("unicode")).isEmpty());
+        WAIT_TRUE(window.index()->resolve(QStringLiteral("Analysis.ipynb")) == relative, 15000); // still a file a link finds
+    }
+    config.setValue(Settings::featureKey("notebooks"), true);
+    config.save();
+}
+
 // "Share one kernel between a note's code blocks": through the window's own
 // runner (the settings, the note's path as the kernel's scope, the sandbox),
 // a variable one block sets is there for the next, and the second block shows

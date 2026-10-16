@@ -72,7 +72,8 @@ public:
         Writer(const QString &databasePath, const QString &vaultRoot);
         ~Writer();
         bool isOpen() const;
-        bool isCurrent(const QString &path, qint64 mtime, qint64 size);
+        /// `asNote`: the cached row must also be of that kind (a note, or a plain file).
+        bool isCurrent(const QString &path, qint64 mtime, qint64 size, bool asNote);
         /// Notes only, vault-relative, as Index::allPaths().
         QStringList allPaths();
         void begin();

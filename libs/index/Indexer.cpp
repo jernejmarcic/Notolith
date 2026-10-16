@@ -70,6 +70,19 @@ void Indexer::setVault(const Vault &vault)
     rebuild();
 }
 
+void Indexer::setNotebookReader(NotebookReader reader)
+{
+    const bool changed = bool(reader) != bool(m_notebookReader);
+    m_notebookReader = std::move(reader);
+    if (changed && m_vault.isValid())
+        rebuild(); // every notebook's row is of the other kind now, which the scan sees
+}
+
+bool Indexer::isNotebook(const QString &path) const
+{
+    return m_notebookReader && QFileInfo(path).suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0;
+}
+
 void Indexer::rebuild()
 {
     start({});
@@ -77,7 +90,7 @@ void Indexer::rebuild()
 
 void Indexer::reindex(const QString &path)
 {
-    if (m_vault.isValid() && m_vault.contains(path) && Vault::isNote(path))
+    if (m_vault.isValid() && m_vault.contains(path) && (Vault::isNote(path) || isNotebook(path)))
         start({path});
 }
 
@@ -96,12 +109,13 @@ void Indexer::start(const QStringList &paths)
     m_indexed = 0;
     m_wrote = false;
     m_scan = QtConcurrent::run(&m_pool, [this, paths, scan = m_scanNumber.load(), vault = m_vault,
-                                         database = m_index->databasePath()] {
-        runScan(paths, scan, vault, database);
+                                         database = m_index->databasePath(), notebooks = m_notebookReader] {
+        runScan(paths, scan, vault, database, notebooks);
     });
 }
 
-void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath)
+void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
+                      const NotebookReader &notebooks)
 {
     // On the scan's thread: nothing here touches m_index, and what the
     // Index's thread must know goes to it in a Batch.
@@ -128,9 +142,12 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
             const QString relative = vault.relative(path);
             if (isIgnored(relative) || vault.isIgnored(relative))
                 continue;
-            if (writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size()))
+            // A notebook is a note while a reader is set: its cached row is stale in the other case too.
+            const bool asNote = Vault::isNote(path)
+                                || (notebooks && info.suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0);
+            if (writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
                 continue;
-            (Vault::isNote(path) ? notes : attachments) << path; // attachments so ![[image.png]] resolves
+            (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
         }
         writer.begin();
         for (const QString &path : std::as_const(attachments)) {
@@ -152,8 +169,11 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
     // Parsed across the pool a chunk at a time, the next chunk parsing while
     // this one is written: the one writer is the slower half.
     constexpr qsizetype kChunk = 256;
-    const auto parse = [&notes](qsizetype from) {
-        return from < notes.size() ? QtConcurrent::mapped(notes.mid(from, kChunk), &Indexer::parseFile)
+    const auto parse = [&notes, &notebooks](qsizetype from) {
+        return from < notes.size() ? QtConcurrent::mapped(notes.mid(from, kChunk),
+                                                          [notebooks](const QString &path) {
+                                                              return Indexer::parseFile(path, notebooks);
+                                                          })
                                    : QFuture<Parsed>();
     };
     QFuture<Parsed> next = parse(0);
@@ -203,12 +223,21 @@ void Indexer::apply(const Batch &batch)
         start(std::exchange(m_pending, {}));
 }
 
-Indexer::Parsed Indexer::parseFile(const QString &path)
+Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &notebooks)
 {
     Parsed parsed;
     Note note;
-    if (!Vault::read(path, note))
+    if (notebooks && QFileInfo(path).suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return parsed;
+        const std::optional<QString> text = notebooks(file.readAll());
+        if (!text)
+            return parsed; // not a notebook nbformat 4 can read: not indexed
+        note.text = *text;
+    } else if (!Vault::read(path, note)) {
         return parsed;
+    }
 
     const QFileInfo info(path);
     parsed.metadata = threadParser().parse(note.text, path);
