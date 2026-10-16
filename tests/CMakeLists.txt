@@ -262,12 +262,18 @@ add_executable(test_tables test_tables.cpp)
 target_link_libraries(test_tables PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME tables COMMAND test_tables)
 
+# List editing and display (EditingCommands.cpp, BulletGlyphs.cpp): keys go in as real key events.
+add_executable(test_lists test_lists.cpp)
+target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME lists COMMAND test_lists)
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
 # running it had set up their own copy of the app - Settings.defaultsAreCompiledIn
 # failed the day Jernej switched his theme to OLED. Set once here so every test,
-# including ones not written yet, starts from a clean home.
+# including ones not written yet, starts from a clean home. Register every
+# test above this block: a test added below it runs against the real home.
 get_property(noteappc_tests DIRECTORY PROPERTY TESTS)
 foreach(test IN LISTS noteappc_tests)
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
@@ -276,7 +282,12 @@ foreach(test IN LISTS noteappc_tests)
         "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
 endforeach()
 
-# List editing and display (EditingCommands.cpp, BulletGlyphs.cpp): keys go in as real key events.
-add_executable(test_lists test_lists.cpp)
-target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
-add_test(NAME lists COMMAND test_lists)
+# The same homes for a test binary run by hand (IsolatedHome.cpp runs before main).
+get_property(noteappc_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(target IN LISTS noteappc_targets)
+    if(target MATCHES "^test_")
+        target_sources(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IsolatedHome.cpp)
+        target_compile_definitions(${target} PRIVATE
+            NOTEAPPC_TEST_HOME="${CMAKE_CURRENT_BINARY_DIR}/isolated-home")
+    endif()
+endforeach()
