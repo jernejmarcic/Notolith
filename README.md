@@ -37,7 +37,8 @@ the command palette (Ctrl+P) included; `TODO.md` has what is left.
   mentions, outgoing links, tags, outline, bookmarks, daily notes,
   templates, page preview, PDF export, hotkeys, and a right-click menu
   with word lookup (definitions from a DICT server).
-- **Modules** - spellcheck, graph view (global and local), canvas (JSON
+- **Modules** - spellcheck, graph view (global and local; header button or
+  Ctrl+G, Obsidian's filters/groups/display/forces controls), canvas (JSON
   Canvas), bases (`.base` views), each optional at build time.
 - **Themes** - dark by default, Obsidian's token names and values, custom
   colour schemes, and an importer for any Obsidian theme in the vault.

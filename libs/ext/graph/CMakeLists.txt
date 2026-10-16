@@ -9,4 +9,4 @@ add_library(noteAppC_graph STATIC
     GraphView.h)
 
 target_include_directories(noteAppC_graph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_graph PUBLIC Qt6::Widgets noteAppC_index noteAppC_theme)
+target_link_libraries(noteAppC_graph PUBLIC Qt6::Widgets noteAppC_index noteAppC_theme PRIVATE Qt6::Concurrent)

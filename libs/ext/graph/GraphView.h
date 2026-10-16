@@ -2,14 +2,19 @@
 
 #include <QColor>
 #include <QFont>
+#include <QFutureWatcher>
 #include <QHash>
+#include <QImage>
+#include <QJsonObject>
 #include <QList>
 #include <QPointF>
 #include <QString>
 #include <QStringList>
 #include <QWidget>
 
+#include <functional>
 #include <utility>
+#include <vector>
 
 #include "GraphLayout.h"
 
@@ -19,6 +24,10 @@ class QShowEvent;
 class QHideEvent;
 class QTimer;
 class QToolButton;
+class QLineEdit;
+class QSlider;
+class QFormLayout;
+class QVBoxLayout;
 class QWheelEvent;
 
 namespace noteAppC {
@@ -57,8 +66,15 @@ struct GraphColorGroup {
 /// `.obsidian/graph.json`, read by GraphOptions::readFromVault(), or
 /// GraphOptions::defaults() when there is none. Field names match the file's
 /// own keys so a value copied out of Obsidian's graph settings drops
-/// straight in.
+/// straight in. The app keeps its own copy of what the controls change
+/// (toJson()/fromJson()); the vault's file is only ever read.
 struct GraphOptions {
+    QString search;          ///< the Filters search box: only files matching this (search grammar) stay
+    bool animate = true;     ///< off: the layout is settled before the picture moves
+    bool collapseFilter = true; ///< Obsidian's `collapse-*`: a controls section starts folded
+    bool collapseColorGroups = true;
+    bool collapseDisplay = true;
+    bool collapseForces = true;
     bool showTags = false;
     bool showAttachments = false;
     bool hideUnresolved = false;
@@ -75,6 +91,12 @@ struct GraphOptions {
     int localDepth = 1;
 
     static GraphOptions defaults() { return GraphOptions{}; }
+
+    /// Obsidian's graph.json shape, plus `animate`; `localJumps` is the local
+    /// graph's depth. Missing keys keep `base`'s value, unknown ones are ignored.
+    static GraphOptions fromJson(const QJsonObject &root, const GraphOptions &base);
+    static GraphOptions fromJson(const QJsonObject &root);
+    QJsonObject toJson() const;
 
     /// Reads `<vaultRoot>/.obsidian/graph.json` when present, the way
     /// Vault::loadIgnoreFilters() reads app.json; defaults() otherwise, and
@@ -94,6 +116,27 @@ struct GraphOptions {
 /// the layout settles, and stops again in hideEvent() - a graph in a
 /// background tab burns no CPU, and one with a hundred notes stops moving
 /// within a couple of seconds and then costs nothing at all.
+///
+/// Threading: stepping the layout and painting a frame run on a worker
+/// (QtConcurrent), because at 20 000 notes one step is ~30 ms and one frame
+/// ~20 ms - together longer than the UI could spare. The contract:
+///  - At most one job is in flight. The 16 ms timer is only a pacer: when it
+///    fires and no job runs, and the layout is unsettled or the picture is
+///    out of date (m_frameDirty), it launches one.
+///  - A job owns m_layout while it runs. It steps, then paints a QImage
+///    from a FrameInput snapshot (positions, nodes, edges, camera, hover,
+///    colours - all values or implicitly shared). Its FrameOutput comes back
+///    through the QFutureWatcher on the UI thread.
+///  - The UI thread never reads m_layout. It reads m_positions, the snapshot
+///    the last job returned, for hit tests, fitToView() and screenPosition().
+///    It edits the layout (pin, move, wake, force options) only through
+///    editLayout(): applied at once when idle, queued behind the job when not.
+///  - rebuild() waits for the job (bounded by one job, ~65 ms at 20 000
+///    notes) and bumps m_generation, so an output from before the rebuild is
+///    dropped when its signal arrives.
+///  - paintEvent() only draws the last frame, mapped from the camera it was
+///    rendered with to the current one, so panning and zooming move the old
+///    picture instantly while the real frame catches up.
 ///
 /// Colour groups are queries in Obsidian's search grammar (libs/index's
 /// SearchQuery): OR, -negation, groups, `path:`, `file:`, `tag:`, regexes.
@@ -127,7 +170,8 @@ public:
     /// neighbourhood out to `depth` hops (both directions - Obsidian's local
     /// graph does not distinguish incoming from outgoing), meant for a
     /// sidebar pane. An empty `path` leaves the current note unchanged.
-    void setLocalGraph(bool local, const QString &path = {}, int depth = 1);
+    /// `depth` 0 keeps the current depth (the slider owns it).
+    void setLocalGraph(bool local, const QString &path = {}, int depth = 0);
     bool isLocalGraph() const { return m_localMode; }
 
     /// The active note: the local graph's centre, and the ring drawn around
@@ -152,18 +196,25 @@ public:
     /// Where node `id` is drawn, in widget pixels.
     QPointF screenPosition(const QString &id) const
     {
-        return toScreen(m_layout.position(m_idToIndex.value(id, -1)));
+        return toScreen(m_positions.value(m_idToIndex.value(id, -1)));
     }
 
-    /// Advances the simulation by `steps` steps immediately, instead of
-    /// waiting for the timer to do a few per frame, and repaints once
-    /// afterwards. Real usage never needs this - the timer in
-    /// ensureTimerRunning() already does it - but it gives a performance
-    /// test a step to time directly, through the same ForceLayout instance
-    /// and options a shown GraphView would actually use.
+    /// Advances the simulation by `steps` steps immediately (waiting for a
+    /// running job first), instead of leaving it to the timer a few per
+    /// frame, and marks the picture out of date. Real usage never needs this
+    /// - the timer in ensureTimerRunning() already does it - but it gives a
+    /// performance test a step to time directly, through the same
+    /// ForceLayout instance and options a shown GraphView would actually use.
     void stepSimulation(int steps = 1);
 
+    /// Paints the current state to an image synchronously, the way a worker
+    /// job does - for a test to time the frame without the widget machinery.
+    QImage renderFrameNow() const;
+
 signals:
+    /// A control changed an option (not setOptions() - that is the caller's
+    /// own write): the owner persists them.
+    void optionsChanged();
     /// A note or attachment node was clicked; `relativePath` is its
     /// GraphNode::id. Never fired for a tag or unresolved node - there is
     /// nothing to open.
@@ -187,30 +238,75 @@ private:
         int group = -1; ///< the first colour group it matches, or -1
     };
 
+    using BuiltGraph = std::pair<QList<GraphNode>, QList<GraphEdge>>; ///< what a data job returns
+    struct Palette {
+        QColor background{Qt::black};
+        QColor node{Qt::lightGray};
+        QColor edge{Qt::darkGray};
+        QColor text{Qt::white};
+        QColor muted{Qt::gray};
+        QColor accent{Qt::cyan};
+    };
+
+    /// Everything a frame is painted from, by value or implicitly shared, so a
+    /// worker never reads a member the UI thread may be changing.
+    struct FrameInput {
+        QSize size;
+        qreal dpr = 1.0;
+        QVector<QPointF> positions;
+        QList<VisualNode> nodes;
+        QList<std::pair<int, int>> edges;
+        double zoom = 1.0;
+        QPointF pan;
+        int hoverNode = -1;
+        QString currentNote;
+        GraphOptions options;
+        Palette palette;
+        QFont font;
+        int generation = 0;
+        int steps = 0; ///< layout steps to run before painting (a worker job only)
+    };
+    struct FrameOutput {
+        QImage frame;
+        QVector<QPointF> positions;
+        bool settled = false;
+        int generation = 0;
+        double zoom = 1.0; ///< the camera the frame was painted with
+        QPointF pan;
+    };
+
     void rebuild();
     void assignColorGroups();
     void applyIndexData();
+    void onGraphBuilt();
     void ensureTimerRunning();
     void fitToView();
+    FrameInput makeFrameInput() const;
+    static QImage paintGraph(const FrameInput &input);
+    void launchFrame();
+    void onFrameFinished();
+    void editLayout(std::function<void(ForceLayout &)> edit);
+    void flushLayoutEdits();
+    void markDirty();
     QWidget *buildControlsPanel();
     void layoutControls();
+    void syncControls();
+    void rebuildGroupRows();
+    void reapplyData();
 
     QPointF toScreen(QPointF graphPos) const;
     QPointF toGraph(QPointF screenPos) const;
     int nodeAt(QPointF screenPos) const;
     void updateHover(QPointF screenPos);
-    QColor colorFor(const VisualNode &node) const;
-    double radiusFor(int degree) const;
+    static QColor colorFor(const VisualNode &node, const GraphOptions &options, const Palette &palette);
+    QColor colorFor(const VisualNode &node) const { return colorFor(node, m_options, m_palette); }
+    static double radiusFor(int degree, const GraphOptions &options);
+    double radiusFor(int degree) const { return radiusFor(degree, m_options); }
 
     Index *m_index = nullptr;
     GraphOptions m_options;
 
-    QColor m_backgroundColor{Qt::black};
-    QColor m_nodeColor{Qt::lightGray};
-    QColor m_edgeColor{Qt::darkGray};
-    QColor m_textColor{Qt::white};
-    QColor m_mutedColor{Qt::gray};
-    QColor m_accentColor{Qt::cyan};
+    Palette m_palette;
 
     bool m_localMode = false;
     bool m_staleData = false;   ///< the index changed while hidden
@@ -224,11 +320,34 @@ private:
     QList<std::pair<int, int>> m_edgeIndices; // into m_nodes
     QHash<QString, int> m_idToIndex;
 
-    ForceLayout m_layout;
+    ForceLayout m_layout; ///< owned by the job while one runs - see the class comment
+    QVector<QPointF> m_positions; ///< the UI thread's snapshot of m_layout
     QTimer *m_stepTimer = nullptr;
+
+    QFutureWatcher<FrameOutput> m_frameWatcher;
+    QFutureWatcher<BuiltGraph> m_dataWatcher; ///< applyIndexData()'s job
+    int m_dataRequest = 0;        ///< bumped by every request and every direct setGraphData()
+    int m_pendingDataRequest = 0; ///< the request the job in m_dataWatcher answers
+    std::vector<std::function<void(ForceLayout &)>> m_layoutEdits; ///< queued while a job runs
+    QImage m_frame;           ///< the last rendered picture, painted by paintEvent()
+    double m_frameZoom = 1.0; ///< the camera m_frame was painted with
+    QPointF m_framePan;
+    bool m_frameDirty = false; ///< the picture no longer matches the state
+    bool m_settled = true;     ///< the last job's verdict - never m_layout.isSettled() live
+    bool m_jobInFlight = false; ///< launched and not yet delivered to onFrameFinished(): never launch over it
+    bool m_woken = false;      ///< an edit woke the layout since the last launch, whatever that job says
+    int m_generation = 0;
+    QPointF m_dragPos;         ///< graph coordinates of the node being dragged
 
     QToolButton *m_controlsToggle = nullptr;
     QWidget *m_controlsPanel = nullptr;
+    QWidget *m_groupRows = nullptr;
+    QVBoxLayout *m_groupsLayout = nullptr;
+    QFormLayout *m_filtersForm = nullptr;
+    QSlider *m_depthSlider = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
+    QTimer *m_searchDebounce = nullptr;
+    std::vector<std::function<void()>> m_controlSyncs; ///< each pushes one option into its widget
 
     double m_zoom = 1.0;
     QPointF m_pan{0, 0};

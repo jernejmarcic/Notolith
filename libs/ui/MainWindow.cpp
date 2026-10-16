@@ -190,6 +190,10 @@ QString rgbaString(const QColor &color, double alpha)
 
 MainWindow::~MainWindow()
 {
+    if (m_graphSave.isActive()) {
+        m_graphSave.stop();
+        saveGraphOptions(); // a change made in the last half second still counts
+    }
     // The indexer's scan, which posts to the index, stops first. Searches
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
@@ -491,6 +495,14 @@ QWidget *MainWindow::buildHeaderBar()
                                       tr("New note (Ctrl+N)"), 18);
     connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
 
+#ifdef NOTEAPPC_HAVE_GRAPH
+    // Obsidian's ribbon has a graph icon; Ctrl+G alone left nothing on screen
+    // that opens it. Hidden with the feature (applyFeatures()).
+    m_headerGraphButton = iconButton(QStringLiteral("headerGraphButton"), QStringLiteral("git-fork"),
+                                     tr("Open graph view (Ctrl+G)"), 18);
+    connect(m_headerGraphButton, &QToolButton::clicked, this, &MainWindow::openGraph);
+#endif
+
     QToolButton *rightSidebarToggle = iconButton(QStringLiteral("headerRightSidebarToggle"),
                                                  QStringLiteral("panel-right"),
                                                  tr("Toggle right sidebar (Ctrl+Alt+R)"), 18);
@@ -509,6 +521,9 @@ QWidget *MainWindow::buildHeaderBar()
     layout->addWidget(m_headerSearch);
     layout->addStretch(1);
     layout->addWidget(newNote);
+#ifdef NOTEAPPC_HAVE_GRAPH
+    layout->addWidget(m_headerGraphButton);
+#endif
     layout->addWidget(rightSidebarToggle);
     layout->addWidget(settingsButton);
     return m_headerBar;
@@ -1791,6 +1806,7 @@ void MainWindow::applyFeatures()
              // Cheap while hidden: GraphView reads the index only once shown.
              m_localGraph = new GraphView(parent);
              m_localGraph->setObjectName(QStringLiteral("localGraph"));
+             wireGraphOptions(m_localGraph);
              m_localGraph->setLocalGraph(true);
              m_localGraph->setTheme(m_theme);
              m_localGraph->setIndex(&m_index);
@@ -1838,6 +1854,8 @@ void MainWindow::applyFeatures()
         showNoteInPanes(m_active->notePath);
 
 #ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_headerGraphButton)
+        m_headerGraphButton->setVisible(featureOn("graph"));
     if (m_graph && !featureOn("graph")) {
         if (m_mainStack->currentWidget() == m_graph)
             leaveSettings();
@@ -2436,8 +2454,7 @@ void MainWindow::openGraph()
         m_graph = new GraphView(m_mainStack);
         m_graph->setObjectName(QStringLiteral("graphView"));
         m_graph->setTheme(m_theme);
-        if (m_vault.isValid())
-            m_graph->setOptions(GraphOptions::readFromVault(m_vault.root()));
+        wireGraphOptions(m_graph);
         m_graph->setIndex(&m_index);
         connect(m_graph, &GraphView::noteActivated, this, &MainWindow::openRelative);
         m_mainStack->addWidget(m_graph);
@@ -2446,6 +2463,59 @@ void MainWindow::openGraph()
                                                                       : QString());
     m_mainStack->setCurrentWidget(m_graph);
     m_graph->setFocus();
+#endif
+}
+
+QString MainWindow::graphOptionsPath() const
+{
+    const QString key = QString::fromLatin1(
+        QCryptographicHash::hash(m_vault.root().toUtf8(), QCryptographicHash::Sha1).toHex());
+    return QDir(Settings::configDirectory()).filePath(QStringLiteral("vaults/%1/graph.json").arg(key));
+}
+
+void MainWindow::wireGraphOptions(GraphView *view)
+{
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (m_vault.isValid()) {
+        QFile own(graphOptionsPath());
+        view->setOptions(own.open(QIODevice::ReadOnly)
+                             ? GraphOptions::fromJson(QJsonDocument::fromJson(own.readAll()).object())
+                             : GraphOptions::readFromVault(m_vault.root()));
+    }
+    if (!m_graphSave.isSingleShot()) {
+        m_graphSave.setSingleShot(true);
+        m_graphSave.setInterval(500);
+        connect(&m_graphSave, &QTimer::timeout, this, &MainWindow::saveGraphOptions);
+    }
+    // Connected once per view: wireGraphOptions() runs again on a vault switch.
+    if (view->property("optionsWired").toBool())
+        return;
+    view->setProperty("optionsWired", true);
+    connect(view, &GraphView::optionsChanged, this, [this, view] {
+        m_graphChanged = view;
+        m_graphSave.start();
+    });
+#else
+    Q_UNUSED(view);
+#endif
+}
+
+void MainWindow::saveGraphOptions()
+{
+#ifdef NOTEAPPC_HAVE_GRAPH
+    if (!m_graphChanged || !m_vault.isValid())
+        return;
+    // One file serves both graphs; the local depth is the local pane's alone.
+    GraphOptions options = m_graphChanged->options();
+    if (m_localGraph)
+        options.localDepth = m_localGraph->options().localDepth;
+    const QString path = graphOptionsPath();
+    QDir().mkpath(QFileInfo(path).path());
+    QSaveFile file(path);
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(QJsonDocument(options.toJson()).toJson());
+        file.commit();
+    }
 #endif
 }
 
@@ -3700,7 +3770,9 @@ void MainWindow::openVault(const QString &path)
     restoreLayout(Workspaces::current(m_vault.root()));
 #ifdef NOTEAPPC_HAVE_GRAPH
     if (m_graph)
-        m_graph->setOptions(GraphOptions::readFromVault(m_vault.root()));
+        wireGraphOptions(m_graph);
+    if (m_localGraph)
+        wireGraphOptions(m_localGraph);
 #endif
 
     statusBar()->showMessage(m_vault.hasObsidianConfig()

@@ -42,7 +42,8 @@ setting or a config file. That costs zero code and zero time.
 
 Optional features that ship with noteAppC: spellcheck, the graph view, Canvas,
 Bases, export, git sync. Each is a library under `libs/ext/<name>/`, behind a
-CMake option, and the application links it only when the option is on:
+CMake option, and the application links it only when the option is on (the
+graph view's controls, settings file and threading are in docs/GRAPH.md):
 
 ```sh
 cmake -B /tmp/noteAppC-build -DNOTEAPPC_WITH_SPELLCHECK=ON -DNOTEAPPC_WITH_GRAPH=ON

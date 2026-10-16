@@ -1,9 +1,18 @@
 #include "GraphView.h"
 
 #include <QCheckBox>
+#include <QColorDialog>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFile>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QFileInfo>
+#include <QImage>
 #include <QFormLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -23,6 +32,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Icons.h"
 #include "Index.h"
 #include "Theme.h"
 
@@ -55,224 +65,26 @@ QColor blendOverBackground(QColor color, int alpha, QColor background)
                  mix(color.blue(), background.blue()));
 }
 
-} // namespace
-
-// ---------------------------------------------------------------------------
-// GraphOptions
-
-GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
+/// The four sliders' share of the engine's options; theta, damping and the
+/// time step stay at their defaults.
+ForceLayout::Options forceOptionsFor(const GraphOptions &options)
 {
-    GraphOptions options;
-
-    QFile file(vaultRoot + QLatin1String("/.obsidian/graph.json"));
-    if (!file.open(QIODevice::ReadOnly))
-        return options;
-
-    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
-    const auto boolField = [&](const char *key, bool fallback) {
-        return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toBool() : fallback;
-    };
-    const auto numberField = [&](const char *key, double fallback) {
-        return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toDouble() : fallback;
-    };
-
-    options.showTags = boolField("showTags", options.showTags);
-    options.showAttachments = boolField("showAttachments", options.showAttachments);
-    options.hideUnresolved = boolField("hideUnresolved", options.hideUnresolved);
-    options.showOrphans = boolField("showOrphans", options.showOrphans);
-    options.showArrow = boolField("showArrow", options.showArrow);
-    options.textFadeMultiplier = numberField("textFadeMultiplier", options.textFadeMultiplier);
-    options.nodeSizeMultiplier = numberField("nodeSizeMultiplier", options.nodeSizeMultiplier);
-    options.lineSizeMultiplier = numberField("lineSizeMultiplier", options.lineSizeMultiplier);
-    options.centerStrength = numberField("centerStrength", options.centerStrength);
-    options.repelStrength = numberField("repelStrength", options.repelStrength);
-    options.linkStrength = numberField("linkStrength", options.linkStrength);
-    options.linkDistance = numberField("linkDistance", options.linkDistance);
-
-    // Obsidian's own shape: [{query, color:{a, rgb}}], rgb a packed 24-bit int.
-    for (const QJsonValue &value : root.value(QLatin1String("colorGroups")).toArray()) {
-        const QJsonObject group = value.toObject();
-        const QString query = group.value(QLatin1String("query")).toString();
-        if (query.isEmpty())
-            continue;
-        const int rgb = group.value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt();
-        options.colorGroups.append(GraphColorGroup{query, QColor::fromRgb(rgb)});
-    }
-
-    return options;
+    ForceLayout::Options forceOptions;
+    forceOptions.repelStrength = options.repelStrength;
+    forceOptions.linkStrength = options.linkStrength;
+    forceOptions.linkDistance = options.linkDistance;
+    forceOptions.centerStrength = options.centerStrength;
+    return forceOptions;
 }
 
-// ---------------------------------------------------------------------------
-// GraphView
-
-GraphView::GraphView(QWidget *parent)
-    : QWidget(parent)
+/// Nodes and edges for `data` under `options`: runs on a worker, so it
+/// reads nothing of the view's.
+std::pair<QList<GraphNode>, QList<GraphEdge>> buildGraph(const Index::GraphData &data, const GraphOptions &options)
 {
-    setMouseTracking(true);
-    setFocusPolicy(Qt::ClickFocus);
-    setMinimumSize(120, 120);
-    m_labelFont = font();
-    m_labelFont.setPointSizeF(std::max(7.0, font().pointSizeF() - 1.0));
-
-    m_controlsToggle = new QToolButton(this);
-    m_controlsToggle->setText(tr("Filters"));
-    m_controlsToggle->setCheckable(true);
-    m_controlsToggle->setCursor(Qt::PointingHandCursor);
-
-    m_controlsPanel = buildControlsPanel();
-    m_controlsPanel->setVisible(false);
-    connect(m_controlsToggle, &QToolButton::toggled, m_controlsPanel, &QWidget::setVisible);
-
-    m_controlsToggle->raise();
-    m_controlsPanel->raise();
-}
-
-GraphView::~GraphView() = default;
-
-QWidget *GraphView::buildControlsPanel()
-{
-    auto *panel = new QWidget(this);
-    auto *layout = new QFormLayout(panel);
-    layout->setContentsMargins(10, 8, 10, 8);
-    layout->setSpacing(6);
-
-    const auto addToggle = [&](const QString &label, bool checked, auto onToggled) {
-        auto *box = new QCheckBox(panel);
-        box->setChecked(checked);
-        connect(box, &QCheckBox::toggled, this, onToggled);
-        layout->addRow(label, box);
-    };
-    const auto addSlider = [&](const QString &label, int value, int min, int max, auto onChanged) {
-        auto *slider = new QSlider(Qt::Horizontal, panel);
-        slider->setRange(min, max);
-        slider->setValue(value);
-        slider->setFixedWidth(120);
-        connect(slider, &QSlider::valueChanged, this, onChanged);
-        layout->addRow(label, slider);
-    };
-
-    // Filters: each one re-derives the node/edge lists from the index, same
-    // as a fresh setIndex() call. A caller feeding raw data via
-    // setGraphData() instead (no index attached) simply sees no effect here,
-    // since there is nothing of ours left to re-filter.
-    addToggle(tr("Tags"), m_options.showTags, [this](bool on) {
-        m_options.showTags = on;
-        applyIndexData();
-    });
-    addToggle(tr("Attachments"), m_options.showAttachments, [this](bool on) {
-        m_options.showAttachments = on;
-        applyIndexData();
-    });
-    addToggle(tr("Unresolved links"), !m_options.hideUnresolved, [this](bool on) {
-        m_options.hideUnresolved = !on;
-        applyIndexData();
-    });
-    addToggle(tr("Orphans"), m_options.showOrphans, [this](bool on) {
-        m_options.showOrphans = on;
-        applyIndexData();
-    });
-    addToggle(tr("Arrows"), m_options.showArrow, [this](bool on) {
-        m_options.showArrow = on;
-        update();
-    });
-
-    // Forces: these only need the layout to notice and to start moving
-    // again, not a full rebuild - dragging a node does the same wake().
-    const auto pushForceOptions = [this] {
-        ForceLayout::Options forceOptions = m_layout.options();
-        forceOptions.repelStrength = m_options.repelStrength;
-        forceOptions.linkStrength = m_options.linkStrength;
-        forceOptions.linkDistance = m_options.linkDistance;
-        forceOptions.centerStrength = m_options.centerStrength;
-        m_layout.setOptions(forceOptions);
-        m_layout.wake();
-        ensureTimerRunning();
-    };
-    addSlider(tr("Repel force"), int(m_options.repelStrength), 0, 40, [this, pushForceOptions](int v) {
-        m_options.repelStrength = v;
-        pushForceOptions();
-    });
-    addSlider(tr("Link force"), int(m_options.linkStrength * 10), 0, 50, [this, pushForceOptions](int v) {
-        m_options.linkStrength = v / 10.0;
-        pushForceOptions();
-    });
-    addSlider(tr("Link distance"), int(m_options.linkDistance), 20, 600, [this, pushForceOptions](int v) {
-        m_options.linkDistance = v;
-        pushForceOptions();
-    });
-    addSlider(tr("Center force"), int(m_options.centerStrength * 100), 0, 200, [this, pushForceOptions](int v) {
-        m_options.centerStrength = v / 100.0;
-        pushForceOptions();
-    });
-
-    return panel;
-}
-
-void GraphView::layoutControls()
-{
-    if (!m_controlsToggle)
-        return;
-    m_controlsToggle->adjustSize();
-    m_controlsToggle->move(width() - m_controlsToggle->width() - 8, 8);
-    if (m_controlsPanel) {
-        m_controlsPanel->adjustSize();
-        m_controlsPanel->move(width() - m_controlsPanel->width() - 8,
-                              m_controlsToggle->y() + m_controlsToggle->height() + 4);
-    }
-}
-
-void GraphView::setTheme(const Theme &theme)
-{
-    m_backgroundColor = theme.color(QStringLiteral("--background-primary"));
-    m_nodeColor = theme.color(QStringLiteral("--text-muted"));
-    m_edgeColor = theme.color(QStringLiteral("--background-modifier-border"));
-    m_textColor = theme.color(QStringLiteral("--text-normal"));
-    m_mutedColor = theme.color(QStringLiteral("--text-faint"));
-    m_accentColor = theme.color(QStringLiteral("--interactive-accent"));
-    update();
-}
-
-void GraphView::setOptions(const GraphOptions &options)
-{
-    m_options = options;
-    if (m_index)
-        applyIndexData();
-    else
-        rebuild();
-}
-
-void GraphView::setIndex(Index *index)
-{
-    if (m_index)
-        disconnect(m_index, nullptr, this, nullptr);
-    m_index = index;
-    if (m_index) {
-        // A graph nobody is looking at (a background tab, a closed sidebar)
-        // must not re-read the whole vault on every save; it catches up in
-        // showEvent().
-        connect(m_index, &Index::changed, this, [this] {
-            if (isVisible())
-                applyIndexData();
-            else
-                m_staleData = true;
-        });
-    }
-    applyIndexData();
-}
-
-void GraphView::applyIndexData()
-{
-    if (!m_index) {
-        setGraphData({}, {});
-        return;
-    }
-
-    const Index::GraphData data = m_index->graphData();
-
     QHash<QString, GraphNode> byId;
     byId.reserve(data.files.size());
     for (const Index::GraphFileInfo &file : data.files) {
-        if (file.isAttachment && !m_options.showAttachments)
+        if (file.isAttachment && !options.showAttachments)
             continue;
         GraphNode node;
         node.id = file.path;
@@ -282,7 +94,7 @@ void GraphView::applyIndexData()
         byId.insert(node.id, node);
     }
 
-    if (m_options.showTags) {
+    if (options.showTags) {
         // Snapshot first: byId gains a tag entry inside this loop, and
         // iterating a QHash while inserting into it is unsafe (a rehash can
         // invalidate the iteration).
@@ -315,7 +127,7 @@ void GraphView::applyIndexData()
             if (!byId.contains(link.toPath))
                 continue; // the target was filtered out too
             edges.append({link.fromPath, link.toPath});
-        } else if (!m_options.hideUnresolved) {
+        } else if (!options.hideUnresolved) {
             const QString unresolvedID = QStringLiteral("unresolved:") + link.targetName;
             if (!byId.contains(unresolvedID)) {
                 GraphNode node;
@@ -328,7 +140,7 @@ void GraphView::applyIndexData()
         }
     }
 
-    if (m_options.showTags) {
+    if (options.showTags) {
         for (auto it = byId.constBegin(); it != byId.constEnd(); ++it) {
             if (it->kind != GraphNode::Kind::Note)
                 continue;
@@ -337,11 +149,550 @@ void GraphView::applyIndexData()
         }
     }
 
-    setGraphData(byId.values(), edges);
+    return {byId.values(), edges};
+}
+
+/// What a search query is asked about a node: it has no note text, so a bare
+/// word is looked for in the name.
+NoteContext contextFor(const GraphNode &node)
+{
+    NoteContext context;
+    context.path = node.id;
+    context.text = node.label;
+    for (const QString &tag : node.tags)
+        context.tags << NoteTag{tag, Range{0, context.text.size()}};
+    return context;
+}
+
+QPointF project(QPointF graphPos, double zoom, QPointF pan, QSize size)
+{
+    return graphPos * zoom + pan + QPointF(size.width() / 2.0, size.height() / 2.0);
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// GraphOptions
+
+GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
+{
+    QFile file(vaultRoot + QLatin1String("/.obsidian/graph.json"));
+    if (!file.open(QIODevice::ReadOnly))
+        return GraphOptions{};
+    return fromJson(QJsonDocument::fromJson(file.readAll()).object());
+}
+
+GraphOptions GraphOptions::fromJson(const QJsonObject &root)
+{
+    return fromJson(root, GraphOptions{});
+}
+
+GraphOptions GraphOptions::fromJson(const QJsonObject &root, const GraphOptions &base)
+{
+    GraphOptions options = base;
+    const auto boolField = [&](const char *key, bool fallback) {
+        return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toBool() : fallback;
+    };
+    const auto numberField = [&](const char *key, double fallback) {
+        return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toDouble() : fallback;
+    };
+
+    if (root.contains(QLatin1String("search")))
+        options.search = root.value(QLatin1String("search")).toString();
+    options.showTags = boolField("showTags", options.showTags);
+    options.showAttachments = boolField("showAttachments", options.showAttachments);
+    options.hideUnresolved = boolField("hideUnresolved", options.hideUnresolved);
+    options.showOrphans = boolField("showOrphans", options.showOrphans);
+    options.showArrow = boolField("showArrow", options.showArrow);
+    options.animate = boolField("animate", options.animate);
+    options.collapseFilter = boolField("collapse-filter", options.collapseFilter);
+    options.collapseColorGroups = boolField("collapse-color-groups", options.collapseColorGroups);
+    options.collapseDisplay = boolField("collapse-display", options.collapseDisplay);
+    options.collapseForces = boolField("collapse-forces", options.collapseForces);
+    options.textFadeMultiplier = numberField("textFadeMultiplier", options.textFadeMultiplier);
+    options.nodeSizeMultiplier = numberField("nodeSizeMultiplier", options.nodeSizeMultiplier);
+    options.lineSizeMultiplier = numberField("lineSizeMultiplier", options.lineSizeMultiplier);
+    options.centerStrength = numberField("centerStrength", options.centerStrength);
+    options.repelStrength = numberField("repelStrength", options.repelStrength);
+    options.linkStrength = numberField("linkStrength", options.linkStrength);
+    options.linkDistance = numberField("linkDistance", options.linkDistance);
+    options.localDepth = std::max(1, int(numberField("localJumps", options.localDepth)));
+
+    // Obsidian's own shape: [{query, color:{a, rgb}}], rgb a packed 24-bit int.
+    if (root.contains(QLatin1String("colorGroups"))) {
+        options.colorGroups.clear();
+        for (const QJsonValue &value : root.value(QLatin1String("colorGroups")).toArray()) {
+            const QJsonObject group = value.toObject();
+            const QString query = group.value(QLatin1String("query")).toString();
+            if (query.isEmpty())
+                continue;
+            const int rgb = group.value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt();
+            options.colorGroups.append(GraphColorGroup{query, QColor::fromRgb(rgb)});
+        }
+    }
+    return options;
+}
+
+QJsonObject GraphOptions::toJson() const
+{
+    QJsonArray groups;
+    for (const GraphColorGroup &group : colorGroups) {
+        if (group.query.trimmed().isEmpty())
+            continue; // a row still being typed in: nothing to keep yet
+        groups.append(QJsonObject{{QLatin1String("query"), group.query},
+                                  {QLatin1String("color"), QJsonObject{{QLatin1String("a"), 1},
+                                                                       {QLatin1String("rgb"), int(group.color.rgb() & 0xFFFFFF)}}}});
+    }
+    return QJsonObject{{QLatin1String("collapse-filter"), collapseFilter},
+                       {QLatin1String("search"), search},
+                       {QLatin1String("showTags"), showTags},
+                       {QLatin1String("showAttachments"), showAttachments},
+                       {QLatin1String("hideUnresolved"), hideUnresolved},
+                       {QLatin1String("showOrphans"), showOrphans},
+                       {QLatin1String("collapse-color-groups"), collapseColorGroups},
+                       {QLatin1String("colorGroups"), groups},
+                       {QLatin1String("collapse-display"), collapseDisplay},
+                       {QLatin1String("showArrow"), showArrow},
+                       {QLatin1String("textFadeMultiplier"), textFadeMultiplier},
+                       {QLatin1String("nodeSizeMultiplier"), nodeSizeMultiplier},
+                       {QLatin1String("lineSizeMultiplier"), lineSizeMultiplier},
+                       {QLatin1String("animate"), animate},
+                       {QLatin1String("collapse-forces"), collapseForces},
+                       {QLatin1String("centerStrength"), centerStrength},
+                       {QLatin1String("repelStrength"), repelStrength},
+                       {QLatin1String("linkStrength"), linkStrength},
+                       {QLatin1String("linkDistance"), linkDistance},
+                       {QLatin1String("localJumps"), localDepth}};
+}
+
+// ---------------------------------------------------------------------------
+// GraphView
+
+GraphView::GraphView(QWidget *parent)
+    : QWidget(parent)
+{
+    setMouseTracking(true);
+    setFocusPolicy(Qt::ClickFocus);
+    setMinimumSize(120, 120);
+    m_labelFont = font();
+    m_labelFont.setPointSizeF(std::max(7.0, font().pointSizeF() - 1.0));
+
+    m_controlsToggle = new QToolButton(this);
+    m_controlsToggle->setObjectName(QStringLiteral("graphControlsToggle"));
+    m_controlsToggle->setToolTip(tr("Graph settings"));
+    m_controlsToggle->setIcon(Icons::icon(QStringLiteral("settings"), m_palette.text, 16));
+    m_controlsToggle->setCheckable(true);
+    m_controlsToggle->setAutoRaise(true);
+    m_controlsToggle->setCursor(Qt::PointingHandCursor);
+
+    m_controlsPanel = buildControlsPanel();
+    m_controlsPanel->setVisible(false);
+    connect(m_controlsToggle, &QToolButton::toggled, this, [this](bool open) {
+        m_controlsPanel->setVisible(open);
+        layoutControls();
+    });
+
+    m_controlsToggle->raise();
+    m_controlsPanel->raise();
+
+    connect(&m_frameWatcher, &QFutureWatcher<FrameOutput>::finished, this, &GraphView::onFrameFinished);
+    connect(&m_dataWatcher, &QFutureWatcher<BuiltGraph>::finished, this, &GraphView::onGraphBuilt);
+}
+
+GraphView::~GraphView()
+{
+    m_frameWatcher.waitForFinished(); // the job holds a pointer to m_layout
+    m_dataWatcher.waitForFinished();
+}
+
+void GraphView::reapplyData()
+{
+    // Filters re-derive the node and edge lists from the index, same as a
+    // fresh setIndex(). A caller feeding raw data through setGraphData()
+    // has no index to re-read, so only the filters rebuild() owns apply.
+    if (m_index)
+        applyIndexData();
+    else
+        rebuild();
+}
+
+/// Obsidian's controls card: four folding sections (Filters, Groups, Display,
+/// Forces) in a scrolling column pinned top-right. Every control writes one
+/// option, tells the owner (optionsChanged(), which persists them) and
+/// registers a sync lambda so setOptions() can put the widgets back in step.
+QWidget *GraphView::buildControlsPanel()
+{
+    auto *scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("graphControlsPanel"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *body = new QWidget;
+    body->setObjectName(QStringLiteral("graphControlsBody"));
+    scroll->setWidget(body);
+    auto *column = new QVBoxLayout(body);
+    column->setContentsMargins(10, 6, 10, 8);
+    column->setSpacing(2);
+
+    const auto addSection = [&](const QString &title, bool GraphOptions::*collapsed) {
+        auto *header = new QToolButton(body);
+        header->setText(title);
+        header->setObjectName(QStringLiteral("graph%1Section").arg(title));
+        header->setCheckable(true);
+        header->setAutoRaise(true);
+        header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        header->setCursor(Qt::PointingHandCursor);
+        header->setStyleSheet(QStringLiteral("QToolButton{font-weight:600;text-align:left;border:none;padding:4px 0;}"));
+        auto *content = new QWidget(body);
+        auto *form = new QFormLayout(content);
+        form->setContentsMargins(0, 2, 0, 6);
+        form->setSpacing(6);
+        column->addWidget(header);
+        column->addWidget(content);
+        const auto show = [header, content](bool open) {
+            header->setChecked(open);
+            header->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+            content->setVisible(open);
+        };
+        connect(header, &QToolButton::toggled, this, [this, show, collapsed](bool open) {
+            show(open);
+            m_options.*collapsed = !open;
+            emit optionsChanged();
+            layoutControls();
+        });
+        show(!(m_options.*collapsed));
+        m_controlSyncs.push_back([this, header, show, collapsed] {
+            const QSignalBlocker blocker(header);
+            show(!(m_options.*collapsed));
+        });
+        return form;
+    };
+    const auto addToggle = [&](QFormLayout *form, const QString &label, auto get, auto set) {
+        auto *box = new QCheckBox(form->parentWidget());
+        box->setChecked(get());
+        connect(box, &QCheckBox::toggled, this, [this, set](bool on) {
+            set(on);
+            emit optionsChanged();
+        });
+        m_controlSyncs.push_back([box, get] {
+            const QSignalBlocker blocker(box);
+            box->setChecked(get());
+        });
+        form->addRow(label, box);
+        return box;
+    };
+    const auto addSlider = [&](QFormLayout *form, const QString &label, int min, int max, auto get, auto set) {
+        auto *slider = new QSlider(Qt::Horizontal, form->parentWidget());
+        slider->setRange(min, max);
+        slider->setValue(get());
+        connect(slider, &QSlider::valueChanged, this, [this, set](int value) {
+            set(value);
+            emit optionsChanged();
+        });
+        m_controlSyncs.push_back([slider, get] {
+            const QSignalBlocker blocker(slider);
+            slider->setValue(get());
+        });
+        form->addRow(label, slider);
+        return slider;
+    };
+
+    // Filters
+    QFormLayout *filters = addSection(tr("Filters"), &GraphOptions::collapseFilter);
+    m_filtersForm = filters;
+    m_searchEdit = new QLineEdit(filters->parentWidget());
+    m_searchEdit->setObjectName(QStringLiteral("graphSearchEdit"));
+    m_searchEdit->setPlaceholderText(tr("Search files..."));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchDebounce = new QTimer(this);
+    m_searchDebounce->setSingleShot(true);
+    m_searchDebounce->setInterval(300);
+    connect(m_searchDebounce, &QTimer::timeout, this, &GraphView::rebuild);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
+        m_options.search = text;
+        m_searchDebounce->start(); // a keystroke is not worth a rebuild
+        emit optionsChanged();
+    });
+    m_controlSyncs.push_back([this] {
+        const QSignalBlocker blocker(m_searchEdit);
+        m_searchEdit->setText(m_options.search);
+    });
+    filters->addRow(m_searchEdit);
+    addToggle(filters, tr("Tags"), [this] { return m_options.showTags; }, [this](bool on) {
+        m_options.showTags = on;
+        reapplyData();
+    });
+    addToggle(filters, tr("Attachments"), [this] { return m_options.showAttachments; }, [this](bool on) {
+        m_options.showAttachments = on;
+        reapplyData();
+    });
+    addToggle(filters, tr("Unresolved links"), [this] { return !m_options.hideUnresolved; }, [this](bool on) {
+        m_options.hideUnresolved = !on;
+        reapplyData();
+    });
+    addToggle(filters, tr("Orphans"), [this] { return m_options.showOrphans; }, [this](bool on) {
+        m_options.showOrphans = on;
+        reapplyData();
+    });
+    m_depthSlider = addSlider(filters, tr("Depth"), 1, 5, [this] { return m_options.localDepth; }, [this](int value) {
+        m_options.localDepth = value;
+        rebuild();
+    });
+    m_depthSlider->setObjectName(QStringLiteral("graphDepthSlider"));
+
+    // Groups
+    QFormLayout *groups = addSection(tr("Groups"), &GraphOptions::collapseColorGroups);
+    m_groupRows = new QWidget(groups->parentWidget());
+    m_groupsLayout = new QVBoxLayout(m_groupRows);
+    m_groupsLayout->setContentsMargins(0, 0, 0, 0);
+    m_groupsLayout->setSpacing(4);
+    groups->addRow(m_groupRows);
+    auto *newGroup = new QPushButton(tr("New group"), groups->parentWidget());
+    newGroup->setObjectName(QStringLiteral("graphNewGroupButton"));
+    newGroup->setCursor(Qt::PointingHandCursor);
+    connect(newGroup, &QPushButton::clicked, this, [this] {
+        static const QColor swatches[] = {QColor(0xe5, 0x48, 0x4d), QColor(0x46, 0xa7, 0x58), QColor(0x3e, 0x63, 0xdd),
+                                          QColor(0xf5, 0xd9, 0x0a), QColor(0x8e, 0x4e, 0xc6), QColor(0x12, 0xa5, 0x94)};
+        m_options.colorGroups.append(GraphColorGroup{QString(), swatches[m_options.colorGroups.size() % 6]});
+        rebuildGroupRows();
+        emit optionsChanged();
+    });
+    groups->addRow(newGroup);
+
+    // Display
+    QFormLayout *display = addSection(tr("Display"), &GraphOptions::collapseDisplay);
+    addToggle(display, tr("Arrows"), [this] { return m_options.showArrow; }, [this](bool on) {
+        m_options.showArrow = on;
+        markDirty();
+    });
+    addSlider(display, tr("Text fade threshold"), -30, 30,
+              [this] { return int(std::lround(m_options.textFadeMultiplier * 10)); }, [this](int value) {
+                  m_options.textFadeMultiplier = value / 10.0;
+                  markDirty();
+              })->setObjectName(QStringLiteral("graphTextFadeSlider"));
+    addSlider(display, tr("Node size"), 1, 50, [this] { return int(std::lround(m_options.nodeSizeMultiplier * 10)); },
+              [this](int value) {
+                  m_options.nodeSizeMultiplier = value / 10.0;
+                  markDirty();
+              });
+    addSlider(display, tr("Link thickness"), 1, 50, [this] { return int(std::lround(m_options.lineSizeMultiplier * 10)); },
+              [this](int value) {
+                  m_options.lineSizeMultiplier = value / 10.0;
+                  markDirty();
+              });
+    addToggle(display, tr("Animate"), [this] { return m_options.animate; }, [this](bool on) {
+        m_options.animate = on;
+        editLayout([](ForceLayout &layout) { layout.wake(); }); // settle (or not) from here
+        ensureTimerRunning();
+    });
+
+    // Forces: these only need the layout to notice and to start moving
+    // again, not a full rebuild - dragging a node does the same wake().
+    const auto pushForceOptions = [this] {
+        const ForceLayout::Options forceOptions = forceOptionsFor(m_options);
+        editLayout([forceOptions](ForceLayout &layout) {
+            layout.setOptions(forceOptions);
+            layout.wake();
+        });
+        ensureTimerRunning();
+    };
+    QFormLayout *forces = addSection(tr("Forces"), &GraphOptions::collapseForces);
+    addSlider(forces, tr("Center force"), 0, 200, [this] { return int(std::lround(m_options.centerStrength * 100)); },
+              [this, pushForceOptions](int v) {
+                  m_options.centerStrength = v / 100.0;
+                  pushForceOptions();
+              });
+    addSlider(forces, tr("Repel force"), 0, 40, [this] { return int(m_options.repelStrength); },
+              [this, pushForceOptions](int v) {
+                  m_options.repelStrength = v;
+                  pushForceOptions();
+              })->setObjectName(QStringLiteral("graphRepelSlider"));
+    addSlider(forces, tr("Link force"), 0, 50, [this] { return int(std::lround(m_options.linkStrength * 10)); },
+              [this, pushForceOptions](int v) {
+                  m_options.linkStrength = v / 10.0;
+                  pushForceOptions();
+              });
+    addSlider(forces, tr("Link distance"), 20, 600, [this] { return int(m_options.linkDistance); },
+              [this, pushForceOptions](int v) {
+                  m_options.linkDistance = v;
+                  pushForceOptions();
+              });
+    column->addStretch(1);
+
+    rebuildGroupRows();
+    syncControls();
+    return scroll;
+}
+
+/// One row per colour group: its query, a swatch that opens a colour dialog,
+/// and a remove button. Rebuilt whole - groups are a handful.
+void GraphView::rebuildGroupRows()
+{
+    while (QLayoutItem *item = m_groupsLayout->takeAt(0)) {
+        if (QWidget *widget = item->widget())
+            widget->deleteLater();
+        delete item;
+    }
+    for (int i = 0; i < m_options.colorGroups.size(); ++i) {
+        auto *row = new QWidget(m_groupRows);
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(4);
+
+        auto *query = new QLineEdit(m_options.colorGroups.at(i).query, row);
+        query->setPlaceholderText(tr("Enter query..."));
+        auto *swatch = new QToolButton(row);
+        swatch->setFixedSize(22, 22);
+        swatch->setCursor(Qt::PointingHandCursor);
+        const auto paintSwatch = [this, swatch, i] {
+            swatch->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid palette(mid);border-radius:11px;}")
+                                      .arg(m_options.colorGroups.at(i).color.name()));
+        };
+        paintSwatch();
+        auto *remove = new QToolButton(row);
+        remove->setText(QStringLiteral("x"));
+        remove->setAutoRaise(true);
+        remove->setToolTip(tr("Delete group"));
+        remove->setCursor(Qt::PointingHandCursor);
+        layout->addWidget(query, 1);
+        layout->addWidget(swatch);
+        layout->addWidget(remove);
+        m_groupsLayout->addWidget(row);
+
+        connect(query, &QLineEdit::textChanged, this, [this, i](const QString &text) {
+            if (i >= m_options.colorGroups.size())
+                return;
+            m_options.colorGroups[i].query = text;
+            assignColorGroups();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+        connect(swatch, &QToolButton::clicked, this, [this, i, paintSwatch] {
+            const QColor picked = QColorDialog::getColor(m_options.colorGroups.at(i).color, this, tr("Group colour"));
+            if (!picked.isValid())
+                return;
+            m_options.colorGroups[i].color = picked;
+            paintSwatch();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+        connect(remove, &QToolButton::clicked, this, [this, i] {
+            m_options.colorGroups.removeAt(i);
+            rebuildGroupRows();
+            assignColorGroups();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+    }
+}
+
+/// Puts every control back in step with m_options - after setOptions(), or
+/// when the local/global mode (which shows the Depth slider) changes.
+void GraphView::syncControls()
+{
+    if (!m_filtersForm)
+        return;
+    for (const auto &sync : m_controlSyncs)
+        sync();
+    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    layoutControls();
+}
+
+void GraphView::layoutControls()
+{
+    if (!m_controlsToggle)
+        return;
+    m_controlsToggle->adjustSize();
+    m_controlsToggle->move(width() - m_controlsToggle->width() - 8, 8);
+    if (m_controlsPanel) {
+        // A fixed-width card, as tall as its sections need but never past the
+        // pane: the scroll area takes up the rest.
+        const int panelWidth = std::min(270, std::max(120, width() - 16));
+        const int wanted = static_cast<QScrollArea *>(m_controlsPanel)->widget()->sizeHint().height() + 4;
+        const int available = std::max(60, height() - m_controlsToggle->y() - m_controlsToggle->height() - 16);
+        m_controlsPanel->resize(panelWidth, std::min(wanted, available));
+        m_controlsPanel->move(width() - m_controlsPanel->width() - 8,
+                              m_controlsToggle->y() + m_controlsToggle->height() + 4);
+    }
+}
+
+void GraphView::setTheme(const Theme &theme)
+{
+    m_palette.background = theme.color(QStringLiteral("--background-primary"));
+    m_palette.node = theme.color(QStringLiteral("--text-muted"));
+    m_palette.edge = theme.color(QStringLiteral("--background-modifier-border"));
+    m_palette.text = theme.color(QStringLiteral("--text-normal"));
+    m_palette.muted = theme.color(QStringLiteral("--text-faint"));
+    m_palette.accent = theme.color(QStringLiteral("--interactive-accent"));
+    m_controlsToggle->setIcon(Icons::icon(QStringLiteral("settings"), m_palette.text, 16));
+    m_controlsPanel->setStyleSheet(
+        QStringLiteral("#graphControlsPanel{background:%1;border:1px solid %2;border-radius:8px;}"
+                       "#graphControlsBody{background:transparent;}")
+            .arg(theme.color(QStringLiteral("--background-secondary")).name(),
+                 theme.color(QStringLiteral("--background-modifier-border")).name()));
+    markDirty();
+}
+
+void GraphView::setOptions(const GraphOptions &options)
+{
+    m_options = options;
+    rebuildGroupRows();
+    syncControls();
+    reapplyData();
+}
+
+void GraphView::setIndex(Index *index)
+{
+    if (m_index)
+        disconnect(m_index, nullptr, this, nullptr);
+    m_index = index;
+    if (m_index) {
+        // A graph nobody is looking at (a background tab, a closed sidebar)
+        // must not re-read the whole vault on every save; it catches up in
+        // showEvent().
+        connect(m_index, &Index::changed, this, [this] {
+            if (isVisible())
+                applyIndexData();
+            else
+                m_staleData = true;
+        });
+    }
+    applyIndexData();
+}
+
+void GraphView::applyIndexData()
+{
+    if (!m_index) {
+        setGraphData({}, {});
+        return;
+    }
+
+    // Off the UI thread: the two queries and 40 000 link resolutions are
+    // ~100 ms at 20 000 notes. The newest request wins; an older one's
+    // result is dropped (setGraphData() also supersedes a request).
+    const int request = ++m_dataRequest;
+    m_pendingDataRequest = request;
+    m_dataWatcher.setFuture(QtConcurrent::run(
+        [snapshot = m_index->graphSnapshot(), options = m_options] {
+            return buildGraph(Index::graphDataIn(snapshot), options);
+        }));
+}
+
+void GraphView::onGraphBuilt()
+{
+    if (m_pendingDataRequest != m_dataRequest)
+        return;
+    const BuiltGraph built = m_dataWatcher.result();
+    setGraphData(built.first, built.second);
 }
 
 void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdge> &edges)
 {
+    ++m_dataRequest; // whatever applyIndexData() has in flight is older than this
     m_rawNodes = nodes;
     m_rawEdges = edges;
     rebuild();
@@ -350,9 +701,14 @@ void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdg
 void GraphView::setLocalGraph(bool local, const QString &path, int depth)
 {
     m_localMode = local;
+    if (m_filtersForm)
+        m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
     if (!path.isEmpty())
         m_currentNote = path;
-    m_options.localDepth = std::max(1, depth);
+    if (depth > 0) {
+        m_options.localDepth = depth;
+        syncControls();
+    }
     rebuild();
 }
 
@@ -360,7 +716,7 @@ void GraphView::setCurrentNote(const QString &relativePath)
 {
     m_currentNote = relativePath;
     if (!m_localMode)
-        update();
+        markDirty();
     else if (isVisible())
         rebuild();
     else
@@ -369,6 +725,11 @@ void GraphView::setCurrentNote(const QString &relativePath)
 
 void GraphView::rebuild()
 {
+    // The job owns m_layout: let it finish, and drop whatever it hands back.
+    m_frameWatcher.waitForFinished();
+    ++m_generation;
+    m_layoutEdits.clear(); // aimed at nodes that may no longer exist
+
     QList<GraphNode> nodes = m_rawNodes;
     QList<GraphEdge> edges = m_rawEdges;
 
@@ -408,6 +769,37 @@ void GraphView::rebuild()
         edges = localEdges;
     }
 
+    // The Filters search box: files that do not match go, then the edges
+    // into them, then any tag or unresolved node nothing is left linking to.
+    const SearchQuery filter = SearchQuery::parse(m_options.search);
+    if (!m_options.search.trimmed().isEmpty() && filter.isValid()) {
+        QSet<QString> kept;
+        QList<GraphNode> matching;
+        for (const GraphNode &node : std::as_const(nodes)) {
+            const bool isFile = node.kind == GraphNode::Kind::Note || node.kind == GraphNode::Kind::Attachment;
+            if (isFile && !filter.evaluate(contextFor(node)).matched)
+                continue;
+            kept.insert(node.id);
+            matching.append(node);
+        }
+        QList<GraphEdge> remaining;
+        QSet<QString> linked;
+        for (const GraphEdge &edge : std::as_const(edges)) {
+            if (kept.contains(edge.fromID) && kept.contains(edge.toID)) {
+                remaining.append(edge);
+                linked.insert(edge.fromID);
+                linked.insert(edge.toID);
+            }
+        }
+        nodes.clear();
+        for (const GraphNode &node : std::as_const(matching)) {
+            const bool isFile = node.kind == GraphNode::Kind::Note || node.kind == GraphNode::Kind::Attachment;
+            if (isFile || linked.contains(node.id))
+                nodes.append(node);
+        }
+        edges = remaining;
+    }
+
     // A first pass over the un-filtered set, purely to learn each node's
     // degree - orphan filtering (showOrphans) needs to know that before it
     // can decide who stays, and it applies uniformly here rather than in
@@ -431,6 +823,14 @@ void GraphView::rebuild()
         ++degree[a];
         ++degree[b];
     }
+
+    // Where every node stands now, so a rebuild that keeps a node keeps it in
+    // place: every note save and every filter toggle lands here, and a graph
+    // that re-scatters on each of them is unusable.
+    QHash<QString, QPointF> keep;
+    keep.reserve(m_nodes.size());
+    for (int i = 0; i < m_nodes.size(); ++i)
+        keep.insert(m_nodes[i].data.id, m_positions.value(i));
 
     QVector<int> remap(nodes.size(), -1);
     m_nodes.clear();
@@ -460,26 +860,147 @@ void GraphView::rebuild()
         layoutEdges.append({a, b});
     }
 
-    ForceLayout::Options forceOptions;
-    forceOptions.repelStrength = m_options.repelStrength;
-    forceOptions.linkStrength = m_options.linkStrength;
-    forceOptions.linkDistance = m_options.linkDistance;
-    forceOptions.centerStrength = m_options.centerStrength;
-    m_layout.setOptions(forceOptions);
+    m_layout.setOptions(forceOptionsFor(m_options));
     m_layout.reset(m_nodes.size(), layoutEdges);
+    int kept = 0;
+    for (int i = 0; i < m_nodes.size(); ++i) {
+        const auto it = keep.constFind(m_nodes[i].data.id);
+        if (it != keep.constEnd()) {
+            m_layout.setPosition(i, it.value());
+            ++kept;
+        }
+    }
+
+    m_positions = m_layout.positions();
+    m_settled = m_nodes.isEmpty();
 
     m_hoverNode = -1;
     m_dragNode = -1;
-    m_cameraMoved = false;
-    fitToView();
+    // Survivors stay where they are, so the camera stays too; the step timer
+    // keeps framing the graph while the newcomers settle, until the user moves it.
+    if (kept == 0) {
+        m_cameraMoved = false;
+        fitToView();
+        m_frame = QImage(); // a different graph: nothing to show until the first job lands
+    }
+    markDirty();
     ensureTimerRunning();
-    update();
 }
 
 void GraphView::stepSimulation(int steps)
 {
+    m_frameWatcher.waitForFinished();
+    ++m_generation; // the finished job's output is older than this
+    flushLayoutEdits();
     for (int i = 0; i < steps; ++i)
         m_layout.step();
+    m_positions = m_layout.positions();
+    m_settled = m_layout.isSettled();
+    markDirty();
+}
+
+QImage GraphView::renderFrameNow() const
+{
+    return paintGraph(makeFrameInput());
+}
+
+void GraphView::markDirty()
+{
+    m_frameDirty = true;
+    update();
+}
+
+void GraphView::editLayout(std::function<void(ForceLayout &)> edit)
+{
+    m_settled = false; // every edit wakes the layout
+    m_woken = true;
+    if (m_jobInFlight) {
+        m_layoutEdits.push_back(std::move(edit));
+        return;
+    }
+    flushLayoutEdits();
+    edit(m_layout);
+}
+
+void GraphView::flushLayoutEdits()
+{
+    for (const auto &edit : m_layoutEdits)
+        edit(m_layout);
+    m_layoutEdits.clear();
+}
+
+GraphView::FrameInput GraphView::makeFrameInput() const
+{
+    FrameInput input;
+    input.size = size();
+    input.dpr = devicePixelRatioF();
+    input.positions = m_positions;
+    input.nodes = m_nodes;
+    input.edges = m_edgeIndices;
+    input.zoom = m_zoom;
+    input.pan = m_pan;
+    input.hoverNode = m_hoverNode;
+    input.currentNote = m_currentNote;
+    input.options = m_options;
+    input.palette = m_palette;
+    input.font = m_labelFont;
+    input.generation = m_generation;
+    return input;
+}
+
+void GraphView::launchFrame()
+{
+    flushLayoutEdits();
+    m_woken = false;
+    FrameInput input = makeFrameInput();
+    // A few steps per frame on a small graph so it settles in a couple of
+    // seconds rather than needing patience; one step is already the right
+    // amount of work once the graph is big, since each is O(n log n) - see
+    // GraphLayout.h.
+    input.steps = m_settled ? 0 : !m_options.animate ? 300 : (m_nodes.size() > 1000 ? 1 : 3);
+    m_frameDirty = false;
+    ForceLayout *layout = &m_layout;
+    m_jobInFlight = true;
+    m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout]() mutable {
+        FrameOutput output;
+        // Animate off: settle before the picture moves, up to 300 steps - but
+        // never more than a quarter second a job, which a rebuild may have
+        // to wait out; the next job carries on.
+        QElapsedTimer budget;
+        budget.start();
+        for (int i = 0; i < input.steps; ++i) {
+            layout->step();
+            if (!input.options.animate && (layout->isSettled() || budget.elapsed() > 250))
+                break;
+        }
+        input.positions = layout->positions();
+        output.positions = input.positions;
+        output.settled = layout->isSettled();
+        output.generation = input.generation;
+        output.zoom = input.zoom;
+        output.pan = input.pan;
+        output.frame = paintGraph(input);
+        return output;
+    }));
+}
+
+void GraphView::onFrameFinished()
+{
+    m_jobInFlight = false;
+    const FrameOutput output = m_frameWatcher.result();
+    if (output.generation != m_generation)
+        return; // from before a rebuild: its positions belong to nodes that are gone
+    m_positions = output.positions;
+    if (m_dragNode >= 0 && m_dragNode < m_positions.size())
+        m_positions[m_dragNode] = m_dragPos; // the job had not seen the latest move yet
+    m_frame = output.frame;
+    m_frameZoom = output.zoom;
+    m_framePan = output.pan;
+    // An edit made while the job ran woke the layout; the job's own verdict
+    // says it was settled.
+    m_settled = output.settled && !m_woken;
+    if (!m_cameraMoved)
+        fitToView();
     update();
 }
 
@@ -490,19 +1011,17 @@ void GraphView::ensureTimerRunning()
 
     if (!m_stepTimer) {
         m_stepTimer = new QTimer(this);
+        // Only a pacer: a job is launched when none runs and there is
+        // something to show or to settle, and the timer stops once there is
+        // not - a settled, still picture costs nothing.
         connect(m_stepTimer, &QTimer::timeout, this, [this] {
-            // A few steps per frame on a small graph so it settles in a
-            // couple of seconds rather than needing patience; one step is
-            // already the right amount of work once the graph is big, since
-            // each is O(n log n) - see GraphLayout.h.
-            const int stepsPerFrame = m_nodes.size() > 1000 ? 1 : 3;
-            for (int i = 0; i < stepsPerFrame; ++i)
-                m_layout.step();
-            if (!m_cameraMoved)
-                fitToView();
-            update();
-            if (m_layout.isSettled() && m_dragNode < 0)
-                m_stepTimer->stop(); // the picture stopped moving - stop paying for it
+            if (m_jobInFlight)
+                return;
+            if (m_settled && !m_frameDirty && m_dragNode < 0) {
+                m_stepTimer->stop();
+                return;
+            }
+            launchFrame();
         });
     }
     if (!m_stepTimer->isActive())
@@ -520,7 +1039,7 @@ void GraphView::fitToView()
     double left = 0, top = 0, right = 0, bottom = 0;
     bool any = false;
     for (int i = 0; i < m_nodes.size(); ++i) {
-        const QPointF p = m_layout.position(i);
+        const QPointF p = m_positions.value(i);
         if (!std::isfinite(p.x()) || !std::isfinite(p.y()))
             continue;
         left = any ? std::min(left, p.x()) : p.x();
@@ -533,8 +1052,13 @@ void GraphView::fitToView()
     const double margin = 40.0;
     const double zoomX = (width() - 2 * margin) / std::max(1.0, bounds.width());
     const double zoomY = (height() - 2 * margin) / std::max(1.0, bounds.height());
-    m_zoom = std::clamp(std::min(zoomX, zoomY), 0.05, 1.0);
-    m_pan = -bounds.center() * m_zoom;
+    const double zoom = std::clamp(std::min(zoomX, zoomY), 0.05, 1.0);
+    const QPointF pan = -bounds.center() * zoom;
+    if (zoom != m_zoom || pan != m_pan) {
+        m_zoom = zoom;
+        m_pan = pan;
+        markDirty();
+    }
 }
 
 void GraphView::showEvent(QShowEvent *event)
@@ -545,7 +1069,7 @@ void GraphView::showEvent(QShowEvent *event)
     else if (m_staleLayout)
         rebuild();
     m_staleData = m_staleLayout = false;
-    if (!m_layout.isSettled())
+    if (!m_settled || m_frameDirty)
         ensureTimerRunning();
 }
 
@@ -560,11 +1084,13 @@ void GraphView::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
     layoutControls();
+    m_frameDirty = true;
+    ensureTimerRunning();
 }
 
 QPointF GraphView::toScreen(QPointF graphPos) const
 {
-    return graphPos * m_zoom + m_pan + QPointF(width() / 2.0, height() / 2.0);
+    return project(graphPos, m_zoom, m_pan, size());
 }
 
 QPointF GraphView::toGraph(QPointF screenPos) const
@@ -572,13 +1098,13 @@ QPointF GraphView::toGraph(QPointF screenPos) const
     return (screenPos - m_pan - QPointF(width() / 2.0, height() / 2.0)) / m_zoom;
 }
 
-double GraphView::radiusFor(int degree) const
+double GraphView::radiusFor(int degree, const GraphOptions &options)
 {
     // Sub-linear in degree so a hundred-link hub reads as bigger, not ten
     // times the area of a one-link note. Obsidian's nodes are small dots:
     // at 3 + 1.6 sqrt(degree) a ten-link note was 8 px and a 300-note vault
     // read as a blob.
-    return (2.0 + std::sqrt(double(std::max(0, degree)))) * m_options.nodeSizeMultiplier;
+    return (2.0 + std::sqrt(double(std::max(0, degree)))) * options.nodeSizeMultiplier;
 }
 
 void GraphView::assignColorGroups()
@@ -595,13 +1121,10 @@ void GraphView::assignColorGroups()
         node.group = -1;
         if (queries.isEmpty())
             continue;
-        NoteContext context;
-        context.path = node.data.id;
-        context.text = node.data.label;
-        for (const QString &tag : std::as_const(node.data.tags))
-            context.tags << NoteTag{tag, Range{0, context.text.size()}};
+        const NoteContext context = contextFor(node.data);
         for (int i = 0; i < queries.size(); ++i) {
-            if (queries.at(i).isValid() && queries.at(i).evaluate(context).matched) {
+            if (queries.at(i).isValid() && !m_options.colorGroups.at(i).query.trimmed().isEmpty()
+                && queries.at(i).evaluate(context).matched) {
                 node.group = i;
                 break;
             }
@@ -609,26 +1132,26 @@ void GraphView::assignColorGroups()
     }
 }
 
-QColor GraphView::colorFor(const VisualNode &node) const
+QColor GraphView::colorFor(const VisualNode &node, const GraphOptions &options, const Palette &palette)
 {
-    if (node.group >= 0 && node.group < m_options.colorGroups.size())
-        return m_options.colorGroups.at(node.group).color;
+    if (node.group >= 0 && node.group < options.colorGroups.size())
+        return options.colorGroups.at(node.group).color;
     switch (node.data.kind) {
     case GraphNode::Kind::Tag:
-        return m_accentColor;
+        return palette.accent;
     case GraphNode::Kind::Attachment:
     case GraphNode::Kind::Unresolved:
-        return m_mutedColor;
+        return palette.muted;
     case GraphNode::Kind::Note:
     default:
-        return m_nodeColor;
+        return palette.node;
     }
 }
 
 int GraphView::nodeAt(QPointF screenPos) const
 {
     for (int i = m_nodes.size() - 1; i >= 0; --i) {
-        const QPointF center = toScreen(m_layout.position(i));
+        const QPointF center = toScreen(m_positions.value(i));
         const double radius = radiusFor(m_nodes[i].degree) * m_zoom + 3.0;
         const QPointF delta = screenPos - center;
         if (QPointF::dotProduct(delta, delta) <= radius * radius)
@@ -643,34 +1166,62 @@ void GraphView::updateHover(QPointF screenPos)
     if (hit != m_hoverNode) {
         m_hoverNode = hit;
         setCursor(hit >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
-        update();
+        markDirty();
+        ensureTimerRunning();
     }
 }
 
 void GraphView::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
-    painter.fillRect(rect(), m_backgroundColor);
-    if (m_nodes.isEmpty())
+    painter.fillRect(rect(), m_palette.background);
+    if (m_frame.isNull())
         return;
+    // The frame was painted with the camera it was launched under; panning and
+    // zooming since then just move that picture, and a real frame follows.
+    const QPointF center(width() / 2.0, height() / 2.0);
+    const double k = m_zoom / m_frameZoom;
+    if (k != 1.0 || m_pan != m_framePan) {
+        painter.translate(center + m_pan);
+        painter.scale(k, k);
+        painter.translate(-(center + m_framePan));
+    }
+    painter.drawImage(QPointF(0, 0), m_frame);
+}
+
+QImage GraphView::paintGraph(const FrameInput &in)
+{
+    QImage image(in.size * in.dpr, QImage::Format_ARGB32_Premultiplied);
+    image.setDevicePixelRatio(in.dpr);
+    image.fill(in.palette.background);
+    if (in.nodes.isEmpty())
+        return image;
+    QPainter painter(&image);
+    const auto toScreen = [&](QPointF graphPos) { return project(graphPos, in.zoom, in.pan, in.size); };
+    const auto radiusFor = [&](int degree) { return GraphView::radiusFor(degree, in.options); };
+    const QColor background = in.palette.background;
+    const QColor edgeColor = in.palette.edge;
+    const QList<VisualNode> &nodes = in.nodes;
+    const QList<std::pair<int, int>> &edges = in.edges;
+    const GraphOptions &options = in.options;
 
     // Antialiasing is real cost per primitive; a graph big enough to need
     // the performance guard in tests/test_graph.cpp does not get it.
-    painter.setRenderHint(QPainter::Antialiasing, m_nodes.size() < 1500);
+    painter.setRenderHint(QPainter::Antialiasing, nodes.size() < 1500);
 
-    const QRectF viewport = rect();
+    const QRectF viewport(QPointF(0, 0), QSizeF(in.size));
 
     QSet<int> highlighted;
-    if (m_hoverNode >= 0) {
-        highlighted.insert(m_hoverNode);
-        for (const auto &edge : std::as_const(m_edgeIndices)) {
-            if (edge.first == m_hoverNode)
+    if (in.hoverNode >= 0) {
+        highlighted.insert(in.hoverNode);
+        for (const auto &edge : edges) {
+            if (edge.first == in.hoverNode)
                 highlighted.insert(edge.second);
-            else if (edge.second == m_hoverNode)
+            else if (edge.second == in.hoverNode)
                 highlighted.insert(edge.first);
         }
     }
-    const bool dimming = m_hoverNode >= 0;
+    const bool dimming = in.hoverNode >= 0;
 
     // Batched rather than one setPen()+drawLine() per edge: at the
     // performance guard's scale (~10 000 edges) that was three quarters of
@@ -680,28 +1231,28 @@ void GraphView::paintEvent(QPaintEvent *)
     // first and drawing them in one call, replace what used to be a
     // per-edge state change.
     QVector<QLineF> normalLines, dimLines;
-    normalLines.reserve(m_edgeIndices.size());
-    for (const auto &edge : std::as_const(m_edgeIndices)) {
-        const QPointF a = toScreen(m_layout.position(edge.first));
-        const QPointF b = toScreen(m_layout.position(edge.second));
+    normalLines.reserve(edges.size());
+    for (const auto &edge : edges) {
+        const QPointF a = toScreen(in.positions.value(edge.first));
+        const QPointF b = toScreen(in.positions.value(edge.second));
         if (!viewport.intersects(QRectF(a, b).normalized().adjusted(-4, -4, 4, 4)))
             continue; // culled - neither endpoint is anywhere near the viewport
 
         const bool dim = dimming && !(highlighted.contains(edge.first) && highlighted.contains(edge.second));
         (dim ? dimLines : normalLines).append(QLineF(a, b));
 
-        if (m_options.showArrow) {
+        if (options.showArrow) {
             const QPointF direction = b - a;
             const double length = std::hypot(direction.x(), direction.y());
             if (length > 1.0) {
                 const QPointF unit = direction / length;
-                const double targetRadius = radiusFor(m_nodes[edge.second].degree) * m_zoom;
+                const double targetRadius = radiusFor(nodes[edge.second].degree) * in.zoom;
                 const QPointF tip = b - unit * (targetRadius + 2.0);
                 const QPointF normal(-unit.y(), unit.x());
-                const double headSize = 4.0 + m_options.lineSizeMultiplier;
+                const double headSize = 4.0 + options.lineSizeMultiplier;
                 const QPointF left = tip - unit * headSize + normal * (headSize * 0.6);
                 const QPointF right = tip - unit * headSize - normal * (headSize * 0.6);
-                painter.setBrush(blendOverBackground(m_edgeColor, dim ? 40 : 160, m_backgroundColor));
+                painter.setBrush(blendOverBackground(edgeColor, dim ? 40 : 160, background));
                 painter.setPen(Qt::NoPen);
                 const QPointF triangle[3] = {tip, left, right};
                 painter.drawPolygon(triangle, 3);
@@ -709,25 +1260,27 @@ void GraphView::paintEvent(QPaintEvent *)
         }
     }
     QPen edgePen;
-    edgePen.setWidthF(std::max(0.4, m_options.lineSizeMultiplier * m_zoom));
+    edgePen.setWidthF(std::max(0.4, options.lineSizeMultiplier * in.zoom));
     if (!normalLines.isEmpty()) {
-        edgePen.setColor(blendOverBackground(m_edgeColor, 160, m_backgroundColor));
+        edgePen.setColor(blendOverBackground(edgeColor, 160, background));
         painter.setPen(edgePen);
         painter.drawLines(normalLines);
     }
     if (!dimLines.isEmpty()) {
-        edgePen.setColor(blendOverBackground(m_edgeColor, 40, m_backgroundColor));
+        edgePen.setColor(blendOverBackground(edgeColor, 40, background));
         painter.setPen(edgePen);
         painter.drawLines(dimLines);
     }
 
-    // Text fade threshold: Obsidian reveals labels once zoomed in enough (or
-    // hovered). textFadeMultiplier shifts the zoom level that counts as
-    // "enough"; we do not know Obsidian's exact curve, so this is a
-    // deliberately simple, documented approximation of it.
-    const double labelZoomThreshold = m_options.textFadeMultiplier > 0.0 ? m_options.textFadeMultiplier : 1.4;
-    const bool showAllLabels = m_zoom >= labelZoomThreshold;
-    painter.setFont(m_labelFont);
+    // Text fade threshold: labels fade in as the view zooms in (Obsidian's
+    // slider, -3..3, moves where that happens). The threshold t is 1.4 at 0
+    // and scales by 1.3 per step, so -3..3 spans 0.6..3.1; the labels are
+    // invisible below 0.75 t and fully drawn from 1.25 t. A hovered node,
+    // its neighbours and the current note always get theirs.
+    const double fadeThreshold = 1.4 * std::pow(1.3, -options.textFadeMultiplier);
+    const double fadeAlpha = std::clamp((in.zoom - 0.75 * fadeThreshold) / (0.5 * fadeThreshold), 0.0, 1.0);
+    painter.setFont(in.font);
+
 
     // Most nodes share one colour (no colour groups, all Kind::Note), so the
     // usual case is one setBrush() for the whole graph rather than one per
@@ -747,17 +1300,17 @@ void GraphView::paintEvent(QPaintEvent *)
     // shape where a rect fill does not. A dot this small reads the same
     // either way once antialiasing is off, which is only true past the
     // same node count this is gated on.
-    const bool simplifiedDots = m_nodes.size() >= 1500;
-    for (int i = 0; i < m_nodes.size(); ++i) {
-        const VisualNode &node = m_nodes[i];
-        const QPointF center = toScreen(m_layout.position(i));
-        const double radius = radiusFor(node.degree) * m_zoom;
+    const bool simplifiedDots = nodes.size() >= 1500;
+    for (int i = 0; i < nodes.size(); ++i) {
+        const VisualNode &node = nodes[i];
+        const QPointF center = toScreen(in.positions.value(i));
+        const double radius = radiusFor(node.degree) * in.zoom;
         const QRectF bounds(center.x() - radius, center.y() - radius, radius * 2, radius * 2);
         if (!viewport.intersects(bounds.adjusted(-50, -20, 50, 24)))
             continue; // culled - padded for the label that might sit beside it
 
         const bool dim = dimming && !highlighted.contains(i);
-        QColor fill = colorFor(node);
+        QColor fill = colorFor(node, options, in.palette);
         if (dim)
             fill.setAlpha(60);
         if (simplifiedDots) {
@@ -772,23 +1325,27 @@ void GraphView::paintEvent(QPaintEvent *)
             painter.drawEllipse(center, radius, radius);
         }
 
-        if (node.data.id == m_currentNote) {
-            painter.setPen(QPen(m_accentColor, 2.0));
+        if (node.data.id == in.currentNote) {
+            painter.setPen(QPen(in.palette.accent, 2.0));
             painter.setBrush(Qt::NoBrush);
             painter.drawEllipse(center, radius + 3, radius + 3);
             painter.setPen(Qt::NoPen); // state left dirty for the next node's ellipse
             haveBrush = false;         // and the brush, since NoBrush was just set too
         }
 
-        const bool showLabel =
-            !dim && (showAllLabels || i == m_hoverNode || highlighted.contains(i) || node.data.id == m_currentNote);
-        if (showLabel && !node.data.label.isEmpty()) {
-            painter.setPen(m_textColor);
+        const bool pinned = i == in.hoverNode || highlighted.contains(i) || node.data.id == in.currentNote;
+        const double labelAlpha = dim ? 0.0 : pinned ? 1.0 : fadeAlpha;
+        if (labelAlpha > 0.0 && !node.data.label.isEmpty()) {
+            QColor labelColor = in.palette.text;
+            labelColor.setAlphaF(labelAlpha);
+            painter.setPen(labelColor);
             painter.drawText(QRectF(center.x() - 70, center.y() + radius + 2, 140, 16),
                              Qt::AlignHCenter | Qt::AlignTop, node.data.label);
             painter.setPen(Qt::NoPen);
         }
     }
+    painter.end();
+    return image;
 }
 
 void GraphView::wheelEvent(QWheelEvent *event)
@@ -805,7 +1362,8 @@ void GraphView::wheelEvent(QWheelEvent *event)
     m_pan += cursor - toScreen(graphPointUnderCursor);
 
     event->accept();
-    update();
+    markDirty();
+    ensureTimerRunning();
 }
 
 void GraphView::mousePressEvent(QMouseEvent *event)
@@ -820,8 +1378,11 @@ void GraphView::mousePressEvent(QMouseEvent *event)
     if (hit >= 0) {
         m_dragNode = hit;
         m_cameraMoved = true; // a refit would slide the node out from under the pointer
-        m_layout.setPinned(hit, true);
-        m_layout.wake();
+        m_dragPos = m_positions.value(hit);
+        editLayout([hit](ForceLayout &layout) {
+            layout.setPinned(hit, true);
+            layout.wake();
+        });
         ensureTimerRunning();
     } else {
         m_panning = true;
@@ -833,16 +1394,24 @@ void GraphView::mousePressEvent(QMouseEvent *event)
 void GraphView::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_dragNode >= 0) {
-        m_layout.setPosition(m_dragNode, toGraph(event->position()));
-        m_layout.wake();
+        m_dragPos = toGraph(event->position());
+        const int node = m_dragNode;
+        const QPointF to = m_dragPos;
+        if (node < m_positions.size())
+            m_positions[node] = to; // hit tests see the move at once; the layout follows
+        editLayout([node, to](ForceLayout &layout) {
+            layout.setPosition(node, to);
+            layout.wake();
+        });
+        markDirty();
         ensureTimerRunning();
-        update();
         return;
     }
     if (m_panning) {
         m_pan = m_panOrigin + (event->position() - m_panStart);
         m_cameraMoved = true;
-        update();
+        markDirty();
+        ensureTimerRunning();
         return;
     }
     updateHover(event->position());
@@ -862,8 +1431,11 @@ void GraphView::mouseReleaseEvent(QMouseEvent *event)
             if (data.kind == GraphNode::Kind::Note || data.kind == GraphNode::Kind::Attachment)
                 emit noteActivated(data.id);
         }
-        m_layout.setPinned(m_dragNode, false);
-        m_layout.wake();
+        const int node = m_dragNode;
+        editLayout([node](ForceLayout &layout) {
+            layout.setPinned(node, false);
+            layout.wake();
+        });
         ensureTimerRunning();
         m_dragNode = -1;
     }
@@ -875,7 +1447,8 @@ void GraphView::leaveEvent(QEvent *event)
     QWidget::leaveEvent(event);
     if (m_hoverNode >= 0) {
         m_hoverNode = -1;
-        update();
+        markDirty();
+        ensureTimerRunning();
     }
 }
 

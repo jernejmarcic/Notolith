@@ -889,6 +889,39 @@ were not before). First window 36.3 -> 28 ms (best of 3, 20 000 notes).
 |---|---|---|
 | 20 000 notes | 41.5 ms | 36.3 ms |
 
+### The graph view at 20 000 notes
+
+A step of the force layout is O(n log n) and a frame is linear in nodes and
+edges, and both ran on the UI thread: at 20 000 notes and 40 000 links a step
+was 22-28 ms and a frame 18 ms, so a settling graph held the window for ~65 ms a
+tick and every hover repainted for ~18 ms. Opening the graph read the index
+(`Index::graphData()`, 100 ms with its 40 000 link resolutions) and built the
+node lists on the UI thread too, and every note save did it again, scattering
+every node (`m_layout.reset()`) as it went.
+
+Now: stepping and painting are one `QtConcurrent` job at a time, painted into a
+`QImage`; the UI thread draws that image (and, between jobs, maps it from the
+camera it was painted with to the current one, so pan and zoom are instant).
+The index read, link resolution and node/edge building run on a worker over a
+snapshot (`Index::graphDataIn`, same pattern as `searchIn`); the rebuild keeps
+every surviving node where it was. Threading contract: GraphView.h.
+
+| 20 000 notes / 40 000 links, best of three | before | after |
+|---|---|---|
+| layout step (unchanged, on a worker now) | 28.5 ms | 22 ms (run-to-run noise) |
+| frame (on a worker now) | 17.9 ms | 8.5 ms |
+| UI thread per paint | 17.9 ms | 0.2 ms |
+| `setIndex()` blocks the UI | 123 ms | 0.0 ms |
+| longest UI stall while the graph loads | 123 ms | 6.8 ms |
+| graph ready after `setIndex()` | 123 ms | 83 ms |
+| 5 000 nodes, step / frame (the old guard) | 5.5 / 9.5 ms | 4.4 / 2.8 ms |
+
+`GraphPerformanceTest.TwentyThousandNodesReportCosts` prints the first four;
+`BigVaultOpenCosts` (set `NOTEAPPC_GRAPH_BENCH_NOTES=20000`) prints the rest.
+Left: a save while the graph is visible waits for the job in flight before it
+rebuilds - one job, ~35 ms at 20 000 notes, but up to 250 ms with Animate off,
+which runs a settling pass per job.
+
 ## Tried and not adopted
 
 ### OpenGL viewport

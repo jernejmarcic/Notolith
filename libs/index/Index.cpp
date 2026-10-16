@@ -631,16 +631,22 @@ QList<Index::PropertyCount> Index::propertyCounts() const
 
 QString Index::resolve(const QString &target, const QString &fromPath) const
 {
+    return resolveIn(m_names, m_vaultRoot, target, fromPath);
+}
+
+QString Index::resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
+                         const QString &target, const QString &fromPath)
+{
     QString wanted = normaliseTarget(target);
     if (wanted.isEmpty())
         return {};
 
     // An absolute path inside the vault is just a vault-relative one.
-    if (wanted.startsWith(m_vaultRoot + QLatin1Char('/')))
-        wanted = wanted.mid(m_vaultRoot.size() + 1);
+    if (wanted.startsWith(vaultRoot + QLatin1Char('/')))
+        wanted = wanted.mid(vaultRoot.size() + 1);
 
     const QString fromRelative =
-        fromPath.isEmpty() ? QString() : QDir(m_vaultRoot).relativeFilePath(fromPath);
+        fromPath.isEmpty() ? QString() : QDir(vaultRoot).relativeFilePath(fromPath);
 
     // A target with a slash is a path: try it relative to the linking note
     // first, then relative to the vault root, the way Obsidian does.
@@ -651,16 +657,16 @@ QString Index::resolve(const QString &target, const QString &fromPath) const
         }
         attempts << QDir::cleanPath(wanted);
         for (const QString &attempt : std::as_const(attempts)) {
-            const QStringList hit = m_names.value(foldCase(attempt));
+            const QStringList hit = names.value(foldCase(attempt));
             if (!hit.isEmpty())
                 return hit.first();
         }
     }
 
-    QStringList candidates = m_names.value(foldCase(wanted));
+    QStringList candidates = names.value(foldCase(wanted));
     // [[Secret]] still finds Secret.md once it is Secret.mdlock.
     if (candidates.isEmpty())
-        candidates = m_names.value(foldCase(wanted + QStringLiteral(".mdlock")));
+        candidates = names.value(foldCase(wanted + QStringLiteral(".mdlock")));
     if (candidates.isEmpty())
         return {};
     if (candidates.size() == 1)
@@ -1243,21 +1249,22 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
 // rest of Index already holds itself to (put()/remove() are the exception,
 // and only because a write genuinely is per-note).
 
-Index::GraphData Index::graphData() const
-{
-    GraphData result;
-    if (!m_db.isOpen())
-        return result;
+namespace {
 
+/// The two graph queries over `db`, links resolved against `names`.
+Index::GraphData readGraphData(QSqlDatabase &db, const QString &vaultRoot,
+                               const QHash<QString, QStringList> &names)
+{
+    Index::GraphData result;
     // Files, with each one's tags concatenated in the same query - the
     // second query below is the only other one this method runs. Char 30
     // (ASCII record separator) is not a character a tag can contain.
-    QSqlQuery files(m_db);
+    QSqlQuery files(db);
     files.exec(QStringLiteral(
         "SELECT files.path, files.words, GROUP_CONCAT(tags.name, char(30)) FROM files "
         "LEFT JOIN tags ON tags.file = files.id GROUP BY files.id ORDER BY files.path"));
     while (files.next()) {
-        GraphFileInfo file;
+        Index::GraphFileInfo file;
         file.path = files.value(0).toString();
         file.isAttachment = files.value(1).toInt() < 0;
         const QString tags = files.value(2).toString();
@@ -1266,22 +1273,51 @@ Index::GraphData Index::graphData() const
         result.files.append(file);
     }
 
-    const QDir vaultDir(m_vaultRoot);
-    QSqlQuery links(m_db);
+    const QDir vaultDir(vaultRoot);
+    QSqlQuery links(db);
     links.exec(QStringLiteral(
         "SELECT src.path, links.target FROM links "
         "JOIN files AS src ON src.id = links.file WHERE links.external = 0"));
     while (links.next()) {
-        GraphLinkInfo link;
+        Index::GraphLinkInfo link;
         link.fromPath = links.value(0).toString();
         link.targetName = links.value(1).toString();
-        // resolve() is an in-memory hash lookup (see m_names), not a query,
+        // resolveIn() is an in-memory hash lookup (see m_names), not a query,
         // so running it once per link here still holds the "no per-note
         // queries" budget.
-        link.toPath = resolve(link.targetName, vaultDir.absoluteFilePath(link.fromPath));
+        link.toPath = Index::resolveIn(names, vaultRoot, link.targetName, vaultDir.absoluteFilePath(link.fromPath));
         result.links.append(link);
     }
+    return result;
+}
 
+} // namespace
+
+Index::GraphData Index::graphData() const
+{
+    if (!m_db.isOpen())
+        return {};
+    QSqlDatabase db = m_db;
+    return readGraphData(db, m_vaultRoot, m_names);
+}
+
+Index::GraphSnapshot Index::graphSnapshot() const
+{
+    return GraphSnapshot{m_databasePath, m_vaultRoot, m_names};
+}
+
+Index::GraphData Index::graphDataIn(const GraphSnapshot &snapshot)
+{
+    GraphData result;
+    const QString connectionName =
+        QStringLiteral("noteAppC-graph-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        db.setDatabaseName(snapshot.databasePath);
+        if (db.open())
+            result = readGraphData(db, snapshot.vaultRoot, snapshot.names);
+    }
+    QSqlDatabase::removeDatabase(connectionName);
     return result;
 }
 

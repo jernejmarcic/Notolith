@@ -10,9 +10,15 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QSlider>
 #include <QPainter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTest>
 
 #include "GraphLayout.h"
@@ -268,6 +274,51 @@ TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)
     EXPECT_GT(closest, 12.0) << "two leaves sit on top of each other";
 }
 
+TEST(GraphViewTest, RebuildKeepsSurvivingNodesInPlace)
+{
+    // Every note save rebuilds the graph; it must not re-scatter what is there.
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+    const QList<GraphEdge> edges{{QStringLiteral("A"), QStringLiteral("B")},
+                                 {QStringLiteral("B"), QStringLiteral("C")}};
+    GraphView view;
+    view.resize(600, 400);
+    view.setGraphData(nodesFor(ids), edges);
+    view.stepSimulation(50);
+    const QPointF before = view.screenPosition(QStringLiteral("A"));
+
+    view.setGraphData(nodesFor(ids + QStringList{QStringLiteral("D")}),
+                      edges + QList<GraphEdge>{{QStringLiteral("C"), QStringLiteral("D")}});
+    ASSERT_EQ(view.nodeCount(), 4);
+    const QPointF after = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(after.x() - before.x(), after.y() - before.y()), 1.0);
+}
+
+TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(1500);
+
+    const QPoint grab = view.screenPosition(QStringLiteral("A")).toPoint();
+    const QPoint drop = grab + QPoint(40, 30);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, grab);
+    QTest::mouseMove(&view, drop);
+    // The snapshot answers hit tests at once; the layout catches up on the worker.
+    const QPointF held = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(held.x() - drop.x(), held.y() - drop.y()), 2.0);
+    QTest::qWait(300);
+    const QPointF later = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(later.x() - drop.x(), later.y() - drop.y()), 2.0) << "the pinned node slid away";
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, drop);
+    QTest::qWait(300); // and the layout settles again without a crash
+    EXPECT_EQ(view.nodeCount(), 3);
+}
+
 TEST(GraphViewTest, ColourGroupsAreSearchQueries)
 {
     QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Journal/B.md"),
@@ -289,6 +340,184 @@ TEST(GraphViewTest, ColourGroupsAreSearchQueries)
     // next group's bare word - matched against the name - takes it.
     EXPECT_EQ(view.nodeColor(QStringLiteral("Journal/B.md")), QColor(Qt::blue));
     EXPECT_EQ(view.nodeColor(QStringLiteral("Home.md")), QColor(Qt::blue));
+}
+
+TEST(GraphViewTest, SearchFilterDropsNonMatchingNotes)
+{
+    QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Projects/B.md"),
+                                       QStringLiteral("Journal/C.md")});
+    nodes[0].tags = {QStringLiteral("work")};
+    GraphNode tag;
+    tag.id = QStringLiteral("tag:work");
+    tag.label = QStringLiteral("#work");
+    tag.kind = GraphNode::Kind::Tag;
+    nodes << tag;
+    const QList<GraphEdge> edges{{QStringLiteral("Projects/A.md"), QStringLiteral("Projects/B.md")},
+                                 {QStringLiteral("Journal/C.md"), QStringLiteral("Projects/B.md")},
+                                 {QStringLiteral("Projects/A.md"), QStringLiteral("tag:work")}};
+    GraphView view;
+    view.setGraphData(nodes, edges);
+    ASSERT_EQ(view.nodeCount(), 4);
+
+    GraphOptions options = view.options();
+    options.search = QStringLiteral("path:Projects");
+    view.setOptions(options);
+    EXPECT_FALSE(view.containsNode(QStringLiteral("Journal/C.md")));
+    EXPECT_TRUE(view.containsNode(QStringLiteral("Projects/A.md")));
+    EXPECT_TRUE(view.containsNode(QStringLiteral("tag:work"))) << "a tag still linked from a kept note stays";
+    EXPECT_EQ(view.edgeCount(), 2);
+
+    options.search = QStringLiteral("path:Journal");
+    view.setOptions(options);
+    EXPECT_EQ(view.nodeCount(), 1) << "the tag and the notes it linked to are gone";
+}
+
+TEST(GraphViewTest, DepthSliderDrivesLocalGraph)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    auto *slider = view.findChild<QSlider *>(QStringLiteral("graphDepthSlider"));
+    ASSERT_NE(slider, nullptr);
+    view.setLocalGraph(true, QStringLiteral("A"), 1);
+    EXPECT_EQ(view.nodeCount(), 2);
+    QSignalSpy changed(&view, &GraphView::optionsChanged);
+    slider->setValue(3);
+    EXPECT_EQ(view.nodeCount(), 4);
+    EXPECT_EQ(view.options().localDepth, 3);
+    EXPECT_EQ(changed.count(), 1);
+    view.setLocalGraph(true, QStringLiteral("A")); // no depth: the slider's value stands
+    EXPECT_EQ(view.nodeCount(), 4);
+}
+
+TEST(GraphViewTest, GroupsEditorAddsAGroup)
+{
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("B.md")}), {});
+    auto *add = view.findChild<QPushButton *>(QStringLiteral("graphNewGroupButton"));
+    ASSERT_NE(add, nullptr);
+    const QColor before = view.nodeColor(QStringLiteral("Projects/A.md"));
+    add->click();
+    ASSERT_EQ(view.options().colorGroups.size(), 1);
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), before) << "an empty query colours nothing";
+
+    // The new row's query box, found by its placeholder.
+    QLineEdit *query = nullptr;
+    for (auto *edit : view.findChildren<QLineEdit *>()) {
+        if (edit->placeholderText() == QStringLiteral("Enter query..."))
+            query = edit;
+    }
+    ASSERT_NE(query, nullptr);
+    query->setText(QStringLiteral("path:Projects"));
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), view.options().colorGroups.first().color);
+    EXPECT_EQ(view.nodeColor(QStringLiteral("B.md")), before);
+}
+
+TEST(GraphViewTest, AForceSliderRestartsASettledLayout)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(2500); // settled, the timer stopped
+    const QPointF resting = view.screenPosition(QStringLiteral("A"));
+    auto *repel = view.findChild<QSlider *>(QStringLiteral("graphRepelSlider"));
+    ASSERT_NE(repel, nullptr);
+    repel->setValue(repel->maximum()); // a settled graph must wake and move
+    EXPECT_TRUE(QTest::qWaitFor(
+        [&] {
+            const QPointF now = view.screenPosition(QStringLiteral("A"));
+            return std::hypot(now.x() - resting.x(), now.y() - resting.y()) > 1.0;
+        },
+        2000));
+}
+
+TEST(GraphViewTest, OptionsRoundTripThroughJson)
+{
+    GraphOptions options;
+    options.search = QStringLiteral("tag:#x");
+    options.showTags = true;
+    options.animate = false;
+    options.localDepth = 3;
+    options.collapseDisplay = false;
+    options.textFadeMultiplier = -1.5;
+    options.colorGroups = {{QStringLiteral("path:A"), QColor(0x12, 0x34, 0x56)}};
+
+    const GraphOptions back = GraphOptions::fromJson(options.toJson());
+    EXPECT_EQ(back.search, options.search);
+    EXPECT_TRUE(back.showTags);
+    EXPECT_FALSE(back.animate);
+    EXPECT_EQ(back.localDepth, 3);
+    EXPECT_FALSE(back.collapseDisplay);
+    EXPECT_DOUBLE_EQ(back.textFadeMultiplier, -1.5);
+    ASSERT_EQ(back.colorGroups.size(), 1);
+    EXPECT_EQ(back.colorGroups.first().color.rgb() & 0xFFFFFF, 0x123456u);
+    // Obsidian's own spelling of the same group and fold state.
+    const QJsonObject obsidian = options.toJson();
+    EXPECT_EQ(obsidian.value(QLatin1String("collapse-display")).toBool(), false);
+    EXPECT_EQ(obsidian.value(QLatin1String("colorGroups")).toArray().first().toObject().value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt(), 0x123456);
+}
+
+TEST(GraphViewTest, WithAnimationOffTheLayoutIsSettledBeforeTheFirstFrame)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(500, 400);
+    GraphOptions options = view.options();
+    options.animate = false;
+    view.setOptions(options);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    const QPointF scattered = view.screenPosition(QStringLiteral("A"));
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    // One job carries it to rest: the first picture already shows the result.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.screenPosition(QStringLiteral("A")) != scattered; }, 3000));
+    const QPointF first = view.screenPosition(QStringLiteral("A"));
+    QTest::qWait(300);
+    const QPointF later = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(later.x() - first.x(), later.y() - first.y()), 3.0);
+}
+
+TEST(GraphViewTest, LabelsFadeInAsTheViewZoomsIn)
+{
+    // Labels are text-coloured pixels: count how many the frame holds.
+    const auto textPixels = [](const QImage &frame) {
+        int count = 0;
+        for (int y = 0; y < frame.height(); ++y) {
+            const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+            for (int x = 0; x < frame.width(); ++x)
+                count += qRed(row[x]) > 200 && qGreen(row[x]) > 200; // the default palette's white text
+        }
+        return count;
+    };
+    const QStringList ids{QStringLiteral("alpha"), QStringLiteral("beta"), QStringLiteral("gamma"),
+                          QStringLiteral("delta")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("alpha"), QStringLiteral("beta")},
+                                      {QStringLiteral("beta"), QStringLiteral("gamma")},
+                                      {QStringLiteral("gamma"), QStringLiteral("delta")}});
+    view.stepSimulation(300);
+    const int far = textPixels(view.renderFrameNow());
+    // Zoom in about the centre: the same graph, nearer.
+    for (int i = 0; i < 3; ++i) {
+        QWheelEvent wheel(QPointF(250, 200), QPointF(250, 200), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&view, &wheel);
+    }
+    const int near = textPixels(view.renderFrameNow());
+    EXPECT_EQ(far, 0) << "no label shows while zoomed out";
+    EXPECT_GT(near, 0) << "labels appear once zoomed in";
 }
 
 TEST(GraphViewTest, OrphanFilterDropsUnconnectedNotes)
@@ -394,6 +623,20 @@ TEST_F(GraphDataTest, ReturnsEveryFileAndEveryInternalLink)
     EXPECT_TRUE(sawUnresolved);
 }
 
+TEST_F(GraphDataTest, TheWorkerThreadReadMatchesTheSynchronousRead)
+{
+    Index index;
+    build(index);
+    const Index::GraphData sync = index.graphData();
+    const Index::GraphData worker = Index::graphDataIn(index.graphSnapshot());
+    ASSERT_EQ(worker.files.size(), sync.files.size());
+    ASSERT_EQ(worker.links.size(), sync.links.size());
+    for (qsizetype i = 0; i < sync.links.size(); ++i) {
+        EXPECT_EQ(worker.links[i].fromPath, sync.links[i].fromPath);
+        EXPECT_EQ(worker.links[i].toPath, sync.links[i].toPath);
+    }
+}
+
 TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
 {
     // Not just that Index and GraphView each work alone: that the shape one
@@ -404,6 +647,7 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
 
     GraphView view;
     view.setIndex(&index);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000)); // read on a worker
     // Home.md, Ideas.md, Orphan.md (kept: showOrphans defaults to true) and
     // the unresolved "Missing Note" node; diagram.png is excluded because
     // showAttachments defaults to false.
@@ -416,6 +660,7 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
     options.hideUnresolved = true;
     options.showOrphans = false;
     view.setOptions(options);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 2; }, 5000));
     // Orphan.md has no links at all, so it drops; the unresolved node goes too.
     EXPECT_FALSE(view.containsNode(QStringLiteral("unresolved:Missing Note")));
     EXPECT_FALSE(view.containsNode(QStringLiteral("Orphan.md")));
@@ -429,7 +674,7 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
     build(index);
     GraphView view;
     view.setIndex(&index);
-    ASSERT_EQ(view.nodeCount(), 4);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
 
     // Hidden: a change must not re-read the vault, only mark it stale.
     emit index.changed();
@@ -438,7 +683,7 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
     EXPECT_EQ(view.nodeCount(), 1);
 
     view.show();
-    EXPECT_EQ(view.nodeCount(), 4);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
 }
 
 // ---------------------------------------------------------------------------
@@ -505,16 +750,14 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
         return median(stepTimes);
     }, 3, 16.0);
 
-    QImage image(1600, 1000, QImage::Format_ARGB32_Premultiplied);
     const double frameMedian = perf::bestOf([&] {
         std::vector<double> frameTimes;
         for (int i = 0; i < 12; ++i) {
-            image.fill(Qt::black);
-            QPainter painter(&image);
             clock.start();
-            view.render(&painter);
-            painter.end();
+            const QImage image = view.renderFrameNow();
             frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+            if (image.isNull())
+                return 1e9;
         }
         return median(frameTimes);
     }, 3, 16.0);
@@ -524,6 +767,110 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
 
     EXPECT_LT(stepMedian, 16.0);
     EXPECT_LT(frameMedian, 16.0);
+}
+
+// Reports, does not budget: what a 20 000-note vault costs per step, per
+// frame and per rebuild (docs/PERFORMANCE.md). Only finiteness is asserted.
+TEST(GraphPerformanceTest, TwentyThousandNodesReportCosts)
+{
+    constexpr int kNodes = 20000;
+    GraphView view;
+    view.resize(1600, 1000);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    const QList<GraphEdge> edges = makeEdges(nodes, 2);
+
+    QElapsedTimer clock;
+    clock.start();
+    view.setGraphData(nodes, edges);
+    const double rebuildMs = clock.nsecsElapsed() / 1e6;
+    ASSERT_EQ(view.nodeCount(), kNodes);
+
+    view.stepSimulation(100);
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    std::vector<double> stepTimes;
+    for (int i = 0; i < 8; ++i) {
+        clock.start();
+        view.stepSimulation(1);
+        stepTimes.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    std::vector<double> frameTimes;
+    for (int i = 0; i < 6; ++i) {
+        clock.start();
+        const QImage image = view.renderFrameNow();
+        frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+        ASSERT_FALSE(image.isNull());
+    }
+    const double step = median(stepTimes);
+    const double frame = median(frameTimes);
+
+    // What the UI thread itself pays per paint once a worker has delivered a
+    // frame: drawing one finished image.
+    view.show();
+    QTest::qWait(1500);
+    QImage target(1600, 1000, QImage::Format_ARGB32_Premultiplied);
+    std::vector<double> blitTimes;
+    for (int i = 0; i < 8; ++i) {
+        QPainter painter(&target);
+        clock.start();
+        view.render(&painter);
+        painter.end();
+        blitTimes.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    const double blit = median(blitTimes);
+    std::printf("[ PERF     ] %d nodes / %d edges: rebuild %.1f ms, step %.2f ms, render %.2f ms (on a worker), UI blit %.2f ms\n",
+                view.nodeCount(), view.edgeCount(), rebuildMs, step, frame, blit);
+    EXPECT_TRUE(std::isfinite(step) && std::isfinite(frame));
+    EXPECT_LT(blit, 5.0) << "the UI thread must only draw a finished image";
+}
+
+// Opt-in (NOTEAPPC_GRAPH_BENCH_NOTES=20000): indexes that many linked notes
+// and times what opening the graph costs on the UI thread. Prints only.
+TEST(GraphPerformanceTest, BigVaultOpenCosts)
+{
+    const int notes = qEnvironmentVariableIntValue("NOTEAPPC_GRAPH_BENCH_NOTES");
+    if (notes <= 0)
+        GTEST_SKIP() << "set NOTEAPPC_GRAPH_BENCH_NOTES=20000 to run";
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    for (int i = 0; i < notes; ++i) {
+        QFile file(dir.filePath(QStringLiteral("n%1.md").arg(i)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QStringLiteral("# n%1\n[[n%2]] [[n%3]]\n").arg(i).arg((i * 7 + 1) % notes).arg((i + 97) % notes).toUtf8());
+    }
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(Vault(dir.path()));
+    ASSERT_TRUE(done.wait(120000));
+
+    QElapsedTimer clock;
+    clock.start();
+    const Index::GraphData data = index.graphData();
+    const double dataMs = clock.nsecsElapsed() / 1e6;
+
+    GraphView view;
+    view.resize(1600, 1000);
+    clock.start();
+    view.setIndex(&index);
+    const double blockedMs = clock.nsecsElapsed() / 1e6;
+    // Longest gap between two event-loop turns while the worker reads and the
+    // graph is rebuilt: what the user would feel as a freeze.
+    double worstGap = 0;
+    clock.start();
+    QElapsedTimer sinceReady;
+    sinceReady.start();
+    while (view.nodeCount() != notes && sinceReady.elapsed() < 20000) {
+        QElapsedTimer turn;
+        turn.start();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        worstGap = std::max(worstGap, turn.nsecsElapsed() / 1e6);
+        QThread::msleep(1);
+    }
+    ASSERT_EQ(view.nodeCount(), notes);
+    const double readyMs = blockedMs + clock.nsecsElapsed() / 1e6;
+    std::printf("[ PERF     ] %d notes (%d links): Index::graphData() %.1f ms; setIndex() blocks the UI %.1f ms, "
+                "graph ready after %.1f ms, longest UI stall while loading %.1f ms\n",
+                notes, int(data.links.size()), dataMs, blockedMs, readyMs, worstGap);
 }
 
 TEST(GraphPerformanceTest, StepCostIsNotQuadraticInNodeCount)

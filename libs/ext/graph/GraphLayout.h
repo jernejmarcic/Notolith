@@ -41,6 +41,9 @@ public:
 
     int count() const { return m_position.size(); }
     QPointF position(int index) const { return m_position.value(index); }
+    /// Every position at once - what GraphView snapshots after a step so the
+    /// UI thread never reads the layout while a worker is stepping it.
+    const QVector<QPointF> &positions() const { return m_position; }
     void setPosition(int index, QPointF position);
     void setPinned(int index, bool pinned);
     bool isPinned(int index) const { return m_pinned.value(index, false); }

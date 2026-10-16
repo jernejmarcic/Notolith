@@ -4,10 +4,11 @@
 //
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
 //   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single
-//   ... [--command <id> [--type <text>]]
+//   ... [--command <id> [--type <text>]] [--click <button object name>]...
 //   ... [--popup <QMenu object name>] [--tooltip <text>]   a menu / tooltip over the window
 
 #include <QAction>
+#include <QAbstractButton>
 #include <QApplication>
 #include <QFileInfo>
 #include <QTemporaryDir>
@@ -124,6 +125,28 @@ int main(int argc, char *argv[])
     const QString typed = flag("--type");
 
     int status = 0;
+    // `--click <objectName>` (repeatable) presses that button once the command
+    // has run: the way to open a panel that only a click reaches.
+    const auto clickButtons = [&] {
+        for (qsizetype at = args.indexOf(QLatin1String("--click")); at >= 0 && at + 1 < args.size();
+             at = args.indexOf(QLatin1String("--click"), at + 1)) {
+            // The visible one: a window can hold several of the same name (the
+            // graph and the local graph both have a controls button).
+            QAbstractButton *button = nullptr;
+            for (auto *candidate : window.findChildren<QAbstractButton *>(args.at(at + 1))) {
+                if (!button || candidate->isVisible())
+                    button = candidate;
+                if (candidate->isVisible())
+                    break;
+            }
+            if (!button) {
+                qWarning("no button %s", qPrintable(args.at(at + 1)));
+                status = 1;
+                continue;
+            }
+            button->click();
+        }
+    };
     const auto capture = [&] {
         QImage shot = window.grab().toImage();
         // The window system's own composite, which includes translucent popups
@@ -171,6 +194,10 @@ int main(int argc, char *argv[])
             return QTimer::singleShot(600, &app, capture);
         }
         if (command.isEmpty()) {
+            if (args.contains(QLatin1String("--click"))) {
+                clickButtons();
+                return QTimer::singleShot(600, &app, capture);
+            }
             if (flag("--popup").isEmpty() && flag("--tooltip").isEmpty())
                 return capture();
             return QTimer::singleShot(400, &app, capture); // let the popup map
@@ -192,7 +219,13 @@ int main(int argc, char *argv[])
         action->trigger();
         if (auto *edit = qobject_cast<QLineEdit *>(QApplication::focusWidget()); edit && !typed.isEmpty())
             edit->setText(typed);
-        QTimer::singleShot(1200, &app, capture); // a debounced search, a settling graph
+        // After the command's own work has had a moment to land: a graph's
+        // controls button exists as soon as it is opened, a pane's content
+        // not until its worker is done.
+        QTimer::singleShot(1200, &app, [&] {
+            clickButtons();
+            QTimer::singleShot(400, &app, capture); // a debounced search, a settling graph
+        });
     });
     app.exec();
     return status;
