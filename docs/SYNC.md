@@ -306,8 +306,9 @@ rebuilds itself from a full rescan.
 Three-way merge needs a base: the last plaintext body both sides agreed on.
 `SyncJournal` keeps that base per note-entity under
 `$XDG_DATA_HOME/noteAppC/sync/<vault digest>/base/<entityID>` - a plain UTF-8
-copy, written only when a push or a clean pull succeeds, never touched by
-anything else. It is local-only and never syncs.
+copy, written (through `QSaveFile`, so a crash or a failed write leaves the
+previous base, never an empty one) only when a push or a clean pull succeeds,
+never touched by anything else. It is local-only and never syncs.
 
 On pull, for a note entity, compare three hashes: `base` (what
 `SyncJournal` has on file), `local` (what's on disk right now), `remote`

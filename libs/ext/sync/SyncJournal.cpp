@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QSaveFile>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -227,9 +228,15 @@ QString SyncJournal::readBase(const QByteArray &entityID) const
 
 void SyncJournal::writeBase(const QByteArray &entityID, const QString &text)
 {
-    QFile f(m_dataDirectory + QStringLiteral("/base/") + QString::fromLatin1(entityID.toHex()));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    // QSaveFile, not truncate-then-write: a crash in between would leave an
+    // empty base, and the next cycle would turn a two-device edit into a
+    // conflict copy instead of a clean three-way merge. On any failure the
+    // previous base stays.
+    QSaveFile f(m_dataDirectory + QStringLiteral("/base/") + QString::fromLatin1(entityID.toHex()));
+    if (f.open(QIODevice::WriteOnly)) {
         f.write(text.toUtf8());
+        f.commit();
+    }
 }
 
 void SyncJournal::removeBase(const QByteArray &entityID)

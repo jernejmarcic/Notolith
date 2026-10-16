@@ -15,6 +15,8 @@
 
 #include <memory>
 
+#include <unistd.h>
+
 #include <QTest>
 #include <QSignalSpy>
 #include <QRegularExpression>
@@ -494,6 +496,38 @@ TEST(SyncScannerTest, RenameIsDetectedByContent)
     EXPECT_EQ(renamed.first().entityID, entity.entityID);
     EXPECT_EQ(renamed.first().oldPath, QStringLiteral("old.md"));
     EXPECT_EQ(renamed.first().path, QStringLiteral("new.md"));
+}
+
+// writeBase() goes through QSaveFile: a crash between truncate and write used
+// to leave an empty base, and the next cycle made a conflict copy of a
+// two-device edit instead of merging it. The stand-in for the crash is a
+// write that cannot finish: with the base directory read-only QSaveFile
+// cannot create its temporary file, so the old base must survive untouched,
+// where a truncating QFile happily emptied the (still writable) file first.
+TEST(SyncJournalTest, FailedWriteBaseKeepsThePreviousBase)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    SyncJournal journal(dir.path());
+    ASSERT_TRUE(journal.isOpen());
+
+    const QByteArray id = SyncCrypto::randomID();
+    journal.writeBase(id, QStringLiteral("one"));
+    ASSERT_EQ(journal.readBase(id), QStringLiteral("one"));
+
+    const QString baseDir = SyncJournal::dataDirectoryFor(dir.path()) + QStringLiteral("/base");
+    ASSERT_TRUE(QFile::setPermissions(baseDir, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    journal.writeBase(id, QStringLiteral("two"));
+    const QString after = journal.readBase(id);
+    QFile::setPermissions(baseDir, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    EXPECT_EQ(after, QStringLiteral("one"));
+
+    journal.writeBase(id, QStringLiteral("three")); // and it works again once the directory is writable
+    EXPECT_EQ(journal.readBase(id), QStringLiteral("three"));
 }
 
 // ---------------------------------------------------------------------
