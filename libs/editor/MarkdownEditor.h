@@ -133,6 +133,20 @@ public:
     /// The button's rect in viewport coordinates, invalid unless the pointer
     /// is over a block that has one (for the tests too).
     QRectF editButtonRect() const;
+    /// Row and column grips, add-row and add-column bars and rectangular cell
+    /// selection on a rendered pipe table (TableHandles.cpp). On by default;
+    /// off tracks no hover for tables and a drag across cells selects text.
+    void setTableHandles(bool on);
+    /// The parts of a table's hover chrome, for hit tests and the tests.
+    enum class TablePart { None, RowGrip, ColumnGrip, AddRow, AddColumn };
+    TablePart hoveredTablePart() const { return m_tableHover.part; }
+    /// Viewport rect of cell (`row`, `column`) of the rendered table holding
+    /// `offset`, or of one of its handles (`index` is the row or the column
+    /// for a grip). Empty when that is not drawn.
+    QRectF tableCellRect(qsizetype offset, int row, int column) const;
+    QRectF tableChromeRect(qsizetype offset, TablePart part, int index = 0) const;
+    /// The selected cells as x = first column, y = first row; null when none.
+    QRect cellSelectionRect() const;
     /// Selects the whole of the block `blockIndex` (any piece) with the
     /// caret at its start, which is what shows its source.
     void editBlockSource(qsizetype blockIndex);
@@ -1541,6 +1555,67 @@ private:
     void updateHover(const QPoint &point);
     void clearHover();
     void paintEditHover(QPainter &painter) const;
+
+    // --- table chrome, TableHandles.cpp -------------------------------------
+    struct TableChrome {
+        qsizetype block = -1; ///< index in m_blocks of the hovered table
+        TablePart part = TablePart::None;
+        int row = -1;    ///< the row under the pointer (a grip's row)
+        int column = -1; ///< the column under the pointer (a grip's column)
+        bool operator==(const TableChrome &) const = default;
+    };
+    /// A grip being dragged, or pressed and not yet moved (a click on it
+    /// selects the row or column).
+    struct TableDrag {
+        TablePart part = TablePart::None;
+        qsizetype block = -1;
+        int from = -1;
+        int to = -1; ///< the boundary the drop would land on, 1 or 0 .. count
+        bool moved = false;
+        QPoint start;
+    };
+    /// Cells selected as a rectangle: parser rows and columns, caret in the
+    /// anchor cell. Valid only while the text, the caret and the table are as
+    /// it left them, so nothing has to clear it.
+    struct CellSelection {
+        qsizetype tableStart = -1;
+        qsizetype caret = -1;
+        quint64 version = 0;
+        int anchorRow = 0, anchorColumn = 0, headRow = 0, headColumn = 0;
+    };
+    const TableSpan *chromeTable(const BlockView &view) const;
+    TableChrome tableChromeAt(const QPoint &point) const;
+    QRectF rowGripRect(const BlockView &view, const TableSpan &table, int row, bool hit) const;
+    QRectF columnGripRect(const BlockView &view, const TableSpan &table, int column, bool hit) const;
+    /// A cell's rect in viewport coordinates.
+    QRectF cellViewRect(const BlockView &view, const Cell &cell) const;
+    int cellRowAt(const BlockView &view, const TableSpan &table, qreal y) const;
+    int cellColumnAt(const BlockView &view, const TableSpan &table, qreal x) const;
+    QRectF addRowRect(const BlockView &view) const;
+    QRectF addColumnRect(const BlockView &view) const;
+    QRectF tableViewRect(const BlockView &view) const;
+    /// What a repaint of the chrome's parts in `mask` (kRowGrip, kColumnGrip,
+    /// kBars) covers: a few small rects, never the table.
+    QRegion chromeDirty(const TableChrome &chrome, int mask) const;
+    void updateTableHover(const QPoint &point);
+    void clearTableHover();
+    void paintTableChrome(QPainter &painter) const;
+    bool pressTableChrome(const QPoint &point);
+    bool dragTableChrome(const QPoint &point);
+    bool releaseTableChrome(const QPoint &point);
+    /// Moves body row or column `from` so it sits before `to` (a boundary,
+    /// counted before the move), one undo step. False when it would not move.
+    bool moveTableLine(qsizetype table, bool column, int from, int to);
+    /// Appends an empty row or column, caret in its first cell.
+    bool appendTableLine(qsizetype table, bool column);
+    const CellSelection *cellSelection() const;
+    void setCellSelection(qsizetype table, int anchorRow, int anchorColumn, int headRow, int headColumn);
+    /// The cell a drag at `point` reaches in the table the press was in.
+    bool dragCellSelection(const QPoint &point);
+    bool handleCellSelectionKey(QKeyEvent *event);
+    bool copyCellSelection(bool cut);
+    bool clearCellSelection();
+    bool pasteIntoCells();
     /// Flips a checkbox property, rewriting only that value's bytes.
     void toggleProperty(int index);
     /// The key's line, and where on it the value is, when its value can be
@@ -2117,6 +2192,23 @@ private:
     /// step, the caret following its cell. False when the caret is in no
     /// table cell or the command does not apply (the header row cannot move).
     bool runTableCommand(const QString &id);
+    /// A pipe table as the commands see it: its lines (0 the header, 1 the
+    /// delimiter row) split into cell text, every row padded to the widest.
+    struct TableText {
+        qsizetype index = -1; ///< in m_decorations.tables
+        qsizetype start = 0;  ///< the lines' source span
+        qsizetype end = 0;
+        QString prefix;       ///< a callout's "> ", copied onto every row
+        QList<QStringList> rows;
+        int columns = 0;
+    };
+    /// False for an HTML table or a base. `rows` index r is parser row r on
+    /// line r, or r + 1 past the header (tableLine).
+    bool loadTableText(qsizetype index, TableText &table) const;
+    static int tableLine(int row) { return row == 0 ? 0 : row + 1; }
+    /// Rewrites the table aligned as one undo step; false when the source
+    /// is already that.
+    bool storeTableText(const TableText &table);
     /// The same commands for the right-click menu of a table cell.
     void addTableActions(QMenu &menu, qsizetype offset);
     /// Gives row `row` of table `table` (m_decorations.tables) every column
@@ -2390,6 +2482,13 @@ private:
     bool m_alignTables = true;
     bool m_tableEdited = false; ///< the caret's table was edited; aligned when the caret leaves it
     bool m_formattingTables = false; ///< formatTables' own edits do not count as editing
+    bool m_tableHandles = true;
+    TableChrome m_tableHover;
+    TableDrag m_tableDrag;
+    CellSelection m_cellSel;
+    qsizetype m_cellPress = -1; ///< table start of a press in a cell, for a drag across cells
+    int m_cellPressRow = -1;
+    int m_cellPressColumn = -1;
     qreal m_goalX = -1; ///< remembered column for up/down
 
     /// A freshly opened note renders whole; the block under the caret only

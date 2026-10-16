@@ -304,6 +304,8 @@ void MarkdownEditor::updateHover(const QPoint &point)
             viewport()->update(m_hoverRect);
         viewport()->setToolTip(overButton ? tr("Edit this block") : QString());
     }
+    if (m_tableHandles)
+        updateTableHover(point); // the grips and bars of a table (TableHandles.cpp)
 }
 
 void MarkdownEditor::clearHover()
@@ -316,6 +318,7 @@ void MarkdownEditor::clearHover()
     viewport()->setToolTip(QString());
     if (!old.isNull())
         viewport()->update(old);
+    clearTableHover();
 }
 
 void MarkdownEditor::paintEditHover(QPainter &painter) const

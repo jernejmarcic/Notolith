@@ -476,6 +476,53 @@ bool MarkdownEditor::handleSourceTableKey(int key)
     return true;
 }
 
+bool MarkdownEditor::loadTableText(qsizetype index, TableText &table) const
+{
+    if (index < 0 || index >= m_decorations.tables.size() || m_decorations.tables.at(index).html)
+        return false;
+    const Range &range = m_decorations.tables.at(index).range;
+    table.index = index;
+    table.start = m_lines.lineStart(m_lines.lineAt(range.start));
+    table.end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
+
+    // The table as rows of cell text; line 1 is the delimiter row, so the
+    // parser's row r is line r, or r + 1 past the header.
+    const QStringList lines = m_text.mid(table.start, table.end - table.start).split(QLatin1Char('\n'));
+    table.rows.clear();
+    table.prefix.clear();
+    for (const QString &line : lines) {
+        qsizetype lead = 0;
+        while (lead < line.size() && (line.at(lead) == QLatin1Char('>') || line.at(lead).isSpace()))
+            ++lead;
+        if (table.rows.isEmpty())
+            table.prefix = line.left(lead);
+        QStringList cells;
+        for (const Range &text : tableRowCells(line, 0, line.size()))
+            cells << line.mid(text.start, text.length());
+        table.rows << cells;
+    }
+    table.columns = 0;
+    for (const QStringList &row : std::as_const(table.rows))
+        table.columns = qMax(table.columns, int(row.size()));
+    for (QStringList &row : table.rows) {
+        while (row.size() < table.columns)
+            row << QString();
+    }
+    return table.rows.size() >= 2;
+}
+
+bool MarkdownEditor::storeTableText(const TableText &table)
+{
+    QStringList rebuilt;
+    for (const QStringList &row : table.rows)
+        rebuilt << table.prefix + QStringLiteral("| ") + row.join(QStringLiteral(" | ")) + QStringLiteral(" |");
+    const QString text = formatTable(rebuilt.join(QLatin1Char('\n')));
+    if (text == m_text.mid(table.start, table.end - table.start))
+        return false; // already so: no step on the undo stack for nothing
+    rewriteTable(table.start, table.end, text);
+    return true;
+}
+
 bool MarkdownEditor::runTableCommand(const QString &id)
 {
     const CellRef cell = tableCellAt(m_cursor);
@@ -484,33 +531,12 @@ bool MarkdownEditor::runTableCommand(const QString &id)
     const qsizetype index = tableAround(m_cursor);
     if (m_decorations.tables.at(index).html)
         return runHTMLtableCommand(id, index, cell.row, cell.column);
-    const Range &range = m_decorations.tables.at(index).range;
-    const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
-    const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
-
-    // The table as rows of cell text; line 1 is the delimiter row, so the
-    // parser's row r is line r, or r + 1 past the header.
-    QStringList lines = m_text.mid(start, end - start).split(QLatin1Char('\n'));
-    QString prefix;
-    QList<QStringList> rows;
-    for (const QString &line : std::as_const(lines)) {
-        qsizetype lead = 0;
-        while (lead < line.size() && (line.at(lead) == QLatin1Char('>') || line.at(lead).isSpace()))
-            ++lead;
-        if (rows.isEmpty())
-            prefix = line.left(lead);
-        QStringList cells;
-        for (const Range &text : tableRowCells(line, 0, line.size()))
-            cells << line.mid(text.start, text.length());
-        rows << cells;
-    }
-    int columns = 0;
-    for (const QStringList &row : std::as_const(rows))
-        columns = qMax(columns, int(row.size()));
-    for (QStringList &row : rows) {
-        while (row.size() < columns)
-            row << QString();
-    }
+    TableText table;
+    if (!loadTableText(index, table))
+        return false;
+    const qsizetype start = table.start;
+    QList<QStringList> &rows = table.rows;
+    const int columns = table.columns;
 
     int line = cell.row == 0 ? 0 : cell.row + 1;
     int column = cell.column;
@@ -586,14 +612,8 @@ bool MarkdownEditor::runTableCommand(const QString &id)
         return false;
     }
 
-    QStringList rebuilt;
-    for (const QStringList &row : std::as_const(rows))
-        rebuilt << prefix + QStringLiteral("| ") + row.join(QStringLiteral(" | ")) + QStringLiteral(" |");
-    const QString text = formatTable(rebuilt.join(QLatin1Char('\n')));
-
-    if (text == m_text.mid(start, end - start))
-        return true; // already so: no step on the undo stack for nothing
-    rewriteTable(start, end, text);
+    if (!storeTableText(table))
+        return true;
     const QList<QList<Range>> &after = m_decorations.tables.value(index).rows;
     const int row = line == 0 ? 0 : line - 1;
     moveCursor(after.value(row).value(column, Range{start, start}).start, false);
