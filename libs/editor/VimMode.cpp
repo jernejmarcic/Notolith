@@ -1204,7 +1204,7 @@ bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
         out.pos = cur;
         for (int i = 0; i < n && out.pos > ls(cur); ++i)
             out.pos = qMax(ls(cur), stepOver(out.pos - 1, -1));
-        return true;
+        return out.pos != cur; // at the line's start it fails, as in vim
     case 'l': {
         const Pos end = le(cur);
         // The block caret sits on the last character, which may be an entity.
@@ -1212,7 +1212,9 @@ bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
         out.pos = cur;
         for (int i = 0; i < n && out.pos < limit; ++i)
             out.pos = qMin(limit, stepOver(out.pos + 1, 1));
-        return true;
+        // On the last character it fails, as in vim (an operator's limit is
+        // past it, so `dl` still takes it); an empty line never moves.
+        return out.pos != cur;
     }
     case 'j':
     case 'k': {
