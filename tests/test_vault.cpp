@@ -163,7 +163,8 @@ TEST(VaultPaths, NoteExtensions)
 {
     EXPECT_TRUE(Vault::isNote(QStringLiteral("/v/a.md")));
     EXPECT_TRUE(Vault::isNote(QStringLiteral("/v/a.MD")));
-    EXPECT_TRUE(Vault::isNote(QStringLiteral("/v/a.markdown")));
+    // Obsidian treats only .md as a note; .markdown is an attachment.
+    EXPECT_FALSE(Vault::isNote(QStringLiteral("/v/a.markdown")));
     EXPECT_FALSE(Vault::isNote(QStringLiteral("/v/a.png")));
     EXPECT_FALSE(Vault::isNote(QStringLiteral("/v/a")));
 }

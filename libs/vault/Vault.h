@@ -32,7 +32,7 @@ public:
     bool hasObsidianConfig() const;
 
     /// Extensions APP opens in the editor. Obsidian only treats `.md` as a
-    /// note; `.markdown` is accepted on read because some vaults carry it.
+    /// note; a `.markdown` file is an attachment, as it is there.
     static bool isNote(const QString &path);
     /// A note encrypted on disk, `Name.mdlock` (libs/ext/crypt). Not a note
     /// to anything that reads files: only the window opens one, in memory.

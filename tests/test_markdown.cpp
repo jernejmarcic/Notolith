@@ -212,6 +212,33 @@ TEST(FrontmatterTest, PropertiesAliasesTagsAndId)
     EXPECT_TRUE(metadata.linkNames().contains(QStringLiteral("Note")));
 }
 
+TEST(FrontmatterTest, AScalarTagsOrAliasesValueIsSplitLikeObsidian)
+{
+    // Tags split on commas and whitespace, aliases on commas only; the
+    // property itself stays as written, so nothing is rewritten on disk.
+    const Metadata metadata = parse(QStringLiteral(
+        "---\ntags: \"#old, project urgent\"\naliases: Brain, Mind\n---\n"));
+    EXPECT_EQ(tagNames(metadata), QStringList({QStringLiteral("old"), QStringLiteral("project"),
+                                               QStringLiteral("urgent")}));
+    EXPECT_EQ(metadata.aliases, QStringList({QStringLiteral("Brain"), QStringLiteral("Mind")}));
+    ASSERT_EQ(metadata.properties.size(), 2);
+    EXPECT_EQ(metadata.properties.at(0).type, Property::Type::Text);
+    EXPECT_EQ(metadata.properties.at(0).values,
+              QStringList({QStringLiteral("#old, project urgent")}));
+    EXPECT_EQ(metadata.properties.at(1).values, QStringList({QStringLiteral("Brain, Mind")}));
+
+    // A lone alias with no comma is untouched, spaces and all.
+    EXPECT_EQ(parse(QStringLiteral("---\nalias: Second brain\n---\n")).aliases,
+              QStringList({QStringLiteral("Second brain")}));
+}
+
+TEST(FrontmatterTest, AScalarTagsValueSplitsWithoutQuotes)
+{
+    const Metadata metadata = parse(QStringLiteral("---\ntags: project, urgent #old\n---\n"));
+    // " #old" is a YAML comment, so only the two real words are tags.
+    EXPECT_EQ(tagNames(metadata), QStringList({QStringLiteral("project"), QStringLiteral("urgent")}));
+}
+
 TEST(FrontmatterTest, TypesComeFromTheYamlNotTheString)
 {
     const QString text = QStringLiteral(

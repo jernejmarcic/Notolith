@@ -41,8 +41,6 @@ QString Slugs::defaultPagePath(const QString &vaultRelativePath)
     QString stem = vaultRelativePath;
     if (stem.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
         stem.chop(3);
-    else if (stem.endsWith(QLatin1String(".markdown"), Qt::CaseInsensitive))
-        stem.chop(9);
 
     const QStringList segments = stem.split(QLatin1Char('/'), Qt::SkipEmptyParts);
     QStringList slugged;
