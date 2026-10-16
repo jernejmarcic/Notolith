@@ -277,6 +277,25 @@ public:
     /// this into nodes and edges and does its own filtering; Index does
     /// neither.
     GraphData graphData() const;
+
+    /// What graphDataIn() needs from the Index: the cache's path and the
+    /// link-name table (implicitly shared, so taking one is a refcount bump
+    /// and the Index may change under a worker that holds it).
+    struct GraphSnapshot {
+        QString databasePath;
+        QString vaultRoot;
+        QHash<QString, QStringList> names;
+    };
+    GraphSnapshot graphSnapshot() const;
+
+    /// graphData() for a worker thread: its own database connection, no
+    /// Index. Takes the snapshot rather than the Index so the UI thread is
+    /// free to keep writing (same pattern as searchIn()).
+    static GraphData graphDataIn(const GraphSnapshot &snapshot);
+
+    /// resolve() over an explicit name table, for graphDataIn().
+    static QString resolveIn(const QHash<QString, QStringList> &names, const QString &vaultRoot,
+                             const QString &target, const QString &fromPath);
 };
 
 } // namespace noteAppC

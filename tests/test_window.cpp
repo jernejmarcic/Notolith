@@ -339,8 +339,8 @@ TEST_F(WindowTest, GraphViewOpensInTheMainAreaAndANodeOpensItsNote)
     ASSERT_NE(graph, nullptr);
     auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
     EXPECT_EQ(stack->currentWidget(), graph);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return graph->containsNode(QStringLiteral("B.md")); }, 5000)); // read on a worker
     EXPECT_TRUE(graph->containsNode(QStringLiteral("A.md")));
-    EXPECT_TRUE(graph->containsNode(QStringLiteral("B.md")));
 
     emit graph->noteActivated(QStringLiteral("B.md"));
     EXPECT_EQ(stack->currentIndex(), 0);
@@ -391,7 +391,7 @@ TEST_F(WindowTest, LocalGraphFollowsTheOpenNote)
     ASSERT_NE(local, nullptr);
     EXPECT_TRUE(local->isVisible());
     EXPECT_TRUE(window.findChild<QToolButton *>(QStringLiteral("localGraphTabButton"))->isChecked());
-    EXPECT_TRUE(local->containsNode(QStringLiteral("B.md")));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return local->containsNode(QStringLiteral("B.md")); }, 5000));
     EXPECT_FALSE(local->containsNode(QStringLiteral("C.md"))); // two hops away
 
     window.openNote(path(QStringLiteral("C.md")));

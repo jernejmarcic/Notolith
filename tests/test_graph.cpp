@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTest>
 
 #include "GraphLayout.h"
@@ -439,6 +440,20 @@ TEST_F(GraphDataTest, ReturnsEveryFileAndEveryInternalLink)
     EXPECT_TRUE(sawUnresolved);
 }
 
+TEST_F(GraphDataTest, TheWorkerThreadReadMatchesTheSynchronousRead)
+{
+    Index index;
+    build(index);
+    const Index::GraphData sync = index.graphData();
+    const Index::GraphData worker = Index::graphDataIn(index.graphSnapshot());
+    ASSERT_EQ(worker.files.size(), sync.files.size());
+    ASSERT_EQ(worker.links.size(), sync.links.size());
+    for (qsizetype i = 0; i < sync.links.size(); ++i) {
+        EXPECT_EQ(worker.links[i].fromPath, sync.links[i].fromPath);
+        EXPECT_EQ(worker.links[i].toPath, sync.links[i].toPath);
+    }
+}
+
 TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
 {
     // Not just that Index and GraphView each work alone: that the shape one
@@ -449,6 +464,7 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
 
     GraphView view;
     view.setIndex(&index);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000)); // read on a worker
     // Home.md, Ideas.md, Orphan.md (kept: showOrphans defaults to true) and
     // the unresolved "Missing Note" node; diagram.png is excluded because
     // showAttachments defaults to false.
@@ -461,6 +477,7 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
     options.hideUnresolved = true;
     options.showOrphans = false;
     view.setOptions(options);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 2; }, 5000));
     // Orphan.md has no links at all, so it drops; the unresolved node goes too.
     EXPECT_FALSE(view.containsNode(QStringLiteral("unresolved:Missing Note")));
     EXPECT_FALSE(view.containsNode(QStringLiteral("Orphan.md")));
@@ -474,7 +491,7 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
     build(index);
     GraphView view;
     view.setIndex(&index);
-    ASSERT_EQ(view.nodeCount(), 4);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
 
     // Hidden: a change must not re-read the vault, only mark it stale.
     emit index.changed();
@@ -483,7 +500,7 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
     EXPECT_EQ(view.nodeCount(), 1);
 
     view.show();
-    EXPECT_EQ(view.nodeCount(), 4);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
 }
 
 // ---------------------------------------------------------------------------
@@ -653,11 +670,24 @@ TEST(GraphPerformanceTest, BigVaultOpenCosts)
     clock.start();
     view.setIndex(&index);
     const double blockedMs = clock.nsecsElapsed() / 1e6;
+    // Longest gap between two event-loop turns while the worker reads and the
+    // graph is rebuilt: what the user would feel as a freeze.
+    double worstGap = 0;
     clock.start();
-    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == notes; }, 20000));
+    QElapsedTimer sinceReady;
+    sinceReady.start();
+    while (view.nodeCount() != notes && sinceReady.elapsed() < 20000) {
+        QElapsedTimer turn;
+        turn.start();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        worstGap = std::max(worstGap, turn.nsecsElapsed() / 1e6);
+        QThread::msleep(1);
+    }
+    ASSERT_EQ(view.nodeCount(), notes);
     const double readyMs = blockedMs + clock.nsecsElapsed() / 1e6;
-    std::printf("[ PERF     ] %d notes (%d links): Index::graphData() %.1f ms; setIndex() blocks the UI %.1f ms, graph ready after %.1f ms\n",
-                notes, int(data.links.size()), dataMs, blockedMs, readyMs);
+    std::printf("[ PERF     ] %d notes (%d links): Index::graphData() %.1f ms; setIndex() blocks the UI %.1f ms, "
+                "graph ready after %.1f ms, longest UI stall while loading %.1f ms\n",
+                notes, int(data.links.size()), dataMs, blockedMs, readyMs, worstGap);
 }
 
 TEST(GraphPerformanceTest, StepCostIsNotQuadraticInNodeCount)

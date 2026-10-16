@@ -216,6 +216,7 @@ private:
         int group = -1; ///< the first colour group it matches, or -1
     };
 
+    using BuiltGraph = std::pair<QList<GraphNode>, QList<GraphEdge>>; ///< what a data job returns
     struct Palette {
         QColor background{Qt::black};
         QColor node{Qt::lightGray};
@@ -255,6 +256,7 @@ private:
     void rebuild();
     void assignColorGroups();
     void applyIndexData();
+    void onGraphBuilt();
     void ensureTimerRunning();
     void fitToView();
     FrameInput makeFrameInput() const;
@@ -298,6 +300,9 @@ private:
     QTimer *m_stepTimer = nullptr;
 
     QFutureWatcher<FrameOutput> m_frameWatcher;
+    QFutureWatcher<BuiltGraph> m_dataWatcher; ///< applyIndexData()'s job
+    int m_dataRequest = 0;        ///< bumped by every request and every direct setGraphData()
+    int m_pendingDataRequest = 0; ///< the request the job in m_dataWatcher answers
     std::vector<std::function<void(ForceLayout &)>> m_layoutEdits; ///< queued while a job runs
     QImage m_frame;           ///< the last rendered picture, painted by paintEvent()
     double m_frameZoom = 1.0; ///< the camera m_frame was painted with

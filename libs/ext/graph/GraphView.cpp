@@ -69,6 +69,81 @@ ForceLayout::Options forceOptionsFor(const GraphOptions &options)
     return forceOptions;
 }
 
+/// Nodes and edges for `data` under `options`: runs on a worker, so it
+/// reads nothing of the view's.
+std::pair<QList<GraphNode>, QList<GraphEdge>> buildGraph(const Index::GraphData &data, const GraphOptions &options)
+{
+    QHash<QString, GraphNode> byId;
+    byId.reserve(data.files.size());
+    for (const Index::GraphFileInfo &file : data.files) {
+        if (file.isAttachment && !options.showAttachments)
+            continue;
+        GraphNode node;
+        node.id = file.path;
+        node.label = QFileInfo(file.path).completeBaseName();
+        node.kind = file.isAttachment ? GraphNode::Kind::Attachment : GraphNode::Kind::Note;
+        node.tags = file.tags;
+        byId.insert(node.id, node);
+    }
+
+    if (options.showTags) {
+        // Snapshot first: byId gains a tag entry inside this loop, and
+        // iterating a QHash while inserting into it is unsafe (a rehash can
+        // invalidate the iteration).
+        const QList<GraphNode> notes = byId.values();
+        for (const GraphNode &note : notes) {
+            for (const QString &tag : note.tags) {
+                const QString tagId = QStringLiteral("tag:") + tag;
+                if (!byId.contains(tagId)) {
+                    GraphNode tagNode;
+                    tagNode.id = tagId;
+                    tagNode.label = QLatin1Char('#') + tag;
+                    tagNode.kind = GraphNode::Kind::Tag;
+                    byId.insert(tagId, tagNode);
+                }
+            }
+        }
+    }
+
+    // Orphans are not filtered here: rebuild() drops any node (of any kind)
+    // that ends up with no edges once showOrphans is off, which comes to the
+    // same thing - a tag or unresolved node only ever exists because
+    // something links to it, so it is never an orphan by construction - and
+    // means setGraphData() callers get the same filter for free.
+    QList<GraphEdge> edges;
+    for (const Index::GraphLinkInfo &link : data.links) {
+        if (!byId.contains(link.fromPath))
+            continue; // the source itself was filtered out (e.g. an attachment, hidden)
+
+        if (!link.toPath.isEmpty()) {
+            if (!byId.contains(link.toPath))
+                continue; // the target was filtered out too
+            edges.append({link.fromPath, link.toPath});
+        } else if (!options.hideUnresolved) {
+            const QString unresolvedID = QStringLiteral("unresolved:") + link.targetName;
+            if (!byId.contains(unresolvedID)) {
+                GraphNode node;
+                node.id = unresolvedID;
+                node.label = link.targetName;
+                node.kind = GraphNode::Kind::Unresolved;
+                byId.insert(unresolvedID, node);
+            }
+            edges.append({link.fromPath, unresolvedID});
+        }
+    }
+
+    if (options.showTags) {
+        for (auto it = byId.constBegin(); it != byId.constEnd(); ++it) {
+            if (it->kind != GraphNode::Kind::Note)
+                continue;
+            for (const QString &tag : it->tags)
+                edges.append({it->id, QStringLiteral("tag:") + tag});
+        }
+    }
+
+    return {byId.values(), edges};
+}
+
 QPointF project(QPointF graphPos, double zoom, QPointF pan, QSize size)
 {
     return graphPos * zoom + pan + QPointF(size.width() / 2.0, size.height() / 2.0);
@@ -146,11 +221,13 @@ GraphView::GraphView(QWidget *parent)
     m_controlsPanel->raise();
 
     connect(&m_frameWatcher, &QFutureWatcher<FrameOutput>::finished, this, &GraphView::onFrameFinished);
+    connect(&m_dataWatcher, &QFutureWatcher<BuiltGraph>::finished, this, &GraphView::onGraphBuilt);
 }
 
 GraphView::~GraphView()
 {
     m_frameWatcher.waitForFinished(); // the job holds a pointer to m_layout
+    m_dataWatcher.waitForFinished();
 }
 
 QWidget *GraphView::buildControlsPanel()
@@ -289,81 +366,28 @@ void GraphView::applyIndexData()
         return;
     }
 
-    const Index::GraphData data = m_index->graphData();
+    // Off the UI thread: the two queries and 40 000 link resolutions are
+    // ~100 ms at 20 000 notes. The newest request wins; an older one's
+    // result is dropped (setGraphData() also supersedes a request).
+    const int request = ++m_dataRequest;
+    m_pendingDataRequest = request;
+    m_dataWatcher.setFuture(QtConcurrent::run(
+        [snapshot = m_index->graphSnapshot(), options = m_options] {
+            return buildGraph(Index::graphDataIn(snapshot), options);
+        }));
+}
 
-    QHash<QString, GraphNode> byId;
-    byId.reserve(data.files.size());
-    for (const Index::GraphFileInfo &file : data.files) {
-        if (file.isAttachment && !m_options.showAttachments)
-            continue;
-        GraphNode node;
-        node.id = file.path;
-        node.label = QFileInfo(file.path).completeBaseName();
-        node.kind = file.isAttachment ? GraphNode::Kind::Attachment : GraphNode::Kind::Note;
-        node.tags = file.tags;
-        byId.insert(node.id, node);
-    }
-
-    if (m_options.showTags) {
-        // Snapshot first: byId gains a tag entry inside this loop, and
-        // iterating a QHash while inserting into it is unsafe (a rehash can
-        // invalidate the iteration).
-        const QList<GraphNode> notes = byId.values();
-        for (const GraphNode &note : notes) {
-            for (const QString &tag : note.tags) {
-                const QString tagId = QStringLiteral("tag:") + tag;
-                if (!byId.contains(tagId)) {
-                    GraphNode tagNode;
-                    tagNode.id = tagId;
-                    tagNode.label = QLatin1Char('#') + tag;
-                    tagNode.kind = GraphNode::Kind::Tag;
-                    byId.insert(tagId, tagNode);
-                }
-            }
-        }
-    }
-
-    // Orphans are not filtered here: rebuild() drops any node (of any kind)
-    // that ends up with no edges once showOrphans is off, which comes to the
-    // same thing - a tag or unresolved node only ever exists because
-    // something links to it, so it is never an orphan by construction - and
-    // means setGraphData() callers get the same filter for free.
-    QList<GraphEdge> edges;
-    for (const Index::GraphLinkInfo &link : data.links) {
-        if (!byId.contains(link.fromPath))
-            continue; // the source itself was filtered out (e.g. an attachment, hidden)
-
-        if (!link.toPath.isEmpty()) {
-            if (!byId.contains(link.toPath))
-                continue; // the target was filtered out too
-            edges.append({link.fromPath, link.toPath});
-        } else if (!m_options.hideUnresolved) {
-            const QString unresolvedID = QStringLiteral("unresolved:") + link.targetName;
-            if (!byId.contains(unresolvedID)) {
-                GraphNode node;
-                node.id = unresolvedID;
-                node.label = link.targetName;
-                node.kind = GraphNode::Kind::Unresolved;
-                byId.insert(unresolvedID, node);
-            }
-            edges.append({link.fromPath, unresolvedID});
-        }
-    }
-
-    if (m_options.showTags) {
-        for (auto it = byId.constBegin(); it != byId.constEnd(); ++it) {
-            if (it->kind != GraphNode::Kind::Note)
-                continue;
-            for (const QString &tag : it->tags)
-                edges.append({it->id, QStringLiteral("tag:") + tag});
-        }
-    }
-
-    setGraphData(byId.values(), edges);
+void GraphView::onGraphBuilt()
+{
+    if (m_pendingDataRequest != m_dataRequest)
+        return;
+    const BuiltGraph built = m_dataWatcher.result();
+    setGraphData(built.first, built.second);
 }
 
 void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdge> &edges)
 {
+    ++m_dataRequest; // whatever applyIndexData() has in flight is older than this
     m_rawNodes = nodes;
     m_rawEdges = edges;
     rebuild();
