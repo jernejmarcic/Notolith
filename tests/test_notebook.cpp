@@ -1314,3 +1314,27 @@ TEST(IpynbTest, StoredOutputsAreSeededWhereTheEditorLooksForThem)
     EXPECT_TRUE(looked.hasRun);
     EXPECT_EQ(looked.outputs.size(), 5);
 }
+
+TEST(IpynbTest, StoredOutputsAreWrittenOnlyWhenLookedUpAndARunWins)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    QString text;
+    ASSERT_TRUE(readIpynb(sampleNotebook(), &text));
+    const QString key = notebookCacheKey(QStringLiteral("python"), QStringLiteral("import math\nprint('hello')\nmath.pi"));
+    const QString failedKey = notebookCacheKey(QStringLiteral("python"), QStringLiteral("1/0"));
+    EXPECT_TRUE(QDir(notebookCacheRoot()).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot)) << "nothing decoded at read";
+
+    // A run before the first look-up supersedes the file's outputs; a cleared output stays cleared.
+    NotebookRunResult ran;
+    ran.outputs.append(NotebookOutput{});
+    ran.outputs.last().text = QStringLiteral("fresh");
+    writeNotebookCache(key, ran);
+    removeNotebookCache(failedKey);
+    EXPECT_EQ(readNotebookCache(key).outputs.value(0).text, QStringLiteral("fresh"));
+    EXPECT_FALSE(readNotebookCache(failedKey).hasRun);
+
+    // Read again, the file's outputs win once more, as they always did at a read.
+    ASSERT_TRUE(readIpynb(sampleNotebook(), &text));
+    EXPECT_EQ(readNotebookCache(key).outputs.size(), 5);
+}
