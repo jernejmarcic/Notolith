@@ -35,7 +35,7 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start, the process's first window (bench, includes `openVault`) | 40.3 ms (2026-10-16) | 40 ms |
+| cold start, the process's first window (bench, includes `openVault`) | 36.3 ms (2026-10-16, perf2) | 40 ms |
 | cold start to first painted frame, later in-process windows (bench) | 19.5 ms (2026-10-16) | - |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.8 ms (2026-10-16) | 300 ms |
@@ -43,7 +43,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | note open, 200 kB | 2.5 ms (2026-10-16; readable, styled ~26 ms later) | 300 ms |
 | note open, 1 MB | 10.2 ms (2026-10-16; readable, styled ~140 ms later) | - |
 | note open, notebook with 40 stored PNG outputs | 37.7 ms (2026-10-16) | - |
-| Tags pane refresh, 20 000 notes, 4 505 distinct tags | 37 ms (2026-10-16) | - |
+| Tags pane refresh, 20 000 notes, 4 505 distinct tags | 36 ms when shown; 0.00 ms while hidden (marked stale, rebuilt on show) | - |
+| every note for a base (`allNotesForBases`), 20 000 notes, off the UI thread | 33 ms (2026-10-16, perf2; 65 ms before) | - |
 | keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
 | keystroke, 1 MB | 0.55 ms (2026-10-16; 0.44 ms on a quiet machine) | 0.6 ms (this pass), 8 ms |
@@ -824,6 +825,62 @@ index), on the UI thread, at open and on every `Index::changed`. Found by the
 |---|---|---|
 | warm index | 9.5 s | 38 ms |
 
+### 30. The Tags pane rebuilt while nobody could see it
+
+`TagsPane::refresh()` is 36 ms at 4 505 tags (half query, half
+`QTreeWidget`) and ran on every `Index::changed`, shown or not. A hidden pane
+now sets `m_stale` and returns; `showEvent` refreshes a stale one. The two
+window tests that read the pane now show the window and click its tab first,
+and the first also asserts the hidden list is still empty. The bench has a row
+for each case.
+
+| Tags pane refresh, 20 000 notes, 4 505 distinct tags | before | after |
+|---|---|---|
+| index change while the pane is hidden | 37 ms | 0.00 ms |
+| the pane being shown | 37 ms | 36 ms (paid once, on show) |
+
+### 31. `allNotesForBases` read 220 000 rows one after the other
+
+Every base block, view switch and publish calls it, always on a worker
+(`BaseView::openCurrentView`, the editor's base runner, `Publisher`), never
+on the UI thread, so the cost was latency before a base appeared: files 5 ms,
+props 15, tags 14, links 14, plus a QVariant per cell. Two changes. Each query
+is `setForwardOnly(true)`, which drops Qt's row cache (65 to 61 ms). The
+three child tables are then read on their own threads and connections (WAL
+lets readers run side by side) into lists indexed like the notes and moved in,
+so the wall time is the slowest one. `std::async`, not the global pool, because
+the caller may itself be on that pool. `GROUP_CONCAT` per note was tried and
+was slower (73 ms: the sort for `GROUP BY` and the splitting cost more than
+the rows saved). Same results; the bases, publish and index suites pass.
+
+| every note for a base, 20 000 notes | before | after |
+|---|---|---|
+| bench row (includes freeing the result) | 65 ms | 33 ms |
+
+### 32. The first window paid libgit2's certificate load
+
+`--phase start` on the first window splits as constructor 19.5 ms, `openVault`
+15 ms, show and paint 6 ms; later windows total 19 ms. A sampled profile of the
+first window put 5 ms of `openVault` in `NoteHistory`'s constructor, which
+runs `git_libgit2_init()` once per process, and that loads the system's CA
+bundle through OpenSSL. `NoteHistory::warmUp()` runs the same function-local
+static on the history pool from the window's constructor (when the feature is
+on), so it overlaps the 19 ms of widget construction; whoever needs libgit2
+first waits on the static. Nothing was shut down or reordered, so the crash
+the comment above it records (shutdown racing init) is not reintroduced.
+
+Also profiled and left: font database population and the first font load are
+about 5 ms but start at the first widget, with no earlier work to overlap
+(warming it on a worker from the constructor's first line changed nothing);
+`Indexer::rewatch` is 6.7 ms of directory walking on the UI thread in every
+window, not just the first. Moving it off would open a gap between the scan
+and the watch for a file created meanwhile, so it needs the scan to hand over
+its directory list instead.
+
+| cold start, the process's first window (bench), best of 3 | before | after |
+|---|---|---|
+| 20 000 notes | 41.5 ms | 36.3 ms |
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -981,14 +1038,11 @@ Each of these produced a wrong number at least once in this project.
 - The Wayland buffer measurement, above.
 - Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
   path to first paint.
-- The Tags pane still rebuilds its whole tree (38 ms at 4 505 tags, about
-  half query, half `QTreeWidget`) on every `Index::changed`, even while
-  hidden. Deferring the rebuild until the pane is shown is the next step; the
-  window tests read the pane without showing it, so they would change too.
-- The process's first window is about 40 ms to its first frame, unchanged by
-  this pass: fonts, plugins and the first polish. `Indexer::rewatch` walks the
-  vault's directories on the UI thread for about 2.7 ms of it.
-- `Index::allNotesForBases()` is about 65 ms at 20 000 notes.
+- The process's first window is 36 ms to its first frame: fonts (about 5 ms,
+  no earlier work to overlap) and `Indexer::rewatch`'s directory walk (6.7 ms,
+  see fix 32) are what is left that is not needed for the frame.
+- The Tags pane rebuilds in 36 ms the first time it is shown after an index
+  change; incremental updates of the tree would remove that.
 - A keystroke on the 1 MB note is mostly text shaping of the edited block;
   nothing cheap was left in it.
 

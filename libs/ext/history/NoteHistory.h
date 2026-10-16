@@ -35,6 +35,10 @@ public:
     NoteHistory(const NoteHistory &) = delete;
     NoteHistory &operator=(const NoteHistory &) = delete;
 
+    /// Initialises libgit2 (loading the system's certificates, ~5 ms) so a
+    /// history constructed later does not. Safe from any thread.
+    static void warmUp();
+
     /// Where the repository for `vaultRoot` lives.
     static QString repositoryPathFor(const QString &vaultRoot);
 

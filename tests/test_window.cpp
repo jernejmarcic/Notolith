@@ -236,8 +236,17 @@ TEST_F(WindowTest, TagsPaneListsTagsNestedAndSortedByCount)
     window.openVault(dir.path());
     ASSERT_TRUE(indexed.wait(5000));
 
+    // A hidden Tags pane only marks itself stale; showing it rebuilds.
+    auto *hiddenList = window.findChild<QWidget *>(QStringLiteral("tagsPane"))->findChild<QTreeWidget *>();
+    ASSERT_NE(hiddenList, nullptr);
+    EXPECT_EQ(hiddenList->topLevelItemCount(), 0);
+    window.show();
+    auto *tagsTab = window.findChild<QToolButton *>(QStringLiteral("tagsTabButton"));
+    ASSERT_NE(tagsTab, nullptr);
+    tagsTab->click();
     auto *tagsPane = window.findChild<QWidget *>(QStringLiteral("tagsPane"));
     ASSERT_NE(tagsPane, nullptr);
+    ASSERT_TRUE(tagsPane->isVisible());
     auto *list = tagsPane->findChild<QTreeWidget *>();
     ASSERT_NE(list, nullptr);
 
@@ -263,6 +272,8 @@ TEST_F(WindowTest, ClickingATagSearchesForItAndAResultOpensTheNoteAtTheMatch)
     window.openVault(dir.path());
     ASSERT_TRUE(indexed.wait(5000));
 
+    window.show();
+    window.findChild<QToolButton *>(QStringLiteral("tagsTabButton"))->click(); // showing rebuilds a stale pane
     auto *tags = window.findChild<QWidget *>(QStringLiteral("tagsPane"))->findChild<QTreeWidget *>();
     ASSERT_NE(tags, nullptr);
     emit tags->itemClicked(tags->topLevelItem(0)->child(0), 0); // project/alpha
