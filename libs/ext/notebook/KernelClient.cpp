@@ -233,6 +233,15 @@ void KernelClient::run()
     const QByteArray controlEp = m_info.controlEndpoint().toUtf8();
     const QByteArray iopubEp = m_info.iopubEndpoint().toUtf8();
     QByteArray hbEp = m_info.hbEndpoint().toUtf8();
+    // The stdin socket has the same race as iopub below, on the other side: the
+    // kernel's stdin ROUTER drops an input_request addressed to an identity
+    // whose handshake has not finished, and input() then waits forever. On a
+    // loaded machine the first run's input() lost it most of the time. So the
+    // outbox waits for this socket's handshake as it waits for iopub_welcome.
+    zmq_socket_monitor(stdinSocket, "inproc://stdin-handshake", ZMQ_EVENT_HANDSHAKE_SUCCEEDED);
+    void *stdinMonitor = zmq_socket(ctx, ZMQ_PAIR);
+    zmq_setsockopt(stdinMonitor, ZMQ_LINGER, &linger, sizeof(linger));
+    zmq_connect(stdinMonitor, "inproc://stdin-handshake");
     zmq_connect(shell, shellEp.constData());
     zmq_connect(control, controlEp.constData());
     zmq_connect(stdinSocket, m_info.stdinEndpoint().toUtf8().constData());
@@ -258,10 +267,17 @@ void KernelClient::run()
         QElapsedTimer readyClock;
         readyClock.start();
         bool sawWelcome = false;
-        while (!sawWelcome && readyClock.elapsed() < 3000 && !m_stopRequested.load()) {
-            zmq_pollitem_t readyItem{iopub, 0, ZMQ_POLLIN, 0};
-            const int rc = zmqRetryEINTR([&] { return zmq_poll(&readyItem, 1, 100); });
-            if (rc <= 0 || !(readyItem.revents & ZMQ_POLLIN))
+        bool stdinReady = false;
+        while ((!sawWelcome || !stdinReady) && readyClock.elapsed() < 3000 && !m_stopRequested.load()) {
+            zmq_pollitem_t readyItems[] = {{iopub, 0, ZMQ_POLLIN, 0}, {stdinMonitor, 0, ZMQ_POLLIN, 0}};
+            const int rc = zmqRetryEINTR([&] { return zmq_poll(readyItems, 2, 100); });
+            if (rc <= 0)
+                continue;
+            if (readyItems[1].revents & ZMQ_POLLIN) {
+                recvFrames(stdinMonitor); // event + endpoint; only the handshake is subscribed
+                stdinReady = true;
+            }
+            if (!(readyItems[0].revents & ZMQ_POLLIN))
                 continue;
             KernelMessage welcome;
             if (!decodeMessage(recvFrames(iopub), m_info.key, &welcome))
@@ -398,6 +414,8 @@ void KernelClient::run()
 
     zmq_close(shell);
     zmq_close(control);
+    zmq_socket_monitor(stdinSocket, nullptr, 0);
+    zmq_close(stdinMonitor);
     zmq_close(stdinSocket);
     zmq_close(iopub);
     zmq_close(hb);
