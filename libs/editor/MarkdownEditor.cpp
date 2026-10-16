@@ -2703,6 +2703,13 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         painter.setClipRect(window.adjusted(-1, -1, 1, 1));
     const qreal shift = -view.tableScroll;
 
+    // A rectangle of selected cells (TableHandles.cpp), when it is this table's.
+    QRect picked;
+    if (m_cellSel.tableStart == view.span.range.start)
+        picked = cellSelectionRect();
+    QColor pickedFill = m_theme.color(QStringLiteral("--interactive-accent"));
+    pickedFill.setAlphaF(0.22f);
+
     for (const Cell &cell : view.cells) {
         const QRectF rect = cell.rect.translated(left + shift, top);
         if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
@@ -2713,6 +2720,8 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
             painter.fillRect(rect, cell.fill);
         painter.setPen(QPen(border, 1));
         painter.drawRect(rect);
+        if (!picked.isNull() && picked.contains(cell.column, cell.row))
+            painter.fillRect(rect.adjusted(1, 1, -1, -1), pickedFill);
 
         // A selection is drawn in each cell it reaches; one that runs across
         // cells tints the ones it covers whole, so it reads as a block.
@@ -2747,6 +2756,15 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         painter.setClipRect(rect.adjusted(1, 1, -1, -1), Qt::IntersectClip);
         cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top), selected);
         painter.restore();
+    }
+    if (!picked.isNull()) {
+        const auto cellAt = [&](int row, int column) {
+            return view.cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
+        };
+        const QRectF box = cellAt(picked.top(), picked.left()).united(cellAt(picked.bottom(), picked.right()));
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(m_theme.color(QStringLiteral("--interactive-accent")), 1.5));
+        painter.drawRect(box.translated(left + shift, top));
     }
     painter.restore();
 
@@ -3516,7 +3534,7 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // The block under a stationary pointer changes as the content moves: the
     // ring and button follow their block, so re-aim them (HoverEdit.cpp).
     m_hoverRect.translate(dx, dy);
-    if (m_hoverEditButton || !m_hoverRect.isNull()) {
+    if (m_hoverEditButton || m_tableHandles || !m_hoverRect.isNull()) {
         if (viewport()->underMouse())
             updateHover(viewport()->mapFromGlobal(QCursor::pos()));
         else
@@ -3721,6 +3739,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
 
     paintBlocks(painter, verticalScrollBar()->value(), exposedTop, exposedBottom);
     paintEditHover(painter);
+    paintTableChrome(painter);
 
     m_caretPainted = QRect();
     if (hasFocus() && m_cursorOn && m_mode != Mode::Reading) {
@@ -4515,12 +4534,16 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             moveCursor(m_text.size(), true);
             return;
         case Qt::Key_C:
+            if (m_cellSel.tableStart >= 0 && copyCellSelection(false))
+                return;
             if (selection().length() > 0) {
                 QApplication::clipboard()->setText(
                     m_text.mid(selection().start, selection().length()));
             }
             return;
         case Qt::Key_X:
+            if (m_cellSel.tableStart >= 0 && copyCellSelection(true))
+                return;
             if (selection().length() > 0) {
                 QApplication::clipboard()->setText(
                     m_text.mid(selection().start, selection().length()));
@@ -4532,7 +4555,7 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             // image on the clipboard is saved as an attachment (PasteDrop.cpp).
             if (shift)
                 insertText(cellSafe(QApplication::clipboard()->text()));
-            else
+            else if (!pasteIntoCells()) // a block of cells into the table's cells, else the ordinary paste
                 insertMimeData(QApplication::clipboard()->mimeData());
             return;
         default:
@@ -4541,6 +4564,8 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
     }
 
     m_goalX = -1;
+    if (m_tableHandles && handleCellSelectionKey(event))
+        return;
     if (handleTableKey(event))
         return;
     switch (event->key()) {
@@ -4647,6 +4672,17 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
             return;
         }
     }
+    // A table's grips and add bars (TableHandles.cpp); a press anywhere else
+    // ends a rectangle of selected cells.
+    m_cellPress = -1;
+    if (m_tableHandles) {
+        if (m_cellSel.tableStart >= 0) {
+            m_cellSel = CellSelection{};
+            viewport()->update();
+        }
+        if (!touch && pressTableChrome(event->pos()))
+            return;
+    }
 
     // A hooked embed's own image (a `.canvas`, say) takes the press instead
     // of the caret: a plain click may open a card on release, and a drag
@@ -4705,6 +4741,15 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         m_longPress.start();
     }
     moveCursor(m_pressOffset, event->modifiers().testFlag(Qt::ShiftModifier));
+    // A drag from a cell into another selects cells, not text.
+    if (m_tableHandles && !event->modifiers().testFlag(Qt::ShiftModifier)) {
+        const CellRef cell = tableCellAt(m_pressOffset);
+        if (cell.row >= 0 && tableRenderedAt(m_pressOffset) && !cell.table->html) {
+            m_cellPress = cell.table->range.start;
+            m_cellPressRow = cell.row;
+            m_cellPressColumn = cell.column;
+        }
+    }
     updateLayout();
     viewport()->update();
 }
@@ -4767,6 +4812,9 @@ QString MarkdownEditor::selectedText() const
 void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 {
     m_longPress.stop();
+    m_cellPress = -1;
+    if (releaseTableChrome(event->pos()))
+        return;
     if (m_embedDrag.blockIndex >= 0) {
         const qsizetype block = m_embedDrag.blockIndex;
         const bool wasClick = !m_embedDrag.moved;
@@ -4812,6 +4860,13 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
     }
     if (dragSelectionHandle(event->pos()))
         return;
+    if (m_tableDrag.part != TablePart::None) {
+        if (event->buttons().testFlag(Qt::LeftButton))
+            dragTableChrome(event->pos());
+        else
+            m_tableDrag = TableDrag{}; // the release was missed
+        return;
+    }
     if (event->buttons().testFlag(Qt::LeftButton)) {
         if (m_longPress.isActive()) {
             // A finger always wobbles a little; only a real move is a drag.
@@ -4819,6 +4874,8 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
                 return;
             m_longPress.stop();
         }
+        if (m_cellPress >= 0 && dragCellSelection(event->pos()))
+            return;
         moveCursor(offsetAt(event->pos()), true);
         return;
     }
@@ -4829,7 +4886,22 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
     updateHover(event->pos());
 
     const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || m_overEditButton;
-    viewport()->setCursor(clickable ? Qt::PointingHandCursor : Qt::IBeamCursor);
+    Qt::CursorShape shape = clickable ? Qt::PointingHandCursor : Qt::IBeamCursor;
+    switch (m_tableHover.part) {
+    case TablePart::RowGrip:
+    case TablePart::ColumnGrip:
+        shape = Qt::OpenHandCursor;
+        break;
+    case TablePart::AddRow:
+        shape = Qt::SizeVerCursor;
+        break;
+    case TablePart::AddColumn:
+        shape = Qt::SizeHorCursor;
+        break;
+    case TablePart::None:
+        break;
+    }
+    viewport()->setCursor(shape);
     updateLinkHover(event->pos(), event->modifiers().testFlag(Qt::ControlModifier),
                     event->globalPosition().toPoint());
 }

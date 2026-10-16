@@ -25,6 +25,7 @@ add_library(noteAppC_editor STATIC
     NotebookEmbed.cpp
     PasteDrop.cpp
     TableCells.cpp
+    TableHandles.cpp
     TouchInput.cpp
     VimMode.cpp
     PdfEmbedBlock.cpp

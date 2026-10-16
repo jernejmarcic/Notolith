@@ -53,6 +53,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.bulletGlyphsNested"), false}, // dot, ring, square by depth instead of by marker
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
+        {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
         {QStringLiteral("editor.tabWidth"), 4},
 

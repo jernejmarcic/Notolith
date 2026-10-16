@@ -398,11 +398,56 @@ commands, which are always there.
   column`, `Sort column ascending/descending` (numbers by value, header and
   delimiter row fixed, equal cells keep their order).
 
-Not done: row and column drag handles, hover add-row/column buttons, and a
-rectangular cell selection with cut and paste - each needs hit-testing and
-selection state of its own.
-
 Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
+
+## Table handles and cell selection
+
+What Obsidian puts around a rendered table, in `libs/editor/TableHandles.cpp`.
+Only pipe tables in live preview (an HTML `<table>` and a base keep what they
+had). Every action rewrites the source through the same row/column model the
+table commands use (`loadTableText`, `storeTableText`, then `formatTable`), so it
+is one undo step and the table comes out aligned. Behaviour only is taken from
+Obsidian; none of its code.
+
+- **Grips.** Pointer over a table: a small pill straddles its left edge at the
+  hovered row and its top edge over the hovered column (accent when the pointer
+  is on it, open-hand cursor). Drag a row grip up or down, a column grip
+  sideways: a bar shows where it would land and the drop reorders the source.
+  The header row is fixed (its grip only selects, nothing can be dropped above
+  the first body row), the delimiter row stays second, and a column's alignment
+  moves with it. A click on a grip without moving selects that row or column.
+- **Add bars.** A thin strip with a "+" under the table and another right of
+  it (below the `</>` button) appends an empty padded row or column on a
+  click; the caret goes into its first cell, so typing fills it. A new column
+  gets a `---` delimiter cell.
+- **Cell selection.** Drag from one cell into another (or Shift+Up/Down, and
+  Shift+Left/Right at a cell's edge) selects a rectangle of cells, drawn as an
+  accent tint and outline; the caret stays in the anchor cell. Dragging back
+  into the first cell, or out of the table, is the text selection it always
+  was. Shift+arrows grow and shrink it, Escape drops it, any other key or click
+  ends it, and it ends by itself when the text or caret changes.
+  - Ctrl+C: the cells as a pipe table (first selected row is the header, the
+    columns' alignment goes along) as `text/plain` and `text/markdown`, and as
+    `text/tab-separated-values` for a spreadsheet. Ctrl+X does that and empties
+    the cells; Delete or Backspace empties them. A copy writes nothing; a cut
+    or a clear is one undo step.
+  - Ctrl+V: a pipe table (its delimiter row left out) or tab-separated values
+    goes into the cells from the top-left of the selection, or from the caret's
+    cell when none, and adds the rows and columns it needs. One value over a
+    selection fills every cell of it. What was pasted is left selected. A word
+    or a line with no selection is the ordinary paste (Ctrl+Shift+V too).
+
+Setting `editor.tableHandles` (Settings > Editor, on by default). Off: no hover
+tracking for tables, no grips or bars, and a drag across cells selects text.
+Hover is a mouse-move path like the `</>` button's: two binary searches (block,
+cell), a repaint of only the grip or bar that changed, nothing laid out. The
+`</>` button wins where they overlap. Nothing runs on a keystroke but one
+comparison (and a clipboard read on Ctrl+V).
+
+Not done: dragging an add bar to add several, autoscroll of a wide table while
+dragging a column, touch.
+
+Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`).
 
 ## Mermaid diagrams
 

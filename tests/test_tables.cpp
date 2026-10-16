@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QClipboard>
 #include <QElapsedTimer>
+#include <QMimeData>
+#include <QPaintEvent>
 #include <QtTest/QTest>
 
 #include <memory>
@@ -310,6 +313,342 @@ TEST(TableAutoTest, DuplicateRowAndColumn)
     auto header = editorWith(note, after(note, QStringLiteral("| a")), MarkdownEditor::Mode::LivePreview);
     header->runCommand(QStringLiteral("noteAppC:table-duplicate-row"));
     EXPECT_EQ(header->noteText(), note) << "the header is the table's only one";
+}
+
+// --- the table's handles, add bars and rectangular selection (TableHandles.cpp) ---
+
+namespace {
+
+const QString kGrid = QStringLiteral(
+    "para\n\n| a | b | c |\n| --- | :-: | --: |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |\n\nend\n");
+// A table drawn as one, the caret outside it.
+std::unique_ptr<MarkdownEditor> gridEditor(const QString &note = kGrid)
+{
+    auto editor = editorWith(note, 0, MarkdownEditor::Mode::LivePreview);
+    editor->setFocus();
+    return editor;
+}
+
+qsizetype tableAt(const QString &note = kGrid) { return note.indexOf(QStringLiteral("| a")); }
+
+QPoint centre(const QRectF &rect) { return rect.center().toPoint(); }
+
+void moveTo(MarkdownEditor &editor, const QPoint &point, Qt::MouseButtons held = Qt::NoButton)
+{
+    QMouseEvent move(QEvent::MouseMove, QPointF(point), editor.viewport()->mapToGlobal(QPointF(point)),
+                     Qt::NoButton, held, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor.viewport(), &move);
+}
+
+void press(MarkdownEditor &editor, const QPoint &point, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    QTest::mousePress(editor.viewport(), Qt::LeftButton, modifiers, point);
+}
+
+void release(MarkdownEditor &editor, const QPoint &point)
+{
+    QTest::mouseRelease(editor.viewport(), Qt::LeftButton, Qt::NoModifier, point);
+}
+
+/// A press, a drag to `to` and a release, the way the mouse does it.
+void drag(MarkdownEditor &editor, const QPoint &from, const QPoint &to)
+{
+    moveTo(editor, from);
+    press(editor, from);
+    moveTo(editor, QPoint((from.x() + to.x()) / 2, (from.y() + to.y()) / 2), Qt::LeftButton);
+    moveTo(editor, to, Qt::LeftButton);
+    release(editor, to);
+}
+
+QPoint cellCentre(const MarkdownEditor &editor, int row, int column)
+{
+    return centre(editor.tableCellRect(tableAt(), row, column));
+}
+
+QString pipeRows(const MarkdownEditor &editor)
+{
+    const QString text = editor.noteText();
+    const qsizetype start = text.indexOf(QStringLiteral("| "));
+    return text.mid(start, text.indexOf(QStringLiteral("\n\n"), start) - start);
+}
+
+} // namespace
+
+TEST(TableHandlesTest, HoverFindsTheGripsAndTheBars)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    ASSERT_FALSE(editor->tableCellRect(at, 1, 1).isEmpty()) << "the table is drawn as a grid";
+
+    moveTo(*editor, cellCentre(*editor, 2, 1));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::None);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 2)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::RowGrip);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 1)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::ColumnGrip);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::AddRow);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddColumn)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::AddColumn);
+    moveTo(*editor, QPoint(5, 5));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::None);
+
+    // The `</>` button over the table is still the button.
+    moveTo(*editor, cellCentre(*editor, 1, 1));
+    ASSERT_TRUE(editor->editButtonRect().isValid());
+    press(*editor, centre(editor->editButtonRect()));
+    release(*editor, centre(editor->editButtonRect()));
+    EXPECT_EQ(editor->selectedText(), kGrid.mid(at, kGrid.indexOf(QStringLiteral("\n\nend")) - at));
+}
+
+TEST(TableHandlesTest, OffTracksNothingAndDragsSelectText)
+{
+    auto editor = gridEditor();
+    editor->setTableHandles(false);
+    moveTo(*editor, centre(editor->tableCellRect(tableAt(), 1, 0)));
+    moveTo(*editor, centre(editor->tableChromeRect(tableAt(), MarkdownEditor::TablePart::RowGrip, 2)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::None);
+
+    drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 2, 1));
+    EXPECT_FALSE(editor->cellSelectionRect().isValid());
+    EXPECT_FALSE(editor->selectedText().isEmpty()) << "a text selection, as before";
+}
+
+TEST(TableHandlesTest, DraggingARowGripReordersBodyRowsInOneStep)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    const QRectF grip = editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 1);
+    const QRectF last = editor->tableCellRect(at, 3, 0);
+    drag(*editor, centre(grip), QPoint(last.center().x(), int(last.bottom()) - 2)); // below the last row
+    EXPECT_EQ(pipeRows(*editor), QStringLiteral(
+        "| a   |  b  |   c |\n| --- | :-: | --: |\n| 4   |  5  |   6 |\n| 7   |  8  |   9 |\n| 1   |  2  |   3 |"))
+        << pipeRows(*editor).toStdString();
+    EXPECT_TRUE(editor->cellSelectionRect().isValid()) << "the moved row stays selected";
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid) << "one undo step";
+
+    // The header does not move, and nothing goes above it.
+    const QRectF header = editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 0);
+    drag(*editor, centre(header), cellCentre(*editor, 3, 0));
+    EXPECT_EQ(editor->noteText(), kGrid);
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 2)),
+         QPoint(cellCentre(*editor, 0, 0).x(), int(editor->tableCellRect(at, 0, 0).top()) + 1));
+    const QStringList lines = editor->noteText().split(QLatin1Char('\n'));
+    ASSERT_GE(lines.size(), 8);
+    EXPECT_TRUE(lines.at(2).contains(QStringLiteral("a")) && lines.at(3).contains(QStringLiteral("---"))
+                && lines.at(4).contains(QStringLiteral("4")) && lines.at(5).contains(QStringLiteral("1")))
+        << "dropped at the top of the body: the header and the delimiter stay\n" << editor->noteText().toStdString();
+}
+
+TEST(TableHandlesTest, DraggingAColumnGripMovesItsAlignmentToo)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    const QRectF right = editor->tableCellRect(at, 1, 2);
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 0)),
+         QPoint(int(right.right()) - 2, int(right.center().y()))); // past the last column
+    EXPECT_EQ(pipeRows(*editor), QStringLiteral(
+        "|  b  |   c | a   |\n| :-: | --: | --- |\n|  2  |   3 | 1   |\n|  5  |   6 | 4   |\n|  8  |   9 | 7   |"))
+        << pipeRows(*editor).toStdString();
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid);
+}
+
+TEST(TableHandlesTest, AClickOnAGripSelectsTheRowOrColumn)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    const QPoint grip = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 2));
+    moveTo(*editor, grip);
+    press(*editor, grip);
+    release(*editor, grip);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 2, 3, 1));
+    EXPECT_EQ(editor->noteText(), kGrid) << "selecting writes nothing";
+
+    const QPoint column = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 1));
+    moveTo(*editor, column);
+    press(*editor, column);
+    release(*editor, column);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(1, 0, 1, 4));
+}
+
+TEST(TableHandlesTest, TheAddBarsAppendARowAndAColumn)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    const QPoint row = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow));
+    moveTo(*editor, row);
+    press(*editor, row);
+    release(*editor, row);
+    EXPECT_TRUE(pipeRows(*editor).endsWith(QStringLiteral("| 7   |  8  |   9 |\n|     |     |     |")))
+        << pipeRows(*editor).toStdString();
+    // The caret is in the new row's first cell, so typing goes there.
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| x ")));
+    undo(*editor);
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid) << "the row, then the x";
+
+    const QPoint column = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddColumn));
+    moveTo(*editor, column);
+    press(*editor, column);
+    release(*editor, column);
+    const QStringList lines = pipeRows(*editor).split(QLatin1Char('\n'));
+    ASSERT_EQ(lines.size(), 5);
+    EXPECT_TRUE(lines.at(0).endsWith(QStringLiteral("|     |"))) << lines.at(0).toStdString();
+    EXPECT_TRUE(lines.at(1).endsWith(QStringLiteral("| --- |"))) << lines.at(1).toStdString();
+    QTest::keyClicks(editor.get(), QStringLiteral("d"));
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| d ")) || editor->noteText().contains(QStringLiteral("| d|")))
+        << editor->noteText().toStdString();
+}
+
+TEST(TableHandlesTest, ADragAcrossCellsSelectsARectangleThatCopiesAsATable)
+{
+    auto editor = gridEditor();
+    drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 2, 1));
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 2));
+    EXPECT_EQ(editor->noteText(), kGrid);
+
+    QTest::keyClick(editor.get(), Qt::Key_C, Qt::ControlModifier);
+    const QMimeData *mime = QApplication::clipboard()->mimeData();
+    ASSERT_NE(mime, nullptr);
+    EXPECT_EQ(mime->text(), QStringLiteral("| 1   |  2  |\n| --- | :-: |\n| 4   |  5  |"))
+        << "the first row becomes the header, the alignment goes along\n" << mime->text().toStdString();
+    EXPECT_EQ(QString::fromUtf8(mime->data(QStringLiteral("text/tab-separated-values"))), QStringLiteral("1\t2\n4\t5"));
+    EXPECT_EQ(editor->noteText(), kGrid) << "a copy writes nothing";
+}
+
+TEST(TableHandlesTest, ShiftArrowsGrowTheRectangleFromACell)
+{
+    auto editor = gridEditor();
+    editor->setCursorOffset(kGrid.indexOf(QStringLiteral("| 1")) + 3); // end of the "1" cell
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 1, 2));
+    QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 2));
+    QTest::keyClick(editor.get(), Qt::Key_Up, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 1));
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+    EXPECT_FALSE(editor->cellSelectionRect().isValid());
+    EXPECT_EQ(editor->noteText(), kGrid);
+}
+
+TEST(TableHandlesTest, DeleteAndCutClearTheCellsAsOneStep)
+{
+    auto editor = gridEditor();
+    drag(*editor, cellCentre(*editor, 1, 1), cellCentre(*editor, 3, 2));
+    ASSERT_EQ(editor->cellSelectionRect(), QRect(1, 1, 2, 3));
+    QTest::keyClick(editor.get(), Qt::Key_Delete);
+    EXPECT_EQ(pipeRows(*editor), QStringLiteral(
+        "| a   |  b  |   c |\n| --- | :-: | --: |\n| 1   |     |     |\n| 4   |     |     |\n| 7   |     |     |"))
+        << pipeRows(*editor).toStdString();
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid);
+
+    drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 1, 1));
+    ASSERT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 1));
+    QTest::keyClick(editor.get(), Qt::Key_X, Qt::ControlModifier);
+    EXPECT_EQ(QString::fromUtf8(QApplication::clipboard()->mimeData()->data(QStringLiteral("text/tab-separated-values"))),
+              QStringLiteral("1\t2"));
+    EXPECT_TRUE(pipeRows(*editor).contains(QStringLiteral("|     |     | 3 |"))
+                || pipeRows(*editor).contains(QStringLiteral("|     |     |   3 |")))
+        << pipeRows(*editor).toStdString();
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid);
+}
+
+TEST(TableHandlesTest, PasteFillsFromTheCaretCellAndGrowsTheTable)
+{
+    auto editor = gridEditor();
+    auto *mime = new QMimeData;
+    mime->setText(QStringLiteral("x\ty\tz\nu\tv\tw"));
+    QApplication::clipboard()->setMimeData(mime);
+
+    editor->setCursorOffset(kGrid.indexOf(QStringLiteral("| 7")) + 3); // the "7" cell: last row
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    const QStringList lines = pipeRows(*editor).split(QLatin1Char('\n'));
+    ASSERT_EQ(lines.size(), 6) << pipeRows(*editor).toStdString(); // grew by one row
+    EXPECT_TRUE(lines.at(4).contains(QStringLiteral("x"))) << pipeRows(*editor).toStdString();
+    EXPECT_TRUE(lines.at(4).contains(QStringLiteral(" y ")) && lines.at(4).contains(QStringLiteral(" z ")));
+    EXPECT_TRUE(lines.at(5).contains(QStringLiteral("u")) && lines.at(5).contains(QStringLiteral("w")));
+    EXPECT_EQ(lines.at(4).count(QLatin1Char('|')), 4) << "x goes in column 0, the 3-wide block fits";
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 3, 3, 2)) << "what was pasted is selected";
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid) << "one undo step";
+
+    // A pipe table pastes too, its delimiter row left out; a word is the ordinary paste.
+    auto *table = new QMimeData;
+    table->setText(QStringLiteral("| p | q |\n| --- | --- |\n| r | s |"));
+    QApplication::clipboard()->setMimeData(table);
+    editor->setCursorOffset(kGrid.indexOf(QStringLiteral("| 2")) + 3);
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(pipeRows(*editor).contains(QStringLiteral(" p ")) && pipeRows(*editor).contains(QStringLiteral(" r ")))
+        << pipeRows(*editor).toStdString();
+    EXPECT_EQ(pipeRows(*editor).split(QLatin1Char('\n')).at(2).count(QLatin1Char('|')), 4);
+    undo(*editor);
+
+    auto *word = new QMimeData;
+    word->setText(QStringLiteral("word"));
+    QApplication::clipboard()->setMimeData(word);
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("word")));
+}
+
+TEST(TableHandlesTest, OneValuePastedOverASelectionFillsIt)
+{
+    auto editor = gridEditor();
+    auto *mime = new QMimeData;
+    mime->setText(QStringLiteral("z"));
+    QApplication::clipboard()->setMimeData(mime);
+    drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 2, 1));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText().count(QLatin1Char('z')), 4) << editor->noteText().toStdString();
+}
+
+namespace {
+
+/// Records the region of every paint the viewport gets.
+class PaintSpy : public QObject {
+public:
+    QList<QRect> regions;
+
+protected:
+    bool eventFilter(QObject *, QEvent *event) override
+    {
+        if (event->type() == QEvent::Paint)
+            regions.append(static_cast<QPaintEvent *>(event)->region().boundingRect());
+        return false;
+    }
+};
+
+} // namespace
+
+TEST(TableHandlesTest, HoverRepaintsOnlyTheChangedHandles)
+{
+    auto editor = gridEditor();
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+    QCoreApplication::processEvents();
+    const qsizetype at = tableAt();
+    const QRectF table = editor->tableCellRect(at, 0, 0).united(editor->tableCellRect(at, 3, 2));
+    PaintSpy spy;
+    editor->viewport()->installEventFilter(&spy);
+
+    moveTo(*editor, cellCentre(*editor, 1, 1)); // into the table: its grips and bars come
+    QCoreApplication::processEvents();
+    spy.regions.clear();
+    moveTo(*editor, cellCentre(*editor, 2, 1)); // next row, same column: one grip moves
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(spy.regions.isEmpty());
+    for (const QRect &region : spy.regions) {
+        EXPECT_LT(region.width() * region.height(), table.width() * table.height() / 4)
+            << "a grip, not the table";
+    }
+    spy.regions.clear();
+    moveTo(*editor, cellCentre(*editor, 2, 1) + QPoint(2, 1)); // within the cell: nothing changed
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(spy.regions.isEmpty()) << "nothing repainted when nothing changed";
 }
 
 int main(int argc, char **argv)

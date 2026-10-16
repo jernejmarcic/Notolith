@@ -529,6 +529,9 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.hoverEditButton"), tr("Edit button on rendered blocks"),
                 tr("Show a </> button over a callout, formula, table, embed or other rendered "
                    "block while the pointer is on it. Clicking it shows the block's source."));
+    addToggleRow(layout, QStringLiteral("editor.tableHandles"), tr("Table handles"),
+                tr("Drag grips to reorder a table's rows and columns, \"+\" bars to add one, and "
+                   "select a rectangle of cells to copy, cut, paste or clear as a table."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
     addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
