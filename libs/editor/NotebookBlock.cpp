@@ -422,11 +422,10 @@ QRectF MarkdownEditor::notebookRunRectFor(const BlockView &view, qreal left, qre
     // The header row every notebook-eligible block gets (view.textTop was
     // set to codeHeaderHeight() for exactly this reason - see layoutBlock).
     const qreal y = panel.top() + (view.textTop + 8 - size) / 2;
-    // Left of the language label codeLabelOf draws at the header's right
-    // end, never on it: placed by the label's own width, since a fixed
-    // offset put the icon over the start of "haskell".
+    // Left of the copy button's reserved place at the header's right end,
+    // never on it, and in the same place whether "Copy" is showing or not.
     const CodeLabel label = codeLabelOf(view, left, top);
-    const qreal right = label.rect.isValid() ? label.rect.left() - 8 - size : panel.right() - 22 - kFoldHandle - size;
+    const qreal right = label.slotLeft > 0 ? label.slotLeft - 8 - size : panel.right() - 22 - kFoldHandle - size;
     return QRectF(right, y, size, size);
 }
 

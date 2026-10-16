@@ -370,6 +370,16 @@ callout wraps in live preview, as Obsidian's does (a language-less listing
 there scrolls on a single unbroken token; here it is broken, which no
 reader has asked about).
 
+Every fence with a language is laid out under a header strip (`hasCodeHeader`,
+one `codeHeaderHeight` tall) that names it (`codeTitleOf`: `#| title:`, else the
+style's name; nothing in a tab group, whose tabs are the names). The copy button
+(`codeLabelOf`) is at the right end and shows only on hover or just after a copy,
+but its place is always reserved so the run control beside it never moves. The
+run control exists only where `setNotebookRunnable`'s predicate says something
+can run the language: the window answers with `DirectRunner::canRun` or a Jupyter
+kernel spec, remembered per language for the session, so a block nobody can run
+has no control, no output row and no "does not know how to run" warning.
+
 A tab group (adjacent fences marked `tab`, see STYLING.md) being edited is
 plain source: with the caret anywhere in it every member shows its fence lines,
 `#|` options and listing as text, no panel, tab strip, run control, gutter or

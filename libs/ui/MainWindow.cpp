@@ -64,7 +64,9 @@
 #include "DailyNotes.h"
 #include "AudioRecorder.h"
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+#include "DirectRunner.h"
 #include "Ipynb.h"
+#include "KernelSpec.h"
 #include "NotebookController.h"
 #endif
 #include "Frontmatter.h"
@@ -889,6 +891,20 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     if (m_applyPluginRenderer)
         m_applyPluginRenderer(editor); // plugin fences in a new tab too
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // A block gets a run control only for a language something can run: a
+    // recipe with its tool installed, or a Jupyter kernel - the two paths
+    // NotebookController::run takes. Remembered per language for the session:
+    // this is asked while laying out a block, and findExecutable walks PATH and
+    // the kernel list is read from disk on every call.
+    editor->setNotebookRunnable([this](const QString &language) {
+        auto known = m_runnableLanguages.constFind(language);
+        if (known == m_runnableLanguages.constEnd()) {
+            known = m_runnableLanguages.insert(
+                language, notebook::DirectRunner::canRun(language)
+                              || notebook::kernelSpecsByLanguage().contains(language.trimmed().toLower()));
+        }
+        return known.value();
+    });
     // Code blocks through a Jupyter kernel. A lookup (forceRun false) only
     // reads the output cache; the controller, and any kernel, exist only
     // once something is run.

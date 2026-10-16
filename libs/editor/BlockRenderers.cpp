@@ -835,6 +835,40 @@ const CodeOptions *MarkdownEditor::codeOptionsFor(const BlockView &view) const
     return nullptr;
 }
 
+bool MarkdownEditor::hasCodeHeader(const BlockView &view) const
+{
+    if (plainSource(view))
+        return false;
+    if (view.options || view.tabGroup >= 0 || view.notebookEligible)
+        return true;
+    // Every fence with a language names itself in a strip. Matched on the
+    // Code kind: the paragraph above a fence holds its opening line, and
+    // codeFenceOf finds that fence from there too.
+    const CodeFenceSpan *fence = view.span.kind == BlockSpan::Kind::Code ? codeFenceOf(view) : nullptr;
+    return fence && !fence->language.trimmed().isEmpty();
+}
+
+QString MarkdownEditor::codeTitleOf(const BlockView &view) const
+{
+    if (view.tabGroup >= 0)
+        return {}; // the tabs are the titles
+    // Read from the source, not view.options, which is null while the caret
+    // is in the block and would rename it under the cursor.
+    if (const CodeOptions *options = codeOptionsFor(view); options && !options->title.isEmpty())
+        return options->title;
+    const CodeFenceSpan *fence = codeFenceOf(view);
+    return fence && !fence->language.trimmed().isEmpty() ? styleOfFence(*fence).name : QString();
+}
+
+QString MarkdownEditor::codeTitleAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    return view.span.kind == BlockSpan::Kind::Code && hasCodeHeader(view) ? codeTitleOf(view) : QString();
+}
+
 qreal MarkdownEditor::codeHeaderHeight() const
 {
     return lineHeightFor({BlockSpan::Kind::Code, {0, 0}, 0}) * 1.5;
@@ -1187,51 +1221,39 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
                                                       qreal top) const
 {
     CodeLabel label;
-    if (view.piece > 0 || plainSource(view))
-        return label; // a long fence's label is on its first piece; plain source has none
-    const LanguageStyle style = codeStyleOf(view);
+    // A long fence's label is on its first piece, plain source has none, and
+    // an embed's panel is not a listing to copy.
+    if (view.piece > 0 || plainSource(view) || view.span.kind != BlockSpan::Kind::Code)
+        return label;
     const bool copied = m_copiedBlock == view.span.range.start;
     const bool hovered = m_hoveredCodeBlock == view.span.range.start;
+    const bool header = hasCodeHeader(view);
 
-    // A block with a language always names it. One without shows "Copy" only
-    // while the pointer is over it, so a plain listing is copyable without
-    // carrying a label nobody asked for.
-    // In a tab strip the tabs already carry the names, so the label is only
-    // the copy button there.
-    const bool strip = view.tabGroup >= 0;
-    label.text = copied                         ? tr("Copied")
-                 : strip                        ? tr("Copy")
-                 : !style.name.isEmpty()        ? style.name
-                 : hovered                      ? tr("Copy")
-                                                : QString();
-    if (label.text.isEmpty())
+    // The copy button. The header already names the block (codeTitleOf), so
+    // this says "Copy" only while the pointer is over the block, or "Copied"
+    // just after. Under a header its place is reserved either way, so the run
+    // control beside it never moves; a block with no header has no room to
+    // reserve and shows it in the corner when hovered.
+    if (!header && !copied && !hovered)
         return label;
+    label.text = copied ? tr("Copied") : tr("Copy");
 
     label.font = m_theme.uiFont();
     label.font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
-    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    label.colour = hovered || copied ? muted : style.color.isValid() ? style.color : faint;
-
+    label.colour = m_theme.color(QStringLiteral("--text-muted"));
     const QFontMetricsF metrics(label.font);
-    const qreal iconSize = metrics.height();
-    if (!copied && !strip && !style.icon.isEmpty())
-        label.icon = Icons::icon(style.icon, label.colour, int(iconSize));
-    const qreal width = metrics.horizontalAdvance(label.text)
-                        + (label.icon.isNull() ? 0 : iconSize + 5);
+    const qreal width = metrics.horizontalAdvance(label.text);
 
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
-    // With `#|` options, or a notebook run control, there is a header strip,
-    // and the label sits at its right end, clear of the fold arrow; without
-    // either it takes the corner.
-    const bool header = view.options || strip || view.notebookEligible;
+    // With `#|` options, the header's right end is clear of the fold arrow.
     const qreal right = view.options ? panel.right() - 22 - kFoldHandle
-                        : strip      ? panel.right() - 14
+                        : header     ? panel.right() - 14
                                      : panel.right() - 10;
     const qreal y = header ? panel.top() + (view.textTop + 8 - metrics.height()) / 2
                            : panel.top() + 4;
     label.rect = QRectF(right - width, y, width, metrics.height());
-    label.visible = true;
+    label.slotLeft = right - qMax(width, metrics.horizontalAdvance(tr("Copied")));
+    label.visible = copied || hovered;
     return label;
 }
 
@@ -1286,13 +1308,7 @@ void MarkdownEditor::paintCodeLabel(QPainter &painter, const BlockView &view, qr
     painter.save();
     painter.setFont(label.font);
     painter.setPen(label.colour);
-    QRectF text = label.rect;
-    if (!label.icon.isNull()) {
-        const qreal size = label.rect.height();
-        label.icon.paint(&painter, QRectF(text.left(), text.top(), size, size).toRect());
-        text.setLeft(text.left() + size + 5);
-    }
-    painter.drawText(text, Qt::AlignVCenter | Qt::AlignLeft, label.text);
+    painter.drawText(label.rect, Qt::AlignVCenter | Qt::AlignLeft, label.text);
     painter.restore();
 }
 
@@ -1350,9 +1366,9 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
 void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top, const QRectF &panel) const
 {
-    if (!view.options && view.tabGroup < 0 && !view.notebookEligible) {
-        // No `#|` options, no tabs, not a notebook block: the label alone,
-        // in the corner.
+    if (!hasCodeHeader(view)) {
+        // No language to name, no `#|` options, no tabs, not a notebook
+        // block: the copy button alone, in the corner.
         paintCodeLabel(painter, view, left, top);
         return;
     }
@@ -1362,8 +1378,9 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
     const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
 
-    // The header strip: title on the left, language on the right, and a
-    // hairline under it when there is a listing below.
+    // The header strip: the block's name on the left, the copy button and run
+    // control on the right, and a hairline under it when there is a listing
+    // below.
     const QRectF header(panel.left(), panel.top(), panel.width(), view.textTop + 8);
     QPainterPath headerPath;
     headerPath.addRoundedRect(header, 6, 6);
@@ -1406,15 +1423,26 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
         return;
     }
 
-    painter.setFont(badgeFont);
-    painter.setPen(muted);
-    const QRectF titleRect(header.left() + 14, header.top(), header.width() - 36 - kFoldHandle,
-                           header.height());
-    // No `#|` title on a notebook-only block (no options at all) - just the
-    // run control and the language label share the strip a title would
-    // otherwise sit in.
-    if (view.options)
-        painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, view.options->title);
+    // The name: `#| title:`, else the style's (the language, or `name="..."`),
+    // with the style's icon in front.
+    QFont titleFont = m_theme.uiFont();
+    titleFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+    painter.setFont(titleFont);
+    QRectF titleRect(header.left() + 14, header.top(), header.width() - 36 - kFoldHandle, header.height());
+    QColor titleColour = muted;
+    if (const CodeFenceSpan *fence = codeFenceOf(view)) {
+        const LanguageStyle style = styleOfFence(*fence);
+        if (style.color.isValid())
+            titleColour = style.color; // codeblocks.ini's or the fence's own `color=`
+        if (!style.icon.isEmpty()) {
+            const qreal size = QFontMetricsF(titleFont).height();
+            const QIcon icon = Icons::icon(style.icon, titleColour, int(size));
+            icon.paint(&painter, QRectF(titleRect.left(), titleRect.center().y() - size / 2, size, size).toRect());
+            titleRect.setLeft(titleRect.left() + size + 5);
+        }
+    }
+    painter.setPen(titleColour);
+    painter.drawText(titleRect, Qt::AlignVCenter | Qt::AlignLeft, codeTitleOf(view));
     paintCodeLabel(painter, view, left, top);
     paintNotebookRunControl(painter, view, left, top);
     paintNotebookHostBadge(painter, view, left, top);

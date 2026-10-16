@@ -3313,7 +3313,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
             // `#| eval: false` - never runs, so no run control and no cache
             // lookup either: the same "off" a null runner already gives.
             view.notebookEligible = fence && !fence->language.trimmed().isEmpty()
-                                    && !(view.options && !view.options->eval);
+                                    && !(view.options && !view.options->eval)
+                                    && (!m_notebookRunnable || m_notebookRunnable(fence->language));
         }
         notebookEchoHidden = view.options && !view.options->echo && !view.active;
     } else if (plainSource(view)) {
@@ -3515,7 +3516,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // carries on the body.
         view.textTop = view.piece == 0 ? calloutHeaderHeight(view.calloutStyle) : 0;
         view.height = height;
-    } else if ((view.options || view.tabGroup >= 0 || view.notebookEligible) && view.piece == 0) {
+    } else if (hasCodeHeader(view) && view.piece == 0) {
         view.textTop = codeHeaderHeight(); // the `#|` header, the tab strip, or the run control
     }
 

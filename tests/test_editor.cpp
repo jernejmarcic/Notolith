@@ -1519,10 +1519,33 @@ TEST(BlockOverlapTest, ConsecutiveQuoteCalloutsDoNotOverlap)
 
 // --- `#|` code block options (HANDOFF 3) ----------------------------------
 
+TEST(CodeHeaderTest, ABlockWithALanguageIsTitledByItsName)
+{
+    // `listing` is what follows the opening fence; the title is read at its
+    // last line, the one `#|` options leave in place.
+    auto titleOf = [](const QString &fence, const QString &listing) {
+        const QString note = fence + QStringLiteral("\n") + listing + QStringLiteral("\n```\n");
+        return editorWith(note)->codeTitleAt(note.lastIndexOf(QLatin1Char('\n'), -6) + 1);
+    };
+    EXPECT_EQ(titleOf(QStringLiteral("```python"), QStringLiteral("x = 1")), QStringLiteral("python"));
+    EXPECT_EQ(titleOf(QStringLiteral("```python name=\"Setup script\""), QStringLiteral("x = 1")),
+              QStringLiteral("Setup script"));
+    EXPECT_EQ(titleOf(QStringLiteral("```python"), QStringLiteral("#| title: main.py\nx = 1")),
+              QStringLiteral("main.py"));
+    EXPECT_EQ(titleOf(QStringLiteral("```"), QStringLiteral("x = 1")), QString());
+
+    // The strip is a header's height of its own, so a named block is taller
+    // than the same listing with no language to name it.
+    auto named = editorWith(QStringLiteral("```cpp\nx\n```\n"));
+    auto bare = editorWith(QStringLiteral("```\nx\n```\n"));
+    EXPECT_GT(named->documentHeight() - bare->documentHeight(), 10);
+}
+
 TEST(CodeOptionsTest, ATitleGivesTheBlockAHeaderStrip)
 {
-    auto plain = editorWith(QStringLiteral("```python\nx = 1\n```\n"));
-    auto titled = editorWith(QStringLiteral("```python\n#| title: fib.py\nx = 1\n```\n"));
+    // No language to name it: only the option gives this block a strip.
+    auto plain = editorWith(QStringLiteral("```\nx = 1\n```\n"));
+    auto titled = editorWith(QStringLiteral("```\n#| title: fib.py\nx = 1\n```\n"));
 
     // The option line is hidden either way, so the listing is the same size;
     // the difference is the strip the title is drawn in.
@@ -1944,6 +1967,38 @@ TEST(NotebookBlockTest, AnErrorShowsItsHeaderThenTheTracebackOnce)
     QTest::qWait(50);
     EXPECT_EQ(editor->notebookOutputTextAt(note.indexOf(QStringLiteral("fn main"))),
               QStringList{QStringLiteral("Exit code 1\nboom")});
+}
+
+TEST(NotebookBlockTest, ALanguageWithNoRunnerGetsNoRunControl)
+{
+    // "That that should be run should not have a run object": json has no
+    // recipe and no kernel, so it is not a runnable block at all - no control,
+    // no output row, no warning triangle after a click, and "Run all" skips it.
+    const QString note = QStringLiteral("```json\n{}\n```\n\n```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    editor->setNotebookRunnable([](const QString &language) { return language == QLatin1String("python"); });
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+
+    const qsizetype json = note.indexOf(QLatin1String("{}"));
+    const qsizetype python = note.indexOf(QLatin1String("print(1)"));
+    EXPECT_FALSE(editor->notebookInfoAt(json).eligible);
+    EXPECT_FALSE(editor->notebookInfoAt(json).runRect.isValid());
+    EXPECT_FALSE(editor->runNotebookBlockAt(json));
+    EXPECT_TRUE(editor->notebookInfoAt(python).eligible);
+    EXPECT_EQ(editor->runAllNotebookBlocks(), 1);
+}
+
+TEST(NotebookBlockTest, WithoutARunnablePredicateEveryLanguageIsEligible)
+{
+    const QString note = QStringLiteral("```json\n{}\n```\n\n```python\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    FakeNotebook fake;
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    EXPECT_TRUE(editor->notebookInfoAt(note.indexOf(QLatin1String("{}"))).eligible);
+    EXPECT_TRUE(editor->notebookInfoAt(note.indexOf(QLatin1String("print(1)"))).eligible);
 }
 
 TEST(NotebookBlockTest, ClearingOutputsAsksTheRunnerAndEmptiesTheBlock)
@@ -3483,6 +3538,11 @@ bool clickLabelUntilCopied(MarkdownEditor &editor)
     const int right = left + column + 4;
     for (int y = 12; y < 110; y += 4) {
         for (int x = right - 6; x > right - 140; x -= 6) {
+            // "Copy" only shows while the pointer is over the block. (Sent
+            // by hand: QTest::mouseMove needs an exposed window.)
+            QMouseEvent move(QEvent::MouseMove, QPointF(x, y), editor.viewport()->mapToGlobal(QPointF(x, y)),
+                             Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+            QCoreApplication::sendEvent(editor.viewport(), &move);
             QTest::mouseClick(editor.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, y));
             if (!QGuiApplication::clipboard()->text().isEmpty())
                 return true;
@@ -3572,9 +3632,9 @@ TEST(NestedCalloutTest, APlusStartsOpenAndFolds)
 
 namespace {
 
-/// Pixels in a code block label's corner - the top right of the first block -
-/// where one channel (0 red, 1 green, 2 blue) clearly outweighs the other two.
-/// Not an exact colour match: the label is antialiased text, and only a few of
+/// Pixels in a code block's title - the top left of the first block - where
+/// one channel (0 red, 1 green, 2 blue) clearly outweighs the other two.
+/// Not an exact colour match: the title is antialiased text, and only a few of
 /// its pixels ever land on the exact colour - how many depends on the state of
 /// Qt's glyph cache, which is why an exact count passed alone and failed after
 /// other tests had drawn text first.
@@ -3584,7 +3644,7 @@ int labelPixelsDominatedBy(MarkdownEditor &editor, int channel)
     int count = 0;
     for (int y = 0; y < qMin(frame.height(), 110); ++y) {
         const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
-        for (int x = frame.width() * 3 / 5; x < frame.width(); ++x) {
+        for (int x = 0; x < frame.width() * 2 / 5; ++x) {
             const int c[3] = {qRed(row[x]), qGreen(row[x]), qBlue(row[x])};
             if (c[channel] - qMax(c[(channel + 1) % 3], c[(channel + 2) % 3]) > 70)
                 ++count;

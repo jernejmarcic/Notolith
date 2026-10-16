@@ -1477,15 +1477,15 @@ private:
                        const QRectF &panel) const;
     QRectF bandOf(const BlockView &view, const Range &source) const;
 
-    /// The label on the side of a code block's header: its language's style
-    /// name and icon, and the thing to click to copy the listing. Painting and
+    /// The copy button at the right of a code block's header ("Copy" under the
+    /// pointer, "Copied" after a click), the thing to click to copy the
+    /// listing. The block's name is on the left (codeTitleOf). Painting and
     /// hit-testing both come from codeLabelOf, so they cannot disagree about
     /// where it is.
     struct CodeLabel {
         QRectF rect;   ///< in viewport coordinates, icon included
         qreal slotLeft = 0; ///< left edge of the room "Copied" would take, so neighbours never move
         QString text;
-        QIcon icon;
         QColor colour;
         QFont font;
         bool visible = false;
