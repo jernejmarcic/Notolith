@@ -287,6 +287,32 @@ TEST(GraphViewTest, RebuildKeepsSurvivingNodesInPlace)
     EXPECT_LT(std::hypot(after.x() - before.x(), after.y() - before.y()), 1.0);
 }
 
+TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(1500);
+
+    const QPoint grab = view.screenPosition(QStringLiteral("A")).toPoint();
+    const QPoint drop = grab + QPoint(40, 30);
+    QTest::mousePress(&view, Qt::LeftButton, Qt::NoModifier, grab);
+    QTest::mouseMove(&view, drop);
+    // The snapshot answers hit tests at once; the layout catches up on the worker.
+    const QPointF held = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(held.x() - drop.x(), held.y() - drop.y()), 2.0);
+    QTest::qWait(300);
+    const QPointF later = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(later.x() - drop.x(), later.y() - drop.y()), 2.0) << "the pinned node slid away";
+    QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, drop);
+    QTest::qWait(300); // and the layout settles again without a crash
+    EXPECT_EQ(view.nodeCount(), 3);
+}
+
 TEST(GraphViewTest, ColourGroupsAreSearchQueries)
 {
     QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Journal/B.md"),
@@ -524,16 +550,14 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
         return median(stepTimes);
     }, 3, 16.0);
 
-    QImage image(1600, 1000, QImage::Format_ARGB32_Premultiplied);
     const double frameMedian = perf::bestOf([&] {
         std::vector<double> frameTimes;
         for (int i = 0; i < 12; ++i) {
-            image.fill(Qt::black);
-            QPainter painter(&image);
             clock.start();
-            view.render(&painter);
-            painter.end();
+            const QImage image = view.renderFrameNow();
             frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+            if (image.isNull())
+                return 1e9;
         }
         return median(frameTimes);
     }, 3, 16.0);
@@ -569,21 +593,34 @@ TEST(GraphPerformanceTest, TwentyThousandNodesReportCosts)
         view.stepSimulation(1);
         stepTimes.push_back(clock.nsecsElapsed() / 1e6);
     }
-    QImage image(1600, 1000, QImage::Format_ARGB32_Premultiplied);
     std::vector<double> frameTimes;
     for (int i = 0; i < 6; ++i) {
-        image.fill(Qt::black);
-        QPainter painter(&image);
         clock.start();
-        view.render(&painter);
-        painter.end();
+        const QImage image = view.renderFrameNow();
         frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+        ASSERT_FALSE(image.isNull());
     }
     const double step = median(stepTimes);
     const double frame = median(frameTimes);
-    std::printf("[ PERF     ] %d nodes / %d edges: rebuild %.1f ms, step %.2f ms, render %.2f ms\n",
-                view.nodeCount(), view.edgeCount(), rebuildMs, step, frame);
+
+    // What the UI thread itself pays per paint once a worker has delivered a
+    // frame: drawing one finished image.
+    view.show();
+    QTest::qWait(1500);
+    QImage target(1600, 1000, QImage::Format_ARGB32_Premultiplied);
+    std::vector<double> blitTimes;
+    for (int i = 0; i < 8; ++i) {
+        QPainter painter(&target);
+        clock.start();
+        view.render(&painter);
+        painter.end();
+        blitTimes.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    const double blit = median(blitTimes);
+    std::printf("[ PERF     ] %d nodes / %d edges: rebuild %.1f ms, step %.2f ms, render %.2f ms (on a worker), UI blit %.2f ms\n",
+                view.nodeCount(), view.edgeCount(), rebuildMs, step, frame, blit);
     EXPECT_TRUE(std::isfinite(step) && std::isfinite(frame));
+    EXPECT_LT(blit, 5.0) << "the UI thread must only draw a finished image";
 }
 
 // Opt-in (NOTEAPPC_GRAPH_BENCH_NOTES=20000): indexes that many linked notes
