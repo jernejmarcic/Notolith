@@ -79,6 +79,7 @@
 #include "EncryptionSession.h"
 #endif
 #include "ExportPdfDialog.h"
+#include "DictClient.h"
 #include "PagePreview.h"
 #include "PdfPage.h"
 #include "RecoveryDialog.h"
@@ -816,6 +817,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                 m_previewPos = globalPos;
                 m_previewDelay.start();
             });
+    connect(editor, &MarkdownEditor::searchRequested, this, &MainWindow::openSearch);
+    connect(editor, &MarkdownEditor::lookupRequested, this, &MainWindow::lookUp);
     connect(editor, &MarkdownEditor::linkHoverEnded, this, [this] {
         m_previewDelay.stop();
         if (m_preview)
@@ -1151,6 +1154,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+    editor->setContextActions(contextActions());
 
     // What the editor draws of the optional features: off, a block shows
     // its source and none of that feature's code runs.
@@ -1842,6 +1846,12 @@ void MainWindow::applyFeatures()
 #endif
     if (!featureOn("page-preview"))
         delete m_preview;
+    if (!featureOn("word-lookup")) { // nothing built, nothing listening
+        delete m_lookupPopover;
+        delete std::exchange(m_dictClient, nullptr);
+    }
+    for (const auto &leaf : m_leaves)
+        leaf->editor->setContextActions(contextActions());
     if (m_active)
         updateWordCount(); // the word and character counts are one feature
 
@@ -2244,6 +2254,18 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             else
                 goForward();
             return true;
+        }
+    }
+
+    // The definition popover goes with a click outside it or Escape; it has
+    // no link to leave, so PagePreview's own timer never starts for it.
+    if (m_lookupPopover && m_lookupPopover->isVisible()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *widget = qobject_cast<QWidget *>(watched);
+            if (widget && widget != m_lookupPopover && !m_lookupPopover->isAncestorOf(widget))
+                m_lookupPopover->hide();
+        } else if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            m_lookupPopover->hide();
         }
     }
 
@@ -3050,6 +3072,46 @@ PagePreview *MainWindow::pagePreview()
     return m_preview;
 }
 
+PagePreview *MainWindow::lookupPopover()
+{
+    if (!m_lookupPopover) {
+        m_lookupPopover = new PagePreview(this);
+        m_lookupPopover->setObjectName(QStringLiteral("lookupPopover"));
+        m_lookupPopover->applyTheme(m_theme);
+    }
+    return m_lookupPopover;
+}
+
+MarkdownEditor::ContextActions MainWindow::contextActions() const
+{
+    return {featureOn("global-search"), featureOn("word-lookup"),
+            m_settings.text(QStringLiteral("lookup.webSearchURL"))};
+}
+
+void MainWindow::lookUp(const QString &word, const QPoint &globalPos)
+{
+    if (!featureOn("word-lookup"))
+        return;
+    m_lookupPos = globalPos;
+    lookupPopover()->showNote(tr("Looking up \"%1\"...").arg(word), 0, globalPos);
+    const quint64 token = ++m_lookupToken;
+    const auto show = [this, token](const QString &markdown) {
+        // Dismissed, or a newer lookup started, while this one was away.
+        if (token == m_lookupToken && m_lookupPopover && m_lookupPopover->isVisible())
+            m_lookupPopover->showNote(markdown, 0, m_lookupPos);
+    };
+    if (m_lookupFunction) {
+        m_lookupFunction(word, show);
+        return;
+    }
+    if (!m_dictClient)
+        m_dictClient = new DictClient(this);
+    const QString server = m_settings.text(QStringLiteral("lookup.server")).trimmed();
+    m_dictClient->setServers(server.isEmpty() ? DictClient::serversFromSystem()
+                                              : QList<DictClient::Server>{DictClient::parseServerSpec(server)});
+    m_dictClient->define(word, [show](DictClient::Result result) { show(DictClient::toMarkdown(result)); });
+}
+
 void MainWindow::updateSpelling()
 {
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
@@ -3072,6 +3134,12 @@ void MainWindow::updateSpelling()
                             [this, spell](const QString &word) {
                                 spell->addWord(word);
                                 // Every open note stops underlining it, not just this one.
+                                for (const auto &leaf : m_leaves)
+                                    leaf->editor->refreshSpelling();
+                            },
+                            [spell](const QString &word) { return spell->isPersonal(word); },
+                            [this, spell](const QString &word) {
+                                spell->removeWord(word);
                                 for (const auto &leaf : m_leaves)
                                     leaf->editor->refreshSpelling();
                             }};
@@ -3447,6 +3515,8 @@ void MainWindow::applyTheme()
 #endif
     if (m_preview)
         m_preview->applyTheme(m_theme);
+    if (m_lookupPopover)
+        m_lookupPopover->applyTheme(m_theme);
     if (m_outgoingLinks)
         m_outgoingLinks->setTheme(m_theme);
     if (m_settingsPage)

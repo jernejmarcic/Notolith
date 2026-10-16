@@ -100,6 +100,11 @@ add_test(NAME demo COMMAND test_demo)
 set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 set_tests_properties(window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# The DICT client talks to a QTcpServer on loopback, never to a real server.
+add_executable(test_lookup test_lookup.cpp)
+target_link_libraries(test_lookup PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
+add_test(NAME lookup COMMAND test_lookup)
+
 add_executable(test_theme test_theme.cpp)
 target_link_libraries(test_theme PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)
 add_test(NAME theme COMMAND test_theme)

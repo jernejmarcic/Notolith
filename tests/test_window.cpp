@@ -2971,6 +2971,139 @@ TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+namespace {
+
+QAction *actionStartingWith(const QMenu &menu, const QString &name)
+{
+    for (QAction *action : menu.actions()) {
+        if (action->text().startsWith(name))
+            return action;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_F(WindowTest, LookUpShowsAPopoverAndEscapeClosesIt)
+{
+    write(QStringLiteral("Words.md"), "good words here\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Words.md")));
+    QStringList asked;
+    // Never the network: the window's own client is not reached.
+    window.setLookupFunction([&asked](const QString &word, std::function<void(const QString &)> done) {
+        asked << word;
+        done(QStringLiteral("## %1\n\n**fake definition**").arg(word));
+    });
+
+    const auto menu = window.editor()->contextMenuAt(window.editor()->noteText().indexOf(QLatin1String("words")) + 1);
+    QAction *look = actionStartingWith(*menu, QStringLiteral("Look up"));
+    ASSERT_TRUE(look) << "on by default";
+    EXPECT_TRUE(actionStartingWith(*menu, QStringLiteral("Search for"))) << "Search is on by default too";
+    EXPECT_TRUE(actionStartingWith(*menu, QStringLiteral("Search the web for")));
+    EXPECT_EQ(window.findChild<noteAppC::PagePreview *>(QStringLiteral("lookupPopover")), nullptr)
+        << "built when first used";
+    look->trigger();
+    EXPECT_EQ(asked, QStringList{QStringLiteral("words")});
+
+    auto *popover = window.findChild<noteAppC::PagePreview *>(QStringLiteral("lookupPopover"));
+    ASSERT_TRUE(popover);
+    EXPECT_TRUE(popover->isVisible());
+    EXPECT_TRUE(popover->editor()->noteText().contains(QLatin1String("fake definition")));
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_FALSE(popover->isVisible());
+}
+
+TEST_F(WindowTest, ALateDefinitionDoesNotReopenADismissedPopover)
+{
+    write(QStringLiteral("Words.md"), "good words here\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Words.md")));
+    std::function<void(const QString &)> later;
+    window.setLookupFunction([&later](const QString &, std::function<void(const QString &)> done) { later = done; });
+    const auto menu = window.editor()->contextMenuAt(1);
+    actionStartingWith(*menu, QStringLiteral("Look up"))->trigger();
+    auto *popover = window.findChild<noteAppC::PagePreview *>(QStringLiteral("lookupPopover"));
+    ASSERT_TRUE(popover);
+    EXPECT_TRUE(popover->editor()->noteText().contains(QLatin1String("Looking up")));
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    ASSERT_TRUE(later);
+    later(QStringLiteral("## good\n\narrived"));
+    EXPECT_FALSE(popover->isVisible());
+}
+
+TEST_F(WindowTest, LookUpIsAbsentWhenTheFeatureIsOff)
+{
+    write(QStringLiteral("Words.md"), "good words here\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Words.md")));
+    window.show();
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    noteAppC::ToggleSwitch *lookup = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return (lookup = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.wordLookup")));
+    }));
+    lookup->click();
+    const auto menu = window.editor()->contextMenuAt(1);
+    EXPECT_FALSE(actionStartingWith(*menu, QStringLiteral("Look up")));
+    EXPECT_TRUE(actionStartingWith(*menu, QStringLiteral("Search for"))) << "only the one switched off goes";
+    lookup->click();
+    EXPECT_TRUE(actionStartingWith(*window.editor()->contextMenuAt(1), QStringLiteral("Look up")));
+}
+
+#ifdef NOTEAPPC_HAVE_SPELLCHECK
+TEST_F(WindowTest, AWordAddedInOneTabStopsBeingUnderlinedInTheOther)
+{
+    // A dictionary named for the language the system asks for, so the window
+    // loads it as it would the real one.
+    QString language = QLocale::system().uiLanguages().value(0);
+    language.replace(QLatin1Char('-'), QLatin1Char('_'));
+    if (language.isEmpty() || language == QLatin1String("C"))
+        GTEST_SKIP() << "no system language to name a test dictionary after";
+    QTemporaryDir dictionaries;
+    ASSERT_TRUE(dictionaries.isValid());
+    for (const auto &[extension, bytes] : {std::pair{"aff", "SET UTF-8\n"}, std::pair{"dic", "2\ngood\nhere\n"}}) {
+        QFile file(QDir(dictionaries.path()).filePath(language + QLatin1Char('.') + QLatin1String(extension)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(bytes);
+    }
+    const QByteArray oldPath = qgetenv("DICPATH");
+    qputenv("DICPATH", dictionaries.path().toUtf8());
+
+    write(QStringLiteral("Words.md"), "good zzqxv here\n");
+    MainWindow window;
+    window.show();
+    // The way main() opens: spellcheck loads only once the window has painted.
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    window.openNote(path(QStringLiteral("Words.md")));
+    MarkdownEditor *first = window.editor();
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    MarkdownEditor *second = window.editor();
+    ASSERT_NE(first, second);
+    const qsizetype at = first->noteText().indexOf(QLatin1String("zzqxv")) + 1;
+    const auto underlined = [at](const MarkdownEditor *editor) {
+        return editor->formatAt(at).underlineStyle() == QTextCharFormat::SpellCheckUnderline;
+    };
+    // The dictionary loads off the UI thread after the first paint.
+    const bool loaded = QTest::qWaitFor([&] { return underlined(first) && underlined(second); }, 5000);
+    if (loaded) {
+        actionStartingWith(*first->contextMenuAt(at), QStringLiteral("Add \"zzqxv\""))->trigger();
+        EXPECT_FALSE(underlined(first));
+        EXPECT_FALSE(underlined(second)) << "the other tab needs no click to catch up";
+        const auto menu = first->contextMenuAt(at);
+        QAction *remove = actionStartingWith(*menu, QStringLiteral("Remove \"zzqxv\""));
+        ASSERT_TRUE(remove);
+        remove->trigger();
+        EXPECT_TRUE(underlined(second));
+    }
+    qputenv("DICPATH", oldPath);
+    EXPECT_TRUE(loaded) << "the test dictionary never loaded";
+}
+#endif
+
 TEST_F(WindowTest, ANoteInTwoTabsIsOneDocument)
 {
     MainWindow window;

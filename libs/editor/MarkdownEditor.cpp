@@ -1388,14 +1388,19 @@ Range MarkdownEditor::wordAtCaret() const
 {
     if (!m_spelling.isCorrect)
         return {};
+    return wordAt(m_cursor);
+}
+
+Range MarkdownEditor::wordAt(qsizetype offset) const
+{
     const auto inWord = [](QChar c) {
         return c.isLetterOrNumber() || c.isMark() || c == QLatin1Char('\'')
                || c == QChar(0x2019) || c == QLatin1Char('_');
     };
-    qsizetype start = m_cursor;
+    qsizetype start = qBound<qsizetype>(0, offset, m_text.size());
+    qsizetype end = start;
     while (start > 0 && inWord(m_text.at(start - 1)))
         --start;
-    qsizetype end = m_cursor;
     while (end < m_text.size() && inWord(m_text.at(end)))
         ++end;
     return start < end ? Range{start, end} : Range{};
@@ -1417,32 +1422,40 @@ void MarkdownEditor::appendSpellingFormats(const BlockView &view,
     }
 }
 
-std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
+bool MarkdownEditor::addSpellingActions(QMenu &menu, qsizetype sourceOffset, bool personal)
 {
     if (!m_spelling.isCorrect)
-        return nullptr;
+        return false;
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0)
-        return nullptr;
+        return false;
     const BlockView &view = m_blocks[size_t(index)];
     if (!view.laidOut)
-        return nullptr;
+        return false;
     for (const Range &source : checkedWordsOf(view)) {
         if (sourceOffset < source.start || sourceOffset > source.end)
             continue;
-        const QString misspelt = m_text.mid(source.start, source.length());
-        if (m_spelling.isCorrect(misspelt))
-            return nullptr;
+        const QString word = m_text.mid(source.start, source.length());
+        if (m_spelling.isCorrect(word)) {
+            // A word the reader added: the way back, for a slip of the mouse.
+            if (!personal || !m_spelling.isPersonal || !m_spelling.removeWord || !m_spelling.isPersonal(word))
+                return false;
+            connect(menu.addAction(tr("Remove \"%1\" from dictionary").arg(word)),
+                    &QAction::triggered, this, [this, word] {
+                        m_spelling.removeWord(word);
+                        refreshSpelling();
+                    });
+            return true;
+        }
 
-        auto menu = std::make_unique<QMenu>(this);
         const QStringList suggestions =
-            m_spelling.suggestions ? m_spelling.suggestions(misspelt) : QStringList();
+            m_spelling.suggestions ? m_spelling.suggestions(word) : QStringList();
         for (const QString &suggestion : suggestions) {
-            connect(menu->addAction(suggestion), &QAction::triggered, this,
-                    [this, source, misspelt, suggestion] {
+            connect(menu.addAction(suggestion), &QAction::triggered, this,
+                    [this, source, word, suggestion] {
                         // Only if the word is still there: the menu may have
                         // stayed open over a reparse.
-                        if (m_text.mid(source.start, source.length()) != misspelt)
+                        if (m_text.mid(source.start, source.length()) != word)
                             return;
                         pushUndo();
                         m_lastEdit.invalidate();
@@ -1450,43 +1463,187 @@ std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
                     });
         }
         if (suggestions.isEmpty())
-            menu->addAction(tr("No suggestions"))->setEnabled(false);
+            menu.addAction(tr("No suggestions"))->setEnabled(false);
         if (m_spelling.addWord) {
-            menu->addSeparator();
-            connect(menu->addAction(tr("Add \"%1\" to dictionary").arg(misspelt)),
-                    &QAction::triggered, this, [this, misspelt] {
-                        m_spelling.addWord(misspelt);
+            menu.addSeparator();
+            connect(menu.addAction(tr("Add \"%1\" to dictionary").arg(word)),
+                    &QAction::triggered, this, [this, word] {
+                        m_spelling.addWord(word);
                         refreshSpelling();
                     });
         }
-        return menu;
+        return true;
     }
-    return nullptr;
+    return false;
+}
+
+std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
+{
+    auto menu = std::make_unique<QMenu>(this);
+    // Only a misspelt word has a menu of its own; "Remove" is part of contextMenuAt().
+    return addSpellingActions(*menu, sourceOffset, false) ? std::move(menu) : nullptr;
+}
+
+void MarkdownEditor::setContextActions(ContextActions actions)
+{
+    m_contextActions = std::move(actions);
+}
+
+void MarkdownEditor::copySelection()
+{
+    if (m_cellSel.tableStart >= 0 && copyCellSelection(false))
+        return;
+    if (selection().length() > 0)
+        QApplication::clipboard()->setText(m_text.mid(selection().start, selection().length()));
+}
+
+void MarkdownEditor::cutSelection()
+{
+    if (m_cellSel.tableStart >= 0 && copyCellSelection(true))
+        return;
+    if (selection().length() > 0) {
+        QApplication::clipboard()->setText(m_text.mid(selection().start, selection().length()));
+        removeSelectionOrChar(0);
+    }
+}
+
+void MarkdownEditor::pasteClipboard(bool plain)
+{
+    // Plain text only with Shift, as Obsidian does; otherwise an
+    // image on the clipboard is saved as an attachment (PasteDrop.cpp).
+    if (plain)
+        insertText(cellSafe(QApplication::clipboard()->text()));
+    else if (!pasteIntoCells()) // a block of cells into the table's cells, else the ordinary paste
+        insertMimeData(QApplication::clipboard()->mimeData());
+}
+
+std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset)
+{
+    auto menu = std::make_unique<QMenu>(this);
+    menu->setObjectName(QStringLiteral("editorContextMenu"));
+    const bool editable = m_mode != Mode::Reading;
+    // One separator between groups, none at the ends.
+    const auto gap = [&menu] {
+        if (!menu->isEmpty() && !menu->actions().constLast()->isSeparator())
+            menu->addSeparator();
+    };
+    // "Name<tab>Ctrl+B": the key is shown, never registered, so it cannot fire twice.
+    const auto keyText = [](const QString &id) {
+        for (const Command &command : commands()) {
+            if (command.id == id && !command.keys.isEmpty())
+                return QLatin1Char('\t') + command.keys.first().toString(QKeySequence::NativeText);
+        }
+        return QString();
+    };
+    const auto elide = [](QString text) {
+        if (text.size() > 30)
+            text = text.left(30) + QStringLiteral("...");
+        return text.replace(QLatin1Char('&'), QStringLiteral("&&"));
+    };
+
+    if (addSpellingActions(*menu, sourceOffset))
+        gap();
+
+    // Cut, copy and paste.
+    const bool hasSelection = selection().length() > 0 || m_cellSel.tableStart >= 0;
+    if (editable) {
+        connect(menu->addAction(tr("Cut") + QStringLiteral("\tCtrl+X")), &QAction::triggered, this,
+                [this] { cutSelection(); });
+        menu->actions().constLast()->setEnabled(hasSelection);
+    }
+    connect(menu->addAction(tr("Copy") + QStringLiteral("\tCtrl+C")), &QAction::triggered, this,
+            [this] { copySelection(); });
+    menu->actions().constLast()->setEnabled(hasSelection);
+    if (editable) {
+        connect(menu->addAction(tr("Paste") + QStringLiteral("\tCtrl+V")), &QAction::triggered, this,
+                [this] { pasteClipboard(); });
+    }
+
+    if (editable) {
+        gap();
+        // With nothing selected a format applies to the word under the pointer.
+        const auto format = [this, sourceOffset](const QString &id) {
+            if (selection().length() == 0) {
+                if (const Range word = wordAt(sourceOffset); word.length() > 0)
+                    setSelectionRange(word.start, word.end);
+            }
+            runCommand(id);
+        };
+        QMenu *submenu = menu->addMenu(tr("Format"));
+        static const std::pair<const char *, const char *> formats[] = {
+            {"Bold", "editor:toggle-bold"},
+            {"Italic", "editor:toggle-italics"},
+            {"Strikethrough", "editor:toggle-strikethrough"},
+            {"Highlight", "editor:toggle-highlight"},
+            {"Code", "editor:toggle-code"},
+            {"Math", "editor:toggle-inline-math"},
+            {"Comment", "editor:toggle-comments"},
+        };
+        for (const auto &[name, id] : formats) {
+            const QString commandID = QString::fromLatin1(id);
+            connect(submenu->addAction(tr(name) + keyText(commandID)), &QAction::triggered, this,
+                    [format, commandID] { format(commandID); });
+        }
+        connect(menu->addAction(tr("Add link") + keyText(QStringLiteral("editor:insert-link"))),
+                &QAction::triggered, this, [this] { insertLink(); });
+    }
+
+    // What the window can do with a word: look it up, search for it. A
+    // selection of one short line counts; anything longer is not "a word".
+    QString target;
+    if (const Range chosen = selection(); chosen.length() > 0) {
+        const QString text = m_text.mid(chosen.start, chosen.length()).trimmed();
+        if (chosen.length() <= 60 && !text.contains(QLatin1Char('\n')))
+            target = text;
+    } else if (const Range word = wordAt(sourceOffset); word.length() > 0) {
+        target = m_text.mid(word.start, word.length());
+    }
+    if (!target.isEmpty()) {
+        const QString label = elide(target);
+        const bool web = !m_contextActions.webSearchURL.isEmpty();
+        if (m_contextActions.lookup || m_contextActions.vaultSearch || web)
+            gap();
+        if (m_contextActions.lookup) {
+            connect(menu->addAction(tr("Look up \"%1\"").arg(label)), &QAction::triggered, this,
+                    [this, target] { emit lookupRequested(target, QCursor::pos()); });
+        }
+        if (m_contextActions.vaultSearch) {
+            connect(menu->addAction(tr("Search for \"%1\"").arg(label)), &QAction::triggered, this,
+                    [this, target] { emit searchRequested(target); });
+        }
+        if (web) {
+            const QString url = m_contextActions.webSearchURL;
+            connect(menu->addAction(tr("Search the web for \"%1\"").arg(label)),
+                    &QAction::triggered, this, [url, target] {
+                        QDesktopServices::openUrl(QUrl(url.arg(
+                            QString::fromUtf8(QUrl::toPercentEncoding(target)))));
+                    });
+        }
+    }
+
+    if (tableCellAt(sourceOffset).row >= 0) {
+        gap();
+        addTableActions(*menu, sourceOffset);
+    }
+    // A callout is edited as source from its menu as from its button, and
+    // copied, retyped or unwrapped there.
+    const qsizetype block = blockAt(sourceOffset);
+    if (block >= 0 && firstPiece(m_blocks[size_t(block)]).callout
+        && hasEditButton(firstPiece(m_blocks[size_t(block)]))) {
+        gap();
+        addCalloutActions(*menu, block);
+    }
+    return menu;
 }
 
 void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
 {
     const QPoint point = viewport()->mapFrom(this, event->pos());
     const qsizetype offset = offsetAt(point);
-    std::unique_ptr<QMenu> menu = spellingMenuAt(offset);
-    if (tableCellAt(offset).row >= 0) {
-        if (!menu)
-            menu = std::make_unique<QMenu>(this);
-        else
-            menu->addSeparator();
-        addTableActions(*menu, offset);
-    }
-    // A callout is edited as source from its menu as from its button, and
-    // copied, retyped or unwrapped there.
-    const qsizetype block = blockAtPoint(point);
-    if (block >= 0 && firstPiece(m_blocks[size_t(block)]).callout && hasEditButton(firstPiece(m_blocks[size_t(block)]))) {
-        if (!menu)
-            menu = std::make_unique<QMenu>(this);
-        else
-            menu->addSeparator();
-        addCalloutActions(*menu, block);
-    }
-    if (menu)
+    // A click outside the selection moves the caret there, inside keeps it.
+    if (const Range chosen = selection(); offset < chosen.start || offset > chosen.end)
+        setCursorOffset(offset);
+    if (const auto menu = contextMenuAt(offset))
         menu->exec(event->globalPos());
 }
 
@@ -4398,6 +4555,10 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:toggle-italics"), tr("Toggle italics"), {QKeySequence(Qt::CTRL | Qt::Key_I)}},
         {QStringLiteral("editor:toggle-highlight"), tr("Toggle highlight"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_H)}},
+        {QStringLiteral("editor:toggle-strikethrough"), tr("Toggle strikethrough"), {}},
+        {QStringLiteral("editor:toggle-code"), tr("Toggle code"), {}},
+        {QStringLiteral("editor:toggle-inline-math"), tr("Toggle inline math"), {}},
+        {QStringLiteral("editor:toggle-comments"), tr("Toggle comment"), {}},
         {QStringLiteral("editor:insert-link"), tr("Insert Markdown link"), {QKeySequence(Qt::CTRL | Qt::Key_K)}},
         {QStringLiteral("editor:toggle-checklist-status"), tr("Toggle checkbox status"),
          {QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)}},
@@ -4443,6 +4604,14 @@ bool MarkdownEditor::runCommand(const QString &id)
         toggleItalic();
     else if (id == QLatin1String("editor:toggle-highlight"))
         toggleHighlight();
+    else if (id == QLatin1String("editor:toggle-strikethrough"))
+        toggleWrap(QStringLiteral("~~"));
+    else if (id == QLatin1String("editor:toggle-code"))
+        toggleWrap(QStringLiteral("`"));
+    else if (id == QLatin1String("editor:toggle-inline-math"))
+        toggleWrap(QStringLiteral("$"));
+    else if (id == QLatin1String("editor:toggle-comments"))
+        toggleWrap(QStringLiteral("%%"));
     else if (id == QLatin1String("editor:insert-link"))
         insertLink();
     else if (id == QLatin1String("editor:toggle-checklist-status"))
@@ -4581,29 +4750,13 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
             moveCursor(m_text.size(), true);
             return;
         case Qt::Key_C:
-            if (m_cellSel.tableStart >= 0 && copyCellSelection(false))
-                return;
-            if (selection().length() > 0) {
-                QApplication::clipboard()->setText(
-                    m_text.mid(selection().start, selection().length()));
-            }
+            copySelection();
             return;
         case Qt::Key_X:
-            if (m_cellSel.tableStart >= 0 && copyCellSelection(true))
-                return;
-            if (selection().length() > 0) {
-                QApplication::clipboard()->setText(
-                    m_text.mid(selection().start, selection().length()));
-                removeSelectionOrChar(0);
-            }
+            cutSelection();
             return;
         case Qt::Key_V:
-            // Plain text only with Shift, as Obsidian does; otherwise an
-            // image on the clipboard is saved as an attachment (PasteDrop.cpp).
-            if (shift)
-                insertText(cellSafe(QApplication::clipboard()->text()));
-            else if (!pasteIntoCells()) // a block of cells into the table's cells, else the ordinary paste
-                insertMimeData(QApplication::clipboard()->mimeData());
+            pasteClipboard(shift);
             return;
         default:
             break;

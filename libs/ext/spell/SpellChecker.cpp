@@ -197,6 +197,22 @@ void SpellChecker::addWord(const QString &word)
         dictionary->hunspell->add(dictionary->encode(trimmed));
     m_known.insert(trimmed, true);
 
+    savePersonal();
+}
+
+void SpellChecker::removeWord(const QString &word)
+{
+    const QString trimmed = word.trimmed();
+    if (m_personal.removeAll(trimmed) == 0)
+        return;
+    for (const auto &dictionary : m_dictionaries)
+        dictionary->hunspell->remove(dictionary->encode(trimmed));
+    m_known.remove(trimmed); // not set to false: hunspell may still say yes
+    savePersonal();
+}
+
+void SpellChecker::savePersonal() const
+{
     // The whole list is rewritten, atomically: a file that is half written
     // when the power goes would lose every word in it.
     const QString path = personalDictionaryPath();

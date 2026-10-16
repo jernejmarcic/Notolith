@@ -4503,7 +4503,9 @@ struct FakeSpelling {
     {
         return {[this](const QString &word) { return known.contains(word) || added.contains(word); },
                 [](const QString &) { return QStringList{QStringLiteral("words")}; },
-                [this](const QString &word) { added << word; }};
+                [this](const QString &word) { added << word; },
+                [this](const QString &word) { return added.contains(word); },
+                [this](const QString &word) { added.removeAll(word); }};
     }
 };
 
@@ -4605,6 +4607,177 @@ TEST(SpellingTest, LearningAWordKeepsTheViewWhereItWas)
     EXPECT_EQ(static_cast<QWidget *>(editor.get())->inputMethodQuery(Qt::ImCursorRectangle).toRect(), caretBefore)
         << "and the caret's line with it";
     EXPECT_FALSE(underlined(*editor, at));
+}
+
+// --- context menu --------------------------------------------------------------
+
+namespace {
+
+/// The action whose text starts with `name` (the key text follows a tab).
+QAction *menuAction(const QMenu &menu, const QString &name)
+{
+    for (QAction *action : menu.actions()) {
+        if (action->text().startsWith(name))
+            return action;
+    }
+    return nullptr;
+}
+
+/// "good words here", the caret in front of "words" and `count` letters selected.
+std::unique_ptr<MarkdownEditor> editorSelecting(const QString &note, qsizetype from, int count)
+{
+    auto editor = editorWith(note);
+    editor->setCursorOffset(from);
+    for (int i = 0; i < count; ++i)
+        QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier);
+    return editor;
+}
+
+} // namespace
+
+TEST(ContextMenuTest, EveryWordGetsAMenu)
+{
+    const QString note = QStringLiteral("good words here\n");
+    auto editor = editorWith(note);
+    const auto menu = editor->contextMenuAt(note.indexOf(QLatin1String("words")) + 1);
+    ASSERT_TRUE(menu);
+    for (const char *name : {"Cut", "Copy", "Paste", "Format", "Add link"})
+        EXPECT_TRUE(menuAction(*menu, QLatin1String(name))) << name;
+    QAction *format = menuAction(*menu, QStringLiteral("Format"));
+    ASSERT_TRUE(format && format->menu());
+    QStringList names;
+    for (QAction *action : format->menu()->actions())
+        names << action->text().section(QLatin1Char('\t'), 0, 0);
+    EXPECT_EQ(names, (QStringList{"Bold", "Italic", "Strikethrough", "Highlight", "Code", "Math", "Comment"}));
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Look up"))) << "off until the window turns it on";
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Search")));
+}
+
+TEST(ContextMenuTest, FormatWrapsTheSelectionOrTheWordUnderThePointer)
+{
+    const QString note = QStringLiteral("good words here\n");
+    const qsizetype words = note.indexOf(QLatin1String("words"));
+    auto editor = editorSelecting(note, words, 5);
+    auto menu = editor->contextMenuAt(words + 1);
+    QAction *format = menuAction(*menu, QStringLiteral("Format"));
+    ASSERT_TRUE(format);
+    menuAction(*format->menu(), QStringLiteral("Strikethrough"))->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("good ~~words~~ here\n"));
+
+    // Nothing selected: the word the pointer was on.
+    menu.reset(); // a menu is its editor's child: gone with it
+    editor = editorWith(note);
+    menu = editor->contextMenuAt(words + 2);
+    menuAction(*menuAction(*menu, QStringLiteral("Format"))->menu(), QStringLiteral("Bold"))->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("good **words** here\n"));
+}
+
+TEST(ContextMenuTest, CutCopyAndPasteWork)
+{
+    const QString note = QStringLiteral("good words here\n");
+    const qsizetype words = note.indexOf(QLatin1String("words"));
+    auto editor = editorSelecting(note, words, 5);
+    auto menu = editor->contextMenuAt(words + 1);
+    menuAction(*menu, QStringLiteral("Copy"))->trigger();
+    EXPECT_EQ(QApplication::clipboard()->text(), QStringLiteral("words"));
+    menuAction(*menu, QStringLiteral("Cut"))->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("good  here\n"));
+    menuAction(*menu, QStringLiteral("Paste"))->trigger();
+    EXPECT_EQ(editor->noteText(), note);
+
+    // Nothing selected: nothing to cut or copy.
+    menu.reset();
+    editor = editorWith(note);
+    menu = editor->contextMenuAt(words);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Cut"))->isEnabled());
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Copy"))->isEnabled());
+}
+
+TEST(ContextMenuTest, LookUpAndSearchFollowTheContextActions)
+{
+    const QString note = QStringLiteral("good words here\n");
+    const qsizetype at = note.indexOf(QLatin1String("words")) + 1;
+    auto editor = editorWith(note);
+    QSignalSpy lookup(editor.get(), &MarkdownEditor::lookupRequested);
+    QSignalSpy search(editor.get(), &MarkdownEditor::searchRequested);
+
+    editor->setContextActions({true, true, QStringLiteral("https://x.test/?q=%1")});
+    auto menu = editor->contextMenuAt(at);
+    QAction *look = menuAction(*menu, QStringLiteral("Look up"));
+    QAction *find = menuAction(*menu, QStringLiteral("Search for"));
+    QAction *web = menuAction(*menu, QStringLiteral("Search the web for"));
+    ASSERT_TRUE(look && find && web);
+    EXPECT_TRUE(look->text().contains(QLatin1String("words")));
+    EXPECT_TRUE(web->text().contains(QLatin1String("words")));
+    look->trigger();
+    find->trigger(); // the web item opens a browser, which a test must not
+    ASSERT_EQ(lookup.size(), 1);
+    ASSERT_EQ(search.size(), 1);
+    EXPECT_EQ(lookup.first().at(0).toString(), QStringLiteral("words"));
+    EXPECT_EQ(search.first().at(0).toString(), QStringLiteral("words"));
+
+    editor->setContextActions({true, false, {}});
+    menu = editor->contextMenuAt(at);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Look up")));
+    EXPECT_TRUE(menuAction(*menu, QStringLiteral("Search for")));
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Search the web")));
+
+    // Between two spaces there is no word to look up.
+    editor->setContextActions({true, true, QStringLiteral("https://x.test/?q=%1")});
+    editor->setNoteText(QStringLiteral("a  b\n"));
+    menu = editor->contextMenuAt(2);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Look up")));
+}
+
+TEST(ContextMenuTest, ASelectionLongerThanALineIsNotLookedUp)
+{
+    const QString note = QStringLiteral("one\ntwo\nthree\n");
+    auto editor = editorSelecting(note, 0, 9);
+    editor->setContextActions({true, true, QStringLiteral("https://x.test/?q=%1")});
+    const auto menu = editor->contextMenuAt(1);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Look up")));
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Search")));
+    EXPECT_TRUE(menuAction(*menu, QStringLiteral("Format")));
+
+    // One line of a few words is a phrase worth looking up.
+    editor->setNoteText(QStringLiteral("a kind of magic\n"));
+    editor->setCursorOffset(0);
+    for (int i = 0; i < 6; ++i)
+        QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier);
+    EXPECT_TRUE(menuAction(*editor->contextMenuAt(1), QStringLiteral("Look up \"a kind\"")));
+}
+
+TEST(ContextMenuTest, ReadingViewOffersCopyAndLookUpOnly)
+{
+    const QString note = QStringLiteral("good words here\n");
+    auto editor = editorWith(note);
+    editor->setContextActions({true, true, {}});
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    const auto menu = editor->contextMenuAt(note.indexOf(QLatin1String("words")) + 1);
+    EXPECT_TRUE(menuAction(*menu, QStringLiteral("Copy")));
+    EXPECT_TRUE(menuAction(*menu, QStringLiteral("Look up")));
+    for (const char *name : {"Cut", "Paste", "Format", "Add link"})
+        EXPECT_FALSE(menuAction(*menu, QLatin1String(name))) << name;
+}
+
+TEST(ContextMenuTest, ARemovedWordIsUnderlinedAgain)
+{
+    FakeSpelling dictionary;
+    const QString note = QStringLiteral("good wrds here\n");
+    auto editor = editorWith(note);
+    editor->setSpelling(dictionary.spelling());
+    const qsizetype at = note.indexOf(QLatin1String("wrds")) + 1;
+    EXPECT_FALSE(menuAction(*editor->contextMenuAt(at), QStringLiteral("Remove")));
+
+    menuAction(*editor->contextMenuAt(at), QStringLiteral("Add \"wrds\""))->trigger();
+    EXPECT_FALSE(underlined(*editor, at));
+    const auto menu = editor->contextMenuAt(at);
+    QAction *remove = menuAction(*menu, QStringLiteral("Remove \"wrds\""));
+    ASSERT_TRUE(remove);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Add \"wrds\"")));
+    remove->trigger();
+    EXPECT_TRUE(underlined(*editor, at));
+    EXPECT_TRUE(dictionary.added.isEmpty());
 }
 
 // --- commands and their keys ---------------------------------------------------
