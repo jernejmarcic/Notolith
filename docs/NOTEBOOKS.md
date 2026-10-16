@@ -153,10 +153,15 @@ code cells are fenced blocks in the notebook's language (from
 `metadata.kernelspec`, else `language_info`, else python), raw cells are
 ```` ```raw ```` fences, and two markdown cells in a row are told apart by an
 `<!-- cell -->` line. The stored outputs (stream, execute_result, display_data,
-error: text, PNG, HTML, ANSI stripped from tracebacks) are put in the output
-cache under the key the block looks itself up with, so they show on the block
-the moment the note opens, and running a block uses the same kernel machinery
-as any other (a notebook shares one kernel per note whatever the setting says).
+error: text, PNG, HTML, ANSI stripped from tracebacks) go to the output cache
+under the key the block looks itself up with, so they show on the block the
+moment it appears. They are decoded and written lazily, when that block first
+looks itself up - only blocks that are laid out do - not all of them at every
+read: 40 stored plots cost 230 ms of a 358 ms open that way. A run or a clear
+of the block before then supersedes them; reading the file again re-seeds, so
+at each read the file's outputs win, as before. Running a block uses the same
+kernel machinery as any other (a notebook shares one kernel per note whatever
+the setting says).
 
 It is editable. Saving merges the text into the notebook on disk by aligning
 old and new cells (longest common subsequence): an edited cell keeps its `id`,
