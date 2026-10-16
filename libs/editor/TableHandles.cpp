@@ -854,6 +854,23 @@ bool MarkdownEditor::copyCellSelection(bool cut)
     return true;
 }
 
+namespace {
+
+/// What clearing or pasting into an HTML cell replaces: everything between its
+/// tags, the spaces too, unless that spans lines - then only the text, so the
+/// author's line layout stays.
+Range HTMLcellText(const QString &text, Range content, Range element)
+{
+    Range inner = content;
+    while (inner.start > element.start && text.at(inner.start - 1).isSpace())
+        --inner.start;
+    while (inner.end < element.end && text.at(inner.end).isSpace())
+        ++inner.end;
+    return QStringView(text).mid(inner.start, inner.length()).contains(QLatin1Char('\n')) ? content : inner;
+}
+
+} // namespace
+
 bool MarkdownEditor::clearCellSelection()
 {
     const CellSelection *sel = cellSelection();
@@ -866,9 +883,12 @@ bool MarkdownEditor::clearCellSelection()
         QList<HTMLtableEdit> edits;
         for (int r = rect.top(); r <= rect.bottom(); ++r) {
             for (int c = rect.left(); c <= rect.right(); ++c) {
-                const Range cell = table.rows.value(r).value(c);
-                if (cell.isValid() && cell.length() > 0)
-                    edits.append({cell.start, cell.length(), QString()});
+                const Range content = table.rows.value(r).value(c);
+                if (!content.isValid())
+                    continue;
+                const Range gone = HTMLcellText(m_text, content, table.cellElements.value(r).value(c));
+                if (gone.length() > 0)
+                    edits.append({gone.start, gone.length(), QString()});
             }
         }
         if (applyHTMLtableEdits(edits, index, keep.anchorRow, keep.anchorColumn))
@@ -940,8 +960,9 @@ bool MarkdownEditor::pasteIntoCells()
                              : mime->text();
     const CellSelection *sel = cellSelection();
     const CellRef cell = tableCellAt(m_cursor);
-    if (text.isEmpty() || !cell.valid() || cell.row < 0 || !tableRenderedAt(m_cursor) || cell.table->html)
-        return false;
+    if (text.isEmpty() || !cell.valid() || cell.row < 0 || !tableRenderedAt(m_cursor)
+        || (cell.table->html && !cell.table->simple))
+        return false; // a merged cell: no grid to fill
     bool structured = false;
     QList<QStringList> cells = cellGrid(text, structured);
     if ((!sel && !structured) || cells.isEmpty())
@@ -952,13 +973,20 @@ bool MarkdownEditor::pasteIntoCells()
 
     const QRect rect = sel ? cellSelectionRect() : QRect(cell.column, cell.row, 1, 1);
     const qsizetype index = tableAround(m_cursor);
-    TableText table;
-    if (index < 0 || !loadTableText(index, table))
+    if (index < 0)
         return false;
     // One value into several cells fills them all, as a spreadsheet does.
     const bool fill = cells.size() == 1 && columnsWide == 1 && (rect.width() > 1 || rect.height() > 1);
     const int rowsWide = fill ? rect.height() : int(cells.size());
     const int across = fill ? rect.width() : columnsWide;
+    if (m_decorations.tables.at(index).html) {
+        if (pasteIntoHTMLcells(index, rect, cells, fill, rowsWide, across))
+            setCellSelection(index, rect.top(), rect.left(), rect.top() + rowsWide - 1, rect.left() + across - 1);
+        return true;
+    }
+    TableText table;
+    if (!loadTableText(index, table))
+        return false;
     int bodyRows = int(table.rows.size()) - 1; // parser rows
     while (bodyRows < rect.top() + rowsWide) {
         table.rows << QStringList(table.columns, QString());
@@ -978,6 +1006,78 @@ bool MarkdownEditor::pasteIntoCells()
     if (storeTableText(table))
         setCellSelection(index, rect.top(), rect.left(), rect.top() + rowsWide - 1, rect.left() + across - 1);
     return true;
+}
+
+bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, const QList<QStringList> &cells, bool fill,
+                                        int rowsWide, int across)
+{
+    // The table grows the way its source is written: a new cell copies its
+    // row's last cell's tag and the gap before it, a new row the last row's
+    // tags and layout; th stays th only in the header.
+    const TableSpan &span = m_decorations.tables.at(index);
+    const int haveRows = int(span.rows.size());
+    const int newColumns = qMax(0, rect.left() + across - span.columns);
+    const auto value = [&](int r, int c) {
+        r -= rect.top();
+        c -= rect.left();
+        if (r < 0 || r >= rowsWide || c < 0 || c >= across)
+            return QString();
+        QString cell = fill ? cells.first().first() : cells.at(r).value(c);
+        return cell.replace(QStringLiteral("\\|"), QStringLiteral("|")).toHtmlEscaped();
+    };
+    const auto openTag = [&](int r, int c) {
+        const Range element = span.cellElements.at(r).at(c);
+        Range inner = span.rows.at(r).at(c);
+        while (inner.start > element.start && m_text.at(inner.start - 1).isSpace())
+            --inner.start;
+        return m_text.mid(element.start, inner.start - element.start);
+    };
+    const auto written = [](const QString &open, const QString &content) {
+        qsizetype end = 1;
+        while (end < open.size() && open.at(end).isLetterOrNumber())
+            ++end;
+        return open + content + QStringLiteral("</") + open.mid(1, end - 1) + QLatin1Char('>');
+    };
+    const auto gapIn = [&](const QList<Range> &elements) {
+        return elements.size() > 1 ? m_text.mid(elements.at(0).end, elements.at(1).start - elements.at(0).end)
+                                   : QString();
+    };
+
+    QList<HTMLtableEdit> edits; // applied by offset, ties in this order
+    if (rect.top() + rowsWide > haveRows) {
+        const int like = haveRows - 1;
+        const QList<Range> &elements = span.cellElements.at(like);
+        const Range row = span.rowElements.at(like);
+        const QString indent = indentBefore(row.start).value_or(QString());
+        QString added;
+        for (int r = haveRows; r < rect.top() + rowsWide; ++r) {
+            added += QLatin1Char('\n') + indent + m_text.mid(row.start, elements.first().start - row.start);
+            for (int c = 0; c < span.columns + newColumns; ++c) {
+                QString open = openTag(like, qMin(c, int(elements.size()) - 1));
+                if (like < span.headerRows) // a body row under a header-only table
+                    open = open.at(1).isUpper() ? QStringLiteral("<TD>") : QStringLiteral("<td>");
+                added += (c > 0 ? gapIn(elements) : QString()) + written(open, value(r, c));
+            }
+            added += m_text.mid(elements.last().end, row.end - elements.last().end);
+        }
+        edits.append({row.end, 0, added});
+    }
+    for (int r = 0; r < haveRows; ++r) {
+        const QList<Range> &elements = span.cellElements.at(r);
+        if (r >= rect.top() && r < rect.top() + rowsWide) {
+            for (int c = rect.left(); c < qMin(rect.left() + across, span.columns); ++c) {
+                const Range target = HTMLcellText(m_text, span.rows.at(r).at(c), elements.at(c));
+                edits.append({target.start, target.length(), value(r, c)});
+            }
+        }
+        if (newColumns > 0) {
+            QString more;
+            for (int c = span.columns; c < span.columns + newColumns; ++c)
+                more += gapIn(elements) + written(openTag(r, int(elements.size()) - 1), value(r, c));
+            edits.append({elements.last().end, 0, more});
+        }
+    }
+    return applyHTMLtableEdits(edits, index, rect.top(), rect.left());
 }
 
 // --- the tests' view of the chrome -----------------------------------------

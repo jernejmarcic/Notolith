@@ -482,7 +482,12 @@ comparison (and a clipboard read on Ctrl+V).
   last. One undo step each. Ctrl+C copies what the cells show (tags and
   entities resolved, one line each) as TSV in `text/plain` and a pipe table in
   `text/markdown`; Delete or Ctrl+X empties the cell contents and keeps their
-  tags. Paste into an HTML rectangle is the ordinary paste (not done).
+  tags, the spaces inside going too unless they span lines (then the line
+  layout stays and only the text goes). Paste fills from the top-left cell as
+  in a pipe table, text HTML-escaped; the table grows with cells and rows
+  copying its own last cell's tag, the gap between cells and the last row's
+  layout, th only in the header. One undo step. A table with a merged cell
+  keeps the ordinary paste.
 
 Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`), `HtmlTableHandlesTest.*`
 (`tests/test_html_edit.cpp`).

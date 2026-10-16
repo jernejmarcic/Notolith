@@ -2160,6 +2160,10 @@ private:
     std::optional<QString> indentBefore(qsizetype offset) const;
     /// Applies `edits` as one undo step and puts the caret in a cell.
     bool applyHTMLtableEdits(QList<HTMLtableEdit> edits, qsizetype table, int row, int column);
+    /// pasteIntoCells() for a simple HTML table: `cells` from `rect`'s top-left,
+    /// the table grown to fit, as one undo step.
+    bool pasteIntoHTMLcells(qsizetype index, const QRect &rect, const QList<QStringList> &cells, bool fill, int rowsWide,
+                            int across);
     /// The HTML counterparts of TableCells.cpp's row and column edits.
     bool insertHTMLrow(qsizetype table, int row, bool after, int column);
     bool fillShortHTMLrow(qsizetype table, int row);

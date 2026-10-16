@@ -389,6 +389,82 @@ TEST(HtmlTableHandlesTest, ARectangleCopiesAsATableAndTabSeparatedValues)
     EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
 }
 
+TEST(HtmlTableHandlesTest, PasteFillsFromTheCaretCellAndGrowsTheTableLikeItsSource)
+{
+    auto editor = handlesEditor();
+    auto *mime = new QMimeData;
+    mime->setText(QStringLiteral("a<b\tx\ty\nu\tv\tw"));
+    QApplication::clipboard()->setMimeData(mime);
+    editor->setCursorOffset(kHandles.indexOf(QStringLiteral("fig")) + 1); // the last row's first cell
+    editor->grab();
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    quiet(*editor);
+    const QString expected = QStringLiteral(
+        "above\n\n<table class=\"t\">\n"
+        "  <tr><th>name</th><th>qty</th><th></th></tr>\n"
+        "  <tr id=\"a\"><td>apple &amp; co</td><td>3</td><td></td></tr>\n"
+        "  <tr id=\"b\" class=\"x\"><td style=\"color:red\">pear</td><td><b>5</b></td><td></td></tr>\n"
+        "  <tr><td>a&lt;b</td><td>x</td><td>y</td></tr>\n"
+        "  <tr><td>u</td><td>v</td><td>w</td></tr>\n"
+        "</table>\n\nbelow\n");
+    EXPECT_EQ(editor->noteText().toStdString(), expected.toStdString());
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 3, 3, 2)) << "what was pasted is selected";
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString()) << "one undo step";
+
+    // A pipe table pastes too (text/markdown first), its escaped pipes as pipes.
+    auto *table = new QMimeData;
+    table->setText(QStringLiteral("p\tq"));
+    table->setData(QStringLiteral("text/markdown"), QByteArray("| p\\|1 | q |\n| --- | --- |\n| r | s |"));
+    QApplication::clipboard()->setMimeData(table);
+    editor->setCursorOffset(kHandles.indexOf(QStringLiteral("apple")) + 1);
+    editor->grab();
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    quiet(*editor);
+    QString filled = kHandles;
+    filled.replace(QStringLiteral("<td>apple &amp; co</td><td>3</td>"), QStringLiteral("<td>p|1</td><td>q</td>"));
+    filled.replace(QStringLiteral("<td style=\"color:red\">pear</td><td><b>5</b></td>"),
+                   QStringLiteral("<td style=\"color:red\">r</td><td>s</td>"));
+    EXPECT_EQ(editor->noteText().toStdString(), filled.toStdString()) << "attributes stay, the text goes in";
+}
+
+TEST(HtmlTableHandlesTest, ClearingACellTakesItsSpacesUnlessItSpansLines)
+{
+    const QString source = QStringLiteral(
+        "<table>\n"
+        "  <tr>\n    <th>h</th>\n    <th>i</th>\n  </tr>\n"
+        "  <tr>\n    <td> one </td>\n    <td>\n      two\n    </td>\n  </tr>\n"
+        "</table>\n\nbelow\n");
+    auto editor = handlesEditor(source);
+    const qsizetype at = handlesAt(source);
+    drag(*editor, centre(editor->tableCellRect(at, 1, 0)), centre(editor->tableCellRect(at, 1, 1)));
+    ASSERT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 1));
+    QTest::keyClick(editor.get(), Qt::Key_Delete);
+    quiet(*editor);
+    QString cleared = source;
+    cleared.replace(QStringLiteral("<td> one </td>"), QStringLiteral("<td></td>"));
+    cleared.replace(QStringLiteral("      two\n"), QStringLiteral("      \n"));
+    EXPECT_EQ(editor->noteText().toStdString(), cleared.toStdString());
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText().toStdString(), source.toStdString());
+
+    // A new row and column keep the table's one-cell-a-line layout.
+    auto *mime = new QMimeData;
+    mime->setText(QStringLiteral("x\ty\tz\nu\tv\tw"));
+    QApplication::clipboard()->setMimeData(mime);
+    editor->setCursorOffset(source.indexOf(QStringLiteral("one")) + 1);
+    editor->grab();
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    quiet(*editor);
+    const QString grown = QStringLiteral(
+        "<table>\n"
+        "  <tr>\n    <th>h</th>\n    <th>i</th>\n    <th></th>\n  </tr>\n"
+        "  <tr>\n    <td>x</td>\n    <td>\n      y\n    </td>\n    <td>z</td>\n  </tr>\n"
+        "  <tr>\n    <td>u</td>\n    <td>v</td>\n    <td>w</td>\n  </tr>\n"
+        "</table>\n\nbelow\n");
+    EXPECT_EQ(editor->noteText().toStdString(), grown.toStdString());
+}
+
 TEST(HtmlTableHandlesTest, ShiftArrowsGrowARectangleAndEscapeDropsIt)
 {
     auto editor = handlesEditor();

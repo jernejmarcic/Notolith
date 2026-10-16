@@ -1210,7 +1210,9 @@ bool MarkdownEditor::applyHTMLtableEdits(QList<HTMLtableEdit> edits, qsizetype t
 {
     if (edits.isEmpty())
         return false;
-    std::sort(edits.begin(), edits.end(), [](const HTMLtableEdit &l, const HTMLtableEdit &r) { return l.start > r.start; });
+    // Stable: edits at one offset go in in the order given, the first one last.
+    std::stable_sort(edits.begin(), edits.end(),
+                     [](const HTMLtableEdit &l, const HTMLtableEdit &r) { return l.start > r.start; });
     m_lastEdit.invalidate();
     pushUndo();
     m_formattingTables = true; // an HTML table is never aligned anyway

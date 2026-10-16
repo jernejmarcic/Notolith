@@ -960,9 +960,8 @@ optimal as it can be".
       before the stdin handshake; KernelClient now waits for it.
 - [x] Tables later: drag a bar to add several rows/columns, autoscroll a wide
       table while dragging a column, touch, handles on HTML tables. Done
-      2026-10-16 (simple HTML grids only). Left: paste into an HTML cell
-      rectangle is the ordinary paste; clearing an HTML cell keeps its inner
-      whitespace.
+      2026-10-16 (simple HTML grids only). Paste into an HTML cell rectangle
+      and clearing a cell's inner spaces done 2026-10-16 too.
 - [ ] Image annotation is off by default (it replaces the plain image tab);
       Jernej to say whether it should be on.
 - [x] Lists leftovers: if Enter still fails on a bare list in the running app,
