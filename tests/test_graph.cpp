@@ -20,6 +20,7 @@
 #include "Index.h"
 #include "Indexer.h"
 #include "Vault.h"
+#include "Perf.h"
 
 using namespace noteAppC;
 
@@ -491,30 +492,35 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
     // the first frame of the burst.
     view.stepSimulation(150);
 
-    std::vector<double> stepTimes;
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    // Best of three medians for each: load only ever adds time.
     QElapsedTimer clock;
-    for (int i = 0; i < 15; ++i) {
-        clock.start();
-        view.stepSimulation(1);
-        stepTimes.push_back(clock.nsecsElapsed() / 1e6);
-    }
-    const double stepMedian = median(stepTimes);
+    const double stepMedian = perf::bestOf([&] {
+        std::vector<double> stepTimes;
+        for (int i = 0; i < 15; ++i) {
+            clock.start();
+            view.stepSimulation(1);
+            stepTimes.push_back(clock.nsecsElapsed() / 1e6);
+        }
+        return median(stepTimes);
+    }, 3, 16.0);
 
     QImage image(1600, 1000, QImage::Format_ARGB32_Premultiplied);
-    std::vector<double> frameTimes;
-    for (int i = 0; i < 12; ++i) {
-        image.fill(Qt::black);
-        QPainter painter(&image);
-        clock.start();
-        view.render(&painter);
-        painter.end();
-        frameTimes.push_back(clock.nsecsElapsed() / 1e6);
-    }
-    const double frameMedian = median(frameTimes);
+    const double frameMedian = perf::bestOf([&] {
+        std::vector<double> frameTimes;
+        for (int i = 0; i < 12; ++i) {
+            image.fill(Qt::black);
+            QPainter painter(&image);
+            clock.start();
+            view.render(&painter);
+            painter.end();
+            frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+        }
+        return median(frameTimes);
+    }, 3, 16.0);
 
-    std::printf("[ PERF     ] %d nodes / %d edges: step %.3f ms, frame %.3f ms (median of %zu / %zu runs)\n",
-                view.nodeCount(), view.edgeCount(), stepMedian, frameMedian, stepTimes.size(),
-                frameTimes.size());
+    std::printf("[ PERF     ] %d nodes / %d edges: step %.3f ms, frame %.3f ms (best of three medians)\n",
+                view.nodeCount(), view.edgeCount(), stepMedian, frameMedian);
 
     EXPECT_LT(stepMedian, 16.0);
     EXPECT_LT(frameMedian, 16.0);
@@ -525,7 +531,8 @@ TEST(GraphPerformanceTest, StepCostIsNotQuadraticInNodeCount)
     constexpr int kSmall = 1000;
     constexpr int kLarge = 5000; // 5x kSmall
 
-    const auto medianStepMs = [](int n) {
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    const auto medianStepOnce = [](int n) {
         GraphView view;
         const QList<GraphNode> nodes = makeNodes(n);
         view.setGraphData(nodes, makeEdges(nodes, 2));
@@ -540,6 +547,8 @@ TEST(GraphPerformanceTest, StepCostIsNotQuadraticInNodeCount)
         }
         return median(times);
     };
+    // Best of three: load only ever adds time to either side of the ratio.
+    const auto medianStepMs = [&](int n) { return perf::bestOf([&] { return medianStepOnce(n); }); };
 
     const double smallMs = std::max(0.001, medianStepMs(kSmall));
     const double largeMs = medianStepMs(kLarge);

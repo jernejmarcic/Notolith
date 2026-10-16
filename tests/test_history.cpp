@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "NoteHistory.h"
+#include "Perf.h"
 
 using noteAppC::NoteHistory;
 
@@ -55,6 +56,26 @@ TEST_F(HistoryTest, EverySaveIsAVersionNewestFirstAndAnUnchangedSaveIsNot)
     // A second instance - the next launch - sees the same history.
     NoteHistory again(vault.path());
     EXPECT_EQ(again.versions(QStringLiteral("Folder/Note.md")).size(), 2);
+}
+
+TEST_F(HistoryTest, TheRepositoryIsCreatedByTheFirstSaveNotByOpeningTheVault)
+{
+    const QString repository = NoteHistory::repositoryPathFor(vault.path());
+    {
+        NoteHistory history(vault.path());
+        EXPECT_TRUE(history.isOpen());
+        EXPECT_TRUE(history.versions(QStringLiteral("Note.md")).isEmpty());
+        EXPECT_EQ(history.looseObjects(), 0);
+    }
+    EXPECT_FALSE(QFileInfo::exists(repository)) << "nothing was saved, so nothing is on disk";
+    EXPECT_FALSE(QDir(QFileInfo(repository).path()).exists());
+
+    NoteHistory history(vault.path());
+    ASSERT_TRUE(history.record(QStringLiteral("Note.md"), QStringLiteral("one\n")));
+    EXPECT_TRUE(QFileInfo(repository).isDir());
+    EXPECT_EQ(history.versions(QStringLiteral("Note.md")).size(), 1);
+    NoteHistory again(vault.path());
+    EXPECT_EQ(again.versions(QStringLiteral("Note.md")).size(), 1);
 }
 
 TEST_F(HistoryTest, ARenameCarriesTheHistoryAndOldVersionsStillRead)
@@ -105,16 +126,24 @@ TEST_F(HistoryTest, ASaveCostsWellUnderAMillisecond)
     QString text;
     for (int line = 0; line < 200; ++line)
         text += QStringLiteral("A line of a 10 kB note, number %1.\n").arg(line);
-    std::vector<double> samples;
-    for (int save = 0; save < 200; ++save) {
-        text += QStringLiteral("x");
-        QElapsedTimer clock;
-        clock.start();
-        ASSERT_TRUE(history.record(QStringLiteral("Deep/Folder/Note.md"), text));
-        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
-    }
-    std::sort(samples.begin(), samples.end());
-    const double median = samples[samples.size() / 2];
-    std::printf("[ PERF     ] one save recorded: median %.3f ms, worst %.3f ms\n", median, samples.back());
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    bool allRecorded = true;
+    double worst = 0;
+    // Best of three medians: load only ever adds time.
+    const double median = perf::bestOf([&] {
+        std::vector<double> samples;
+        for (int save = 0; save < 200; ++save) {
+            text += QStringLiteral("x");
+            QElapsedTimer clock;
+            clock.start();
+            allRecorded = history.record(QStringLiteral("Deep/Folder/Note.md"), text) && allRecorded;
+            samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        }
+        std::sort(samples.begin(), samples.end());
+        worst = samples.back();
+        return samples[samples.size() / 2];
+    }, 3, 1.0);
+    ASSERT_TRUE(allRecorded);
+    std::printf("[ PERF     ] one save recorded: median %.3f ms, worst %.3f ms\n", median, worst);
     EXPECT_LT(median, 1.0); // and it runs off the UI thread besides
 }

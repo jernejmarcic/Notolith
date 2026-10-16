@@ -2317,6 +2317,26 @@ TEST_F(WindowTest, EverySaveIsInTheNotesHistoryAndOneCanBePutBack)
     qputenv("XDG_DATA_HOME", previous);
 }
 
+TEST_F(WindowTest, NoteHistoryCreatesItsRepositoryOnTheFirstSaveNotWhenTheVaultOpens)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::qWait(100); // a lazy write on the history pool would have landed by now
+        EXPECT_FALSE(histories.exists()) << "opening a vault is not a snapshot";
+
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+    }
+    qputenv("XDG_DATA_HOME", previous);
+}
+
 TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
 {
     QTemporaryDir data;

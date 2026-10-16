@@ -10,6 +10,7 @@
 #include "Parser.h"
 #include "SourceMap.h"
 #include "TableFormat.h"
+#include "Perf.h"
 
 using namespace noteAppC;
 
@@ -1311,14 +1312,18 @@ TEST(ParserPerfTest, ParsingStaysLinearInFileSize)
     // One untimed pass, so neither measurement pays for a cold regex cache.
     parser.parseAll(chunk, QStringLiteral("/vault/Note.md"));
 
-    QElapsedTimer clock;
-    clock.start();
-    parser.parseAll(small, QStringLiteral("/vault/Note.md"));
-    const double smallMs = clock.nsecsElapsed() / 1e6;
-
-    clock.restart();
-    parser.parseAll(large, QStringLiteral("/vault/Note.md"));
-    const double largeMs = clock.nsecsElapsed() / 1e6;
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    // Best of three for each: load only ever adds time to either side.
+    const auto bestParseMs = [&](const QString &text) {
+        return perf::bestOf([&] {
+            QElapsedTimer clock;
+            clock.start();
+            parser.parseAll(text, QStringLiteral("/vault/Note.md"));
+            return clock.nsecsElapsed() / 1e6;
+        });
+    };
+    const double smallMs = bestParseMs(small);
+    const double largeMs = bestParseMs(large);
 
     const double sizeRatio = double(large.size()) / double(small.size());
     const double timeRatio = largeMs / std::max(0.001, smallMs);

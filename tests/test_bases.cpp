@@ -27,6 +27,7 @@
 #include "Indexer.h"
 #include "Vault.h"
 #include "WaitFor.h"
+#include "Perf.h"
 
 using namespace noteAppC;
 using namespace noteAppC::bases;
@@ -1635,7 +1636,9 @@ TEST(BasesPerformanceTest, TwentyThousandRowsFilterAndSortWellUnderBudget)
         "    filters:\n      and:\n        - 'status != \"done\"'\n        - 'price > 10'\n"
         "    sort:\n      - property: formula.ppu\n        direction: DESC\n"));
     const QList<Row> rows = generateRows(20000);
-    const qint64 elapsed = timeOpen(file, rows);
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    // Best of three: load only ever adds time.
+    const qint64 elapsed = perf::bestOf([&] { return timeOpen(file, rows); }, 3, 100);
     // "Well under 100 ms" per the task; 100 ms is the hard ceiling checked
     // here so a real regression fails the build without flaking on a loaded
     // CI box.
@@ -1650,10 +1653,11 @@ TEST(BasesPerformanceTest, TimeGrowsRoughlyLinearlyNotQuadratically)
     const QList<Row> small = generateRows(2000);
     const QList<Row> big = generateRows(20000); // 10x the rows
 
-    // Run each twice and keep the faster: a scheduler hiccup on one run
-    // should not make an O(n log n) engine look quadratic.
-    qint64 smallTime = std::min(timeOpen(file, small), timeOpen(file, small));
-    qint64 bigTime = std::min(timeOpen(file, big), timeOpen(file, big));
+    // Keep the fastest of three: a scheduler hiccup on one run should not
+    // make an O(n log n) engine look quadratic.
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    qint64 smallTime = perf::bestOf([&] { return timeOpen(file, small); });
+    qint64 bigTime = perf::bestOf([&] { return timeOpen(file, big); });
     smallTime = std::max<qint64>(smallTime, 1); // avoid a divide-by-zero on a very fast box
 
     // O(n log n) growing 10x in n grows a little over 10x; a quadratic
