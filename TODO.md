@@ -1086,17 +1086,19 @@ optimal as it can be".
       2026-10-16: "javascript should never be ran"; only HTML and CSS
       formatting is followed). Audit: no JS engine linked, litehtml executes
       nothing, on* attributes and javascript: URLs inert.
-- [ ] Nested `-` list items drawn with `↳` (U+21B3), per Jernej's sketch
+- [x] Nested `-` list items drawn with `↳` (U+21B3), per Jernej's sketch
       2026-10-16 ("nested - rows should look like this").
 - [x] Bug: "Add to dictionary" on a misspelt word resets the view to the top
       of the element (Jernej 2026-10-16). Relayout keeps heights, every
       editor refreshes, ensureCursorVisible lays the caret block out first;
       test fails on the old code.
-- [ ] Callout title editable in place: clicking the rendered title edits the
+- [x] Callout title editable in place: clicking the rendered title edits the
       title text while the header stays drawn and the `> [!type|...]` marker
       stays hidden; today any click reveals the whole marker line (Jernej
       2026-10-16: "it would make more sense of the title to be editable when
-      you click on it").
+      you click on it"). Done 273415f: overlay line edit over the title,
+      one undo step; on a foldable callout the title edits, the arrow and
+      empty header row fold.
 - [ ] Code block that cannot run (`json`, any language with no runner): no
       run button, no warning icon, no "does not know how to run" line
       (Jernej 2026-10-16: "That that should be run should not have a run
