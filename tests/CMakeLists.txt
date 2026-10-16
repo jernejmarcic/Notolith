@@ -89,7 +89,8 @@ set_tests_properties(mermaid PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(test_demo test_demo.cpp)
 target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
-target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo")
+target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo"
+                                            NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})
         target_link_libraries(test_demo PRIVATE ${module})

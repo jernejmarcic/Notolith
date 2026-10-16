@@ -1,0 +1,46 @@
+{
+  "main": {
+    "id": "main-split",
+    "type": "split",
+    "direction": "vertical",
+    "children": [
+      {
+        "id": "group-left",
+        "type": "tabs",
+        "currentTab": 0,
+        "children": [
+          {
+            "id": "leaf-welcome",
+            "type": "leaf",
+            "state": { "type": "markdown", "state": { "file": "Welcome.md", "mode": "source" } }
+          },
+          {
+            "id": "leaf-callouts",
+            "type": "leaf",
+            "state": { "type": "markdown", "state": { "file": "Callouts/Callouts.md" } }
+          }
+        ]
+      },
+      {
+        "id": "group-right",
+        "type": "tabs",
+        "currentTab": 0,
+        "children": [
+          {
+            "id": "leaf-library",
+            "type": "leaf",
+            "state": { "type": "bases", "state": { "file": "Library/Library.base" } }
+          }
+        ]
+      }
+    ]
+  },
+  "left": { "collapsed": false },
+  "right": { "collapsed": false },
+  "active": "leaf-welcome",
+  "lastOpenFiles": [
+    "Welcome.md",
+    "Callouts/Callouts.md",
+    "Library/Library.base"
+  ]
+}

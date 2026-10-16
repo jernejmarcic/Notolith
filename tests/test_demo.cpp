@@ -46,6 +46,18 @@ QString vaultPath()
     return QStringLiteral(NOTEAPPC_DEMO_VAULT_PATH);
 }
 
+void copyTree(const QString &from, const QString &to)
+{
+    QDir().mkpath(to);
+    const QFileInfoList entries = QDir(from).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+    for (const QFileInfo &entry : entries) {
+        if (entry.isDir())
+            copyTree(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
+        else
+            QFile::copy(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
+    }
+}
+
 // Every note, canvas, base, PDF and book under the vault, vault-relative, sorted -
 // deterministic order for a reproducible failure. .obsidian's own JSON is
 // vault configuration, not something MainWindow::openNote ever opens, so it
@@ -257,8 +269,18 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
 #ifdef NOTEAPPC_HAVE_BASES // the saved split holds a base: without bases it would be an empty tab
 TEST(DemoVaultTest, OpeningABaseOrCanvasReplacesTheCurrentTabAndAddsNoPane)
 {
+    // On a copy with the committed workspace: using the app on demo/ saves
+    // whatever layout was left open into its workspace.json.
+    QTemporaryDir copy;
+    ASSERT_TRUE(copy.isValid());
+    const QString root = copy.path() + QStringLiteral("/demo");
+    copyTree(vaultPath(), root);
+    QFile::remove(root + QStringLiteral("/.obsidian/workspace.json"));
+    ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/demo-workspace.json"),
+                            root + QStringLiteral("/.obsidian/workspace.json")));
+
     MainWindow window;
-    window.openVault(vaultPath());
+    window.openVault(root);
     window.resize(1280, 900);
     window.show();
     QApplication::processEvents();
@@ -279,7 +301,7 @@ TEST(DemoVaultTest, OpeningABaseOrCanvasReplacesTheCurrentTabAndAddsNoPane)
     EXPECT_EQ(panes(), 2);
     EXPECT_EQ(tabs(), (QStringList{QStringLiteral("Callouts"), QStringLiteral("Library"), QStringLiteral("Welcome")}));
 
-    ASSERT_TRUE(window.openNote(vaultPath() + QStringLiteral("/Welcome.md")));
+    ASSERT_TRUE(window.openNote(root + QStringLiteral("/Welcome.md")));
     for (const QString &file : {
 #ifdef NOTEAPPC_HAVE_CANVAS
              QStringLiteral("/Canvas/Board.canvas"),
@@ -287,7 +309,7 @@ TEST(DemoVaultTest, OpeningABaseOrCanvasReplacesTheCurrentTabAndAddsNoPane)
              QStringLiteral("/Library/Library.base"),
              QStringLiteral("/Welcome.md")}) {
         SCOPED_TRACE(file.toStdString());
-        ASSERT_TRUE(window.openNote(vaultPath() + file));
+        ASSERT_TRUE(window.openNote(root + file));
         QApplication::processEvents();
         EXPECT_EQ(panes(), 2) << "no pane is added";
         EXPECT_EQ(tabs().size(), 3) << "the active tab is reused, no tab is added";
@@ -307,17 +329,6 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
     QTemporaryDir copy;
     ASSERT_TRUE(copy.isValid());
     const QString root = copy.path() + QStringLiteral("/demo");
-    std::function<void(const QString &, const QString &)> copyTree = [&](const QString &from, const QString &to) {
-        QDir().mkpath(to);
-        const QFileInfoList entries =
-            QDir(from).entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
-        for (const QFileInfo &entry : entries) {
-            if (entry.isDir())
-                copyTree(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
-            else
-                QFile::copy(entry.filePath(), to + QLatin1Char('/') + entry.fileName());
-        }
-    };
     copyTree(vaultPath(), root);
 
     MainWindow window;
