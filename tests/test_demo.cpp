@@ -21,6 +21,7 @@
 #include <QAction>
 #include <QDir>
 #include <QSignalSpy>
+#include <QTabBar>
 #include <QTimer>
 #include <QWidget>
 #include <QTest>
@@ -248,6 +249,52 @@ TEST(DemoVaultTest, EveryFileOpensAndPaintsInEveryMode)
     EXPECT_LT(clock.elapsed(), 60000);
     EXPECT_TRUE(unexpectedMessages().isEmpty()) << unexpectedMessages().join(QLatin1Char('\n')).toStdString();
 }
+
+// The second "Library" pane in the walk's screenshots is the vault's own saved
+// workspace (demo/.obsidian/workspace.json puts Library.base in a right-hand
+// split), not a leftover: opening a base or a canvas, like a note, replaces the
+// tab it is opened in and adds no pane.
+#ifdef NOTEAPPC_HAVE_BASES // the saved split holds a base: without bases it would be an empty tab
+TEST(DemoVaultTest, OpeningABaseOrCanvasReplacesTheCurrentTabAndAddsNoPane)
+{
+    MainWindow window;
+    window.openVault(vaultPath());
+    window.resize(1280, 900);
+    window.show();
+    QApplication::processEvents();
+
+    const auto tabs = [&window] {
+        QStringList titles;
+        const auto bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+        for (QTabBar *bar : bars) {
+            for (int i = 0; i < bar->count(); ++i)
+                titles << bar->tabText(i);
+        }
+        titles.sort(); // the bars come in no order
+        return titles;
+    };
+    const auto panes = [&window] { return window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(); };
+
+    // What workspace.json says: Welcome and Callouts on the left, Library on the right.
+    EXPECT_EQ(panes(), 2);
+    EXPECT_EQ(tabs(), (QStringList{QStringLiteral("Callouts"), QStringLiteral("Library"), QStringLiteral("Welcome")}));
+
+    ASSERT_TRUE(window.openNote(vaultPath() + QStringLiteral("/Welcome.md")));
+    for (const QString &file : {
+#ifdef NOTEAPPC_HAVE_CANVAS
+             QStringLiteral("/Canvas/Board.canvas"),
+#endif
+             QStringLiteral("/Library/Library.base"),
+             QStringLiteral("/Welcome.md")}) {
+        SCOPED_TRACE(file.toStdString());
+        ASSERT_TRUE(window.openNote(vaultPath() + file));
+        QApplication::processEvents();
+        EXPECT_EQ(panes(), 2) << "no pane is added";
+        EXPECT_EQ(tabs().size(), 3) << "the active tab is reused, no tab is added";
+        EXPECT_TRUE(tabs().contains(QFileInfo(file).completeBaseName())) << tabs().join(QLatin1Char(',')).toStdString();
+    }
+}
+#endif
 
 // Every command in the palette once, on a scratch copy of the vault so an
 // editing command cannot dirty demo/. Modal dialogs (the file pickers, the
