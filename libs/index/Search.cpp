@@ -27,41 +27,77 @@ QList<Range> lineRanges(const QString &text)
     return ranges;
 }
 
-/// A "block" here is a paragraph: a run of non-blank lines, blank lines
-/// (whitespace-only) as the separator. Obsidian's own notion of a block is
-/// finer (a list item is its own block, for instance); this is the
-/// ponytail version - simple, and right often enough that `line:` and
-/// `section:` cover the rest. Upgrade path: walk md4qt's block tree instead,
-/// the way the editor's own layout does, if a list-item-precision block:
-/// query is ever asked for.
+/// A "block" is what Obsidian's `block:` matches inside: a paragraph (a run of
+/// non-blank lines), but also each list item on its own (a nested item too),
+/// each ATX heading line, a callout from its `> [!type]` title line on, and a
+/// blockquote paragraph - a line of only `>` markers separates like a blank
+/// line. List items, headings and quotes inside a fenced code block are code,
+/// not structure. Still line-based text scanning rather than md4qt's block
+/// tree, so setext headings and lazy continuation lines are not told apart.
 QList<Range> blockRanges(const QString &text)
 {
-    const auto lineEndFrom = [&text](qsizetype at) {
-        const qsizetype newline = text.indexOf(QLatin1Char('\n'), at);
-        return newline < 0 ? text.size() : newline;
+    // Hand-rolled rather than regexes: this runs on every line of every note a block: query touches.
+    const auto spaceOrEnd = [](QStringView v, qsizetype at) { return at >= v.size() || v.at(at).isSpace(); };
+    const auto isList = [&](QStringView v) {
+        if (v.isEmpty())
+            return false;
+        if (v.at(0) == QLatin1Char('-') || v.at(0) == QLatin1Char('*') || v.at(0) == QLatin1Char('+'))
+            return spaceOrEnd(v, 1);
+        qsizetype digits = 0;
+        while (digits < v.size() && v.at(digits).isDigit())
+            ++digits;
+        return digits >= 1 && digits <= 9 && digits < v.size()
+               && (v.at(digits) == QLatin1Char('.') || v.at(digits) == QLatin1Char(')')) && spaceOrEnd(v, digits + 1);
     };
-    const auto isBlank = [&text](qsizetype start, qsizetype end) {
-        return QStringView(text).mid(start, end - start).trimmed().isEmpty();
+    const auto isHeading = [&](QStringView v) {
+        qsizetype hashes = 0;
+        while (hashes < v.size() && v.at(hashes) == QLatin1Char('#'))
+            ++hashes;
+        return hashes >= 1 && hashes <= 6 && spaceOrEnd(v, hashes);
     };
+    const QStringView all(text);
 
     QList<Range> blocks;
-    const qsizetype n = text.size();
+    qsizetype blockStart = -1, blockEnd = -1;
+    bool inFence = false, afterHeading = false;
+    const auto close = [&] {
+        if (blockStart >= 0)
+            blocks.append({blockStart, blockEnd});
+        blockStart = -1;
+    };
+
     qsizetype i = 0;
+    const qsizetype n = text.size();
     while (i < n) {
-        qsizetype end = lineEndFrom(i);
-        while (i < n && isBlank(i, end)) {
-            i = qMin(n, end + 1);
-            end = lineEndFrom(i);
+        const qsizetype newline = text.indexOf(QLatin1Char('\n'), i);
+        const qsizetype end = newline < 0 ? n : newline;
+        const QStringView line = all.mid(i, end - i);
+        // The text after any leading whitespace and blockquote markers.
+        qsizetype body = 0;
+        while (body < line.size() && (line.at(body) == QLatin1Char(' ') || line.at(body) == QLatin1Char('\t')
+                                      || line.at(body) == QLatin1Char('>')))
+            ++body;
+        const QStringView content = line.mid(body);
+        const bool quoted = line.left(body).contains(QLatin1Char('>'));
+
+        if (content.isEmpty()) {
+            close(); // blank, or only quote markers
+            afterHeading = false;
+        } else {
+            if (content.startsWith(QLatin1String("```")) || content.startsWith(QLatin1String("~~~")))
+                inFence = !inFence;
+            const bool startsOwn = !inFence
+                && (isList(content) || isHeading(content) || (quoted && content.startsWith(QLatin1String("[!"))));
+            if (blockStart >= 0 && (startsOwn || afterHeading))
+                close();
+            if (blockStart < 0)
+                blockStart = i;
+            blockEnd = end;
+            afterHeading = !inFence && isHeading(content);
         }
-        if (i >= n)
-            break;
-        const qsizetype start = i;
-        while (i < n && !isBlank(i, end)) {
-            i = qMin(n, end + 1);
-            end = lineEndFrom(i);
-        }
-        blocks.append({start, i > start ? (text.at(i - 1) == QLatin1Char('\n') ? i - 1 : i) : n});
+        i = end + 1;
     }
+    close();
     return blocks;
 }
 
