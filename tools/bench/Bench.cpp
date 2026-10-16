@@ -12,6 +12,7 @@
 // separate temporary directory, never into the vault itself.
 
 #include <QApplication>
+#include <QBuffer>
 #include <QCommandLineParser>
 #include <QDir>
 #include <QDirIterator>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -1104,6 +1106,187 @@ Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
                   samples);
 }
 
+// --- relayouts that are not keystrokes --------------------------------------
+
+/// `insert` placed at the section boundary nearest the middle of a
+/// buildNote(kilobytes), so the block it adds is on screen with the caret.
+QString noteWithBlockInMiddle(int kilobytes, const QString &insert, qsizetype *at)
+{
+    QString note = buildNote(kilobytes);
+    *at = note.indexOf(QStringLiteral("## Section"), note.size() / 2);
+    note.insert(*at, insert);
+    return note;
+}
+
+/// An editor showing `note` with its parse landed, the caret and the
+/// viewport at `at`, one frame painted.
+std::unique_ptr<MarkdownEditor> settledEditor(const QString &note, qsizetype at, QSize size = QSize(900, 600))
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(size);
+    QSignalSpy parsed(editor.get(), &MarkdownEditor::wordCountChanged);
+    editor->setNoteText(note);
+    while (parsed.isEmpty() || parsed.last().at(0).toInt() < 0) {
+        if (!parsed.wait(30000))
+            break;
+    }
+    editor->setCursorOffset(at);
+    editor->enterBlockAt(at);
+    paintedFrame(editor.get());
+    return editor;
+}
+
+/// A window resize, two widths alternately. With readable line length on (the
+/// default) and both widths wider than it, no line breaks anywhere.
+Timing benchResize(int kilobytes, int fromWidth, int toWidth, const QString &what, int runs)
+{
+    qsizetype at = 0;
+    const QString note = noteWithBlockInMiddle(kilobytes, QString(), &at);
+    auto editor = settledEditor(note, at, QSize(fromWidth, 600));
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        editor->resize(i % 2 ? fromWidth : toWidth, 600);
+        (void)paintedFrame(editor.get());
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Resize to painted"), QStringLiteral("%1 kB note, %2").arg(kilobytes).arg(what),
+                  samples);
+}
+
+/// A foldable callout on screen, folded and unfolded alternately.
+Timing benchFold(int kilobytes, int runs)
+{
+    qsizetype at = 0;
+    const QString note = noteWithBlockInMiddle(
+        kilobytes, QStringLiteral("> [!note]- Folded\n> one line\n> and another\n\n"), &at);
+    auto editor = settledEditor(note, at);
+    // The caret out of the callout, so its source is not what shows.
+    editor->setCursorOffset(note.indexOf(QStringLiteral("A paragraph"), at));
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        editor->toggleFoldAt(at + 2);
+        (void)paintedFrame(editor.get());
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Fold toggle to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
+}
+
+/// A plugin code block's image arriving: what any embed's late answer
+/// (a PDF page, a note embed, a diagram) costs once it is back. Timed from
+/// the renderer's deliver call, so it includes the queued hop back to the
+/// editor's thread - that hop is part of what an arrival costs.
+Timing benchMediaArrival(int kilobytes, int runs)
+{
+    qsizetype at = 0;
+    const QString note = noteWithBlockInMiddle(kilobytes, QStringLiteral("```benchimage\nanything\n```\n\n"), &at);
+    auto editor = settledEditor(note, at);
+    editor->setCursorOffset(note.indexOf(QStringLiteral("A paragraph"), at));
+    std::function<void(MarkdownEditor::CodeBlockResult)> pending;
+    const auto renderer = [&pending](const QString &, const QString &, int, const QString &,
+                                     const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+        pending = deliver;
+    };
+    QImage image(600, 240, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::darkCyan);
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        pending = nullptr;
+        editor->setCodeBlockRenderer({QStringLiteral("benchimage")}, renderer); // a fresh ask, untimed
+        (void)paintedFrame(editor.get());
+        if (!pending)
+            break;
+        MarkdownEditor::CodeBlockResult result;
+        result.isMarkdown = false;
+        result.image = image;
+        QElapsedTimer clock;
+        clock.start();
+        pending(result);
+        QCoreApplication::processEvents(); // the answer is posted back to the editor's thread
+        (void)paintedFrame(editor.get());
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Media arrival to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
+}
+
+/// Source mode, a pipe table in the middle of a long note: a character typed
+/// into a cell and Tab straight after it, inside the parse debounce, so the
+/// table is realigned before the reparse of the typing has run.
+Timing benchSourceTableTab(int kilobytes, int runs)
+{
+    qsizetype at = 0;
+    const QString note = noteWithBlockInMiddle(
+        kilobytes, QStringLiteral("| name | qty |\n| --- | --- |\n| a | 1 |\n| b | 2 |\n\n"), &at);
+    auto editor = settledEditor(note, at);
+    editor->setAlignTables(true);
+    editor->setMode(MarkdownEditor::Mode::Source);
+    editor->setCursorOffset(at + 2); // in the header's first cell
+    (void)paintedFrame(editor.get());
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        QElapsedTimer clock;
+        clock.start();
+        QTest::keyClick(editor.get(), Qt::Key_Tab);
+        (void)paintedFrame(editor.get());
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Source table Tab after typing"), QStringLiteral("%1 kB note").arg(kilobytes),
+                  samples);
+}
+
+/// A Jupyter notebook of `cells` code cells, each with a stored PNG output of
+/// about 200 kB - what opening one costs is reading those into the cache.
+QString writeBenchNotebook(const QString &dir, int cells)
+{
+    QImage image(640, 480, QImage::Format_RGB32);
+    quint32 seed = 1;
+    for (int y = 0; y < image.height(); ++y) {
+        auto *line = reinterpret_cast<quint32 *>(image.scanLine(y));
+        for (int x = 0; x < image.width(); ++x) {
+            seed = seed * 1664525u + 1013904223u; // noise, so the PNG does not compress away
+            line[x] = 0xff000000u | (seed >> 8);
+        }
+    }
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    const QString base64 = QString::fromLatin1(png.toBase64());
+
+    QJsonArray cellArray;
+    for (int i = 0; i < cells; ++i) {
+        QJsonObject output{{QStringLiteral("output_type"), QStringLiteral("display_data")},
+                           {QStringLiteral("data"), QJsonObject{{QStringLiteral("image/png"), base64},
+                                                                {QStringLiteral("text/plain"), QStringLiteral("<Figure>")}}},
+                           {QStringLiteral("metadata"), QJsonObject()}};
+        cellArray.append(QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                                     {QStringLiteral("execution_count"), i + 1},
+                                     {QStringLiteral("metadata"), QJsonObject()},
+                                     {QStringLiteral("source"), QStringLiteral("plot(%1)").arg(i)},
+                                     {QStringLiteral("outputs"), QJsonArray{output}}});
+        cellArray.append(QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                                     {QStringLiteral("metadata"), QJsonObject()},
+                                     {QStringLiteral("source"), QStringLiteral("Figure %1 shows it.").arg(i)}});
+    }
+    const QJsonObject root{
+        {QStringLiteral("cells"), cellArray},
+        {QStringLiteral("metadata"),
+         QJsonObject{{QStringLiteral("kernelspec"), QJsonObject{{QStringLiteral("language"), QStringLiteral("python")},
+                                                                {QStringLiteral("name"), QStringLiteral("python3")}}}}},
+        {QStringLiteral("nbformat"), 4},
+        {QStringLiteral("nbformat_minor"), 5}};
+    const QString path = dir + QStringLiteral("/bench.ipynb");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return {};
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    return path;
+}
+
 /// 5. Peak resident memory for a vault open with a large note. Measured
 /// first, before any other phase of this tool has allocated and freed a
 /// pile of throwaway notes and windows: VmHWM never falls back down within
@@ -1258,8 +1441,8 @@ int main(int argc, char *argv[])
     parser.addOption(viewportOption);
     // One phase alone, so `perf record` sees only it.
     QCommandLineOption phaseOption(QStringLiteral("phase"),
-                                   QStringLiteral("Run one phase: memory, start, open, keystroke, scroll "
-                                                  "or pdfview."),
+                                   QStringLiteral("Run one phase: memory, start, open, keystroke, relayout, "
+                                                  "scroll or pdfview."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
     parser.process(app);
@@ -1387,6 +1570,11 @@ int main(int argc, char *argv[])
                                  [&] { (void)index.allNotesForBases(); });
         }
 
+        // A notebook's stored outputs go into the output cache when it is read.
+        if (const QString notebook = writeBenchNotebook(workDir.path(), 40); !notebook.isEmpty())
+            timings << benchNoteOpen(*window, notebook, scratchPath,
+                                     QStringLiteral("notebook, 40 PNG outputs"), 9);
+
         // What every switch on the settings page costs: the page reports a
         // change and the window applies every setting, with a big note open.
         window->openNote(sizedNotes.value(1024));
@@ -1413,6 +1601,18 @@ int main(int argc, char *argv[])
         timings << benchHtmlTableKeystroke(30);
         timings << benchHtmlTableParse(30);
         timings << benchPdfKeystroke(workDir.path(), 30);
+    }
+
+    // Relayouts that are not keystrokes: a resize, a fold, an embed's late
+    // answer, and a source-mode table realigned inside the parse debounce.
+    if (runs("relayout")) {
+        for (int kb : {200, 1024}) {
+            timings << benchResize(kb, 1100, 1000, QStringLiteral("text width kept"), 20);
+            timings << benchResize(kb, 640, 600, QStringLiteral("text rewrapped"), 20);
+            timings << benchFold(kb, 20);
+            timings << benchMediaArrival(kb, 20);
+        }
+        timings << benchSourceTableTab(1024, 15);
     }
 
     // 4: scroll frame time over a 5 000-line note.
