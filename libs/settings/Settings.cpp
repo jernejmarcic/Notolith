@@ -51,6 +51,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.listNumberSuffix"), QStringLiteral(".")},   // after a drawn number; empty: as written
         {QStringLiteral("editor.bulletGlyphs"), QStringLiteral("-=dash,*=dot,+=diamond")},
         {QStringLiteral("editor.alignTables"), true},
+        {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tabWidth"), 4},
 
         // Files and links

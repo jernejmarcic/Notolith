@@ -1106,6 +1106,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setListNumberSuffix(m_settings.text(QStringLiteral("editor.listNumberSuffix")));
     editor->setBulletGlyphs(m_settings.text(QStringLiteral("editor.bulletGlyphs")));
     editor->setAlignTables(m_settings.boolean(QStringLiteral("editor.alignTables")));
+    editor->setHoverEditButton(m_settings.boolean(QStringLiteral("editor.hoverEditButton")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));

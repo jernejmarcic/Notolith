@@ -519,6 +519,9 @@ QWidget *SettingsPage::buildEditorPage()
                tr("How each bullet marker is drawn in live preview. The note keeps - * +."), glyphs,
                [this, key, glyphs] { glyphs->setSpec(m_settings->text(key)); });
     }
+    addToggleRow(layout, QStringLiteral("editor.hoverEditButton"), tr("Edit button on rendered blocks"),
+                tr("Show a </> button over a callout, formula, table, embed or other rendered "
+                   "block while the pointer is on it. Clicking it shows the block's source."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
     addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
