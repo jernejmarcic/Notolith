@@ -35,7 +35,8 @@ the command palette (Ctrl+P) included; `TODO.md` has what is left.
   layout comes back with the vault, and named layouts save and load.
 - **Core plugins** - search with Obsidian's grammar, backlinks and unlinked
   mentions, outgoing links, tags, outline, bookmarks, daily notes,
-  templates, page preview, PDF export, hotkeys.
+  templates, page preview, PDF export, hotkeys, and a right-click menu
+  with word lookup (definitions from a DICT server).
 - **Modules** - spellcheck, graph view (global and local), canvas (JSON
   Canvas), bases (`.base` views), each optional at build time.
 - **Themes** - dark by default, Obsidian's token names and values, custom

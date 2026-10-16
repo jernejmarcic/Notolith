@@ -2440,12 +2440,14 @@ private:
     Range wordAtCaret() const;
     /// The run of word characters touching `offset`, whatever spelling does.
     Range wordAt(qsizetype offset) const;
-    /// The suggestions, "Add to dictionary" and "Remove from dictionary" for
-    /// `word`, when it is misspelt or in the personal dictionary.
-    void addSpellingActions(QMenu &menu, const Range &word);
+    /// The suggestions and "Add to dictionary" for a misspelt word at
+    /// `offset`, or "Remove from dictionary" for a personal one when `personal`.
+    /// False, and nothing added, anywhere else.
+    bool addSpellingActions(QMenu &menu, qsizetype offset, bool personal = true);
     void copySelection();
     void cutSelection();
-    void pasteClipboard();
+    /// `plain`: Ctrl+Shift+V, text only, never an image saved as an attachment.
+    void pasteClipboard(bool plain = false);
     /// Kate-definition colours for a fenced code block, in the coordinates of
     /// that block's display string. Not const: a piece records the state it
     /// ended in, for the piece after it.

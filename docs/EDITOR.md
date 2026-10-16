@@ -251,6 +251,59 @@ panels that changed (not the viewport), a painted button, nothing laid out.
 
 Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
+## The context menu
+
+Right-click anywhere in a note. Obsidian's order, minus its Paragraph and
+Insert submenus (there is no list, heading or quote helper to reuse; add them
+when wanted):
+
+| group | items | when |
+|---|---|---|
+| spelling | the suggestions, "Add "w" to dictionary" | on a misspelt word (as before) |
+| | "Remove "w" from dictionary" | on a word in `~/.config/noteAppC/dictionary.txt` |
+| edit | Cut, Copy, Paste | Cut and Paste not in reading view; Cut and Copy greyed with nothing selected |
+| format | Format > Bold, Italic, Strikethrough, Highlight, Code, Math, Comment; Add link | not in reading view; with nothing selected a format applies to the word under the pointer |
+| window | Look up "t", Search for "t", Search the web for "t" | each off by its switch (below) |
+| block | the table and callout items | on a table cell or a callout |
+
+`t` is the selection when it is one line of at most 60 characters, else the
+word under the pointer; a paragraph is never a lookup target. A right click
+outside the selection moves the caret there; inside it keeps the selection.
+The Format items are also commands (`editor:toggle-strikethrough`,
+`-code`, `-inline-math`, `-comments`, no default keys), so they reach the
+palette and Hotkeys.
+
+`MarkdownEditor::contextMenuAt(offset)` builds the menu without showing it,
+for the tests; the window-level items arrive through `setContextActions()`
+and the `searchRequested` / `lookupRequested` signals, so the editor links
+nothing.
+
+### Look up, and what leaves the machine
+
+"Look up" asks a DICT server (RFC 2229, `libs/ui/DictClient`) for the word on
+every database it has - on dict.org that includes WordNet (definitions and
+`[syn: ...]`) and a thesaurus. Servers come from the "Dictionary server"
+setting (`lookup.server`, `host` or `host:port`), else `~/.dictrc`, then
+`/etc/dict/dict.conf`, tried in order; a refused one costs under a
+millisecond, a dead one 1.5 s.
+
+Nothing is sent on a right click. Only when "Look up" is chosen, a TCP
+connection to port 2628 of the first server that answers carries exactly
+`DEFINE * "word"` and `QUIT` (the word quoted, control characters turned to
+spaces), in plain text. With `/etc/dict/dict.conf` as shipped that is
+localhost, and when `dictd` is not running, dict.org over the internet. To stay
+offline install `dictd` with a database (`dict-gcide`, `dict-wn`) and enable
+it. The popover (a second `PagePreview`, `lookupPopover`) says "Looking up..."
+at once, fills when the answer comes, and goes with Escape or a click outside.
+
+Switches: Settings > Core plugins > "Look up words" (`plugins.wordLookup`, on;
+off, no item, no popover and no client are built), "Search" for "Search
+for", and Settings > Editor > "Web search" (`lookup.webSearchURL`, `%1` is
+the URL-encoded text; empty removes the item). Tests: `ContextMenuTest.*` in
+`tests/test_editor.cpp`, `DictClientTest.*` (a fake server on loopback; no
+test reaches a real one) in `tests/test_lookup.cpp`, `LookUp*` in
+`tests/test_window.cpp`.
+
 ## The callout menu
 
 Right-click a rendered callout (`> [!x]` or `:::`, any piece of a long one):
