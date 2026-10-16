@@ -29,28 +29,35 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 
 ## Where it stands
 
-Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000:
+Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000. Rows dated
+2026-10-16 are the best of three interleaved runs at `d9fcfae` (20 000 notes, the busy machine):
 
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench, includes `openVault`) | 32 ms (2026-10-01, 20 000 notes, quiet) | - |
+| cold start, the process's first window (bench, includes `openVault`) | 40.3 ms (2026-10-16) | 40 ms |
+| cold start to first painted frame, later in-process windows (bench) | 19.5 ms (2026-10-16) | - |
 | vault usable from process start | 204 ms | - |
-| note open, 1 kB | 1.1 ms | 300 ms |
-| note open, 50 kB | 6.9 ms | 300 ms |
-| note open, 200 kB | 3.9 ms (readable; styled ~26 ms later) | 300 ms |
-| note open, 1 MB | 11.9 ms (readable; styled ~140 ms later) | - |
+| note open, 1 kB | 1.8 ms (2026-10-16) | 300 ms |
+| note open, 50 kB | 7.9 ms (2026-10-16) | 300 ms |
+| note open, 200 kB | 2.5 ms (2026-10-16; readable, styled ~26 ms later) | 300 ms |
+| note open, 1 MB | 10.2 ms (2026-10-16; readable, styled ~140 ms later) | - |
+| note open, notebook with 40 stored PNG outputs | 37.7 ms (2026-10-16) | - |
+| Tags pane refresh, 20 000 notes, 4 505 distinct tags | 37 ms (2026-10-16) | - |
 | keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
-| keystroke, 1 MB | 0.44 ms | 8 ms |
+| keystroke, 1 MB | 0.55 ms (2026-10-16; 0.44 ms on a quiet machine) | 0.6 ms (this pass), 8 ms |
+| source-mode table Tab, 1 MB | 2.0 ms (2026-10-16) | - |
+| resize, text width kept / rewrapped, 1 MB | 0.24 / 1.36 ms (2026-10-16) | - |
+| fold a callout, 1 MB | 0.29 ms (2026-10-16) | - |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | keystroke in a cell of a 50-row HTML table (2026-10-02, busy machine) | 1.33 ms | 8 ms |
 | parse plus HTML structure pass, that note, gumbo cache cold (off the UI thread) | 0.24 ms | - |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine) | 5 s |
-| peak RSS, vault plus a 1 MB note | 227 MB (2026-10-01) | - |
+| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
+| peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
@@ -726,7 +733,9 @@ writes it, and a run or a clear before then drops it. See
 `unlinkedMentions` read each candidate note in full to find its aliases. It
 now reads the first 16 kB and goes back for the rest only when the note opens
 a front matter that has not closed by then. `Vault::decode` no longer runs a
-CRLF replace over text that has no `\r`.
+CRLF replace over text that has no `\r`. The bench vault's notes are about
+1 kB, so its rows did not move (unlinked mentions 0.165 to 0.163 ms, vault
+note open 4.05 to 3.85 ms); the read is bounded for long notes now.
 
 ### 25. A resize, a fold or a link turning resolved threw away every layout
 
@@ -755,7 +764,8 @@ viewport, which is what a rewrapping resize pays for.
 | fold a callout, 200 kB / 1 MB | 0.88 / 1.41 ms | 0.23 / 0.30 ms |
 | media arrival, 200 kB / 1 MB | already one block | unchanged |
 
-The rewrap rows are the fixed point's price, inside the 15% this pass allowed.
+The rewrap rows are the fixed point's price, inside the 15% this pass allowed
+(+11.4% / +9.4% in the final interleaved run against the pre-pass build).
 
 ### 26. DisplayMap walked its runs from the start
 
@@ -779,7 +789,8 @@ palette and the sheet only when they differ.
 | settings pass, 1 MB note open | 1.59 ms | 0.70 ms |
 
 The median row fell because later windows no longer repolish the earlier
-ones; a real launch is the first-window row, which did not move.
+ones; a real launch is the first-window row, which did not move. With fix 28
+on top, the final interleaved run put it at 42.6 to 40.3 ms.
 
 ### 28. Every editor read the syntax definitions
 
