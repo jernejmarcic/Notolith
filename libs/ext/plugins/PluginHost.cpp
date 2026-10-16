@@ -15,6 +15,14 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#if defined(__SANITIZE_ADDRESS__)
+#define NOTEAPPC_ASAN
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define NOTEAPPC_ASAN
+#endif
+#endif
+
 namespace noteAppC {
 
 namespace {
@@ -32,7 +40,7 @@ constexpr qint64 kSlowRenderMs = 1000;
 // shape as TexCompiler's rlimits (libs/render/TexCompiler.cpp), just a
 // smaller ceiling because these are meant to be small out-of-process
 // extras, not a full TeX engine.
-constexpr rlim_t kMemoryLimitBytes = 256ULL * 1024 * 1024;
+[[maybe_unused]] constexpr rlim_t kMemoryLimitBytes = 256ULL * 1024 * 1024;
 constexpr rlim_t kOpenFileLimit = 64;
 
 QString permissionLabel(PluginPermission permission)
@@ -220,8 +228,12 @@ void PluginHost::ensureStarted()
     // chain (rlimits survive execve) - see TexCompiler::compile for the
     // pattern this copies.
     m_process->setChildProcessModifier([filterFD] {
+#ifndef NOTEAPPC_ASAN
+        // ASan reserves terabytes of address space at start-up, so under it the
+        // cap would kill the plugin before main; every other limit stays.
         rlimit memory{kMemoryLimitBytes, kMemoryLimitBytes};
         setrlimit(RLIMIT_AS, &memory);
+#endif
         rlimit files{kOpenFileLimit, kOpenFileLimit};
         setrlimit(RLIMIT_NOFILE, &files);
         sandbox::keepInChild(filterFD);

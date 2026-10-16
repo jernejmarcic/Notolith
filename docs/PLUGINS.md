@@ -189,7 +189,8 @@ wipes everything else, including `$XDG_CONFIG_HOME` itself, which is why it is
 also explicitly re-set to the same value the config bind used).
 `QProcess::setChildProcessModifier` sets `RLIMIT_AS` (256 MiB) and
 `RLIMIT_NOFILE` (64) between fork and exec, so the limit holds whether or not
-bwrap is present. A per-request timeout in the app kills a host that does not
+bwrap is present (`RLIMIT_AS` is left off in an ASan build, which reserves
+terabytes of address space at start-up; every other limit stays). A per-request timeout in the app kills a host that does not
 answer; the next command or render on that plugin restarts it, after a
 backoff that grows with repeated failures. The host never sees a byte of the
 vault except what the protocol hands it - no file access, no path to the

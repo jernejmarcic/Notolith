@@ -49,6 +49,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 
 using namespace noteAppC;
 using namespace noteAppC::ai;
@@ -752,9 +753,11 @@ TEST_F(AiPluginEndToEndTest, TranslateWithNoSelectionWritesANewNoteAndNeverOverw
     PluginHost host(manifest, {PluginPermission::ReadNotes, PluginPermission::WriteNotes, PluginPermission::Network},
                     cb);
     const auto run = [&] {
-        bool done = false;
-        host.runCommand(QStringLiteral("translate"), [&](bool, const QJsonObject &, const QString &) { done = true; });
-        return waitUntil([&] { return done; });
+        // On the heap, and captured by value: when the first run() fails and
+        // the ASSERT returns, the host is still alive and may call this late.
+        const auto done = std::make_shared<bool>(false);
+        host.runCommand(QStringLiteral("translate"), [done](bool, const QJsonObject &, const QString &) { *done = true; });
+        return waitUntil([done] { return *done; });
     };
     ASSERT_TRUE(run());
     EXPECT_EQ(written.value(QStringLiteral("Note (de).md")), QStringLiteral("translated"));
