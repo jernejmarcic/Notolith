@@ -621,11 +621,11 @@ TEST(CanvasFitTest, OpeningACanvasShowsAllOfIt)
 
 namespace {
 
-void buildGrid(CanvasView &view, int count)
+void buildGrid(CanvasView &view, int count, int columns = 40)
 {
     for (int i = 0; i < count; ++i) {
-        const int col = i % 40;
-        const int row = i / 40;
+        const int col = i % columns;
+        const int row = i / columns;
         view.document().addNode(makeTextNode(
             QRectF(col * 220.0, row * 140.0, 200, 120),
             QStringLiteral("Node %1\n\nSome body text, so the content cache has real Markdown to lay out.").arg(i)));
@@ -701,19 +701,22 @@ TEST(CanvasPerfTest, ColdFirstPaintCostTracksVisibleNodesNotTotalNodes)
     // the cull (isNodeVisible() always returning true) was checked to fail
     // this well before the loose threshold below: it built all 1 000 nodes'
     // Markdown content on that first paint instead of the ~56 actually on
-    // screen, which measured at roughly 18x, not under 6x.
+    // screen, which measured at roughly 16x, not under 6x.
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
     // A cold paint needs a fresh view each time; best of three for each side,
     // because load only ever adds time to either.
-    const auto cold = [](int nodes) {
-        return perf::bestOf([nodes] {
+    // The small canvas is 8 columns wide so all 60 really are on screen; at
+    // the default 40 only 16 of them were, which left the honest ratio near
+    // 4x and the guard at the mercy of one noisy run.
+    const auto cold = [](int nodes, int columns) {
+        return perf::bestOf([nodes, columns] {
             CanvasView view;
-            buildGrid(view, nodes);
+            buildGrid(view, nodes, columns);
             return firstPaintNanos(view);
         });
     };
-    const qint64 coldBig = cold(1000);
-    const qint64 coldSmall = cold(60);
+    const qint64 coldBig = cold(1000, 40);
+    const qint64 coldSmall = cold(60, 8);
 
     EXPECT_LT(double(coldBig), double(coldSmall) * 6.0)
         << "cold first paint: " << coldBig / 1.0e6 << " ms for 1000 nodes vs " << coldSmall / 1.0e6

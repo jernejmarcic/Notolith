@@ -267,6 +267,13 @@ MainWindow::MainWindow(QWidget *parent)
     m_historyPool.setMaxThreadCount(1);
     m_historyPool.setExpiryTimeout(-1);
     m_theme = themeFromSettings();
+    // The style sheet before the widgets exist, so each is styled once as it
+    // is made: set after them (applyTheme), it re-polished every one, a third
+    // of a cold start. applyTheme then finds it already in place.
+    if (auto *app = qobject_cast<QApplication *>(QCoreApplication::instance())) {
+        app->setPalette(m_theme.palette());
+        app->setStyleSheet(m_theme.styleSheet());
+    }
 
     auto *central = new QWidget(this);
     auto *rows = new QVBoxLayout(central);
@@ -3358,8 +3365,11 @@ void MainWindow::applyTheme()
     Icons::clearCache();
 
     if (auto *app = qobject_cast<QApplication *>(QCoreApplication::instance())) {
-        app->setPalette(m_theme.palette());
-        app->setStyleSheet(m_theme.styleSheet());
+        // Either one, set again unchanged, repolishes every widget in the app.
+        if (!(app->palette() == m_theme.palette()))
+            app->setPalette(m_theme.palette());
+        if (const QString sheet = m_theme.styleSheet(); app->styleSheet() != sheet)
+            app->setStyleSheet(sheet);
     } else {
         setPalette(m_theme.palette());
         setStyleSheet(m_theme.styleSheet());

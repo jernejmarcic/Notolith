@@ -376,8 +376,8 @@ QString ipynbMarkdown(const IpynbDocument &document)
     return markdownOf(cellsOf(document.root), document.language);
 }
 
-// ponytail: synchronous on the caller (the GUI thread, at every readNote incl. the reload after a save); large PNG outputs
-// cost decode + cache writes each time. Move to a worker, or skip unchanged keys, if a notebook is slow to open.
+// Lazily (seedNotebookCache): decoding every stored PNG and writing it out at each read was 230 ms of a 350 ms
+// open for a notebook of 40 plots, on the GUI thread; now only the blocks laid out pay, when they look themselves up.
 void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier)
 {
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
@@ -393,7 +393,7 @@ void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier)
         QString source = joined(cell.value(QStringLiteral("source")));
         while (source.startsWith(QLatin1Char('\n')))
             source.remove(0, 1);
-        writeNotebookCache(notebookCacheKey(document.language, source, tier), resultOfCell(cell));
+        seedNotebookCache(notebookCacheKey(document.language, source, tier), [cell] { return resultOfCell(cell); });
     }
 }
 

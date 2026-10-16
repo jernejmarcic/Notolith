@@ -122,6 +122,10 @@ public:
     QList<Backlink> backlinks(const QString &path) const;
     QList<Link> outgoingLinks(const QString &path) const;
     QStringList notesWithTag(const QString &tag) const;
+    /// Every tag path's note count, nested children included the way
+    /// notesWithTag() counts them: `a` gets a note tagged only `a/b`. One
+    /// query for the whole vault, where a count per tag was one each.
+    QHash<QString, int> tagCounts() const;
     /// Quick switcher: paths whose name matches `query`, best first.
     QStringList findByName(const QString &query, int limit = 50) const;
     /// Every name a wikilink may use, for the `[[` suggester.

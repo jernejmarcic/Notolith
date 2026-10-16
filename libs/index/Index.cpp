@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -758,6 +759,35 @@ QStringList Index::notesWithTag(const QString &tag) const
     return paths;
 }
 
+QHash<QString, int> Index::tagCounts() const
+{
+    QHash<QString, int> counts;
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT DISTINCT file, name FROM tags ORDER BY file"));
+    // Per note, the set of paths it counts towards - itself and every
+    // '/'-ancestor - so a note tagged `a/b` and `a/c` adds 1 to `a`, not 2.
+    QSet<QString> paths;
+    qint64 file = -1;
+    const auto flush = [&] {
+        for (const QString &path : std::as_const(paths))
+            ++counts[path];
+        paths.clear();
+    };
+    while (query.next()) {
+        if (const qint64 next = query.value(0).toLongLong(); next != file) {
+            flush();
+            file = next;
+        }
+        const QString name = query.value(1).toString();
+        for (qsizetype slash = name.indexOf(QLatin1Char('/')); slash > 0;
+             slash = name.indexOf(QLatin1Char('/'), slash + 1))
+            paths.insert(name.left(slash));
+        paths.insert(name);
+    }
+    flush();
+    return counts;
+}
+
 QStringList Index::findByName(const QString &query, int limit) const
 {
     QStringList paths;
@@ -957,10 +987,21 @@ QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) cons
     // The note's own title and aliases, re-read from the file rather than
     // trusted from the index - "the file is the truth". From its front
     // matter alone: a whole parse was 130 ms for a 1 MB note, each time the
-    // backlinks pane showed it.
+    // backlinks pane showed it. And only as much of the file as holds the
+    // front matter is read: decoding all of an 11 MB notebook was 60 ms.
     Note note;
-    if (!Vault::read(path, note))
-        return results;
+    {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly))
+            return results;
+        QByteArray bytes = file.read(16 * 1024);
+        note = Vault::decode(bytes);
+        const Range head = Frontmatter::find(note.text);
+        const bool complete = !note.text.startsWith(QLatin1String("---"))
+                              || (head.isValid() && note.text.at(head.end - 1) == QLatin1Char('\n'));
+        if (!file.atEnd() && !complete)
+            note = Vault::decode(bytes + file.readAll());
+    }
     Metadata own;
     own.path = path;
     Frontmatter::parse(note.text, Frontmatter::find(note.text), own);

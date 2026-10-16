@@ -112,29 +112,32 @@ qsizetype DisplayMap::toDisplay(qsizetype sourceOffset) const
         return 0;
     const qsizetype wanted = qBound(m_block.start, sourceOffset, m_block.end);
 
-    for (const Run &run : m_runs) {
-        if (wanted < run.sourceStart)
-            return run.displayStart; // inside a hidden stretch: snap forward
-        if (wanted <= run.sourceStart + run.sourceLength) {
-            if (run.substituted) // inside one: snap forward, as a hidden offset does
-                return run.displayStart + (wanted == run.sourceStart ? 0 : run.length);
-            return run.displayStart + (wanted - run.sourceStart);
-        }
-    }
-    return m_text.size();
+    // The first run that ends at or after `wanted`: runs are in source order,
+    // so their ends are too, and that is a binary search as in toSource.
+    const auto it = std::lower_bound(m_runs.cbegin(), m_runs.cend(), wanted,
+                                     [](const Run &run, qsizetype value) {
+                                         return run.sourceStart + run.sourceLength < value;
+                                     });
+    if (it == m_runs.cend())
+        return m_text.size();
+    const Run &run = *it;
+    if (wanted < run.sourceStart)
+        return run.displayStart; // inside a hidden stretch: snap forward
+    if (run.substituted) // inside one: snap forward, as a hidden offset does
+        return run.displayStart + (wanted == run.sourceStart ? 0 : run.length);
+    return run.displayStart + (wanted - run.sourceStart);
 }
 
 bool DisplayMap::isHidden(qsizetype sourceOffset) const
 {
     if (sourceOffset < m_block.start || sourceOffset >= m_block.end)
         return false;
-    for (const Run &run : m_runs) {
-        if (sourceOffset < run.sourceStart)
-            return true;
-        if (sourceOffset < run.sourceStart + run.sourceLength)
-            return false;
-    }
-    return true;
+    // The first run that ends past the offset; before its start is a hole.
+    const auto it = std::upper_bound(m_runs.cbegin(), m_runs.cend(), sourceOffset,
+                                     [](qsizetype value, const Run &run) {
+                                         return value < run.sourceStart + run.sourceLength;
+                                     });
+    return it == m_runs.cend() || sourceOffset < it->sourceStart;
 }
 
 Range DisplayMap::toDisplay(const Range &sourceRange) const

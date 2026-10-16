@@ -21,7 +21,7 @@ namespace {
 /// One level of the '/'-nested tag tree, rebuilt fresh on every refresh().
 struct TagNode {
     QString name;     ///< this segment only
-    QString fullPath; ///< dotted with '/', what Index::notesWithTag() wants
+    QString fullPath; ///< dotted with '/', the key of Index::tagCounts()
     int count = 0;
     std::vector<TagNode> children;
 };
@@ -46,15 +46,14 @@ void insertTag(TagNode &root, const QString &tag)
     }
 }
 
-void computeCounts(TagNode &node, Index *index)
+void computeCounts(TagNode &node, const QHash<QString, int> &counts)
 {
-    // notesWithTag() already matches a tag's nested children (Index.cpp's
-    // `LIKE tag/%`), so this doubles as the aggregate count a parent row
-    // needs without summing children by hand.
+    // Index::tagCounts() already folds a tag's nested children into it, the
+    // way notesWithTag() matches them, so a parent row needs no summing here.
     if (!node.fullPath.isEmpty())
-        node.count = index->notesWithTag(node.fullPath).size();
+        node.count = counts.value(node.fullPath);
     for (TagNode &child : node.children)
-        computeCounts(child, index);
+        computeCounts(child, counts);
 }
 
 void populateNode(QTreeWidgetItem *parentItem, QTreeWidget *list, std::vector<TagNode> &nodes,
@@ -178,7 +177,7 @@ void TagsPane::refresh()
     TagNode root;
     for (const QString &tag : tags)
         insertTag(root, tag);
-    computeCounts(root, m_index);
+    computeCounts(root, m_index->tagCounts());
     populateNode(nullptr, m_list, root.children, m_sortByName, m_mutedColor);
 }
 

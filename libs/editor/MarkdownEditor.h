@@ -2099,9 +2099,9 @@ private:
     /// first cell, on a paragraph of its own when the caret's line has text.
     void insertTable();
     /// Replaces lines `start`..`end` with the table `text` as one undo step,
-    /// reparses, and lets the caret-leave formatter know there is nothing left
-    /// for it to do.
-    void rewriteTable(qsizetype start, qsizetype end, const QString &text);
+    /// reparses (unless `reparseNow` is false: then the debounced parse does),
+    /// and lets the caret-leave formatter know there is nothing left for it to do.
+    void rewriteTable(qsizetype start, qsizetype end, const QString &text, bool reparseNow = true);
     /// What typing or pasting `text` puts into a drawn table's cell: a pipe
     /// escaped, a line break a space. `text` itself anywhere else.
     QString cellSafe(const QString &text) const;
@@ -2135,7 +2135,13 @@ private:
     void revealCaretCell();
     /// Heights, positions, and layouts for the blocks near the viewport.
     void updateLayout();
+    /// Every block laid out again: what a theme, mode or width change costs.
     void invalidateLayouts();
+    /// The block at `index` (all its pieces) laid out again; out of range is a no-op.
+    void invalidateBlock(qsizetype index);
+    /// invalidateLayouts() only if contentWidth() differs from the layouts'; then updateLayout().
+    void relayoutIfWidthChanged();
+    int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     qreal estimatedHeight(const BlockView &view) const;
     qreal lineHeightFor(const BlockSpan &span) const;
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level

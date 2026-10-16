@@ -183,6 +183,56 @@ TEST(DisplayMapTest, FuzzRoundTrip)
     }
 }
 
+// toDisplay and isHidden are binary searches; the linear walk over the runs
+// they replaced is the reference, at every offset, holes and substitutions
+// both, run boundaries included.
+TEST(DisplayMapTest, BinarySearchesAgreeWithALinearWalk)
+{
+    const auto linearToDisplay = [](const DisplayMap &map, qsizetype sourceOffset) -> qsizetype {
+        if (map.runs().isEmpty())
+            return 0;
+        const qsizetype wanted = qBound(map.block().start, sourceOffset, map.block().end);
+        for (const DisplayMap::Run &run : map.runs()) {
+            if (wanted < run.sourceStart)
+                return run.displayStart;
+            if (wanted <= run.sourceStart + run.sourceLength)
+                return run.substituted ? run.displayStart + (wanted == run.sourceStart ? 0 : run.length)
+                                       : run.displayStart + (wanted - run.sourceStart);
+        }
+        return map.text().size();
+    };
+    const auto linearIsHidden = [](const DisplayMap &map, qsizetype sourceOffset) {
+        if (sourceOffset < map.block().start || sourceOffset >= map.block().end)
+            return false;
+        for (const DisplayMap::Run &run : map.runs()) {
+            if (sourceOffset < run.sourceStart)
+                return true;
+            if (sourceOffset < run.sourceStart + run.sourceLength)
+                return false;
+        }
+        return true;
+    };
+    QRandomGenerator random(7);
+    for (int c = 0; c < 3000; ++c) {
+        const qsizetype length = random.bounded(1, 60);
+        const QString source(length, QLatin1Char('x'));
+        QList<Range> hidden;
+        for (int h = random.bounded(0, 5); h > 0; --h) {
+            const qsizetype start = random.bounded(int(length));
+            hidden.append({start, start + random.bounded(1, int(length - start) + 1)});
+        }
+        QList<Substitution> substitutions; // sorted and disjoint, as the parser gives them
+        for (qsizetype at = random.bounded(4); at + 2 <= length; at += 2 + random.bounded(8))
+            substitutions.append({{at, at + 1 + random.bounded(2)}, QStringLiteral("&")});
+        const Range block{random.bounded(int(length / 3) + 1), length - random.bounded(int(length / 3) + 1)};
+        const DisplayMap map = DisplayMap::build(source, block, hidden, substitutions);
+        for (qsizetype s = block.start - 1; s <= block.end + 1; ++s) {
+            ASSERT_EQ(map.toDisplay(s), linearToDisplay(map, s)) << "case " << c << " source " << s;
+            ASSERT_EQ(map.isHidden(s), linearIsHidden(map, s)) << "case " << c << " source " << s;
+        }
+    }
+}
+
 // --- the widget ----------------------------------------------------------
 
 #include <QApplication>
@@ -283,6 +333,31 @@ TEST(MarkdownEditorTest, RendersTheWholeNoteUntilTheReaderClicksIn)
     // Move to the paragraph: the heading goes back to rendered.
     editor->enterBlockAt(source.indexOf(QStringLiteral("bold")));
     EXPECT_EQ(editor->displayText(), QStringLiteral("Title\n\nSome **bold** text.\n"));
+}
+
+TEST(MarkdownEditorTest, AResizeRewrapsOnlyWhenTheTextWidthChanges)
+{
+    // With readable line length on, a window wider than it keeps every line
+    // break, and is not laid out again; narrower, the text rewraps, and back
+    // to wide it is exactly as it was.
+    QString note;
+    for (int i = 0; i < 12; ++i)
+        note += QStringLiteral("A paragraph long enough to wrap at any width this test uses, and then some more words "
+                               "so a narrow window breaks it over several lines. ").repeated(2)
+                + QStringLiteral("\n\n");
+    auto editor = editorWith(note);
+    editor->resize(1100, 300);
+    (void)editor->grab();
+    const int wide = editor->verticalScrollBar()->maximum();
+    editor->resize(1000, 300);
+    (void)editor->grab();
+    EXPECT_EQ(editor->verticalScrollBar()->maximum(), wide);
+    editor->resize(420, 300);
+    (void)editor->grab();
+    EXPECT_GT(editor->verticalScrollBar()->maximum(), wide);
+    editor->resize(1100, 300);
+    (void)editor->grab();
+    EXPECT_EQ(editor->verticalScrollBar()->maximum(), wide);
 }
 
 TEST(MarkdownEditorTest, SourceModeHidesNothingAndReadingHidesEverything)

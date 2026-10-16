@@ -20,6 +20,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 namespace noteAppC::notebook {
 
 struct NotebookOutput {
@@ -73,6 +75,11 @@ void writeNotebookCache(const QString &key, NotebookRunResult result);
 
 /// Forgets `key`'s cached result ("Clear the output"). A key with none is fine.
 void removeNotebookCache(const QString &key);
+
+/// Writes `result()` under `key` the first time `key` is read, not now: a
+/// notebook's stored outputs are decoded and written only for the blocks that
+/// are looked up (Ipynb.cpp). A write or removal of `key` first drops it.
+void seedNotebookCache(const QString &key, std::function<NotebookRunResult()> result);
 
 /// `$XDG_CACHE_HOME/noteAppC/notebook`, or `~/.cache/noteAppC/notebook` when
 /// unset - exposed for the tests, which redirect XDG_CACHE_HOME rather than

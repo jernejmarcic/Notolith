@@ -29,28 +29,35 @@ every way, being native C++, and stay fast on a machine with no GPU at all.
 
 ## Where it stands
 
-Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000:
+Median of several runs, after every fix below; a 2 000-note vault unless the row says 20 000. Rows dated
+2026-10-16 are the best of three interleaved runs at `d9fcfae` (20 000 notes, the busy machine):
 
 | what | median | budget |
 |---|---|---|
 | window on screen from process start | 50.5 ms | - |
-| cold start to first painted frame (bench, includes `openVault`) | 32 ms (2026-10-01, 20 000 notes, quiet) | - |
+| cold start, the process's first window (bench, includes `openVault`) | 40.3 ms (2026-10-16) | 40 ms |
+| cold start to first painted frame, later in-process windows (bench) | 19.5 ms (2026-10-16) | - |
 | vault usable from process start | 204 ms | - |
-| note open, 1 kB | 1.1 ms | 300 ms |
-| note open, 50 kB | 6.9 ms | 300 ms |
-| note open, 200 kB | 3.9 ms (readable; styled ~26 ms later) | 300 ms |
-| note open, 1 MB | 11.9 ms (readable; styled ~140 ms later) | - |
+| note open, 1 kB | 1.8 ms (2026-10-16) | 300 ms |
+| note open, 50 kB | 7.9 ms (2026-10-16) | 300 ms |
+| note open, 200 kB | 2.5 ms (2026-10-16; readable, styled ~26 ms later) | 300 ms |
+| note open, 1 MB | 10.2 ms (2026-10-16; readable, styled ~140 ms later) | - |
+| note open, notebook with 40 stored PNG outputs | 37.7 ms (2026-10-16) | - |
+| Tags pane refresh, 20 000 notes, 4 505 distinct tags | 37 ms (2026-10-16) | - |
 | keystroke to relaid, painted block, 200 kB | 0.22 ms | 8 ms |
 | keystroke through the whole window, 200 kB | 0.17 ms | 8 ms |
-| keystroke, 1 MB | 0.44 ms | 8 ms |
+| keystroke, 1 MB | 0.55 ms (2026-10-16; 0.44 ms on a quiet machine) | 0.6 ms (this pass), 8 ms |
+| source-mode table Tab, 1 MB | 2.0 ms (2026-10-16) | - |
+| resize, text width kept / rewrapped, 1 MB | 0.24 / 1.36 ms (2026-10-16) | - |
+| fold a callout, 1 MB | 0.29 ms (2026-10-16) | - |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | keystroke in a cell of a 50-row HTML table (2026-10-02, busy machine) | 1.33 ms | 8 ms |
 | parse plus HTML structure pass, that note, gumbo cache cold (off the UI thread) | 0.24 ms | - |
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
-| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine) | 5 s |
-| peak RSS, vault plus a 1 MB note | 227 MB (2026-10-01) | - |
+| cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
+| peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.
@@ -126,8 +133,9 @@ Caveats, in the order they matter:
   without those notes (a second, clean batch of 5 rounds); the 1 MB and 200 kB
   notes exist only in the first batch's vaults, so Obsidian's open, keystroke and
   peak-RSS rows come from there (its index there: 7.4 s / 39 s, warm note
-  1.28 s / 2.18 s). The bench never sees the stall, because its big notes live
-  outside the vault.
+  1.28 s / 2.18 s). Fixed since: see
+  [fix 29](#29-the-tags-pane-ran-one-query-per-tag), and the bench vault now
+  carries a tag-heavy note.
 - **Defaults on both sides.** Obsidian ran in its default Live Preview on a vault
   whose only config was an empty `app.json`, with no network restriction (its
   update check, if it ran, is not in the timed path); noteAppC ran with defaults
@@ -148,7 +156,7 @@ pieces and the vault generator.
 cmake --build /tmp/noteAppC-build
 /tmp/noteAppC-build/tools/bench/noteAppC-bench                     # the table, headless
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, scroll, pdfview
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, relayout, scroll, pdfview
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 3440x1440
 QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
@@ -178,6 +186,24 @@ instrumentation look like "this code never runs". Set
 `QT_FORCE_STDERR_LOGGING=1`, or use `fprintf(stderr, ...)` for throwaway
 probes. The screenshot tool and the bench now set it themselves.
 
+The `relayout` phase times what is not a keystroke but still re-lays a note
+out, on the 200 kB and 1 MB notes: a resize that keeps the text width (the
+editor is wider than its readable line length, 1 100 to 1 000 px), one that
+rewraps it (640 to 600 px), folding a callout in the middle, a code-block
+renderer's result arriving for a block in the middle (deliver, the queued hop
+and the paint), and Tab in a source-mode table. The `start` phase leads with
+`Cold start, the process's first window` when run on its own: the median row
+below it is in-process windows after the first, which skip what a process does
+once (fonts, plugins, the style sheet), so that row is what a launch pays. The
+generated vault carries `tag-heavy.md` (3 000 flat and 1 500 nested tags) so
+the Tags pane has real work; `firstNoteIn` skips it, so the "vault note" rows
+stay about an ordinary note.
+
+On a shared machine compare builds **interleaved**: base and candidate
+alternate run for run (three each, best median per row), each run in a fresh
+XDG tree, pinned with `taskset -c 6-11,18-23 chrt --idle 0`. Back-to-back
+batches drifted by more than the changes being measured.
+
 ## Guards in the test suite
 
 | test | asserts |
@@ -197,6 +223,13 @@ probes. The screenshot tool and the bench now set it themselves.
 | `EpubViewTest.FontFaceIsRegisteredSynchronouslyBeforeTheWorkerIsDispatched` | `@font-face` registration has already happened before the worker is dispatched |
 | `EpubViewTest.RemoteFontFaceIsNeverFetched` | a remote `@font-face` source is never attempted |
 | `EpubViewTest.PagedModeNeverScrollsPastTheDocumentBounds` | paged navigation clamps to `[0, documentHeight - pageHeight]` |
+| `CanvasPerfTest.ColdFirstPaintCostTracksVisibleNodesNotTotalNodes` | a cold first paint of 1 000 nodes costs under 6x one of 60 that all fit the viewport (about 1x; a broken cull is about 16x) |
+| `MarkdownEditorTest.AResizeRewrapsOnlyWhenTheTextWidthChanges` | a resize that keeps the text width keeps every layout; one that changes it rewraps to the same heights a fresh layout gives |
+| `DisplayMapTest.BinarySearchesAgreeWithALinearWalk` | `toDisplay` and `isHidden` agree with a linear walk on 3 000 random maps |
+| `TableAutoTest.KeysInsideTheParseDebounceDoWhatTheyDoAfterIt` | source-mode Tab and Enter typed faster than the parse do what they do with a parse between keys |
+| `IpynbTest.StoredOutputsAreWrittenOnlyWhenLookedUpAndARunWins` | reading a notebook writes no output-cache entry; a run or a clear before the lookup wins |
+| `IndexTest.UnlinkedMentionsReadAFrontMatterLongerThanTheFirstRead` | a 40 kB front matter still yields its aliases |
+| `IndexTest.TagCountsAgreeWithNotesWithTag` | the one-query tag counts equal `notesWithTag().size()` for every tag and parent |
 
 Every wall-clock guard above keeps the best of three runs (`tests/Perf.h`,
 `perf::bestOf`), because a loaded machine - a parallel build, a lane-check next
@@ -668,6 +701,129 @@ running on the machine. Of the 50 kB open, 7.1 ms is md4qt's parse, run
 synchronously below the 128 kB threshold; the blocks, layout and panes are
 the other 2 ms, and the first frame the rest.
 
+### 22. Tab in a source-mode table reparsed the whole note
+
+`handleSourceTableKey` rewrote the table and then called `reparseNow()` so the
+next key would find the table again: the whole note, synchronously, on every
+Tab or Enter. The table is now found in the decorations as `shiftRanges` left
+them, its rows are re-read from its own lines, the caret is placed from the
+rewritten lines, and the reparse goes back to the normal 20 ms debounce. Only
+when the shifted decorations no longer describe the table (no table found, or
+the header's cell count changed) does it still reparse first.
+
+| Tab in a source-mode table | before | after |
+|---|---|---|
+| 1 MB note | 340 ms | 2.07 ms |
+
+### 23. A notebook's stored outputs were all written at open
+
+Reading an `.ipynb` decoded every stored output and wrote each into the output
+cache before the note was shown: with 40 plots of about 1.2 MB, 230 ms of a
+358 ms open. `seedNotebookCache` now keeps a closure per key; the first lookup
+of that key (only blocks that are laid out look themselves up) decodes and
+writes it, and a run or a clear before then drops it. See
+[NOTEBOOKS.md](NOTEBOOKS.md#jupyter-notebooks-ipynb).
+
+| note open | before | after |
+|---|---|---|
+| notebook, 40 PNG outputs | 351 ms | 35.4 ms |
+
+### 24. Unlinked mentions read every candidate whole for its front matter
+
+`unlinkedMentions` read each candidate note in full to find its aliases. It
+now reads the first 16 kB and goes back for the rest only when the note opens
+a front matter that has not closed by then. `Vault::decode` no longer runs a
+CRLF replace over text that has no `\r`. The bench vault's notes are about
+1 kB, so its rows did not move (unlinked mentions 0.165 to 0.163 ms, vault
+note open 4.05 to 3.85 ms); the read is bounded for long notes now.
+
+### 25. A resize, a fold or a link turning resolved threw away every layout
+
+`invalidateLayouts()` reset every block, and it was the answer to anything
+that was not an edit. Now:
+
+- a resize relays out only when `contentWidth()` changed - the left margin is
+  added at paint time, so a window wider than the readable line length keeps
+  every layout;
+- a fold invalidates that one block;
+- a link-status change invalidates only blocks with a link to a target that
+  flipped.
+
+Narrowing the resize exposed a bug the full invalidation had hidden:
+`updateLayout()` lays out the window around the scroll position from estimated
+heights, and when real heights then moved other blocks into view they stayed
+unlaid, and undrawn, until something invalidated everything. The fuzz test
+caught it as pixel differences. `updateLayout()` now repeats until nothing
+changes (at most 8 passes), and the passes after the first cover only the
+viewport, which is what a rewrapping resize pays for.
+
+| relayout | before | after |
+|---|---|---|
+| resize, text width kept, 200 kB / 1 MB | 0.83 / 1.29 ms | 0.19 / 0.25 ms |
+| resize, text rewrapped, 200 kB / 1 MB | 0.79 / 1.26 ms | 0.86 / 1.36 ms |
+| fold a callout, 200 kB / 1 MB | 0.88 / 1.41 ms | 0.23 / 0.30 ms |
+| media arrival, 200 kB / 1 MB | already one block | unchanged |
+
+The rewrap rows are the fixed point's price, inside the 15% this pass allowed
+(+11.4% / +9.4% in the final interleaved run against the pre-pass build).
+
+### 26. DisplayMap walked its runs from the start
+
+`DisplayMap::toDisplay` and `isHidden` walked every run up to the offset. The
+runs are in source order with non-decreasing ends, so both are a
+`lower_bound` / `upper_bound` now. Small at today's sizes; it is on the path
+of every caret move in a note with hidden syntax.
+
+### 27. Every window re-applied the application style sheet
+
+`MainWindow` set the palette and the style sheet in `applyTheme()`, after its
+widgets existed, so they were polished twice; and setting an unchanged sheet
+still repolishes every widget in the application. The theme is now applied to
+the application before any widget is built, and `applyTheme()` sets the
+palette and the sheet only when they differ.
+
+| what | before | after |
+|---|---|---|
+| cold start, in-process windows (median) | 32.0 ms | 19.4 ms |
+| cold start, the process's first window | 40.4 ms | 40.7 ms |
+| settings pass, 1 MB note open | 1.59 ms | 0.70 ms |
+
+The median row fell because later windows no longer repolish the earlier
+ones; a real launch is the first-window row, which did not move. With fix 28
+on top, the final interleaved run put it at 42.6 to 40.3 ms.
+
+### 28. Every editor read the syntax definitions
+
+Each `MarkdownEditor` owns a `CodeHighlighter`, whose constructor built a
+`KSyntaxHighlighting::Repository` - reading every definition's metadata, 2.3 ms
+- whether or not the note had a line of code. The repository is now made on
+the first `knows()` or `highlight()`. A canvas builds an editor per visible
+node:
+
+| canvas cold first paint | before | after |
+|---|---|---|
+| 60 nodes, all on screen | 188-210 ms | 63-88 ms |
+
+That made the canvas cold-paint guard flaky. Its "60 nodes" were laid out 40
+columns wide, so only 16 of them were on screen and the honest ratio against
+1 000 nodes was about 4x, under a 6x limit; the 2.3 ms per editor had been
+padding both sides. The small canvas is now 8 columns wide, so the ratio is
+about 1x, and a broken cull (`isNodeVisible()` always true) was checked to
+fail it at about 16x.
+
+### 29. The Tags pane ran one query per tag
+
+`TagsPane::refresh()` asked `Index::notesWithTag()` for every node of the tag
+tree, each a full scan of the `tags` table (its `LIKE` cannot use the name
+index), on the UI thread, at open and on every `Index::changed`. Found by the
+[Obsidian comparison](#against-obsidian). `Index::tagCounts()` reads the
+(note, tag) pairs once and adds each note once to its tag and every
+`/`-parent.
+
+| Tags pane refresh, 20 000 notes, 4 505 distinct tags | before | after |
+|---|---|---|
+| warm index | 9.5 s | 38 ms |
+
 ## Tried and not adopted
 
 ### OpenGL viewport
@@ -825,4 +981,13 @@ Each of these produced a wrong number at least once in this project.
 - The Wayland buffer measurement, above.
 - Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
   path to first paint.
-- Nothing has been measured against Obsidian itself: it is not installed here.
+- The Tags pane still rebuilds its whole tree (38 ms at 4 505 tags, about
+  half query, half `QTreeWidget`) on every `Index::changed`, even while
+  hidden. Deferring the rebuild until the pane is shown is the next step; the
+  window tests read the pane without showing it, so they would change too.
+- The process's first window is about 40 ms to its first frame, unchanged by
+  this pass: fonts, plugins and the first polish. `Indexer::rewatch` walks the
+  vault's directories on the UI thread for about 2.7 ms of it.
+- `Index::allNotesForBases()` is about 65 ms at 20 000 notes.
+- A keystroke on the 1 MB note is mostly text shaping of the edited block;
+  nothing cheap was left in it.

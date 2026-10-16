@@ -218,6 +218,40 @@ TEST(TableAutoTest, TabAndEnterWalkASourceTableAndAppendRows)
     EXPECT_EQ(editor->noteText().count(QLatin1Char('\n')), 5) << editor->noteText().toStdString();
 }
 
+TEST(TableAutoTest, KeysInsideTheParseDebounceDoWhatTheyDoAfterIt)
+{
+    // Inside the debounce a source table is read from its shifted cells and
+    // its own lines, not reparsed; the keys must land exactly where they do
+    // once the parse has caught up. The `|` typed into the header last makes
+    // it no table at all, which only the parser can say.
+    const QString note = QStringLiteral("para\n\n| a | b |\n| --- | --- |\n| 1 | 2 |\n\nafter\n");
+    const auto play = [&](bool waitForParse) {
+        auto editor = editorWith(note, after(note, QStringLiteral("| 1")));
+        const auto step = [&](auto &&key) {
+            key(editor.get());
+            if (waitForParse)
+                QTest::qWait(60);
+        };
+        step([](QWidget *w) { QTest::keyClicks(w, QStringLiteral("23")); });
+        step([](QWidget *w) { QTest::keyClick(w, Qt::Key_Tab); });
+        step([](QWidget *w) { QTest::keyClicks(w, QStringLiteral("x")); });
+        step([](QWidget *w) { QTest::keyClick(w, Qt::Key_Tab); }); // past the last cell: a new row
+        step([](QWidget *w) { QTest::keyClicks(w, QStringLiteral("q")); });
+        step([](QWidget *w) { QTest::keyClick(w, Qt::Key_Backtab); });
+        step([](QWidget *w) { QTest::keyClick(w, Qt::Key_Return); });
+        step([](QWidget *w) { QTest::keyClicks(w, QStringLiteral("w")); });
+        editor->setCursorOffset(after(editor->noteText(), QStringLiteral("| a")));
+        step([](QWidget *w) { QTest::keyClicks(w, QStringLiteral("|")); });
+        step([](QWidget *w) { QTest::keyClick(w, Qt::Key_Tab); });
+        return std::make_pair(editor->noteText(), editor->cursorOffset());
+    };
+    const auto settled = play(true);
+    const auto hurried = play(false);
+    EXPECT_EQ(hurried.first, settled.first) << hurried.first.toStdString();
+    EXPECT_EQ(hurried.second, settled.second);
+    EXPECT_TRUE(settled.first.contains(QStringLiteral("| 123 | x2  |"))) << settled.first.toStdString();
+}
+
 TEST(TableAutoTest, AlignmentMenuRewritesDelimiter)
 {
     const QString note = QStringLiteral("| a | b |\n| --- | --- |\n| 1 | 2 |\n");

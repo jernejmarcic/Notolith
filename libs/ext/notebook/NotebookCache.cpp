@@ -3,8 +3,10 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QMutex>
 
 namespace noteAppC::notebook {
 
@@ -62,10 +64,35 @@ NotebookOutput::Kind kindFromName(const QString &name)
     return NotebookOutput::Kind::Text;
 }
 
+/// Seeds not yet written (seedNotebookCache). ponytail: kept until their key
+/// is read, written or removed, so a session that opens many notebooks and
+/// scrolls through none holds their unseen outputs in memory; flush them to
+/// disk on a worker if that ever shows in RSS.
+QMutex seedMutex;
+QHash<QString, std::function<NotebookRunResult()>> &pendingSeeds()
+{
+    static QHash<QString, std::function<NotebookRunResult()>> seeds;
+    return seeds;
+}
+
+std::function<NotebookRunResult()> takeSeed(const QString &key)
+{
+    QMutexLocker lock(&seedMutex);
+    return pendingSeeds().take(key);
+}
+
 } // namespace
+
+void seedNotebookCache(const QString &key, std::function<NotebookRunResult()> result)
+{
+    QMutexLocker lock(&seedMutex);
+    pendingSeeds().insert(key, std::move(result));
+}
 
 NotebookRunResult readNotebookCache(const QString &key)
 {
+    if (const auto seed = takeSeed(key))
+        writeNotebookCache(key, seed());
     NotebookRunResult result;
     const QString dir = entryDir(key);
     QFile metaFile(dir + QStringLiteral("/outputs.json"));
@@ -103,11 +130,13 @@ NotebookRunResult readNotebookCache(const QString &key)
 
 void removeNotebookCache(const QString &key)
 {
+    takeSeed(key);
     QDir(entryDir(key)).removeRecursively();
 }
 
 void writeNotebookCache(const QString &key, NotebookRunResult result)
 {
+    takeSeed(key); // a run's own output supersedes what the file had
     result.hasRun = true;
     const QString dir = entryDir(key);
     QDir().mkpath(dir);

@@ -358,7 +358,7 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
     }
 }
 
-void MarkdownEditor::rewriteTable(qsizetype start, qsizetype end, const QString &text)
+void MarkdownEditor::rewriteTable(qsizetype start, qsizetype end, const QString &text, bool reparseNow)
 {
     m_lastEdit.invalidate(); // its own undo step, not the end of the typing before it
     pushUndo();
@@ -367,7 +367,8 @@ void MarkdownEditor::rewriteTable(qsizetype start, qsizetype end, const QString 
     m_formattingTables = false;
     m_lastEdit.invalidate();
     m_tableEdited = false;
-    reparse();
+    if (reparseNow)
+        reparse(); // else the debounced parse applyEdit started catches up
 }
 
 bool MarkdownEditor::handleSourceTableKey(int key)
@@ -380,19 +381,39 @@ bool MarkdownEditor::handleSourceTableKey(int key)
     if (!QStringView(m_text).mid(lineStart, m_lines.lineEnd(caretLine) - lineStart).contains(QLatin1Char('|'))
         || tableRenderedAt(m_cursor)) // a drawn table's cells are handleTableKey's
         return false;
-    // ponytail: a stale parse is redone here, whole note; fine for a Tab, an
-    // upgrade path would be scanning the contiguous pipe lines by hand.
-    if (m_parsedVersion != m_textVersion)
+    // Inside the parse debounce the last parse's table still holds: every
+    // edit since has shifted its range and cells (shiftRanges), and the cells
+    // are read again from its lines below. Whole-note reparse, synchronous,
+    // was 340 ms a Tab in a 1 MB note. ponytail: a table typed since that
+    // parse is not in it yet, and that first Tab still reparses the note.
+    qsizetype index = tableAround(m_cursor);
+    if (index < 0 && m_parsedVersion != m_textVersion) {
         reparse();
-    const qsizetype index = tableAround(m_cursor);
+        index = tableAround(m_cursor);
+    }
     if (index < 0 || m_decorations.tables.at(index).html)
         return false;
 
-    const TableSpan &table = m_decorations.tables.at(index);
+    TableSpan table = m_decorations.tables.at(index);
     const qsizetype firstLine = m_lines.lineAt(table.range.start);
     const qsizetype lastLine = m_lines.lineAt(qMax(table.range.start, table.range.end - 1));
     const qsizetype start = m_lines.lineStart(firstLine);
     const qsizetype end = m_lines.lineEnd(lastLine);
+    // The rows as the text has them now, by the parser's own rule
+    // (Parser.cpp: line by line, the delimiter row skipped).
+    table.rows.clear();
+    for (qsizetype line = firstLine; line <= lastLine; ++line) {
+        if (line != firstLine + 1)
+            table.rows << tableRowCells(m_text, m_lines.lineStart(line), m_lines.lineEnd(line));
+    }
+    if (table.rows.isEmpty())
+        return false;
+    // A header that no longer has the table's columns (a `|` typed into it)
+    // may be no table at all: that one is the parser's to say.
+    if (m_parsedVersion != m_textVersion && table.rows.first().size() != table.columns) {
+        reparse();
+        return handleSourceTableKey(key);
+    }
     const int lineIndex = int(m_lines.lineAt(m_cursor) - firstLine); // 0 header, 1 delimiter
     const int columns = table.columns;
 
@@ -439,13 +460,16 @@ bool MarkdownEditor::handleSourceTableKey(int key)
             text += QStringLiteral("  |");
     }
     text = formatTable(text);
+    // Source mode draws no table, so the parse can wait for the debounce. In
+    // live preview this is the moment a raw table starts being drawn.
     if (text != source)
-        rewriteTable(start, end, text);
+        rewriteTable(start, end, text, m_mode != Mode::Source);
 
-    // The rewrite reparsed; where the cell is now is read from the new parse.
-    const qsizetype now = tableAround(start);
-    if (now >= 0) {
-        const Range cell = m_decorations.tables.at(now).rows.value(toRow).value(toColumn);
+    // Where the cell is now, from the rewritten lines: row r is line r, or
+    // r + 1 past the header.
+    const qsizetype line = firstLine + (toRow == 0 ? 0 : toRow + 1);
+    if (line < m_lines.lineCount()) {
+        const Range cell = tableRowCells(m_text, m_lines.lineStart(line), m_lines.lineEnd(line)).value(toColumn);
         if (cell.isValid())
             moveCursor(cell.start, false);
     }

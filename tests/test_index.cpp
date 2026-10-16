@@ -167,6 +167,26 @@ TEST_F(IndexTest, TagsIncludeFrontmatterAndNesting)
     EXPECT_TRUE(index.notesWithTag(QStringLiteral("nothing")).isEmpty());
 }
 
+TEST_F(IndexTest, TagCountsAgreeWithNotesWithTag)
+{
+    // Nested tags, a parent that is never a tag itself, two children of one
+    // parent in one note, and a repeated tag: each must count a note once.
+    write(QStringLiteral("A.md"), "#area/one #area/two #area/one\n");
+    write(QStringLiteral("B.md"), "#area/one/deep #solo\n");
+    write(QStringLiteral("C.md"), "---\ntags: [area]\n---\nbody\n");
+    Index index;
+    build(index);
+
+    const QHash<QString, int> counts = index.tagCounts();
+    QStringList paths = index.allTags();
+    paths << QStringLiteral("area/one"); // also a parent, of area/one/deep
+    for (const QString &path : std::as_const(paths))
+        EXPECT_EQ(counts.value(path), index.notesWithTag(path).size()) << path.toStdString();
+    EXPECT_EQ(counts.value(QStringLiteral("area")), 3);
+    EXPECT_EQ(counts.value(QStringLiteral("area/one")), 2);
+    EXPECT_EQ(counts.value(QStringLiteral("thinking")), 1);
+}
+
 TEST_F(IndexTest, QuickSwitcherFindsByAnyName)
 {
     Index index;
@@ -689,6 +709,24 @@ TEST_F(IndexTest, UnlinkedMentionsIncludeAliases)
     for (const SearchResult &result : results)
         paths << result.path;
     EXPECT_TRUE(paths.contains(QStringLiteral("AliasMention.md")));
+}
+
+TEST_F(IndexTest, UnlinkedMentionsReadAFrontMatterLongerThanTheFirstRead)
+{
+    // Only the start of the file is read for its front matter; one that runs
+    // past it, with the alias at its end, is read whole.
+    QByteArray head = "---\nnotes: \"" + QByteArray(40 * 1024, 'x') + "\"\naliases: [Longform]\n---\nbody\n";
+    write(QStringLiteral("Long.md"), head);
+    write(QStringLiteral("LongMention.md"), "Somebody wrote Longform here.\n");
+
+    Index index;
+    ASSERT_TRUE(index.open(dir.path()));
+    build(index);
+
+    QStringList paths;
+    for (const SearchResult &result : index.unlinkedMentions(dir.filePath(QStringLiteral("Long.md"))))
+        paths << result.path;
+    EXPECT_TRUE(paths.contains(QStringLiteral("LongMention.md")));
 }
 
 namespace {
