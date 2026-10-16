@@ -6,6 +6,7 @@
 //   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single
 //   ... [--command <id> [--type <text>]]
 //   ... [--popup <QMenu object name>] [--tooltip <text>]   a menu / tooltip over the window
+//   ... [--caret <offset>]   the caret in the visible note at that source offset (a tab group's edit state)
 
 #include <QAction>
 #include <QApplication>
@@ -148,6 +149,19 @@ int main(int argc, char *argv[])
         }
         app.quit();
     };
+    // `--caret <offset>` puts the caret in the visible editor, so a block's
+    // or a tab group's edit state can be looked at. An editor of its own
+    // (the page preview has one) is found too, hence the isVisible test.
+    if (const qsizetype offset = flag("--caret").toLongLong(); !flag("--caret").isEmpty()) {
+        QTimer::singleShot(400, &app, [&window, offset] {
+            for (auto *editor : window.findChildren<noteAppC::MarkdownEditor *>()) {
+                if (editor->isVisible()) {
+                    editor->enterBlockAt(offset);
+                    break;
+                }
+            }
+        });
+    }
     // One turn of the event loop so QFileSystemModel's worker fills the tree.
     QTimer::singleShot(600, &app, [&] {
         // `--popup <name>` opens the menu of that name above its button, and

@@ -1210,11 +1210,25 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
                                    int(iconSize));
         const qreal width = 12 + (tab.icon.isNull() ? 0 : iconSize + 5)
                             + metrics.horizontalAdvance(tab.text) + 12;
-        tab.rect = QRectF(x, panel.top(), width, height);
+        // 4 px under the header's top: the selected tab is a tab, not a bar.
+        tab.rect = QRectF(x, panel.top() + 4, width, height - 4);
         x += width;
         tabs.push_back(tab);
     }
     return tabs;
+}
+
+QRectF MarkdownEditor::selectedTabRectAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    for (const TabRect &tab : tabsOf(view, contentLeft(), view.y - verticalScrollBar()->value())) {
+        if (tab.selected)
+            return tab.rect;
+    }
+    return {};
 }
 
 MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qreal left,
@@ -1393,15 +1407,40 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
     }
 
     if (view.tabGroup >= 0) {
-        // The strip: the tab being shown in the normal text colour over an
-        // accent underline, the others muted. The tabs own the header, so a
+        // The strip: the tab being shown is attached to the listing under it -
+        // a rounded-topped tab in the panel's own colour, edged on three
+        // sides, with the hairline under the strip left out beneath it. The
+        // others are muted text on the strip. The tabs own the header, so a
         // `#|` title has nowhere to go here and is not drawn.
         QFont tabFont = m_theme.uiFont();
         tabFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
         painter.setFont(tabFont);
         const QColor normal = m_theme.color(QStringLiteral("--text-normal"));
-        const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
+        const QColor panelColour = codeStyleOf(view).bg.isValid()
+                                       ? codeStyleOf(view).bg
+                                       : m_theme.color(QStringLiteral("--background-primary-alt"));
+        const QColor border = m_theme.color(QStringLiteral("--background-modifier-border"));
         for (const TabRect &tab : tabsOf(view, left, top)) {
+            if (tab.selected) {
+                painter.save();
+                // Down to the hairline's row, no further: the rounded rect is
+                // taller than the clip so its bottom corners never show.
+                painter.setClipRect(tab.rect.adjusted(-1, -1, 1, 1));
+                painter.setRenderHint(QPainter::Antialiasing);
+                const QRectF body = tab.rect.adjusted(0, 0, 0, 6);
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(panelColour);
+                painter.drawRoundedRect(body, 5, 5);
+                painter.setPen(QPen(border, 1));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawRoundedRect(body.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5);
+                // The border's own left and right sides end at the header's
+                // bottom; under it the panel carries on without a seam.
+                painter.setRenderHint(QPainter::Antialiasing, false);
+                painter.fillRect(QRectF(tab.rect.left() + 1, tab.rect.bottom(), tab.rect.width() - 2, 1),
+                                 panelColour);
+                painter.restore();
+            }
             QRectF text = tab.rect.adjusted(12, 0, -12, 0);
             if (!tab.icon.isNull()) {
                 const qreal size = QFontMetricsF(tabFont).height();
@@ -1412,10 +1451,6 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
             }
             painter.setPen(tab.selected ? normal : muted);
             painter.drawText(text, Qt::AlignVCenter | Qt::AlignLeft, tab.text);
-            if (tab.selected)
-                painter.fillRect(QRectF(tab.rect.left() + 6, tab.rect.bottom() - 2,
-                                        tab.rect.width() - 12, 2),
-                                 accent);
         }
         paintCodeLabel(painter, view, left, top);
         paintNotebookRunControl(painter, view, left, top);

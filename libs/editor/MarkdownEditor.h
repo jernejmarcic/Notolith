@@ -769,6 +769,9 @@ public:
     /// Where the text column starts, in viewport coordinates: the x a panel
     /// sits 14 px left of. For the tests.
     int textColumn() const { return contentLeft(); }
+    /// The selected tab of the tab group holding `offset`, in viewport
+    /// coordinates; null outside a group, or while the caret is in it. For the tests.
+    QRectF selectedTabRectAt(qsizetype offset) const;
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as

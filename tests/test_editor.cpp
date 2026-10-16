@@ -3824,6 +3824,32 @@ TEST(CodeTabTest, TheCaretInsideTheGroupShowsPlainSourceWithoutPanels)
     EXPECT_EQ(checked, 2);
 }
 
+TEST(CodeTabTest, TheSelectedTabIsAttachedToItsPanel)
+{
+    auto editor = editorWith(kTabbedNote);
+    editor->show();
+    const QRectF tab = editor->selectedTabRectAt(kTabbedNote.indexOf(QLatin1String("print")));
+    ASSERT_TRUE(tab.isValid());
+    const QImage shot = editor->viewport()->grab().toImage();
+
+    // Down a column right of the strip's tabs: header, the hairline under it,
+    // then the panel. The hairline is the row that is neither of the other two.
+    const int outside = int(tab.right()) + 120;
+    const int bottom = int(tab.bottom());
+    const QRgb header = shot.pixel(outside, bottom - 8);
+    const QRgb panel = shot.pixel(outside, bottom + 8);
+    int line = -1;
+    for (int y = bottom - 3; y <= bottom + 3; ++y) {
+        if (shot.pixel(outside, y) != header && shot.pixel(outside, y) != panel)
+            line = y;
+    }
+    ASSERT_GE(line, 0) << "no hairline under the strip";
+    // The tab is part of the listing's panel: the hairline stops under it.
+    const int inside = int(tab.center().x());
+    EXPECT_EQ(shot.pixel(inside, line), panel);
+    EXPECT_EQ(shot.pixel(inside, bottom - 6), panel) << "the tab is filled like the panel";
+}
+
 TEST(CodeTabTest, SourceModeShowsEveryFence)
 {
     auto editor = editorWith(kTabbedNote);

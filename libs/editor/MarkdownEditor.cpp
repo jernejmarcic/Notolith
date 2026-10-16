@@ -1674,7 +1674,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
 
     // In source mode the markers stay visible, so colour them like Obsidian
     // rather than hiding them.
-    if (m_mode == Mode::Source || view.active) {
+    if (plainSource(view) || view.active) {
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
             const Range &marker = m_decorations.syntax.at(i);
             if (!marker.overlaps(block))

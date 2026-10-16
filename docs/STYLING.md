@@ -236,7 +236,9 @@ strip:
 
 A bare `tab` takes the language's name and icon from `codeblocks.ini`;
 `tab="..."` names it yourself. Only blank lines may come between the fences -
-any other text ends the group. The Copy button copies the tab being shown.
+any other text ends the group. The Copy button copies the tab being shown. The
+shown tab is drawn attached to its listing; with the caret anywhere in the group
+every member is plain source (see "Code blocks").
 **Publishing.** A group publishes as a tab strip that needs no JavaScript: one
 radio input, label and panel per tab (`.code-tabs`, `.code-tab-input`,
 `.code-tab-label`, `.code-tab-panel` in `site.css`), the first tab selected,
