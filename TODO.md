@@ -906,9 +906,10 @@ optimal as it can be".
       number so this would be 1.2."; toggleable. The number's terminator shown
       as `.` or `:` "or literally anything", a setting. Display only: the file
       keeps CommonMark `1.`.
-- [ ] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate fails under load 16
+- [x] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate fails under load 16
       (ratio 8.6 vs limit 5.0), passes alone: make it load-robust (best of N,
       or compare against a same-run baseline) so lane-checks stay meaningful.
+      Now best of three per size.
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced

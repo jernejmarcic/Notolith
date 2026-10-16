@@ -540,14 +540,20 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
     const QString small = generateNote(200);
     const QString large = generateNote(1000);
 
-    QElapsedTimer clock;
-    clock.start();
-    auto smallEditor = editorWith(small);
-    const double smallMs = clock.nsecsElapsed() / 1e6;
-
-    clock.restart();
-    auto largeEditor = editorWith(large);
-    const double largeMs = clock.nsecsElapsed() / 1e6;
+    // Best of three for each: a busy machine (parallel builds) only ever adds
+    // time, so the minimum is the cost of the code, not of the neighbours.
+    auto bestOpenMs = [](const QString &text) {
+        double best = 1e9;
+        for (int run = 0; run < 3; ++run) {
+            QElapsedTimer clock;
+            clock.start();
+            auto editor = editorWith(text);
+            best = qMin(best, clock.nsecsElapsed() / 1e6);
+        }
+        return best;
+    };
+    const double smallMs = bestOpenMs(small);
+    const double largeMs = bestOpenMs(large);
 
     const double sizeRatio = double(large.size()) / double(small.size());
     const double timeRatio = largeMs / qMax(0.001, smallMs);
