@@ -560,3 +560,12 @@ most 256 px) and kept per path, mtime and size; the card is laid out without it
 first and grows from 52 to 96 px when it lands. A book with no cover, or one
 that does not decode, stays the plain card. Built with the EPUB module
 (`NOTEAPPC_WITH_EPUB`); without it the card is always the plain one.
+
+## Renaming and links
+
+With `links.autoUpdate` on, renaming a note rewrites the links that point at
+it (`Index::updateLinksAfterRename`). Renaming a folder does the same for
+every link that resolves to a note under it: `[[Folder/A]]` and
+`[y](Folder/A.md)` become `Moved/A`, `Moved/A.md`, a bare `[[A]]` stays
+`[[A]]` while the name is unique, and a linking note that sat inside the
+folder is rewritten at its new path.
