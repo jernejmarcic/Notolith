@@ -5204,9 +5204,13 @@ void MainWindow::reportSaveError(const QString &path, const QString &error, bool
     // An autosave runs while someone types: a box in their face then is
     // worse than the failure, which the next pause tries again anyway. The
     // bar keeps saying so until a save goes through.
-    if (quiet)
+    if (quiet) {
+        m_lastSaveError = error;
         statusBar()->showMessage(tr("Could not save %1: %2 - will try again").arg(QFileInfo(path).fileName(), error));
-    else
+        // Nothing else restarts it: only a further edit would.
+        if (m_settings.boolean(QStringLiteral("files.autosave")))
+            m_autosave.start();
+    } else
         QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(path, error));
 }
 
@@ -5230,15 +5234,21 @@ bool MainWindow::maybeSave()
     // Obsidian's way: what is typed is kept, never asked about - unless the
     // file is gone and was not found, where saving would bring it back.
     const bool lost = m_lostNotes.value(m_active->notePath, false);
-    if (!lost && m_settings.boolean(QStringLiteral("files.autosave")))
-        return saveLeaf(m_active, true);
+    // A save that fails (disk full, read-only folder) falls through to the
+    // box below, so leaving is never refused without a word.
+    m_lastSaveError.clear();
+    if (!lost && m_settings.boolean(QStringLiteral("files.autosave")) && saveLeaf(m_active, true))
+        return true;
 
     const QString shown =
         m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
-    const auto answer = QMessageBox::question(
-        this, tr("Unsaved changes"),
-        lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown),
-        QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel, QMessageBox::Save);
+    QString question =
+        lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown);
+    if (!m_lastSaveError.isEmpty())
+        question = tr("%1 could not be saved: %2\n\nTry saving again?").arg(shown, m_lastSaveError);
+    const auto answer = QMessageBox::question(this, tr("Unsaved changes"), question,
+                                              QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+                                              QMessageBox::Save);
 
     if (answer == QMessageBox::Cancel)
         return false;

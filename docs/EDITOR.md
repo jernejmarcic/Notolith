@@ -273,6 +273,17 @@ bare). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
 in Obsidian's live preview) and `[[Note#^id]]` shows as written; a heading
 link shows "Note > Heading".
 
+## Autosave
+
+With `files.autosave` on (the default) every modified note is saved two
+seconds after typing stops, and leaving a note, closing a tab or quitting saves
+it too; nothing asks. A save that fails (disk full, read-only folder) says so in
+the status bar and is tried again at the next pause, with no further edit
+needed. If leaving or quitting then still cannot save, the usual
+Save / Discard / Cancel box appears with the error in its text, so a window is
+never refused a close without a word. With the setting off, the box is always
+the way out and nothing is saved on a timer.
+
 ## Status bar counts
 
 Words and characters in the bar skip the frontmatter (the same text the word
