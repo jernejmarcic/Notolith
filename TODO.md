@@ -1061,3 +1061,12 @@ optimal as it can be".
       whose vault no longer exists). Done: 3555 moved to
       /tmp/noteAppC-history-leaked (gone at reboot); kept Lancaster, demo and
       one 2026-09-23 repo holding Sensors.md.
+
+## Requested by Jernej 2026-10-16 night
+
+- [ ] "if you select a word there should be a right click menau, that can
+      give you stuff like definition, etc." Word/selection context menu:
+      definition, plus Obsidian-style selection actions (plan: Fable).
+- [ ] "There should also be a file graph like obsidian". A graph view exists
+      (Ctrl+G, local graph pane) but nothing on screen opens it, and its look
+      against Obsidian's is unchecked (plan: Fable).
