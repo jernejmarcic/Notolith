@@ -22,6 +22,7 @@
 #include <QFontMetricsF>
 #include <QListView>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QStandardItemModel>
 #include <QStyledItemDelegate>
 
@@ -53,6 +54,22 @@ public:
         painter->restore();
     }
 };
+
+/// A typed word that is a whole word of the name puts it ahead of fuzzy
+/// matches, the shortest name first: `/table` offers "Insert table" before the
+/// four "Table: ..." commands. Not for a query of several words, which the
+/// fuzzy score already ranks (`/insert table`).
+int wordBonus(const QString &query, const QString &name)
+{
+    if (query.isEmpty() || query.contains(QLatin1Char(' ')))
+        return 0;
+    const QStringList words = name.split(QRegularExpression(QStringLiteral("[^\\p{L}\\p{N}]+")), Qt::SkipEmptyParts);
+    for (const QString &word : words) {
+        if (word.compare(query, Qt::CaseInsensitive) == 0)
+            return 100000 - 1000 * int(name.size()); // outweighs any fuzzy score
+    }
+    return 0;
+}
 
 } // namespace
 
@@ -160,7 +177,7 @@ void MarkdownEditor::updateSlashSuggestions()
     for (qsizetype i = 0; i < m_slashCache.size(); ++i) {
         const auto match = Fuzzy::score(*prefix, m_slashCache.at(i).name);
         if (match.matched)
-            ranked.append({match.score, i});
+            ranked.append({match.score + wordBonus(*prefix, m_slashCache.at(i).name), i});
     }
     if (ranked.isEmpty()) {
         m_slashCompleter->popup()->hide();

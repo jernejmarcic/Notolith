@@ -1075,6 +1075,38 @@ TEST(VimTest, Macros)
     }
 }
 
+TEST(VimTest, LAndHAtALineEdgeFailARunningMacro)
+{
+    {
+        Vim v(QStringLiteral("abcdef\n"));
+        v.keys(QStringLiteral("qalxq")); // "acdef", the caret on c
+        v.keys(QStringLiteral("10@a"));  // the third l finds the last character: the macro ends
+        EXPECT_EQ(v.text(), QStringLiteral("ace\n"));
+    }
+    {
+        Vim v(QStringLiteral("abc\n"), 2);
+        v.keys(QStringLiteral("qahxq")); // "ac", the caret on c
+        v.keys(QStringLiteral("5@a"));   // the second h finds column 0
+        EXPECT_EQ(v.text(), QStringLiteral("c\n"));
+    }
+    {
+        // Outside a macro they still just stay put, and `dl` still takes the last character.
+        Vim v(QStringLiteral("ab\n"), 1);
+        v.keys(QStringLiteral("lh"));
+        EXPECT_EQ(v.cursor(), 0);
+        v.keys(QStringLiteral("$dl"));
+        EXPECT_EQ(v.text(), QStringLiteral("a\n"));
+    }
+}
+
+TEST(VimTest, XOnAnEmptyLineDoesNotEndAMacro)
+{
+    Vim v(QStringLiteral("a\n\nb\n"));
+    v.keys(QStringLiteral("qaxjq")); // deletes a, now on the empty line
+    v.keys(QStringLiteral("2@a"));   // x on the empty line is silent, then b goes
+    EXPECT_EQ(v.text(), QStringLiteral("\n\n\n"));
+}
+
 TEST(VimTest, BlockVisualDelete)
 {
     Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);

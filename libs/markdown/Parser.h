@@ -45,4 +45,16 @@ private:
 /// typing into it lands - md4qt puts one on the pipe that closes it.
 QList<Range> tableRowCells(const QString &text, qsizetype lineStart, qsizetype lineEnd);
 
+/// Words in `text`, as the note's word count counts them: runs of letters,
+/// digits, `_` and `'`.
+int wordsIn(QStringView text);
+
+/// The lines `#Heading` names - an ATX heading or an HTML `<h1>`-`<h6>`
+/// whose text (tags removed, entities decoded) equals `wanted`, case
+/// ignored - from its line to the next heading at its level or above, or the
+/// end of the text. Headings inside a code fence, a comment or the frontmatter
+/// do not count. An invalid Range when there is none. A scan of the lines,
+/// not a parse: the embed and the canvas call it on notes they only read.
+Range headingSection(const QString &text, const QString &wanted);
+
 } // namespace noteAppC

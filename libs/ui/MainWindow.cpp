@@ -334,6 +334,12 @@ MainWindow::MainWindow(QWidget *parent)
         m_modeButton->setMenu(menu);
     }
     m_modeButton->hide();
+    m_selectionCountTimer.setSingleShot(true);
+    m_selectionCountTimer.setInterval(200);
+    connect(&m_selectionCountTimer, &QTimer::timeout, this, [this] {
+        if (m_active)
+            updateTextCount();
+    });
     m_backlinkCountTimer.setSingleShot(true);
     m_backlinkCountTimer.setInterval(200);
     connect(&m_backlinkCountTimer, &QTimer::timeout, this, &MainWindow::updateBacklinkCount);
@@ -773,6 +779,11 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(editor, &MarkdownEditor::headingsChanged, this, [this, leaf] {
         if (leaf == m_active)
             updateWordCount();
+    });
+    // A selection is counted after a pause, off the keystroke and drag path.
+    connect(editor, &MarkdownEditor::cursorMoved, this, [this, leaf] {
+        if (leaf == m_active)
+            m_selectionCountTimer.start();
     });
     connect(editor, &MarkdownEditor::modeChanged, this, [this, leaf] {
         if (leaf == m_active)
@@ -3274,7 +3285,10 @@ void MainWindow::publishSite()
     // Publisher queries the index on the thread that calls it, and an Index
     // is one connection for one thread: this run opens its own on the same
     // cache (WAL, so the indexer is not blocked) instead of sharing m_index.
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices] {
+    // The code colours come from the vault's scheme, one reading per mode
+    // (a built-in scheme has none), on the worker with the rest.
+    const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -3288,6 +3302,10 @@ void MainWindow::publishSite()
         options.homeNote = choices.homeNote;
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
+        if (!schemePath.isEmpty()) {
+            options.codeThemeDark = Scheme::apply(schemePath, Theme::Mode::Dark);
+            options.codeThemeLight = Scheme::apply(schemePath, Theme::Mode::Light);
+        }
         result.ok = publisher.publish(options, {}, &result.error);
         result.counts = publisher.counts();
         return result;
@@ -5200,22 +5218,34 @@ void MainWindow::updateWordCount()
     m_backlinkStatus->setVisible(note && m_backlinks);
     if (note)
         m_backlinkCountTimer.start();
-    const int words = m_active->editor->wordCount();
-    if (!note || !featureOn("word-count") || words < 0) { // < 0: a large note, still being counted
-        m_wordCount->clear();
-        m_charCount->clear();
-    } else {
-        const QLocale locale;
-        m_wordCount->setText(tr("%1 words").arg(locale.toString(words)));
-        m_charCount->setText(tr("%1 characters").arg(locale.toString(m_active->editor->noteText().size())));
-    }
-    m_wordCount->setVisible(!m_wordCount->text().isEmpty());
-    m_charCount->setVisible(!m_charCount->text().isEmpty());
+    updateTextCount();
     if (note) {
         const qsizetype properties = m_active->editor->properties().size();
         m_propertyStatus->setText(properties == 1 ? tr("1 property")
                                                   : tr("%1 properties").arg(properties));
     }
+}
+
+void MainWindow::updateTextCount()
+{
+    const bool note = !m_active->notePath.isEmpty() && !m_active->view;
+    const int words = m_active->editor->wordCount();
+    if (!note || !featureOn("word-count") || words < 0) { // < 0: a large note, still being counted
+        m_wordCount->clear();
+        m_charCount->clear();
+    } else if (const auto selected = m_active->editor->selectionCount(); selected.characters > 0) {
+        // Obsidian counts what is selected, in place of the note.
+        const QLocale locale;
+        m_wordCount->setText(tr("%1 words, %2 characters")
+                                 .arg(locale.toString(selected.words), locale.toString(selected.characters)));
+        m_charCount->clear();
+    } else {
+        const QLocale locale;
+        m_wordCount->setText(tr("%1 words").arg(locale.toString(words)));
+        m_charCount->setText(tr("%1 characters").arg(locale.toString(m_active->editor->characterCount())));
+    }
+    m_wordCount->setVisible(!m_wordCount->text().isEmpty());
+    m_charCount->setVisible(!m_charCount->text().isEmpty());
 }
 
 void MainWindow::updateBacklinkCount()

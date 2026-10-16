@@ -1,5 +1,7 @@
 #include "MarkdownEditor.h"
 
+#include "Frontmatter.h"
+
 #include "Icons.h"
 #include "MediaPlayback.h"
 #include "PdfPage.h"
@@ -602,12 +604,38 @@ bool MarkdownEditor::revealsWholeBlock(const BlockView &view) const
 /// Worked from the caret outward - the styles that contain it, the syntax on
 /// its line - never a scan of the whole block, because a long list is one
 /// block.
+const CodeFenceSpan *MarkdownEditor::fenceAroundCaret() const
+{
+    if (m_mode != Mode::LivePreview || m_decorations.codeFences.isEmpty())
+        return nullptr;
+    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    auto it = std::lower_bound(fences.cbegin(), fences.cend(), m_cursor,
+                               [](const CodeFenceSpan &fence, qsizetype at) { return fence.block.end < at; });
+    return it != fences.cend() && it->depth == 0 && it->block.start <= m_cursor ? &*it : nullptr;
+}
+
 QList<Range> MarkdownEditor::revealedSyntax(const BlockView &view) const
 {
     QList<Range> revealed;
     const qsizetype caret = m_cursor;
+    // The caret anywhere in a fenced listing opens both fence lines, which
+    // md4qt leaves in the blocks either side of the listing: Obsidian shows
+    // the opening and closing fence (and the language) as one unit.
+    if (view.span.kind == BlockSpan::Kind::Paragraph) {
+        if (const CodeFenceSpan *fence = fenceAroundCaret(); fence && view.span.range.overlaps(fence->block)) {
+            for (int i = view.firstSyntax; i < view.lastSyntax; ++i) {
+                if (m_decorations.syntax.at(i).overlaps(fence->block))
+                    revealed.append(m_decorations.syntax.at(i));
+            }
+            return revealed;
+        }
+    }
     if (!view.span.range.contains(caret) && caret != view.span.range.end)
         return revealed;
+
+    // An entity the caret touches shows as written (it is not syntax the
+    // parser lists, so the markers below never find it).
+    revealed = revealedEntities();
 
     const qsizetype line = m_lines.lineAt(caret);
     const qsizetype lineStart = m_lines.lineStart(line);
@@ -1370,14 +1398,15 @@ void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
             menu->addSeparator();
         addTableActions(*menu, offset);
     }
-    // A callout is edited as source from its menu as from its button.
+    // A callout is edited as source from its menu as from its button, and
+    // copied, retyped or unwrapped there.
     const qsizetype block = blockAtPoint(point);
-    if (block >= 0 && m_blocks[size_t(block)].callout && hasEditButton(m_blocks[size_t(block)])) {
+    if (block >= 0 && firstPiece(m_blocks[size_t(block)]).callout && hasEditButton(firstPiece(m_blocks[size_t(block)]))) {
         if (!menu)
             menu = std::make_unique<QMenu>(this);
         else
             menu->addSeparator();
-        menu->addAction(tr("Edit block source"), this, [this, block] { editBlockSource(block); });
+        addCalloutActions(*menu, block);
     }
     if (menu)
         menu->exec(event->globalPos());
@@ -2395,9 +2424,10 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
         if (span.kind != StyleSpan::Kind::Link || !span.anchorHash.isValid()
             || !span.anchorText.isValid() || span.anchorText.length() <= 0)
             continue;
-        // A block reference stays as written: what Obsidian shows for one is
-        // not recorded anywhere this was checked.
-        if (m_text.at(span.anchorText.start) == QLatin1Char('^'))
+        // A block reference to another note stays as written, "Note#^id" -
+        // Obsidian's live preview rewrites no "#" but a leading one, so
+        // `[[#^id]]` shows "^id" (its reading view writes "Note > ^id").
+        if (m_text.at(span.anchorText.start) == QLatin1Char('^') && !span.payload.isEmpty())
             continue;
         // Only a rendered link: with the caret inside it its brackets show,
         // and so does its "#". An alias has hidden the "#" already.
@@ -3061,8 +3091,13 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         if (notebookEchoHidden)
             hidden.append(view.span.range);
     }
+    // An entity the caret touches is among `revealed`: its source is drawn.
+    const QList<Range> openEntities = perElement ? revealedEntities() : QList<Range>();
+    const QList<Substitution> withoutOpen = openEntities.isEmpty() ? QList<Substitution>()
+                                                                   : substitutionsWithout(openEntities);
     view.map = reveal ? DisplayMap::identity(m_text, view.span.range)
-                      : DisplayMap::build(m_text, view.span.range, hidden, m_decorations.substitutions);
+                      : DisplayMap::build(m_text, view.span.range, hidden,
+                                          openEntities.isEmpty() ? m_decorations.substitutions : withoutOpen);
     for (BlockView::InlineMath &formula : view.inlineMaths)
         formula.displayPos = view.map.toDisplay(formula.sourcePos);
     for (BlockView::AnchorSeparator &separator : view.separators)
@@ -3289,6 +3324,8 @@ void MarkdownEditor::updateLayout()
             m_sourceReveal = -1;
     }
 
+    const CodeFenceSpan *fenceShown = bareCaret ? fenceAroundCaret() : nullptr;
+
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
     m_movedFrom = qInf();
@@ -3303,8 +3340,13 @@ void MarkdownEditor::updateLayout()
             view.laidOut = false;
             view.heightEstimated = false;
         }
+        // A fence's two lines, in the blocks around its listing, open with it.
+        const bool inFence = bareCaret && fenceShown
+                             && view.span.kind == BlockSpan::Kind::Paragraph
+                             && view.span.range.overlaps(fenceShown->block);
         const bool active = m_pressing ? view.active
-                                       : (bareCaret && i - view.piece == caretFirst) || i - view.piece == sourceShown;
+                                       : (bareCaret && i - view.piece == caretFirst) || i - view.piece == sourceShown
+                                             || inFence;
         if (active != view.active) {
             view.active = active;
             view.layout.reset();
@@ -3892,8 +3934,16 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
     // The two blocks swap between raw and rendered - and so does one block
     // when a selection starts or collapses inside it, since only a bare caret
     // reveals source.
-    if (m_activeBlock != previousBlock || hadSelection != (m_anchor != m_cursor))
+    if (m_activeBlock != previousBlock || hadSelection != (m_anchor != m_cursor)) {
         updateLayout();
+    } else if (m_activeBlock >= 0 && m_activeBlock < qsizetype(m_blocks.size())) {
+        // Within the block it was in: what the caret now touches (an element's
+        // markers, an entity) may differ, which relays out this block alone.
+        const BlockView &view = m_blocks[size_t(m_activeBlock)];
+        if (view.active && view.laidOut && !revealsWholeBlock(view)
+            && (revealedSyntax(view) != view.revealed || !(wordAtCaret() == view.caretWord)))
+            updateLayout();
+    }
 
     ensureCursorVisible();
     m_cursorOn = true;
@@ -4638,6 +4688,20 @@ void MarkdownEditor::reloadStyleFiles()
     invalidateLayouts();
     updateLayout();
     viewport()->update();
+}
+
+qsizetype MarkdownEditor::characterCount() const
+{
+    const Range front = Frontmatter::find(m_text);
+    return m_text.size() - (front.isValid() ? front.end : 0);
+}
+
+MarkdownEditor::TextCount MarkdownEditor::selectionCount() const
+{
+    const Range range = selection();
+    if (range.length() <= 0)
+        return {};
+    return {wordsIn(QStringView(m_text).mid(range.start, range.length())), range.length()};
 }
 
 QString MarkdownEditor::selectedText() const

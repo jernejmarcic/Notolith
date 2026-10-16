@@ -1199,12 +1199,22 @@ TEST_F(WindowTest, TheStatusBarShowsCountsAndSwitchesTheMode)
     const auto has = [&labels](const QString &wanted) {
         return std::any_of(labels.begin(), labels.end(), [&wanted](QLabel *label) { return label->text() == wanted; });
     };
-    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->noteText().size()))), 5000);
+    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->characterCount()))), 5000);
+    EXPECT_LT(editor->characterCount(), editor->noteText().size() - 20) << "the frontmatter is not counted";
     EXPECT_TRUE(has(QStringLiteral("%1 words").arg(editor->wordCount())));
     // Typing moves the counts with the next parse, not with a rescan.
     editor->setCursorOffset(editor->noteText().size());
     QTest::keyClicks(editor, QStringLiteral("four"));
-    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->noteText().size()))), 5000);
+    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->characterCount()))), 5000);
+
+    // A selection is counted instead, a moment after it settles.
+    const qsizetype from = editor->noteText().indexOf(QStringLiteral("One"));
+    editor->setCursorOffset(from);
+    for (int i = 0; i < 7; ++i)
+        QTest::keyClick(editor, Qt::Key_Right, Qt::ShiftModifier); // "One two"
+    WAIT_TRUE(has(QStringLiteral("2 words, 7 characters")), 5000);
+    editor->setCursorOffset(from);
+    WAIT_TRUE(has(QStringLiteral("%1 characters").arg(QLocale().toString(editor->characterCount()))), 5000);
 
     // The pencil's menu: three modes, the check follows the current one.
     auto *menu = window.findChild<QMenu *>(QStringLiteral("modeMenu"));

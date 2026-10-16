@@ -87,6 +87,9 @@ public:
 
     /// Type names the file defines, sorted. For the settings page.
     QStringList definedTypes() const;
+    /// Obsidian's 13 types, then the file's others sorted: what a callout can
+    /// be changed to.
+    QStringList knownTypes() const;
 
 private:
     QHash<QString, QMap<QString, QString>> m_sections;
