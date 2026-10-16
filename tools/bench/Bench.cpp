@@ -272,6 +272,23 @@ Timing benchColdStart(const QString &vaultPath, int runs)
     return reduce(QStringLiteral("Cold start to first painted frame"), QString(), samples);
 }
 
+/// The first window of the process on its own: it alone pays for what a
+/// process does once (fonts, the style sheet, plugins), which is what a real
+/// launch pays. Its own row, since the median above hides it.
+Timing benchFirstWindow(const QString &vaultPath)
+{
+    QElapsedTimer clock;
+    clock.start();
+    auto window = std::make_unique<MainWindow>();
+    window->openVault(vaultPath);
+    window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    (void)paintedFrame(window.get());
+    return reduce(QStringLiteral("Cold start, the process's first window"), QString(),
+                  {double(clock.nsecsElapsed()) / 1e6});
+}
+
 /// A full scan into an empty cache, as on a vault's first open: the time the
 /// indexer itself reports. Deletes the vault's index cache before each run, so
 /// only ever called on the generated vault.
@@ -1533,6 +1550,8 @@ int main(int argc, char *argv[])
     // 1: cold start. Constructing MainWindow is the most expensive single
     // sample here, so this runs the fewest times.
     if (runs("start")) {
+        if (phase == QLatin1String("start")) // in a full run the memory phase opened the first window
+            timings << benchFirstWindow(vaultPath);
         timings << benchColdStart(vaultPath, 7);
         if (args.isEmpty()) // a vault given on the command line keeps its cache
             timings << benchColdIndex(vaultPath, 3);
