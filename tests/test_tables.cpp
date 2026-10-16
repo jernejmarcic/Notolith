@@ -5,6 +5,7 @@
 #include <QElapsedTimer>
 #include <QMimeData>
 #include <QPaintEvent>
+#include <QScrollBar>
 #include <QtTest/QTest>
 
 #include <memory>
@@ -425,6 +426,8 @@ TEST(TableHandlesTest, DraggingARowGripReordersBodyRowsInOneStep)
         "| a   |  b  |   c |\n| --- | :-: | --: |\n| 4   |  5  |   6 |\n| 7   |  8  |   9 |\n| 1   |  2  |   3 |"))
         << pipeRows(*editor).toStdString();
     EXPECT_TRUE(editor->cellSelectionRect().isValid()) << "the moved row stays selected";
+    editor->grab(); // paints
+    EXPECT_TRUE(editor->tableRenderedAt(at)) << "and the table stays a grid, not its source";
     undo(*editor);
     EXPECT_EQ(editor->noteText(), kGrid) << "one undo step";
 
@@ -609,6 +612,147 @@ TEST(TableHandlesTest, OneValuePastedOverASelectionFillsIt)
     drag(*editor, cellCentre(*editor, 1, 0), cellCentre(*editor, 2, 1));
     QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
     EXPECT_EQ(editor->noteText().count(QLatin1Char('z')), 4) << editor->noteText().toStdString();
+}
+
+TEST(TableHandlesTest, DraggingAnAddBarAddsOneRowOrColumnForEachCellTravelled)
+{
+    auto editor = gridEditor();
+    const qsizetype at = tableAt();
+    const QRectF last = editor->tableCellRect(at, 3, 0);
+    const QPoint bar = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow));
+    moveTo(*editor, bar);
+    press(*editor, bar);
+    // Three and a bit row heights down.
+    const QPoint to = bar + QPoint(0, int(last.height() * 3.4));
+    moveTo(*editor, bar + QPoint(0, 6), Qt::LeftButton);
+    moveTo(*editor, to, Qt::LeftButton);
+    EXPECT_EQ(editor->tableAddPreview(), 3) << "previewed while dragging";
+    EXPECT_EQ(editor->noteText(), kGrid) << "and nothing written until the release";
+    moveTo(*editor, bar + QPoint(0, int(last.height() * 1.2)), Qt::LeftButton);
+    EXPECT_EQ(editor->tableAddPreview(), 1) << "dragging back takes them away";
+    moveTo(*editor, to, Qt::LeftButton);
+    release(*editor, to);
+    const QStringList lines = pipeRows(*editor).split(QLatin1Char('\n'));
+    ASSERT_EQ(lines.size(), 8) << pipeRows(*editor).toStdString();
+    for (int i = 5; i < 8; ++i)
+        EXPECT_EQ(lines.at(i), QStringLiteral("|     |     |     |"));
+    EXPECT_EQ(editor->tableAddPreview(), 0);
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid) << "one undo step for all three";
+
+    // Columns: two widths to the right.
+    const QRectF lastColumn = editor->tableCellRect(at, 1, 2);
+    const QPoint side = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddColumn));
+    moveTo(*editor, side);
+    press(*editor, side);
+    moveTo(*editor, side + QPoint(5, 0), Qt::LeftButton);
+    const QPoint across = side + QPoint(int(lastColumn.width() * 2.5), 0);
+    moveTo(*editor, across, Qt::LeftButton);
+    EXPECT_EQ(editor->tableAddPreview(), 2);
+    release(*editor, across);
+    const QStringList columns = pipeRows(*editor).split(QLatin1Char('\n'));
+    ASSERT_EQ(columns.size(), 5);
+    EXPECT_EQ(columns.at(0).count(QLatin1Char('|')), 6) << columns.at(0).toStdString();
+    EXPECT_TRUE(columns.at(1).endsWith(QStringLiteral("| --- | --- |"))) << columns.at(1).toStdString();
+    undo(*editor);
+    EXPECT_EQ(editor->noteText(), kGrid);
+}
+
+TEST(TableHandlesTest, ASmallWobbleOnABarStillAddsOne)
+{
+    auto editor = gridEditor();
+    const QPoint bar = centre(editor->tableChromeRect(tableAt(), MarkdownEditor::TablePart::AddRow));
+    moveTo(*editor, bar);
+    press(*editor, bar);
+    moveTo(*editor, bar + QPoint(1, 1), Qt::LeftButton);
+    release(*editor, bar + QPoint(1, 1));
+    EXPECT_EQ(pipeRows(*editor).split(QLatin1Char('\n')).size(), 6) << "one row, as a click does";
+}
+
+namespace {
+
+/// A table wider than the editor: `columns` columns of long cells.
+QString wideNote(int columns)
+{
+    QStringList head, rule, body;
+    for (int c = 0; c < columns; ++c) {
+        head << QStringLiteral("column-number-%1-header").arg(c);
+        rule << QStringLiteral("---");
+        body << QStringLiteral("cell-%1-text-text-text").arg(c);
+    }
+    const auto row = [](const QStringList &cells) { return QStringLiteral("| ") + cells.join(QStringLiteral(" | ")) + QStringLiteral(" |"); };
+    return QStringLiteral("para\n\n") + row(head) + QLatin1Char('\n') + row(rule) + QLatin1Char('\n') + row(body)
+           + QLatin1Char('\n') + row(body) + QStringLiteral("\n\nend\n");
+}
+
+} // namespace
+
+TEST(TableHandlesTest, DraggingAColumnGripPastTheEdgeAutoscrollsAWideTableUntilRelease)
+{
+    const QString note = wideNote(12);
+    auto editor = gridEditor(note);
+    const qsizetype at = note.indexOf(QStringLiteral("| column"));
+    const qreal startLeft = editor->tableCellRect(at, 0, 0).left();
+    const QPoint grip = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 0));
+    moveTo(*editor, grip);
+    press(*editor, grip);
+    moveTo(*editor, grip + QPoint(20, 0), Qt::LeftButton);
+    EXPECT_FALSE(editor->tableAutoScrolling()) << "inside the table's window: no scroll";
+    const int past = editor->viewport()->width() + 30;
+    moveTo(*editor, QPoint(past, grip.y()), Qt::LeftButton);
+    ASSERT_TRUE(editor->tableAutoScrolling());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellRect(at, 0, 0).left() < startLeft - 100; }, 2000))
+        << "the table pans while the pointer stays put";
+    // Farther past the edge is faster.
+    qreal mark = editor->tableCellRect(at, 0, 0).left();
+    QTest::qWait(100);
+    const qreal slow = mark - editor->tableCellRect(at, 0, 0).left();
+    moveTo(*editor, QPoint(past + 400, grip.y()), Qt::LeftButton);
+    mark = editor->tableCellRect(at, 0, 0).left();
+    QTest::qWait(100);
+    const qreal fast = mark - editor->tableCellRect(at, 0, 0).left();
+    EXPECT_GT(fast, slow);
+
+    release(*editor, QPoint(past, grip.y()));
+    EXPECT_FALSE(editor->tableAutoScrolling());
+    QTest::qWait(150); // the drop's own edit settles first
+    editor->grab();
+    const qreal stopped = editor->tableCellRect(at, 0, 0).left();
+    QTest::qWait(120);
+    editor->grab();
+    EXPECT_EQ(editor->tableCellRect(at, 0, 0).left(), stopped) << "nothing scrolls after the release";
+}
+
+TEST(TableHandlesTest, ASelectionDraggedBelowTheViewportAutoscrollsATallTable)
+{
+    QString note = QStringLiteral("| a | b |\n| --- | --- |\n");
+    for (int i = 0; i < 40; ++i)
+        note += QStringLiteral("| r%1 | v%1 |\n").arg(i);
+    note += QStringLiteral("\nend\n");
+    auto editor = gridEditor(note);
+    editor->resize(900, 220);
+    QCoreApplication::processEvents();
+    const qsizetype at = note.indexOf(QStringLiteral("| a"));
+    QScrollBar *bar = editor->verticalScrollBar();
+    ASSERT_GT(bar->maximum(), 100) << "the table is taller than the view";
+    ASSERT_EQ(bar->value(), 0);
+
+    const QPoint from = centre(editor->tableCellRect(at, 1, 0));
+    moveTo(*editor, from);
+    press(*editor, from);
+    moveTo(*editor, from + QPoint(40, 20), Qt::LeftButton);
+    const QPoint below(from.x() + 60, editor->viewport()->height() + 25);
+    moveTo(*editor, below, Qt::LeftButton);
+    ASSERT_TRUE(editor->tableAutoScrolling());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return bar->value() > 120; }, 3000));
+    EXPECT_GT(editor->cellSelectionRect().height(), 4) << "the rectangle grows as the rows pass";
+    EXPECT_EQ(editor->cellSelectionRect().top(), 1) << "from the row it began in";
+    release(*editor, below);
+    EXPECT_FALSE(editor->tableAutoScrolling());
+    const int stopped = bar->value();
+    QTest::qWait(120);
+    EXPECT_EQ(bar->value(), stopped);
+    EXPECT_EQ(editor->noteText(), note) << "selecting writes nothing";
 }
 
 namespace {

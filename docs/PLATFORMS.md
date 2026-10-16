@@ -79,7 +79,9 @@ with no widget code in them. A mobile app links them unchanged.
 **The UI is the work.** QML is ruled out - its binding engine is a JavaScript
 engine - so a mobile noteAppC is Qt Widgets on a touch screen. That works on
 Android, but the editor is built for a mouse and keyboard: it needs kinetic
-scrolling (`QScroller`), selection handles, touch-sized targets, and a layout
+scrolling (`QScroller`), selection handles, touch-sized targets (table grips,
+add bars and long-press cell selection already work by finger, docs/EDITOR.md
+"Table handles"), and a layout
 for a narrow screen with no sidebars. The shell (`libs/ui`) would be largely
 new.
 

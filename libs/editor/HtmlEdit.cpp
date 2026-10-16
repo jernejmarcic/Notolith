@@ -744,6 +744,11 @@ private:
                     break;
                 }
                 allHeads = allHeads && c->v.element.tag == GUMBO_TAG_TH;
+                for (const char *spanning : {"colspan", "rowspan"}) {
+                    const QString value = attribute(c, spanning).trimmed();
+                    if (!value.isEmpty() && value != QLatin1String("1"))
+                        span.simple = false; // a merged cell: no handles
+                }
                 const Range cellTag = open(c);
                 Context context;
                 inlineChildren(c, context);
@@ -814,6 +819,8 @@ private:
         span.headerRows = headRows >= 0 ? headRows : headRows == -2 ? 1 : 0;
         for (const QList<Range> &cells : std::as_const(span.rows))
             span.columns = qMax(span.columns, int(cells.size()));
+        for (const QList<Range> &cells : std::as_const(span.rows))
+            span.simple = span.simple && int(cells.size()) == span.columns;
         while (span.alignment.size() < span.columns)
             span.alignment << Qt::AlignLeft;
         span.range = {tag.start, elementEnd(node)};
@@ -1339,6 +1346,72 @@ bool MarkdownEditor::runHTMLtableCommand(const QString &id, qsizetype table, int
         return applyHTMLtableEdits(edits, table, row, other);
     }
     return false;
+}
+
+bool MarkdownEditor::moveHTMLline(qsizetype table, bool column, int from, int final)
+{
+    const TableSpan span = m_decorations.tables.at(table); // a copy: the edits reparse
+    const int low = qMin(from, final);
+    const int high = qMax(from, final);
+    // The text each slot between `low` and `high` takes: moving down rotates
+    // the run one to the left, moving up one to the right.
+    QList<int> order;
+    for (int i = low; i <= high; ++i)
+        order << i;
+    if (from < final)
+        std::rotate(order.begin(), order.begin() + 1, order.end());
+    else
+        std::rotate(order.begin(), order.end() - 1, order.end());
+    // Each element's own text moves into another's place; what lies between
+    // them (indentation, newlines, comments) and every untouched row stays.
+    QList<HTMLtableEdit> edits;
+    const auto permute = [&](const QList<Range> &line) {
+        if (line.size() <= high)
+            return;
+        for (int k = 0; k < order.size(); ++k) {
+            if (order.at(k) == low + k)
+                continue;
+            const Range &slot = line.at(low + k);
+            const Range &source = line.at(order.at(k));
+            edits.append({slot.start, slot.length(), m_text.mid(source.start, source.length())});
+        }
+    };
+    if (column) {
+        for (const QList<Range> &cells : span.cellElements)
+            permute(cells);
+    } else {
+        permute(span.rowElements);
+    }
+    return applyHTMLtableEdits(edits, table, column ? 0 : final, column ? final : 0);
+}
+
+bool MarkdownEditor::appendHTMLline(qsizetype table, bool column, int count)
+{
+    const TableSpan span = m_decorations.tables.at(table);
+    QList<HTMLtableEdit> edits;
+    if (!column) {
+        // After the last row, written like it and on lines of its own.
+        const int like = int(span.rowElements.size()) - 1;
+        const Range &here = span.rowElements.at(like);
+        const QString indent = indentBefore(here.start).value_or(QString());
+        QString added;
+        for (int i = 0; i < count; ++i)
+            added += QLatin1Char('\n') + indent + HTMLrowText(span, like, false);
+        edits.append({here.end, 0, added});
+        return applyHTMLtableEdits(edits, table, like + 1, 0);
+    }
+    for (int r = 0; r < span.cellElements.size(); ++r) {
+        const QList<Range> &cells = span.cellElements.at(r);
+        if (cells.isEmpty())
+            continue;
+        const QString name = sameCase(r < span.headerRows ? QStringLiteral("th") : QStringLiteral("td"),
+                                      tagNameAt(m_text, cells.first().start));
+        QString added;
+        for (int i = 0; i < count; ++i)
+            added += QStringLiteral("<%1></%1>").arg(name);
+        edits.append({cells.last().end, 0, added});
+    }
+    return applyHTMLtableEdits(edits, table, 0, span.columns);
 }
 
 } // namespace noteAppC

@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <QApplication>
+#include <QClipboard>
+#include <QMimeData>
+#include <QMouseEvent>
 #include <QSignalSpy>
 #include <QtTest/QTest>
 
@@ -171,6 +174,242 @@ TEST(HtmlTableTest, LeavingAnEditedTableLeavesItsSourceAsWritten)
     QString expected = kTable;
     expected.replace(QStringLiteral("apple"), QStringLiteral("apples"));
     EXPECT_EQ(editor->noteText(), expected);
+}
+
+namespace {
+
+const QString kHandles = QStringLiteral(
+    "above\n\n<table class=\"t\">\n"
+    "  <tr><th>name</th><th>qty</th></tr>\n"
+    "  <tr id=\"a\"><td>apple &amp; co</td><td>3</td></tr>\n"
+    "  <tr id=\"b\" class=\"x\"><td style=\"color:red\">pear</td><td><b>5</b></td></tr>\n"
+    "  <tr><td>fig</td><td>7</td></tr>\n"
+    "</table>\n\nbelow\n");
+
+QPoint centre(const QRectF &rect) { return rect.center().toPoint(); }
+
+void moveTo(MarkdownEditor &editor, const QPoint &point, Qt::MouseButtons held = Qt::NoButton)
+{
+    QMouseEvent move(QEvent::MouseMove, QPointF(point), editor.viewport()->mapToGlobal(QPointF(point)),
+                     Qt::NoButton, held, Qt::NoModifier);
+    QCoreApplication::sendEvent(editor.viewport(), &move);
+}
+
+void drag(MarkdownEditor &editor, const QPoint &from, const QPoint &to)
+{
+    moveTo(editor, from);
+    QTest::mousePress(editor.viewport(), Qt::LeftButton, Qt::NoModifier, from);
+    moveTo(editor, QPoint((from.x() + to.x()) / 2, (from.y() + to.y()) / 2), Qt::LeftButton);
+    moveTo(editor, to, Qt::LeftButton);
+    QTest::mouseRelease(editor.viewport(), Qt::LeftButton, Qt::NoModifier, to);
+}
+
+/// The parse and the relayout an edit leaves for later have happened.
+void quiet(MarkdownEditor &editor)
+{
+    QTest::qWait(80);
+    editor.grab();
+}
+
+/// A shown, laid-out editor on `text` with the caret out of the table.
+std::unique_ptr<MarkdownEditor> handlesEditor(const QString &text = kHandles)
+{
+    auto editor = editorWith(text);
+    editor->setCursorOffset(text.size());
+    quiet(*editor);
+    editor->grab();
+    return editor;
+}
+
+qsizetype handlesAt(const QString &text = kHandles) { return text.indexOf(QStringLiteral("<table")); }
+
+} // namespace
+
+TEST(HtmlTableHandlesTest, HoverFindsTheGripsAndBarsOfASimpleGrid)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    ASSERT_FALSE(editor->tableCellRect(at, 1, 1).isEmpty());
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 2)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::RowGrip);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 1)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::ColumnGrip);
+    moveTo(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::AddRow);
+}
+
+TEST(HtmlTableHandlesTest, AMergedCellMeansNoHandles)
+{
+    const QString merged = QStringLiteral(
+        "above\n\n<table>\n  <tr><th colspan=\"2\">both</th></tr>\n  <tr><td>a</td><td>b</td></tr>\n</table>\n\nbelow\n");
+    auto editor = handlesEditor(merged);
+    const qsizetype at = handlesAt(merged);
+    ASSERT_TRUE(editor->tableRenderedAt(at)) << "still edited cell by cell";
+    EXPECT_TRUE(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow).isEmpty());
+    EXPECT_TRUE(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 1).isEmpty());
+    // A row with fewer cells than the others is not a simple grid either.
+    const QString ragged = QStringLiteral(
+        "above\n\n<table>\n  <tr><th>a</th><th>b</th></tr>\n  <tr><td>c</td></tr>\n</table>\n\nbelow\n");
+    auto other = handlesEditor(ragged);
+    EXPECT_TRUE(other->tableChromeRect(handlesAt(ragged), MarkdownEditor::TablePart::AddRow).isEmpty());
+}
+
+TEST(HtmlTableHandlesTest, DraggingARowGripMovesTheRowAndNothingElse)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    const QRectF last = editor->tableCellRect(at, 3, 0);
+    // The first body row (apple) to the end.
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 1)),
+         QPoint(int(last.center().x()), int(last.bottom()) - 2));
+    quiet(*editor);
+    const QString expected = QStringLiteral(
+        "above\n\n<table class=\"t\">\n"
+        "  <tr><th>name</th><th>qty</th></tr>\n"
+        "  <tr id=\"b\" class=\"x\"><td style=\"color:red\">pear</td><td><b>5</b></td></tr>\n"
+            "  <tr><td>fig</td><td>7</td></tr>\n"
+        "  <tr id=\"a\"><td>apple &amp; co</td><td>3</td></tr>\n"
+        "</table>\n\nbelow\n");
+    EXPECT_EQ(editor->noteText().toStdString(), expected.toStdString());
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 3, 2, 1)) << "the moved row stays selected";
+    editor->grab();
+    EXPECT_TRUE(editor->tableRenderedAt(at)) << "and the table stays a grid";
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, TheHeaderRowGripOnlySelects)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    const QRectF last = editor->tableCellRect(at, 3, 0);
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 0)),
+         QPoint(int(last.center().x()), int(last.bottom()) - 2));
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+    // A drop above the first body row stays at the top of the body.
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::RowGrip, 3)),
+         QPoint(int(last.center().x()), int(editor->tableCellRect(at, 0, 0).top()) + 1));
+    quiet(*editor);
+    EXPECT_LT(editor->noteText().indexOf(QStringLiteral("<td>fig")), editor->noteText().indexOf(QStringLiteral("apple")));
+    EXPECT_LT(editor->noteText().indexOf(QStringLiteral("<th>name")), editor->noteText().indexOf(QStringLiteral("<td>fig")));
+}
+
+TEST(HtmlTableHandlesTest, DraggingAColumnGripMovesItsCellsInEveryRow)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    const QRectF right = editor->tableCellRect(at, 1, 1);
+    drag(*editor, centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::ColumnGrip, 0)),
+         QPoint(int(right.right()) - 2, int(right.center().y())));
+    quiet(*editor);
+    const QString expected = QStringLiteral(
+        "above\n\n<table class=\"t\">\n"
+        "  <tr><th>qty</th><th>name</th></tr>\n"
+        "  <tr id=\"a\"><td>3</td><td>apple &amp; co</td></tr>\n"
+            "  <tr id=\"b\" class=\"x\"><td><b>5</b></td><td style=\"color:red\">pear</td></tr>\n"
+        "  <tr><td>7</td><td>fig</td></tr>\n"
+        "</table>\n\nbelow\n");
+    EXPECT_EQ(editor->noteText().toStdString(), expected.toStdString());
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, TheAddBarsAppendAndADragAddsSeveral)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    const QPoint bar = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow));
+    moveTo(*editor, bar);
+    QTest::mousePress(editor->viewport(), Qt::LeftButton, Qt::NoModifier, bar);
+    QTest::mouseRelease(editor->viewport(), Qt::LeftButton, Qt::NoModifier, bar);
+    quiet(*editor);
+    QString expected = kHandles;
+    expected.replace(QStringLiteral("  <tr><td>fig</td><td>7</td></tr>\n"),
+                     QStringLiteral("  <tr><td>fig</td><td>7</td></tr>\n  <tr><td></td><td></td></tr>\n"));
+    EXPECT_EQ(editor->noteText().toStdString(), expected.toStdString());
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, ADragOnAnAddBarAddsOneRowOrColumnForEachCellTravelled)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    // Two row heights down: two rows, one undo step.
+    const qreal rowHeight = editor->tableCellRect(at, 3, 0).height();
+    const QPoint start = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddRow));
+    drag(*editor, start, start + QPoint(0, int(rowHeight * 2.4)));
+    quiet(*editor);
+    EXPECT_EQ(editor->noteText().count(QStringLiteral("<tr><td></td><td></td></tr>")), 2) << editor->noteText().toStdString();
+    EXPECT_EQ(editor->cursorOffset(), editor->noteText().indexOf(QStringLiteral("<tr><td></td>")) + 8)
+        << "the caret is in the first new cell";
+    editor->grab();
+    EXPECT_TRUE(editor->tableRenderedAt(at));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString()) << "one undo step";
+
+    // And a column: <td></td> after every row's last cell, <th> in the header.
+    editor = handlesEditor();
+    const QPoint side = centre(editor->tableChromeRect(at, MarkdownEditor::TablePart::AddColumn));
+    const qreal width = editor->tableCellRect(at, 1, 1).width();
+    drag(*editor, side, side + QPoint(int(width * 1.6), 0));
+    quiet(*editor);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("<th>qty</th><th></th></tr>"))) << editor->noteText().toStdString();
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("<td>7</td><td></td></tr>")));
+    EXPECT_EQ(editor->noteText().count(QStringLiteral("<td></td>")) + editor->noteText().count(QStringLiteral("<th></th>")), 4)
+        << "one new cell in each of four rows";
+    undoAll(*editor);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, ARectangleCopiesAsATableAndTabSeparatedValues)
+{
+    auto editor = handlesEditor();
+    const qsizetype at = handlesAt();
+    drag(*editor, centre(editor->tableCellRect(at, 1, 0)), centre(editor->tableCellRect(at, 2, 1)));
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 2));
+    QTest::keyClick(editor.get(), Qt::Key_C, Qt::ControlModifier);
+    const QMimeData *mime = QApplication::clipboard()->mimeData();
+    ASSERT_NE(mime, nullptr);
+    EXPECT_EQ(mime->text(), QStringLiteral("apple & co\t3\npear\t5")) << "what the cells show, not their tags";
+    EXPECT_EQ(QString::fromUtf8(mime->data(QStringLiteral("text/markdown"))),
+              QStringLiteral("| apple & co | 3   |\n| ---------- | --- |\n| pear       | 5   |"))
+        << QString::fromUtf8(mime->data(QStringLiteral("text/markdown"))).toStdString();
+    EXPECT_EQ(editor->noteText(), kHandles) << "a copy writes nothing";
+
+    // Delete empties the cells' content and keeps their tags, as one step.
+    QTest::keyClick(editor.get(), Qt::Key_Delete);
+    quiet(*editor);
+    QString cleared = kHandles;
+    cleared.replace(QStringLiteral("<td>apple &amp; co</td><td>3</td>"), QStringLiteral("<td></td><td></td>"));
+    cleared.replace(QStringLiteral("<td style=\"color:red\">pear</td><td><b>5</b></td>"),
+                    QStringLiteral("<td style=\"color:red\"></td><td></td>"));
+    EXPECT_EQ(editor->noteText(), cleared) << editor->noteText().toStdString();
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, ShiftArrowsGrowARectangleAndEscapeDropsIt)
+{
+    auto editor = handlesEditor();
+    editor->setCursorOffset(kHandles.indexOf(QStringLiteral("pear")) + 4); // the end of a cell: the edge Shift+Right needs
+    editor->grab();
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 2, 1, 2));
+    QTest::keyClick(editor.get(), Qt::Key_Right, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 2, 2, 2));
+    QTest::keyClick(editor.get(), Qt::Key_Escape);
+    EXPECT_FALSE(editor->cellSelectionRect().isValid());
+    EXPECT_EQ(editor->noteText().toStdString(), kHandles.toStdString());
+}
+
+TEST(HtmlTableHandlesTest, OffMeansNoGripsOnAnHTMLTable)
+{
+    auto editor = handlesEditor();
+    editor->setTableHandles(false);
+    moveTo(*editor, centre(editor->tableCellRect(handlesAt(), 1, 0)));
+    moveTo(*editor, centre(editor->tableChromeRect(handlesAt(), MarkdownEditor::TablePart::RowGrip, 1)));
+    EXPECT_EQ(editor->hoveredTablePart(), MarkdownEditor::TablePart::None);
 }
 
 namespace {

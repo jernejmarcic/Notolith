@@ -22,6 +22,8 @@
 #include <QPainter>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QScroller>
+#include <QTextDocumentFragment>
 
 #include <algorithm>
 
@@ -67,6 +69,7 @@ void MarkdownEditor::setTableHandles(bool on)
         m_tableDrag = TableDrag{};
         m_cellSel = CellSelection{};
         m_cellPress = -1;
+        stopTableAutoScroll();
         viewport()->update();
     }
 }
@@ -79,7 +82,7 @@ const TableSpan *MarkdownEditor::chromeTable(const BlockView &view) const
     const QList<TableSpan> &tables = m_decorations.tables;
     const auto it = std::lower_bound(tables.cbegin(), tables.cend(), view.span.range.start,
                                      [](const TableSpan &table, qsizetype start) { return table.range.start < start; });
-    if (it == tables.cend() || it->range.start != view.span.range.start || it->html || it->columns <= 0
+    if (it == tables.cend() || it->range.start != view.span.range.start || (it->html && !it->simple) || it->columns <= 0
         || size_t(it->rows.size()) * size_t(it->columns) != view.cells.size())
         return nullptr;
     return &*it;
@@ -209,13 +212,15 @@ MarkdownEditor::TableChrome MarkdownEditor::tableChromeAt(const QPoint &point) c
         // The `</>` button is the one thing a press there means.
         if (m_hoverEditButton && hasEditButton(view) && editButtonRectOf(chrome.block).contains(point))
             return chrome;
-        if (rowGripRect(view, *table, chrome.row, true).contains(point))
+        // A finger is bigger than a pointer (touchable: no growth for a mouse).
+        const auto hit = [this, &point](const QRectF &rect) { return !rect.isEmpty() && touchable(rect, 0).contains(point); };
+        if (hit(rowGripRect(view, *table, chrome.row, true)))
             chrome.part = TablePart::RowGrip;
-        else if (columnGripRect(view, *table, chrome.column, true).contains(point))
+        else if (hit(columnGripRect(view, *table, chrome.column, true)))
             chrome.part = TablePart::ColumnGrip;
-        else if (addRowRect(view).contains(point))
+        else if (hit(addRowRect(view)))
             chrome.part = TablePart::AddRow;
-        else if (addColumnRect(view).contains(point))
+        else if (hit(addColumnRect(view)))
             chrome.part = TablePart::AddColumn;
         return chrome;
     }
@@ -299,8 +304,31 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         painter.drawLine(QPointF(middle.x(), middle.y() - arm), QPointF(middle.x(), middle.y() + arm));
         painter.setPen(Qt::NoPen);
     };
-    bar(addRowRect(view), m_tableHover.part == TablePart::AddRow);
-    bar(addColumnRect(view), m_tableHover.part == TablePart::AddColumn);
+    bar(addRowRect(view), m_tableHover.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddRow);
+    bar(addColumnRect(view), m_tableHover.part == TablePart::AddColumn || m_tableDrag.part == TablePart::AddColumn);
+
+    // The rows or columns a dragged add bar would add: a tinted strip, one
+    // cell to each.
+    if (dragging && m_tableDrag.moved && m_tableDrag.to > 0
+        && (m_tableDrag.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddColumn)) {
+        const QRectF ghost = addBarGhost(view, *table, m_tableDrag.to);
+        QColor tint = accent;
+        tint.setAlphaF(0.16f);
+        painter.setBrush(tint);
+        painter.drawRect(ghost);
+        QColor line = accent;
+        line.setAlphaF(0.55f);
+        painter.setPen(QPen(line, 1));
+        painter.setBrush(Qt::NoBrush);
+        const bool rows = m_tableDrag.part == TablePart::AddRow;
+        for (int i = 0; i <= m_tableDrag.to; ++i) {
+            const qreal step = (rows ? ghost.height() : ghost.width()) * i / m_tableDrag.to;
+            painter.drawLine(rows ? QPointF(ghost.left(), ghost.top() + step) : QPointF(ghost.left() + step, ghost.top()),
+                             rows ? QPointF(ghost.right(), ghost.top() + step) : QPointF(ghost.left() + step, ghost.bottom()));
+        }
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(accent);
+    }
 
     // Where a dragged row or column would land.
     if (dragging && m_tableDrag.moved) {
@@ -324,19 +352,31 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
 
 // --- the grips and the add bars ---------------------------------------------
 
-bool MarkdownEditor::pressTableChrome(const QPoint &point)
+bool MarkdownEditor::pressTableChrome(const QPoint &point, bool touch)
 {
     const TableChrome chrome = tableChromeAt(point);
-    if (chrome.part == TablePart::None)
+    // A finger has no hover: its first tap in a table brings the grips and
+    // bars up (for the row and column it is on), and only then are they its.
+    if (chrome.part == TablePart::None || (touch && chrome.block != m_tableHover.block)) {
+        if (touch)
+            updateTableHover(point);
         return false;
+    }
     const BlockView &view = m_blocks[size_t(chrome.block)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return false;
-    const qsizetype index = table - m_decorations.tables.constData();
     m_interacted = true;
+    // The finger drags the grip, not the page.
+    if (touch && QScroller::hasScroller(viewport()))
+        QScroller::scroller(viewport())->stop();
     if (chrome.part == TablePart::AddRow || chrome.part == TablePart::AddColumn) {
-        appendTableLine(index, chrome.part == TablePart::AddColumn);
+        // A click adds one, a drag adds one for each row height or column
+        // width it travels; the table changes on release.
+        const bool column = chrome.part == TablePart::AddColumn;
+        const qreal origin = column ? point.x() - contentLeft() + view.tableScroll
+                                    : point.y() + verticalScrollBar()->value() - view.y;
+        m_tableDrag = {chrome.part, chrome.block, -1, 0, false, point, origin};
         return true;
     }
     m_tableDrag = {chrome.part, chrome.block, chrome.part == TablePart::RowGrip ? chrome.row : chrome.column,
@@ -354,8 +394,28 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
     const BlockView &view = m_blocks[size_t(m_tableDrag.block)];
     const TableSpan *table = chromeTable(view);
     const bool column = m_tableDrag.part == TablePart::ColumnGrip;
-    // The header row stays where it is: its grip only selects.
-    if (!table || (!column && m_tableDrag.from < 1)
+    if (table && (m_tableDrag.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddColumn)) {
+        if (!m_tableDrag.moved && (point - m_tableDrag.start).manhattanLength() < 4)
+            return true;
+        const int count = addBarCount(view, *table, point);
+        if (!m_tableDrag.moved || count != m_tableDrag.to) {
+            // Both the strip it was and the one it is: only that is repainted.
+            QRegion dirty;
+            for (const int shown : {m_tableDrag.moved ? m_tableDrag.to : 0, count}) {
+                if (shown > 0)
+                    dirty += addBarGhost(view, *table, shown).adjusted(-2, -2, 2, 2).toAlignedRect();
+            }
+            m_tableDrag.moved = true;
+            m_tableDrag.to = count;
+            viewport()->update(dirty);
+        }
+        updateTableAutoScroll(point);
+        return true;
+    }
+    // A header row stays where it is: its grip only selects. (An HTML table
+    // may have several, or none.)
+    const int firstRow = table && table->html ? table->headerRows : 1;
+    if (!table || (!column && m_tableDrag.from < firstRow)
         || (!m_tableDrag.moved && (point - m_tableDrag.start).manhattanLength() < 4))
         return true;
 
@@ -364,7 +424,7 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
     int to = column ? int(table->columns) : int(table->rows.size());
     const qreal local = column ? point.x() - contentLeft() + view.tableScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
-    for (int i = column ? 0 : 1; i < to; ++i) {
+    for (int i = column ? 0 : firstRow; i < to; ++i) {
         const Cell &cell = view.cells[column ? size_t(i) : size_t(i) * size_t(table->columns)];
         if (local < (column ? cell.rect.center().x() : cell.rect.center().y())) {
             to = i;
@@ -376,7 +436,101 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
         m_tableDrag.to = to;
         viewport()->update(tableViewRect(view).adjusted(-10, -10, 16, 16).toAlignedRect());
     }
+    updateTableAutoScroll(point);
     return true;
+}
+
+int MarkdownEditor::addBarCount(const BlockView &view, const TableSpan &table, const QPoint &point) const
+{
+    const bool column = m_tableDrag.part == TablePart::AddColumn;
+    const qreal local = column ? point.x() - contentLeft() + view.tableScroll
+                               : point.y() + verticalScrollBar()->value() - view.y;
+    const Cell &last = view.cells[column ? size_t(table.columns) - 1
+                                         : (size_t(table.rows.size()) - 1) * size_t(table.columns)];
+    const qreal unit = qMax<qreal>(8, column ? last.rect.width() : last.rect.height());
+    return qBound(0, int((local - m_tableDrag.origin) / unit), 100);
+}
+
+QRectF MarkdownEditor::addBarGhost(const BlockView &view, const TableSpan &table, int count) const
+{
+    if (count <= 0)
+        return {};
+    const QRectF area = tableViewRect(view);
+    if (m_tableDrag.part == TablePart::AddColumn) {
+        const QRectF last = cellViewRect(view, view.cells[size_t(table.columns) - 1]);
+        return QRectF(last.right(), area.top(), last.width() * count, area.height());
+    }
+    const QRectF last = cellViewRect(view, view.cells[(size_t(table.rows.size()) - 1) * size_t(table.columns)]);
+    return QRectF(area.left(), last.bottom(), area.width(), last.height() * count);
+}
+
+// --- autoscroll ----------------------------------------------------------------
+
+QPoint MarkdownEditor::tableScrollDelta(const QPoint &point, qsizetype &block) const
+{
+    block = m_tableDrag.part != TablePart::None ? m_tableDrag.block : m_cellPress >= 0 ? blockAt(m_cellPress) : -1;
+    if (block < 0 || block >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(block)];
+    // Faster the farther past the edge, from a couple of pixels a tick.
+    const auto step = [](qreal over) { return over == 0 ? 0 : (over < 0 ? -1 : 1) * qBound(2, 2 + int(qAbs(over) / 4), 40); };
+    QPoint delta;
+    // A wide table pans inside its own window, which is where its cells end.
+    if (view.tableWidth > contentWidth()) {
+        const qreal left = contentLeft();
+        const qreal right = left + contentWidth();
+        delta.setX(step(point.x() < left ? point.x() - left : point.x() > right ? point.x() - right : 0));
+    }
+    delta.setY(step(point.y() < 0 ? point.y() : point.y() > viewport()->height() ? point.y() - viewport()->height() : 0));
+    return delta;
+}
+
+void MarkdownEditor::updateTableAutoScroll(const QPoint &point)
+{
+    qsizetype block = -1;
+    m_tableScrollPoint = point;
+    if (tableScrollDelta(point, block).isNull())
+        stopTableAutoScroll();
+    else if (!m_tableScrollTimer.isActive())
+        m_tableScrollTimer.start();
+}
+
+void MarkdownEditor::stopTableAutoScroll()
+{
+    m_tableScrollTimer.stop();
+}
+
+void MarkdownEditor::tableAutoScrollTick()
+{
+    qsizetype block = -1;
+    const QPoint delta = tableScrollDelta(m_tableScrollPoint, block);
+    if (delta.isNull()) {
+        stopTableAutoScroll();
+        return;
+    }
+    BlockView &view = m_blocks[size_t(block)];
+    bool scrolled = false;
+    if (delta.x() != 0) {
+        const qreal wanted = qBound<qreal>(0, view.tableScroll + delta.x(), view.tableWidth - contentWidth());
+        if (!qFuzzyCompare(wanted + 1, view.tableScroll + 1)) {
+            view.tableScroll = wanted;
+            scrolled = true;
+        }
+    }
+    if (delta.y() != 0) {
+        QScrollBar *bar = verticalScrollBar();
+        const int before = bar->value();
+        bar->setValue(before + delta.y());
+        scrolled = scrolled || bar->value() != before;
+    }
+    if (!scrolled)
+        return;
+    viewport()->update();
+    // The cells moved under a pointer that did not: take them as it is.
+    if (m_tableDrag.part != TablePart::None)
+        dragTableChrome(m_tableScrollPoint);
+    else if (m_cellPress >= 0)
+        dragCellSelection(m_tableScrollPoint);
 }
 
 bool MarkdownEditor::releaseTableChrome(const QPoint &)
@@ -385,7 +539,10 @@ bool MarkdownEditor::releaseTableChrome(const QPoint &)
         return false;
     const TableDrag drag = m_tableDrag;
     m_tableDrag = TableDrag{};
-    viewport()->setCursor(Qt::OpenHandCursor);
+    stopTableAutoScroll();
+    const bool bar = drag.part == TablePart::AddRow || drag.part == TablePart::AddColumn;
+    viewport()->setCursor(bar ? (drag.part == TablePart::AddRow ? Qt::SizeVerCursor : Qt::SizeHorCursor)
+                              : Qt::OpenHandCursor);
     if (drag.block >= qsizetype(m_blocks.size()))
         return true;
     const BlockView &view = m_blocks[size_t(drag.block)];
@@ -393,6 +550,13 @@ bool MarkdownEditor::releaseTableChrome(const QPoint &)
     if (!table)
         return true;
     const qsizetype index = table - m_decorations.tables.constData();
+    if (bar) {
+        const int count = drag.moved ? drag.to : 1; // a click adds one
+        if (count > 0)
+            appendTableLine(index, drag.part == TablePart::AddColumn, count);
+        viewport()->update();
+        return true;
+    }
     const bool column = drag.part == TablePart::ColumnGrip;
     const int rows = int(table->rows.size());
     const int columns = table->columns;
@@ -409,20 +573,27 @@ bool MarkdownEditor::releaseTableChrome(const QPoint &)
 
 bool MarkdownEditor::moveTableLine(qsizetype index, bool column, int from, int to)
 {
+    const bool html = index >= 0 && index < m_decorations.tables.size() && m_decorations.tables.at(index).html;
     TableText text;
-    if (!loadTableText(index, text))
+    if (!html && !loadTableText(index, text))
         return false;
-    const int count = column ? text.columns : int(text.rows.size()) - 1; // parser rows
+    // Parser rows; an HTML table's header is as many rows as it says.
+    const int count = html ? (column ? m_decorations.tables.at(index).columns : int(m_decorations.tables.at(index).rows.size()))
+                      : column ? text.columns : int(text.rows.size()) - 1;
+    const int first = column ? 0 : html ? m_decorations.tables.at(index).headerRows : 1;
     const int final = to > from ? to - 1 : to;
-    if (from < (column ? 0 : 1) || final < (column ? 0 : 1) || from >= count || final >= count || final == from)
+    if (from < first || final < first || from >= count || final >= count || final == from)
         return false;
-    if (column) {
+    if (html) {
+        if (!moveHTMLline(index, column, from, final))
+            return false;
+    } else if (column) {
         for (QStringList &row : text.rows)
             row.move(from, final); // the delimiter row's cell too: the alignment goes with it
     } else {
         text.rows.move(tableLine(from), tableLine(final));
     }
-    if (!storeTableText(text))
+    if (!html && !storeTableText(text))
         return false;
     const TableSpan &after = m_decorations.tables.at(index);
     if (column)
@@ -432,23 +603,33 @@ bool MarkdownEditor::moveTableLine(qsizetype index, bool column, int from, int t
     return true;
 }
 
-bool MarkdownEditor::appendTableLine(qsizetype index, bool column)
+bool MarkdownEditor::appendTableLine(qsizetype index, bool column, int count)
 {
+    const bool html = index >= 0 && index < m_decorations.tables.size() && m_decorations.tables.at(index).html;
     TableText text;
-    if (!loadTableText(index, text))
+    if (!html && !loadTableText(index, text))
         return false;
-    if (column) {
-        for (int r = 0; r < text.rows.size(); ++r)
-            text.rows[r] << (r == 1 ? QStringLiteral("---") : QString());
+    // The column index the new cells start at, for the caret below.
+    const int before = html ? m_decorations.tables.at(index).columns : text.columns;
+    if (html) {
+        if (!appendHTMLline(index, column, count))
+            return false;
     } else {
-        text.rows << QStringList(text.columns, QString());
+        for (int i = 0; i < count; ++i) {
+            if (column) {
+                for (int r = 0; r < text.rows.size(); ++r)
+                    text.rows[r] << (r == 1 ? QStringLiteral("---") : QString());
+            } else {
+                text.rows << QStringList(text.columns, QString());
+            }
+        }
+        if (!storeTableText(text))
+            return false;
     }
-    if (!storeTableText(text))
-        return false;
     // The caret goes into the first cell of what was added.
     const TableSpan &after = m_decorations.tables.at(index);
-    const Range cell = column ? after.rows.value(0).value(after.columns - 1)
-                              : after.rows.value(int(after.rows.size()) - 1).value(0);
+    const Range cell = column ? after.rows.value(0).value(before)
+                              : after.rows.value(int(after.rows.size()) - count).value(0);
     if (cell.isValid())
         moveCursor(cell.start, false);
     viewport()->update();
@@ -487,7 +668,11 @@ void MarkdownEditor::setCellSelection(qsizetype index, int anchorRow, int anchor
     const Range cell = table.rows.value(anchorRow).value(anchorColumn);
     if (!cell.isValid())
         return;
+    // The caret goes to the anchor cell, which must not drag the page back to
+    // it while a selection is being autoscrolled away from it.
+    const int scrolled = verticalScrollBar()->value();
     moveCursor(cell.end, false);
+    verticalScrollBar()->setValue(scrolled);
     if (anchorRow == headRow && anchorColumn == headColumn) {
         m_cellSel = CellSelection{}; // one cell is the caret
     } else {
@@ -508,20 +693,32 @@ bool MarkdownEditor::dragCellSelection(const QPoint &point)
     const int row = cellRowAt(view, *table, point.y());
     const int column = cellColumnAt(view, *table, point.x());
     const CellSelection *sel = cellSelection();
+    // Past the edge of a wide or tall table the pointer is still in it: that
+    // is where it autoscrolls.
+    QRectF reach = tableViewRect(view).adjusted(-2, -2, 2, 2);
+    constexpr qreal kFar = 1e6;
+    if (view.tableWidth > contentWidth()) {
+        reach.setLeft(-kFar);
+        reach.setRight(kFar);
+    }
+    if (reach.top() < 0)
+        reach.setTop(-kFar);
+    if (reach.bottom() > viewport()->height())
+        reach.setBottom(kFar);
     // Out of the table, or back in the cell the press began in: a text
     // selection again, as a drag out of a table always was.
-    if ((row == m_cellPressRow && column == m_cellPressColumn)
-        || !tableViewRect(view).adjusted(-2, -2, 2, 2).contains(point)) {
+    if ((row == m_cellPressRow && column == m_cellPressColumn) || !reach.contains(point)) {
         if (sel) {
             m_cellSel = CellSelection{};
             m_anchor = m_pressOffset;
             viewport()->update();
         }
+        stopTableAutoScroll();
         return false;
     }
-    if (sel && sel->headRow == row && sel->headColumn == column)
-        return true;
-    setCellSelection(table - m_decorations.tables.constData(), m_cellPressRow, m_cellPressColumn, row, column);
+    if (!sel || sel->headRow != row || sel->headColumn != column)
+        setCellSelection(table - m_decorations.tables.constData(), m_cellPressRow, m_cellPressColumn, row, column);
+    updateTableAutoScroll(point);
     return true;
 }
 
@@ -539,7 +736,8 @@ bool MarkdownEditor::handleCellSelectionKey(QKeyEvent *event)
         return false;
 
     const qsizetype index = tableAround(m_cursor);
-    if (index < 0 || index >= m_decorations.tables.size() || m_decorations.tables.at(index).html)
+    if (index < 0 || index >= m_decorations.tables.size()
+        || (m_decorations.tables.at(index).html && !m_decorations.tables.at(index).simple))
         return false;
     const TableSpan &table = m_decorations.tables.at(index);
     int anchorRow = 0, anchorColumn = 0, headRow = 0, headColumn = 0;
@@ -618,7 +816,15 @@ bool MarkdownEditor::copyCellSelection(bool cut)
         QStringList plain;
         for (int c = rect.left(); c <= rect.right(); ++c) {
             const Range range = table.rows.value(r).value(c);
-            const QString text = range.isValid() ? m_text.mid(range.start, range.length()) : QString();
+            QString text = range.isValid() ? m_text.mid(range.start, range.length()) : QString();
+            if (table.html) {
+                // What the cell shows: tags and entities gone, one line, a
+                // pipe escaped in the table and not in the plain text.
+                const QString shown = QTextDocumentFragment::fromHtml(text).toPlainText().simplified();
+                cells << QString(shown).replace(QLatin1Char('|'), QStringLiteral("\\|"));
+                plain << shown;
+                continue;
+            }
             cells << text;
             plain << plainCell(text);
         }
@@ -650,6 +856,23 @@ bool MarkdownEditor::clearCellSelection()
 {
     const CellSelection *sel = cellSelection();
     const qsizetype index = sel ? tableAround(m_cursor) : -1;
+    if (index >= 0 && m_decorations.tables.at(index).html) {
+        // An HTML cell's content, between its tags, goes; the tags stay.
+        const TableSpan &table = m_decorations.tables.at(index);
+        const CellSelection keep = *sel;
+        const QRect rect = cellSelectionRect();
+        QList<HTMLtableEdit> edits;
+        for (int r = rect.top(); r <= rect.bottom(); ++r) {
+            for (int c = rect.left(); c <= rect.right(); ++c) {
+                const Range cell = table.rows.value(r).value(c);
+                if (cell.isValid() && cell.length() > 0)
+                    edits.append({cell.start, cell.length(), QString()});
+            }
+        }
+        if (applyHTMLtableEdits(edits, index, keep.anchorRow, keep.anchorColumn))
+            setCellSelection(index, keep.anchorRow, keep.anchorColumn, keep.headRow, keep.headColumn);
+        return true;
+    }
     TableText text;
     if (index < 0 || !loadTableText(index, text))
         return false;

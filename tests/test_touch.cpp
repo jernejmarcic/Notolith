@@ -8,7 +8,10 @@
 #include <QMouseEvent>
 #include <QPointingDevice>
 #include <QScroller>
+#include <QStyleHints>
 #include <QTest>
+
+#include <memory>
 
 #include "MarkdownEditor.h"
 
@@ -144,6 +147,103 @@ TEST(TouchTest, AFingerReachesATaskBoxAMouseWouldMiss)
     ASSERT_GT(edge, 0) << "a mouse never reached the box";
     EXPECT_FALSE(ticks(edge + 4, QPointingDevice::primaryPointingDevice()));
     EXPECT_TRUE(ticks(edge + 4, touchscreen)) << "a finger reaches a little further";
+}
+
+namespace {
+
+const QString kGrid = QStringLiteral(
+    "para\n\n| a | b | c |\n| --- | :-: | --: |\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |\n\nend\n");
+
+std::unique_ptr<MarkdownEditor> gridEditor()
+{
+    auto editor = editorWith(kGrid);
+    editor->setMode(MarkdownEditor::Mode::LivePreview);
+    editor->setCursorOffset(0);
+    editor->setFocus();
+    return editor;
+}
+
+QPoint at(const QRectF &rect) { return rect.center().toPoint(); }
+
+QString pipeRows(const MarkdownEditor &editor)
+{
+    const QString text = editor.noteText();
+    const qsizetype start = text.indexOf(QStringLiteral("| "));
+    return text.mid(start, text.indexOf(QStringLiteral("\n\n"), start) - start);
+}
+
+/// One finger down, moved along `path`, and up, as touch events (which the
+/// editor sees as a touch screen's synthesized mouse events).
+void finger(MarkdownEditor &editor, const QList<QPoint> &path, int holdMs = 0, bool quick = false)
+{
+    // Not within a double-click of the last one, unless that is the point.
+    if (!quick)
+        QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 30);
+    QWidget *viewport = editor.viewport();
+    auto sequence = QTest::touchEvent(viewport, touchscreen);
+    sequence.press(0, path.first(), viewport).commit();
+    if (holdMs > 0)
+        QTest::qWait(holdMs);
+    for (qsizetype i = 1; i < path.size(); ++i)
+        sequence.move(0, path.at(i), viewport).commit();
+    sequence.release(0, path.last(), viewport).commit();
+    QTest::qWait(30);
+    editor.viewport()->repaint(); // the relayout an edit leaves for the next paint
+}
+
+} // namespace
+
+TEST(TouchTableTest, AFirstTapBringsTheGripsUpAndTheNextOneIsTheirs)
+{
+    auto editor = gridEditor();
+    const qsizetype table = kGrid.indexOf(QStringLiteral("| a"));
+    EXPECT_FALSE(editor->tableChromeShown());
+    const QPoint grip = at(editor->tableChromeRect(table, MarkdownEditor::TablePart::RowGrip, 2));
+    finger(*editor, {grip});
+    EXPECT_FALSE(editor->cellSelectionRect().isValid()) << "no grips yet: a tap on the edge is only a tap";
+
+    finger(*editor, {at(editor->tableCellRect(table, 2, 1))});
+    EXPECT_TRUE(editor->tableChromeShown());
+    const QPoint rowGrip = at(editor->tableChromeRect(table, MarkdownEditor::TablePart::RowGrip, 2));
+    finger(*editor, {rowGrip}, 0, true); // quick: Qt hands it over as a double click
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 2, 3, 1)) << "a tap on a grip selects the row";
+    EXPECT_EQ(editor->noteText(), kGrid);
+}
+
+TEST(TouchTableTest, AFingerDragsAGripToReorderAndAddBarsToAddRows)
+{
+    auto editor = gridEditor();
+    const qsizetype table = kGrid.indexOf(QStringLiteral("| a"));
+    finger(*editor, {at(editor->tableCellRect(table, 1, 1))}); // brings the chrome up
+    const QRectF last = editor->tableCellRect(table, 3, 0);
+    finger(*editor, {at(editor->tableChromeRect(table, MarkdownEditor::TablePart::RowGrip, 1)),
+                     at(editor->tableChromeRect(table, MarkdownEditor::TablePart::RowGrip, 1)) + QPoint(20, 20),
+                     QPoint(int(last.center().x()), int(last.bottom()) - 2)});
+    EXPECT_TRUE(pipeRows(*editor).contains(QStringLiteral("| 4   |  5  |   6 |\n| 7   |  8  |   9 |\n| 1   |  2  |   3 |")))
+        << pipeRows(*editor).toStdString();
+
+    finger(*editor, {at(editor->tableCellRect(table, 1, 1))});
+    const QPoint bar = at(editor->tableChromeRect(table, MarkdownEditor::TablePart::AddRow));
+    const qreal rowHeight = editor->tableCellRect(table, 3, 0).height();
+    finger(*editor, {bar, bar + QPoint(0, 8), bar + QPoint(0, int(rowHeight * 2.5))});
+    EXPECT_EQ(pipeRows(*editor).split(QLatin1Char('\n')).size(), 7) << "two rows added by one drag";
+    finger(*editor, {at(editor->tableCellRect(table, 1, 1))});
+    finger(*editor, {at(editor->tableChromeRect(table, MarkdownEditor::TablePart::AddRow))});
+    EXPECT_EQ(pipeRows(*editor).split(QLatin1Char('\n')).size(), 8) << "a tap adds one";
+}
+
+TEST(TouchTableTest, ALongPressInACellStartsARectangleAndAPlainDragDoesNot)
+{
+    auto editor = gridEditor();
+    const qsizetype table = kGrid.indexOf(QStringLiteral("| a"));
+    const QPoint from = at(editor->tableCellRect(table, 1, 0));
+    const QPoint to = at(editor->tableCellRect(table, 2, 1));
+    finger(*editor, {from, from + QPoint(20, 10), to});
+    EXPECT_FALSE(editor->cellSelectionRect().isValid()) << "a finger that moves at once is a scroll, not a selection";
+
+    finger(*editor, {from, from + QPoint(1, 1), to}, 700);
+    EXPECT_EQ(editor->cellSelectionRect(), QRect(0, 1, 2, 2)) << "held, then dragged across cells";
+    EXPECT_EQ(editor->noteText(), kGrid);
 }
 
 int main(int argc, char **argv)

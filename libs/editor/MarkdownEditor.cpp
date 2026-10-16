@@ -110,8 +110,17 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         QScroller::grabGesture(viewport(), QScroller::TouchGesture);
     m_longPress.setSingleShot(true);
     m_longPress.setInterval(500);
+    m_tableScrollTimer.setInterval(16);
+    connect(&m_tableScrollTimer, &QTimer::timeout, this, &MarkdownEditor::tableAutoScrollTick);
     connect(&m_longPress, &QTimer::timeout, this, [this] {
         m_pressing = false;
+        // In a table cell the finger may now drag a rectangle of cells; the
+        // word is selected as ever, until it does.
+        if (m_cellPress >= 0 && m_cellPressTouch) {
+            m_cellArmed = true;
+            if (QScroller::hasScroller(viewport()))
+                QScroller::scroller(viewport())->stop();
+        }
         selectWordAt(m_pressOffset);
         m_touchHandles = true; // a finger's selection is adjusted by its handles
         viewport()->update();
@@ -3994,7 +4003,11 @@ void MarkdownEditor::moveCursor(qsizetype offset, bool keepAnchor)
     const Range caretCell = cell.row >= 0 ? cell.range : Range{-1, -1};
     if (!(caretCell == m_caretCell)) {
         for (const qsizetype block : {previousBlock, m_activeBlock}) {
-            if (block < 0 || block >= qsizetype(m_blocks.size()) || m_blocks[size_t(block)].cells.empty())
+            // A table laid out as source (the caret was outside its cells
+            // for a moment, as an edit that rewrites it leaves it) has no
+            // cells either, and is the one that must be drawn as a grid now.
+            if (block < 0 || block >= qsizetype(m_blocks.size())
+                || (m_blocks[size_t(block)].cells.empty() && m_blocks[size_t(block)].span.kind != BlockSpan::Kind::Table))
                 continue;
             BlockView &view = m_blocks[size_t(block)];
             view.laidOut = false;
@@ -4675,12 +4688,13 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     // A table's grips and add bars (TableHandles.cpp); a press anywhere else
     // ends a rectangle of selected cells.
     m_cellPress = -1;
+    m_cellArmed = false;
     if (m_tableHandles) {
         if (m_cellSel.tableStart >= 0) {
             m_cellSel = CellSelection{};
             viewport()->update();
         }
-        if (!touch && pressTableChrome(event->pos()))
+        if (pressTableChrome(event->pos(), touch))
             return;
     }
 
@@ -4744,10 +4758,11 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     // A drag from a cell into another selects cells, not text.
     if (m_tableHandles && !event->modifiers().testFlag(Qt::ShiftModifier)) {
         const CellRef cell = tableCellAt(m_pressOffset);
-        if (cell.row >= 0 && tableRenderedAt(m_pressOffset) && !cell.table->html) {
+        if (cell.row >= 0 && tableRenderedAt(m_pressOffset) && (!cell.table->html || cell.table->simple)) {
             m_cellPress = cell.table->range.start;
             m_cellPressRow = cell.row;
             m_cellPressColumn = cell.column;
+            m_cellPressTouch = touch;
         }
     }
     updateLayout();
@@ -4813,6 +4828,8 @@ void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
 {
     m_longPress.stop();
     m_cellPress = -1;
+    m_cellArmed = false;
+    stopTableAutoScroll();
     if (releaseTableChrome(event->pos()))
         return;
     if (m_embedDrag.blockIndex >= 0) {
@@ -4874,7 +4891,7 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
                 return;
             m_longPress.stop();
         }
-        if (m_cellPress >= 0 && dragCellSelection(event->pos()))
+        if (m_cellPress >= 0 && (!m_cellPressTouch || m_cellArmed) && dragCellSelection(event->pos()))
             return;
         moveCursor(offsetAt(event->pos()), true);
         return;
@@ -4883,7 +4900,10 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
     // language shows its "Copy" label) and the rendered block whose `</>`
     // button shows (HoverEdit.cpp). Only a change repaints, and only the
     // panels involved.
-    updateHover(event->pos());
+    // A finger has no hover: the move Qt sends ahead of its press must not
+    // bring a table's grips up on its own (its first tap does that).
+    const bool finger = event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen;
+    updateHover(event->pos(), !finger);
 
     const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || m_overEditButton;
     Qt::CursorShape shape = clickable ? Qt::PointingHandCursor : Qt::IBeamCursor;
@@ -4908,6 +4928,14 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 
 void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
 {
+    // A second tap that comes quickly, on a grip or a bar a first tap just
+    // brought up, reaches here as a double click, not as a press.
+    if (m_tableHandles && event->pointingDevice()
+        && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen) {
+        m_touchSlop = 10;
+            if (pressTableChrome(event->pos(), true))
+            return;
+    }
     // Empty space in a hooked embed's own image opens the file itself
     // (a card there already opened on the first click's release, above); a
     // card falls through this unused, harmlessly, since it already handled
