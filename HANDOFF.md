@@ -45,7 +45,7 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 32 suites pass in the full build and 19 in a build with every optional
+All 35 suites pass in the full build and 21 in a build with every optional
 module off (`sh tools/check.sh` runs both; counts from `ctest -N`, 2026-10-16).
 
 Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`,
@@ -179,7 +179,10 @@ the suites that start a plugin host (`plugins_host`, `ai_plugin`, and
 started under `RLIMIT_AS`, and ASan maps terabytes of shadow memory; and the
 `*Perf*`/`*Budget*`/`OpeningAMegabyteNoteIsImmediate` timing guards, which
 ASan slows past their limits. `NOTEAPPC_DEMO_SHOTS=<dir>` makes
-`test_demo` write one PNG per demo note and mode there, for looking at; the
+`test_demo` write one PNG per demo note and mode there, for looking at (the
+second "Library" pane in them is the demo's own `workspace.json`, a right split
+holding `Library.base`, not a leftover; a test pins that opening a base or canvas
+reuses the active tab); the
 same test fails on any `qWarning` outside its short allowlist and on two
 neighbouring blocks whose painted boxes overlap (`MarkdownEditor::blockBoxes`).
 

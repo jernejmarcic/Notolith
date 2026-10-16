@@ -223,6 +223,72 @@ TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)
     EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 3);
 }
 
+// A notebook is a note only while the indexer has a reader for it (the window
+// gives it one with the notebooks feature on): indexed by the reader's text,
+// named by its file name with the extension, and a plain file again without.
+TEST_F(IndexTest, ANotebookIsIndexedByItsTextWhileAReaderIsSet)
+{
+    write(QStringLiteral("Projects/Analysis.ipynb"), "{\"cells\": \"stands in for a notebook\"}");
+    write(QStringLiteral("Analysis.md"), "# Analysis\n\nthe markdown note\n");
+    write(QStringLiteral("Mentions.md"), "See [[Analysis.ipynb]] and [[Analysis]].\n");
+    const Indexer::NotebookReader reader = [](const QByteArray &bytes) -> std::optional<QString> {
+        return bytes.contains("stands in") ? std::optional<QString>(QStringLiteral("zeppelin cell [[Home]] #nbtag\n"))
+                                           : std::nullopt;
+    };
+    const QString notebook = QStringLiteral("Projects/Analysis.ipynb");
+    Index index;
+    Indexer indexer(&index);
+    const auto scan = [&](bool rebuild) {
+        QSignalSpy done(&indexer, &Indexer::finished);
+        if (rebuild)
+            indexer.rebuild();
+        else
+            indexer.setVault(vault);
+        EXPECT_TRUE(done.wait(20000));
+    };
+
+    // Off, as before: a file that is not a note.
+    scan(false);
+    EXPECT_EQ(index.attachmentCount(), 2) << "notes.txt and the notebook";
+    EXPECT_EQ(index.noteCount(), 5);
+    EXPECT_TRUE(index.search(QStringLiteral("zeppelin")).isEmpty());
+    EXPECT_EQ(index.resolve(QStringLiteral("Analysis.ipynb")), notebook) << "it already resolves, as an attachment";
+
+    // On: a note, found by its text, tags and links, by name with the extension.
+    indexer.setNotebookReader(reader);
+    QSignalSpy rescanned(&indexer, &Indexer::finished);
+    ASSERT_TRUE(rescanned.wait(20000)) << "switching it rescans by itself";
+    EXPECT_EQ(index.noteCount(), 6);
+    EXPECT_EQ(index.attachmentCount(), 1);
+    EXPECT_TRUE(index.allPaths().contains(notebook));
+    ASSERT_EQ(index.search(QStringLiteral("zeppelin")).size(), 1);
+    EXPECT_EQ(index.search(QStringLiteral("zeppelin")).first().path, notebook);
+    EXPECT_EQ(index.notesWithTag(QStringLiteral("nbtag")), QStringList{notebook});
+    EXPECT_EQ(index.findByName(QStringLiteral("analysis.ipy")), QStringList{notebook}) << "the quick switcher";
+    EXPECT_EQ(index.resolve(QStringLiteral("Analysis.ipynb")), notebook);
+    EXPECT_EQ(index.resolve(QStringLiteral("Analysis")), QStringLiteral("Analysis.md")) << "a bare name is still the note";
+    const QList<Backlink> toNotebook = index.backlinks(vault.absolute(notebook));
+    ASSERT_EQ(toNotebook.size(), 1);
+    EXPECT_EQ(toNotebook.first().fromPath, QStringLiteral("Mentions.md"));
+    EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 3) << "the notebook's own [[Home]] counts";
+
+    // A change to the notebook is picked up by a single reindex, a file that is no notebook is not indexed at all.
+    write(QStringLiteral("Projects/Analysis.ipynb"), "{\"cells\": \"stands in for it, longer\"}");
+    write(QStringLiteral("Broken.ipynb"), "not json");
+    QSignalSpy once(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(once.wait(20000));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Broken.ipynb")));
+
+    // Off again: a file that is not a note, and its text is gone from search.
+    indexer.setNotebookReader(nullptr);
+    QSignalSpy off(&indexer, &Indexer::finished);
+    ASSERT_TRUE(off.wait(20000));
+    EXPECT_EQ(index.noteCount(), 5);
+    EXPECT_FALSE(index.allPaths().contains(notebook));
+    EXPECT_TRUE(index.search(QStringLiteral("zeppelin")).isEmpty());
+}
+
 TEST_F(IndexTest, DeletedNotesLeaveTheCache)
 {
     Index index;

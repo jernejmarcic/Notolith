@@ -56,6 +56,92 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 paragraphs at once and styled when its parse comes back from the thread pool.
 See [the async parse](#8-a-big-note-is-shown-before-it-is-parsed).
 
+## Against Obsidian
+
+First head-to-head, 2026-10-16, starbase-1, Obsidian 1.14.4 (Electron 43, no
+plugins, never signed in) against noteAppC at `c3e13ea` (Release). Both ran in
+the same headless `cage` (1280x720, real RTX 5080 through GL, so Obsidian was
+GPU-accelerated), in a throwaway `HOME`/XDG tree, pinned to CCD1 (cores
+6-11,18-23) at `nice 19`, one app at a time, interleaved (noteAppC cold, noteAppC
+warm, Obsidian cold, Obsidian warm, then the next round). Every cell is the
+**median of 5**, and the machine was not quiet (load average 2 to 5, other
+lanes building at idle priority), so read ratios, not milliseconds.
+
+Vaults are `tools/gen_bench_vault.py` output (5 000 and 20 000 notes, seed
+fixed). "Cold" is a fresh profile with no cache (Obsidian's IndexedDB metadata
+cache, noteAppC's `index.db`); "warm" is the second launch on the same profile.
+The note shown at start is `areas/Note 00000.md`.
+
+| what | vault | noteAppC | Obsidian | how it was timed |
+|---|---|---|---|---|
+| window on screen, cold | 5 000 / 20 000 | 169 / 174 ms | 627 ms (5k) | process spawn to first `wl_surface` commit with a buffer, read from cage's server-side protocol log (same for both; includes cage start-up). Obsidian's own first-contentful-paint is 714 / 691 ms |
+| note painted, cold | 5 000 | **207 ms** | 916 ms (867 ms by the log) | noteAppC: first commit after the title names the note (log). Obsidian: devtools, first frame after `.cm-content` holds the note text |
+| note painted, cold | 20 000 | **217 ms** | 1 221 ms | as above |
+| note painted, warm | 5 000 | **221 ms** | 1 019 ms (989 ms by the log) | as above |
+| note painted, warm | 20 000 | **286 ms** | 1 897 ms | as above |
+| cold index, whole vault | 5 000 | **243 ms** (240-248) | 5.7 s from spawn, 5.0 s from when its indexer starts | noteAppC: the "Indexed N note(s) in X ms" message in the status bar, which is the indexer's own clock (scan start to `finished` reaching the UI thread); one `grim` crop 2 s after launch, 5 cold launches. Obsidian: devtools, from `inProgressTaskCount` first above 0 to back at 0 with every note in `resolvedLinks` |
+| cold index, whole vault | 20 000 | **1.07 s** (1.06-1.12) | 36.7 s from spawn, 35.8 s from its indexer's start | as above (crop 3 s after launch); 33x |
+| metadata ready, warm | 5 000 / 20 000 | not separately visible (the note is up at 0.22 / 0.29 s) | 1.08 / 2.27 s | same Obsidian condition on a populated cache |
+| RSS after the index settles | 5 000 / 20 000 | 185 / 214 MB | 1 165 / 1 541 MB | `VmRSS` summed over every process of the app (Obsidian: 8 of them) 3 s after settling |
+| PSS, same moment | 5 000 / 20 000 | 121 / 152 MB | 747 / 1 130 MB | `smaps_rollup`, which does not count Obsidian's shared pages once per process |
+| open a 1 kB note | 5 000 / 20 000 | 2.2 ms (bench) | 27 / 45 ms | noteAppC: `benchNoteOpen`, readable and painted, offscreen, no compositor. Obsidian: `leaf.openFile` to the second animation frame with the text in `.cm-content`, so one 60 Hz frame wait (about 8 ms on average) is inside it |
+| open a 200 kB note | 5 000 / 20 000 | 3.5 ms (bench) | 48 / 74 ms | as above |
+| open a 1 MB note | 5 000 / 20 000 | 13.8 ms (bench; styled about 140 ms later) | 130 / 158 ms | as above; Obsidian virtualises, so this is the first screenful |
+| keystroke, 1 kB note | - | 0.38 ms (bench) | 4.2 ms | noteAppC: `benchKeystroke`, relaid and painted block. Obsidian: devtools `Input.dispatchKeyEvent` to the end of the frame that follows (keydown to a `MessageChannel` message posted from a `requestAnimationFrame`), main thread only, no raster or present. The 1 kB row is Obsidian's floor: the frame cadence alone |
+| keystroke, 200 kB note | - | 0.38 ms (bench) | 8.8 ms | as above, cursor in the middle of the note |
+| keystroke, 1 MB note | - | 0.73 ms (bench) | 26.2 ms | as above |
+| peak RSS, vault plus a 1 MB note | 5 000 / 20 000 | 240 / 234 MB (bench `VmHWM`, note outside the vault) | 1 425 / 1 701 MB (RSS right after opening it, note inside the vault) | not the same thing twice: noteAppC's figure is a high-water mark of the bench process, Obsidian's a sample of the summed RSS |
+
+noteAppC is ahead on every row: 4x to 7x on window and note on screen, 21x to
+34x on the cold index (5 000 / 20 000 notes), 6x to 7x less memory (RSS), and
+about 9x to 36x on open and keystroke. The "bench" rows are in-process figures and
+not a like-for-like timing against the devtools ones (see the first caveat).
+
+Caveats, in the order they matter:
+
+- **Mixed methods in the open and keystroke rows.** noteAppC's come from
+  `noteAppC-bench` (offscreen, no compositor, no vsync wait); Obsidian's from the
+  Chromium event loop on a 60 Hz output and include up to one frame of wait. The
+  1 kB row is the floor that shows how much of Obsidian's figure is cadence.
+  Even after subtracting it, the 1 MB keystroke is about 22 ms against
+  noteAppC's 0.7 ms. A headless app window has no input-to-photon path in either
+  case.
+- **The two index clocks do not start at the same place.** noteAppC's is the
+  status-bar message (scan start to the `finished` signal arriving on the UI
+  thread); Obsidian's is read from outside, and I give it both from process
+  spawn and from the moment its indexer starts (0.7-1.0 s in). The bare
+  `Indexer` in the bench measured 0.41 s (5 000) and 2.7 s (20 000) in the same
+  hours, noticeably above the app's own 0.24 s and 1.07 s from the same binary;
+  the difference was not chased, and this table uses the in-app message.
+- **Obsidian's "ready" is `inProgressTaskCount == 0`.** There is no single
+  public "metadata cache finished" event: `resolved` fires once per file.
+- **A vault with thousands of distinct tags stalls noteAppC's window.** The first
+  attempt put the 200 kB and 1 MB notes of the bench inside the vault. Those two
+  notes carry about 4 500 distinct `#tagN` tags, and with that vault noteAppC
+  showed the note only after **4.1 s** (5 000 notes) / **12.3 s** (20 000 notes)
+  on a warm cache, and on a cold one the "Indexed" message came at 4.4 s (0.6-6.1)
+  / 13.8 s with the status bar frozen before it. `perf` puts it in `openVault` ->
+  `Index::open` -> `TagsPane::refresh` -> `computeCounts` -> `Index::notesWithTag`
+  on the UI thread: one SQLite query per tag node. The table above uses vaults
+  without those notes (a second, clean batch of 5 rounds); the 1 MB and 200 kB
+  notes exist only in the first batch's vaults, so Obsidian's open, keystroke and
+  peak-RSS rows come from there (its index there: 7.4 s / 39 s, warm note
+  1.28 s / 2.18 s). The bench never sees the stall, because its big notes live
+  outside the vault.
+- **Defaults on both sides.** Obsidian ran in its default Live Preview on a vault
+  whose only config was an empty `app.json`, with no network restriction (its
+  update check, if it ran, is not in the timed path); noteAppC ran with defaults
+  on an empty `XDG_CONFIG_HOME`.
+- **Typing latency is not photon latency.** Neither side's figure includes
+  compositing or scan-out.
+- One Obsidian cold-index run at 20 000 notes took 98 s in the first batch (a
+  stall, not reproduced; the clean batch gave 35.9-37.7 s).
+
+Reproduce: the harness that produced this is not in the repository (it is a
+few hundred lines of Python driving `cage`, `WAYLAND_DEBUG=server` and the
+Chrome devtools protocol); every number above can be re-taken with those three
+pieces and the vault generator.
+
 ## Measuring
 
 ```sh

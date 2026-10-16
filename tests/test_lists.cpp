@@ -189,6 +189,38 @@ TEST(ListEnter, ACodeFenceIsNotAList)
     EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- not a list\n\n```\n"));
 }
 
+// Typed with no pause for the 20 ms parse: the decorations know nothing of any
+// fence yet, so the editor has to read the fence lines itself.
+TEST(ListEnter, AFenceTypedWithinTheParseDelayIsSeen)
+{
+    auto editor = editorWith(QString());
+    const auto typeLine = [&](const QString &line) {
+        QTest::keyClicks(editor.get(), line);
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+    };
+    typeLine(QStringLiteral("```"));
+    QTest::keyClicks(editor.get(), QStringLiteral("- a"));
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n")) << "inside the fence: a newline, not a bullet";
+
+    // Closed again, still before any parse: the list after it continues.
+    typeLine(QStringLiteral("```"));
+    QTest::keyClicks(editor.get(), QStringLiteral("- b"));
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- a\n```\n- b\n- "));
+}
+
+TEST(ListEnter, AFenceTheParseAlreadySawStillCounts)
+{
+    const QString note = QStringLiteral("```\n- x\n```\n\n- b");
+    auto editor = editorWith(note);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), note + QStringLiteral("\n- "));
+    editor->setCursorOffset(after(note, QStringLiteral("- x")));
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\n- x\n\n```\n\n- b\n- "));
+}
+
 TEST(ListEnter, InsideTheMarkerIsJustANewline)
 {
     EXPECT_EQ(enter(QStringLiteral("- a"), 1).text, QStringLiteral("-\n a"));
@@ -365,6 +397,42 @@ TEST(BulletGlyphs, TheEditorDrawsTheMappedGlyphPerMarker)
     }
     ASSERT_FALSE(changedRows.isEmpty());
     EXPECT_LT(changedRows.last() - changedRows.first(), 20) << "one bullet, one row of text";
+    editor->hide();
+}
+
+TEST(BulletGlyphs, NestedBulletsCycleDotRingSquareByDepthWhenAsked)
+{
+    const QString note = QStringLiteral("- a\n  - b\n    - c\n      - d\n\nend");
+    auto editor = editorWith(note, note.size());
+    editor->show();
+    QApplication::processEvents();
+    EXPECT_FALSE(editor->nestedBulletGlyphs()) << "off unless asked";
+    const QImage perMarker = editor->grab().toImage();
+    editor->setNestedBulletGlyphs(true);
+    const QImage byDepth = editor->grab().toImage();
+    EXPECT_NE(byDepth, perMarker);
+    editor->setNestedBulletGlyphs(false);
+    EXPECT_EQ(editor->grab().toImage(), perMarker) << "off again: as before, pixel for pixel";
+
+    // One glyph per depth: the first and the fourth item (depth 0 and 3) are both a dot.
+    editor->setNestedBulletGlyphs(true);
+    editor->setBulletGlyphs(QStringLiteral("-=dot"));
+    const QImage dotted = editor->grab().toImage();
+    editor->setNestedBulletGlyphs(false);
+    const QImage plainDots = editor->grab().toImage();
+    int differing = 0;
+    for (int y = 0; y < dotted.height(); ++y) {
+        bool row = false;
+        for (int x = 0; x < dotted.width() && !row; ++x)
+            row = dotted.pixel(x, y) != plainDots.pixel(x, y);
+        differing += row;
+    }
+    EXPECT_GT(differing, 0) << "the ring and the square differ from a dot";
+    // "typed" is the person's own choice and stays.
+    editor->setBulletGlyphs(QStringLiteral("-=typed"));
+    const QImage typed = editor->grab().toImage();
+    editor->setNestedBulletGlyphs(true);
+    EXPECT_EQ(editor->grab().toImage(), typed);
     editor->hide();
 }
 

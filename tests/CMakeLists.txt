@@ -73,6 +73,11 @@ if(TARGET noteAppC_plugins)
         NOTEAPPC_WORD_STATS_PLUGIN_DIR="${CMAKE_BINARY_DIR}/examples/plugins/word-stats"
         NOTEAPPC_PLUGIN_HOST_PATH="$<TARGET_FILE:noteAppC-plugin-host>")
     add_dependencies(test_window noteAppC-plugin-host word-stats)
+    # The AI plugin asks a question through the window's own dialog (plugins.cpp's askUser).
+    if(TARGET ai)
+        target_compile_definitions(test_window PRIVATE NOTEAPPC_AI_PLUGIN_DIR="${CMAKE_BINARY_DIR}/plugins/ai")
+        add_dependencies(test_window ai)
+    endif()
 endif()
 
 # Mermaid fences through a fake tool: the renderer alone, in an editor, and by the window's setting.
@@ -96,6 +101,11 @@ set_tests_properties(window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(test_theme test_theme.cpp)
 target_link_libraries(test_theme PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)
 add_test(NAME theme COMMAND test_theme)
+
+add_executable(test_popup test_popup.cpp)
+target_link_libraries(test_popup PRIVATE noteAppC_theme Qt6::Widgets Qt6::Test GTest::gtest)
+add_test(NAME popup COMMAND test_popup)
+set_tests_properties(popup PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(test_icons test_icons.cpp)
 target_link_libraries(test_icons PRIVATE noteAppC_theme Qt6::Test GTest::gtest GTest::gtest_main)

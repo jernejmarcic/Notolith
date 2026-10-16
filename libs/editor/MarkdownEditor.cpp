@@ -510,6 +510,14 @@ void MarkdownEditor::setBulletGlyphs(const QString &spec)
     viewport()->update(); // drawn in the margin; nothing moves
 }
 
+void MarkdownEditor::setNestedBulletGlyphs(bool on)
+{
+    if (on == m_nestedBulletGlyphs)
+        return;
+    m_nestedBulletGlyphs = on;
+    viewport()->update();
+}
+
 void MarkdownEditor::setTabWidth(int spaces)
 {
     m_tabWidth = qBound(1, spaces, 8);
@@ -2002,8 +2010,12 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
                              Qt::AlignRight | Qt::AlignVCenter, label);
         } else {
             // One look per way of writing a bullet, set in Settings.
-            paintBulletGlyph(painter, m_bulletGlyphs.glyphFor(item.bullet), item.bullet,
-                             QPointF(textX - 12, baseline + line.height() / 2), muted,
+            BulletGlyph glyph = m_bulletGlyphs.glyphFor(item.bullet);
+            if (m_nestedBulletGlyphs && glyph != BulletGlyph::AsTyped) { // dot, ring, square by depth
+                static constexpr BulletGlyph levels[] = {BulletGlyph::Dot, BulletGlyph::Ring, BulletGlyph::Square};
+                glyph = levels[item.indent % 3];
+            }
+            paintBulletGlyph(painter, glyph, item.bullet, QPointF(textX - 12, baseline + line.height() / 2), muted,
                              view.layout->font());
         }
         painter.restore();

@@ -1136,6 +1136,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setOutlineNumbering(m_settings.text(QStringLiteral("editor.listNumberStyle")) == QLatin1String("hierarchical"));
     editor->setListNumberSuffix(m_settings.text(QStringLiteral("editor.listNumberSuffix")));
     editor->setBulletGlyphs(m_settings.text(QStringLiteral("editor.bulletGlyphs")));
+    editor->setNestedBulletGlyphs(m_settings.boolean(QStringLiteral("editor.bulletGlyphsNested")));
     editor->setAlignTables(m_settings.boolean(QStringLiteral("editor.alignTables")));
     editor->setHoverEditButton(m_settings.boolean(QStringLiteral("editor.hoverEditButton")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
@@ -1847,8 +1848,24 @@ void MainWindow::applyFeatures()
     // here rather than leave the microphone on.
     if (m_recorder && !featureOn("audio-recorder"))
         m_recorder->stop();
+    updateNotebookIndex();
     if (m_painted)
         syncPlugins();
+}
+
+void MainWindow::updateNotebookIndex()
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // With notebooks on, the index reads a .ipynb as the text it opens as; off, it is a plain file.
+    m_indexer->setNotebookReader(featureOn("notebooks")
+                                     ? Indexer::NotebookReader([](const QByteArray &bytes) -> std::optional<QString> {
+                                           notebook::IpynbDocument document;
+                                           if (!notebook::parseIpynb(bytes, &document))
+                                               return std::nullopt;
+                                           return notebook::ipynbMarkdown(document);
+                                       })
+                                     : Indexer::NotebookReader());
+#endif
 }
 
 void MainWindow::showNoteInPanes(const QString &path)
@@ -3578,6 +3595,7 @@ void MainWindow::openVault(const QString &path)
     syncTabs(m_active->group);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
+    updateNotebookIndex(); // before the scan: a vault's notebooks are indexed by the first one
     m_indexer->setVault(m_vault);
 
     reloadSettings(m_vault.root());
@@ -5330,8 +5348,6 @@ void MainWindow::updateModeButton()
         action->setIcon(Icons::icon(action->data().toString(), color, 16));
         const bool on = action->objectName() == QLatin1String(current);
         action->setChecked(on);
-        // Obsidian's check sits at the right edge: the shortcut column does that.
-        action->setText(action->text().section(QLatin1Char('\t'), 0, 0) + (on ? QStringLiteral("\t\u2713") : QString()));
         if (on)
             m_modeButton->setIcon(Icons::icon(action->data().toString(), color, 14));
     }

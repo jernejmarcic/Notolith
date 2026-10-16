@@ -171,8 +171,20 @@ Ceilings: a run's new output is not written back into the file (it lives in the
 cache like every block's; the notebook keeps the outputs it came with), because
 a block's cache key is its source and two cells with the same code would
 collide. `execution_count` is the file's own. Cell attachments are kept but not
-shown. The vault index (links, backlinks, search) does not read notebooks: it
-lists only Markdown files.
+shown.
+
+The vault index reads a notebook as the text it opens as (every cell, code in
+its fences), while the notebooks feature is on: search finds its words with
+offsets into that text, the quick switcher lists it, its tags and `[[links]]`
+count, and `[[Analysis.ipynb]]` and its backlinks resolve. It answers to its
+file name with the extension only, as any file that is not Markdown does in
+Obsidian, so `[[Analysis]]` still means `Analysis.md`. With the feature off it
+is a plain file again (a link to it resolves, nothing inside it is searched);
+switching the feature, or opening a vault whose cache was written the other way,
+rescans only what changed kind. `Indexer::setNotebookReader` is the switch: the
+index library knows nothing of nbformat, the window hands it a reader. The index
+reads the file's JSON, not its outputs, so a notebook full of PNGs costs one
+parse, off the UI thread.
 
 ## Where outputs go
 

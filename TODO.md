@@ -290,8 +290,14 @@ budget, which this project has already learned once on the index.
       only thing a target that resolves to a note can be guaranteed to share
       with it. Opening a 1 kB note on a 2 000-note vault went 14.6 ms -> 1.4 ms,
       and no longer depends on vault size at all. Schema version 3.
-- [ ] Measure against Obsidian itself on the same vault. Not installed here,
-      so the comparison is still unmade - these are noteAppC's own numbers.
+- [x] Measured against Obsidian 1.14.4 on the same generated vaults, 2026-10-16:
+      docs/PERFORMANCE.md "Against Obsidian" (noteAppC ahead on every row:
+      cold index 1.07 s vs 36.7 s on 20 000 notes, RSS 214 vs 1541 MB).
+      Found: TagsPane::refresh runs one notesWithTag query per tag on the UI
+      thread (4.1 s warm open on a 5 000-note vault with 4 500 tags).
+- [ ] TagsPane::refresh stall on tag-heavy vaults: compute tag counts in one
+      grouped query or off the UI thread; add a ~4 500-tag note inside the
+      vault to tools/bench.
 - [x] **Opening a note was quadratic, twice over.** Found with perf, not
       guessed. `ObsidianSyntax::scan` ran the lazy `%%...%%` pattern once per
       unmasked region - 16 273 of them on a 1 MB note - and each run with no
@@ -370,7 +376,7 @@ budget, which this project has already learned once on the index.
       adds one. Rewritten in the style written (block or flow), other items
       kept byte for byte; a list with a comment in it stays read-only.
 - [x] Editing an existing list item in place: click its text.
-- [ ] Measure against Obsidian itself. Not installed here.
+- [x] Measure against Obsidian itself: see the 2026-10-16 entry above.
 
 ## Requested 2026-09-23
 
@@ -919,8 +925,9 @@ optimal as it can be".
       -fsanitize=address); test_ai_plugin.cpp:756 callback captures a dead
       local when the first run() fails (stack-use-after-return). Timing guards
       fail under ASan by nature (skip them when sanitized).
-- [ ] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
-      later views; check whether that is wanted workspace state.
+- [x] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
+      later views; check whether that is wanted workspace state. 2026-10-16:
+      wanted, demo/.obsidian/workspace.json puts Library.base in a right split.
 - [ ] Tables leftovers: (`/table` now offers Insert table first, 2026-10-16); source-mode Tab/Enter
       within 20 ms of typing does a synchronous whole-note reparse (hitch on a
       note above the async-parse threshold); row/column drag handles, hover
@@ -938,7 +945,7 @@ optimal as it can be".
 - [x] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
       a published site gets no theme `syntax`/`--code-*` token colours yet; a
       listing nested in a callout gets ini/theme colours only (no fence attrs).
-- [ ] Notebook leftovers: no window-level test drives input() end to end;
+- [x] Notebook leftovers: no window-level test drives input() end to end;
       the plugin askUser dialog is untested; `.ipynb` outputs are seeded on
       the GUI thread at every read (big PNGs cost time); run outputs are not
       written back into the .ipynb; the vault index ignores .ipynb.
@@ -946,7 +953,7 @@ optimal as it can be".
       before the stdin handshake; KernelClient now waits for it.
 - [ ] Image annotation is off by default (it replaces the plain image tab);
       Jernej to say whether it should be on.
-- [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
+- [x] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
       decorations (a fence typed within the parse delay is not seen yet).
@@ -986,7 +993,7 @@ optimal as it can be".
 - [x] Status bar word/character count: 200 ms debounce, counts the selection
       when there is one, skips frontmatter. Today: counts come with each parse,
       characters are the whole file incl. frontmatter.
-- [ ] Popup leftovers: mode-menu check is a text mark in the shortcut column
+- [x] Popup leftovers: mode-menu check is a text mark in the shortcut column
       (QSS cannot put the indicator right of an icon); QMessageBox/QInputDialog
       windows are not rounded.
 - [x] Callout context menu: Edit / Copy / Change type / Remove, once the hover
