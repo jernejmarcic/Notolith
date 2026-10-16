@@ -319,6 +319,15 @@ Each is one undo step. `MarkdownEditor::calloutSourceAt`, `changeCalloutType`
 and `removeCallout` (HoverEdit.cpp) do the work for a source offset, so a
 plugin or a test needs no menu. Nothing runs until the menu opens.
 
+Click a top-level `> [!type]` callout's title (not a `:::` container or a
+nested callout) and it becomes a line edit exactly where it is drawn, over the
+panel, with the `[!type]` marker still hidden. Return or leaving the field
+writes it back as one undo step, Escape throws it away; an implicit title
+(`> [!note]`, drawn "Note") opens empty and gains a space and the typed text.
+The rest of the header row, and the fold arrow, still fold a foldable callout;
+`</>` or the menu's "Edit block source" reaches the raw line.
+`CalloutTitle.cpp`; tests `CalloutTitleTest.*`.
+
 ## Embedded notes
 
 `![[Note]]`, `![[Note#Heading]]` and `![[Note#^id]]` draw the note, section or

@@ -701,6 +701,9 @@ void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QSt
 
 void MarkdownEditor::finishPropertyEdit(bool commit)
 {
+    // Every site that ends a property edit (a mode change, a new note, a scroll,
+    // a resize) ends an open callout title the same way.
+    finishCalloutTitleEdit(commit);
     if (!m_propertyEdit)
         return;
     // Cleared first: hiding the editor moves the focus, which finishes it again.
@@ -762,16 +765,17 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
 
 bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_propertyEdit && event->type() == QEvent::KeyPress) {
+    const bool title = watched == m_calloutTitleEdit;
+    if ((title || watched == m_propertyEdit) && event->type() == QEvent::KeyPress) {
         // Handled here, not left to QLineEdit: it lets Return go on to its
         // parent, and the editor would type it into the note.
         switch (static_cast<QKeyEvent *>(event)->key()) {
         case Qt::Key_Escape:
-            finishPropertyEdit(false);
+            title ? finishCalloutTitleEdit(false) : finishPropertyEdit(false);
             return true;
         case Qt::Key_Return:
         case Qt::Key_Enter:
-            finishPropertyEdit(true);
+            title ? finishCalloutTitleEdit(true) : finishPropertyEdit(true);
             return true;
         default:
             break;

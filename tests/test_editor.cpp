@@ -1436,10 +1436,93 @@ TEST(FoldTest, ClickingTheCalloutTitleToggles)
     const int viewport = editor->viewport()->width();
     const int column = qMax(120, qMin(viewport - 48, 700));
     const int left = qMax(24, (viewport - column) / 2);
+    // Off the title text, which edits it: the empty header row folds.
     QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
-                      QPoint(left + 80, 34));
+                      QPoint(left + column - 120, 34));
     EXPECT_TRUE(editor->isFoldedAt(0));
     EXPECT_EQ(editor->cursorOffset(), 0) << "folding must not drag the caret with it";
+    // So does the fold arrow itself.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(left + column - 9, 34));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+}
+
+// --- a callout's title is edited where it is drawn -------------------------
+
+namespace {
+
+/// An editor on screen with a callout note, and the centre of its title.
+struct CalloutTitleFixture {
+    std::unique_ptr<MarkdownEditor> editor;
+    QPoint title;
+    explicit CalloutTitleFixture(const QString &text)
+        : editor(editorWith(text))
+    {
+        editor->show();
+        QApplication::processEvents();
+        title = editor->calloutTitleRectAt(0).center().toPoint();
+    }
+    /// The open title editor; one just closed is hidden and only waiting to be deleted.
+    QLineEdit *edit() const
+    {
+        auto *found = editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"));
+        return found && found->isVisible() ? found : nullptr;
+    }
+    void click() { QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, title); }
+};
+
+} // namespace
+
+TEST(CalloutTitleTest, ClickingTheTitleEditsItInPlace)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note] Title\n> body\n"));
+    ASSERT_TRUE(fixture.editor->calloutTitleRectAt(0).isValid());
+    fixture.click();
+    EXPECT_FALSE(fixture.editor->displayText().contains(QStringLiteral("[!note]")))
+        << "the marker line stays hidden: only the title is open";
+    QLineEdit *edit = fixture.edit();
+    ASSERT_TRUE(edit);
+    EXPECT_TRUE(edit->isVisible());
+    EXPECT_EQ(edit->text(), QStringLiteral("Title"));
+    QTest::keyClicks(edit, QStringLiteral(" 2"));
+    QTest::keyClick(edit, Qt::Key_Return);
+    EXPECT_EQ(fixture.editor->noteText(), QStringLiteral("> [!note] Title 2\n> body\n"));
+    EXPECT_FALSE(fixture.edit()) << "closed once committed";
+    QTest::keyClick(fixture.editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(fixture.editor->noteText(), QStringLiteral("> [!note] Title\n> body\n")) << "one undo step";
+}
+
+TEST(CalloutTitleTest, EscapeKeepsTheNote)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note] Title\n> body\n"));
+    fixture.click();
+    QLineEdit *edit = fixture.edit();
+    ASSERT_TRUE(edit);
+    QTest::keyClicks(edit, QStringLiteral("zzz"));
+    QTest::keyClick(edit, Qt::Key_Escape);
+    EXPECT_EQ(fixture.editor->noteText(), QStringLiteral("> [!note] Title\n> body\n"));
+    EXPECT_FALSE(fixture.edit());
+}
+
+TEST(CalloutTitleTest, AnImplicitTitleGetsASpace)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note]\n> body\n"));
+    fixture.click();
+    QLineEdit *edit = fixture.edit();
+    ASSERT_TRUE(edit);
+    EXPECT_EQ(edit->text(), QString()) << "the drawn \"Note\" is not in the file";
+    QTest::keyClicks(edit, QStringLiteral("X"));
+    QTest::keyClick(edit, Qt::Key_Return);
+    EXPECT_EQ(fixture.editor->noteText(), QStringLiteral("> [!note] X\n> body\n"));
+}
+
+TEST(CalloutTitleTest, ClickingTheBodyStillPlacesTheCaret)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note] Title\n> body\n"));
+    const QRectF rect = fixture.editor->calloutTitleRectAt(0);
+    QTest::mouseClick(fixture.editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(int(rect.left()) + 10, int(rect.bottom()) + 30));
+    EXPECT_FALSE(fixture.edit());
 }
 
 // --- neighbouring blocks never overlap ------------------------------------
