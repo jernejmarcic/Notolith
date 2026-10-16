@@ -1,8 +1,11 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QString>
+
+#include "Theme.h"
 
 namespace noteAppC {
 class Vault;
@@ -33,6 +36,11 @@ struct Options {
     /// `@media (prefers-color-scheme: light)`, so the reader's own OS/browser
     /// preference decides - no toggle, no JavaScript needed for it.
     ThemeMode theme = ThemeMode::Both;
+    /// The schemes the code colours come from (`--code-*`, a scheme's
+    /// `syntax`), one per mode; unset is the built-in scheme, which names none
+    /// and so leaves the highlighter's own colours.
+    std::optional<noteAppC::Theme> codeThemeDark;
+    std::optional<noteAppC::Theme> codeThemeLight;
 };
 
 /// What one publish() call did, for the caller to report.
