@@ -5,7 +5,7 @@ tags: [demo, code]
 
 # Code blocks
 
-The language label copies the listing when clicked:
+The header names the block, and "Copy" in it copies the listing:
 
 ```python
 def greet(name: str) -> str:

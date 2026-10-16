@@ -87,9 +87,18 @@ without it, CommonMark joins the next `>` line to the nested one's paragraph.
 
 ## Code blocks
 
-A fenced block's language label sits at the right of its header. **Click it to
-copy the listing** - without the fences, the language tag or any `#|` option
-lines. A block with no language shows "Copy" while the pointer is over it.
+A fenced block with a language has a header strip that names it: the
+`#| title:` if it has one, else its style name - the language as written, or
+the `name="..."` the fence gives - with the style's icon in front. A block in a
+tab group has its tabs for names instead. At the right of the strip, **"Copy"
+appears while the pointer is over the block; click it to copy the listing**
+(without the fences, the language tag or any `#|` option lines). A run control
+sits beside it, only for a language something can run (a tool installed, or a
+Jupyter kernel); a block with no language has no strip and shows "Copy" in its
+corner.
+
+The caret in a tab group, or Source mode, shows the plain text instead: no
+strip, panel or run control, the listing still highlighted.
 
 `~/.config/noteAppC/codeblocks.ini` styles a language:
 
@@ -227,7 +236,9 @@ strip:
 
 A bare `tab` takes the language's name and icon from `codeblocks.ini`;
 `tab="..."` names it yourself. Only blank lines may come between the fences -
-any other text ends the group. The Copy button copies the tab being shown.
+any other text ends the group. The Copy button copies the tab being shown. The
+shown tab is drawn attached to its listing; with the caret anywhere in the group
+every member is plain source (see "Code blocks").
 **Publishing.** A group publishes as a tab strip that needs no JavaScript: one
 radio input, label and panel per tab (`.code-tabs`, `.code-tab-input`,
 `.code-tab-label`, `.code-tab-panel` in `site.css`), the first tab selected,

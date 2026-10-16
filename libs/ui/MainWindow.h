@@ -636,6 +636,9 @@ QLabel *m_vimStatus = nullptr;
     AudioRecorder *m_recorder = nullptr; ///< made on the first recording
     /// Made when the first block runs; owns one kernel per language.
     notebook::NotebookController *m_notebook = nullptr;
+    /// Whether anything can run a code block's language, asked once each
+    /// (MarkdownEditor::setNotebookRunnable).
+    QHash<QString, bool> m_runnableLanguages;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;

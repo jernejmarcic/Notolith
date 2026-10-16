@@ -631,6 +631,14 @@ public:
                                               bool forceRun, const NotebookRunOptions &options,
                                               const NotebookDeliver &deliver)>;
     void setNotebookRunner(NotebookRunner runner);
+    /// Whether anything can run `language` at all (a recipe whose tool is
+    /// installed, or a kernel for it). A block whose language says no gets no
+    /// run control, no output row and no "does not know how to run" warning:
+    /// something that cannot be run has no run object. Null, the default,
+    /// says yes to every language, so a fake runner in a test needs no
+    /// predicate. Supplied by the window, like the runner itself.
+    using NotebookRunnable = std::function<bool(const QString &language)>;
+    void setNotebookRunnable(NotebookRunnable runnable);
 
     /// A running kernel's answer to a completion or documentation request.
     struct NotebookIntrospection {
@@ -737,6 +745,10 @@ public:
         int outputCellCount = 0; ///< outputs laid out under the block
     };
     NotebookBlockInfo notebookInfoAt(qsizetype offset) const;
+    /// The text of each output cell under the block at `offset`, line breaks
+    /// as typed (an image or other cell with no text gives an empty string).
+    /// For the tests.
+    QStringList notebookOutputTextAt(qsizetype offset) const;
     /// Whether the table holding `offset` is drawn as a table rather than
     /// as its source. For the tests.
     bool tableRenderedAt(qsizetype offset) const;
@@ -754,6 +766,17 @@ public:
     int clearNotebookOutputs();
     /// The language of the fenced block at `offset`, empty outside one.
     QString codeLanguageAt(qsizetype offset) const;
+    /// The name its header strip shows for the fenced block at `offset`: the
+    /// `#| title:`, else the style's name (the language, or `name="..."`).
+    /// Empty for a block with no header strip and for one in a tab group,
+    /// where the tabs are the names.
+    QString codeTitleAt(qsizetype offset) const;
+    /// Where the text column starts, in viewport coordinates: the x a panel
+    /// sits 14 px left of. For the tests.
+    int textColumn() const { return contentLeft(); }
+    /// The selected tab of the tab group holding `offset`, in viewport
+    /// coordinates; null outside a group, or while the caret is in it. For the tests.
+    QRectF selectedTabRectAt(qsizetype offset) const;
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -1470,14 +1493,15 @@ private:
                        const QRectF &panel) const;
     QRectF bandOf(const BlockView &view, const Range &source) const;
 
-    /// The label on the side of a code block's header: its language's style
-    /// name and icon, and the thing to click to copy the listing. Painting and
+    /// The copy button at the right of a code block's header ("Copy" under the
+    /// pointer, "Copied" after a click), the thing to click to copy the
+    /// listing. The block's name is on the left (codeTitleOf). Painting and
     /// hit-testing both come from codeLabelOf, so they cannot disagree about
     /// where it is.
     struct CodeLabel {
         QRectF rect;   ///< in viewport coordinates, icon included
+        qreal slotLeft = 0; ///< left edge of the room "Copied" would take, so neighbours never move
         QString text;
-        QIcon icon;
         QColor colour;
         QFont font;
         bool visible = false;
@@ -1564,6 +1588,15 @@ private:
     /// ends no longer compare equal.
     const CodeOptions *codeOptionsFor(const BlockView &view) const;
     qreal codeHeaderHeight() const;
+    /// Source mode draws pure text, and so does a tab group while the caret is
+    /// in it: markdown syntax coloured, listings highlighted, nothing else -
+    /// no panel, header, run control, callout or fold.
+    bool plainSource(const BlockView &view) const { return m_mode == Mode::Source || view.inCaretGroup; }
+    /// Whether this fenced block is laid out under a header strip: `#|`
+    /// options, a tab group, a run control, or just a language to name.
+    bool hasCodeHeader(const BlockView &view) const;
+    /// What the strip says on its left, see codeTitleAt.
+    QString codeTitleOf(const BlockView &view) const;
     /// Space under the listing for a `#| caption:`, 0 when there is none.
     qreal codeCaptionHeight(const BlockView &view) const;
     qreal propertyRowHeight() const;
@@ -1912,6 +1945,7 @@ private:
     /// block shows below its listing when there is nothing richer yet.
     void appendNotebookMessage(BlockView &view, const QString &text, const QString &colourToken);
     NotebookRunner m_notebookRunner;
+    NotebookRunnable m_notebookRunnable;
 
     // --- input() from a running block, NotebookInput.cpp ----------------
     /// One prompt at a time: a kernel asks one question at a time.

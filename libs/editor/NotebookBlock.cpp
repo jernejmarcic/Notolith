@@ -77,6 +77,12 @@ void MarkdownEditor::setNotebookRunner(NotebookRunner runner)
     }
 }
 
+void MarkdownEditor::setNotebookRunnable(NotebookRunnable runnable)
+{
+    m_notebookRunnable = std::move(runnable);
+    setNotebookRunner(m_notebookRunner); // every block decides again under the new answer
+}
+
 const MarkdownEditor::NotebookCacheEntry &MarkdownEditor::ensureNotebookResult(
     const QString &key, const QString &language, const QString &source, const NotebookRunOptions &options)
 {
@@ -139,7 +145,11 @@ std::unique_ptr<QTextLayout> MarkdownEditor::buildNotebookTextLayout(const QStri
 {
     if (text.isEmpty())
         return nullptr;
-    auto layout = std::make_unique<QTextLayout>(text);
+    // QTextLayout breaks a line only at U+2028, never at \n: without this
+    // every output is one run-on line.
+    QString shown = text;
+    shown.replace(QLatin1Char('\n'), QChar(QChar::LineSeparator));
+    auto layout = std::make_unique<QTextLayout>(shown);
     layout->setCacheEnabled(true);
     layout->setFont(fontFor({BlockSpan::Kind::Code, {0, 0}, 0}));
     QTextOption option;
@@ -147,7 +157,7 @@ std::unique_ptr<QTextLayout> MarkdownEditor::buildNotebookTextLayout(const QStri
     layout->setTextOption(option);
     QTextLayout::FormatRange format;
     format.start = 0;
-    format.length = int(text.size());
+    format.length = int(shown.size());
     format.format.setForeground(colour);
     layout->setFormats({format});
 
@@ -359,14 +369,19 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
                 stripAnsi(output.text), width,
                 m_theme.color(output.isStderr ? QStringLiteral("--color-orange") : QStringLiteral("--text-normal")));
         } else if (output.kind == NotebookOutput::Kind::Error) {
+            // The header names the error ("Exit code 1", "ZeroDivisionError")
+            // and the traceback is the body. `text` is the error's evalue; a
+            // traceback usually ends with it, so it joins the header only when
+            // the body does not already say it - once, not twice.
+            QString body = stripAnsi(output.traceback.join(QLatin1Char('\n')));
+            while (body.endsWith(QLatin1Char('\n')))
+                body.chop(1);
+            const QString evalue = output.text.trimmed();
             QString text = output.ename;
-            if (!output.text.isEmpty())
-                text += (text.isEmpty() ? QString() : QStringLiteral(": ")) + output.text;
-            if (!output.traceback.isEmpty()) {
-                if (!text.isEmpty())
-                    text += QLatin1Char('\n');
-                text += stripAnsi(output.traceback.join(QLatin1Char('\n')));
-            }
+            if (!evalue.isEmpty() && !body.contains(evalue))
+                text += (text.isEmpty() ? QString() : QStringLiteral(": ")) + evalue;
+            if (!body.isEmpty())
+                text += (text.isEmpty() ? QString() : QStringLiteral("\n")) + body;
             cell.layout = buildNotebookTextLayout(text, width, m_theme.color(QStringLiteral("--text-error")));
         } else {
             cell.image = i < entry.renderedImages.size() ? entry.renderedImages.at(i) : QPixmap();
@@ -407,11 +422,10 @@ QRectF MarkdownEditor::notebookRunRectFor(const BlockView &view, qreal left, qre
     // The header row every notebook-eligible block gets (view.textTop was
     // set to codeHeaderHeight() for exactly this reason - see layoutBlock).
     const qreal y = panel.top() + (view.textTop + 8 - size) / 2;
-    // Left of the language label codeLabelOf draws at the header's right
-    // end, never on it: placed by the label's own width, since a fixed
-    // offset put the icon over the start of "haskell".
+    // Left of the copy button's reserved place at the header's right end,
+    // never on it, and in the same place whether "Copy" is showing or not.
     const CodeLabel label = codeLabelOf(view, left, top);
-    const qreal right = label.rect.isValid() ? label.rect.left() - 8 - size : panel.right() - 22 - kFoldHandle - size;
+    const qreal right = label.slotLeft > 0 ? label.slotLeft - 8 - size : panel.right() - 22 - kFoldHandle - size;
     return QRectF(right, y, size, size);
 }
 
@@ -510,6 +524,18 @@ MarkdownEditor::NotebookBlockInfo MarkdownEditor::notebookInfoAt(qsizetype offse
     info.runRect = notebookRunRectFor(view, left, top);
     info.labelRect = codeLabelOf(view, left, top).rect;
     return info;
+}
+
+QStringList MarkdownEditor::notebookOutputTextAt(qsizetype offset) const
+{
+    QStringList texts;
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return texts;
+    for (const BlockView::NotebookOutputCell &cell : m_blocks[size_t(index)].notebookOutputs)
+        texts.append(cell.layout ? cell.layout->text().replace(QChar(QChar::LineSeparator), QLatin1Char('\n'))
+                                 : QString());
+    return texts;
 }
 
 int MarkdownEditor::runAllNotebookBlocks()
