@@ -295,7 +295,7 @@ budget, which this project has already learned once on the index.
       cold index 1.07 s vs 36.7 s on 20 000 notes, RSS 214 vs 1541 MB).
       Found: TagsPane::refresh runs one notesWithTag query per tag on the UI
       thread (4.1 s warm open on a 5 000-note vault with 4 500 tags).
-- [ ] TagsPane::refresh stall on tag-heavy vaults: compute tag counts in one
+- [x] TagsPane::refresh stall on tag-heavy vaults: compute tag counts in one
       grouped query or off the UI thread; add a ~4 500-tag note inside the
       vault to tools/bench.
 - [x] **Opening a note was quadratic, twice over.** Found with perf, not
@@ -610,8 +610,12 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
       bookmarks, `.obsidian` config (hotkeys, graph, workspace), and later
       notebook blocks. Grown as each feature lands; big and extreme vaults
       stay generated under /tmp.
-- [ ] Once everything else is done: a profiling and optimisation pass over
-      the whole app, measured before and after (docs/PERFORMANCE.md).
+- [x] Once everything else is done: a profiling and optimisation pass over
+      the whole app, measured before and after (docs/PERFORMANCE.md). 2026-10-16
+      pass: fixes 22-29 (tags 9.4 s -> 37 ms, table Tab 330 -> 2 ms, notebook
+      open 360 -> 38 ms, resize/fold 1.3 -> 0.3 ms).
+  - [ ] Left: Tags rebuilds while hidden (~37 ms per index change); first
+        window ~40 ms; `allNotesForBases` ~65 ms.
   - [x] Note open and memory: `rebuildBlocks` built 1.6 kB views into an
         unreserved vector (1 MB open 38.6 -> 11.9 ms, RSS 262 -> 233 MB).
   - [x] Qt warnings in the bench: empty-path read in the outgoing-links
@@ -998,7 +1002,7 @@ optimal as it can be".
       windows are not rounded.
 - [x] Callout context menu: Edit / Copy / Change type / Remove, once the hover
       edit "Edit block source" item exists.
-- [ ] `DisplayMap::toDisplay` is linear (four loops); binary search like
+- [x] `DisplayMap::toDisplay` is linear (four loops); binary search like
       `toSource`. Small gain; whoever touches DisplayMap next.
-- [ ] Audit the 19 `invalidateLayouts()` callers; narrow each to the blocks it
+- [x] Audit the 19 `invalidateLayouts()` callers; narrow each to the blocks it
       changed, if bench resize/fold rows are over 10 ms.
