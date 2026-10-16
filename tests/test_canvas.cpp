@@ -548,6 +548,14 @@ TEST(CanvasRenderTest, AFileCardsSubpathShowsThatSectionOnly)
     EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Missing")), note);
 }
 
+TEST(CanvasRenderTest, AnHTMLHeadingIsASectionToo)
+{
+    const QString note = QStringLiteral("# Top\nintro\n<h2>Plan &amp; more</h2>\nstep\n<h3>Detail</h3>\nx\n## Next\nlater\n");
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Plan & more")),
+              QStringLiteral("<h2>Plan &amp; more</h2>\nstep\n<h3>Detail</h3>\nx"));
+    EXPECT_EQ(canvasSectionOf(note, QStringLiteral("#Detail")), QStringLiteral("<h3>Detail</h3>\nx"));
+}
+
 TEST(CanvasRenderTest, AStraightVerticalEdgeIsDrawn)
 {
     CanvasView view;

@@ -3,7 +3,9 @@
 `libs/editor/MarkdownEditor` is the one editing widget: live preview, source
 and reading are three modes of it. This page covers the optional parts of how
 it takes input: [HTML edited in place](#html-edited-in-place),
-[the `</>` edit button](#the--edit-button-on-rendered-blocks) and
+[the `</>` edit button](#the--edit-button-on-rendered-blocks) and its
+[callout menu](#the-callout-menu), [embedded notes](#embedded-notes),
+[the status bar counts](#status-bar-counts) and
 [Vim key bindings](#vim-key-bindings).
 
 ## HTML edited in place
@@ -90,6 +92,21 @@ What it does with the bytes - the file is the truth:
   does; its entities stay one character. A `<pre>` under the caret shows its
   source, as a fence does.
 
+**Under the caret an entity opens into its source** (HTML's and Markdown's alike),
+as the markers of other inline syntax do: with a bare caret anywhere from its
+`&` to its `;` (both edges count) it shows as written, `&amp;`, and the caret
+walks through its characters; one step off it closes again. A selection keeps
+every entity closed (selecting across `&copy;` takes it whole), Source mode is
+always as written, and Vim's normal and visual modes keep stepping over one as
+a single character (insert mode opens it like the other modes). So Backspace
+and Delete next to an entity take one character of its source while it is
+open; to remove one whole, select it. Inside a table cell the entity stays
+one character, as before. Implementation: `revealedEntities()` in
+`HtmlEdit.cpp` adds the touched substitution to the block's revealed set, and
+the block's layout draws the list without it; `moveCursor` relays out the
+caret's block when that set changes, which also makes a caret moving by arrow
+keys inside one paragraph reveal what it reaches without a click.
+
 Cost: the structure pass is in the parse (off the UI thread), proportional to
 the block, cached per thread by the block's text, so a keystroke anywhere else
 parses no HTML; a note without HTML pays one test per block. Measured: a
@@ -109,7 +126,14 @@ heading inside a quote or a list item is not a top-level block and is not
 listed. The heading text is the content with its tags removed and its entities
 decoded; the heading's range is the element, its text range the content.
 Publish draws the element once, with its HTML block (`tests/test_publish.cpp`).
-`![[Note#Heading]]` (an embedded section) still finds Markdown headings only.
+`![[Note#Heading]]` (an embedded section) and a canvas card's `#Heading`
+(the section picker) find them too: both go through `headingSection` in
+`libs/markdown/Parser.cpp`, one line scan shared by the two - an ATX heading or
+an `<h1>`-`<h6>` element at the start of a line, whose text (tags removed,
+entities decoded, case ignored) equals the one asked for, running to the next
+heading of either kind at its level or above, or the end of the note. Headings
+in a fence, a comment or the frontmatter do not count (a YAML `# comment` used
+to).
 
 Entities in Markdown text: a CommonMark reference (`&amp;`, `&copy;`, `&#169;`,
 `&#xA9;`, any name md4qt knows) outside code, maths, HTML, links, wikilinks and
@@ -117,9 +141,8 @@ frontmatter, and not escaped with a backslash, shows as its character and is
 one step for the caret, Backspace, Delete and Vim's `h` `l` `x`, exactly as in
 an HTML block (`Parser.cpp`'s `scanEntities`, drawn through DisplayMap's
 substitutions). The source is never rewritten, Source mode shows it as
-written, and typing next to one writes plain text, not an entity. It does not
-open into its source under the caret, as HTML's does not either; delete it and
-type it again to change it. A reference with no `;`, an unknown name, a number
+written, and typing next to one writes plain text, not an entity. A reference
+with no `;`, an unknown name, a number
 that is no character and a control character (`&#10;`) show as written. Entities
 inside a Markdown link's text are left as written.
 
@@ -206,6 +229,61 @@ panels that changed (not the viewport), a painted button, nothing laid out.
 
 Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
+## The callout menu
+
+Right-click a rendered callout (`> [!x]` or `:::`, any piece of a long one):
+
+| item | does |
+|---|---|
+| Edit block source | as the `</>` button: selects the whole callout, which shows its source |
+| Copy | the callout's source on the clipboard, without its trailing newline |
+| Change type | a submenu of Obsidian's 13 types and every section of `callouts.ini`, the current one ticked; rewrites the `[!type]` word, or the type word of a `:::` fence, and keeps the title, fold mark and attributes |
+| Remove callout | takes the callout off and keeps what is in it: one level of `>` off every line, or the two `:::` fences; an explicitly written title (`> [!note] Title`, `title=` on a fence) stays as the first paragraph; a nested callout inside becomes the outer one's level |
+
+Each is one undo step. `MarkdownEditor::calloutSourceAt`, `changeCalloutType`
+and `removeCallout` (HoverEdit.cpp) do the work for a source offset, so a
+plugin or a test needs no menu. Nothing runs until the menu opens.
+
+## Embedded notes
+
+`![[Note]]`, `![[Note#Heading]]` and `![[Note#^id]]` draw the note, section or
+block as a reading-view editor of its own (`FileEmbedBlock.cpp`): headings,
+lists, callouts, code and maths as the editor draws them, read-only, into an
+image a turn of the event loop after the layout (the plain text shows first).
+Only an embed that is laid out - on screen, or a screen either side - is
+drawn, and the image is cached by file, mtime, section, width and theme.
+
+A note embedded inside an embedded note is drawn the same way, now, on the
+same pass: up to five levels deep (Obsidian's own limit). A note already being
+drawn around it (it embeds itself, or A embeds B embeds A) and anything past
+the fifth level stays the plain text panel, which is what ends a loop.
+
+Titles follow Obsidian: a whole-note embed carries the note's name over it, a
+`#^id` block embed has none (Obsidian titles an embed only when it has no
+subpath). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
+in Obsidian's live preview) and `[[Note#^id]]` shows as written; a heading
+link shows "Note > Heading".
+
+## Status bar counts
+
+Words and characters in the bar skip the frontmatter (the same text the word
+count already skipped). With a selection the bar shows the selection's
+instead, "N words, M characters", as Obsidian does. The note's counts still
+come with each parse; the selection's are recounted 200 ms after the caret
+last moved (`MainWindow::m_selectionCountTimer`), never on the keystroke or drag
+path, and cost one pass over the selected text.
+
+## Fenced code and the caret
+
+The caret anywhere from a fence's opening line to its closing line, not only on
+a fence line, shows both fence lines and the language tag (Obsidian treats the
+block as one unit), and moving out hides them again. md4qt's code block
+covers the listing alone, so `fenceAroundCaret()` marks the blocks either side
+as active and `revealedSyntax` reveals their fence markers. A listing inside a
+callout wraps in live preview, as Obsidian's does (a language-less listing
+there scrolls on a single unbroken token; here it is broken, which no
+reader has asked about).
+
 ## Vim key bindings
 
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).
@@ -267,7 +345,7 @@ Notes on behaviour that differs from a terminal vim:
 extends an existing visual selection (it replaces it), `gu`/`gU`/`g~`, `U` as
 line undo, and `:s` flags other than `g` and `i`. A macro stops at its first
 failed motion (`j` on the last line, an `f` that finds nothing, a search with
-no match), but `l` and `h` at a line's edge do not fail as they do in vim.
+no match, `l` on a line's last character or an empty line, `h` at column 0).
 Block columns count characters, not drawn width, so
 a tab is one column. In normal and visual mode `Ctrl+v` is block-visual, not
 paste; `Ctrl+V` still pastes in insert mode. Visual mode highlights the
@@ -298,7 +376,7 @@ commands, which are always there.
   newline it always was, so nothing is injected into an existing table. Cells are
   counted by the parser's `tableRowCells`, so `\|` is not a border (a pipe in a
   code span is one, as in GFM).
-- **Insert table** (`noteAppC:insert-table`; `/insert table` in the slash popup - `/table` lists the `Table:` commands, which rank above it by prefix):
+- **Insert table** (`noteAppC:insert-table`; `/table` and `/insert table` in the slash popup both put it first: a typed word that is a whole word of a command's name outranks fuzzy matches, shortest name first):
   Obsidian's 2x2 template, the caret in its first cell; on a line with text the
   table goes below as a paragraph of its own.
 - **Tab, Shift+Tab, Enter in source mode** inside a table align that table (not

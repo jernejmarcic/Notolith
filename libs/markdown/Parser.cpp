@@ -781,6 +781,38 @@ void scanEntities(const QString &text, const QList<Range> &masked, Decorations &
     }
 }
 
+const QRegularExpression &htmlHeadingRe()
+{
+    static const QRegularExpression heading(
+        QStringLiteral("<h([1-6])\\b[^>]*>(.*?)</h\\1\\s*>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    return heading;
+}
+
+/// One match of htmlHeadingRe() as a Heading; the matched string starts at
+/// `base` in the note.
+Heading htmlHeadingOf(const QRegularExpressionMatch &match, qsizetype base)
+{
+    static const QRegularExpression tag(QStringLiteral("<[^>]*>"));
+    Heading out;
+    out.level = match.captured(1).toInt();
+    out.range = {base + match.capturedStart(), base + match.capturedEnd()};
+    out.textRange = {base + match.capturedStart(2), base + match.capturedEnd(2)};
+    QString inner = match.captured(2);
+    inner.remove(tag);
+    // Entities last to first, so the offsets in front stay true.
+    QList<QRegularExpressionMatch> entities;
+    for (auto e = entityRe().globalMatch(inner); e.hasNext();)
+        entities << e.next();
+    for (auto e = entities.crbegin(); e != entities.crend(); ++e) {
+        const QString decoded = decodeEntity(e->capturedView(0));
+        if (!decoded.isEmpty())
+            inner.replace(e->capturedStart(), e->capturedLength(), decoded);
+    }
+    out.text = inner.simplified();
+    return out;
+}
+
 /// The h1-h6 of a top-level HTML block, for the outline and the index: they
 /// are headings of the note however the editor draws the block (its own
 /// layout, litehtml, or the source), and the Parser knows neither the editor's
@@ -788,12 +820,8 @@ void scanEntities(const QString &text, const QList<Range> &masked, Decorations &
 /// another block element (nested tags) is found by its own tags.
 void htmlHeadings(const QString &text, const Range &block, QList<Heading> &headings)
 {
-    static const QRegularExpression heading(
-        QStringLiteral("<h([1-6])\\b[^>]*>(.*?)</h\\1\\s*>"),
-        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
     static const QRegularExpression comment(QStringLiteral("<!--.*?(?:-->|$)"),
                                             QRegularExpression::DotMatchesEverythingOption);
-    static const QRegularExpression tag(QStringLiteral("<[^>]*>"));
     const QStringView view = QStringView(text).mid(block.start, block.length());
     if (view.size() < 9 || !view.contains(QLatin1String("</"))) // <h1>x</h1> is the shortest
         return;
@@ -802,26 +830,8 @@ void htmlHeadings(const QString &text, const Range &block, QList<Heading> &headi
         const QRegularExpressionMatch match = it.next();
         html.replace(match.capturedStart(), match.capturedLength(), QString(match.capturedLength(), QLatin1Char(' ')));
     }
-    for (auto it = heading.globalMatch(html); it.hasNext();) {
-        const QRegularExpressionMatch match = it.next();
-        Heading out;
-        out.level = match.captured(1).toInt();
-        out.range = {block.start + match.capturedStart(), block.start + match.capturedEnd()};
-        out.textRange = {block.start + match.capturedStart(2), block.start + match.capturedEnd(2)};
-        QString inner = match.captured(2);
-        inner.remove(tag);
-        // Entities last to first, so the offsets in front stay true.
-        QList<QRegularExpressionMatch> entities;
-        for (auto e = entityRe().globalMatch(inner); e.hasNext();)
-            entities << e.next();
-        for (auto e = entities.crbegin(); e != entities.crend(); ++e) {
-            const QString decoded = decodeEntity(e->capturedView(0));
-            if (!decoded.isEmpty())
-                inner.replace(e->capturedStart(), e->capturedLength(), decoded);
-        }
-        out.text = inner.simplified();
-        headings.append(out);
-    }
+    for (auto it = htmlHeadingRe().globalMatch(html); it.hasNext();)
+        headings.append(htmlHeadingOf(it.next(), block.start));
 }
 
 /// `[^label]: text` definitions, `[^label]` references and inline `^[text]`,
@@ -1619,6 +1629,79 @@ QStringList Metadata::linkNames() const
         names << id; // Ideas.md 16.5: the id is an implicit alias
     names.removeDuplicates();
     return names;
+}
+
+Range headingSection(const QString &text, const QString &wanted)
+{
+    static const QRegularExpression atx(QStringLiteral("^ {0,3}(#{1,6})[ \\t]+(.*?)(?:[ \\t]+#+)?\\s*$"));
+    const Range front = Frontmatter::find(text);
+    const QString want = wanted.simplified();
+    QChar fence;
+    qsizetype fenceLength = 0;
+    bool inComment = false;
+    qsizetype start = -1;
+    int startLevel = 0;
+    for (qsizetype pos = 0; pos <= text.size();) {
+        qsizetype eol = text.indexOf(QLatin1Char('\n'), pos);
+        if (eol < 0)
+            eol = text.size();
+        qsizetype next = eol + 1;
+        const QStringView line = QStringView(text).mid(pos, eol - pos);
+        qsizetype indent = 0;
+        while (indent < line.size() && indent < 4 && line.at(indent) == QLatin1Char(' '))
+            ++indent;
+        const QStringView body = line.sliced(indent);
+        int level = 0;
+        QString title;
+        if (front.isValid() && pos < front.end) {
+            // YAML, whose `# comment` lines are not headings
+        } else if (!fence.isNull()) {
+            qsizetype run = 0;
+            while (run < body.size() && body.at(run) == fence)
+                ++run;
+            if (indent < 4 && run >= fenceLength && body.sliced(run).trimmed().isEmpty())
+                fence = QChar();
+        } else if (inComment) {
+            inComment = !line.contains(QLatin1String("-->"));
+        } else if (indent < 4 && (body.startsWith(QLatin1String("```")) || body.startsWith(QLatin1String("~~~")))) {
+            fence = body.at(0);
+            fenceLength = 0;
+            while (fenceLength < body.size() && body.at(fenceLength) == fence)
+                ++fenceLength;
+        } else if (indent < 4 && body.startsWith(QLatin1String("<!--"))) {
+            inComment = !line.contains(QLatin1String("-->"));
+        } else if (const auto match = atx.matchView(line); match.hasMatch()) {
+            level = int(match.capturedLength(1));
+            title = match.captured(2);
+        } else if (indent < 4 && body.size() > 3 && body.at(0) == QLatin1Char('<')
+                   && (body.at(1) == QLatin1Char('h') || body.at(1) == QLatin1Char('H'))) {
+            const auto html = htmlHeadingRe().match(text, pos + indent, QRegularExpression::NormalMatch,
+                                                      QRegularExpression::AnchorAtOffsetMatchOption);
+            if (html.hasMatch()) {
+                const Heading heading = htmlHeadingOf(html, 0);
+                level = heading.level;
+                title = heading.text;
+                // the element's own lines are not looked at again
+                const qsizetype after = text.indexOf(QLatin1Char('\n'), html.capturedEnd());
+                next = after < 0 ? text.size() + 1 : after + 1;
+            }
+        }
+        if (level) {
+            if (start >= 0 && level <= startLevel)
+                return {start, pos};
+            if (start < 0 && title.simplified().compare(want, Qt::CaseInsensitive) == 0) {
+                start = pos;
+                startLevel = level;
+            }
+        }
+        pos = next;
+    }
+    return start >= 0 ? Range{start, text.size()} : Range{};
+}
+
+int wordsIn(QStringView text)
+{
+    return countWords(text);
 }
 
 } // namespace noteAppC

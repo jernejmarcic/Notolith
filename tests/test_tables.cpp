@@ -164,6 +164,22 @@ TEST(TableAutoTest, SlashTableInsertsIt)
         << editor->noteText().toStdString();
 }
 
+TEST(TableAutoTest, SlashTableOffersInsertTableFirst)
+{
+    auto editor = editorWith(QStringLiteral("\n"), 0, MarkdownEditor::Mode::LivePreview);
+    QList<MarkdownEditor::SlashCommand> commands;
+    for (const MarkdownEditor::Command &command : MarkdownEditor::commands())
+        commands.append({command.id, command.name, QString()});
+    editor->setSlashCommands([commands] { return commands; },
+                             [e = editor.get()](const QString &id) { e->runCommand(id); });
+    QTest::keyClicks(editor.get(), QStringLiteral("/table"));
+    ASSERT_TRUE(editor->slashPopupVisible());
+    const QStringList names = editor->slashSuggestions();
+    ASSERT_GT(names.size(), 3);
+    EXPECT_EQ(names.constFirst(), QStringLiteral("Insert table")) << names.join(QStringLiteral(" / ")).toStdString();
+    EXPECT_TRUE(names.at(1).contains(QStringLiteral("table"), Qt::CaseInsensitive)) << "the other table commands follow";
+}
+
 TEST(TableAutoTest, TabInSourceModeRealignsOnlyThatTable)
 {
     const QString second = QStringLiteral("|x|y|\n|-|-|\n|1|2|\n");

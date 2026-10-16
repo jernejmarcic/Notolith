@@ -421,6 +421,8 @@ private:
     void autosave();
     void updateTitle();
     void updateWordCount();
+    /// The word and character labels alone: the note's, or the selection's.
+    void updateTextCount();
     /// The status bar's backlink count for the tab in front: one query.
     void updateBacklinkCount();
     /// Live preview, source or reading for the tab in front, as the status
@@ -587,6 +589,7 @@ void updateVimStatus();
     QToolButton *m_backlinkStatus = nullptr;
     QToolButton *m_propertyStatus = nullptr;
     QToolButton *m_modeButton = nullptr;
+    QTimer m_selectionCountTimer; ///< the selection's count, 200 ms after it moves
     QTimer m_backlinkCountTimer; ///< a burst of index changes is one count
 QLabel *m_vimStatus = nullptr;
     QLabel *m_syncStatus = nullptr;

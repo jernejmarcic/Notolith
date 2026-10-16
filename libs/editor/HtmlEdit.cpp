@@ -1039,7 +1039,41 @@ const Substitution *MarkdownEditor::shownSubstitution(qsizetype offset) const
         if (view.active && view.cells.empty() && revealsWholeBlock(view))
             return nullptr;
     }
+    if (entityRevealed(*(it - 1)))
+        return nullptr;
     return &*(it - 1);
+}
+
+bool MarkdownEditor::entityRevealed(const Substitution &substitution) const
+{
+    // Vim's normal and visual modes keep an entity one character, as `l` and
+    // `x` step over it; its insert mode opens it like any other editing.
+    const bool vimStepping = m_vim.enabled && m_vim.mode != VimState::Mode::Insert;
+    return m_mode == Mode::LivePreview && !vimStepping && m_anchor == m_cursor
+           && substitution.range.start <= m_cursor
+           && m_cursor <= substitution.range.end && m_text.at(substitution.range.start) == QLatin1Char('&');
+}
+
+QList<Range> MarkdownEditor::revealedEntities() const
+{
+    QList<Range> touched;
+    const QList<Substitution> &all = m_decorations.substitutions;
+    if (all.isEmpty() || m_mode != Mode::LivePreview || m_anchor != m_cursor)
+        return touched;
+    for (auto it = std::lower_bound(all.cbegin(), all.cend(), m_cursor,
+                                    [](const Substitution &s, qsizetype at) { return s.range.end < at; });
+         it != all.cend() && it->range.start <= m_cursor; ++it) {
+        if (entityRevealed(*it))
+            touched.append(it->range);
+    }
+    return touched;
+}
+
+QList<Substitution> MarkdownEditor::substitutionsWithout(const QList<Range> &revealed) const
+{
+    QList<Substitution> drawn = m_decorations.substitutions;
+    drawn.removeIf([&revealed](const Substitution &s) { return revealed.contains(s.range); });
+    return drawn;
 }
 
 qsizetype MarkdownEditor::stepOverSubstitution(qsizetype target, int direction) const

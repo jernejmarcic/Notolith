@@ -1740,3 +1740,42 @@ TEST(EntityTest, ReferencesInTextAreSubstitutions)
                                  QStringLiteral("©"), QStringLiteral("&")}))
         << seen.join(QLatin1Char('|')).toStdString().c_str();
 }
+
+TEST(HeadingSectionTest, MarkdownAndHTMLHeadingsBothNameASection)
+{
+    const QString note = QStringLiteral(
+        "---\n# yaml comment\ntitle: x\n---\n"
+        "intro\n\n# Top\ntext\n"
+        "<h2 class=\"a\">Two &amp; <b>Three</b></h2>\n\nhtml body\n\n"
+        "```\n# in a fence\n<h2>Two &amp; Three</h2>\n```\n\n"
+        "<!--\n# in a comment\n-->\n"
+        "### Deep\nmore\n"
+        "<H2>\nMulti\nline\n</H2>\nlast\n"
+        "## Md two\nend\n");
+    const auto section = [&](const QString &wanted) {
+        const Range range = headingSection(note, wanted);
+        return range.isValid() ? note.mid(range.start, range.length()) : QStringLiteral("<none>");
+    };
+    // An HTML heading runs to the next heading at its level or above, here the
+    // second <h2>; the fenced and commented ones are not headings.
+    const QString html = section(QStringLiteral("two & three"));
+    EXPECT_TRUE(html.startsWith(QStringLiteral("<h2 class=\"a\">Two &amp; <b>Three</b></h2>")));
+    EXPECT_TRUE(html.contains(QStringLiteral("html body")));
+    EXPECT_TRUE(html.contains(QStringLiteral("### Deep")));
+    EXPECT_TRUE(html.contains(QStringLiteral("# in a fence"))) << "inside the section, as text";
+    EXPECT_FALSE(html.contains(QStringLiteral("<H2>")));
+    EXPECT_EQ(section(QStringLiteral("Multi line")), QStringLiteral("<H2>\nMulti\nline\n</H2>\nlast\n"));
+    EXPECT_TRUE(section(QStringLiteral("Top")).startsWith(QStringLiteral("# Top\ntext")));
+    EXPECT_TRUE(section(QStringLiteral("Top")).endsWith(QStringLiteral("end\n"))) << "h1 holds every lower level";
+    EXPECT_EQ(section(QStringLiteral("md two")), QStringLiteral("## Md two\nend\n"));
+    EXPECT_EQ(section(QStringLiteral("yaml comment")), QStringLiteral("<none>"));
+    EXPECT_EQ(section(QStringLiteral("in a fence")), QStringLiteral("<none>"));
+    EXPECT_EQ(section(QStringLiteral("in a comment")), QStringLiteral("<none>"));
+    EXPECT_EQ(section(QStringLiteral("Missing")), QStringLiteral("<none>"));
+}
+
+TEST(WordsInTest, CountsRunsOfLettersDigitsAndApostrophes)
+{
+    EXPECT_EQ(wordsIn(u"one two, don't  3rd_x"), 4);
+    EXPECT_EQ(wordsIn(u""), 0);
+}
