@@ -98,9 +98,11 @@ const QVariantMap &defaults()
     // Core plugins: every feature on until a person or the vault says not.
     for (const Settings::Feature &feature : Settings::features())
         // Off until asked for: another program's code, and a "/" menu that
-        // Obsidian also ships switched off.
+        // Obsidian also ships switched off, and the annotating image tab,
+        // which replaces the plain picture a person may want as it was.
         map.insert(Settings::featureKey(feature.id),
-                   QByteArray(feature.id) != "community-plugins" && QByteArray(feature.id) != "slash-command");
+                   QByteArray(feature.id) != "community-plugins" && QByteArray(feature.id) != "slash-command"
+                       && QByteArray(feature.id) != "image-annotation");
     return map;
     }();
     return map;
@@ -581,6 +583,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Hover over a link to a note to see it: with Ctrl held while editing, "
                                        "on its own in reading view."),
          true},
+        {"image-annotation", QT_TRANSLATE_NOOP("Settings", "Image annotation"),
+         QT_TRANSLATE_NOOP("Settings", "Open images in a tab to highlight, draw on and note them. The image is "
+                                       "never changed: the marks are kept in a note beside it."),
+         false},
         {"pdf-viewer", QT_TRANSLATE_NOOP("Settings", "PDF viewer"),
          QT_TRANSLATE_NOOP("Settings", "Open PDFs in a tab to read and annotate: highlight, underline, "
                                        "strike out, ink, notes and boxes, saved into the file."),

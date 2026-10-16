@@ -102,6 +102,9 @@
 #ifdef NOTEAPPC_HAVE_SYNC
 #include "SyncEngine.h"
 #endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+#include "ImageView.h"
+#endif
 #ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfRecovery.h"
 #include "PdfView.h"
@@ -2068,6 +2071,21 @@ void MainWindow::buildActions()
                 statusBar()->showMessage(tr("Annotations extracted"), 3000);
         });
 #endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    add(QStringLiteral("image-annotation:extract-annotations"), tr("Image: Extract annotations to a note"), QString(),
+        [this] {
+            auto *image = qobject_cast<ImageView *>(m_active->view);
+            if (!image) {
+                statusBar()->showMessage(tr("Open an image with annotation on first"), 3000);
+                return;
+            }
+            QString error;
+            if (!image->extractAnnotations(QString(), &error))
+                QMessageBox::warning(this, tr("Extract annotations"), error);
+            else
+                statusBar()->showMessage(tr("Annotations extracted"), 3000);
+        });
+#endif
 #ifdef NOTEAPPC_HAVE_SYNC
     add(QStringLiteral("sync:sign-in"), tr("Sync: Sign in"), QString(), &MainWindow::syncSignIn);
     add(QStringLiteral("sync:sync-now"), tr("Sync: Sync now"), QString(), [this] {
@@ -3338,6 +3356,10 @@ void MainWindow::applyTheme()
         if (auto *pdf = qobject_cast<PdfView *>(leaf->view))
             pdf->setTheme(m_theme);
 #endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+        if (auto *image = qobject_cast<ImageView *>(leaf->view))
+            image->setTheme(m_theme);
+#endif
         if (auto *media = qobject_cast<MarkdownEditor *>(leaf->view))
             media->setTheme(m_theme);
     }
@@ -4283,6 +4305,19 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             });
             connect(pdf, &PdfView::noteActivated, this, &MainWindow::openRelative);
             view = pdf;
+        }
+    }
+#endif
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+    if (!view && mediaKindOf(path) == QLatin1String("image") && featureOn("image-annotation")) {
+        auto *image = new ImageView(m_active->area);
+        image->setTheme(m_theme);
+        if (!image->load(path, &error)) {
+            delete image;
+        } else {
+            connect(image, &ImageView::statusMessage, this,
+                    [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
+            view = image;
         }
     }
 #endif

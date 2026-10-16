@@ -72,7 +72,8 @@ reading, index, find and replace):
   load, in Obsidian's `workspace.json` shape; background tabs load when shown.
 - **Core plugins**: search with Obsidian's grammar, backlinks with unlinked
   mentions, outgoing links, tags, outline, bookmarks, daily notes, templates,
-  page preview, file recovery, PDF export, hotkeys with a settings page.
+  page preview, file recovery, PDF export, hotkeys with a settings page,
+  image annotation (off by default; [docs/ANNOTATIONS.md](docs/ANNOTATIONS.md)).
 - **Optional modules** (`libs/ext/`, each behind a CMake option, see
   [docs/PLUGINS.md](docs/PLUGINS.md)): spellcheck (hunspell), graph view
   (global and local), canvas (JSON Canvas), bases (`.base` views).
