@@ -1906,6 +1906,26 @@ private:
     /// Tab, Shift+Tab, Enter, Home, End, and Backspace or Delete at a cell's
     /// edge, inside a rendered table. False when the caret is in none.
     bool handleTableKey(QKeyEvent *event);
+    /// Tab, Shift+Tab and Enter inside a table whose pipes are showing (source
+    /// mode): the table is aligned and the caret goes to the next cell, the
+    /// previous one, or the cell below, a row added past the last, all as one
+    /// undo step. `key` is Qt::Key_Tab, Key_Backtab or Key_Return. False off a
+    /// table, with `editor.alignTables` off, or with a selection.
+    bool handleSourceTableKey(int key);
+    /// Enter at the end of a header row typed in plain text (`| a | b |`, the
+    /// line above blank and the one below too): writes the delimiter row and
+    /// an empty body row, the table aligned, caret in the first body cell, as
+    /// one undo step. False for anything else, and with `editor.alignTables`
+    /// off. Cells are counted by tableRowCells, so a `\|` or a pipe in code
+    /// is not a cell border.
+    bool handleTableEnter();
+    /// `noteAppC:insert-table`: Obsidian's 2x2 template with the caret in its
+    /// first cell, on a paragraph of its own when the caret's line has text.
+    void insertTable();
+    /// Replaces lines `start`..`end` with the table `text` as one undo step,
+    /// reparses, and lets the caret-leave formatter know there is nothing left
+    /// for it to do.
+    void rewriteTable(qsizetype start, qsizetype end, const QString &text);
     /// What typing or pasting `text` puts into a drawn table's cell: a pipe
     /// escaped, a line break a space. `text` itself anywhere else.
     QString cellSafe(const QString &text) const;

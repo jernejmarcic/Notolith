@@ -257,6 +257,11 @@ if(TARGET ai AND TARGET Qt6::HttpServer)
         TIMEOUT 120)
 endif()
 
+# Pipe tables typed and edited as source (EditingCommands.cpp, TableCells.cpp): keys go in as real key events.
+add_executable(test_tables test_tables.cpp)
+target_link_libraries(test_tables PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
+add_test(NAME tables COMMAND test_tables)
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
