@@ -158,7 +158,7 @@ TEST(TableAutoTest, SlashTableInsertsIt)
     QTest::keyClicks(editor.get(), QStringLiteral("/insert table"));
     ASSERT_TRUE(editor->slashPopupVisible());
     ASSERT_FALSE(editor->slashSuggestions().isEmpty());
-    EXPECT_EQ(editor->slashSuggestions().constFirst(), QStringLiteral("Insert table"));
+    EXPECT_EQ(editor->slashSuggestions().constFirst(), QStringLiteral("Insert table")) << editor->slashSuggestions().join(QStringLiteral(" / ")).toStdString();
     QTest::keyClick(editor.get(), Qt::Key_Return);
     EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("|     |     |\n| --- | --- |\n")))
         << editor->noteText().toStdString();

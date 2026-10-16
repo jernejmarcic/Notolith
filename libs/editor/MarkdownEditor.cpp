@@ -4107,6 +4107,7 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
         {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+        {QStringLiteral("noteAppC:insert-table"), tr("Insert table"), {}},
         {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
         {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
         {QStringLiteral("noteAppC:table-insert-row-before"), tr("Table: Insert row before"), {}},
@@ -4126,7 +4127,6 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("noteAppC:table-duplicate-column"), tr("Table: Duplicate column"), {}},
         {QStringLiteral("noteAppC:table-sort-column-ascending"), tr("Table: Sort column ascending"), {}},
         {QStringLiteral("noteAppC:table-sort-column-descending"), tr("Table: Sort column descending"), {}},
-        {QStringLiteral("noteAppC:insert-table"), tr("Insert table"), {}},
     };
     return table;
 }

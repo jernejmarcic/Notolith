@@ -252,7 +252,7 @@ commands, which are always there.
   newline it always was, so nothing is injected into an existing table. Cells are
   counted by the parser's `tableRowCells`, so `\|` is not a border (a pipe in a
   code span is one, as in GFM).
-- **Insert table** (`noteAppC:insert-table`, also `/table` in the slash popup):
+- **Insert table** (`noteAppC:insert-table`; `/insert table` in the slash popup - `/table` lists the `Table:` commands, which rank above it by prefix):
   Obsidian's 2x2 template, the caret in its first cell; on a line with text the
   table goes below as a paragraph of its own.
 - **Tab, Shift+Tab, Enter in source mode** inside a table align that table (not
