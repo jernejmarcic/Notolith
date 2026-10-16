@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFile>
+#include <QFileInfo>
 #include <QStandardPaths>
 
 #include <git2.h>
@@ -72,9 +73,10 @@ NoteHistory::NoteHistory(const QString &vaultRoot)
     static const int initialised = git_libgit2_init();
     Q_UNUSED(initialised);
     m_repo->path = repositoryPathFor(vaultRoot);
-    QDir().mkpath(m_repo->path);
-    if (git_repository_open_bare(&m_repo->repo, m_repo->path.toUtf8().constData()) != 0
-        && git_repository_init(&m_repo->repo, m_repo->path.toUtf8().constData(), 1) != 0) {
+    // Only opened here: a vault that is merely looked at leaves nothing on
+    // disk. The repository is created by the first record().
+    if (QFileInfo::exists(m_repo->path)
+        && git_repository_open_bare(&m_repo->repo, m_repo->path.toUtf8().constData()) != 0) {
         m_error = lastError();
         m_repo->repo = nullptr;
     }
@@ -94,14 +96,27 @@ QString NoteHistory::repositoryPathFor(const QString &vaultRoot)
 
 bool NoteHistory::isOpen() const
 {
-    return m_repo->repo != nullptr;
+    // Usable: opened, or not created yet (record() makes it). Only an
+    // existing repository that failed to open is not.
+    return m_repo->repo != nullptr || m_error.isEmpty();
+}
+
+bool NoteHistory::create()
+{
+    QDir().mkpath(m_repo->path);
+    if (git_repository_init(&m_repo->repo, m_repo->path.toUtf8().constData(), 1) != 0) {
+        m_error = lastError();
+        m_repo->repo = nullptr;
+        return false;
+    }
+    return true;
 }
 
 bool NoteHistory::record(const QString &relativePath, const QString &text, const QDateTime &when)
 {
-    git_repository *repo = m_repo->repo;
-    if (!repo || relativePath.isEmpty())
+    if (relativePath.isEmpty() || (!m_repo->repo && !m_error.isEmpty()) || (!m_repo->repo && !create()))
         return false;
+    git_repository *repo = m_repo->repo;
     const QByteArray bytes = text.toUtf8();
     const QByteArray ref = refFor(relativePath);
 
