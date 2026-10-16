@@ -413,7 +413,7 @@ TEST(PluginHostManifestTimeoutTest, ADeclaredTimeoutMsOverridesTheDefaultWithout
                             pluginDir.filePath(QStringLiteral("libword-stats.so"))));
     QFile ini(pluginDir.filePath(QStringLiteral("plugin.ini")));
     ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
-    ini.write(QByteArrayLiteral("[plugin]\nid = word-stats\nlibrary = libword-stats.so\napi = 2\n"
+    ini.write(QByteArrayLiteral("[plugin]\nid = word-stats\nlibrary = libword-stats.so\napi = 3\n"
                                 "timeout-ms = 1200\n[provides]\ncommands = hang\n"));
     ini.close();
 

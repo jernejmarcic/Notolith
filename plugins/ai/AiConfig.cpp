@@ -43,6 +43,8 @@ AiConfig AiConfig::load()
     // error instead of PluginHost killing the whole host process.
     config.httpTimeoutMs =
         qBound(1000, ini.value(QStringLiteral("ai/timeout-ms"), config.httpTimeoutMs).toInt(), 280000);
+    config.askTimeoutMs =
+        qBound(1000, ini.value(QStringLiteral("ai/ask-timeout-ms"), config.askTimeoutMs).toInt(), 300000);
     return config;
 }
 

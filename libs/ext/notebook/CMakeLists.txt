@@ -16,6 +16,10 @@ add_library(noteAppC_notebook STATIC
     KernelClient.cpp
     NotebookCache.h
     NotebookCache.cpp
+    NotebookOutputs.h
+    NotebookOutputs.cpp
+    Ipynb.h
+    Ipynb.cpp
     NotebookController.h
     DirectRunner.h
     DirectRunner.cpp

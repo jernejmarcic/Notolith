@@ -105,14 +105,14 @@ void KernelClient::stopClient()
     wait(2000);
 }
 
-QString KernelClient::execute(const QString &code)
+QString KernelClient::execute(const QString &code, bool allowStdin)
 {
     QJsonObject content;
     content.insert(QStringLiteral("code"), code);
     content.insert(QStringLiteral("silent"), false);
     content.insert(QStringLiteral("store_history"), true);
     content.insert(QStringLiteral("user_expressions"), QJsonObject());
-    content.insert(QStringLiteral("allow_stdin"), false);
+    content.insert(QStringLiteral("allow_stdin"), allowStdin);
     // Blocks are independent cells: one failing must not abort the ones
     // queued behind it (a "run all" with an error in the middle).
     content.insert(QStringLiteral("stop_on_error"), false);
@@ -154,6 +154,16 @@ void KernelClient::requestInterrupt()
     const KernelMessage message = buildMessage(header, {}, {}, QJsonObject());
     QMutexLocker lock(&m_mutex);
     m_outbox.append({Channel::Control, message});
+}
+
+void KernelClient::replyToInput(const QString &line)
+{
+    QJsonObject content;
+    content.insert(QStringLiteral("value"), line);
+    content.insert(QStringLiteral("status"), QStringLiteral("ok"));
+    const QJsonObject header = newHeader(QStringLiteral("input_reply"), m_session, m_username);
+    QMutexLocker lock(&m_mutex);
+    m_outbox.append({Channel::Stdin, buildMessage(header, {}, {}, content)});
 }
 
 void KernelClient::dispatchShellOrControl(const KernelMessage &message)
@@ -205,11 +215,18 @@ void KernelClient::run()
     void *ctx = zmq_ctx_new();
     void *shell = zmq_socket(ctx, ZMQ_DEALER);
     void *control = zmq_socket(ctx, ZMQ_DEALER);
+    void *stdinSocket = zmq_socket(ctx, ZMQ_DEALER);
     void *iopub = zmq_socket(ctx, ZMQ_SUB);
     void *hb = zmq_socket(ctx, ZMQ_REQ);
     const int linger = 0;
-    for (void *socket : {shell, control, iopub, hb})
+    for (void *socket : {shell, control, stdinSocket, iopub, hb})
         zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
+    // One identity on every DEALER, as jupyter_client gives them: the kernel
+    // answers an execute_request's input() on its stdin ROUTER to the identity
+    // the request came from, which only reaches the stdin socket if that is the same.
+    const QByteArray identity = m_session.toUtf8();
+    for (void *socket : {shell, control, stdinSocket})
+        zmq_setsockopt(socket, ZMQ_IDENTITY, identity.constData(), size_t(identity.size()));
     zmq_setsockopt(iopub, ZMQ_SUBSCRIBE, "", 0);
 
     const QByteArray shellEp = m_info.shellEndpoint().toUtf8();
@@ -218,6 +235,7 @@ void KernelClient::run()
     QByteArray hbEp = m_info.hbEndpoint().toUtf8();
     zmq_connect(shell, shellEp.constData());
     zmq_connect(control, controlEp.constData());
+    zmq_connect(stdinSocket, m_info.stdinEndpoint().toUtf8().constData());
     zmq_connect(iopub, iopubEp.constData());
     zmq_connect(hb, hbEp.constData());
 
@@ -267,9 +285,12 @@ void KernelClient::run()
     while (!m_stopRequested.load()) {
         {
             QMutexLocker lock(&m_mutex);
-            for (const PendingSend &pending : m_outbox)
-                sendFrames(pending.channel == Channel::Shell ? shell : control,
-                          encodeMessage(pending.message, m_info.key));
+            for (const PendingSend &pending : m_outbox) {
+                void *socket = pending.channel == Channel::Shell ? shell
+                               : pending.channel == Channel::Stdin ? stdinSocket
+                                                                   : control;
+                sendFrames(socket, encodeMessage(pending.message, m_info.key));
+            }
             m_outbox.clear();
         }
 
@@ -279,11 +300,12 @@ void KernelClient::run()
             sinceHeartbeat.restart();
         }
 
-        zmq_pollitem_t items[4] = {
+        zmq_pollitem_t items[5] = {
             {shell, 0, ZMQ_POLLIN, 0},
             {control, 0, ZMQ_POLLIN, 0},
             {iopub, 0, ZMQ_POLLIN, 0},
             {hb, 0, ZMQ_POLLIN, 0},
+            {stdinSocket, 0, ZMQ_POLLIN, 0},
         };
         // Same zmqRetryEINTR sendFrames/recvFrames use: the first version of
         // this call `break`d the whole run() loop on any negative return,
@@ -292,7 +314,7 @@ void KernelClient::run()
         // this thread shares a process with every QProcess the app starts)
         // and made every message after that point vanish. Caught by
         // looping the end-to-end test, not by inspection.
-        const int pollResult = zmqRetryEINTR([&] { return zmq_poll(items, 4, 50); });
+        const int pollResult = zmqRetryEINTR([&] { return zmq_poll(items, 5, 50); });
         if (pollResult < 0)
             break; // a genuine error (e.g. ETERM: the context was destroyed under us)
 
@@ -328,6 +350,25 @@ void KernelClient::run()
                     break;
             }
         }
+        if (items[4].revents & ZMQ_POLLIN) {
+            // The kernel waits for the answer, so a burst cannot be one the
+            // loop starves anything on: at most a handful per tick.
+            for (int drained = 0; drained < 8; ++drained) {
+                KernelMessage message;
+                if (!decodeMessage(recvFrames(stdinSocket), m_info.key, &message))
+                    break;
+                if (message.msgType() == QLatin1String("input_request")) {
+                    const QJsonObject content = message.content();
+                    emit inputRequested(message.parentMsgID(), content.value(QStringLiteral("prompt")).toString(),
+                                        content.value(QStringLiteral("password")).toBool());
+                }
+                int events = 0;
+                size_t eventsSize = sizeof(events);
+                zmq_getsockopt(stdinSocket, ZMQ_EVENTS, &events, &eventsSize);
+                if (!(events & ZMQ_POLLIN))
+                    break;
+            }
+        }
         if (items[3].revents & ZMQ_POLLIN) {
             char buf[64];
             // The pong's payload is not checked, only its arrival.
@@ -357,6 +398,7 @@ void KernelClient::run()
 
     zmq_close(shell);
     zmq_close(control);
+    zmq_close(stdinSocket);
     zmq_close(iopub);
     zmq_close(hb);
     zmq_ctx_destroy(ctx);

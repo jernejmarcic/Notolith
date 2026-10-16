@@ -2327,6 +2327,26 @@ TEST_F(WindowTest, EverySaveIsInTheNotesHistoryAndOneCanBePutBack)
     qputenv("XDG_DATA_HOME", previous);
 }
 
+TEST_F(WindowTest, NoteHistoryCreatesItsRepositoryOnTheFirstSaveNotWhenTheVaultOpens)
+{
+    QTemporaryDir data;
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    const QDir histories(data.path() + QStringLiteral("/noteAppC/history"));
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        QTest::qWait(100); // a lazy write on the history pool would have landed by now
+        EXPECT_FALSE(histories.exists()) << "opening a vault is not a snapshot";
+
+        QTest::keyClicks(window.editor(), QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        WAIT_TRUE(histories.entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, 5000);
+    }
+    qputenv("XDG_DATA_HOME", previous);
+}
+
 TEST_F(WindowTest, NoteHistoryOffMeansNoRepositoryAtAll)
 {
     QTemporaryDir data;
@@ -2881,6 +2901,67 @@ TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)
 }
 
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+// A .ipynb in the vault opens as a note: cells as text, its stored outputs
+// shown on the blocks, an untouched save changing no bytes, an edit saved
+// back into the same notebook, and the notebooks feature switch turning it
+// all off.
+TEST_F(WindowTest, ANotebookFileOpensAsANoteAndSavesBackAsANotebook)
+{
+    const QByteArray original = readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    write(QStringLiteral("Analysis.ipynb"), original);
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+        MarkdownEditor *editor = window.editor();
+        EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("# Title\n\n")));
+        EXPECT_TRUE(editor->noteText().contains(QStringLiteral("```python\nimport math")));
+
+        // The stored output is on the block, with nothing run.
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype code = editor->noteText().indexOf(QStringLiteral("import math"));
+        ASSERT_TRUE(QTest::qWaitFor(
+            [&] {
+                const auto info = editor->notebookInfoAt(code);
+                return info.eligible && info.hasRun;
+            },
+            5000));
+        EXPECT_EQ(editor->notebookInfoAt(code).outputCellCount, 5);
+
+        // Saving what was not touched writes the file's own bytes.
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        EXPECT_EQ(readAll(path(QStringLiteral("Analysis.ipynb"))), original);
+
+        editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("# Title")) + 2);
+        QTest::keyClicks(editor, QStringLiteral("Big "));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        const QByteArray saved = readAll(path(QStringLiteral("Analysis.ipynb")));
+        EXPECT_NE(saved, original);
+        EXPECT_TRUE(saved.contains("# Big Title"));
+        EXPECT_TRUE(saved.contains("\"nbformat\": 4"));
+        EXPECT_TRUE(saved.contains("ZeroDivisionError")) << "the cells that were not edited keep their outputs";
+        EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
+    }
+}
+
+TEST_F(WindowTest, ANotebookFileIsNotANoteWithTheNotebooksFeatureOff)
+{
+    write(QStringLiteral("Analysis.ipynb"), readAll(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb")));
+    Settings config = Settings::load();
+    config.setValue(Settings::featureKey("notebooks"), false);
+    ASSERT_TRUE(config.save());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        EXPECT_FALSE(window.openNote(path(QStringLiteral("Analysis.ipynb"))));
+        EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    }
+    config.setValue(Settings::featureKey("notebooks"), true);
+    config.save();
+}
+
 // "Share one kernel between a note's code blocks": through the window's own
 // runner (the settings, the note's path as the kernel's scope, the sandbox),
 // a variable one block sets is there for the next, and the second block shows

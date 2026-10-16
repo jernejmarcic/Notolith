@@ -112,6 +112,13 @@ probes. The screenshot tool and the bench now set it themselves.
 | `EpubViewTest.RemoteFontFaceIsNeverFetched` | a remote `@font-face` source is never attempted |
 | `EpubViewTest.PagedModeNeverScrollsPastTheDocumentBounds` | paged navigation clamps to `[0, documentHeight - pageHeight]` |
 
+Every wall-clock guard above keeps the best of three runs (`tests/Perf.h`,
+`perf::bestOf`), because a loaded machine - a parallel build, a lane-check next
+door - only ever adds time, so the fastest run is the cost of the code. The
+budgets themselves are unchanged, so a real regression still fails all three.
+Under ASan or TSan the guards skip (`SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER`):
+the clock would measure the instrumentation.
+
 The last of the editor rows used to live in the editor tests. When the parse moved off the UI
 thread it started measuring the layout path instead, and would have gone on
 passing while the quadratic it existed for came back. It now measures

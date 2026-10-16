@@ -254,6 +254,8 @@ private:
     /// Whether an optional feature is on: noteAppC's own switch. A feature
     /// that is off is not built, connected or refreshed - it costs nothing.
     bool featureOn(const char *id) const;
+    /// A Jupyter notebook the window opens as a note (the notebooks feature is on).
+    bool isNotebookFile(const QString &path) const;
     /// `editor.defaultMode`, for a new tab.
     MarkdownEditor::Mode defaultMode() const;
     /// Builds what is switched on and destroys what is not: the side panes

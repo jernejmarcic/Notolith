@@ -3426,6 +3426,8 @@ void MarkdownEditor::updateLayout()
         m_totalHeight = y + m_topPadding;
     }
     updateScrollRange();
+    if (m_notebookInput.edit)
+        positionNotebookInput(); // the prompt under a block follows it as it moves
 }
 
 QList<MarkdownEditor::BlockBox> MarkdownEditor::blockBoxes()

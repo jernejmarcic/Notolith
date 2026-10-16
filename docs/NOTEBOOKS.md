@@ -63,6 +63,17 @@ control (`[*]` while it runs again). Commands (all under "Notebooks:"):
 A kernel that dies (the code called `exit()`) tells the running block so, and
 the next run starts a new one.
 
+### input()
+
+A block run in a kernel can ask for a line: when the code calls `input()` the
+kernel sends `input_request` on its stdin channel and a one-line prompt appears
+under the block, with the kernel's own prompt text. Enter sends the line back
+as `input_reply`; `getpass` asks the same way and the line is masked. Esc
+interrupts the run instead of answering, which is Jupyter's
+own way out. The prompt is the editor's, so it scrolls with the block. A block outside a kernel
+(the system's own one-shot tool) has no terminal behind it, so `input()` there
+still raises `EOFError`.
+
 ## Completion and documentation
 
 With the caret in a code block whose note already has a running kernel for
@@ -134,6 +145,35 @@ settings.
 Docker (or Podman) would be the next tier, for languages not installed on
 the machine; neither is installed on starbase-1, so it is not built.
 
+## Jupyter notebooks (.ipynb)
+
+A `.ipynb` in the vault opens as a note when the notebooks feature is on (it
+is refused like any other file that is not a note when off). Markdown cells are the text,
+code cells are fenced blocks in the notebook's language (from
+`metadata.kernelspec`, else `language_info`, else python), raw cells are
+```` ```raw ```` fences, and two markdown cells in a row are told apart by an
+`<!-- cell -->` line. The stored outputs (stream, execute_result, display_data,
+error: text, PNG, HTML, ANSI stripped from tracebacks) are put in the output
+cache under the key the block looks itself up with, so they show on the block
+the moment the note opens, and running a block uses the same kernel machinery
+as any other (a notebook shares one kernel per note whatever the setting says).
+
+It is editable. Saving merges the text into the notebook on disk by aligning
+old and new cells (longest common subsequence): an edited cell keeps its `id`,
+metadata and outputs, a new cell is empty with a fresh `id`, and everything
+outside `cells`, unknown keys included, is untouched. A text that is the one
+the file shows writes back the file's exact bytes. Otherwise it is written as
+nbformat writes JSON (one-space indent, sorted keys, no ASCII escaping, final
+newline), so a notebook in git changes only where it was edited. nbformat 4 only;
+anything else is refused with the reason and never touched.
+
+Ceilings: a run's new output is not written back into the file (it lives in the
+cache like every block's; the notebook keeps the outputs it came with), because
+a block's cache key is its source and two cells with the same code would
+collide. `execution_count` is the file's own. Cell attachments are kept but not
+shown. The vault index (links, backlinks, search) does not read notebooks: it
+lists only Markdown files.
+
 ## Where outputs go
 
 In the XDG cache, keyed by language, source and tier, never in the note
@@ -152,10 +192,9 @@ extensions: py, js, sh, rb, pl, lua, c, cpp, hs, java, rs, go.
 
 - Tier 2 and 3 sandboxes (gVisor, Firecracker) and the WASM tier for phones:
   none of runsc, firecracker or a wasm runtime is installed.
-- `input()` from a block: the kernel is told stdin is not available, so it
-  raises instead of waiting for a person.
-- `.ipynb` files. Completion and documentation show only what the kernel
-  returns as plain text (no rich Jupyter signatures), and the list is not
-  filtered further as you type.
+- Rich Jupyter signatures: completion and documentation show only what the
+  kernel returns as plain text, and the list is not filtered further as you
+  type.
+- Writing a run's output back into an `.ipynb`.
 - A kernel for Haskell or the other languages the system's own tool covers:
   none installed here, so those stay one process per block.

@@ -24,6 +24,7 @@
 #include "CanvasDocument.h"
 #include "CanvasView.h"
 #include "Theme.h"
+#include "Perf.h"
 
 using namespace noteAppC;
 
@@ -681,9 +682,12 @@ qint64 firstPaintNanos(CanvasView &view)
 
 TEST(CanvasPerfTest, OnePanFrameOfAThousandNodesStaysUnderBudget)
 {
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
     CanvasView big;
     buildGrid(big, 1000);
-    const qint64 medianBig = medianPanFrameNanos(big, 25);
+    // Best of three medians: load only ever adds time.
+    const qint64 medianBig = perf::bestOf([&] { return medianPanFrameNanos(big, 25); }, 3,
+                                          double(qint64(16) * 1000 * 1000));
     EXPECT_LT(medianBig, qint64(16) * 1000 * 1000) << "median pan frame: " << medianBig / 1.0e6 << " ms";
 }
 
@@ -698,13 +702,18 @@ TEST(CanvasPerfTest, ColdFirstPaintCostTracksVisibleNodesNotTotalNodes)
     // this well before the loose threshold below: it built all 1 000 nodes'
     // Markdown content on that first paint instead of the ~56 actually on
     // screen, which measured at roughly 18x, not under 6x.
-    CanvasView big;
-    buildGrid(big, 1000);
-    const qint64 coldBig = firstPaintNanos(big);
-
-    CanvasView small;
-    buildGrid(small, 60);
-    const qint64 coldSmall = firstPaintNanos(small);
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    // A cold paint needs a fresh view each time; best of three for each side,
+    // because load only ever adds time to either.
+    const auto cold = [](int nodes) {
+        return perf::bestOf([nodes] {
+            CanvasView view;
+            buildGrid(view, nodes);
+            return firstPaintNanos(view);
+        });
+    };
+    const qint64 coldBig = cold(1000);
+    const qint64 coldSmall = cold(60);
 
     EXPECT_LT(double(coldBig), double(coldSmall) * 6.0)
         << "cold first paint: " << coldBig / 1.0e6 << " ms for 1000 nodes vs " << coldSmall / 1.0e6

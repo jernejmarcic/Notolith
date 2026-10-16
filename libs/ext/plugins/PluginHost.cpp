@@ -8,12 +8,21 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QPointer>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTimer>
 
 #include <sys/resource.h>
 #include <unistd.h>
+
+#if defined(__SANITIZE_ADDRESS__)
+#define NOTEAPPC_ASAN
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define NOTEAPPC_ASAN
+#endif
+#endif
 
 namespace noteAppC {
 
@@ -32,7 +41,7 @@ constexpr qint64 kSlowRenderMs = 1000;
 // shape as TexCompiler's rlimits (libs/render/TexCompiler.cpp), just a
 // smaller ceiling because these are meant to be small out-of-process
 // extras, not a full TeX engine.
-constexpr rlim_t kMemoryLimitBytes = 256ULL * 1024 * 1024;
+[[maybe_unused]] constexpr rlim_t kMemoryLimitBytes = 256ULL * 1024 * 1024;
 constexpr rlim_t kOpenFileLimit = 64;
 
 QString permissionLabel(PluginPermission permission)
@@ -220,8 +229,12 @@ void PluginHost::ensureStarted()
     // chain (rlimits survive execve) - see TexCompiler::compile for the
     // pattern this copies.
     m_process->setChildProcessModifier([filterFD] {
+#ifndef NOTEAPPC_ASAN
+        // ASan reserves terabytes of address space at start-up, so under it the
+        // cap would kill the plugin before main; every other limit stays.
         rlimit memory{kMemoryLimitBytes, kMemoryLimitBytes};
         setrlimit(RLIMIT_AS, &memory);
+#endif
         rlimit files{kOpenFileLimit, kOpenFileLimit};
         setrlimit(RLIMIT_NOFILE, &files);
         sandbox::keepInChild(filterFD);
@@ -533,6 +546,39 @@ void PluginHost::handleHostRequest(const PluginMessage &request)
         QJsonObject result;
         result.insert(QStringLiteral("ok"), ok);
         return reply(result);
+    }
+
+    if (method == QLatin1String("ui.prompt")) {
+        // The person is typing, not the plugin hanging: the per-request kill
+        // timers are held for the wait and start over when it ends.
+        const QString label = request.params.value(QStringLiteral("label")).toString();
+        const bool password = request.params.value(QStringLiteral("password")).toBool();
+        const int asked = request.params.value(QStringLiteral("timeoutMs")).toInt();
+        const int timeoutMs = asked <= 0 ? 60'000 : qMin(asked, 300'000);
+        const qint64 id = request.id;
+        for (Pending &entry : m_pending)
+            entry.timer->stop();
+        // Answered once, by whichever comes first: the person, the app's own
+        // timeout, or the backstop below. The dialog may outlive this host.
+        auto settled = std::make_shared<bool>(false);
+        const QPointer<PluginHost> self(this);
+        const PluginAppCallbacks::PromptDone finish = [self, id, settled](bool ok, const QString &text) {
+            if (*settled || !self)
+                return;
+            *settled = true;
+            for (Pending &entry : self->m_pending)
+                entry.timer->start(self->m_requestTimeoutMs);
+            QJsonObject result;
+            result.insert(QStringLiteral("ok"), ok);
+            result.insert(QStringLiteral("text"), ok ? text : QString());
+            self->sendMessage(PluginMessage::response(id, result));
+        };
+        QTimer::singleShot(timeoutMs + 500, this, [finish] { finish(false, QString()); });
+        if (m_callbacks.askUser)
+            m_callbacks.askUser(m_manifest.name(), label, password, timeoutMs, finish);
+        else
+            finish(false, QString());
+        return;
     }
 
     sendMessage(PluginMessage::errorResponse(request.id, QStringLiteral("unknown-method"),
