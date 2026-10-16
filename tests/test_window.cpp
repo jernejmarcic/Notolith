@@ -47,6 +47,9 @@
 #include "FootnotesPane.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+#include "ImageView.h"
+#endif
 #ifdef NOTEAPPC_HAVE_GRAPH
 #include "GraphView.h"
 #endif
@@ -2061,6 +2064,34 @@ TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
     write(QStringLiteral("data.bin"), "\x01\x02");
     EXPECT_FALSE(window.openNote(path(QStringLiteral("data.bin"))));
 }
+
+#ifdef NOTEAPPC_HAVE_IMAGEVIEW
+TEST_F(WindowTest, AnImageOpensAnnotatableOnlyWithImageAnnotationOn)
+{
+    QImage picture(400, 200, QImage::Format_RGB32);
+    picture.fill(Qt::darkCyan);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("pic.png"))));
+    Settings config = Settings::load();
+    config.setValue(Settings::featureKey("image-annotation"), true);
+    ASSERT_TRUE(config.save());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.resize(1000, 700);
+        window.show();
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+        EXPECT_NE(window.findChild<noteAppC::ImageView *>(), nullptr);
+        EXPECT_EQ(window.findChild<MarkdownEditor *>(QStringLiteral("mediaView")), nullptr);
+    }
+    config.setValue(Settings::featureKey("image-annotation"), false);
+    config.save();
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("pic.png"))));
+    EXPECT_EQ(window.findChild<noteAppC::ImageView *>(), nullptr); // off: the plain picture, as before
+    EXPECT_NE(window.findChild<MarkdownEditor *>(QStringLiteral("mediaView")), nullptr);
+}
+#endif
 
 TEST_F(WindowTest, ARandomNoteAndAUniqueNote)
 {

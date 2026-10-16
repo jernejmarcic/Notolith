@@ -203,6 +203,13 @@ colours the editor shows; with a built-in scheme, which names none, the page
 keeps the highlighter's own colours. Per-language and per-fence colours are a
 live-editor feature and are not published.
 
+**Publishing footnotes.** `[^1]` and inline `^[...]` references link to their
+definition in the list at the foot of the page. Every reference has its own id
+(`fnref-1`, `fnref-1-2`, ...), so ids stay unique, and each definition ends
+with one text back-arrow per reference (`&#8617;&#xFE0E;`, never an emoji).
+References inside an embedded note stay plain numbers: its list is not on the
+page.
+
 ### Tabs
 
 Two or more fences in a row, each marked `tab`, become one block with a tab
@@ -221,6 +228,12 @@ strip:
 A bare `tab` takes the language's name and icon from `codeblocks.ini`;
 `tab="..."` names it yourself. Only blank lines may come between the fences -
 any other text ends the group. The Copy button copies the tab being shown.
+**Publishing.** A group publishes as a tab strip that needs no JavaScript: one
+radio input, label and panel per tab (`.code-tabs`, `.code-tab-input`,
+`.code-tab-label`, `.code-tab-panel` in `site.css`), the first tab selected,
+each label named by `tab="..."`, else the language as written, else "Tab N".
+Keyboard arrows move between the tabs (they are a radio group); a lone `tab`
+fence publishes as an ordinary block.
 With the caret inside the group every fence shows as written, so you can edit
 any of them. Obsidian shows the same note as separate blocks.
 

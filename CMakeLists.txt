@@ -87,6 +87,10 @@ option(NOTEAPPC_WITH_PUBLISH "Export a vault as a static website (libs/ext/publi
 # PkgConfig::POPPLER_QT6 target - this option on top lets it be switched off
 # on its own even when embeds stay on.
 option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
+# Image annotation (libs/ext/imageview): an image opens in a tab to highlight,
+# draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
+# only - no new dependency - so it has no tool to look for, just this switch.
+option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sidecar note" ON)
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
 # `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
@@ -265,6 +269,9 @@ endif()
 get_property(noteappc_have_poppler GLOBAL PROPERTY NOTEAPPC_HAVE_POPPLER)
 if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
     add_subdirectory(libs/ext/pdfview)
+endif()
+if(NOTEAPPC_WITH_IMAGEVIEW)
+    add_subdirectory(libs/ext/imageview)
 endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)
