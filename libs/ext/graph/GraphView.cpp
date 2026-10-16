@@ -1,6 +1,13 @@
 #include "GraphView.h"
 
 #include <QCheckBox>
+#include <QColorDialog>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <QFile>
 #include <QtConcurrent/QtConcurrentRun>
@@ -25,6 +32,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "Icons.h"
 #include "Index.h"
 #include "Theme.h"
 
@@ -144,6 +152,18 @@ std::pair<QList<GraphNode>, QList<GraphEdge>> buildGraph(const Index::GraphData 
     return {byId.values(), edges};
 }
 
+/// What a search query is asked about a node: it has no note text, so a bare
+/// word is looked for in the name.
+NoteContext contextFor(const GraphNode &node)
+{
+    NoteContext context;
+    context.path = node.id;
+    context.text = node.label;
+    for (const QString &tag : node.tags)
+        context.tags << NoteTag{tag, Range{0, context.text.size()}};
+    return context;
+}
+
 QPointF project(QPointF graphPos, double zoom, QPointF pan, QSize size)
 {
     return graphPos * zoom + pan + QPointF(size.width() / 2.0, size.height() / 2.0);
@@ -156,13 +176,20 @@ QPointF project(QPointF graphPos, double zoom, QPointF pan, QSize size)
 
 GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
 {
-    GraphOptions options;
-
     QFile file(vaultRoot + QLatin1String("/.obsidian/graph.json"));
     if (!file.open(QIODevice::ReadOnly))
-        return options;
+        return GraphOptions{};
+    return fromJson(QJsonDocument::fromJson(file.readAll()).object());
+}
 
-    const QJsonObject root = QJsonDocument::fromJson(file.readAll()).object();
+GraphOptions GraphOptions::fromJson(const QJsonObject &root)
+{
+    return fromJson(root, GraphOptions{});
+}
+
+GraphOptions GraphOptions::fromJson(const QJsonObject &root, const GraphOptions &base)
+{
+    GraphOptions options = base;
     const auto boolField = [&](const char *key, bool fallback) {
         return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toBool() : fallback;
     };
@@ -170,11 +197,18 @@ GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
         return root.contains(QLatin1String(key)) ? root.value(QLatin1String(key)).toDouble() : fallback;
     };
 
+    if (root.contains(QLatin1String("search")))
+        options.search = root.value(QLatin1String("search")).toString();
     options.showTags = boolField("showTags", options.showTags);
     options.showAttachments = boolField("showAttachments", options.showAttachments);
     options.hideUnresolved = boolField("hideUnresolved", options.hideUnresolved);
     options.showOrphans = boolField("showOrphans", options.showOrphans);
     options.showArrow = boolField("showArrow", options.showArrow);
+    options.animate = boolField("animate", options.animate);
+    options.collapseFilter = boolField("collapse-filter", options.collapseFilter);
+    options.collapseColorGroups = boolField("collapse-color-groups", options.collapseColorGroups);
+    options.collapseDisplay = boolField("collapse-display", options.collapseDisplay);
+    options.collapseForces = boolField("collapse-forces", options.collapseForces);
     options.textFadeMultiplier = numberField("textFadeMultiplier", options.textFadeMultiplier);
     options.nodeSizeMultiplier = numberField("nodeSizeMultiplier", options.nodeSizeMultiplier);
     options.lineSizeMultiplier = numberField("lineSizeMultiplier", options.lineSizeMultiplier);
@@ -182,18 +216,53 @@ GraphOptions GraphOptions::readFromVault(const QString &vaultRoot)
     options.repelStrength = numberField("repelStrength", options.repelStrength);
     options.linkStrength = numberField("linkStrength", options.linkStrength);
     options.linkDistance = numberField("linkDistance", options.linkDistance);
+    options.localDepth = std::max(1, int(numberField("localJumps", options.localDepth)));
 
     // Obsidian's own shape: [{query, color:{a, rgb}}], rgb a packed 24-bit int.
-    for (const QJsonValue &value : root.value(QLatin1String("colorGroups")).toArray()) {
-        const QJsonObject group = value.toObject();
-        const QString query = group.value(QLatin1String("query")).toString();
-        if (query.isEmpty())
-            continue;
-        const int rgb = group.value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt();
-        options.colorGroups.append(GraphColorGroup{query, QColor::fromRgb(rgb)});
+    if (root.contains(QLatin1String("colorGroups"))) {
+        options.colorGroups.clear();
+        for (const QJsonValue &value : root.value(QLatin1String("colorGroups")).toArray()) {
+            const QJsonObject group = value.toObject();
+            const QString query = group.value(QLatin1String("query")).toString();
+            if (query.isEmpty())
+                continue;
+            const int rgb = group.value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt();
+            options.colorGroups.append(GraphColorGroup{query, QColor::fromRgb(rgb)});
+        }
     }
-
     return options;
+}
+
+QJsonObject GraphOptions::toJson() const
+{
+    QJsonArray groups;
+    for (const GraphColorGroup &group : colorGroups) {
+        if (group.query.trimmed().isEmpty())
+            continue; // a row still being typed in: nothing to keep yet
+        groups.append(QJsonObject{{QLatin1String("query"), group.query},
+                                  {QLatin1String("color"), QJsonObject{{QLatin1String("a"), 1},
+                                                                       {QLatin1String("rgb"), int(group.color.rgb() & 0xFFFFFF)}}}});
+    }
+    return QJsonObject{{QLatin1String("collapse-filter"), collapseFilter},
+                       {QLatin1String("search"), search},
+                       {QLatin1String("showTags"), showTags},
+                       {QLatin1String("showAttachments"), showAttachments},
+                       {QLatin1String("hideUnresolved"), hideUnresolved},
+                       {QLatin1String("showOrphans"), showOrphans},
+                       {QLatin1String("collapse-color-groups"), collapseColorGroups},
+                       {QLatin1String("colorGroups"), groups},
+                       {QLatin1String("collapse-display"), collapseDisplay},
+                       {QLatin1String("showArrow"), showArrow},
+                       {QLatin1String("textFadeMultiplier"), textFadeMultiplier},
+                       {QLatin1String("nodeSizeMultiplier"), nodeSizeMultiplier},
+                       {QLatin1String("lineSizeMultiplier"), lineSizeMultiplier},
+                       {QLatin1String("animate"), animate},
+                       {QLatin1String("collapse-forces"), collapseForces},
+                       {QLatin1String("centerStrength"), centerStrength},
+                       {QLatin1String("repelStrength"), repelStrength},
+                       {QLatin1String("linkStrength"), linkStrength},
+                       {QLatin1String("linkDistance"), linkDistance},
+                       {QLatin1String("localJumps"), localDepth}};
 }
 
 // ---------------------------------------------------------------------------
@@ -209,13 +278,19 @@ GraphView::GraphView(QWidget *parent)
     m_labelFont.setPointSizeF(std::max(7.0, font().pointSizeF() - 1.0));
 
     m_controlsToggle = new QToolButton(this);
-    m_controlsToggle->setText(tr("Filters"));
+    m_controlsToggle->setObjectName(QStringLiteral("graphControlsToggle"));
+    m_controlsToggle->setToolTip(tr("Graph settings"));
+    m_controlsToggle->setIcon(Icons::icon(QStringLiteral("settings"), m_palette.text, 16));
     m_controlsToggle->setCheckable(true);
+    m_controlsToggle->setAutoRaise(true);
     m_controlsToggle->setCursor(Qt::PointingHandCursor);
 
     m_controlsPanel = buildControlsPanel();
     m_controlsPanel->setVisible(false);
-    connect(m_controlsToggle, &QToolButton::toggled, m_controlsPanel, &QWidget::setVisible);
+    connect(m_controlsToggle, &QToolButton::toggled, this, [this](bool open) {
+        m_controlsPanel->setVisible(open);
+        layoutControls();
+    });
 
     m_controlsToggle->raise();
     m_controlsPanel->raise();
@@ -230,51 +305,185 @@ GraphView::~GraphView()
     m_dataWatcher.waitForFinished();
 }
 
+void GraphView::reapplyData()
+{
+    // Filters re-derive the node and edge lists from the index, same as a
+    // fresh setIndex(). A caller feeding raw data through setGraphData()
+    // has no index to re-read, so only the filters rebuild() owns apply.
+    if (m_index)
+        applyIndexData();
+    else
+        rebuild();
+}
+
+/// Obsidian's controls card: four folding sections (Filters, Groups, Display,
+/// Forces) in a scrolling column pinned top-right. Every control writes one
+/// option, tells the owner (optionsChanged(), which persists them) and
+/// registers a sync lambda so setOptions() can put the widgets back in step.
 QWidget *GraphView::buildControlsPanel()
 {
-    auto *panel = new QWidget(this);
-    auto *layout = new QFormLayout(panel);
-    layout->setContentsMargins(10, 8, 10, 8);
-    layout->setSpacing(6);
+    auto *scroll = new QScrollArea(this);
+    scroll->setObjectName(QStringLiteral("graphControlsPanel"));
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *body = new QWidget;
+    body->setObjectName(QStringLiteral("graphControlsBody"));
+    scroll->setWidget(body);
+    auto *column = new QVBoxLayout(body);
+    column->setContentsMargins(10, 6, 10, 8);
+    column->setSpacing(2);
 
-    const auto addToggle = [&](const QString &label, bool checked, auto onToggled) {
-        auto *box = new QCheckBox(panel);
-        box->setChecked(checked);
-        connect(box, &QCheckBox::toggled, this, onToggled);
-        layout->addRow(label, box);
+    const auto addSection = [&](const QString &title, bool GraphOptions::*collapsed) {
+        auto *header = new QToolButton(body);
+        header->setText(title);
+        header->setCheckable(true);
+        header->setAutoRaise(true);
+        header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        header->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        header->setCursor(Qt::PointingHandCursor);
+        header->setStyleSheet(QStringLiteral("QToolButton{font-weight:600;text-align:left;border:none;padding:4px 0;}"));
+        auto *content = new QWidget(body);
+        auto *form = new QFormLayout(content);
+        form->setContentsMargins(0, 2, 0, 6);
+        form->setSpacing(6);
+        column->addWidget(header);
+        column->addWidget(content);
+        const auto show = [header, content](bool open) {
+            header->setChecked(open);
+            header->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+            content->setVisible(open);
+        };
+        connect(header, &QToolButton::toggled, this, [this, show, collapsed](bool open) {
+            show(open);
+            m_options.*collapsed = !open;
+            emit optionsChanged();
+            layoutControls();
+        });
+        show(!(m_options.*collapsed));
+        m_controlSyncs.push_back([this, header, show, collapsed] {
+            const QSignalBlocker blocker(header);
+            show(!(m_options.*collapsed));
+        });
+        return form;
     };
-    const auto addSlider = [&](const QString &label, int value, int min, int max, auto onChanged) {
-        auto *slider = new QSlider(Qt::Horizontal, panel);
+    const auto addToggle = [&](QFormLayout *form, const QString &label, auto get, auto set) {
+        auto *box = new QCheckBox(form->parentWidget());
+        box->setChecked(get());
+        connect(box, &QCheckBox::toggled, this, [this, set](bool on) {
+            set(on);
+            emit optionsChanged();
+        });
+        m_controlSyncs.push_back([box, get] {
+            const QSignalBlocker blocker(box);
+            box->setChecked(get());
+        });
+        form->addRow(label, box);
+        return box;
+    };
+    const auto addSlider = [&](QFormLayout *form, const QString &label, int min, int max, auto get, auto set) {
+        auto *slider = new QSlider(Qt::Horizontal, form->parentWidget());
         slider->setRange(min, max);
-        slider->setValue(value);
-        slider->setFixedWidth(120);
-        connect(slider, &QSlider::valueChanged, this, onChanged);
-        layout->addRow(label, slider);
+        slider->setValue(get());
+        connect(slider, &QSlider::valueChanged, this, [this, set](int value) {
+            set(value);
+            emit optionsChanged();
+        });
+        m_controlSyncs.push_back([slider, get] {
+            const QSignalBlocker blocker(slider);
+            slider->setValue(get());
+        });
+        form->addRow(label, slider);
+        return slider;
     };
 
-    // Filters: each one re-derives the node/edge lists from the index, same
-    // as a fresh setIndex() call. A caller feeding raw data via
-    // setGraphData() instead (no index attached) simply sees no effect here,
-    // since there is nothing of ours left to re-filter.
-    addToggle(tr("Tags"), m_options.showTags, [this](bool on) {
+    // Filters
+    QFormLayout *filters = addSection(tr("Filters"), &GraphOptions::collapseFilter);
+    m_filtersForm = filters;
+    m_searchEdit = new QLineEdit(filters->parentWidget());
+    m_searchEdit->setObjectName(QStringLiteral("graphSearchEdit"));
+    m_searchEdit->setPlaceholderText(tr("Search files..."));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchDebounce = new QTimer(this);
+    m_searchDebounce->setSingleShot(true);
+    m_searchDebounce->setInterval(300);
+    connect(m_searchDebounce, &QTimer::timeout, this, &GraphView::rebuild);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
+        m_options.search = text;
+        m_searchDebounce->start(); // a keystroke is not worth a rebuild
+        emit optionsChanged();
+    });
+    m_controlSyncs.push_back([this] {
+        const QSignalBlocker blocker(m_searchEdit);
+        m_searchEdit->setText(m_options.search);
+    });
+    filters->addRow(m_searchEdit);
+    addToggle(filters, tr("Tags"), [this] { return m_options.showTags; }, [this](bool on) {
         m_options.showTags = on;
-        applyIndexData();
+        reapplyData();
     });
-    addToggle(tr("Attachments"), m_options.showAttachments, [this](bool on) {
+    addToggle(filters, tr("Attachments"), [this] { return m_options.showAttachments; }, [this](bool on) {
         m_options.showAttachments = on;
-        applyIndexData();
+        reapplyData();
     });
-    addToggle(tr("Unresolved links"), !m_options.hideUnresolved, [this](bool on) {
+    addToggle(filters, tr("Unresolved links"), [this] { return !m_options.hideUnresolved; }, [this](bool on) {
         m_options.hideUnresolved = !on;
-        applyIndexData();
+        reapplyData();
     });
-    addToggle(tr("Orphans"), m_options.showOrphans, [this](bool on) {
+    addToggle(filters, tr("Orphans"), [this] { return m_options.showOrphans; }, [this](bool on) {
         m_options.showOrphans = on;
-        applyIndexData();
+        reapplyData();
     });
-    addToggle(tr("Arrows"), m_options.showArrow, [this](bool on) {
+    m_depthSlider = addSlider(filters, tr("Depth"), 1, 5, [this] { return m_options.localDepth; }, [this](int value) {
+        m_options.localDepth = value;
+        rebuild();
+    });
+    m_depthSlider->setObjectName(QStringLiteral("graphDepthSlider"));
+
+    // Groups
+    QFormLayout *groups = addSection(tr("Groups"), &GraphOptions::collapseColorGroups);
+    m_groupRows = new QWidget(groups->parentWidget());
+    m_groupsLayout = new QVBoxLayout(m_groupRows);
+    m_groupsLayout->setContentsMargins(0, 0, 0, 0);
+    m_groupsLayout->setSpacing(4);
+    groups->addRow(m_groupRows);
+    auto *newGroup = new QPushButton(tr("New group"), groups->parentWidget());
+    newGroup->setObjectName(QStringLiteral("graphNewGroupButton"));
+    newGroup->setCursor(Qt::PointingHandCursor);
+    connect(newGroup, &QPushButton::clicked, this, [this] {
+        static const QColor swatches[] = {QColor(0xe5, 0x48, 0x4d), QColor(0x46, 0xa7, 0x58), QColor(0x3e, 0x63, 0xdd),
+                                          QColor(0xf5, 0xd9, 0x0a), QColor(0x8e, 0x4e, 0xc6), QColor(0x12, 0xa5, 0x94)};
+        m_options.colorGroups.append(GraphColorGroup{QString(), swatches[m_options.colorGroups.size() % 6]});
+        rebuildGroupRows();
+        emit optionsChanged();
+    });
+    groups->addRow(newGroup);
+
+    // Display
+    QFormLayout *display = addSection(tr("Display"), &GraphOptions::collapseDisplay);
+    addToggle(display, tr("Arrows"), [this] { return m_options.showArrow; }, [this](bool on) {
         m_options.showArrow = on;
         markDirty();
+    });
+    addSlider(display, tr("Text fade threshold"), -30, 30,
+              [this] { return int(std::lround(m_options.textFadeMultiplier * 10)); }, [this](int value) {
+                  m_options.textFadeMultiplier = value / 10.0;
+                  markDirty();
+              })->setObjectName(QStringLiteral("graphTextFadeSlider"));
+    addSlider(display, tr("Node size"), 1, 50, [this] { return int(std::lround(m_options.nodeSizeMultiplier * 10)); },
+              [this](int value) {
+                  m_options.nodeSizeMultiplier = value / 10.0;
+                  markDirty();
+              });
+    addSlider(display, tr("Link thickness"), 1, 50, [this] { return int(std::lround(m_options.lineSizeMultiplier * 10)); },
+              [this](int value) {
+                  m_options.lineSizeMultiplier = value / 10.0;
+                  markDirty();
+              });
+    addToggle(display, tr("Animate"), [this] { return m_options.animate; }, [this](bool on) {
+        m_options.animate = on;
+        editLayout([](ForceLayout &layout) { layout.wake(); }); // settle (or not) from here
+        ensureTimerRunning();
     });
 
     // Forces: these only need the layout to notice and to start moving
@@ -287,24 +496,109 @@ QWidget *GraphView::buildControlsPanel()
         });
         ensureTimerRunning();
     };
-    addSlider(tr("Repel force"), int(m_options.repelStrength), 0, 40, [this, pushForceOptions](int v) {
-        m_options.repelStrength = v;
-        pushForceOptions();
-    });
-    addSlider(tr("Link force"), int(m_options.linkStrength * 10), 0, 50, [this, pushForceOptions](int v) {
-        m_options.linkStrength = v / 10.0;
-        pushForceOptions();
-    });
-    addSlider(tr("Link distance"), int(m_options.linkDistance), 20, 600, [this, pushForceOptions](int v) {
-        m_options.linkDistance = v;
-        pushForceOptions();
-    });
-    addSlider(tr("Center force"), int(m_options.centerStrength * 100), 0, 200, [this, pushForceOptions](int v) {
-        m_options.centerStrength = v / 100.0;
-        pushForceOptions();
-    });
+    QFormLayout *forces = addSection(tr("Forces"), &GraphOptions::collapseForces);
+    addSlider(forces, tr("Center force"), 0, 200, [this] { return int(std::lround(m_options.centerStrength * 100)); },
+              [this, pushForceOptions](int v) {
+                  m_options.centerStrength = v / 100.0;
+                  pushForceOptions();
+              });
+    addSlider(forces, tr("Repel force"), 0, 40, [this] { return int(m_options.repelStrength); },
+              [this, pushForceOptions](int v) {
+                  m_options.repelStrength = v;
+                  pushForceOptions();
+              });
+    addSlider(forces, tr("Link force"), 0, 50, [this] { return int(std::lround(m_options.linkStrength * 10)); },
+              [this, pushForceOptions](int v) {
+                  m_options.linkStrength = v / 10.0;
+                  pushForceOptions();
+              });
+    addSlider(forces, tr("Link distance"), 20, 600, [this] { return int(m_options.linkDistance); },
+              [this, pushForceOptions](int v) {
+                  m_options.linkDistance = v;
+                  pushForceOptions();
+              });
+    column->addStretch(1);
 
-    return panel;
+    rebuildGroupRows();
+    syncControls();
+    return scroll;
+}
+
+/// One row per colour group: its query, a swatch that opens a colour dialog,
+/// and a remove button. Rebuilt whole - groups are a handful.
+void GraphView::rebuildGroupRows()
+{
+    while (QLayoutItem *item = m_groupsLayout->takeAt(0)) {
+        if (QWidget *widget = item->widget())
+            widget->deleteLater();
+        delete item;
+    }
+    for (int i = 0; i < m_options.colorGroups.size(); ++i) {
+        auto *row = new QWidget(m_groupRows);
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(4);
+
+        auto *query = new QLineEdit(m_options.colorGroups.at(i).query, row);
+        query->setPlaceholderText(tr("Enter query..."));
+        auto *swatch = new QToolButton(row);
+        swatch->setFixedSize(22, 22);
+        swatch->setCursor(Qt::PointingHandCursor);
+        const auto paintSwatch = [this, swatch, i] {
+            swatch->setStyleSheet(QStringLiteral("QToolButton{background:%1;border:1px solid palette(mid);border-radius:11px;}")
+                                      .arg(m_options.colorGroups.at(i).color.name()));
+        };
+        paintSwatch();
+        auto *remove = new QToolButton(row);
+        remove->setText(QStringLiteral("x"));
+        remove->setAutoRaise(true);
+        remove->setToolTip(tr("Delete group"));
+        remove->setCursor(Qt::PointingHandCursor);
+        layout->addWidget(query, 1);
+        layout->addWidget(swatch);
+        layout->addWidget(remove);
+        m_groupsLayout->addWidget(row);
+
+        connect(query, &QLineEdit::textChanged, this, [this, i](const QString &text) {
+            if (i >= m_options.colorGroups.size())
+                return;
+            m_options.colorGroups[i].query = text;
+            assignColorGroups();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+        connect(swatch, &QToolButton::clicked, this, [this, i, paintSwatch] {
+            const QColor picked = QColorDialog::getColor(m_options.colorGroups.at(i).color, this, tr("Group colour"));
+            if (!picked.isValid())
+                return;
+            m_options.colorGroups[i].color = picked;
+            paintSwatch();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+        connect(remove, &QToolButton::clicked, this, [this, i] {
+            m_options.colorGroups.removeAt(i);
+            rebuildGroupRows();
+            assignColorGroups();
+            markDirty();
+            ensureTimerRunning();
+            emit optionsChanged();
+        });
+    }
+}
+
+/// Puts every control back in step with m_options - after setOptions(), or
+/// when the local/global mode (which shows the Depth slider) changes.
+void GraphView::syncControls()
+{
+    if (!m_filtersForm)
+        return;
+    for (const auto &sync : m_controlSyncs)
+        sync();
+    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    layoutControls();
 }
 
 void GraphView::layoutControls()
@@ -314,7 +608,12 @@ void GraphView::layoutControls()
     m_controlsToggle->adjustSize();
     m_controlsToggle->move(width() - m_controlsToggle->width() - 8, 8);
     if (m_controlsPanel) {
-        m_controlsPanel->adjustSize();
+        // A fixed-width card, as tall as its sections need but never past the
+        // pane: the scroll area takes up the rest.
+        const int panelWidth = std::min(270, std::max(120, width() - 16));
+        const int wanted = static_cast<QScrollArea *>(m_controlsPanel)->widget()->sizeHint().height() + 4;
+        const int available = std::max(60, height() - m_controlsToggle->y() - m_controlsToggle->height() - 16);
+        m_controlsPanel->resize(panelWidth, std::min(wanted, available));
         m_controlsPanel->move(width() - m_controlsPanel->width() - 8,
                               m_controlsToggle->y() + m_controlsToggle->height() + 4);
     }
@@ -328,16 +627,21 @@ void GraphView::setTheme(const Theme &theme)
     m_palette.text = theme.color(QStringLiteral("--text-normal"));
     m_palette.muted = theme.color(QStringLiteral("--text-faint"));
     m_palette.accent = theme.color(QStringLiteral("--interactive-accent"));
+    m_controlsToggle->setIcon(Icons::icon(QStringLiteral("settings"), m_palette.text, 16));
+    m_controlsPanel->setStyleSheet(
+        QStringLiteral("#graphControlsPanel{background:%1;border:1px solid %2;border-radius:8px;}"
+                       "#graphControlsBody{background:transparent;}")
+            .arg(theme.color(QStringLiteral("--background-secondary")).name(),
+                 theme.color(QStringLiteral("--background-modifier-border")).name()));
     markDirty();
 }
 
 void GraphView::setOptions(const GraphOptions &options)
 {
     m_options = options;
-    if (m_index)
-        applyIndexData();
-    else
-        rebuild();
+    rebuildGroupRows();
+    syncControls();
+    reapplyData();
 }
 
 void GraphView::setIndex(Index *index)
@@ -396,9 +700,14 @@ void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdg
 void GraphView::setLocalGraph(bool local, const QString &path, int depth)
 {
     m_localMode = local;
+    if (m_filtersForm)
+        m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
     if (!path.isEmpty())
         m_currentNote = path;
-    m_options.localDepth = std::max(1, depth);
+    if (depth > 0) {
+        m_options.localDepth = depth;
+        syncControls();
+    }
     rebuild();
 }
 
@@ -457,6 +766,37 @@ void GraphView::rebuild()
         }
         nodes = localNodes;
         edges = localEdges;
+    }
+
+    // The Filters search box: files that do not match go, then the edges
+    // into them, then any tag or unresolved node nothing is left linking to.
+    const SearchQuery filter = SearchQuery::parse(m_options.search);
+    if (!m_options.search.trimmed().isEmpty() && filter.isValid()) {
+        QSet<QString> kept;
+        QList<GraphNode> matching;
+        for (const GraphNode &node : std::as_const(nodes)) {
+            const bool isFile = node.kind == GraphNode::Kind::Note || node.kind == GraphNode::Kind::Attachment;
+            if (isFile && !filter.evaluate(contextFor(node)).matched)
+                continue;
+            kept.insert(node.id);
+            matching.append(node);
+        }
+        QList<GraphEdge> remaining;
+        QSet<QString> linked;
+        for (const GraphEdge &edge : std::as_const(edges)) {
+            if (kept.contains(edge.fromID) && kept.contains(edge.toID)) {
+                remaining.append(edge);
+                linked.insert(edge.fromID);
+                linked.insert(edge.toID);
+            }
+        }
+        nodes.clear();
+        for (const GraphNode &node : std::as_const(matching)) {
+            const bool isFile = node.kind == GraphNode::Kind::Note || node.kind == GraphNode::Kind::Attachment;
+            if (isFile || linked.contains(node.id))
+                nodes.append(node);
+        }
+        edges = remaining;
     }
 
     // A first pass over the un-filtered set, purely to learn each node's
@@ -615,13 +955,21 @@ void GraphView::launchFrame()
     // seconds rather than needing patience; one step is already the right
     // amount of work once the graph is big, since each is O(n log n) - see
     // GraphLayout.h.
-    input.steps = m_settled ? 0 : (m_nodes.size() > 1000 ? 1 : 3);
+    input.steps = m_settled ? 0 : !m_options.animate ? 300 : (m_nodes.size() > 1000 ? 1 : 3);
     m_frameDirty = false;
     ForceLayout *layout = &m_layout;
     m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout]() mutable {
         FrameOutput output;
-        for (int i = 0; i < input.steps; ++i)
+        // Animate off: settle before the picture moves, up to 300 steps - but
+        // never more than a quarter second a job, which a rebuild may have
+        // to wait out; the next job carries on.
+        QElapsedTimer budget;
+        budget.start();
+        for (int i = 0; i < input.steps; ++i) {
             layout->step();
+            if (!input.options.animate && (layout->isSettled() || budget.elapsed() > 250))
+                break;
+        }
         input.positions = layout->positions();
         output.positions = input.positions;
         output.settled = layout->isSettled();
@@ -769,13 +1117,10 @@ void GraphView::assignColorGroups()
         node.group = -1;
         if (queries.isEmpty())
             continue;
-        NoteContext context;
-        context.path = node.data.id;
-        context.text = node.data.label;
-        for (const QString &tag : std::as_const(node.data.tags))
-            context.tags << NoteTag{tag, Range{0, context.text.size()}};
+        const NoteContext context = contextFor(node.data);
         for (int i = 0; i < queries.size(); ++i) {
-            if (queries.at(i).isValid() && queries.at(i).evaluate(context).matched) {
+            if (queries.at(i).isValid() && !m_options.colorGroups.at(i).query.trimmed().isEmpty()
+                && queries.at(i).evaluate(context).matched) {
                 node.group = i;
                 break;
             }

@@ -5,6 +5,7 @@
 #include <QFutureWatcher>
 #include <QHash>
 #include <QImage>
+#include <QJsonObject>
 #include <QList>
 #include <QPointF>
 #include <QString>
@@ -23,6 +24,10 @@ class QShowEvent;
 class QHideEvent;
 class QTimer;
 class QToolButton;
+class QLineEdit;
+class QSlider;
+class QFormLayout;
+class QVBoxLayout;
 class QWheelEvent;
 
 namespace noteAppC {
@@ -61,8 +66,15 @@ struct GraphColorGroup {
 /// `.obsidian/graph.json`, read by GraphOptions::readFromVault(), or
 /// GraphOptions::defaults() when there is none. Field names match the file's
 /// own keys so a value copied out of Obsidian's graph settings drops
-/// straight in.
+/// straight in. The app keeps its own copy of what the controls change
+/// (toJson()/fromJson()); the vault's file is only ever read.
 struct GraphOptions {
+    QString search;          ///< the Filters search box: only files matching this (search grammar) stay
+    bool animate = true;     ///< off: the layout is settled before the picture moves
+    bool collapseFilter = true; ///< Obsidian's `collapse-*`: a controls section starts folded
+    bool collapseColorGroups = true;
+    bool collapseDisplay = true;
+    bool collapseForces = true;
     bool showTags = false;
     bool showAttachments = false;
     bool hideUnresolved = false;
@@ -79,6 +91,12 @@ struct GraphOptions {
     int localDepth = 1;
 
     static GraphOptions defaults() { return GraphOptions{}; }
+
+    /// Obsidian's graph.json shape, plus `animate`; `localJumps` is the local
+    /// graph's depth. Missing keys keep `base`'s value, unknown ones are ignored.
+    static GraphOptions fromJson(const QJsonObject &root, const GraphOptions &base);
+    static GraphOptions fromJson(const QJsonObject &root);
+    QJsonObject toJson() const;
 
     /// Reads `<vaultRoot>/.obsidian/graph.json` when present, the way
     /// Vault::loadIgnoreFilters() reads app.json; defaults() otherwise, and
@@ -152,7 +170,8 @@ public:
     /// neighbourhood out to `depth` hops (both directions - Obsidian's local
     /// graph does not distinguish incoming from outgoing), meant for a
     /// sidebar pane. An empty `path` leaves the current note unchanged.
-    void setLocalGraph(bool local, const QString &path = {}, int depth = 1);
+    /// `depth` 0 keeps the current depth (the slider owns it).
+    void setLocalGraph(bool local, const QString &path = {}, int depth = 0);
     bool isLocalGraph() const { return m_localMode; }
 
     /// The active note: the local graph's centre, and the ring drawn around
@@ -193,6 +212,9 @@ public:
     QImage renderFrameNow() const;
 
 signals:
+    /// A control changed an option (not setOptions() - that is the caller's
+    /// own write): the owner persists them.
+    void optionsChanged();
     /// A note or attachment node was clicked; `relativePath` is its
     /// GraphNode::id. Never fired for a tag or unresolved node - there is
     /// nothing to open.
@@ -268,6 +290,9 @@ private:
     void markDirty();
     QWidget *buildControlsPanel();
     void layoutControls();
+    void syncControls();
+    void rebuildGroupRows();
+    void reapplyData();
 
     QPointF toScreen(QPointF graphPos) const;
     QPointF toGraph(QPointF screenPos) const;
@@ -315,6 +340,13 @@ private:
 
     QToolButton *m_controlsToggle = nullptr;
     QWidget *m_controlsPanel = nullptr;
+    QWidget *m_groupRows = nullptr;
+    QVBoxLayout *m_groupsLayout = nullptr;
+    QFormLayout *m_filtersForm = nullptr;
+    QSlider *m_depthSlider = nullptr;
+    QLineEdit *m_searchEdit = nullptr;
+    QTimer *m_searchDebounce = nullptr;
+    std::vector<std::function<void()>> m_controlSyncs; ///< each pushes one option into its widget
 
     double m_zoom = 1.0;
     QPointF m_pan{0, 0};

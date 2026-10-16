@@ -10,6 +10,11 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QSlider>
 #include <QPainter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -335,6 +340,129 @@ TEST(GraphViewTest, ColourGroupsAreSearchQueries)
     // next group's bare word - matched against the name - takes it.
     EXPECT_EQ(view.nodeColor(QStringLiteral("Journal/B.md")), QColor(Qt::blue));
     EXPECT_EQ(view.nodeColor(QStringLiteral("Home.md")), QColor(Qt::blue));
+}
+
+TEST(GraphViewTest, SearchFilterDropsNonMatchingNotes)
+{
+    QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Projects/B.md"),
+                                       QStringLiteral("Journal/C.md")});
+    nodes[0].tags = {QStringLiteral("work")};
+    GraphNode tag;
+    tag.id = QStringLiteral("tag:work");
+    tag.label = QStringLiteral("#work");
+    tag.kind = GraphNode::Kind::Tag;
+    nodes << tag;
+    const QList<GraphEdge> edges{{QStringLiteral("Projects/A.md"), QStringLiteral("Projects/B.md")},
+                                 {QStringLiteral("Journal/C.md"), QStringLiteral("Projects/B.md")},
+                                 {QStringLiteral("Projects/A.md"), QStringLiteral("tag:work")}};
+    GraphView view;
+    view.setGraphData(nodes, edges);
+    ASSERT_EQ(view.nodeCount(), 4);
+
+    GraphOptions options = view.options();
+    options.search = QStringLiteral("path:Projects");
+    view.setOptions(options);
+    EXPECT_FALSE(view.containsNode(QStringLiteral("Journal/C.md")));
+    EXPECT_TRUE(view.containsNode(QStringLiteral("Projects/A.md")));
+    EXPECT_TRUE(view.containsNode(QStringLiteral("tag:work"))) << "a tag still linked from a kept note stays";
+    EXPECT_EQ(view.edgeCount(), 2);
+
+    options.search = QStringLiteral("path:Journal");
+    view.setOptions(options);
+    EXPECT_EQ(view.nodeCount(), 1) << "the tag and the notes it linked to are gone";
+}
+
+TEST(GraphViewTest, DepthSliderDrivesLocalGraph)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    auto *slider = view.findChild<QSlider *>(QStringLiteral("graphDepthSlider"));
+    ASSERT_NE(slider, nullptr);
+    view.setLocalGraph(true, QStringLiteral("A"), 1);
+    EXPECT_EQ(view.nodeCount(), 2);
+    QSignalSpy changed(&view, &GraphView::optionsChanged);
+    slider->setValue(3);
+    EXPECT_EQ(view.nodeCount(), 4);
+    EXPECT_EQ(view.options().localDepth, 3);
+    EXPECT_EQ(changed.count(), 1);
+    view.setLocalGraph(true, QStringLiteral("A")); // no depth: the slider's value stands
+    EXPECT_EQ(view.nodeCount(), 4);
+}
+
+TEST(GraphViewTest, GroupsEditorAddsAGroup)
+{
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("B.md")}), {});
+    auto *add = view.findChild<QPushButton *>(QStringLiteral("graphNewGroupButton"));
+    ASSERT_NE(add, nullptr);
+    const QColor before = view.nodeColor(QStringLiteral("Projects/A.md"));
+    add->click();
+    ASSERT_EQ(view.options().colorGroups.size(), 1);
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), before) << "an empty query colours nothing";
+
+    // The new row's query box, found by its placeholder.
+    QLineEdit *query = nullptr;
+    for (auto *edit : view.findChildren<QLineEdit *>()) {
+        if (edit->placeholderText() == QStringLiteral("Enter query..."))
+            query = edit;
+    }
+    ASSERT_NE(query, nullptr);
+    query->setText(QStringLiteral("path:Projects"));
+    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), view.options().colorGroups.first().color);
+    EXPECT_EQ(view.nodeColor(QStringLiteral("B.md")), before);
+}
+
+TEST(GraphViewTest, OptionsRoundTripThroughJson)
+{
+    GraphOptions options;
+    options.search = QStringLiteral("tag:#x");
+    options.showTags = true;
+    options.animate = false;
+    options.localDepth = 3;
+    options.collapseDisplay = false;
+    options.textFadeMultiplier = -1.5;
+    options.colorGroups = {{QStringLiteral("path:A"), QColor(0x12, 0x34, 0x56)}};
+
+    const GraphOptions back = GraphOptions::fromJson(options.toJson());
+    EXPECT_EQ(back.search, options.search);
+    EXPECT_TRUE(back.showTags);
+    EXPECT_FALSE(back.animate);
+    EXPECT_EQ(back.localDepth, 3);
+    EXPECT_FALSE(back.collapseDisplay);
+    EXPECT_DOUBLE_EQ(back.textFadeMultiplier, -1.5);
+    ASSERT_EQ(back.colorGroups.size(), 1);
+    EXPECT_EQ(back.colorGroups.first().color.rgb() & 0xFFFFFF, 0x123456u);
+    // Obsidian's own spelling of the same group and fold state.
+    const QJsonObject obsidian = options.toJson();
+    EXPECT_EQ(obsidian.value(QLatin1String("collapse-display")).toBool(), false);
+    EXPECT_EQ(obsidian.value(QLatin1String("colorGroups")).toArray().first().toObject().value(QLatin1String("color")).toObject().value(QLatin1String("rgb")).toInt(), 0x123456);
+}
+
+TEST(GraphViewTest, WithAnimationOffTheLayoutIsSettledBeforeTheFirstFrame)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(500, 400);
+    GraphOptions options = view.options();
+    options.animate = false;
+    view.setOptions(options);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    const QPointF scattered = view.screenPosition(QStringLiteral("A"));
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    // One job carries it to rest: the first picture already shows the result.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.screenPosition(QStringLiteral("A")) != scattered; }, 3000));
+    const QPointF first = view.screenPosition(QStringLiteral("A"));
+    QTest::qWait(300);
+    const QPointF later = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(later.x() - first.x(), later.y() - first.y()), 3.0);
 }
 
 TEST(GraphViewTest, OrphanFilterDropsUnconnectedNotes)
