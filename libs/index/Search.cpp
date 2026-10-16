@@ -214,6 +214,28 @@ private:
     QString m_text;
 };
 
+/// A regex with its case-folded twin, both compiled once at parse time. Every
+/// node that takes a /regex/ reads the one that matches the query's case rule
+/// through forCase(), so `tag:/x/`, `path:/x/`, `[p:/x/]` and bare /x/ cannot
+/// disagree about case; setPatternOptions() per evaluate would recompile.
+class CaseRegex {
+public:
+    CaseRegex() = default;
+    CaseRegex(QRegularExpression regex) : m_exact(std::move(regex)), m_folded(m_exact)
+    {
+        m_folded.setPatternOptions(m_exact.patternOptions() | QRegularExpression::CaseInsensitiveOption);
+    }
+
+    const QRegularExpression &forCase(Qt::CaseSensitivity cs) const
+    {
+        return cs == Qt::CaseInsensitive ? m_folded : m_exact;
+    }
+
+private:
+    QRegularExpression m_exact;
+    QRegularExpression m_folded;
+};
+
 /// `/pattern/`, JS-flavoured per Obsidian's docs; QRegularExpression (PCRE2)
 /// is close enough for the common case and is what the codebase already has -
 /// nothing here claims byte-for-byte JS regex compatibility.
@@ -224,10 +246,7 @@ public:
     SearchOutcome evaluate(const EvalContext &ctx) const override
     {
         SearchOutcome outcome;
-        QRegularExpression regex = m_regex;
-        if (ctx.caseSensitivity == Qt::CaseInsensitive)
-            regex.setPatternOptions(regex.patternOptions() | QRegularExpression::CaseInsensitiveOption);
-        auto it = regex.globalMatch(ctx.note.text, ctx.scope.start);
+        auto it = m_regex.forCase(ctx.caseSensitivity).globalMatch(ctx.note.text, ctx.scope.start);
         while (it.hasNext()) {
             const QRegularExpressionMatch match = it.next();
             if (match.capturedStart() >= ctx.scope.end)
@@ -243,7 +262,7 @@ public:
     }
 
 private:
-    QRegularExpression m_regex;
+    CaseRegex m_regex;
 };
 
 class NotNode : public SearchQueryNode {
@@ -381,10 +400,7 @@ public:
             m_source == Source::Path ? ctx.note.path : QFileInfo(ctx.note.path).fileName();
         bool matched = false;
         if (m_isRegex) {
-            QRegularExpression regex = m_regex;
-            if (ctx.caseSensitivity == Qt::CaseInsensitive)
-                regex.setPatternOptions(regex.patternOptions() | QRegularExpression::CaseInsensitiveOption);
-            matched = regex.match(subject).hasMatch();
+            matched = m_regex.forCase(ctx.caseSensitivity).match(subject).hasMatch();
         } else {
             matched = subject.contains(m_literal, ctx.caseSensitivity);
         }
@@ -394,7 +410,7 @@ public:
 private:
     Source m_source;
     QString m_literal;
-    QRegularExpression m_regex;
+    CaseRegex m_regex;
     bool m_isRegex;
 };
 
@@ -425,10 +441,7 @@ public:
             for (const QString &value : property.values) {
                 bool matched = false;
                 if (m_isRegex) {
-                    QRegularExpression regex = m_regex;
-                    if (ctx.caseSensitivity == Qt::CaseInsensitive)
-                        regex.setPatternOptions(regex.patternOptions() | QRegularExpression::CaseInsensitiveOption);
-                    matched = regex.match(value).hasMatch();
+                    matched = m_regex.forCase(ctx.caseSensitivity).match(value).hasMatch();
                 } else {
                     matched = value.contains(*m_literal, ctx.caseSensitivity);
                 }
@@ -444,7 +457,7 @@ public:
 private:
     QString m_key;
     std::optional<QString> m_literal;
-    QRegularExpression m_regex;
+    CaseRegex m_regex;
     bool m_isRegex;
 };
 
@@ -467,7 +480,7 @@ public:
                 continue;
             bool matched;
             if (m_isRegex) {
-                matched = m_regex.match(tag.name).hasMatch();
+                matched = m_regex.forCase(ctx.caseSensitivity).match(tag.name).hasMatch();
             } else {
                 matched = tag.name.compare(m_literal, ctx.caseSensitivity) == 0
                     || tag.name.startsWith(m_literal + QLatin1Char('/'), ctx.caseSensitivity);
@@ -504,7 +517,7 @@ private:
     }
 
     QString m_literal;
-    QRegularExpression m_regex;
+    CaseRegex m_regex;
     bool m_isRegex;
 };
 
@@ -843,9 +856,13 @@ private:
         return std::make_shared<const ScopeNode>(kind, inner);
     }
 
+    /// `match-case:tag:/x/` - the value may itself be a field, so the case
+    /// rule reaches `tag:`, `path:`, `file:` and the scope fields too.
     NodePtr parseCaseField(Qt::CaseSensitivity forced)
     {
-        NodePtr inner = parseFieldValueAsQuery();
+        skipSpace();
+        const QString field = tryReadFieldName();
+        NodePtr inner = field.isEmpty() ? parseFieldValueAsQuery() : parseField(field);
         if (!inner)
             return nullptr;
         return std::make_shared<const CaseOverrideNode>(inner, forced);
