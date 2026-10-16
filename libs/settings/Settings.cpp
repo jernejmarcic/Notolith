@@ -50,6 +50,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.listNumberStyle"), QStringLiteral("plain")}, // or "hierarchical": 1., 1.1., 1.2.
         {QStringLiteral("editor.listNumberSuffix"), QStringLiteral(".")},   // after a drawn number; empty: as written
         {QStringLiteral("editor.bulletGlyphs"), QStringLiteral("-=dash,*=dot,+=diamond")},
+        {QStringLiteral("editor.bulletGlyphsNested"), false}, // dot, ring, square by depth instead of by marker
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
