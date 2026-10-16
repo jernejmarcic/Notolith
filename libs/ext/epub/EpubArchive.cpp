@@ -1,9 +1,54 @@
 #include "EpubArchive.h"
 
+#include <QStringList>
+#include <QUrl>
+
 #include <archive.h>
 #include <archive_entry.h>
 
 namespace noteAppC {
+
+std::optional<QString> resolveEpubPath(const QString &fromEntry, const QString &hrefIn)
+{
+    QString href = hrefIn.trimmed();
+    const qsizetype hash = href.indexOf(QLatin1Char('#'));
+    if (hash >= 0)
+        href = href.left(hash);
+    if (href.isEmpty())
+        return std::nullopt;
+
+    // Percent-decoded before the scheme/escape checks: "%2e%2e/" is still
+    // ".." wearing a disguise.
+    href = QUrl::fromPercentEncoding(href.toUtf8());
+    if (href.contains(QLatin1String("://")) || href.startsWith(QLatin1String("data:"))
+        || href.startsWith(QLatin1Char('/')))
+        return std::nullopt; // remote, embedded, or archive-absolute: refused, see the header comment
+
+    const QString base = fromEntry.contains(QLatin1Char('/'))
+                             ? fromEntry.left(fromEntry.lastIndexOf(QLatin1Char('/')))
+                             : QString();
+    const QString joined = base.isEmpty() ? href : base + QLatin1Char('/') + href;
+
+    // Walked by hand rather than trusted to QDir::cleanPath: cleanPath on
+    // "a/../../b" collapses to "../b" - it removes what it can pair off but
+    // is happy to leave a path that still climbs past the root, which is
+    // exactly the escape this function exists to catch.
+    QStringList resolved;
+    for (const QString &part : joined.split(QLatin1Char('/'), Qt::SkipEmptyParts)) {
+        if (part == QLatin1String("."))
+            continue;
+        if (part == QLatin1String("..")) {
+            if (resolved.isEmpty())
+                return std::nullopt; // climbs past the archive root
+            resolved.removeLast();
+            continue;
+        }
+        resolved << part;
+    }
+    if (resolved.isEmpty())
+        return std::nullopt;
+    return resolved.join(QLatin1Char('/'));
+}
 
 namespace {
 

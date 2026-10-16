@@ -15,7 +15,9 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QBuffer>
 #include <QFontDatabase>
+#include <QImage>
 #include <QTemporaryDir>
 #include <QTest>
 
@@ -25,6 +27,8 @@
 #include "WaitFor.h"
 
 #include "EpubArchive.h"
+#include "EpubCover.h"
+#include "MarkdownEditor.h"
 #include "EpubDocument.h"
 #include "EpubHighlights.h"
 #include "EpubView.h"
@@ -947,6 +951,100 @@ TEST(EpubViewTest, PerfTocBuildOnAHugeToc)
             "first show (20 rows) %lld ms; one volume (100 rows) %lld ms; "
             "remaining 19 volumes (1900 rows, what eager open() used to pay) %lld ms\n",
             (long long)firstShowMs, (long long)oneExpandMs, (long long)restMs);
+}
+
+namespace {
+
+/// A book of one chapter whose cover is a solid-colour PNG of the given size,
+/// declared the EPUB 3 way (properties="cover-image") or the EPUB 2 way
+/// (<meta name="cover">), or not at all.
+enum class CoverKind { None, Property, Meta };
+
+QString makeCoverBook(const QString &dir, CoverKind kind, QSize size = QSize(80, 120))
+{
+    QImage cover(size, QImage::Format_RGB32);
+    cover.fill(QColor(200, 30, 30));
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    cover.save(&buffer, "PNG");
+
+    const QString item = kind == CoverKind::Property
+        ? QStringLiteral("<item id='cv' href='img/cover.png' media-type='image/png' properties='cover-image'/>")
+        : QStringLiteral("<item id='cv' href='img/cover.png' media-type='image/png'/>");
+    const QString meta = kind == CoverKind::Meta ? QStringLiteral("<meta name='cover' content='cv'/>") : QString();
+    const QByteArray opf = QStringLiteral(
+        "<?xml version='1.0'?><package xmlns='http://www.idpf.org/2007/opf' version='3.0'>"
+        "<metadata xmlns:dc='http://purl.org/dc/elements/1.1/'><dc:title>Covered</dc:title>%1</metadata>"
+        "<manifest><item id='c1' href='ch1.xhtml' media-type='application/xhtml+xml'/>%2</manifest>"
+        "<spine><itemref idref='c1'/></spine></package>").arg(meta, item).toUtf8();
+    const QString path = QDir(dir).filePath(QStringLiteral("cover%1.epub").arg(int(kind)));
+    writeZip(path, {{QStringLiteral("mimetype"), QByteArrayLiteral("application/epub+zip")},
+                    {QStringLiteral("META-INF/container.xml"), QByteArray(kContainerXML)},
+                    {QStringLiteral("OEBPS/content.opf"), opf},
+                    {QStringLiteral("OEBPS/ch1.xhtml"),
+                     QByteArrayLiteral("<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>")},
+                    {QStringLiteral("OEBPS/img/cover.png"), png}});
+    return path;
+}
+
+} // namespace
+
+TEST(EpubCoverTest, FoundByManifestPropertyOrByMetaAndScaledDown)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    for (const CoverKind kind : {CoverKind::Property, CoverKind::Meta}) {
+        const QImage cover = noteAppC::epubCover(makeCoverBook(dir.path(), kind));
+        ASSERT_FALSE(cover.isNull()) << int(kind);
+        EXPECT_EQ(cover.size(), QSize(80, 120));
+        EXPECT_EQ(cover.pixelColor(10, 10), QColor(200, 30, 30));
+    }
+    // A cover bigger than the bound keeps its proportions inside it.
+    const QImage big = noteAppC::epubCover(makeCoverBook(dir.path(), CoverKind::Property, QSize(600, 900)), 256);
+    EXPECT_EQ(big.height(), 256);
+    EXPECT_NEAR(big.width(), 171, 1);
+}
+
+TEST(EpubCoverTest, NoCoverNotAnEpubOrAMissingFileGiveANullImage)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    EXPECT_TRUE(noteAppC::epubCover(makeCoverBook(dir.path(), CoverKind::None)).isNull());
+    EXPECT_TRUE(noteAppC::epubCover(makeEpub3(dir.path())).isNull()) << "declares no cover";
+    const QString text = dir.filePath(QStringLiteral("x.epub"));
+    QFile file(text);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("not a zip");
+    file.close();
+    EXPECT_TRUE(noteAppC::epubCover(text).isNull());
+    EXPECT_TRUE(noteAppC::epubCover(dir.filePath(QStringLiteral("gone.epub"))).isNull());
+}
+
+TEST(EpubCoverTest, TheEmbedCardShowsTheCoverOnceItIsRead)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString withCover = makeCoverBook(dir.path(), CoverKind::Property);
+    const QString without = makeCoverBook(dir.path(), CoverKind::None);
+
+    noteAppC::MarkdownEditor editor;
+    editor.resize(900, 600);
+    editor.setLinkResolver([&](const QString &name) { return name.contains(QLatin1String("plain")) ? without : withCover; });
+    editor.setNoteText(QStringLiteral("![[book.epub]]\n"));
+    // A card at once, its cover when the worker has read it.
+    EXPECT_TRUE(editor.isFileCardAt(0));
+    const qreal plainHeight = editor.documentHeight();
+    WAIT_TRUE(editor.fileCardHasCoverAt(0), 5000);
+    EXPECT_GT(editor.documentHeight(), plainHeight) << "the card grows to hold a portrait";
+
+    noteAppC::MarkdownEditor bare;
+    bare.resize(900, 600);
+    bare.setLinkResolver([&](const QString &) { return without; });
+    bare.setNoteText(QStringLiteral("![[plain.epub]]\n"));
+    EXPECT_TRUE(bare.isFileCardAt(0));
+    QTest::qWait(300); // the read of a book with no cover must not conjure one
+    EXPECT_FALSE(bare.fileCardHasCoverAt(0));
 }
 
 int main(int argc, char **argv)

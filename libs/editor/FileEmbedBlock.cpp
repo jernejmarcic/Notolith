@@ -10,6 +10,9 @@
 #include "MarkdownEditor.h"
 
 #include "Icons.h"
+#ifdef NOTEAPPC_HAVE_EPUBCOVER
+#include "EpubCover.h"
+#endif
 #include "PdfPage.h"
 #include "Vault.h"
 
@@ -23,6 +26,7 @@
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QStringDecoder>
+#include <QtConcurrent>
 #include <QTextLine>
 #include <QTimer>
 #include <QUrl>
@@ -281,7 +285,11 @@ bool MarkdownEditor::layoutFileCard(BlockView &view, const EmbedSpan &embed, con
     view.layout.reset();
     view.cells.clear();
     view.embedPanel = false;
-    constexpr qreal kCardHeight = 52;
+    view.fileCardCover = QPixmap();
+    if (path.endsWith(QLatin1String(".epub"), Qt::CaseInsensitive))
+        view.fileCardCover = ensureEpubCoverAsync(path, info.lastModified().toMSecsSinceEpoch(), info.size());
+    // A book with a cover gets a taller card: a cover is a portrait, an icon a square.
+    const qreal kCardHeight = view.fileCardCover.isNull() ? 52 : 96;
     view.fileCardRect = QRectF(0, 0, contentWidth(), kCardHeight);
     view.height = kCardHeight;
     hideWholeBlockText(view);
@@ -301,10 +309,21 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
     const QColor text = m_theme.color(QStringLiteral("--text-normal"));
     const qreal iconSize = card.height() - 20;
-    const QIcon icon = Icons::icon(QStringLiteral("file"), muted, int(iconSize));
-    const QRectF iconRect(card.left() + 12, card.top() + 10, iconSize, iconSize);
-    if (!icon.isNull())
-        icon.paint(&painter, iconRect.toRect());
+    QRectF iconRect(card.left() + 12, card.top() + 10, iconSize, iconSize);
+    if (!view.fileCardCover.isNull()) {
+        // The cover, fitted into the icon's square and centred in it.
+        const QSizeF fitted = view.fileCardCover.deviceIndependentSize().scaled(iconRect.size(), Qt::KeepAspectRatio);
+        const QRectF target(iconRect.center().x() - fitted.width() / 2, iconRect.top(), fitted.width(),
+                            fitted.height());
+        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        painter.drawPixmap(target, view.fileCardCover, QRectF(view.fileCardCover.rect()));
+        iconRect.setWidth(fitted.width());
+        iconRect.moveLeft(target.left());
+    } else {
+        const QIcon icon = Icons::icon(QStringLiteral("file"), muted, int(iconSize));
+        if (!icon.isNull())
+            icon.paint(&painter, iconRect.toRect());
+    }
 
     const qreal textLeft = iconRect.right() + 12;
     QFont name = m_theme.uiFont();
@@ -321,6 +340,52 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
                             card.height() / 2),
                      Qt::AlignVCenter | Qt::AlignLeft, view.fileCardSize);
     painter.restore();
+}
+
+QPixmap MarkdownEditor::ensureEpubCoverAsync(const QString &path, qint64 mtime, qint64 size)
+{
+#ifdef NOTEAPPC_HAVE_EPUBCOVER
+    const QString key = QStringLiteral("%1|%2|%3").arg(path).arg(mtime).arg(size);
+    const auto it = m_epubCoverCache.constFind(key);
+    if (it != m_epubCoverCache.constEnd())
+        return it->pending ? QPixmap() : it->cover;
+    if (m_epubCoverCache.size() >= 64)
+        m_epubCoverCache.clear(); // ponytail: a flush, not an LRU; a card asks again
+    m_epubCoverCache.insert(key, EpubCoverEntry{true, QPixmap()});
+    // Through m_lifeline, as the PDF pages: a read that outlives the editor is dropped.
+    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, path] {
+        QImage cover = epubCover(path);
+        lifeline->post(this, [this, key, path, cover = std::move(cover)]() mutable {
+            deliverEpubCover(key, path, std::move(cover));
+        });
+    });
+#else
+    Q_UNUSED(path);
+    Q_UNUSED(mtime);
+    Q_UNUSED(size);
+#endif
+    return QPixmap();
+}
+
+void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, QImage cover)
+{
+    // A book with no cover is cached as a null pixmap, so it is asked once.
+    m_epubCoverCache.insert(key, EpubCoverEntry{false, cover.isNull() ? QPixmap() : QPixmap::fromImage(cover)});
+    if (cover.isNull())
+        return; // the card stays as laid out
+    bool touched = false;
+    for (BlockView &block : m_blocks) {
+        if (!block.isFileCard || block.fileCardPath != path)
+            continue;
+        block.layout.reset();
+        block.laidOut = false;
+        block.heightEstimated = false;
+        touched = true;
+    }
+    if (touched) {
+        updateLayout();
+        viewport()->update();
+    }
 }
 
 bool MarkdownEditor::handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
@@ -736,6 +801,12 @@ bool MarkdownEditor::isFileCardAt(qsizetype offset) const
     if (index < 0 || index >= qsizetype(m_blocks.size()))
         return false;
     return m_blocks[size_t(index)].isFileCard;
+}
+
+bool MarkdownEditor::fileCardHasCoverAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    return index >= 0 && index < qsizetype(m_blocks.size()) && !m_blocks[size_t(index)].fileCardCover.isNull();
 }
 
 bool MarkdownEditor::isMediaCardAt(qsizetype offset) const
