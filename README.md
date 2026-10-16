@@ -78,3 +78,8 @@ reviewed:
 ```sh
 /tmp/noteAppC-build/tools/noteAppC_shot <vault> <note> out.png dark 1180 760
 ```
+
+## Licence
+
+GPL-3.0-or-later, see `LICENSE`. Bundled: md4qt and MicroTeX (MIT),
+tinyxml2 (zlib), Lucide icons (ISC).

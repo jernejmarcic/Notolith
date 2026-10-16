@@ -21,7 +21,6 @@ any x86-64 or arm64 machine (`docs/PLATFORMS.md`).
 | `appimage/build-appimage.sh` | not yet run: downloads linuxdeploy, and needs an app icon first. |
 
 Outstanding, all Jernej's to decide (see TODO.md): the app has no icon of its
-own and borrows the freedesktop `accessories-text-editor` name; no licence has
-been chosen; and the app id `io.github.jernejmarcic.noteAppC` follows basket's
+own and borrows the freedesktop `accessories-text-editor` name, and the app id `io.github.jernejmarcic.noteAppC` follows basket's
 (`io.github.jernejmarcic.basket`) but is not confirmed. With an icon: put the SVG here as `noteAppC.svg`, set `Icon=noteAppC` in the desktop
 file, and install it to `share/icons/hicolor/scalable/apps/`.

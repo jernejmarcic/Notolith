@@ -114,7 +114,7 @@ first shown.
 `TODO.md` has the list. The ones that are Jernej's to answer:
 
 - autosave like Obsidian, or the save prompt noteAppC has now;
-- a licence, an app id, an app icon (packaging waits on all three);
+- an app id and an app icon (packaging waits on both; the licence is GPL-3.0-or-later);
 - what Ctrl+click on a link should do (follow, as now, or a new tab as in
   Obsidian);
 - three decisions in [docs/PLUGINS.md](docs/PLUGINS.md) (third-party

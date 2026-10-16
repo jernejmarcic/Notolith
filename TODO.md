@@ -812,7 +812,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
   out), Format converter and Markdown importer (one-off migration tools).
 
 ### For Jernej to decide
-- [ ] **A licence.** None is chosen; the PKGBUILD says `LicenseRef-unknown`
+- [x] **A licence.** GPL-3.0-or-later (Jernej 2026-10-16): LICENSE, PKGBUILD,
+      AppStream, README. Was: none chosen; the PKGBUILD said `LicenseRef-unknown`
       and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
 - [ ] **An app id** for Flatpak, AppStream and Android:
@@ -1054,7 +1055,7 @@ optimal as it can be".
       singleShot holds a raw MarkdownEditor* (lane canvasparse).
 - [ ] SyncJournal::writeBase truncates in place (torn base -> conflict copy
       instead of a merge); QSaveFile (lane sync).
-- [ ] Licence: GPL-3.0-or-later (Jernej 2026-10-16). LICENSE, PKGBUILD,
+- [x] Licence: GPL-3.0-or-later (Jernej 2026-10-16). LICENSE, PKGBUILD,
       AppStream, README.
 - [ ] Delete the leaked test history repos (Jernej 2026-10-16: only those
       whose vault no longer exists).

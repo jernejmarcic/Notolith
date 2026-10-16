@@ -1,10 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- The app id follows basket's (io.github.jernejmarcic.basket) and is not
-     confirmed yet: it is what Flatpak installs under. There is no project_license yet, because no licence has
-     been chosen, and no homepage (appstreamcli warns about that one). -->
+     confirmed yet: it is what Flatpak installs under. There is no homepage yet
+     (appstreamcli warns about that one). -->
 <component type="desktop-application">
   <id>io.github.jernejmarcic.noteAppC</id>
   <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
   <name>noteAppC</name>
   <summary>Markdown notes and Obsidian vaults, native and fast</summary>
   <description>

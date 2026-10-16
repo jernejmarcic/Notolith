@@ -13,8 +13,7 @@ pkgver=0.0.1
 pkgrel=1
 pkgdesc='Markdown notes and Obsidian vaults, native and fast'
 arch=('x86_64' 'aarch64')
-# No licence has been chosen for noteAppC yet.
-license=('LicenseRef-unknown')
+license=('GPL-3.0-or-later')
 # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
 # would fall back to running unsandboxed.
 depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'
