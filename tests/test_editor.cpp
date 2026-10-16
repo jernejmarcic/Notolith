@@ -658,9 +658,11 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
                 small.size() / 1024.0, smallMs, large.size() / 1024.0, largeMs,
                 sizeRatio, timeRatio);
 
-    // Showing five times the text must not cost five times the wait, because
-    // almost none of this is proportional to the file any more.
-    EXPECT_LT(timeRatio, sizeRatio);
+    // Five times the text may cost up to about five times the wait, never more:
+    // what is left is linear (about 7 ms for 1 MB on starbase-1, a 3.7-4.3x
+    // ratio), and the bug this guards against was quadratic. The headroom is
+    // for the 2 ms small open, where a single scheduler hiccup moves the ratio.
+    EXPECT_LT(timeRatio, sizeRatio * 1.25);
     EXPECT_LT(largeMs, 60.0);
 }
 
