@@ -28,12 +28,12 @@ built; each stage's detail is in its own section further down.
 | # | stage | state |
 |---|---|---|
 | 1 | Obsidian's features (the base everything else sits on) | done; the command palette (Ctrl+P) landed 2026-09-23 |
-| 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | done; formatted note transclusion left |
+| 2 | Embeds of everything renderable; PDF page selection and slides; `.tex` | done; nested formatted transclusion (5 levels, cycle guard) 2026-10-16 |
 | 3 | Every non-core feature switchable off at run time, costing nothing when off | done: 23 switches |
 | 4 | `demo/`, a vault under 5 MB that exercises every feature | 354 kB, 77 files, `test_demo` opens all of it; grows with each stage |
 | 5 | Version history: snapshots (done) and git (done, 0.09 ms a save) | done |
-| 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Left: footnote links, code-tab strips |
-| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: image annotation (EPUB paged mode and CSS `url()` exist: EpubView.cpp, EpubRender.cpp) |
+| 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Footnote back-links and no-JS code-tab strips 2026-10-16 |
+| 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Image annotation 2026-10-16 (`libs/ext/imageview`, sidecar `<image> annotations.md`, feature `image-annotation` off by default) (EPUB paged mode and CSS `url()` exist: EpubView.cpp, EpubRender.cpp) |
 | 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | done but quickjs-ng: sandboxed host per plugin, C ABI, commands, code blocks, vault events, permissions page. quickjs-ng: "Decide later" |
 | 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | done: `plugins/ai` (Ollama, OpenAI-compatible, Anthropic; key by env var name only), `ai` code blocks, declared per-plugin timeouts. 2026-10-16: typed question (host `prompt` call, "AI: Ask a question") |
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
@@ -341,8 +341,10 @@ budget, which this project has already learned once on the index.
       and `[[#Heading]]` reads "Heading", as the Obsidian forum confirms for
       both views. No DisplayMap substitution needed: the "#" stays, invisible
       and as wide as " > ", which is painted over it.
-- [ ] How Obsidian displays a block reference `[[Note#^id]]` is not recorded
-      anywhere checked; shown as written until someone looks.
+- [x] How Obsidian displays a block reference `[[Note#^id]]` is not recorded
+      anywhere checked; shown as written until someone looks. 2026-10-16:
+      Obsidian shows `[[Note#^id]]` as written, `[[#^id]]` as "^id", and
+      `![[Note#^id]]` embeds only that block, untitled; ours matches.
 - [x] Spellcheck: the first Tier 1 module, `libs/ext/spell/` (hunspell),
       behind `NOTEAPPC_WITH_SPELLCHECK`. Wavy underline on prose (not code,
       links, tags, maths, or the word being typed), right click for
@@ -355,10 +357,11 @@ budget, which this project has already learned once on the index.
       for the en_GB locale. Slovenian is not in the Arch repositories; its
       `sl_SI.aff`/`.dic` from LibreOffice's dictionaries work dropped into
       `~/.local/share/hunspell/`, with `sl` added to `LANGUAGE`.
-- [ ] **Verify first**: a listing inside a callout wraps here. The claim
+- [x] **Verify first**: a listing inside a callout wraps here. The claim
       that Obsidian scrolls it was mine and unchecked; the session notes say
       Obsidian's live preview wraps too, and only its reading view is thought
-      to scroll. Nothing to change until someone looks.
+      to scroll. Nothing to change until someone looks. 2026-10-16: Obsidian
+      wraps it; ours already did (test added).
 - [x] Property values: text, number, date and date-time edit in place (click
       the value; Enter or clicking away keeps it, Escape drops it). Written
       through yaml-cpp, quoted only when needed, and refused when it would
@@ -503,12 +506,13 @@ Jernej's rule: a new feature goes here and the current task carries on.
       (`CodeBlockPerfTest.TypingInALongListingInsideACalloutStaysInBudget`).
       ponytail: the highlighter's state is not carried across a callout's
       pieces, so a construct spanning a piece boundary restarts there.
-- [ ] **Verify first: does the caret in a code block show its fences?**
+- [x] **Verify first: does the caret in a code block show its fences?**
       Here it does not - md4qt's code block covers the listing alone, so the
       two fence lines sit in the gap blocks either side and are revealed only
       with the caret on them, which also means the language tag can only be
       edited from its own line. I believe Obsidian shows both fences as soon
       as the caret is anywhere inside; check before changing anything.
+      2026-10-16: it does; ours now shows both fences with the caret anywhere inside.
 - [x] Mobile groundwork, the `-march=native` PKGBUILD guard, scroll by
       blitting, the Wayland buffer measurement - each done, see above.
 
@@ -877,8 +881,8 @@ optimal as it can be".
       one; what the editor cannot lay out itself stays litehtml.
       2026-10-02 later: HTML headings in outline/index/links, cell style= kept
       editable (alignment drawn), vim steps over entities, Markdown entities
-      shown decoded. 2026-10-16: cell colour, background, bold drawn. Left: entities do not open
-      into source under the caret; `![[Note#Heading]]` and the canvas section
+      shown decoded. 2026-10-16: cell colour, background, bold drawn. Entities open into source under the caret, HTML headings are embed
+      and canvas targets (2026-10-16); `![[Note#Heading]]` and the canvas section
       picker see Markdown headings only; entity decoder uses md4qt's private
       MD::s_entityMap (check on md4qt bumps).
 - [x] Mermaid. Jernej: "add mermaid as toggleable, or make it load after the
@@ -917,8 +921,7 @@ optimal as it can be".
       fail under ASan by nature (skip them when sanitized).
 - [ ] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
       later views; check whether that is wanted workspace state.
-- [ ] Tables leftovers: `/table` in the slash popup ranks the `Table:` commands
-      above Insert table (works as `/insert table`); source-mode Tab/Enter
+- [ ] Tables leftovers: (`/table` now offers Insert table first, 2026-10-16); source-mode Tab/Enter
       within 20 ms of typing does a synchronous whole-note reparse (hitch on a
       note above the async-parse threshold); row/column drag handles, hover
       add-row/column buttons, rectangular cell selection.
@@ -932,13 +935,17 @@ optimal as it can be".
 - [x] Perf-budget tests fail under load 16+ (canvas pan, bases 20k, epub,
       ListPerf, kernel completion): best-of-N like the 1 MB open test, so
       parallel lane-checks stay meaningful.
-- [ ] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
+- [x] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
       a published site gets no theme `syntax`/`--code-*` token colours yet; a
       listing nested in a callout gets ini/theme colours only (no fence attrs).
 - [ ] Notebook leftovers: no window-level test drives input() end to end;
       the plugin askUser dialog is untested; `.ipynb` outputs are seeded on
       the GUI thread at every read (big PNGs cost time); run outputs are not
       written back into the .ipynb; the vault index ignores .ipynb.
+- [x] Notebook stdin race (found merging 2026-10-16): input_request dropped
+      before the stdin handshake; KernelClient now waits for it.
+- [ ] Image annotation is off by default (it replaces the plain image tab);
+      Jernej to say whether it should be on.
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
@@ -976,13 +983,13 @@ optimal as it can be".
       submenu, duplicate row/column, sort by column (tables lane). Later: row and
       column drag handles, hover add-row/column buttons, rectangular cell
       selection.
-- [ ] Status bar word/character count: 200 ms debounce, counts the selection
+- [x] Status bar word/character count: 200 ms debounce, counts the selection
       when there is one, skips frontmatter. Today: counts come with each parse,
       characters are the whole file incl. frontmatter.
 - [ ] Popup leftovers: mode-menu check is a text mark in the shortcut column
       (QSS cannot put the indicator right of an icon); QMessageBox/QInputDialog
       windows are not rounded.
-- [ ] Callout context menu: Edit / Copy / Change type / Remove, once the hover
+- [x] Callout context menu: Edit / Copy / Change type / Remove, once the hover
       edit "Edit block source" item exists.
 - [ ] `DisplayMap::toDisplay` is linear (four loops); binary search like
       `toSource`. Small gain; whoever touches DisplayMap next.
