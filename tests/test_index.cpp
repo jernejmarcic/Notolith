@@ -188,6 +188,16 @@ TEST_F(IndexTest, TagCountsAgreeWithNotesWithTag)
     EXPECT_EQ(counts.value(QStringLiteral("thinking")), 1);
 }
 
+TEST_F(IndexTest, AScalarTagsAndAliasesValueIsSplit)
+{
+    write(QStringLiteral("Split.md"), "---\ntags: project, urgent\naliases: Brain, Mind\n---\nbody\n");
+    Index index;
+    build(index);
+
+    EXPECT_EQ(index.notesWithTag(QStringLiteral("urgent")), QStringList({QStringLiteral("Split.md")}));
+    EXPECT_EQ(index.resolve(QStringLiteral("Mind")), QStringLiteral("Split.md"));
+}
+
 TEST_F(IndexTest, QuickSwitcherFindsByAnyName)
 {
     Index index;

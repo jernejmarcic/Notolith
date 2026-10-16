@@ -297,10 +297,24 @@ void Frontmatter::parse(const QString &text, const Range &block, Metadata &out)
 
         const QStringList &values = property.values;
         const QString lower = key.toLower();
+        // Obsidian reads a plain string (not a list) as a comma list for
+        // aliases and a comma-or-space list for tags. Only the parsed names
+        // change; the property keeps the text as written.
+        const bool scalar = property.type != Property::Type::List && values.size() == 1;
         if (lower == QLatin1String("aliases") || lower == QLatin1String("alias")) {
-            out.aliases += values;
+            if (scalar) {
+                for (const QString &piece : values.first().split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                    const QString alias = piece.trimmed();
+                    if (!alias.isEmpty())
+                        out.aliases.append(alias);
+                }
+            } else {
+                out.aliases += values;
+            }
         } else if (lower == QLatin1String("tags") || lower == QLatin1String("tag")) {
-            for (const QString &value : values) {
+            static const QRegularExpression separators(QStringLiteral("[,\\s]+"));
+            const QStringList names = scalar ? values.first().split(separators, Qt::SkipEmptyParts) : values;
+            for (const QString &value : names) {
                 // Frontmatter tags may be written with or without the hash.
                 const QString name = value.startsWith(QLatin1Char('#')) ? value.mid(1) : value;
                 if (!name.isEmpty())
