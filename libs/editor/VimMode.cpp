@@ -20,8 +20,10 @@
 #include <QGuiApplication>
 #include <QKeyEvent>
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 #include <utility>
 
@@ -454,6 +456,80 @@ bool bracketObject(const QString &t, Pos p, QChar open, QChar close, bool inner,
     return true;
 }
 
+/// it / at: the innermost HTML or XML element around `p` (n levels out). The
+/// whole note is scanned, so it works inside an HTML block as in plain text;
+/// comments, void and self-closing tags are skipped, a stray close is ignored.
+bool tagObject(const QString &t, Pos p, bool inner, int n, Range &out)
+{
+    static const QSet<QString> voidTags{QStringLiteral("br"),    QStringLiteral("hr"),   QStringLiteral("img"),
+                                        QStringLiteral("input"), QStringLiteral("meta"), QStringLiteral("link"),
+                                        QStringLiteral("area"),  QStringLiteral("base"), QStringLiteral("col"),
+                                        QStringLiteral("embed"), QStringLiteral("source"), QStringLiteral("track"),
+                                        QStringLiteral("wbr")};
+    struct Open {
+        QString name;
+        Pos start, end;
+    };
+    struct Pair {
+        Pos openStart, openEnd, closeStart, closeEnd;
+    };
+    QList<Open> stack;
+    QList<Pair> around;
+    const auto nameChar = [](QChar c) { return c.isLetterOrNumber() || c == QLatin1Char('-') || c == QLatin1Char(':') || c == QLatin1Char('_'); };
+    for (Pos i = t.indexOf(QLatin1Char('<')); i >= 0; i = t.indexOf(QLatin1Char('<'), i + 1)) {
+        if (t.mid(i, 4) == QLatin1String("<!--")) {
+            const Pos e = t.indexOf(QLatin1String("-->"), i + 4);
+            if (e < 0)
+                break;
+            i = e + 2;
+            continue;
+        }
+        const bool closing = i + 1 < t.size() && t.at(i + 1) == QLatin1Char('/');
+        Pos j = i + (closing ? 2 : 1);
+        const Pos nameStart = j;
+        if (j >= t.size() || !t.at(j).isLetter())
+            continue;
+        while (j < t.size() && nameChar(t.at(j)))
+            ++j;
+        const QString name = t.mid(nameStart, j - nameStart).toLower();
+        QChar quote; // the tag ends at the first > outside an attribute's quotes
+        for (; j < t.size(); ++j) {
+            const QChar c = t.at(j);
+            if (!quote.isNull())
+                quote = c == quote ? QChar() : quote;
+            else if (c == QLatin1Char('"') || c == QLatin1Char('\''))
+                quote = c;
+            else if (c == QLatin1Char('>') || c == QLatin1Char('<'))
+                break;
+        }
+        if (j >= t.size() || t.at(j) != QLatin1Char('>'))
+            continue; // not a tag: a less-than sign in prose
+        const Pos end = j + 1;
+        if (closing) {
+            for (qsizetype k = stack.size() - 1; k >= 0; --k) {
+                if (stack.at(k).name != name)
+                    continue;
+                const Open o = stack.at(k);
+                stack.resize(k);
+                if (o.start <= p && p < end)
+                    around.append({o.start, o.end, i, end});
+                break;
+            }
+        } else if (t.at(j - 1) != QLatin1Char('/') && !voidTags.contains(name)) {
+            stack.append({name, i, end});
+        }
+        i = j;
+    }
+    std::sort(around.begin(), around.end(), [](const Pair &a, const Pair &b) {
+        return a.closeEnd - a.openStart < b.closeEnd - b.openStart;
+    });
+    if (n > around.size())
+        return false;
+    const Pair &w = around.at(n - 1);
+    out = inner ? Range{w.openEnd, w.closeStart} : Range{w.openStart, w.closeEnd};
+    return true;
+}
+
 /// i" a" and friends: the quoted string around the caret on its line, or the
 /// first one after it. a" takes the space after, or before when there is none.
 bool quoteObject(const QString &t, Pos p, QChar quote, bool inner, Range &out)
@@ -583,6 +659,7 @@ private:
     void paste(bool after);
     void replaceChars(QChar c);
     void toggleCase();
+    void mapSelection(const std::function<QString(const QString &)> &fn);
     void join();
     void openLine(bool below);
     void undoRedo(bool redo);
@@ -714,6 +791,7 @@ void VimEngine::abort()
     s.count = s.count2 = 0;
     s.op = s.pending = s.regName = QChar();
     s.keepGoal = false;
+    s.regOne = false;
 }
 
 /// A command ran to completion. `change` makes it what `.` repeats.
@@ -1013,19 +1091,33 @@ void VimEngine::feed(QChar c)
         paste(false);
         return;
     case 'u':
-        undoRedo(false);
+        if (vis)
+            mapSelection([](const QString &x) { return x.toLower(); });
+        else
+            undoRedo(false);
+        return;
+    case 'U':
+        if (vis)
+            mapSelection([](const QString &x) { return x.toUpper(); });
+        else
+            abort();
         return;
     case 'J':
         join();
         return;
     case 'r':
-        if (vis)
-            abort();
-        else
-            s.pending = c;
+        s.pending = c;
         return;
     case '~':
-        toggleCase();
+        if (vis)
+            mapSelection([](const QString &x) {
+                QString out = x;
+                for (QChar &ch : out)
+                    ch = ch.isUpper() ? ch.toLower() : ch.toUpper();
+                return out;
+            });
+        else
+            toggleCase();
         return;
     case '.':
         s.keys.clear();
@@ -1293,6 +1385,17 @@ bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
         return searchMove(forward, n, from, out.pos);
     }
     case '%': {
+        if (hasCount) { // 50%: the line that far down the note
+            if (n > 100)
+                return false;
+            Pos last = t.size();
+            if (last > 0 && t.at(last - 1) == QLatin1Char('\n'))
+                --last;
+            const qsizetype lines = QStringView(t).left(last).count(QLatin1Char('\n')) + 1;
+            out.pos = firstNonBlank(t, lineStartByNumber(t, (n * lines + 99) / 100 - 1));
+            out.linewise = true;
+            return true;
+        }
         // the first bracket at or after the caret on its line, and its partner
         static constexpr QStringView pairs = u"()[]{}";
         const Pos end = le(cur);
@@ -1333,10 +1436,13 @@ void VimEngine::runMotion(QChar key)
 {
     Move mv;
     if (!motion(key, total(), hasCount(), mv)) {
+        if (s.macroDepth > 0)
+            s.macroFailed = true; // the macro runs no further, as in vim
         abort();
         return;
     }
     if (!s.op.isNull()) {
+        s.regOne = QStringView(u"%{}nN").contains(key);
         applyMove(mv);
         return;
     }
@@ -1579,11 +1685,35 @@ void VimEngine::storeReg(const QString &text, int kind, bool yank)
     } else if (name == QLatin1Char('+') || name == QLatin1Char('*')) {
         QGuiApplication::clipboard()->setText(text);
     }
+    else if (name >= QLatin1Char('1') && name <= QLatin1Char('9'))
+        s.regs.insert(name, r);
+    else if (name == QLatin1Char('-'))
+        s.regs.insert(name, r);
     s.reg = r.text;
     s.regLinewise = r.kind == 1;
     s.regBlock = r.kind == 2;
-    if (yank && name.isNull())
-        s.regs.insert(QLatin1Char('0'), r);
+    if (yank) {
+        if (name.isNull())
+            s.regs.insert(QLatin1Char('0'), r);
+        return;
+    }
+    // A delete or change that spans lines (or ends in % { } n N) shifts "1
+    // to "9; a smaller one, with no register named, fills "-.
+    const Register plain{text, kind};
+    const bool large = kind == 1 || text.contains(QLatin1Char('\n')) || s.regOne;
+    s.regOne = false;
+    if (large) {
+        for (QChar d = QLatin1Char('9'); d > QLatin1Char('1'); d = QChar(d.unicode() - 1)) {
+            const QChar prev(d.unicode() - 1);
+            if (s.regs.contains(prev))
+                s.regs.insert(d, s.regs.value(prev));
+            else
+                s.regs.remove(d);
+        }
+        s.regs.insert(QLatin1Char('1'), plain);
+    }
+    if (name.isNull() && !(kind == 1 || text.contains(QLatin1Char('\n'))))
+        s.regs.insert(QLatin1Char('-'), plain);
 }
 
 bool VimEngine::loadReg(QString &text, int &kind) const
@@ -1592,7 +1722,7 @@ bool VimEngine::loadReg(QString &text, int &kind) const
     if (name == QLatin1Char('+') || name == QLatin1Char('*')) {
         text = QGuiApplication::clipboard()->text();
         kind = text.endsWith(QLatin1Char('\n')) ? 1 : 0;
-    } else if (name.isLetter() || name == QLatin1Char('0')) {
+    } else if (name.isLetter() || name.isDigit() || name == QLatin1Char('-')) {
         const auto it = s.regs.constFind(name.toLower());
         if (it == s.regs.constEnd())
             return false;
@@ -1630,6 +1760,9 @@ void VimEngine::applyObject(bool inner, QChar object)
         break;
     case '"': case '\'': case '`':
         found = quoteObject(t, cur, object, inner, r);
+        break;
+    case 't':
+        found = tagObject(t, cur, inner, n, r);
         break;
     default: {
         static constexpr QStringView pairs = u"()[]{}<>";
@@ -1849,11 +1982,15 @@ void VimEngine::runMacro(QChar name, int times)
     if (s.macroDepth >= 8) // a macro that runs itself
         return;
     const QList<MarkdownEditor::VimState::MacroKey> keys = s.macros.value(name);
+    if (s.macroDepth == 0)
+        s.macroFailed = false;
     ++s.macroDepth;
-    for (int i = 0; i < times; ++i) {
+    for (int i = 0; i < times && !s.macroFailed; ++i) {
         for (const auto &k : keys) {
             QKeyEvent event(QEvent::KeyPress, k.key, Qt::KeyboardModifiers(k.modifiers), k.text);
             m.keyPressEvent(&event);
+            if (s.macroFailed)
+                break;
         }
     }
     --s.macroDepth;
@@ -1900,6 +2037,23 @@ void VimEngine::paste(bool after)
 
 void VimEngine::replaceChars(QChar c)
 {
+    if (visual()) { // every selected character, line breaks kept
+        if (!c.isPrint()) {
+            abort();
+            return;
+        }
+        mapSelection([c](const QString &x) {
+            QString out;
+            for (qsizetype i = 0; i < x.size(); ++i) {
+                const QChar ch = x.at(i);
+                const bool pair = ch.isHighSurrogate() && i + 1 < x.size() && x.at(i + 1).isLowSurrogate();
+                out += ch == QLatin1Char('\n') || ch == QLatin1Char('\r') ? ch : c;
+                i += pair;
+            }
+            return out;
+        });
+        return;
+    }
     const Pos cur = m.m_cursor;
     const int n = total();
     if (!c.isPrint() || cur + n > le(cur)) {
@@ -1927,11 +2081,43 @@ void VimEngine::toggleCase()
     finish(true);
 }
 
+/// r, ~, u and U in visual mode: `fn` rewrites each selected span (one per
+/// line of a block), and the caret lands on the selection's start.
+void VimEngine::mapSelection(const std::function<QString(const QString &)> &fn)
+{
+    const Pos low = qMin(m.m_anchor, m.m_cursor);
+    const Pos high = qMax(m.m_anchor, m.m_cursor);
+    QList<Range> spans;
+    if (s.mode == Mode::VisualBlock)
+        spans = blockRanges(blockGeometry());
+    else
+        spans.append(s.mode == Mode::VisualLine ? Range{ls(low), le(high)} : Range{low, afterChar(t, high)});
+    const Pos start = s.mode == Mode::VisualLine ? ls(low) : low;
+    exitVisual();
+    beginGroup();
+    for (qsizetype i = spans.size() - 1; i >= 0; --i) { // last first: earlier offsets stay valid
+        const QString from = t.mid(spans.at(i).start, spans.at(i).length());
+        const QString to = fn(from);
+        if (to != from)
+            edit(spans.at(i).start, from.size(), to);
+    }
+    endGroup();
+    go(start);
+    finish(true);
+}
+
 void VimEngine::join()
 {
+    int lines = qMax(2, total());
+    if (visual()) { // the selected lines, or this one and the next
+        const Pos a = ls(m.m_anchor), b = ls(m.m_cursor);
+        lines = qMax(2, 1 + int(QStringView(t).mid(qMin(a, b), qAbs(a - b)).count(QLatin1Char('\n'))));
+        const Pos low = qMin(m.m_anchor, m.m_cursor);
+        exitVisual();
+        m.moveCursor(low, false);
+    }
     const Pos start = ls(m.m_cursor);
     Pos last = start;
-    const int lines = qMax(2, total());
     int joined = 0;
     for (int i = 1; i < lines; ++i) {
         const Pos next = nextLine(t, last);

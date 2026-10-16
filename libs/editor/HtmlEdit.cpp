@@ -120,10 +120,12 @@ QString decodeEntity(QStringView entity) // "&amp;", ";" included
 
 /// A cell's style=: `ok` when it holds only text-align, color, background,
 /// background-color and font-weight (a value without `;` or `:`, so no url()),
-/// `align` the text-align value in lower case. Only the alignment is drawn.
+/// `align` the text-align value in lower case; the rest is what the cell is
+/// drawn with (color and background as written, bold from font-weight).
 struct CellStyle {
     bool ok = true;
     QString align;
+    TableSpan::CellLook look;
 };
 
 CellStyle cellStyle(const QString &style)
@@ -141,6 +143,12 @@ CellStyle cellStyle(const QString &style)
             result.ok = false;
         else if (name == QLatin1String("text-align"))
             result.align = value;
+        else if (name == QLatin1String("color"))
+            result.look.color = value;
+        else if (name == QLatin1String("font-weight"))
+            result.look.bold = value == QLatin1String("bold") || value == QLatin1String("bolder") || value.toInt() >= 600;
+        else
+            result.look.background = value;
     }
     return result;
 }
@@ -723,6 +731,7 @@ private:
             const Range rowTag = open(tr);
             QList<Range> cells;
             QList<Range> elements;
+            QList<TableSpan::CellLook> looks;
             bool allHeads = true;
             const GumboVector &children = tr->v.element.children;
             for (unsigned i = 0; i < children.length && m_ok; ++i) {
@@ -747,6 +756,7 @@ private:
                 const qsizetype trimmed = trimBack(start, end);
                 cells << (start < trimmed ? Range{start, trimmed} : Range{cellTag.end, cellTag.end});
                 elements << Range{cellTag.start, elementEnd(c)};
+                looks << cellStyle(attribute(c, "style")).look;
                 addTextSpan(c, cellTag, end);
                 if (span.rows.isEmpty()) {
                     QString align = attribute(c, "align").toLower();
@@ -762,6 +772,7 @@ private:
                 m_ok = false;
             span.rows << cells;
             span.cellElements << elements;
+            span.cellLooks << looks;
             span.rowElements << Range{rowTag.start, elementEnd(tr)};
             if (headRows < 0 && span.rows.size() == 1 && allHeads)
                 headRows = -2; // a first row of <th> is the header, unless a <thead> says otherwise

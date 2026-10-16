@@ -1272,6 +1272,177 @@ TEST(VimTest, StarWithAnOperatorAndACount)
 }
 
 
+TEST(VimTest, NumberedRegistersShiftOnDelete)
+{
+    {
+        Vim v(QStringLiteral("a\nb\nc\nd\n"));
+        v.keys(QStringLiteral("dddddd")); // "1 is the newest, "3 the oldest
+        EXPECT_EQ(v.text(), QStringLiteral("d\n"));
+        v.keys(QStringLiteral("\"1p\"2p\"3p"));
+        EXPECT_EQ(v.text(), QStringLiteral("d\nc\nb\na\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\n"));
+        v.keys(QStringLiteral("dddddddddddddddddddd")); // ten deletes: the first one falls off "9
+        EXPECT_EQ(v.text(), QStringLiteral("k\n"));
+        v.keys(QStringLiteral("\"9p\"1p"));
+        EXPECT_EQ(v.text(), QStringLiteral("k\nb\nj\n"));
+    }
+    { // a small delete fills "- and leaves "1 alone
+        Vim v(QStringLiteral("foo bar\nx\ny\n"));
+        v.keys(QStringLiteral("dwjdd"));
+        EXPECT_EQ(v.text(), QStringLiteral("bar\ny\n"));
+        v.keys(QStringLiteral("\"-P\"1P"));
+        EXPECT_EQ(v.text(), QStringLiteral("bar\nx\nfoo y\n"));
+    }
+    { // d% always fills "1, and "- too
+        Vim v(QStringLiteral("(a) b\nz\n"));
+        v.keys(QStringLiteral("d%"));
+        EXPECT_EQ(v.text(), QStringLiteral(" b\nz\n"));
+        v.keys(QStringLiteral("j\"1P"));
+        EXPECT_EQ(v.text(), QStringLiteral(" b\n(a)z\n"));
+    }
+    { // a yank touches "0 only; a named delete of lines still shifts "1
+        Vim v(QStringLiteral("a\nb\nc\n"));
+        v.keys(QStringLiteral("yyjdd\"0p"));
+        EXPECT_EQ(v.text(), QStringLiteral("a\nc\na\n"));
+        v.keys(QStringLiteral("gg\"add\"2P")); // "1 now holds a, "2 the earlier b
+        EXPECT_EQ(v.text(), QStringLiteral("b\nc\na\n"));
+    }
+}
+
+TEST(VimTest, InnerAndAroundTagObjects)
+{
+    const auto run = [](const QString &text, qsizetype caret, const QString &keys) {
+        Vim v(text, caret);
+        v.keys(keys);
+        return v.text();
+    };
+    const QString nested = QStringLiteral("<div><b>bold</b> text</div>");
+    EXPECT_EQ(run(nested, 8, QStringLiteral("dit")), QStringLiteral("<div><b></b> text</div>"));
+    EXPECT_EQ(run(nested, 8, QStringLiteral("dat")), QStringLiteral("<div> text</div>"));
+    EXPECT_EQ(run(nested, 8, QStringLiteral("d2it")), QStringLiteral("<div></div>"));
+    EXPECT_EQ(run(nested, 17, QStringLiteral("dit")), QStringLiteral("<div></div>")); // between the tags
+    EXPECT_EQ(run(nested, 1, QStringLiteral("dit")), QStringLiteral("<div></div>")); // on the open tag
+    EXPECT_EQ(run(QStringLiteral("<a><a>x</a>y</a>"), 6, QStringLiteral("dit")), QStringLiteral("<a><a></a>y</a>"));
+    EXPECT_EQ(run(QStringLiteral("<a><a>x</a>y</a>"), 6, QStringLiteral("d2it")), QStringLiteral("<a></a>"));
+    EXPECT_EQ(run(QStringLiteral("<p>one<br>two</p>"), 10, QStringLiteral("dit")), QStringLiteral("<p></p>"));
+    EXPECT_EQ(run(QStringLiteral("<a title=\"a>b\">link</a>"), 16, QStringLiteral("dit")),
+              QStringLiteral("<a title=\"a>b\"></a>"));
+    EXPECT_EQ(run(QStringLiteral("1 < 2 <i>x</i>"), 10, QStringLiteral("dat")), QStringLiteral("1 < 2 "));
+    EXPECT_EQ(run(QStringLiteral("<B>x</b>"), 3, QStringLiteral("dit")), QStringLiteral("<B></b>")); // names ignore case
+    EXPECT_EQ(run(QStringLiteral("<b>x</b>"), 3, QStringLiteral("citY\x1b")), QStringLiteral("<b>Y</b>"));
+    EXPECT_EQ(run(QStringLiteral("<b>x</b>"), 3, QStringLiteral("yitP")), QStringLiteral("<b>xx</b>"));
+    EXPECT_EQ(run(QStringLiteral("no tags here"), 3, QStringLiteral("dit")), QStringLiteral("no tags here"));
+    EXPECT_EQ(run(QStringLiteral("<b>x"), 3, QStringLiteral("dit")), QStringLiteral("<b>x")); // never closed
+    // inside an HTML block of a note, over lines
+    EXPECT_EQ(run(QStringLiteral("para\n\n<div>\n<span>hi</span>\n</div>\n"), 19, QStringLiteral("dit")),
+              QStringLiteral("para\n\n<div>\n<span></span>\n</div>\n"));
+    EXPECT_EQ(run(QStringLiteral("para\n\n<div>\n<span>hi</span>\n</div>\n"), 19, QStringLiteral("d2it")),
+              QStringLiteral("para\n\n<div></div>\n"));
+    { // visual
+        Vim v(nested, 8);
+        v.keys(QStringLiteral("vitd"));
+        EXPECT_EQ(v.text(), QStringLiteral("<div><b></b> text</div>"));
+        Vim w(nested, 8);
+        w.keys(QStringLiteral("vatd"));
+        EXPECT_EQ(w.text(), QStringLiteral("<div> text</div>"));
+    }
+}
+
+TEST(VimTest, VisualJoinReplaceAndToggleCase)
+{
+    {
+        Vim v(QStringLiteral("a\nb\nc\nd\n"));
+        v.keys(QStringLiteral("VjJ"));
+        EXPECT_EQ(v.text(), QStringLiteral("a b\nc\nd\n"));
+        EXPECT_EQ(v.mode(), QStringLiteral("normal"));
+        v.keys(QStringLiteral("vjJ")); // two lines of the rest
+        EXPECT_EQ(v.text(), QStringLiteral("a b c\nd\n"));
+        v.keys(QStringLiteral("u"));
+        EXPECT_EQ(v.text(), QStringLiteral("a b\nc\nd\n"));
+    }
+    {
+        Vim v(QStringLiteral("a\nb\nc\nd\n"), 2);
+        v.keys(QStringLiteral("vjjJ")); // three lines, the selection's top first
+        EXPECT_EQ(v.text(), QStringLiteral("a\nb c d\n"));
+        Vim w(QStringLiteral("a\n  b\nc\n"));
+        w.keys(QStringLiteral("VJ")); // one line: it and the next
+        EXPECT_EQ(w.text(), QStringLiteral("a b\nc\n"));
+    }
+    {
+        Vim v(QStringLiteral("abc\ndef\n"));
+        v.keys(QStringLiteral("vjlrx")); // every selected character, not the line break
+        EXPECT_EQ(v.text(), QStringLiteral("xxx\nxxf\n"));
+        EXPECT_EQ(v.mode(), QStringLiteral("normal"));
+        EXPECT_EQ(v.cursor(), 0);
+        v.keys(QStringLiteral("u"));
+        EXPECT_EQ(v.text(), QStringLiteral("abc\ndef\n"));
+        v.keys(QStringLiteral("ggVr-"));
+        EXPECT_EQ(v.text(), QStringLiteral("---\ndef\n"));
+    }
+    {
+        Vim v(QStringLiteral("abcd\nefgh\nijkl\n"), 1);
+        v.key(Qt::Key_V, Qt::ControlModifier);
+        v.keys(QStringLiteral("jlr#"));
+        EXPECT_EQ(v.text(), QStringLiteral("a##d\ne##h\nijkl\n"));
+    }
+    {
+        Vim v(QStringLiteral("Hello World\n"));
+        v.keys(QStringLiteral("veU"));
+        EXPECT_EQ(v.text(), QStringLiteral("HELLO World\n"));
+        v.keys(QStringLiteral("veu"));
+        EXPECT_EQ(v.text(), QStringLiteral("hello World\n"));
+        v.keys(QStringLiteral("V~"));
+        EXPECT_EQ(v.text(), QStringLiteral("HELLO wORLD\n"));
+        v.keys(QStringLiteral("u")); // normal mode: still undo
+        EXPECT_EQ(v.text(), QStringLiteral("hello World\n"));
+        v.keys(QStringLiteral("U")); // line-undo is not covered: a no-op, not a command
+        EXPECT_EQ(v.text(), QStringLiteral("hello World\n"));
+    }
+}
+
+TEST(VimTest, PercentWithACountGoesToThatPercentOfTheFile)
+{
+    QString ten;
+    for (int i = 1; i <= 10; ++i)
+        ten += QString::number(i) + QLatin1Char('\n');
+    Vim v(ten);
+    v.keys(QStringLiteral("50%"));
+    EXPECT_EQ(v.cursor(), 8); // line 5
+    v.keys(QStringLiteral("100%"));
+    EXPECT_EQ(v.cursor(), 18); // line 10
+    v.keys(QStringLiteral("1%"));
+    EXPECT_EQ(v.cursor(), 0);
+    v.keys(QStringLiteral("35%")); // rounds up: line 4
+    EXPECT_EQ(v.cursor(), 6);
+    v.keys(QStringLiteral("101%")); // out of range: stays
+    EXPECT_EQ(v.cursor(), 6);
+    v.keys(QStringLiteral("gg"));
+    v.keys(QStringLiteral("d50%")); // linewise with an operator
+    EXPECT_EQ(v.text(), QStringLiteral("6\n7\n8\n9\n10\n"));
+    Vim b(QStringLiteral("(a)\n"));
+    b.keys(QStringLiteral("%")); // without a count it still matches brackets
+    EXPECT_EQ(b.cursor(), 2);
+}
+
+TEST(VimTest, AMacroStopsAtItsFirstFailedMotion)
+{
+    Vim v(QStringLiteral("1\n2\n3\n"));
+    v.keys(QStringLiteral("qqA!"));
+    v.esc();
+    v.keys(QStringLiteral("jq"));
+    v.keys(QStringLiteral("10@q")); // line 3 is the last: its j fails and ends the run
+    EXPECT_EQ(v.text(), QStringLiteral("1!\n2!\n3!\n"));
+    v.keys(QStringLiteral("gg@q")); // the flag does not outlive the run
+    EXPECT_EQ(v.text(), QStringLiteral("1!!\n2!\n3!\n"));
+    Vim w(QStringLiteral("a-b\n"));
+    w.keys(QStringLiteral("qwf-x"));
+    w.keys(QStringLiteral("q0@w")); // the second run finds no "-": it never reaches the x
+    EXPECT_EQ(w.text(), QStringLiteral("ab\n"));
+}
+
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
