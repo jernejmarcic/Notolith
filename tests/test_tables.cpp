@@ -518,6 +518,11 @@ TEST(TableHandlesTest, ADragAcrossCellsSelectsARectangleThatCopiesAsATable)
         << "the first row becomes the header, the alignment goes along\n" << markdown.toStdString();
     EXPECT_EQ(mime->text(), QStringLiteral("1\t2\n4\t5")) << "plain text is what a spreadsheet takes";
     EXPECT_EQ(editor->noteText(), kGrid) << "a copy writes nothing";
+
+    // Pasted into prose, the note gets the table, not the TSV.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(editor->noteText().endsWith(markdown)) << editor->noteText().toStdString();
 }
 
 TEST(TableHandlesTest, ShiftArrowsGrowTheRectangleFromACell)

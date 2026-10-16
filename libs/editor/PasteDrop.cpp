@@ -102,7 +102,11 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
         return;
     }
 
-    if (mime->hasText())
+    // A copied cell rectangle carries its pipe table as text/markdown beside the
+    // TSV a spreadsheet takes; a note wants the table.
+    if (mime->hasFormat(QStringLiteral("text/markdown")))
+        insertText(cellSafe(QString::fromUtf8(mime->data(QStringLiteral("text/markdown")))));
+    else if (mime->hasText())
         insertText(cellSafe(mime->text()));
 }
 

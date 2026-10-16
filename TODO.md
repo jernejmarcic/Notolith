@@ -932,7 +932,7 @@ optimal as it can be".
 - [x] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
       later views; check whether that is wanted workspace state. 2026-10-16:
       wanted, demo/.obsidian/workspace.json puts Library.base in a right split.
-- [ ] Tables leftovers: (`/table` now offers Insert table first, 2026-10-16); source-mode Tab/Enter
+- [x] Tables leftovers: (`/table` now offers Insert table first, 2026-10-16); source-mode Tab/Enter
       within 20 ms of typing does a synchronous whole-note reparse (hitch on a
       note above the async-parse threshold); row/column drag handles, hover
       add-row/column buttons, rectangular cell selection.
@@ -955,6 +955,8 @@ optimal as it can be".
       written back into the .ipynb; the vault index ignores .ipynb.
 - [x] Notebook stdin race (found merging 2026-10-16): input_request dropped
       before the stdin handshake; KernelClient now waits for it.
+- [ ] Tables later: drag a bar to add several rows/columns, autoscroll a wide
+      table while dragging a column, touch, handles on HTML tables.
 - [ ] Image annotation is off by default (it replaces the plain image tab);
       Jernej to say whether it should be on.
 - [x] Lists leftovers: if Enter still fails on a bare list in the running app,
