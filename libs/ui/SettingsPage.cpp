@@ -552,6 +552,13 @@ QWidget *SettingsPage::buildFilesPage()
 
     addFolderRow(layout, QStringLiteral("files.attachmentFolder"), tr("Attachment folder"),
                 tr("Where a pasted or dropped file lands. Empty means the vault root."));
+    addComboRow(layout, QStringLiteral("files.newNoteLocation"), tr("Default location for new notes"),
+               tr("Where New note and the quick switcher put a note."),
+               {{tr("Vault folder"), QStringLiteral("root")},
+                {tr("Same folder as current file"), QStringLiteral("current")},
+                {tr("In the folder specified below"), QStringLiteral("folder")}});
+    addFolderRow(layout, QStringLiteral("files.newNoteFolder"), tr("Folder to create new notes in"),
+                tr("Used when the location above is the folder specified."));
     addToggleRow(layout, QStringLiteral("encryption.unlockAtStartup"), tr("Unlock encrypted notes on startup"),
                 tr("Ask for the password when the vault opens. Off asks the first time an "
                    "encrypted note is opened. Either way it lasts until locked or the app closes."));

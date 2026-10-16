@@ -160,6 +160,10 @@ private slots:
     // QMetaObject::invokeMethod the same way they already drive save().
 
     void newNoteIn(const QString &folderRelative);
+    /// Where a new note goes when nothing chose a folder: files.newNoteLocation
+    /// (Obsidian's newFileLocation) - the vault root, the open note's folder,
+    /// or files.newNoteFolder. Vault-relative, "" the root.
+    QString newNoteFolder() const;
     /// The quick switcher's "create": a note named as typed, "Folder/Name" too.
     void createNoteNamed(const QString &typed);
     void newFolderIn(const QString &folderRelative);

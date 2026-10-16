@@ -1016,21 +1016,24 @@ optimal as it can be".
 
 ## Fable audit 2026-10-16 evening
 
-- [ ] Quick switcher: Enter with no match creates the note, Shift+Enter
+- [x] Quick switcher: Enter with no match creates the note, Shift+Enter
       always creates (Obsidian); palette and merge picker keep no create path
       (lane switcher).
-- [ ] MomentFormat: moment.js tokens `h hh H m s a` (`{{time:h:mm a}}`
+- [x] MomentFormat: moment.js tokens `h hh H m s a` (`{{time:h:mm a}}`
       rendered literally) (lane moment).
-- [ ] Frontmatter: a string `tags:` splits on commas and spaces, a string
+- [x] Frontmatter: a string `tags:` splits on commas and spaces, a string
       `aliases:` on commas, as Obsidian reads them; the property text stays
       (lane moment).
-- [ ] `.markdown` files were half notes (isNote yes, links/templates no);
+- [x] `.markdown` files were half notes (isNote yes, links/templates no);
       Obsidian treats only `.md` as notes, so they become attachments
       (lane moment).
-- [ ] Search `tag:/regex/` ignores case like every other field unless
+- [x] Search `tag:/regex/` ignores case like every other field unless
       `match-case:` (lane search).
-- [ ] Test TableFormat's East-Asian/combining/emoji display width (lane
+- [x] Test TableFormat's East-Asian/combining/emoji display width (lane
       search).
 - [x] test_bases segfaulted ~1 in 3 (found by the search lane): pool tasks
       held a raw Index* that could die or reopen under them. Workers now
       take a copy of the cache path (Index::notesForBases / searchIn).
+- [x] Obsidian's "Default location for new notes" (`newFileLocation`,
+      `newFileFolderPath`) read and in Settings > Files; New note, Ctrl+N
+      and the quick switcher's create follow it (left by the switcher lane).

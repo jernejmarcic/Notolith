@@ -488,7 +488,7 @@ QWidget *MainWindow::buildHeaderBar()
 
     QToolButton *newNote = iconButton(QStringLiteral("headerNewNoteButton"), QStringLiteral("plus"),
                                       tr("New note (Ctrl+N)"), 18);
-    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(QString()); });
+    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
 
     QToolButton *rightSidebarToggle = iconButton(QStringLiteral("headerRightSidebarToggle"),
                                                  QStringLiteral("panel-right"),
@@ -564,7 +564,7 @@ QWidget *MainWindow::buildSidebar()
 
     QToolButton *newNote = iconButton(QStringLiteral("sidebarNewNoteButton"),
                                       QStringLiteral("file-plus"), tr("New note"), 14);
-    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(QString()); });
+    connect(newNote, &QToolButton::clicked, this, [this] { newNoteIn(newNoteFolder()); });
     QToolButton *newFolder = iconButton(QStringLiteral("sidebarNewFolderButton"),
                                         QStringLiteral("folder-plus"), tr("New folder"), 14);
     connect(newFolder, &QToolButton::clicked, this, [this] { newFolderIn(QString()); });
@@ -2147,7 +2147,7 @@ void MainWindow::buildActions()
     add(QStringLiteral("editor:toggle-source"), tr("Toggle Live Preview/Source mode"), QString(),
         &MainWindow::toggleSourceMode);
     add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
-        [this] { newNoteIn(QString()); });
+        [this] { newNoteIn(newNoteFolder()); });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
@@ -5457,19 +5457,36 @@ void MainWindow::newNoteIn(const QString &folderRelative)
     openNote(path);
 }
 
+QString MainWindow::newNoteFolder() const
+{
+    const QString location = m_settings.text(QStringLiteral("files.newNoteLocation"));
+    QString folder;
+    if (location == QLatin1String("current") && m_active && !m_active->notePath.isEmpty())
+        folder = QDir(m_vault.root()).relativeFilePath(QFileInfo(m_active->notePath).absolutePath());
+    else if (location == QLatin1String("folder"))
+        folder = m_settings.text(QStringLiteral("files.newNoteFolder"));
+    folder = QDir::cleanPath(folder);
+    while (folder.startsWith(QLatin1Char('/')))
+        folder.remove(0, 1);
+    // "." is the root; anything climbing out of the vault is too.
+    if (folder == QLatin1String(".") || folder == QLatin1String("..") || folder.startsWith(QLatin1String("../")))
+        folder.clear();
+    return folder;
+}
+
 void MainWindow::createNoteNamed(const QString &typed)
 {
     if (!m_vault.isValid())
         return;
-    // The vault root, like newNoteIn(QString()): there is no default-folder
-    // setting yet. A "Folder/Name" lands in that folder, made when missing.
+    // A bare name goes where New note puts one (newNoteFolder()); a typed
+    // "Folder/Name" lands in that folder from the root, made when missing.
     QString name = typed;
     if (name.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
         name.chop(3);
     // Obsidian's invalid characters - the ones Vault::renamePath refuses.
     static const QRegularExpression invalid(QStringLiteral(R"([\[\]#^|:\\])"));
     const qsizetype slash = name.lastIndexOf(QLatin1Char('/'));
-    const QString folder = slash < 0 ? QString() : name.left(slash).trimmed();
+    const QString folder = slash < 0 ? newNoteFolder() : name.left(slash).trimmed();
     const QString base = name.mid(slash + 1).trimmed();
     QString error;
     QString path;

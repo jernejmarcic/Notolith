@@ -2788,6 +2788,34 @@ TEST_F(WindowTest, TheQuickSwitcherCreatesTheNoteYouTyped)
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Meetings/Standup.md")));
 }
 
+TEST_F(WindowTest, NewNotesGoWhereObsidiansDefaultLocationSays)
+{
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    QDir(dir.path()).mkpath(QStringLiteral("Deep/Er"));
+    write(QStringLiteral("Deep/Er/Here.md"), "\n");
+    write(QStringLiteral(".obsidian/app.json"), R"({"newFileLocation": "folder", "newFileFolderPath": "Inbox"})");
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("switcher:open"))->trigger();
+        auto *switcher = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("quickSwitcher"));
+        auto *query = switcher->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+        QTest::keyClicks(query, QStringLiteral("Typed"));
+        QTest::keyClick(query, Qt::Key_Return);
+        EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Inbox/Typed.md")))) << "the folder, made when missing";
+    }
+    write(QStringLiteral(".obsidian/app.json"), R"({"newFileLocation": "current"})");
+    MainWindow window;
+    window.openVault(dir.path());
+    QAction *newNote = window.findChild<QAction *>(QStringLiteral("file-explorer:new-file"));
+    newNote->trigger();
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Untitled.md")))) << "nothing open: the root";
+    window.openNote(path(QStringLiteral("Deep/Er/Here.md")));
+    newNote->trigger();
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Deep/Er/Untitled.md")))) << "the open note's folder";
+}
+
 TEST_F(WindowTest, TheCommandPaletteNeverCreatesANote)
 {
     MainWindow window;

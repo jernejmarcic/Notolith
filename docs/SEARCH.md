@@ -59,10 +59,12 @@ Both rules are pinned by `tests/test_search.cpp`.
 
 Ctrl+O (`switcher:open`) fuzzy-finds a note by path. It is also "find or
 create", as in Obsidian: Enter with no match, or Shift+Enter with matches
-showing, creates a note named as typed (a trailing `.md` is not doubled) in the
-vault root and opens it. A name with a `/` creates that folder path first. A
-name that is empty or holds `# ^ [ ] | : \`, or a `..` folder, is refused in
-the status bar; an existing name gets a numeric suffix, like New note.
-Obsidian's "default location for new notes" setting is not read yet, so the
-vault root is always the folder. The command palette and the merge picker
+showing, creates a note named as typed (a trailing `.md` is not doubled) and
+opens it. A bare name goes where New note puts one: Settings > Files "Default
+location for new notes" (`files.newNoteLocation`: the vault root, the open
+note's folder, or `files.newNoteFolder`), read from Obsidian's
+`newFileLocation` / `newFileFolderPath` in `app.json`. A name with a `/` is
+from the vault root and creates that folder path first. A name that is empty
+or holds `# ^ [ ] | : \`, or a `..` folder, is refused in the status bar; an
+existing name gets a numeric suffix, like New note. The command palette and the merge picker
 share the widget but never create (`QuickSwitcher::setCreateAllowed`).

@@ -59,6 +59,8 @@ const QVariantMap &defaults()
 
         // Files and links
         {QStringLiteral("files.attachmentFolder"), QString()},
+        {QStringLiteral("files.newNoteLocation"), QStringLiteral("root")}, // root, current (the open note's folder) or folder
+        {QStringLiteral("files.newNoteFolder"), QString()},               // for "folder"
         {QStringLiteral("encryption.unlockAtStartup"), false}, // false: asked when an encrypted note opens
         {QStringLiteral("encryption.autoLockMinutes"), 15},
         {QStringLiteral("files.confirmDelete"), true},
@@ -449,6 +451,8 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     take(out, app, "spellcheck", QStringLiteral("editor.spellcheck"));
     take(out, app, "tabSize", QStringLiteral("editor.tabWidth"));
     take(out, app, "attachmentFolderPath", QStringLiteral("files.attachmentFolder"));
+    take(out, app, "newFileLocation", QStringLiteral("files.newNoteLocation"));
+    take(out, app, "newFileFolderPath", QStringLiteral("files.newNoteFolder"));
     take(out, app, "alwaysUpdateLinks", QStringLiteral("links.autoUpdate"));
     if (app.contains(QLatin1String("useMarkdownLinks"))) {
         out.insert(QStringLiteral("links.useWikilinks"),
