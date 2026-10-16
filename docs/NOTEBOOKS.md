@@ -68,10 +68,9 @@ the next run starts a new one.
 A block run in a kernel can ask for a line: when the code calls `input()` the
 kernel sends `input_request` on its stdin channel and a one-line prompt appears
 under the block, with the kernel's own prompt text. Enter sends the line back
-as `input_reply`; `getpass` asks the same way and the line is masked. Esc (or
-the stop control) interrupts the run instead of answering, which is Jupyter's
-own way out. The prompt is the editor's, so it scrolls with the block, and a
-run that nobody answers ends at the block's timeout. A block outside a kernel
+as `input_reply`; `getpass` asks the same way and the line is masked. Esc
+interrupts the run instead of answering, which is Jupyter's
+own way out. The prompt is the editor's, so it scrolls with the block. A block outside a kernel
 (the system's own one-shot tool) has no terminal behind it, so `input()` there
 still raises `EOFError`.
 
@@ -149,7 +148,7 @@ the machine; neither is installed on starbase-1, so it is not built.
 ## Jupyter notebooks (.ipynb)
 
 A `.ipynb` in the vault opens as a note when the notebooks feature is on (it
-is a plain file with its own editor when off). Markdown cells are the text,
+is refused like any other file that is not a note when off). Markdown cells are the text,
 code cells are fenced blocks in the notebook's language (from
 `metadata.kernelspec`, else `language_info`, else python), raw cells are
 ```` ```raw ```` fences, and two markdown cells in a row are told apart by an

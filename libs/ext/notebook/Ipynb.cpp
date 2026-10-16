@@ -376,6 +376,8 @@ QString ipynbMarkdown(const IpynbDocument &document)
     return markdownOf(cellsOf(document.root), document.language);
 }
 
+// ponytail: synchronous on the caller (the GUI thread, at every readNote incl. the reload after a save); large PNG outputs
+// cost decode + cache writes each time. Move to a worker, or skip unchanged keys, if a notebook is slow to open.
 void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier)
 {
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
