@@ -61,9 +61,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     const QSize viewport(int(page.width() / scale), int(page.height() / scale));
     editor.resize(viewport);
     editor.setNoteText(printed);
-    if (editor.m_parseWatcher.isRunning())
-        editor.m_parseWatcher.waitForFinished(); // a big note parses on the pool
-    QCoreApplication::processEvents(); // lets that parse land
+    editor.finishParse(); // a big note parses on the pool
 
     // Everything laid out, not just what a screen would show.
     for (BlockView &view : editor.m_blocks) {

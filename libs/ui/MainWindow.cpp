@@ -1231,8 +1231,12 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     const MarkdownEditor::FileEmbedRenderer canvasEmbed =
         [this, editor](const QString &path, const QString &subpath, int width,
                        const std::function<void(QImage)> &deliver) {
-            QTimer::singleShot(0, this, [this, editor, path, subpath, width, deliver] {
-                CanvasView &canvas = canvasEmbedView(editor, path, subpath);
+            // The tab can close before this turn: a view made then would sit
+            // under a key nobody erases (dropLeaf() already ran).
+            QTimer::singleShot(0, this, [this, guard = QPointer<MarkdownEditor>(editor), path, subpath, width, deliver] {
+                if (!guard)
+                    return;
+                CanvasView &canvas = canvasEmbedView(guard, path, subpath);
                 if (canvas.path().isEmpty()) {
                     deliver({});
                     return;

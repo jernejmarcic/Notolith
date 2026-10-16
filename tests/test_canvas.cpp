@@ -19,6 +19,7 @@
 #include <QPainter>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include "CanvasCommands.h"
 #include "CanvasDocument.h"
@@ -578,6 +579,24 @@ TEST(CanvasRenderTest, AStraightVerticalEdgeIsDrawn)
     for (int x = 195; x <= 205; ++x)
         drawn += frame.pixel(x, 250) != background;
     EXPECT_GT(drawn, 0);
+}
+
+TEST(CanvasRenderTest, ABigTextNodeParsesWithoutAnEventLoopInsideThePaint)
+{
+    // paintEvent must not dispatch timers or deferred deletes: Ctrl+W landing
+    // in a nested loop would free the view while it is still painting.
+    QString text = QStringLiteral("# Big\n\n");
+    while (text.size() < 200 * 1024)
+        text += QStringLiteral("A paragraph of words to make the node big enough.\n\n");
+    CanvasView view;
+    view.resize(400, 300);
+    view.document().addNode(makeTextNode(QRectF(20, 20, 300, 200), text));
+
+    bool fired = false;
+    QTimer::singleShot(0, &view, [&fired] { fired = true; });
+    const QImage frame = view.grab().toImage();
+    EXPECT_FALSE(frame.isNull());
+    EXPECT_FALSE(fired);
 }
 
 TEST(CanvasFitTest, OpeningACanvasShowsAllOfIt)
