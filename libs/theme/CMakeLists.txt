@@ -1,4 +1,6 @@
 add_library(noteAppC_theme STATIC
+    PopupStyle.cpp
+    PopupStyle.h
     Theme.cpp
     Theme.h
     Scheme.cpp
@@ -31,6 +33,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/circle-alert.svg
     icons/circle-check.svg
     icons/circle-help.svg
+    icons/code.svg
     icons/clipboard-list.svg
     icons/ellipsis.svg
     icons/external-link.svg
@@ -56,6 +59,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/play.svg
     icons/plus.svg
     icons/quote.svg
+    icons/spin-up.svg
     icons/square.svg
     icons/search.svg
     icons/settings.svg
@@ -73,4 +77,4 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
 # root find_package asks for it, so nothing is requested twice here.
 
 target_include_directories(noteAppC_theme PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Svg Qt6::Network)
+target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Network)

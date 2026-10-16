@@ -168,3 +168,36 @@ Like `callouts.ini` and `codeblocks.ini`, a theme reloads the moment its file
 changes - edit the selected scheme and the window restyles with no restart -
 and adding or removing a file in a themes directory updates the settings
 page's list while it is open.
+
+## Popups, the status bar and the inline title
+
+Jernej, 2026-10-16: "the general design is fine, I just want refinements".
+
+- **Rounded popups.** A QSS `border-radius` on a menu, a tooltip or the `[[`
+  suggester only rounds the frame; the popup window is still a rectangle.
+  `libs/theme/PopupStyle` (Fusion in a `QProxyStyle`, installed by the app and
+  by `noteAppC_shot`) makes every popup-type window frameless and translucent
+  when it is polished, so one place covers menus, combo lists, tooltips, the
+  suggesters and the quick switcher, the ones made later too. A plain `QDialog`
+  popup needs its styled background asked for back, which the style does.
+  Shadows are not drawn: a translucent popup has no window-manager shadow.
+- **Fields.** Inputs on the settings page and in dialogs are rounded fields
+  with a 1px border that turns accent on focus; combo lists and spin buttons
+  follow. Buttons show an accent border on focus. All from tokens.
+- **The status bar** reads like Obsidian's: backlinks, properties, the mode
+  icon, words, characters. Backlinks opens the backlinks pane; properties
+  scrolls the note to its properties. The pencil (or book, or code) icon is the
+  current mode; its menu has Reading, Source mode and Live Preview with a check
+  at the right edge. The word and character counts come with each parse and
+  cost nothing per keystroke; the backlink count is one indexed query, a
+  moment after the index changes. Words and characters follow the `word-count`
+  core plugin switch.
+- **The inline title** is a line edit styled as the heading: click to put a
+  caret in it. Enter or leaving it renames the note through the same path as
+  the file tree (links, history, open tabs, index), Esc or a refused name puts
+  the old one back, Down or Enter moves into the note. A name with a `/` or
+  another character Obsidian refuses, a leading dot, nothing, or one a note
+  already has is refused with a status-bar notice. A note outside a vault is
+  not renamed from here. `noteAppC_shot` takes `--popup <menu name>`,
+  `--tooltip <text>` and `--keys <text>` to show these, and
+  `NOTEAPPC_SHOT_SCREEN=1` for the window system's own composite.

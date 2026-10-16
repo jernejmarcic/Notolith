@@ -49,6 +49,7 @@ class NotebookController;
 class BacklinksPane;
 class BookmarksPane;
 class GraphView;
+class InlineTitleEdit;
 class MarkdownEditor;
 class OutgoingLinksPane;
 class OutlinePane;
@@ -161,6 +162,9 @@ private slots:
     void newNoteIn(const QString &folderRelative);
     void newFolderIn(const QString &folderRelative);
     void renamePathAt(const QModelIndex &index);
+    /// The rename itself, shared by the tree and the inline title: moves the
+    /// file, then links, history, tabs and the index follow. False with `error`.
+    bool renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error);
     void deletePathAt(const QModelIndex &index);
 
 private:
@@ -170,7 +174,7 @@ private:
     struct Leaf {
         QWidget *area = nullptr; ///< the inline title over the editor
         MarkdownEditor *editor = nullptr;
-        QLabel *inlineTitle = nullptr;
+        InlineTitleEdit *inlineTitle = nullptr;
         Note note;        ///< line endings and BOM of the open file
         QString notePath; ///< absolute path, empty when nothing is open
         /// Absolute paths visited in this tab, oldest first; a fresh
@@ -298,6 +302,9 @@ private:
     QString tabBarStyle() const;
     /// Keeps `leaf`'s inline title on the same column as its note text.
     void updateInlineTitleMargins(Leaf *leaf);
+    /// Enter or focus-out in a tab's inline title: rename the note, or refuse
+    /// with a notice and put the old name back.
+    void commitInlineTitle(Leaf *leaf);
     /// Rebuilds `m_theme` from Settings (mode, scheme, accent, font size),
     /// applies it, then every editor/appearance setting that has a live
     /// hook. Called at startup, on any settings-page edit, and whenever the
@@ -414,6 +421,13 @@ private:
     void autosave();
     void updateTitle();
     void updateWordCount();
+    /// The status bar's backlink count for the tab in front: one query.
+    void updateBacklinkCount();
+    /// Live preview, source or reading for the tab in front, as the status
+    /// bar's menu picks it; keeps what Ctrl+E returns to.
+    void setViewMode(MarkdownEditor::Mode mode);
+    /// The mode button's icon and the menu's check mark follow the editor.
+    void updateModeButton();
 void updateVimStatus();
     void onIndexChanged();
     /// Opens a vault-relative path from the index or the switcher.
@@ -569,6 +583,11 @@ void updateVimStatus();
     Hotkeys::Bindings m_editorBindings; ///< for editors made after applyHotkeys()
     MarkdownEditor::Spelling m_editorSpelling;
     QLabel *m_wordCount = nullptr;
+    QLabel *m_charCount = nullptr;
+    QToolButton *m_backlinkStatus = nullptr;
+    QToolButton *m_propertyStatus = nullptr;
+    QToolButton *m_modeButton = nullptr;
+    QTimer m_backlinkCountTimer; ///< a burst of index changes is one count
 QLabel *m_vimStatus = nullptr;
     QLabel *m_syncStatus = nullptr;
     QLabel *m_recordingStatus = nullptr;

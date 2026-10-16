@@ -27,6 +27,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QActionGroup>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -119,6 +120,7 @@
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "FootnotesPane.h"
+#include "InlineTitleEdit.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
 #include "TagsPane.h"
@@ -282,7 +284,60 @@ MainWindow::MainWindow(QWidget *parent)
     rows->addWidget(splitter, 1);
     setCentralWidget(central);
 
+    // Obsidian's status bar: backlinks, properties, the mode, words, characters.
+    const auto statusLink = [this](const char *name) {
+        auto *button = new QToolButton(this);
+        button->setObjectName(QLatin1String(name));
+        button->setAutoRaise(true);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setFocusPolicy(Qt::NoFocus);
+        return button;
+    };
+    m_backlinkStatus = statusLink("backlinkStatus");
+    connect(m_backlinkStatus, &QToolButton::clicked, this, [this] {
+        if (m_backlinks)
+            showRightPane(m_backlinks);
+    });
+    m_propertyStatus = statusLink("propertyStatus");
+    connect(m_propertyStatus, &QToolButton::clicked, this, [this] {
+        // The properties are the first block of the note: bring them into view.
+        m_active->editor->verticalScrollBar()->setValue(0);
+        m_active->editor->setFocus();
+    });
+    m_modeButton = statusLink("modeButton");
+    m_modeButton->setPopupMode(QToolButton::InstantPopup);
+    m_modeButton->setIconSize(QSize(14, 14));
+    {
+        auto *menu = new QMenu(m_modeButton);
+        menu->setObjectName(QStringLiteral("modeMenu"));
+        auto *group = new QActionGroup(menu);
+        const struct {
+            const char *id;
+            const char *icon;
+            QString label;
+            MarkdownEditor::Mode mode;
+        } entries[] = {
+            {"mode-reading", "book-open", tr("Reading"), MarkdownEditor::Mode::Reading},
+            {"mode-source", "code", tr("Source mode"), MarkdownEditor::Mode::Source},
+            {"mode-live", "pencil", tr("Live Preview"), MarkdownEditor::Mode::LivePreview},
+        };
+        for (const auto &entry : entries) {
+            QAction *action = menu->addAction(entry.label);
+            action->setObjectName(QLatin1String(entry.id));
+            action->setCheckable(true);
+            action->setData(entry.icon);
+            group->addAction(action);
+            const auto mode = entry.mode;
+            connect(action, &QAction::triggered, this, [this, mode] { setViewMode(mode); });
+        }
+        m_modeButton->setMenu(menu);
+    }
+    m_modeButton->hide();
+    m_backlinkCountTimer.setSingleShot(true);
+    m_backlinkCountTimer.setInterval(200);
+    connect(&m_backlinkCountTimer, &QTimer::timeout, this, &MainWindow::updateBacklinkCount);
     m_wordCount = new QLabel(this);
+    m_charCount = new QLabel(this);
     m_vimStatus = new QLabel(this);
     m_vimStatus->setObjectName(QStringLiteral("vimStatus"));
     m_vimStatus->hide();
@@ -297,7 +352,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_recordingStatus->hide();
     statusBar()->addPermanentWidget(m_recordingStatus);
     statusBar()->addPermanentWidget(m_vimStatus);
+    statusBar()->addPermanentWidget(m_backlinkStatus);
+    statusBar()->addPermanentWidget(m_propertyStatus);
+    statusBar()->addPermanentWidget(m_modeButton);
     statusBar()->addPermanentWidget(m_wordCount);
+    statusBar()->addPermanentWidget(m_charCount);
     statusBar()->addPermanentWidget(m_vaultLabel);
     statusBar()->setSizeGripEnabled(false);
 
@@ -666,14 +725,23 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // ponytail: the inline title is a fixed label above the editor, so it does
     // not scroll away like Obsidian's. It becomes the first block once the
     // Phase 2 engine owns the layout.
-    leaf->inlineTitle = new QLabel(leaf->area);
+    leaf->inlineTitle = new InlineTitleEdit(leaf->area);
     leaf->inlineTitle->setObjectName(QStringLiteral("inlineTitle"));
     leaf->inlineTitle->setVisible(false);
+    // Enter and losing the focus rename the note; Esc and Down leave the
+    // field for the text.
+    connect(leaf->inlineTitle, &QLineEdit::editingFinished, this, [this, leaf] { commitInlineTitle(leaf); });
 
     // Its Resize and FocusIn events reach eventFilter() through the
     // application-wide filter installed in the constructor.
     MarkdownEditor *editor = new MarkdownEditor(leaf->area);
     leaf->editor = editor;
+    connect(leaf->inlineTitle, &QLineEdit::returnPressed, editor, qOverload<>(&QWidget::setFocus));
+    connect(leaf->inlineTitle, &InlineTitleEdit::moveDown, editor, qOverload<>(&QWidget::setFocus));
+    connect(leaf->inlineTitle, &InlineTitleEdit::cancelled, this, [this, leaf, editor] {
+        leaf->inlineTitle->setText(QFileInfo(leaf->notePath).completeBaseName());
+        editor->setFocus();
+    });
     editor->setEnabled(false);
     connect(editor, &MarkdownEditor::modificationChanged, this, [this, leaf] {
         if (leaf == m_active)
@@ -698,6 +766,16 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(editor, &MarkdownEditor::wordCountChanged, this, [this, leaf] {
         if (leaf == m_active)
             updateWordCount();
+    });
+    // Each parse also settles the character and property counts, which
+    // wordCountChanged alone would miss when only those moved.
+    connect(editor, &MarkdownEditor::headingsChanged, this, [this, leaf] {
+        if (leaf == m_active)
+            updateWordCount();
+    });
+    connect(editor, &MarkdownEditor::modeChanged, this, [this, leaf] {
+        if (leaf == m_active)
+            updateModeButton();
     });
     editor->setLinkResolver(m_resolveLink);
     connect(editor, &MarkdownEditor::linkActivated, this, &MainWindow::followLink);
@@ -1350,6 +1428,7 @@ void MainWindow::dropLeaf(Leaf *leaf)
     // Nothing of this tab may call back in once it is gone: its lambdas hold
     // the Leaf pointer.
     leaf->editor->disconnect(this);
+    leaf->inlineTitle->disconnect(this);
 #ifdef NOTEAPPC_HAVE_CANVAS
     // Its own canvas embeds' view state goes with it too - "until the note
     // is closed" means this, not whenever Qt gets around to deleting the
@@ -1717,7 +1796,8 @@ void MainWindow::applyFeatures()
 #endif
     if (!featureOn("page-preview"))
         delete m_preview;
-    m_wordCount->setVisible(featureOn("word-count"));
+    if (m_active)
+        updateWordCount(); // the word and character counts are one feature
 
     // A command is its plugin's while its id starts with that plugin's id,
     // the way Obsidian names them ("graph:open", "daily-notes").
@@ -2115,6 +2195,14 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
             break;
         }
     }
+    if (event->type() == QEvent::FocusIn) {
+        for (const auto &leaf : m_leaves) {
+            if (watched == leaf->inlineTitle) {
+                activateLeaf(leaf.get());
+                break;
+            }
+        }
+    }
     if (event->type() == QEvent::MouseButtonRelease
         && static_cast<QMouseEvent *>(event)->button() == Qt::MiddleButton && m_tree
         && watched == m_tree->viewport()) {
@@ -2148,7 +2236,7 @@ void MainWindow::updateInlineTitleMargins(Leaf *leaf)
 {
     const int column = m_theme.value(QStringLiteral("--file-line-width")).toInt();
     const int side = qMax(24, (leaf->editor->width() - column) / 2);
-    leaf->inlineTitle->setContentsMargins(side, 32, side, 0);
+    leaf->inlineTitle->setTextMargins(side, 32, side, 0);
 }
 
 void MainWindow::toggleSidebar()
@@ -2387,6 +2475,8 @@ void MainWindow::onIndexChanged()
     }
     // The backlinks, tags and outgoing-links panes listen to Index::changed
     // themselves; refreshing them here as well did each one twice per save.
+    if (m_backlinkStatus->isVisible())
+        m_backlinkCountTimer.start();
     if (m_index.isOpen() && m_active->notePath.isEmpty())
         m_vaultLabel->setText(tr("%1  -  %2 notes").arg(m_vault.name()).arg(m_index.noteCount()));
 }
@@ -3208,6 +3298,8 @@ void MainWindow::applyTheme()
 
     setFont(m_theme.uiFont());
     m_tree->setFont(m_theme.uiFont());
+    if (m_active && m_modeButton)
+        updateModeButton();
     for (const auto &leaf : m_leaves) {
         leaf->editor->setTheme(m_theme);
 #ifdef NOTEAPPC_HAVE_CANVAS
@@ -5036,16 +5128,73 @@ void MainWindow::updateVimStatus()
 void MainWindow::updateWordCount()
 {
     updateVimStatus(); // both are "the status bar, for the tab now in front"
+    updateModeButton();
     // A canvas or a base has no words of its own to count.
-    if (m_active->notePath.isEmpty() || m_active->view || !featureOn("word-count")) {
-        m_wordCount->clear();
-        return;
-    }
+    const bool note = !m_active->notePath.isEmpty() && !m_active->view;
+    m_propertyStatus->setVisible(note);
+    m_backlinkStatus->setVisible(note && m_backlinks);
+    if (note)
+        m_backlinkCountTimer.start();
     const int words = m_active->editor->wordCount();
-    if (words < 0)
-        m_wordCount->clear(); // a large note, still being counted
-    else
-        m_wordCount->setText(tr("%n word(s)", nullptr, words));
+    if (!note || !featureOn("word-count") || words < 0) { // < 0: a large note, still being counted
+        m_wordCount->clear();
+        m_charCount->clear();
+    } else {
+        const QLocale locale;
+        m_wordCount->setText(tr("%1 words").arg(locale.toString(words)));
+        m_charCount->setText(tr("%1 characters").arg(locale.toString(m_active->editor->noteText().size())));
+    }
+    m_wordCount->setVisible(!m_wordCount->text().isEmpty());
+    m_charCount->setVisible(!m_charCount->text().isEmpty());
+    if (note) {
+        const qsizetype properties = m_active->editor->properties().size();
+        m_propertyStatus->setText(properties == 1 ? tr("1 property")
+                                                  : tr("%1 properties").arg(properties));
+    }
+}
+
+void MainWindow::updateBacklinkCount()
+{
+    if (!m_backlinkStatus->isVisible() || !m_index.isOpen() || !m_vault.isValid())
+        return;
+    const qsizetype links = m_index.backlinks(m_active->notePath).size();
+    m_backlinkStatus->setText(links == 1 ? tr("1 backlink") : tr("%1 backlinks").arg(links));
+}
+
+void MainWindow::setViewMode(MarkdownEditor::Mode mode)
+{
+    MarkdownEditor *editor = m_active->editor;
+    if (mode == MarkdownEditor::Mode::Reading) {
+        if (editor->mode() != MarkdownEditor::Mode::Reading)
+            m_active->editingMode = editor->mode();
+    } else {
+        m_active->editingMode = mode;
+    }
+    editor->setMode(mode);
+    updateModeButton();
+    editor->setFocus();
+}
+
+void MainWindow::updateModeButton()
+{
+    const bool note = !m_active->notePath.isEmpty() && !m_active->view;
+    m_modeButton->setVisible(note);
+    if (!note)
+        return;
+    const QColor color = m_theme.color(QStringLiteral("--text-muted"));
+    const MarkdownEditor::Mode mode = m_active->editor->mode();
+    const char *current = mode == MarkdownEditor::Mode::Reading  ? "mode-reading"
+                          : mode == MarkdownEditor::Mode::Source ? "mode-source"
+                                                                 : "mode-live";
+    for (QAction *action : m_modeButton->menu()->actions()) {
+        action->setIcon(Icons::icon(action->data().toString(), color, 16));
+        const bool on = action->objectName() == QLatin1String(current);
+        action->setChecked(on);
+        // Obsidian's check sits at the right edge: the shortcut column does that.
+        action->setText(action->text().section(QLatin1Char('\t'), 0, 0) + (on ? QStringLiteral("\t\u2713") : QString()));
+        if (on)
+            m_modeButton->setIcon(Icons::icon(action->data().toString(), color, 14));
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event)
@@ -5171,13 +5320,17 @@ void MainWindow::renamePathAt(const QModelIndex &index)
     if (!ok || newName.isEmpty() || newName == currentName)
         return;
 
+    QString error;
+    if (!renameVaultPath(oldPath, isDir, newName, &error))
+        QMessageBox::warning(this, tr("Rename"), tr("Could not rename %1:\n%2").arg(currentName, error));
+}
+
+bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error)
+{
     const QString oldRelative = m_vault.relative(oldPath);
     QString newPath;
-    QString error;
-    if (!m_vault.renamePath(oldPath, newName, &newPath, &error)) {
-        QMessageBox::warning(this, tr("Rename"), tr("Could not rename %1:\n%2").arg(currentName, error));
-        return;
-    }
+    if (!m_vault.renamePath(oldPath, newName, &newPath, error))
+        return false;
     const QString newRelative = m_vault.relative(newPath);
     notifyPlugins("note-renamed", newPath);
 #ifdef NOTEAPPC_HAVE_HISTORY
@@ -5230,6 +5383,29 @@ void MainWindow::renamePathAt(const QModelIndex &index)
     // patching the renamed rows by hand, folder rename included.
     m_indexer->rebuild();
     updateTitle();
+    return true;
+}
+
+void MainWindow::commitInlineTitle(Leaf *leaf)
+{
+    const QString current = QFileInfo(leaf->notePath).completeBaseName();
+    const QString name = leaf->inlineTitle->text().trimmed();
+    if (leaf->notePath.isEmpty() || name == current)
+        return;
+    QString error;
+    if (!m_vault.isValid() || !m_vault.contains(leaf->notePath))
+        error = tr("only notes in a vault can be renamed");
+    else if (name.startsWith(QLatin1Char('.')))
+        error = tr("a name cannot start with a dot");
+    else
+        renameVaultPath(leaf->notePath, false, name, &error);
+    if (!error.isEmpty()) {
+        statusBar()->showMessage(tr("Could not rename: %1").arg(error), 4000);
+        leaf->inlineTitle->setText(current);
+    }
+    // On success every tab on the note, this one included, was retitled by
+    // renameVaultPath; the field may still hold the untrimmed text.
+    leaf->inlineTitle->setText(QFileInfo(leaf->notePath).completeBaseName());
 }
 
 void MainWindow::deletePathAt(const QModelIndex &index)

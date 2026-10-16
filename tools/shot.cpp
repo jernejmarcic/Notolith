@@ -5,19 +5,26 @@
 //   noteAppC_shot <vault> <note> <out.png> [dark|light] [width height]
 //   noteAppC_shot - <file>  <out.png> [dark|light] [w h] --single
 //   ... [--command <id> [--type <text>]]
+//   ... [--popup <QMenu object name>] [--tooltip <text>]   a menu / tooltip over the window
 
 #include <QAction>
 #include <QApplication>
 #include <QFileInfo>
 #include <QTemporaryDir>
+#include <QGuiApplication>
 #include <QImage>
+#include <QScreen>
+#include <QKeyEvent>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPainter>
-#include <QStyleFactory>
+#include <QToolButton>
+#include <QToolTip>
 #include <QTimer>
 
 #include "MarkdownEditor.h"
 #include "MainWindow.h"
+#include "PopupStyle.h"
 #include "Settings.h"
 
 int main(int argc, char *argv[])
@@ -37,7 +44,7 @@ int main(int argc, char *argv[])
     if (!qEnvironmentVariableIsSet("QT_FORCE_STDERR_LOGGING"))
         qputenv("QT_FORCE_STDERR_LOGGING", "1");
     QApplication app(argc, argv);
-    QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    QApplication::setStyle(new noteAppC::PopupStyle);
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-shot"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-shot"));
 
@@ -119,11 +126,19 @@ int main(int argc, char *argv[])
     int status = 0;
     const auto capture = [&] {
         QImage shot = window.grab().toImage();
+        // The window system's own composite, which includes translucent popups
+        // the way a user sees them: the one thing a widget grab cannot show.
+        if (qEnvironmentVariableIsSet("NOTEAPPC_SHOT_SCREEN")) {
+            shot = QGuiApplication::primaryScreen()->grabWindow(0).toImage();
+            if (!shot.save(args.at(3)))
+                status = 1;
+            return app.quit();
+        }
         // A popup - the switcher, the command palette - is a window of its
         // own, which grabbing the main window leaves out.
         QPainter painter(&shot);
         for (QWidget *top : QApplication::topLevelWidgets()) {
-            if (top != &window && top->isVisible() && top->windowType() == Qt::Popup)
+            if (top != &window && top->isVisible() && (top->windowType() == Qt::Popup || top->windowType() == Qt::ToolTip))
                 painter.drawPixmap(window.mapFromGlobal(top->mapToGlobal(QPoint(0, 0))), top->grab());
         }
         painter.end();
@@ -135,8 +150,31 @@ int main(int argc, char *argv[])
     };
     // One turn of the event loop so QFileSystemModel's worker fills the tree.
     QTimer::singleShot(600, &app, [&] {
-        if (command.isEmpty())
-            return capture();
+        // `--popup <name>` opens the menu of that name above its button, and
+        // `--tooltip <text>` shows a tooltip there: separate windows, grabbed
+        // with the rest in capture().
+        if (auto *menu = window.findChild<QMenu *>(flag("--popup")); menu && !flag("--popup").isEmpty()) {
+            const auto *button = qobject_cast<QWidget *>(menu->parent());
+            menu->popup(button->mapToGlobal(QPoint(button->width() - menu->sizeHint().width(),
+                                                    -menu->sizeHint().height() - 4)));
+        }
+        if (!flag("--tooltip").isEmpty()) {
+            auto *button = window.findChild<QToolButton *>(QStringLiteral("backlinkStatus"));
+            QToolTip::showText(button->mapToGlobal(QPoint(0, -36)), flag("--tooltip"), button);
+        }
+        // `--keys <text>` types into the focused widget, for a suggester popup.
+        if (const QString keys = flag("--keys"); !keys.isEmpty()) {
+            for (const QChar c : keys) {
+                QKeyEvent press(QEvent::KeyPress, 0, Qt::NoModifier, QString(c));
+                QCoreApplication::sendEvent(QApplication::focusWidget(), &press);
+            }
+            return QTimer::singleShot(600, &app, capture);
+        }
+        if (command.isEmpty()) {
+            if (flag("--popup").isEmpty() && flag("--tooltip").isEmpty())
+                return capture();
+            return QTimer::singleShot(400, &app, capture); // let the popup map
+        }
         auto *action = window.findChild<QAction *>(command);
         if (!action) {
             // An editor command ("noteAppC:format-all-tables") runs in the
