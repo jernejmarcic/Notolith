@@ -285,19 +285,32 @@ QString SyntaxMap::captureOf(int kateTextStyle)
 
 struct CodeHighlighter::Private {
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
-    KSyntaxHighlighting::Repository repository;
-    KSyntaxHighlighting::Theme theme;
+    /// Made on first use: reading every syntax definition's metadata is
+    /// 2.3 ms, and every editor has a highlighter - a new tab's, a note
+    /// embed's - whether or not its note has a line of code.
+    std::unique_ptr<KSyntaxHighlighting::Repository> repository;
+    bool dark = true;
     mutable Collector collector;
+
+    KSyntaxHighlighting::Repository &repo()
+    {
+        if (!repository) {
+            repository = std::make_unique<KSyntaxHighlighting::Repository>();
+            applyTheme();
+        }
+        return *repository;
+    }
+    void applyTheme()
+    {
+        collector.setTheme(repository->defaultTheme(dark ? KSyntaxHighlighting::Repository::DarkTheme
+                                                         : KSyntaxHighlighting::Repository::LightTheme));
+    }
 #endif
 };
 
 CodeHighlighter::CodeHighlighter()
     : d(std::make_unique<Private>())
 {
-#ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
-    d->theme = d->repository.defaultTheme(KSyntaxHighlighting::Repository::DarkTheme);
-    d->collector.setTheme(d->theme);
-#endif
 }
 
 CodeHighlighter::~CodeHighlighter() = default;
@@ -327,10 +340,9 @@ bool CodeHighlighter::State::operator==(const State &other) const
 void CodeHighlighter::setTheme(const Theme &theme)
 {
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
-    d->theme = d->repository.defaultTheme(theme.isDark()
-                                              ? KSyntaxHighlighting::Repository::DarkTheme
-                                              : KSyntaxHighlighting::Repository::LightTheme);
-    d->collector.setTheme(d->theme);
+    d->dark = theme.isDark();
+    if (d->repository)
+        d->applyTheme();
 #else
     Q_UNUSED(theme);
 #endif
@@ -358,7 +370,7 @@ bool CodeHighlighter::knows(const QString &language) const
 #ifdef NOTEAPPC_HAVE_SYNTAX_HIGHLIGHTING
     if (language.isEmpty())
         return false;
-    return d->repository.definitionForName(kateNameFor(language)).isValid();
+    return d->repo().definitionForName(kateNameFor(language)).isValid();
 #else
     Q_UNUSED(language);
     return false;
@@ -381,11 +393,11 @@ QList<QTextLayout::FormatRange> CodeHighlighter::highlight(const QString &text,
     if (text.isEmpty())
         return {};
 
-    auto definition = d->repository.definitionForName(kateNameFor(language));
+    auto definition = d->repo().definitionForName(kateNameFor(language));
     if (!definition.isValid()) {
         // Fall back on the file-name matcher: "```CMakeLists.txt" and the
         // like still highlight.
-        definition = d->repository.definitionForFileName(language);
+        definition = d->repo().definitionForFileName(language);
     }
     if (!definition.isValid())
         return {};
