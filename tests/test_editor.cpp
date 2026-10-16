@@ -3629,6 +3629,10 @@ bool clickLabelUntilCopied(MarkdownEditor &editor)
             QTest::mouseClick(editor.viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(x, y));
             if (!QGuiApplication::clipboard()->text().isEmpty())
                 return true;
+            // A miss lands in the listing, which then opens as source and
+            // has no header: the caret goes back below the block.
+            editor.setCursorOffset(editor.noteText().size());
+            editor.verticalScrollBar()->setValue(0);
         }
     }
     return false;
@@ -3905,6 +3909,30 @@ TEST(CodeTabTest, TheCaretInsideTheGroupShowsPlainSourceWithoutPanels)
         ++checked;
     }
     EXPECT_EQ(checked, 2);
+}
+
+TEST(CodeTabTest, ACaretInASingleListingShowsItsFencesWithoutAPanel)
+{
+    // Jernej's screenshot: the panel and its header strip were drawn over
+    // the opened fence lines, half hiding "```python" above the listing.
+    const QString note = QStringLiteral("Before.\n\n```python\nprint(1)\nprint(2)\n```\n\nAfter.\n");
+    auto editor = editorWith(note);
+    editor->show();
+    editor->grab();
+    const auto panelBehind = [&editor] {
+        const QImage shot = editor->viewport()->grab().toImage();
+        for (const auto &box : editor->blockBoxes()) {
+            if (box.kind != BlockSpan::Kind::Code)
+                continue;
+            const int y = int(box.rect.center().y());
+            return shot.pixel(editor->textColumn() - 12, y) != shot.pixel(2, y);
+        }
+        return false;
+    };
+    ASSERT_TRUE(panelBehind()) << "a listing at rest sits on its panel";
+    editor->enterBlockAt(note.indexOf(QLatin1String("print(2)")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("```python")));
+    EXPECT_FALSE(panelBehind()) << "a listing being edited is plain source";
 }
 
 TEST(CodeTabTest, TheSelectedTabIsAttachedToItsPanel)

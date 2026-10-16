@@ -3599,10 +3599,15 @@ void MarkdownEditor::updateLayout()
     qreal y = m_topPadding;
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
-        const bool inCaretGroup = caretGroup && view.span.range.start >= caretGroup->span.start
-                                  && view.span.range.start < caretGroup->span.end;
-        if (inCaretGroup != view.inCaretGroup) {
-            view.inCaretGroup = inCaretGroup;
+        // A tab group with the caret in it, or a listing whose fences the
+        // caret has opened, is edited as plain source: its panel and header
+        // drawn over the fence lines hid them.
+        const bool editedAsSource = (caretGroup && view.span.range.start >= caretGroup->span.start
+                                     && view.span.range.start < caretGroup->span.end)
+                                    || (fenceShown && view.span.kind == BlockSpan::Kind::Code
+                                        && view.span.range.overlaps(fenceShown->block));
+        if (editedAsSource != view.editedAsSource) {
+            view.editedAsSource = editedAsSource;
             view.layout.reset();
             view.laidOut = false;
             view.heightEstimated = false;

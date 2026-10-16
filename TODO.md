@@ -1099,27 +1099,31 @@ optimal as it can be".
       you click on it"). Done 273415f: overlay line edit over the title,
       one undo step; on a foldable callout the title edits, the arrow and
       empty header row fold.
-- [ ] Code block that cannot run (`json`, any language with no runner): no
+- [x] Code block that cannot run (`json`, any language with no runner): no
       run button, no warning icon, no "does not know how to run" line
       (Jernej 2026-10-16: "That that should be run should not have a run
       object").
-- [ ] Run output keeps its line breaks: a rustc error printed as one run-on
+- [x] Run output keeps its line breaks: a rustc error printed as one run-on
       line ("Exit code 1error[E0601]...") (Jernej's screenshot 2026-10-16).
-- [ ] Code block header shows the block's name (its `tab`/title, else the
+- [x] Code block header shows the block's name (its `tab`/title, else the
       language) as the bar's title, not a faint language tag on the right
       (Jernej 2026-10-16: "the top bar should be what the name of the
       codeblock is").
-- [ ] Tabbed code groups (```` ```python tab ````, `tab="C++"`): better tab
+- [x] Tabbed code groups (```` ```python tab ````, `tab="C++"`): better tab
       UI, and editing a group shows its source (fences visible, syntax
       highlighting kept) instead of the half-rendered panels (Jernej
       2026-10-16).
-- [ ] Source mode is plain text: no panels, headers, run buttons or any
+- [x] Source mode is plain text: no panels, headers, run buttons or any
       rendering, only syntax highlighting to keep things distinct (Jernej
       2026-10-16: "source mode should show pure text, no rendering").
-- [ ] Demo pane test read the live demo/.obsidian/workspace.json, which the
+- [x] Demo pane test read the live demo/.obsidian/workspace.json, which the
       app rewrites when Jernej uses the demo; now runs on a copy with
       fixtures/demo-workspace.json. [x] done 5e6734f.
 - [x] Graph labels: at the opening zoom only the current note is labelled,
       even in a 4-note vault; Obsidian labels every node at its default
       zoom. Tie the default fade threshold to the fitted zoom (found
       checking the graph merge, 2026-10-16).
+  Code block items above done in lane codeblocks (aedca60).
+- [x] A single fenced block being edited drew its panel and header over its
+      opened fence lines (Jernej's first python screenshot): it is now plain
+      source like a tab group being edited.

@@ -1153,7 +1153,7 @@ private:
         /// Inside the tab group the caret is in, which shows every fence.
         /// Tracked so the caret crossing a group's edge relays out the whole
         /// group, not only the block it landed in.
-        bool inCaretGroup = false;
+        bool editedAsSource = false;
         /// A fence longer than kCodePieceLines is split into pieces of that
         /// many lines, each a block of its own, so an edit relays out one
         /// piece and not the whole listing. The fence's chrome is drawn across
@@ -1588,10 +1588,10 @@ private:
     /// ends no longer compare equal.
     const CodeOptions *codeOptionsFor(const BlockView &view) const;
     qreal codeHeaderHeight() const;
-    /// Source mode draws pure text, and so does a tab group while the caret is
-    /// in it: markdown syntax coloured, listings highlighted, nothing else -
+    /// Source mode draws pure text, and so does a tab group or a fenced
+    /// listing while the caret is in it: markdown syntax coloured, listings highlighted, nothing else -
     /// no panel, header, run control, callout or fold.
-    bool plainSource(const BlockView &view) const { return m_mode == Mode::Source || view.inCaretGroup; }
+    bool plainSource(const BlockView &view) const { return m_mode == Mode::Source || view.editedAsSource; }
     /// Whether this fenced block is laid out under a header strip: `#|`
     /// options, a tab group, a run control, or just a language to name.
     bool hasCodeHeader(const BlockView &view) const;

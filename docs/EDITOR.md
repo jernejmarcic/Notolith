@@ -400,8 +400,10 @@ plain source: with the caret anywhere in it every member shows its fence lines,
 `#|` options and listing as text, no panel, tab strip, run control, gutter or
 caption, and none of its blocks runs ("Run all blocks" skips them) until the
 caret leaves. The listings keep their syntax colours. This is `plainSource()`,
-the one test Source mode shares with it, and `BlockView::inCaretGroup` already
-re-lays the group out when the caret crosses its edge.
+the one test Source mode shares with it, and `BlockView::editedAsSource` already
+re-lays the group out when the caret crosses its edge. A single fenced block
+whose fences the caret has opened is edited the same way: its panel and header
+strip were drawn over the opened fence lines.
 
 ## Source mode
 
