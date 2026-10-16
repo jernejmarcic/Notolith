@@ -497,3 +497,90 @@ TEST(CalloutStyle, ColorIsTheBodyTextNotTheRail)
     EXPECT_EQ(style.color, QColor(0xE6, 0xE6, 0xE6));
 }
 
+
+// --- code block colours (ComplexCodeTest) ------------------------------------
+
+TEST(ComplexCodeTest, TokenStyleParsesColourAndFlags)
+{
+    const auto full = TokenStyle::parse(QStringLiteral("#98C379 Italic bold"));
+    ASSERT_TRUE(full.has_value());
+    EXPECT_EQ(full->color, QColor(0x98, 0xC3, 0x79));
+    EXPECT_TRUE(full->italic);
+    EXPECT_TRUE(full->bold);
+    EXPECT_FALSE(full->underline);
+
+    const auto flagsOnly = TokenStyle::parse(QStringLiteral("underline"));
+    ASSERT_TRUE(flagsOnly.has_value());
+    EXPECT_FALSE(flagsOnly->color.isValid());
+    EXPECT_TRUE(flagsOnly->underline);
+
+    EXPECT_FALSE(TokenStyle::parse(QString()).has_value());
+    EXPECT_FALSE(TokenStyle::parse(QStringLiteral("#98C379 wobbly")).has_value())
+        << "an unknown word drops the rule rather than guessing";
+}
+
+TEST(ComplexCodeTest, IniKeysResolveAndInherit)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("codeblocks.ini"));
+    writeFile(path,
+              QStringLiteral("[python]\n"
+                             "bg = #1E2A3Aff        ; panel fill\n"
+                             "fg = #D8DEE9\n"
+                             "border = #3776AB80\n"
+                             "syntax.keyword = #C678DD\n"
+                             "syntax.function.builtin = #61AFEF bold\n"
+                             "syntax.bogus = nonsense\n"
+                             "aliases = py\n"
+                             "[cython]\n"
+                             "inherits = python\n"
+                             "bg = #000000ff\n"));
+    const LanguageStyles styles = LanguageStyles::load(path);
+
+    const LanguageStyle python = styles.resolve(QStringLiteral("py"));
+    EXPECT_EQ(python.bg, QColor(0x1E, 0x2A, 0x3A));
+    EXPECT_EQ(python.fg, QColor(0xD8, 0xDE, 0xE9));
+    EXPECT_EQ(python.border.alpha(), 0x80);
+    EXPECT_EQ(python.syntax.size(), 2) << "the unparsable value is dropped";
+    EXPECT_TRUE(python.syntax.value(QStringLiteral("function.builtin")).bold);
+    EXPECT_TRUE(python.hasColours());
+
+    const LanguageStyle cython = styles.resolve(QStringLiteral("cython"));
+    EXPECT_EQ(cython.bg, QColor(0, 0, 0)) << "the child's own key wins";
+    EXPECT_EQ(cython.fg, python.fg) << "and the rest comes from the parent";
+    EXPECT_EQ(cython.syntax.size(), 2);
+
+    EXPECT_FALSE(styles.resolve(QStringLiteral("rust")).hasColours())
+        << "an unconfigured language has no colour knob set";
+}
+
+TEST(ComplexCodeTest, ASchemeCarriesASyntaxObject)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = QDir(dir.path()).filePath(QStringLiteral("Mine.json"));
+    writeFile(path,
+              QStringLiteral(R"({"name":"Mine",
+                  "syntax":{"keyword":"#C678DD bold","function.builtin":"#61AFEF"},
+                  "dark":{"--color-red":"#ff0000","syntax":{"keyword":"#111111"}},
+                  "light":{"--color-red":"#aa0000"}})"));
+
+    const SyntaxStyles dark = Scheme::apply(path, Theme::Mode::Dark).syntaxStyles();
+    EXPECT_EQ(dark.size(), 2);
+    EXPECT_EQ(dark.value(QStringLiteral("keyword")).color, QColor(0x11, 0x11, 0x11))
+        << "the mode's own object refines the shared one";
+    EXPECT_EQ(dark.value(QStringLiteral("function.builtin")).color, QColor(0x61, 0xAF, 0xEF));
+
+    const SyntaxStyles light = Scheme::apply(path, Theme::Mode::Light).syntaxStyles();
+    EXPECT_TRUE(light.value(QStringLiteral("keyword")).bold);
+
+    // Saved and read back, it is still there.
+    const QString saved = QDir(dir.path()).filePath(QStringLiteral("Saved.json"));
+    ASSERT_TRUE(Scheme::save(saved, QStringLiteral("Saved"), Scheme::apply(path, Theme::Mode::Dark),
+                             Scheme::apply(path, Theme::Mode::Light)));
+    EXPECT_EQ(Scheme::apply(saved, Theme::Mode::Dark).syntaxStyles().size(), 2);
+
+    EXPECT_TRUE(Theme::builtin(Theme::Mode::Dark).syntaxStyles().isEmpty())
+        << "the built-in schemes leave the highlighter's own colours alone";
+}

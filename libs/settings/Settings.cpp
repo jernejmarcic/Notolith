@@ -52,6 +52,7 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.bulletGlyphs"), QStringLiteral("-=dash,*=dot,+=diamond")},
         {QStringLiteral("editor.alignTables"), true},
         {QStringLiteral("editor.hoverEditButton"), true},
+        {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
         {QStringLiteral("editor.tabWidth"), 4},
 
         // Files and links

@@ -312,10 +312,21 @@ QHash<QString, QString> Scheme::load(const QString &path, Theme::Mode mode, QStr
     const QString key = mode == Theme::Mode::Light ? QStringLiteral("light")
                                                    : QStringLiteral("dark");
     QHash<QString, QString> tokens;
+    // Zed's theme shape: a `syntax` object of dotted capture names, at the
+    // top level for every mode and again inside a mode to refine it. Kept as
+    // `--syntax-<capture>` tokens so a scheme round-trips through Theme and
+    // save() unchanged; the value is "#colour [bold] [italic]", not just a colour.
+    for (const QJsonObject &object : {root.value(QStringLiteral("syntax")).toObject(),
+                                      root.value(key).toObject().value(QStringLiteral("syntax")).toObject()}) {
+        for (auto it = object.constBegin(); it != object.constEnd(); ++it)
+            tokens.insert(QStringLiteral("--syntax-") + it.key(), it.value().toString());
+    }
     // A scheme may carry shared tokens at the top level under "tokens".
     for (const QString &section : {QStringLiteral("tokens"), key}) {
         const QJsonObject object = root.value(section).toObject();
         for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+            if (it.value().isObject())
+                continue; // the mode's own `syntax` object, read above
             const QString value = it.value().toVariant().toString();
             if (isNumericToken(it.key())) {
                 tokens.insert(it.key(), value);

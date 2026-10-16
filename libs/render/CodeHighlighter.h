@@ -3,6 +3,7 @@
 #include <QHash>
 #include <QList>
 #include <QString>
+#include <QTextFormat>
 #include <QTextLayout>
 
 #include <memory>
@@ -10,6 +11,47 @@
 #include "Theme.h"
 
 namespace noteAppC {
+
+/// Token colours for one code block, resolved the way Zed resolves a theme's
+/// `syntax` object: a token has a dotted capture name (`function.builtin`) and
+/// takes the style of the longest dotted prefix some entry names - `function`
+/// covers it when `function.builtin` is absent, `functionx` never does.
+///
+/// Built from layers, most specific first (fence, codeblocks.ini section,
+/// theme): the first layer with a matching prefix decides, so a fence's
+/// `syntax.keyword` also beats a theme's `keyword.control`. An empty map, or
+/// no map at all, leaves the highlighter's own colours untouched.
+class SyntaxMap {
+public:
+    SyntaxMap() = default;
+    explicit SyntaxMap(QList<SyntaxStyles> layers);
+
+    /// A map that names no colour but still has the highlighter tag every
+    /// token with its capture name, for a caller (the publisher) that wants
+    /// the same token segmentation from two runs of which one is mapped.
+    static SyntaxMap tagging();
+
+    bool isEmpty() const { return m_signature == 0; }
+    /// Same signature, same colours: what the highlighter keys its caches by.
+    quint64 signature() const { return m_signature; }
+
+    /// Null when no layer names a prefix of `capture`. `matched`, when given,
+    /// gets the key that did (`keyword` for `keyword.control`).
+    const TokenStyle *resolve(const QString &capture, QString *matched = nullptr) const;
+
+    /// The capture a Kate `Theme::TextStyle` stands for (as an int, so this
+    /// header needs no KSyntaxHighlighting). Empty for plain text, and in a
+    /// build without the library.
+    static QString captureOf(int kateTextStyle);
+
+    /// The capture name a mapped format was made from, empty for a format that
+    /// came out of an unmapped run. Lets the publisher write `tok-*` classes.
+    static QString captureOf(const QTextCharFormat &format);
+
+private:
+    QList<SyntaxStyles> m_layers;
+    quint64 m_signature = 0;
+};
 
 /// Syntax highlighting for fenced code blocks, from KSyntaxHighlighting's
 /// Kate definitions - 300+ languages, the same engine Kate and KDevelop use.
@@ -45,12 +87,15 @@ public:
 
     /// `language` is the info string after the opening fence ("cpp", "py",
     /// "Rust", ...). Unknown languages return no formats rather than failing.
-    QList<QTextLayout::FormatRange> highlight(const QString &text, const QString &language) const;
+    /// `map`, when it names anything, recolours tokens; null (or empty) is
+    /// exactly the output there was before maps existed.
+    QList<QTextLayout::FormatRange> highlight(const QString &text, const QString &language,
+                                              const SyntaxMap *map = nullptr) const;
 
     /// The same, for lines that continue a listing from `*state`; leaves
     /// `*state` where the last of them ended.
     QList<QTextLayout::FormatRange> highlight(const QString &text, const QString &language,
-                                              State *state) const;
+                                              State *state, const SyntaxMap *map = nullptr) const;
 
     /// True when the language has a definition, so the caller can decide
     /// whether a header badge is worth showing.

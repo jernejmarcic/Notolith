@@ -8,6 +8,7 @@
 #include <QSet>
 #include <QUrl>
 #include <algorithm>
+#include <set>
 
 #include "CodeHighlighter.h"
 #include "MermaidCache.h"
@@ -127,6 +128,18 @@ public:
         , m_env(env)
         , m_pageOutputPath(topLevel.outputPath)
     {
+        // The theme's token colours, when it has any (an Obsidian theme's
+        // --code-*, a scheme's `syntax`). Neither: no map, no .tok-* classes,
+        // and highlighting exactly as it was.
+        const noteAppC::SyntaxStyles dark = env.themeDark.syntaxStyles();
+        const noteAppC::SyntaxStyles light = env.highlighterLight ? env.themeLight.syntaxStyles()
+                                                                  : noteAppC::SyntaxStyles();
+        if (!dark.isEmpty() || !light.isEmpty()) {
+            // Both runs are mapped (or tagged) so they segment alike.
+            m_syntaxDark = dark.isEmpty() ? noteAppC::SyntaxMap::tagging() : noteAppC::SyntaxMap({dark});
+            if (env.highlighterLight)
+                m_syntaxLight = light.isEmpty() ? noteAppC::SyntaxMap::tagging() : noteAppC::SyntaxMap({light});
+        }
     }
 
     ContentResult run()
@@ -646,10 +659,13 @@ private:
     /// from.
     QString highlightedLines(const QString &text, const QString &lang)
     {
-        const auto dark = m_env.highlighterDark.highlight(text, lang);
+        const auto dark = m_env.highlighterDark.highlight(
+            text, lang, m_syntaxDark.isEmpty() ? nullptr : &m_syntaxDark);
         const QList<QTextLayout::FormatRange> light =
-            m_env.highlighterLight ? m_env.highlighterLight->highlight(text, lang)
-                                   : QList<QTextLayout::FormatRange>();
+            m_env.highlighterLight
+                ? m_env.highlighterLight->highlight(
+                      text, lang, m_syntaxLight.isEmpty() ? nullptr : &m_syntaxLight)
+                : QList<QTextLayout::FormatRange>();
         if (dark.isEmpty())
             return escapeHtml(text);
 
@@ -668,7 +684,12 @@ private:
                 out += escapeHtml(text.mid(pos, range.start - pos));
             const QString run = text.mid(range.start, range.length);
             const int cls = classFor(range.format, haveLight ? &light.at(i).format : nullptr);
-            out += QStringLiteral("<span class=\"c%1\">%2</span>").arg(cls).arg(escapeHtml(run));
+            QString tok;
+            if (const QString capture = noteAppC::SyntaxMap::captureOf(range.format); !capture.isEmpty()) {
+                m_captures.insert(capture);
+                tok = QStringLiteral(" tok-") + QString(capture).replace(QLatin1Char('.'), QLatin1Char('-'));
+            }
+            out += QStringLiteral("<span class=\"c%1%2\">%3</span>").arg(cls).arg(tok, escapeHtml(run));
             pos = range.start + range.length;
         }
         if (pos < text.size())
@@ -723,9 +744,62 @@ private:
                             .arg(i).arg(QColor(s.light).name(QColor::HexRgb).mid(1), weight, style);
             }
         }
+        // Token classes, for a theme that names token colours: one custom
+        // property and one rule per capture the page used, written after the
+        // .cN rules so they take over, and so a page's own CSS can retune a
+        // token by setting the property. Dotted names become dashed.
+        QMap<QString, QString> darkVars, lightVars; // --code-<key> -> colour
+        QString rules;
+        const auto cssColour = [](const QColor &c) {
+            return c.alpha() == 255 ? c.name(QColor::HexRgb)
+                                    : QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue())
+                                          .arg(c.alphaF(), 0, 'f', 3);
+        };
+        const auto dashed = [](QString name) { return name.replace(QLatin1Char('.'), QLatin1Char('-')); };
+        for (const QString &capture : std::as_const(m_captures)) {
+            QString darkKey, lightKey;
+            const noteAppC::TokenStyle *d = m_syntaxDark.resolve(capture, &darkKey);
+            if (!d)
+                continue;
+            const noteAppC::TokenStyle *l =
+                m_env.highlighterLight ? m_syntaxLight.resolve(capture, &lightKey) : nullptr;
+            QString rule;
+            // A colour only where every theme the page ships has one - else
+            // the other theme would show the dark colour on its own ground.
+            // The variable is named for the key that matched, so `keyword`
+            // colours `keyword.control` through one property.
+            if (d->color.isValid() && (!m_env.highlighterLight || (l && l->color.isValid()))) {
+                darkVars.insert(dashed(darkKey), cssColour(d->color));
+                if (l)
+                    lightVars.insert(dashed(darkKey), cssColour(l->color));
+                rule += QStringLiteral("color:var(--code-%1);").arg(dashed(darkKey));
+            }
+            if (d->bold)
+                rule += QStringLiteral("font-weight:600;");
+            if (d->italic)
+                rule += QStringLiteral("font-style:italic;");
+            if (d->underline)
+                rule += QStringLiteral("text-decoration:underline;");
+            if (!rule.isEmpty())
+                rules += QStringLiteral(".tok-%1{%2}").arg(dashed(capture), rule);
+        }
+        const auto declarations = [](const QMap<QString, QString> &vars) {
+            QString out;
+            for (auto it = vars.cbegin(); it != vars.cend(); ++it)
+                out += QStringLiteral("--code-%1:%2;").arg(it.key(), it.value());
+            return out;
+        };
+
         QString css = QStringLiteral("<style>%1").arg(dark);
-        if (!light.isEmpty())
-            css += QStringLiteral("@media (prefers-color-scheme: light){%1}").arg(light);
+        if (!darkVars.isEmpty())
+            css += QStringLiteral(":root{%1}").arg(declarations(darkVars));
+        css += rules;
+        if (!light.isEmpty() || !lightVars.isEmpty()) {
+            css += QStringLiteral("@media (prefers-color-scheme: light){%1").arg(light);
+            if (!lightVars.isEmpty())
+                css += QStringLiteral(":root{%1}").arg(declarations(lightVars));
+            css += QLatin1Char('}');
+        }
         css += QStringLiteral("</style>\n");
         return css;
     }
@@ -1294,6 +1368,9 @@ private:
     QHash<QString, int> m_headingAnchors;
     QHash<QString, QString> m_iconCache;
     QList<TokenStyle> m_codeStyles;
+    noteAppC::SyntaxMap m_syntaxDark;  ///< empty unless the theme names token colours
+    noteAppC::SyntaxMap m_syntaxLight;
+    std::set<QString> m_captures;      ///< capture names the page used, sorted for stable output
     QList<PendingFormula> m_formulas;
 };
 

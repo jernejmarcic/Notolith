@@ -496,6 +496,10 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
                 tr("Pad a table's cells into straight columns in the file itself when you "
                    "leave a table you edited, so it reads as a table in any text editor."));
+    addToggleRow(layout, QStringLiteral("editor.complexCodeBlocks"), tr("Code block colours"),
+                tr("Let codeblocks.ini, a fence's attributes and the theme set a code block's "
+                   "background, text, border and token colours. Off draws every block in the "
+                   "theme's plain code colours."));
     addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
                 tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "
                    "1.2.1.), counted from the items they sit in. The note's text is unchanged."),

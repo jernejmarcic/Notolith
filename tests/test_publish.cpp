@@ -14,11 +14,15 @@
 #include <QTemporaryDir>
 #include <QtConcurrent>
 
+#include "CodeHighlighter.h"
 #include "Index.h"
 #include "Indexer.h"
 #include "MathRenderer.h"
 #include "MermaidCache.h"
+#include "PageBody.h"
+#include "Parser.h"
 #include "Publisher.h"
+#include "Theme.h"
 #include "Vault.h"
 
 using namespace noteAppC;
@@ -492,4 +496,43 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+TEST(ComplexCodeTest, PublishEmitsTokenClasses)
+{
+    const QString text = QStringLiteral("```cpp\nstatic int x = 0;\nreturn x;\n```\n");
+    ParsedNote note;
+    note.relativePath = QStringLiteral("a.md");
+    note.outputPath = QStringLiteral("a.html");
+    note.title = QStringLiteral("a");
+    note.text = text;
+    note.decorations = Parser().parseAll(text).decorations;
+    const PublishedNotes notes;
+    const QHash<QString, QString> resolved;
+
+    const auto render = [&](const Theme &dark) {
+        noteAppC::CodeHighlighter highlighter;
+        highlighter.setTheme(dark);
+        const Theme light = Theme::builtin(Theme::Mode::Light);
+        const RenderEnv env{notes, resolved, highlighter, nullptr, dark, light, 4};
+        return PageBody::render(note, env);
+    };
+
+    // A theme that names token colours: the variables, the rules, the classes.
+    Theme themed = Theme::builtin(Theme::Mode::Dark);
+    themed.setToken(QStringLiteral("--syntax-keyword"), QStringLiteral("#C678DD bold"));
+    themed.setToken(QStringLiteral("--syntax-type"), QStringLiteral("#61AFEF"));
+    const ContentResult styled = render(themed);
+    EXPECT_TRUE(styled.codeStyle.contains(QLatin1String("--code-keyword:#c678dd")));
+    EXPECT_TRUE(styled.codeStyle.contains(QLatin1String(".tok-type{color:var(--code-type);}")));
+    // `return` is a keyword.control: its own class, the `keyword` variable.
+    EXPECT_TRUE(styled.codeStyle.contains(QLatin1String(
+        ".tok-keyword-control{color:var(--code-keyword);font-weight:600;}")));
+    EXPECT_TRUE(styled.html.contains(QLatin1String("tok-type\">int")));
+
+    // A theme that names none: today's page, with no token classes at all.
+    const ContentResult plain = render(Theme::builtin(Theme::Mode::Dark));
+    EXPECT_FALSE(plain.codeStyle.contains(QLatin1String("tok-")));
+    EXPECT_FALSE(plain.codeStyle.contains(QLatin1String("--code-")));
+    EXPECT_FALSE(plain.html.contains(QLatin1String("tok-")));
 }

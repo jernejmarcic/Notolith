@@ -6,6 +6,8 @@
 #include <QSet>
 #include <QString>
 
+#include "LanguageStyle.h"
+
 namespace noteAppC {
 
 /// Colour scheme. Tokens are keyed by Obsidian's own CSS variable names
@@ -60,6 +62,13 @@ public:
 
     /// Accent colour, rebuilt from `--accent-h/s/l` like Obsidian's picker.
     void setAccent(int hue, int saturationPercent, int lightnessPercent);
+
+    /// Token colours every code block starts from: Obsidian's `--code-keyword`,
+    /// `--code-string`, ... (so an imported theme's code colours land), then
+    /// the `--syntax-<capture>` tokens a scheme's `syntax` object becomes,
+    /// which win. Empty for the built-in schemes - a block then keeps the
+    /// highlighter's own colours.
+    SyntaxStyles syntaxStyles() const;
 
     /// Qt Style Sheet for the whole application, generated from the tokens.
     QString styleSheet() const;
