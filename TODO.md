@@ -123,7 +123,7 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
         crossed whole are tinted); a short row draws its missing cells, and a
         click or Tab into one fills the row in first.
 - [ ] Sync asks the password every session: keep the derived keys in the
-      keyring instead, once Jernej says the keyring is where they belong.
+      keyring instead. Jernej 2026-10-16: "Use keyring" (lane sync).
 - [x] Lockbox approval: a person approves a device enrolling by lockbox,
       comparing a fingerprint shown on both; before, every device the server
       listed was sealed the keys (a server could list its own). 9647a92.
@@ -962,8 +962,8 @@ optimal as it can be".
       table while dragging a column, touch, handles on HTML tables. Done
       2026-10-16 (simple HTML grids only). Paste into an HTML cell rectangle
       and clearing a cell's inner spaces done 2026-10-16 too.
-- [ ] Image annotation is off by default (it replaces the plain image tab);
-      Jernej to say whether it should be on.
+- [x] Image annotation is off by default (it replaces the plain image tab).
+      Jernej 2026-10-16: "Keep off".
 - [x] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
@@ -1037,3 +1037,24 @@ optimal as it can be".
 - [x] Obsidian's "Default location for new notes" (`newFileLocation`,
       `newFileFolderPath`) read and in Settings > Files; New note, Ctrl+N
       and the quick switcher's create follow it (left by the switcher lane).
+
+## Fable audit round 2, 2026-10-16
+
+- [ ] Rename while a linking note is open and modified: the rewritten links
+      are lost to the editor's stale text on the next autosave. Save open
+      notes before a rename (lane rename).
+- [ ] Folder rename rewrites no path-form links (`[[Projects/Plan]]`,
+      `[x](Projects/Plan.md)`); Obsidian does (lane rename).
+- [ ] A failed quiet autosave is never retried, and closing then silently
+      refuses; retry on the next pause, fall back to the Save/Discard box
+      (lane autosave).
+- [ ] CanvasRender spins a nested QEventLoop inside paintEvent for a big
+      text node (re-entrancy, up to 500 ms on the UI thread); finish the
+      parse synchronously instead; same in PdfExport; the canvas-embed
+      singleShot holds a raw MarkdownEditor* (lane canvasparse).
+- [ ] SyncJournal::writeBase truncates in place (torn base -> conflict copy
+      instead of a merge); QSaveFile (lane sync).
+- [ ] Licence: GPL-3.0-or-later (Jernej 2026-10-16). LICENSE, PKGBUILD,
+      AppStream, README.
+- [ ] Delete the leaked test history repos (Jernej 2026-10-16: only those
+      whose vault no longer exists).
