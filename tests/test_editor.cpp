@@ -4905,6 +4905,87 @@ TEST(HtmlRendererTest, GradientsRoundedCornersAndPerSideBorders)
     EXPECT_TRUE(near(sides.pixelColor(58, 77), Qt::blue)) << sides.pixelColor(58, 77).name().toStdString();
 }
 
+namespace {
+
+QImage renderBox(const QString &style)
+{
+    return HtmlRenderer::render(QStringLiteral("<div style=\"width:100px;height:60px;%1\"></div>").arg(style),
+                                testHtmlTheme(), 300, QString());
+}
+
+/// Nothing drawn here: the block's image is transparent where no box paints.
+bool isWhite(QColor c)
+{
+    return c.alpha() < 20 || (c.red() > 235 && c.green() > 235 && c.blue() > 235);
+}
+
+} // namespace
+
+TEST(HtmlRendererTest, DoubleBorderLeavesAGap)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    // 9 px border at (8,8): outer third y 8-11, gap 11-14, inner third 14-17.
+    const QImage image = renderBox(QStringLiteral("border:9px double #ff0000"));
+    ASSERT_FALSE(image.isNull());
+    EXPECT_EQ(image.pixelColor(58, 9), QColor(Qt::red));
+    EXPECT_TRUE(isWhite(image.pixelColor(58, 12))) << image.pixelColor(58, 12).name().toStdString();
+    EXPECT_EQ(image.pixelColor(58, 15), QColor(Qt::red));
+    // The inside of the box is still empty.
+    EXPECT_TRUE(isWhite(image.pixelColor(58, 40)));
+}
+
+TEST(HtmlRendererTest, GrooveRidgeInsetOutsetShadeTheirSides)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    const auto lum = [](QColor c) { return c.red() + c.green() + c.blue(); };
+    const QColor base(0, 160, 0);
+    // Box is 118 x 78 from (8,8): top band y 8-17, bottom band y 77-86.
+    const QImage groove = renderBox(QStringLiteral("border:10px groove #00a000"));
+    ASSERT_FALSE(groove.isNull());
+    EXPECT_LT(lum(groove.pixelColor(58, 10)), lum(groove.pixelColor(58, 15))) << "groove top: outer half dark";
+    EXPECT_GT(lum(groove.pixelColor(58, 84)), lum(groove.pixelColor(58, 79))) << "groove bottom: outer half light";
+    const QImage ridge = renderBox(QStringLiteral("border:10px ridge #00a000"));
+    EXPECT_GT(lum(ridge.pixelColor(58, 10)), lum(ridge.pixelColor(58, 15))) << "ridge top: outer half light";
+    EXPECT_LT(lum(ridge.pixelColor(58, 84)), lum(ridge.pixelColor(58, 79))) << "ridge bottom: outer half dark";
+    const QImage inset = renderBox(QStringLiteral("border:10px inset #00a000"));
+    EXPECT_LT(lum(inset.pixelColor(58, 12)), lum(inset.pixelColor(58, 82))) << "inset: top darker than bottom";
+    EXPECT_EQ(inset.pixelColor(58, 82), base);
+    EXPECT_LT(lum(inset.pixelColor(10, 40)), lum(inset.pixelColor(124, 40))) << "inset: left darker than right";
+    const QImage outset = renderBox(QStringLiteral("border:10px outset #00a000"));
+    EXPECT_GT(lum(outset.pixelColor(58, 12)), lum(outset.pixelColor(58, 82))) << "outset: top lighter than bottom";
+    EXPECT_EQ(outset.pixelColor(58, 12), base);
+}
+
+TEST(HtmlRendererTest, RadiiWithMismatchedSides)
+{
+    if (!HtmlRenderer::isAvailable())
+        GTEST_SKIP() << "built without litehtml";
+    // Red top, blue bottom, no side borders, 20 px radius, one corner square.
+    const QImage image = renderBox(QStringLiteral(
+        "border-top:6px solid #ff0000;border-bottom:6px solid #0000ff;border-radius:20px 20px 20px 0"));
+    ASSERT_FALSE(image.isNull());
+    EXPECT_EQ(image.pixelColor(58, 10), QColor(Qt::red));
+    EXPECT_EQ(image.pixelColor(58, 75), QColor(Qt::blue));
+    EXPECT_TRUE(isWhite(image.pixelColor(9, 9))) << "the rounded top-left corner is cut, not mitred";
+    EXPECT_TRUE(isWhite(image.pixelColor(124, 9))) << "so is the top-right one";
+    EXPECT_EQ(image.pixelColor(10, 74), QColor(Qt::blue)) << "the square bottom-left corner is filled";
+    // The red follows the curve: past the radius the stroke is on the top edge.
+    EXPECT_EQ(image.pixelColor(30, 9), QColor(Qt::red));
+
+    // Dashed with a differing side: the dashes leave gaps along the top.
+    const QImage dashed = renderBox(QStringLiteral("border-top:4px dashed #ff0000;border-bottom:4px solid #0000ff"));
+    int red = 0, gaps = 0;
+    for (int x = 12; x < 120; ++x) {
+        const QColor c = dashed.pixelColor(x, 10);
+        red += c == QColor(Qt::red);
+        gaps += isWhite(c);
+    }
+    EXPECT_GT(red, 20);
+    EXPECT_GT(gaps, 10);
+}
+
 TEST(HtmlRendererTest, ListMarkersUseTheirNumeralSystem)
 {
     if (!HtmlRenderer::isAvailable())

@@ -5,7 +5,14 @@
 #include <QString>
 #include <QStringList>
 
+#include <optional>
+
 namespace noteAppC {
+
+/// An href found inside a book resolved to an archive entry name, or nothing
+/// when it is remote, embedded, archive-absolute or climbs past the root
+/// (EpubDocument::resolveArchivePath forwards here).
+std::optional<QString> resolveEpubPath(const QString &fromEntry, const QString &href);
 
 /// Read-only access to an EPUB's zip container through libarchive.
 ///

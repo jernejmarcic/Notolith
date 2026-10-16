@@ -591,6 +591,8 @@ public:
     /// file card (icon, name, size) - the fallback for a binary file, or any
     /// file with no richer renderer.
     bool isFileCardAt(qsizetype offset) const;
+    /// For the tests: whether that file card shows an EPUB's cover.
+    bool fileCardHasCoverAt(qsizetype offset) const;
     /// For the tests: whether that block is an audio or video player card.
     bool isMediaCardAt(qsizetype offset) const;
     /// How many embeds the block containing `offset` rendered inline - see
@@ -1114,6 +1116,7 @@ private:
         QString fileCardLabel;
         QString fileCardSize;
         QRectF fileCardRect; ///< block-local; the whole card is the click target
+        QPixmap fileCardCover; ///< an EPUB's cover, when it has one and it has been read
 
         /// One embedded file inside a block that holds more than one embed,
         /// or mixes an embed with running text, drawn inline - see
@@ -1589,6 +1592,16 @@ private:
     /// opens it on click. Also where layoutSourceFile redirects when the
     /// bytes it read back are not text - never shown as a wall of garbage.
     bool layoutFileCard(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// An EPUB card's cover, read off the UI thread (a zip walk and an image
+    /// decode) and kept per "path|mtime|size"; a null pixmap until it lands,
+    /// when the cards showing that file are laid out again.
+    QPixmap ensureEpubCoverAsync(const QString &path, qint64 mtime, qint64 size);
+    void deliverEpubCover(const QString &key, const QString &path, QImage cover);
+    struct EpubCoverEntry {
+        bool pending = false;
+        QPixmap cover;
+    };
+    QHash<QString, EpubCoverEntry> m_epubCoverCache;
     void paintFileCard(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleFileCardClick(const BlockView &view, const QPoint &point, qreal left,
                              qreal top) const;

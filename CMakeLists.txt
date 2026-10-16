@@ -253,6 +253,11 @@ endif()
 get_property(noteappc_have_litehtml GLOBAL PROPERTY NOTEAPPC_HAVE_LITEHTML)
 if(NOTEAPPC_WITH_EPUB AND TARGET PkgConfig::LIBARCHIVE AND noteappc_have_litehtml)
     add_subdirectory(libs/ext/epub)
+    # The editor's EPUB embed card reads the cover through the reader's own
+    # zip code; linked here because libs/editor is configured before the
+    # reader, which itself links the editor.
+    target_link_libraries(noteAppC_editor PRIVATE noteAppC_epubcover)
+    target_compile_definitions(noteAppC_editor PRIVATE NOTEAPPC_HAVE_EPUBCOVER)
 endif()
 if(NOTEAPPC_WITH_PUBLISH)
     add_subdirectory(libs/ext/publish)

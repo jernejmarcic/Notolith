@@ -49,6 +49,17 @@ tags, text stranded in a table), and two block elements on one line
 (`<p>a</p><p>b</p>`): each block element must start its own line, because a
 block of the editor is whole lines.
 
+**Borders in the litehtml image** (`libs/render/HtmlRenderer.cpp`): every
+CSS 2.1 border style is drawn. A uniform `solid`, `dotted` or `dashed` border is
+one stroke round the box; any other case (sides that differ in width, colour
+or style, or `double`, `groove`, `ridge`, `inset`, `outset`) cuts the ring
+between the outer and inner edge into four mitred wedges and draws each side in
+its own style, so per-corner radii (`border-radius: 20px 20px 20px 0`) and
+mixed sides compose. `double` is two thirds-bands with a gap, `groove` and
+`ridge` two halves (outer dark then light, ridge reversed), `inset` and
+`outset` shade the top and left or the bottom and right darker; a near-black
+colour brightens the light side instead.
+
 What it does with the bytes - the file is the truth:
 
 - Typing `&`, `<` or `>` into drawn text writes `&amp;`, `&lt;`, `&gt;`
@@ -362,3 +373,15 @@ already linked for notebook output).
 one test against the installed tool (skipped when absent, a failure under
 `NOTEAPPC_REQUIRE_TOOLS=1`, which the lane check sets); the publish test is in
 `tests/test_publish.cpp`.
+
+## File cards
+
+A file with no richer renderer embeds (`![[x.bin]]`) as a card: icon, name,
+size, a click opens it. An `.epub` card shows the book's cover in place of the
+icon: the manifest item with `properties="cover-image"` (EPUB 3), else the one
+`<meta name="cover">` names (EPUB 2). The cover is read off the UI thread
+(`libs/ext/epub/EpubCover.cpp`, a zip walk and an image decode, scaled to at
+most 256 px) and kept per path, mtime and size; the card is laid out without it
+first and grows from 52 to 96 px when it lands. A book with no cover, or one
+that does not decode, stays the plain card. Built with the EPUB module
+(`NOTEAPPC_WITH_EPUB`); without it the card is always the plain one.

@@ -212,6 +212,31 @@ TEST(SearchGrammarTest, BlockRequiresBothWordsInTheSameParagraph)
     EXPECT_FALSE(matchesText(QStringLiteral("block:(dog fish)"), text));
 }
 
+TEST(SearchGrammarTest, BlockIsEachListItemHeadingAndCalloutLine)
+{
+    // Each list item (a nested one too) is its own block, as in Obsidian.
+    const QString list = QStringLiteral("- dog\n- cat\n  - fish\n");
+    EXPECT_TRUE(matchesText(QStringLiteral("block:(dog)"), list));
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(dog cat)"), list));
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(cat fish)"), list));
+    // A continuation line stays with its item.
+    EXPECT_TRUE(matchesText(QStringLiteral("block:(dog bone)"), QStringLiteral("- dog\n  bone\n- cat\n")));
+    // Numbered items too; a plain dash in the middle of text is not an item.
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(one two)"), QStringLiteral("1. one\n2) two\n")));
+    EXPECT_TRUE(matchesText(QStringLiteral("block:(one two)"), QStringLiteral("one -two\n")));
+
+    // A heading line is a block of its own.
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(title dog)"), QStringLiteral("# title\ndog\n")));
+    // A callout starts at its title line, and a bare `>` line ends a quoted paragraph.
+    const QString callout = QStringLiteral("intro\n> [!note] Heads up\n> body line\n>\n> second\n");
+    EXPECT_TRUE(matchesText(QStringLiteral("block:(heads body)"), callout));
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(intro heads)"), callout));
+    EXPECT_FALSE(matchesText(QStringLiteral("block:(body second)"), callout));
+    // List syntax and headings inside a code fence are code, not structure.
+    const QString fenced = QStringLiteral("```\n- a\n# b\n```\n");
+    EXPECT_TRUE(matchesText(QStringLiteral("block:(a b)"), fenced));
+}
+
 TEST(SearchGrammarTest, SectionRequiresBothWordsUnderTheSameHeading)
 {
     NoteContext n = note(QStringLiteral("# One\ndog here\n# Two\ncat here\n"));
@@ -304,6 +329,17 @@ TEST(SearchGrammarTest, UnmatchedParenIsAParseError)
 TEST(SearchGrammarTest, UnterminatedRegexIsAParseError)
 {
     EXPECT_FALSE(SearchQuery::parse(QStringLiteral("/never closed")).isValid());
+}
+
+TEST(SearchGrammarTest, RegexIsPCREWithoutFlagsAndASlashEndsItEvenInAClass)
+{
+    // docs/SEARCH.md: no flags after the closing slash - a letter there is the next term.
+    EXPECT_FALSE(matchesText(QStringLiteral("/a/i"), QStringLiteral("a b")));
+    EXPECT_TRUE(matchesText(QStringLiteral("/a/i"), QStringLiteral("a i")));
+    // PCRE-only syntax works (atomic group, \h, inline flags); JS-only `/u` or `/s` flags do not exist.
+    EXPECT_TRUE(matchesText(QStringLiteral("/(?>ab)c\\h(?i)D/"), QStringLiteral("abc d")));
+    // JS would read /[/]/ as a class holding a slash; here the first slash closes the pattern.
+    EXPECT_FALSE(SearchQuery::parse(QStringLiteral("/[/]/")).isValid());
 }
 
 TEST(SearchGrammarTest, UnknownFieldNameIsJustAWord)

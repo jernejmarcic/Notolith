@@ -6,9 +6,13 @@
 # to read/write the highlights sidecar with the same byte-fidelity rule every
 # other note gets, and noteAppC_editor only to reuse FindBar (UI-only, no
 # dependency on MarkdownEditor's text model) for find-in-book.
+# The zip access and the cover reader stand alone (no editor, no render): the
+# editor's EPUB embed card links just this, the reader links it too.
+add_library(noteAppC_epubcover STATIC EpubArchive.cpp EpubArchive.h EpubCover.cpp EpubCover.h)
+target_include_directories(noteAppC_epubcover PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(noteAppC_epubcover PUBLIC Qt6::Gui PRIVATE PkgConfig::LIBARCHIVE)
+
 add_library(noteAppC_epub STATIC
-    EpubArchive.cpp
-    EpubArchive.h
     EpubDocument.cpp
     EpubDocument.h
     EpubHighlights.cpp
@@ -23,5 +27,5 @@ add_library(noteAppC_epub STATIC
 set_target_properties(noteAppC_epub PROPERTIES AUTOMOC ON)
 target_include_directories(noteAppC_epub PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_epub
-    PUBLIC Qt6::Widgets noteAppC_theme
+    PUBLIC Qt6::Widgets noteAppC_theme noteAppC_epubcover
     PRIVATE noteAppC_render noteAppC_vault noteAppC_editor Qt6::Concurrent PkgConfig::LIBARCHIVE)
