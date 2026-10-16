@@ -65,6 +65,19 @@ QString expand(const QString &token, const QDate &date, const QTime &time)
         date.weekNumber(&isoYear);
         return QString::number(isoYear);
     }
+    if (token == QLatin1String("hh") || token == QLatin1String("h")) {
+        const int hour12 = time.hour() % 12 == 0 ? 12 : time.hour() % 12;
+        return token == QLatin1String("hh") ? QString::number(hour12).rightJustified(2, QLatin1Char('0'))
+                                            : QString::number(hour12);
+    }
+    if (token == QLatin1String("H"))
+        return QString::number(time.hour());
+    if (token == QLatin1String("m"))
+        return QString::number(time.minute());
+    if (token == QLatin1String("s"))
+        return QString::number(time.second());
+    if (token == QLatin1String("a"))
+        return time.hour() < 12 ? QStringLiteral("am") : QStringLiteral("pm");
     if (token == QLatin1String("HH"))
         return QString::number(time.hour()).rightJustified(2, QLatin1Char('0'));
     if (token == QLatin1String("mm"))
@@ -88,7 +101,9 @@ const QStringList &tokens()
         QStringLiteral("gggg"),
         QStringLiteral("WW"),   QStringLiteral("W"),
         QStringLiteral("E"),
-        QStringLiteral("HH"),   QStringLiteral("mm"),  QStringLiteral("ss"), QStringLiteral("A"),
+        QStringLiteral("HH"),   QStringLiteral("H"),   QStringLiteral("hh"), QStringLiteral("h"),
+        QStringLiteral("mm"),   QStringLiteral("m"),   QStringLiteral("ss"), QStringLiteral("s"),
+        QStringLiteral("A"),    QStringLiteral("a"),
     };
     return list;
 }

@@ -94,6 +94,16 @@ TEST(MomentFormat, TimeTokens)
              QStringLiteral("13:30 PM"));
 }
 
+TEST(MomentFormat, ShortAndTwelveHourTimeTokens)
+{
+    const auto at = [](int h, int m, int sec) { return QDateTime(QDate(2024, 1, 1), QTime(h, m, sec)); };
+    EXPECT_EQ(MomentFormat::format(at(13, 5, 7), QStringLiteral("h:mm:s a")), QStringLiteral("1:05:7 pm"));
+    EXPECT_EQ(MomentFormat::format(at(0, 5, 0), QStringLiteral("h hh")), QStringLiteral("12 12"));
+    EXPECT_EQ(MomentFormat::format(at(12, 0, 0), QStringLiteral("hh A")), QStringLiteral("12 PM"));
+    EXPECT_EQ(MomentFormat::format(at(9, 0, 0), QStringLiteral("H:m")), QStringLiteral("9:0"));
+    EXPECT_EQ(MomentFormat::format(at(9, 3, 0), QStringLiteral("hh:mm a")), QStringLiteral("09:03 am"));
+}
+
 TEST(MomentFormat, LiteralBracketsPassThrough)
 {
     EXPECT_EQ(MomentFormat::format(QDateTime(QDate(2024, 1, 1), {}), QStringLiteral("[Week of] YYYY")),
