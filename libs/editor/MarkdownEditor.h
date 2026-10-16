@@ -188,8 +188,8 @@ public:
     /// (BulletGlyphs.h). Display only; the file keeps `-`, `*` and `+`.
     void setBulletGlyphs(const QString &spec);
     BulletGlyphMap bulletGlyphs() const { return m_bulletGlyphs; }
-    /// Bullets drawn by nesting depth (dot, ring, square, then again) instead
-    /// of by marker; "typed" glyphs stay as typed. Off by default.
+    /// Nested bullets (depth >= 1) drawn as a turn arrow instead of by marker;
+    /// "typed" glyphs stay as typed. On by default.
     void setNestedBulletGlyphs(bool on);
     bool nestedBulletGlyphs() const { return m_nestedBulletGlyphs; }
     /// What an ordered item's number reads as drawn (for the tests too).
@@ -348,6 +348,11 @@ public:
     /// Colour a link at `sourceOffset` is painted in, for the tests. Invalid
     /// when there is no link there.
     QColor linkColourAt(qsizetype sourceOffset) const;
+
+    /// Where the title of the top-level callout holding `offset` is drawn and
+    /// clicked, in viewport coordinates, for the tests - null when there is
+    /// no such callout on screen.
+    QRectF calloutTitleRectAt(qsizetype offset) const;
 
     /// Link target under `viewportPoint`, empty when there is none.
     QString linkAt(const QPoint &viewportPoint) const;
@@ -1426,6 +1431,14 @@ private:
     /// The table under `viewportPoint` that is wider than the column, or null.
     BlockView *scrollableTableAt(const QPoint &viewportPoint);
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// The clickable, editable title of a top-level `> [!type]` callout, laid
+    /// out from the block's `left`/`top` the way paintCallout draws it; null
+    /// for every other callout (nested, `:::`, a later piece) and when the
+    /// title is open for editing. CalloutTitle.cpp.
+    QRectF calloutTitleRect(const BlockView &view, qreal left, qreal top) const;
+    bool pressCalloutTitle(const QPoint &point);
+    void openCalloutTitleEditor(const CalloutSpan &callout, const QRectF &rect, const BlockView &view);
+    void finishCalloutTitleEdit(bool commit);
     /// Bullets and checkboxes in the margin of a list block.
     void paintListMarkers(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// The list items that start inside `block`.
@@ -2512,6 +2525,10 @@ private:
     /// The inline editor over a property value, while one is open, and the
     /// key it edits: a reparse can renumber the properties under it.
     QPointer<QLineEdit> m_propertyEdit;
+    /// The editor over a callout's title, and the source offset its callout
+    /// starts at (a reparse can renumber the callouts, not move that).
+    QPointer<QLineEdit> m_calloutTitleEdit;
+    qsizetype m_calloutTitleAt = -1;
     QString m_editedKey;
     /// What the open editor writes: the scalar value (kEditValue), a new list
     /// item (kEditNewItem), or list item n.
@@ -2593,7 +2610,7 @@ private:
     bool m_outlineNumbering = false;
     QString m_listNumberSuffix = QStringLiteral(".");
     BulletGlyphMap m_bulletGlyphs;
-    bool m_nestedBulletGlyphs = false;
+    bool m_nestedBulletGlyphs = true;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;

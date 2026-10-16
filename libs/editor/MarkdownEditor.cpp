@@ -296,6 +296,11 @@ MarkdownEditor::~MarkdownEditor()
         m_propertyEdit->removeEventFilter(this);
         delete m_propertyEdit.data();
     }
+    if (m_calloutTitleEdit) {
+        m_calloutTitleEdit->disconnect(this);
+        m_calloutTitleEdit->removeEventFilter(this);
+        delete m_calloutTitleEdit.data();
+    }
     if (m_parseWatcher.isRunning())
         m_parseWatcher.waitForFinished();
 }
@@ -2206,10 +2211,8 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         } else {
             // One look per way of writing a bullet, set in Settings.
             BulletGlyph glyph = m_bulletGlyphs.glyphFor(item.bullet);
-            if (m_nestedBulletGlyphs && glyph != BulletGlyph::AsTyped) { // dot, ring, square by depth
-                static constexpr BulletGlyph levels[] = {BulletGlyph::Dot, BulletGlyph::Ring, BulletGlyph::Square};
-                glyph = levels[item.indent % 3];
-            }
+            if (m_nestedBulletGlyphs && item.indent > 0 && glyph != BulletGlyph::AsTyped)
+                glyph = BulletGlyph::Turn; // a nested item hangs off the one above it
             paintBulletGlyph(painter, glyph, item.bullet, QPointF(textX - 12, baseline + line.height() / 2), muted,
                              view.layout->font());
         }
@@ -2299,9 +2302,10 @@ void MarkdownEditor::paintCallout(QPainter &painter, const BlockView &view, qrea
     // The title runs from the icon to the fold arrow, whatever size the style
     // gives it; a fixed width clipped any heading larger than the theme's.
     const qreal titleLeft = iconRect.right() + 8;
-    painter.drawText(QRectF(titleLeft, panel.top() + 8,
-                            qMax(qreal(0), panel.right() - 36 - titleLeft), iconSize * 1.4),
-                     Qt::AlignVCenter | Qt::AlignLeft, view.callout->title);
+    if (!m_calloutTitleEdit || m_calloutTitleAt != view.callout->range.start) // else the editor draws it
+        painter.drawText(QRectF(titleLeft, panel.top() + 8,
+                                qMax(qreal(0), panel.right() - 36 - titleLeft), iconSize * 1.4),
+                         Qt::AlignVCenter | Qt::AlignLeft, view.callout->title);
     painter.restore();
 
     // `[!type]+`, `[!type]-` and a `:::` details container all fold; the
@@ -4901,6 +4905,9 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         emit linkActivated(target);
         return;
     }
+    // A callout's title is edited where it is drawn (CalloutTitle.cpp).
+    if (!touch && pressCalloutTitle(event->pos()))
+        return;
     // A footnote never leaves the note, so it jumps straight to an offset
     // rather than going through linkActivated the way a real link does.
     if (event->modifiers().testFlag(Qt::ControlModifier) && jumpToFootnote(event->pos()))

@@ -204,8 +204,8 @@ tabular figures, so a column of them lines up.
 |---|---|---|
 | `editor.listNumberStyle` | `plain` | `plain` draws each list counting on its own (`1.` `2.`); `hierarchical` composes a nested item's number from the items it sits in (`1.` then `1.1.` `1.2.` then `1.2.1.`). Replaces `editor.outlineNumbering`. |
 | `editor.listNumberSuffix` | `.` | what follows a drawn number: `.` `:` `)` or any short text. Empty draws the delimiter the note was written with. |
-| `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
-| `editor.bulletGlyphsNested` | off | draw bullets by nesting depth instead of by marker: dot, ring, square, then again. A marker set to `typed` stays as typed. |
+| `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `turn` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
+| `editor.bulletGlyphsNested` | on | a nested bullet (depth 1 and deeper) is drawn as a turn arrow, the shape of U+21B3, instead of by marker; depth 0 keeps its marker's glyph. A marker set to `typed` stays as typed. The arrow is also `turn` in `editor.bulletGlyphs`. |
 
 `=` is not a CommonMark list marker (`- [ ]`, `* ` and `+ ` are), so it cannot
 be mapped; the three real ones can. The glyphs are painted in
@@ -318,6 +318,15 @@ Right-click a rendered callout (`> [!x]` or `:::`, any piece of a long one):
 Each is one undo step. `MarkdownEditor::calloutSourceAt`, `changeCalloutType`
 and `removeCallout` (HoverEdit.cpp) do the work for a source offset, so a
 plugin or a test needs no menu. Nothing runs until the menu opens.
+
+Click a top-level `> [!type]` callout's title (not a `:::` container or a
+nested callout) and it becomes a line edit exactly where it is drawn, over the
+panel, with the `[!type]` marker still hidden. Return or leaving the field
+writes it back as one undo step, Escape throws it away; an implicit title
+(`> [!note]`, drawn "Note") opens empty and gains a space and the typed text.
+The rest of the header row, and the fold arrow, still fold a foldable callout;
+`</>` or the menu's "Edit block source" reaches the raw line.
+`CalloutTitle.cpp`; tests `CalloutTitleTest.*`.
 
 ## Embedded notes
 

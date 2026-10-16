@@ -32,6 +32,7 @@ constexpr Entry kGlyphs[] = {
     {BulletGlyph::Arrow, "arrow", "Arrow"},
     {BulletGlyph::Star, "star", "Star"},
     {BulletGlyph::Check, "check", "Check"},
+    {BulletGlyph::Turn, "turn", "Turn arrow"},
     {BulletGlyph::AsTyped, "typed", "As typed"},
 };
 
@@ -176,6 +177,21 @@ void paintBulletGlyph(QPainter &painter, BulletGlyph glyph, QChar marker, const 
         tick.lineTo(centre.x() - 1.0, centre.y() + 2.6);
         tick.lineTo(centre.x() + 3.4, centre.y() - 2.8);
         painter.drawPath(tick);
+        break;
+    }
+    case BulletGlyph::Turn: {
+        // U+21B3 as a path (a font's coverage of it is not guaranteed): down the
+        // stem, along the bar, and an open arrowhead at its end.
+        painter.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.setBrush(Qt::NoBrush);
+        QPainterPath turn;
+        turn.moveTo(centre.x() - 3.5, centre.y() - 4.5);
+        turn.lineTo(centre.x() - 3.5, centre.y() + 1.5);
+        turn.lineTo(centre.x() + 3.5, centre.y() + 1.5);
+        turn.moveTo(centre.x() + 1.5, centre.y() - 0.5);
+        turn.lineTo(centre.x() + 3.5, centre.y() + 1.5);
+        turn.lineTo(centre.x() + 1.5, centre.y() + 3.5);
+        painter.drawPath(turn);
         break;
     }
     case BulletGlyph::AsTyped:

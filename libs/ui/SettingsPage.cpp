@@ -529,8 +529,8 @@ QWidget *SettingsPage::buildEditorPage()
                tr("How each bullet marker is drawn in live preview. The note keeps - * +."), glyphs,
                [this, key, glyphs] { glyphs->setSpec(m_settings->text(key)); });
     }
-    addToggleRow(layout, QStringLiteral("editor.bulletGlyphsNested"), tr("Bullets by nesting depth"),
-                 tr("Draw nested bullets as dot, ring, square by depth instead of by marker. "
+    addToggleRow(layout, QStringLiteral("editor.bulletGlyphsNested"), tr("Nested bullets as \u21B3"),
+                 tr("Draw a nested bullet as a turn arrow instead of by marker. "
                     "Display only; glyphs set to \"As typed\" stay as typed."));
     addToggleRow(layout, QStringLiteral("editor.hoverEditButton"), tr("Edit button on rendered blocks"),
                 tr("Show a </> button over a callout, formula, table, embed or other rendered "
