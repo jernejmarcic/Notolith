@@ -1464,6 +1464,16 @@ std::unique_ptr<QMenu> MarkdownEditor::spellingMenuAt(qsizetype sourceOffset)
     return nullptr;
 }
 
+void MarkdownEditor::setContextActions(ContextActions actions)
+{
+    m_contextActions = std::move(actions);
+}
+
+std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset)
+{
+    return spellingMenuAt(sourceOffset); // stub: the real menu follows
+}
+
 void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
 {
     const QPoint point = viewport()->mapFrom(this, event->pos());

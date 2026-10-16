@@ -209,6 +209,10 @@ public:
         std::function<bool(const QString &)> isCorrect;
         std::function<QStringList(const QString &)> suggestions;
         std::function<void(const QString &)> addWord;
+        /// Optional: whether `word` is in the personal dictionary, and take it
+        /// out again. Without them the menu has no "Remove from dictionary".
+        std::function<bool(const QString &)> isPersonal;
+        std::function<void(const QString &)> removeWord;
     };
     void setSpelling(Spelling spelling);
     /// Lays every block out again for new spelling answers (a word added to
@@ -222,6 +226,17 @@ public:
     /// its suggestions, then "Add to dictionary". Null anywhere else. Built
     /// rather than shown, so it can be tested.
     std::unique_ptr<QMenu> spellingMenuAt(qsizetype sourceOffset);
+
+    /// Which window-level items the context menu offers. Off/empty: item absent.
+    struct ContextActions {
+        bool vaultSearch = false;  ///< "Search for ..." -> searchRequested()
+        bool lookup = false;       ///< "Look up ..."    -> lookupRequested()
+        QString webSearchURL;      ///< "%1" = URL-encoded text; empty hides the item
+    };
+    void setContextActions(ContextActions actions);
+    /// The menu a right click at `sourceOffset` opens. Built rather than
+    /// shown, so it can be tested.
+    std::unique_ptr<QMenu> contextMenuAt(qsizetype sourceOffset);
     bool useWikilinks() const { return m_useWikilinks; }
 
     /// Paints the viewport through OpenGL instead of Qt's raster engine.
@@ -909,6 +924,10 @@ signals:
     /// preview wants it: plain hover in reading view, with Ctrl held while
     /// editing. `globalPos` is where the pointer is.
     void linkHovered(const QString &target, const QPoint &globalPos);
+    /// The context menu's "Search for ..." and "Look up ...": the window
+    /// owns the vault search and the dictionary, the editor only asks.
+    void searchRequested(const QString &text);
+    void lookupRequested(const QString &text, const QPoint &globalPos);
     /// It left that link, or let go of it by leaving the editor.
     void linkHoverEnded();
     /// A result in a rendered ```query``` block was clicked: `relativePath`
@@ -2419,6 +2438,14 @@ private:
     QList<Range> checkedWordsOf(const BlockView &view) const;
     /// The word the caret is in or just after, while spelling is on.
     Range wordAtCaret() const;
+    /// The run of word characters touching `offset`, whatever spelling does.
+    Range wordAt(qsizetype offset) const;
+    /// The suggestions, "Add to dictionary" and "Remove from dictionary" for
+    /// `word`, when it is misspelt or in the personal dictionary.
+    void addSpellingActions(QMenu &menu, const Range &word);
+    void copySelection();
+    void cutSelection();
+    void pasteClipboard();
     /// Kate-definition colours for a fenced code block, in the coordinates of
     /// that block's display string. Not const: a piece records the state it
     /// ended in, for the piece after it.
@@ -2479,6 +2506,7 @@ private:
     /// it runs.
     QHash<int, QString> m_keymap;
     Spelling m_spelling;
+    ContextActions m_contextActions;
     /// The inline editor over a property value, while one is open, and the
     /// key it edits: a reparse can renumber the properties under it.
     QPointer<QLineEdit> m_propertyEdit;
