@@ -1013,3 +1013,21 @@ optimal as it can be".
       `toSource`. Small gain; whoever touches DisplayMap next.
 - [x] Audit the 19 `invalidateLayouts()` callers; narrow each to the blocks it
       changed, if bench resize/fold rows are over 10 ms.
+
+## Fable audit 2026-10-16 evening
+
+- [ ] Quick switcher: Enter with no match creates the note, Shift+Enter
+      always creates (Obsidian); palette and merge picker keep no create path
+      (lane switcher).
+- [ ] MomentFormat: moment.js tokens `h hh H m s a` (`{{time:h:mm a}}`
+      rendered literally) (lane moment).
+- [ ] Frontmatter: a string `tags:` splits on commas and spaces, a string
+      `aliases:` on commas, as Obsidian reads them; the property text stays
+      (lane moment).
+- [ ] `.markdown` files were half notes (isNote yes, links/templates no);
+      Obsidian treats only `.md` as notes, so they become attachments
+      (lane moment).
+- [ ] Search `tag:/regex/` ignores case like every other field unless
+      `match-case:` (lane search).
+- [ ] Test TableFormat's East-Asian/combining/emoji display width (lane
+      search).
