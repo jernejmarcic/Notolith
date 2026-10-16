@@ -302,32 +302,41 @@ public:
             return side->width == borders.top.width && side->style == borders.top.style
                    && side->color == borders.top.color;
         });
-        if (uniform) {
+        const litehtml::border_style style = borders.top.style;
+        if (uniform && (style == litehtml::border_style_solid || style == litehtml::border_style_dotted
+                        || style == litehtml::border_style_dashed)) {
             // One stroke round the (maybe rounded) box, inset by half the
             // width so it stays inside it, as a CSS border does.
             const qreal half = borders.top.width / 2.0;
             QPen pen(toQColor(borders.top.color), qreal(borders.top.width));
-            pen.setStyle(penStyleFor(borders.top.style));
+            pen.setStyle(penStyleFor(style));
             painter->setPen(pen);
             painter->setBrush(Qt::NoBrush);
-            painter->drawPath(roundedPath(box.adjusted(half, half, -half, -half), borders.radius, half));
+            painter->drawPath(roundedPath(box, borders.radius, QMarginsF(half, half, half, half)));
         } else {
-            // Each side its own colour, a trapezoid mitred at the corners.
-            // ponytail: radii are dropped when the sides differ; a note's
-            // HTML has not needed both at once.
+            // Mismatched sides or a two-band style. The ring between the
+            // outer and the inner rounded edge is cut into four wedges, one
+            // per side, mitred at the corners; each wedge is clipped to the
+            // ring and gets its own side's width, colour and style, so radii
+            // and per-side styles compose.
+            const QMarginsF width(borders.left.width, borders.top.width, borders.right.width, borders.bottom.width);
+            const QPainterPath ring = roundedPath(box, borders.radius).subtracted(roundedPath(box, borders.radius, width));
             const QPointF outer[] = {box.topLeft(), box.topRight(), box.bottomRight(), box.bottomLeft()};
-            const QPointF inner[] = {
-                box.topLeft() + QPointF(borders.left.width, borders.top.width),
-                box.topRight() + QPointF(-borders.right.width, borders.top.width),
-                box.bottomRight() + QPointF(-borders.right.width, -borders.bottom.width),
-                box.bottomLeft() + QPointF(borders.left.width, -borders.bottom.width)};
-            painter->setPen(Qt::NoPen);
+            const QPointF inner[] = {box.topLeft() + QPointF(width.left(), width.top()),
+                                     box.topRight() + QPointF(-width.right(), width.top()),
+                                     box.bottomRight() + QPointF(-width.right(), -width.bottom()),
+                                     box.bottomLeft() + QPointF(width.left(), -width.bottom())};
             for (int i = 0; i < 4; ++i) {
                 if (!shown(sides[i]))
                     continue;
                 const int next = (i + 1) % 4;
-                painter->setBrush(toQColor(sides[i]->color));
-                painter->drawPolygon(QPolygonF({outer[i], outer[next], inner[next], inner[i]}));
+                QPainterPath wedge;
+                wedge.addPolygon(QPolygonF({outer[i], outer[next], inner[next], inner[i]}));
+                wedge.closeSubpath();
+                painter->save();
+                painter->setClipPath(wedge.intersected(ring));
+                drawSide(box, borders.radius, width, *sides[i], i);
+                painter->restore();
             }
         }
         painter->restore();
@@ -419,15 +428,21 @@ public:
     }
 
 private:
-    /// A box with CSS's per-corner elliptical radii, each shrunk by `inset`
-    /// (half a border's width) so a stroke follows the curve inside it.
-    static QPainterPath roundedPath(const QRectF &box, const litehtml::border_radiuses &r, qreal inset = 0)
+    /// A box with CSS's per-corner elliptical radii, shrunk by `inset` on each
+    /// side (a border's width, or a fraction of it): the box moves in and each
+    /// radius loses the inset of the two sides it touches, so the curve stays
+    /// concentric with the outer edge.
+    static QPainterPath roundedPath(const QRectF &outerBox, const litehtml::border_radiuses &r,
+                                    const QMarginsF &inset = QMarginsF())
     {
-        const auto radius = [inset](litehtml::pixel_t x, litehtml::pixel_t y) {
-            return QSizeF(qMax<qreal>(0, x - inset), qMax<qreal>(0, y - inset));
+        const QRectF box = outerBox.marginsRemoved(inset);
+        const auto radius = [](litehtml::pixel_t x, litehtml::pixel_t y, qreal dx, qreal dy) {
+            return QSizeF(qMax<qreal>(0, x - dx), qMax<qreal>(0, y - dy));
         };
-        const QSizeF tl = radius(r.top_left_x, r.top_left_y), tr = radius(r.top_right_x, r.top_right_y);
-        const QSizeF br = radius(r.bottom_right_x, r.bottom_right_y), bl = radius(r.bottom_left_x, r.bottom_left_y);
+        const QSizeF tl = radius(r.top_left_x, r.top_left_y, inset.left(), inset.top());
+        const QSizeF tr = radius(r.top_right_x, r.top_right_y, inset.right(), inset.top());
+        const QSizeF br = radius(r.bottom_right_x, r.bottom_right_y, inset.right(), inset.bottom());
+        const QSizeF bl = radius(r.bottom_left_x, r.bottom_left_y, inset.left(), inset.bottom());
         QPainterPath path;
         if (tl.isEmpty() && tr.isEmpty() && br.isEmpty() && bl.isEmpty()) {
             path.addRect(box);
@@ -482,7 +497,59 @@ private:
         case litehtml::border_style_dashed:
             return Qt::DashLine;
         default:
-            return Qt::SolidLine; // double, groove, ridge, inset, outset: drawn solid
+            return Qt::SolidLine;
+        }
+    }
+
+    /// One side of a border inside its clipped wedge. Bands are strokes along
+    /// the ring at a fraction of the side's width: one centred band for
+    /// solid, dotted and dashed; two thirds-bands round a gap for double;
+    /// two halves for groove and ridge (outer dark then light, ridge the
+    /// reverse); inset and outset shade the whole side, top and left dark for
+    /// inset, bottom and right dark for outset (CSS 2.1 leaves the colours to
+    /// the UA; this is what browsers do).
+    void drawSide(const QRectF &box, const litehtml::border_radiuses &radius, const QMarginsF &width,
+                  const litehtml::border &side, int index)
+    {
+        const QColor base = toQColor(side.color);
+        // Near black cannot go darker, so its "light" side gets lighter instead.
+        const bool nearBlack = base.value() < 48;
+        const QColor dark = nearBlack ? base : base.darker(160);
+        const QColor light = nearBlack ? QColor(qMin(255, base.red() + 96), qMin(255, base.green() + 96),
+                                                qMin(255, base.blue() + 96), base.alpha())
+                                      : base;
+        const bool topLeft = index == 0 || index == 3; // top, left
+        const qreal w = side.width;
+        const auto band = [&](qreal centre, qreal thickness, const QColor &colour, Qt::PenStyle penStyle) {
+            QPen pen(colour, thickness);
+            pen.setStyle(penStyle);
+            painter->setPen(pen);
+            painter->setBrush(Qt::NoBrush);
+            painter->drawPath(roundedPath(box, radius, QMarginsF(width.left() * centre, width.top() * centre,
+                                                                  width.right() * centre, width.bottom() * centre)));
+        };
+        switch (side.style) {
+        case litehtml::border_style_double:
+            band(1.0 / 6.0, w / 3.0, base, Qt::SolidLine);
+            band(5.0 / 6.0, w / 3.0, base, Qt::SolidLine);
+            break;
+        case litehtml::border_style_groove:
+        case litehtml::border_style_ridge: {
+            // Groove: the outer half is dark on top and left, light on bottom and right.
+            const bool outerDark = (side.style == litehtml::border_style_groove) == topLeft;
+            band(0.25, w / 2.0, outerDark ? dark : light, Qt::SolidLine);
+            band(0.75, w / 2.0, outerDark ? light : dark, Qt::SolidLine);
+            break;
+        }
+        case litehtml::border_style_inset:
+        case litehtml::border_style_outset: {
+            const bool darkSide = (side.style == litehtml::border_style_inset) == topLeft;
+            band(0.5, w, darkSide ? dark : light, Qt::SolidLine);
+            break;
+        }
+        default:
+            band(0.5, w, base, penStyleFor(side.style));
+            break;
         }
     }
 
