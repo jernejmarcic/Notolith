@@ -183,6 +183,56 @@ TEST(DisplayMapTest, FuzzRoundTrip)
     }
 }
 
+// toDisplay and isHidden are binary searches; the linear walk over the runs
+// they replaced is the reference, at every offset, holes and substitutions
+// both, run boundaries included.
+TEST(DisplayMapTest, BinarySearchesAgreeWithALinearWalk)
+{
+    const auto linearToDisplay = [](const DisplayMap &map, qsizetype sourceOffset) -> qsizetype {
+        if (map.runs().isEmpty())
+            return 0;
+        const qsizetype wanted = qBound(map.block().start, sourceOffset, map.block().end);
+        for (const DisplayMap::Run &run : map.runs()) {
+            if (wanted < run.sourceStart)
+                return run.displayStart;
+            if (wanted <= run.sourceStart + run.sourceLength)
+                return run.substituted ? run.displayStart + (wanted == run.sourceStart ? 0 : run.length)
+                                       : run.displayStart + (wanted - run.sourceStart);
+        }
+        return map.text().size();
+    };
+    const auto linearIsHidden = [](const DisplayMap &map, qsizetype sourceOffset) {
+        if (sourceOffset < map.block().start || sourceOffset >= map.block().end)
+            return false;
+        for (const DisplayMap::Run &run : map.runs()) {
+            if (sourceOffset < run.sourceStart)
+                return true;
+            if (sourceOffset < run.sourceStart + run.sourceLength)
+                return false;
+        }
+        return true;
+    };
+    QRandomGenerator random(7);
+    for (int c = 0; c < 3000; ++c) {
+        const qsizetype length = random.bounded(1, 60);
+        const QString source(length, QLatin1Char('x'));
+        QList<Range> hidden;
+        for (int h = random.bounded(0, 5); h > 0; --h) {
+            const qsizetype start = random.bounded(int(length));
+            hidden.append({start, start + random.bounded(1, int(length - start) + 1)});
+        }
+        QList<Substitution> substitutions; // sorted and disjoint, as the parser gives them
+        for (qsizetype at = random.bounded(4); at + 2 <= length; at += 2 + random.bounded(8))
+            substitutions.append({{at, at + 1 + random.bounded(2)}, QStringLiteral("&")});
+        const Range block{random.bounded(int(length / 3) + 1), length - random.bounded(int(length / 3) + 1)};
+        const DisplayMap map = DisplayMap::build(source, block, hidden, substitutions);
+        for (qsizetype s = block.start - 1; s <= block.end + 1; ++s) {
+            ASSERT_EQ(map.toDisplay(s), linearToDisplay(map, s)) << "case " << c << " source " << s;
+            ASSERT_EQ(map.isHidden(s), linearIsHidden(map, s)) << "case " << c << " source " << s;
+        }
+    }
+}
+
 // --- the widget ----------------------------------------------------------
 
 #include <QApplication>
