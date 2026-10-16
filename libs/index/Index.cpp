@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -752,6 +753,35 @@ QStringList Index::notesWithTag(const QString &tag) const
     while (query.next())
         paths << query.value(0).toString();
     return paths;
+}
+
+QHash<QString, int> Index::tagCounts() const
+{
+    QHash<QString, int> counts;
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT DISTINCT file, name FROM tags ORDER BY file"));
+    // Per note, the set of paths it counts towards - itself and every
+    // '/'-ancestor - so a note tagged `a/b` and `a/c` adds 1 to `a`, not 2.
+    QSet<QString> paths;
+    qint64 file = -1;
+    const auto flush = [&] {
+        for (const QString &path : std::as_const(paths))
+            ++counts[path];
+        paths.clear();
+    };
+    while (query.next()) {
+        if (const qint64 next = query.value(0).toLongLong(); next != file) {
+            flush();
+            file = next;
+        }
+        const QString name = query.value(1).toString();
+        for (qsizetype slash = name.indexOf(QLatin1Char('/')); slash > 0;
+             slash = name.indexOf(QLatin1Char('/'), slash + 1))
+            paths.insert(name.left(slash));
+        paths.insert(name);
+    }
+    flush();
+    return counts;
 }
 
 QStringList Index::findByName(const QString &query, int limit) const

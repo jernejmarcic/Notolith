@@ -56,6 +56,7 @@
 #endif
 #include "MarkdownEditor.h"
 #include "SettingsPage.h"
+#include "TagsPane.h"
 
 #ifdef NOTEAPPC_HAVE_PDFVIEW
 #include "PdfDocument.h"
@@ -110,6 +111,20 @@ QString buildCodeNote(int lines)
     for (int i = 0; i < lines; ++i)
         text += QStringLiteral("int value%1 = compute(%1, \"text\"); // line %1\n").arg(i);
     return text + QStringLiteral("```\n");
+}
+
+/// One note carrying 4 500 distinct tags, 1 500 of them nested under 30
+/// parents: a vault that tags by habit. The Tags pane counts every one of
+/// them on each index change, so it goes into the generated vault itself.
+QString buildTagHeavyNote()
+{
+    QString text = QStringLiteral("# Tags\n\n");
+    for (int i = 0; i < 3000; ++i)
+        text += QStringLiteral("#topic%1 ").arg(i);
+    text += QStringLiteral("\n\n");
+    for (int i = 0; i < 1500; ++i)
+        text += QStringLiteral("#area%1/item%2 ").arg(i % 30).arg(i);
+    return text + QStringLiteral("\n");
 }
 
 /// A heading, a `query` block whose one result is already resolved and
@@ -369,8 +384,13 @@ void waitForIndex(const Index &index)
 
 QString firstNoteIn(const QString &vaultPath)
 {
+    // Not the tag-heavy note: a row about an ordinary note stays about one.
     QDirIterator it(vaultPath, {QStringLiteral("*.md")}, QDir::Files, QDirIterator::Subdirectories);
-    return it.hasNext() ? it.next() : QString();
+    while (it.hasNext()) {
+        if (const QString path = it.next(); !path.endsWith(QLatin1String("/tag-heavy.md")))
+            return path;
+    }
+    return QString();
 }
 
 /// 3. Keystroke latency: insert one character mid-document, relay out and
@@ -1493,6 +1513,7 @@ int main(int argc, char *argv[])
             qWarning("gen_bench_vault.py failed:\n%s", gen.readAllStandardError().constData());
             return 1;
         }
+        writeNote(vaultPath + QStringLiteral("/tag-heavy.md"), buildTagHeavyNote());
     }
 
     // Notes for the size-tiered measurements, and the scratch note the
@@ -1587,6 +1608,9 @@ int main(int argc, char *argv[])
                                  [&] { (void)index.search(QStringLiteral("zyxwvu")); });
             timings << benchCall(QStringLiteral("Every note for a base"), QStringLiteral("allNotesForBases"), 5,
                                  [&] { (void)index.allNotesForBases(); });
+            if (auto *tags = window->findChild<TagsPane *>())
+                timings << benchCall(QStringLiteral("Tags pane refresh"), QStringLiteral("%1 tags").arg(index.allTags().size()),
+                                     5, [&] { tags->refresh(); });
         }
 
         // A notebook's stored outputs go into the output cache when it is read.
