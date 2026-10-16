@@ -40,14 +40,17 @@ class SyncEngine : public QObject {
     Q_OBJECT
 
 public:
-    enum class Status { Idle, SigningIn, Scanning, Syncing, WaitingForApproval, Error };
+    /// NeedsPassword: no keys in the keyring for this device and the prompt
+    /// gave no password - not a failure, the person has not signed in yet.
+    enum class Status { Idle, SigningIn, Scanning, Syncing, WaitingForApproval, Error, NeedsPassword };
     Q_ENUM(Status)
 
     /// Returns the account password, or an empty string to cancel. Called
     /// from the engine's worker thread whenever nothing usable is cached
-    /// for the session (docs/SYNC.md "Deriving masterKey") - a UI supplies
-    /// one that shows a modal on its own thread via a blocking queued
-    /// invocation; see the report for the exact snippet.
+    /// for the session and the keyring holds no keys for this device
+    /// (docs/SYNC.md "Keys kept in the keyring") - a UI supplies one that
+    /// shows a modal on its own thread via a blocking queued invocation, or
+    /// one that hands over a password it already asked for.
     using PasswordPrompt = std::function<QString(const QString &email)>;
 
     /// No QObject parent: SyncEngine moves itself to its own thread (see
@@ -88,14 +91,21 @@ public:
     /// sealed on the spot. Only ever a person's decision.
     void approveDevice(const QByteArray &deviceID);
 
+    /// Deletes this device's keys from the keyring (docs/SYNC.md "Keys kept
+    /// in the keyring"), wipes the session's copies and stops the engine:
+    /// the next start asks for the password again. A no-op without a
+    /// running engine.
+    void forgetStoredKeys();
+
     /// Where the device identity key is kept: the OS keyring unless one is
     /// set here. A test sets an in-memory one, so a run never writes to the
     /// user's real keyring, nor waits out a secret-service backend that does
     /// not answer. Process-wide; set it before any engine starts. Both
-    /// functions run on engines' worker threads.
+    /// functions run on engines' worker threads. `remove` may stay empty.
     struct SecretStore {
         std::function<bool(const QString &key, QByteArray *value)> read;
         std::function<bool(const QString &key, const QByteArray &value)> write;
+        std::function<bool(const QString &key)> remove;
     };
     static void setSecretStore(SecretStore store);
 
@@ -119,6 +129,11 @@ private:
 
     bool ensureSession();      ///< sign in / register, get a bearer token and vaultID
     bool loadDeviceIdentity(); ///< this device's X25519 keypair, from the OS keyring or freshly made
+    bool deriveKeysFromPassword(QByteArray *salt, bool refreshSalt); ///< asks the prompt (NeedsPassword if none given), fetches the salt if missing or refreshSalt
+    bool loadStoredKeys();     ///< loginKey/wrapKey/contentKey from the keyring; false if absent or malformed
+    void storeKeys() const;    ///< writes the session's three keys to the keyring (never the password)
+    void dropStoredKeys() const;
+    QString storedKeysName() const; ///< "keys/<server>/<device id>", this vault's entry
     bool ensureItemsKey();     ///< path 1 (wrapKey) or path 2 (lockbox), per m_viaLockbox
     void maintainEnrolment();  ///< seal lockboxes for approved devices, ask about the rest
 
@@ -137,6 +152,10 @@ private:
     QString m_email;
     PasswordPrompt m_prompt;
     bool m_viaLockbox = false;
+    QString m_serverURL;
+    bool m_storeTried = false;     ///< the keyring was asked once this start; a missing entry is not asked again
+    bool m_keysFromStore = false;  ///< the keyring holds this session's keys (loaded from it, or stored once the server accepted them)
+    bool m_forgotten = false;      ///< forgetStoredKeys() ran: stopping reports NeedsPassword, not Idle
     bool m_running = false;
     /// True for the whole duration of one runCycle(). A cycle spends most
     /// of its time inside a nested QEventLoop (SyncClient's HTTP calls,

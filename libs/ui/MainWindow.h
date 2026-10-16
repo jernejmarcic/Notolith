@@ -612,6 +612,7 @@ QLabel *m_vimStatus = nullptr;
     std::shared_ptr<SyncEngine> m_sync;
     QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for
     QString m_syncPassword; ///< from syncSignIn, handed to the next engine once
+    bool m_syncNeedsPassword = false; ///< the engine found no keys in the keyring and has no password
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;

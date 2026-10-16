@@ -124,6 +124,50 @@ void runKeychainJob(QKeychain::Job *job)
     loop.exec();
 }
 
+const QString kKeychainService = QStringLiteral("noteAppC-sync");
+
+bool secretRead(const QString &key, QByteArray *value)
+{
+    const SyncEngine::SecretStore &store = secretStore();
+    if (store.read && store.write)
+        return store.read(key, value);
+    QKeychain::ReadPasswordJob job(kKeychainService);
+    job.setAutoDelete(false);
+    job.setKey(key);
+    runKeychainJob(&job);
+    // An empty value is how a watchdog timeout looks (the job never
+    // finished, error() is still NoError); no secret here is ever empty.
+    if (job.error() != QKeychain::NoError || job.binaryData().isEmpty())
+        return false;
+    *value = job.binaryData();
+    return true;
+}
+
+bool secretWrite(const QString &key, const QByteArray &value)
+{
+    const SyncEngine::SecretStore &store = secretStore();
+    if (store.read && store.write)
+        return store.write(key, value);
+    QKeychain::WritePasswordJob job(kKeychainService);
+    job.setAutoDelete(false);
+    job.setKey(key);
+    job.setBinaryData(value);
+    runKeychainJob(&job);
+    return job.error() == QKeychain::NoError;
+}
+
+bool secretRemove(const QString &key)
+{
+    const SyncEngine::SecretStore &store = secretStore();
+    if (store.read && store.write)
+        return store.remove && store.remove(key);
+    QKeychain::DeletePasswordJob job(kKeychainService);
+    job.setAutoDelete(false);
+    job.setKey(key);
+    runKeychainJob(&job);
+    return job.error() == QKeychain::NoError;
+}
+
 } // namespace
 
 void SyncEngine::setSecretStore(SecretStore store)
@@ -212,6 +256,12 @@ void SyncEngine::startOnWorker(QString vaultRoot, QString serverURL, QString ema
     }
     m_client = std::make_unique<SyncClient>(serverURL, this);
     m_email = email;
+    m_serverURL = serverURL.trimmed();
+    while (m_serverURL.endsWith(u'/'))
+        m_serverURL.chop(1);
+    m_storeTried = false;
+    m_keysFromStore = false;
+    m_forgotten = false;
     m_prompt = std::move(prompt);
     m_viaLockbox = viaLockbox;
     m_running = true;
@@ -254,7 +304,7 @@ void SyncEngine::stopOnWorker()
     m_announced.clear();
     m_client.reset();
     m_journal.reset();
-    setStatus(Status::Idle);
+    setStatus(m_forgotten ? Status::NeedsPassword : Status::Idle);
 }
 
 void SyncEngine::runCycle()
@@ -289,13 +339,49 @@ void SyncEngine::runCycle()
     emit syncFinished(pushed, pulled, conflicts);
 }
 
+bool SyncEngine::deriveKeysFromPassword(QByteArray *salt, bool refreshSalt)
+{
+    // The password first, the network second: with nobody to ask there is
+    // nothing to contact the server for.
+    const QString password = m_prompt ? m_prompt(m_email) : QString();
+    if (password.isEmpty()) {
+        setStatus(Status::NeedsPassword, QStringLiteral("no password given"));
+        return false;
+    }
+    if (salt->isEmpty() || refreshSalt) {
+        const SyncClient::Salt fetched = m_client->fetchSalt(m_email);
+        if (fetched.ok)
+            *salt = fetched.salt;
+        else if (salt->isEmpty()) {
+            setStatus(Status::Error, QStringLiteral("could not reach the server"));
+            return false;
+        }
+    }
+    QByteArray masterKey = SyncCrypto::deriveMasterKey(password.toUtf8(), *salt);
+    if (masterKey.isEmpty()) {
+        setStatus(Status::Error, QStringLiteral("key derivation failed"));
+        return false;
+    }
+    m_loginKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextLogin);
+    m_wrapKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextWrap);
+    m_contentKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextContent);
+    SyncCrypto::wipe(masterKey);
+    return true;
+}
+
 bool SyncEngine::ensureSession()
 {
     if (!m_client->token().isEmpty() && !m_vaultID.isEmpty())
         return true;
 
     QByteArray salt = m_journal->meta(QStringLiteral("salt"));
-    if (salt.isEmpty()) {
+    if (m_wrapKey.isEmpty() && !m_storeTried) {
+        m_storeTried = true; // one keyring read per start, not one per cycle
+        m_keysFromStore = loadStoredKeys();
+    }
+    if (m_wrapKey.isEmpty() && !deriveKeysFromPassword(&salt, false))
+        return false;
+    if (salt.isEmpty()) { // keys from the keyring and no salt on file: only account registration needs one
         const SyncClient::Salt fetched = m_client->fetchSalt(m_email);
         if (!fetched.ok) {
             setStatus(Status::Error, QStringLiteral("could not reach the server"));
@@ -304,29 +390,33 @@ bool SyncEngine::ensureSession()
         salt = fetched.salt;
     }
 
-    if (m_wrapKey.isEmpty()) {
-        const QString password = m_prompt ? m_prompt(m_email) : QString();
-        if (password.isEmpty()) {
-            setStatus(Status::Error, QStringLiteral("no password given"));
-            return false;
-        }
-        QByteArray masterKey = SyncCrypto::deriveMasterKey(password.toUtf8(), salt);
-        if (masterKey.isEmpty()) {
-            setStatus(Status::Error, QStringLiteral("key derivation failed"));
-            return false;
-        }
-        m_loginKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextLogin);
-        m_wrapKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextWrap);
-        m_contentKey = SyncCrypto::deriveSubkey(masterKey, SyncCrypto::kContextContent);
-        SyncCrypto::wipe(masterKey);
-    }
-
     SyncClient::Auth auth = m_client->signIn(m_email, m_loginKey);
+    if (!auth.ok && m_keysFromStore && auth.status != 0) {
+        // The server answered and said no: the stored keys are stale (the
+        // password was changed on another device). An unreachable server
+        // (status 0) keeps them - offline is not a reason to forget.
+        dropStoredKeys();
+        m_keysFromStore = false;
+        SyncCrypto::wipe(m_loginKey);
+        SyncCrypto::wipe(m_wrapKey);
+        SyncCrypto::wipe(m_contentKey);
+        m_loginKey.clear();
+        m_wrapKey.clear();
+        m_contentKey.clear();
+        if (!deriveKeysFromPassword(&salt, true)) // a password change also changed the salt
+            return false;
+        auth = m_client->signIn(m_email, m_loginKey);
+    }
     if (!auth.ok)
         auth = m_client->registerAccount(m_email, salt, m_loginKey);
     if (!auth.ok) {
         setStatus(Status::Error, auth.error.isEmpty() ? QStringLiteral("sign-in failed") : auth.error);
         return false;
+    }
+    if (!m_keysFromStore) {
+        // Only keys the server just accepted are worth keeping.
+        storeKeys();
+        m_keysFromStore = true;
     }
     m_client->setToken(auth.token);
     m_journal->setMeta(QStringLiteral("salt"), salt);
@@ -358,35 +448,14 @@ bool SyncEngine::loadDeviceIdentity()
     if (!m_boxPublicKey.isEmpty() && !m_boxSecretKey.isEmpty())
         return true;
 
-    const QString service = QStringLiteral("noteAppC-sync");
-    const QString cachedPublic = QString::fromLatin1(m_journal->meta(QStringLiteral("boxPublicKey")).toHex());
+    const bool haveCachedPublic = !m_journal->meta(QStringLiteral("boxPublicKey")).isEmpty();
     const QString keychainKey = QStringLiteral("device-box-secret-") + QString::fromLatin1(m_journal->deviceID().toHex());
 
-    const SecretStore &store = secretStore();
-    if (store.read && store.write) {
-        QByteArray secret;
-        if (!cachedPublic.isEmpty() && store.read(keychainKey, &secret)) {
-            m_boxPublicKey = m_journal->meta(QStringLiteral("boxPublicKey"));
-            m_boxSecretKey = secret;
-            return true;
-        }
-        const SyncCrypto::BoxKeyPair pair = SyncCrypto::generateBoxKeyPair();
-        m_boxPublicKey = pair.publicKey;
-        m_boxSecretKey = pair.secretKey;
-        m_journal->setMeta(QStringLiteral("boxPublicKey"), m_boxPublicKey);
-        return store.write(keychainKey, m_boxSecretKey);
-    }
-
-    if (!cachedPublic.isEmpty()) {
-        QKeychain::ReadPasswordJob read(service);
-        read.setAutoDelete(false);
-        read.setKey(keychainKey);
-        runKeychainJob(&read);
-        if (read.error() == QKeychain::NoError) {
-            m_boxPublicKey = m_journal->meta(QStringLiteral("boxPublicKey"));
-            m_boxSecretKey = read.binaryData();
-            return true;
-        }
+    QByteArray secret;
+    if (haveCachedPublic && secretRead(keychainKey, &secret)) {
+        m_boxPublicKey = m_journal->meta(QStringLiteral("boxPublicKey"));
+        m_boxSecretKey = secret;
+        return true;
     }
 
     // Nothing usable in the keyring yet: mint a fresh device identity.
@@ -394,13 +463,44 @@ bool SyncEngine::loadDeviceIdentity()
     m_boxPublicKey = pair.publicKey;
     m_boxSecretKey = pair.secretKey;
     m_journal->setMeta(QStringLiteral("boxPublicKey"), m_boxPublicKey);
+    return secretWrite(keychainKey, m_boxSecretKey);
+}
 
-    QKeychain::WritePasswordJob write(service);
-    write.setAutoDelete(false);
-    write.setKey(keychainKey);
-    write.setBinaryData(m_boxSecretKey);
-    runKeychainJob(&write);
-    return write.error() == QKeychain::NoError;
+// The keys a session derives from the password, kept in the keyring so the
+// password is asked once per device (docs/SYNC.md "Keys kept in the
+// keyring"): one byte of format version, then loginKey, wrapKey, contentKey.
+// Runs on the worker thread, like every other keyring call here.
+QString SyncEngine::storedKeysName() const
+{
+    return QStringLiteral("keys/") + m_serverURL + u'/' + QString::fromLatin1(m_journal->deviceID().toHex());
+}
+
+bool SyncEngine::loadStoredKeys()
+{
+    QByteArray blob;
+    if (!secretRead(storedKeysName(), &blob))
+        return false;
+    constexpr int kKey = SyncCrypto::kKeyBytes;
+    const bool good = blob.size() == 1 + 3 * kKey && blob.at(0) == 1;
+    if (good) {
+        m_loginKey = blob.mid(1, kKey);
+        m_wrapKey = blob.mid(1 + kKey, kKey);
+        m_contentKey = blob.mid(1 + 2 * kKey, kKey);
+    }
+    SyncCrypto::wipe(blob);
+    return good;
+}
+
+void SyncEngine::storeKeys() const
+{
+    QByteArray blob = QByteArray(1, char(1)) + m_loginKey + m_wrapKey + m_contentKey;
+    secretWrite(storedKeysName(), blob); // a keyring that refuses just means the password is asked next time
+    SyncCrypto::wipe(blob);
+}
+
+void SyncEngine::dropStoredKeys() const
+{
+    secretRemove(storedKeysName());
 }
 
 bool SyncEngine::ensureItemsKey()
@@ -517,6 +617,20 @@ void SyncEngine::approveDevice(const QByteArray &deviceID)
         Qt::QueuedConnection);
 }
 
+void SyncEngine::forgetStoredKeys()
+{
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+            if (!m_running || !m_journal)
+                return;
+            dropStoredKeys();
+            m_forgotten = true;
+            stopOnWorker(); // deferred to the end of a cycle in flight
+        },
+        Qt::QueuedConnection);
+}
+
 void SyncEngine::changePassword(const QString &newPassword)
 {
     QMetaObject::invokeMethod(
@@ -552,6 +666,8 @@ void SyncEngine::changePassword(const QString &newPassword)
             m_loginKey = newLoginKey;
             m_wrapKey = newWrapKey;
             m_contentKey = newContentKey;
+            if (m_keysFromStore)
+                storeKeys(); // the keyring's copy is the old password's keys now
             setStatus(Status::Idle, QStringLiteral("password changed"));
         },
         Qt::QueuedConnection);

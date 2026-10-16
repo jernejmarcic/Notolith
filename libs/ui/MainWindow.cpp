@@ -2131,8 +2131,14 @@ void MainWindow::buildActions()
 #endif
 #ifdef NOTEAPPC_HAVE_SYNC
     add(QStringLiteral("sync:sign-in"), tr("Sync: Sign in"), QString(), &MainWindow::syncSignIn);
+    add(QStringLiteral("sync:forget-keys"), tr("Sync: Forget this device's keys"), QString(), [this] {
+        if (m_sync) {
+            m_sync->forgetStoredKeys();
+            statusBar()->showMessage(tr("Sync keys removed from the keyring; the password is asked next time"), 5000);
+        }
+    });
     add(QStringLiteral("sync:sync-now"), tr("Sync: Sync now"), QString(), [this] {
-        if (m_sync)
+        if (m_sync && !m_syncNeedsPassword)
             m_sync->syncNow();
         else
             syncSignIn();
@@ -4138,19 +4144,16 @@ void MainWindow::updateSync()
     const bool configured = m_painted && m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("sync")
                             && !server.isEmpty() && !email.isEmpty();
     const QString wanted = configured ? m_vault.root() + u'\n' + server + u'\n' + email : QString();
-    if (wanted == m_syncFor && (m_sync || m_syncPassword.isEmpty()))
+    if (wanted == m_syncFor && m_sync)
         return;
     m_sync.reset();
     m_syncFor.clear();
     m_syncStatus->setVisible(configured);
     if (!configured)
         return;
-    if (m_syncPassword.isEmpty()) {
-        m_syncStatus->setText(tr("Sync: not signed in"));
-        m_syncFor = wanted;
-        return;
-    }
-    // The password goes to the engine's thread once and is gone from here:
+    // The engine starts even with no password: it looks for this device's
+    // keys in the keyring first and only reports NeedsPassword when there
+    // are none. A password goes to its thread once and is gone from here:
     // it keeps the keys it derives, not the password.
     auto password = std::make_shared<QString>(std::exchange(m_syncPassword, QString()));
     m_sync = std::make_shared<SyncEngine>();
@@ -4159,8 +4162,10 @@ void MainWindow::updateSync()
             [this](SyncEngine::Status status, const QString &message) {
                 const QString state = status == SyncEngine::Status::Idle          ? tr("synced")
                                       : status == SyncEngine::Status::Error      ? tr("error")
+                                      : status == SyncEngine::Status::NeedsPassword ? tr("not signed in")
                                       : status == SyncEngine::Status::WaitingForApproval ? tr("waiting for approval")
                                                                                           : tr("syncing");
+                m_syncNeedsPassword = status == SyncEngine::Status::NeedsPassword;
                 m_syncStatus->setText(tr("Sync: %1").arg(state));
                 m_syncStatus->setToolTip(message);
             });
@@ -4182,6 +4187,7 @@ void MainWindow::updateSync()
             });
     // A file changed on disk (another app, the tree) is a change to sync too.
     connect(&m_index, &Index::changed, m_sync.get(), &SyncEngine::noteChanged);
+    m_syncNeedsPassword = false;
     m_syncStatus->setText(tr("Sync: signing in"));
     m_sync->start(m_vault.root(), server, email, [password](const QString &) {
         return std::exchange(*password, QString());

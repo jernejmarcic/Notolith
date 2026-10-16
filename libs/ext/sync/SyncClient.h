@@ -34,6 +34,7 @@ public:
 
     struct Auth {
         bool ok = false;
+        int status = 0; ///< HTTP status; 0 when the server did not answer at all
         QString error;
         QByteArray accountID;
         QByteArray token;

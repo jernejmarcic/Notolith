@@ -80,10 +80,48 @@ reveal which emails are registered.
 `masterKey` lives in memory only - `sodium_mlock`ed for the process lifetime it
 is needed, `sodium_memzero`d on sign-out or destruction - and is re-derived
 from the password whenever the engine has nothing usable cached for the
-session. "Nothing usable" means: no `wrapKey` derived this session, and no
-itemsKey already unwrapped (which can also come from a lockbox - see
-enrolment). This is the one place the app calls back into the UI to ask for a
-password (`SyncEngine::signIn`'s callback parameter).
+session. "Nothing usable" means: no `wrapKey` derived this session, no keys in
+the OS keyring for this device (next section), and no itemsKey already
+unwrapped (which can also come from a lockbox - see enrolment). This is the
+one place the app calls back into the UI to ask for a password
+(`SyncEngine::PasswordPrompt`, `start()`'s callback parameter).
+
+### Keys kept in the keyring
+
+The password is asked once per device, not once per session. After the server
+accepts a sign-in made with freshly derived keys, the engine writes those keys
+(never the password, never `masterKey`) to the OS keyring through QtKeychain:
+
+| | |
+|---|---|
+| service | `noteAppC-sync` (the same one the device identity key uses) |
+| key | `keys/<server URL, no trailing slash>/<local device ID, hex>` |
+| value | 97 bytes: a version byte `0x01`, then `loginKey`, `wrapKey`, `contentKey` (32 B each) |
+
+The device ID is the one in this vault's local journal, so the entry is per
+(server, vault on this device). `loginKey` and `wrapKey` are one-way
+derivatives of `masterKey` but are as good as the password for this account's
+sync (the first signs in, the second unwraps the itemsKeys), so the keyring is
+the trust boundary, exactly as for the device identity key.
+
+At startup the engine reads the entry before asking anything, and only once per
+start. If it is missing or malformed, the password prompt is asked (with no
+password to give, the status is `NeedsPassword` - "Sync: not signed in" - and
+nothing touches the network). If the server answers a sign-in with the stored
+`loginKey` and refuses it (the password was changed on another device), the
+entry is deleted, the salt is fetched again, and the password is asked. An
+unreachable server is not a refusal: the entry stays and the cycle just tries
+again later. The entry is rewritten after a password change made here.
+
+"Sync: Forget this device's keys" (`sync:forget-keys`, `SyncEngine::forgetStoredKeys()`)
+deletes the entry and stops the engine; the next sign-in asks the password.
+Turning sync off leaves the entry alone (switching it back on should not cost a
+password), and so does changing the server or account in settings - the old
+entry then names a server nobody syncs to; "Forget" before changing it
+removes it. Every keyring call runs on the sync worker thread under the same
+15 s watchdog as the device identity key; the UI thread never waits on the
+keyring. Without Qt6Keychain sync is not built at all (see the root
+`CMakeLists.txt`), so there is no such path to configure.
 
 ### Subkeys
 
@@ -536,9 +574,9 @@ encryption" is the assumption.
 
 ## The test suite never touches the OS keyring
 
-The device identity key normally goes to the OS keyring through QtKeychain.
-`tests/test_sync.cpp` sets an in-memory `SyncEngine::SecretStore` in its
-`main()` instead, for two reasons. A test run must not leave device keys in
+The device identity key and the stored keys normally go to the OS keyring
+through QtKeychain. `tests/test_sync.cpp` and `tests/test_window.cpp` set an
+in-memory `SyncEngine::SecretStore` in their `main()` instead, for two reasons. A test run must not leave device keys in
 the user's real keyring. And a secret-service backend that never answers (a
 locked keyring, a prompt nobody sees) held each engine for the full 15 s of
 `runKeychainJob`'s watchdog: that was the whole of the "per-process

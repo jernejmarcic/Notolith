@@ -66,6 +66,7 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteA
 endforeach()
 if(TARGET noteAppC_sync)
     target_compile_definitions(test_window PRIVATE NOTEAPPC_EXPECT_SYNC)
+    target_link_libraries(test_window PRIVATE noteAppC_sync) # for the in-memory secret store, see main()
 endif()
 # A real plugin in a real host process, through the window's own wiring.
 if(TARGET noteAppC_plugins)

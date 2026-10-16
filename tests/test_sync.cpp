@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <memory>
 
 #include <unistd.h>
@@ -90,6 +91,38 @@ QList<QPair<QString, QByteArray>> allFilesUnder(const QString &root)
 SyncEngine::PasswordPrompt fixedPassword(const QString &password)
 {
     return [password](const QString &) { return password; };
+}
+
+/// The process-wide in-memory secret store main() installs - the engines'
+/// stand-in for the OS keyring. Tests look inside it for the keys entry.
+QMutex g_secretsMutex;
+QHash<QString, QByteArray> g_secrets;
+
+QStringList keyEntries()
+{
+    const QMutexLocker lock(&g_secretsMutex);
+    QStringList out;
+    for (auto it = g_secrets.cbegin(); it != g_secrets.cend(); ++it)
+        if (it.key().startsWith(QStringLiteral("keys/")))
+            out.append(it.key());
+    return out;
+}
+
+void clearKeyEntries()
+{
+    for (const QString &name : keyEntries()) {
+        const QMutexLocker lock(&g_secretsMutex);
+        g_secrets.remove(name);
+    }
+}
+
+/// A prompt that answers `password` and counts how often it was asked.
+SyncEngine::PasswordPrompt countingPrompt(const QString &password, const std::shared_ptr<std::atomic<int>> &asked)
+{
+    return [password, asked](const QString &) {
+        ++*asked;
+        return password;
+    };
 }
 
 /// Tracks a SyncEngine's signals so a test can wait on a cycle finishing
@@ -195,6 +228,7 @@ protected:
         server = std::make_unique<SyncServer>(store.get());
         ASSERT_TRUE(server->listen(QStringLiteral("127.0.0.1"), 0));
         serverURL = QStringLiteral("http://127.0.0.1:%1").arg(server->actualPort());
+        clearKeyEntries();
     }
 
     QTemporaryDir dataHome;
@@ -877,6 +911,180 @@ TEST_F(SyncIntegrationTest, ASecondDeviceEnrolledByLockboxReadsEverything)
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/note.md")), QStringLiteral("only ever synced via lockbox"));
 }
 
+// ---------------------------------------------------------------------
+// Keys kept in the keyring: the password is asked once per device
+// (docs/SYNC.md "Keys kept in the keyring")
+// ---------------------------------------------------------------------
+
+TEST_F(SyncIntegrationTest, AfterTheFirstUnlockANewEngineStartsWithoutAskingForThePassword)
+{
+    writeNote(vaultA.path(), QStringLiteral("Welcome.md"), QStringLiteral("hello"));
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    {
+        SyncEngine engine;
+        Watcher watch(engine);
+        engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+        ASSERT_TRUE(watch.waitForCycle()) << watch.lastMessage.toStdString();
+        EXPECT_EQ(asked->load(), 1);
+    }
+
+    // One entry, scoped to this server and this device, and what it holds is
+    // three 32-byte keys behind a version byte - not the password.
+    const QStringList entries = keyEntries();
+    ASSERT_EQ(entries.size(), 1);
+    EXPECT_TRUE(entries.first().startsWith(QStringLiteral("keys/") + serverURL + QLatin1Char('/')));
+    {
+        const QMutexLocker lock(&g_secretsMutex);
+        const QByteArray blob = g_secrets.value(entries.first());
+        EXPECT_EQ(blob.size(), 1 + 3 * 32);
+        EXPECT_FALSE(blob.contains(password.toUtf8()));
+    }
+
+    // The next session, same vault: unlocked from the keyring, the prompt is never called.
+    writeNote(vaultA.path(), QStringLiteral("Second.md"), QStringLiteral("more"));
+    SyncEngine again;
+    Watcher watchAgain(again);
+    again.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+    ASSERT_TRUE(watchAgain.waitForCycle()) << watchAgain.lastMessage.toStdString();
+    EXPECT_EQ(asked->load(), 1) << "the keyring had the keys; nobody should have been asked";
+    EXPECT_EQ(watchAgain.pushed, 1); // and it really synced, content key included
+}
+
+TEST_F(SyncIntegrationTest, AStoredKeyTheServerRefusesIsDroppedAndThePasswordAsked)
+{
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    {
+        SyncEngine engine;
+        Watcher watch(engine);
+        engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+        ASSERT_TRUE(watch.waitForCycle());
+    }
+    const QStringList entries = keyEntries();
+    ASSERT_EQ(entries.size(), 1);
+    QByteArray stale(1 + 3 * 32, '\0'); // well-formed, but not this account's keys
+    stale[0] = 1;
+    for (int i = 1; i < stale.size(); ++i)
+        stale[i] = char(i);
+    {
+        const QMutexLocker lock(&g_secretsMutex);
+        g_secrets.insert(entries.first(), stale);
+    }
+
+    SyncEngine engine;
+    Watcher watch(engine);
+    engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+    ASSERT_TRUE(watch.waitForCycle()) << watch.lastMessage.toStdString();
+    EXPECT_EQ(asked->load(), 2);
+    const QMutexLocker lock(&g_secretsMutex);
+    EXPECT_NE(g_secrets.value(entries.first()), stale) << "the good keys replaced the stale entry";
+    EXPECT_EQ(g_secrets.value(entries.first()).size(), 1 + 3 * 32);
+}
+
+TEST_F(SyncIntegrationTest, AMalformedStoredEntryIsIgnoredAndThePasswordAsked)
+{
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    {
+        SyncEngine engine;
+        Watcher watch(engine);
+        engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+        ASSERT_TRUE(watch.waitForCycle());
+    }
+    const QStringList entries = keyEntries();
+    ASSERT_EQ(entries.size(), 1);
+    {
+        const QMutexLocker lock(&g_secretsMutex);
+        g_secrets.insert(entries.first(), QByteArrayLiteral("garbage"));
+    }
+    SyncEngine engine;
+    Watcher watch(engine);
+    engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+    ASSERT_TRUE(watch.waitForCycle()) << watch.lastMessage.toStdString();
+    EXPECT_EQ(asked->load(), 2);
+}
+
+TEST_F(SyncIntegrationTest, APasswordChangedOnAnotherDeviceMakesTheStoredKeysStale)
+{
+    const QString newPassword = QStringLiteral("a different, also-decent passphrase");
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    {
+        SyncEngine engine;
+        Watcher watch(engine);
+        engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+        ASSERT_TRUE(watch.waitForCycle());
+    }
+    {
+        SyncEngine other; // the second device changes the password
+        Watcher watchOther(other);
+        other.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchOther.waitForCycle());
+        other.changePassword(newPassword);
+        watchOther.pump(500);
+    }
+    const QStringList before = keyEntries();
+    ASSERT_EQ(before.size(), 2); // one entry per device
+    QHash<QString, QByteArray> snapshot;
+    {
+        const QMutexLocker lock(&g_secretsMutex);
+        for (const QString &name : before)
+            snapshot.insert(name, g_secrets.value(name));
+    }
+
+    // Device A still holds the old password's keys: refused, dropped, asked.
+    SyncEngine engine;
+    Watcher watch(engine);
+    engine.start(vaultA.path(), serverURL, email, countingPrompt(newPassword, asked));
+    ASSERT_TRUE(watch.waitForCycle()) << watch.lastMessage.toStdString();
+    EXPECT_EQ(asked->load(), 2);
+    int changed = 0;
+    const QMutexLocker lock(&g_secretsMutex);
+    for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it)
+        changed += g_secrets.value(it.key()) != it.value();
+    EXPECT_EQ(changed, 1) << "device A's entry now holds the new keys; B's already did";
+}
+
+TEST_F(SyncIntegrationTest, AnUnreachableServerKeepsTheStoredKeys)
+{
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    {
+        SyncEngine engine;
+        Watcher watch(engine);
+        engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+        ASSERT_TRUE(watch.waitForCycle());
+    }
+    server.reset(); // offline
+
+    SyncEngine engine;
+    Watcher watch(engine);
+    engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+    ASSERT_TRUE(watch.waitForStatus(SyncEngine::Status::Error, 20000));
+    EXPECT_EQ(asked->load(), 1) << "offline is not a reason to ask again";
+    EXPECT_EQ(keyEntries().size(), 1) << "...nor to forget the keys";
+}
+
+TEST_F(SyncIntegrationTest, ForgettingTheKeysRemovesTheEntryAndTheNextStartAsks)
+{
+    auto asked = std::make_shared<std::atomic<int>>(0);
+    SyncEngine engine;
+    Watcher watch(engine);
+    engine.start(vaultA.path(), serverURL, email, countingPrompt(password, asked));
+    ASSERT_TRUE(watch.waitForCycle());
+    ASSERT_EQ(keyEntries().size(), 1);
+
+    engine.forgetStoredKeys();
+    ASSERT_TRUE(watch.waitForStatus(SyncEngine::Status::NeedsPassword, 10000));
+    EXPECT_TRUE(keyEntries().isEmpty());
+
+    // With nothing in the keyring and nobody to ask, a start waits for a
+    // sign-in rather than failing.
+    SyncEngine next;
+    Watcher watchNext(next);
+    auto nobody = std::make_shared<std::atomic<int>>(0);
+    next.start(vaultA.path(), serverURL, email, countingPrompt(QString(), nobody));
+    ASSERT_TRUE(watchNext.waitForStatus(SyncEngine::Status::NeedsPassword, 10000));
+    EXPECT_GE(nobody->load(), 1);
+    EXPECT_TRUE(keyEntries().isEmpty());
+}
+
 TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)
 {
     // The task's own performance bar, adapted: a vault of 20 000 notes
@@ -924,19 +1132,21 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     // Never the real OS keyring: a run must not leave device keys in it,
     // and an unanswered secret-service call cost each engine 15 s.
-    static QMutex secretsMutex;
-    static QHash<QString, QByteArray> secrets;
     SyncEngine::setSecretStore({[](const QString &key, QByteArray *value) {
-                                    const QMutexLocker lock(&secretsMutex);
-                                    if (!secrets.contains(key))
+                                    const QMutexLocker lock(&g_secretsMutex);
+                                    if (!g_secrets.contains(key))
                                         return false;
-                                    *value = secrets.value(key);
+                                    *value = g_secrets.value(key);
                                     return true;
                                 },
                                 [](const QString &key, const QByteArray &value) {
-                                    const QMutexLocker lock(&secretsMutex);
-                                    secrets.insert(key, value);
+                                    const QMutexLocker lock(&g_secretsMutex);
+                                    g_secrets.insert(key, value);
                                     return true;
+                                },
+                                [](const QString &key) {
+                                    const QMutexLocker lock(&g_secretsMutex);
+                                    return g_secrets.remove(key) > 0;
                                 }});
     // Deliberately *not* QStandardPaths::setTestModeEnabled(true), unlike
     // test_index.cpp's own main(): test mode redirects

@@ -97,6 +97,7 @@ SyncClient::Auth SyncClient::registerAccount(const QString &email, const QByteAr
                               {QStringLiteral("loginKey"), QString::fromLatin1(b64(loginKey))}});
     Auth out;
     out.ok = reply.status == 201;
+    out.status = reply.status;
     out.error = reply.json.value(QStringLiteral("error")).toString();
     if (out.ok) {
         out.accountID = unb64(reply.json, "accountID");
@@ -112,6 +113,7 @@ SyncClient::Auth SyncClient::signIn(const QString &email, const QByteArray &logi
                               {QStringLiteral("loginKey"), QString::fromLatin1(b64(loginKey))}});
     Auth out;
     out.ok = reply.status == 200;
+    out.status = reply.status;
     out.error = reply.json.value(QStringLiteral("error")).toString();
     if (out.ok) {
         out.accountID = unb64(reply.json, "accountID");
