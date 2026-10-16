@@ -333,7 +333,7 @@ private:
         case BlockNode::Table:
             return renderTable(note.decorations.tables.at(node.dataIndex), note);
         case BlockNode::CodeFence:
-            return renderCodeFence(note.decorations.codeFences.at(node.dataIndex), note);
+            return renderCodeNode(node.dataIndex, note);
         case BlockNode::MathBlock:
             return QStringLiteral("<div class=\"math-block\">")
                   + renderMath(note.decorations.maths.at(node.dataIndex), note) + QStringLiteral("</div>\n");
@@ -607,6 +607,38 @@ private:
         svg.replace(QLatin1String("url(#"), QStringLiteral("url(#") + prefix);
         svg.replace(QLatin1String("href=\"#"), QStringLiteral("href=\"#") + prefix);
         return QStringLiteral("<div class=\"mermaid-diagram\">") + svg + QStringLiteral("</div>\n");
+    }
+
+    /// A fence, or - for the first `tab` fence of a group - the whole group as
+    /// one tab strip; the group's later members render nothing of their own.
+    /// No JavaScript: each tab is a radio input, its label and its panel in
+    /// a row, and CSS (Publisher's stylesheet) shows the checked one. Ids are
+    /// page-wide, so a counter numbers the groups. The language as written
+    /// names a bare `tab` (codeblocks.ini's style names are an editor thing).
+    QString renderCodeNode(qsizetype index, const ParsedNote &note)
+    {
+        const QList<CodeFenceSpan> &fences = note.decorations.codeFences;
+        const int group = fences.at(index).tabGroup;
+        if (group < 0)
+            return renderCodeFence(fences.at(index), note);
+        if (group != index)
+            return {};
+        const QString id = QStringLiteral("code-tabs-%1").arg(++m_tabGroupCount);
+        QString out = QStringLiteral("<div class=\"code-tabs\" role=\"radiogroup\" aria-label=\"Code tabs\">\n");
+        for (qsizetype i = index, n = 1; i < fences.size() && fences.at(i).tabGroup == group; ++i, ++n) {
+            const CodeFenceSpan &fence = fences.at(i);
+            const QString label = !fence.tabLabel.isEmpty() ? fence.tabLabel
+                                  : !fence.language.isEmpty() ? fence.language
+                                                              : QStringLiteral("Tab %1").arg(n);
+            out += QStringLiteral("<input type=\"radio\" class=\"code-tab-input\" name=\"%1\" id=\"%1-%2\"%3>"
+                                  "<label class=\"code-tab-label\" for=\"%1-%2\">%4</label>"
+                                  "<div class=\"code-tab-panel\">%5</div>\n")
+                       .arg(id)
+                       .arg(n)
+                       .arg(n == 1 ? QStringLiteral(" checked") : QString())
+                       .arg(escapeHtml(label), renderCodeFence(fence, note));
+        }
+        return out + QStringLiteral("</div>\n");
     }
 
     QString renderCodeFence(const CodeFenceSpan &fence, const ParsedNote &note)
@@ -1003,10 +1035,13 @@ private:
             const QString number = QString::number(note.decorations.footnotes.at(node.dataIndex).number);
             if (&note != m_topLevel)
                 return QStringLiteral("<sup class=\"footnote-ref\">") + number + QStringLiteral("</sup>");
-            const bool first = !m_footnoteRefs.contains(number);
-            m_footnoteRefs.insert(number);
-            return QStringLiteral("<sup class=\"footnote-ref\"><a href=\"#fn-%1\"%2>%1</a></sup>")
-                .arg(number, first ? QStringLiteral(" id=\"fnref-%1\"").arg(number) : QString());
+            // Every reference gets its own id (fnref-N, then fnref-N-2, ...), so the
+            // definition can link back to each one and no id repeats on the page.
+            const int nth = ++m_footnoteRefs[number];
+            const QString id = nth == 1 ? QStringLiteral("fnref-") + number
+                                        : QStringLiteral("fnref-%1-%2").arg(number).arg(nth);
+            return QStringLiteral("<sup class=\"footnote-ref\"><a href=\"#fn-%1\" id=\"%2\">%1</a></sup>")
+                .arg(number, id);
         }
         }
         return {};
@@ -1025,12 +1060,29 @@ private:
         QString out = QStringLiteral("<section class=\"footnotes\"><ol>\n");
         for (auto it = byNumber.cbegin(); it != byNumber.cend(); ++it) {
             const FootnoteSpan &footnote = note.decorations.footnotes.at(it.value());
-            out += QStringLiteral("<li id=\"fn-%1\">").arg(it.key())
-                   + emitInline(footnote.content, note, InlineNode::Footnote, it.value())
-                   + QStringLiteral(" <a class=\"footnote-back\" href=\"#fnref-%1\">&#8617;&#xFE0E;</a></li>\n")
-                         .arg(it.key());
+            out += QStringLiteral("<li id=\"fn-%1\">").arg(it.key());
+            out += emitInline(footnote.content, note, InlineNode::Footnote, it.value());
+            out += footnoteBackLinks(it.key()) + QStringLiteral("</li>\n");
         }
         return out + QStringLiteral("</ol></section>\n");
+    }
+
+    /// One back arrow per reference to footnote `number` - text, not an emoji
+    /// (the VS15 selector keeps the arrow from turning into one); later
+    /// references carry their count so the links tell apart.
+    QString footnoteBackLinks(int number) const
+    {
+        QString out;
+        const int refs = qMax(1, m_footnoteRefs.value(QString::number(number)));
+        for (int nth = 1; nth <= refs; ++nth) {
+            out += QStringLiteral(" <a class=\"footnote-back\" href=\"#fnref-%1%2\" aria-label=\"Back to reference %1%3\">"
+                                  "&#8617;&#xFE0E;%4</a>")
+                       .arg(number)
+                       .arg(nth == 1 ? QString() : QStringLiteral("-%1").arg(nth))
+                       .arg(nth == 1 ? QString() : QStringLiteral(" (%1)").arg(nth))
+                       .arg(nth == 1 ? QString() : QStringLiteral("<sup>%1</sup>").arg(nth));
+        }
+        return out;
     }
 
     QString renderTag(const QString &name)
@@ -1357,6 +1409,7 @@ private:
     const ParsedNote *m_topLevel;
     const RenderEnv &m_env;
     int m_diagramCount = 0;
+    int m_tabGroupCount = 0;
     QString m_pageOutputPath;
     QSet<QString> m_attachments;
     QSet<QString> m_embedStack;
@@ -1364,7 +1417,7 @@ private:
     int m_blockDepth = 0;
     int m_inlineDepth = 0;
     QList<Range> m_extraHides;
-    QSet<QString> m_footnoteRefs; ///< numbers whose first reference already carries its id
+    QHash<QString, int> m_footnoteRefs; ///< footnote number -> references emitted so far
     QHash<QString, int> m_headingAnchors;
     QHash<QString, QString> m_iconCache;
     QList<TokenStyle> m_codeStyles;

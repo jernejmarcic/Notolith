@@ -334,6 +334,16 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
 .code-block.numbered .line::before { content: attr(data-line); display: inline-block;
   width: 2.5em; color: var(--text-faint); user-select: none; }
 .code-block .line.hl { background: var(--background-modifier-hover); }
+.code-tabs { display: flex; flex-wrap: wrap; margin: 1em 0; position: relative; }
+.code-tabs .code-block { margin: 0; }
+.code-tab-input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.code-tab-label { order: 0; padding: 4px 12px; cursor: pointer; font-size: 0.85em;
+  color: var(--text-muted); border-bottom: 2px solid transparent; }
+.code-tab-input:checked + .code-tab-label { color: var(--text-normal);
+  border-bottom-color: var(--interactive-accent); }
+.code-tab-input:focus-visible + .code-tab-label { outline: 2px solid var(--interactive-accent); }
+.code-tab-panel { order: 1; flex: 0 0 100%; display: none; }
+.code-tab-input:checked + .code-tab-label + .code-tab-panel { display: block; }
 .math-block { text-align: center; margin: 1em 0; overflow-x: auto; }
 .mermaid-diagram { text-align: center; margin: 1em 0; overflow-x: auto; }
 .mermaid-diagram svg { max-width: 100%; height: auto; }
@@ -346,6 +356,7 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
 .footnotes { margin-top: 2em; border-top: 1px solid var(--background-modifier-border);
   font-size: 0.9em; color: var(--text-muted); }
 .footnote-back { text-decoration: none; }
+.footnote-back sup { font-size: 0.7em; }
 .tag { background: var(--background-modifier-hover); border-radius: 10px; padding: 0 8px;
   text-decoration: none; font-size: 0.85em; }
 .backlinks { margin-top: 40px; border-top: 1px solid var(--background-modifier-border);

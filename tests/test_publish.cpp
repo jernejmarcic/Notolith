@@ -456,6 +456,50 @@ TEST(PublishTest, FootnotesAreNumberedLinkedAndListedOnce)
     EXPECT_FALSE(page.contains(QStringLiteral("[^a]")));
 }
 
+TEST(PublishTest, RepeatedFootnoteReferencesGetUniqueIdsAndBackLinks)
+{
+    TestSite site({{QStringLiteral("Note.md"), "One.[^a] Two.[^a] Three.[^a]\n\n[^a]: Body.\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    EXPECT_EQ(page.count(QStringLiteral("id=\"fnref-1\"")), 1);
+    EXPECT_EQ(page.count(QStringLiteral("id=\"fnref-1-2\"")), 1);
+    EXPECT_EQ(page.count(QStringLiteral("id=\"fnref-1-3\"")), 1);
+    // One way back per reference, as a text arrow with an accessible name.
+    EXPECT_EQ(page.count(QStringLiteral("class=\"footnote-back\"")), 3);
+    EXPECT_TRUE(page.contains(QStringLiteral("href=\"#fnref-1-3\" aria-label=\"Back to reference 1 (3)\"")));
+    EXPECT_TRUE(page.contains(QStringLiteral("&#8617;&#xFE0E;")));
+}
+
+TEST(PublishTest, ConsecutiveTabFencesBecomeANoJavaScriptTabStrip)
+{
+    TestSite site({{QStringLiteral("Note.md"),
+                    "```python tab\nprint(1)\n```\n\n```cpp tab=\"C++ <b>\"\nint x;\n```\n\n"
+                    "```sh\nls\n```\n\n```a tab\n1\n```\n```b tab\n2\n```\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    // Two groups, numbered apart; the plain fence between them stays a plain block.
+    EXPECT_EQ(page.count(QStringLiteral("class=\"code-tabs\"")), 2);
+    EXPECT_TRUE(page.contains(QStringLiteral("name=\"code-tabs-1\" id=\"code-tabs-1-1\" checked>")));
+    EXPECT_TRUE(page.contains(QStringLiteral("name=\"code-tabs-1\" id=\"code-tabs-1-2\">")));
+    EXPECT_EQ(page.count(QStringLiteral(" checked>")), 2); // first tab of each group only
+    // A bare `tab` is labelled by its language; a named one is escaped.
+    EXPECT_TRUE(page.contains(QStringLiteral("for=\"code-tabs-1-1\">python</label>")));
+    EXPECT_TRUE(page.contains(QStringLiteral("for=\"code-tabs-1-2\">C++ &lt;b&gt;</label>")));
+    EXPECT_EQ(page.count(QStringLiteral("class=\"code-block")), 5);
+    // Nothing script-driven inside the strip itself (the page has the site's own search script).
+    const qsizetype stripStart = page.indexOf(QStringLiteral("class=\"code-tabs\""));
+    EXPECT_FALSE(page.mid(stripStart, page.indexOf(QStringLiteral("language-sh"), stripStart) - stripStart)
+                     .contains(QStringLiteral("<script")));
+    EXPECT_TRUE(site.read(QStringLiteral("site.css")).contains(QStringLiteral(".code-tab-input:checked")));
+}
+
+TEST(PublishTest, ALoneTabFenceIsAnOrdinaryBlock)
+{
+    TestSite site({{QStringLiteral("Note.md"), "```python tab\nprint(1)\n```\n"}});
+    site.publish();
+    EXPECT_FALSE(site.read(QStringLiteral("note.html")).contains(QStringLiteral("code-tabs")));
+}
+
 // ---------------------------------------------------------------------------
 // Off the UI thread
 
