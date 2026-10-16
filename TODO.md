@@ -919,8 +919,9 @@ optimal as it can be".
       -fsanitize=address); test_ai_plugin.cpp:756 callback captures a dead
       local when the first run() fails (stack-use-after-return). Timing guards
       fail under ASan by nature (skip them when sanitized).
-- [ ] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
-      later views; check whether that is wanted workspace state.
+- [x] Demo walk: opening a .base or .canvas leaves a second "Library" pane in
+      later views; check whether that is wanted workspace state. 2026-10-16:
+      wanted, demo/.obsidian/workspace.json puts Library.base in a right split.
 - [ ] Tables leftovers: (`/table` now offers Insert table first, 2026-10-16); source-mode Tab/Enter
       within 20 ms of typing does a synchronous whole-note reparse (hitch on a
       note above the async-parse threshold); row/column drag handles, hover
@@ -938,7 +939,7 @@ optimal as it can be".
 - [x] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
       a published site gets no theme `syntax`/`--code-*` token colours yet; a
       listing nested in a callout gets ini/theme colours only (no fence attrs).
-- [ ] Notebook leftovers: no window-level test drives input() end to end;
+- [x] Notebook leftovers: no window-level test drives input() end to end;
       the plugin askUser dialog is untested; `.ipynb` outputs are seeded on
       the GUI thread at every read (big PNGs cost time); run outputs are not
       written back into the .ipynb; the vault index ignores .ipynb.
@@ -946,7 +947,7 @@ optimal as it can be".
       before the stdin handshake; KernelClient now waits for it.
 - [ ] Image annotation is off by default (it replaces the plain image tab);
       Jernej to say whether it should be on.
-- [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
+- [x] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
       decorations (a fence typed within the parse delay is not seen yet).
@@ -986,7 +987,7 @@ optimal as it can be".
 - [x] Status bar word/character count: 200 ms debounce, counts the selection
       when there is one, skips frontmatter. Today: counts come with each parse,
       characters are the whole file incl. frontmatter.
-- [ ] Popup leftovers: mode-menu check is a text mark in the shortcut column
+- [x] Popup leftovers: mode-menu check is a text mark in the shortcut column
       (QSS cannot put the indicator right of an icon); QMessageBox/QInputDialog
       windows are not rounded.
 - [x] Callout context menu: Edit / Copy / Change type / Remove, once the hover
