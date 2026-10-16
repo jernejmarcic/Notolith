@@ -1066,7 +1066,7 @@ optimal as it can be".
 
 - [ ] "if you select a word there should be a right click menau, that can
       give you stuff like definition, etc." Word/selection context menu:
-      definition, plus Obsidian-style selection actions (plan: Fable).
+      definition, plus Obsidian-style selection actions (plan: Fable, PLAN-word-graph Plan 1).
 - [ ] "There should also be a file graph like obsidian". A graph view exists
       (Ctrl+G, local graph pane) but nothing on screen opens it, and its look
       against Obsidian's is unchecked (plan: Fable).
@@ -1081,10 +1081,32 @@ optimal as it can be".
       nothing, on* attributes and javascript: URLs inert.
 - [ ] Nested `-` list items drawn with `↳` (U+21B3), per Jernej's sketch
       2026-10-16 ("nested - rows should look like this").
-- [ ] Bug: "Add to dictionary" on a misspelt word resets the view to the top
-      of the element (Jernej 2026-10-16).
+- [x] Bug: "Add to dictionary" on a misspelt word resets the view to the top
+      of the element (Jernej 2026-10-16). Relayout keeps heights, every
+      editor refreshes, ensureCursorVisible lays the caret block out first;
+      test fails on the old code.
 - [ ] Callout title editable in place: clicking the rendered title edits the
       title text while the header stays drawn and the `> [!type|...]` marker
       stays hidden; today any click reveals the whole marker line (Jernej
       2026-10-16: "it would make more sense of the title to be editable when
       you click on it").
+- [ ] Code block that cannot run (`json`, any language with no runner): no
+      run button, no warning icon, no "does not know how to run" line
+      (Jernej 2026-10-16: "That that should be run should not have a run
+      object").
+- [ ] Run output keeps its line breaks: a rustc error printed as one run-on
+      line ("Exit code 1error[E0601]...") (Jernej's screenshot 2026-10-16).
+- [ ] Code block header shows the block's name (its `tab`/title, else the
+      language) as the bar's title, not a faint language tag on the right
+      (Jernej 2026-10-16: "the top bar should be what the name of the
+      codeblock is").
+- [ ] Tabbed code groups (```` ```python tab ````, `tab="C++"`): better tab
+      UI, and editing a group shows its source (fences visible, syntax
+      highlighting kept) instead of the half-rendered panels (Jernej
+      2026-10-16).
+- [ ] Source mode is plain text: no panels, headers, run buttons or any
+      rendering, only syntax highlighting to keep things distinct (Jernej
+      2026-10-16: "source mode should show pure text, no rendering").
+- [ ] Demo pane test read the live demo/.obsidian/workspace.json, which the
+      app rewrites when Jernej uses the demo; now runs on a copy with
+      fixtures/demo-workspace.json. [x] done 5e6734f.
