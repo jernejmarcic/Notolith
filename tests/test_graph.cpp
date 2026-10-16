@@ -545,6 +545,84 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
     EXPECT_LT(frameMedian, 16.0);
 }
 
+// Reports, does not budget: what a 20 000-note vault costs per step, per
+// frame and per rebuild (docs/PERFORMANCE.md). Only finiteness is asserted.
+TEST(GraphPerformanceTest, TwentyThousandNodesReportCosts)
+{
+    constexpr int kNodes = 20000;
+    GraphView view;
+    view.resize(1600, 1000);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    const QList<GraphEdge> edges = makeEdges(nodes, 2);
+
+    QElapsedTimer clock;
+    clock.start();
+    view.setGraphData(nodes, edges);
+    const double rebuildMs = clock.nsecsElapsed() / 1e6;
+    ASSERT_EQ(view.nodeCount(), kNodes);
+
+    view.stepSimulation(100);
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    std::vector<double> stepTimes;
+    for (int i = 0; i < 8; ++i) {
+        clock.start();
+        view.stepSimulation(1);
+        stepTimes.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    QImage image(1600, 1000, QImage::Format_ARGB32_Premultiplied);
+    std::vector<double> frameTimes;
+    for (int i = 0; i < 6; ++i) {
+        image.fill(Qt::black);
+        QPainter painter(&image);
+        clock.start();
+        view.render(&painter);
+        painter.end();
+        frameTimes.push_back(clock.nsecsElapsed() / 1e6);
+    }
+    const double step = median(stepTimes);
+    const double frame = median(frameTimes);
+    std::printf("[ PERF     ] %d nodes / %d edges: rebuild %.1f ms, step %.2f ms, render %.2f ms\n",
+                view.nodeCount(), view.edgeCount(), rebuildMs, step, frame);
+    EXPECT_TRUE(std::isfinite(step) && std::isfinite(frame));
+}
+
+// Opt-in (NOTEAPPC_GRAPH_BENCH_NOTES=20000): indexes that many linked notes
+// and times what opening the graph costs on the UI thread. Prints only.
+TEST(GraphPerformanceTest, BigVaultOpenCosts)
+{
+    const int notes = qEnvironmentVariableIntValue("NOTEAPPC_GRAPH_BENCH_NOTES");
+    if (notes <= 0)
+        GTEST_SKIP() << "set NOTEAPPC_GRAPH_BENCH_NOTES=20000 to run";
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    for (int i = 0; i < notes; ++i) {
+        QFile file(dir.filePath(QStringLiteral("n%1.md").arg(i)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(QStringLiteral("# n%1\n[[n%2]] [[n%3]]\n").arg(i).arg((i * 7 + 1) % notes).arg((i + 97) % notes).toUtf8());
+    }
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(Vault(dir.path()));
+    ASSERT_TRUE(done.wait(120000));
+
+    QElapsedTimer clock;
+    clock.start();
+    const Index::GraphData data = index.graphData();
+    const double dataMs = clock.nsecsElapsed() / 1e6;
+
+    GraphView view;
+    view.resize(1600, 1000);
+    clock.start();
+    view.setIndex(&index);
+    const double blockedMs = clock.nsecsElapsed() / 1e6;
+    clock.start();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == notes; }, 20000));
+    const double readyMs = blockedMs + clock.nsecsElapsed() / 1e6;
+    std::printf("[ PERF     ] %d notes (%d links): Index::graphData() %.1f ms; setIndex() blocks the UI %.1f ms, graph ready after %.1f ms\n",
+                notes, int(data.links.size()), dataMs, blockedMs, readyMs);
+}
+
 TEST(GraphPerformanceTest, StepCostIsNotQuadraticInNodeCount)
 {
     constexpr int kSmall = 1000;
