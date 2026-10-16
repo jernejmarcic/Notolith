@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QSet>
 #include <QtConcurrent>
 
 #include "Parser.h"
@@ -64,9 +65,14 @@ void Indexer::setVault(const Vault &vault)
 {
     stop();
     m_vault = vault;
-    rewatch();
-    if (!m_vault.isValid() || !m_index->open(m_vault.root()))
+    if (!m_files.directories().isEmpty())
+        m_files.removePaths(m_files.directories());
+    // The scan's walk hands its directories to watch(), so the UI thread does
+    // not walk the vault a second time (6.7 ms on 20 000 notes, every window).
+    if (!m_vault.isValid() || !m_index->open(m_vault.root())) {
+        rewatch();
         return;
+    }
     rebuild();
 }
 
@@ -135,13 +141,22 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
     QStringList notes = only;
     if (only.isEmpty()) {
         QStringList attachments;
-        QDirIterator it(vault.root(), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        Batch directories;
+        directories.scan = scan;
+        directories.directories.insert(vault.root(), QFileInfo(vault.root()).lastModified().toMSecsSinceEpoch());
+        QDirIterator it(vault.root(), QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
         while (it.hasNext() && !cancelled()) {
             const QFileInfo info = it.nextFileInfo();
             const QString path = info.filePath();
             const QString relative = vault.relative(path);
             if (isIgnored(relative) || vault.isIgnored(relative))
                 continue;
+            if (info.isDir()) {
+                // Its mtime as listed, before its entries are read: anything
+                // created in it later shows as a newer mtime in watch().
+                directories.directories.insert(path, info.lastModified().toMSecsSinceEpoch());
+                continue;
+            }
             // A notebook is a note while a reader is set: its cached row is stale in the other case too.
             const bool asNote = Vault::isNote(path)
                                 || (notebooks && info.suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0);
@@ -149,6 +164,8 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
                 continue;
             (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
         }
+        if (!cancelled())
+            post(directories);
         writer.begin();
         for (const QString &path : std::as_const(attachments)) {
             const QFileInfo info(path);
@@ -203,6 +220,10 @@ void Indexer::apply(const Batch &batch)
 {
     if (batch.scan != m_scanNumber.load())
         return; // from a scan stop() cancelled
+    if (!batch.directories.isEmpty()) {
+        watch(batch.directories);
+        return;
+    }
     for (const auto &[relative, names] : batch.names)
         m_index->setNames(relative, names);
     m_wrote = m_wrote || !batch.names.isEmpty();
@@ -269,6 +290,37 @@ void Indexer::rewatch()
     // ponytail: one inotify watch per directory, which tops out around 8k.
     // fanotify, or watching only the open folders, if a vault ever hits it.
     m_files.addPaths(directories);
+}
+
+void Indexer::watch(const QHash<QString, qint64> &directories)
+{
+    // Only the difference: a save rescans the vault, and re-adding every watch
+    // each time would cost what the walk saved.
+    const QStringList watchedList = m_files.directories();
+    const QSet<QString> watched(watchedList.cbegin(), watchedList.cend());
+    QStringList gone;
+    for (const QString &path : watchedList) {
+        if (!directories.contains(path))
+            gone << path;
+    }
+    if (!gone.isEmpty())
+        m_files.removePaths(gone);
+    QStringList added;
+    for (auto it = directories.cbegin(); it != directories.cend(); ++it) {
+        if (!watched.contains(it.key()))
+            added << it.key();
+    }
+    // ponytail: one inotify watch per directory, which tops out around 8k.
+    if (!added.isEmpty())
+        m_files.addPaths(added);
+    // Between the walk reading a directory and its watch starting, a file can
+    // arrive unseen; its directory's mtime moved, so walk again.
+    for (const QString &path : std::as_const(added)) {
+        if (QFileInfo(path).lastModified().toMSecsSinceEpoch() != directories.value(path)) {
+            m_debounce.start();
+            break;
+        }
+    }
 }
 
 void Indexer::onDirectoryChanged(const QString &)

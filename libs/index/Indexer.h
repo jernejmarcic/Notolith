@@ -6,6 +6,7 @@
 
 #include <QElapsedTimer>
 #include <QFileSystemWatcher>
+#include <QHash>
 #include <QFuture>
 #include <QObject>
 #include <QThreadPool>
@@ -76,6 +77,9 @@ private:
         int done = 0;
         int total = 0;
         bool last = false;
+        /// A whole-vault walk's directories with their mtimes when it read them,
+        /// so the watches come from the scan's own walk (rewatch() is the fallback).
+        QHash<QString, qint64> directories;
     };
     /// `paths` empty means the whole vault.
     void start(const QStringList &paths);
@@ -83,6 +87,7 @@ private:
                  const NotebookReader &notebooks);
     void apply(const Batch &batch);
     void rewatch();
+    void watch(const QHash<QString, qint64> &directories);
     void onDirectoryChanged(const QString &path);
 
     Index *m_index = nullptr;

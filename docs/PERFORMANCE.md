@@ -872,10 +872,12 @@ the comment above it records (shutdown racing init) is not reintroduced.
 Also profiled and left: font database population and the first font load are
 about 5 ms but start at the first widget, with no earlier work to overlap
 (warming it on a worker from the constructor's first line changed nothing);
-`Indexer::rewatch` is 6.7 ms of directory walking on the UI thread in every
-window, not just the first. Moving it off would open a gap between the scan
-and the watch for a file created meanwhile, so it needs the scan to hand over
-its directory list instead.
+`Indexer::rewatch` was 6.7 ms of directory walking on the UI thread in every
+window. The scan's own walk now lists the directories too and hands them to
+`Indexer::watch` with each one's mtime as read; a directory whose mtime moved
+before its watch started triggers a rescan, so the gap is closed. Only the
+difference is (re)watched, and folders made later are now watched too (they
+were not before). First window 36.3 -> 28 ms (best of 3, 20 000 notes).
 
 | cold start, the process's first window (bench), best of 3 | before | after |
 |---|---|---|

@@ -616,8 +616,9 @@ work in tmp." And: "after ALL is done, see if you can topimize anything".
       open 360 -> 38 ms, resize/fold 1.3 -> 0.3 ms).
   - [x] Tags rebuilds while hidden (37 -> 0 ms), first window 41.5 -> 36.3 ms,
         `allNotesForBases` 65 -> 33 ms (perf2, 2026-10-16).
-  - [ ] Left: `Indexer::rewatch` walks the dirs on the UI thread (~6.7 ms per
+  - [x] Left: `Indexer::rewatch` walks the dirs on the UI thread (~6.7 ms per
         window); the scan should hand its directory list over (docs/PERFORMANCE.md).
+        Done: first window 36.3 -> 28 ms; new folders now watched too.
   - [x] Note open and memory: `rebuildBlocks` built 1.6 kB views into an
         unreserved vector (1 MB open 38.6 -> 11.9 ms, RSS 262 -> 233 MB).
   - [x] Qt warnings in the bench: empty-path read in the outgoing-links

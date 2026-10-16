@@ -13,6 +13,7 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QTest>
 #include <QTimer>
 
 #include "Fuzzy.h"
@@ -873,4 +874,33 @@ TEST(IndexerThreadTest, AScanStoppedByAVaultSwitchLeavesNothingBehind)
         leaked += !index.resolve(QStringLiteral("Old%1").arg(i)).isEmpty();
     EXPECT_EQ(leaked, 0) << "names from the old vault's scan";
     EXPECT_EQ(index.resolve(QStringLiteral("New0")), QStringLiteral("New0.md"));
+}
+
+// The watches come from the scan's own walk: a note written into an existing
+// subfolder after the scan, and one in a folder made after it, are both seen.
+TEST(IndexerThreadTest, TheScansWalkWatchesEveryFolderIncludingNewOnes)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("a/b")));
+    const auto write = [&](const QString &relative, const QByteArray &text) {
+        QFile file(dir.filePath(relative));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(text);
+    };
+    write(QStringLiteral("a/b/First.md"), "# First\n");
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(Vault(dir.path()));
+    ASSERT_TRUE(done.wait(20000));
+
+    write(QStringLiteral("a/b/Second.md"), "# Second\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.resolve(QStringLiteral("Second")).isEmpty(); }, 5000))
+        << "a note in a folder the scan walked";
+
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("a/c")));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return done.size() >= 3; }, 5000)) << "the new folder's rescan";
+    write(QStringLiteral("a/c/Third.md"), "# Third\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.resolve(QStringLiteral("Third")).isEmpty(); }, 5000))
+        << "a note in a folder made after the first scan";
 }
