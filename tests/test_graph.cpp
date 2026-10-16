@@ -268,6 +268,25 @@ TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)
     EXPECT_GT(closest, 12.0) << "two leaves sit on top of each other";
 }
 
+TEST(GraphViewTest, RebuildKeepsSurvivingNodesInPlace)
+{
+    // Every note save rebuilds the graph; it must not re-scatter what is there.
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+    const QList<GraphEdge> edges{{QStringLiteral("A"), QStringLiteral("B")},
+                                 {QStringLiteral("B"), QStringLiteral("C")}};
+    GraphView view;
+    view.resize(600, 400);
+    view.setGraphData(nodesFor(ids), edges);
+    view.stepSimulation(50);
+    const QPointF before = view.screenPosition(QStringLiteral("A"));
+
+    view.setGraphData(nodesFor(ids + QStringList{QStringLiteral("D")}),
+                      edges + QList<GraphEdge>{{QStringLiteral("C"), QStringLiteral("D")}});
+    ASSERT_EQ(view.nodeCount(), 4);
+    const QPointF after = view.screenPosition(QStringLiteral("A"));
+    EXPECT_LT(std::hypot(after.x() - before.x(), after.y() - before.y()), 1.0);
+}
+
 TEST(GraphViewTest, ColourGroupsAreSearchQueries)
 {
     QList<GraphNode> nodes = nodesFor({QStringLiteral("Projects/A.md"), QStringLiteral("Journal/B.md"),

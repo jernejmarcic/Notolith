@@ -432,6 +432,14 @@ void GraphView::rebuild()
         ++degree[b];
     }
 
+    // Where every node stands now, so a rebuild that keeps a node keeps it in
+    // place: every note save and every filter toggle lands here, and a graph
+    // that re-scatters on each of them is unusable.
+    QHash<QString, QPointF> keep;
+    keep.reserve(m_nodes.size());
+    for (int i = 0; i < m_nodes.size(); ++i)
+        keep.insert(m_nodes[i].data.id, m_layout.position(i));
+
     QVector<int> remap(nodes.size(), -1);
     m_nodes.clear();
     m_nodes.reserve(nodes.size());
@@ -467,11 +475,23 @@ void GraphView::rebuild()
     forceOptions.centerStrength = m_options.centerStrength;
     m_layout.setOptions(forceOptions);
     m_layout.reset(m_nodes.size(), layoutEdges);
+    int kept = 0;
+    for (int i = 0; i < m_nodes.size(); ++i) {
+        const auto it = keep.constFind(m_nodes[i].data.id);
+        if (it != keep.constEnd()) {
+            m_layout.setPosition(i, it.value());
+            ++kept;
+        }
+    }
 
     m_hoverNode = -1;
     m_dragNode = -1;
-    m_cameraMoved = false;
-    fitToView();
+    // Survivors stay where they are, so the camera stays too; the step timer
+    // keeps framing the graph while the newcomers settle, until the user moves it.
+    if (kept == 0) {
+        m_cameraMoved = false;
+        fitToView();
+    }
     ensureTimerRunning();
     update();
 }
