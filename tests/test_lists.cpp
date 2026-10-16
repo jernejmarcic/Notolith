@@ -400,40 +400,55 @@ TEST(BulletGlyphs, TheEditorDrawsTheMappedGlyphPerMarker)
     editor->hide();
 }
 
-TEST(BulletGlyphs, NestedBulletsCycleDotRingSquareByDepthWhenAsked)
+TEST(BulletGlyphs, NestedItemsDrawTheTurnArrowByDefault)
 {
-    const QString note = QStringLiteral("- a\n  - b\n    - c\n      - d\n\nend");
+    const QString note = QStringLiteral("- a\n  - b\n    - c\n\nend");
     auto editor = editorWith(note, note.size());
     editor->show();
     QApplication::processEvents();
-    EXPECT_FALSE(editor->nestedBulletGlyphs()) << "off unless asked";
+    EXPECT_TRUE(editor->nestedBulletGlyphs()) << "on unless switched off";
+    const QImage turned = editor->grab().toImage();
+    editor->setNestedBulletGlyphs(false);
     const QImage perMarker = editor->grab().toImage();
+    EXPECT_NE(turned, perMarker) << "depth >= 1 is drawn differently";
     editor->setNestedBulletGlyphs(true);
-    const QImage byDepth = editor->grab().toImage();
-    EXPECT_NE(byDepth, perMarker);
-    editor->setNestedBulletGlyphs(false);
-    EXPECT_EQ(editor->grab().toImage(), perMarker) << "off again: as before, pixel for pixel";
+    EXPECT_EQ(editor->grab().toImage(), turned);
 
-    // One glyph per depth: the first and the fourth item (depth 0 and 3) are both a dot.
-    editor->setNestedBulletGlyphs(true);
-    editor->setBulletGlyphs(QStringLiteral("-=dot"));
-    const QImage dotted = editor->grab().toImage();
-    editor->setNestedBulletGlyphs(false);
-    const QImage plainDots = editor->grab().toImage();
-    int differing = 0;
-    for (int y = 0; y < dotted.height(); ++y) {
-        bool row = false;
-        for (int x = 0; x < dotted.width() && !row; ++x)
-            row = dotted.pixel(x, y) != plainDots.pixel(x, y);
-        differing += row;
-    }
-    EXPECT_GT(differing, 0) << "the ring and the square differ from a dot";
     // "typed" is the person's own choice and stays.
     editor->setBulletGlyphs(QStringLiteral("-=typed"));
     const QImage typed = editor->grab().toImage();
-    editor->setNestedBulletGlyphs(true);
+    editor->setNestedBulletGlyphs(false);
     EXPECT_EQ(editor->grab().toImage(), typed);
+
+    // A note with no nesting looks the same either way.
+    editor->setBulletGlyphs(QStringLiteral("-=dash"));
+    editor->setNoteText(QStringLiteral("- a\n- b\n\nend"));
+    QApplication::processEvents();
+    const QImage flat = editor->grab().toImage();
+    editor->setNestedBulletGlyphs(true);
+    EXPECT_EQ(editor->grab().toImage(), flat);
     editor->hide();
+}
+
+TEST(BulletGlyphs, TheTurnGlyphHasAStemAndAHead)
+{
+    EXPECT_EQ(bulletGlyphFromName(QStringLiteral("turn"), BulletGlyph::Dot), BulletGlyph::Turn);
+    QImage image(16, 16, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    {
+        QPainter painter(&image);
+        paintBulletGlyph(painter, BulletGlyph::Turn, QLatin1Char('-'), QPointF(8, 8), Qt::white, QFont());
+    }
+    auto painted = [&](int x0, int y0, int x1, int y1) {
+        for (int y = y0; y < y1; ++y)
+            for (int x = x0; x < x1; ++x)
+                if (qAlpha(image.pixel(x, y)) > 40)
+                    return true;
+        return false;
+    };
+    EXPECT_TRUE(painted(0, 0, 6, 6)) << "the stem above the bar, to the left";
+    EXPECT_TRUE(painted(9, 7, 16, 16)) << "the head, to the right";
+    EXPECT_FALSE(painted(9, 0, 16, 4)) << "nothing top right";
 }
 
 TEST(BulletGlyphs, AChooserShowsAndReportsTheSpec)

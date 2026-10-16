@@ -204,8 +204,8 @@ tabular figures, so a column of them lines up.
 |---|---|---|
 | `editor.listNumberStyle` | `plain` | `plain` draws each list counting on its own (`1.` `2.`); `hierarchical` composes a nested item's number from the items it sits in (`1.` then `1.1.` `1.2.` then `1.2.1.`). Replaces `editor.outlineNumbering`. |
 | `editor.listNumberSuffix` | `.` | what follows a drawn number: `.` `:` `)` or any short text. Empty draws the delimiter the note was written with. |
-| `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
-| `editor.bulletGlyphsNested` | off | draw bullets by nesting depth instead of by marker: dot, ring, square, then again. A marker set to `typed` stays as typed. |
+| `editor.bulletGlyphs` | `-=dash,*=dot,+=diamond` | the glyph per marker, from `dot` `ring` `square` `diamond` `dash` `arrow` `star` `check` `turn` `typed` (the character itself). Settings > Editor shows a drop-down per marker with a preview, and Reset restores the default. |
+| `editor.bulletGlyphsNested` | on | a nested bullet (depth 1 and deeper) is drawn as a turn arrow, the shape of U+21B3, instead of by marker; depth 0 keeps its marker's glyph. A marker set to `typed` stays as typed. The arrow is also `turn` in `editor.bulletGlyphs`. |
 
 `=` is not a CommonMark list marker (`- [ ]`, `* ` and `+ ` are), so it cannot
 be mapped; the three real ones can. The glyphs are painted in

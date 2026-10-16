@@ -2206,10 +2206,8 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         } else {
             // One look per way of writing a bullet, set in Settings.
             BulletGlyph glyph = m_bulletGlyphs.glyphFor(item.bullet);
-            if (m_nestedBulletGlyphs && glyph != BulletGlyph::AsTyped) { // dot, ring, square by depth
-                static constexpr BulletGlyph levels[] = {BulletGlyph::Dot, BulletGlyph::Ring, BulletGlyph::Square};
-                glyph = levels[item.indent % 3];
-            }
+            if (m_nestedBulletGlyphs && item.indent > 0 && glyph != BulletGlyph::AsTyped)
+                glyph = BulletGlyph::Turn; // a nested item hangs off the one above it
             paintBulletGlyph(painter, glyph, item.bullet, QPointF(textX - 12, baseline + line.height() / 2), muted,
                              view.layout->font());
         }

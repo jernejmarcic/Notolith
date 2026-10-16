@@ -16,7 +16,7 @@ namespace noteAppC {
 /// What a list bullet looks like in live preview. The file keeps its `-`, `*`
 /// or `+` (CommonMark has no other bullet markers; `=` is not one); only the
 /// drawing changes, and `AsTyped` draws the character itself.
-enum class BulletGlyph { Dot, Ring, Square, Diamond, Dash, Arrow, Star, Check, AsTyped };
+enum class BulletGlyph { Dot, Ring, Square, Diamond, Dash, Arrow, Star, Check, Turn, AsTyped };
 
 /// The glyph each bullet marker is drawn as: "-=dash,*=dot,+=diamond" in the
 /// `editor.bulletGlyphs` setting. Anything unreadable falls back to the

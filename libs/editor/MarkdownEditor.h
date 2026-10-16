@@ -188,8 +188,8 @@ public:
     /// (BulletGlyphs.h). Display only; the file keeps `-`, `*` and `+`.
     void setBulletGlyphs(const QString &spec);
     BulletGlyphMap bulletGlyphs() const { return m_bulletGlyphs; }
-    /// Bullets drawn by nesting depth (dot, ring, square, then again) instead
-    /// of by marker; "typed" glyphs stay as typed. Off by default.
+    /// Nested bullets (depth >= 1) drawn as a turn arrow instead of by marker;
+    /// "typed" glyphs stay as typed. On by default.
     void setNestedBulletGlyphs(bool on);
     bool nestedBulletGlyphs() const { return m_nestedBulletGlyphs; }
     /// What an ordered item's number reads as drawn (for the tests too).
@@ -2593,7 +2593,7 @@ private:
     bool m_outlineNumbering = false;
     QString m_listNumberSuffix = QStringLiteral(".");
     BulletGlyphMap m_bulletGlyphs;
-    bool m_nestedBulletGlyphs = false;
+    bool m_nestedBulletGlyphs = true;
     int m_tabWidth = 4;
     bool m_useWikilinks = true;
     bool m_GPUacceleration = false;
