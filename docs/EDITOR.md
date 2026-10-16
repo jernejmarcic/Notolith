@@ -569,3 +569,9 @@ every link that resolves to a note under it: `[[Folder/A]]` and
 `[y](Folder/A.md)` become `Moved/A`, `Moved/A.md`, a bare `[[A]]` stays
 `[[A]]` while the name is unique, and a linking note that sat inside the
 folder is rewritten at its new path.
+
+A rename first saves every note with unsaved typing, whatever `files.autosave`
+says, so the rewrite works on what is on screen and the next autosave cannot
+put the old link back. The open editor then picks up the rewritten text from
+disk. A link typed in the last two seconds is saved but may not be indexed
+yet, so that one link is not rewritten.
