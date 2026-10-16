@@ -5321,8 +5321,6 @@ void MainWindow::updateModeButton()
         action->setIcon(Icons::icon(action->data().toString(), color, 16));
         const bool on = action->objectName() == QLatin1String(current);
         action->setChecked(on);
-        // Obsidian's check sits at the right edge: the shortcut column does that.
-        action->setText(action->text().section(QLatin1Char('\t'), 0, 0) + (on ? QStringLiteral("\t\u2713") : QString()));
         if (on)
             m_modeButton->setIcon(Icons::icon(action->data().toString(), color, 14));
     }

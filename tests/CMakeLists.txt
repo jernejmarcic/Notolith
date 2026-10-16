@@ -102,6 +102,11 @@ target_link_libraries(test_icons PRIVATE noteAppC_theme Qt6::Test GTest::gtest G
 add_test(NAME icons COMMAND test_icons)
 set_tests_properties(icons PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(test_popup test_popup.cpp)
+target_link_libraries(test_popup PRIVATE noteAppC_theme Qt6::Widgets Qt6::Test GTest::gtest)
+add_test(NAME popup COMMAND test_popup)
+set_tests_properties(popup PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 if(TARGET noteAppC_spell)
     add_executable(test_spell test_spell.cpp)
     target_link_libraries(test_spell PRIVATE noteAppC_spell GTest::gtest GTest::gtest_main)

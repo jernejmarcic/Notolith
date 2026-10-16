@@ -286,7 +286,9 @@ Jernej, 2026-10-16: "the general design is fine, I just want refinements".
   icon, words, characters. Backlinks opens the backlinks pane; properties
   scrolls the note to its properties. The pencil (or book, or code) icon is the
   current mode; its menu has Reading, Source mode and Live Preview with a check
-  at the right edge. The word and character counts come with each parse and
+  at the right edge (drawn by `PopupStyle`, which puts a check there for every
+  checked item of every menu: QSS styles a menu item itself and its
+  `QMenu::indicator` can only sit left of the icon). The word and character counts come with each parse and
   cost nothing per keystroke; the backlink count is one indexed query, a
   moment after the index changes. Words and characters follow the `word-count`
   core plugin switch.
