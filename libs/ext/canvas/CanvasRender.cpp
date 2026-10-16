@@ -463,8 +463,7 @@ QPixmap CanvasView::contentPixmap(const CanvasNode &node) const
             pixmap = renderFileCard(node.file(), physical, true);
         } else if (QImageReader(absolute).canRead()) { // the header only, not a decode
             pixmap = renderImageContent(absolute, physical);
-        } else if (node.file().endsWith(QLatin1String(".md"), Qt::CaseInsensitive)
-                  || node.file().endsWith(QLatin1String(".markdown"), Qt::CaseInsensitive)) {
+        } else if (node.file().endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) {
             QFile file(absolute);
             QString text;
             if (file.open(QIODevice::ReadOnly))

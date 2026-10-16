@@ -23,7 +23,7 @@ struct Slugs {
     static QString slugifySegment(const QString &text);
 
     /// The default output path for `vaultRelativePath` (folders kept, each
-    /// segment slugified on its own, ".md"/".markdown" dropped, ".html"
+    /// segment slugified on its own, ".md" dropped, ".html"
     /// added). Never consults `permalink` - see permalinkOverride() for that.
     static QString defaultPagePath(const QString &vaultRelativePath);
 

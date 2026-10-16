@@ -198,6 +198,22 @@ TEST_F(IndexTest, AScalarTagsAndAliasesValueIsSplit)
     EXPECT_EQ(index.resolve(QStringLiteral("Mind")), QStringLiteral("Split.md"));
 }
 
+TEST_F(IndexTest, DotMarkdownIsAnAttachmentNotANote)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Sub")));
+    write(QStringLiteral("Sub/Note.markdown"), "# Not a note\n");
+    Index index;
+    build(index);
+
+    // Only the three .md notes count; the .markdown file and notes.txt are
+    // attachments, resolved by their full file name like any other.
+    EXPECT_EQ(index.noteCount(), 3);
+    EXPECT_EQ(index.attachmentCount(), 2);
+    EXPECT_EQ(index.resolve(QStringLiteral("Note.markdown")), QStringLiteral("Sub/Note.markdown"));
+    EXPECT_EQ(index.resolve(QStringLiteral("Sub/Note.markdown")), QStringLiteral("Sub/Note.markdown"));
+    EXPECT_TRUE(index.resolve(QStringLiteral("Note")).isEmpty());
+}
+
 TEST_F(IndexTest, QuickSwitcherFindsByAnyName)
 {
     Index index;

@@ -58,8 +58,7 @@ bool Vault::isEncryptedNote(const QString &path)
 
 bool Vault::isNote(const QString &path)
 {
-    const QString suffix = QFileInfo(path).suffix().toLower();
-    return suffix == QLatin1String("md") || suffix == QLatin1String("markdown");
+    return QFileInfo(path).suffix().compare(QLatin1String("md"), Qt::CaseInsensitive) == 0;
 }
 
 QString Vault::relative(const QString &absolutePath) const
