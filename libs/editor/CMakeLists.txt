@@ -21,6 +21,7 @@ add_library(noteAppC_editor STATIC
     MermaidBlock.h
     NotebookBlock.cpp
     NotebookComplete.cpp
+    NotebookInput.cpp
     NotebookEmbed.cpp
     PasteDrop.cpp
     TableCells.cpp

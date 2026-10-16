@@ -70,6 +70,35 @@ int askAboutSelection()
     return 0;
 }
 
+/// "AI: Ask a question": the question is typed into a small dialog the app
+/// shows (host->prompt), the answer lands at the caret - or, with a
+/// selection, which an insert would overwrite, in the status line and the
+/// log instead. Only the question is sent: unlike summarize, the note is not
+/// context (neither is it for an ```ai block).
+int askQuestion()
+{
+    const noteappc_host *host = gPlugin.host();
+    const AiConfig config = AiConfig::load();
+    const char *typed = host->prompt("Ask the model a question:", 0, config.askTimeoutMs);
+    const QString question = typed ? QString::fromUtf8(typed).trimmed() : QString();
+    if (question.isEmpty()) {
+        host->show_notice(typed ? "Ask a question: nothing typed." : "Ask a question: cancelled.");
+        return 0;
+    }
+    const AiResult result = noteAppC::ai::runChat(config, QString(), question);
+    if (!result.ok) {
+        host->show_notice((QStringLiteral("Ask a question failed: ") + result.error).toUtf8().constData());
+        return 0;
+    }
+    const QByteArray answer = result.text.toUtf8();
+    const bool selected = !QString::fromUtf8(host->active_selection_text()).isEmpty();
+    if (selected || host->replace_selection(answer.constData()) != 0) {
+        host->log(answer.constData());
+        host->show_notice(answer.constData());
+    }
+    return 0;
+}
+
 int rewriteSelection()
 {
     const noteappc_host *host = gPlugin.host();
@@ -215,6 +244,7 @@ int aiPluginInit()
 {
     gPlugin.onCommand("summarize", summarize);
     gPlugin.onCommand("ask", askAboutSelection);
+    gPlugin.onCommand("ask-question", askQuestion);
     gPlugin.onCommand("rewrite", rewriteSelection);
     gPlugin.onCommand("continue", continueWriting);
     gPlugin.onCommand("translate", translate);

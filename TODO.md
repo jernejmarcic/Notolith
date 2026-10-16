@@ -35,11 +35,11 @@ built; each stage's detail is in its own section further down.
 | 6 | Publishing: the vault as a static website (Obsidian Publish style) | done: `publish:export`, marked notes only by default, off the UI thread; 20 000 notes 6.7 s. Left: footnote links, code-tab strips |
 | 7 | Media annotation: highlight, draw on and annotate PDFs and EPUBs; notes extracted from the annotations | done: PDF viewer (six annotation kinds saved into the file, extract to a note, recovery copies) and EPUB reader (highlights sidecar). Left: image annotation (EPUB paged mode and CSS `url()` exist: EpubView.cpp, EpubRender.cpp) |
 | 8 | Extensibility: out-of-process plugin host, capability allowlist, quickjs-ng engine, public API | done but quickjs-ng: sandboxed host per plugin, C ABI, commands, code blocks, vault events, permissions page. quickjs-ng: "Decide later" |
-| 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | done: `plugins/ai` (Ollama, OpenAI-compatible, Anthropic; key by env var name only), `ai` code blocks, declared per-plugin timeouts. Left: a typed question (no host prompt call yet) |
+| 9 | AI, as an optional first-party plugin: local (ollama is installed) or an API | done: `plugins/ai` (Ollama, OpenAI-compatible, Anthropic; key by env var name only), `ai` code blocks, declared per-plugin timeouts. 2026-10-16: typed question (host `prompt` call, "AI: Ask a question") |
 | 10 | Local-first sync to an optional server: entity-change journal and content hashes, E2EE (libsodium: Argon2id, XChaCha20-Poly1305, secretstream, 3-tier keys, X25519 lockboxes), client-side search only | done: engine, reference server (tools/sync_server), window wiring (sign in per session). Left: first full sync of 20 000 notes unmeasured, lockbox approval UI, key rotation |
 | 11 | Real-time collaboration: a CRDT per note body, an E2EE blind relay (secsync's model), presence | todo; Jernej 2026-09-23: "yrs via C FFI" (ask before cargo fetches it: source, size) |
 | 12 | Cross-platform: Linux and Android build; Windows, macOS, iOS, BSD need toolchains this machine lacks | partly blocked |
-| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands; 2026-10-01: shared kernels, rich output, more `#|` options, stale output, timeouts. completion/inspect built (NotebookComplete.cpp). Left: `.ipynb`, `input()`, tiers 2-3 (not installed) |
+| 13 | Jupyter-style code execution, tiered sandbox, `#|` options, sidecar output, runnable file embeds ("when everything is said and done") | merged 2026-09-23: kernels over ZeroMQ, bubblewrap tier, output cache, run control, commands; 2026-10-01: shared kernels, rich output, more `#|` options, stale output, timeouts. completion/inspect built (NotebookComplete.cpp). 2026-10-16: editable `.ipynb`, `input()`/getpass prompts. Left: tiers 2-3 (not installed) |
 | 14 | A profiling and optimisation pass over everything ("after ALL is done") | last |
 
 Standing decisions the spec left open, kept as they are unless Jernej says
@@ -848,7 +848,7 @@ optimal as it can be".
       2026-10-16: `"1`-`"9`, `it`/`at`, visual `J r ~ u U`, `N%`, macro stop on
       a failed motion. Left: `l`/`h` at a line edge do not fail a macro.
 - [x] Notebook gaps against Ideas.md (docs/NOTEBOOKS.md). Completion and
-      inspect built 2026-10-01. Left: `.ipynb` files, `input()`, tiers 2-3.
+      inspect built 2026-10-01. 2026-10-16: `.ipynb` and `input()` done. Left: tiers 2-3.
 - [x] Audit (tests in test_window/test_sync/test_vault): split panes, metadata
       byte-exact through every save path, encryption leaves no plaintext on
       disk, every embed kind renders inline. Fixed: outside changes to an open
@@ -935,6 +935,10 @@ optimal as it can be".
 - [ ] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
       a published site gets no theme `syntax`/`--code-*` token colours yet; a
       listing nested in a callout gets ini/theme colours only (no fence attrs).
+- [ ] Notebook leftovers: no window-level test drives input() end to end;
+      the plugin askUser dialog is untested; `.ipynb` outputs are seeded on
+      the GUI thread at every read (big PNGs cost time); run outputs are not
+      written back into the .ipynb; the vault index ignores .ipynb.
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced

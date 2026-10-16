@@ -110,6 +110,7 @@ void MarkdownEditor::deliverNotebookResult(const QString &key, quint64 generatio
         return;
     it->pending = false;
     it->running = false;
+    dropNotebookInput(key); // the run is over: nobody is waiting for a line any more
     it->result = std::move(result);
     // Invalidated, not rebuilt here: renderNotebookImage runs off
     // appendNotebookOutput's own contentWidth(), which this delivery
@@ -252,6 +253,14 @@ void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &langua
                                           const QString &blockID, const QString &workingDir,
                                           const CodeOptions *options)
 {
+    appendNotebookOutputRows(view, language, source, blockID, workingDir, options);
+    appendNotebookInput(view);
+}
+
+void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &language, const QString &source,
+                                              const QString &blockID, const QString &workingDir,
+                                              const CodeOptions *options)
+{
     const bool sandboxHost = options && options->sandboxHost;
     // The tier is part of the key: a host-tier and a bubblewrap-tier run of
     // the same source must never share a cached result (this stage's own
@@ -273,6 +282,7 @@ void MarkdownEditor::appendNotebookOutput(BlockView &view, const QString &langua
     view.notebookBlockID = blockID;
     view.notebookOutputs.clear();
     view.notebookOutputTop = view.height;
+    view.notebookInputRect = QRectF();
 
     const NotebookCacheEntry &lookup = ensureNotebookResult(key, language, source, notebookOptionsOf(view));
     view.notebookHasRun = lookup.result.hasRun;
@@ -581,7 +591,7 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     const QString language = view.notebookLanguage;
     const QString source = view.notebookSource;
     const QString key = view.notebookKey;
-    const NotebookRunOptions options = notebookOptionsOf(view);
+    NotebookRunOptions options = notebookOptionsOf(view);
 
     NotebookCacheEntry &entry = m_notebookCache[key]; // inserted fresh if this is the first run
     if (entry.running) {
@@ -593,6 +603,13 @@ bool MarkdownEditor::runNotebookBlockAt(qsizetype offset)
     entry.pending = false;
     const quint64 generation = ++m_notebookGeneration;
     entry.generation = generation;
+    // input() in the code: the prompt appears under this block (the runner calls this from its own thread).
+    options.onInput = [this, lifeline = m_lifeline, key, generation](const NotebookInputPrompt &prompt,
+                                                                      const NotebookInputReply &reply) {
+        lifeline->post(this, [this, key, generation, prompt, reply] {
+            showNotebookInput(key, generation, prompt, reply);
+        });
+    };
 
     view.notebookRunning = true;
     view.layout.reset();

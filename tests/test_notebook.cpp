@@ -12,12 +12,16 @@
 #include <optional>
 #include <QStandardPaths>
 #include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QFile>
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 #include "DirectRunner.h"
+#include "Ipynb.h"
 #include "KernelProcess.h"
 #include "KernelSpec.h"
 #include "NotebookCache.h"
@@ -936,4 +940,377 @@ TEST(NotebookKernelFeatureTest, CompletionAndDocumentationComeFromTheNotesRunnin
     controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md"));
     EXPECT_TRUE(gone);
     controller.shutdownAll();
+}
+
+// --- input() from a running block -------------------------------------------
+
+namespace {
+
+/// A missing kernel skips the test, unless the lane check says tools are required.
+#define REQUIRE_PYTHON_KERNEL()                                                                          \
+    if (!pythonKernelAvailable()) {                                                                      \
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))                    \
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and no Jupyter python kernelspec is installed";                 \
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";                       \
+    }
+
+/// What the stand-in for the person at the prompt saw, and what it answers.
+struct Asked {
+    QStringList prompts;
+    QList<bool> passwords;
+    bool cancel = false;
+    QString answer;
+    int answerDelayMs = 0;
+};
+
+NotebookController::RunRequest requestAsking(const std::shared_ptr<Asked> &asked, const QString &scope)
+{
+    NotebookController::RunRequest request = kernelRequest(scope);
+    request.onInput = [asked](const NotebookController::InputPrompt &prompt,
+                              const NotebookController::InputReply &reply) {
+        asked->prompts << prompt.prompt;
+        asked->passwords << prompt.password;
+        QTimer::singleShot(asked->answerDelayMs, [asked, reply] { reply(!asked->cancel, asked->answer); });
+    };
+    return request;
+}
+
+} // namespace
+
+TEST(NotebookInputTest, InputAsksAndTheAnswerGoesBackToTheKernel)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    asked->answer = QStringLiteral("Ada \xc5\xa0");
+    asked->answerDelayMs = 150; // a person takes a moment: the run is waiting, not finished
+
+    const NotebookRunResult result = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                QStringLiteral("name = input('Name: ')\nprint('hi ' + name)"));
+    ASSERT_TRUE(result.kernelError.isEmpty()) << result.kernelError.toStdString();
+    EXPECT_TRUE(result.ok);
+    EXPECT_EQ(asked->prompts, QStringList{QStringLiteral("Name: ")});
+    EXPECT_EQ(asked->passwords, QList<bool>{false});
+    EXPECT_TRUE(joinedText(result).contains(QStringLiteral("hi Ada \xc5\xa0"))) << joinedText(result).toStdString();
+
+    // A second ask in one cell, and the variable lives on in the kernel.
+    asked->prompts.clear();
+    asked->answer = QStringLiteral("7");
+    const NotebookRunResult twice = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                               QStringLiteral("a = int(input('a? '))\nb = int(input('b? '))\nprint(a + b)"));
+    EXPECT_EQ(asked->prompts, (QStringList{QStringLiteral("a? "), QStringLiteral("b? ")}));
+    EXPECT_EQ(joinedText(twice).trimmed(), QStringLiteral("14"));
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, GetpassIsMaskedAndACancelledInputInterruptsTheRun)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    asked->answer = QStringLiteral("hunter22");
+
+    const NotebookRunResult secret = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                QStringLiteral("import getpass\nprint(len(getpass.getpass('Secret: ')))"));
+    EXPECT_EQ(asked->passwords, QList<bool>{true});
+    EXPECT_EQ(joinedText(secret).trimmed(), QStringLiteral("8"));
+
+    // Esc: the run is interrupted (a KeyboardInterrupt), and the kernel is still there for the next block.
+    asked->cancel = true;
+    const NotebookRunResult cancelled = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                   QStringLiteral("x = input('never answered')\nprint('not reached')"));
+    EXPECT_FALSE(cancelled.ok);
+    ASSERT_FALSE(cancelled.outputs.isEmpty());
+    EXPECT_EQ(cancelled.outputs.last().kind, NotebookOutput::Kind::Error);
+    EXPECT_TRUE(cancelled.outputs.last().ename.contains(QStringLiteral("KeyboardInterrupt")))
+        << cancelled.outputs.last().ename.toStdString();
+    EXPECT_FALSE(joinedText(cancelled).contains(QStringLiteral("not reached")));
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("a.md")), 1);
+    EXPECT_EQ(joinedText(runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("print(1 + 1)"))).trimmed(),
+              QStringLiteral("2"));
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, WithNoOneToAskInputStillRaisesAsItAlwaysDid)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookRunResult result =
+        runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("input('anyone?')"));
+    EXPECT_FALSE(result.ok);
+    ASSERT_FALSE(result.outputs.isEmpty());
+    EXPECT_TRUE(result.outputs.last().ename.contains(QStringLiteral("StdinNotImplementedError")))
+        << result.outputs.last().ename.toStdString();
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, AReplyAfterTheKernelWentIsIgnored)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    NotebookController::InputReply late;
+    NotebookController::RunRequest request = kernelRequest(QStringLiteral("a.md"));
+    request.onInput = [&](const NotebookController::InputPrompt &, const NotebookController::InputReply &reply) {
+        late = reply; // the person is still thinking
+    };
+    request.source = QStringLiteral("input('wait')");
+    bool delivered = false;
+    controller.run(request, true, [&](NotebookRunResult) { delivered = true; });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return bool(late); }, 20000));
+    controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md")); // delivers a kernel error
+    EXPECT_TRUE(delivered);
+    late(true, QStringLiteral("too late")); // nothing to send it to: must not crash or wake another kernel
+    late(false, QString());
+    EXPECT_EQ(controller.runningKernelCount(), 0);
+    controller.shutdownAll();
+}
+
+// --- .ipynb as a note ---------------------------------------------------------
+
+namespace {
+
+QByteArray sampleNotebook()
+{
+    QFile file(QStringLiteral(NOTEAPPC_FIXTURES_DIR "/notebook/sample.ipynb"));
+    EXPECT_TRUE(file.open(QIODevice::ReadOnly));
+    return file.readAll();
+}
+
+IpynbDocument parsedSample()
+{
+    IpynbDocument document;
+    QString error;
+    EXPECT_TRUE(parseIpynb(sampleNotebook(), &document, &error)) << error.toStdString();
+    return document;
+}
+
+QString joinedSource(const QJsonObject &cell)
+{
+    QString text;
+    for (const QJsonValue &line : cell.value(QStringLiteral("source")).toArray())
+        text += line.toString();
+    return text;
+}
+
+QJsonArray cellsIn(const QByteArray &notebook)
+{
+    return QJsonDocument::fromJson(notebook).object().value(QStringLiteral("cells")).toArray();
+}
+
+/// Does nbformat itself (Jupyter's own validator) accept these bytes? Skipped without Python or the module.
+void expectNbformatValid(const QByteArray &bytes)
+{
+    QProcess python;
+    python.start(QStringLiteral("python3"),
+                 {QStringLiteral("-c"), QStringLiteral("import sys, nbformat\n"
+                                                      "nbformat.validate(nbformat.reads(sys.stdin.read(), 4))")});
+    if (!python.waitForStarted()) {
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "NOTEAPPC_REQUIRE_TOOLS=1 and no python3";
+        GTEST_SKIP() << "python3 is not installed";
+    }
+    python.write(bytes);
+    python.closeWriteChannel();
+    ASSERT_TRUE(python.waitForFinished(20000));
+    const QString err = QString::fromUtf8(python.readAllStandardError());
+    if (python.exitCode() != 0 && err.contains(QStringLiteral("No module named 'nbformat'"))) {
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and python has no nbformat";
+        GTEST_SKIP() << "python has no nbformat module";
+    }
+    EXPECT_EQ(python.exitCode(), 0) << err.toStdString();
+}
+
+} // namespace
+
+TEST(IpynbTest, OurJSONWriterIsNbformatsOwn)
+{
+    // The fixture is nbformat's own output (one-space indent, sorted keys, unicode kept, a final newline):
+    // read and written again it is the same bytes, so a saved notebook differs only where it was edited.
+    const IpynbDocument document = parsedSample();
+    EXPECT_EQ(dumpIpynbJSON(document.root), sampleNotebook());
+}
+
+TEST(IpynbTest, CellsBecomeTextAndFences)
+{
+    const IpynbDocument document = parsedSample();
+    EXPECT_EQ(document.language, QStringLiteral("python"));
+    const QString text = ipynbMarkdown(document);
+    EXPECT_TRUE(text.startsWith(QStringLiteral("# Title\n\nSome *text* with unicode: \u00e9\u00e8 \u2713 and a quote \"x\".\n\n")));
+    // Two markdown cells in a row are told apart by a marker line.
+    EXPECT_TRUE(text.contains(QStringLiteral("\n\n<!-- cell -->\n\nsecond markdown cell")));
+    EXPECT_TRUE(text.contains(QStringLiteral("```python\nimport math\nprint('hello')\nmath.pi\n```\n\n```python\n1/0\n```")));
+    // A cell with a fence inside gets a longer one; a raw cell is a raw fence; another language's fence in a
+    // markdown cell is just markdown.
+    EXPECT_TRUE(text.contains(QStringLiteral("````python\ntext = '''\n```\ninside\n```\n'''\nprint(text)\n````")));
+    EXPECT_TRUE(text.contains(QStringLiteral("```raw\nraw text, left alone\n```")));
+    EXPECT_TRUE(text.contains(QStringLiteral("```bash\necho not a code cell\n```\n\nafter a bash fence")));
+    EXPECT_TRUE(text.endsWith(QLatin1Char('\n')));
+}
+
+TEST(IpynbTest, AnUneditedNoteWritesTheFilesOwnBytes)
+{
+    const QByteArray file = sampleNotebook();
+    QString error;
+    EXPECT_EQ(mergeIpynb(file, ipynbMarkdown(parsedSample()), &error), file) << error.toStdString();
+}
+
+TEST(IpynbTest, EditsKeepEverythingTheTextDoesNotSay)
+{
+    const QByteArray file = sampleNotebook();
+    const QJsonArray before = cellsIn(file);
+    QString text = ipynbMarkdown(parsedSample());
+    text.replace(QStringLiteral("print('hello')"), QStringLiteral("print('hello, world')"));
+    text.replace(QStringLiteral("# Title"), QStringLiteral("# A better title"));
+
+    const QByteArray merged = mergeIpynb(file, text);
+    ASSERT_FALSE(merged.isEmpty());
+    const QJsonArray after = cellsIn(merged);
+    ASSERT_EQ(after.size(), before.size());
+    for (int i = 0; i < before.size(); ++i) {
+        if (i == 0 || i == 2)
+            continue;
+        EXPECT_EQ(after.at(i), before.at(i)) << "cell " << i << " was not edited";
+    }
+    // The edited cells are the same cells with new text: id, metadata, outputs and count stay.
+    const QJsonObject code = after.at(2).toObject();
+    const QJsonObject codeBefore = before.at(2).toObject();
+    EXPECT_EQ(joinedSource(code), QStringLiteral("import math\nprint('hello, world')\nmath.pi"));
+    EXPECT_EQ(code.value(QStringLiteral("id")), codeBefore.value(QStringLiteral("id")));
+    EXPECT_EQ(code.value(QStringLiteral("metadata")), codeBefore.value(QStringLiteral("metadata")));
+    EXPECT_EQ(code.value(QStringLiteral("outputs")), codeBefore.value(QStringLiteral("outputs")));
+    EXPECT_EQ(code.value(QStringLiteral("execution_count")), codeBefore.value(QStringLiteral("execution_count")));
+    EXPECT_EQ(after.at(0).toObject().value(QStringLiteral("id")), before.at(0).toObject().value(QStringLiteral("id")));
+    // Everything outside the cells is as it was, unknown keys included.
+    const QJsonObject rootBefore = QJsonDocument::fromJson(file).object();
+    QJsonObject rootAfter = QJsonDocument::fromJson(merged).object();
+    for (const char *key : {"metadata", "nbformat", "nbformat_minor"})
+        EXPECT_EQ(rootAfter.value(QLatin1String(key)), rootBefore.value(QLatin1String(key)));
+    EXPECT_TRUE(merged.endsWith("}\n"));
+    expectNbformatValid(merged);
+}
+
+TEST(IpynbTest, InsertedDeletedAndAdjacentCellsKeepTheirNeighboursAndStayValid)
+{
+    const QByteArray file = sampleNotebook();
+    const QJsonArray before = cellsIn(file);
+    QString text = ipynbMarkdown(parsedSample());
+    // A new code cell between the two markdown cells and the first code cell; the error cell deleted.
+    text.replace(QStringLiteral("\n\n```python\nimport math"), QStringLiteral("\n\n```python\nx = 1\n```\n\n```python\nimport math"));
+    text.remove(QStringLiteral("```python\n1/0\n```\n\n"));
+
+    const QByteArray merged = mergeIpynb(file, text);
+    const QJsonArray after = cellsIn(merged);
+    ASSERT_EQ(after.size(), before.size()); // +1 -1
+    EXPECT_EQ(after.at(0), before.at(0));
+    EXPECT_EQ(after.at(1), before.at(1)) << "two markdown cells in a row stay two";
+    const QJsonObject added = after.at(2).toObject();
+    EXPECT_EQ(added.value(QStringLiteral("cell_type")).toString(), QStringLiteral("code"));
+    EXPECT_EQ(joinedSource(added), QStringLiteral("x = 1"));
+    EXPECT_TRUE(added.value(QStringLiteral("execution_count")).isNull());
+    EXPECT_TRUE(added.value(QStringLiteral("outputs")).toArray().isEmpty());
+    EXPECT_FALSE(added.value(QStringLiteral("id")).toString().isEmpty()) << "nbformat 4.5 wants an id";
+    EXPECT_NE(added.value(QStringLiteral("id")), before.at(2).toObject().value(QStringLiteral("id")));
+    EXPECT_EQ(after.at(3), before.at(2)) << "the cell that was there before is untouched, outputs and all";
+    EXPECT_EQ(after.at(4), before.at(4)); // the error cell (3) is gone
+    EXPECT_EQ(after.at(5), before.at(5));
+    EXPECT_EQ(after.at(6), before.at(6));
+    expectNbformatValid(merged);
+}
+
+TEST(IpynbTest, SomethingThatIsNotANotebookIsRefusedAndNotTouched)
+{
+    IpynbDocument document;
+    QString error;
+    EXPECT_FALSE(parseIpynb("not json", &document, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(parseIpynb(R"({"nbformat": 3, "worksheets": []})", &document, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("nbformat 3")));
+    EXPECT_FALSE(parseIpynb(R"({"nbformat": 4, "metadata": {}})", &document, &error));
+    EXPECT_TRUE(mergeIpynb("not json", QStringLiteral("text"), &error).isEmpty());
+    QString text;
+    EXPECT_FALSE(readIpynb("[]", &text, &error));
+}
+
+TEST(IpynbTest, UnknownKeysSurviveAnEditAndTheLanguageComesFromTheKernelspec)
+{
+    QJsonObject root = QJsonDocument::fromJson(sampleNotebook()).object();
+    root.insert(QStringLiteral("extra_root_key"), QJsonObject{{QStringLiteral("a"), 1}});
+    QJsonObject metadata = root.value(QStringLiteral("metadata")).toObject();
+    metadata.insert(QStringLiteral("kernelspec"), QJsonObject{{QStringLiteral("language"), QStringLiteral("R")},
+                                                              {QStringLiteral("name"), QStringLiteral("ir")}});
+    root.insert(QStringLiteral("metadata"), metadata);
+    QJsonArray cells = root.value(QStringLiteral("cells")).toArray();
+    QJsonObject first = cells.at(0).toObject();
+    first.insert(QStringLiteral("future_key"), QStringLiteral("kept"));
+    cells.replace(0, first);
+    root.insert(QStringLiteral("cells"), cells);
+    const QByteArray file = dumpIpynbJSON(root);
+
+    IpynbDocument document;
+    ASSERT_TRUE(parseIpynb(file, &document));
+    EXPECT_EQ(document.language, QStringLiteral("r"));
+    QString text = ipynbMarkdown(document);
+    EXPECT_TRUE(text.contains(QStringLiteral("```r\nimport math")));
+    text.replace(QStringLiteral("Title"), QStringLiteral("Heading"));
+    const QJsonObject merged = QJsonDocument::fromJson(mergeIpynb(file, text)).object();
+    EXPECT_EQ(merged.value(QStringLiteral("extra_root_key")), root.value(QStringLiteral("extra_root_key")));
+    const QJsonObject edited = merged.value(QStringLiteral("cells")).toArray().at(0).toObject();
+    EXPECT_EQ(edited.value(QStringLiteral("future_key")).toString(), QStringLiteral("kept"));
+    EXPECT_TRUE(joinedSource(edited).contains(QStringLiteral("Heading")));
+}
+
+TEST(IpynbTest, StoredOutputsAreSeededWhereTheEditorLooksForThem)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    QString text;
+    ASSERT_TRUE(readIpynb(sampleNotebook(), &text));
+
+    const QString key = notebookCacheKey(QStringLiteral("python"), QStringLiteral("import math\nprint('hello')\nmath.pi"));
+    const NotebookRunResult first = readNotebookCache(key);
+    ASSERT_TRUE(first.hasRun);
+    EXPECT_TRUE(first.ok);
+    EXPECT_EQ(first.executionCount, 3);
+    ASSERT_EQ(first.outputs.size(), 5);
+    EXPECT_EQ(first.outputs.at(0).kind, NotebookOutput::Kind::Text);
+    EXPECT_EQ(first.outputs.at(0).text, QStringLiteral("hello\n"));
+    EXPECT_FALSE(first.outputs.at(0).isStderr);
+    EXPECT_TRUE(first.outputs.at(1).isStderr);
+    EXPECT_EQ(first.outputs.at(2).text, QStringLiteral("3.141592653589793")); // an execute_result's text/plain
+    EXPECT_EQ(first.outputs.at(3).kind, NotebookOutput::Kind::ImagePng);
+    EXPECT_TRUE(first.outputs.at(3).imageBytes.startsWith("\x89PNG"));
+    EXPECT_EQ(first.outputs.at(4).kind, NotebookOutput::Kind::Html);
+    EXPECT_EQ(first.outputs.at(4).text, QStringLiteral("<b>bold</b>"));
+    EXPECT_EQ(first.outputs.at(4).alt, QStringLiteral("bold"));
+
+    const NotebookRunResult failed = readNotebookCache(notebookCacheKey(QStringLiteral("python"), QStringLiteral("1/0")));
+    ASSERT_TRUE(failed.hasRun);
+    EXPECT_FALSE(failed.ok);
+    ASSERT_EQ(failed.outputs.size(), 1);
+    EXPECT_EQ(failed.outputs.at(0).kind, NotebookOutput::Kind::Error);
+    EXPECT_EQ(failed.outputs.at(0).ename, QStringLiteral("ZeroDivisionError"));
+    EXPECT_FALSE(failed.outputs.at(0).traceback.join(QLatin1Char('\n')).contains(QLatin1Char('\x1b'))) << "colour codes are stripped";
+
+    // A cell that never ran leaves nothing behind.
+    EXPECT_FALSE(readNotebookCache(notebookCacheKey(QStringLiteral("python"), QStringLiteral("text = '''\n```\ninside\n```\n'''\nprint(text)"))).hasRun);
+
+    // And the controller's own lookup - what a note opening does for every block - finds them.
+    NotebookController controller;
+    NotebookController::RunRequest request;
+    request.language = QStringLiteral("python");
+    request.source = QStringLiteral("import math\nprint('hello')\nmath.pi");
+    bool delivered = false;
+    NotebookRunResult looked;
+    controller.run(request, false, [&](NotebookRunResult result) {
+        looked = std::move(result);
+        delivered = true;
+    });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return delivered; }, 5000));
+    EXPECT_TRUE(looked.hasRun);
+    EXPECT_EQ(looked.outputs.size(), 5);
 }
