@@ -122,7 +122,7 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
   - [x] Table cells: a selection is drawn inside the rendered table (cells
         crossed whole are tinted); a short row draws its missing cells, and a
         click or Tab into one fills the row in first.
-- [ ] Sync asks the password every session: keep the derived keys in the
+- [x] Sync asks the password every session: keep the derived keys in the
       keyring instead. Jernej 2026-10-16: "Use keyring" (lane sync).
 - [x] Lockbox approval: a person approves a device enrolling by lockbox,
       comparing a fingerprint shown on both; before, every device the server
@@ -1053,7 +1053,7 @@ optimal as it can be".
       text node (re-entrancy, up to 500 ms on the UI thread); finish the
       parse synchronously instead; same in PdfExport; the canvas-embed
       singleShot holds a raw MarkdownEditor* (lane canvasparse).
-- [ ] SyncJournal::writeBase truncates in place (torn base -> conflict copy
+- [x] SyncJournal::writeBase truncates in place (torn base -> conflict copy
       instead of a merge); QSaveFile (lane sync).
 - [x] Licence: GPL-3.0-or-later (Jernej 2026-10-16). LICENSE, PKGBUILD,
       AppStream, README.
