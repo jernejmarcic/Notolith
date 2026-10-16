@@ -337,6 +337,7 @@ QWidget *GraphView::buildControlsPanel()
     const auto addSection = [&](const QString &title, bool GraphOptions::*collapsed) {
         auto *header = new QToolButton(body);
         header->setText(title);
+        header->setObjectName(QStringLiteral("graph%1Section").arg(title));
         header->setCheckable(true);
         header->setAutoRaise(true);
         header->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
@@ -1268,13 +1269,15 @@ QImage GraphView::paintGraph(const FrameInput &in)
         painter.drawLines(dimLines);
     }
 
-    // Text fade threshold: Obsidian reveals labels once zoomed in enough (or
-    // hovered). textFadeMultiplier shifts the zoom level that counts as
-    // "enough"; we do not know Obsidian's exact curve, so this is a
-    // deliberately simple, documented approximation of it.
-    const double labelZoomThreshold = options.textFadeMultiplier > 0.0 ? options.textFadeMultiplier : 1.4;
-    const bool showAllLabels = in.zoom >= labelZoomThreshold;
+    // Text fade threshold: labels fade in as the view zooms in (Obsidian's
+    // slider, -3..3, moves where that happens). The threshold t is 1.4 at 0
+    // and scales by 1.3 per step, so -3..3 spans 0.6..3.1; the labels are
+    // invisible below 0.75 t and fully drawn from 1.25 t. A hovered node,
+    // its neighbours and the current note always get theirs.
+    const double fadeThreshold = 1.4 * std::pow(1.3, -options.textFadeMultiplier);
+    const double fadeAlpha = std::clamp((in.zoom - 0.75 * fadeThreshold) / (0.5 * fadeThreshold), 0.0, 1.0);
     painter.setFont(in.font);
+
 
     // Most nodes share one colour (no colour groups, all Kind::Note), so the
     // usual case is one setBrush() for the whole graph rather than one per
@@ -1327,10 +1330,12 @@ QImage GraphView::paintGraph(const FrameInput &in)
             haveBrush = false;         // and the brush, since NoBrush was just set too
         }
 
-        const bool showLabel =
-            !dim && (showAllLabels || i == in.hoverNode || highlighted.contains(i) || node.data.id == in.currentNote);
-        if (showLabel && !node.data.label.isEmpty()) {
-            painter.setPen(in.palette.text);
+        const bool pinned = i == in.hoverNode || highlighted.contains(i) || node.data.id == in.currentNote;
+        const double labelAlpha = dim ? 0.0 : pinned ? 1.0 : fadeAlpha;
+        if (labelAlpha > 0.0 && !node.data.label.isEmpty()) {
+            QColor labelColor = in.palette.text;
+            labelColor.setAlphaF(labelAlpha);
+            painter.setPen(labelColor);
             painter.drawText(QRectF(center.x() - 70, center.y() + radius + 2, 140, 16),
                              Qt::AlignHCenter | Qt::AlignTop, node.data.label);
             painter.setPen(Qt::NoPen);

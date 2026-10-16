@@ -465,6 +465,38 @@ TEST(GraphViewTest, WithAnimationOffTheLayoutIsSettledBeforeTheFirstFrame)
     EXPECT_LT(std::hypot(later.x() - first.x(), later.y() - first.y()), 3.0);
 }
 
+TEST(GraphViewTest, LabelsFadeInAsTheViewZoomsIn)
+{
+    // Labels are text-coloured pixels: count how many the frame holds.
+    const auto textPixels = [](const QImage &frame) {
+        int count = 0;
+        for (int y = 0; y < frame.height(); ++y) {
+            const QRgb *row = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+            for (int x = 0; x < frame.width(); ++x)
+                count += qRed(row[x]) > 200 && qGreen(row[x]) > 200; // the default palette's white text
+        }
+        return count;
+    };
+    const QStringList ids{QStringLiteral("alpha"), QStringLiteral("beta"), QStringLiteral("gamma"),
+                          QStringLiteral("delta")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("alpha"), QStringLiteral("beta")},
+                                      {QStringLiteral("beta"), QStringLiteral("gamma")},
+                                      {QStringLiteral("gamma"), QStringLiteral("delta")}});
+    view.stepSimulation(300);
+    const int far = textPixels(view.renderFrameNow());
+    // Zoom in about the centre: the same graph, nearer.
+    for (int i = 0; i < 3; ++i) {
+        QWheelEvent wheel(QPointF(250, 200), QPointF(250, 200), QPoint(), QPoint(0, 120), Qt::NoButton,
+                          Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(&view, &wheel);
+    }
+    const int near = textPixels(view.renderFrameNow());
+    EXPECT_EQ(far, 0) << "no label shows while zoomed out";
+    EXPECT_GT(near, 0) << "labels appear once zoomed in";
+}
+
 TEST(GraphViewTest, OrphanFilterDropsUnconnectedNotes)
 {
     GraphOptions options = GraphOptions::defaults();
