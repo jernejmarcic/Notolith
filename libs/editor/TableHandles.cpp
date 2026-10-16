@@ -820,6 +820,8 @@ bool MarkdownEditor::copyCellSelection(bool cut)
             if (table.html) {
                 // What the cell shows: tags and entities gone, one line, a
                 // pipe escaped in the table and not in the plain text.
+                // ponytail: one QTextDocument per cell; a rectangle of thousands
+                // would want the laid-out cell's DisplayMap text instead.
                 const QString shown = QTextDocumentFragment::fromHtml(text).toPlainText().simplified();
                 cells << QString(shown).replace(QLatin1Char('|'), QStringLiteral("\\|"));
                 plain << shown;
