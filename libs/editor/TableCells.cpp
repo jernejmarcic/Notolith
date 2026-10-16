@@ -19,6 +19,7 @@
 #include "Parser.h"
 #include "TableFormat.h"
 
+#include <QCollator>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QScrollBar>
@@ -357,6 +358,100 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
     }
 }
 
+void MarkdownEditor::rewriteTable(qsizetype start, qsizetype end, const QString &text)
+{
+    m_lastEdit.invalidate(); // its own undo step, not the end of the typing before it
+    pushUndo();
+    m_formattingTables = true; // aligned already: leaving it has nothing to do
+    applyEdit(start, end - start, text);
+    m_formattingTables = false;
+    m_lastEdit.invalidate();
+    m_tableEdited = false;
+    reparse();
+}
+
+bool MarkdownEditor::handleSourceTableKey(int key)
+{
+    if (!m_alignTables || m_mode == Mode::Reading || m_anchor != m_cursor)
+        return false;
+    // Prose is the common case, and a line without a pipe is not a row.
+    const qsizetype caretLine = m_lines.lineAt(m_cursor);
+    const qsizetype lineStart = m_lines.lineStart(caretLine);
+    if (!QStringView(m_text).mid(lineStart, m_lines.lineEnd(caretLine) - lineStart).contains(QLatin1Char('|'))
+        || tableRenderedAt(m_cursor)) // a drawn table's cells are handleTableKey's
+        return false;
+    // ponytail: a stale parse is redone here, whole note; fine for a Tab, an
+    // upgrade path would be scanning the contiguous pipe lines by hand.
+    if (m_parsedVersion != m_textVersion)
+        reparse();
+    const qsizetype index = tableAround(m_cursor);
+    if (index < 0 || m_decorations.tables.at(index).html)
+        return false;
+
+    const TableSpan &table = m_decorations.tables.at(index);
+    const qsizetype firstLine = m_lines.lineAt(table.range.start);
+    const qsizetype lastLine = m_lines.lineAt(qMax(table.range.start, table.range.end - 1));
+    const qsizetype start = m_lines.lineStart(firstLine);
+    const qsizetype end = m_lines.lineEnd(lastLine);
+    const int lineIndex = int(m_lines.lineAt(m_cursor) - firstLine); // 0 header, 1 delimiter
+    const int columns = table.columns;
+
+    // Which row and cell the caret is in, then where the key sends it.
+    int row = lineIndex <= 1 ? 0 : lineIndex - 1;
+    int column = 0;
+    for (int c = 0; c < table.rows.at(row).size() && c < columns; ++c) {
+        if (table.rows.at(row).at(c).start <= m_cursor)
+            column = c;
+    }
+    int toRow = row;
+    int toColumn = column;
+    if (lineIndex == 1) { // the delimiter row: on to the body, or back to the header
+        toRow = key == Qt::Key_Backtab ? 0 : 1;
+        toColumn = key == Qt::Key_Backtab ? columns - 1 : 0;
+    } else if (key == Qt::Key_Tab) {
+        if (column + 1 < columns) {
+            ++toColumn;
+        } else {
+            ++toRow;
+            toColumn = 0;
+        }
+    } else if (key == Qt::Key_Backtab) {
+        if (column > 0) {
+            --toColumn;
+        } else if (row > 0) {
+            --toRow;
+            toColumn = columns - 1;
+        }
+    } else {
+        ++toRow; // Enter: the cell below
+    }
+
+    // Past the last row there is none: a new one is written with the table.
+    const QString source = m_text.mid(start, end - start);
+    QString text = source;
+    if (toRow >= table.rows.size()) {
+        qsizetype lead = 0;
+        const QString lastText = m_text.mid(m_lines.lineStart(lastLine), end - m_lines.lineStart(lastLine));
+        while (lead < lastText.size() && (lastText.at(lead) == QLatin1Char('>') || lastText.at(lead).isSpace()))
+            ++lead;
+        text += QLatin1Char('\n') + lastText.left(lead) + QLatin1Char('|');
+        for (int c = 0; c < columns; ++c)
+            text += QStringLiteral("  |");
+    }
+    text = formatTable(text);
+    if (text != source)
+        rewriteTable(start, end, text);
+
+    // The rewrite reparsed; where the cell is now is read from the new parse.
+    const qsizetype now = tableAround(start);
+    if (now >= 0) {
+        const Range cell = m_decorations.tables.at(now).rows.value(toRow).value(toColumn);
+        if (cell.isValid())
+            moveCursor(cell.start, false);
+    }
+    return true;
+}
+
 bool MarkdownEditor::runTableCommand(const QString &id)
 {
     const CellRef cell = tableCellAt(m_cursor);
@@ -438,6 +533,31 @@ bool MarkdownEditor::runTableCommand(const QString &id)
         for (QStringList &row : rows)
             row.swapItemsAt(column, other);
         column = other;
+    } else if (id.contains(QLatin1String("table-align-column-"))) {
+        // The delimiter row's cell is the alignment; formatTable redraws it.
+        rows[1][column] = id.endsWith(QLatin1String("left")) ? QStringLiteral(":--")
+                          : id.endsWith(QLatin1String("center")) ? QStringLiteral(":-:")
+                                                                  : QStringLiteral("--:");
+    } else if (id.endsWith(QLatin1String("duplicate-row"))) {
+        if (header)
+            return false; // the header is the table's only one
+        rows.insert(line + 1, rows.at(line));
+        ++line;
+    } else if (id.endsWith(QLatin1String("duplicate-column"))) {
+        for (QStringList &row : rows)
+            row.insert(column + 1, row.at(column)); // the delimiter row's cell too: the alignment goes with it
+        ++column;
+    } else if (id.contains(QLatin1String("table-sort-column-"))) {
+        // Numbers by value ("2" before "10"), the rest by locale; the header and
+        // the delimiter row stay where they are, equal cells keep their order.
+        const bool descending = id.endsWith(QLatin1String("descending"));
+        QCollator collator;
+        collator.setNumericMode(true);
+        collator.setCaseSensitivity(Qt::CaseInsensitive);
+        std::stable_sort(rows.begin() + 2, rows.end(), [&](const QStringList &l, const QStringList &r) {
+            const int order = collator.compare(l.at(column).trimmed(), r.at(column).trimmed());
+            return descending ? order > 0 : order < 0;
+        });
     } else {
         return false;
     }
@@ -447,13 +567,9 @@ bool MarkdownEditor::runTableCommand(const QString &id)
         rebuilt << prefix + QStringLiteral("| ") + row.join(QStringLiteral(" | ")) + QStringLiteral(" |");
     const QString text = formatTable(rebuilt.join(QLatin1Char('\n')));
 
-    m_lastEdit.invalidate();
-    pushUndo();
-    m_formattingTables = true; // aligned already: leaving it has nothing to do
-    applyEdit(start, end - start, text);
-    m_formattingTables = false;
-    m_lastEdit.invalidate();
-    reparse();
+    if (text == m_text.mid(start, end - start))
+        return true; // already so: no step on the undo stack for nothing
+    rewriteTable(start, end, text);
     const QList<QList<Range>> &after = m_decorations.tables.value(index).rows;
     const int row = line == 0 ? 0 : line - 1;
     moveCursor(after.value(row).value(column, Range{start, start}).start, false);
@@ -462,11 +578,26 @@ bool MarkdownEditor::runTableCommand(const QString &id)
 
 void MarkdownEditor::addTableActions(QMenu &menu, qsizetype offset)
 {
+    QMenu *align = nullptr;
+    QMenu *sort = nullptr;
     for (const Command &command : commands()) {
         if (!command.id.startsWith(QLatin1String("noteAppC:table-")))
             continue;
-        const QString name = command.name.section(QStringLiteral(": "), 1);
-        connect(menu.addAction(name), &QAction::triggered, this, [this, id = command.id, offset] {
+        QString name = command.name.section(QStringLiteral(": "), 1);
+        // The alignments and the two sort orders are a submenu each: "Align
+        // column left" is "Left" under "Align column".
+        QMenu *target = &menu;
+        QMenu **slot = command.id.contains(QLatin1String("table-align-")) ? &align
+                       : command.id.contains(QLatin1String("table-sort-")) ? &sort : nullptr;
+        if (slot) {
+            const QString title = name.section(QLatin1Char(' '), 0, 1);
+            if (!*slot)
+                *slot = menu.addMenu(title);
+            name = name.mid(title.size() + 1);
+            name[0] = name.at(0).toUpper();
+            target = *slot;
+        }
+        connect(target->addAction(name), &QAction::triggered, this, [this, id = command.id, offset] {
             setCursorOffset(offset);
             runTableCommand(id);
         });

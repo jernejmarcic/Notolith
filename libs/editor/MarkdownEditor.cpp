@@ -4169,6 +4169,7 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:swap-line-down"), tr("Move line down"), {QKeySequence(Qt::ALT | Qt::Key_Down)}},
         {QStringLiteral("noteAppC:duplicate-lines"), tr("Duplicate line"),
          {QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_D)}},
+        {QStringLiteral("noteAppC:insert-table"), tr("Insert table"), {}},
         {QStringLiteral("noteAppC:format-table"), tr("Format table"), {}},
         {QStringLiteral("noteAppC:format-all-tables"), tr("Format all tables"), {}},
         {QStringLiteral("noteAppC:table-insert-row-before"), tr("Table: Insert row before"), {}},
@@ -4181,6 +4182,13 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("noteAppC:table-delete-column"), tr("Table: Delete column"), {}},
         {QStringLiteral("noteAppC:table-move-column-left"), tr("Table: Move column left"), {}},
         {QStringLiteral("noteAppC:table-move-column-right"), tr("Table: Move column right"), {}},
+        {QStringLiteral("noteAppC:table-align-column-left"), tr("Table: Align column left"), {}},
+        {QStringLiteral("noteAppC:table-align-column-center"), tr("Table: Align column center"), {}},
+        {QStringLiteral("noteAppC:table-align-column-right"), tr("Table: Align column right"), {}},
+        {QStringLiteral("noteAppC:table-duplicate-row"), tr("Table: Duplicate row"), {}},
+        {QStringLiteral("noteAppC:table-duplicate-column"), tr("Table: Duplicate column"), {}},
+        {QStringLiteral("noteAppC:table-sort-column-ascending"), tr("Table: Sort column ascending"), {}},
+        {QStringLiteral("noteAppC:table-sort-column-descending"), tr("Table: Sort column descending"), {}},
     };
     return table;
 }
@@ -4213,6 +4221,8 @@ bool MarkdownEditor::runCommand(const QString &id)
         formatTables(m_cursor);
     else if (id == QLatin1String("noteAppC:format-all-tables"))
         formatTables(-1);
+    else if (id == QLatin1String("noteAppC:insert-table"))
+        insertTable();
     else if (id.startsWith(QLatin1String("noteAppC:table-"))) {
         // A known command, run - whether or not the caret is in a table for
         // it to change, as format-table outside one is.
@@ -4396,15 +4406,16 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     case Qt::Key_Return:
     case Qt::Key_Enter:
-        if (!handleHTMLenter() && !handleListEnter(shift))
+        if (!handleHTMLenter() && !(!shift && (handleSourceTableKey(Qt::Key_Return) || handleTableEnter()))
+            && !handleListEnter(shift))
             insertText(QStringLiteral("\n"));
         return;
     case Qt::Key_Tab:
-        if (!handleListIndent(1))
+        if (!handleSourceTableKey(Qt::Key_Tab) && !handleListIndent(1))
             insertText(QString(m_tabWidth, QLatin1Char(' ')));
         return;
     case Qt::Key_Backtab: // Shift+Tab
-        if (handleListIndent(-1))
+        if (handleSourceTableKey(Qt::Key_Backtab) || handleListIndent(-1))
             return;
         break;
     case Qt::Key_Escape:

@@ -9,6 +9,9 @@
 
 #include "MarkdownEditor.h"
 
+#include "Parser.h"
+#include "TableFormat.h"
+
 #include <QRegularExpression>
 #include <QScrollBar>
 
@@ -348,6 +351,121 @@ bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
             break;
     }
     return false;
+}
+
+namespace {
+
+/// A delimiter-row cell: dashes, a colon allowed at either end.
+bool isDelimiterCell(QStringView cell)
+{
+    cell = cell.trimmed();
+    if (cell.startsWith(QLatin1Char(':')))
+        cell = cell.mid(1);
+    if (cell.endsWith(QLatin1Char(':')))
+        cell.chop(1);
+    return !cell.isEmpty() && std::all_of(cell.cbegin(), cell.cend(), [](QChar c) { return c == QLatin1Char('-'); });
+}
+
+} // namespace
+
+bool MarkdownEditor::handleTableEnter()
+{
+    if (!m_alignTables || m_mode == Mode::Reading || selection().length() > 0)
+        return false;
+
+    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
+    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
+    // Every Enter in prose ends here, after one scan for the first pipe.
+    qsizetype lead = lineStart;
+    while (lead < lineEnd && (m_text.at(lead) == QLatin1Char('>') || m_text.at(lead).isSpace()))
+        ++lead;
+    if (lead >= lineEnd || m_text.at(lead) != QLatin1Char('|'))
+        return false;
+    // Indented four columns or more outside a quote is code, not a table.
+    if (lead - lineStart >= 4 && !QStringView(m_text).mid(lineStart, lead - lineStart).contains(QLatin1Char('>')))
+        return false;
+    // The row is finished: the caret is past its closing pipe.
+    qsizetype last = lineEnd;
+    while (last > lead && m_text.at(last - 1).isSpace())
+        --last;
+    if (last - lead < 2 || m_text.at(last - 1) != QLatin1Char('|') || m_cursor < last)
+        return false;
+
+    // The parser's own rule for cells: an escaped pipe or one in code is text.
+    const QList<Range> cells = tableRowCells(m_text, lineStart, lineEnd);
+    bool anyText = false;
+    bool allDelimiters = true;
+    for (const Range &cell : cells) {
+        anyText = anyText || cell.length() > 0;
+        allDelimiters = allDelimiters && isDelimiterCell(QStringView(m_text).mid(cell.start, cell.length()));
+    }
+    if (!anyText || allDelimiters)
+        return false; // an empty `| |` or a delimiter row typed on its own
+
+    // A line above that has pipes: this is a row of a table, or of one in
+    // the making, and gets no separator pushed in.
+    if (lineStart > 0) {
+        const qsizetype above = lineStartOf(m_text, lineStart - 1);
+        if (QStringView(m_text).mid(above, lineStart - 1 - above).contains(QLatin1Char('|')))
+            return false;
+    }
+    // A line below: a delimiter row says the table has one already; any other
+    // text would become a row of the table about to be written.
+    if (lineEnd < m_text.size()) {
+        const qsizetype below = lineEnd + 1;
+        const qsizetype belowEnd = lineEndOf(m_text, below);
+        qsizetype text = below;
+        while (text < belowEnd && (m_text.at(text) == QLatin1Char('>') || m_text.at(text).isSpace()))
+            ++text;
+        if (text < belowEnd)
+            return false;
+    }
+    if (inCodeFenceAt(m_cursor))
+        return false;
+
+    const QString prefix = m_text.mid(lineStart, lead - lineStart);
+    QString delimiter = prefix + QLatin1Char('|');
+    QString body = delimiter;
+    for (qsizetype c = 0; c < cells.size(); ++c) {
+        delimiter += QStringLiteral(" --- |");
+        body += QStringLiteral("   |");
+    }
+    const QString table = formatTable(m_text.mid(lineStart, lineEnd - lineStart) + QLatin1Char('\n')
+                                      + delimiter + QLatin1Char('\n') + body);
+    rewriteTable(lineStart, lineEnd, table);
+
+    const qsizetype bodyStart = lineStart + table.lastIndexOf(QLatin1Char('\n')) + 1;
+    const QList<Range> bodyCells = tableRowCells(m_text, bodyStart, lineEndOf(m_text, bodyStart));
+    moveCursor(bodyCells.value(0, Range{bodyStart, bodyStart}).start, false);
+    return true;
+}
+
+void MarkdownEditor::insertTable()
+{
+    if (m_mode == Mode::Reading)
+        return;
+    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
+    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
+    const bool blank = QStringView(m_text).mid(lineStart, lineEnd - lineStart).trimmed().isEmpty();
+    // A line with text keeps it: the table goes below, a paragraph of its own.
+    const qsizetype at = blank ? lineStart : lineEnd;
+    const qsizetype removed = blank ? lineEnd - lineStart : 0;
+    QString text = QStringLiteral("|     |     |\n| --- | --- |\n|     |     |");
+    const qsizetype tableStart = at + (blank ? 0 : 2);
+    if (!blank)
+        text.prepend(QStringLiteral("\n\n"));
+    // Text straight below would read as one more row.
+    if (lineEnd < m_text.size()) {
+        const qsizetype below = lineEnd + 1;
+        if (!QStringView(m_text).mid(below, lineEndOf(m_text, below) - below).trimmed().isEmpty())
+            text += QLatin1Char('\n');
+    }
+    m_lastEdit.invalidate();
+    pushUndo();
+    applyEdit(at, removed, text);
+    m_lastEdit.invalidate();
+    reparse();
+    moveCursor(tableStart + 2, false); // after the first "| "
 }
 
 bool MarkdownEditor::handleListEnter(bool lineBreak)

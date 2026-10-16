@@ -241,6 +241,41 @@ operators, text objects, registers, marks, macros, block-visual, `:s`, counts,
 undo, mode switches, search, the ex line, IME, the caret);
 `tests/test_window.cpp` covers the setting, the status bar and `:w`.
 
+## Pipe tables as source
+
+A table is edited in its cells in live preview (`TableCells.cpp`) and as text in
+source mode; both keep the file reading as aligned ASCII art. All of it is one
+undo step per action and is switched off by `editor.alignTables`, except the
+commands, which are always there.
+
+- **Typing one.** `| a | b |` then Enter writes the delimiter row and an empty
+  body row under it, the whole table padded (`| a   | b   |`, `| --- | --- |`,
+  `|     |     |`), and puts the caret in the first body cell. It happens only
+  when the line is a finished row (caret past the closing pipe), the line above
+  has no pipe, the line below is blank, the line is not in a code fence or a
+  delimiter row itself, and has a cell with text. Anywhere else Enter is the
+  newline it always was, so nothing is injected into an existing table. Cells are
+  counted by the parser's `tableRowCells`, so `\|` is not a border (a pipe in a
+  code span is one, as in GFM).
+- **Insert table** (`noteAppC:insert-table`; `/insert table` in the slash popup - `/table` lists the `Table:` commands, which rank above it by prefix):
+  Obsidian's 2x2 template, the caret in its first cell; on a line with text the
+  table goes below as a paragraph of its own.
+- **Tab, Shift+Tab, Enter in source mode** inside a table align that table (not
+  per keystroke: it would move the caret's column under the typist) and move to
+  the next cell, the previous one, or the cell below; past the last row they add
+  one. Other tables are untouched byte for byte. Rendered cells already did the
+  moving; they align when the caret leaves, as before.
+- **Commands** (palette and the cell's right-click menu): `Table: Align column
+  left/center/right` (rewrites the delimiter cell), `Duplicate row`, `Duplicate
+  column`, `Sort column ascending/descending` (numbers by value, header and
+  delimiter row fixed, equal cells keep their order).
+
+Not done: row and column drag handles, hover add-row/column buttons, and a
+rectangular cell selection with cut and paste - each needs hit-testing and
+selection state of its own.
+
+Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
+
 ## Mermaid diagrams
 
 A ```` ```mermaid ```` fence is drawn as its diagram when the caret is outside
