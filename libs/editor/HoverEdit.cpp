@@ -274,7 +274,7 @@ void MarkdownEditor::addCalloutActions(QMenu &menu, qsizetype blockIndex)
     menu.addAction(tr("Remove callout"), this, [this, at] { removeCallout(at); });
 }
 
-void MarkdownEditor::updateHover(const QPoint &point)
+void MarkdownEditor::updateHover(const QPoint &point, bool tables)
 {
     // The code label shows "Copy" while the pointer is over a listing; the
     // edit button belongs to the rendered kinds. One lookup serves both.
@@ -304,7 +304,7 @@ void MarkdownEditor::updateHover(const QPoint &point)
             viewport()->update(m_hoverRect);
         viewport()->setToolTip(overButton ? tr("Edit this block") : QString());
     }
-    if (m_tableHandles)
+    if (m_tableHandles && tables)
         updateTableHover(point); // the grips and bars of a table (TableHandles.cpp)
 }
 

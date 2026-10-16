@@ -403,8 +403,8 @@ Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
 ## Table handles and cell selection
 
 What Obsidian puts around a rendered table, in `libs/editor/TableHandles.cpp`.
-Only pipe tables in live preview (an HTML `<table>` and a base keep what they
-had). Every action rewrites the source through the same row/column model the
+Pipe tables in live preview, and an HTML `<table>` that is a simple grid (below);
+a base keeps what it had. Every pipe-table action rewrites the source through the same row/column model the
 table commands use (`loadTableText`, `storeTableText`, then `formatTable`), so it
 is one undo step and the table comes out aligned. Behaviour only is taken from
 Obsidian; none of its code.
@@ -414,12 +414,16 @@ Obsidian; none of its code.
   is on it, open-hand cursor). Drag a row grip up or down, a column grip
   sideways: a bar shows where it would land and the drop reorders the source.
   The header row is fixed (its grip only selects, nothing can be dropped above
-  the first body row), the delimiter row stays second, and a column's alignment
+  the first body row; an HTML table's header is as many rows as its `<thead>` or
+  leading `<th>` row says), the delimiter row stays second, and a column's alignment
   moves with it. A click on a grip without moving selects that row or column.
 - **Add bars.** A thin strip with a "+" under the table and another right of
   it (below the `</>` button) appends an empty padded row or column on a
   click; the caret goes into its first cell, so typing fills it. A new column
-  gets a `---` delimiter cell.
+  gets a `---` delimiter cell. Dragging a bar adds one row (down) or column
+  (right) for each row height or column width travelled, previewed as a tinted
+  strip while dragging; the table changes on release, as one undo step. A click,
+  or a wobble of a few pixels, adds one.
 - **Cell selection.** Drag from one cell into another (or Shift+Up/Down, and
   Shift+Left/Right at a cell's edge) selects a rectangle of cells, drawn as an
   accent tint and outline; the caret stays in the anchor cell. Dragging back
@@ -444,10 +448,44 @@ cell), a repaint of only the grip or bar that changed, nothing laid out. The
 `</>` button wins where they overlap. Nothing runs on a keystroke but one
 comparison (and a clipboard read on Ctrl+V).
 
-Not done: dragging an add bar to add several, autoscroll of a wide table while
-dragging a column, touch.
+- **Autoscroll.** A grip, an add bar or a cell selection dragged past the edge
+  of the viewport scrolls the page, and past the edge of a wide table's window
+  pans the table, on a 16 ms timer (`m_tableScrollTimer`) that runs only during
+  such a drag: 2 px a tick at the edge, 1 px more per 4 px past it, at most 40.
+  A cell-selection drag past those edges stays a rectangle instead of falling
+  back to a text selection. Release (or the handles setting off) stops it. The
+  caret's move to the anchor cell no longer scrolls the page back
+  (`setCellSelection` keeps the scroll).
+- A table laid out as source for a moment (an edit that rewrites it leaves the
+  caret outside its cells until the caret is placed) is invalidated again when
+  the caret lands in a cell (`moveCursor` no longer skips a table block for
+  having no cells), so a grip drop, a bar or a clear leaves a grid, not source.
+- **Touch.** A finger has no hover, so its first tap in a table brings the grips
+  and bars up for the row and column it is on (the move Qt sends ahead of a
+  touch press does not, `updateHover(point, false)`); the next press on one of
+  them is theirs and the finger drags it (`QScroller` is stopped, the hit
+  rects grow by the touch slop). A tap on a grip selects, on a bar adds one,
+  a drag does what the mouse does. A long press in a cell selects its word as
+  ever and arms a rectangle: the finger, still down, now drags across cells.
+  A finger that moves at once is a scroll, as before. A second tap that comes
+  within the double-click interval reaches the editor as a double click, which
+  forwards it to the same press. Tests: `TouchTableTest.*`
+  (`tests/test_touch.cpp`, with `QTest::touchEvent`).
+- **HTML tables.** A `<table>` the editor draws as a grid (HtmlEdit.cpp) gets the
+  same grips, bars and rectangle when it is *simple*: no `rowspan` or `colspan`
+  other than 1, and every row with as many cells as the widest
+  (`TableSpan::simple`); any other gets none and is edited cell by cell as
+  before. A reorder permutes the rows' (or each row's cells') own text between
+  their slots, so attributes, `<th>` vs `<td>`, the author's indentation, line
+  breaks and comments between rows, and every untouched row stay byte for byte;
+  adding appends rows written like the last one, or a cell after each row's
+  last. One undo step each. Ctrl+C copies what the cells show (tags and
+  entities resolved, one line each) as TSV in `text/plain` and a pipe table in
+  `text/markdown`; Delete or Ctrl+X empties the cell contents and keeps their
+  tags. Paste into an HTML rectangle is the ordinary paste (not done).
 
-Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`).
+Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`), `HtmlTableHandlesTest.*`
+(`tests/test_html_edit.cpp`).
 
 ## Mermaid diagrams
 

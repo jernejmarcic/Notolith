@@ -91,6 +91,9 @@ struct TableSpan {
     /// tags, and the two lists below are what its row and column commands
     /// rewrite. Never aligned by TableFormat.
     bool html = false;
+    /// html: a plain grid - no rowspan or colspan, every row with `columns`
+    /// cells - which is what the row and column handles can reorder.
+    bool simple = true;
     QList<Range> rowElements;         ///< html: each `<tr>` through its `</tr>`
     QList<QList<Range>> cellElements; ///< html: each cell, its own tags included
     /// An HTML cell's style= as written: CSS colour text for color and

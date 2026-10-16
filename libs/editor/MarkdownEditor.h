@@ -140,6 +140,16 @@ public:
     /// The parts of a table's hover chrome, for hit tests and the tests.
     enum class TablePart { None, RowGrip, ColumnGrip, AddRow, AddColumn };
     TablePart hoveredTablePart() const { return m_tableHover.part; }
+    /// How many rows or columns the add bar being dragged would add; 0 when none is.
+    int tableAddPreview() const
+    {
+        const bool bar = m_tableDrag.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddColumn;
+        return bar && m_tableDrag.moved ? m_tableDrag.to : 0;
+    }
+    /// Whether a table's grips and bars are up (hover, or a finger's tap).
+    bool tableChromeShown() const { return m_tableHover.block >= 0; }
+    /// Whether the table autoscroll timer is running (for the tests).
+    bool tableAutoScrolling() const { return m_tableScrollTimer.isActive(); }
     /// Viewport rect of cell (`row`, `column`) of the rendered table holding
     /// `offset`, or of one of its handles (`index` is the row or the column
     /// for a grip). Empty when that is not drawn.
@@ -1551,8 +1561,9 @@ private:
     /// The block under a press on its button, else -1.
     qsizetype editButtonAt(const QPoint &point) const;
     /// Tracks the pointer for the code label and the edit button; repaints
-    /// only the panels that changed.
-    void updateHover(const QPoint &point);
+    /// only the panels that changed. `tables` false: leave a table's grips
+    /// alone (a finger's).
+    void updateHover(const QPoint &point, bool tables = true);
     void clearHover();
     void paintEditHover(QPainter &painter) const;
 
@@ -1570,9 +1581,10 @@ private:
         TablePart part = TablePart::None;
         qsizetype block = -1;
         int from = -1;
-        int to = -1; ///< the boundary the drop would land on, 1 or 0 .. count
+        int to = -1; ///< the boundary the drop would land on, or for an add bar how many it adds
         bool moved = false;
         QPoint start;
+        qreal origin = 0; ///< an add bar: where the drag began along its axis, in the table's own coordinates
     };
     /// Cells selected as a rectangle: parser rows and columns, caret in the
     /// anchor cell. Valid only while the text, the caret and the table are as
@@ -1600,14 +1612,35 @@ private:
     void updateTableHover(const QPoint &point);
     void clearTableHover();
     void paintTableChrome(QPainter &painter) const;
-    bool pressTableChrome(const QPoint &point);
+    /// `touch`: a finger. It has no hover, so a first tap in a table only brings
+    /// the grips and bars up; the next press on one of them is theirs.
+    bool pressTableChrome(const QPoint &point, bool touch = false);
     bool dragTableChrome(const QPoint &point);
     bool releaseTableChrome(const QPoint &point);
     /// Moves body row or column `from` so it sits before `to` (a boundary,
     /// counted before the move), one undo step. False when it would not move.
     bool moveTableLine(qsizetype table, bool column, int from, int to);
-    /// Appends an empty row or column, caret in its first cell.
-    bool appendTableLine(qsizetype table, bool column);
+    /// Appends `count` empty rows or columns, caret in the first of them, one
+    /// undo step.
+    bool appendTableLine(qsizetype table, bool column, int count = 1);
+    /// An HTML table's counterparts: `from` moves to `final` (the position it
+    /// ends at) by permuting the elements' text between their own slots, so
+    /// attributes and the author's spacing between rows stay.
+    bool moveHTMLline(qsizetype table, bool column, int from, int final);
+    bool appendHTMLline(qsizetype table, bool column, int count);
+    /// How many rows or columns an add bar dragged to `point` would add, and
+    /// the strip they would take up (painted while dragging).
+    int addBarCount(const BlockView &view, const TableSpan &table, const QPoint &point) const;
+    QRectF addBarGhost(const BlockView &view, const TableSpan &table, int count) const;
+    /// While a grip, an add bar or a cell selection is dragged past the edge
+    /// of the viewport (or of a wide table's window), scrolls by a speed that
+    /// grows with the distance past it, on a timer; `point` is the pointer.
+    void updateTableAutoScroll(const QPoint &point);
+    /// How far a tick scrolls (x: the wide table's own window, y: the page)
+    /// for a pointer at `point`, and in which block; null when it is inside.
+    QPoint tableScrollDelta(const QPoint &point, qsizetype &block) const;
+    void stopTableAutoScroll();
+    void tableAutoScrollTick();
     const CellSelection *cellSelection() const;
     void setCellSelection(qsizetype table, int anchorRow, int anchorColumn, int headRow, int headColumn);
     /// The cell a drag at `point` reaches in the table the press was in.
@@ -2489,6 +2522,10 @@ private:
     qsizetype m_cellPress = -1; ///< table start of a press in a cell, for a drag across cells
     int m_cellPressRow = -1;
     int m_cellPressColumn = -1;
+    bool m_cellPressTouch = false; ///< that press was a finger's: a drag scrolls, unless a long press armed it
+    bool m_cellArmed = false;      ///< a long press in a cell: the finger now drags a rectangle of cells
+    QTimer m_tableScrollTimer;
+    QPoint m_tableScrollPoint;
     qreal m_goalX = -1; ///< remembered column for up/down
 
     /// A freshly opened note renders whole; the block under the caret only
