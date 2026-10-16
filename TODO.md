@@ -1031,3 +1031,6 @@ optimal as it can be".
       `match-case:` (lane search).
 - [ ] Test TableFormat's East-Asian/combining/emoji display width (lane
       search).
+- [x] test_bases segfaulted ~1 in 3 (found by the search lane): pool tasks
+      held a raw Index* that could die or reopen under them. Workers now
+      take a copy of the cache path (Index::notesForBases / searchIn).
