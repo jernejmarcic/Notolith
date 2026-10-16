@@ -910,7 +910,7 @@ optimal as it can be".
       (ratio 8.6 vs limit 5.0), passes alone: make it load-robust (best of N,
       or compare against a same-run baseline) so lane-checks stay meaningful.
       Now best of three per size.
-- [ ] ASan leftovers (bughunt 2026-10-16): plugin host exits under ASan,
+- [x] ASan leftovers (bughunt 2026-10-16): plugin host exits under ASan,
       probably its 256 MiB RLIMIT_AS (skip the limit when built with
       -fsanitize=address); test_ai_plugin.cpp:756 callback captures a dead
       local when the first run() fails (stack-use-after-return). Timing guards
@@ -927,9 +927,9 @@ optimal as it can be".
       tests/IsolatedHome.cpp now sets the XDG homes before main in every test
       binary; test_lists moved above the ctest isolation block. Cleaning the
       old repos is Jernej's call (his real vault's repo is in the same dir).
-- [ ] History creates a git repo the moment a vault opens, even with nothing
+- [x] History creates a git repo the moment a vault opens, even with nothing
       to commit; create it on the first snapshot instead.
-- [ ] Perf-budget tests fail under load 16+ (canvas pan, bases 20k, epub,
+- [x] Perf-budget tests fail under load 16+ (canvas pan, bases 20k, epub,
       ListPerf, kernel completion): best-of-N like the 1 MB open test, so
       parallel lane-checks stay meaningful.
 - [ ] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
