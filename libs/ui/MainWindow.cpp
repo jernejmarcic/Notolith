@@ -849,15 +849,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         if (m_footnotes && leaf == m_active)
             m_footnotes->setFootnotes(leaf->editor->footnotes());
     });
-    // ```query blocks: Index::search() opens its own connection, so it runs
-    // on the thread pool, and the editor brings the results back to its own
-    // thread. ~MainWindow waits for the pool, so a search never outlives the
-    // index it reads.
+    // ```query blocks: the search runs on the thread pool through its own
+    // connection, given a copy of the cache's path rather than the Index (a
+    // vault switch reopens it), and the editor brings the results back to its
+    // own thread.
     Index *index = &m_index;
     editor->setQueryRunner([index](const QString &query, const MarkdownEditor::QueryDeliver &deliver) {
-        (void)QtConcurrent::run([index, query, deliver] {
+        (void)QtConcurrent::run([databasePath = index->databasePath(), query, deliver] {
             QueryResults results;
-            for (const SearchResult &found : index->search(query)) {
+            for (const SearchResult &found : Index::searchIn(databasePath, query)) {
                 QueryResult result{found.path, found.matchCount, found.snippet, {},
                                    found.matches.isEmpty() ? 0 : found.matches.constFirst().offset};
                 for (const SearchMatch &match : found.snippetHighlights)
@@ -1000,9 +1000,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // thread, where the editor asks.
     editor->setBaseRunner([this, index](const QString &YAMLtext, const QString &viewName,
                                         const MarkdownEditor::BaseDeliver &deliver) {
-        (void)QtConcurrent::run([index, vault = m_vault, YAMLtext, viewName, deliver] {
+        (void)QtConcurrent::run([databasePath = index->databasePath(), vault = m_vault, YAMLtext, viewName, deliver] {
             const bases::BaseEditorTable table = bases::evaluateBaseForEditor(
-                YAMLtext, index->allNotesForBases(), &vault, -1, viewName);
+                YAMLtext, Index::notesForBases(databasePath), &vault, -1, viewName);
             BaseTableData result;
             result.viewNames = table.viewNames;
             result.shownView = table.shownView;

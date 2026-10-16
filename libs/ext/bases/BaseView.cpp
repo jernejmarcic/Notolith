@@ -152,15 +152,16 @@ void BaseView::openCurrentView()
         return;
     }
 
-    // allNotesForBases() opens its own connection, so it is worker-safe; a
-    // newer request replaces this one, and the watcher drops its result.
-    // ~MainWindow waits for the pool, so a task never outlives the index.
+    // The task reads the cache through its own connections and holds only a
+    // copy of its path, never the Index: a task left running when the view or
+    // the Index goes, or the Index reopens on another vault, touches nothing
+    // freed. A newer request replaces this one, and the watcher drops its result.
     m_status->setText(tr("Loading..."));
     m_opening.setFuture(QtConcurrent::run(
-        [index = m_index, file = m_file, view = m_currentView,
+        [databasePath = m_index->databasePath(), file = m_file, view = m_currentView,
          vault = std::make_shared<const Vault>(m_vault ? *m_vault : Vault())] {
             QList<Row> rows;
-            for (const Index::BaseNote &note : index->allNotesForBases())
+            for (const Index::BaseNote &note : Index::notesForBases(databasePath))
                 rows << rowFromNote(note);
             Opened opened;
             opened.file = file;

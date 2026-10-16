@@ -144,7 +144,15 @@ public:
     /// number of notes returned; a note may itself carry many matches. Empty
     /// (or all-whitespace) queries return no results without touching the
     /// database. On a parse error, returns no results and fills `error`.
-    QList<SearchResult> search(const QString &queryText, int limit = 200, QString *error = nullptr) const;
+    QList<SearchResult> search(const QString &queryText, int limit = 200, QString *error = nullptr) const
+    {
+        return searchIn(m_databasePath, queryText, limit, error);
+    }
+    /// search() on the cache at `databasePath` (databasePath()), with no Index:
+    /// a worker given a copy of the path cannot race the Index reopening on
+    /// another vault, nor outlive it.
+    static QList<SearchResult> searchIn(const QString &databasePath, const QString &queryText, int limit = 200,
+                                        QString *error = nullptr);
 
     /// Obsidian's "Unlinked mentions": notes that mention this note's title
     /// or one of its aliases as plain text without a `[[...]]`/`[...](...)`
@@ -194,7 +202,11 @@ public:
     /// depends on. Its own connections, like search(), so call it from a
     /// worker thread; the three child tables are read in parallel (half the
     /// time of reading them one after the other).
-    QList<BaseNote> allNotesForBases() const;
+    QList<BaseNote> allNotesForBases() const { return notesForBases(m_databasePath); }
+    /// The same from the cache at `databasePath` (databasePath()), with no
+    /// Index at all: a worker that copies the path cannot outlive or race
+    /// the Index it came from.
+    static QList<BaseNote> notesForBases(const QString &databasePath);
 
 signals:
     void changed();
@@ -218,8 +230,8 @@ private:
     /// table, loads whatever metadata the query needs, and calls `onMatch`
     /// for every one of the first `limit` candidates that evaluate() judges
     /// a match. See Index.cpp for why it opens its own connection.
-    void eachMatch(const SearchQuery &query, int limit,
-                   const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch) const;
+    static void eachMatch(const QString &databasePath, const SearchQuery &query, int limit,
+                          const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch);
 
     QSqlDatabase m_db;
     QString m_connectionName;

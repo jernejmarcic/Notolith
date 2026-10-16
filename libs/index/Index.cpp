@@ -831,8 +831,8 @@ QStringList Index::linkTargets() const
 /// QtConcurrent worker so a search over a large vault never costs the UI
 /// thread anything. WAL mode (set once in open()) is what lets this reader
 /// run alongside the indexer's writer.
-void Index::eachMatch(const SearchQuery &query, int limit,
-                      const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch) const
+void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int limit,
+                      const std::function<void(NoteContext &&, SearchOutcome &&)> &onMatch)
 {
     if (!query.isValid())
         return;
@@ -841,7 +841,7 @@ void Index::eachMatch(const SearchQuery &query, int limit,
         QStringLiteral("noteAppC-search-%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
     {
         QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
-        db.setDatabaseName(m_databasePath);
+        db.setDatabaseName(databasePath);
         if (!db.open()) {
             QSqlDatabase::removeDatabase(connectionName);
             return;
@@ -951,7 +951,7 @@ void Index::eachMatch(const SearchQuery &query, int limit,
     QSqlDatabase::removeDatabase(connectionName);
 }
 
-QList<SearchResult> Index::search(const QString &queryText, int limit, QString *error) const
+QList<SearchResult> Index::searchIn(const QString &databasePath, const QString &queryText, int limit, QString *error)
 {
     QList<SearchResult> results;
     if (queryText.trimmed().isEmpty())
@@ -964,7 +964,7 @@ QList<SearchResult> Index::search(const QString &queryText, int limit, QString *
         return results;
     }
 
-    eachMatch(query, limit, [&results](NoteContext &&note, SearchOutcome &&outcome) {
+    eachMatch(databasePath, query, limit, [&results](NoteContext &&note, SearchOutcome &&outcome) {
         SearchResult result;
         result.path = note.path;
         result.matches = outcome.matches;
@@ -1031,7 +1031,7 @@ QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) cons
 
     // +1 of slack for the note's own row, which is always dropped below and
     // would otherwise silently cost one real result.
-    eachMatch(query, limit + 1, [&](NoteContext &&candidate, SearchOutcome &&outcome) {
+    eachMatch(m_databasePath, query, limit + 1, [&](NoteContext &&candidate, SearchOutcome &&outcome) {
         if (candidate.path == relative || results.size() >= limit)
             return;
 
@@ -1296,14 +1296,14 @@ void withConnection(const QString &databasePath, Read read)
 
 } // namespace
 
-QList<Index::BaseNote> Index::allNotesForBases() const
+QList<Index::BaseNote> Index::notesForBases(const QString &databasePath)
 {
     QList<BaseNote> notes;
-    if (m_databasePath.isEmpty())
+    if (databasePath.isEmpty())
         return notes;
 
     QHash<qint64, qsizetype> rowOf; // file id -> index into notes
-    withConnection(m_databasePath, [&](const QSqlDatabase &db) {
+    withConnection(databasePath, [&](const QSqlDatabase &db) {
         QSqlQuery files(db);
         files.setForwardOnly(true); // no row cache: each row is read once
         // Attachments carry no properties and are not what a base lists. In
@@ -1328,7 +1328,7 @@ QList<Index::BaseNote> Index::allNotesForBases() const
     // pool, and waiting on a task queued behind it would be a deadlock.
     const qsizetype rows = notes.size();
     const auto readEach = [&](const QString &sql, auto onRow) {
-        withConnection(m_databasePath, [&](const QSqlDatabase &db) {
+        withConnection(databasePath, [&](const QSqlDatabase &db) {
             QSqlQuery query(db);
             query.setForwardOnly(true);
             query.exec(sql);

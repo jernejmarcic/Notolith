@@ -177,9 +177,8 @@ void SearchPane::runSearch(const QString &text)
         return;
     }
     m_pendingGeneration = ++m_generation;
-    Index *index = m_index;
-    m_watcher.setFuture(
-        QtConcurrent::run([index, text]() { return index->search(text, kResultLimit); }));
+    m_watcher.setFuture(QtConcurrent::run(
+        [databasePath = m_index->databasePath(), text] { return Index::searchIn(databasePath, text, kResultLimit); }));
 }
 
 void SearchPane::onSearchFinished()
