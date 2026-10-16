@@ -172,8 +172,8 @@ Ceilings: a run's new output is not written back into the file (it lives in the
 cache like every block's; the notebook keeps the outputs it came with), because
 a block's cache key is its source and two cells with the same code would
 collide. `execution_count` is the file's own. Cell attachments are kept but not
-shown. Links, search and the index see the notebook as it is shown, not the
-JSON.
+shown. The vault index (links, backlinks, search) does not read notebooks: it
+lists only Markdown files.
 
 ## Where outputs go
 
