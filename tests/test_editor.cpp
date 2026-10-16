@@ -5378,6 +5378,26 @@ TEST(InlineHtmlTest, TheCaretInsideAnElementRevealsItsTags)
     EXPECT_EQ(editor->displayText(), QStringLiteral("Water is H2O and Go.\n"));
 }
 
+TEST(InlineHtmlTest, AScriptShowsAsRedBoldSourceAndNeverRuns)
+{
+    const QString note = QStringLiteral("Before <script>alert(1)</script> after.\n\n"
+                                        "<script>document.title = \"RAN\";</script>\n\nend\n");
+    auto editor = editorWith(note);
+    editor->enterBlockAt(note.indexOf(QStringLiteral("end")));
+    // Inline: the tags stay, the whole element is the error colour, bold.
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("Before <script>alert(1)</script> after.")))
+        << editor->displayText().toStdString();
+    const QTextCharFormat inside = editor->formatAt(note.indexOf(QStringLiteral("alert")));
+    EXPECT_GE(inside.fontWeight(), int(QFont::Bold));
+    EXPECT_EQ(inside.foreground().color(), Theme::builtin().color(QStringLiteral("--text-error")));
+    EXPECT_GE(editor->formatAt(note.indexOf(QStringLiteral("<script>"))).fontWeight(), int(QFont::Bold));
+    // A block: drawn (its source as text) rather than left as raw purple
+    // source, and nothing it says has happened.
+    if (HtmlRenderer::isAvailable())
+        EXPECT_FALSE(editor->htmlImageSizeAt(note.indexOf(QStringLiteral("document"))).isEmpty());
+    EXPECT_NE(editor->window()->windowTitle(), QStringLiteral("RAN"));
+}
+
 TEST(InlineHtmlTest, SpanStyleColourIsRead)
 {
     const QString note = QStringLiteral("A <span style=\"color: #ff0000\">warning</span> word.\n");

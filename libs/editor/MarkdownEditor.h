@@ -2134,6 +2134,8 @@ private:
         Range open;
         Range close;
         QTextCharFormat format;
+        /// `<script>`: never hidden, the whole element formatted (a warning).
+        bool shown = false;
     };
     QList<InlineHTMLpair> inlineHTMLpairs(const BlockView &view) const;
     /// The QTextCharFormat for a recognised inline tag, or nullopt for one

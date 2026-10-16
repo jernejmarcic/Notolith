@@ -61,7 +61,24 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
     view.image = QPixmap();
     view.cells.clear();
 
-    const QString html = resolveHtmlImages(raw);
+    // A script never runs (litehtml has no interpreter, and sanitise() strips
+    // it anyway); its source is shown in its place instead, red and bold, so
+    // what the note would have run is in plain sight.
+    static const QRegularExpression scriptElement(
+        QStringLiteral("<script\\b[^>]*>.*?(</script\\s*>|$)"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    QString shown = raw;
+    const QString scriptStyle = QStringLiteral("<code style=\"color:%1;font-weight:bold;white-space:pre-wrap\">")
+                                    .arg(m_theme.color(QStringLiteral("--text-error")).name());
+    for (qsizetype from = 0;;) {
+        const QRegularExpressionMatch match = scriptElement.match(shown, from);
+        if (!match.hasMatch())
+            break;
+        const QString replacement = scriptStyle + match.captured(0).toHtmlEscaped() + QStringLiteral("</code>");
+        shown.replace(match.capturedStart(), match.capturedLength(), replacement);
+        from = match.capturedStart() + replacement.size();
+    }
+    const QString html = resolveHtmlImages(shown);
     const qreal ratio = devicePixelRatioF();
     const int width = contentWidth();
     const QColor text = m_theme.color(QStringLiteral("--text-normal"));
@@ -191,8 +208,14 @@ QList<MarkdownEditor::InlineHTMLpair> MarkdownEditor::inlineHTMLpairs(const Bloc
         stack.pop_back();
         const std::optional<QTextCharFormat> format =
             htmlTagFormat(name, m_text.mid(open.range.start, open.range.length()));
-        if (format)
+        if (name == QLatin1String("script")) {
+            QTextCharFormat warning;
+            warning.setForeground(m_theme.color(QStringLiteral("--text-error")));
+            warning.setFontWeight(QFont::Bold);
+            pairs.append({open.range, span.range, warning, true});
+        } else if (format) {
             pairs.append({open.range, span.range, *format});
+        }
     }
     return pairs;
 }
@@ -202,6 +225,10 @@ void MarkdownEditor::layoutInlineHtml(BlockView &view, QList<Range> &hidden)
     // Tags the caret has revealed stay as written, still formatting the text
     // between them, the way `**bold**` keeps its weight with its asterisks shown.
     for (const InlineHTMLpair &pair : inlineHTMLpairs(view)) {
+        if (pair.shown) {
+            view.inlineHtmlFormats.push_back({Range{pair.open.start, pair.close.end}, pair.format});
+            continue;
+        }
         if (!view.revealed.contains(pair.open))
             hidden.append(pair.open);
         if (!view.revealed.contains(pair.close))

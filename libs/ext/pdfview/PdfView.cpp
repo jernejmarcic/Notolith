@@ -56,7 +56,15 @@ PdfView::PdfView(QWidget *parent)
     });
     connect(m_pages, &PdfPagesArea::selectionChanged, this, &PdfView::refreshToolButtons);
     connect(m_pages, &PdfPagesArea::openExternalUrl, this,
-           [](const QString &url) { QDesktopServices::openUrl(QUrl(url)); });
+           [](const QString &url) {
+               // The web and mail only, as a note's links: a PDF's javascript:
+               // or file: URI is never handed to another program.
+               const QUrl target(url);
+               const QString scheme = target.scheme().toLower();
+               if (scheme == QLatin1String("http") || scheme == QLatin1String("https")
+                   || scheme == QLatin1String("mailto"))
+                   QDesktopServices::openUrl(target);
+           });
     connect(m_pages, &PdfPagesArea::findStatusChanged, this, [this](int current, int total) {
         if (m_findBar)
             m_findBar->setStatus(current, total, true);

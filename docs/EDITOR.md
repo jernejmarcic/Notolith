@@ -8,6 +8,19 @@ it takes input: [HTML edited in place](#html-edited-in-place),
 [the status bar counts](#status-bar-counts) and
 [Vim key bindings](#vim-key-bindings).
 
+## Scripts never run
+
+Jernej, 2026-10-16: "javascript should never be ran"; only HTML and CSS
+formatting is followed, even where a page relied on a script. There is no
+script engine anywhere in the app: litehtml has none, and `sanitise()`
+(libs/render/HtmlRenderer.cpp) strips `<script>` and every `on*=` attribute
+before litehtml sees the markup. What a script element says is shown in its
+place instead, in `--text-error` and bold: an HTML block draws it as text
+(libs/editor/HtmlBlock.cpp layoutHtml), an inline `<script>...</script>` keeps
+its tags showing (inlineHTMLpairs). Links open only http, https and mailto,
+from notes and PDFs alike, so a `javascript:` URI is never handed on. The
+plugin manifest's QuickJS engine kind is a seam with no engine behind it.
+
 ## HTML edited in place
 
 Jernej, 2026-10-02: "For HTML I want rendering of it like in obsidian, but

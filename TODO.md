@@ -1074,8 +1074,17 @@ optimal as it can be".
       coloured `<span>`) reveals its tags while the caret is inside the
       element, like markdown syntax does in live preview (Jernej 2026-10-16,
       screenshot of the inline formatting demo).
-- [ ] `<script>` (and every other script-bearing thing) never runs, and a
+- [x] `<script>` (and every other script-bearing thing) never runs, and a
       script element shows as source in red and bold, a warning (Jernej
       2026-10-16: "javascript should never be ran"; only HTML and CSS
       formatting is followed). Audit: no JS engine linked, litehtml executes
       nothing, on* attributes and javascript: URLs inert.
+- [ ] Nested `-` list items drawn with `↳` (U+21B3), per Jernej's sketch
+      2026-10-16 ("nested - rows should look like this").
+- [ ] Bug: "Add to dictionary" on a misspelt word resets the view to the top
+      of the element (Jernej 2026-10-16).
+- [ ] Callout title editable in place: clicking the rendered title edits the
+      title text while the header stays drawn and the `> [!type|...]` marker
+      stays hidden; today any click reveals the whole marker line (Jernej
+      2026-10-16: "it would make more sense of the title to be editable when
+      you click on it").
