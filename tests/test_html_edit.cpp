@@ -246,24 +246,24 @@ TEST(HtmlTextTest, AnEntityIsOneCharacter)
     EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b © c d ☺\n")))
         << editor->displayText().toStdString();
 
+    // The caret on an entity opens it into its source, as it does a `**`:
+    // five steps through "&amp;", then it closes again.
     const qsizetype amp = note.indexOf(QStringLiteral("&amp;"));
     editor->enterBlockAt(amp);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b © c\u00A0d ☺\n")))
+        << editor->displayText().toStdString();
     QTest::keyClick(editor.get(), Qt::Key_Right);
-    EXPECT_EQ(editor->cursorOffset(), amp + 5);
-    QTest::keyClick(editor.get(), Qt::Key_Left);
-    EXPECT_EQ(editor->cursorOffset(), amp);
-    QTest::keyClick(editor.get(), Qt::Key_Delete);
-    QString expected = note;
-    expected.remove(amp, 5);
-    EXPECT_EQ(editor->noteText(), expected);
-    settle(*editor);
-
-    const qsizetype copy = expected.indexOf(QStringLiteral("&copy;"));
-    editor->enterBlockAt(copy + 6);
-    QTest::keyClick(editor.get(), Qt::Key_Backspace);
-    expected.remove(copy, 6);
-    EXPECT_EQ(editor->noteText(), expected);
-
+    EXPECT_EQ(editor->cursorOffset(), amp + 1);
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("<p>a &xamp; b &copy; c&nbsp;d &#x263A;</p>\n\nend\n"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    editor->enterBlockAt(amp + 5);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b "))) << "the end touches it too";
+    QTest::keyClick(editor.get(), Qt::Key_Right);
+    EXPECT_EQ(editor->cursorOffset(), amp + 6);
+    editor->grab(); // a paint settles what the caret now reveals
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b © c\u00A0d ☺\n")))
+        << editor->displayText().toStdString();
     undoAll(*editor);
     EXPECT_EQ(editor->noteText(), note);
 }
@@ -386,23 +386,36 @@ TEST(MarkdownEntityTest, AReferenceShowsAsItsCharacterAndIsOneStep)
 
     const qsizetype amp = note.indexOf(QStringLiteral("&amp;"));
     editor->enterBlockAt(amp);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b \u00A9 c &amp; \\&amp;\n")))
+        << "the caret on it opens it: " << editor->displayText().toStdString();
     QTest::keyClick(editor.get(), Qt::Key_Right);
-    EXPECT_EQ(editor->cursorOffset(), amp + 5);
+    EXPECT_EQ(editor->cursorOffset(), amp + 1);
     QTest::keyClick(editor.get(), Qt::Key_Left);
     EXPECT_EQ(editor->cursorOffset(), amp);
-    QTest::keyClick(editor.get(), Qt::Key_Delete);
-    QString expected = note;
-    expected.remove(amp, 5);
-    EXPECT_EQ(editor->noteText(), expected);
-    settle(*editor);
-
-    const qsizetype copy = expected.indexOf(QStringLiteral("&copy;"));
-    editor->enterBlockAt(copy + 6);
+    // Away from it, closed again, and a click-sized step on is one step.
+    editor->enterBlockAt(note.indexOf(QStringLiteral("end")));
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a & b \u00A9 c")));
+    editor->enterBlockAt(amp - 1);
+    QTest::keyClick(editor.get(), Qt::Key_Right);
+    editor->grab();
+    EXPECT_EQ(editor->cursorOffset(), amp) << "arriving opens it";
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("a &amp; b "))) << editor->displayText().toStdString();
+    editor->enterBlockAt(amp + 5);
     QTest::keyClick(editor.get(), Qt::Key_Backspace);
-    expected.remove(copy, 6);
-    EXPECT_EQ(editor->noteText(), expected);
+    QString expected = note;
+    expected.remove(amp + 4, 1);
+    EXPECT_EQ(editor->noteText(), expected) << "open, so a Backspace takes a character of its source";
     undoAll(*editor);
     EXPECT_EQ(editor->noteText(), note);
+
+    // A numeric one opens like a named one, anywhere from its first character
+    // to its last.
+    editor->setNoteText(QStringLiteral("x &#x2014; y\n\nend\n"));
+    editor->enterBlockAt(4);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("x &#x2014; y")));
+    editor->enterBlockAt(11);
+    EXPECT_TRUE(editor->displayText().startsWith(QStringLiteral("x \u2014 y")));
+    editor->setNoteText(note);
 
     // Source mode shows every byte as written.
     editor->setMode(MarkdownEditor::Mode::Source);

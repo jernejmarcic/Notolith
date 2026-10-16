@@ -196,8 +196,12 @@ this were configured. With nothing configured it makes no difference at all.
 **Publishing.** A site built from a theme that names token colours gets a
 `--code-<capture>` CSS variable and a `.tok-<capture>` rule per token kind the
 page uses (dots become dashes: `.tok-function-builtin`), so a page's own CSS
-can retune a token. Per-language and per-fence colours are a live-editor
-feature and are not published.
+can retune a token. The colours come from the vault's active scheme
+(`appearance.scheme`), read once per mode on the publishing worker (dark and
+light), so `Publish: Export the vault as a website` carries the same token
+colours the editor shows; with a built-in scheme, which names none, the page
+keeps the highlighter's own colours. Per-language and per-fence colours are a
+live-editor feature and are not published.
 
 **Publishing footnotes.** `[^1]` and inline `^[...]` references link to their
 definition in the list at the foot of the page. Every reference has its own id

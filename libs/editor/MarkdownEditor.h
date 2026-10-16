@@ -136,6 +136,15 @@ public:
     /// Selects the whole of the block `blockIndex` (any piece) with the
     /// caret at its start, which is what shows its source.
     void editBlockSource(qsizetype blockIndex);
+    /// What the callout menu does to the top-level callout holding `offset`
+    /// (HoverEdit.cpp), one undo step each. All false or empty when there is
+    /// none. `calloutSourceAt` is its text (no trailing newline);
+    /// `changeCalloutType` rewrites `[!type]` or `:::type`; `removeCallout`
+    /// takes the `>` prefixes or the `:::` fences and the marker off and keeps
+    /// the content, an explicit title as a first paragraph.
+    QString calloutSourceAt(qsizetype offset) const;
+    bool changeCalloutType(qsizetype offset, const QString &type);
+    bool removeCallout(qsizetype offset);
     qsizetype hoveredBlock() const { return m_hoveredBlock; }
     /// The panel a block of the one at `sourceOffset` is drawn in (all of a
     /// long block's pieces), viewport coordinates; the ring is drawn on it.
@@ -220,6 +229,17 @@ public:
     /// a large note's first parse is still out. Counted on the parse thread,
     /// not per keystroke - wordCountChanged says when it moves.
     int wordCount() const { return m_wordCount; }
+    /// Characters in the note, frontmatter excluded (as wordCount is). Cheap:
+    /// the text's length less the properties block's.
+    qsizetype characterCount() const;
+    /// Words and characters of the selection (frontmatter not special-cased),
+    /// zeros with none. Linear in the selection; the status bar asks after a
+    /// short pause, never per keystroke.
+    struct TextCount {
+        int words = 0;
+        qsizetype characters = 0;
+    };
+    TextCount selectionCount() const;
     /// Source offset of the caret, for tests and for the status bar.
     qsizetype cursorOffset() const { return m_cursor; }
     /// The selected source text, exactly as it is in the file - markers
@@ -634,6 +654,10 @@ public:
     /// The size an embed drawn as an image (a formatted note, a canvas)
     /// shows at; empty while it is text or a placeholder. For the tests.
     QSize embedImageSizeAt(qsizetype offset) const;
+    /// The title strip's text over a note embed's panel, empty for none.
+    QString panelLabelAt(qsizetype offset) const;
+    /// That image itself (null while text), for the tests.
+    QImage embedImageAt(qsizetype offset) const;
     /// The same image's rect, in viewport coordinates - the same rect
     /// hookedEmbedBlockAt hit-tests wheel/drag/click against - so a test can
     /// send one there without reimplementing this layout by hand. Null
@@ -1452,6 +1476,8 @@ private:
     /// Paragraphs, headings, lists and plain quotes reveal per element instead.
     bool revealsWholeBlock(const BlockView &view) const;
     QList<Range> revealedSyntax(const BlockView &view) const;
+    /// The top-level fenced block the caret is in or on, in live preview.
+    const CodeFenceSpan *fenceAroundCaret() const;
     QRectF nestedFoldHandleRect(const BlockView &view, const NestedCallout &nested, qreal left,
                                 qreal top) const;
     void paintNestedCallouts(QPainter &painter, const BlockView &view, qreal left,
@@ -1496,6 +1522,10 @@ private:
     /// on screen: a callout, formula, HTML, plugin, query/base or embed
     /// block, or a table's grid.
     bool hasEditButton(const BlockView &view) const;
+    /// The top-level callout whose source holds `offset`, or null.
+    const CalloutSpan *topCalloutAt(qsizetype offset) const;
+    /// Edit / Copy / Change type / Remove, for a right-click on a callout.
+    void addCalloutActions(QMenu &menu, qsizetype blockIndex);
     QRectF panelRectOf(qsizetype firstPiece) const;
     /// The block's whole source, every piece, without the newline that ends it.
     Range wholeBlockRange(const BlockView &firstPiece) const;
@@ -1643,8 +1673,13 @@ private:
     /// falls through to layoutSourceFile/layoutFileCard.
     bool layoutHookedFileEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
     /// A note embed's slice drawn formatted, `width` wide; null when it
-    /// cannot be drawn without waiting.
-    QImage renderNoteEmbed(const QString &slice, int width) const;
+    /// cannot be drawn without waiting. `fromNote` is the file the slice
+    /// came from, joined to this editor's own ancestors for the nested one.
+    QImage renderNoteEmbed(const QString &slice, int width, const QString &fromNote = QString()) const;
+    /// The notes (canonical paths) this editor is drawing inside, outermost
+    /// first; empty for a window's editor. Cycle and depth guard.
+    QStringList m_embedAncestors;
+    static constexpr int kMaxEmbedDepth = 5;
     /// What an embed drawn into an image took from the theme, so a theme
     /// change misses its cache instead of showing the old colours.
     QString embedThemeTag() const;
@@ -1984,6 +2019,13 @@ private:
     /// The substitution (an entity, `<br>`) live preview draws over
     /// `offset`'s character, or null where the source shows as it is.
     const Substitution *shownSubstitution(qsizetype offset) const;
+    /// An entity (`&amp;`) the caret touches opens into its source, as
+    /// the markers of other inline syntax do; with a selection, none does.
+    bool entityRevealed(const Substitution &substitution) const;
+    /// The ranges of the entities entityRevealed says are open.
+    QList<Range> revealedEntities() const;
+    /// The substitutions to draw while `revealed` entities show as written.
+    QList<Substitution> substitutionsWithout(const QList<Range> &revealed) const;
     /// `target` moved out of a drawn substitution, the way it was going: the
     /// caret steps over `&amp;` as one character.
     qsizetype stepOverSubstitution(qsizetype target, int direction) const;

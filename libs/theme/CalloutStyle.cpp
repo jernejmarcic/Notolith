@@ -166,4 +166,18 @@ QStringList CalloutStyles::definedTypes() const
     return out;
 }
 
+QStringList CalloutStyles::knownTypes() const
+{
+    QStringList out = {QStringLiteral("note"),     QStringLiteral("abstract"), QStringLiteral("info"),
+                       QStringLiteral("todo"),     QStringLiteral("tip"),      QStringLiteral("success"),
+                       QStringLiteral("question"), QStringLiteral("warning"),  QStringLiteral("failure"),
+                       QStringLiteral("danger"),   QStringLiteral("bug"),      QStringLiteral("example"),
+                       QStringLiteral("quote")};
+    for (const QString &type : definedTypes()) {
+        if (!out.contains(type))
+            out.append(type);
+    }
+    return out;
+}
+
 } // namespace noteAppC

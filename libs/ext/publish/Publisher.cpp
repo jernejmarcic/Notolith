@@ -664,8 +664,12 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     // `deferredForMaths` instead and finished below, serially, once
     // rendering is done. Two thread-local highlighters (one per theme mode)
     // mirror Indexer.cpp's own `thread_local Parser` pattern. -------------
-    const noteAppC::Theme themeDark = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Dark);
-    const noteAppC::Theme themeLight = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Light);
+    const noteAppC::Theme themeDark =
+        options.codeThemeDark.value_or(noteAppC::Theme::builtin(noteAppC::Theme::Mode::Dark));
+    const noteAppC::Theme themeLight =
+        options.codeThemeLight.value_or(noteAppC::Theme::builtin(noteAppC::Theme::Mode::Light));
+    static std::atomic<quint64> publishCount{0};
+    const quint64 publishID = ++publishCount;
     const bool bothThemes = options.theme == Options::ThemeMode::Both;
     QList<QPair<QString, ContentResult>> deferredForMaths;
     std::atomic<int> donePages{0};
@@ -690,11 +694,13 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
     const auto renderAndWriteOne = [&](const QString &relativePath) {
         static thread_local noteAppC::CodeHighlighter highlighterDark;
         static thread_local noteAppC::CodeHighlighter highlighterLight;
-        static thread_local bool ready = false;
-        if (!ready) {
+        // Per publish, not per thread: a pool thread outlives the run, and
+        // the next one may be for another scheme.
+        static thread_local quint64 readyFor = 0;
+        if (readyFor != publishID) {
             highlighterDark.setTheme(themeDark);
             highlighterLight.setTheme(themeLight);
-            ready = true;
+            readyFor = publishID;
         }
         RenderEnv env{notes,
                      resolveCache,

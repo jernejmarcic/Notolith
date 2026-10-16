@@ -102,6 +102,25 @@ TEST(PublishTest, LinksResolveAcrossFolders)
     EXPECT_TRUE(sub.contains(QStringLiteral("href=\"../root.html\"")));
 }
 
+TEST(PublishTest, TheSchemesCodeColoursReachThePage)
+{
+    TestSite site({{QStringLiteral("Code.md"), "```cpp\nstatic int x = 0;\n```\n"}});
+    site.publish();
+    EXPECT_FALSE(site.read(QStringLiteral("code.html")).contains(QLatin1String("--code-type")))
+        << "the built-in scheme names no token colours";
+
+    Options options;
+    options.codeThemeDark = Theme::builtin(Theme::Mode::Dark);
+    options.codeThemeDark->setToken(QStringLiteral("--syntax-type"), QStringLiteral("#C678DD bold"));
+    options.codeThemeLight = Theme::builtin(Theme::Mode::Light);
+    options.codeThemeLight->setToken(QStringLiteral("--syntax-type"), QStringLiteral("#7A3E9D"));
+    site.publish(options); // the same process again: a pool thread must not keep the first run's theme
+    const QString page = site.read(QStringLiteral("code.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("--code-type:#c678dd"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QLatin1String("--code-type:#7a3e9d")));
+    EXPECT_TRUE(page.contains(QLatin1String("tok-")));
+}
+
 TEST(PublishTest, HeadingAndBlockAnchors)
 {
     TestSite site({

@@ -13,7 +13,11 @@
 
 #include "Icons.h"
 
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QMenu>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QScrollBar>
 
 #include <algorithm>
@@ -143,6 +147,131 @@ void MarkdownEditor::editBlockSource(qsizetype blockIndex)
     // select-the-widget does: the caret lands on the block's first line.
     setSelectionRange(whole.end, whole.start);
     setFocus(Qt::MouseFocusReason);
+}
+
+// --- the callout's context menu ---------------------------------------------
+
+const CalloutSpan *MarkdownEditor::topCalloutAt(qsizetype offset) const
+{
+    for (const CalloutSpan &callout : m_decorations.callouts) {
+        if (callout.depth == 0 && callout.range.contains(offset))
+            return &callout;
+    }
+    return nullptr;
+}
+
+QString MarkdownEditor::calloutSourceAt(qsizetype offset) const
+{
+    const CalloutSpan *callout = topCalloutAt(offset);
+    if (!callout)
+        return {};
+    QString source = m_text.mid(callout->range.start, callout->range.length());
+    while (source.endsWith(QLatin1Char('\n')))
+        source.chop(1);
+    return source;
+}
+
+bool MarkdownEditor::changeCalloutType(qsizetype offset, const QString &type)
+{
+    const CalloutSpan *callout = topCalloutAt(offset);
+    static const QRegularExpression valid(QStringLiteral("^[\\w-]+$"));
+    if (!callout || type == callout->type || !valid.match(type).hasMatch())
+        return false;
+
+    // Where the type word sits: after `[!` in a quote, after the colons (and
+    // `{`, `.`) of a `:::` fence.
+    qsizetype at = -1;
+    if (m_text.at(callout->marker.start) == QLatin1Char('[')) {
+        at = callout->marker.start + 2;
+    } else {
+        static const QRegularExpression fence(QStringLiteral("^:{3,}[ \\t]*\\{?[ \\t]*(?:#[^\\s}]+[ \\t]+)*\\.?"));
+        const qsizetype lineEnd = m_text.indexOf(QLatin1Char('\n'), callout->marker.start);
+        const auto match = fence.match(QStringView(m_text).mid(
+            callout->marker.start, (lineEnd < 0 ? m_text.size() : lineEnd) - callout->marker.start));
+        if (match.hasMatch())
+            at = callout->marker.start + match.capturedLength();
+    }
+    const qsizetype length = callout->type.size();
+    if (at < 0 || m_text.mid(at, length).toLower() != callout->type)
+        return false;
+
+    const qsizetype caret = m_cursor;
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(at, length, type);
+    setCursorOffset(caret >= at + length ? caret + type.size() - length : qMin(caret, at));
+    return true;
+}
+
+bool MarkdownEditor::removeCallout(qsizetype offset)
+{
+    const CalloutSpan *callout = topCalloutAt(offset);
+    if (!callout)
+        return false;
+    const Range range = callout->range;
+    QString text = m_text.mid(range.start, range.length());
+    const bool newline = text.endsWith(QLatin1Char('\n'));
+    if (newline)
+        text.chop(1);
+    QStringList lines = text.split(QLatin1Char('\n'));
+
+    QString title;
+    if (m_text.at(callout->marker.start) == QLatin1Char('[')) {
+        // `> [!note]+ Title`: one level of `>` off every line, then the
+        // first line is the title alone.
+        static const QRegularExpression prefix(QStringLiteral("^[ \\t]*>[ \\t]?"));
+        if (callout->titleRange.isValid())
+            title = m_text.mid(callout->titleRange.start, callout->titleRange.length()).trimmed();
+        for (QString &line : lines)
+            line.remove(prefix);
+        lines.removeFirst();
+    } else {
+        // `:::` fences: the opening and the closing line go.
+        static const QRegularExpression close(QStringLiteral("^:{3,}[ \\t]*\\r?$"));
+        title = callout->attributes.value(QStringLiteral("title"),
+                                          callout->attributes.value(QStringLiteral("summary"))).trimmed();
+        lines.removeFirst();
+        if (!lines.isEmpty() && close.match(lines.constLast()).hasMatch())
+            lines.removeLast();
+    }
+    if (!title.isEmpty()) {
+        // A blank line, or the title would run into the first paragraph.
+        if (!lines.isEmpty() && !lines.constFirst().trimmed().isEmpty())
+            lines.prepend(QString());
+        lines.prepend(title);
+    }
+    QString result = lines.join(QLatin1Char('\n'));
+    if (newline && !result.isEmpty())
+        result += QLatin1Char('\n');
+
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(range.start, range.length(), result);
+    setCursorOffset(qMin<qsizetype>(range.start, m_text.size()));
+    return true;
+}
+
+void MarkdownEditor::addCalloutActions(QMenu &menu, qsizetype blockIndex)
+{
+    const BlockView &view = firstPiece(m_blocks[size_t(blockIndex)]);
+    if (!view.callout)
+        return;
+    const qsizetype at = view.callout->range.start;
+    menu.addAction(tr("Edit block source"), this, [this, blockIndex] { editBlockSource(blockIndex); });
+    menu.addAction(tr("Copy"), this, [this, at] {
+        QGuiApplication::clipboard()->setText(calloutSourceAt(at));
+    });
+    QMenu *types = menu.addMenu(tr("Change type"));
+    const QString current = view.callout->type;
+    QStringList known = m_calloutStyles.knownTypes();
+    if (!known.contains(current))
+        known.prepend(current);
+    for (const QString &type : std::as_const(known)) {
+        QAction *action = types->addAction(type, this, [this, at, type] { changeCalloutType(at, type); });
+        action->setCheckable(true);
+        action->setChecked(type == current);
+    }
+    menu.addAction(tr("Remove callout"), this, [this, at] { removeCallout(at); });
 }
 
 void MarkdownEditor::updateHover(const QPoint &point)

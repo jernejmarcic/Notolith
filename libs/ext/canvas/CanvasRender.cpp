@@ -19,14 +19,15 @@
 
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "Parser.h"
 
 namespace noteAppC {
 
 /// The part of a note a file card names with its subpath, as Obsidian shows
 /// it: `#Heading` is that heading down to the next one at its level or
-/// above, `#^id` the line carrying that block id. The whole note when there
-/// is no subpath or it names nothing. Lines inside a code fence are never
-/// headings.
+/// above, `#^id` the line carrying that block id. Headings are Markdown or
+/// HTML (headingSection). The whole note when there is no subpath or it
+/// names nothing.
 QString canvasSectionOf(const QString &text, const QString &subpath)
 {
     if (!subpath.startsWith(QLatin1Char('#')) || subpath.size() < 2)
@@ -41,31 +42,13 @@ QString canvasSectionOf(const QString &text, const QString &subpath)
         return text;
     }
     const QString wanted = subpath.mid(1).section(QLatin1Char('#'), -1).trimmed(); // the last level
-    const auto headingLevel = [](const QString &line) {
-        int level = 0;
-        while (level < line.size() && line.at(level) == QLatin1Char('#'))
-            ++level;
-        return level >= 1 && level <= 6 && level < line.size() && line.at(level) == QLatin1Char(' ') ? level : 0;
-    };
-    bool inFence = false;
-    int start = -1;
-    int level = 0;
-    for (int i = 0; i < lines.size(); ++i) {
-        if (lines.at(i).trimmed().startsWith(QLatin1String("```"))) {
-            inFence = !inFence;
-            continue;
-        }
-        const int here = inFence ? 0 : headingLevel(lines.at(i));
-        if (!here)
-            continue;
-        if (start >= 0 && here <= level)
-            return lines.mid(start, i - start).join(QLatin1Char('\n'));
-        if (start < 0 && lines.at(i).mid(here).trimmed().compare(wanted, Qt::CaseInsensitive) == 0) {
-            start = i;
-            level = here;
-        }
-    }
-    return start >= 0 ? lines.mid(start).join(QLatin1Char('\n')) : text;
+    const Range section = headingSection(text, wanted);
+    if (!section.isValid())
+        return text;
+    QString part = text.mid(section.start, section.length());
+    if (section.end < text.size() && part.endsWith(QLatin1Char('\n')))
+        part.chop(1); // the newline before the next heading is not the section's
+    return part;
 }
 
 namespace {

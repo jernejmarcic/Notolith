@@ -14,6 +14,7 @@
 #include "EpubCover.h"
 #endif
 #include "PdfPage.h"
+#include "Parser.h"
 #include "Vault.h"
 
 #include <QDesktopServices>
@@ -42,7 +43,7 @@ bool MarkdownEditor::layoutTextPanel(BlockView &view, const QString &label, cons
     view.embedPanel = true;
     view.layout.reset();
     view.cells.clear();
-    view.textTop = codeHeaderHeight();
+    view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
 
     QString trimmed = body;
     while (trimmed.endsWith(QLatin1Char('\n')))
@@ -114,40 +115,26 @@ QString MarkdownEditor::noteEmbedSlice(const QString &noteText, const QString &s
             QString last = block.constLast();
             last.remove(marker);
             block[block.size() - 1] = last.trimmed();
-            label = title + QStringLiteral(" > ^") + id;
+            label.clear(); // Obsidian titles an embed only when it has no subpath
             return block.join(QLatin1Char('\n')).trimmed();
         }
         ok = false;
         return QString();
     }
 
-    // A heading: from a line whose text matches (trailing "#"s and space
-    // trimmed, case-insensitive) to the next heading at the same level or
-    // shallower, or the end of the file - CommonMark's own section rule.
-    static const QRegularExpression heading(QStringLiteral("^(#{1,6})\\s+(.*?)\\s*#*\\s*$"));
-    int start = -1, level = 0;
-    for (int i = 0; i < lines.size(); ++i) {
-        const auto match = heading.match(lines.at(i));
-        if (match.hasMatch() && match.captured(2).compare(fragment, Qt::CaseInsensitive) == 0) {
-            start = i;
-            level = match.captured(1).size();
-            break;
-        }
-    }
-    if (start < 0) {
+    // A heading, Markdown or HTML: from its line to the next heading at the
+    // same level or shallower, or the end of the file - CommonMark's own
+    // section rule (headingSection). `A#B#C` names the last level, as a
+    // canvas card does, when the whole text matches no heading.
+    Range section = headingSection(noteText, fragment);
+    if (!section.isValid() && fragment.contains(QLatin1Char('#')))
+        section = headingSection(noteText, fragment.section(QLatin1Char('#'), -1));
+    if (!section.isValid()) {
         ok = false;
         return QString();
     }
-    int end = int(lines.size());
-    for (int i = start + 1; i < lines.size(); ++i) {
-        const auto match = heading.match(lines.at(i));
-        if (match.hasMatch() && match.captured(1).size() <= level) {
-            end = i;
-            break;
-        }
-    }
     label = title + QStringLiteral(" > ") + fragment;
-    return lines.mid(start, end - start).join(QLatin1Char('\n')).trimmed();
+    return noteText.mid(section.start, section.length()).trimmed();
 }
 
 bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path)
@@ -171,6 +158,14 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     // own in reading view, drawn into an image a turn after this layout.
     // Until then, and when it cannot be drawn, the plain text.
     const int width = contentWidth() - 28;
+    // Inside another embed's drawing a note that is already being drawn
+    // around it (it embeds itself, or A embeds B embeds A) or one nested
+    // kMaxEmbedDepth deep stays the plain text panel, as Obsidian stops at
+    // five levels; nothing is drawn for it, so the recursion ends here.
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+    if (m_embedAncestors.contains(canonical) || m_embedAncestors.size() >= kMaxEmbedDepth)
+        return layoutTextPanel(view, label, slice, false);
+
     const QString key = QStringLiteral("%1|%2|%3|%4|%5")
                             .arg(path)
                             .arg(info.lastModified().toMSecsSinceEpoch())
@@ -181,10 +176,18 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     if (it == m_fileEmbedCache.end()) {
         FileEmbedCacheEntry entry;
         entry.generation = ++m_fileEmbedGeneration;
-        it = m_fileEmbedCache.insert(key, entry);
-        QTimer::singleShot(0, this, [this, key, generation = entry.generation, slice, width] {
-            deliverFileEmbed(key, generation, renderNoteEmbed(slice, width));
-        });
+        if (!m_embedAncestors.isEmpty()) {
+            // A nested editor is gone as soon as it has been drawn, so a
+            // turn of the event loop would never come: draw this level now.
+            entry.image = renderNoteEmbed(slice, width, canonical);
+            entry.pending = false;
+            it = m_fileEmbedCache.insert(key, entry);
+        } else {
+            it = m_fileEmbedCache.insert(key, entry);
+            QTimer::singleShot(0, this, [this, key, generation = entry.generation, slice, width, canonical] {
+                deliverFileEmbed(key, generation, renderNoteEmbed(slice, width, canonical));
+            });
+        }
     }
     view.imagePath = path; // deliverFileEmbed's way back to this block
     if (it->pending || it->image.isNull())
@@ -194,7 +197,7 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     view.embedPanel = true;
     view.layout.reset();
     view.cells.clear();
-    view.textTop = codeHeaderHeight();
+    view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
     hideWholeBlockText(view);
     const QPixmap pixmap = QPixmap::fromImage(it->image);
     const qreal ratio = pixmap.devicePixelRatio();
@@ -205,14 +208,17 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     return true;
 }
 
-QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width) const
+QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width, const QString &fromNote) const
 {
-    // ponytail: one level formatted - the nested editor's own embeds are
-    // gone with it before they can be drawn, which also ends a note that
-    // embeds itself - and a long note cut at kMaxNoteEmbedHeight where
-    // Obsidian scrolls inside the embed.
+    // ponytail: a long note is cut at kMaxNoteEmbedHeight where Obsidian
+    // scrolls inside the embed. Notes embedded in the slice are drawn the
+    // same way, now, one level down (layoutNoteEmbed); `fromNote` joined to
+    // the ancestors is the cycle guard.
     constexpr int kMaxNoteEmbedHeight = 1200;
     MarkdownEditor nested;
+    nested.m_embedAncestors = m_embedAncestors;
+    if (!fromNote.isEmpty())
+        nested.m_embedAncestors.append(fromNote);
     nested.setTheme(m_theme);
     nested.setMode(Mode::Reading);
     nested.setReadableLineLength(false);
@@ -830,6 +836,21 @@ QString MarkdownEditor::panelTextAt(qsizetype offset) const
         return QString();
     const BlockView &view = m_blocks[size_t(index)];
     return view.layout ? view.layout->text() : QString();
+}
+
+QString MarkdownEditor::panelLabelAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    return index < 0 || index >= qsizetype(m_blocks.size()) ? QString() : m_blocks[size_t(index)].embedLabel;
+}
+
+QImage MarkdownEditor::embedImageAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(m_blocks.size()))
+        return {};
+    const BlockView &view = m_blocks[size_t(index)];
+    return view.embedPanel ? view.image.toImage() : QImage();
 }
 
 QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const

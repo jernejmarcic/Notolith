@@ -6282,3 +6282,197 @@ TEST(HoverEditTest, EveryRenderedKindSelectsItsWholeSource)
     std::printf("[ INFO     ] %d of %d kinds had a button\n", clicked, int(sources.size()));
     EXPECT_GE(clicked, 2); // the table and the callout, whatever the build draws
 }
+
+// --- editor3 lane: fences, callout menu, nested embeds, block refs -------------
+
+TEST(CodeFenceRevealTest, TheCaretAnywhereInTheListingShowsBothFences)
+{
+    // Obsidian: the caret anywhere from the opening fence to the closing one
+    // shows both fence lines (and the language tag); away from it they hide.
+    const QString note = QStringLiteral("before\n\n```python\nprint(1)\nprint(2)\n```\n\nafter\n");
+    auto editor = editorWith(note);
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("```")));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("python")));
+    for (const QString &where : {QStringLiteral("print(1)"), QStringLiteral("print(2)")}) {
+        editor->enterBlockAt(note.indexOf(where) + 2);
+        EXPECT_TRUE(editor->displayText().contains(QLatin1String("```python\nprint(1)\nprint(2)\n```")))
+            << qPrintable(where) << ": " << qPrintable(editor->displayText());
+    }
+    editor->enterBlockAt(note.indexOf(QLatin1String("after")));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("```")));
+    editor->enterBlockAt(note.indexOf(QLatin1String("before")));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("```")));
+    // On the fence line itself, as before.
+    editor->enterBlockAt(note.indexOf(QLatin1String("```python")) + 3);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("```python")));
+}
+
+namespace {
+std::unique_ptr<MarkdownEditor> editorWithCallout(const QString &callout)
+{
+    return editorWith(QStringLiteral("before\n\n") + callout + QStringLiteral("\n\nafter\n"));
+}
+} // namespace
+
+TEST(CalloutMenuTest, ChangeTypeRewritesTheMarkerInOneUndoStep)
+{
+    const QString callout = QStringLiteral("> [!note|bar=#FF0000ff]+ Title\n> body\n> > [!tip] inner");
+    auto editor = editorWithCallout(callout);
+    const qsizetype at = editor->noteText().indexOf(QLatin1String("body"));
+    EXPECT_EQ(editor->calloutSourceAt(at), callout);
+    ASSERT_TRUE(editor->changeCalloutType(at, QStringLiteral("warning")));
+    EXPECT_EQ(editor->calloutSourceAt(at),
+              QStringLiteral("> [!warning|bar=#FF0000ff]+ Title\n> body\n> > [!tip] inner"));
+    EXPECT_FALSE(editor->changeCalloutType(at, QStringLiteral("warning"))) << "already that type";
+    EXPECT_FALSE(editor->changeCalloutType(at, QStringLiteral("two words")));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("before\n\n") + callout + QStringLiteral("\n\nafter\n"));
+}
+
+TEST(CalloutMenuTest, ChangeTypeWorksOnAColonFence)
+{
+    for (const QString &fence : {QStringLiteral("::: note Title\nbody\n:::"),
+                                 QStringLiteral("::: {#id .note title=\"T\"}\nbody\n:::")}) {
+        auto editor = editorWithCallout(fence);
+        const qsizetype at = editor->noteText().indexOf(QLatin1String("body"));
+        ASSERT_TRUE(editor->changeCalloutType(at, QStringLiteral("bug"))) << qPrintable(fence);
+        QString expected = fence;
+        expected.replace(QLatin1String("note"), QLatin1String("bug"));
+        EXPECT_EQ(editor->calloutSourceAt(at), expected);
+    }
+}
+
+TEST(CalloutMenuTest, RemoveKeepsTheContentAndAnExplicitTitle)
+{
+    auto quote = editorWithCallout(QStringLiteral("> [!note]+ My title\n> line one\n>\n> - item\n> > nested"));
+    const qsizetype at = quote->noteText().indexOf(QLatin1String("line"));
+    ASSERT_TRUE(quote->removeCallout(at));
+    EXPECT_EQ(quote->noteText(), QStringLiteral("before\n\nMy title\n\nline one\n\n- item\n> nested\n\nafter\n"))
+        << qPrintable(quote->noteText());
+    QTest::keyClick(quote.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_TRUE(quote->noteText().contains(QLatin1String("> [!note]+ My title")));
+
+    auto untitled = editorWithCallout(QStringLiteral("> [!tip]\n> only body"));
+    ASSERT_TRUE(untitled->removeCallout(untitled->noteText().indexOf(QLatin1String("only"))));
+    EXPECT_EQ(untitled->noteText(), QStringLiteral("before\n\nonly body\n\nafter\n")) << qPrintable(untitled->noteText());
+
+    auto colons = editorWithCallout(QStringLiteral("::: warning\ntext\n:::"));
+    ASSERT_TRUE(colons->removeCallout(colons->noteText().indexOf(QLatin1String("text"))));
+    EXPECT_EQ(colons->noteText(), QStringLiteral("before\n\ntext\n\nafter\n")) << qPrintable(colons->noteText());
+
+    auto none = editorWith(QStringLiteral("plain\n"));
+    EXPECT_FALSE(none->removeCallout(1));
+    EXPECT_FALSE(none->changeCalloutType(1, QStringLiteral("note")));
+    EXPECT_TRUE(none->calloutSourceAt(1).isEmpty());
+}
+
+TEST(CalloutMenuTest, KnownTypesStartWithObsidiansAndAddTheIni)
+{
+    const QStringList types = CalloutStyles::load(QStringLiteral("/nonexistent/callouts.ini")).knownTypes();
+    ASSERT_EQ(types.size(), 13);
+    EXPECT_EQ(types.first(), QStringLiteral("note"));
+    EXPECT_TRUE(types.contains(QStringLiteral("quote")));
+}
+
+TEST(NoteEmbedTest, ANoteEmbeddedInAnEmbeddedNoteIsDrawnFormattedToo)
+{
+    QTemporaryDir dir;
+    const auto write = [&](const QString &name, const QByteArray &body) {
+        QFile file(dir.filePath(name));
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(body);
+        return dir.filePath(name);
+    };
+    const QString inner = write(QStringLiteral("Inner.md"), "==marked words==\n");
+    const QString middle = write(QStringLiteral("Middle.md"), "![[Inner]]\n");
+    const QString outer = write(QStringLiteral("Outer.md"), "![[Middle]]\n");
+    // The highlight's fill is the one pixel colour only a formatted draw has.
+    const auto marked = [](const QImage &image) {
+        const QColor highlight = Theme::builtin().color(QStringLiteral("--color-yellow"));
+        int found = 0;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor c = image.pixelColor(x, y);
+                if (qAbs(c.hue() - highlight.hue()) < 12 && c.saturation() > 80 && c.value() > 90)
+                    ++found;
+            }
+        return found;
+    };
+    const auto draw = [&](const QString &note, const QString &target) {
+        auto editor = editorWith(QStringLiteral("![[%1]]\n\nafter\n").arg(note));
+        editor->setLinkResolver([&](const QString &name) { return name == QLatin1String("Inner")  ? inner
+                                                                  : name == QLatin1String("Middle") ? middle
+                                                                                                    : target; });
+        editor->setCursorOffset(editor->noteText().size());
+        QTest::qWaitFor([&] { return !editor->embedImageSizeAt(0).isEmpty(); }, 3000);
+        return editor->embedImageAt(0);
+    };
+    const int direct = marked(draw(QStringLiteral("Inner"), inner));
+    ASSERT_GT(direct, 20) << "the highlight is drawn when the note is embedded directly";
+    EXPECT_GT(marked(draw(QStringLiteral("Middle"), middle)), 20) << "one level down";
+    // Nothing in the chain loops: Outer is only ever the document here.
+    EXPECT_FALSE(outer.isEmpty());
+}
+
+TEST(NoteEmbedTest, ANoteThatEmbedsItselfStopsAtTheFirstLevel)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("Loop.md"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("# Loop\n\n![[Loop]]\n");
+    }
+    auto editor = editorWith(QStringLiteral("![[Loop]]\n\nafter\n"));
+    editor->setLinkResolver([&](const QString &) { return path; });
+    editor->setCursorOffset(editor->noteText().size());
+    WAIT_TRUE(!editor->embedImageSizeAt(0).isEmpty(), 3000);
+    EXPECT_LT(editor->embedImageSizeAt(0).height(), 600) << "a loop would have run to the 1200 px cap";
+}
+
+TEST(NoteEmbedTest, ABlockEmbedHasNoTitleAndAnHTMLHeadingIsASection)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("Target.md"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("intro\n\n<h2>Two &amp; Three</h2>\n\nhtml section body\n\n## Next\n\nmarkdown body\n\npara ^blk\n");
+    }
+    auto html = editorWith(QStringLiteral("![[Target#Two & Three]]\n"));
+    html->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(html->panelTextAt(0).contains(QLatin1String("html section body"))) << qPrintable(html->panelTextAt(0));
+    EXPECT_FALSE(html->panelTextAt(0).contains(QLatin1String("markdown body")));
+    EXPECT_FALSE(html->panelTextAt(0).contains(QLatin1String("intro")));
+
+    auto md = editorWith(QStringLiteral("![[Target#Next]]\n"));
+    md->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_TRUE(md->panelTextAt(0).contains(QLatin1String("markdown body")));
+
+    auto block = editorWith(QStringLiteral("![[Target#^blk]]\n"));
+    block->setLinkResolver([&](const QString &) { return path; });
+    EXPECT_EQ(block->panelTextAt(0), QStringLiteral("para"));
+    EXPECT_EQ(block->panelLabelAt(0), QString()) << "Obsidian titles an embed only when it has no subpath";
+}
+
+TEST(BlockReferenceTest, ASameNoteReferenceHidesItsHashAndAnotherNotesStaysWritten)
+{
+    auto editor = editorWith(QStringLiteral("a [[#^abc]] b [[Other#^abc]] c [[#Head]] d\n"));
+    editor->setCursorOffset(0);
+    // Obsidian's live preview rewrites only a leading "#": "^abc", "Other#^abc".
+    editor->enterBlockAt(editor->noteText().size()); // caret out of the paragraph's way
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("a ^abc b Other#^abc c Head d"))) << qPrintable(shown);
+}
+
+TEST(CodeInCalloutTest, ALongListingInsideACalloutWrapsInLivePreview)
+{
+    // Obsidian wraps it too (its callout is a reading-view pre-wrap), so a long
+    // line makes the callout taller, not wider than the column.
+    const auto heightOf = [](const QString &line) {
+        auto editor = editorWith(QStringLiteral("> [!note] t\n> ```\n> ") + line + QStringLiteral("\n> ```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size());
+        return editor->documentHeight();
+    };
+    EXPECT_GT(heightOf(QString(400, QLatin1Char('x')) + QStringLiteral(" y")), heightOf(QStringLiteral("x y")) + 20);
+}
