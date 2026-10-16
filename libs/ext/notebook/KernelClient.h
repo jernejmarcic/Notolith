@@ -1,8 +1,8 @@
 #pragma once
 
 // The ZeroMQ side of the Jupyter messaging protocol: five sockets (shell,
-// control, stdin - unused, no input() support, see the comment on
-// NotebookController for why that is left out - iopub, heartbeat), all
+// control, stdin - only used for an execute() that allows it: the kernel's
+// input() asks on it and the reply goes back on it - iopub, heartbeat), all
 // owned by this object's own worker thread so kernel I/O is never on the
 // caller's thread (stage 13's requirement - a long-running cell must not
 // block anything, and interrupt must keep working while one runs).
@@ -44,7 +44,11 @@ public:
     /// sent (sending happens on the worker thread next tick, at most ~50 ms
     /// later) so a caller can match iopub/shell replies to this call from
     /// the moment it returns.
-    QString execute(const QString &code);
+    /// `allowStdin`: the kernel may ask for a line (input(), getpass) while
+    /// this runs - inputRequested comes back and must be answered with
+    /// replyToInput or the cell waits (an interrupt ends it). Without it the
+    /// kernel raises instead of asking, as before.
+    QString execute(const QString &code, bool allowStdin = false);
     /// Queues a complete_request / inspect_request for `code` with the caret
     /// at `cursorPos` (Unicode code points, as the protocol counts); returns
     /// its msg_id. The answer is introspectionReplyReceived.
@@ -56,6 +60,8 @@ public:
     /// since a kernel that does not understand interrupt_request simply
     /// never replies to it.
     void requestInterrupt();
+    /// The input_reply that answers the kernel's one pending input_request.
+    void replyToInput(const QString &line);
 
 signals:
     void heartbeatAlive(bool alive);
@@ -68,6 +74,8 @@ signals:
     void clearOutputReceived(QString parentMsgID); ///< iopub "clear_output": tqdm, IPython.display.clear_output
     void errorReceived(QString parentMsgID, QString ename, QString evalue, QStringList traceback);
     void executeReplyReceived(QString parentMsgID, bool ok, int executionCount);
+    /// stdin "input_request": the cell `parentMsgID` is waiting for a line.
+    void inputRequested(QString parentMsgID, QString prompt, bool password);
     /// shell "complete_reply" / "inspect_reply": `msgType` says which.
     void introspectionReplyReceived(QString parentMsgID, QString msgType, QJsonObject content);
 
@@ -75,7 +83,7 @@ protected:
     void run() override;
 
 private:
-    enum class Channel { Shell, Control };
+    enum class Channel { Shell, Control, Stdin };
     struct PendingSend {
         Channel channel;
         KernelMessage message;

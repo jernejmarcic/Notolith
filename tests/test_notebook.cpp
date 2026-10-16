@@ -16,6 +16,7 @@
 #include <QProcess>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QTimer>
 
 #include "DirectRunner.h"
 #include "KernelProcess.h"
@@ -935,5 +936,133 @@ TEST(NotebookKernelFeatureTest, CompletionAndDocumentationComeFromTheNotesRunnin
                                       [&](NotebookController::Introspection answer) { gone = !answer.ok; }));
     controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md"));
     EXPECT_TRUE(gone);
+    controller.shutdownAll();
+}
+
+// --- input() from a running block -------------------------------------------
+
+namespace {
+
+/// A missing kernel skips the test, unless the lane check says tools are required.
+#define REQUIRE_PYTHON_KERNEL()                                                                          \
+    if (!pythonKernelAvailable()) {                                                                      \
+        ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))                    \
+            << "NOTEAPPC_REQUIRE_TOOLS=1 and no Jupyter python kernelspec is installed";                 \
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";                       \
+    }
+
+/// What the stand-in for the person at the prompt saw, and what it answers.
+struct Asked {
+    QStringList prompts;
+    QList<bool> passwords;
+    bool cancel = false;
+    QString answer;
+    int answerDelayMs = 0;
+};
+
+NotebookController::RunRequest requestAsking(const std::shared_ptr<Asked> &asked, const QString &scope)
+{
+    NotebookController::RunRequest request = kernelRequest(scope);
+    request.onInput = [asked](const NotebookController::InputPrompt &prompt,
+                              const NotebookController::InputReply &reply) {
+        asked->prompts << prompt.prompt;
+        asked->passwords << prompt.password;
+        QTimer::singleShot(asked->answerDelayMs, [asked, reply] { reply(!asked->cancel, asked->answer); });
+    };
+    return request;
+}
+
+} // namespace
+
+TEST(NotebookInputTest, InputAsksAndTheAnswerGoesBackToTheKernel)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    asked->answer = QStringLiteral("Ada \xc5\xa0");
+    asked->answerDelayMs = 150; // a person takes a moment: the run is waiting, not finished
+
+    const NotebookRunResult result = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                QStringLiteral("name = input('Name: ')\nprint('hi ' + name)"));
+    ASSERT_TRUE(result.kernelError.isEmpty()) << result.kernelError.toStdString();
+    EXPECT_TRUE(result.ok);
+    EXPECT_EQ(asked->prompts, QStringList{QStringLiteral("Name: ")});
+    EXPECT_EQ(asked->passwords, QList<bool>{false});
+    EXPECT_TRUE(joinedText(result).contains(QStringLiteral("hi Ada \xc5\xa0"))) << joinedText(result).toStdString();
+
+    // A second ask in one cell, and the variable lives on in the kernel.
+    asked->prompts.clear();
+    asked->answer = QStringLiteral("7");
+    const NotebookRunResult twice = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                               QStringLiteral("a = int(input('a? '))\nb = int(input('b? '))\nprint(a + b)"));
+    EXPECT_EQ(asked->prompts, (QStringList{QStringLiteral("a? "), QStringLiteral("b? ")}));
+    EXPECT_EQ(joinedText(twice).trimmed(), QStringLiteral("14"));
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, GetpassIsMaskedAndACancelledInputInterruptsTheRun)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    asked->answer = QStringLiteral("hunter22");
+
+    const NotebookRunResult secret = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                QStringLiteral("import getpass\nprint(len(getpass.getpass('Secret: ')))"));
+    EXPECT_EQ(asked->passwords, QList<bool>{true});
+    EXPECT_EQ(joinedText(secret).trimmed(), QStringLiteral("8"));
+
+    // Esc: the run is interrupted (a KeyboardInterrupt), and the kernel is still there for the next block.
+    asked->cancel = true;
+    const NotebookRunResult cancelled = runThrough(controller, requestAsking(asked, QStringLiteral("a.md")),
+                                                   QStringLiteral("x = input('never answered')\nprint('not reached')"));
+    EXPECT_FALSE(cancelled.ok);
+    ASSERT_FALSE(cancelled.outputs.isEmpty());
+    EXPECT_EQ(cancelled.outputs.last().kind, NotebookOutput::Kind::Error);
+    EXPECT_TRUE(cancelled.outputs.last().ename.contains(QStringLiteral("KeyboardInterrupt")))
+        << cancelled.outputs.last().ename.toStdString();
+    EXPECT_FALSE(joinedText(cancelled).contains(QStringLiteral("not reached")));
+    EXPECT_EQ(controller.runningKernelCount(QStringLiteral("a.md")), 1);
+    EXPECT_EQ(joinedText(runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("print(1 + 1)"))).trimmed(),
+              QStringLiteral("2"));
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, WithNoOneToAskInputStillRaisesAsItAlwaysDid)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    const NotebookRunResult result =
+        runThrough(controller, kernelRequest(QStringLiteral("a.md")), QStringLiteral("input('anyone?')"));
+    EXPECT_FALSE(result.ok);
+    ASSERT_FALSE(result.outputs.isEmpty());
+    EXPECT_TRUE(result.outputs.last().ename.contains(QStringLiteral("StdinNotImplementedError")))
+        << result.outputs.last().ename.toStdString();
+    controller.shutdownAll();
+}
+
+TEST(NotebookInputTest, AReplyAfterTheKernelWentIsIgnored)
+{
+    REQUIRE_PYTHON_KERNEL();
+    KernelTestDirs dirs;
+    NotebookController controller;
+    auto asked = std::make_shared<Asked>();
+    NotebookController::InputReply late;
+    NotebookController::RunRequest request = kernelRequest(QStringLiteral("a.md"));
+    request.onInput = [&](const NotebookController::InputPrompt &, const NotebookController::InputReply &reply) {
+        late = reply; // the person is still thinking
+    };
+    request.source = QStringLiteral("input('wait')");
+    bool delivered = false;
+    controller.run(request, true, [&](NotebookRunResult) { delivered = true; });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return bool(late); }, 20000));
+    controller.restartKernel(QStringLiteral("python"), QStringLiteral("a.md")); // delivers a kernel error
+    EXPECT_TRUE(delivered);
+    late(true, QStringLiteral("too late")); // nothing to send it to: must not crash or wake another kernel
+    late(false, QString());
+    EXPECT_EQ(controller.runningKernelCount(), 0);
     controller.shutdownAll();
 }

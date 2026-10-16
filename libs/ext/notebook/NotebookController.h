@@ -30,6 +30,16 @@ public:
     explicit NotebookController(QObject *parent = nullptr);
     ~NotebookController() override;
 
+    /// What a kernel's input() asks, and how the answer goes back.
+    struct InputPrompt {
+        QString prompt;
+        bool password = false; ///< getpass: what is typed is not shown
+    };
+    /// `ok` false (Esc, the prompt dismissed) interrupts the run instead of
+    /// answering it - Jupyter's own way out of an input() nobody will answer.
+    /// Calling it a second time does nothing.
+    using InputReply = std::function<void(bool ok, const QString &line)>;
+    using InputHandler = std::function<void(const InputPrompt &, const InputReply &)>;
     struct RunRequest {
         QString language;
         QString source;
@@ -58,6 +68,11 @@ public:
         int timeoutMs = 0;
         /// false (`#| cache: false`): a lookup finds nothing and a run is not kept.
         bool cache = true;
+        /// Set: a kernel run may ask for a line (input()) and this is called, on
+        /// the controller's thread, for each ask. Unset: the kernel is told
+        /// stdin is not there and input() raises. Only a kernel can ask: the
+        /// system's own one-shot runner has no terminal behind it.
+        InputHandler onInput;
     };
     using Deliver = std::function<void(NotebookRunResult)>;
 
@@ -118,6 +133,7 @@ private:
         bool cache = true;
         bool timedOut = false;
         bool truncated = false;
+        InputHandler onInput;
         int timeoutMs = 0;
         int executionCount = 0;
         NotebookRunResult result;

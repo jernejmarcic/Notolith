@@ -1,6 +1,7 @@
 #include "NotebookController.h"
 
 #include <QJsonArray>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QTimer>
 #include <QUuid>
@@ -181,9 +182,10 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         return;
     }
 
-    const QString msgID = session->client->execute(request.source);
+    const QString msgID = session->client->execute(request.source, bool(request.onInput));
     InFlight inFlight;
     inFlight.deliver = deliver;
+    inFlight.onInput = request.onInput;
     inFlight.clock.start();
     inFlight.cacheKey = cacheKey;
     inFlight.language = request.language;
@@ -388,6 +390,35 @@ void NotebookController::wireKernel(KernelSession *session)
                it->replyOk = ok;
                it->executionCount = qMax(0, count);
                finalizeIfDone(session, it);
+           });
+    connect(client, &KernelClient::inputRequested, this,
+           [this, session, guard = QPointer<KernelClient>(client)](const QString &parent, const QString &prompt,
+                                                                  bool password) {
+               const auto it = session->inFlight.find(parent);
+               if (it == session->inFlight.end() || !it->onInput) {
+                   // Nobody to ask (a stray request, or the run was already
+                   // answered): an empty line, so the kernel is not left waiting.
+                   session->client->replyToInput(QString());
+                   return;
+               }
+               // Answered once. The kernel may be gone or replaced by the time
+               // a person answers: `guard` is this very client or nothing.
+               auto answered = std::make_shared<bool>(false);
+               const InputReply reply = [this, guard, answered](bool ok, const QString &line) {
+                   if (*answered || !guard)
+                       return;
+                   *answered = true;
+                   if (ok) {
+                       guard->replyToInput(line);
+                       return;
+                   }
+                   for (auto &entry : m_kernels) {
+                       if (entry.second->client.get() == guard.data())
+                           interruptSession(entry.second.get());
+                   }
+               };
+               const InputHandler handler = it->onInput;
+               handler({prompt, password}, reply);
            });
     connect(client, &KernelClient::introspectionReplyReceived, this,
            [session](const QString &parent, const QString &type, const QJsonObject &content) {
