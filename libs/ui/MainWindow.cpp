@@ -400,6 +400,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_switcher = new QuickSwitcher(this);
     connect(m_switcher, &QuickSwitcher::accepted, this, &MainWindow::openRelative);
+    m_switcher->setCreateAllowed(true);
+    connect(m_switcher, &QuickSwitcher::createRequested, this, &MainWindow::createNoteNamed);
 
     buildActions();
     // Installed on the application, not just this window, because the
@@ -5449,6 +5451,34 @@ void MainWindow::newNoteIn(const QString &folderRelative)
     const QString path = m_vault.createNote(folderRelative, tr("Untitled"), &error);
     if (path.isEmpty()) {
         QMessageBox::warning(this, tr("New note"), tr("Could not create the note:\n%1").arg(error));
+        return;
+    }
+    m_indexer->reindex(path);
+    openNote(path);
+}
+
+void MainWindow::createNoteNamed(const QString &typed)
+{
+    if (!m_vault.isValid())
+        return;
+    // The vault root, like newNoteIn(QString()): there is no default-folder
+    // setting yet. A "Folder/Name" lands in that folder, made when missing.
+    QString name = typed;
+    if (name.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+        name.chop(3);
+    // Obsidian's invalid characters - the ones Vault::renamePath refuses.
+    static const QRegularExpression invalid(QStringLiteral(R"([\[\]#^|:\\])"));
+    const qsizetype slash = name.lastIndexOf(QLatin1Char('/'));
+    const QString folder = slash < 0 ? QString() : name.left(slash).trimmed();
+    const QString base = name.mid(slash + 1).trimmed();
+    QString error;
+    QString path;
+    if (base.isEmpty() || name.contains(invalid) || folder.split(QLatin1Char('/')).contains(QLatin1String("..")))
+        error = tr("a note name cannot be empty or hold # ^ [ ] | : \\ or a .. folder");
+    else
+        path = m_vault.createNote(folder, base, &error);
+    if (path.isEmpty()) {
+        statusBar()->showMessage(tr("Could not create the note: %1").arg(error), 5000);
         return;
     }
     m_indexer->reindex(path);

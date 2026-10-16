@@ -2754,6 +2754,55 @@ TEST_F(WindowTest, TheCommandPaletteRunsCommandsAndPutsTheLastFirst)
     EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# **Welcome**")));
 }
 
+TEST_F(WindowTest, TheQuickSwitcherCreatesTheNoteYouTyped)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    const auto open = [&window] {
+        window.findChild<QAction *>(QStringLiteral("switcher:open"))->trigger();
+        auto *switcher = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("quickSwitcher"));
+        return switcher->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+    };
+
+    // Nothing matches: Enter creates it in the vault root and opens it.
+    auto *query = open();
+    QTest::keyClicks(query, QStringLiteral("Brand New"));
+    EXPECT_EQ(query->parent()->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"))->count(), 0);
+    QTest::keyClick(query, Qt::Key_Return);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Brand New.md"))));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Brand New.md")));
+
+    // Shift+Enter creates even though "Welcome" matches; ".md" is not doubled,
+    // and a typed "Folder/Name" makes the folder.
+    query = open();
+    QTest::keyClicks(query, QStringLiteral("Welc"));
+    QTest::keyClick(query, Qt::Key_Return, Qt::ShiftModifier);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Welc.md"))));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welc.md")));
+    query = open();
+    QTest::keyClicks(query, QStringLiteral("Meetings/Standup.md"));
+    QTest::keyClick(query, Qt::Key_Return);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Meetings/Standup.md"))));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Meetings/Standup.md")));
+}
+
+TEST_F(WindowTest, TheCommandPaletteNeverCreatesANote)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.findChild<QAction *>(QStringLiteral("command-palette:open"))->trigger();
+    auto *palette = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette"));
+    auto *query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+    QTest::keyClicks(query, QStringLiteral("zzzqqq"));
+    QTest::keyClick(query, Qt::Key_Return);
+    QTest::keyClick(query, Qt::Key_Return, Qt::ShiftModifier);
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("zzzqqq.md"))));
+    EXPECT_TRUE(palette->isVisible()) << "nothing to run, so it stays open";
+}
+
 #ifdef NOTEAPPC_HAVE_BASES
 TEST_F(WindowTest, AnEmbeddedBaseShowsItsRowsInTheNote)
 {

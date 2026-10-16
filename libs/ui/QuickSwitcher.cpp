@@ -124,7 +124,18 @@ void QuickSwitcher::chooseCurrent()
     if (auto *item = m_results->currentItem()) {
         emit accepted(item->text());
         hide();
+    } else {
+        requestCreate();
     }
+}
+
+void QuickSwitcher::requestCreate()
+{
+    const QString name = m_query->text().trimmed();
+    if (!m_createAllowed || name.isEmpty())
+        return;
+    hide();
+    emit createRequested(name);
 }
 
 bool QuickSwitcher::eventFilter(QObject *watched, QEvent *event)
@@ -133,6 +144,12 @@ bool QuickSwitcher::eventFilter(QObject *watched, QEvent *event)
     if (watched == m_query && event->type() == QEvent::KeyPress) {
         auto *key = static_cast<QKeyEvent *>(event);
         switch (key->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter:
+            if (!(key->modifiers() & Qt::ShiftModifier))
+                break;
+            requestCreate(); // Shift+Enter creates even when something matches
+            return true;
         case Qt::Key_Down:
         case Qt::Key_Up:
         case Qt::Key_PageDown:
