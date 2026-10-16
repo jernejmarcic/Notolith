@@ -1070,9 +1070,13 @@ optimal as it can be".
       6c9f09b): menu on every word, suggestions, add/remove dictionary,
       Format submenu, Look up via DICT (localhost, then dict.org), vault and
       web search; feature word-lookup.
-- [ ] "There should also be a file graph like obsidian". A graph view exists
+- [x] "There should also be a file graph like obsidian". A graph view exists
       (Ctrl+G, local graph pane) but nothing on screen opens it, and its look
-      against Obsidian's is unchecked (plan: Fable).
+      against Obsidian's is unchecked. Done (lane graph, ad5d76b): header
+      button, step/paint and index read off the UI thread (20k nodes: UI
+      paint 0.2 ms, setIndex 0 ms blocking), positions kept across saves,
+      Filters/Groups/Display/Forces card, per-vault graph.json outside the
+      vault, label fade. docs/GRAPH.md.
 - [x] Inline HTML formatting (`H<sub>2</sub>O`, `<mark>`, `<u>`, `<kbd>`,
       coloured `<span>`) reveals its tags while the caret is inside the
       element, like markdown syntax does in live preview (Jernej 2026-10-16,
@@ -1113,3 +1117,7 @@ optimal as it can be".
 - [ ] Demo pane test read the live demo/.obsidian/workspace.json, which the
       app rewrites when Jernej uses the demo; now runs on a copy with
       fixtures/demo-workspace.json. [x] done 5e6734f.
+- [ ] Graph labels: at the opening zoom only the current note is labelled,
+      even in a 4-note vault; Obsidian labels every node at its default
+      zoom. Tie the default fade threshold to the fitted zoom (found
+      checking the graph merge, 2026-10-16).
