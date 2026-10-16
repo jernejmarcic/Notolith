@@ -178,6 +178,18 @@ TEST(SearchGrammarTest, TagMatchesByNameAndNestedChild)
     EXPECT_FALSE(matches(QStringLiteral("tag:play"), n));
 }
 
+TEST(SearchGrammarTest, TagRegexIgnoresCaseUnlessMatchCase)
+{
+    NoteContext n = note(QStringLiteral("text #work text"));
+    n.tags.append(NoteTag{QStringLiteral("work"), Range{5, 10}});
+    const SearchOutcome folded = SearchQuery::parse(QStringLiteral("tag:/WORK/")).evaluate(n);
+    ASSERT_EQ(folded.matches.size(), 1);
+    EXPECT_EQ(folded.matches.first().offset, 5);
+    EXPECT_EQ(folded.matches.first().length, 5);
+    EXPECT_FALSE(matches(QStringLiteral("match-case:tag:/WORK/"), n));
+    EXPECT_TRUE(matches(QStringLiteral("match-case:tag:/work/"), n));
+}
+
 TEST(SearchGrammarTest, AFrontmatterTagHighlightsItsOwnWordNotTheBlock)
 {
     // The index gives a frontmatter tag its property block as its range.

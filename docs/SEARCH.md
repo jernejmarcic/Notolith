@@ -38,7 +38,8 @@ The pattern is PCRE2 (Qt's `QRegularExpression`), not JavaScript's engine.
   scans the whole text but keeps only matches that lie within the range
   (`^` therefore only ever matches at the very start of the note).
 - No flags after the closing slash. `/x/i` is the regex `x` AND the word `i`.
-  Case is ignored unless `match-case:` says otherwise, as for words; inline `(?i)`, `(?s)`, `(?m)`, `(?x)` work.
+  Case is ignored unless `match-case:` says otherwise, as for words, in `tag:/x/`, `path:/x/`, `file:/x/` and `[property:/x/]` too; inline `(?i)`, `(?s)`, `(?m)`, `(?x)` work.
+  `match-case:` / `ignore-case:` take a field as well: `match-case:tag:/work/`.
 - The first unescaped `/` ends the pattern, also inside a class: JavaScript
   reads `/[/]/` as a class holding a slash, here it is a bad pattern. Write
   `[\/]`.
