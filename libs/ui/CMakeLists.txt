@@ -101,6 +101,11 @@ if(TARGET noteAppC_publish)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_PUBLISH)
 endif()
 
+if(TARGET noteAppC_imageview)
+    target_link_libraries(noteAppC_ui PRIVATE noteAppC_imageview)
+    target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_IMAGEVIEW)
+endif()
+
 if(TARGET noteAppC_epub)
     target_link_libraries(noteAppC_ui PRIVATE noteAppC_epub)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_EPUB)

@@ -215,6 +215,13 @@ target_link_libraries(test_plugins PRIVATE noteAppC_vault noteAppC_ui Qt6::Test 
 add_test(NAME plugins COMMAND test_plugins)
 set_tests_properties(plugins PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+if(TARGET noteAppC_imageview)
+    add_executable(test_imageview test_imageview.cpp)
+    target_link_libraries(test_imageview PRIVATE noteAppC_imageview Qt6::Test GTest::gtest)
+    add_test(NAME imageview COMMAND test_imageview)
+    set_tests_properties(imageview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 if(TARGET noteAppC_pdfview)
     add_executable(test_pdfview test_pdfview.cpp)
     target_link_libraries(test_pdfview PRIVATE noteAppC_pdfview Qt6::Test GTest::gtest)
