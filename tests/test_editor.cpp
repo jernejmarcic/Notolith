@@ -1870,6 +1870,51 @@ TEST(NotebookBlockTest, StderrAndHtmlOutputsAreLaidOut)
     EXPECT_EQ(editor->notebookInfoAt(note.indexOf(QStringLiteral("print(1)"))).outputCellCount, 3);
 }
 
+TEST(NotebookBlockTest, OutputKeepsItsLineBreaks)
+{
+    const QString note = QStringLiteral("```python\nprint(1)\n```\n");
+    const qsizetype offset = note.indexOf(QStringLiteral("print(1)"));
+    auto height = [&](const QString &text, QStringList *shown) {
+        auto editor = editorWith(note);
+        editor->setCursorOffset(note.size());
+        FakeNotebook fake;
+        fake.lookup = textRun(text);
+        editor->setNotebookRunner(fake.runner());
+        QTest::qWait(50);
+        if (shown)
+            *shown = editor->notebookOutputTextAt(offset);
+        return editor->documentHeight();
+    };
+    QStringList shown;
+    const qreal one = height(QStringLiteral("a\n"), nullptr);
+    const qreal three = height(QStringLiteral("a\nb\nc\n"), &shown);
+    // QTextLayout ignores \n, so each break has to reach it as U+2028 or the
+    // output is one run-on line: every extra line must add one line of height.
+    const qreal two = height(QStringLiteral("a\nb\n"), nullptr);
+    EXPECT_GT(two - one, 8);
+    EXPECT_NEAR(three - one, 2 * (two - one), 1);
+    EXPECT_EQ(shown, QStringList{QStringLiteral("a\nb\nc\n")});
+}
+
+TEST(NotebookBlockTest, AnErrorShowsItsHeaderThenTheTracebackOnce)
+{
+    const QString note = QStringLiteral("```rust\nfn main() {}\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    fake.lookup.hasRun = true;
+    MarkdownEditor::NotebookOutput error;
+    error.kind = MarkdownEditor::NotebookOutput::Kind::Error;
+    error.ename = QStringLiteral("Exit code 1");
+    error.text = QStringLiteral("boom\n");
+    error.traceback = {QStringLiteral("boom")};
+    fake.lookup.outputs.append(error);
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    EXPECT_EQ(editor->notebookOutputTextAt(note.indexOf(QStringLiteral("fn main"))),
+              QStringList{QStringLiteral("Exit code 1\nboom")});
+}
+
 TEST(NotebookBlockTest, ClearingOutputsAsksTheRunnerAndEmptiesTheBlock)
 {
     const QString note = QStringLiteral("```python\nprint(1)\n```\n");
