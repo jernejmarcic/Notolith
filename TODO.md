@@ -290,8 +290,14 @@ budget, which this project has already learned once on the index.
       only thing a target that resolves to a note can be guaranteed to share
       with it. Opening a 1 kB note on a 2 000-note vault went 14.6 ms -> 1.4 ms,
       and no longer depends on vault size at all. Schema version 3.
-- [ ] Measure against Obsidian itself on the same vault. Not installed here,
-      so the comparison is still unmade - these are noteAppC's own numbers.
+- [x] Measured against Obsidian 1.14.4 on the same generated vaults, 2026-10-16:
+      docs/PERFORMANCE.md "Against Obsidian" (noteAppC ahead on every row:
+      cold index 1.07 s vs 36.7 s on 20 000 notes, RSS 214 vs 1541 MB).
+      Found: TagsPane::refresh runs one notesWithTag query per tag on the UI
+      thread (4.1 s warm open on a 5 000-note vault with 4 500 tags).
+- [ ] TagsPane::refresh stall on tag-heavy vaults: compute tag counts in one
+      grouped query or off the UI thread; add a ~4 500-tag note inside the
+      vault to tools/bench.
 - [x] **Opening a note was quadratic, twice over.** Found with perf, not
       guessed. `ObsidianSyntax::scan` ran the lazy `%%...%%` pattern once per
       unmasked region - 16 273 of them on a 1 MB note - and each run with no
@@ -370,7 +376,7 @@ budget, which this project has already learned once on the index.
       adds one. Rewritten in the style written (block or flow), other items
       kept byte for byte; a list with a comment in it stays read-only.
 - [x] Editing an existing list item in place: click its text.
-- [ ] Measure against Obsidian itself. Not installed here.
+- [x] Measure against Obsidian itself: see the 2026-10-16 entry above.
 
 ## Requested 2026-09-23
 
