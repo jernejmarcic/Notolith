@@ -334,6 +334,7 @@ private:
     QPointF m_framePan;
     bool m_frameDirty = false; ///< the picture no longer matches the state
     bool m_settled = true;     ///< the last job's verdict - never m_layout.isSettled() live
+    bool m_jobInFlight = false; ///< launched and not yet delivered to onFrameFinished(): never launch over it
     bool m_woken = false;      ///< an edit woke the layout since the last launch, whatever that job says
     int m_generation = 0;
     QPointF m_dragPos;         ///< graph coordinates of the node being dragged

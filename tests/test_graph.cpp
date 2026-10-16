@@ -417,6 +417,29 @@ TEST(GraphViewTest, GroupsEditorAddsAGroup)
     EXPECT_EQ(view.nodeColor(QStringLiteral("B.md")), before);
 }
 
+TEST(GraphViewTest, AForceSliderRestartsASettledLayout)
+{
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C"), QStringLiteral("D")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")},
+                                      {QStringLiteral("C"), QStringLiteral("D")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(2500); // settled, the timer stopped
+    const QPointF resting = view.screenPosition(QStringLiteral("A"));
+    auto *repel = view.findChild<QSlider *>(QStringLiteral("graphRepelSlider"));
+    ASSERT_NE(repel, nullptr);
+    repel->setValue(repel->maximum()); // a settled graph must wake and move
+    EXPECT_TRUE(QTest::qWaitFor(
+        [&] {
+            const QPointF now = view.screenPosition(QStringLiteral("A"));
+            return std::hypot(now.x() - resting.x(), now.y() - resting.y()) > 1.0;
+        },
+        2000));
+}
+
 TEST(GraphViewTest, OptionsRoundTripThroughJson)
 {
     GraphOptions options;

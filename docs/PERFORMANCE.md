@@ -908,7 +908,7 @@ every surviving node where it was. Threading contract: GraphView.h.
 
 | 20 000 notes / 40 000 links, best of three | before | after |
 |---|---|---|
-| layout step (on a worker now) | 28.5 ms | 22 ms |
+| layout step (unchanged, on a worker now) | 28.5 ms | 22 ms (run-to-run noise) |
 | frame (on a worker now) | 17.9 ms | 8.5 ms |
 | UI thread per paint | 17.9 ms | 0.2 ms |
 | `setIndex()` blocks the UI | 123 ms | 0.0 ms |
@@ -918,8 +918,9 @@ every surviving node where it was. Threading contract: GraphView.h.
 
 `GraphPerformanceTest.TwentyThousandNodesReportCosts` prints the first four;
 `BigVaultOpenCosts` (set `NOTEAPPC_GRAPH_BENCH_NOTES=20000`) prints the rest.
-Left: a save while the graph is visible waits for the job in flight (at most
-one job, ~35 ms at 20 000 notes) before it rebuilds.
+Left: a save while the graph is visible waits for the job in flight before it
+rebuilds - one job, ~35 ms at 20 000 notes, but up to 250 ms with Animate off,
+which runs a settling pass per job.
 
 ## Tried and not adopted
 

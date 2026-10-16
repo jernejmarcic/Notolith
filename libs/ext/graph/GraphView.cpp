@@ -507,7 +507,7 @@ QWidget *GraphView::buildControlsPanel()
               [this, pushForceOptions](int v) {
                   m_options.repelStrength = v;
                   pushForceOptions();
-              });
+              })->setObjectName(QStringLiteral("graphRepelSlider"));
     addSlider(forces, tr("Link force"), 0, 50, [this] { return int(std::lround(m_options.linkStrength * 10)); },
               [this, pushForceOptions](int v) {
                   m_options.linkStrength = v / 10.0;
@@ -912,8 +912,9 @@ void GraphView::markDirty()
 
 void GraphView::editLayout(std::function<void(ForceLayout &)> edit)
 {
-    m_settled = m_woken = true; // every edit wakes the layout
-    if (m_frameWatcher.isRunning()) {
+    m_settled = false; // every edit wakes the layout
+    m_woken = true;
+    if (m_jobInFlight) {
         m_layoutEdits.push_back(std::move(edit));
         return;
     }
@@ -959,6 +960,7 @@ void GraphView::launchFrame()
     input.steps = m_settled ? 0 : !m_options.animate ? 300 : (m_nodes.size() > 1000 ? 1 : 3);
     m_frameDirty = false;
     ForceLayout *layout = &m_layout;
+    m_jobInFlight = true;
     m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout]() mutable {
         FrameOutput output;
         // Animate off: settle before the picture moves, up to 300 steps - but
@@ -984,6 +986,7 @@ void GraphView::launchFrame()
 
 void GraphView::onFrameFinished()
 {
+    m_jobInFlight = false;
     const FrameOutput output = m_frameWatcher.result();
     if (output.generation != m_generation)
         return; // from before a rebuild: its positions belong to nodes that are gone
@@ -1012,7 +1015,7 @@ void GraphView::ensureTimerRunning()
         // something to show or to settle, and the timer stops once there is
         // not - a settled, still picture costs nothing.
         connect(m_stepTimer, &QTimer::timeout, this, [this] {
-            if (m_frameWatcher.isRunning())
+            if (m_jobInFlight)
                 return;
             if (m_settled && !m_frameDirty && m_dragNode < 0) {
                 m_stepTimer->stop();
