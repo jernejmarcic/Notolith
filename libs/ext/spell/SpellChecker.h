@@ -38,6 +38,10 @@ public:
     QStringList suggestions(const QString &word, int limit = 6) const;
     /// Accepts the word from now on, and remembers it for next time.
     void addWord(const QString &word);
+    /// Whether the person added `word` (and so may take it back).
+    bool isPersonal(const QString &word) const { return m_personal.contains(word.trimmed()); }
+    /// Takes a word back out: wrong again from now on, and gone from the file.
+    void removeWord(const QString &word);
 
     /// Where dictionaries are looked for, in order.
     static QStringList dictionaryDirectories();
@@ -47,6 +51,7 @@ public:
 private:
     struct Dictionary;
     std::vector<std::unique_ptr<Dictionary>> m_dictionaries;
+    void savePersonal() const;
     QStringList m_personal;
     /// Words repeat, and asking hunspell costs microseconds each time.
     mutable QHash<QString, bool> m_known;

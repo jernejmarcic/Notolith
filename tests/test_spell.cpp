@@ -89,6 +89,25 @@ TEST_F(SpellTest, AnAddedWordIsKeptForNextTime)
     EXPECT_TRUE(SpellChecker({QStringLiteral("xx_TEST")}).isCorrect(QStringLiteral("noteAppC")));
 }
 
+TEST_F(SpellTest, ARemovedWordIsWrongAgainAndStaysRemoved)
+{
+    {
+        SpellChecker spell({QStringLiteral("xx_TEST")});
+        spell.addWord(QStringLiteral("noteAppC"));
+        EXPECT_TRUE(spell.isPersonal(QStringLiteral("noteAppC")));
+        EXPECT_FALSE(spell.isPersonal(QStringLiteral("hello"))) << "the base dictionary's words are not the person's";
+        spell.removeWord(QStringLiteral("noteAppC"));
+        EXPECT_FALSE(spell.isPersonal(QStringLiteral("noteAppC")));
+        EXPECT_FALSE(spell.isCorrect(QStringLiteral("noteAppC")));
+        spell.removeWord(QStringLiteral("hello")); // not the person's to remove
+        EXPECT_TRUE(spell.isCorrect(QStringLiteral("hello")));
+        spell.addWord(QStringLiteral("noteAppC")); // and it can come back
+        EXPECT_TRUE(spell.isCorrect(QStringLiteral("noteAppC")));
+        spell.removeWord(QStringLiteral("noteAppC"));
+    }
+    EXPECT_FALSE(SpellChecker({QStringLiteral("xx_TEST")}).isCorrect(QStringLiteral("noteAppC")));
+}
+
 TEST_F(SpellTest, ADictionaryInALegacyEncodingWorks)
 {
     // Older dictionaries, Slovenian among them, are ISO-8859-2, and hunspell
