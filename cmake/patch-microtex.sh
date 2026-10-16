@@ -14,6 +14,10 @@
 # 3. A malloc freed with delete. LaTeX::queryResourceLocation frees asprintf's
 #    buffer with `delete`, which AddressSanitizer reports on the first formula
 #    rendered: undefined behaviour in upstream's own code, patched here.
+# 4. A binary search one row too far. IndexedArray::operator() starts with
+#    `h = _rows`, so once the key sorts after every row it reads row _rows,
+#    past the end of the table (AddressSanitizer: global-buffer-overflow in
+#    FontInfo::getKern, on a matrix formula).
 set -e
 file="src/platform/qt/graphic_qt.cpp"
 
@@ -33,4 +37,10 @@ latex="src/latex.cpp"
 grep -q "free(userdata_fallback);" "$latex" || {
   sed -i 's|    delete userdata_fallback;|    free(userdata_fallback);|' "$latex"
   echo "patched $latex: asprintf's buffer freed with free()"
+}
+
+indexed="src/utils/indexed_arr.h"
+grep -q "h = (int)_rows - 1" "$indexed" || {
+  sed -i 's|int     l = 0, h = _rows;|int     l = 0, h = (int)_rows - 1;|' "$indexed"
+  echo "patched $indexed: binary search stays inside the table"
 }

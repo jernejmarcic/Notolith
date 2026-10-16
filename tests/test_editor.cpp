@@ -1315,6 +1315,50 @@ TEST(FoldTest, ClickingTheCalloutTitleToggles)
     EXPECT_EQ(editor->cursorOffset(), 0) << "folding must not drag the caret with it";
 }
 
+// --- neighbouring blocks never overlap ------------------------------------
+
+/// Scrolls through the whole note, the way reading it would, and says where two
+/// neighbouring blocks' boxes (a callout's panel included) cross. Empty if none.
+QString firstBlockOverlap(MarkdownEditor &editor)
+{
+    for (int pass = 0; pass < 2; ++pass) {
+        QScrollBar *bar = editor.verticalScrollBar();
+        for (int at = 0; at <= bar->maximum() + editor.viewport()->height(); at += 150) {
+            bar->setValue(at);
+            QList<MarkdownEditor::BlockBox> boxes = editor.blockBoxes();
+            boxes.removeIf([](const MarkdownEditor::BlockBox &box) { return box.rect.isEmpty(); });
+            for (qsizetype i = 1; i < boxes.size(); ++i) {
+                if (boxes.at(i).rect.top() < boxes.at(i - 1).rect.bottom() - 0.01)
+                    return QStringLiteral("block at source %1 (top %2) starts inside the one before (bottom %3)")
+                        .arg(boxes.at(i).source.start).arg(boxes.at(i).rect.top()).arg(boxes.at(i - 1).rect.bottom());
+            }
+        }
+        editor.setMode(MarkdownEditor::Mode::Reading); // and again in the other view
+    }
+    return {};
+}
+
+TEST(BlockOverlapTest, ConsecutiveColonFenceCalloutsDoNotOverlap)
+{
+    auto editor = editorWith(QStringLiteral(
+        "## The container form\n\n"
+        "::: tip A colon-fence callout\nObsidian does not have this form, but the \"Ideas\" spec this app also\n"
+        "reads does; it renders exactly like the `> [!tip]` form above.\n:::\n\n"
+        "::: details Foldable, closed by default\nThe details type folds like `-` does on the `>` form.\n:::\n\n"
+        "after\n"));
+    EXPECT_EQ(firstBlockOverlap(*editor).toStdString(), "");
+}
+
+TEST(BlockOverlapTest, ConsecutiveQuoteCalloutsDoNotOverlap)
+{
+    const QString note = QStringLiteral(
+        "> [!tip] one\n> body\n\n> [!note]- two\n> hidden\n\n> [!note]+ three\n> shown\n\nafter\n");
+    auto editor = editorWith(note);
+    EXPECT_EQ(firstBlockOverlap(*editor).toStdString(), "");
+    editor->toggleFoldAt(note.indexOf(QStringLiteral("[!note]-")));
+    EXPECT_EQ(firstBlockOverlap(*editor).toStdString(), "");
+}
+
 // --- `#|` code block options (HANDOFF 3) ----------------------------------
 
 TEST(CodeOptionsTest, ATitleGivesTheBlockAHeaderStrip)

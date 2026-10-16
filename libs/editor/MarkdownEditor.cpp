@@ -999,9 +999,14 @@ void MarkdownEditor::rebuildBlocks()
 
         Part view{span};
         // A block owns the newline that ends it, so the blank lines left over
-        // in the gap are exactly the blank lines the file has.
+        // in the gap are exactly the blank lines the file has. A range that
+        // already ends in one (a `:::` container's does) has its own; taking
+        // the next as well swallowed the blank line between two containers,
+        // and their panels, which reach past the block, painted over each other.
         if (view.span.range.end < m_text.size()
-            && m_text.at(view.span.range.end) == QLatin1Char('\n'))
+            && m_text.at(view.span.range.end) == QLatin1Char('\n')
+            && !(view.span.range.end > view.span.range.start
+                 && m_text.at(view.span.range.end - 1) == QLatin1Char('\n')))
             ++view.span.range.end;
 
         // A list becomes one block per top-level item, its nested items going
@@ -3323,6 +3328,28 @@ void MarkdownEditor::updateLayout()
         m_totalHeight = y + m_topPadding;
     }
     updateScrollRange();
+}
+
+QList<MarkdownEditor::BlockBox> MarkdownEditor::blockBoxes()
+{
+    updateLayout();
+    QList<BlockBox> boxes;
+    boxes.reserve(qsizetype(m_blocks.size()));
+    for (const BlockView &view : m_blocks) {
+        const Range &range = view.span.range;
+        // A blank line draws nothing, so a callout panel reaching into it is
+        // not an overlap; it is what keeps two panels 8 px apart.
+        const bool blank = view.span.kind == BlockSpan::Kind::Paragraph
+                           && QStringView(m_text).mid(range.start, range.length()).trimmed().isEmpty();
+        // A callout's panel reaches 8 px above its first piece and below its
+        // last (see paintCallout), outside view.height.
+        const bool callout = view.span.kind == BlockSpan::Kind::Callout;
+        const qreal above = callout && view.piece == 0 ? 8 : 0;
+        const qreal below = callout && (view.piece == view.pieces - 1 || view.pieces <= 1) ? 8 : 0;
+        boxes.append({blank ? QRectF() : QRectF(0, view.y - above, contentWidth(), view.height + above + below),
+                      view.span.kind, range});
+    }
+    return boxes;
 }
 
 void MarkdownEditor::scrollContentsBy(int dx, int dy)
