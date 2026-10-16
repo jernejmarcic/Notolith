@@ -958,8 +958,11 @@ optimal as it can be".
       written back into the .ipynb; the vault index ignores .ipynb.
 - [x] Notebook stdin race (found merging 2026-10-16): input_request dropped
       before the stdin handshake; KernelClient now waits for it.
-- [ ] Tables later: drag a bar to add several rows/columns, autoscroll a wide
-      table while dragging a column, touch, handles on HTML tables.
+- [x] Tables later: drag a bar to add several rows/columns, autoscroll a wide
+      table while dragging a column, touch, handles on HTML tables. Done
+      2026-10-16 (simple HTML grids only). Left: paste into an HTML cell
+      rectangle is the ordinary paste; clearing an HTML cell keeps its inner
+      whitespace.
 - [ ] Image annotation is off by default (it replaces the plain image tab);
       Jernej to say whether it should be on.
 - [x] Lists leftovers: if Enter still fails on a bare list in the running app,
