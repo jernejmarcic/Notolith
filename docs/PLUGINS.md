@@ -151,6 +151,20 @@ is a real layout change, so every in-tree plugin's `plugin.ini` bumped its
 `api =` alongside - see `plugin.h`'s comment on the macro for what a
 third-party plugin needs to do.
 
+`NOTEAPPC_PLUGIN_API` is `3` as of 2026-10-16: `noteappc_host::prompt(label,
+password, timeout_ms)` was added at the end of the table, so a plugin can ask
+the person one typed line (a `NULL` return is cancelled, timed out or no way to
+ask; `""` is a real empty answer). It needs no capability. It travels as a
+`ui.prompt` request; `PluginHost` hands it to `PluginAppCallbacks::askUser`,
+which the window answers with a small dialog titled with the plugin's name (the
+plugin supplies only the question, so it cannot pose as the app; `password`
+masks the line). The wait is the person's, not the plugin's: while a prompt is
+open every pending command's kill timer is held and starts over when it ends,
+and `PluginHost` ends the call itself `timeout + 0.5 s` after it was asked
+(default 60 s, at most 5 min) if the dialog never answers - a late answer is
+ignored. With no `askUser` set (a test, a headless run) the question is
+cancelled at once. Both in-tree `plugin.ini` files declare `api = 3`.
+
 **Engine abstraction, inside the host.** `tools/plugin_host/Engine.h` is an
 interface with one method per plugin hook; `NativeEngine` (`dlopen`, the C
 ABI above) is the only one built. `QuickJSEngine.h` documents the seam a
@@ -329,6 +343,17 @@ Everything a note-taking app is for, and nothing it is not:
    ```
 
    A named `api-key-env` that is unset still refuses before any request.
+
+   Added 2026-10-16: **AI: Ask a question** (`ask-question`). It asks the
+   person for the question through `host->prompt` (how long they have:
+   `ask-timeout-ms` in `ai.ini`, default 120000), sends that line and nothing
+   else - not the note, as an `ai` block does not either - and puts the answer
+   at the caret (`replace_selection`). With text selected, which an insert would
+   overwrite, the answer is shown in the status line and logged instead. A
+   cancelled or empty question sends no request. The key comes from the
+   `api-key-env` variable as for every command; nothing new is written to any
+   file. The tests (`tests/test_ai_plugin.cpp`) answer the dialog with a stand-in
+   and the model with the in-process fake server.
 
 ## Decisions that are Jernej's
 

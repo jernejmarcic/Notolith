@@ -138,6 +138,21 @@ void host_log(const char *utf8)
     g_io->writeMessage(PluginMessage::notification(QStringLiteral("log"), params));
 }
 
+const char *host_prompt(const char *label, int password, int timeoutMs)
+{
+    static QByteArray buffer;
+    QJsonObject params;
+    params.insert(QStringLiteral("label"), QString::fromUtf8(label ? label : ""));
+    params.insert(QStringLiteral("password"), password != 0);
+    params.insert(QStringLiteral("timeoutMs"), timeoutMs);
+    const PluginMessage response = g_io->request(QStringLiteral("ui.prompt"), params);
+    // NULL is "no answer" (cancelled, timed out, refused); "" is a real, empty one.
+    if (!response.ok || !response.result.value(QStringLiteral("ok")).toBool())
+        return nullptr;
+    buffer = response.result.value(QStringLiteral("text")).toString().toUtf8();
+    return buffer.constData();
+}
+
 const noteappc_host kHostTable = {
     NOTEAPPC_PLUGIN_API,
     host_active_note_path,
@@ -151,6 +166,7 @@ const noteappc_host kHostTable = {
     host_clipboard_write,
     host_show_notice,
     host_log,
+    host_prompt,
 };
 
 /// Handles one "command.run" or "codeBlock.render" request from the app,
