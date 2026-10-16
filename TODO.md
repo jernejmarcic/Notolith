@@ -948,7 +948,7 @@ optimal as it can be".
 - [x] Overlapping blocks: two `:::` callouts in a row overlap ("Fix overlapping
       elements and such"); a check over every demo note that no block rects
       intersect (bughunt lane).
-- [ ] Hover over a rendered element (callout, embed, table, rendered block)
+- [x] Hover over a rendered element (callout, embed, table, rendered block)
       shows the `</>` edit icon, as Obsidian does: "when hovering over rendered
       elements the code icon should appear to edit the code".
 - [ ] Code blocks, optional "complex mode" beside the default: "It should
@@ -961,7 +961,7 @@ optimal as it can be".
       copied.
 - [ ] Code block tab click relays out the whole note (`selectCodeTab` calls
       `invalidateLayouts()`); invalidate only the tab group (complex-code lane).
-- [ ] Code hover repaints the whole viewport (`m_hoveredCodeBlock` path); repaint
+- [x] Code hover repaints the whole viewport (`m_hoveredCodeBlock` path); repaint
       only the old and new block rects (hover-edit lane).
 - [ ] Obsidian `--code-*` and Zed-style `syntax.*` keys as one theme contract, so
       imported Obsidian themes colour code (complex-code lane).
