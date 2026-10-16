@@ -64,6 +64,7 @@
 #include "DailyNotes.h"
 #include "AudioRecorder.h"
 #ifdef NOTEAPPC_HAVE_NOTEBOOK
+#include "Ipynb.h"
 #include "NotebookController.h"
 #endif
 #include "Frontmatter.h"
@@ -905,7 +906,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             request.extraReadOnlyBinds = {options.workingDir};
         request.cache = options.cache;
         request.timeoutMs = options.timeoutSeconds * 1000;
-        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
+        chooseKernel(request, options, notePathOf(editor),
+                     m_settings.boolean(QStringLiteral("notebooks.sharedKernel")) || notebook::isIpynbPath(notePathOf(editor)));
+        if (options.onInput) {
+            // The editor's inline prompt; the controller calls this from the kernel's thread of events.
+            request.onInput = [handler = options.onInput](const notebook::NotebookController::InputPrompt &prompt,
+                                                         const notebook::NotebookController::InputReply &reply) {
+                handler(MarkdownEditor::NotebookInputPrompt{prompt.prompt, prompt.password}, reply);
+            };
+        }
         m_notebook->run(request, forceRun, [deliver](const notebook::NotebookRunResult &result) {
             MarkdownEditor::NotebookRunResult shown;
             shown.hasRun = result.hasRun;
@@ -939,7 +948,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         request.tier = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
                            ? notebook::SandboxTier::Host
                            : notebook::SandboxTier::Bubblewrap;
-        chooseKernel(request, options, notePathOf(editor), m_settings.boolean(QStringLiteral("notebooks.sharedKernel")));
+        chooseKernel(request, options, notePathOf(editor),
+                     m_settings.boolean(QStringLiteral("notebooks.sharedKernel")) || notebook::isIpynbPath(notePathOf(editor)));
         if (!request.useKernel && request.kernelName.isEmpty())
             return false;
         return m_notebook->introspect(request, code, cursor, inspect,
@@ -2212,7 +2222,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         const QModelIndex index = m_tree->indexAt(static_cast<QMouseEvent *>(event)->position().toPoint());
         if (index.isValid() && !m_files->isDir(index)) {
             const QString path = m_files->filePath(index);
-            if (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path)) {
+            if (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)) {
                 newTab();
                 openNote(path, NavSource::Tree);
             }
@@ -3079,6 +3089,22 @@ void MainWindow::syncPlugins(bool rescan)
             return true;
         };
         callbacks.showNotice = [this](const QString &message) { statusBar()->showMessage(message, 5000); };
+        // A plugin's typed question: a small window-modal prompt that does not block the event loop,
+        // cancelled by Esc or by its timeout. `done` is called once, whichever comes first.
+        callbacks.askUser = [this](const QString &pluginName, const QString &label, bool password, int timeoutMs,
+                                   const PluginAppCallbacks::PromptDone &done) {
+            auto *dialog = new QInputDialog(this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->setWindowTitle(pluginName);
+            dialog->setLabelText(label);
+            dialog->setTextEchoMode(password ? QLineEdit::Password : QLineEdit::Normal);
+            connect(dialog, &QDialog::finished, this, [dialog, done](int result) {
+                done(result == QDialog::Accepted, result == QDialog::Accepted ? dialog->textValue() : QString());
+            });
+            if (timeoutMs > 0)
+                QTimer::singleShot(timeoutMs, dialog, &QDialog::reject);
+            dialog->open();
+        };
         callbacks.log = [](const QString &pluginID, const QString &message) {
             qInfo("plugin %s: %s", qPrintable(pluginID), qPrintable(message));
         };
@@ -3703,7 +3729,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
             return false;
         return openView(path, source, fragment);
     }
-    if (!Vault::isNote(path) && !Vault::isEncryptedNote(path)) {
+    if (!Vault::isNote(path) && !Vault::isEncryptedNote(path) && !isNotebookFile(path)) {
         if (source != NavSource::History) {
             statusBar()->showMessage(tr("%1 is not a note - editors for other file types come later")
                                          .arg(QFileInfo(path).fileName()),
@@ -4459,8 +4485,31 @@ bool MainWindow::save()
 
 // --- encrypted notes (docs/ENCRYPTION.md) ------------------------------------
 
+bool MainWindow::isNotebookFile(const QString &path) const
+{
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    return notebook::isIpynbPath(path) && featureOn("notebooks");
+#else
+    Q_UNUSED(path)
+    return false;
+#endif
+}
+
 bool MainWindow::readNote(const QString &path, Note &out, QString *error)
 {
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // A Jupyter notebook: its cells as text (docs/NOTEBOOKS.md), outputs seeded into the cache.
+    if (isNotebookFile(path)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (error)
+                *error = file.errorString();
+            return false;
+        }
+        out = Note();
+        return notebook::readIpynb(file.readAll(), &out.text, error);
+    }
+#endif
     if (!Vault::isEncryptedNote(path))
         return Vault::read(path, out, error);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
@@ -4490,6 +4539,20 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error)
 
 bool MainWindow::writeNote(const QString &path, const Note &note, QString *error)
 {
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    // The edited text merged into the notebook on disk: cells it did not touch stay the file's own.
+    if (isNotebookFile(path)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (error)
+                *error = file.errorString();
+            return false;
+        }
+        const QByteArray merged = notebook::mergeIpynb(file.readAll(), note.text, error);
+        file.close();
+        return !merged.isEmpty() && Vault::writeBytes(path, merged, error);
+    }
+#endif
     if (!Vault::isEncryptedNote(path))
         return Vault::write(path, note, error);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
