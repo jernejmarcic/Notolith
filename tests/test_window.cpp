@@ -373,6 +373,43 @@ TEST_F(WindowTest, TheHeaderGraphButtonOpensTheGraph)
     EXPECT_EQ(window.findChild<QStackedWidget *>(QStringLiteral("mainStack"))->currentWidget(), graph);
 }
 
+// The graph controls are the app's own copy under the config directory; the
+// vault's .obsidian/graph.json is read, never written.
+TEST_F(WindowTest, GraphControlsSurviveARestartInTheAppsOwnCopy)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "b\n");
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("graph:open"))->trigger();
+        auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+        ASSERT_NE(graph, nullptr);
+        EXPECT_FALSE(graph->options().showTags);
+        noteAppC::GraphOptions options = graph->options();
+        options.showTags = true;
+        options.search = QStringLiteral("path:A");
+        graph->setOptions(options);
+        emit graph->optionsChanged(); // what a control does
+        QDir saved(config.path() + QStringLiteral("/noteAppC/vaults"));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !saved.entryList(QDir::Dirs | QDir::NoDotAndDotDot).isEmpty(); }, 3000));
+    }
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".obsidian/graph.json")))) << "the vault's file is never written";
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("graph:open"))->trigger();
+        auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+        ASSERT_NE(graph, nullptr);
+        EXPECT_TRUE(graph->options().showTags);
+        EXPECT_EQ(graph->options().search, QStringLiteral("path:A"));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 TEST_F(WindowTest, LocalGraphFollowsTheOpenNote)
 {
     write(QStringLiteral("A.md"), "[[B]]\n");

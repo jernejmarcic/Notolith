@@ -468,6 +468,14 @@ void updateVimStatus();
     /// "Graph view: Open graph view", in the main area; again returns to the
     /// note. Built on first use: nothing optional before first paint.
     void openGraph();
+    /// Where this vault's graph controls are kept: a file of the app's own
+    /// under the config directory, never `.obsidian/graph.json`, which is
+    /// only read (as the starting point when there is no copy of ours).
+    QString graphOptionsPath() const;
+    /// Applies the saved (or the vault's, or the default) options to `view`
+    /// and saves what its controls change from then on, after a pause.
+    void wireGraphOptions(GraphView *view);
+    void saveGraphOptions();
     /// "Publish: Export the vault as a website": asks for a folder, then
     /// writes the site there off the UI thread (libs/ext/publish).
     void publishSite();
@@ -624,6 +632,8 @@ QLabel *m_vimStatus = nullptr;
     QPointer<SearchPane> m_search;
     QPointer<GraphView> m_graph;
     QPointer<GraphView> m_localGraph;
+    QPointer<GraphView> m_graphChanged; ///< the graph whose controls were touched last
+    QTimer m_graphSave;                 ///< writes them 500 ms after the last touch
     QPointer<BacklinksPane> m_backlinks;
     QPointer<TagsPane> m_tags;
     QPointer<PropertiesPane> m_properties;
