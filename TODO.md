@@ -754,7 +754,7 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       Qt Creator's qlitehtml is GPL-3, so it was read, not vendored.
 - [x] HTML left out: gradients, rounded corners, per-side borders and list
       numerals now drawn. Left: radii with mismatched sides; double, groove,
-      ridge, inset, outset borders draw solid.
+      ridge, inset, outset borders draw solid. 2026-10-16: all drawn (render lane).
 - [x] `canvas:new-file` ("Create new canvas"): an empty `{}` Untitled.canvas.
 - [x] A new-base command: `bases:new-file`, "Bases: Create new base" (2879964).
 - [x] ` ```base ` blocks inside notes, on `BaseView`.
@@ -932,6 +932,9 @@ optimal as it can be".
 - [ ] Perf-budget tests fail under load 16+ (canvas pan, bases 20k, epub,
       ListPerf, kernel completion): best-of-N like the 1 MB open test, so
       parallel lane-checks stay meaningful.
+- [ ] Complex code leftovers: Publisher builds themes with Theme::builtin(), so
+      a published site gets no theme `syntax`/`--code-*` token colours yet; a
+      listing nested in a callout gets ini/theme colours only (no fence attrs).
 - [ ] Lists leftovers: if Enter still fails on a bare list in the running app,
       find what owns Return (popup, hotkey); offscreen it continues. Per-level
       glyph variation for nested bullets. Fence check reads the debounced
@@ -951,7 +954,7 @@ optimal as it can be".
 - [x] Hover over a rendered element (callout, embed, table, rendered block)
       shows the `</>` edit icon, as Obsidian does: "when hovering over rendered
       elements the code icon should appear to edit the code".
-- [ ] Code blocks, optional "complex mode" beside the default: "It should
+- [x] Code blocks, optional "complex mode" beside the default: "It should
       allow for tabs, icons, custom code color, custom bg color, custom tree
       sitter color, etc. It should work like the super custom callouts kind of,
       at least follow the same philosophy". tree-sitter 0.26 is installed with
@@ -959,11 +962,11 @@ optimal as it can be".
 - [x] Study how Obsidian and Zed work with REA, to make the editor better
       (Jernej's suggestion); findings feed the lanes, behaviour only, no code
       copied.
-- [ ] Code block tab click relays out the whole note (`selectCodeTab` calls
+- [x] Code block tab click relays out the whole note (`selectCodeTab` calls
       `invalidateLayouts()`); invalidate only the tab group (complex-code lane).
 - [x] Code hover repaints the whole viewport (`m_hoveredCodeBlock` path); repaint
       only the old and new block rects (hover-edit lane).
-- [ ] Obsidian `--code-*` and Zed-style `syntax.*` keys as one theme contract, so
+- [x] Obsidian `--code-*` and Zed-style `syntax.*` keys as one theme contract, so
       imported Obsidian themes colour code (complex-code lane).
 - [x] Tables like Obsidian: insert-table command and slash entry, alignment
       submenu, duplicate row/column, sort by column (tables lane). Later: row and
