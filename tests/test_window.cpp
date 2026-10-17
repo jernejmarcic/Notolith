@@ -49,6 +49,7 @@
 #include "WaitFor.h"
 #include "FileTree.h"
 #include "MarkdownEditor.h"
+#include "MetaNotesPane.h"
 #include "FootnotesPane.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
@@ -4622,4 +4623,235 @@ TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
     EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(path(QStringLiteral("Welcome.md")))), QString());
     EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(path(QStringLiteral("Projects")))), QString()) << "a folder has no tag";
     EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(QStringLiteral("x/Board.canvas"))), QStringLiteral("CANVAS"));
+}
+
+// --- the Meta notes pane, status count and Alt+] / Alt+[ -----------------------
+
+namespace {
+
+/// A private settings directory for a test that flips switches, put back after.
+struct PrivateConfig {
+    QTemporaryDir dir;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
+    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
+noteAppC::ToggleSwitch *settingsToggle(MainWindow &window, const char *key)
+{
+    noteAppC::ToggleSwitch *found = nullptr;
+    EXPECT_TRUE(QTest::qWaitFor([&] {
+        return (found = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_") + QLatin1String(key)));
+    }));
+    return found;
+}
+
+/// Opens the settings page, flips editor.metaNotes and comes back to the note.
+void switchMetaNotesOn(MainWindow &window)
+{
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    settingsToggle(window, "editor.metaNotes")->click();
+    window.closeSettings();
+}
+
+QTreeWidget *metaTree(MainWindow &window)
+{
+    auto *pane = window.findChild<noteAppC::MetaNotesPane *>();
+    return pane ? pane->findChild<QTreeWidget *>() : nullptr;
+}
+
+QString metaStatus(MainWindow &window, bool *visible = nullptr)
+{
+    auto *button = window.findChild<QToolButton *>(QStringLiteral("metaNoteStatus"));
+    if (visible)
+        *visible = button && button->isVisibleTo(&window);
+    return button ? button->text() : QString();
+}
+
+constexpr QLatin1StringView kMetaNote{"# One\n\nA [first] b.\n\n# Two\n\nplain\n\n# Three\n\nC [second] d [third].\n"};
+
+} // namespace
+
+TEST_F(WindowTest, TheMetaNotesPaneIsAbsentWhileTheSettingIsOff)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Meta.md"), QByteArray(kMetaNote.data()));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Meta.md")));
+
+    EXPECT_EQ(window.findChild<noteAppC::MetaNotesPane *>(), nullptr);
+    EXPECT_EQ(window.findChild<QToolButton *>(QStringLiteral("metaNotesTabButton")), nullptr);
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("noteAppC:next-meta-note"))->isEnabled());
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("noteAppC:previous-meta-note"))->isEnabled());
+    bool visible = true;
+    metaStatus(window, &visible);
+    EXPECT_FALSE(visible);
+
+    switchMetaNotesOn(window);
+    EXPECT_NE(window.findChild<noteAppC::MetaNotesPane *>(), nullptr);
+    const QLayout *tabs = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"))->layout();
+    const int outline = tabs->indexOf(window.findChild<QToolButton *>(QStringLiteral("outlineTabButton")));
+    EXPECT_EQ(tabs->indexOf(window.findChild<QToolButton *>(QStringLiteral("metaNotesTabButton"))), outline + 1);
+    EXPECT_TRUE(window.findChild<QAction *>(QStringLiteral("noteAppC:next-meta-note"))->isEnabled());
+
+    // And off again: gone, with nothing left in the status bar.
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    settingsToggle(window, "editor.metaNotes")->click();
+    window.closeSettings();
+    EXPECT_EQ(window.findChild<noteAppC::MetaNotesPane *>(), nullptr);
+    EXPECT_FALSE(window.findChild<QAction *>(QStringLiteral("noteAppC:next-meta-note"))->isEnabled());
+    metaStatus(window, &visible);
+    EXPECT_FALSE(visible);
+}
+
+TEST_F(WindowTest, TheMetaNotesPaneGroupsRunsUnderHeadingsAndJumps)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Meta.md"), QByteArray(kMetaNote.data()));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    switchMetaNotesOn(window);
+    window.openNote(path(QStringLiteral("Meta.md")));
+    MarkdownEditor *editor = window.editor();
+
+    QTreeWidget *tree = nullptr;
+    WAIT_TRUE((tree = metaTree(window)) && tree->topLevelItemCount() == 2, 2000);
+    EXPECT_EQ(tree->topLevelItem(0)->text(0), QStringLiteral("One"));
+    EXPECT_EQ(tree->topLevelItem(1)->text(0), QStringLiteral("Three")) << "Two has none and is not listed";
+    EXPECT_EQ(tree->topLevelItem(0)->childCount(), 1);
+    EXPECT_EQ(tree->topLevelItem(1)->childCount(), 2);
+    const auto rowText = [&](QTreeWidgetItem *item) {
+        auto *label = qobject_cast<QLabel *>(tree->itemWidget(item, 0));
+        return label ? label->text() : QString();
+    };
+    EXPECT_TRUE(rowText(tree->topLevelItem(0)->child(0)).contains(QStringLiteral(">first<")));
+    EXPECT_EQ(metaStatus(window), QStringLiteral("3 meta notes"));
+
+    // A click on a row selects the whole run in the editor.
+    emit tree->itemClicked(tree->topLevelItem(0)->child(0), 0);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[first]"));
+
+    // The row the caret is in is the highlighted one.
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("second")) + 1);
+    auto *second = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(1)->child(0), 0));
+    ASSERT_NE(second, nullptr);
+    EXPECT_TRUE(second->property("current").toBool());
+
+    // Typing a letter outside the runs leaves the rows alone (no rebuild)...
+    QTreeWidgetItem *before = tree->topLevelItem(1)->child(0);
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("plain")));
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    QTest::qWait(150); // the parse
+    EXPECT_EQ(tree->topLevelItem(1)->child(0), before);
+    // ...a fourth run adds a row and bumps the count once the parse lands.
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral(" [fourth]"));
+    WAIT_TRUE(metaStatus(window) == QStringLiteral("4 meta notes"), 2000);
+    EXPECT_EQ(tree->topLevelItem(1)->childCount(), 3);
+}
+
+TEST_F(WindowTest, AltBracketJumpsAndTheStatusBarSaysWhich)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Meta.md"), QByteArray(kMetaNote.data()));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    switchMetaNotesOn(window);
+    window.openNote(path(QStringLiteral("Meta.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(&window));
+    WAIT_TRUE(editor->metaNoteRanges().size() == 3, 2000);
+    const QString text = editor->noteText();
+    editor->setCursorOffset(0);
+    editor->setFocus();
+
+    QTest::keyClick(editor, Qt::Key_BracketRight, Qt::AltModifier);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[first]"));
+    QTest::keyClick(editor, Qt::Key_BracketRight, Qt::AltModifier);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[second]"));
+    EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("Meta note 2 of 3"));
+    QTest::keyClick(editor, Qt::Key_BracketRight, Qt::AltModifier);
+    QTest::keyClick(editor, Qt::Key_BracketRight, Qt::AltModifier);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[first]"));
+    EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("Meta note 1 of 3 (wrapped around)"));
+    QTest::keyClick(editor, Qt::Key_BracketLeft, Qt::AltModifier);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[third]"));
+    EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("Meta note 3 of 3 (wrapped around)"));
+    EXPECT_EQ(editor->noteText(), text) << "the editor typed no bracket";
+}
+
+TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Meta.md"), "Some [a] and << b >> here.\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    switchMetaNotesOn(window);
+    window.openNote(path(QStringLiteral("Meta.md")));
+    WAIT_TRUE(metaStatus(window) == QStringLiteral("2 meta notes") || metaStatus(window) == QStringLiteral("1 meta note"), 2000);
+
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    const auto type = [&window](const char *key, const QString &text) {
+        QLineEdit *edit = nullptr;
+        EXPECT_TRUE(QTest::qWaitFor([&] {
+            return (edit = window.findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_") + QLatin1String(key)));
+        }));
+        QTest::keyClick(edit, Qt::Key_A, Qt::ControlModifier);
+        QTest::keyClicks(edit, text);
+    };
+    type("editor.metaNoteOpen", QStringLiteral("<<"));
+    type("editor.metaNoteClose", QStringLiteral(">>"));
+    window.closeSettings();
+
+    QTreeWidget *tree = nullptr;
+    WAIT_TRUE((tree = metaTree(window)) && !tree->isHidden() && tree->topLevelItemCount() == 1, 2000);
+    EXPECT_EQ(tree->topLevelItem(0)->childCount(), 0) << "no headings: the rows are flat";
+    auto *label = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(0), 0));
+    ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->text().contains(QStringLiteral(">b<"))) << qPrintable(label->text());
+    WAIT_TRUE(metaStatus(window) == QStringLiteral("1 meta note"), 2000);
+}
+
+TEST_F(WindowTest, TheMetaNotesPaneVaultModeListsEveryNoteWithRunsAndDrillsDown)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Alpha.md"), "A [one] x.\n");
+    write(QStringLiteral("Beta.md"), "B [two] and [three].\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    switchMetaNotesOn(window);
+    window.openNote(path(QStringLiteral("Alpha.md")));
+    auto *pane = window.findChild<noteAppC::MetaNotesPane *>();
+    ASSERT_NE(pane, nullptr);
+    EXPECT_EQ(pane->findChild<QWidget *>(QStringLiteral("metaVaultSearch")), nullptr) << "built on the first press";
+
+    const auto queryBoxes = window.findChildren<QLineEdit *>(QStringLiteral("quickSwitcherQuery")).size();
+    window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->click();
+    QTreeWidget *list = nullptr;
+    WAIT_TRUE((list = pane->findChild<QTreeWidget *>(QStringLiteral("metaVaultList"))) && list->topLevelItemCount() == 2, 8000);
+    QTreeWidgetItem *beta = nullptr;
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+        if (list->topLevelItem(i)->text(0) == QStringLiteral("Beta"))
+            beta = list->topLevelItem(i);
+    }
+    ASSERT_NE(beta, nullptr);
+    EXPECT_EQ(beta->text(1), QStringLiteral("2")) << "one count per note: its runs";
+
+    // The window's own Search pane is still the only one by its names.
+    EXPECT_EQ(window.findChildren<QLineEdit *>(QStringLiteral("quickSwitcherQuery")).size(), queryBoxes);
+    EXPECT_EQ(window.findChildren<QWidget *>(QStringLiteral("searchPane")).size(), 1);
+
+    // A row opens the note at its first run and the pane lists that note's runs.
+    emit list->itemClicked(beta->child(0), 0);
+    WAIT_TRUE(window.editor()->noteText().startsWith(QStringLiteral("B [two]")), 2000);
+    EXPECT_EQ(window.editor()->cursorOffset(), window.editor()->noteText().indexOf(QStringLiteral("[two]")));
+    EXPECT_FALSE(window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->isChecked());
+    QTreeWidget *tree = nullptr;
+    WAIT_TRUE((tree = metaTree(window)) && !tree->isHidden() && tree->topLevelItemCount() == 2, 2000);
 }

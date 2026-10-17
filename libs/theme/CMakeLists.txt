@@ -25,6 +25,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/book-open.svg
     icons/noteAppC.svg
     icons/bookmark.svg
+    icons/brackets.svg
     icons/branch-collapsed.svg
     icons/branch-expanded.svg
     icons/bug.svg

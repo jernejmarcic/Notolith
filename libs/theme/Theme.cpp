@@ -693,32 +693,32 @@ QLabel#paneHeader {
     font-weight: 600;
     padding-left: 2px;
 }
-QTreeWidget#backlinkList {
+QTreeWidget#backlinkList, QTreeWidget#metaVaultList {
     background: transparent;
     border: none;
     color: %{--text-muted};
     font-size: %{--font-ui-small}px;
     show-decoration-selected: 0;
 }
-QTreeWidget#backlinkList::item {
+QTreeWidget#backlinkList::item, QTreeWidget#metaVaultList::item {
     padding: 3px 4px;
     border-radius: %{--radius-s}px;
     min-height: 20px;
 }
-QTreeWidget#backlinkList::item:hover {
+QTreeWidget#backlinkList::item:hover, QTreeWidget#metaVaultList::item:hover {
     background: %{--background-modifier-hover};
     color: %{--text-normal};
 }
-QTreeWidget#backlinkList::branch {
+QTreeWidget#backlinkList::branch, QTreeWidget#metaVaultList::branch {
     background: transparent;
     image: none;
 }
-QTreeWidget#backlinkList::branch:has-children:!has-siblings:closed,
-QTreeWidget#backlinkList::branch:closed:has-children:has-siblings {
+QTreeWidget#backlinkList::branch:has-children:!has-siblings:closed, QTreeWidget#metaVaultList::branch:has-children:!has-siblings:closed,
+QTreeWidget#backlinkList::branch:closed:has-children:has-siblings, QTreeWidget#metaVaultList::branch:closed:has-children:has-siblings {
     image: url(:/icons/branch-collapsed.svg);
 }
-QTreeWidget#backlinkList::branch:open:has-children:!has-siblings,
-QTreeWidget#backlinkList::branch:open:has-children:has-siblings {
+QTreeWidget#backlinkList::branch:open:has-children:!has-siblings, QTreeWidget#metaVaultList::branch:open:has-children:!has-siblings,
+QTreeWidget#backlinkList::branch:open:has-children:has-siblings, QTreeWidget#metaVaultList::branch:open:has-children:has-siblings {
     image: url(:/icons/branch-expanded.svg);
 }
 
@@ -729,7 +729,7 @@ QDialog#quickSwitcher {
     border: 1px solid %{--background-modifier-border};
     border-radius: %{--radius-l}px;
 }
-QLineEdit#quickSwitcherQuery {
+QLineEdit#quickSwitcherQuery, QLineEdit#metaNotesFilter {
     background: %{--background-modifier-form-field};
     border: 1px solid %{--background-modifier-border};
     border-radius: %{--radius-m}px;
@@ -737,8 +737,25 @@ QLineEdit#quickSwitcherQuery {
     color: %{--text-normal};
     font-size: %{--font-ui-medium}px;
 }
-QLineEdit#quickSwitcherQuery:focus {
+QLineEdit#quickSwitcherQuery:focus, QLineEdit#metaNotesFilter:focus {
     border-color: %{--interactive-accent};
+}
+QToolButton#metaNotesVaultButton {
+    background: transparent;
+    border: 1px solid %{--background-modifier-border};
+    border-radius: %{--radius-m}px;
+    padding: 6px 8px;
+    color: %{--text-muted};
+    font-size: %{--font-ui-small}px;
+}
+QToolButton#metaNotesVaultButton:hover {
+    background: %{--background-modifier-hover};
+    color: %{--text-normal};
+}
+QToolButton#metaNotesVaultButton:checked {
+    background: %{--interactive-accent};
+    border-color: %{--interactive-accent};
+    color: %{--text-on-accent};
 }
 QListWidget#quickSwitcherResults {
     background: transparent;

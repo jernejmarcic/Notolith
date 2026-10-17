@@ -602,7 +602,8 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.metaNotes"), tr("Meta notes"),
                 tr("Draw a run of text between the delimiters below, such as [check the date], in "
                    "its own colour (--meta-note-color), delimiters kept and never hidden. Off, "
-                   "nothing looks for it. A bare [bracket] is drawn like a link either way."));
+                   "nothing looks for it. A bare [bracket] is drawn like a link either way. "
+                   "Adds the Meta notes pane, Alt+] / Alt+[ and the meta: search field."));
     addDelimiterRow(layout, QStringLiteral("editor.metaNoteOpen"), QStringLiteral("editor.metaNoteClose"),
                     tr("Meta note delimiters"),
                     tr("The characters that open and close a note, 1 to 3 each; the same on both "

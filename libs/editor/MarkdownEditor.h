@@ -127,6 +127,15 @@ public:
     /// Every meta note, outermost, delimiters included, in source order -
     /// empty unless ParseOptions::metaNotes. For a pane or a jump to build on.
     const QList<Range> &metaNoteRanges() const { return m_decorations.metaNotes; }
+    enum class MetaJump { None, Moved, Wrapped };
+    /// Alt+] / Alt+[: selects the whole next (`direction` > 0) or previous
+    /// meta note after the selection, delimiters included, so Backspace
+    /// deletes it and an arrow key lets you edit inside. Past the last one it
+    /// wraps to the first (Wrapped). `index` / `count` get the 1-based
+    /// position of the run reached and the number of runs. Linear in the runs.
+    MetaJump selectMetaNote(int direction, int *index = nullptr, int *count = nullptr);
+    /// Selects `range` and scrolls to it: a pane row was clicked.
+    void selectRange(const Range &range);
 
     /// A faint vertical rule at each level of list indentation.
     void setIndentGuides(bool on);
@@ -2389,6 +2398,8 @@ private:
     /// not need a reparse before the caret's block can be redrawn.
     void shiftRanges(qsizetype at, qsizetype delta);
     void applyEdit(qsizetype at, qsizetype removed, const QString &inserted);
+    /// "Delete meta note": the run and one neighbouring space, one undo step.
+    void deleteMetaNote(Range run);
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()
     void updateScrollRange();
     int contentLeft() const;

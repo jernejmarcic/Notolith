@@ -36,6 +36,8 @@ add_library(noteAppC_ui STATIC
     PagePreview.h
     OutlinePane.cpp
     OutlinePane.h
+    MetaNotesPane.cpp
+    MetaNotesPane.h
     BookmarksPane.cpp
     BookmarksPane.h
     TemplatePicker.cpp

@@ -147,6 +147,11 @@ void SearchPane::setQuery(const QString &text)
     runSearch(text);
 }
 
+void SearchPane::setQueryBoxVisible(bool visible)
+{
+    m_queryEdit->setVisible(visible);
+}
+
 void SearchPane::onTextEdited(const QString &text)
 {
     if (text.trimmed().isEmpty()) {
