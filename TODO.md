@@ -1165,3 +1165,20 @@ title), L (look-up), K (edited listing chrome).
       "reads the index only once shown"; graph page has no Escape exit, nodes
       no right-click menu (G adds Escape back to the note; node menu: Open,
       Open in new tab).
+
+## Requested by Jernej 2026-10-17: meta notes
+
+- [ ] "I want [] to be purple or at least distinct like in Obsidian. I was
+      mostly using them for meta notes in writing." Bare `[text]` in prose
+      drawn in a theme token (accent purple) in every mode; not links,
+      wikilinks, footnotes, tasks, callouts. Lane meta.
+- [ ] Toggleable, and the delimiters are the writer's choice ("another
+      writer can select any character to behave like a meta note");
+      default `[` `]`. Lane meta (scanner, settings, validation).
+- [ ] Meta pane + jump (Jernej's pick from the proposed workflow): right
+      sidebar pane listing the note's meta notes, vault-wide toggle, a
+      `meta:` search operator, Alt+] / Alt+[ next/previous. "Plan this
+      feature out and think about how it may work" - Fable plans it after
+      lane meta lands.
+- Proposed, not picked (2026-10-17): hide toggle + clean export + prose-only
+  word count; quick insert + resolve menu; typed meta notes via meta.ini.
