@@ -1620,6 +1620,16 @@ std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset, con
         }
         connect(menu->addAction(tr("Add link") + keyText(QStringLiteral("editor:insert-link"))),
                 &QAction::triggered, this, [this] { insertLink(); });
+
+        // The only way a meta note leaves the text: removed, never hidden.
+        for (const Range &run : m_decorations.metaNotes) {
+            if (sourceOffset < run.start || sourceOffset >= run.end)
+                continue;
+            gap();
+            connect(menu->addAction(tr("Delete meta note")), &QAction::triggered, this,
+                    [this, run] { deleteMetaNote(run); });
+            break;
+        }
     }
 
     // What the window can do with a word: look it up, search for it. A
@@ -1670,6 +1680,24 @@ std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset, con
         addCalloutActions(*menu, block);
     }
     return menu;
+}
+
+void MarkdownEditor::deleteMetaNote(Range run)
+{
+    // One neighbouring space goes with the run so no double or stray space is
+    // left: `early [x] and` -> `early and`, `[y] She` -> `She`, `back [z].`
+    // -> `back.`. A run glued to a word keeps the space after it.
+    const bool spaceBefore = run.start > 0 && m_text.at(run.start - 1) == u' ';
+    const bool spaceAfter = run.end < m_text.size() && m_text.at(run.end) == u' ';
+    const bool atLineStart = run.start == 0 || m_text.at(run.start - 1) == u'\n';
+    if (spaceAfter && (spaceBefore || atLineStart))
+        ++run.end;
+    else if (spaceBefore && !spaceAfter)
+        --run.start;
+
+    pushUndo();
+    m_lastEdit.invalidate();
+    applyEdit(run.start, run.length(), QString());
 }
 
 void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
@@ -4378,6 +4406,8 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(view.span.range);
     }
     for (Range &range : m_decorations.syntax)
+        shift(range);
+    for (Range &range : m_decorations.metaNotes) // a jump or a delete in these 20 ms
         shift(range);
     for (StyleSpan &span : m_decorations.styles)
         shift(span.range);

@@ -444,9 +444,23 @@ are drawn, a bracket inside a note keeping the later span.
 Off, `ParseOptions::metaNotes` is false and the parse never looks. On, each run is
 a `StyleSpan::Kind::MetaNote` and the ranges are in `Decorations::metaNotes`
 (`MarkdownEditor::metaNoteRanges()`), outermost, delimiters included, in source
-order - what a later meta pane or next/previous jump builds on. Tests:
+order - what the meta pane and the jump build on. Tests:
 `MetaNoteTest` and `BareBracketTest` in `tests/test_markdown.cpp`,
 `BracketStyleTest` and `MetaNoteStyleTest` in `tests/test_editor.cpp`.
+
+**Jump.** `Alt+]` / `Alt+[` (commands `noteAppC:next-meta-note` /
+`noteAppC:previous-meta-note`) select the next or previous run after the
+selection, delimiters included, so Backspace deletes it in one stroke, an arrow
+key puts the caret inside to edit it and typing replaces it. Past the last run
+it wraps to the first. `MarkdownEditor::selectMetaNote(direction, &index, &count)`
+is linear over the run list and never parses; it works in every mode. A caret on
+the opening delimiter selects that run, not the one after it.
+
+**Delete.** Right-click inside a run: "Delete meta note" removes it and one
+neighbouring space (`early [x] and` -> `early and`, `[y] She` -> `She`,
+`back [z].` -> `back.`), as one undo step. This is the only way a note leaves the
+text; it is never hidden. Tests: `MetaNoteJumpTest` and `MetaNoteContextMenuTest`
+in `tests/test_editor.cpp`.
 
 ## Fenced code and the caret
 

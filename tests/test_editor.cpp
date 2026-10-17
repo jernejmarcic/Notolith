@@ -7425,6 +7425,117 @@ TEST(MetaNoteStyleTest, ARunInATableCellIsColouredToo)
     EXPECT_EQ(colourOf(*editor, QStringLiteral("[check]"), 2), QColor(0, 0xff, 0));
 }
 
+namespace {
+
+std::unique_ptr<MarkdownEditor> metaEditor(const QString &text,
+                                           MarkdownEditor::Mode mode = MarkdownEditor::Mode::LivePreview)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->setParseOptions(ParseOptions{.brackets = true, .metaNotes = true});
+    editor->resize(900, 600);
+    editor->setNoteText(text);
+    editor->show();
+    QTest::qWait(60);
+    editor->setMode(mode);
+    QTest::qWait(30);
+    return editor;
+}
+
+} // namespace
+
+TEST(MetaNoteJumpTest, NextAndPreviousSelectWholeRunsAndWrapAround)
+{
+    for (const auto mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source,
+                            MarkdownEditor::Mode::Reading}) {
+        auto editor = metaEditor(QStringLiteral("one [a] two [bb] three\n\n[ccc] four\n"), mode);
+        ASSERT_EQ(editor->metaNoteRanges().size(), 3);
+        editor->setCursorOffset(0);
+        int index = 0;
+        int count = 0;
+        const auto jump = [&](int direction) { return editor->selectMetaNote(direction, &index, &count); };
+
+        EXPECT_EQ(jump(+1), MarkdownEditor::MetaJump::Moved);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[a]")) << "delimiters included";
+        EXPECT_EQ(index, 1);
+        EXPECT_EQ(count, 3);
+        EXPECT_EQ(jump(+1), MarkdownEditor::MetaJump::Moved);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[bb]"));
+        EXPECT_EQ(jump(+1), MarkdownEditor::MetaJump::Moved);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[ccc]"));
+        EXPECT_EQ(index, 3);
+        EXPECT_EQ(jump(+1), MarkdownEditor::MetaJump::Wrapped);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[a]"));
+        EXPECT_EQ(index, 1);
+        EXPECT_EQ(jump(-1), MarkdownEditor::MetaJump::Wrapped);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[ccc]"));
+        EXPECT_EQ(jump(-1), MarkdownEditor::MetaJump::Moved);
+        EXPECT_EQ(editor->selectedText(), QStringLiteral("[bb]"));
+        EXPECT_EQ(index, 2);
+    }
+}
+
+TEST(MetaNoteJumpTest, WithoutRunsNothingMoves)
+{
+    auto editor = metaEditor(QStringLiteral("no notes here, just [[a link]] and text\n"));
+    editor->setCursorOffset(7);
+    int count = -1;
+    EXPECT_EQ(editor->selectMetaNote(+1, nullptr, &count), MarkdownEditor::MetaJump::None);
+    EXPECT_EQ(editor->selectMetaNote(-1), MarkdownEditor::MetaJump::None);
+    EXPECT_EQ(count, 0);
+    EXPECT_EQ(editor->cursorOffset(), 7);
+    EXPECT_TRUE(editor->selectedText().isEmpty());
+}
+
+TEST(MetaNoteJumpTest, ACaretOnTheOpeningDelimiterSelectsThatRun)
+{
+    auto editor = metaEditor(QStringLiteral("a [x] b [y] c\n"));
+    editor->setCursorOffset(2); // on the first "["
+    EXPECT_EQ(editor->selectMetaNote(+1), MarkdownEditor::MetaJump::Moved);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[x]")) << "not the one after it";
+    editor->setCursorOffset(editor->noteText().indexOf(QLatin1Char('y')) + 1); // inside the second run
+    EXPECT_EQ(editor->selectMetaNote(-1), MarkdownEditor::MetaJump::Moved);
+    EXPECT_EQ(editor->selectedText(), QStringLiteral("[x]"));
+}
+
+TEST(MetaNoteJumpTest, BackspaceDeletesTheSelectedRunInOneStroke)
+{
+    auto editor = metaEditor(QStringLiteral("a [x] b\n"));
+    editor->setCursorOffset(0);
+    editor->selectMetaNote(+1);
+    QTest::keyClick(editor.get(), Qt::Key_Backspace);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("a  b\n"));
+}
+
+TEST(MetaNoteContextMenuTest, DeleteMetaNoteLeavesNoStraySpace)
+{
+    const auto deleteAt = [](MarkdownEditor &editor, const QString &needle) {
+        const auto menu = editor.contextMenuAt(editor.noteText().indexOf(needle) + 1);
+        QAction *found = nullptr;
+        for (QAction *action : menu->actions()) {
+            if (action->text() == QLatin1String("Delete meta note"))
+                found = action;
+        }
+        return found ? (found->trigger(), true) : false;
+    };
+    const QString original = QStringLiteral("She left early [x] and went.\n\n[y] She came back [z].\n");
+    auto editor = metaEditor(original);
+    ASSERT_EQ(editor->metaNoteRanges().size(), 3);
+
+    EXPECT_TRUE(deleteAt(*editor, QStringLiteral("[x]")));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("She left early and went.\n\n[y] She came back [z].\n"));
+    QTest::qWait(60); // the reparse after the edit
+    EXPECT_TRUE(deleteAt(*editor, QStringLiteral("[y]")));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("She left early and went.\n\nShe came back [z].\n"));
+    QTest::qWait(60);
+    EXPECT_TRUE(deleteAt(*editor, QStringLiteral("[z]")));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("She left early and went.\n\nShe came back.\n"));
+
+    EXPECT_FALSE(deleteAt(*editor, QStringLiteral("came"))) << "outside any run there is no such action";
+    for (int i = 0; i < 3; ++i)
+        QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), original) << "each delete is one undo step";
+}
+
 TEST(MetaNoteStyleTest, TheDefaultTokensAreTheAccent)
 {
     const Theme theme = Theme::builtin(Theme::Mode::Dark);

@@ -232,6 +232,43 @@ void MarkdownEditor::setSelectionRange(qsizetype anchor, qsizetype cursor)
     emit cursorMoved(m_cursor);
 }
 
+MarkdownEditor::MetaJump MarkdownEditor::selectMetaNote(int direction, int *index, int *count)
+{
+    const QList<Range> &runs = m_decorations.metaNotes;
+    if (count)
+        *count = int(runs.size());
+    if (runs.isEmpty())
+        return MetaJump::None;
+
+    // Forward looks from the end of the selection (the caret when there is
+    // none), backward from its start; a run the selection already is lies on
+    // the wrong side of both, so it is never picked twice.
+    const Range from = selection();
+    qsizetype found = -1;
+    if (direction >= 0) {
+        for (qsizetype i = 0; i < runs.size() && found < 0; ++i)
+            found = runs.at(i).start >= from.end ? i : -1;
+    } else {
+        for (qsizetype i = runs.size() - 1; i >= 0 && found < 0; --i)
+            found = runs.at(i).end <= from.start ? i : -1;
+    }
+    const bool wrapped = found < 0;
+    if (wrapped)
+        found = direction >= 0 ? 0 : runs.size() - 1;
+
+    selectRange(runs.at(found));
+    if (index)
+        *index = int(found) + 1;
+    return wrapped ? MetaJump::Wrapped : MetaJump::Moved;
+}
+
+void MarkdownEditor::selectRange(const Range &range)
+{
+    setSelectionRange(range.start, range.end);
+    scrollToOffset(range.start);
+    viewport()->update();
+}
+
 // --- auto-pairs -----------------------------------------------------------
 
 bool MarkdownEditor::handleAutoPair(QChar typed)
