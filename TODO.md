@@ -1133,12 +1133,13 @@ optimal as it can be".
 Full report: session scratchpad AUDIT3.md. Lanes G (graph), C (callout
 title), L (look-up), K (edited listing chrome).
 
-- [ ] 1 HIGH: Reading view edits the note through the callout title overlay
+- [x] 1 HIGH: Reading view edits the note through the callout title overlay
       (pressCalloutTitle has no mode gate; check the property editor too). C
+      Done; also gated fillShortRow (a short table row was filled in Reading).
 - [ ] 2 HIGH: GraphView::rebuild() waits for the worker job on the UI thread:
       47 ms (animate on) / 255 ms (off) at 20k nodes, on every autosave and
       local-graph note switch. Shared layout + generation, no wait. G
-- [ ] 3 MEDIUM: an external edit (same note in two tabs) while the title
+- [x] 3 MEDIUM: an external edit (same note in two tabs) while the title
       overlay is open drops the typed title or retitles another callout. C
 - [ ] 4 MEDIUM: caret in a single fenced listing drops panel, run control and
       last output; the block height jumps. Decision: keep the panel
@@ -1153,7 +1154,7 @@ title), L (look-up), K (edited listing chrome).
       lost (flush in openVault). G
 - [ ] 9 LOW: Look up from a keyboard-opened menu anchors the popover at the
       mouse, not the caret. L
-- [ ] 10 LOW: clicking into a callout title puts the caret at the end. C
+- [x] 10 LOW: clicking into a callout title puts the caret at the end. C
 - [ ] 11 LOW: DictClient reply is unbounded; timeouts not settable so the
       silent-server path is untested; docs say a dead server costs 1.5 s. L
 - [ ] 12 LOW: colour dialog returns to an unguarded group index. G
