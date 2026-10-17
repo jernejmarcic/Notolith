@@ -276,6 +276,8 @@ private:
     /// and their tabs, the graph, page preview; and disables the commands of
     /// every feature that is off.
     void applyFeatures();
+    /// What the parse looks for, from the editor settings (meta notes, counts).
+    ParseOptions parseOptions() const;
     /// Tells the indexer whether a `.ipynb` is a note it reads (notebooks on) or a plain file.
     void updateNotebookIndex();
     /// Community plugins: the registry started or stopped to match the

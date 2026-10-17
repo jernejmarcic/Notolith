@@ -1,5 +1,6 @@
 #include "Parser.h"
 
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QTextStream>
@@ -948,6 +949,218 @@ void scanFootnotes(const QString &text, const QList<Range> &masked, Decorations 
     }
 }
 
+/// Characters that already mean something in Markdown: `*`/`_` emphasis, `~`
+/// strikethrough, `=` highlight, a backtick code, `$` maths, `%` comments, `#`
+/// tags and headings, `|` table cells.
+constexpr QLatin1StringView metaNoteReserved{"*_~=`$%#|"};
+
+/// A line that starts a block of its own - a heading, a list item, a fence -
+/// so a meta note cannot run into it from the line above. `at` is the line's
+/// first character; quote markers are looked past.
+bool startsBlock(const QString &text, qsizetype at)
+{
+    const qsizetype size = text.size();
+    while (at < size && (text.at(at) == QLatin1Char(' ') || text.at(at) == QLatin1Char('>')))
+        ++at;
+    if (at >= size)
+        return false;
+    const QChar c = text.at(at);
+    const auto spaceAfter = [&](qsizetype i) {
+        return i < size && (text.at(i) == QLatin1Char(' ') || text.at(i) == QLatin1Char('\t'));
+    };
+    if (c == QLatin1Char('#')) {
+        qsizetype i = at;
+        while (i < size && text.at(i) == QLatin1Char('#') && i - at < 6)
+            ++i;
+        return spaceAfter(i);
+    }
+    if (c == QLatin1Char('-') || c == QLatin1Char('*') || c == QLatin1Char('+'))
+        return spaceAfter(at + 1);
+    if (c.isDigit()) {
+        qsizetype i = at;
+        while (i < size && text.at(i).isDigit() && i - at < 9)
+            ++i;
+        return i < size && (text.at(i) == QLatin1Char('.') || text.at(i) == QLatin1Char(')')) && spaceAfter(i + 1);
+    }
+    const QStringView three = QStringView(text).mid(at, 3);
+    return three == QLatin1String("```") || three == QLatin1String("~~~");
+}
+
+/// `- [x]`, `1. [ ]`: a task box, not a note. `at` is the opening "[".
+bool isTaskBox(const QString &text, qsizetype at)
+{
+    qsizetype i = at;
+    while (i > 0 && text.at(i - 1) == QLatin1Char(' '))
+        --i;
+    if (i == at || i == 0)
+        return false; // no space before it, or nothing: no list marker
+    qsizetype marker = i - 1;
+    if (text.at(marker) == QLatin1Char('.') || text.at(marker) == QLatin1Char(')')) {
+        while (marker > 0 && text.at(marker - 1).isDigit())
+            --marker;
+        if (marker == i - 1)
+            return false;
+    } else if (text.at(marker) != QLatin1Char('-') && text.at(marker) != QLatin1Char('*')
+               && text.at(marker) != QLatin1Char('+')) {
+        return false;
+    }
+    while (marker > 0 && (text.at(marker - 1) == QLatin1Char(' ') || text.at(marker - 1) == QLatin1Char('>')))
+        --marker;
+    return marker == 0 || text.at(marker - 1) == QLatin1Char('\n');
+}
+
+/// Runs of prose between a pair of delimiters, `[like this]` or whatever the
+/// caller passes: bare brackets, meta notes and the word count's exclusion all
+/// come from here. One pass over the text with a stack of open delimiters, so
+/// it is linear however many are left unclosed. A run holds nested pairs
+/// (`[a [b] c]` is one run, the outermost), may span soft line breaks, and
+/// ends at a blank line, a line that starts another block, or - in a table -
+/// the cell. `masked`, sorted, is what the pass must not look inside: code,
+/// maths, HTML, links, footnotes, comments. With the brackets themselves, a
+/// run is not one if it is really a link (`[a](u)`, `[a][r]`, `[a][]`), a
+/// link definition (`[a]: u`), a task box or empty, and an escaped `\[` does
+/// not open one. Sorted by position.
+QList<Range> scanRuns(const QString &text, const QList<Range> &masked, const QString &open,
+                      const QString &close, const QList<TableSpan> &tables)
+{
+    const bool same = open == close;
+    const bool brackets = open == QLatin1String("[") && close == QLatin1String("]");
+    if (!text.contains(open) || (!same && !text.contains(close)))
+        return {};
+
+    qsizetype maskIndex = 0;
+    QList<Range> found;
+    // Closed runs under a delimiter still open: kept only if it never closes.
+    QList<Range> pending;
+    QList<qsizetype> stack;
+    const auto flush = [&] {
+        found += pending;
+        pending.clear();
+        stack.clear();
+    };
+    const auto addRun = [&](Range run) {
+        // A run swallows the ones inside it.
+        while (!pending.isEmpty() && pending.last().start >= run.start)
+            pending.removeLast();
+        if (stack.isEmpty())
+            found.append(run);
+        else
+            pending.append(run);
+    };
+
+    const qsizetype size = text.size();
+    qsizetype tableIndex = 0;
+    const auto inTable = [&](qsizetype at) {
+        while (tableIndex < tables.size() && tables.at(tableIndex).range.end <= at)
+            ++tableIndex;
+        return tableIndex < tables.size() && tables.at(tableIndex).range.start <= at;
+    };
+
+    for (qsizetype i = 0; i < size;) {
+        while (maskIndex < masked.size() && masked.at(maskIndex).end <= i)
+            ++maskIndex;
+        // Masked ranges overlap and nest: the furthest end of those holding i.
+        qsizetype skipTo = i;
+        for (qsizetype m = maskIndex; m < masked.size() && masked.at(m).start <= i; ++m)
+            skipTo = qMax(skipTo, masked.at(m).end);
+        if (skipTo > i) {
+            i = skipTo;
+            continue;
+        }
+        const QChar c = text.at(i);
+        if (c == QLatin1Char('\\')) {
+            // A backslash before a newline is a hard break, not an escape.
+            i += i + 1 < size && text.at(i + 1) != QLatin1Char('\n') ? 2 : 1;
+            continue;
+        }
+        if (c == QLatin1Char('\n')) {
+            qsizetype next = i + 1;
+            qsizetype line = next;
+            while (line < size && (text.at(line) == QLatin1Char(' ') || text.at(line) == QLatin1Char('\t')))
+                ++line;
+            if (line >= size || text.at(line) == QLatin1Char('\n') || startsBlock(text, next) || inTable(i))
+                flush();
+            i = next;
+            continue;
+        }
+        if (c == QLatin1Char('|') && inTable(i)) {
+            flush(); // a table cell ends the note
+            ++i;
+            continue;
+        }
+
+        // A closer wins over an opener where both would match, so `>>` ends
+        // a `<<` note rather than starting one.
+        const bool closes = !stack.isEmpty() && QStringView(text).mid(i, close.size()) == QStringView(close);
+        const bool opens = !closes && QStringView(text).mid(i, open.size()) == QStringView(open);
+        if (same && (closes || opens)) {
+            // Identical delimiters pair left to right.
+            if (stack.isEmpty()) {
+                stack.append(i);
+                i += open.size();
+            } else {
+                const Range run{stack.takeLast(), i + close.size()};
+                addRun(run);
+                i += close.size();
+            }
+            continue;
+        }
+        if (opens) {
+            // A bare URL is not scanned: its `[1]` or `{y}` is part of it.
+            qsizetype word = i;
+            while (word > 0 && i - word < 256 && !text.at(word - 1).isSpace())
+                --word;
+            const bool skip = QStringView(text).mid(word, i - word).contains(QLatin1String("://"));
+            if (!skip)
+                stack.append(i);
+            i += open.size();
+            continue;
+        }
+        if (closes) {
+            const qsizetype start = stack.takeLast();
+            const qsizetype end = i + close.size();
+            i = end;
+            if (brackets) {
+                const QChar after = end < size ? text.at(end) : QChar();
+                if (after == QLatin1Char('[')) {
+                    // `[text][ref]` and `[text][]`: the second pair is the label.
+                    const qsizetype closer = text.indexOf(QLatin1Char(']'), end);
+                    i = closer < 0 ? end : closer + 1;
+                    while (!pending.isEmpty() && pending.last().start >= start)
+                        pending.removeLast();
+                    continue;
+                }
+                const bool lineStart = [&] {
+                    qsizetype b = start;
+                    while (b > 0 && text.at(b - 1) == QLatin1Char(' '))
+                        --b;
+                    return (b == 0 || text.at(b - 1) == QLatin1Char('\n')) && start - b < 4;
+                }();
+                if (after == QLatin1Char('(') || (after == QLatin1Char(':') && lineStart)) {
+                    if (after == QLatin1Char(':')) { // a link definition owns its line
+                        const qsizetype eol = text.indexOf(QLatin1Char('\n'), end);
+                        i = eol < 0 ? size : eol;
+                    }
+                    while (!pending.isEmpty() && pending.last().start >= start)
+                        pending.removeLast();
+                    continue;
+                }
+                const QStringView inner = QStringView(text).mid(start + 1, end - start - 2);
+                if (inner.trimmed().isEmpty() || (inner.size() == 1 && isTaskBox(text, start)))
+                    continue;
+            } else if (QStringView(text).mid(start + open.size(), i - close.size() - start - open.size()).trimmed().isEmpty()) {
+                continue; // `{}` says nothing
+            }
+            addRun({start, end});
+            continue;
+        }
+        ++i;
+    }
+    flush();
+    std::sort(found.begin(), found.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
+    return found;
+}
+
 void scanColonFences(const QString &text, const QList<Range> &masked, Decorations &decorations)
 {
     const QRegularExpression &fence = colonFenceRe();
@@ -1441,6 +1654,45 @@ int countWords(QStringView text)
     return words;
 }
 
+/// What the counts leave out: `excluded`, and with `ignoreFormatting` the
+/// markers live preview hides (heading and list markers, link targets and
+/// brackets, fences, `%%` comments - their text too, as it is not rendered),
+/// a callout's marker, a task's box and every HTML tag. Sorted and merged.
+QList<Range> uncountedRanges(const QString &text, QList<Range> ranges, bool ignoreFormatting,
+                             const Decorations &decorations, qsizetype from)
+{
+    if (ignoreFormatting) {
+        ranges += decorations.syntax;
+        for (const ListItemSpan &item : decorations.listItems)
+            ranges.append(item.marker);
+        for (const CalloutSpan &callout : decorations.callouts)
+            ranges.append(callout.marker);
+        static const QRegularExpression tag(QStringLiteral("<!--.*?-->|<[^>]*>"),
+                                            QRegularExpression::DotMatchesEverythingOption);
+        for (const StyleSpan &span : decorations.styles) {
+            if (span.kind != StyleSpan::Kind::Html)
+                continue;
+            for (auto it = tag.globalMatchView(QStringView(text).mid(span.range.start, span.range.length())); it.hasNext();) {
+                const auto match = it.next();
+                ranges.append({span.range.start + match.capturedStart(), span.range.start + match.capturedEnd()});
+            }
+        }
+    }
+    // Only what lies after the frontmatter, which is not counted at all.
+    for (Range &range : ranges)
+        range.start = qMax(range.start, from);
+    ranges.removeIf([&text](const Range &range) { return range.length() <= 0 || range.end > text.size(); });
+    std::sort(ranges.begin(), ranges.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
+    QList<Range> merged;
+    for (const Range &range : std::as_const(ranges)) {
+        if (!merged.isEmpty() && range.start <= merged.last().end)
+            merged.last().end = qMax(merged.last().end, range.end);
+        else
+            merged.append(range);
+    }
+    return merged;
+}
+
 } // namespace
 
 struct Parser::Private {
@@ -1454,12 +1706,29 @@ Parser::Parser()
 
 Parser::~Parser() = default;
 
+QString metaNoteDelimitersError(const QString &open, const QString &close, bool anySyntax)
+{
+    for (const QString &delimiter : {open, close}) {
+        if (delimiter.isEmpty() || delimiter.size() > 3)
+            return QCoreApplication::translate("MetaNotes", "A delimiter is 1 to 3 characters.");
+        for (const QChar c : delimiter) {
+            if (c.isSpace() || c == QLatin1Char('\\'))
+                return QCoreApplication::translate("MetaNotes", "A delimiter cannot contain a space or a backslash.");
+            if (!anySyntax && c.unicode() < 128 && metaNoteReserved.contains(c))
+                return QCoreApplication::translate("MetaNotes", "\"%1\" is Markdown syntax (emphasis, strikethrough, highlight, "
+                                   "code, maths, comments, tags or table cells).").arg(c);
+        }
+    }
+    return {};
+}
+
 Metadata Parser::parse(const QString &text, const QString &path) const
 {
     return parseAll(text, path).metadata;
 }
 
-Parser::Result Parser::parseAll(const QString &text, const QString &path) const
+Parser::Result Parser::parseAll(const QString &text, const QString &path,
+                                const ParseOptions &options) const
 {
     Result result;
     Metadata &metadata = result.metadata;
@@ -1539,8 +1808,6 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     metadata.tags += obsidian.tags;
     metadata.blockIds = obsidian.blockIds;
     metadata.tasks = walk.tasks;
-    metadata.wordCount = countWords(
-        QStringView(text).mid(frontmatter.isValid() ? frontmatter.end : 0));
 
     // Before the move, or the spans would be written into a Decorations that
     // is about to be overwritten.
@@ -1605,6 +1872,44 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
         result.decorations.syntax.append(range);
     nestQuotedLists(text, map, result.decorations.listItems);
     scanFootnotes(text, walk.masked + obsidian.comments, result.decorations);
+    // Bare brackets, meta notes and the word count's exclusion are all runs
+    // between delimiters, found over what has no syntax of its own.
+    QList<Range> excluded;
+    const bool metaOn = options.metaNotes && metaNoteDelimitersError(options.open, options.close).isEmpty();
+    const bool excludeOn = options.excludeBetween
+                           && metaNoteDelimitersError(options.excludeOpen, options.excludeClose, true).isEmpty();
+    if (options.brackets || metaOn || excludeOn) {
+        QList<Range> opaque = withColonFenceLines(text, walk.masked) + obsidian.comments;
+        for (const Link &link : obsidian.links)
+            opaque.append(link.range);
+        for (const FootnoteSpan &span : result.decorations.footnotes)
+            opaque.append(span.range);
+        for (const FootnoteDefinition &definition : result.decorations.footnoteDefinitions)
+            opaque.append({definition.range.start, definition.content.start});
+        for (const CalloutSpan &callout : result.decorations.callouts)
+            opaque.append(callout.marker);
+        std::sort(opaque.begin(), opaque.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
+        QHash<QString, QList<Range>> cache; // the same pair is scanned once
+        const auto runsFor = [&](const QString &open, const QString &close) {
+            const QString key = open + QLatin1Char('\n') + close;
+            if (!cache.contains(key))
+                cache.insert(key, scanRuns(text, opaque, open, close, result.decorations.tables));
+            return cache.value(key);
+        };
+        const bool bracketsAreNotes = metaOn && options.open == QLatin1String("[")
+                                      && options.close == QLatin1String("]");
+        if (options.brackets && !bracketsAreNotes) { // a meta note's colour wins
+            for (const Range &run : runsFor(QStringLiteral("["), QStringLiteral("]")))
+                result.decorations.styles.append({StyleSpan::Kind::BareBracket, run, 0, {}, {}, {}});
+        }
+        if (metaOn) {
+            result.decorations.metaNotes = runsFor(options.open, options.close);
+            for (const Range &run : std::as_const(result.decorations.metaNotes))
+                result.decorations.styles.append({StyleSpan::Kind::MetaNote, run, 0, {}, {}, {}});
+        }
+        if (excludeOn)
+            excluded = runsFor(options.excludeOpen, options.excludeClose);
+    }
 
     // Two things md4qt leaves on the page: the `:::` fences it read as prose,
     // and the definition half of a reference link, which it reads and forgets.
@@ -1614,6 +1919,18 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path) const
     // Every fence in the file is known only now, which is what a tab group
     // needs to see across.
     groupCodeFenceTabs(text, result.decorations.codeFences);
+
+    const qsizetype counted = frontmatter.isValid() ? frontmatter.end : 0;
+    result.decorations.uncounted = uncountedRanges(text, excluded, options.ignoreFormatting,
+                                                   result.decorations, counted);
+    if (result.decorations.uncounted.isEmpty()) {
+        metadata.wordCount = countWords(QStringView(text).mid(counted));
+    } else {
+        QString shown = text;
+        for (const Range &range : std::as_const(result.decorations.uncounted))
+            std::fill_n(shown.data() + range.start, range.length(), QLatin1Char(' '));
+        metadata.wordCount = countWords(QStringView(shown).mid(counted));
+    }
 
     return result;
 }

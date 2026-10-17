@@ -106,6 +106,11 @@ private:
                     const QString &suffix = {});
     void addLineEditRow(QVBoxLayout *into, const QString &key, const QString &label,
                         const QString &description, const QString &placeholder = {});
+    /// Two short line edits for an opening and a closing delimiter, checked
+    /// by metaNoteDelimitersError(); a refused pair is explained, not stored.
+    void addDelimiterRow(QVBoxLayout *into, const QString &openKey, const QString &closeKey,
+                         const QString &label, const QString &description, bool anySyntax,
+                         bool mayBeEmpty);
     void addAccentRow(QVBoxLayout *into);
     void addSchemeRow(QVBoxLayout *into);
     void addFolderRow(QVBoxLayout *into, const QString &key, const QString &label,
