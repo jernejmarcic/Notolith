@@ -3764,6 +3764,10 @@ void MainWindow::openVault(const QString &path)
     }
 
     saveLayout(); // the vault being left
+    if (m_graphSave.isActive()) {
+        m_graphSave.stop();
+        saveGraphOptions(); // still the old vault's path: a change made in the last half second counts
+    }
     m_openMode = OpenMode::Vault;
     m_vault = vault;
     resetWorkspace();
