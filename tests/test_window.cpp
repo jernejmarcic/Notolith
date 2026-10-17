@@ -19,6 +19,9 @@
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
+#include <QHeaderView>
+#include <QHoverEvent>
+#include <QTreeView>
 #include <QFile>
 #include <QFileInfo>
 #include <QInputDialog>
@@ -44,6 +47,7 @@
 #include <QWheelEvent>
 
 #include "WaitFor.h"
+#include "FileTree.h"
 #include "MarkdownEditor.h"
 #include "FootnotesPane.h"
 #include "PropertiesPane.h"
@@ -4435,4 +4439,187 @@ TEST_F(WindowTest, EveryKindOfBlockAndEmbedRendersInline)
     EXPECT_TRUE(QTest::qWaitFor([&] { return !window.editor()->displayText().contains(QStringLiteral("status:")); },
                                 3000))
         << "properties are not a table";
+}
+
+namespace {
+
+/// Three pixels of a file explorer row, read from a grab of the viewport:
+/// the two columns left of the row's indent guide (the gutter), the same
+/// columns on the empty viewport below the last row, and a pixel inside the row.
+struct RowPixels {
+    QRgb gutterNear, gutterFar, belowNear, belowFar, inside;
+};
+
+RowPixels sampleRow(QTreeView *tree, const QModelIndex &index)
+{
+    const QImage image = tree->viewport()->grab().toImage();
+    const QRect row = tree->visualRect(index);
+    const int y = row.center().y();
+    const int near = 2;
+    const int far = tree->indentation() - 2;
+    const int below = image.height() - 3;
+    return {image.pixel(near, y), image.pixel(far, y), image.pixel(near, below),
+            image.pixel(far, below), image.pixel(row.left() + 8, y)};
+}
+
+} // namespace
+
+TEST_F(WindowTest, TheSelectedTreeRowDoesNotLightTheIndentGutter)
+{
+    MainWindow window;
+    window.resize(1000, 700);
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] { return tree->currentIndex().isValid() && tree->visualRect(tree->currentIndex()).height() > 0; },
+        5000));
+    const QModelIndex current = tree->currentIndex();
+    ASSERT_TRUE(tree->selectionModel()->isSelected(current));
+    // Expanding Projects animates; a grab taken meanwhile shows the old rows.
+    QTest::qWait(500);
+    ASSERT_GT(tree->visualRect(current).left(), tree->indentation()) << "a depth-1 row";
+
+    const RowPixels pixels = sampleRow(tree, current);
+    EXPECT_EQ(pixels.gutterNear, pixels.belowNear);
+    EXPECT_EQ(pixels.gutterFar, pixels.belowFar);
+    EXPECT_NE(pixels.inside, pixels.belowNear) << "the selected row is drawn at all";
+}
+
+TEST_F(WindowTest, HoveringATreeRowDoesNotLightTheIndentGutter)
+{
+    MainWindow window;
+    window.resize(1000, 700);
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = tree ? qobject_cast<QFileSystemModel *>(tree->model()) : nullptr;
+    ASSERT_NE(model, nullptr);
+    // A plain QModelIndex goes stale when the model sorts; this one follows.
+    QPersistentModelIndex welcome;
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            welcome = model->index(path(QStringLiteral("Welcome.md")));
+            return welcome.isValid() && tree->visualRect(welcome).isValid();
+        },
+        5000));
+    QTest::qWait(300); // the sort settles
+    tree->selectionModel()->clearSelection();
+    tree->setCurrentIndex(QModelIndex());
+
+    // A hover event straight to the viewport: the view's hover row follows it,
+    // whether or not the offscreen platform generates hover events itself.
+    const QPointF over = tree->visualRect(welcome).center();
+    QHoverEvent hover(QEvent::HoverMove, over, tree->viewport()->mapToGlobal(over), QPointF(-1, -1));
+    QApplication::sendEvent(tree->viewport(), &hover);
+    QTest::qWait(50);
+
+    const RowPixels pixels = sampleRow(tree, QModelIndex(welcome));
+    EXPECT_EQ(pixels.gutterNear, pixels.belowNear);
+    EXPECT_EQ(pixels.gutterFar, pixels.belowFar);
+    EXPECT_NE(pixels.inside, pixels.belowNear) << "the hovered row is drawn at all";
+}
+
+TEST_F(WindowTest, F2RenamesThroughTheVaultSoLinksFollow)
+{
+    write(QStringLiteral("Linker.md"), "See [[Welcome]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = tree ? qobject_cast<QFileSystemModel *>(tree->model()) : nullptr;
+    ASSERT_NE(model, nullptr);
+    QPersistentModelIndex welcome;
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            welcome = model->index(path(QStringLiteral("Welcome.md")));
+            return welcome.isValid() && tree->visualRect(welcome).isValid();
+        },
+        5000));
+    QTest::qWait(300); // the sort settles
+    tree->setCurrentIndex(welcome);
+    tree->setFocus();
+
+    QTest::keyClick(tree, Qt::Key_F2);
+    auto *edit = tree->findChild<QLineEdit *>(QStringLiteral("fileRenameEditor"));
+    ASSERT_NE(edit, nullptr) << "F2 opens the vault's own rename editor";
+    EXPECT_EQ(edit->text(), QStringLiteral("Welcome")) << "no extension in the editor";
+    edit->setText(QStringLiteral("Hello"));
+    QTest::keyClick(edit, Qt::Key_Return);
+
+    // The rename is queued out of the editor's own close; wait for it.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return QFile::exists(path(QStringLiteral("Hello.md"))); }, 5000));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("Linker.md"))), QByteArray("See [[Hello]].\n"));
+}
+
+TEST_F(WindowTest, SidebarHeaderHasCollapseAllAndSortButtons)
+{
+    MainWindow window;
+    window.resize(1000, 700);
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = tree ? qobject_cast<QFileSystemModel *>(tree->model()) : nullptr;
+    ASSERT_NE(model, nullptr);
+    QPersistentModelIndex projects;
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            projects = model->index(path(QStringLiteral("Projects")));
+            return projects.isValid() && tree->visualRect(projects).isValid();
+        },
+        5000));
+    tree->expand(projects);
+    ASSERT_TRUE(tree->isExpanded(projects));
+
+    auto *collapse = window.findChild<QToolButton *>(QStringLiteral("sidebarCollapseButton"));
+    ASSERT_NE(collapse, nullptr);
+    collapse->click();
+    EXPECT_FALSE(tree->isExpanded(projects));
+
+    auto *sort = window.findChild<QToolButton *>(QStringLiteral("sidebarSortButton"));
+    auto *menu = window.findChild<QMenu *>(QStringLiteral("sidebarSortMenu"));
+    ASSERT_NE(sort, nullptr);
+    ASSERT_NE(menu, nullptr);
+    const auto trigger = [&](const QString &text) {
+        for (QAction *action : menu->actions()) {
+            if (action->text() == text) {
+                action->trigger();
+                return true;
+            }
+        }
+        return false;
+    };
+    ASSERT_TRUE(trigger(QStringLiteral("File name (Z to A)")));
+    EXPECT_EQ(tree->header()->sortIndicatorSection(), 0);
+    EXPECT_EQ(tree->header()->sortIndicatorOrder(), Qt::DescendingOrder);
+    ASSERT_TRUE(trigger(QStringLiteral("Modified time (old to new)")));
+    EXPECT_EQ(tree->header()->sortIndicatorSection(), 3);
+    EXPECT_EQ(tree->header()->sortIndicatorOrder(), Qt::AscendingOrder);
+}
+
+TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
+{
+    // Pure functions on the file name: no pixels, no model.
+    EXPECT_EQ(noteAppC::FileRowDelegate::displayName(QFileInfo(path(QStringLiteral("Welcome.md")))), QStringLiteral("Welcome"));
+    EXPECT_EQ(noteAppC::FileRowDelegate::displayName(QFileInfo(path(QStringLiteral("Projects")))), QStringLiteral("Projects"));
+    EXPECT_EQ(noteAppC::FileRowDelegate::displayName(QFileInfo(path(QStringLiteral("attachment.txt")))),
+              QStringLiteral("attachment"));
+    EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(path(QStringLiteral("attachment.txt")))), QStringLiteral("TXT"));
+    EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(path(QStringLiteral("Welcome.md")))), QString());
+    EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(path(QStringLiteral("Projects")))), QString()) << "a folder has no tag";
+    EXPECT_EQ(noteAppC::FileRowDelegate::tagFor(QFileInfo(QStringLiteral("x/Board.canvas"))), QStringLiteral("CANVAS"));
 }

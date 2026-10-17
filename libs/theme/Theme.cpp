@@ -217,6 +217,29 @@ void Theme::applyDerivedTokens()
     derive(QStringLiteral("--scrollbar-active-thumb-bg"), overlay(dark, 0.20));
     derive(QStringLiteral("--nav-item-color"), m_tokens[QStringLiteral("--text-muted")]);
     derive(QStringLiteral("--nav-item-color-active"), m_tokens[QStringLiteral("--text-normal")]);
+
+    // The file explorer, under Obsidian's own names. Sizes are plain numbers
+    // (pixels), colours are anything parseColor() takes.
+    derive(QStringLiteral("--nav-item-size"), m_tokens[QStringLiteral("--font-ui-small")]);
+    derive(QStringLiteral("--nav-item-padding"), QStringLiteral("3"));
+    derive(QStringLiteral("--nav-item-weight"), QStringLiteral("400"));
+    derive(QStringLiteral("--nav-item-color-hover"), m_tokens[QStringLiteral("--text-normal")]);
+    derive(QStringLiteral("--nav-item-background-hover"),
+           m_tokens[QStringLiteral("--background-modifier-hover")]);
+    derive(QStringLiteral("--nav-item-background-active"),
+           m_tokens[QStringLiteral("--background-modifier-active")]);
+    derive(QStringLiteral("--nav-item-background-selected"), rgba(QColor(accent), dark ? 0.16 : 0.12));
+    derive(QStringLiteral("--nav-collapse-icon-color"), m_tokens[QStringLiteral("--text-faint")]);
+    derive(QStringLiteral("--nav-collapse-icon-color-collapsed"),
+           m_tokens[QStringLiteral("--text-muted")]);
+    derive(QStringLiteral("--nav-indentation-guide-width"), QStringLiteral("1"));
+    derive(QStringLiteral("--nav-indentation-guide-color"),
+           dark ? QStringLiteral("rgba(255, 255, 255, 0.06)") : QStringLiteral("rgba(0, 0, 0, 0.08)"));
+    derive(QStringLiteral("--nav-file-tag-size"), QStringLiteral("11"));
+    derive(QStringLiteral("--nav-file-tag-color"), m_tokens[QStringLiteral("--text-muted")]);
+    derive(QStringLiteral("--nav-file-tag-background"),
+           m_tokens[QStringLiteral("--background-modifier-hover")]);
+    derive(QStringLiteral("--nav-heading-color"), m_tokens[QStringLiteral("--text-faint")]);
 }
 
 QString Theme::value(const QString &token) const
@@ -575,35 +598,33 @@ QTreeView#fileExplorer {
     border: none;
     padding: 2px 6px 8px 6px;
     color: %{--nav-item-color};
-    font-size: %{--font-ui-small}px;
+    font-size: %{--nav-item-size}px;
+    font-weight: %{--nav-item-weight};
     show-decoration-selected: 0;
+    outline: 0;
 }
+/* The hover and selected pills are drawn by FileRowDelegate inside the row.
+   A background here would also fill the indent gutter left of the row, so
+   both stay transparent. The row height comes from the delegate. */
 QTreeView#fileExplorer::item {
-    padding: 4px 6px;
-    border-radius: %{--radius-s}px;
-    min-height: 22px;
+    padding: 0 6px;
+    border: none;
 }
-QTreeView#fileExplorer::item:hover {
-    background: %{--background-modifier-hover};
-    color: %{--nav-item-color-active};
-}
+QTreeView#fileExplorer::item:hover,
 QTreeView#fileExplorer::item:selected,
 QTreeView#fileExplorer::item:selected:active {
-    background: %{--background-modifier-active};
-    color: %{--nav-item-color-active};
+    background: transparent;
 }
-/* Stylesheet mode turns off the style's own branch arrows, so supply them. */
+/* Chevrons and indent guides are drawn by FileTree::drawBranches. */
 QTreeView#fileExplorer::branch {
     background: transparent;
     image: none;
 }
-QTreeView#fileExplorer::branch:has-children:!has-siblings:closed,
-QTreeView#fileExplorer::branch:closed:has-children:has-siblings {
-    image: url(:/icons/branch-collapsed.svg);
-}
-QTreeView#fileExplorer::branch:open:has-children:!has-siblings,
-QTreeView#fileExplorer::branch:open:has-children:has-siblings {
-    image: url(:/icons/branch-expanded.svg);
+QTreeView#fileExplorer QLineEdit {
+    background: %{--background-modifier-form-field};
+    border: 1px solid %{--interactive-accent};
+    border-radius: %{--radius-s}px;
+    padding: 0 4px;
 }
 
 /* Main area: tab strip, inline title, editor -------------------------- */

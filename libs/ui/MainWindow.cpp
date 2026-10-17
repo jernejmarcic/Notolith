@@ -28,6 +28,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QActionGroup>
+#include <QHeaderView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -57,6 +58,7 @@
 
 #include "BacklinksPane.h"
 #include "Hotkeys.h"
+#include "FileTree.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "MermaidBlock.h"
@@ -587,17 +589,57 @@ QWidget *MainWindow::buildSidebar()
                                         QStringLiteral("folder-plus"), tr("New folder"), 14);
     connect(newFolder, &QToolButton::clicked, this, [this] { newFolderIn(QString()); });
 
+    // Sorting. QFileSystemModel has no created-time column and does not keep
+    // folders first on a modified-time sort, so those two are not offered.
+    QToolButton *sortButton = iconButton(QStringLiteral("sidebarSortButton"),
+                                         QStringLiteral("arrow-up-down"), tr("Change sort order"), 14);
+    sortButton->setPopupMode(QToolButton::InstantPopup);
+    auto *sortMenu = new QMenu(sortButton);
+    sortMenu->setObjectName(QStringLiteral("sidebarSortMenu"));
+    auto *sortGroup = new QActionGroup(sortMenu);
+    static const struct {
+        const char *key;
+        const char *label;
+        int column;
+        Qt::SortOrder order;
+    } sortOrders[] = {
+        {"nameAsc", QT_TR_NOOP("File name (A to Z)"), 0, Qt::AscendingOrder},
+        {"nameDesc", QT_TR_NOOP("File name (Z to A)"), 0, Qt::DescendingOrder},
+        {"modifiedDesc", QT_TR_NOOP("Modified time (new to old)"), 3, Qt::DescendingOrder},
+        {"modifiedAsc", QT_TR_NOOP("Modified time (old to new)"), 3, Qt::AscendingOrder},
+    };
+    for (const auto &entry : sortOrders) {
+        QAction *action = sortMenu->addAction(tr(entry.label));
+        action->setCheckable(true);
+        action->setData(QLatin1String(entry.key));
+        action->setProperty("column", entry.column);
+        action->setProperty("order", int(entry.order));
+        sortGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, entry] {
+            m_tree->sortByColumn(entry.column, entry.order);
+            m_settings.setValue(QStringLiteral("files.sortOrder"), QLatin1String(entry.key));
+            m_settings.save();
+        });
+    }
+    sortButton->setMenu(sortMenu);
+
+    QToolButton *collapseAll = iconButton(QStringLiteral("sidebarCollapseButton"),
+                                          QStringLiteral("chevrons-down-up"), tr("Collapse all"), 14);
+    connect(collapseAll, &QToolButton::clicked, this, [this] { m_tree->collapseAll(); });
+
     headerLayout->addWidget(filesLabel, 1);
     headerLayout->addWidget(newNote);
     headerLayout->addWidget(newFolder);
+    headerLayout->addWidget(sortButton);
+    headerLayout->addWidget(collapseAll);
 
     m_files = new QFileSystemModel(this);
     m_files->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
     m_files->setReadOnly(false);
     m_files->setIconProvider(noIcons());
 
-    m_tree = new QTreeView(m_sidebar);
-    m_tree->setObjectName(QStringLiteral("fileExplorer"));
+    auto *fileTree = new FileTree(m_sidebar);
+    m_tree = fileTree;
     m_tree->setModel(m_files);
     m_tree->setHeaderHidden(true);
     m_tree->setSortingEnabled(true);
@@ -624,6 +666,23 @@ QWidget *MainWindow::buildSidebar()
     connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeClicked);
     connect(m_tree, &QTreeView::customContextMenuRequested, this,
            &MainWindow::showTreeContextMenu);
+    // The inline editor (F2, context menu) hands the new name here instead of
+    // writing to QFileSystemModel, so links, history and plugins follow. Queued:
+    // the delegate calls this from inside the view closing the editor, and a
+    // synchronous rename would change rows under it.
+    connect(fileTree->rowDelegate(), &FileRowDelegate::renameRequested, this,
+            [this](const QPersistentModelIndex &index, const QString &name) {
+                if (!index.isValid() || name.isEmpty())
+                    return;
+                const QString oldPath = m_files->filePath(index);
+                const bool isDir = m_files->isDir(index);
+                if (name == FileRowDelegate::displayName(QFileInfo(oldPath)))
+                    return;
+                QString error;
+                if (!renameVaultPath(oldPath, isDir, name, &error))
+                    statusBar()->showMessage(tr("Could not rename: %1").arg(error), 4000);
+            },
+            Qt::QueuedConnection);
     // QFileSystemModel fills a directory on a worker thread, so the root
     // index is not usable until it says so.
     connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
@@ -2722,6 +2781,20 @@ void MainWindow::applySettings()
     // Every switch on the settings page comes here, and restyling the window
     // and relaying out every open note was most of it - 17 ms with a 1 MB
     // note open - so that waits for the theme itself to change.
+    // The sidebar's sort order, as the settings file has it (per vault).
+    if (auto *sortMenu = m_sidebar->findChild<QMenu *>(QStringLiteral("sidebarSortMenu"))) {
+        const QString key = m_settings.text(QStringLiteral("files.sortOrder"));
+        for (QAction *action : sortMenu->actions()) {
+            if (action->data().toString() != key)
+                continue;
+            action->setChecked(true);
+            const int column = action->property("column").toInt();
+            const auto order = Qt::SortOrder(action->property("order").toInt());
+            if (m_tree->header()->sortIndicatorSection() != column
+                || m_tree->header()->sortIndicatorOrder() != order)
+                m_tree->sortByColumn(column, order);
+        }
+    }
     const Theme theme = themeFromSettings();
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
@@ -3667,12 +3740,10 @@ void MainWindow::applyTheme()
     }
 
     m_sidebar->setStyleSheet(
-        QStringLiteral(
-            "QLabel#filesLabel { color: %1; font-size: 11px; font-weight: 700; padding-left: 4px; }"
-            "QTreeView#fileExplorer::item:selected, QTreeView#fileExplorer::item:selected:active { "
-            "background: %2; border-radius: 6px; color: %3; }")
-            .arg(m_theme.value(QStringLiteral("--text-faint")), rgbaString(accentColor, 0.16),
-                m_theme.value(QStringLiteral("--text-normal"))));
+        QStringLiteral("QLabel#filesLabel { color: %1; font-size: 11px; font-weight: 700; "
+                       "padding-left: 4px; }")
+            .arg(m_theme.value(QStringLiteral("--nav-heading-color"))));
+    static_cast<FileTree *>(m_tree)->setColours(m_theme);
 }
 
 void MainWindow::chooseVault()
@@ -5640,7 +5711,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     else if (chosen == newFolderAction)
         newFolderIn(folderRelativeFor(index));
     else if (chosen == renameAction)
-        renamePathAt(index);
+        m_tree->edit(index);
     else if (chosen == deleteAction)
         deletePathAt(index);
 }

@@ -584,3 +584,20 @@ TEST(ComplexCodeTest, ASchemeCarriesASyntaxObject)
     EXPECT_TRUE(Theme::builtin(Theme::Mode::Dark).syntaxStyles().isEmpty())
         << "the built-in schemes leave the highlighter's own colours alone";
 }
+
+TEST(Theme, navTokensExistInDarkAndLight)
+{
+    const Theme dark = Theme::builtin(Theme::Mode::Dark);
+    const Theme light = Theme::builtin(Theme::Mode::Light);
+    for (const char *token :
+         {"--nav-item-background-hover", "--nav-item-background-active", "--nav-item-background-selected",
+          "--nav-collapse-icon-color", "--nav-collapse-icon-color-collapsed",
+          "--nav-indentation-guide-color", "--nav-file-tag-color", "--nav-file-tag-background",
+          "--nav-heading-color", "--nav-item-color-hover"}) {
+        EXPECT_TRUE(dark.color(QLatin1String(token)).isValid()) << token << " dark";
+        EXPECT_TRUE(light.color(QLatin1String(token)).isValid()) << token << " light";
+    }
+    EXPECT_NE(dark.color(QStringLiteral("--nav-indentation-guide-color")),
+              light.color(QStringLiteral("--nav-indentation-guide-color")));
+    EXPECT_EQ(dark.value(QStringLiteral("--nav-item-size")).toInt(), 13);
+}

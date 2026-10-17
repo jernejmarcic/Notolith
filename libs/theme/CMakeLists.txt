@@ -20,6 +20,7 @@ set_target_properties(noteAppC_theme PROPERTIES AUTOMOC ON)
 qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/arrow-left.svg
     icons/arrow-right.svg
+    icons/arrow-up-down.svg
     icons/arrow-up-right.svg
     icons/book-open.svg
     icons/noteAppC.svg
@@ -31,6 +32,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/check.svg
     icons/chevron-down.svg
     icons/chevron-right.svg
+    icons/chevrons-down-up.svg
     icons/circle-alert.svg
     icons/circle-check.svg
     icons/circle-help.svg
