@@ -8,6 +8,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -1172,11 +1173,12 @@ QList<SearchResult> Index::unlinkedMentions(const QString &path, int limit) cons
     return results;
 }
 
-bool Index::basenameStillUnique(const QString &basename, const QString &excludePath) const
+bool Index::basenameStillUnique(const QString &basename, const QString &excludePath,
+                                const QString &alsoExclude) const
 {
     const QStringList candidates = m_names.value(foldCase(basename));
     for (const QString &candidate : candidates) {
-        if (candidate != excludePath)
+        if (candidate != excludePath && candidate != alsoExclude)
             return false;
     }
     return true;
@@ -1204,7 +1206,7 @@ QString Index::rebasedTarget(const QString &oldTarget, const QString &oldRelativ
     // the new vault-relative path.
     QString rebased;
     if (!working.contains(QLatin1Char('/')) && foldCase(working) == foldCase(oldBase))
-        rebased = basenameStillUnique(newBase, oldRelative) ? newBase : newFull;
+        rebased = basenameStillUnique(newBase, oldRelative, newRelative) ? newBase : newFull;
     else
         rebased = newFull;
 
@@ -1233,8 +1235,18 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         Range targetRange;
         QString resolved; // the note the link pointed at, old path
         QString movedTo;  // the same note after the rename
+        bool own = false; // a link written in a moved note, to a file that stays
     };
     QHash<QString, QList<Hit>> perFile;
+
+    // Where a path ends up after the rename; "" for one that does not move.
+    const auto movedPath = [&](const QString &path) -> QString {
+        if (path == oldRelative)
+            return newRelative;
+        if (path.startsWith(oldRelative + QLatin1Char('/')))
+            return newRelative + path.mid(oldRelative.size());
+        return {};
+    };
 
     QSqlQuery query(m_db);
     query.exec(QStringLiteral(
@@ -1251,18 +1263,35 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
 
         // oldRelative is a note or a folder: a folder's notes move with it,
         // each to the same spot under the new name.
-        const QString resolved = resolve(target, vault.absolute(fromPath));
-        QString movedTo;
-        if (resolved == oldRelative)
-            movedTo = newRelative;
-        else if (resolved.startsWith(oldRelative + QLatin1Char('/')))
-            movedTo = newRelative + resolved.mid(oldRelative.size());
-        else
-            continue;
+        QString resolved = resolve(target, vault.absolute(fromPath));
+        QString movedTo = movedPath(resolved);
+        bool own = false;
+        if (movedTo.isEmpty()) {
+            // Not a link to what moved. A Markdown link written in a moved
+            // note is relative to its folder, so it must be rewritten to
+            // reach the same file from the new one, note or attachment alike
+            // (neither the index nor Obsidian's name lookup covers a path to
+            // an image). A wikilink is found by name and stays as it is.
+            // ponytail: only a path that exists relative to the old folder;
+            // one that resolved by name alone (a bare `a.md`) is left to
+            // that lookup.
+            if (query.value(3).toBool() || movedPath(fromPath).isEmpty() || target.startsWith(QLatin1Char('/')))
+                continue;
+            // The index keeps an `<angle bracket>` target with its brackets.
+            const QString inner = target.startsWith(QLatin1Char('<')) && target.endsWith(QLatin1Char('>'))
+                                      ? target.mid(1, target.size() - 2) : target;
+            resolved = QDir::cleanPath(QFileInfo(fromPath).path() + QLatin1Char('/') + inner);
+            if (resolved.startsWith(QLatin1String("..")) || !movedPath(resolved).isEmpty()
+                || !QFileInfo(vault.absolute(resolved)).isFile())
+                continue;
+            movedTo = resolved;
+            own = true;
+        }
 
         Hit hit;
         hit.resolved = resolved;
         hit.movedTo = movedTo;
+        hit.own = own;
         hit.subpath = query.value(2).toString();
         hit.wiki = query.value(3).toBool();
         hit.targetRange = {query.value(4).toLongLong(), query.value(5).toLongLong()};
@@ -1288,10 +1317,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         // The renamed note (or every note under the renamed folder) has
         // already moved on disk by the time this runs; every other linking
         // note is still where the index found it.
-        const QString actualRelative =
-            fromPath == oldRelative ? newRelative
-            : fromPath.startsWith(oldRelative + QLatin1Char('/')) ? newRelative + fromPath.mid(oldRelative.size())
-                                                                  : fromPath;
+        const QString actualRelative = movedPath(fromPath).isEmpty() ? fromPath : movedPath(fromPath);
         const QString absolutePath = vault.absolute(actualRelative);
 
         Note note;
@@ -1317,8 +1343,43 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
                 continue; // stale offset - the file moved under us; a rebuild will catch it
 
             const QString rawSlice = note.text.mid(hit.targetRange.start, rawLength);
-            const QString decoded =
-                hit.wiki ? rawSlice : QUrl::fromPercentEncoding(rawSlice.toUtf8());
+            const bool angled = !hit.wiki && rawSlice.size() >= 2 && rawSlice.startsWith(QLatin1Char('<'))
+                                && rawSlice.endsWith(QLatin1Char('>'));
+            const QString raw = angled ? rawSlice.mid(1, rawSlice.size() - 2) : rawSlice;
+            const QString decoded = hit.wiki ? raw : QUrl::fromPercentEncoding(raw.toUtf8());
+
+            // A Markdown link spelled as a path from its note's folder stays
+            // one: from the folder the linking note is in now to where the
+            // file is now. (A bare name keeps rebasedTarget's name rule.)
+            const QString fromFolder = QFileInfo(fromPath).path();
+            const auto stem = [](QString path) {
+                if (path.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+                    path.chop(3);
+                return path.toCaseFolded();
+            };
+            const bool pathLink =
+                !hit.wiki
+                && (hit.own || (decoded.contains(QLatin1Char('/'))
+                                && stem(QDir::cleanPath(fromFolder + QLatin1Char('/') + decoded)) == stem(hit.resolved)));
+            if (pathLink) {
+                QString relativeTarget = QDir(vault.absolute(QFileInfo(actualRelative).path()))
+                                             .relativeFilePath(vault.absolute(hit.movedTo));
+                if (!hit.own && !decoded.endsWith(QLatin1String(".md"), Qt::CaseInsensitive)
+                    && relativeTarget.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+                    relativeTarget.chop(3);
+                if (relativeTarget == decoded)
+                    continue; // both ends moved together: not a byte to touch
+                // Percent-encoded as it was, or literal when it was written
+                // so (inside angle brackets a space needs no escape).
+                const bool literal = !raw.contains(QLatin1Char('%'))
+                                     && (angled || !relativeTarget.contains(QRegularExpression(QStringLiteral("[ ()<>]"))));
+                QString written = literal ? relativeTarget
+                                          : QString::fromUtf8(QUrl::toPercentEncoding(relativeTarget, "/"));
+                if (angled)
+                    written = QLatin1Char('<') + written + QLatin1Char('>');
+                note.text.replace(hit.targetRange.start, rawLength, written);
+                continue;
+            }
 
             QString rebased = rebasedTarget(decoded, hit.resolved, hit.movedTo);
             if (!hit.wiki)

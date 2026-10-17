@@ -887,6 +887,15 @@ or into `.obsidian`, `.trash` or another hidden folder. Changing only the
 letter case of a name works on case-insensitive filesystems (exFAT, NTFS,
 SMB) too.
 
+A moved note's own Markdown links and embeds are paths from its folder, so
+they are rewritten to reach the same files from the new one: `[a](../a.md)` and
+`![](img/p.png)` moved a level down become `[a](../../a.md)` and
+`![](../img/p.png)`. Percent-encoding and `<angle bracket>` forms are kept as
+written. Wikilinks (found by name), URLs, `#anchor` links and bare `[x](a.md)`
+names are left alone, and a folder moved whole keeps the links between its own
+files byte for byte. A Markdown link to a moved note from elsewhere stays a
+relative path (`../A/n.md` becomes `../A/B/n.md`).
+
 A rename or move first saves every note with unsaved typing, whatever `files.autosave`
 says, so the rewrite works on what is on screen and the next autosave cannot
 put the old link back. The open editor then picks up the rewritten text from

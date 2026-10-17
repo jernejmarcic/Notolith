@@ -601,6 +601,77 @@ TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
                                     QStringLiteral("Home.md"), QStringLiteral("MdLink.md")}));
 }
 
+// A moved note's own Markdown links are paths from its folder; Obsidian
+// rewrites them so they still reach the same files. Wikilinks (found by name),
+// URLs and same-note anchors are not paths and stay as written.
+TEST_F(RenameLinksTest, MovingANoteKeepsItsRelativeMarkdownLinksPointingAtTheSameFiles)
+{
+    write(QStringLiteral("Top.md"), "# Top\n");
+    write(QStringLiteral("A/a.md"), "# a\n");
+    write(QStringLiteral("A/img/p.png"), "png");
+    write(QStringLiteral("A/B/Keep.md"), "# Keep\n");
+    write(QStringLiteral("A/n.md"),
+          "# n\n\n[a](a.md) ![](img/p.png) [t](../Top.md) [u](img/p%20x.png#frag)\n"
+          "[w](https://example.com/a.md) [h](#n) [[a]] [e](<img/p x.png>)\n");
+    write(QStringLiteral("A/x.md"), "[bare](n.md) [rel](./n.md)\n");
+    write(QStringLiteral("Other/o.md"), "[to n](../A/n.md) [to n again](../A/n.md#n)\n");
+    write(QStringLiteral("A/img/p x.png"), "png");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A/n.md")), vault.absolute(QStringLiteral("A/B")),
+                               &newPath, &error)) << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A/n.md"), QStringLiteral("A/B/n.md"), vault, &error), 0)
+        << error.toStdString();
+
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A/B/n.md"))),
+              QByteArray("# n\n\n[a](../a.md) ![](../img/p.png) [t](../../Top.md) [u](../img/p%20x.png#frag)\n"
+                         "[w](https://example.com/a.md) [h](#n) [[a]] [e](<../img/p x.png>)\n"));
+    // Links to the moved note: a bare name stays a name, a path stays a path.
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A/x.md"))), QByteArray("[bare](n.md) [rel](B/n.md)\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other/o.md"))),
+              QByteArray("[to n](../A/B/n.md) [to n again](../A/B/n.md#n)\n"));
+
+    // And up to the vault root again, from the rewritten state.
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A/B/n.md")), dir.path(), &newPath, &error))
+        << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A/B/n.md"), QStringLiteral("n.md"), vault, &error), 0)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("n.md"))),
+              QByteArray("# n\n\n[a](A/a.md) ![](A/img/p.png) [t](Top.md) [u](A/img/p%20x.png#frag)\n"
+                         "[w](https://example.com/a.md) [h](#n) [[a]] [e](<A/img/p x.png>)\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other/o.md"))),
+              QByteArray("[to n](../n.md) [to n again](../n.md#n)\n"));
+}
+
+// A folder moves whole: links between its own files keep their bytes, links
+// out of it are rewritten for the new depth.
+TEST_F(RenameLinksTest, MovingAFolderRewritesOnlyTheLinksThatLeaveIt)
+{
+    write(QStringLiteral("Top.md"), "# Top\n");
+    write(QStringLiteral("A/a.md"), "# a\n");
+    write(QStringLiteral("A/img/p.png"), "png");
+    write(QStringLiteral("A/n.md"), "[in](a.md) ![](img/p.png) [out](../Top.md)\n");
+    write(QStringLiteral("Z/z.md"), "# z\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A")), vault.absolute(QStringLiteral("Z")), &newPath, &error))
+        << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A"), QStringLiteral("Z/A"), vault, &error), 0)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Z/A/n.md"))),
+              QByteArray("[in](a.md) ![](img/p.png) [out](../../Top.md)\n"));
+}
+
 TEST_F(RenameLinksTest, FallsBackToAFullPathWhenTheNewBasenameIsAmbiguous)
 {
     write(QStringLiteral("Folder/Solo.md"), "# Solo\n");

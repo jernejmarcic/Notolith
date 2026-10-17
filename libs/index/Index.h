@@ -241,7 +241,11 @@ private:
     /// (a basename only when it stays unique) and any leading "./"/".md".
     QString rebasedTarget(const QString &oldTarget, const QString &oldRelative,
                           const QString &newRelative) const;
-    bool basenameStillUnique(const QString &basename, const QString &excludePath) const;
+    /// True when no note but `excludePath` and `alsoExclude` (the renamed note
+    /// before and after: a moved note rewritten early is already indexed at
+    /// its new path) answers to `basename`.
+    bool basenameStillUnique(const QString &basename, const QString &excludePath,
+                             const QString &alsoExclude = {}) const;
     /// PRAGMA user_version of the database at `databasePath`; 0 when it
     /// cannot be read.
     static int storedVersion(const QString &databasePath);
