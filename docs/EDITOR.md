@@ -462,6 +462,28 @@ neighbouring space (`early [x] and` -> `early and`, `[y] She` -> `She`,
 text; it is never hidden. Tests: `MetaNoteJumpTest` and `MetaNoteContextMenuTest`
 in `tests/test_editor.cpp`.
 
+**Pane.** While `editor.metaNotes` is on, the right sidebar has a Meta notes tab
+(`MetaNotesPane`, `libs/ui`, a brackets icon after Outline); off, the pane, its
+tab, the two commands (disabled, so absent from the palette) and the status count
+do not exist - nothing is built. It lists the note's runs in document order,
+grouped under the nearest heading above each (flat in a note without headings;
+a heading with none is not listed): the run's text, then a muted line with its
+line number and the words around it, the run in `--meta-note-color`. A long row
+is clipped, not wrapped, so a row is always two lines; the tooltip has the whole
+run. The run the caret is in is highlighted; Return or a click selects it in the
+editor. The filter box narrows the rows by their text. `MainWindow` feeds it the
+editor's `noteText()`, `metaNoteRanges()` and `headings()` on every parse;
+`setNote` is a no-op when every row would read the same, and when only offsets
+moved (typing above a run) it rewrites them in place and rebuilds nothing.
+The status bar shows "N meta notes" (click: opens the pane), hidden at zero.
+`Alt+]` / `Alt+[` report "Meta note 2 of 3" there, "(wrapped around)" past either
+end and "No meta notes in this note" with none. Changing the delimiters in
+Settings refreshes the pane and the count from the next parse. Tests:
+`WindowTest.TheMetaNotesPane*`, `AltBracketJumps*`, `ChangingTheDelimiters*`.
+Fixture: `fixtures/demo-vault/notes/Meta notes.md`; to see the pane in
+`noteAppC_shot`, put `[editor]` / `meta-notes = true` in a private
+`$XDG_CONFIG_HOME/noteAppC/settings.ini` and set `NOTEAPPC_SHOT_KEEP_CONFIG=1`.
+
 ## Fenced code and the caret
 
 The caret anywhere from a fence's opening line to its closing line, not only on

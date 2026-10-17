@@ -53,6 +53,7 @@ class GraphView;
 class InlineTitleEdit;
 class MarkdownEditor;
 class OutgoingLinksPane;
+class MetaNotesPane;
 class OutlinePane;
 class PagePreview;
 class QuickSwitcher;
@@ -453,6 +454,12 @@ private:
     void updateTextCount();
     /// The status bar's backlink count for the tab in front: one query.
     void updateBacklinkCount();
+    /// The status bar's "N meta notes" for the tab in front: `size()` of the
+    /// editor's runs; hidden at zero and while the feature is off.
+    void updateMetaCount();
+    /// Alt+] / Alt+[: selects the next (+1) or previous (-1) meta note and
+    /// says which in the status bar.
+    void jumpMetaNote(int direction);
     /// Live preview, source or reading for the tab in front, as the status
     /// bar's menu picks it; keeps what Ctrl+E returns to.
     void setViewMode(MarkdownEditor::Mode mode);
@@ -630,6 +637,7 @@ void updateVimStatus();
     QLabel *m_charCount = nullptr;
     QToolButton *m_backlinkStatus = nullptr;
     QToolButton *m_propertyStatus = nullptr;
+    QToolButton *m_metaStatus = nullptr;
     QToolButton *m_modeButton = nullptr;
     QTimer m_selectionCountTimer; ///< the selection's count, 200 ms after it moves
     QTimer m_backlinkCountTimer; ///< a burst of index changes is one count
@@ -668,6 +676,7 @@ QLabel *m_vimStatus = nullptr;
     bool m_slidesLeftFullScreen = false; ///< whether ending a presentation restores the window
     QPointer<OutgoingLinksPane> m_outgoingLinks;
     QPointer<OutlinePane> m_outline;
+    QPointer<MetaNotesPane> m_metaPane; ///< built only while editor.metaNotes is on
     QPointer<BookmarksPane> m_bookmarks;
     class TemplatePicker *m_templatePicker = nullptr;
     QuickSwitcher *m_switcher = nullptr;

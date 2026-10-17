@@ -74,6 +74,7 @@
 #include "Frontmatter.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
+#include "MetaNotesPane.h"
 #include "OutlinePane.h"
 #include "TemplatePicker.h"
 #include "Templates.h"
@@ -329,6 +330,12 @@ MainWindow::MainWindow(QWidget *parent)
         m_active->editor->verticalScrollBar()->setValue(0);
         m_active->editor->setFocus();
     });
+    m_metaStatus = statusLink("metaNoteStatus");
+    m_metaStatus->hide();
+    connect(m_metaStatus, &QToolButton::clicked, this, [this] {
+        if (m_metaPane)
+            showRightPane(m_metaPane);
+    });
     m_modeButton = statusLink("modeButton");
     m_modeButton->setPopupMode(QToolButton::InstantPopup);
     m_modeButton->setIconSize(QSize(14, 14));
@@ -385,6 +392,7 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->addPermanentWidget(m_vimStatus);
     statusBar()->addPermanentWidget(m_backlinkStatus);
     statusBar()->addPermanentWidget(m_propertyStatus);
+    statusBar()->addPermanentWidget(m_metaStatus);
     statusBar()->addPermanentWidget(m_modeButton);
     statusBar()->addPermanentWidget(m_wordCount);
     statusBar()->addPermanentWidget(m_charCount);
@@ -905,10 +913,18 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     connect(editor, &MarkdownEditor::headingsChanged, this, [this, leaf] {
         if (m_outline && leaf == m_active)
             m_outline->setHeadings(leaf->editor->headings());
+        // The meta notes ride the same parse: the pane and the count follow it.
+        if (m_metaPane && leaf == m_active) {
+            m_metaPane->setNote(leaf->editor->noteText(), leaf->editor->metaNoteRanges(),
+                                leaf->editor->headings());
+            updateMetaCount();
+        }
     });
     connect(editor, &MarkdownEditor::cursorMoved, this, [this, leaf](qsizetype offset) {
         if (m_outline && leaf == m_active)
             m_outline->setCursorOffset(offset);
+        if (m_metaPane && leaf == m_active)
+            m_metaPane->setCursorOffset(offset);
     });
     // Vim mode: its mode line sits in the status bar, and :w / :q are the
     // window's save and close for this tab.
@@ -1875,6 +1891,20 @@ void MainWindow::applyFeatures()
              return m_outline.data();
          },
          "outlineTabButton", "list", tr("Outline")},
+        // No plugin of its own: the editor.metaNotes setting is the switch.
+        {nullptr, m_metaPane,
+         [this, parent] {
+             m_metaPane = new MetaNotesPane(parent);
+             m_metaPane->setTheme(m_theme);
+             const ParseOptions options = parseOptions();
+             m_metaPane->setDelimiters(options.open, options.close);
+             connect(m_metaPane, &MetaNotesPane::jumpRequested, this, [this](const Range &run) {
+                 m_active->editor->selectRange(run);
+                 m_active->editor->setFocus();
+             });
+             return m_metaPane.data();
+         },
+         "metaNotesTabButton", "brackets", tr("Meta notes")},
         {"footnotes", m_footnotes,
          [this, parent] {
              m_footnotes = new FootnotesPane(parent);
@@ -1925,7 +1955,8 @@ void MainWindow::applyFeatures()
     int slot = 0;
     for (const Pane &pane : panes) {
         auto *button = m_rightSidebar->findChild<QToolButton *>(QLatin1String(pane.button));
-        if (!featureOn(pane.feature)) {
+        const bool on = pane.feature ? featureOn(pane.feature) : m_settings.boolean(QStringLiteral("editor.metaNotes"));
+        if (!on) {
             delete button;
             delete pane.widget; // its QPointer member nulls itself
             continue;
@@ -1986,6 +2017,12 @@ void MainWindow::applyFeatures()
                 action->setEnabled(featureOn(feature.id));
         }
     }
+    for (const char *id : {"noteAppC:next-meta-note", "noteAppC:previous-meta-note"}) {
+        for (QAction *action : std::as_const(m_commands)) {
+            if (action->objectName() == QLatin1String(id))
+                action->setEnabled(m_settings.boolean(QStringLiteral("editor.metaNotes")));
+        }
+    }
     // Switched off mid-recording: its Stop command just went dark, so stop
     // here rather than leave the microphone on.
     if (m_recorder && !featureOn("audio-recorder"))
@@ -2025,6 +2062,15 @@ void MainWindow::showNoteInPanes(const QString &path)
             m_footnotes->setFootnotes(m_active->editor->footnotes());
         else
             m_footnotes->clear();
+    }
+    if (m_metaPane) {
+        if (m_active && !path.isEmpty() && path == m_active->notePath && !m_active->view) {
+            m_metaPane->setNote(m_active->editor->noteText(), m_active->editor->metaNoteRanges(),
+                                m_active->editor->headings());
+            m_metaPane->setCursorOffset(m_active->editor->cursorOffset());
+        } else {
+            m_metaPane->clear();
+        }
     }
     if (m_outline && path.isEmpty())
         m_outline->clear();
@@ -2291,6 +2337,10 @@ void MainWindow::buildActions()
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
+    add(QStringLiteral("noteAppC:next-meta-note"), tr("Meta notes: Next meta note"), QStringLiteral("Alt+]"),
+        [this] { jumpMetaNote(+1); });
+    add(QStringLiteral("noteAppC:previous-meta-note"), tr("Meta notes: Previous meta note"),
+        QStringLiteral("Alt+["), [this] { jumpMetaNote(-1); });
     add(QStringLiteral("app:go-back"), tr("Navigate back"), QStringLiteral("Alt+Left"),
         &MainWindow::goBack);
     add(QStringLiteral("app:go-forward"), tr("Navigate forward"), QStringLiteral("Alt+Right"),
@@ -2824,6 +2874,10 @@ void MainWindow::applySettings()
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
     applyFeatures(); // first, so a pane it builds is themed below
+    if (m_metaPane) {
+        const ParseOptions options = parseOptions();
+        m_metaPane->setDelimiters(options.open, options.close);
+    }
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     m_encryption->setAutoLockMinutes(m_settings.integer(QStringLiteral("encryption.autoLockMinutes")));
     if (!featureOn("encrypted-notes"))
@@ -3718,6 +3772,8 @@ void MainWindow::applyTheme()
         m_lookupPopover->applyTheme(m_theme);
     if (m_outgoingLinks)
         m_outgoingLinks->setTheme(m_theme);
+    if (m_metaPane)
+        m_metaPane->setTheme(m_theme);
     if (m_settingsPage)
         m_settingsPage->applyTheme(m_theme);
 
@@ -5588,6 +5644,7 @@ void MainWindow::updateWordCount()
     if (note)
         m_backlinkCountTimer.start();
     updateTextCount();
+    updateMetaCount();
     if (note) {
         const qsizetype properties = m_active->editor->properties().size();
         m_propertyStatus->setText(properties == 1 ? tr("1 property")
@@ -5615,6 +5672,34 @@ void MainWindow::updateTextCount()
     }
     m_wordCount->setVisible(!m_wordCount->text().isEmpty());
     m_charCount->setVisible(!m_charCount->text().isEmpty());
+}
+
+void MainWindow::updateMetaCount()
+{
+    const qsizetype runs = m_metaPane && m_active && m_active->notePath.size() && !m_active->view
+                               ? m_active->editor->metaNoteRanges().size()
+                               : 0;
+    m_metaStatus->setText(runs == 1 ? tr("1 meta note") : tr("%1 meta notes").arg(runs));
+    m_metaStatus->setVisible(runs > 0);
+}
+
+void MainWindow::jumpMetaNote(int direction)
+{
+    if (!m_active || m_active->notePath.isEmpty() || m_active->view)
+        return;
+    int index = 0;
+    int count = 0;
+    switch (m_active->editor->selectMetaNote(direction, &index, &count)) {
+    case MarkdownEditor::MetaJump::None:
+        statusBar()->showMessage(tr("No meta notes in this note"), 2500);
+        break;
+    case MarkdownEditor::MetaJump::Moved:
+        statusBar()->showMessage(tr("Meta note %1 of %2").arg(index).arg(count), 2500);
+        break;
+    case MarkdownEditor::MetaJump::Wrapped:
+        statusBar()->showMessage(tr("Meta note %1 of %2 (wrapped around)").arg(index).arg(count), 2500);
+        break;
+    }
 }
 
 void MainWindow::updateBacklinkCount()

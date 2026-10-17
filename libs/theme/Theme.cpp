@@ -729,7 +729,7 @@ QDialog#quickSwitcher {
     border: 1px solid %{--background-modifier-border};
     border-radius: %{--radius-l}px;
 }
-QLineEdit#quickSwitcherQuery {
+QLineEdit#quickSwitcherQuery, QLineEdit#metaNotesFilter {
     background: %{--background-modifier-form-field};
     border: 1px solid %{--background-modifier-border};
     border-radius: %{--radius-m}px;
@@ -737,7 +737,7 @@ QLineEdit#quickSwitcherQuery {
     color: %{--text-normal};
     font-size: %{--font-ui-medium}px;
 }
-QLineEdit#quickSwitcherQuery:focus {
+QLineEdit#quickSwitcherQuery:focus, QLineEdit#metaNotesFilter:focus {
     border-color: %{--interactive-accent};
 }
 QListWidget#quickSwitcherResults {
