@@ -1155,6 +1155,10 @@ private:
         /// Tracked so the caret crossing a group's edge relays out the whole
         /// group, not only the block it landed in.
         bool editedAsSource = false;
+        /// A single listing whose fences the caret has opened. Its source is
+        /// plain text like a group's, but it keeps its panel (drawn out over
+        /// the two fence lines, editedListingPanel), run control and output.
+        bool editedListing = false;
         /// A fence longer than kCodePieceLines is split into pieces of that
         /// many lines, each a block of its own, so an edit relays out one
         /// piece and not the whole listing. The fence's chrome is drawn across
@@ -1485,6 +1489,8 @@ private:
     /// The panel, the header strip, the line-number gutter and the highlighted
     /// rows of a fenced code block.
     void paintCodeChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
+    /// editedListingPanel's fill and border, nothing else: no header strip.
+    void paintEditedListingPanel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// The first piece's share of the chrome: the `#|` header, the tab strip
     /// or just the label, over `panel`, which spans the whole fence.
     void paintCodeHeader(QPainter &painter, const BlockView &view, qreal left, qreal top,
@@ -1589,10 +1595,19 @@ private:
     /// ends no longer compare equal.
     const CodeOptions *codeOptionsFor(const BlockView &view) const;
     qreal codeHeaderHeight() const;
-    /// Source mode draws pure text, and so does a tab group or a fenced
-    /// listing while the caret is in it: markdown syntax coloured, listings highlighted, nothing else -
+    /// Source mode draws pure text, and so does a tab group while the caret is
+    /// in it: markdown syntax coloured, listings highlighted, nothing else -
     /// no panel, header, run control, callout or fold.
-    bool plainSource(const BlockView &view) const { return m_mode == Mode::Source || view.editedAsSource; }
+    bool pureSource(const BlockView &view) const { return m_mode == Mode::Source || view.editedAsSource; }
+    /// pureSource, plus a single listing the caret has opened: its text is
+    /// plain and it has no header strip or copy label, but unlike pureSource
+    /// it keeps a panel, a run control and its output.
+    bool plainSource(const BlockView &view) const { return pureSource(view) || view.editedListing; }
+    /// The panel behind a listing being edited: the listing plus the opening
+    /// and closing fence lines the neighbouring paragraphs show, so no text is
+    /// drawn over the panel's edge. `top` is this block's, in the viewport.
+    /// `fenceLine` receives the opening fence line's height, 0 when it shows none.
+    QRectF editedListingPanel(const BlockView &view, qreal left, qreal top, qreal *fenceLine = nullptr) const;
     /// Whether this fenced block is laid out under a header strip: `#|`
     /// options, a tab group, a run control, or just a language to name.
     bool hasCodeHeader(const BlockView &view) const;

@@ -3968,28 +3968,108 @@ TEST(CodeTabTest, TheCaretInsideTheGroupShowsPlainSourceWithoutPanels)
     EXPECT_EQ(checked, 2);
 }
 
-TEST(CodeTabTest, ACaretInASingleListingShowsItsFencesWithoutAPanel)
+// A single listing with a cached output, and the lookups to read its pieces
+// back while the caret goes in and out of it.
+struct EditedListing {
+    const QString note = QStringLiteral("Before.\n\n```python\nprint(1)\nprint(2)\n```\n\nAfter.\n");
+    std::unique_ptr<MarkdownEditor> editor = editorWith(note);
+    FakeNotebook fake;
+    qsizetype inside = note.indexOf(QLatin1String("print(2)"));
+
+    EditedListing()
+    {
+        fake.lookup = textRun(QStringLiteral("1\n"), 3);
+        editor->setNotebookRunner(fake.runner());
+        editor->show();
+        editor->grab();
+        const qsizetype offset = note.indexOf(QLatin1String("print(1)"));
+        EXPECT_TRUE(QTest::qWaitFor([&] { return editor->notebookInfoAt(offset).outputCellCount > 0; }, 2000));
+    }
+    QRectF codeBox() const
+    {
+        for (const auto &box : editor->blockBoxes()) {
+            if (box.kind == BlockSpan::Kind::Code)
+                return box.rect;
+        }
+        return {};
+    }
+    QImage shot() const { return editor->viewport()->grab().toImage(); }
+    QRgb pixelAt(const QImage &image, int x, qreal y) const { return image.pixel(x, int(y)); }
+};
+
+TEST(CodeTabTest, ACaretInASingleListingKeepsItsPanelAndShowsItsFencesOnIt)
 {
     // Jernej's screenshot: the panel and its header strip were drawn over
-    // the opened fence lines, half hiding "```python" above the listing.
-    const QString note = QStringLiteral("Before.\n\n```python\nprint(1)\nprint(2)\n```\n\nAfter.\n");
-    auto editor = editorWith(note);
-    editor->show();
-    editor->grab();
-    const auto panelBehind = [&editor] {
-        const QImage shot = editor->viewport()->grab().toImage();
-        for (const auto &box : editor->blockBoxes()) {
-            if (box.kind != BlockSpan::Kind::Code)
-                continue;
-            const int y = int(box.rect.center().y());
-            return shot.pixel(editor->textColumn() - 12, y) != shot.pixel(2, y);
-        }
-        return false;
-    };
-    ASSERT_TRUE(panelBehind()) << "a listing at rest sits on its panel";
-    editor->enterBlockAt(note.indexOf(QLatin1String("print(2)")));
-    EXPECT_TRUE(editor->displayText().contains(QLatin1String("```python")));
-    EXPECT_FALSE(panelBehind()) << "a listing being edited is plain source";
+    // the opened fence lines, half hiding "```python" above the listing. The
+    // panel now reaches out over both fence lines instead, with no strip.
+    EditedListing listing;
+    const QRectF rest = listing.codeBox();
+    const QImage before = listing.shot();
+    const int margin = listing.editor->textColumn() - 12;
+    ASSERT_NE(listing.pixelAt(before, margin, rest.center().y()), listing.pixelAt(before, 2, rest.center().y()))
+        << "a listing at rest sits on its panel";
+
+    listing.editor->enterBlockAt(listing.inside);
+    EXPECT_TRUE(listing.editor->displayText().contains(QLatin1String("```python")));
+    const QRectF open = listing.codeBox();
+    const QImage shot = listing.shot();
+    const QRgb panel = listing.pixelAt(shot, margin, open.center().y());
+    EXPECT_NE(panel, listing.pixelAt(shot, 2, open.center().y())) << "the listing keeps its panel";
+    // The two fence lines sit inside it: the line above the listing and the
+    // one below, at the left margin where no text is drawn.
+    EXPECT_EQ(listing.pixelAt(shot, margin, open.top() - 6), panel) << "opening fence line";
+    EXPECT_EQ(listing.pixelAt(shot, margin, open.bottom() + 6), panel) << "closing fence line";
+    // ... and it does not reach past them.
+    EXPECT_NE(listing.pixelAt(shot, margin, open.top() - 40), panel);
+    EXPECT_NE(listing.pixelAt(shot, margin, open.bottom() + 40), panel);
+    // The strip went; what that costs the block is that strip and no more.
+    EXPECT_GT(rest.height() - open.height(), 0);
+    EXPECT_LE(rest.height() - open.height(), 40);
+}
+
+TEST(CodeTabTest, TheLastOutputSurvivesTheCaretEnteringASingleListing)
+{
+    EditedListing listing;
+    const qsizetype print1 = listing.note.indexOf(QLatin1String("print(1)"));
+    const auto atRest = listing.editor->notebookInfoAt(print1);
+    ASSERT_TRUE(atRest.eligible);
+    ASSERT_GT(atRest.outputCellCount, 0);
+
+    listing.editor->enterBlockAt(listing.inside);
+    const auto edited = listing.editor->notebookInfoAt(print1);
+    EXPECT_TRUE(edited.eligible);
+    EXPECT_EQ(edited.outputCellCount, atRest.outputCellCount);
+    EXPECT_EQ(listing.editor->notebookOutputTextAt(print1), QStringList{QStringLiteral("1\n")});
+    EXPECT_EQ(edited.executionCount, 3);
+
+    // Back out: unchanged.
+    listing.editor->setCursorOffset(listing.note.size() - 2);
+    EXPECT_EQ(listing.editor->notebookInfoAt(print1).outputCellCount, atRest.outputCellCount);
+}
+
+TEST(CodeTabTest, TheRunControlOfAnEditedListingStaysOffItsFenceText)
+{
+    EditedListing listing;
+    listing.editor->enterBlockAt(listing.inside);
+    const auto info = listing.editor->notebookInfoAt(listing.inside);
+    ASSERT_TRUE(info.eligible);
+    ASSERT_TRUE(info.runRect.isValid());
+    const QRectF open = listing.codeBox();
+    // On the opening fence line, whose text is only as wide as it is written.
+    const qreal lineBottom = open.top();
+    EXPECT_GT(info.runRect.center().y(), lineBottom - 24);
+    EXPECT_LT(info.runRect.center().y(), lineBottom);
+    const QFontMetricsF metrics(listing.editor->font());
+    const QRectF fenceText(listing.editor->textColumn(), lineBottom - 24,
+                           metrics.horizontalAdvance(QStringLiteral("```python")) * 2, 24);
+    EXPECT_FALSE(fenceText.intersects(info.runRect));
+    // Nor does it touch the closing fence or the listing.
+    EXPECT_LT(info.runRect.bottom(), lineBottom + 1);
+    // It still works from there.
+    listing.fake.ran = textRun(QStringLiteral("2\n"), 4);
+    const QPoint click = info.runRect.center().toPoint();
+    QTest::mouseClick(listing.editor->viewport(), Qt::LeftButton, Qt::NoModifier, click);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !listing.fake.runs.isEmpty(); }, 2000));
 }
 
 TEST(CodeTabTest, TheSelectedTabIsAttachedToItsPanel)

@@ -418,6 +418,16 @@ QRectF MarkdownEditor::notebookRunRectFor(const BlockView &view, qreal left, qre
         return {};
     const QFontMetricsF metrics(m_theme.uiFont());
     const qreal size = metrics.height();
+    if (view.editedListing) {
+        // No header strip while the caret is in the listing: the control sits
+        // in the panel's top-right corner, on the opening fence line, whose
+        // text is short and at the left (its info string would have to run
+        // the whole column to reach it).
+        qreal fenceLine = 0;
+        const QRectF edited = editedListingPanel(view, left, top, &fenceLine);
+        const qreal line = fenceLine > 0 ? fenceLine : lineHeightFor(view.span);
+        return QRectF(edited.right() - 14 - size, edited.top() + (line - size) / 2, size, size);
+    }
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
     // The header row every notebook-eligible block gets (view.textTop was
     // set to codeHeaderHeight() for exactly this reason - see layoutBlock).
