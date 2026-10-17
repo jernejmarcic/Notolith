@@ -156,6 +156,19 @@ TEST_F(DiagramTest, AMissingToolShowsTheSourceAndAHint)
     }
 }
 
+TEST_F(DiagramTest, WithoutBubblewrapThereIsNoDiagramAndNeverAnUnsandboxedRun)
+{
+    NEED("dot");
+    const QString dot = QStandardPaths::findExecutable(QStringLiteral("dot"));
+    const QByteArray oldPath = qgetenv("PATH");
+    qputenv("PATH", dir.path().toUtf8()); // an empty directory: no bwrap to find
+    const auto answer = ask(rendererFor(DiagramKind::Graphviz, dot), QStringLiteral("dot"), kDot);
+    qputenv("PATH", oldPath);
+    ASSERT_TRUE(answer->result.isMarkdown);
+    EXPECT_TRUE(answer->result.text.contains(QLatin1String("bubblewrap"))) << answer->result.text.toStdString();
+    EXPECT_TRUE(cached(DiagramKind::Graphviz, kDot).isEmpty());
+}
+
 TEST_F(DiagramTest, ASyntaxErrorShowsTheSourceAndTheToolsOwnError)
 {
     NEED("dot");
