@@ -29,7 +29,7 @@ namespace {
 /// from the vault, so a mismatch drops it and rebuilds rather than migrating:
 /// a wrong migration is a silently wrong index, and a rebuild costs one pass
 /// over the notes.
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 } // namespace
 
 namespace {
@@ -104,6 +104,7 @@ public:
         , m_insertTag(db)
         , m_insertBlock(db)
         , m_insertTask(db)
+        , m_insertMetaNote(db)
         , m_insertProperty(db)
         , m_insertName(db)
         , m_insertContent(db)
@@ -123,6 +124,8 @@ public:
             QStringLiteral("INSERT INTO blocks(file, block, start, finish) VALUES(?, ?, ?, ?)"));
         m_insertTask.prepare(
             QStringLiteral("INSERT INTO tasks(file, done, text, start, finish) VALUES(?, ?, ?, ?, ?)"));
+        m_insertMetaNote.prepare(
+            QStringLiteral("INSERT INTO meta_notes(file, start, finish) VALUES(?, ?, ?)"));
         m_insertProperty.prepare(
             QStringLiteral("INSERT INTO props(file, key, type, value) VALUES(?, ?, ?, ?)"));
         m_insertName.prepare(QStringLiteral("INSERT INTO names(file, name, folded) VALUES(?, ?, ?)"));
@@ -163,6 +166,8 @@ public:
             run(m_insertBlock, {fileID, block.id, block.range.start, block.range.end});
         for (const Task &task : metadata.tasks)
             run(m_insertTask, {fileID, task.done, task.text, task.range.start, task.range.end});
+        for (const Range &metaNote : metadata.metaNotes)
+            run(m_insertMetaNote, {fileID, metaNote.start, metaNote.end});
         for (const Property &property : metadata.properties) {
             run(m_insertProperty,
                 {fileID, property.key, int(property.type), property.values.join(QLatin1Char('\n'))});
@@ -221,6 +226,7 @@ private:
     QSqlQuery m_insertTag;
     QSqlQuery m_insertBlock;
     QSqlQuery m_insertTask;
+    QSqlQuery m_insertMetaNote;
     QSqlQuery m_insertProperty;
     QSqlQuery m_insertName;
     QSqlQuery m_insertContent;
@@ -343,6 +349,10 @@ bool Index::createSchema()
         QStringLiteral("CREATE TABLE IF NOT EXISTS props ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "key TEXT, type INTEGER, value TEXT)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS meta_notes ("
+                       "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
+                       "start INTEGER, finish INTEGER)"),
+        QStringLiteral("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS names ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "name TEXT, folded TEXT)"),
@@ -471,6 +481,33 @@ void Index::put(const Metadata &metadata, const QString &body)
     rememberNames(path, names);
     if (!m_inBatch)
         emit changed();
+}
+
+void Index::clearMetaNotes()
+{
+    if (!m_db.isOpen())
+        return;
+    QSqlQuery(m_db).exec(QStringLiteral("DELETE FROM meta_notes"));
+    notifyChanged();
+}
+
+QString Index::metaNotesKey() const
+{
+    if (!m_db.isOpen())
+        return {};
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT value FROM state WHERE key = 'metaNotes'"));
+    return query.next() ? query.value(0).toString() : QString();
+}
+
+void Index::setMetaNotesKey(const QString &key)
+{
+    if (!m_db.isOpen())
+        return;
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("INSERT OR REPLACE INTO state(key, value) VALUES('metaNotes', ?)"));
+    query.addBindValue(key);
+    query.exec();
 }
 
 void Index::remove(const QString &path)
@@ -865,6 +902,7 @@ void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int
         QHash<qint64, QList<NoteHeading>> headingsByFile;
         QHash<qint64, QList<NoteTask>> tasksByFile;
         QHash<qint64, QList<NoteProperty>> propertiesByFile;
+        QHash<qint64, QList<Range>> metaNotesByFile;
 
         if (needs.tags) {
             QSqlQuery tagQuery(db);
@@ -891,6 +929,15 @@ void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int
                 tasksByFile[taskQuery.value(0).toLongLong()].append(
                     NoteTask{taskQuery.value(1).toBool(),
                             Range{taskQuery.value(2).toLongLong(), taskQuery.value(3).toLongLong()}});
+            }
+        }
+
+        if (needs.metaNotes) {
+            QSqlQuery metaQuery(db);
+            metaQuery.exec(QStringLiteral("SELECT file, start, finish FROM meta_notes ORDER BY file, start"));
+            while (metaQuery.next()) {
+                metaNotesByFile[metaQuery.value(0).toLongLong()].append(
+                    Range{metaQuery.value(1).toLongLong(), metaQuery.value(2).toLongLong()});
             }
         }
 
@@ -943,6 +990,7 @@ void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int
             note.headings = headingsByFile.value(id);
             note.tasks = tasksByFile.value(id);
             note.properties = propertiesByFile.value(id);
+            note.metaNotes = metaNotesByFile.value(id);
 
             SearchOutcome outcome = query.evaluate(note);
             if (!outcome.matched)

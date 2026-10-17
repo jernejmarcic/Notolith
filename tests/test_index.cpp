@@ -316,6 +316,104 @@ TEST_F(IndexTest, ANotebookIsIndexedByItsTextWhileAReaderIsSet)
     EXPECT_TRUE(index.search(QStringLiteral("zeppelin")).isEmpty());
 }
 
+namespace {
+
+ParseOptions metaNotesOn(const QString &open = QStringLiteral("["), const QString &close = QStringLiteral("]"))
+{
+    ParseOptions options;
+    options.metaNotes = true;
+    options.open = open;
+    options.close = close;
+    return options;
+}
+
+} // namespace
+
+TEST_F(IndexTest, MetaNotesAreIndexedOnlyWhileAskedFor)
+{
+    const QString draft = QStringLiteral("She left early [check the date] and never came back.\n");
+    write(QStringLiteral("Draft.md"), draft.toUtf8());
+    Index index;
+    build(index);
+    EXPECT_TRUE(index.search(QStringLiteral("meta:date")).isEmpty()) << "off by default";
+    EXPECT_TRUE(index.search(QStringLiteral("meta:")).isEmpty());
+
+    Indexer indexer(&index);
+    indexer.setMetaNotes(metaNotesOn());
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    const QList<SearchResult> found = index.search(QStringLiteral("meta:date"));
+    ASSERT_EQ(found.size(), 1);
+    EXPECT_EQ(found.first().path, QStringLiteral("Draft.md"));
+    ASSERT_EQ(index.search(QStringLiteral("meta:")).size(), 1);
+    EXPECT_EQ(index.search(QStringLiteral("meta:")).first().matches.first().offset, draft.indexOf(QStringLiteral("[check")));
+    EXPECT_TRUE(index.search(QStringLiteral("meta:early")).isEmpty());
+}
+
+TEST_F(IndexTest, ChangingTheMetaDelimitersReindexesEveryUnchangedNote)
+{
+    const QString draft = QStringLiteral("A [square run] and a << angled run >> here.\n");
+    write(QStringLiteral("Draft.md"), draft.toUtf8());
+    Index index;
+    Indexer indexer(&index);
+    indexer.setMetaNotes(metaNotesOn());
+    QSignalSpy first(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(first.wait(20000));
+    ASSERT_EQ(index.search(QStringLiteral("meta:square")).size(), 1);
+
+    QSignalSpy again(&indexer, &Indexer::finished);
+    indexer.setMetaNotes(metaNotesOn(QStringLiteral("<<"), QStringLiteral(">>")));
+    ASSERT_TRUE(again.wait(20000)) << "changing them rescans by itself";
+    EXPECT_TRUE(index.search(QStringLiteral("meta:square")).isEmpty()) << "nothing on disk changed, yet it is re-parsed";
+    const QList<SearchResult> found = index.search(QStringLiteral("meta:"));
+    ASSERT_EQ(found.size(), 1);
+    ASSERT_EQ(found.first().matches.size(), 1);
+    EXPECT_EQ(found.first().matches.first().offset, draft.indexOf(QStringLiteral("<<")));
+
+    // The cache remembers them: a warm start by other delimiters re-parses, by the same ones does not.
+    Indexer same(&index);
+    same.setMetaNotes(metaNotesOn(QStringLiteral("<<"), QStringLiteral(">>")));
+    QSignalSpy warm(&same, &Indexer::finished);
+    same.setVault(vault);
+    ASSERT_TRUE(warm.wait(20000));
+    EXPECT_EQ(warm.last().at(0).toInt(), 0) << "nothing to re-parse";
+    Indexer other(&index);
+    other.setMetaNotes(metaNotesOn());
+    QSignalSpy cold(&other, &Indexer::finished);
+    other.setVault(vault);
+    ASSERT_TRUE(cold.wait(20000));
+    EXPECT_EQ(index.search(QStringLiteral("meta:square")).size(), 1);
+    EXPECT_TRUE(index.search(QStringLiteral("meta:angled")).isEmpty());
+}
+
+TEST_F(IndexTest, SwitchingMetaNotesOffDropsTheRowsWithoutAScan)
+{
+    write(QStringLiteral("Draft.md"), "She left early [check the date] and never came back.\n");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setMetaNotes(metaNotesOn());
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    ASSERT_EQ(index.search(QStringLiteral("meta:")).size(), 1);
+
+    QSignalSpy scans(&indexer, &Indexer::finished);
+    indexer.setMetaNotes(ParseOptions{});
+    EXPECT_TRUE(index.search(QStringLiteral("meta:")).isEmpty()) << "at once";
+    EXPECT_FALSE(scans.wait(300));
+    EXPECT_EQ(scans.count(), 0);
+
+    // And a later warm start with them off has nothing stale to clear.
+    Indexer later(&index);
+    QSignalSpy warm(&later, &Indexer::finished);
+    later.setVault(vault);
+    ASSERT_TRUE(warm.wait(20000));
+    EXPECT_EQ(warm.last().at(0).toInt(), 0);
+    EXPECT_TRUE(index.search(QStringLiteral("meta:")).isEmpty());
+}
+
 TEST_F(IndexTest, DeletedNotesLeaveTheCache)
 {
     Index index;

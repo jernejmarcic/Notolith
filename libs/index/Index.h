@@ -59,6 +59,13 @@ public:
     void endBatch();
     void put(const Metadata &metadata, const QString &body);
     void remove(const QString &path);
+    /// Every meta-note row, at once and without a scan: what turning the
+    /// editor's meta notes off costs.
+    void clearMetaNotes();
+    /// What the meta-note rows were written with, kept in the cache so a warm
+    /// start can tell they are stale: empty for none (Indexer::setMetaNotes).
+    QString metaNotesKey() const;
+    void setMetaNotesKey(const QString &key);
     /// mtime and size of what the cache holds, for skipping unchanged files.
     bool isCurrent(const QString &path, qint64 mtime, qint64 size) const;
 

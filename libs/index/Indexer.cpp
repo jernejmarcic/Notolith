@@ -13,6 +13,12 @@ namespace noteAppC {
 
 namespace {
 
+/// Index::metaNotesKey() for these options.
+QString metaNotesKey(const ParseOptions &options)
+{
+    return options.metaNotes ? options.open + QLatin1Char('\n') + options.close : QString();
+}
+
 /// One parser per worker thread: md4qt parsers are cheap but not shareable.
 Parser &threadParser()
 {
@@ -58,6 +64,7 @@ void Indexer::stop()
     ++m_scanNumber; // what it has queued already is dropped on arrival
     m_scan.waitForFinished();
     m_rescan = false;
+    m_forceRescan = false;
     m_pending.clear();
 }
 
@@ -73,7 +80,15 @@ void Indexer::setVault(const Vault &vault)
         rewatch();
         return;
     }
-    rebuild();
+    if (m_index->metaNotesKey() == metaNotesKey(m_parseOptions)) {
+        rebuild();
+    } else if (!m_parseOptions.metaNotes) {
+        m_index->clearMetaNotes();
+        m_index->setMetaNotesKey({});
+        rebuild();
+    } else {
+        start({}, true); // the cache's runs are by other delimiters, or none: every note again
+    }
 }
 
 void Indexer::setNotebookReader(NotebookReader reader)
@@ -82,6 +97,27 @@ void Indexer::setNotebookReader(NotebookReader reader)
     m_notebookReader = std::move(reader);
     if (changed && m_vault.isValid())
         rebuild(); // every notebook's row is of the other kind now, which the scan sees
+}
+
+void Indexer::setMetaNotes(const ParseOptions &options)
+{
+    ParseOptions next;
+    next.metaNotes = options.metaNotes;
+    if (next.metaNotes) {
+        next.open = options.open;
+        next.close = options.close;
+    }
+    if (metaNotesKey(next) == metaNotesKey(m_parseOptions))
+        return;
+    m_parseOptions = next;
+    if (!m_vault.isValid() || !m_index->isOpen())
+        return;
+    if (next.metaNotes) {
+        start({}, true);
+    } else {
+        m_index->clearMetaNotes(); // a scan running now clears what it wrote when it ends
+        m_index->setMetaNotesKey({});
+    }
 }
 
 bool Indexer::isNotebook(const QString &path) const
@@ -100,28 +136,32 @@ void Indexer::reindex(const QString &path)
         start({path});
 }
 
-void Indexer::start(const QStringList &paths)
+void Indexer::start(const QStringList &paths, bool force)
 {
     if (!m_vault.isValid() || !m_index->isOpen())
         return;
     if (m_scan.isRunning()) {
-        if (paths.isEmpty())
+        if (paths.isEmpty()) {
             m_rescan = true;
-        else
+            m_forceRescan = m_forceRescan || force;
+        } else
             m_pending += paths;
         return;
     }
     m_clock.start();
     m_indexed = 0;
     m_wrote = false;
+    m_scanOptions = m_parseOptions;
+    m_scanSetsKey = force && paths.isEmpty();
     m_scan = QtConcurrent::run(&m_pool, [this, paths, scan = m_scanNumber.load(), vault = m_vault,
-                                         database = m_index->databasePath(), notebooks = m_notebookReader] {
-        runScan(paths, scan, vault, database, notebooks);
+                                         database = m_index->databasePath(), notebooks = m_notebookReader,
+                                         options = m_parseOptions, force] {
+        runScan(paths, scan, vault, database, notebooks, options, force);
     });
 }
 
 void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
-                      const NotebookReader &notebooks)
+                      const NotebookReader &notebooks, const ParseOptions &options, bool force)
 {
     // On the scan's thread: nothing here touches m_index, and what the
     // Index's thread must know goes to it in a Batch.
@@ -160,7 +200,7 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
             // A notebook is a note while a reader is set: its cached row is stale in the other case too.
             const bool asNote = Vault::isNote(path)
                                 || (notebooks && info.suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0);
-            if (writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
+            if (!force && writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
                 continue;
             (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
         }
@@ -186,10 +226,10 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
     // Parsed across the pool a chunk at a time, the next chunk parsing while
     // this one is written: the one writer is the slower half.
     constexpr qsizetype kChunk = 256;
-    const auto parse = [&notes, &notebooks](qsizetype from) {
+    const auto parse = [&notes, &notebooks, &options](qsizetype from) {
         return from < notes.size() ? QtConcurrent::mapped(notes.mid(from, kChunk),
-                                                          [notebooks](const QString &path) {
-                                                              return Indexer::parseFile(path, notebooks);
+                                                          [notebooks, options](const QString &path) {
+                                                              return Indexer::parseFile(path, notebooks, options);
                                                           })
                                    : QFuture<Parsed>();
     };
@@ -233,18 +273,25 @@ void Indexer::apply(const Batch &batch)
         return;
     }
     m_scan.waitForFinished(); // it posted this as its last act
+    if (m_scanOptions.metaNotes && !m_parseOptions.metaNotes) {
+        m_index->clearMetaNotes(); // switched off while it ran: what it wrote is stale
+    } else if (m_scanSetsKey) {
+        // Every note was parsed by the options it started with. Changed since,
+        // another forced pass is queued and sets the key again.
+        m_index->setMetaNotesKey(metaNotesKey(m_scanOptions));
+    }
     // Once, for the whole scan: every pane refreshes on it. Not at all when
     // the vault was already indexed - open() said so.
     if (m_wrote)
         m_index->notifyChanged();
     emit finished(m_indexed, m_clock.elapsed());
     if (std::exchange(m_rescan, false))
-        rebuild();
+        start({}, std::exchange(m_forceRescan, false));
     else if (!m_pending.isEmpty())
         start(std::exchange(m_pending, {}));
 }
 
-Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &notebooks)
+Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &notebooks, const ParseOptions &options)
 {
     Parsed parsed;
     Note note;
@@ -261,7 +308,7 @@ Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &no
     }
 
     const QFileInfo info(path);
-    parsed.metadata = threadParser().parse(note.text, path);
+    parsed.metadata = threadParser().parse(note.text, path, options);
     parsed.metadata.mtime = info.lastModified().toMSecsSinceEpoch();
     parsed.metadata.size = info.size();
     parsed.metadata.hash =

@@ -354,6 +354,41 @@ TEST(SearchGrammarTest, RegexIsPCREWithoutFlagsAndASlashEndsItEvenInAClass)
     EXPECT_FALSE(SearchQuery::parse(QStringLiteral("/[/]/")).isValid());
 }
 
+TEST(SearchGrammarTest, MetaRequiresTheWordInsideAMetaNote)
+{
+    NoteContext n = note(QStringLiteral("She left [check the date] and the date was wrong."));
+    const qsizetype open = n.text.indexOf(QLatin1Char('['));
+    n.metaNotes = {Range{open, n.text.indexOf(QLatin1Char(']')) + 1}};
+    const SearchOutcome outcome = SearchQuery::parse(QStringLiteral("meta:date")).evaluate(n);
+    ASSERT_TRUE(outcome.matched);
+    ASSERT_EQ(outcome.matches.size(), 1) << "the date outside the run is not a match";
+    EXPECT_EQ(outcome.matches.first().offset, n.text.indexOf(QStringLiteral("date")));
+    EXPECT_FALSE(matches(QStringLiteral("meta:wrong"), n)) << "only outside a run";
+    EXPECT_TRUE(SearchQuery::parse(QStringLiteral("meta:date")).fieldNeeds().metaNotes);
+    EXPECT_FALSE(SearchQuery::parse(QStringLiteral("date")).fieldNeeds().metaNotes);
+}
+
+TEST(SearchGrammarTest, BareMetaMatchesAnyRunAndReportsEachOne)
+{
+    NoteContext n = note(QStringLiteral("[one] then [two] and other words"));
+    n.metaNotes = {Range{0, 5}, Range{11, 16}};
+    const SearchOutcome outcome = SearchQuery::parse(QStringLiteral("meta:")).evaluate(n);
+    ASSERT_TRUE(outcome.matched);
+    ASSERT_EQ(outcome.matches.size(), 2);
+    EXPECT_EQ(outcome.matches.at(1).offset, 11);
+    EXPECT_EQ(outcome.matches.at(1).length, 5) << "the whole run, delimiters included";
+    EXPECT_TRUE(SearchQuery::parse(QStringLiteral("meta:")).fieldNeeds().metaNotes);
+
+    const NoteContext without = note(QStringLiteral("[one] is no run here"));
+    EXPECT_FALSE(matches(QStringLiteral("meta:"), without));
+    EXPECT_TRUE(matches(QStringLiteral("-meta:"), without));
+    EXPECT_FALSE(matches(QStringLiteral("-meta:"), n));
+    // A space after the colon ends the field: meta: AND other.
+    EXPECT_TRUE(matches(QStringLiteral("meta: other"), n));
+    EXPECT_FALSE(matches(QStringLiteral("meta: other"), without));
+    EXPECT_TRUE(matches(QStringLiteral("(meta:) other"), n));
+}
+
 TEST(SearchGrammarTest, UnknownFieldNameIsJustAWord)
 {
     // "foo" is not a recognised field, so "foo:bar" is one literal token -
@@ -401,6 +436,16 @@ TEST(SearchFtsTranslationTest, ScopedFieldsStillNarrowOnPresence)
     const SearchQuery q = SearchQuery::parse(QStringLiteral("line:(mix flour)"));
     ASSERT_TRUE(q.isValid());
     EXPECT_EQ(q.ftsExpression(), QStringLiteral("\"mix\" AND \"flour\""));
+}
+
+TEST(SearchFtsTranslationTest, BareMetaIsWildAndMetaWordNarrowsOnTheWord)
+{
+    const SearchQuery bare = SearchQuery::parse(QStringLiteral("meta:"));
+    ASSERT_TRUE(bare.isValid()) << bare.error().toStdString();
+    EXPECT_TRUE(bare.ftsExpression().isEmpty());
+    const SearchQuery word = SearchQuery::parse(QStringLiteral("meta:date"));
+    ASSERT_TRUE(word.isValid());
+    EXPECT_EQ(word.ftsExpression(), QStringLiteral("\"date\""));
 }
 
 TEST(SearchFtsTranslationTest, PathOnlyQueryIsWild)

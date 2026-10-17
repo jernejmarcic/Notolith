@@ -62,6 +62,9 @@ struct NoteContext {
     QList<NoteHeading> headings;
     QList<NoteTask> tasks;
     QList<NoteProperty> properties;
+    /// Meta-note runs, delimiters included; indexed only while the editor's
+    /// meta-note setting is on (Indexer::setMetaNotes).
+    QList<Range> metaNotes;
 };
 
 /// Which of a note's metadata tables a parsed query actually reads, so
@@ -73,11 +76,12 @@ struct FieldNeeds {
     bool headings = false;
     bool tasks = false;
     bool properties = false;
+    bool metaNotes = false;
 
     FieldNeeds operator|(const FieldNeeds &other) const
     {
         return {tags || other.tags, headings || other.headings, tasks || other.tasks,
-                properties || other.properties};
+                properties || other.properties, metaNotes || other.metaNotes};
     }
 };
 
