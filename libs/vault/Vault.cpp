@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QSaveFile>
+#include <QStringDecoder>
 
 #include <filesystem>
 
@@ -129,7 +130,10 @@ Note Vault::decode(const QByteArray &bytes)
 {
     Note note;
     note.bom = bytes.startsWith(kBom);
-    QString text = QString::fromUtf8(note.bom ? bytes.mid(kBom.size()) : bytes);
+    // Stateless: a sequence cut off at the end is an error, not carried over.
+    QStringDecoder decoder(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
+    QString text = decoder(QByteArrayView(bytes).sliced(note.bom ? kBom.size() : 0));
+    note.lossy = decoder.hasError();
 
     // Only a uniformly CRLF file is round-tripped as CRLF.
     // ponytail: a mixed-ending file is normalised to LF on save - the one case
@@ -169,6 +173,11 @@ bool Vault::read(const QString &path, Note &out, QString *error)
 
 bool Vault::write(const QString &path, const Note &note, QString *error)
 {
+    if (note.lossy) {
+        if (error)
+            *error = QStringLiteral("the file is not valid UTF-8, so saving would change bytes that were not edited");
+        return false;
+    }
     return writeBytes(path, encode(note), error);
 }
 

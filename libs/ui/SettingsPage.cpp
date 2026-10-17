@@ -675,8 +675,13 @@ QWidget *SettingsPage::buildFilesPage()
     addToggleRow(layout, QStringLiteral("files.autosave"), tr("Save automatically"),
                 tr("Save a note a moment after typing stops, and before it is closed or left, "
                    "as Obsidian does. Off asks before closing a note with unsaved changes."));
+    addComboRow(layout, QStringLiteral("files.deletedFiles"), tr("Deleted files"),
+               tr("Where a note or folder goes when you delete it."),
+               {{tr("Move to system trash"), QStringLiteral("system")},
+                {tr("Move to Obsidian trash (.trash folder)"), QStringLiteral("local")},
+                {tr("Permanently delete"), QStringLiteral("permanent")}});
     addToggleRow(layout, QStringLiteral("files.confirmDelete"), tr("Confirm before deleting"),
-                tr("Ask before moving a note or folder to the vault's trash."));
+                tr("Ask before deleting a note or folder."));
     addToggleRow(layout, QStringLiteral("links.useWikilinks"), tr("Use [[wikilinks]]"),
                 tr("Write new links as [[Note]] instead of [Note](Note.md)."));
     addToggleRow(layout, QStringLiteral("links.autoUpdate"), tr("Update links on rename"),

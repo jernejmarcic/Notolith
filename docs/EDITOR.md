@@ -369,6 +369,27 @@ Save / Discard / Cancel box appears with the error in its text, so a window is
 never refused a close without a word. With the setting off, the box is always
 the way out and nothing is saved on a timer.
 
+A note that is not valid UTF-8 (a stray Latin-1 byte, say) opens with the bad
+bytes shown as U+FFFD and a status-bar line saying so. It is never saved
+automatically, on a timer or on leaving, because that would write U+FFFD over
+bytes nobody edited: the status bar says so instead, and leaving it with edits
+asks (Save / Discard / Cancel). Ctrl+S asks "Save anyway?"; Yes replaces the
+invalid bytes and from then on the note saves like any other. Nothing else
+writes such a note either: `Vault::write` refuses a `Note::lossy` one, which
+also stops link updates on rename and merge from rewriting it (merge refuses a
+source like that outright).
+
+## Deleting
+
+Settings > Files > "Deleted files" (`files.deletedFiles`, read from
+`trashOption` in `.obsidian/app.json`) is Obsidian's choice: `system` (the
+default; the desktop trash, freedesktop `$XDG_DATA_HOME/Trash`), `local` (the
+vault's `.trash`, `trashOption` "local") or `permanent` (`trashOption` "none").
+It applies to the file tree's Delete and to the source of a merge. When there is
+no system trash to use, the file goes to the vault's `.trash` and the status bar
+says so; a failed trash is never turned into a permanent delete. Sync pulls
+that remove a note keep using the vault's `.trash`.
+
 ## Status bar counts
 
 Words and characters in the bar skip the frontmatter (the same text the word

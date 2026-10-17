@@ -76,6 +76,7 @@ const QVariantMap &defaults()
         {QStringLiteral("encryption.autoLockMinutes"), 15},
         {QStringLiteral("files.sortOrder"), QStringLiteral("nameAsc")}, // nameAsc, nameDesc, modifiedDesc, modifiedAsc
         {QStringLiteral("files.confirmDelete"), true},
+        {QStringLiteral("files.deletedFiles"), QStringLiteral("system")}, // system trash, local (the vault's .trash) or permanent
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("sync.serverURL"), QString()},
         {QStringLiteral("sync.email"), QString()},
@@ -469,6 +470,12 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     take(out, app, "newFileLocation", QStringLiteral("files.newNoteLocation"));
     take(out, app, "newFileFolderPath", QStringLiteral("files.newNoteFolder"));
     take(out, app, "alwaysUpdateLinks", QStringLiteral("links.autoUpdate"));
+    // Obsidian's "Deleted files": system, local or none.
+    const QString trashOption = app.value(QLatin1String("trashOption")).toString();
+    if (trashOption == QLatin1String("system") || trashOption == QLatin1String("local"))
+        out.insert(QStringLiteral("files.deletedFiles"), trashOption);
+    else if (trashOption == QLatin1String("none"))
+        out.insert(QStringLiteral("files.deletedFiles"), QStringLiteral("permanent"));
     if (app.contains(QLatin1String("useMarkdownLinks"))) {
         out.insert(QStringLiteral("links.useWikilinks"),
                    !app.value(QLatin1String("useMarkdownLinks")).toBool());
