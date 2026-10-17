@@ -1339,15 +1339,28 @@ Fable read the whole tree for bugs and missing Obsidian behaviour not listed
 or deferred here. Built in waves of parallel lanes (3 at a time: 25 GB free).
 
 Wave 1
-- [ ] 1. (lane utf8) A note with an invalid UTF-8 byte is rewritten on its
+- [x] 1. (lane utf8, 5a784bf) A note with an invalid UTF-8 byte is rewritten on its
       first edit: Vault::decode substitutes U+FFFD, autosave writes it back.
       Plan: QStringDecoder, Note::lossy; autosave and plain save refuse a
       lossy note with a status message; an explicit choice saves anyway;
       a banner on open. Test: "a\xE8b" survives typing + autosave byte-exact.
-- [ ] 12. (lane utf8) Deletes always go to the vault's .trash; Obsidian's
+- [x] 12. (lane utf8, 5a784bf) Deletes always go to the vault's .trash; Obsidian's
       default is the system trash. Plan: setting files.deletedFiles =
       system (default, QFile::moveToTrash) / local / permanent, Obsidian's
       app.json trashOption read when present; sync pulls keep .trash.
+      Done (both): Note::lossy from a stateless QStringDecoder; Vault::write
+      refuses a lossy note (so link rewrites, Bases, plugins and merge
+      cannot corrupt it either); autosave skips it with a status message,
+      Ctrl+S asks "Save anyway?", leaving with edits offers Save/Discard.
+      Deletes: files.deletedFiles system (default) / local / permanent,
+      Obsidian's trashOption honoured, a failing system trash falls back to
+      .trash (never permanent). Behaviour change: notes deleted in the app
+      now go to the desktop trash, as in Obsidian, not the vault's .trash.
+      Follow-ups:
+      - [ ] The indexer and other read-only readers index a lossy note's
+            U+FFFD text (search for the original bytes misses).
+      - [ ] Mermaid tests time out (mmdr 5 s) when several lanes build at
+            once: make them load-robust like the 1 MB open test.
 - [x] 2. (lane syncfix, 10a430f; done by Opus: the agent launch was refused) A sync pull of a delete whose trash move fails still
       drops the entity, so the next scan re-creates the note everywhere.
       Plan: keep the entity on failure, retry next pull, show it in status.
