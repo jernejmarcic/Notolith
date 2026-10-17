@@ -1170,8 +1170,8 @@ title), L (look-up), K (edited listing chrome).
 
 - [ ] "I want [] to be purple or at least distinct like in Obsidian. I was
       mostly using them for meta notes in writing." Bare `[text]` in prose
-      drawn in a theme token (accent purple) in every mode; not links,
-      wikilinks, footnotes, tasks, callouts. Lane meta.
+      drawn in a link-colour token (purple) in every mode, as Obsidian does;
+      not links, wikilinks, footnotes, tasks, callouts. Lane meta.
 - [ ] Toggleable, and the delimiters are the writer's choice ("another
       writer can select any character to behave like a meta note");
       default `[` `]`. Lane meta (scanner, settings, validation).
@@ -1180,8 +1180,17 @@ title), L (look-up), K (edited listing chrome).
       `meta:` search operator, Alt+] / Alt+[ next/previous. "Plan this
       feature out and think about how it may work" - Fable plans it after
       lane meta lands.
-- Proposed, not picked (2026-10-17): hide toggle + clean export + prose-only
-  word count; quick insert + resolve menu; typed meta notes via meta.ini.
+- Design corrected by Jernej 2026-10-17: "[] is just link normally, no? I
+  just use them as such does not mean that this is the correct way." So:
+  bare `[text]` gets Obsidian's link-style colour for everyone (plain
+  markdown styling); meta notes are a separate opt-in (default off) with the
+  writer's own delimiters.
+- [ ] Word count settings: "can be toggled in settings to exclude
+      everything within certain characters, and also toggled to ignore
+      formatting". Lane meta.
+- Never hide meta notes while writing: "always there until deleted".
+- Proposed, not picked (2026-10-17): clean export; quick insert + resolve
+  menu; typed meta notes via meta.ini.
 
 ## Requested by Jernej 2026-10-17: sidebar
 
