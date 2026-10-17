@@ -216,7 +216,8 @@ TEST_F(DiagramTest, GraphvizTakesTheThemesColoursAsDefaultsAndTheGraphsOwnWin)
     const QByteArray text = Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--text-normal")).name().toUtf8();
     EXPECT_TRUE(svg.contains("stroke=\"" + text + "\"")) << "the edge, in the theme's text colour";
     EXPECT_TRUE(svg.contains("stroke=\"red\"")) << "the node's own colour";
-    EXPECT_FALSE(svg.contains("fill=\"white\"")) << "no opaque background";
+    EXPECT_TRUE(svg.contains(Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary")).name().toUtf8()))
+        << "the theme's background, so another theme's page shows a card";
 }
 
 TEST_F(DiagramTest, TikZAcceptsTikZJaxsBlockAndABareTikzpicture)
@@ -236,14 +237,18 @@ TEST_F(DiagramTest, TikZBlackBecomesTheTextColourOnADarkThemeAndOtherColoursStay
 {
     NEED("latex");
     const QString source = QStringLiteral("\\begin{tikzpicture}\\draw (0,0) -- (1,1);\\draw[red] (0,1) -- (1,0);\\end{tikzpicture}");
-    ask(rendererFor(DiagramKind::TikZ, QString(), Theme::Mode::Dark), QStringLiteral("tikz"), source);
+    const auto drawn = ask(rendererFor(DiagramKind::TikZ, QString(), Theme::Mode::Dark), QStringLiteral("tikz"), source);
     ask(rendererFor(DiagramKind::TikZ, QString(), Theme::Mode::Light), QStringLiteral("tikz"), source);
+    ASSERT_FALSE(drawn->result.isMarkdown);
+    EXPECT_LT(drawn->result.image.pixelColor(2, 2).lightnessF(), 0.3) << "a dark card, not transparent";
     const QByteArray dark = cached(DiagramKind::TikZ, source, Theme::Mode::Dark);
     const QByteArray text = Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--text-normal")).name().toUtf8();
     EXPECT_TRUE(dark.contains("stroke='" + text + "'")) << dark.constData();
     EXPECT_FALSE(dark.contains("stroke='#000'"));
     EXPECT_TRUE(dark.contains("stroke='#f00'") || dark.contains("stroke='#ff0000'")) << "red stays red: " << dark.constData();
     EXPECT_TRUE(cached(DiagramKind::TikZ, source, Theme::Mode::Light).contains("stroke='#000'")) << "a light theme keeps black";
+    EXPECT_TRUE(dark.contains("<rect x='-")) << "a background card in the theme's colour: " << dark.constData();
+    EXPECT_TRUE(dark.contains(Theme::builtin(Theme::Mode::Dark).color(QStringLiteral("--background-primary")).name().toUtf8()));
 }
 
 TEST_F(DiagramTest, TikZCannotReadAFileOutsideTheSandboxOrStartAShell)

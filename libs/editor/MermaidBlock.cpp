@@ -210,7 +210,9 @@ Made runPlantUML(const QString &tool, const QString &source, const QByteArray &c
     return fromRan(ran, lastLine(QString::fromUtf8(ran.err)));
 }
 
-/// `dot -Tsvg`: the theme's colours as defaults, declared at the top of the
+/// `dot -Tsvg`: the theme's colours (background too, so the SVG is a card like
+/// Mermaid's and PlantUML's when publish or PDF export find it in another
+/// theme) as defaults, declared at the top of the
 /// graph so the graph's own attributes override them (dot's -G/-N/-E flags
 /// would override the graph's `node [color=...]`), on the line of the first
 /// `{` so error line numbers stay the source's. A source with no `{` is
@@ -221,15 +223,16 @@ Made runGraphviz(const QString &tool, const QString &source, const QByteArray &c
     if (!dir.isValid())
         return {{}, QCoreApplication::translate("MermaidBlock", "no temporary directory")};
     const QString text = colours(config).value(QStringLiteral("text")).toString();
+    const QString background = colours(config).value(QStringLiteral("background")).toString();
     QString themed = source;
     bool quoted = false;
     for (qsizetype i = 0; i < source.size(); ++i) {
         if (source.at(i) == QLatin1Char('"') && (i == 0 || source.at(i - 1) != QLatin1Char('\\')))
             quoted = !quoted;
         else if (source.at(i) == QLatin1Char('{') && !quoted) {
-            themed.insert(i + 1, QStringLiteral("bgcolor=transparent; color=\"%1\"; fontcolor=\"%1\"; node [color=\"%1\" fontcolor=\"%1\"]; "
+            themed.insert(i + 1, QStringLiteral("bgcolor=\"%2\"; color=\"%1\"; fontcolor=\"%1\"; node [color=\"%1\" fontcolor=\"%1\"]; "
                                                 "edge [color=\"%1\" fontcolor=\"%1\"]; ")
-                                     .arg(text));
+                                     .arg(text, background));
             break;
         }
     }
@@ -255,15 +258,28 @@ QByteArray tikzDocument(const QString &source)
         .toUtf8();
 }
 
-/// Black is the SVG's default and what dvisvgm leaves implicit: on a dark
-/// theme the root's default becomes the text colour and the explicit blacks
-/// follow (TikZJax's "invert" option). Other colours stay.
-QByteArray recolourTikZ(QByteArray svg, const QString &text)
+/// The SVG as a card in the theme's background (dvisvgm's viewBox starts
+/// off the origin), like Mermaid's and PlantUML's, which carry their own: one
+/// drawn for another theme is then a card, not lines invisible on a page.
+/// On a dark theme black - the SVG's default, which dvisvgm leaves implicit,
+/// and the explicit blacks - becomes the text colour first (TikZJax's
+/// "invert" option). Other colours stay.
+QByteArray themeTikZ(QByteArray svg, const QJsonObject &theme)
 {
     static const QRegularExpression black(QStringLiteral("(fill|stroke)=(['\"])(#000000|#000|black)\\2"));
+    static const QRegularExpression viewBox(QStringLiteral("viewBox=['\"]([-0-9.eE+]+) ([-0-9.eE+]+) ([-0-9.eE+]+) ([-0-9.eE+]+)['\"]"));
     QString markup = QString::fromUtf8(svg);
-    markup.replace(black, QStringLiteral("\\1=\\2") + text + QStringLiteral("\\2"));
-    markup.replace(QStringLiteral("<svg "), QStringLiteral("<svg fill='") + text + QStringLiteral("' "));
+    const QString text = theme.value(QStringLiteral("text")).toString();
+    if (theme.value(QStringLiteral("dark")).toBool()) {
+        markup.replace(black, QStringLiteral("\\1=\\2") + text + QStringLiteral("\\2"));
+        markup.replace(QStringLiteral("<svg "), QStringLiteral("<svg fill='") + text + QStringLiteral("' "));
+    }
+    const QRegularExpressionMatch box = viewBox.match(markup);
+    const qsizetype tagEnd = markup.indexOf(QLatin1Char('>'), markup.indexOf(QLatin1String("<svg ")));
+    if (box.hasMatch() && tagEnd > 0)
+        markup.insert(tagEnd + 1, QStringLiteral("<rect x='%1' y='%2' width='%3' height='%4' fill='%5'/>")
+                                      .arg(box.captured(1), box.captured(2), box.captured(3), box.captured(4),
+                                           theme.value(QStringLiteral("background")).toString()));
     return markup.toUtf8();
 }
 
@@ -306,9 +322,8 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
                                       QStringLiteral("cell.dvi")},
                                      {}, {}, true);
     Made made = fromRan(convert, firstLine(QString::fromUtf8(convert.err)));
-    const QJsonObject theme = colours(config);
-    if (made.error.isEmpty() && theme.value(QStringLiteral("dark")).toBool())
-        made.svg = recolourTikZ(made.svg, theme.value(QStringLiteral("text")).toString());
+    if (made.error.isEmpty())
+        made.svg = themeTikZ(made.svg, colours(config));
     return made;
 }
 

@@ -851,9 +851,10 @@ is the wrong place for it).
   `/usr` or `/etc` (TeX Live 2026's `openin_any` does nothing); the user's files
   are not in the sandbox. On a dark theme black (explicit, and the SVG's implicit
   default) becomes the theme's text colour, like TikZJax's invert option; other
-  colours stay.
-- **Graphviz**: `dot -Tsvg`; the theme's text colour and a transparent
-  background are declared at the top of the graph as the defaults, so the
+  colours stay. The SVG gets a background rect in the theme's background, so
+  like Mermaid's and PlantUML's it is a card (not pale lines invisible on a
+  light page) when publish or PDF export find it drawn for another theme.
+- **Graphviz**: `dot -Tsvg`; the theme's text colour and background are declared at the top of the graph as the defaults, so the
   graph's own attributes override them.
 - **Publish and PDF export** draw the cached SVGs of all four kinds the same
   way (a never-drawn fence stays its source); publish inlines each as
