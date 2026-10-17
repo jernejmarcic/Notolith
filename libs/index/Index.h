@@ -10,6 +10,7 @@
 #include <QStringList>
 
 #include "Metadata.h"
+#include "Parser.h"
 #include "Search.h"
 
 namespace noteAppC {
@@ -66,6 +67,9 @@ public:
     /// start can tell they are stale: empty for none (Indexer::setMetaNotes).
     QString metaNotesKey() const;
     void setMetaNotesKey(const QString &key);
+    /// What to parse a note with before put(), so its meta-note rows are kept:
+    /// the options metaNotesKey() records, defaults otherwise.
+    ParseOptions parseOptions() const;
     /// mtime and size of what the cache holds, for skipping unchanged files.
     bool isCurrent(const QString &path, qint64 mtime, qint64 size) const;
 

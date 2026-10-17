@@ -500,6 +500,19 @@ QString Index::metaNotesKey() const
     return query.next() ? query.value(0).toString() : QString();
 }
 
+ParseOptions Index::parseOptions() const
+{
+    ParseOptions options;
+    const QString key = metaNotesKey();
+    const qsizetype split = key.indexOf(QLatin1Char('\n'));
+    if (split > 0) {
+        options.metaNotes = true;
+        options.open = key.left(split);
+        options.close = key.mid(split + 1);
+    }
+    return options;
+}
+
 void Index::setMetaNotesKey(const QString &key)
 {
     if (!m_db.isOpen())
@@ -1213,10 +1226,11 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
 
     beginBatch();
     const Parser parser;
+    const ParseOptions options = parseOptions();
     int rewritten = 0;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
-        Metadata metadata = parser.parse(text, absolutePath);
+        Metadata metadata = parser.parse(text, absolutePath, options);
         const QFileInfo info(absolutePath);
         metadata.mtime = info.lastModified().toMSecsSinceEpoch();
         metadata.size = info.size();

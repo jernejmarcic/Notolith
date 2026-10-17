@@ -275,7 +275,7 @@ bool BaseTableModel::writePropertyEdit(const QString &relativePath, const QStrin
     if (!Vault::write(absolutePath, note, error))
         return false;
 
-    Metadata fresh = parser.parse(note.text, absolutePath);
+    Metadata fresh = parser.parse(note.text, absolutePath, m_index->parseOptions()); // keeps its meta-note rows
     const QFileInfo info(absolutePath);
     fresh.mtime = info.lastModified().toMSecsSinceEpoch();
     fresh.size = info.size();

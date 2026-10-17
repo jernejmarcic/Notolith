@@ -414,6 +414,44 @@ TEST_F(IndexTest, SwitchingMetaNotesOffDropsTheRowsWithoutAScan)
     EXPECT_TRUE(index.search(QStringLiteral("meta:")).isEmpty());
 }
 
+TEST_F(IndexTest, ARenameKeepsTheMetaNotesOfTheNotesItRewrites)
+{
+    write(QStringLiteral("Draft.md"), "She left [check the date] for [[Home]].\n");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setMetaNotes(metaNotesOn());
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    ASSERT_EQ(index.search(QStringLiteral("meta:date")).size(), 1);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Home.md")), QStringLiteral("Start"), &newPath, &error))
+        << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("Home.md"), QStringLiteral("Start.md"), vault, &error), 1)
+        << error.toStdString();
+    const QList<SearchResult> found = index.search(QStringLiteral("meta:date"));
+    ASSERT_EQ(found.size(), 1) << "the rewritten linker keeps its run";
+    EXPECT_EQ(found.first().path, QStringLiteral("Draft.md"));
+}
+
+TEST_F(IndexTest, SwitchingMetaNotesOffDuringAScanLeavesNoRows)
+{
+    for (int i = 0; i < 1500; ++i)
+        write(QStringLiteral("Bulk %1.md").arg(i), "A [run] in every note.\n");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setMetaNotes(metaNotesOn());
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(indexer.isRunning());
+    indexer.setMetaNotes(ParseOptions{});
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !done.isEmpty() && !indexer.isRunning(); }, 30000));
+    EXPECT_TRUE(index.search(QStringLiteral("meta:")).isEmpty());
+    EXPECT_TRUE(index.metaNotesKey().isEmpty());
+}
+
 TEST_F(IndexTest, DeletedNotesLeaveTheCache)
 {
     Index index;
