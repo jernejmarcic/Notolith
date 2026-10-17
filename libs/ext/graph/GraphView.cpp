@@ -577,7 +577,8 @@ void GraphView::rebuildGroupRows()
         });
         connect(swatch, &QToolButton::clicked, this, [this, i, paintSwatch] {
             const QColor picked = QColorDialog::getColor(m_options.colorGroups.at(i).color, this, tr("Group colour"));
-            if (!picked.isValid())
+            // The dialog is modal but the event loop runs: the list may have shrunk under it.
+            if (!picked.isValid() || i >= m_options.colorGroups.size())
                 return;
             m_options.colorGroups[i].color = picked;
             paintSwatch();
