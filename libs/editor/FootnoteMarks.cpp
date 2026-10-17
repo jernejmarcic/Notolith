@@ -154,8 +154,16 @@ bool MarkdownEditor::footnoteDefinitionBlock(const BlockView &view) const
             continue;
         // The block is the definition, or the part of one an indented line
         // continued; the newline after it goes with it.
-        if (view.span.range.start >= definition.range.start && view.span.range.start < definition.range.end + 1
-            && view.span.range.end <= definition.range.end + 1)
+        // A block may begin on the blank line before the definition.
+        const qsizetype start = view.span.range.start;
+        const bool begins = start >= definition.range.start
+                            || (start < definition.range.start
+                                && QStringView(m_text).mid(start, definition.range.start - start).trimmed().isEmpty());
+        // ... and take the blank lines after it.
+        const qsizetype end = view.span.range.end;
+        const bool ends = end <= definition.range.end + 1
+                          || QStringView(m_text).mid(definition.range.end, end - definition.range.end).trimmed().isEmpty();
+        if (begins && start < definition.range.end + 1 && ends)
             return true;
     }
     return false;
