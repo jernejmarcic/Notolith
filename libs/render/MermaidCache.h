@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 
 #include "Theme.h"
 
@@ -12,6 +13,28 @@ namespace noteAppC {
 /// export (which never run it) can still show a diagram the editor has made.
 /// It lives here, not in libs/editor, because libs/ext/publish does not link
 /// the editor. MermaidBlock.cpp (the editor's renderer) writes it.
+///
+/// PlantUML, TikZ and Graphviz fences are kept the same way, each kind in a
+/// directory of its own; the mermaid* functions are the Mermaid case of the
+/// diagram* ones.
+
+enum class DiagramKind { Mermaid, PlantUML, TikZ, Graphviz };
+
+/// The fence languages a kind answers to (lower case).
+QStringList diagramLanguages(DiagramKind kind);
+
+/// What a kind's cache key and tool are given of `theme`: Mermaid's
+/// mermaidConfig; for the others {"dark", "text", "background"} as JSON.
+QByteArray diagramConfig(DiagramKind kind, const Theme &theme);
+
+/// $XDG_CACHE_HOME/noteAppC/<mermaid|plantuml|tikz|graphviz>.
+QString diagramCacheDirectory(DiagramKind kind);
+
+/// mermaidCachePath for any kind.
+QString diagramCachePath(DiagramKind kind, const QString &source, const QByteArray &config);
+
+/// mermaidCachedSVG(source, theme) for any kind.
+QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme);
 
 /// The config JSON handed to `mmdr -c`: Mermaid's own `theme` and
 /// `themeVariables` shape, in `theme`'s colours. mmdr 0.3.1 honours it (the

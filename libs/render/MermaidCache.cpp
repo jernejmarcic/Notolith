@@ -43,14 +43,40 @@ QByteArray mermaidConfig(const Theme &theme)
         .toJson(QJsonDocument::Compact);
 }
 
-QString mermaidCacheDirectory()
+QStringList diagramLanguages(DiagramKind kind)
+{
+    switch (kind) {
+    case DiagramKind::Mermaid: return {QStringLiteral("mermaid")};
+    case DiagramKind::PlantUML: return {QStringLiteral("plantuml"), QStringLiteral("puml")};
+    case DiagramKind::TikZ: return {QStringLiteral("tikz")};
+    case DiagramKind::Graphviz: return {QStringLiteral("dot"), QStringLiteral("graphviz")};
+    }
+    return {};
+}
+
+QByteArray diagramConfig(DiagramKind kind, const Theme &theme)
+{
+    if (kind == DiagramKind::Mermaid)
+        return mermaidConfig(theme);
+    return QJsonDocument(QJsonObject{{QStringLiteral("dark"), theme.isDark()},
+                                     {QStringLiteral("text"), theme.color(QStringLiteral("--text-normal")).name()},
+                                     {QStringLiteral("background"), theme.color(QStringLiteral("--background-primary")).name()}})
+        .toJson(QJsonDocument::Compact);
+}
+
+QString diagramCacheDirectory(DiagramKind kind)
 {
     // The same spelling as TexCompiler.cpp's: QStandardPaths folds the
     // application name in, and the cache should survive how noteAppC is run.
     QString base = qEnvironmentVariable("XDG_CACHE_HOME");
     if (base.isEmpty())
         base = QDir::homePath() + QStringLiteral("/.cache");
-    return base + QStringLiteral("/noteAppC/mermaid");
+    return base + QStringLiteral("/noteAppC/") + diagramLanguages(kind).constFirst();
+}
+
+QString mermaidCacheDirectory()
+{
+    return diagramCacheDirectory(DiagramKind::Mermaid);
 }
 
 static QString hashOf(const QByteArray &bytes)
@@ -58,11 +84,16 @@ static QString hashOf(const QByteArray &bytes)
     return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha1).toHex());
 }
 
-QString mermaidCachePath(const QString &source, const QByteArray &config)
+QString diagramCachePath(DiagramKind kind, const QString &source, const QByteArray &config)
 {
     // "2": the cache's format (1 held re-coloured light diagrams).
-    return mermaidCacheDirectory() + QLatin1Char('/') + hashOf(source.toUtf8()) + QLatin1Char('-')
+    return diagramCacheDirectory(kind) + QLatin1Char('/') + hashOf(source.toUtf8()) + QLatin1Char('-')
            + hashOf(QByteArrayLiteral("2|") + config) + QStringLiteral(".svg");
+}
+
+QString mermaidCachePath(const QString &source, const QByteArray &config)
+{
+    return diagramCachePath(DiagramKind::Mermaid, source, config);
 }
 
 QByteArray mermaidCachedSVG(const QString &path)
@@ -78,15 +109,20 @@ QByteArray mermaidCachedSVG(const QString &path)
     return svg;
 }
 
-QByteArray mermaidCachedSVG(const QString &source, const Theme &theme)
+QByteArray diagramCachedSVG(DiagramKind kind, const QString &source, const Theme &theme)
 {
-    if (const QByteArray exact = mermaidCachedSVG(mermaidCachePath(source, mermaidConfig(theme))); !exact.isEmpty())
+    if (const QByteArray exact = mermaidCachedSVG(diagramCachePath(kind, source, diagramConfig(kind, theme))); !exact.isEmpty())
         return exact;
     // Not in this theme's colours (the app's own may carry a user's accent, which
     // the built-in one lacks): the diagram most recently used, whatever its colours.
-    const QFileInfoList others = QDir(mermaidCacheDirectory())
+    const QFileInfoList others = QDir(diagramCacheDirectory(kind))
                                      .entryInfoList({hashOf(source.toUtf8()) + QStringLiteral("-*.svg")}, QDir::Files, QDir::Time);
     return others.isEmpty() ? QByteArray() : mermaidCachedSVG(others.first().absoluteFilePath());
+}
+
+QByteArray mermaidCachedSVG(const QString &source, const Theme &theme)
+{
+    return diagramCachedSVG(DiagramKind::Mermaid, source, theme);
 }
 
 bool mermaidCacheStore(const QString &path, const QByteArray &svg)

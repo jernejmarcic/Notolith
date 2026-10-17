@@ -44,7 +44,7 @@ target_include_directories(noteAppC_editor PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # noteAppC_index for Fuzzy::score alone (SlashCommands.cpp): it depends on
 # neither noteAppC_editor nor noteAppC_ui, so linking it here is not a cycle,
 # and it is the command palette's own matcher rather than a second one.
-target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg)
+target_link_libraries(noteAppC_editor PUBLIC Qt6::Widgets noteAppC_markdown noteAppC_theme noteAppC_render noteAppC_vault noteAppC_index PRIVATE Qt6::Concurrent Qt6::Svg noteAppC_sandbox)
 
 # HTML blocks edited in place (HtmlEdit.cpp) take their structure from gumbo,
 # the parser litehtml already pulls in; without it they render as before.

@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSignalSpy>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QtConcurrent>
 
@@ -312,7 +313,42 @@ TEST(PublishTest, MathsBecomesSvg)
     EXPECT_FALSE(page.contains(QStringLiteral("math-source")));
 }
 
-// A fence the editor drew is inlined from the cache; publishing never runs mmdr
+// The SVGs of the page's diagrams, decoded from their <img> data URIs.
+QStringList diagramImages(const QString &page)
+{
+    static const QRegularExpression image(QStringLiteral("<div class=\"mermaid-diagram\"><img alt=\"diagram\" src=\"data:image/svg\\+xml;base64,([A-Za-z0-9+/=]*)\">"));
+    QStringList svgs;
+    for (auto it = image.globalMatch(page); it.hasNext();)
+        svgs << QString::fromUtf8(QByteArray::fromBase64(it.next().captured(1).toLatin1()));
+    return svgs;
+}
+
+// A note can put any markup into its SVG (TikZ writes \special{dvisvgm:raw}
+// straight through): a published diagram is an <img>, where script never runs.
+TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    const QString source = QStringLiteral("\\draw (0,0);");
+    ASSERT_TRUE(mermaidCacheStore(
+        noteAppC::diagramCachePath(noteAppC::DiagramKind::TikZ, source,
+                                   noteAppC::diagramConfig(noteAppC::DiagramKind::TikZ, Theme::builtin(Theme::Mode::Dark))),
+        "<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'><a href='&#106;avascript:alert(2)'><text>X</text></a></svg>"));
+    TestSite site({{QStringLiteral("Note.md"), "```tikz\n\\draw (0,0);\n```\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+    EXPECT_EQ(diagramImages(page).size(), 1) << page.toStdString();
+    EXPECT_FALSE(page.contains(QStringLiteral("onload")));
+    EXPECT_FALSE(page.contains(QStringLiteral("avascript")));
+}
+
+// A fence the editor drew is put in from the cache; publishing never runs mmdr
 // (a stub first on PATH that would leave a file if it did).
 TEST(PublishTest, AMermaidFenceBecomesTheCachedSVGAndNeverStartsTheTool)
 {
@@ -346,14 +382,48 @@ TEST(PublishTest, AMermaidFenceBecomesTheCachedSVGAndNeverStartsTheTool)
     else
         qputenv("XDG_CACHE_HOME", oldCache);
 
-    EXPECT_TRUE(page.contains(QStringLiteral("<div class=\"mermaid-diagram\"><svg"))) << page.toStdString();
-    EXPECT_TRUE(page.contains(QStringLiteral("DRAWNMARK")));
-    EXPECT_TRUE(page.contains(QStringLiteral("id=\"mm1-arrow-0\""))) << "ids are made page-unique";
-    EXPECT_TRUE(page.contains(QStringLiteral("url(#mm1-arrow-0)")));
+    const QStringList images = diagramImages(page);
+    ASSERT_EQ(images.size(), 1) << page.toStdString();
+    EXPECT_TRUE(images.first().contains(QStringLiteral("DRAWNMARK")));
     // Never drawn in the editor: its source, as an ordinary code block.
     EXPECT_TRUE(page.contains(QStringLiteral("NEVERDRAWN")));
     EXPECT_TRUE(page.contains(QStringLiteral("language-mermaid")));
     EXPECT_FALSE(QFile::exists(ran)) << "publish started mmdr";
+}
+
+// dot and dvisvgm start their SVG with an XML prolog and dvisvgm quotes with ': the prolog is
+// dropped and the ids are still made page-unique; a tikz fence the editor never drew stays its listing.
+TEST(PublishTest, DotAndTikZFencesBecomeTheirCachedSVGs)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    const Theme dark = Theme::builtin(Theme::Mode::Dark);
+    using noteAppC::DiagramKind;
+    ASSERT_TRUE(mermaidCacheStore(
+        noteAppC::diagramCachePath(DiagramKind::Graphviz, QStringLiteral("digraph{a->b}"), noteAppC::diagramConfig(DiagramKind::Graphviz, dark)),
+        "<?xml version=\"1.0\"?>\n<!DOCTYPE svg>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"graph0\"><text>DOTMARK</text></g></svg>"));
+    ASSERT_TRUE(mermaidCacheStore(
+        noteAppC::diagramCachePath(DiagramKind::TikZ, QStringLiteral("\\draw (0,0);"), noteAppC::diagramConfig(DiagramKind::TikZ, dark)),
+        "<?xml version='1.0'?>\n<svg xmlns='http://www.w3.org/2000/svg'><defs><path id='g0-65' d='M0 0'/></defs>"
+        "<use xlink:href='#g0-65'/></svg>"));
+    TestSite site({
+        {QStringLiteral("Note.md"), "```dot\ndigraph{a->b}\n```\n\n```tikz\n\\draw (0,0);\n```\n\n```plantuml\nNEVERDRAWN -> B\n```\n"},
+    });
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+
+    const QStringList images = diagramImages(page);
+    ASSERT_EQ(images.size(), 2) << page.toStdString();
+    EXPECT_TRUE(images.at(0).contains(QStringLiteral("DOTMARK")));
+    EXPECT_TRUE(images.at(1).contains(QStringLiteral("g0-65")));
+    EXPECT_TRUE(page.contains(QStringLiteral("NEVERDRAWN")));
+    EXPECT_TRUE(page.contains(QStringLiteral("language-plantuml")));
 }
 
 TEST(PublishTest, ImageEmbedCopiesOnlyReferencedAttachments)

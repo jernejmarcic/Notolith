@@ -590,23 +590,20 @@ private:
         return nullptr;
     }
 
-    /// The diagram the editor already made for a ```mermaid fence's source,
-    /// inlined, or empty (the fence is then an ordinary code block, its
-    /// source in a <pre>). Publishing never starts mmdr. The SVG's ids are
-    /// prefixed per diagram: mmdr numbers its markers from 0 in every file,
-    /// and ids are page-wide once inlined.
-    QString cachedDiagram(const QString &source)
+    /// The diagram the editor already made for a fence's source (mermaid,
+    /// plantuml, tikz, dot) as an <img>, or empty (the fence is then an
+    /// ordinary code block, its source in a <pre>). Publishing never starts a
+    /// tool. An <img>, not inlined: an SVG drawn as an image never runs
+    /// script or loads anything, and a note decides what goes into its SVG
+    /// (TikZ's \special{dvisvgm:raw ...} writes markup straight through), so
+    /// inlining would need a full SVG sanitiser. Its ids stay its own too.
+    QString cachedDiagram(noteAppC::DiagramKind kind, const QString &source)
     {
-        QByteArray bytes = noteAppC::mermaidCachedSVG(source, m_env.themeDark);
-        QString svg = QString::fromUtf8(bytes).trimmed();
-        if (!svg.startsWith(QLatin1String("<svg")) || svg.contains(QLatin1String("<script"), Qt::CaseInsensitive)
-            || svg.contains(QLatin1String("<foreignObject"), Qt::CaseInsensitive))
+        const QByteArray svg = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
+        if (!svg.contains("<svg"))
             return QString();
-        const QString prefix = QStringLiteral("mm%1-").arg(++m_diagramCount);
-        svg.replace(QLatin1String(" id=\""), QStringLiteral(" id=\"") + prefix);
-        svg.replace(QLatin1String("url(#"), QStringLiteral("url(#") + prefix);
-        svg.replace(QLatin1String("href=\"#"), QStringLiteral("href=\"#") + prefix);
-        return QStringLiteral("<div class=\"mermaid-diagram\">") + svg + QStringLiteral("</div>\n");
+        return QStringLiteral("<div class=\"mermaid-diagram\"><img alt=\"diagram\" src=\"data:image/svg+xml;base64,")
+             + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
     }
 
     /// A fence, or - for the first `tab` fence of a group - the whole group as
@@ -646,8 +643,11 @@ private:
         const QString text = stripHiddenRanges(fence.content, note);
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
-        if (lang.compare(QLatin1String("mermaid"), Qt::CaseInsensitive) == 0) {
-            const QString diagram = cachedDiagram(note.text.mid(fence.content.start, fence.content.length()));
+        for (const noteAppC::DiagramKind kind : {noteAppC::DiagramKind::Mermaid, noteAppC::DiagramKind::PlantUML,
+                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz}) {
+            if (!noteAppC::diagramLanguages(kind).contains(lang, Qt::CaseInsensitive))
+                continue;
+            const QString diagram = cachedDiagram(kind, note.text.mid(fence.content.start, fence.content.length()));
             if (!diagram.isEmpty())
                 return diagram;
         }
@@ -1408,7 +1408,6 @@ private:
 
     const ParsedNote *m_topLevel;
     const RenderEnv &m_env;
-    int m_diagramCount = 0;
     int m_tabGroupCount = 0;
     QString m_pageOutputPath;
     QSet<QString> m_attachments;

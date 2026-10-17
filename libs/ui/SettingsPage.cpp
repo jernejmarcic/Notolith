@@ -801,6 +801,22 @@ QWidget *SettingsPage::buildCorePluginsPage()
                       "~/.local/share/cargo/bin) or its full path. Install mmdr with: "
                       "cargo install mermaid-rs-renderer"),
                    QStringLiteral("mmdr"));
+    addToggleRow(layout, QStringLiteral("render.plantuml"), tr("PlantUML diagrams"),
+                 tr("Draw plantuml (and puml) code blocks as diagrams, like Mermaid's. The tool runs in a sandbox "
+                    "with no network and no access to your files."));
+    addLineEditRow(layout, QStringLiteral("render.plantumlTool"), tr("PlantUML tool"),
+                   tr("The command's name on PATH or its full path (it has to be under /usr, which is all the sandbox sees)."),
+                   QStringLiteral("plantuml"));
+    addToggleRow(layout, QStringLiteral("render.tikz"), tr("TikZ diagrams"),
+                 tr("Draw tikz code blocks (a tikzpicture, or TikZJax's \\usepackage lines and document) as "
+                    "diagrams with LaTeX and dvisvgm, in a sandbox with no network and no access to your files."));
+    addLineEditRow(layout, QStringLiteral("render.latexTool"), tr("LaTeX tool for TikZ"),
+                   tr("The latex command's name on PATH or its full path, under /usr; dvisvgm is looked for next to it, then on PATH."),
+                   QStringLiteral("latex"));
+    addToggleRow(layout, QStringLiteral("render.graphviz"), tr("Graphviz diagrams"),
+                 tr("Draw dot (and graphviz) code blocks as diagrams, in a sandbox with no network and no access to your files."));
+    addLineEditRow(layout, QStringLiteral("render.dotTool"), tr("Graphviz tool"),
+                   tr("The dot command's name on PATH or its full path, under /usr."), QStringLiteral("dot"));
 
     // A vault's own .obsidian/daily-notes.json and templates.json win over
     // these, so an Obsidian vault behaves here as it did there.
