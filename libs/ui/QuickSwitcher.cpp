@@ -67,10 +67,14 @@ QuickSwitcher::QuickSwitcher(QWidget *parent)
     resize(560, 380);
 }
 
-void QuickSwitcher::setCandidates(const QStringList &candidates, const QStringList &details)
+void QuickSwitcher::setCandidates(const QStringList &candidates, const QStringList &details,
+                                  const QList<QIcon> &icons)
 {
     m_candidates = candidates;
     m_details = details;
+    m_icons = icons;
+    if (!icons.isEmpty())
+        m_results->setIconSize({16, 16});
     if (!details.isEmpty() && !dynamic_cast<DetailDelegate *>(m_results->itemDelegate()))
         m_results->setItemDelegate(new DetailDelegate(m_results));
     refill();
@@ -114,6 +118,8 @@ void QuickSwitcher::refill()
         auto *item = new QListWidgetItem(m_candidates.at(i), m_results);
         if (i < m_details.size())
             item->setData(kDetailRole, m_details.at(i));
+        if (i < m_icons.size())
+            item->setIcon(m_icons.at(i));
     }
     if (m_results->count() > 0)
         m_results->setCurrentRow(0);

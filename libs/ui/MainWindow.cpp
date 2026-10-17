@@ -691,6 +691,10 @@ QWidget *MainWindow::buildSidebar()
                     statusBar()->showMessage(tr("Could not rename: %1").arg(error), 4000);
             },
             Qt::QueuedConnection);
+    fileTree->rowDelegate()->setIconHook([this](const QString &absolutePath) {
+        return fileIconsOn() && m_vault.contains(absolutePath) ? m_fileIcons.iconFor(m_vault.relative(absolutePath))
+                                                              : QString();
+    });
     // QFileSystemModel fills a directory on a worker thread, so the root
     // index is not usable until it says so.
     connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
@@ -1552,6 +1556,74 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
     return isModified(leaf) ? name + QLatin1String(" *") : name;
 }
 
+QIcon MainWindow::tabIcon(const Leaf *leaf) const
+{
+    if (!fileIconsOn() || leaf->notePath.isEmpty() || !m_vault.contains(leaf->notePath))
+        return {};
+    return fileIcon(m_fileIcons.iconFor(m_vault.relative(leaf->notePath)),
+                    m_theme.color(QStringLiteral("--text-muted")), 14);
+}
+
+bool MainWindow::fileIconsOn() const
+{
+    return m_settings.boolean(QStringLiteral("appearance.fileIcons"));
+}
+
+void MainWindow::setFileIcon(const QString &absolutePath, const QString &icon)
+{
+    if (!m_vault.isValid() || !m_vault.contains(absolutePath))
+        return;
+    m_fileIcons.set(m_vault.relative(absolutePath), icon);
+    QString error;
+    if (!m_fileIcons.save(&error))
+        statusBar()->showMessage(tr("Could not save the icon: %1").arg(error), 4000);
+    refreshFileIcons();
+}
+
+void MainWindow::chooseFileIcon(const QString &absolutePath)
+{
+    static const QSet<QString> notForFiles = {QStringLiteral("noteAppC"), QStringLiteral("branch-collapsed"),
+                                              QStringLiteral("branch-expanded"), QStringLiteral("spin-up")};
+    QStringList names;
+    QList<QIcon> icons;
+    const QColor colour = m_theme.color(QStringLiteral("--text-normal"));
+    for (const QString &file : QDir(QStringLiteral(":/icons")).entryList({QStringLiteral("*.svg")})) {
+        const QString name = file.chopped(4);
+        if (notForFiles.contains(name))
+            continue;
+        names << name;
+        icons << fileIcon(name, colour, 16);
+    }
+    auto *picker = new QuickSwitcher(this);
+    picker->setObjectName(QStringLiteral("fileIconPicker"));
+    picker->setPlaceholder(tr("Icon name, or type one character"));
+    picker->setCandidates(names, {}, icons);
+    picker->setCreateAllowed(true);
+    connect(picker, &QuickSwitcher::accepted, this, [this, absolutePath, picker](const QString &name) {
+        picker->deleteLater();
+        setFileIcon(absolutePath, name);
+    });
+    connect(picker, &QuickSwitcher::createRequested, this, [this, absolutePath, picker](const QString &typed) {
+        picker->deleteLater();
+        const QString text = typed.trimmed();
+        if (text.toUcs4().size() == 1)
+            setFileIcon(absolutePath, text);
+        else
+            statusBar()->showMessage(tr("Not an icon name: type one character, or pick from the list"), 4000);
+    });
+    connect(picker, &QDialog::rejected, picker, &QObject::deleteLater);
+    picker->popUp();
+}
+
+void MainWindow::refreshFileIcons()
+{
+    m_tree->viewport()->update();
+    for (const auto &group : m_groups) {
+        for (int i = 0; i < group->tabs->count() && i < group->leaves.size(); ++i)
+            group->tabs->setTabIcon(i, tabIcon(group->leaves.at(i)));
+    }
+}
+
 void MainWindow::syncTabs(TabGroup *group)
 {
     const bool soleEmpty = m_leaves.size() == 1 && group->leaves.size() == 1
@@ -1592,8 +1664,10 @@ void MainWindow::syncTabs(TabGroup *group)
         });
         group->tabs->setTabButton(index, QTabBar::RightSide, closeButton);
     }
-    for (int i = 0; i < wanted; ++i)
+    for (int i = 0; i < wanted; ++i) {
         group->tabs->setTabText(i, tabTitle(group->leaves.at(i)));
+        group->tabs->setTabIcon(i, tabIcon(group->leaves.at(i)));
+    }
     const int active = group->leaves.indexOf(m_active);
     if (active >= 0 && active < wanted)
         group->tabs->setCurrentIndex(active);
@@ -2884,6 +2958,7 @@ void MainWindow::applySettings()
     const Theme theme = themeFromSettings();
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
+    refreshFileIcons(); // appearance.fileIcons, and the tab icons' colour
     applyFeatures(); // first, so a pane it builds is themed below
     if (m_metaPane) {
         const ParseOptions options = parseOptions();
@@ -3055,6 +3130,8 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
         QMessageBox::warning(this, tr("Merge"), tr("Merged, but %1 stays:\n%2").arg(QFileInfo(source).fileName(), error));
         return false;
     }
+    m_fileIcons.removeUnder(m_vault.relative(source));
+    m_fileIcons.save();
     openNote(target);
     QList<Leaf *> gone;
     for (const auto &leaf : m_leaves) {
@@ -3948,6 +4025,8 @@ void MainWindow::openVault(const QString &path)
     }
     m_openMode = OpenMode::Vault;
     m_vault = vault;
+    m_fileIcons = FileIcons(m_vault.root());
+    m_fileIcons.load();
     resetWorkspace();
     resetHistory();
 
@@ -5467,6 +5546,10 @@ void MainWindow::followLostNotes(bool final)
         const QString moved = findMovedNote(path, (*first)->note);
         if (!moved.isEmpty()) {
             m_lostNotes.remove(path);
+            if (m_vault.contains(path) && m_vault.contains(moved)) {
+                m_fileIcons.renamePrefix(m_vault.relative(path), m_vault.relative(moved));
+                m_fileIcons.save();
+            }
             // The caret, the scroll and what is typed stay: only the name changes.
             for (const auto &leaf : m_leaves) {
                 if (!leaf->view && leaf->notePath == path) {
@@ -5818,10 +5901,19 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
     QAction *deleteAction = nullptr;
+    QAction *iconAction = nullptr;
+    QAction *removeIconAction = nullptr;
+    const QString path = index.isValid() ? m_files->filePath(index) : QString();
     if (index.isValid()) {
         menu.addSeparator();
         renameAction = menu.addAction(tr("Rename"));
         deleteAction = menu.addAction(tr("Delete"));
+        if (fileIconsOn()) {
+            menu.addSeparator();
+            iconAction = menu.addAction(tr("Change icon..."));
+            if (!m_fileIcons.iconFor(m_vault.relative(path)).isEmpty())
+                removeIconAction = menu.addAction(tr("Remove icon"));
+        }
     }
 
     QAction *chosen = menu.exec(m_tree->viewport()->mapToGlobal(pos));
@@ -5835,6 +5927,10 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         m_tree->edit(index);
     else if (chosen == deleteAction)
         deletePathAt(index);
+    else if (chosen == iconAction)
+        chooseFileIcon(path);
+    else if (chosen == removeIconAction)
+        setFileIcon(path, QString());
 }
 
 void MainWindow::newNoteIn(const QString &folderRelative)
@@ -5943,6 +6039,8 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))
         return false;
     const QString newRelative = m_vault.relative(newPath);
+    m_fileIcons.renamePrefix(oldRelative, newRelative);
+    m_fileIcons.save();
     notifyPlugins("note-renamed", newPath);
 #ifdef NOTEAPPC_HAVE_HISTORY
     // The history follows the note: every note under a renamed folder too.
@@ -6040,6 +6138,8 @@ void MainWindow::deletePathAt(const QModelIndex &index)
         QMessageBox::warning(this, tr("Delete"), tr("Could not delete %1:\n%2").arg(name, error));
         return;
     }
+    m_fileIcons.removeUnder(m_vault.relative(path));
+    m_fileIcons.save();
 
     // Obsidian closes the tabs of what was deleted.
     QList<Leaf *> gone;

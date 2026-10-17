@@ -32,6 +32,7 @@ const QVariantMap &defaults()
         {QStringLiteral("appearance.textFont"), QString()},
         {QStringLiteral("appearance.monospaceFont"), QString()},
         {QStringLiteral("appearance.showInlineTitle"), true},
+        {QStringLiteral("appearance.fileIcons"), true},
         {QStringLiteral("appearance.showRibbon"), true},
 
         // Editor

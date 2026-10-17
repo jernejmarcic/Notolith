@@ -97,6 +97,7 @@
 #include "ToggleSwitch.h"
 #include "QuickSwitcher.h"
 #include "Snapshots.h"
+#include "FileIcons.h"
 #include "RecoveryDialog.h"
 #include "Settings.h"
 #ifdef NOTEAPPC_EXPECT_SYNC
@@ -4854,4 +4855,82 @@ TEST_F(WindowTest, TheMetaNotesPaneVaultModeListsEveryNoteWithRunsAndDrillsDown)
     EXPECT_FALSE(window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->isChecked());
     QTreeWidget *tree = nullptr;
     WAIT_TRUE((tree = metaTree(window)) && !tree->isHidden() && tree->topLevelItemCount() == 2, 2000);
+}
+
+TEST_F(WindowTest, AnIconSetFromTheTreeSurvivesRestartAndRename)
+{
+    PrivateConfig config;
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "setFileIcon", Q_ARG(QString, path(QStringLiteral("Welcome.md"))),
+                                              Q_ARG(QString, QStringLiteral("zap"))));
+        // The tree's F2 and the inline title both come here.
+        const auto rename = [&window](const QString &from, bool isDir, const QString &to) {
+            bool renamed = false;
+            QString error;
+            EXPECT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                                  Q_ARG(QString, from), Q_ARG(bool, isDir), Q_ARG(QString, to),
+                                                  Q_ARG(QString *, &error)));
+            return renamed;
+        };
+        ASSERT_TRUE(rename(path(QStringLiteral("Welcome.md")), false, QStringLiteral("Target")));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "setFileIcon", Q_ARG(QString, path(QStringLiteral("Projects"))),
+                                              Q_ARG(QString, QStringLiteral("folder-open"))));
+        ASSERT_TRUE(rename(path(QStringLiteral("Projects")), true, QStringLiteral("Work")));
+    }
+    noteAppC::FileIcons icons(dir.path());
+    icons.load();
+    EXPECT_EQ(icons.iconFor(QStringLiteral("Target.md")), QStringLiteral("zap"));
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("Welcome.md")).isEmpty());
+    EXPECT_EQ(icons.iconFor(QStringLiteral("Work")), QStringLiteral("folder-open"));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral(".obsidian/icons.json"))));
+    EXPECT_FALSE(QDir(dir.path()).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot)
+                     .contains(QStringLiteral("icons.json")));
+}
+
+TEST_F(WindowTest, AnIconShowsOnTheTabAndGoesWhenTheToggleIsOff)
+{
+    PrivateConfig config;
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    ASSERT_GE(tabs->count(), 1);
+    EXPECT_TRUE(tabs->tabIcon(0).isNull());
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "setFileIcon", Q_ARG(QString, path(QStringLiteral("Welcome.md"))),
+                                          Q_ARG(QString, QStringLiteral("zap"))));
+    EXPECT_FALSE(tabs->tabIcon(0).isNull());
+
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    settingsToggle(window, "appearance.fileIcons")->click();
+    window.closeSettings();
+    EXPECT_TRUE(tabs->tabIcon(0).isNull()) << "off hides it";
+    noteAppC::FileIcons icons(dir.path());
+    icons.load();
+    EXPECT_EQ(icons.iconFor(QStringLiteral("Welcome.md")), QStringLiteral("zap")) << "and keeps it";
+}
+
+TEST_F(WindowTest, DeletingANoteDropsItsIcon)
+{
+    PrivateConfig config;
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "setFileIcon", Q_ARG(QString, path(QStringLiteral("Welcome.md"))),
+                                          Q_ARG(QString, QStringLiteral("zap"))));
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Welcome.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "deletePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    noteAppC::FileIcons icons(dir.path());
+    icons.load();
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("Welcome.md")).isEmpty());
 }
