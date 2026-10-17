@@ -1302,11 +1302,18 @@ Wave 1
       default is the system trash. Plan: setting files.deletedFiles =
       system (default, QFile::moveToTrash) / local / permanent, Obsidian's
       app.json trashOption read when present; sync pulls keep .trash.
-- [ ] 2. (lane syncfix) A sync pull of a delete whose trash move fails still
+- [x] 2. (lane syncfix, 10a430f; done by Opus: the agent launch was refused) A sync pull of a delete whose trash move fails still
       drops the entity, so the next scan re-creates the note everywhere.
       Plan: keep the entity on failure, retry next pull, show it in status.
-- [ ] 10. (lane syncfix) inotify addPaths() failures are dropped silently.
+      Done: the pull stops at that record (cursor and entity kept), status
+      Error names the note, next cycle retries. Test ADeleteThatCannotBe-
+      TrashedIsRetriedNotUndone, seen failing with the old code.
+- [x] 10. (lane syncfix, 98edf26) inotify addPaths() failures are dropped silently.
       Plan: status message + periodic rescan fallback.
+      Done: 30 s rescan while any folder lacks a watch, one status message;
+      an unwatchable open note is reported (not polled: reopen shows it).
+      Test AFolderThatCannotBeWatchedTurnsOnPolling (a 000 folder), seen
+      failing with the fallback disabled.
 - [ ] 4. (lane move) Notes and folders cannot be moved between folders.
       Plan: Vault move with renamePath's checks; renameVaultPath gains a
       target folder (links, history, tabs, icons, index follow); tree drag
