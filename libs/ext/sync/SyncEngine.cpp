@@ -332,10 +332,13 @@ void SyncEngine::runCycle()
     const int pushed = pushOutbox();
     int pulled = 0;
     int conflicts = 0;
-    pullJournal(&pulled, &conflicts);
+    const QString pullError = pullJournal(&pulled, &conflicts);
 
     maintainEnrolment();
-    setStatus(Status::Idle);
+    if (pullError.isEmpty())
+        setStatus(Status::Idle);
+    else
+        setStatus(Status::Error, pullError);
     emit syncFinished(pushed, pulled, conflicts);
 }
 
@@ -809,41 +812,47 @@ int SyncEngine::pushOutbox()
     return pending.size();
 }
 
-void SyncEngine::pullJournal(int *pulled, int *conflicts)
+QString SyncEngine::pullJournal(int *pulled, int *conflicts)
 {
     for (;;) {
         const SyncClient::PullResult result = m_client->pullJournal(m_vaultID, m_journal->lastPulledSeq(), 500);
         if (!result.ok || result.records.isEmpty())
             break;
         for (const SyncClient::JournalRecord &record : result.records) {
-            applyRecord(record, pulled, conflicts);
+            // Stop short of a record that could not be applied: the cursor
+            // stays before it, so the next cycle tries it again, and nothing
+            // after it is applied out of order.
+            QString error;
+            if (!applyRecord(record, pulled, conflicts, &error))
+                return error;
             m_journal->setLastPulledSeq(record.seq);
         }
         if (result.records.size() < 500)
             break;
     }
+    return {};
 }
 
-void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts)
+bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error)
 {
     const auto key = m_journal->itemsKey(record.itemsKeyID);
     if (!key)
-        return; // this device does not hold that itemsKey yet - enrolment will pick it up
+        return true; // this device does not hold that itemsKey yet - enrolment will pick it up
     bool ok = false;
     const QByteArray noteKey = SyncCrypto::open(
         key->plaintext, record.wrappedNoteKey, SyncCrypto::buildAD("IK", {record.entityID, record.itemsKeyID}), &ok);
     if (!ok)
-        return;
+        return true;
     const QByteArray plaintext = SyncCrypto::open(
         noteKey, record.payload,
         SyncCrypto::buildAD("EN", {record.entityID, record.deviceID, record.recordID, record.itemsKeyID}), &ok);
     if (!ok)
-        return; // tampered, swapped between entities, or replayed - dropped, never applied
+        return true; // tampered, swapped between entities, or replayed - dropped, never applied
 
     bool parseOk = false;
     const EntityPlain remote = parse(plaintext, &parseOk);
     if (!parseOk)
-        return;
+        return true;
 
     const auto existing = m_journal->entity(record.entityID);
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
@@ -854,7 +863,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             // queueLocalChange() already removed the entity when it
             // pushed this delete - nothing left to confirm.
             ++*pulled;
-            return;
+            return true;
         }
         QByteArray localBytes;
         bool hasLocalFile = false;
@@ -868,11 +877,18 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         // remove the file when nothing local disagrees with the delete.
         const bool localChanged =
             existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
-        if (!localChanged && hasLocalFile)
-            m_vault.moveToTrash(existingPath);
+        // The entity goes only once the file has: dropped with the file
+        // still there, the next scan would push it back as a new note and
+        // undo the delete on every device.
+        QString trashError;
+        if (!localChanged && hasLocalFile && !m_vault.moveToTrash(existingPath, &trashError)) {
+            *error = QStringLiteral("could not move %1 to the trash (%2); its deletion is retried next sync")
+                         .arg(existing->path, trashError);
+            return false;
+        }
         m_journal->removeEntity(record.entityID);
         ++*pulled;
-        return;
+        return true;
     }
 
     if (isSelfEcho) {
@@ -886,7 +902,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         // Just mark whatever is on disk right now as the synced state.
         if (!existing) {
             ++*pulled; // queueLocalChange always creates the entity before pushing - nothing to confirm
-            return;
+            return true;
         }
         QByteArray syncedHash;
         bool hasLocalFile = false;
@@ -913,7 +929,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             m_journal->putEntity(entity);
         }
         ++*pulled;
-        return;
+        return true;
     }
 
     QByteArray localBytes;
@@ -932,12 +948,12 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     if (!remote.blobAddress.isEmpty()) {
         const SyncClient::BlobResult blob = m_client->getBlob(m_vaultID, remote.blobAddress);
         if (!blob.ok)
-            return;
+            return true;
         bool blobOk = false;
         const QByteArray padded =
             SyncCrypto::openBlob(noteKey, SyncCrypto::buildAD("BL", {remote.blobAddress}), blob.bytes, &blobOk);
         if (!blobOk)
-            return;
+            return true;
         const QByteArray unpadded = SyncCrypto::unpad(padded, padded.size());
         if (remote.entityType == QStringLiteral("note"))
             remoteText = QString::fromUtf8(unpadded);
@@ -1011,6 +1027,7 @@ void SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         ++*conflicts;
     else
         ++*pulled;
+    return true;
 }
 
 } // namespace noteAppC

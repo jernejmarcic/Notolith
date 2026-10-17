@@ -138,8 +138,12 @@ private:
     void maintainEnrolment();  ///< seal lockboxes for approved devices, ask about the rest
 
     int pushOutbox();
-    void pullJournal(int *pulled, int *conflicts);
-    void applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts);
+    /// Empty, or why the pull stopped at a record it could not apply here
+    /// (that record is pulled again next cycle).
+    QString pullJournal(int *pulled, int *conflicts);
+    /// False only when the record must be retried: a remote delete whose
+    /// file could not be moved to the trash.
+    bool applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error);
     void queueLocalChange(const SyncScanner::Change &change);
 
     QThread m_thread;
