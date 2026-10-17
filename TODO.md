@@ -1360,13 +1360,27 @@ Wave 1
       an unwatchable open note is reported (not polled: reopen shows it).
       Test AFolderThatCannotBeWatchedTurnsOnPolling (a 000 folder), seen
       failing with the fallback disabled.
-- [ ] 4. (lane move) Notes and folders cannot be moved between folders.
+- [x] 4. (lane move, 0afeed9) Notes and folders cannot be moved between folders.
       Plan: Vault move with renamePath's checks; renameVaultPath gains a
       target folder (links, history, tabs, icons, index follow); tree drag
       and drop (InternalMove, own dropEvent); command "Move file to..."
       with a folder picker.
-- [ ] 11. (lane move) Case-only rename refused on case-insensitive file
+- [x] 11. (lane move, 0afeed9) Case-only rename refused on case-insensitive file
       systems ("already exists").
+      Done: Vault::movePath (refuses outside, hidden, into itself, clash),
+      renameVaultPath split so rename and move share followPathChange
+      (links, tabs, icons, history, index); tree drag and drop through the
+      window only (own startDrag: the base would delete the dragged files
+      from QFileSystemModel); "Move to..." menu and file-explorer:move-file
+      with a folder picker. Case-only rename via std::filesystem::rename
+      when the destination is the same file.
+      Follow-ups:
+      - [ ] Relative Markdown links inside a moved note (`[x](../a.md)`)
+            are not rewritten (same as rename today); Obsidian rewrites them.
+      - [ ] The real drag gesture (startDrag/dragMove/dropEvent) has not run
+            under test; only dropFolderAt and the signal path have.
+      - [ ] Case-only rename not run on a real case-insensitive filesystem
+            (needs a mount; ask Jernej or skip).
 
 Wave 2
 - [ ] 3. (lane single) No single instance: opening a note from the file
