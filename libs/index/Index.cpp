@@ -863,12 +863,57 @@ QStringList Index::findByName(const QString &query, int limit) const
 
 QStringList Index::linkTargets() const
 {
+    // ponytail: an alias that is also another note's name drops out of the
+    // plain list and shows only as the alias entry.
+    QSet<QString> aliasNames;
+    for (const auto &entry : aliases()) {
+        if (entry.first != entry.second)
+            aliasNames.insert(entry.first);
+    }
     QStringList names;
     QSqlQuery query(m_db);
     query.exec(QStringLiteral("SELECT DISTINCT name FROM names ORDER BY name"));
-    while (query.next())
-        names << query.value(0).toString();
+    while (query.next()) {
+        const QString name = query.value(0).toString();
+        if (!aliasNames.contains(name))
+            names << name;
+    }
     return names;
+}
+
+QList<QPair<QString, QString>> Index::aliases() const
+{
+    QList<QPair<QString, QString>> found;
+    QSqlQuery query(m_db);
+    query.exec(QStringLiteral("SELECT files.path, props.type, props.value FROM props "
+                              "JOIN files ON files.id = props.file "
+                              "WHERE lower(props.key) IN ('aliases', 'alias')"));
+    while (query.next()) {
+        const QString note = QFileInfo(query.value(0).toString()).completeBaseName();
+        // The parser's rule (Frontmatter.cpp): a plain string is a comma list.
+        const bool list = query.value(1).toInt() == int(Property::Type::List);
+        for (const QString &piece : query.value(2).toString().split(list ? QLatin1Char('\n') : QLatin1Char(','),
+                                                                     Qt::SkipEmptyParts)) {
+            if (!piece.trimmed().isEmpty())
+                found.append({piece.trimmed(), note});
+        }
+    }
+    return found;
+}
+
+QStringList Index::fragmentsOf(const QString &path, bool blocks) const
+{
+    QStringList found;
+    QSqlQuery query(m_db);
+    query.prepare(QString(QStringLiteral("SELECT %1 FROM %2 JOIN files ON files.id = %2.file "
+                                         "WHERE files.path = ? ORDER BY start"))
+                      .arg(blocks ? QStringLiteral("block") : QStringLiteral("text"),
+                           blocks ? QStringLiteral("blocks") : QStringLiteral("headings")));
+    query.addBindValue(path);
+    query.exec();
+    while (query.next())
+        found << query.value(0).toString();
+    return found;
 }
 
 // --- search (libs/index/Search.h has the grammar and the evaluator) -------

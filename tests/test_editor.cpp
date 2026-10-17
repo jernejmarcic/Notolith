@@ -12,6 +12,7 @@
 #include <QMimeData>
 #include <QRandomGenerator>
 #include <QLineEdit>
+#include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
 #include <QRegularExpression>
@@ -447,6 +448,114 @@ TEST(MarkdownEditorTest, TypingTwoBracketsClosesThePair)
     QTest::keyClicks(editor.get(), QStringLiteral("[["));
     EXPECT_EQ(editor->noteText(), QStringLiteral("see [[]]\n"));
     EXPECT_EQ(editor->cursorOffset(), 6);
+}
+
+/// The `[[` popup: a top-level window, so not among the editor's children.
+QListView *linkPopup()
+{
+    for (QWidget *widget : QApplication::allWidgets()) {
+        if (widget->objectName() == QLatin1String("completerPopup"))
+            return qobject_cast<QListView *>(widget);
+    }
+    return nullptr;
+}
+
+/// What the `[[` popup lists right now: empty while it is closed.
+QStringList linkPopupRows(MarkdownEditor &)
+{
+    QListView *popup = linkPopup();
+    QStringList rows;
+    if (!popup || !popup->isVisible())
+        return rows;
+    for (int row = 0; row < popup->model()->rowCount(); ++row)
+        rows << popup->model()->index(row, 0).data().toString();
+    return rows;
+}
+
+/// Accepts the popup's current row the way Return does.
+void acceptLinkPopup(MarkdownEditor &)
+{
+    QTest::keyClick(linkPopup(), Qt::Key_Return);
+}
+
+TEST(MarkdownEditorTest, LinkCompletionOffersANotesHeadingsAfterAHash)
+{
+    auto editor = editorWith(QStringLiteral("see \n"));
+    editor->show();
+    editor->setLinkTargets({QStringLiteral("A")});
+    int asked = 0;
+    editor->setLinkFragmentProvider([&asked](const QString &note, bool blocks) {
+        ++asked;
+        return note == QLatin1String("A") && !blocks ? QStringList{QStringLiteral("Setup"), QStringLiteral("Usage")}
+                                                      : QStringList();
+    });
+    editor->setCursorOffset(4);
+    QTest::keyClicks(editor.get(), QStringLiteral("[[A"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("A")});
+    EXPECT_EQ(asked, 0); // names come from setLinkTargets, the provider is not asked
+    QTest::keyClicks(editor.get(), QStringLiteral("#"));
+    EXPECT_EQ(linkPopupRows(*editor), (QStringList{QStringLiteral("Setup"), QStringLiteral("Usage")}));
+    QTest::keyClicks(editor.get(), QStringLiteral("Se"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("Setup")});
+    EXPECT_EQ(asked, 1); // once per popup, not per keystroke
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("see [[A#Setup]]\n"));
+    EXPECT_EQ(editor->cursorOffset(), 15);
+}
+
+TEST(MarkdownEditorTest, LinkCompletionOffersThisNotesHeadingsAndBlockIDs)
+{
+    const QString note = QStringLiteral("# Alpha\n\n## Beta\n\nA line ^abc1\n\nsee ");
+    auto editor = editorWith(note);
+    editor->show();
+    editor->setCursorOffset(note.size());
+    QTest::keyClicks(editor.get(), QStringLiteral("[[#"));
+    EXPECT_EQ(linkPopupRows(*editor), (QStringList{QStringLiteral("Alpha"), QStringLiteral("Beta")}));
+    QTest::keyClicks(editor.get(), QStringLiteral("Be"));
+    acceptLinkPopup(*editor);
+    EXPECT_TRUE(editor->noteText().endsWith(QStringLiteral("see [[#Beta]]")));
+
+    editor->setNoteText(note);
+    editor->setCursorOffset(note.size());
+    QTest::keyClicks(editor.get(), QStringLiteral("[[#^"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("abc1")});
+    acceptLinkPopup(*editor);
+    EXPECT_TRUE(editor->noteText().endsWith(QStringLiteral("see [[#^abc1]]")));
+}
+
+TEST(MarkdownEditorTest, LinkCompletionOffersANotesBlockIDsAfterHashCaret)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->show();
+    editor->setLinkTargets({QStringLiteral("A")});
+    editor->setLinkFragmentProvider([](const QString &, bool blocks) {
+        return blocks ? QStringList{QStringLiteral("x1"), QStringLiteral("y2")}
+                      : QStringList{QStringLiteral("Heading")};
+    });
+    QTest::keyClicks(editor.get(), QStringLiteral("![[A#^"));
+    EXPECT_EQ(linkPopupRows(*editor), (QStringList{QStringLiteral("x1"), QStringLiteral("y2")}));
+    QTest::keyClicks(editor.get(), QStringLiteral("y"));
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("![[A#^y2]]\n"));
+}
+
+TEST(MarkdownEditorTest, LinkCompletionOffersAnAliasAndInsertsItWithTheNote)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->show();
+    editor->setLinkTargets({QStringLiteral("Ideas"), QStringLiteral("Other")});
+    editor->setLinkAliases({{QStringLiteral("Brainwaves"), QStringLiteral("Ideas")}});
+    QTest::keyClicks(editor.get(), QStringLiteral("[[Brain"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("Brainwaves -> Ideas")});
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("[[Ideas|Brainwaves]]\n"));
+
+    // A plain name still inserts as itself, and an embed completes the same way.
+    editor->setNoteText(QStringLiteral("\n"));
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor.get(), QStringLiteral("![[Oth"));
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("![[Other]]\n"));
 }
 
 TEST(MarkdownEditorTest, CursorSkipsOverHiddenSyntax)

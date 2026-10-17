@@ -223,7 +223,29 @@ TEST_F(IndexTest, QuickSwitcherFindsByAnyName)
     EXPECT_TRUE(index.findByName(QStringLiteral("note")).contains(
         QStringLiteral("Projects/noteAppC.md")));
     EXPECT_TRUE(index.findByName(QStringLiteral("brain")).contains(QStringLiteral("Ideas.md")));
-    EXPECT_TRUE(index.linkTargets().contains(QStringLiteral("Brainwaves")));
+}
+
+TEST_F(IndexTest, LinkCompletionListsAliasesHeadingsAndBlockIDs)
+{
+    write(QStringLiteral("Sections.md"),
+          "---\naliases: Sec one, Sec two\n---\n# Setup\n\ntext ^blk-1\n\n## Usage\n\nmore ^b2\n");
+    Index index;
+    build(index);
+
+    // An alias is offered as `Note|alias`, so it is not also a plain name.
+    const QList<QPair<QString, QString>> aliases = index.aliases();
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Brainwaves"), QStringLiteral("Ideas")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Sec one"), QStringLiteral("Sections")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Sec two"), QStringLiteral("Sections")}));
+    const QStringList targets = index.linkTargets();
+    EXPECT_TRUE(targets.contains(QStringLiteral("Ideas")));
+    EXPECT_FALSE(targets.contains(QStringLiteral("Brainwaves")));
+
+    EXPECT_EQ(index.fragmentsOf(QStringLiteral("Sections.md"), false),
+              (QStringList{QStringLiteral("Setup"), QStringLiteral("Usage")}));
+    EXPECT_EQ(index.fragmentsOf(QStringLiteral("Sections.md"), true),
+              (QStringList{QStringLiteral("blk-1"), QStringLiteral("b2")}));
+    EXPECT_TRUE(index.fragmentsOf(QStringLiteral("Nowhere.md"), false).isEmpty());
 }
 
 TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)

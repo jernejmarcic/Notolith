@@ -10,6 +10,7 @@
 #include <QKeySequence>
 #include <QPageLayout>
 #include <QPageSize>
+#include <QPair>
 #include <QPixmap>
 #include <QPointer>
 #include <QSizeF>
@@ -22,9 +23,12 @@
 #include <optional>
 #include <vector>
 
+class QAbstractItemModel;
 class QCompleter;
 class QFileSystemWatcher;
 class QMimeData;
+class QModelIndex;
+class QStringListModel;
 class QDragEnterEvent;
 class QDragMoveEvent;
 class QDropEvent;
@@ -379,6 +383,13 @@ public:
 
     /// Names the `[[` suggester offers. Refreshed from the index.
     void setLinkTargets(const QStringList &targets);
+    /// `aliases:` entries as {alias, note name}: the suggester offers each as
+    /// "alias -> Note" and inserts `Note|alias`.
+    void setLinkAliases(const QList<QPair<QString, QString>> &aliases);
+    /// The headings (`blocks` false) or block ids of a note, for `[[Note#` and
+    /// `[[Note#^`. Asked once per popup, never for the note being edited:
+    /// `[[#` is answered from the editor itself.
+    void setLinkFragmentProvider(std::function<QStringList(const QString &note, bool blocks)> provider);
 
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
@@ -2507,7 +2518,7 @@ private:
     /// the caret is not inside a wikilink.
     std::optional<QString> wikilinkPrefix() const;
     void updateSuggestions();
-    void insertCompletion(const QString &completion);
+    void insertCompletion(const QModelIndex &completion);
 
     // --- slash commands, implemented in SlashCommands.cpp ------------------
     /// Text typed after the nearest "/" that opens the popup (line start or
@@ -2760,6 +2771,10 @@ private:
     FindBar *m_findBar = nullptr;
 
     QCompleter *m_completer = nullptr;
+    QAbstractItemModel *m_linkModel = nullptr;     ///< names and aliases
+    QStringListModel *m_fragmentModel = nullptr;   ///< headings or block ids
+    std::function<QStringList(const QString &, bool)> m_fragmentProvider;
+    QString m_fragmentKey; ///< what m_fragmentModel holds; empty when stale
 
     // --- slash commands ------------------------------------------------
     SlashCommandSource m_slashSource;

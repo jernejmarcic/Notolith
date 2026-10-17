@@ -1465,8 +1465,10 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
     editor->setKeyBindings(m_editorBindings);
     if (m_spellHanded)
         editor->setSpelling(m_editorSpelling);
-    if (m_index.isOpen())
+    if (m_index.isOpen()) {
         editor->setLinkTargets(m_index.linkTargets());
+        editor->setLinkAliases(m_index.aliases());
+    }
 
     // Paste and drop: the files go into the vault's attachment folder for the
     // editor's note, by Obsidian's rules; a note outside a vault takes none.
@@ -1477,6 +1479,9 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
         }
         return {};
     };
+    editor->setLinkFragmentProvider([this, noteOf](const QString &target, bool blocks) {
+        return m_index.fragmentsOf(m_index.resolve(target, noteOf()), blocks);
+    });
     const auto attachmentFolder = [this](const QString &note) {
         const QString folder =
             m_vault.attachmentFolderFor(m_settings.text(QStringLiteral("files.attachmentFolder")), note);
@@ -2909,8 +2914,10 @@ void MainWindow::openRelativeInNewTab(const QString &relativePath)
 void MainWindow::onIndexChanged()
 {
     const QStringList targets = m_index.linkTargets();
+    const auto aliases = m_index.aliases();
     for (const auto &leaf : m_leaves) {
         leaf->editor->setLinkTargets(targets);
+        leaf->editor->setLinkAliases(aliases);
         // Before this, a note opened while the vault was first indexed showed
         // every link as missing until it was next edited.
         leaf->editor->refreshLinkStatus();
