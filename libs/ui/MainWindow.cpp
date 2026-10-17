@@ -1024,7 +1024,10 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                     });
         }
         const bool host = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
-        const notebook::SandboxTier tier = host ? notebook::SandboxTier::Host : notebook::SandboxTier::Bubblewrap;
+        // `#| sandbox: wasm` is stricter than the default, so asking for it needs no setting.
+        const notebook::SandboxTier tier = host                  ? notebook::SandboxTier::Host
+                                           : options.sandboxWasm ? notebook::SandboxTier::Wasm
+                                                                 : notebook::SandboxTier::Bubblewrap;
         // Forgetting a block's output: the sidecar entry goes, nothing runs.
         if (options.clear) {
             notebook::removeNotebookCache(notebook::notebookCacheKey(language, source, tier));
@@ -1043,6 +1046,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                      6000);
         }
         request.tier = tier;
+        request.wasmModules = m_settings.text(QStringLiteral("notebooks.wasmModules"));
         if (!options.workingDir.isEmpty())
             request.extraReadOnlyBinds = {options.workingDir};
         request.cache = options.cache;
@@ -1082,8 +1086,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     editor->setNotebookIntrospector([this, editor](const QString &language, const QString &code, qsizetype cursor,
                                                    bool inspect, const MarkdownEditor::NotebookRunOptions &options,
                                                    const MarkdownEditor::NotebookIntrospectionDeliver &deliver) {
-        if (!m_notebook || showsEncryptedNote(editor))
-            return false;
+        if (!m_notebook || showsEncryptedNote(editor) || options.sandboxWasm)
+            return false; // a wasm block never has a kernel
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.tier = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))

@@ -90,8 +90,11 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
     // setting) asks for one so that its blocks share variables.
     const QString tool = DirectRunner::toolFor(request.language);
     const bool wantsKernel = request.useKernel || !request.kernelName.isEmpty();
-    if (!wantsKernel
-        && (!tool.isEmpty() || !kernelSpecsByLanguage().contains(request.language.trimmed().toLower()))) {
+    // The WASM tier is a one-shot module run, never a kernel (DirectRunner
+    // answers for a language it cannot run there).
+    if (request.tier == SandboxTier::Wasm
+        || (!wantsKernel
+            && (!tool.isEmpty() || !kernelSpecsByLanguage().contains(request.language.trimmed().toLower())))) {
         if (!m_direct)
             m_direct = new DirectRunner(this);
         DirectRunner::Request direct;
@@ -99,6 +102,7 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         direct.source = request.source;
         direct.tier = request.tier;
         direct.readOnlyBinds = request.extraReadOnlyBinds;
+        direct.wasmModule = DirectRunner::wasmModuleFor(request.wasmModules, request.language);
         if (request.timeoutMs > 0)
             direct.timeoutMs = request.timeoutMs;
         const bool keep = request.cache;

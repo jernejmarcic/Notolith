@@ -50,6 +50,10 @@ public:
         /// `source` already is the file's contents by the time this is
         /// called - this is only for a script that reads *sibling* files).
         QStringList extraReadOnlyBinds;
+        /// SandboxTier::Wasm only: the `notebooks.wasmModules` setting as
+        /// written (`python=/p/python.wasm;...`); the block's own entry is
+        /// looked up in it. Blocks in this tier never use a kernel.
+        QString wasmModules;
         /// Through the language's Jupyter kernel even when the system's own
         /// tool could run it: what the kernel's end-to-end test asks for, and
         /// what a note asks for with `#| kernel: on` (or the setting that

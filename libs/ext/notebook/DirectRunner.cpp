@@ -4,6 +4,7 @@
 
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -65,6 +66,11 @@ const QList<Recipe> &recipes()
         {{QStringLiteral("rust"), QStringLiteral("rs")}, QStringLiteral("cell.rs"), QStringLiteral("rustc"),
          {QStringLiteral("sh"), QStringLiteral("-c"), QStringLiteral("rustc -O -o \"$1/cell\" \"$1/cell.rs\" && \"$1/cell\""), QStringLiteral("sh"), QStringLiteral("%d")}},
         {{QStringLiteral("java")}, QStringLiteral("Main.java"), QStringLiteral("java"), {QStringLiteral("java"), QStringLiteral("%f")}},
+        // WebAssembly text, run by wasmtime. Both names take WAT: a binary
+        // module cannot live in a Markdown fence. The tool is how the WASM
+        // tier tells a block that is the module from one that needs one.
+        {{QStringLiteral("wat"), QStringLiteral("wasm")}, QStringLiteral("cell.wat"), QStringLiteral("wasmtime"),
+         {QStringLiteral("wasmtime"), QStringLiteral("run"), QStringLiteral("-C"), QStringLiteral("cache=n"), QStringLiteral("%f")}},
     };
     return list;
 }
@@ -113,6 +119,15 @@ QString withoutAnsi(QString text)
 }
 
 constexpr qint64 kMaxOutput = 1 << 20; // a runaway print loop stops here
+constexpr qint64 kWasmMemory = qint64(1) << 30; // a guest's linear memory, 1 GiB
+
+/// `path` itself when it needs binding into the sandbox: /usr already is.
+void bindIfOutsideUsr(QStringList *binds, const QString &path)
+{
+    const QString real = QFileInfo(path).canonicalFilePath();
+    if (!real.isEmpty() && !real.startsWith(QLatin1String("/usr/")) && !binds->contains(real))
+        binds->append(real);
+}
 
 } // namespace
 
@@ -154,6 +169,21 @@ bool DirectRunner::canRun(const QString &language)
     return !tool.isEmpty() && !QStandardPaths::findExecutable(tool).isEmpty();
 }
 
+QString DirectRunner::wasmModuleFor(const QString &setting, const QString &language)
+{
+    const QString wanted = language.trimmed().toLower();
+    const Recipe *recipe = recipeFor(wanted);
+    for (const QString &entry : setting.split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const qsizetype eq = entry.indexOf(QLatin1Char('='));
+        if (eq < 0)
+            continue;
+        const QString key = entry.left(eq).trimmed().toLower();
+        if (key == wanted || (recipe && recipeFor(key) == recipe))
+            return entry.mid(eq + 1).trimmed();
+    }
+    return {};
+}
+
 void DirectRunner::run(const Request &request, const Deliver &deliver)
 {
     const auto fail = [this, deliver](const QString &error) {
@@ -166,7 +196,22 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     const Recipe *recipe = recipeFor(request.language);
     if (!recipe)
         return fail(tr("Notolith does not know how to run \"%1\"").arg(request.language));
-    if (!canRun(request.language))
+    // The WASM tier runs a module under wasmtime, not the language's own
+    // tool, so that tool need not be installed - wasmtime must be.
+    const bool wasm = request.tier == SandboxTier::Wasm;
+    const bool isModule = recipe->tool == QLatin1String("wasmtime"); // a wat/wasm block
+    const QString wasmtime = QStandardPaths::findExecutable(QStringLiteral("wasmtime"));
+    if (wasm && wasmtime.isEmpty())
+        return fail(tr("wasmtime is needed for the wasm sandbox, and it is not installed"));
+    if (wasm && !isModule) {
+        if (request.wasmModule.isEmpty())
+            return fail(tr("no WebAssembly module set for \"%1\" blocks (Settings, notebooks.wasmModules)")
+                            .arg(request.language));
+        if (!QFileInfo(request.wasmModule).isFile())
+            return fail(tr("the WebAssembly module for \"%1\" blocks, %2, is not a file")
+                            .arg(request.language, request.wasmModule));
+    }
+    if (!wasm && !canRun(request.language))
         return fail(tr("%1 is not installed, so \"%2\" blocks cannot run").arg(recipe->tool, request.language));
 
     auto *running = new Running;
@@ -215,11 +260,39 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     QStringList args;
     SandboxTier used = SandboxTier::Host;
     int filterFD = -1;
-    wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used,
-                &filterFD);
-    if (program.isEmpty()) {
-        delete running;
-        return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
+    if (wasm) {
+        // The guest sees the block's directory as /cell and nothing else, and
+        // memory is capped. `request.readOnlyBinds` (a runnable embed's
+        // folder) is deliberately not granted: wasmtime 49 has no read-only
+        // --dir, so the guest could write into the user's vault.
+        const QString module = isModule ? file : request.wasmModule;
+        QStringList wasmArgs = {QStringLiteral("run"), QStringLiteral("-C"), QStringLiteral("cache=n"),
+                                QStringLiteral("--dir"), dir + QStringLiteral("::/cell"),
+                                QStringLiteral("-W"), QStringLiteral("max-memory-size=%1").arg(kWasmMemory),
+                                module};
+        if (!isModule)
+            wasmArgs << QStringLiteral("/cell/") + chosen.file;
+        // Then the whole of wasmtime inside tier 1's bubblewrap + seccomp, so
+        // a wasmtime bug is still contained; only the module and the runtime
+        // (when they are outside /usr) are bound in, as single files.
+        sandbox.readOnlyBinds.clear();
+        bindIfOutsideUsr(&sandbox.readOnlyBinds, wasmtime);
+        if (!isModule) // a wat/wasm block's module is in the cell directory already
+            bindIfOutsideUsr(&sandbox.readOnlyBinds, module);
+        wrapCommand(SandboxTier::Bubblewrap, wasmtime, wasmArgs, sandbox, &program, &args, &used, &filterFD);
+        if (program.isEmpty()) {
+            // No bubblewrap: WASI is the sandbox (no files but /cell, no network).
+            program = wasmtime;
+            args = wasmArgs;
+        }
+        used = SandboxTier::Wasm;
+    } else {
+        wrapCommand(request.tier, command.takeFirst(), command, sandbox, &program, &args, &used,
+                    &filterFD);
+        if (program.isEmpty()) {
+            delete running;
+            return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
+        }
     }
 
     running->process = new QProcess(this);

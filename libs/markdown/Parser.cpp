@@ -417,10 +417,12 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
         else
             options.kernel = name;
     } else if (key == QLatin1String("sandbox")) {
-        // Anything but "host" keeps the tier-1 default rather than failing a
-        // typo closed - "bubblewrap" written out, or a future tier's name
-        // this build does not implement yet, both land here as bubblewrap.
-        options.sandboxHost = unquote(value).compare(QLatin1String("host"), Qt::CaseInsensitive) == 0;
+        // Anything but "host" or "wasm" keeps the tier-1 default rather than
+        // failing a typo closed - "bubblewrap" written out, or a future tier's
+        // name this build does not implement yet, both land here as bubblewrap.
+        const QString tier = unquote(value);
+        options.sandboxHost = tier.compare(QLatin1String("host"), Qt::CaseInsensitive) == 0;
+        options.sandboxWasm = tier.compare(QLatin1String("wasm"), Qt::CaseInsensitive) == 0;
     } else {
         // Quarto's output, warning and error arrive here and stop - noteAppC
         // never surfaces them; keeping them only hides the lines.

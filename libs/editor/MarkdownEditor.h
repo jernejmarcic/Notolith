@@ -616,6 +616,9 @@ public:
         /// `#| sandbox: host` on a fenced block - tier 0, opt-in. Always
         /// false for a runnable embed (no `#|` lines to set it from).
         bool sandboxHost = false;
+        /// `#| sandbox: wasm`: a WebAssembly module under wasmtime. Stricter
+        /// than the default, so no setting gates it.
+        bool sandboxWasm = false;
         /// A runnable embed's own folder, so a script that reads sibling
         /// files still can - bound read-only in the bubblewrap tier (the
         /// window's job; the editor only names the path). Empty for a
@@ -1372,6 +1375,7 @@ private:
         QString notebookSource;
         QString notebookWorkingDir;
         bool notebookSandboxHost = false;
+        bool notebookSandboxWasm = false;
         bool notebookCacheOn = true;
         bool notebookShowOutput = true; ///< `#| output: false` clears it
         int notebookTimeout = 0;
@@ -1554,7 +1558,8 @@ private:
     void paintNotebookOutput(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// A small "host" marker left of the run control, on a fenced block that
     /// opted into `#| sandbox: host` - the reader's only sign that this
-    /// block runs unsandboxed. Nothing on any other block.
+    /// block runs unsandboxed - or "wasm" for `#| sandbox: wasm`. Nothing on
+    /// any other block.
     void paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
 
     /// A run of adjacent `tab` fences, shown as one block with a tab strip.

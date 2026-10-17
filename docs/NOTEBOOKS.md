@@ -115,7 +115,7 @@ the note stays clean CommonMark anywhere else:
 | `cache: false` | nothing is kept: a reopened note shows no output |
 | `timeout: 5` | stop after 5 s (a kernel is interrupted) |
 | `kernel: on`, `off`, `python3` | see above |
-| `sandbox: host` | see below |
+| `sandbox: host`, `sandbox: wasm` | see below |
 
 ## What a block can show
 
@@ -141,6 +141,24 @@ load BPF or modules, use io_uring, or type into the terminal (`TIOCSTI`):
 those calls answer "operation not permitted". `#| sandbox: host` in
 the block asks to run as you, unsandboxed; it is refused unless allowed in
 settings.
+
+`#| sandbox: wasm` runs the block as a WebAssembly module under `wasmtime`
+(a CLI subprocess; install it) and is stricter than the default, so no
+setting gates it. When bubblewrap is there too, the whole `wasmtime` process
+runs inside the tier-1 bubblewrap and seccomp filter; without it, WASI alone
+is the sandbox. The module sees only the block's own directory, as `/cell`,
+and has no network and 1 GiB of memory. The limits:
+
+- `wat` (and `wasm`) blocks are WebAssembly text and are the module
+  themselves; they also run in the default tier, with no `/cell` at all.
+- Any other language needs a module standing in for its interpreter: the
+  setting `notebooks.wasmModules`, `python=/path/python.wasm;ruby=/path/ruby.wasm`
+  (a language's aliases count: `py` finds `python=`). The module is run with
+  the block's file as its argument, `/cell/cell.py`; a language with no entry
+  is refused, saying so. No interpreter module ships with Notolith.
+- A runnable embed's folder (`![[x.py]]`) is not given to the guest: wasmtime
+  has no read-only directory grant, so it could write into the vault.
+- A wasm block never uses a Jupyter kernel.
 
 Docker (or Podman) would be the next tier, for languages not installed on
 the machine; neither is installed on starbase-1, so it is not built.
