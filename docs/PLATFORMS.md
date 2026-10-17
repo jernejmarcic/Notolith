@@ -68,6 +68,32 @@ torpedo is a Raspberry Pi 5 running Debian, which would be the best stand-in
 for a phone's CPU, but the script is Arch-only and torpedo is a server - it
 would need its own dependency list and a decision to install build tools there.
 
+## Launching: one window per user
+
+`packaging/io.github.jernejmarcic.Notolith.desktop` registers Markdown files
+and folders, so a file manager runs `notolith %f`. Like Obsidian, only the
+first launch makes a window: it listens on `notolith.sock` in the runtime
+directory (`$XDG_RUNTIME_DIR`, owner-only), and a later launch connects, sends
+the absolute path it was given (nothing, when it was given none), waits up to a
+second for the answer and exits 0. A launch with no instance running pays one
+failed `connect()`: about 50 microseconds measured, `QStandardPaths` lookup
+included.
+
+The running window opens the path as the command line would: a note in the
+open vault replaces the current tab, as following a link does; another vault
+opens the way the vault menu opens it; a loose note opens as a tab beside the
+vault rather than replacing it. A folder in the recent-vaults list counts as a
+vault whether or not it holds `.obsidian`. Then the window is raised and
+`activateWindow()` is called. On Wayland that is all Qt offers: the
+compositor decides whether to focus the window or only flag it as wanting
+attention, because handing it the second launch's `XDG_ACTIVATION_TOKEN` takes
+Qt's private Wayland API. A socket file left by a crash is replaced on the
+next start.
+
+`NOTEAPPC_INSTANCE_SOCKET` names another socket: benchmarks and anything else
+that starts the real binary while Notolith is in use should set it, or the
+launch is handed to the open window.
+
 ## Mobile
 
 Not started. What is already true, and what stands in the way:

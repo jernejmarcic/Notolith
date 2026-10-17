@@ -29,7 +29,8 @@ struct LaunchTarget {
 /// A directory is a vault. A file is a single file - unless it sits inside a
 /// folder that is already a vault (an ancestor holding `.obsidian`), because
 /// opening a note from a file manager should give the whole app rather than a
-/// lone window with no links.
+/// lone window with no links. A folder in the recent-vaults list counts as a
+/// vault the same way, `.obsidian` or not.
 LaunchTarget resolveLaunchTarget(const QString &argument);
 
 /// The application's settings, and the only place that decides where they

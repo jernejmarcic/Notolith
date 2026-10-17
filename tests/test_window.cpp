@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <future>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <cstdio>
 #include <functional>
@@ -48,6 +51,7 @@
 #include <QWheelEvent>
 
 #include "WaitFor.h"
+#include "SingleInstance.h"
 #include "FileTree.h"
 #include "MarkdownEditor.h"
 #include "MetaNotesPane.h"
@@ -110,6 +114,7 @@
 using noteAppC::Index;
 using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
+using noteAppC::SingleInstance;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
 
@@ -5171,4 +5176,81 @@ TEST_F(WindowTest, TheMoveCommandOffersVisibleFoldersAndMovesTheActiveNote)
     QTest::keyClick(query, Qt::Key_Return);
     WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Sub/Welcome.md"))), 5000);
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+}
+
+// A second launch (a note opened from the file manager) hands its path to the
+// running window instead of starting another copy. The socket is the test's
+// own, never the one a running Notolith listens on.
+TEST_F(WindowTest, ASecondLaunchOpensItsNoteInTheRunningWindow)
+{
+    const QString name = dir.filePath(QStringLiteral("instance.sock"));
+    EXPECT_FALSE(SingleInstance::handOver(name, QString())); // nobody there: start normally
+
+    MainWindow window;
+    window.openTarget(LaunchTarget{}); // startup over: the window has been painted
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    SingleInstance instance(&window, name);
+    ASSERT_TRUE(instance.ok());
+
+    // The sender blocks on its socket, so it runs beside this event loop.
+    auto handed = std::async(std::launch::async,
+                             [&] { return SingleInstance::handOver(name, path(QStringLiteral("Projects/Crlf.md"))); });
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Crlf")), 5000);
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(tabs->count(), 1);
+
+    // Same vault, another note: opened in the open window, the vault not reopened.
+    handed = std::async(std::launch::async,
+                        [&] { return SingleInstance::handOver(name, path(QStringLiteral("Welcome.md"))); });
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Welcome")), 5000);
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(tabs->count(), 1); // replaces the tab, as clicking a link does
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Welcome"));
+
+    // Nothing to open still answers, and the window stays as it was.
+    handed = std::async(std::launch::async, [&] { return SingleInstance::handOver(name, QString()); });
+    WAIT_TRUE(handed.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Welcome"));
+}
+
+// Handed a path before its first paint, the window must not let the open it
+// has queued for startup (the last vault) overwrite it.
+TEST_F(WindowTest, APathHandedOverDuringStartupIsOpenedByTheFirstPaint)
+{
+    const QString name = dir.filePath(QStringLiteral("early.sock"));
+    MainWindow window;
+    SingleInstance instance(&window, name);
+    ASSERT_TRUE(instance.ok());
+    window.openWhenShown(LaunchTarget{}); // what main() queues for a bare launch
+    auto handed = std::async(std::launch::async,
+                             [&] { return SingleInstance::handOver(name, path(QStringLiteral("Welcome.md"))); });
+    WAIT_TRUE(handed.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    EXPECT_TRUE(handed.get());
+    window.show();
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Welcome")), 5000);
+}
+
+TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
+{
+    const QString name = dir.filePath(QStringLiteral("stale.sock"));
+    // Bound and abandoned, as a killed process leaves it.
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::snprintf(address.sun_path, sizeof address.sun_path, "%s", name.toLocal8Bit().constData());
+    ASSERT_EQ(::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof address), 0);
+    ::close(fd);
+    ASSERT_TRUE(QFileInfo::exists(name));
+
+    MainWindow window;
+    SingleInstance instance(&window, name);
+    EXPECT_TRUE(instance.ok());
 }

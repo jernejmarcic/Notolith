@@ -196,6 +196,30 @@ TEST(LaunchTarget, aFileInsideAVaultOpensTheWholeVault)
     EXPECT_TRUE(target.filePath.endsWith(QStringLiteral("Note.md")));
 }
 
+TEST(LaunchTarget, aFileInARecentVaultOpensThatVaultWithoutDotObsidian)
+{
+    QTemporaryDir config;
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    QTemporaryDir dir; // no .obsidian anywhere
+    writeFile(dir.filePath(QStringLiteral("notes/Note.md")), QStringLiteral("# Hi\n"));
+    const QString note = dir.filePath(QStringLiteral("notes/Note.md"));
+
+    EXPECT_EQ(resolveLaunchTarget(note).mode, OpenMode::SingleFile);
+
+    Settings settings = Settings::load();
+    settings.noteOpened(dir.path() + QLatin1Char('/'), QString()); // a trailing slash still matches
+    ASSERT_TRUE(settings.save());
+    const LaunchTarget target = resolveLaunchTarget(note);
+    EXPECT_EQ(target.mode, OpenMode::Vault);
+    EXPECT_EQ(target.vaultRoot, QDir::cleanPath(dir.path()));
+    EXPECT_EQ(target.filePath, QFileInfo(note).absoluteFilePath());
+
+    // A sibling whose name merely starts with the vault's is not inside it.
+    QTemporaryDir other(dir.path() + QStringLiteral("-sibling"));
+    writeFile(other.filePath(QStringLiteral("X.md")), QStringLiteral("# X\n"));
+    EXPECT_EQ(resolveLaunchTarget(other.filePath(QStringLiteral("X.md"))).mode, OpenMode::SingleFile);
+}
+
 TEST(LaunchTarget, nothingNamedIsAnEmptyWindow)
 {
     EXPECT_EQ(resolveLaunchTarget(QString()).mode, OpenMode::Empty);
