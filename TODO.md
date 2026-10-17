@@ -1256,10 +1256,11 @@ title), L (look-up), K (edited listing chrome).
 
 ## Found 2026-10-17 (housekeeping)
 
-- [ ] 44 `/tmp/noteAppC-test-*` vaults were left in /tmp by test runs.
+- [x] 44 `/tmp/noteAppC-test-*` vaults were left in /tmp by test runs.
       QTemporaryDir cleans up on a normal exit, so these come from killed
       runs (timeouts, mutation checks) or a test that keeps its dir; find
       out which. /tmp is a 31 GB tmpfs and filled up during check.sh (other
       projects' build dirs, ~25 GB). Deleted them, and the holding copy
       /tmp/noteAppC-history-leaked from Jernej's 2026-10-16 "leaked history
-      delete" decision.
+      delete" decision. A full check.sh run afterwards left none: they came
+      from killed runs only, no test keeps its dir.
