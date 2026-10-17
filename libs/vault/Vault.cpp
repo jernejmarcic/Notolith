@@ -9,6 +9,8 @@
 #include <QJsonValue>
 #include <QSaveFile>
 
+#include <filesystem>
+
 namespace noteAppC {
 
 namespace {
@@ -287,18 +289,81 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
             *newAbsolutePath = newPath;
         return true;
     }
-    if (QFileInfo::exists(newPath)) {
+    // On a case-insensitive filesystem (exFAT, NTFS, SMB) "Note.md" exists
+    // when only "note.md" does: a change of case alone is no clash there.
+    const bool caseOnly = isCaseOnlyChange(absolutePath, newPath);
+    std::error_code sameError;
+    if (QFileInfo::exists(newPath)
+        && !(caseOnly && std::filesystem::equivalent(absolutePath.toStdString(), newPath.toStdString(), sameError))) {
         if (error)
             *error = QStringLiteral("%1 already exists").arg(newFileName);
         return false;
     }
 
-    QFile file(absolutePath);
-    if (!file.rename(newPath)) {
-        if (error)
-            *error = file.errorString();
-        return false;
+    if (caseOnly) {
+        // QFile::rename refuses a destination that "exists", which on such a
+        // filesystem is the file itself; rename(2) handles it.
+        std::error_code renameError;
+        std::filesystem::rename(absolutePath.toStdString(), newPath.toStdString(), renameError);
+        if (renameError) {
+            if (error)
+                *error = QString::fromStdString(renameError.message());
+            return false;
+        }
+    } else {
+        QFile file(absolutePath);
+        if (!file.rename(newPath)) {
+            if (error)
+                *error = file.errorString();
+            return false;
+        }
     }
+    if (newAbsolutePath)
+        *newAbsolutePath = newPath;
+    return true;
+}
+
+bool Vault::isCaseOnlyChange(const QString &oldPath, const QString &newPath)
+{
+    return oldPath != newPath && oldPath.compare(newPath, Qt::CaseInsensitive) == 0;
+}
+
+bool Vault::movePath(const QString &absolutePath, const QString &targetFolder,
+                     QString *newAbsolutePath, QString *error) const
+{
+    const auto refuse = [error](const QString &why) {
+        if (error)
+            *error = why;
+        return false;
+    };
+    const QString source = QDir::cleanPath(absolutePath);
+    const QString target = QDir::cleanPath(targetFolder);
+    if (!isValid() || !contains(source) || !contains(target))
+        return refuse(QStringLiteral("a move stays inside the vault"));
+    const QFileInfo info(source);
+    if (source == m_root || !info.exists())
+        return refuse(QStringLiteral("%1 cannot be moved").arg(source));
+    if (!QFileInfo(target).isDir())
+        return refuse(QStringLiteral("%1 is not a folder").arg(target));
+    // The vault's own bookkeeping folders and any hidden one are no place for a note.
+    const QString targetRelative = relative(target);
+    if (targetRelative != QLatin1String(".")
+        && targetRelative.split(QLatin1Char('/')).first().startsWith(QLatin1Char('.')))
+        return refuse(QStringLiteral("notes cannot be moved into a hidden folder"));
+    if (target == source || target.startsWith(source + QLatin1Char('/')))
+        return refuse(QStringLiteral("a folder cannot be moved into itself"));
+
+    const QString newPath = target + QLatin1Char('/') + info.fileName();
+    if (newPath == source) {
+        if (newAbsolutePath)
+            *newAbsolutePath = newPath;
+        return true;
+    }
+    if (QFileInfo::exists(newPath))
+        return refuse(QStringLiteral("%1 already exists in that folder").arg(info.fileName()));
+    QFile file(source);
+    if (!file.rename(newPath))
+        return refuse(file.errorString());
     if (newAbsolutePath)
         *newAbsolutePath = newPath;
     return true;

@@ -546,3 +546,99 @@ TEST(FileIconsTest, AGlyphIsOneCharacterAsAReaderSeesIt)
     EXPECT_FALSE(FileIcons::isGlyph(QStringLiteral("ab")));
     EXPECT_FALSE(FileIcons::isGlyph(QString()));
 }
+
+TEST(VaultFileOps, MovePathMovesANoteAndAFolderIntoAFolder)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("Note"), &error);
+    const QString target = vault.createFolder(QString(), QStringLiteral("Target"), &error);
+    const QString folder = vault.createFolder(QString(), QStringLiteral("Folder"), &error);
+    ASSERT_FALSE(note.isEmpty() || target.isEmpty() || folder.isEmpty());
+    ASSERT_FALSE(vault.createNote(QStringLiteral("Folder"), QStringLiteral("Inner"), &error).isEmpty());
+
+    QString moved;
+    ASSERT_TRUE(vault.movePath(note, target, &moved, &error)) << error.toStdString();
+    EXPECT_EQ(moved, dir.filePath(QStringLiteral("Target/Note.md")));
+    EXPECT_TRUE(QFileInfo::exists(moved));
+    EXPECT_FALSE(QFileInfo::exists(note));
+
+    ASSERT_TRUE(vault.movePath(folder, target, &moved, &error)) << error.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral("Target/Folder/Inner.md"))));
+    // And back to the root.
+    ASSERT_TRUE(vault.movePath(moved, dir.path(), &moved, &error)) << error.toStdString();
+    EXPECT_EQ(moved, dir.filePath(QStringLiteral("Folder")));
+}
+
+TEST(VaultFileOps, MovePathRefusesWhatWouldLoseOrHideAFile)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString folder = vault.createFolder(QString(), QStringLiteral("Folder"), &error);
+    const QString child = vault.createFolder(QStringLiteral("Folder"), QStringLiteral("Child"), &error);
+    const QString other = vault.createFolder(QString(), QStringLiteral("Other"), &error);
+    ASSERT_FALSE(folder.isEmpty() || child.isEmpty() || other.isEmpty());
+    const QString clash = vault.createNote(QStringLiteral("Other"), QStringLiteral("Note"), &error);
+    const QString note = vault.createNote(QStringLiteral("Folder"), QStringLiteral("Note"), &error);
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".trash")));
+    QTemporaryDir outside;
+    QString moved;
+
+    EXPECT_FALSE(vault.movePath(folder, child, &moved, &error)) << "into its own subfolder";
+    EXPECT_TRUE(error.contains(QStringLiteral("itself"))) << "refused by us, not by the OS: " << error.toStdString();
+    error.clear();
+    EXPECT_FALSE(vault.movePath(folder, folder, &moved, &error)) << "into itself";
+    EXPECT_TRUE(error.contains(QStringLiteral("itself")));
+    EXPECT_FALSE(vault.movePath(note, other, &moved, &error)) << "name clash";
+    EXPECT_TRUE(error.contains(QStringLiteral("already exists")));
+    EXPECT_FALSE(vault.movePath(note, dir.filePath(QStringLiteral(".trash")), &moved, &error));
+    EXPECT_FALSE(vault.movePath(note, outside.path(), &moved, &error)) << "outside the vault";
+    EXPECT_FALSE(vault.movePath(note, clash, &moved, &error)) << "target is a file";
+    EXPECT_TRUE(QFileInfo::exists(note));
+    EXPECT_TRUE(QFileInfo::exists(clash));
+}
+
+TEST(VaultFileOps, MovePathIntoItsOwnFolderChangesNothing)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QStringLiteral("Folder"), QStringLiteral("Note"), &error);
+    ASSERT_FALSE(note.isEmpty());
+    QString moved;
+    ASSERT_TRUE(vault.movePath(note, QFileInfo(note).absolutePath(), &moved, &error));
+    EXPECT_EQ(moved, note);
+    EXPECT_TRUE(QFileInfo::exists(note));
+}
+
+TEST(VaultFileOps, ACaseOnlyChangeIsNotAClash)
+{
+    EXPECT_TRUE(Vault::isCaseOnlyChange(QStringLiteral("/v/note.md"), QStringLiteral("/v/Note.md")));
+    EXPECT_FALSE(Vault::isCaseOnlyChange(QStringLiteral("/v/note.md"), QStringLiteral("/v/note.md")));
+    EXPECT_FALSE(Vault::isCaseOnlyChange(QStringLiteral("/v/note.md"), QStringLiteral("/v/other.md")));
+
+    // On a case-sensitive filesystem the rename is an ordinary one; a
+    // different file already holding the new case is still refused.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("note"), &error);
+    ASSERT_FALSE(note.isEmpty());
+    QString renamed;
+    ASSERT_TRUE(vault.renamePath(note, QStringLiteral("Note"), &renamed, &error)) << error.toStdString();
+    EXPECT_EQ(renamed, dir.filePath(QStringLiteral("Note.md")));
+    EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Files).contains(QStringLiteral("Note.md")));
+    EXPECT_FALSE(QDir(dir.path()).entryList(QDir::Files).contains(QStringLiteral("note.md")));
+
+    const QString lower = vault.createNote(QString(), QStringLiteral("note"), &error);
+    if (QDir(dir.path()).entryList(QDir::Files).contains(QStringLiteral("note.md"))) { // case-sensitive here
+        EXPECT_FALSE(vault.renamePath(lower, QStringLiteral("Note"), &renamed, &error)) << "a second, different file";
+        EXPECT_TRUE(QFileInfo::exists(lower));
+    }
+}

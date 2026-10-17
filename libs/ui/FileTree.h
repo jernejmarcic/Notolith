@@ -81,7 +81,23 @@ public:
     void setColours(const Theme &theme);
     FileRowDelegate *rowDelegate() const { return m_delegate; }
 
+    /// The folder (absolute) a drop at `viewportPos` lands in: the folder
+    /// row under it, a file row's own folder, or the tree's root on empty
+    /// space. Empty when the row being dragged cannot go there (a folder into
+    /// itself or one of its own subfolders).
+    QString dropFolderAt(const QPoint &viewportPos) const;
+
+signals:
+    /// A drop wants `path` moved into `targetFolder`. The tree never moves a
+    /// file itself - QFileSystemModel would skip the links, history and tabs
+    /// the window keeps in step.
+    void moveRequested(const QString &path, const QString &targetFolder);
+
 protected:
+    void startDrag(Qt::DropActions supportedActions) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     void drawBranches(QPainter *painter, const QRect &rect, const QModelIndex &index) const override;
     bool viewportEvent(QEvent *event) override;
 

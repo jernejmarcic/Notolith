@@ -1,6 +1,8 @@
 #include "FileTree.h"
 
 #include <QDir>
+#include <QDrag>
+#include <QDragMoveEvent>
 #include <QFileSystemModel>
 #include <QHelpEvent>
 #include <QLineEdit>
@@ -219,6 +221,85 @@ FileTree::FileTree(QWidget *parent) : QTreeView(parent)
     setEditTriggers(QAbstractItemView::EditKeyPressed);
     setIndentation(16);
     setUniformRowHeights(true);
+    // One row at a time (the tree is single-selection). Dropping is ours to
+    // handle: see moveRequested().
+    setDragEnabled(true);
+    setAcceptDrops(true);
+    setDropIndicatorShown(true);
+    setDragDropMode(QAbstractItemView::DragDrop);
+}
+
+QString FileTree::dropFolderAt(const QPoint &viewportPos) const
+{
+    const auto *files = qobject_cast<const QFileSystemModel *>(model());
+    if (!files)
+        return {};
+    const QModelIndex row = indexAt(viewportPos);
+    QString folder = files->filePath(rootIndex());
+    if (row.isValid())
+        folder = files->isDir(row) ? files->filePath(row) : files->filePath(row.parent());
+    const QModelIndex dragged = currentIndex();
+    if (dragged.isValid()) {
+        const QString source = files->filePath(dragged);
+        if (folder == source || folder.startsWith(source + QLatin1Char('/')))
+            return {};
+    }
+    return folder;
+}
+
+void FileTree::startDrag(Qt::DropActions)
+{
+    // The base class deletes the dragged rows from the model when a drop
+    // ends in a move, which for QFileSystemModel deletes the files. A drag
+    // here only carries the paths; the window does the moving.
+    const QModelIndexList rows = selectionModel()->selectedRows(0);
+    if (rows.isEmpty())
+        return;
+    auto *drag = new QDrag(this);
+    drag->setMimeData(model()->mimeData(rows));
+    drag->exec(Qt::MoveAction, Qt::MoveAction);
+}
+
+void FileTree::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event->source() == this)
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+
+void FileTree::dragMoveEvent(QDragMoveEvent *event)
+{
+    // The base keeps the drop indicator, auto-scroll and hover-expand going;
+    // whether this spot takes the drop is decided here.
+    QTreeView::dragMoveEvent(event);
+    if (event->source() == this && !dropFolderAt(event->position().toPoint()).isEmpty()) {
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+    } else {
+        event->ignore();
+    }
+}
+
+void FileTree::dropEvent(QDropEvent *event)
+{
+    // Not the base: its InternalMove path would hand the drop to
+    // QFileSystemModel::dropMimeData, which moves the files itself.
+    const QString folder = dropFolderAt(event->position().toPoint());
+    const QModelIndex dragged = currentIndex();
+    const auto *files = qobject_cast<const QFileSystemModel *>(model());
+    const bool ours = event->source() == this && files && dragged.isValid() && !folder.isEmpty();
+    if (ours) {
+        event->setDropAction(Qt::MoveAction);
+        event->accept();
+    } else {
+        event->ignore();
+    }
+    stopAutoScroll();
+    setState(NoState);
+    viewport()->update();
+    if (ours)
+        emit moveRequested(files->filePath(dragged), folder);
 }
 
 void FileTree::setColours(const Theme &theme)

@@ -91,6 +91,16 @@ public:
     bool renamePath(const QString &absolutePath, const QString &newBaseName,
                     QString *newAbsolutePath, QString *error = nullptr) const;
 
+    /// True when the two paths differ in letter case alone.
+    static bool isCaseOnlyChange(const QString &oldPath, const QString &newPath);
+
+    /// Moves a file or folder into `targetFolder` (absolute, inside the vault),
+    /// keeping its name. Refuses a clash, a hidden target (`.trash`,
+    /// `.obsidian`), and a folder moved into itself or its own subfolder.
+    /// Moving into the folder it is already in succeeds and changes nothing.
+    bool movePath(const QString &absolutePath, const QString &targetFolder,
+                  QString *newAbsolutePath, QString *error = nullptr) const;
+
     /// Moves to the vault's own `.trash/`, the way Obsidian's default does,
     /// keeping the relative folder structure and suffixing on collision.
     bool moveToTrash(const QString &absolutePath, QString *error = nullptr) const;

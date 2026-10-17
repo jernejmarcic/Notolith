@@ -691,6 +691,11 @@ QWidget *MainWindow::buildSidebar()
                     statusBar()->showMessage(tr("Could not rename: %1").arg(error), 4000);
             },
             Qt::QueuedConnection);
+    // A drag in the tree. Queued for the same reason as the rename above: the
+    // move changes rows while the view is still finishing the drop.
+    connect(fileTree, &FileTree::moveRequested, this,
+            [this](const QString &path, const QString &folder) { moveToFolder(path, folder); },
+            Qt::QueuedConnection);
     fileTree->rowDelegate()->setIconHook([this](const QString &absolutePath) {
         return fileIconsOn() && m_vault.contains(absolutePath) ? m_fileIcons.iconFor(m_vault.relative(absolutePath))
                                                               : QString();
@@ -2423,6 +2428,8 @@ void MainWindow::buildActions()
         &MainWindow::toggleSourceMode);
     add(QStringLiteral("file-explorer:new-file"), tr("Create new note"), QStringLiteral("Ctrl+N"),
         [this] { newNoteIn(newNoteFolder()); });
+    add(QStringLiteral("file-explorer:move-file"), tr("Move file to another folder"), QString(),
+        [this] { chooseMoveFolder(m_active->notePath); });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
@@ -5905,6 +5912,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     QAction *newNoteAction = menu.addAction(tr("New note"));
     QAction *newFolderAction = menu.addAction(tr("New folder"));
     QAction *renameAction = nullptr;
+    QAction *moveAction = nullptr;
     QAction *deleteAction = nullptr;
     QAction *iconAction = nullptr;
     QAction *removeIconAction = nullptr;
@@ -5912,6 +5920,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     if (index.isValid()) {
         menu.addSeparator();
         renameAction = menu.addAction(tr("Rename"));
+        moveAction = menu.addAction(tr("Move to..."));
         deleteAction = menu.addAction(tr("Delete"));
         if (fileIconsOn()) {
             menu.addSeparator();
@@ -5930,6 +5939,8 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         newFolderIn(folderRelativeFor(index));
     else if (chosen == renameAction)
         m_tree->edit(index);
+    else if (chosen == moveAction)
+        chooseMoveFolder(path);
     else if (chosen == deleteAction)
         deletePathAt(index);
     else if (chosen == iconAction)
@@ -6039,10 +6050,27 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     // ponytail: a link typed in the last 2 s is flushed but may not be
     // indexed yet, so it is not rewritten; wait for the indexer if it matters.
     autosave();
-    const QString oldRelative = m_vault.relative(oldPath);
     QString newPath;
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))
         return false;
+    followPathChange(oldPath, isDir, newPath);
+    return true;
+}
+
+bool MainWindow::moveVaultPath(const QString &oldPath, bool isDir, const QString &targetFolder, QString *error)
+{
+    autosave(); // as for a rename: typed text goes to disk before the file moves
+    QString newPath;
+    if (!m_vault.movePath(oldPath, targetFolder, &newPath, error))
+        return false;
+    if (newPath != oldPath)
+        followPathChange(oldPath, isDir, newPath);
+    return true;
+}
+
+void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QString &newPath)
+{
+    const QString oldRelative = m_vault.relative(oldPath);
     const QString newRelative = m_vault.relative(newPath);
     if (m_fileIcons.renamePrefix(oldRelative, newRelative))
         m_fileIcons.save();
@@ -6097,7 +6125,46 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     // patching the renamed rows by hand, folder rename included.
     m_indexer->rebuild();
     updateTitle();
-    return true;
+}
+
+void MainWindow::moveToFolder(const QString &path, const QString &folder)
+{
+    if (!m_vault.isValid())
+        return;
+    QString error;
+    if (!moveVaultPath(path, QFileInfo(path).isDir(), folder, &error))
+        statusBar()->showMessage(tr("Could not move %1: %2").arg(QFileInfo(path).fileName(), error), 5000);
+}
+
+void MainWindow::chooseMoveFolder(const QString &path)
+{
+    if (!m_vault.isValid() || path.isEmpty() || !m_vault.contains(path) || !QFileInfo::exists(path))
+        return;
+    // Folders as vault-relative paths, "/" the root; not the hidden ones, not
+    // the item's own folder or a subfolder of it.
+    const QString vaultRoot = QStringLiteral("/");
+    QStringList folders{vaultRoot};
+    QDirIterator it(m_vault.root(), QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    const QString self = m_vault.relative(path);
+    while (it.hasNext()) {
+        const QString relative = m_vault.relative(it.next());
+        if (relative.startsWith(QLatin1Char('.')) || relative.contains(QLatin1String("/.")))
+            continue;
+        if (QFileInfo(path).isDir() && (relative == self || relative.startsWith(self + QLatin1Char('/'))))
+            continue;
+        folders << relative;
+    }
+    folders.sort(Qt::CaseInsensitive);
+    auto *picker = new QuickSwitcher(this);
+    picker->setObjectName(QStringLiteral("moveFolderPicker"));
+    picker->setPlaceholder(tr("Move %1 to...").arg(QFileInfo(path).fileName()));
+    picker->setCandidates(folders);
+    connect(picker, &QuickSwitcher::accepted, this, [this, path, vaultRoot, picker](const QString &folder) {
+        picker->deleteLater();
+        moveToFolder(path, folder == vaultRoot ? m_vault.root() : m_vault.absolute(folder));
+    });
+    connect(picker, &QDialog::rejected, picker, &QObject::deleteLater);
+    picker->popUp();
 }
 
 void MainWindow::commitInlineTitle(Leaf *leaf)

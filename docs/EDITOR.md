@@ -835,7 +835,18 @@ folder is rewritten at its new path.
 Renaming from the file tree (F2, or Rename in its menu) edits the name in place and goes
 through the same path as the inline title.
 
-A rename first saves every note with unsaved typing, whatever `files.autosave`
+Moving does the same as renaming. Drag a note or folder onto a folder in the
+file tree (onto empty space for the vault root), pick "Move to..." in its
+menu, or run "Move file to another folder" for the open note: a fuzzy picker
+over the vault's visible folders (`/` is the root). A path-style link follows
+the note, a bare `[[Name]]` stays while the name is unique, open tabs, the
+file icon and the history come along, and unsaved typing is saved first. A
+folder cannot go into itself or its own subfolder, onto a name that is taken,
+or into `.obsidian`, `.trash` or another hidden folder. Changing only the
+letter case of a name works on case-insensitive filesystems (exFAT, NTFS,
+SMB) too.
+
+A rename or move first saves every note with unsaved typing, whatever `files.autosave`
 says, so the rewrite works on what is on screen and the next autosave cannot
 put the old link back. The open editor then picks up the rewritten text from
 disk. A link typed in the last two seconds is saved but may not be indexed

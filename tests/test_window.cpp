@@ -5006,3 +5006,169 @@ TEST_F(WindowTest, AWarmOpenWithMetaNotesOnReparsesNothing)
     open(&warm);
     EXPECT_EQ(warm, 0) << "nothing changed on disk or in the settings";
 }
+
+namespace {
+bool moveVault(MainWindow &window, const QString &from, bool isDir, const QString &toFolder, QString *error)
+{
+    bool moved = false;
+    EXPECT_TRUE(QMetaObject::invokeMethod(&window, "moveVaultPath", Q_RETURN_ARG(bool, moved),
+                                          Q_ARG(QString, from), Q_ARG(bool, isDir), Q_ARG(QString, toFolder),
+                                          Q_ARG(QString *, error)));
+    return moved;
+}
+} // namespace
+
+// "Move file to another folder" and a tree drag end in moveVaultPath: the
+// same follow-up as a rename - links, the open tab, the icon, the unsaved text.
+TEST_F(WindowTest, MovingAnOpenLinkedNoteKeepsLinksTabIconAndTypedText)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    write(QStringLiteral("Src/Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "Bare [[Target]] and path [[Src/Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Src/Target.md")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "setFileIcon", Q_ARG(QString, path(QStringLiteral("Src/Target.md"))),
+                                          Q_ARG(QString, QStringLiteral("zap"))));
+    auto *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    ASSERT_TRUE(editor->isModified()) << "the move must beat the autosave timer";
+
+    QString error;
+    ASSERT_TRUE(moveVault(window, path(QStringLiteral("Src/Target.md")), false, path(QStringLiteral("Projects")), &error))
+        << error.toStdString();
+
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Target.md"))), QByteArray("# Target\nx")) << "typed text came along";
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("Bare [[Target]] and path [[Projects/Target]].\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("# Target\nx"));
+
+    // The tab now saves to the new path, not the old one.
+    QTest::keyClicks(editor, QStringLiteral("y"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Target.md"))), QByteArray("# Target\nxy"));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+
+    noteAppC::FileIcons icons(dir.path());
+    icons.load();
+    EXPECT_EQ(icons.iconFor(QStringLiteral("Projects/Target.md")), QStringLiteral("zap"));
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("Src/Target.md")).isEmpty());
+}
+
+TEST_F(WindowTest, MovingAFolderRewritesPathLinksIntoItAndMovesToTheRoot)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    write(QStringLiteral("Src/Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "See [[Src/Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+
+    QString error;
+    ASSERT_TRUE(moveVault(window, path(QStringLiteral("Src")), true, path(QStringLiteral("Projects")), &error))
+        << error.toStdString();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Projects/Src/Target.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Projects/Src/Target]].\n"));
+
+    // Back out to the vault root, where a drop on empty space goes.
+    ASSERT_TRUE(moveVault(window, path(QStringLiteral("Projects/Src")), true, dir.path(), &error)) << error.toStdString();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+}
+
+TEST_F(WindowTest, AMoveIntoItsOwnSubfolderOrOntoAClashIsRefused)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Projects/Sub")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Other")));
+    write(QStringLiteral("Other/Crlf.md"), "other\n");
+
+    MainWindow window;
+    window.openVault(dir.path());
+    QString error;
+    EXPECT_FALSE(moveVault(window, path(QStringLiteral("Projects")), true, path(QStringLiteral("Projects/Sub")), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(moveVault(window, path(QStringLiteral("Projects")), true, path(QStringLiteral("Projects")), &error));
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Projects/Sub"))));
+
+    error.clear();
+    EXPECT_FALSE(moveVault(window, path(QStringLiteral("Other/Crlf.md")), false, path(QStringLiteral("Projects")), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(readAll(path(QStringLiteral("Other/Crlf.md"))), QByteArray("other\n"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Projects/Crlf.md"))), QByteArray("one\r\ntwo\r\n"));
+}
+
+// The tree only reports a drop; the window moves. A drop that did not start in
+// the tree (a file from another app) is ignored.
+TEST_F(WindowTest, ADropInTheTreeMovesThroughTheWindowAndOnlyIfItStartedThere)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    write(QStringLiteral("Src/Target.md"), "# Target\n");
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) >= 4, 5000);
+
+    const QModelIndex projects = model->index(path(QStringLiteral("Projects")));
+    tree->expand(model->index(path(QStringLiteral("Src"))));
+    WAIT_TRUE(model->index(path(QStringLiteral("Src/Target.md"))).isValid() && tree->visualRect(model->index(path(QStringLiteral("Src/Target.md")))).isValid(), 5000);
+    tree->setCurrentIndex(model->index(path(QStringLiteral("Src/Target.md"))));
+    const QPoint onFolder = tree->visualRect(projects).center();
+    EXPECT_EQ(tree->dropFolderAt(onFolder), path(QStringLiteral("Projects")));
+    EXPECT_EQ(tree->dropFolderAt(tree->visualRect(model->index(path(QStringLiteral("Welcome.md")))).center()), dir.path())
+        << "a file row drops into its own folder";
+    EXPECT_EQ(tree->dropFolderAt(QPoint(5, tree->viewport()->height() - 2)), dir.path()) << "empty space is the root";
+    tree->setCurrentIndex(model->index(path(QStringLiteral("Projects"))));
+    EXPECT_TRUE(tree->dropFolderAt(onFolder).isEmpty()) << "a folder never drops into itself";
+    tree->setCurrentIndex(model->index(path(QStringLiteral("Src/Target.md"))));
+
+    // A drop with no drag of the tree's own behind it moves nothing.
+    QMimeData foreign;
+    foreign.setUrls({QUrl::fromLocalFile(path(QStringLiteral("Src/Target.md")))});
+    QDropEvent stranger(QPointF(onFolder), Qt::MoveAction, &foreign, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(tree->viewport(), &stranger);
+    QTest::qWait(50);
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+
+    // What a real drop emits goes through the window's own move.
+    emit tree->moveRequested(path(QStringLiteral("Src/Target.md")), path(QStringLiteral("Projects")));
+    WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Target.md"))), 5000);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+}
+
+TEST_F(WindowTest, TheMoveCommandOffersVisibleFoldersAndMovesTheActiveNote)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".hidden/Inner")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Projects/Sub")));
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    auto *command = window.findChild<QAction *>(QStringLiteral("file-explorer:move-file"));
+    ASSERT_NE(command, nullptr);
+    command->trigger();
+    auto *picker = window.findChild<QDialog *>(QStringLiteral("moveFolderPicker"));
+    ASSERT_NE(picker, nullptr);
+    auto *results = picker->findChild<QListWidget *>();
+    ASSERT_NE(results, nullptr);
+    QStringList shown;
+    for (int i = 0; i < results->count(); ++i)
+        shown << results->item(i)->text();
+    EXPECT_TRUE(shown.contains(QStringLiteral("/")));
+    EXPECT_TRUE(shown.contains(QStringLiteral("Projects/Sub")));
+    EXPECT_FALSE(shown.join(QLatin1Char('\n')).contains(QStringLiteral(".hidden")));
+
+    auto *query = picker->findChild<QLineEdit *>();
+    QTest::keyClicks(query, QStringLiteral("Sub"));
+    QTest::keyClick(query, Qt::Key_Return);
+    WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Sub/Welcome.md"))), 5000);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+}
