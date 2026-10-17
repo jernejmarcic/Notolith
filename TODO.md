@@ -691,6 +691,9 @@ What the spec asks for:
             fixture standing in for an interpreter (prints its argv);
             missing module and missing wasmtime refuse; parser, editor and
             cache-key cases.
+            The no-bubblewrap branch too (PATH with wasmtime only: the wasm
+            tier runs it alone, tier 1 still refuses; seen failing when that
+            branch is broken).
       - [x] Docs (docs/NOTEBOOKS.md); check.sh green. Honest ceiling: no
             real interpreter module (python.wasm) has run through it - none
             is installed; only WAT fixtures have. The no-bubblewrap path

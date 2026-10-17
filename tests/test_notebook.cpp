@@ -892,6 +892,29 @@ TEST(WasmTierTest, WithoutAModuleOrWithoutWasmtimeABlockIsRefused)
     EXPECT_TRUE(missing->kernelError.contains(QStringLiteral("wasmtime")));
 }
 
+TEST(WasmTierTest, WithoutBubblewrapTheWasmTierRunsWasmtimeAlone)
+{
+    const QString wasmtime = QStandardPaths::findExecutable(QStringLiteral("wasmtime"));
+    if (wasmtime.isEmpty())
+        GTEST_SKIP() << "wasmtime is not installed";
+    // A PATH holding wasmtime and nothing else, so bwrap is not found.
+    QTemporaryDir bin;
+    ASSERT_TRUE(bin.isValid());
+    ASSERT_TRUE(QFile::link(wasmtime, bin.filePath(QStringLiteral("wasmtime"))));
+    const QByteArray path = qgetenv("PATH");
+    qputenv("PATH", QFile::encodeName(bin.path()));
+    const auto alone = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
+    // Tier 1 in the same PATH still refuses rather than running unsandboxed.
+    const auto refused = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat));
+    qputenv("PATH", path);
+    ASSERT_TRUE(alone.has_value());
+    EXPECT_TRUE(alone->ok) << alone->kernelError.toStdString();
+    EXPECT_EQ(textOf(*alone), QStringLiteral("hi from wasm\n"));
+    ASSERT_TRUE(refused.has_value());
+    EXPECT_FALSE(refused->ok);
+    EXPECT_TRUE(refused->kernelError.contains(QStringLiteral("bubblewrap"))) << refused->kernelError.toStdString();
+}
+
 TEST(WasmTierTest, TheModuleSettingIsLookedUpByAnyNameOfTheLanguage)
 {
     const QString setting = QStringLiteral(" python = /m/python.wasm ;ruby=/m/ruby.wasm;;junk");
