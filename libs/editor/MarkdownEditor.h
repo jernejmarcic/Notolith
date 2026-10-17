@@ -235,8 +235,9 @@ public:
     };
     void setContextActions(ContextActions actions);
     /// The menu a right click at `sourceOffset` opens. Built rather than
-    /// shown, so it can be tested.
-    std::unique_ptr<QMenu> contextMenuAt(qsizetype sourceOffset);
+    /// shown, so it can be tested. `anchor` is the screen point "Look up"
+    /// places its popover at; null: where the mouse is.
+    std::unique_ptr<QMenu> contextMenuAt(qsizetype sourceOffset, const QPoint &anchor = {});
     bool useWikilinks() const { return m_useWikilinks; }
 
     /// Paints the viewport through OpenGL instead of Qt's raster engine.

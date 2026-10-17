@@ -51,6 +51,13 @@ public:
     static QString toMarkdown(const Result &result);
 
     void setServers(QList<Server> servers) { m_servers = std::move(servers); }
+    /// How long a server may take to accept the connection, and then to
+    /// answer in full; for tests, the defaults are 1.5 s and 4 s.
+    void setTimeouts(int connectMs, int readMs)
+    {
+        m_connectTimeout = connectMs;
+        m_readTimeout = readMs;
+    }
     /// Asks, in the event loop; `done` runs once, on this thread. A new
     /// define() abandons the one before it, whose `done` never runs.
     void define(const QString &word, std::function<void(Result)> done);
@@ -70,6 +77,8 @@ private:
     QString m_word;
     QStringList m_failures; ///< "host: why", for the offline message
     int m_index = 0;
+    int m_connectTimeout = 1500; ///< ms: a refused port answers at once, a dead host never does
+    int m_readTimeout = 4000;
     bool m_sent = false;
 };
 
