@@ -4035,11 +4035,13 @@ void MainWindow::openVault(const QString &path)
     syncTabs(m_active->group);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
-    updateNotebookIndex(); // before the scan: a vault's notebooks are indexed by the first one
-    m_indexer->setVault(m_vault);
-
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
+    // Before the scan, by this vault's settings: its notebooks and meta notes
+    // are indexed by the first one, and a warm cache is checked against them.
+    updateNotebookIndex();
+    m_indexer->setMetaNotes(parseOptions());
+    m_indexer->setVault(m_vault);
     applySettings();
     if (m_bookmarks)
         m_bookmarks->setVaultRoot(m_vault.root());
