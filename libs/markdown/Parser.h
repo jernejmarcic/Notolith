@@ -64,7 +64,8 @@ public:
     };
 
     /// `path` is only used for messages and for the returned metadata.
-    Metadata parse(const QString &text, const QString &path = {}) const;
+    Metadata parse(const QString &text, const QString &path = {},
+                   const ParseOptions &options = {}) const;
     /// Delimiters that fail metaNoteDelimitersError() find nothing.
     Result parseAll(const QString &text, const QString &path = {},
                     const ParseOptions &options = {}) const;

@@ -523,7 +523,7 @@ private:
 
 class ScopeNode : public SearchQueryNode {
 public:
-    enum class Kind { Line, Block, Section, Task, TaskTodo, TaskDone };
+    enum class Kind { Line, Block, Section, Task, TaskTodo, TaskDone, Meta };
 
     ScopeNode(Kind kind, NodePtr child) : m_kind(kind), m_child(std::move(child)) {}
 
@@ -552,6 +552,7 @@ public:
         FieldNeeds needs = m_child->fieldNeeds();
         needs.headings = needs.headings || m_kind == Kind::Section;
         needs.tasks = needs.tasks || m_kind == Kind::Task || m_kind == Kind::TaskTodo || m_kind == Kind::TaskDone;
+        needs.metaNotes = needs.metaNotes || m_kind == Kind::Meta;
         return needs;
     }
 
@@ -571,12 +572,23 @@ private:
             return taskRanges(note, 0);
         case Kind::TaskDone:
             return taskRanges(note, 1);
+        case Kind::Meta:
+            return note.metaNotes;
         }
         return {};
     }
 
     Kind m_kind;
     NodePtr m_child;
+};
+
+/// Whatever scope it is in, whole: bare `meta:` is every meta note.
+class WholeScopeNode : public SearchQueryNode {
+public:
+    SearchOutcome evaluate(const EvalContext &ctx) const override
+    {
+        return {true, {{ctx.scope.start, ctx.scope.length()}}};
+    }
 };
 
 // --- the parser --------------------------------------------------------
@@ -588,6 +600,7 @@ const QSet<QString> &knownFields()
         QStringLiteral("tag"),        QStringLiteral("line"),       QStringLiteral("block"),
         QStringLiteral("section"),    QStringLiteral("task"),       QStringLiteral("task-todo"),
         QStringLiteral("task-done"),  QStringLiteral("match-case"), QStringLiteral("ignore-case"),
+        QStringLiteral("meta"),
     };
     return fields;
 }
@@ -774,6 +787,12 @@ private:
             return parseScopeField(ScopeNode::Kind::TaskTodo);
         if (name == QLatin1String("task-done"))
             return parseScopeField(ScopeNode::Kind::TaskDone);
+        if (name == QLatin1String("meta")) {
+            if (atEnd() || peek().isSpace() || peek() == QLatin1Char(')'))
+                return std::make_shared<const ScopeNode>(ScopeNode::Kind::Meta,
+                                                         std::make_shared<const WholeScopeNode>());
+            return parseScopeField(ScopeNode::Kind::Meta);
+        }
         if (name == QLatin1String("match-case"))
             return parseCaseField(Qt::CaseSensitive);
         if (name == QLatin1String("ignore-case"))

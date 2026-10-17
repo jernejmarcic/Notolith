@@ -81,6 +81,9 @@ struct Metadata {
     QList<Tag> tags; ///< inline tags and frontmatter tags, both
     QList<BlockId> blockIds;
     QList<Task> tasks;
+    /// Meta-note runs, delimiters included, in source order: filled only when
+    /// the parse was asked for them (ParseOptions::metaNotes).
+    QList<Range> metaNotes;
 
     int wordCount = 0;
     QStringList parseWarnings;

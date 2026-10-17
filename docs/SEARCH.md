@@ -4,7 +4,7 @@ The search pane (Ctrl+Shift+F, `global-search:open`) takes Obsidian's query
 grammar: words (implicit AND), `"phrases"`, `OR` (capitals only), `-negation`,
 `( )`, and the fields `path:` `file:` `tag:` `line:` `block:` `section:`
 `task:` `task-todo:` `task-done:` `content:` `match-case:` `ignore-case:`,
-`[property:value]`, and `/regex/`. A query is parsed by `SearchQuery`
+`[property:value]`, and `/regex/`, plus this app's own `meta:`. A query is parsed by `SearchQuery`
 (`libs/index/Search.cpp`), narrowed through the FTS5 table, then each candidate
 note is checked against the real text, off the UI thread. This page lists
 where the behaviour differs from Obsidian's, so a query copied from there does
@@ -27,6 +27,17 @@ Where it still differs from Obsidian: the split is a line scan, not the
 Markdown block tree, so a setext heading (`Title` over `=====`), a lazy
 continuation line of a quote, a table row and an HTML block are not told apart
 from paragraphs; a table is one block per run of non-blank lines.
+
+## `meta:`
+
+Not in Obsidian. `meta:date` needs the word inside one meta note (the editor's
+Meta notes setting, by its delimiters, `[like this]` by default); bare `meta:`
+is every note with one, and highlights each run whole; `-meta:` is the notes
+without. A space after the colon ends the field, so `meta: date` is `meta:` AND
+`date`. Runs are indexed only while the setting is on: off, `meta:` matches
+nothing. Changing the delimiters re-parses the whole vault once, off the UI
+thread. A run that reads as an HTML tag, `<<like this>>` with `<` delimiters,
+is HTML and not a run; `<< like this >>` is one.
 
 ## `/regex/`
 

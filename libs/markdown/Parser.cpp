@@ -1722,9 +1722,9 @@ QString metaNoteDelimitersError(const QString &open, const QString &close, bool 
     return {};
 }
 
-Metadata Parser::parse(const QString &text, const QString &path) const
+Metadata Parser::parse(const QString &text, const QString &path, const ParseOptions &options) const
 {
-    return parseAll(text, path).metadata;
+    return parseAll(text, path, options).metadata;
 }
 
 Parser::Result Parser::parseAll(const QString &text, const QString &path,
@@ -1904,6 +1904,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
         }
         if (metaOn) {
             result.decorations.metaNotes = runsFor(options.open, options.close);
+            metadata.metaNotes = result.decorations.metaNotes;
             for (const Range &run : std::as_const(result.decorations.metaNotes))
                 result.decorations.styles.append({StyleSpan::Kind::MetaNote, run, 0, {}, {}, {}});
         }

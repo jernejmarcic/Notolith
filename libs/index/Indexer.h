@@ -13,6 +13,7 @@
 #include <QTimer>
 
 #include "Index.h"
+#include "Parser.h"
 #include "Vault.h"
 
 namespace noteAppC {
@@ -53,6 +54,12 @@ public:
     using NotebookReader = std::function<std::optional<QString>(const QByteArray &)>;
     void setNotebookReader(NotebookReader reader);
 
+    /// Meta notes are indexed (for `meta:` search) only while
+    /// `options.metaNotes` is on, by its `open`/`close`; the rest of `options`
+    /// is ignored. Turning it on or changing the delimiters re-parses every
+    /// note, unchanged ones too; turning it off drops the rows without a scan.
+    void setMetaNotes(const ParseOptions &options);
+
     /// Files the vault never indexes: the config directory, the trash, and
     /// anything dot-prefixed.
     static bool isIgnored(const QString &relativePath);
@@ -67,7 +74,7 @@ private:
         QString body;
         bool ok = false;
     };
-    static Parsed parseFile(const QString &path, const NotebookReader &notebooks);
+    static Parsed parseFile(const QString &path, const NotebookReader &notebooks, const ParseOptions &options);
     bool isNotebook(const QString &path) const;
 
     /// What a scan tells the Index's thread, a chunk at a time.
@@ -81,10 +88,11 @@ private:
         /// so the watches come from the scan's own walk (rewatch() is the fallback).
         QHash<QString, qint64> directories;
     };
-    /// `paths` empty means the whole vault.
-    void start(const QStringList &paths);
+    /// `paths` empty means the whole vault; `force` re-parses notes the cache
+    /// already holds as they are on disk.
+    void start(const QStringList &paths, bool force = false);
     void runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
-                 const NotebookReader &notebooks);
+                 const NotebookReader &notebooks, const ParseOptions &options, bool force);
     void apply(const Batch &batch);
     void rewatch();
     void watch(const QHash<QString, qint64> &directories);
@@ -97,6 +105,10 @@ private:
     std::atomic<quint64> m_scanNumber{0};
     bool m_wrote = false;  ///< this scan changed the cache: changed() is due at its end
     bool m_rescan = false; ///< the vault changed during a scan, so walk it again after
+    bool m_forceRescan = false; ///< and that walk re-parses every note
+    ParseOptions m_scanOptions; ///< what the running scan parses with
+    bool m_scanSetsKey = false; ///< it re-parses every note, so its end records m_scanOptions
+    ParseOptions m_parseOptions; ///< only the meta-note fields set
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
     NotebookReader m_notebookReader;
     QFileSystemWatcher m_files;
