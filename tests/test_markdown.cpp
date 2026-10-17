@@ -1893,6 +1893,15 @@ TEST(MetaNoteTest, MetadataCarriesTheRunsWhenAskedFor)
     EXPECT_TRUE(Parser().parse(text).metaNotes.isEmpty()) << "off unless asked for";
 }
 
+TEST(MetaNoteTest, AnUnclosedLabelDoesNotSwallowTheRestOfTheNote)
+{
+    // `[a][` with no `]` on its line is no reference link: `[a]` is a run, and
+    // the label search does not run on to a `]` paragraphs later.
+    EXPECT_EQ(metaNotesOf(QStringLiteral("see [a][ here\n\nand later [real note] too.\n")),
+              (QStringList{QStringLiteral("[a]"), QStringLiteral("[real note]")}));
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [text][ref] link and [note]\n")), QStringList{QStringLiteral("[note]")});
+}
+
 TEST(MetaNoteTest, NestedBracketsAreOneOutermostRun)
 {
     EXPECT_EQ(metaNotesOf(QStringLiteral("a [b [c] d] e")), QStringList{QStringLiteral("[b [c] d]")});

@@ -1122,10 +1122,12 @@ QList<Range> scanRuns(const QString &text, const QList<Range> &masked, const QSt
             i = end;
             if (brackets) {
                 const QChar after = end < size ? text.at(end) : QChar();
-                if (after == QLatin1Char('[')) {
-                    // `[text][ref]` and `[text][]`: the second pair is the label.
-                    const qsizetype closer = text.indexOf(QLatin1Char(']'), end);
-                    i = closer < 0 ? end : closer + 1;
+                // `[text][ref]` and `[text][]`: the second pair is the label,
+                // closed on the same line; an unclosed `[` after it is not one.
+                const qsizetype closer = after == QLatin1Char('[') ? text.indexOf(QLatin1Char(']'), end) : -1;
+                const qsizetype eol = closer < 0 ? -1 : text.indexOf(QLatin1Char('\n'), end);
+                if (closer >= 0 && (eol < 0 || closer < eol)) {
+                    i = closer + 1;
                     while (!pending.isEmpty() && pending.last().start >= start)
                         pending.removeLast();
                     continue;
