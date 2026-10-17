@@ -1127,3 +1127,37 @@ optimal as it can be".
 - [x] A single fenced block being edited drew its panel and header over its
       opened fence lines (Jernej's first python screenshot): it is now plain
       source like a tab group being edited.
+
+## Fable audit round 3, 2026-10-17
+
+Full report: session scratchpad AUDIT3.md. Lanes G (graph), C (callout
+title), L (look-up), K (edited listing chrome).
+
+- [ ] 1 HIGH: Reading view edits the note through the callout title overlay
+      (pressCalloutTitle has no mode gate; check the property editor too). C
+- [ ] 2 HIGH: GraphView::rebuild() waits for the worker job on the UI thread:
+      47 ms (animate on) / 255 ms (off) at 20k nodes, on every autosave and
+      local-graph note switch. Shared layout + generation, no wait. G
+- [ ] 3 MEDIUM: an external edit (same note in two tabs) while the title
+      overlay is open drops the typed title or retitles another callout. C
+- [ ] 4 MEDIUM: caret in a single fenced listing drops panel, run control and
+      last output; the block height jumps. Decision: keep the panel
+      background and outputs, fences drawn inside the panel, no header strip;
+      eligibility flip and output clearing stay tab-group-only. K
+- [ ] 5 MEDIUM: local graph lacks Incoming/Outgoing filters, and a comment
+      wrongly says Obsidian has none. G
+- [ ] 6 LOW: colour-group query typing rescans every node per keystroke, no
+      debounce. G
+- [ ] 7 LOW: graph drag test cannot fail (reads the UI snapshot only). G
+- [ ] 8 LOW: graph control change in the last 500 ms before a vault switch is
+      lost (flush in openVault). G
+- [ ] 9 LOW: Look up from a keyboard-opened menu anchors the popover at the
+      mouse, not the caret. L
+- [ ] 10 LOW: clicking into a callout title puts the caret at the end. C
+- [ ] 11 LOW: DictClient reply is unbounded; timeouts not settable so the
+      silent-server path is untested; docs say a dead server costs 1.5 s. L
+- [ ] 12 LOW: colour dialog returns to an unguarded group index. G
+- [ ] 13 DOC: HANDOFF "35 suites" (36); GraphView.h ~65 ms; MainWindow
+      "reads the index only once shown"; graph page has no Escape exit, nodes
+      no right-click menu (G adds Escape back to the note; node menu: Open,
+      Open in new tab).
