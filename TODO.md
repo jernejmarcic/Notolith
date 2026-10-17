@@ -1253,3 +1253,13 @@ title), L (look-up), K (edited listing chrome).
   (7: old code was right, only blocking). No test: 8, 11.
 - [ ] 12. For Jernej: meta notes and bare brackets share the accent colour by
       default (pinned by a test). Distinct default (orange) wanted?
+
+## Found 2026-10-17 (housekeeping)
+
+- [ ] 44 `/tmp/noteAppC-test-*` vaults were left in /tmp by test runs.
+      QTemporaryDir cleans up on a normal exit, so these come from killed
+      runs (timeouts, mutation checks) or a test that keeps its dir; find
+      out which. /tmp is a 31 GB tmpfs and filled up during check.sh (other
+      projects' build dirs, ~25 GB). Deleted them, and the holding copy
+      /tmp/noteAppC-history-leaked from Jernej's 2026-10-16 "leaked history
+      delete" decision.
