@@ -669,7 +669,12 @@ What the spec asks for:
       left out on purpose: the mount and network namespaces already cover
       what it would restrict. The same filter now covers the plugin host
       and TeX too (libs/sandbox). Left: gVisor and Firecracker (not
-      installed, not approved); the WASM tier below.
+      installed, not approved); the WASM tier below (done).
+      Blocked on Jernej, checked 2026-10-17: Firecracker 1.17.0 is in the
+      Arch repos (`sudo pacman -S firecracker`), /dev/kvm is there; it also
+      needs a guest kernel and rootfs image, which are downloads. gVisor
+      (runsc) is not in the repos (AUR or Google's release binary only).
+      Neither was approved; only wasmtime was.
       **WASM tier** (Jernej 2026-10-17 installed wasmtime 49.0.2: CLI only,
       no C API, so a `wasmtime run` subprocess). Plan (lane wasm):
       - [x] `#| sandbox: wasm` parsed (Parser, Decorations `sandboxWasm`)
