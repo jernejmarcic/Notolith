@@ -413,6 +413,12 @@ MainWindow::MainWindow(QWidget *parent)
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
     });
+    connect(m_indexer, &Indexer::watchesFailed, this, [this](int folders) {
+        statusBar()->showMessage(tr("%n folder(s) cannot be watched (fs.inotify.max_user_watches?): changes made "
+                                    "outside Notolith there are found every 30 seconds",
+                                    nullptr, folders),
+                                 10'000);
+    });
     connect(&m_index, &Index::changed, this, &MainWindow::onIndexChanged);
 
     m_switcher = new QuickSwitcher(this);
@@ -5484,8 +5490,12 @@ void MainWindow::watchOpenNotes()
     }
     if (!gone.isEmpty())
         m_noteWatcher->removePaths(gone);
-    if (!added.isEmpty())
-        m_noteWatcher->addPaths(added);
+    // Every path here exists (checked above), so a failure is a watch the
+    // system would not give: say so rather than miss outside edits silently.
+    if (!added.isEmpty() && !m_noteWatcher->addPaths(added).isEmpty())
+        statusBar()->showMessage(tr("An open note cannot be watched (fs.inotify.max_user_watches?): changes made "
+                                    "outside Notolith will not show until it is reopened"),
+                                 10'000);
 }
 
 QString MainWindow::findMovedNote(const QString &lost, const Note &known)

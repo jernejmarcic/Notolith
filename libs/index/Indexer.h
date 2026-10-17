@@ -64,9 +64,16 @@ public:
     /// anything dot-prefixed.
     static bool isIgnored(const QString &relativePath);
 
+    /// Some folder could not be watched (fs.inotify.max_user_watches, or no
+    /// permission): changes made outside the app are then found by a rescan
+    /// every 30 s instead of at once.
+    bool pollsForChanges() const { return m_poll.isActive(); }
+
 signals:
     void progress(int done, int total);
     void finished(int indexed, qint64 milliseconds);
+    /// Once, when pollsForChanges() turns on; `folders` could not be watched.
+    void watchesFailed(int folders);
 
 private:
     struct Parsed {
@@ -97,6 +104,7 @@ private:
     void apply(const Batch &batch);
     void rewatch();
     void watch(const QHash<QString, qint64> &directories);
+    void addWatches(const QStringList &directories); ///< addPaths, and the poll for what it could not watch
     void onDirectoryChanged(const QString &path);
 
     Index *m_index = nullptr;
@@ -115,6 +123,7 @@ private:
     NotebookReader m_notebookReader;
     QFileSystemWatcher m_files;
     QTimer m_debounce;
+    QTimer m_poll; ///< runs only while some folder has no watch
     QElapsedTimer m_clock;
     int m_indexed = 0;
 };

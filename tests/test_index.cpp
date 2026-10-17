@@ -14,6 +14,7 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
+#include <unistd.h>
 #include <QTimer>
 
 #include "Fuzzy.h"
@@ -1064,6 +1065,42 @@ TEST(IndexerThreadTest, AScanStoppedByAVaultSwitchLeavesNothingBehind)
 
 // The watches come from the scan's own walk: a note written into an existing
 // subfolder after the scan, and one in a folder made after it, are both seen.
+// A folder inotify cannot watch (here: no permission; in the wild, past
+// fs.inotify.max_user_watches) used to be dropped without a word, and its
+// outside changes were never seen. Now the indexer says so once and polls.
+TEST(IndexerThreadTest, AFolderThatCannotBeWatchedTurnsOnPolling)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    QTemporaryDir dir;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("open")));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("closed")));
+    {
+        Index index;
+        Indexer indexer(&index);
+        QSignalSpy done(&indexer, &Indexer::finished);
+        QSignalSpy failed(&indexer, &Indexer::watchesFailed);
+        indexer.setVault(Vault(dir.path()));
+        ASSERT_TRUE(done.wait(20000));
+        EXPECT_FALSE(indexer.pollsForChanges()) << "every folder is watched";
+        EXPECT_TRUE(failed.isEmpty());
+    }
+    const QString closed = dir.filePath(QStringLiteral("closed"));
+    ASSERT_TRUE(QFile::setPermissions(closed, QFileDevice::Permissions()));
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    QSignalSpy failed(&indexer, &Indexer::watchesFailed);
+    indexer.setVault(Vault(dir.path()));
+    const bool finished = done.wait(20000);
+    const bool polls = indexer.pollsForChanges();
+    QFile::setPermissions(closed, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    ASSERT_TRUE(finished);
+    EXPECT_TRUE(polls);
+    ASSERT_EQ(failed.size(), 1);
+    EXPECT_EQ(failed.first().first().toInt(), 1);
+}
+
 TEST(IndexerThreadTest, TheScansWalkWatchesEveryFolderIncludingNewOnes)
 {
     QTemporaryDir dir;
