@@ -1141,10 +1141,12 @@ title), L (look-up), K (edited listing chrome).
       local-graph note switch. Shared layout + generation, no wait. G
 - [x] 3 MEDIUM: an external edit (same note in two tabs) while the title
       overlay is open drops the typed title or retitles another callout. C
-- [ ] 4 MEDIUM: caret in a single fenced listing drops panel, run control and
+- [x] 4 MEDIUM: caret in a single fenced listing drops panel, run control and
       last output; the block height jumps. Decision: keep the panel
       background and outputs, fences drawn inside the panel, no header strip;
       eligibility flip and output clearing stay tab-group-only. K
+      Done (listing3): one panel spans both fence lines, run control on the
+      opening fence line, outputs kept; height delta -31.5 px (header strip).
 - [x] 5 MEDIUM: local graph lacks Incoming/Outgoing filters, and a comment
       wrongly says Obsidian has none. G
 - [x] 6 LOW: colour-group query typing rescans every node per keystroke, no
