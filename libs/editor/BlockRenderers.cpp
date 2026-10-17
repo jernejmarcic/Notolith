@@ -1330,6 +1330,52 @@ void MarkdownEditor::paintCodeLabel(QPainter &painter, const BlockView &view, qr
     painter.restore();
 }
 
+QRectF MarkdownEditor::editedListingPanel(const BlockView &view, qreal left, qreal top,
+                                          qreal *fenceLine) const
+{
+    const BlockView &first = firstPiece(view);
+    const BlockView &closing = lastPiece(view);
+    const qreal fenceTop = top - (view.y - first.y);
+    // The fence lines are the last line of the block before the listing and
+    // the first of the block after it (md4qt leaves them there), shown while
+    // the caret is in the listing. The panel takes in exactly those lines.
+    const CodeFenceSpan *fence = codeFenceOf(view);
+    const auto showsFence = [fence](const BlockView *block) {
+        return fence && block->span.kind == BlockSpan::Kind::Paragraph && block->active
+               && block->span.range.overlaps(fence->block);
+    };
+    const BlockView *data = m_blocks.data();
+    const qsizetype index = &first - data;
+    const qsizetype lastIndex = &closing - data;
+    const qreal above = index > 0 && showsFence(data + index - 1) ? lineHeightFor(data[index - 1].span) : 0;
+    const qreal below = lastIndex + 1 < qsizetype(m_blocks.size()) && showsFence(data + lastIndex + 1)
+                            ? lineHeightFor(data[lastIndex + 1].span)
+                            : 0;
+    if (fenceLine)
+        *fenceLine = above;
+    return QRectF(left - 14, fenceTop - above, contentWidth() + 28,
+                  closing.y + closing.height - first.y + above + below);
+}
+
+void MarkdownEditor::paintEditedListingPanel(QPainter &painter, const BlockView &view, qreal left,
+                                             qreal top) const
+{
+    const QRectF panel = editedListingPanel(view, left, top);
+    painter.save();
+    QPainterPath rounded;
+    rounded.addRoundedRect(panel, 6, 6);
+    const LanguageStyle style = codeStyleOf(view);
+    painter.fillPath(rounded, style.bg.isValid()
+                                  ? style.bg
+                                  : m_theme.color(QStringLiteral("--background-primary-alt")));
+    if (style.border.isValid()) {
+        painter.setPen(QPen(style.border, 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(panel.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+    }
+    painter.restore();
+}
+
 void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {

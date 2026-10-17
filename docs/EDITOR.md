@@ -399,11 +399,23 @@ A tab group (adjacent fences marked `tab`, see STYLING.md) being edited is
 plain source: with the caret anywhere in it every member shows its fence lines,
 `#|` options and listing as text, no panel, tab strip, run control, gutter or
 caption, and none of its blocks runs ("Run all blocks" skips them) until the
-caret leaves. The listings keep their syntax colours. This is `plainSource()`,
+caret leaves. The listings keep their syntax colours. This is `pureSource()`,
 the one test Source mode shares with it, and `BlockView::editedAsSource` already
-re-lays the group out when the caret crosses its edge. A single fenced block
-whose fences the caret has opened is edited the same way: its panel and header
-strip were drawn over the opened fence lines.
+re-lays the group out when the caret crosses its edge.
+
+A single fenced block whose fences the caret has opened (`BlockView::editedListing`)
+is plain text too - no header strip, copy label, `#|` rows, gutter or media
+rendering - but it keeps its panel, its run control and its last output
+(`pureSource()` is false for it, so the notebook eligibility flip and
+`notebookOutputs.clear()` stay tab-group-only and Source-mode-only). The fence
+lines are in the paragraphs either side of the listing, so the panel
+(`editedListingPanel`) reaches out one line above and below to take them in, and
+is drawn first in `paintBlocks`, before any text, so nothing is drawn over a
+fence line. The run control moves to the panel's top-right corner, on the
+opening fence line (`notebookRunRectFor`). The block loses only its header strip
+when the caret enters: 31.5 px at the default font (`codeHeaderHeight`; nothing
+for a listing with no header). The output rows stay directly under the listing,
+so the closing fence line follows them.
 
 ## Source mode
 

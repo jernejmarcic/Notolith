@@ -3305,6 +3305,17 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // through; false here whenever that pass cannot even run (source mode,
     // or the caret already in the block, which reveals everything anyway).
     bool notebookEchoHidden = false;
+    // Whether this block gets a run control and an output, given its `#|` options.
+    const auto decideNotebookEligible = [this, &view](const CodeOptions *options) {
+        if (!m_features.notebooks || !m_notebookRunner || view.piece != 0)
+            return;
+        const CodeFenceSpan *fence = codeFenceOf(view);
+        // `#| eval: false` - never runs, so no run control and no cache
+        // lookup either: the same "off" a null runner already gives.
+        view.notebookEligible = fence && !fence->language.trimmed().isEmpty()
+                                && !(options && !options->eval)
+                                && (!m_notebookRunnable || m_notebookRunnable(fence->language));
+    };
     if (renderMedia && view.span.kind == BlockSpan::Kind::Code) {
         view.options = codeOptionsFor(view);
         // Decided early, like view.options just above, because it feeds the
@@ -3312,16 +3323,16 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         // output itself (appendNotebookOutput) is only built once the rest
         // of this block's own layout is settled, the same distance
         // appendEmbedRows keeps from layoutEmbed.
-        if (m_features.notebooks && m_notebookRunner && view.piece == 0) {
-            const CodeFenceSpan *fence = codeFenceOf(view);
-            // `#| eval: false` - never runs, so no run control and no cache
-            // lookup either: the same "off" a null runner already gives.
-            view.notebookEligible = fence && !fence->language.trimmed().isEmpty()
-                                    && !(view.options && !view.options->eval)
-                                    && (!m_notebookRunnable || m_notebookRunnable(fence->language));
-        }
+        decideNotebookEligible(view.options);
         notebookEchoHidden = view.options && !view.options->echo && !view.active;
-    } else if (plainSource(view)) {
+    } else if (view.editedListing && view.span.kind == BlockSpan::Kind::Code) {
+        // The caret opened this listing's fences: its text is plain (no
+        // options, no media) but it stays runnable and keeps its output, so
+        // clicking into it does not make the block lose its run control and
+        // shift everything below. `#| eval: false` is read from the source,
+        // view.options being null while the caret is in the block.
+        decideNotebookEligible(codeOptionsFor(view));
+    } else if (pureSource(view)) {
         // Decided under an earlier state (the tab shown with its run control,
         // before the caret came into the group): plain source has none.
         view.notebookEligible = false;
@@ -3599,15 +3610,17 @@ void MarkdownEditor::updateLayout()
     qreal y = m_topPadding;
     for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
         BlockView &view = m_blocks[size_t(i)];
-        // A tab group with the caret in it, or a listing whose fences the
-        // caret has opened, is edited as plain source: its panel and header
-        // drawn over the fence lines hid them.
-        const bool editedAsSource = (caretGroup && view.span.range.start >= caretGroup->span.start
-                                     && view.span.range.start < caretGroup->span.end)
-                                    || (fenceShown && view.span.kind == BlockSpan::Kind::Code
-                                        && view.span.range.overlaps(fenceShown->block));
-        if (editedAsSource != view.editedAsSource) {
+        // A tab group with the caret in it is edited as plain source: its
+        // strip and panels drawn over the fence lines would hide them. A
+        // single listing whose fences the caret has opened is plain text too,
+        // but keeps a panel drawn out over those lines (editedListingPanel).
+        const bool editedAsSource = caretGroup && view.span.range.start >= caretGroup->span.start
+                                    && view.span.range.start < caretGroup->span.end;
+        const bool editedListing = !editedAsSource && fenceShown && view.span.kind == BlockSpan::Kind::Code
+                                   && view.span.range.overlaps(fenceShown->block);
+        if (editedAsSource != view.editedAsSource || editedListing != view.editedListing) {
             view.editedAsSource = editedAsSource;
+            view.editedListing = editedListing;
             view.layout.reset();
             view.laidOut = false;
             view.heightEstimated = false;
@@ -3787,6 +3800,19 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         m_blocks.cbegin(), m_blocks.cend(), [scroll, exposedTop](const BlockView &view) {
             return view.y - scroll + view.height < exposedTop;
         });
+    // A listing being edited has its panel drawn first, behind everything: it
+    // reaches out over the fence lines of the paragraphs either side, which
+    // paint after it. One block back catches a listing that ends just above
+    // the exposed strip, one fence line of slack one that starts just below it.
+    for (auto it = firstExposed == m_blocks.cbegin() ? firstExposed : std::prev(firstExposed);
+         it != m_blocks.cend(); ++it) {
+        const qreal top = it->y - scroll;
+        if (top > exposedBottom + 2 * lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0}))
+            break;
+        if (it->editedListing && !it->tabHidden)
+            paintEditedListingPanel(painter, *it, left, top);
+    }
+
     for (auto it = firstExposed; it != m_blocks.cend(); ++it) {
         const BlockView &view = *it;
         const qreal top = view.y - scroll;
@@ -3828,6 +3854,14 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         if (view.span.kind == BlockSpan::Kind::Code && !view.isQuery && !view.isBase && !view.isPluginBlock
             && !plainSource(view)) {
             paintCodeChrome(painter, view, left, top);
+            if (view.notebookEligible && !view.folded)
+                paintNotebookOutput(painter, view, left, top);
+            painter.setPen(text);
+        } else if (view.editedListing && view.span.kind == BlockSpan::Kind::Code && !view.isQuery
+                   && !view.isBase && !view.isPluginBlock) {
+            // The panel is already down (above); the run control and the last
+            // output stay, as they were before the caret came in.
+            paintNotebookRunControl(painter, view, left, top);
             if (view.notebookEligible && !view.folded)
                 paintNotebookOutput(painter, view, left, top);
             painter.setPen(text);
