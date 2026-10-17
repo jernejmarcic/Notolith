@@ -1182,3 +1182,12 @@ title), L (look-up), K (edited listing chrome).
       lane meta lands.
 - Proposed, not picked (2026-10-17): hide toggle + clean export + prose-only
   word count; quick insert + resolve menu; typed meta notes via meta.ini.
+
+## Requested by Jernej 2026-10-17: sidebar
+
+- [ ] "Improve look and feel of the sidebar please. Just in general. Does not
+      feel right, especially the gap on the left being lit up" (screenshot:
+      the selected row lights the indent gutter as a separate block left of
+      the item). Plan: Fable.
+- [ ] Icons on folders and notes, "UI only, not actually saved in the file
+      name". Plan: Fable (storage outside the vault's file names).
