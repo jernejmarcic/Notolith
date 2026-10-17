@@ -818,7 +818,22 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
 - [ ] **An app id** (and maybe a new name: Jernej 2026-10-16 asked for name suggestions) for Flatpak, AppStream and Android:
       2026-10-17 Jernej floated "Skorja? Biblolith? Notolith?"; a web search
-      found no app or software under any of the three. Awaiting his pick.
+      found no app or software under any of the three. He picked Notolith.
+      Plan (lane rename):
+      - [ ] Product name "Notolith" wherever a person reads it: window title,
+            About page, error and settings texts naming the app, PDF creator.
+      - [ ] App id `io.github.jernejmarcic.Notolith`: desktop file named after
+            it (Flatpak needs that), Wayland app_id via setDesktopFileName,
+            icon installed under that name, metainfo, Flatpak manifest,
+            Android package and label.
+      - [ ] Binary `notolith` (OUTPUT_NAME; the CMake target stays noteAppC),
+            Arch package `notolith`, AppImage script.
+      - [ ] Kept as noteAppC on purpose, so nothing is lost or migrated:
+            ~/.config, ~/.cache and ~/.local/share directories, the keyring
+            service, command ids in hotkeys.json (`noteAppC:...`), the C++
+            namespace and target names, the repo directory.
+      - [ ] README and packaging/README say Notolith (code name noteAppC);
+            tests green; check.sh green.
       `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
 - [x] **An app icon.** Hand-written SVG, libs/theme/icons/noteAppC.svg (Jernej 2026-10-16: "Draw an SVG"). Was: The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
