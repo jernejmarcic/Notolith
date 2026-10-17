@@ -249,6 +249,9 @@ MainWindow::MainWindow(QWidget *parent)
 {
     m_autosave.setSingleShot(true);
     m_autosave.setInterval(2000); // Obsidian's pause, near enough
+    m_autosaveMax.setSingleShot(true);
+    m_autosaveMax.setInterval(30000); // typing without a pause still saves
+    connect(&m_autosaveMax, &QTimer::timeout, this, &MainWindow::autosave);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     // Encrypted notes: nothing happens until one is opened or made.
     m_encryption = new crypt::EncryptionSession(this);
@@ -878,7 +881,7 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
     // A moment after typing stops, everything unsaved is saved.
     connect(editor, &MarkdownEditor::edited, this, [this] {
         if (m_settings.boolean(QStringLiteral("files.autosave")))
-            m_autosave.start();
+            armAutosave();
     });
     // The count comes with each parse. Taking it from textChanged recounted
     // the whole note on the UI thread for every keystroke.
@@ -1746,6 +1749,12 @@ void MainWindow::closeLeaf(Leaf *leaf)
     activateLeaf(leaf);
     if (!maybeLeave())
         return;
+    if (!leaf->notePath.isEmpty()) {
+        m_closedTabs.append({leaf->notePath, leaf->group, leaf->editor->cursorOffset(),
+                             leaf->editor->verticalScrollBar()->value()});
+        if (m_closedTabs.size() > 20)
+            m_closedTabs.removeFirst();
+    }
     if (m_leaves.size() == 1) {
         clearOpenNote();
         updateTitle();
@@ -1755,6 +1764,39 @@ void MainWindow::closeLeaf(Leaf *leaf)
     rememberCurrentPosition();
     dropLeaf(leaf);
     m_active->editor->setFocus();
+}
+
+void MainWindow::undoCloseTab()
+{
+    // Newest first; a note gone from disk, or encrypted while locked (that
+    // asks for a password out of nowhere), is passed over.
+    for (qsizetype i = m_closedTabs.size() - 1; i >= 0; --i) {
+        const ClosedTab tab = m_closedTabs.at(i);
+        if (!QFileInfo::exists(tab.path)) {
+            m_closedTabs.removeAt(i);
+            continue;
+        }
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+        if (Vault::isEncryptedNote(tab.path) && !m_encryption->isUnlocked())
+            continue;
+#endif
+        m_closedTabs.removeAt(i);
+        // The split it was in may be gone: the focused one then.
+        const bool groupLives = std::any_of(m_groups.cbegin(), m_groups.cend(),
+                                            [&tab](const auto &owned) { return owned.get() == tab.group; });
+        TabGroup *group = groupLives ? tab.group : m_active->group;
+        // The emptied last tab takes it back rather than leaving a blank beside it.
+        if (!(m_active->group == group && m_active->notePath.isEmpty() && !m_active->view)) {
+            activateLeaf(newLeaf(group));
+            syncTabs(group);
+        }
+        if (openNote(tab.path) && !m_active->view) {
+            m_active->editor->setCursorOffset(qMin(tab.caret, qsizetype(m_active->editor->noteText().size())));
+            m_active->editor->verticalScrollBar()->setValue(tab.scroll);
+        }
+        m_active->editor->setFocus();
+        return;
+    }
 }
 
 void MainWindow::newTab()
@@ -2203,6 +2245,8 @@ void MainWindow::buildActions()
         &MainWindow::newTab);
     add(QStringLiteral("workspace:close"), tr("Close current tab"), QStringLiteral("Ctrl+W"),
         [this] { closeLeaf(m_active); });
+    add(QStringLiteral("workspace:undo-close-pane"), tr("Undo close tab"), QStringLiteral("Ctrl+Shift+T"),
+        &MainWindow::undoCloseTab);
     add(QStringLiteral("workspace:split-vertical"), tr("Split right"), QString(),
         [this] { splitActive(Qt::Horizontal); });
     add(QStringLiteral("workspace:split-horizontal"), tr("Split down"), QString(),
@@ -4801,7 +4845,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
                 else
                     syncTabs(leaf->group);
                 if (modified && m_settings.boolean(QStringLiteral("files.autosave")))
-                    m_autosave.start(); // annotations are kept like a note's text
+                    armAutosave(); // annotations are kept like a note's text
             });
             connect(pdf, &PdfView::noteActivated, this, &MainWindow::openRelative);
             view = pdf;
@@ -4850,7 +4894,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
                 else
                     syncTabs(leaf->group);
                 if (canvas->isModified() && m_settings.boolean(QStringLiteral("files.autosave")))
-                    m_autosave.start(); // a canvas is kept like a note
+                    armAutosave(); // a canvas is kept like a note
             });
             connect(canvas, &CanvasView::noteActivated, this, &MainWindow::openRelative);
             view = canvas;
@@ -5658,13 +5702,27 @@ void MainWindow::reportSaveError(const QString &path, const QString &error, bool
         statusBar()->showMessage(tr("Could not save %1: %2 - will try again").arg(QFileInfo(path).fileName(), error));
         // Nothing else restarts it: only a further edit would.
         if (m_settings.boolean(QStringLiteral("files.autosave")))
-            m_autosave.start();
+            armAutosave();
     } else
         QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(path, error));
 }
 
+void MainWindow::setAutosaveIntervalsForTests(int pause, int maxWait)
+{
+    m_autosave.setInterval(pause);
+    m_autosaveMax.setInterval(maxWait);
+}
+
+void MainWindow::armAutosave()
+{
+    m_autosave.start();
+    if (!m_autosaveMax.isActive())
+        m_autosaveMax.start();
+}
+
 void MainWindow::autosave()
 {
+    m_autosaveMax.stop();
     QSet<QString> saved; // a note in two tabs is one document, saved once
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || saved.contains(leaf->notePath))

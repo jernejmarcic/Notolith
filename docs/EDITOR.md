@@ -361,13 +361,22 @@ link shows "Note > Heading".
 ## Autosave
 
 With `files.autosave` on (the default) every modified note is saved two
-seconds after typing stops, and leaving a note, closing a tab or quitting saves
-it too; nothing asks. A save that fails (disk full, read-only folder) says so in
+seconds after typing stops - or 30 seconds after the first edit since the last
+save, when the typing never stops that long - and leaving a note, closing a tab
+or quitting saves it too; nothing asks. A save that fails (disk full, read-only folder) says so in
 the status bar and is tried again at the next pause, with no further edit
 needed. If leaving or quitting then still cannot save, the usual
 Save / Discard / Cancel box appears with the error in its text, so a window is
 never refused a close without a word. With the setting off, the box is always
 the way out and nothing is saved on a timer.
+
+## Undo close tab
+
+Ctrl+Shift+T (`workspace:undo-close-pane`, rebindable like any command) reopens
+the tab closed last, in the split it was in (the focused one if that split is
+gone), with the caret and scroll it had. The last 20 closed tabs are kept for
+the session; a note deleted since, or an encrypted one while the notes are
+locked, is passed over, and an empty tab is not remembered.
 
 ## Status bar counts
 

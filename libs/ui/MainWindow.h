@@ -143,6 +143,8 @@ public:
     /// Encrypted notes: what asks for the password, in place of the dialog.
     /// For the tests. `creating` true when the password is being set.
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
+    /// The autosave pause and its longest wait, in ms. For the tests.
+    void setAutosaveIntervalsForTests(int pause, int maxWait);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -324,6 +326,8 @@ private:
     /// Obsidian's close-tab: offers to save, then drops the tab and, with its
     /// last tab, the split. The window's last tab is emptied instead.
     void closeLeaf(Leaf *leaf);
+    /// Ctrl+Shift+T: reopens the newest closed tab (20 are kept) in its split.
+    void undoCloseTab();
     /// "Split right" (Qt::Horizontal) and "Split down": a new tab group beside
     /// the focused one, showing the same note.
     void splitActive(Qt::Orientation orientation);
@@ -457,8 +461,11 @@ private:
     /// editor: its tabs show the change, so no autosave writes over it.
     void reloadChangedNotes();
     void reportSaveError(const QString &path, const QString &error, bool quiet);
-    /// Every tab with unsaved changes, a moment after typing stops.
+    /// Every tab with unsaved changes, a moment after typing stops - or
+    /// m_autosaveMax after the first edit, however long the typing goes on.
     void autosave();
+    /// An edit was made: restarts the pause, starts the max wait if idle.
+    void armAutosave();
     void updateTitle();
     void updateWordCount();
     /// The word and character labels alone: the note's, or the selection's.
@@ -640,6 +647,15 @@ void updateVimStatus();
     /// main area is built.
     std::vector<std::unique_ptr<Leaf>> m_leaves;
     std::vector<std::unique_ptr<TabGroup>> m_groups;
+    /// A closed tab, for undoCloseTab(); `group` is only compared, never used
+    /// until found in m_groups.
+    struct ClosedTab {
+        QString path;
+        TabGroup *group;
+        qsizetype caret;
+        int scroll;
+    };
+    QList<ClosedTab> m_closedTabs; ///< oldest first, at most 20
     Leaf *m_active = nullptr;
     bool m_syncingTabs = false; ///< syncTabs() is moving tabs: not a user's switch
     QSplitter *m_workspace = nullptr; ///< the root split
@@ -700,6 +716,7 @@ QLabel *m_vimStatus = nullptr;
     QString m_appliedDefaultMode;
     bool m_themeApplied = false; ///< applySettings has styled the window once
     QTimer m_autosave; ///< restarted by every edit, and by a failed save
+    QTimer m_autosaveMax; ///< started by the first edit after a save, never restarted
     QString m_lastSaveError; ///< why the last quiet save failed; maybeSave() shows it
     QFileSystemWatcher *m_noteWatcher = nullptr; ///< the open notes' files
     QSet<QString> m_changedNotes;                ///< what it reported, read when m_noteChanges fires

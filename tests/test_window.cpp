@@ -749,6 +749,102 @@ TEST_F(WindowTest, SplitDownThenRightNestsTheSplits)
     EXPECT_EQ(qobject_cast<QSplitter *>(root->widget(1)), nullptr);
 }
 
+// Typing with no pause long enough for the 2 s timer still saves: the max
+// wait counts from the first edit after a save.
+TEST_F(WindowTest, ContinuousTypingIsSavedAtTheMaxWaitNotOnlyAtThePause)
+{
+    MainWindow window;
+    window.setAutosaveIntervalsForTests(300, 500);
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    const QByteArray before = readAll(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QElapsedTimer typing;
+    typing.start();
+    bool savedWhileTyping = false;
+    for (int i = 0; i < 40 && !savedWhileTyping; ++i) { // a key every 40 ms: never a 300 ms pause
+        QTest::keyClicks(editor, QStringLiteral("x"));
+        QTest::qWait(40);
+        savedWhileTyping = readAll(note) != before;
+    }
+    EXPECT_TRUE(savedWhileTyping);
+    EXPECT_LT(typing.elapsed(), 1300) << "saved by the max wait, long before the typing could stop";
+}
+
+TEST_F(WindowTest, UndoCloseTabReopensInTheSameSplitWithTheCaret)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    write(QStringLiteral("Third.md"), "third note text\n");
+    MainWindow window;
+    window.show(); // focus moves between the splits only in a shown window
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:split-vertical"))->trigger();
+    const QList<QTabBar *> bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(bars.size(), 2);
+    window.openNote(path(QStringLiteral("Other.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.openNote(path(QStringLiteral("Third.md")));
+    QTabBar *group = nullptr; // the split that holds Third
+    for (QTabBar *bar : bars)
+        if (tabTexts(bar).contains(QStringLiteral("Third")))
+            group = bar;
+    ASSERT_NE(group, nullptr);
+    EXPECT_EQ(tabTexts(group), (QStringList{QStringLiteral("Other"), QStringLiteral("Third")}));
+    window.editor()->setCursorOffset(7);
+
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    EXPECT_EQ(tabTexts(group), QStringList{QStringLiteral("Other")});
+    // Focus the other split: the note still returns to the one it left.
+    for (MarkdownEditor *candidate : tabEditors(window))
+        if (candidate->noteText().startsWith(QStringLiteral("# Welcome")))
+            candidate->setFocus();
+    QApplication::processEvents();
+    ASSERT_TRUE(window.editor()->noteText().startsWith(QStringLiteral("# Welcome")));
+    auto *undo = window.findChild<QAction *>(QStringLiteral("workspace:undo-close-pane"));
+    undo->trigger();
+    EXPECT_EQ(tabTexts(group), (QStringList{QStringLiteral("Other"), QStringLiteral("Third")}));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("third note text\n"));
+    EXPECT_EQ(window.editor()->cursorOffset(), 7);
+    // Nothing more to undo: a further press changes nothing.
+    undo->trigger();
+    EXPECT_EQ(tabTexts(group).size(), 2);
+}
+
+TEST_F(WindowTest, UndoCloseTabKeepsTwentyAndSkipsADeletedFile)
+{
+    for (int i = 1; i <= 21; ++i)
+        write(QStringLiteral("N%1.md").arg(i), "n\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    for (int i = 1; i <= 21; ++i) {
+        window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+        window.openNote(path(QStringLiteral("N%1.md").arg(i)));
+        window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    }
+    flushDeletes();
+    ASSERT_EQ(tabEditors(window).size(), 1);
+    // N21 was the newest; it is gone from disk, so the first undo opens N20.
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("N21.md"))));
+    auto *undo = window.findChild<QAction *>(QStringLiteral("workspace:undo-close-pane"));
+    undo->trigger();
+    EXPECT_TRUE(window.windowTitle().contains(QStringLiteral("N20.md")));
+    for (int i = 0; i < 25; ++i)
+        undo->trigger();
+    // N21 skipped, N20 ... N2 reopened (20 were kept, N1 fell off the end).
+    QStringList names;
+    for (QTabBar *bar : window.findChildren<QTabBar *>(QStringLiteral("noteTabs")))
+        names << tabTexts(bar);
+    EXPECT_EQ(names.size(), 1 + 19);
+    EXPECT_FALSE(names.contains(QStringLiteral("N1")));
+    EXPECT_TRUE(names.contains(QStringLiteral("N2")));
+    EXPECT_FALSE(names.contains(QStringLiteral("N21")));
+}
+
 TEST_F(WindowTest, DeletingANoteClosesEveryTabShowingIt)
 {
     write(QStringLiteral("Other.md"), "other\n");
