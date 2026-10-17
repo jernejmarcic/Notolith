@@ -1289,7 +1289,7 @@ title), L (look-up), K (edited listing chrome).
 
 ## Requested 2026-10-17: diagrams, and a central server
 
-- [ ] **PlantUML, TikZ (TikZJax-style) and Graphviz rendered like Mermaid**,
+- [x] **PlantUML, TikZ (TikZJax-style) and Graphviz rendered like Mermaid**,
       when the tool is installed. Jernej: "PUML, tikjax, mermaid, should be
       renderable if the backend requrement is installed. prefereably if there
       is a c++ package that should be bundled in". Checked 2026-10-17: no
@@ -1301,27 +1301,40 @@ title), L (look-up), K (edited listing chrome).
       like the rest; linking libgvc is a switch away if wanted.
       Installed here: plantuml 1.2026.8 + java, graphviz 16.1 (dot), TeX
       Live latex + dvisvgm, mmdr. Plan (lane diagrams):
-      - [ ] One diagram renderer for fences by language: `plantuml`/`puml`,
+      - [x] One diagram renderer for fences by language: `plantuml`/`puml`,
             `tikz`, `dot`/`graphviz`, built on MermaidBlock's pattern (pool
             thread, tool resolved on first fence and remembered, memo +
             disk cache by source/theme, source + one dim hint when the tool
             is missing or fails, nothing at startup).
-      - [ ] Each tool sandboxed: bwrap + seccomp, no network, a temp dir
+      - [x] Each tool sandboxed: bwrap + seccomp, no network, a temp dir
             only (PlantUML can !include files and URLs; TeX can read
             files); PlantUML also with its SANDBOX security profile; TeX
             with -no-shell-escape. Timeouts.
-      - [ ] TikZ: TikZJax's block shape (`\usepackage` lines, then
+      - [x] TikZ: TikZJax's block shape (`\usepackage` lines, then
             `\begin{document}...\end{document}`) and a bare tikzpicture
             both; standalone class; latex -> dvisvgm --no-fonts; readable in
             the dark theme (TikZJax's invert option, done by recolouring
             black to the text colour).
-      - [ ] PlantUML and Graphviz in the theme's colours where the tool
+      - [x] PlantUML and Graphviz in the theme's colours where the tool
             allows (PlantUML -darkmode / skinparam, dot -Gbgcolor etc.).
-      - [ ] Settings: render.plantuml, render.tikz, render.graphviz (each
+      - [x] Settings: render.plantuml, render.tikz, render.graphviz (each
             off costs nothing), tool path settings like render.mermaidTool.
-      - [ ] Publish and PDF export draw the cached SVGs, never start a tool.
-      - [ ] Tests per kind (skipped when the tool is absent), cache hit,
+      - [x] Publish and PDF export draw the cached SVGs, never start a tool.
+      - [x] Tests per kind (skipped when the tool is absent), cache hit,
             missing tool hint, sandbox has no network; docs/EDITOR.md.
+      Done (lane diagrams, e5ee9d2..4cdf270): diagramRenderer per kind with
+      shared sandbox::bubblewrapCommand; refused without bubblewrap; publish
+      embeds each cached SVG as an <img> data URI (a diagram's own markup,
+      e.g. TeX \special raw SVG, can never script the page).
+      Follow-ups:
+      - [ ] A tool set by path (render.*Tool) outside /usr is not bound into
+            the sandbox: document or bind it read-only like DirectRunner.
+      - [ ] A hung tool holds a pool thread up to its 20-40 s timeout;
+            other fences wait behind it.
+      - [ ] The JVM (PlantUML) runs with no address-space limit (RLIMIT_AS
+            breaks it); only the scope memory cap applies.
+      - [ ] Published diagram text is not selectable or searchable (image).
+      - [ ] Publish CSS class is still `mermaid-diagram` for every kind.
 - [ ] **A central server with only a local cache, like Trilium** - Jernej:
       "is there an API, like trillium notes so a central "server" node can
       store the data with just a local cache?" Today: no. Sync
