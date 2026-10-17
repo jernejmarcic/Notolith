@@ -181,6 +181,16 @@ private slots:
     /// The rename itself, shared by the tree and the inline title: moves the
     /// file, then links, history, tabs and the index follow. False with `error`.
     bool renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error);
+    /// The move behind a tree drag, "Move to..." and the move command: the
+    /// same follow-up as a rename. `targetFolder` is absolute. False with `error`.
+    bool moveVaultPath(const QString &oldPath, bool isDir, const QString &targetFolder, QString *error);
+    /// Everything that follows a file or folder to its new path once the vault
+    /// has moved it: icons, plugins, history, links, tabs, the index.
+    void followPathChange(const QString &oldPath, bool isDir, const QString &newPath);
+    /// moveVaultPath for a UI caller: a refusal goes to the status bar.
+    void moveToFolder(const QString &path, const QString &folder);
+    /// Folder picker over the vault's visible folders, then moveToFolder().
+    void chooseMoveFolder(const QString &path);
     void deletePathAt(const QModelIndex &index);
     /// A UI-only icon for a file or folder in the tree and on its tabs: a
     /// bundled icon id or one character; empty removes it. Kept outside the
