@@ -884,6 +884,10 @@ window. The scan's own walk now lists the directories too and hands them to
 before its watch started triggers a rescan, so the gap is closed. Only the
 difference is (re)watched, and folders made later are now watched too (they
 were not before). First window 36.3 -> 28 ms (best of 3, 20 000 notes).
+A folder inotify will not watch (past `fs.inotify.max_user_watches`, or no
+permission) is no longer dropped silently: the status bar says so once and
+the indexer rescans every 30 s while any folder lacks a watch. With every
+folder watched the poll timer never starts.
 
 | cold start, the process's first window (bench), best of 3 | before | after |
 |---|---|---|

@@ -36,6 +36,8 @@ Indexer::Indexer(Index *index, QObject *parent)
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(300); // let a burst of writes settle
     connect(&m_debounce, &QTimer::timeout, this, &Indexer::rebuild);
+    m_poll.setInterval(30'000);
+    connect(&m_poll, &QTimer::timeout, this, &Indexer::rebuild);
     connect(&m_files, &QFileSystemWatcher::directoryChanged, this, &Indexer::onDirectoryChanged);
     connect(&m_files, &QFileSystemWatcher::fileChanged, this, &Indexer::reindex);
 }
@@ -331,6 +333,7 @@ void Indexer::rewatch()
 {
     if (!m_files.directories().isEmpty())
         m_files.removePaths(m_files.directories());
+    m_poll.stop(); // a new vault: its own watches decide
     if (!m_vault.isValid())
         return;
 
@@ -345,7 +348,22 @@ void Indexer::rewatch()
     }
     // ponytail: one inotify watch per directory, which tops out around 8k.
     // fanotify, or watching only the open folders, if a vault ever hits it.
-    m_files.addPaths(directories);
+    addWatches(directories);
+}
+
+void Indexer::addWatches(const QStringList &directories)
+{
+    // A folder gone since the walk is no loss; one that is there and still
+    // has no watch would never be noticed changing, so poll instead.
+    int failed = 0;
+    for (const QString &path : m_files.addPaths(directories)) {
+        if (QFileInfo(path).isDir())
+            ++failed;
+    }
+    if (failed > 0 && !m_poll.isActive()) {
+        m_poll.start();
+        emit watchesFailed(failed);
+    }
 }
 
 void Indexer::watch(const QHash<QString, qint64> &directories)
@@ -368,7 +386,7 @@ void Indexer::watch(const QHash<QString, qint64> &directories)
     }
     // ponytail: one inotify watch per directory, which tops out around 8k.
     if (!added.isEmpty())
-        m_files.addPaths(added);
+        addWatches(added);
     // Between the walk reading a directory and its watch starting, a file can
     // arrive unseen; its directory's mtime moved, so walk again.
     for (const QString &path : std::as_const(added)) {

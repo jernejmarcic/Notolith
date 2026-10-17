@@ -410,6 +410,11 @@ and reversible (delete it again); a silently lost edit is not.
 A delete only actually removes a note when both sides agree the last thing
 that happened to it was the delete (`base == local`, i.e. nothing local
 disagrees).
+If moving the file to `.trash` then fails (a read-only or full disk), the
+pull stops at that record: the entity stays, the cursor stays before it, the
+status says which note, and the next cycle tries again. Dropping the entity
+with the file still there would make the next scan push it back as a new
+note and undo the delete on every device.
 
 ## What the server stores and learns
 
