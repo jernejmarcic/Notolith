@@ -4928,6 +4928,20 @@ TEST_F(WindowTest, AnIconShowsOnTheTabAndGoesWhenTheToggleIsOff)
     EXPECT_EQ(icons.iconFor(QStringLiteral("Welcome.md")), QStringLiteral("zap")) << "and keeps it";
 }
 
+TEST_F(WindowTest, ARenameWithoutIconsWritesNoIconFile)
+{
+    PrivateConfig config;
+    MainWindow window;
+    window.openVault(dir.path());
+    bool renamed = false;
+    QString error;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                          Q_ARG(QString, path(QStringLiteral("Welcome.md"))), Q_ARG(bool, false),
+                                          Q_ARG(QString, QStringLiteral("Target")), Q_ARG(QString *, &error)));
+    ASSERT_TRUE(renamed) << error.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(noteAppC::FileIcons::storagePathFor(dir.path())));
+}
+
 TEST_F(WindowTest, DeletingANoteDropsItsIcon)
 {
     PrivateConfig config;

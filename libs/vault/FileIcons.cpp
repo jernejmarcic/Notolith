@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QTextBoundaryFinder>
 
 #include "Settings.h"
 
@@ -36,6 +37,12 @@ QString FileIcons::storagePathFor(const QString &vaultRoot)
         .filePath(QStringLiteral("vaults/%1/icons.json").arg(QString::fromLatin1(digest)));
 }
 
+bool FileIcons::isGlyph(const QString &text)
+{
+    QTextBoundaryFinder graphemes(QTextBoundaryFinder::Grapheme, text);
+    return !text.isEmpty() && graphemes.toNextBoundary() == text.size();
+}
+
 void FileIcons::load()
 {
     m_icons.clear();
@@ -43,9 +50,10 @@ void FileIcons::load()
     if (!file.open(QIODevice::ReadOnly))
         return;
     const QJsonObject icons = QJsonDocument::fromJson(file.readAll()).object().value(QLatin1String("icons")).toObject();
+    const QDir root(m_root);
     for (auto it = icons.begin(); it != icons.end(); ++it) {
         const QString icon = it.value().toString();
-        if (!it.key().isEmpty() && !icon.isEmpty())
+        if (!it.key().isEmpty() && !icon.isEmpty() && QFileInfo::exists(root.filePath(it.key())))
             m_icons.insert(it.key(), icon);
     }
 }
@@ -84,7 +92,7 @@ void FileIcons::set(const QString &relativePath, const QString &icon)
         m_icons.insert(relativePath, icon);
 }
 
-void FileIcons::renamePrefix(const QString &oldRelative, const QString &newRelative)
+bool FileIcons::renamePrefix(const QString &oldRelative, const QString &newRelative)
 {
     QHash<QString, QString> moved;
     for (auto it = m_icons.begin(); it != m_icons.end();) {
@@ -96,11 +104,12 @@ void FileIcons::renamePrefix(const QString &oldRelative, const QString &newRelat
         }
     }
     m_icons.insert(moved);
+    return !moved.isEmpty();
 }
 
-void FileIcons::removeUnder(const QString &relativePath)
+bool FileIcons::removeUnder(const QString &relativePath)
 {
-    m_icons.removeIf([&](const auto &entry) { return isUnder(entry.key(), relativePath); });
+    return m_icons.removeIf([&](const auto &entry) { return isUnder(entry.key(), relativePath); }) > 0;
 }
 
 } // namespace noteAppC
