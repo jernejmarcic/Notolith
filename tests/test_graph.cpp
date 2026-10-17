@@ -312,6 +312,10 @@ TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)
     const QPointF held = view.screenPosition(QStringLiteral("A"));
     EXPECT_LT(std::hypot(held.x() - drop.x(), held.y() - drop.y()), 2.0);
     QTest::qWait(300);
+    // screenPosition() reads the UI's own snapshot, which the UI overwrites
+    // itself whatever the layout did with the pin; copy the layout's positions
+    // into it first, so this fails if setPinned()/setPosition() never landed.
+    view.stepSimulation(0);
     const QPointF later = view.screenPosition(QStringLiteral("A"));
     EXPECT_LT(std::hypot(later.x() - drop.x(), later.y() - drop.y()), 2.0) << "the pinned node slid away";
     QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, drop);
