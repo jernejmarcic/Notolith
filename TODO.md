@@ -1221,7 +1221,10 @@ title), L (look-up), K (edited listing chrome).
       .md hidden with type tags for other files, F2 renames through the
       vault (links follow), collapse-all + sort (files.sortOrder).
       Left: tree drag-and-drop, created-time sort.
-- [ ] Icons on folders and notes, "UI only, not actually saved in the file
-      name". Plan: Fable (storage outside the vault's file names). Lane B
-      launch was refused by the auto-mode classifier 2026-10-17; asked
-      Jernej how to proceed.
+- [x] Icons on folders and notes, "UI only, not actually saved in the file
+      name". Done by Opus directly (the lane launch was refused): FileIcons
+      in the app's per-vault icons.json, "Change icon..." / "Remove icon" in
+      the tree menu (bundled icons or one character), tree + tabs, follows
+      rename/move/delete/merge, appearance.fileIcons toggle. Merged 1d327d7.
+      Left: more icons need a Lucide download (ask first); icons in the
+      quick switcher and inline title; Iconize import; a test of the picker.
