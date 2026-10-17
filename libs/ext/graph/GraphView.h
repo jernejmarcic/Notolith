@@ -358,6 +358,7 @@ private:
     QSlider *m_depthSlider = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QTimer *m_searchDebounce = nullptr;
+    QTimer *m_groupDebounce = nullptr; ///< a group query's keystrokes, before the nodes are rescanned
     std::vector<std::function<void()>> m_controlSyncs; ///< each pushes one option into its widget
 
     double m_zoom = 1.0;

@@ -413,7 +413,11 @@ TEST(GraphViewTest, GroupsEditorAddsAGroup)
     }
     ASSERT_NE(query, nullptr);
     query->setText(QStringLiteral("path:Projects"));
-    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), view.options().colorGroups.first().color);
+    // The tint follows a typing pause, not every keystroke; the option is kept at once.
+    EXPECT_EQ(view.options().colorGroups.first().query, QStringLiteral("path:Projects"));
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return view.nodeColor(QStringLiteral("Projects/A.md")) == view.options().colorGroups.first().color;
+    }, 2000));
     EXPECT_EQ(view.nodeColor(QStringLiteral("B.md")), before);
 }
 
@@ -822,6 +826,40 @@ TEST(GraphPerformanceTest, ARebuildDoesNotWaitForTheWorkerJob)
     std::printf("[ PERF     ] rebuild of %d nodes with a job running: %.3f ms\n", kNodes, ms);
     EXPECT_LT(ms, 10.0);
     EXPECT_EQ(view.nodeCount(), kNodes);
+}
+
+// Typing in a colour group's query rescans every node; per keystroke that is
+// work the Filters search box already debounces.
+TEST(GraphPerformanceTest, TypingAGroupQueryDoesNotRescanEveryNodePerKeystroke)
+{
+    constexpr int kNodes = 20000;
+    GraphView view;
+    view.resize(1600, 1000);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    view.setGraphData(nodes, makeEdges(nodes, 1));
+    auto *add = view.findChild<QPushButton *>(QStringLiteral("graphNewGroupButton"));
+    ASSERT_NE(add, nullptr);
+    add->click();
+    QLineEdit *query = nullptr;
+    for (auto *edit : view.findChildren<QLineEdit *>()) {
+        if (edit->placeholderText() == QStringLiteral("Enter query..."))
+            query = edit;
+    }
+    ASSERT_NE(query, nullptr);
+
+    const QString id = QStringLiteral("note-7");
+    const QColor before = view.nodeColor(id);
+    QElapsedTimer clock;
+    clock.start();
+    QString typed;
+    for (const QChar ch : QStringLiteral("path:note-7"))
+        query->setText(typed += ch);
+    const double ms = clock.nsecsElapsed() / 1e6;
+    std::printf("[ PERF     ] 11 group-query keystrokes at %d nodes: %.3f ms\n", kNodes, ms);
+    EXPECT_EQ(view.nodeColor(id), before) << "the nodes are rescanned after a pause, not per keystroke";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeColor(id) != before; }, 3000));
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    EXPECT_LT(ms, 10.0);
 }
 
 // Reports, does not budget: what a 20 000-note vault costs per step, per

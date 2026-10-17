@@ -409,6 +409,14 @@ QWidget *GraphView::buildControlsPanel()
     m_searchDebounce->setSingleShot(true);
     m_searchDebounce->setInterval(300);
     connect(m_searchDebounce, &QTimer::timeout, this, &GraphView::rebuild);
+    m_groupDebounce = new QTimer(this);
+    m_groupDebounce->setSingleShot(true);
+    m_groupDebounce->setInterval(300);
+    connect(m_groupDebounce, &QTimer::timeout, this, [this] {
+        assignColorGroups();
+        markDirty();
+        ensureTimerRunning();
+    });
     connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
         m_options.search = text;
         m_searchDebounce->start(); // a keystroke is not worth a rebuild
@@ -564,9 +572,7 @@ void GraphView::rebuildGroupRows()
             if (i >= m_options.colorGroups.size())
                 return;
             m_options.colorGroups[i].query = text;
-            assignColorGroups();
-            markDirty();
-            ensureTimerRunning();
+            m_groupDebounce->start(); // a keystroke is not worth rescanning every node
             emit optionsChanged();
         });
         connect(swatch, &QToolButton::clicked, this, [this, i, paintSwatch] {
