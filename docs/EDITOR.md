@@ -857,8 +857,11 @@ is the wrong place for it).
 - **Graphviz**: `dot -Tsvg`; the theme's text colour and background are declared at the top of the graph as the defaults, so the
   graph's own attributes override them.
 - **Publish and PDF export** draw the cached SVGs of all four kinds the same
-  way (a never-drawn fence stays its source); publish inlines each as
-  `<div class="mermaid-diagram">`, dropping an XML prolog and prefixing the ids.
+  way (a never-drawn fence stays its source); publish puts each in
+  `<div class="mermaid-diagram">` as an `<img>` with a `data:` URI, never
+  inlined: a note decides what is in its SVG (TikZ's `\special{dvisvgm:raw}`
+  passes markup straight through), and an SVG shown as an image runs no
+  script and loads nothing.
 
 `tests/test_diagrams.cpp` runs the real tools (skipped when one is absent, a
 failure under `NOTEAPPC_REQUIRE_TOOLS=1`): a diagram per kind, the disk cache,

@@ -591,28 +591,19 @@ private:
     }
 
     /// The diagram the editor already made for a fence's source (mermaid,
-    /// plantuml, tikz, dot), inlined, or empty (the fence is then an ordinary
-    /// code block, its source in a <pre>). Publishing never starts a tool.
-    /// The SVG's ids are prefixed per diagram: mmdr numbers its markers from
-    /// 0 in every file, and ids are page-wide once inlined.
+    /// plantuml, tikz, dot) as an <img>, or empty (the fence is then an
+    /// ordinary code block, its source in a <pre>). Publishing never starts a
+    /// tool. An <img>, not inlined: an SVG drawn as an image never runs
+    /// script or loads anything, and a note decides what goes into its SVG
+    /// (TikZ's \special{dvisvgm:raw ...} writes markup straight through), so
+    /// inlining would need a full SVG sanitiser. Its ids stay its own too.
     QString cachedDiagram(noteAppC::DiagramKind kind, const QString &source)
     {
-        QByteArray bytes = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
-        QString svg = QString::fromUtf8(bytes);
-        const qsizetype start = svg.indexOf(QLatin1String("<svg")); // dot and dvisvgm start with an XML prolog
-        svg = start < 0 ? QString() : svg.mid(start).trimmed();
-        if (svg.isEmpty() || svg.contains(QLatin1String("<script"), Qt::CaseInsensitive)
-            || svg.contains(QLatin1String("<foreignObject"), Qt::CaseInsensitive)
-            || svg.contains(QLatin1String("javascript:"), Qt::CaseInsensitive))
+        const QByteArray svg = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
+        if (!svg.contains("<svg"))
             return QString();
-        const QString prefix = QStringLiteral("mm%1-").arg(++m_diagramCount);
-        for (const QChar quote : {QLatin1Char('"'), QLatin1Char('\'')}) { // dvisvgm quotes with '
-            const QString q(quote);
-            svg.replace(QStringLiteral(" id=") + q, QStringLiteral(" id=") + q + prefix);
-            svg.replace(QStringLiteral("href=") + q + QStringLiteral("#"), QStringLiteral("href=") + q + QStringLiteral("#") + prefix);
-        }
-        svg.replace(QLatin1String("url(#"), QStringLiteral("url(#") + prefix);
-        return QStringLiteral("<div class=\"mermaid-diagram\">") + svg + QStringLiteral("</div>\n");
+        return QStringLiteral("<div class=\"mermaid-diagram\"><img alt=\"diagram\" src=\"data:image/svg+xml;base64,")
+             + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
     }
 
     /// A fence, or - for the first `tab` fence of a group - the whole group as
@@ -1417,7 +1408,6 @@ private:
 
     const ParsedNote *m_topLevel;
     const RenderEnv &m_env;
-    int m_diagramCount = 0;
     int m_tabGroupCount = 0;
     QString m_pageOutputPath;
     QSet<QString> m_attachments;
