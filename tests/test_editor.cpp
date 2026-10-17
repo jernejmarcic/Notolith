@@ -539,6 +539,22 @@ TEST(MarkdownEditorTest, LinkCompletionOffersANotesBlockIDsAfterHashCaret)
     EXPECT_EQ(editor->noteText(), QStringLiteral("![[A#^y2]]\n"));
 }
 
+// `#`, `|`, `^`, `[`, `]` cannot sit in a [[Note#Heading]]: Obsidian writes
+// them as spaces, and the link resolves against the heading read the same way.
+TEST(MarkdownEditorTest, LinkCompletionWritesAHeadingTheWayALinkSpellsIt)
+{
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->show();
+    editor->setLinkTargets({QStringLiteral("A")});
+    editor->setLinkFragmentProvider([](const QString &, bool blocks) {
+        return blocks ? QStringList() : QStringList{QStringLiteral("Q&A | notes [x] #1 ^b"), QStringLiteral("Plain")};
+    });
+    QTest::keyClicks(editor.get(), QStringLiteral("[[A#Q"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("Q&A notes x 1 b")});
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("[[A#Q&A notes x 1 b]]\n"));
+}
+
 TEST(MarkdownEditorTest, LinkCompletionOffersAnAliasAndInsertsItWithTheNote)
 {
     auto editor = editorWith(QStringLiteral("\n"));

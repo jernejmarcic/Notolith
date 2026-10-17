@@ -355,6 +355,11 @@ void MarkdownEditor::updateSuggestions()
                 for (const Heading &heading : m_headings)
                     candidates << heading.text;
             }
+            // Written as the link spells them, so what is inserted resolves.
+            if (!fragment.blocks) {
+                for (QString &candidate : candidates)
+                    candidate = ObsidianSyntax::headingLinkText(candidate);
+            }
             m_fragmentModel->setStringList(candidates);
         }
     } else {

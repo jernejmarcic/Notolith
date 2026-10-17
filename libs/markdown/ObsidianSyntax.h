@@ -35,6 +35,12 @@ public:
     /// True for a target Obsidian would open in a browser rather than resolve
     /// inside the vault.
     static bool isExternalTarget(const QString &target);
+
+    /// A heading as `[[Note#Heading]]` spells it: `# | ^ [ ] : \` and `%%`,
+    /// which the link syntax cannot hold, become spaces and runs of space
+    /// collapse, as Obsidian's completion writes them. A link's subpath is
+    /// matched against a heading by comparing both through this.
+    static QString headingLinkText(const QString &heading);
 };
 
 } // namespace noteAppC

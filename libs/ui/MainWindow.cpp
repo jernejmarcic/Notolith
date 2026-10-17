@@ -89,6 +89,7 @@
 #include "PdfPage.h"
 #include "RecoveryDialog.h"
 #include "Snapshots.h"
+#include "ObsidianSyntax.h"
 #include "Parser.h"
 #include "QuickSwitcher.h"
 #include "SearchPane.h"
@@ -3306,8 +3307,9 @@ qsizetype MainWindow::subpathOffset(const QString &text, const QString &subpath)
         }
         return -1;
     }
+    const QString linked = ObsidianSyntax::headingLinkText(wanted);
     for (const Heading &heading : metadata.headings) {
-        if (heading.text.compare(wanted, Qt::CaseInsensitive) == 0)
+        if (ObsidianSyntax::headingLinkText(heading.text).compare(linked, Qt::CaseInsensitive) == 0)
             return heading.range.start;
     }
     return -1;
@@ -3318,9 +3320,10 @@ void MainWindow::jumpToHeading(const QString &subpath)
     const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
     if (wanted.isEmpty())
         return;
-    const auto jump = [this, wanted] {
+    const QString linked = ObsidianSyntax::headingLinkText(wanted);
+    const auto jump = [this, linked] {
         for (const Heading &heading : m_active->editor->headings()) {
-            if (heading.text.compare(wanted, Qt::CaseInsensitive) == 0) {
+            if (ObsidianSyntax::headingLinkText(heading.text).compare(linked, Qt::CaseInsensitive) == 0) {
                 m_active->editor->setCursorOffset(heading.range.start);
                 return true;
             }

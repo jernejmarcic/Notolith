@@ -366,7 +366,10 @@ in the text, not only at its start. Four more things complete, as in Obsidian:
 - **Headings.** After `#` the popup lists that note's headings, `[[Note#`
   for another note and `[[#` for the note being edited (read from the editor,
   so a heading typed a moment ago is there). Picking one inserts
-  `Note#Heading` and closes the brackets.
+  `Note#Heading` and closes the brackets. A heading holding `# | ^ [ ] :`
+  or `\` is inserted with those as spaces, as Obsidian does, and a link's
+  heading is matched against the headings read the same way, so it opens
+  the heading (nested `[[Note#H1#H2]]` paths are not offered).
 - **Block ids.** `[[Note#^` and `[[#^` list the `^id` markers the same way.
   Obsidian's search over every block (`[[^^`) is not offered.
 - **Aliases.** A note's frontmatter `aliases:` appear in the name list as

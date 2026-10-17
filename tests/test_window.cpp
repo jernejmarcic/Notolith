@@ -2327,6 +2327,40 @@ TEST_F(WindowTest, ALinkToABlockOpensTheNoteAtThatBlock)
     EXPECT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("^list")));
 }
 
+// What heading completion inserts for a heading holding link syntax opens that
+// heading, not nothing.
+TEST_F(WindowTest, ACompletedLinkToAHeadingWithLinkSyntaxInItOpensTheHeading)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Q&A | notes [x] #1\n\nBody.\n");
+    write(QStringLiteral("Linking.md"), "See it: ");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+    auto *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("[[Other#Q&A"));
+    QWidget *popup = nullptr;
+    for (QWidget *widget : QApplication::allWidgets()) {
+        if (widget->objectName() == QLatin1String("completerPopup"))
+            popup = widget;
+    }
+    ASSERT_NE(popup, nullptr);
+    ASSERT_TRUE(popup->isVisible());
+    QTest::keyClick(popup, Qt::Key_Return);
+    const QString text = editor->noteText();
+    const qsizetype open = text.indexOf(QLatin1String("[[Other#"));
+    ASSERT_GE(open, 0);
+    const QString inserted = text.mid(open + 2, text.indexOf(QLatin1String("]]"), open) - open - 2);
+    EXPECT_EQ(inserted, QStringLiteral("Other#Q&A notes x 1"));
+
+    emit editor->linkActivated(inserted);
+    const QString shown = window.editor()->noteText();
+    ASSERT_TRUE(shown.startsWith(QLatin1String("# Other")));
+    WAIT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Q&A")), 2000);
+}
+
 TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
 {
     QImage picture(400, 200, QImage::Format_RGB32);
