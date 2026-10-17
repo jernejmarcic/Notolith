@@ -45,8 +45,8 @@ JavaScript, no QML, no browser engine, no Electron.
 
 ## State
 
-All 35 suites pass in the full build and 21 in a build with every optional
-module off (`sh tools/check.sh` runs both; counts from `ctest -N`, 2026-10-16).
+All 36 suites pass in the full build and 22 in a build with every optional
+module off (`sh tools/check.sh` runs both; counts from `ctest -N`, 2026-10-17).
 
 Release build on starbase-1, 20 000-note vault, `tools/bench/noteAppC-bench`,
 medians as of 2026-10-01: cold start to first painted frame 32 ms (including
