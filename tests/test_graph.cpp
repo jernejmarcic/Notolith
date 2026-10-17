@@ -791,6 +791,39 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
     EXPECT_LT(frameMedian, 16.0);
 }
 
+// A rebuild (every note switch in a local graph, every index change while the
+// graph is shown) used to wait for the worker job, which with Animate off runs
+// for up to a quarter second. A smaller graph than the 20 000-note case is
+// enough: it is the wait, not the rebuild itself, that is measured.
+TEST(GraphPerformanceTest, ARebuildDoesNotWaitForTheWorkerJob)
+{
+    constexpr int kNodes = 3000;
+    GraphView view;
+    view.resize(1600, 1000);
+    GraphOptions options = view.options();
+    options.animate = false;
+    view.setOptions(options);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    const QList<GraphEdge> edges = makeEdges(nodes, 2);
+    view.setGraphData(nodes, edges);
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(40); // a settling job is now running
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    QElapsedTimer clock;
+    const double ms = perf::bestOf([&] {
+        clock.start();
+        view.setGraphData(nodes, edges);
+        const double took = clock.nsecsElapsed() / 1e6;
+        QTest::qWait(40); // let the next job start
+        return took;
+    }, 3, 10.0);
+    std::printf("[ PERF     ] rebuild of %d nodes with a job running: %.3f ms\n", kNodes, ms);
+    EXPECT_LT(ms, 10.0);
+    EXPECT_EQ(view.nodeCount(), kNodes);
+}
+
 // Reports, does not budget: what a 20 000-note vault costs per step, per
 // frame and per rebuild (docs/PERFORMANCE.md). Only finiteness is asserted.
 TEST(GraphPerformanceTest, TwentyThousandNodesReportCosts)

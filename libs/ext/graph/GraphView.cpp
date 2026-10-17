@@ -301,7 +301,7 @@ GraphView::GraphView(QWidget *parent)
 
 GraphView::~GraphView()
 {
-    m_frameWatcher.waitForFinished(); // the job holds a pointer to m_layout
+    m_frameWatcher.waitForFinished(); // the job paints from members' snapshots, but is not worth outliving
     m_dataWatcher.waitForFinished();
 }
 
@@ -725,9 +725,11 @@ void GraphView::setCurrentNote(const QString &relativePath)
 
 void GraphView::rebuild()
 {
-    // The job owns m_layout: let it finish, and drop whatever it hands back.
-    m_frameWatcher.waitForFinished();
-    ++m_generation;
+    // The job owns the layout it holds: leave it that one, take a new one for
+    // the new graph, and drop whatever the old job hands back. Waiting here
+    // froze the UI for a whole job (up to 250 ms with Animate off).
+    m_layout = std::make_shared<ForceLayout>();
+    m_liveGeneration->store(++m_generation);
     m_layoutEdits.clear(); // aimed at nodes that may no longer exist
 
     QList<GraphNode> nodes = m_rawNodes;
@@ -860,18 +862,18 @@ void GraphView::rebuild()
         layoutEdges.append({a, b});
     }
 
-    m_layout.setOptions(forceOptionsFor(m_options));
-    m_layout.reset(m_nodes.size(), layoutEdges);
+    m_layout->setOptions(forceOptionsFor(m_options));
+    m_layout->reset(m_nodes.size(), layoutEdges);
     int kept = 0;
     for (int i = 0; i < m_nodes.size(); ++i) {
         const auto it = keep.constFind(m_nodes[i].data.id);
         if (it != keep.constEnd()) {
-            m_layout.setPosition(i, it.value());
+            m_layout->setPosition(i, it.value());
             ++kept;
         }
     }
 
-    m_positions = m_layout.positions();
+    m_positions = m_layout->positions();
     m_settled = m_nodes.isEmpty();
 
     m_hoverNode = -1;
@@ -890,12 +892,12 @@ void GraphView::rebuild()
 void GraphView::stepSimulation(int steps)
 {
     m_frameWatcher.waitForFinished();
-    ++m_generation; // the finished job's output is older than this
+    m_liveGeneration->store(++m_generation); // the finished job's output is older than this
     flushLayoutEdits();
     for (int i = 0; i < steps; ++i)
-        m_layout.step();
-    m_positions = m_layout.positions();
-    m_settled = m_layout.isSettled();
+        m_layout->step();
+    m_positions = m_layout->positions();
+    m_settled = m_layout->isSettled();
     markDirty();
 }
 
@@ -919,13 +921,13 @@ void GraphView::editLayout(std::function<void(ForceLayout &)> edit)
         return;
     }
     flushLayoutEdits();
-    edit(m_layout);
+    edit(*m_layout);
 }
 
 void GraphView::flushLayoutEdits()
 {
     for (const auto &edit : m_layoutEdits)
-        edit(m_layout);
+        edit(*m_layout);
     m_layoutEdits.clear();
 }
 
@@ -959,10 +961,11 @@ void GraphView::launchFrame()
     // GraphLayout.h.
     input.steps = m_settled ? 0 : !m_options.animate ? 300 : (m_nodes.size() > 1000 ? 1 : 3);
     m_frameDirty = false;
-    ForceLayout *layout = &m_layout;
     m_jobInFlight = true;
-    m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout]() mutable {
+    m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout = m_layout,
+                                                live = m_liveGeneration]() mutable {
         FrameOutput output;
+        output.generation = input.generation;
         // Animate off: settle before the picture moves, up to 300 steps - but
         // never more than a quarter second a job, which a rebuild may have
         // to wait out; the next job carries on.
@@ -970,6 +973,8 @@ void GraphView::launchFrame()
         budget.start();
         for (int i = 0; i < input.steps; ++i) {
             layout->step();
+            if (live->load() != input.generation)
+                return output; // superseded by a rebuild: nothing to paint, nothing to keep
             if (!input.options.animate && (layout->isSettled() || budget.elapsed() > 250))
                 break;
         }

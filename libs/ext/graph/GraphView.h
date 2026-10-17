@@ -12,7 +12,9 @@
 #include <QStringList>
 #include <QWidget>
 
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -131,9 +133,13 @@ struct GraphOptions {
 ///    the last job returned, for hit tests, fitToView() and screenPosition().
 ///    It edits the layout (pin, move, wake, force options) only through
 ///    editLayout(): applied at once when idle, queued behind the job when not.
-///  - rebuild() waits for the job (bounded by one job, ~65 ms at 20 000
-///    notes) and bumps m_generation, so an output from before the rebuild is
-///    dropped when its signal arrives.
+///  - rebuild() never waits. It gives the view a fresh ForceLayout (the job
+///    holds the old one by shared_ptr) and bumps m_generation, so an output
+///    from before the rebuild is dropped when its signal arrives; the job
+///    sees the new generation in m_liveGeneration after the step it is on
+///    and bails out without painting. The next job launches once the stale
+///    one has been delivered. Only the destructor and stepSimulation() (a
+///    test hook) wait for a job.
 ///  - paintEvent() only draws the last frame, mapped from the camera it was
 ///    rendered with to the current one, so panning and zooming move the old
 ///    picture instantly while the real frame catches up.
@@ -320,7 +326,12 @@ private:
     QList<std::pair<int, int>> m_edgeIndices; // into m_nodes
     QHash<QString, int> m_idToIndex;
 
-    ForceLayout m_layout; ///< owned by the job while one runs - see the class comment
+    /// Owned by the job while one runs - see the class comment. A shared_ptr so
+    /// rebuild() can replace it under a job that still holds the old one.
+    std::shared_ptr<ForceLayout> m_layout = std::make_shared<ForceLayout>();
+    /// The generation a job should still be working for; a job whose own
+    /// generation differs has been superseded and stops stepping.
+    std::shared_ptr<std::atomic<int>> m_liveGeneration = std::make_shared<std::atomic<int>>(0);
     QVector<QPointF> m_positions; ///< the UI thread's snapshot of m_layout
     QTimer *m_stepTimer = nullptr;
 
