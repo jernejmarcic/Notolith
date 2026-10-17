@@ -327,15 +327,17 @@ the gap on the left being lit up."
 
 ## Bare brackets and meta notes
 
-Two tokens, both defaulting to `--text-accent` (a link's colour) and both
-overridable from a theme, a scheme or a snippet:
+Two tokens, both overridable from a theme, a scheme or a snippet:
 
-- `--bracket-color` - a bare `[text]` that is not a link, in every mode.
+- `--bracket-color` - a bare `[text]` that is not a link, in every mode;
+  `--text-accent` (a link's colour) by default.
 - `--meta-note-color` - a meta note (the `editor.metaNotes` setting), delimiters
-  included; it wins over `--bracket-color` where the two are the same run.
+  included; `--color-orange` by default, so notes to yourself stand apart from
+  bare brackets and links. It wins over `--bracket-color` where the two are the
+  same run.
 
 ```css
-.theme-dark { --bracket-color: var(--color-purple); --meta-note-color: var(--color-orange); }
+.theme-dark { --bracket-color: var(--color-purple); --meta-note-color: var(--color-yellow); }
 ```
 
 What counts as a bracket and a note is in [EDITOR.md](EDITOR.md#bare-brackets).

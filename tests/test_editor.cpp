@@ -7536,11 +7536,14 @@ TEST(MetaNoteContextMenuTest, DeleteMetaNoteLeavesNoStraySpace)
     EXPECT_EQ(editor->noteText(), original) << "each delete is one undo step";
 }
 
-TEST(MetaNoteStyleTest, TheDefaultTokensAreTheAccent)
+TEST(MetaNoteStyleTest, ABareBracketIsTheAccentAndAMetaNoteIsOrange)
 {
-    const Theme theme = Theme::builtin(Theme::Mode::Dark);
-    EXPECT_EQ(theme.color(QStringLiteral("--meta-note-color")), theme.color(QStringLiteral("--text-accent")));
-    EXPECT_EQ(theme.color(QStringLiteral("--bracket-color")), theme.color(QStringLiteral("--text-accent")));
+    for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
+        const Theme theme = Theme::builtin(mode);
+        EXPECT_EQ(theme.color(QStringLiteral("--bracket-color")), theme.color(QStringLiteral("--text-accent")));
+        EXPECT_EQ(theme.color(QStringLiteral("--meta-note-color")), theme.color(QStringLiteral("--color-orange")));
+        EXPECT_NE(theme.color(QStringLiteral("--meta-note-color")), theme.color(QStringLiteral("--bracket-color")));
+    }
 }
 
 TEST(CountTest, TheCharacterCountLeavesOutWhatTheWordCountDoes)

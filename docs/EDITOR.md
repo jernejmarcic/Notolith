@@ -424,7 +424,7 @@ publisher do not, so they pay nothing. Output: `StyleSpan::Kind::BareBracket`.
 
 Setting `editor.metaNotes` (Settings > Editor, **off** by default). A writer's
 notes to themselves, such as `She left early [check the date] and never came
-back.`, are drawn in their own colour, `--meta-note-color` (the accent unless a
+back.`, are drawn in their own colour, `--meta-note-color` (orange unless a
 theme sets it), delimiters kept. They stay visible while you write - nothing
 hides them, and there is no switch that would. The delimiters are
 `editor.metaNoteOpen` / `editor.metaNoteClose`, default `[` and `]`; each is 1

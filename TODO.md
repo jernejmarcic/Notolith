@@ -1251,8 +1251,10 @@ title), L (look-up), K (edited listing chrome).
   Lane audit4 (f239eaf..a33e595). Tests seen failing without the fix: 2
   (4 scans vs 1), 3, 6. New tests for 4, 5, 7, 9, 10 pass and guard them
   (7: old code was right, only blocking). No test: 8, 11.
-- [ ] 12. For Jernej: meta notes and bare brackets share the accent colour by
-      default (pinned by a test). Distinct default (orange) wanted?
+- [x] 12. For Jernej: meta notes and bare brackets share the accent colour by
+      default (pinned by a test). Distinct default (orange) wanted? He picked
+      "Orange meta notes": --meta-note-color = --color-orange, bare brackets
+      stay the accent.
 
 ## Found 2026-10-17 (housekeeping)
 

@@ -202,9 +202,10 @@ void Theme::applyDerivedTokens()
     derive(QStringLiteral("--text-on-accent"), QStringLiteral("#ffffff"));
     derive(QStringLiteral("--text-error"), m_tokens[QStringLiteral("--color-red")]);
     derive(QStringLiteral("--text-accent"), dark ? accent1 : accent);
-    // A bare [bracket] is drawn as a link is; a meta note starts there too.
+    // A bare [bracket] is drawn as a link is; a meta note in orange, so the
+    // writer's notes to themselves stand apart from it (Jernej, 2026-10-17).
     derive(QStringLiteral("--bracket-color"), m_tokens[QStringLiteral("--text-accent")]);
-    derive(QStringLiteral("--meta-note-color"), m_tokens[QStringLiteral("--text-accent")]);
+    derive(QStringLiteral("--meta-note-color"), m_tokens[QStringLiteral("--color-orange")]);
     // Obsidian dims an unresolved link rather than giving it its own hue.
     derive(QStringLiteral("--link-unresolved-color"),
            rgba(QColor(dark ? accent1 : accent), 0.45));
