@@ -754,7 +754,7 @@ comparison (and a clipboard read on Ctrl+V).
 Tests: `TableHandlesTest.*` (`tests/test_tables.cpp`), `HtmlTableHandlesTest.*`
 (`tests/test_html_edit.cpp`).
 
-## Mermaid diagrams
+## Diagrams: Mermaid, PlantUML, TikZ, Graphviz
 
 A ```` ```mermaid ```` fence is drawn as its diagram when the caret is outside
 it, and shown as source when the caret is inside, like any rendered block.
@@ -810,6 +810,60 @@ already linked for notebook output).
 one test against the installed tool (skipped when absent, a failure under
 `NOTEAPPC_REQUIRE_TOOLS=1`, which the lane check sets); the publish test is in
 `tests/test_publish.cpp`.
+
+### PlantUML, TikZ and Graphviz
+
+````plantuml` (also `puml`), ````tikz` and ````dot` (also `graphviz`) fences are
+drawn the same way and by the same code (`diagramRenderer` in
+`libs/editor/MermaidBlock.cpp`; `mermaidRenderer` is its Mermaid case): the one
+pool thread, the tool found by the first fence and remembered, the memo, the
+disk cache (one directory per kind: `.../noteAppC/{mermaid,plantuml,tikz,dot}`),
+the source with one dim hint when the tool is missing or fails, nothing at
+startup, a cached diagram drawn without starting a process, and the caret
+inside the fence showing its source. Settings, next to Mermaid's, each on by
+default and costing nothing when off: "PlantUML diagrams" (`render.plantuml`,
+tool `render.plantumlTool` = `plantuml`), "TikZ diagrams" (`render.tikz`, tool
+`render.latexTool` = `latex`; `dvisvgm` is looked for next to it, then on
+`PATH`), "Graphviz diagrams" (`render.graphviz`, tool `render.dotTool` = `dot`).
+These need PlantUML (and Java), TeX Live's latex and dvisvgm, and Graphviz
+installed; noteAppC bundles none (no C/C++ renderer exists for PlantUML or TikZ,
+and Graphviz's libgvc was left out on purpose: a C parser with a CVE history
+reading a shared note's graph inside the editor process, with its unsaved text,
+is the wrong place for it).
+
+- **Sandbox**: each tool runs inside bubblewrap with the syscall filter
+  (`sandbox::bubblewrapCommand`, `libs/sandbox/Bubblewrap.h`, which TeX's
+  compile step uses too): `/usr`, `/etc` and `/var/lib/texmf` read-only, no home,
+  no other disk, no network, no inherited environment, and one temporary
+  directory writable. Without bwrap there is no diagram, only the hint: never an
+  unsandboxed run. So a tool set by path must live under `/usr`. 20 s for a
+  tool (and for each of TeX's two steps), a CPU limit, and 4 GB of address space
+  for all but the JVM.
+- **PlantUML**: `plantuml -tsvg -pipe -charset UTF-8` with the source on stdin
+  (wrapped in `@startuml` when it has no `@start...`), `--dark-mode` on a dark
+  theme, and `PLANTUML_SECURITY_PROFILE=SANDBOX`, so `!include` of a file or a
+  URL fails (the error shows as the hint). A PlantUML without `--dark-mode`
+  would fail the run; update it.
+- **TikZ**: TikZJax's block (`\usepackage` / `\usetikzlibrary` lines, then
+  `\begin{document}...\end{document}`) or a bare `tikzpicture`, put in a
+  `standalone` document and run through `latex -no-shell-escape` and
+  `dvisvgm --no-fonts --exact-bbox`. TeX can still `\input` a system file under
+  `/usr` or `/etc` (TeX Live 2026's `openin_any` does nothing); the user's files
+  are not in the sandbox. On a dark theme black (explicit, and the SVG's implicit
+  default) becomes the theme's text colour, like TikZJax's invert option; other
+  colours stay.
+- **Graphviz**: `dot -Tsvg`; the theme's text colour and a transparent
+  background are declared at the top of the graph as the defaults, so the
+  graph's own attributes override them.
+- **Publish and PDF export** draw the cached SVGs of all four kinds the same
+  way (a never-drawn fence stays its source); publish inlines each as
+  `<div class="mermaid-diagram">`, dropping an XML prolog and prefixing the ids.
+
+`tests/test_diagrams.cpp` runs the real tools (skipped when one is absent, a
+failure under `NOTEAPPC_REQUIRE_TOOLS=1`): a diagram per kind, the disk cache,
+the missing-tool hint, PlantUML's refused includes, TikZ's reads and shell,
+the colours, the sandbox itself, PDF export and the window's settings; publish
+is in `tests/test_publish.cpp`.
 
 ## File cards
 
