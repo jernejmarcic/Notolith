@@ -1152,10 +1152,10 @@ title), L (look-up), K (edited listing chrome).
 - [ ] 7 LOW: graph drag test cannot fail (reads the UI snapshot only). G
 - [ ] 8 LOW: graph control change in the last 500 ms before a vault switch is
       lost (flush in openVault). G
-- [ ] 9 LOW: Look up from a keyboard-opened menu anchors the popover at the
+- [x] 9 LOW: Look up from a keyboard-opened menu anchors the popover at the
       mouse, not the caret. L
 - [x] 10 LOW: clicking into a callout title puts the caret at the end. C
-- [ ] 11 LOW: DictClient reply is unbounded; timeouts not settable so the
+- [x] 11 LOW: DictClient reply is unbounded; timeouts not settable so the
       silent-server path is untested; docs say a dead server costs 1.5 s. L
 - [ ] 12 LOW: colour dialog returns to an unguarded group index. G
 - [ ] 13 DOC: HANDOFF "35 suites" (36); GraphView.h ~65 ms; MainWindow
