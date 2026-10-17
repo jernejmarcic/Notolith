@@ -1556,6 +1556,33 @@ TEST(CalloutTitleTest, ClickingTheBodyStillPlacesTheCaret)
     EXPECT_FALSE(fixture.edit());
 }
 
+TEST(CalloutTitleTest, ReadingModeNeverOpensTheTitle)
+{
+    // A read-only view must not write to the note, through the overlay or otherwise.
+    const QString note = QStringLiteral("> [!note] Title\n> body\n");
+    CalloutTitleFixture fixture(note);
+    fixture.editor->setMode(MarkdownEditor::Mode::Reading);
+    QApplication::processEvents();
+    fixture.title = fixture.editor->calloutTitleRectAt(0).center().toPoint();
+    fixture.click();
+    EXPECT_FALSE(fixture.edit());
+    EXPECT_EQ(fixture.editor->noteText(), note);
+}
+
+TEST(CalloutTitleTest, ReadingModeNeverFillsAShortRow)
+{
+    const QString note = QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 |\n\nafter\n");
+    for (int y = 4; y < 200; y += 6) {
+        for (int x = 4; x < 880; x += 40) {
+            auto editor = editorWith(note);
+            editor->setMode(MarkdownEditor::Mode::Reading);
+            editor->show();
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(x, y));
+            ASSERT_EQ(editor->noteText(), note) << "click at " << x << "," << y;
+        }
+    }
+}
+
 // --- neighbouring blocks never overlap ------------------------------------
 
 /// Scrolls through the whole note, the way reading it would, and says where two

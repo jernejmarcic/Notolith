@@ -39,6 +39,9 @@ QRectF MarkdownEditor::calloutTitleRectAt(qsizetype offset) const
 
 bool MarkdownEditor::pressCalloutTitle(const QPoint &point)
 {
+    // Reading draws the title but never edits it.
+    if (m_mode == Mode::Reading)
+        return false;
     const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
     for (const BlockView &view : m_blocks) {
