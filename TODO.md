@@ -1136,7 +1136,7 @@ title), L (look-up), K (edited listing chrome).
 - [x] 1 HIGH: Reading view edits the note through the callout title overlay
       (pressCalloutTitle has no mode gate; check the property editor too). C
       Done; also gated fillShortRow (a short table row was filled in Reading).
-- [ ] 2 HIGH: GraphView::rebuild() waits for the worker job on the UI thread:
+- [x] 2 HIGH: GraphView::rebuild() waits for the worker job on the UI thread:
       47 ms (animate on) / 255 ms (off) at 20k nodes, on every autosave and
       local-graph note switch. Shared layout + generation, no wait. G
 - [x] 3 MEDIUM: an external edit (same note in two tabs) while the title
@@ -1145,20 +1145,21 @@ title), L (look-up), K (edited listing chrome).
       last output; the block height jumps. Decision: keep the panel
       background and outputs, fences drawn inside the panel, no header strip;
       eligibility flip and output clearing stay tab-group-only. K
-- [ ] 5 MEDIUM: local graph lacks Incoming/Outgoing filters, and a comment
+- [x] 5 MEDIUM: local graph lacks Incoming/Outgoing filters, and a comment
       wrongly says Obsidian has none. G
-- [ ] 6 LOW: colour-group query typing rescans every node per keystroke, no
+- [x] 6 LOW: colour-group query typing rescans every node per keystroke, no
       debounce. G
-- [ ] 7 LOW: graph drag test cannot fail (reads the UI snapshot only). G
-- [ ] 8 LOW: graph control change in the last 500 ms before a vault switch is
+- [x] 7 LOW: graph drag test cannot fail (reads the UI snapshot only). G
+- [x] 8 LOW: graph control change in the last 500 ms before a vault switch is
       lost (flush in openVault). G
 - [x] 9 LOW: Look up from a keyboard-opened menu anchors the popover at the
       mouse, not the caret. L
 - [x] 10 LOW: clicking into a callout title puts the caret at the end. C
 - [x] 11 LOW: DictClient reply is unbounded; timeouts not settable so the
       silent-server path is untested; docs say a dead server costs 1.5 s. L
-- [ ] 12 LOW: colour dialog returns to an unguarded group index. G
-- [ ] 13 DOC: HANDOFF "35 suites" (36); GraphView.h ~65 ms; MainWindow
+- [x] 12 LOW: colour dialog returns to an unguarded group index. G
+- [x] 13 DOC (rebuild 215 -> 0.8 ms at 3k nodes; local in/out keys are own
+      names localIncoming/localOutgoing, Obsidian's unconfirmed): HANDOFF "35 suites" (36); GraphView.h ~65 ms; MainWindow
       "reads the index only once shown"; graph page has no Escape exit, nodes
       no right-click menu (G adds Escape back to the note; node menu: Open,
       Open in new tab).
