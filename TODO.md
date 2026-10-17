@@ -1287,6 +1287,52 @@ title), L (look-up), K (edited listing chrome).
       Left: more icons need a Lucide download (ask first); icons in the
       quick switcher and inline title; Iconize import; a test of the picker.
 
+## Requested 2026-10-17: diagrams, and a central server
+
+- [ ] **PlantUML, TikZ (TikZJax-style) and Graphviz rendered like Mermaid**,
+      when the tool is installed. Jernej: "PUML, tikjax, mermaid, should be
+      renderable if the backend requrement is installed. prefereably if there
+      is a c++ package that should be bundled in". Checked 2026-10-17: no
+      C/C++ renderer exists for Mermaid (mmdr is Rust, already used),
+      PlantUML (Java only) or TikZ (TeX only); Graphviz has a C library
+      (libgvc 16.1, installed) but parsing a shared note's graph in-process
+      with a C parser that has a CVE history risks the editor (and its
+      unsaved text) on a crafted note, so it runs as `dot` in the sandbox
+      like the rest; linking libgvc is a switch away if wanted.
+      Installed here: plantuml 1.2026.8 + java, graphviz 16.1 (dot), TeX
+      Live latex + dvisvgm, mmdr. Plan (lane diagrams):
+      - [ ] One diagram renderer for fences by language: `plantuml`/`puml`,
+            `tikz`, `dot`/`graphviz`, built on MermaidBlock's pattern (pool
+            thread, tool resolved on first fence and remembered, memo +
+            disk cache by source/theme, source + one dim hint when the tool
+            is missing or fails, nothing at startup).
+      - [ ] Each tool sandboxed: bwrap + seccomp, no network, a temp dir
+            only (PlantUML can !include files and URLs; TeX can read
+            files); PlantUML also with its SANDBOX security profile; TeX
+            with -no-shell-escape. Timeouts.
+      - [ ] TikZ: TikZJax's block shape (`\usepackage` lines, then
+            `\begin{document}...\end{document}`) and a bare tikzpicture
+            both; standalone class; latex -> dvisvgm --no-fonts; readable in
+            the dark theme (TikZJax's invert option, done by recolouring
+            black to the text colour).
+      - [ ] PlantUML and Graphviz in the theme's colours where the tool
+            allows (PlantUML -darkmode / skinparam, dot -Gbgcolor etc.).
+      - [ ] Settings: render.plantuml, render.tikz, render.graphviz (each
+            off costs nothing), tool path settings like render.mermaidTool.
+      - [ ] Publish and PDF export draw the cached SVGs, never start a tool.
+      - [ ] Tests per kind (skipped when the tool is absent), cache hit,
+            missing tool hint, sandbox has no network; docs/EDITOR.md.
+- [ ] **A central server with only a local cache, like Trilium** - Jernej:
+      "is there an API, like trillium notes so a central "server" node can
+      store the data with just a local cache?" Today: no. Sync
+      (docs/SYNC.md) is local-first and end-to-end encrypted: the server
+      stores ciphertext only and every device keeps the whole vault; there
+      is no HTTP API over notes (the server cannot read them). Waiting on
+      Jernej's choice of model (answered in chat 2026-10-17): on-demand
+      local cache over the existing encrypted sync, a trusted plaintext
+      server with an ETAPI-style REST API, or a local REST API on each
+      device.
+
 ## Fable review round 6, 2026-10-17: what TODO did not have
 
 Fable read the whole tree for bugs and missing Obsidian behaviour not listed
