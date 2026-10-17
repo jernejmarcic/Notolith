@@ -21,6 +21,7 @@
 #include <QFileSystemModel>
 #include <QHeaderView>
 #include <QHoverEvent>
+#include <QListView>
 #include <QTreeView>
 #include <QFile>
 #include <QFileInfo>
@@ -4931,6 +4932,44 @@ TEST_F(WindowTest, AltBracketJumpsAndTheStatusBarSaysWhich)
     EXPECT_EQ(editor->selectedText(), QStringLiteral("[third]"));
     EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("Meta note 3 of 3 (wrapped around)"));
     EXPECT_EQ(editor->noteText(), text) << "the editor typed no bracket";
+}
+
+TEST_F(WindowTest, LinkCompletionReadsHeadingsAndAliasesFromTheIndex)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Sections.md"), "---\naliases: [Parts]\n---\n# Setup\n\n## Usage\n\ntext ^blk1\n");
+    write(QStringLiteral("Host.md"), "see \n");
+    MainWindow window;
+    window.show();
+    auto *indexer = window.findChild<noteAppC::Indexer *>();
+    ASSERT_NE(indexer, nullptr);
+    QSignalSpy scanned(indexer, &noteAppC::Indexer::finished);
+    window.openVault(dir.path());
+    ASSERT_TRUE(scanned.wait(10000)); // its changed() has fed the open editors by now
+    window.openNote(path(QStringLiteral("Host.md")));
+    auto *editor = window.findChild<MarkdownEditor *>();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(4);
+
+    const auto popupRows = [] {
+        QStringList rows;
+        for (QWidget *widget : QApplication::allWidgets()) {
+            auto *popup = qobject_cast<QListView *>(widget);
+            if (!popup || popup->objectName() != QLatin1String("completerPopup") || !popup->isVisible())
+                continue;
+            for (int row = 0; row < popup->model()->rowCount(); ++row)
+                rows << popup->model()->index(row, 0).data().toString();
+        }
+        return rows;
+    };
+    QTest::keyClicks(editor, QStringLiteral("[[Par"));
+    EXPECT_EQ(popupRows(), QStringList{QStringLiteral("Parts -> Sections")});
+    for (int i = 0; i < 3; ++i)
+        QTest::keyClick(editor, Qt::Key_Backspace);
+    QTest::keyClicks(editor, QStringLiteral("Sections#"));
+    EXPECT_EQ(popupRows(), (QStringList{QStringLiteral("Setup"), QStringLiteral("Usage")}));
+    QTest::keyClicks(editor, QStringLiteral("^"));
+    EXPECT_EQ(popupRows(), QStringList{QStringLiteral("blk1")});
 }
 
 TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)

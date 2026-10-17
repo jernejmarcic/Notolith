@@ -358,6 +358,26 @@ bare). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
 in Obsidian's live preview) and `[[Note#^id]]` shows as written; a heading
 link shows "Note > Heading".
 
+## `[[` link completion
+
+Typing `[[` (or `![[`) opens a popup of note names; a name is matched anywhere
+in the text, not only at its start. Four more things complete, as in Obsidian:
+
+- **Headings.** After `#` the popup lists that note's headings, `[[Note#`
+  for another note and `[[#` for the note being edited (read from the editor,
+  so a heading typed a moment ago is there). Picking one inserts
+  `Note#Heading` and closes the brackets.
+- **Block ids.** `[[Note#^` and `[[#^` list the `^id` markers the same way.
+  Obsidian's search over every block (`[[^^`) is not offered.
+- **Aliases.** A note's frontmatter `aliases:` appear in the name list as
+  "alias -> Note"; picking one inserts `[[Note|alias]]`, which shows the alias
+  and links to the note. An alias is not also listed as a plain name.
+- **Embeds** (`![[`) behave identically.
+
+Another note's headings or block ids come from the index, with one small query
+the first time the popup shows them and none per keystroke after that. Nothing
+is queried while the popup is closed.
+
 ## Autosave
 
 With `files.autosave` on (the default) every modified note is saved two

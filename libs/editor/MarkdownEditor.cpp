@@ -4,10 +4,12 @@
 
 #include "Icons.h"
 #include "MediaPlayback.h"
+#include "ObsidianSyntax.h"
 #include "PdfPage.h"
 #include "Vault.h"
 
 #include <QAbstractItemView>
+#include <QAbstractListModel>
 #include <QApplication>
 #include <QClipboard>
 #include <QFileInfo>
@@ -46,6 +48,75 @@
 namespace noteAppC {
 
 namespace {
+
+/// What the `[[` popup lists: every name, then every alias. An alias row is
+/// matched on the alias, shown as "alias -> Note" and inserted as `Note|alias`.
+/// Shares the names' list rather than copying it: a vault can have 20 000.
+class LinkModel : public QAbstractListModel {
+public:
+    static constexpr int InsertRole = Qt::UserRole;
+
+    using QAbstractListModel::QAbstractListModel;
+
+    void setNames(const QStringList &names)
+    {
+        beginResetModel();
+        m_names = names;
+        endResetModel();
+    }
+    void setAliases(const QList<QPair<QString, QString>> &aliases)
+    {
+        beginResetModel();
+        m_aliases = aliases;
+        endResetModel();
+    }
+
+    int rowCount(const QModelIndex &parent = {}) const override
+    {
+        return parent.isValid() ? 0 : int(m_names.size() + m_aliases.size());
+    }
+    QVariant data(const QModelIndex &index, int role) const override
+    {
+        if (!index.isValid())
+            return {};
+        if (index.row() < m_names.size())
+            return role == Qt::DisplayRole || role == Qt::EditRole || role == InsertRole
+                       ? QVariant(m_names.at(index.row())) : QVariant();
+        const auto &[alias, note] = m_aliases.at(index.row() - m_names.size());
+        switch (role) {
+        case Qt::EditRole: return alias;
+        case Qt::DisplayRole: return alias + QStringLiteral(" -> ") + note;
+        case InsertRole: return note + QLatin1Char('|') + alias;
+        default: return {};
+        }
+    }
+
+private:
+    QStringList m_names;
+    QList<QPair<QString, QString>> m_aliases;
+};
+
+/// The caret's `[[` text split at its first `#`: `note` before it (empty for
+/// the note being edited), then `text` after it, or after `#^` for block ids.
+struct LinkFragment {
+    bool active = false; ///< the text has a `#`
+    QString note;
+    bool blocks = false;
+    QString text;
+};
+
+LinkFragment splitLinkFragment(const QString &typed)
+{
+    LinkFragment fragment;
+    const qsizetype hash = typed.indexOf(QLatin1Char('#'));
+    if (hash < 0)
+        return fragment;
+    fragment.active = true;
+    fragment.note = typed.left(hash);
+    fragment.blocks = typed.mid(hash + 1).startsWith(QLatin1Char('^'));
+    fragment.text = typed.mid(hash + 1 + (fragment.blocks ? 1 : 0));
+    return fragment;
+}
 
 // The source's own blank lines make the vertical rhythm, exactly as the file
 // reads; only headings get extra air, the way Obsidian styles them.
@@ -145,7 +216,10 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
             viewport()->update(caret);
     });
 
-    m_completer = new QCompleter(new QStringListModel(this), this);
+    auto *linkModel = new LinkModel(this);
+    m_linkModel = linkModel;
+    m_fragmentModel = new QStringListModel(this);
+    m_completer = new QCompleter(linkModel, this);
     m_completer->setWidget(this);
     m_completer->popup()->setObjectName(QStringLiteral("completerPopup"));
     // One line per name. Without this, every application-wide style change
@@ -156,7 +230,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     m_completer->setCompletionMode(QCompleter::PopupCompletion);
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_completer->setFilterMode(Qt::MatchContains);
-    connect(m_completer, qOverload<const QString &>(&QCompleter::activated),
+    connect(m_completer, qOverload<const QModelIndex &>(&QCompleter::activated),
             this, &MarkdownEditor::insertCompletion);
 
     m_lastEdit.start();
@@ -225,8 +299,18 @@ void MarkdownEditor::setFileEmbedInputHandler(const QStringList &suffixes, FileE
 
 void MarkdownEditor::setLinkTargets(const QStringList &targets)
 {
-    if (auto *model = qobject_cast<QStringListModel *>(m_completer->model()))
-        model->setStringList(targets);
+    static_cast<LinkModel *>(m_linkModel)->setNames(targets);
+}
+
+void MarkdownEditor::setLinkAliases(const QList<QPair<QString, QString>> &aliases)
+{
+    static_cast<LinkModel *>(m_linkModel)->setAliases(aliases);
+}
+
+void MarkdownEditor::setLinkFragmentProvider(std::function<QStringList(const QString &, bool)> provider)
+{
+    m_fragmentProvider = std::move(provider);
+    m_fragmentKey.clear();
 }
 
 std::optional<QString> MarkdownEditor::wikilinkPrefix() const
@@ -249,10 +333,38 @@ void MarkdownEditor::updateSuggestions()
     const auto prefix = wikilinkPrefix();
     if (!prefix) {
         m_completer->popup()->hide();
+        m_fragmentKey.clear();
         return;
     }
 
-    m_completer->setCompletionPrefix(*prefix);
+    // After a `#` the popup lists that note's headings or block ids instead of
+    // names; they are fetched once per note and kind, not per keystroke.
+    const LinkFragment fragment = splitLinkFragment(*prefix);
+    if (fragment.active) {
+        const QString key = (fragment.blocks ? QStringLiteral("^") : QStringLiteral("#")) + fragment.note;
+        if (key != m_fragmentKey) {
+            m_fragmentKey = key;
+            QStringList candidates;
+            if (!fragment.note.isEmpty()) {
+                if (m_fragmentProvider)
+                    candidates = m_fragmentProvider(fragment.note, fragment.blocks);
+            } else if (fragment.blocks) {
+                for (const BlockId &block : ObsidianSyntax::scan(m_text, {}).blockIds)
+                    candidates << block.id;
+            } else {
+                for (const Heading &heading : m_headings)
+                    candidates << heading.text;
+            }
+            m_fragmentModel->setStringList(candidates);
+        }
+    } else {
+        m_fragmentKey.clear();
+    }
+    QAbstractItemModel *wanted = fragment.active ? static_cast<QAbstractItemModel *>(m_fragmentModel) : m_linkModel;
+    if (m_completer->model() != wanted)
+        m_completer->setModel(wanted);
+
+    m_completer->setCompletionPrefix(fragment.active ? fragment.text : *prefix);
     if (m_completer->completionCount() == 0) {
         m_completer->popup()->hide();
         return;
@@ -266,18 +378,22 @@ void MarkdownEditor::updateSuggestions()
     m_completer->complete(anchor);
 }
 
-void MarkdownEditor::insertCompletion(const QString &completion)
+void MarkdownEditor::insertCompletion(const QModelIndex &chosen)
 {
     const auto prefix = wikilinkPrefix();
     if (!prefix)
         return;
+    const QVariant insert = chosen.data(LinkModel::InsertRole);
+    const QString completion = insert.isValid() ? insert.toString() : chosen.data().toString();
 
-    // Replace what was typed, then step over the closing brackets if the
-    // auto-pair already put them there.
-    const qsizetype at = m_cursor - prefix->size();
+    // Replace what was typed (after the `#` for a heading or block id), then
+    // step over the closing brackets if the auto-pair already put them there.
+    const LinkFragment fragment = splitLinkFragment(*prefix);
+    const qsizetype typed = fragment.active ? fragment.text.size() : prefix->size();
+    const qsizetype at = m_cursor - typed;
     const bool closed =
         QStringView(m_text).mid(m_cursor).startsWith(QLatin1String("]]"));
-    applyEdit(at, prefix->size(), closed ? completion : completion + QLatin1String("]]"));
+    applyEdit(at, typed, closed ? completion : completion + QLatin1String("]]"));
     if (closed)
         m_cursor = m_anchor = m_cursor + 2;
 }

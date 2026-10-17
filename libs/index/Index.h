@@ -4,6 +4,8 @@
 #include <memory>
 
 #include <QHash>
+#include <QList>
+#include <QPair>
 #include <QObject>
 #include <QSqlDatabase>
 #include <QString>
@@ -139,8 +141,15 @@ public:
     QHash<QString, int> tagCounts() const;
     /// Quick switcher: paths whose name matches `query`, best first.
     QStringList findByName(const QString &query, int limit = 50) const;
-    /// Every name a wikilink may use, for the `[[` suggester.
+    /// Every name a wikilink may use, for the `[[` suggester; the `aliases:`
+    /// entries are left out, aliases() lists those.
     QStringList linkTargets() const;
+    /// Every `aliases:` entry as {alias, note name}: the suggester offers it
+    /// as `[[Note|alias]]`.
+    QList<QPair<QString, QString>> aliases() const;
+    /// Headings, or block ids, of the note at vault-relative `path`, in source
+    /// order: what `[[Note#` and `[[Note#^` complete.
+    QStringList fragmentsOf(const QString &path, bool blocks) const;
 
     // --- search (libs/index/Search.h has the grammar and the evaluator) ---
 
