@@ -3112,6 +3112,10 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
         QMessageBox::warning(this, tr("Merge"), error);
         return false;
     }
+    if (from.lossy) {
+        QMessageBox::warning(this, tr("Merge"), tr("%1 is not valid UTF-8; merging would change its bytes").arg(QFileInfo(source).fileName()));
+        return false;
+    }
     // The body only: the source's properties would be a second frontmatter
     // in the middle of the target.
     const Range frontmatter = Frontmatter::find(from.text);
@@ -3130,7 +3134,7 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
     // Links to the merged note lead to where its text went, as a rename's do.
     if (m_index.isOpen())
         m_index.updateLinksAfterRename(m_vault.relative(source), m_vault.relative(target), m_vault, &error);
-    if (!m_vault.moveToTrash(source, &error)) {
+    if (!deleteVaultPath(source, &error)) {
         QMessageBox::warning(this, tr("Merge"), tr("Merged, but %1 stays:\n%2").arg(QFileInfo(source).fileName(), error));
         return false;
     }
@@ -4298,6 +4302,11 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_settings.noteOpened(m_vault.isValid() ? m_vault.root() : QString(), path);
     updateTitle();
     updateWordCount();
+    if (note.lossy)
+        statusBar()->showMessage(tr("%1 is not valid UTF-8: invalid bytes are shown as U+FFFD and the note is not "
+                                    "saved unless you save it by hand")
+                                     .arg(QFileInfo(path).fileName()),
+                                 10000);
 
     // The tree already shows its own row selected; every other route in -
     // switcher, link, history - reveals the note there instead of leaving the
@@ -5384,6 +5393,29 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     Note note = target->note;
     note.text = target->editor->noteText();
 
+    // Invalid UTF-8 on disk: what is shown has U+FFFD where the bytes were, so
+    // a save changes bytes nobody edited. Never from an autosave; by hand only
+    // when the person says so.
+    if (note.lossy) {
+        if (!isModified(target))
+            return true;
+        const QString name = QFileInfo(target->notePath).fileName();
+        if (quiet) {
+            statusBar()->showMessage(
+                tr("%1 is not valid UTF-8: it is not saved automatically, because saving would change bytes that "
+                   "were not edited. Save it by hand to replace them")
+                    .arg(name),
+                10000);
+            return false;
+        }
+        if (QMessageBox::question(this, tr("Save"),
+                                  tr("%1 is not valid UTF-8. Saving replaces the invalid bytes with U+FFFD and "
+                                     "cannot be undone.\n\nSave anyway?")
+                                      .arg(name)) != QMessageBox::Yes)
+            return false;
+        note.lossy = false; // the consent: Vault::write() refuses a lossy note
+    }
+
     // File recovery, for notes in a vault only: a stray note leaves nothing
     // behind. The first save of a note keeps what it held before, too. An
     // encrypted note keeps nothing there: its text never reaches the disk.
@@ -5681,8 +5713,13 @@ bool MainWindow::maybeSave()
 
     const QString shown =
         m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
+    const bool lossy = m_active->note.lossy;
     QString question =
         lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown);
+    if (lossy)
+        question = tr("%1 is not valid UTF-8. Saving replaces the invalid bytes with U+FFFD and cannot be undone.\n\n"
+                      "Save anyway?")
+                       .arg(shown);
     if (!m_lastSaveError.isEmpty())
         question = tr("%1 could not be saved: %2\n\nTry saving again?").arg(shown, m_lastSaveError);
     const auto answer = QMessageBox::question(this, tr("Unsaved changes"), question,
@@ -5693,6 +5730,7 @@ bool MainWindow::maybeSave()
         return false;
     if (answer == QMessageBox::Discard)
         return true;
+    m_active->note.lossy = false; // asked just now
     return save();
 }
 
@@ -6122,6 +6160,29 @@ void MainWindow::commitInlineTitle(Leaf *leaf)
     leaf->inlineTitle->setText(QFileInfo(leaf->notePath).completeBaseName());
 }
 
+bool MainWindow::deleteVaultPath(const QString &path, QString *error)
+{
+    const QString mode = m_settings.text(QStringLiteral("files.deletedFiles"));
+    if (mode == QLatin1String("permanent")) {
+        const QFileInfo info(path);
+        const bool done = info.isDir() && !info.isSymLink() ? QDir(path).removeRecursively() : QFile::remove(path);
+        if (!done && error)
+            *error = tr("cannot delete %1").arg(path);
+        return done;
+    }
+    if (mode != QLatin1String("local")) {
+        if (QFile::moveToTrash(path))
+            return true;
+        if (!m_vault.moveToTrash(path, error))
+            return false;
+        statusBar()->showMessage(tr("%1 has no system trash here: moved to the vault's .trash instead")
+                                     .arg(QFileInfo(path).fileName()),
+                                 6000);
+        return true;
+    }
+    return m_vault.moveToTrash(path, error);
+}
+
 void MainWindow::deletePathAt(const QModelIndex &index)
 {
     if (!index.isValid() || !m_vault.isValid())
@@ -6131,15 +6192,18 @@ void MainWindow::deletePathAt(const QModelIndex &index)
     const QString name = QFileInfo(path).fileName();
 
     if (m_settings.boolean(QStringLiteral("files.confirmDelete"))) {
-        const auto answer =
-            QMessageBox::question(this, tr("Delete"), tr("Move %1 to the vault's trash?").arg(name),
-                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        const QString mode = m_settings.text(QStringLiteral("files.deletedFiles"));
+        const QString question = mode == QLatin1String("permanent") ? tr("Permanently delete %1?").arg(name)
+                               : mode == QLatin1String("local")     ? tr("Move %1 to the vault's trash?").arg(name)
+                                                                    : tr("Move %1 to the system trash?").arg(name);
+        const auto answer = QMessageBox::question(this, tr("Delete"), question, QMessageBox::Yes | QMessageBox::No,
+                                                  QMessageBox::No);
         if (answer != QMessageBox::Yes)
             return;
     }
 
     QString error;
-    if (!m_vault.moveToTrash(path, &error)) {
+    if (!deleteVaultPath(path, &error)) {
         QMessageBox::warning(this, tr("Delete"), tr("Could not delete %1:\n%2").arg(name, error));
         return;
     }

@@ -88,6 +88,35 @@ TEST(VaultRoundTrip, MixedEndingsNormaliseToLf)
     EXPECT_EQ(roundTrip(bytes), QByteArray("a\nb\nc\n"));
 }
 
+TEST(VaultRoundTrip, InvalidUtf8IsFlaggedLossyAndRefusedByWrite)
+{
+    EXPECT_FALSE(Vault::decode("a\xC3\xA8" "b\n").lossy); // valid: e with grave
+    EXPECT_FALSE(Vault::decode("\xEF\xBB\xBF" "ok\n").lossy);
+    for (const QByteArray &bad : {QByteArray("a\xE8" "b\n"), QByteArray("cut\xE2\x82"), QByteArray("\xFF")}) {
+        const Note note = Vault::decode(bad);
+        EXPECT_TRUE(note.lossy) << bad.toHex().toStdString();
+        EXPECT_TRUE(note.text.contains(QChar(0xFFFD)));
+    }
+
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("bad.md"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("a\xE8" "b\n");
+    file.close();
+    Note note;
+    ASSERT_TRUE(Vault::read(path, note));
+    ASSERT_TRUE(note.lossy);
+    QString error;
+    EXPECT_FALSE(Vault::write(path, note, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(readAll(path), QByteArray("a\xE8" "b\n")); // untouched
+    note.lossy = false; // the explicit choice
+    EXPECT_TRUE(Vault::write(path, note, &error));
+    EXPECT_EQ(readAll(path), QByteArray("a\xEF\xBF\xBD" "b\n"));
+}
+
 TEST(VaultIo, WriteIsAtomicAndReadsBack)
 {
     QTemporaryDir dir;

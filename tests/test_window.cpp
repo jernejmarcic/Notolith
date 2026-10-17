@@ -1446,8 +1446,10 @@ TEST_F(WindowTest, TheStatusBarShowsCountsAndSwitchesTheMode)
     EXPECT_EQ(editor->mode(), MarkdownEditor::Mode::LivePreview);
 }
 
-TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTrashAndClearsTheEditor)
+TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTheVaultTrashAndClearsTheEditor)
 {
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"trashOption": "local"})"); // Obsidian's own spelling
     MainWindow window;
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
@@ -1476,6 +1478,80 @@ TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTrashAndClearsTheEditor)
     auto *editor = window.findChild<MarkdownEditor *>();
     ASSERT_NE(editor, nullptr);
     EXPECT_FALSE(editor->isEnabled());
+}
+
+namespace {
+
+/// Deletes `relative` through the tree's own path, answering the confirmation Yes.
+void deleteThroughTheTree(MainWindow &window, const QString &absolute)
+{
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(absolute);
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(QMessageBox::Yes)->click();
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "deletePathAt", Q_ARG(QModelIndex, index)));
+}
+
+} // namespace
+
+// Obsidian's "Deleted files": the system trash (default), the vault's .trash, or gone.
+TEST_F(WindowTest, DeletingGoesToTheSystemTrashByDefaultNotTheVaultTrash)
+{
+    QTemporaryDir data; // a private XDG_DATA_HOME: the real trash is never touched
+    ASSERT_TRUE(data.isValid());
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        deleteThroughTheTree(window, path(QStringLiteral("Welcome.md")));
+    }
+    qputenv("XDG_DATA_HOME", previous);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_TRUE(QFile::exists(data.filePath(QStringLiteral("Trash/files/Welcome.md"))));
+    EXPECT_FALSE(QFile::exists(dir.filePath(QStringLiteral(".trash"))));
+}
+
+TEST_F(WindowTest, DeletingWithTrashOptionNoneIsPermanentForNotesAndFolders)
+{
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"trashOption": "none"})");
+    write(QStringLiteral("Projects/Deep.md"), "deep\n");
+    QTemporaryDir data;
+    ASSERT_TRUE(data.isValid());
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", data.path().toUtf8());
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        deleteThroughTheTree(window, path(QStringLiteral("Welcome.md")));
+        deleteThroughTheTree(window, path(QStringLiteral("Projects")));
+    }
+    qputenv("XDG_DATA_HOME", previous);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Projects"))));
+    EXPECT_FALSE(QFile::exists(dir.filePath(QStringLiteral(".trash"))));
+    EXPECT_FALSE(QFile::exists(data.filePath(QStringLiteral("Trash"))));
+}
+
+// No system trash must never become a permanent delete.
+TEST_F(WindowTest, ASystemTrashThatFailsFallsBackToTheVaultTrashAndSaysSo)
+{
+    const QByteArray previous = qgetenv("XDG_DATA_HOME");
+    qputenv("XDG_DATA_HOME", "/proc/no-such-trash"); // nothing can be created there
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        deleteThroughTheTree(window, path(QStringLiteral("Welcome.md")));
+        EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral(".trash")));
+    }
+    qputenv("XDG_DATA_HOME", previous);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral(".trash/Welcome.md"))));
 }
 
 TEST_F(WindowTest, ClickingATreeRowLeavesSettingsEvenWhenTheNoteIsAlreadyOpen)
@@ -3394,6 +3470,67 @@ TEST_F(WindowTest, AFailedAutosaveIsTriedAgainAtTheNextPauseWithoutAnotherEdit)
     readOnly.restore();
     WAIT_TRUE(!editor->isModified(), 5000);
     EXPECT_TRUE(readAll(path(QStringLiteral("Welcome.md"))).endsWith("typed"));
+}
+
+// Invalid UTF-8 reads as U+FFFD; an autosave would write EF BF BD over the
+// original byte after one keystroke.
+TEST_F(WindowTest, ANoteWithInvalidUtf8IsNeverAutosavedAndSavesOnlyOnConsent)
+{
+    write(QStringLiteral("Latin.md"), "a\xE8" "b\n");
+    const QString note = path(QStringLiteral("Latin.md"));
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(note);
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not valid UTF-8")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("x"));
+    ASSERT_TRUE(editor->isModified());
+    QTest::qWait(3500); // well past the 2 s autosave
+    EXPECT_TRUE(editor->isModified());
+    EXPECT_EQ(readAll(note), QByteArray("a\xE8" "b\n"));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("not saved automatically")));
+
+    // By hand it asks; No leaves the bytes alone, Yes replaces them.
+    QMessageBox::StandardButton answer = QMessageBox::No;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&answer] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+            box->button(answer)->click();
+    });
+    watch.start(20);
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), QByteArray("a\xE8" "b\n"));
+    EXPECT_TRUE(editor->isModified());
+    answer = QMessageBox::Yes;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(note), QByteArray("a\xEF\xBF\xBD" "b\nx"));
+    EXPECT_FALSE(editor->isModified());
+    // Consent given: from here it is an ordinary note.
+    QTest::keyClicks(editor, QStringLiteral("y"));
+    WAIT_TRUE(!editor->isModified(), 5000);
+    EXPECT_EQ(readAll(note), QByteArray("a\xEF\xBF\xBD" "b\nxy"));
+}
+
+TEST_F(WindowTest, LeavingAnEditedNoteWithInvalidUtf8OffersItAndDiscardKeepsTheBytes)
+{
+    write(QStringLiteral("Latin.md"), "a\xE8" "b\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Latin.md")));
+    QTest::keyClicks(window.editor(), QStringLiteral("x"));
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = box->text().contains(QStringLiteral("not valid UTF-8"));
+            box->button(QMessageBox::Discard)->click();
+        }
+    });
+    watch.start(20);
+    window.openNote(path(QStringLiteral("Projects/Crlf.md"))); // autosave is on: still asks
+    EXPECT_TRUE(asked);
+    EXPECT_EQ(readAll(path(QStringLiteral("Latin.md"))), QByteArray("a\xE8" "b\n"));
 }
 
 TEST_F(WindowTest, WithAutosaveOffNothingSavesUntilAsked)

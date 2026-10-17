@@ -402,6 +402,10 @@ private:
     /// file in the note it was started from once stopped.
     void startRecording();
     bool mergeNote(const QString &source, const QString &target);
+    /// A user's delete, to where `files.deletedFiles` says: the system trash,
+    /// the vault's .trash or nowhere. No system trash falls back to .trash,
+    /// never to a permanent delete.
+    bool deleteVaultPath(const QString &path, QString *error);
     /// Note composer: the selection moved into a new note beside this one,
     /// a link (or, set so, an embed) left in its place.
     void extractSelection();

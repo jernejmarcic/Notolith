@@ -14,6 +14,10 @@ struct Note {
     QString text;      ///< LF line endings, no byte-order mark
     bool crlf = false; ///< the file on disk used CRLF
     bool bom = false;  ///< the file on disk started with a UTF-8 BOM
+    /// The file on disk was not valid UTF-8: `text` holds U+FFFD where it was
+    /// not, so writing it back would change bytes nobody edited.
+    /// Vault::write() refuses a lossy note until the caller clears this.
+    bool lossy = false;
 };
 
 /// A vault is a directory of Markdown files, the same thing Obsidian means by
@@ -57,12 +61,13 @@ public:
     /// createNote() and the audio recorder use. Never touches the disk.
     static QString uniqueAttachmentPath(const QString &folder, const QString &fileName);
 
-    /// Reads UTF-8, normalising CRLF to LF and stripping a BOM. On failure
-    /// returns false and fills `error`.
+    /// Reads UTF-8, normalising CRLF to LF and stripping a BOM; invalid bytes
+    /// become U+FFFD and set `Note::lossy`. On failure returns false and
+    /// fills `error`.
     static bool read(const QString &path, Note &out, QString *error = nullptr);
 
     /// Writes through a temporary file and rename(2), restoring the line
-    /// endings and BOM recorded in `note`.
+    /// endings and BOM recorded in `note`. Fails for a `lossy` note.
     static bool write(const QString &path, const Note &note, QString *error = nullptr);
     /// The same atomic replace for bytes already encoded - an encrypted note.
     static bool writeBytes(const QString &path, const QByteArray &bytes, QString *error = nullptr);

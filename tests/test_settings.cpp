@@ -121,6 +121,21 @@ TEST(Settings, aVaultLayersItsObsidianConfigOverTheDefaults)
     EXPECT_FALSE(settings.isFromVault(QStringLiteral("editor.autoPairs")));
 }
 
+TEST(Settings, DeletedFilesDefaultsToTheSystemTrashAndFollowsObsidiansTrashOption)
+{
+    EXPECT_EQ(Settings::load().text(QStringLiteral("files.deletedFiles")), QStringLiteral("system"));
+    const auto loadWith = [](const char *trashOption) {
+        QTemporaryDir vault;
+        writeFile(vault.filePath(QStringLiteral(".obsidian/app.json")),
+                  QStringLiteral(R"({"trashOption":"%1"})").arg(QLatin1String(trashOption)));
+        return Settings::load(vault.path()).text(QStringLiteral("files.deletedFiles"));
+    };
+    EXPECT_EQ(loadWith("system"), QStringLiteral("system"));
+    EXPECT_EQ(loadWith("local"), QStringLiteral("local"));
+    EXPECT_EQ(loadWith("none"), QStringLiteral("permanent"));
+    EXPECT_EQ(loadWith("nonsense"), QStringLiteral("system")) << "an unknown value is not taken";
+}
+
 TEST(Settings, aVaultsCorePluginsSwitchFeaturesInEitherForm)
 {
     // Today's object form: what it names is set, what it leaves out stays on.
