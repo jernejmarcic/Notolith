@@ -1194,9 +1194,15 @@ title), L (look-up), K (edited listing chrome).
 
 ## Requested by Jernej 2026-10-17: sidebar
 
-- [ ] "Improve look and feel of the sidebar please. Just in general. Does not
+- [x] "Improve look and feel of the sidebar please. Just in general. Does not
       feel right, especially the gap on the left being lit up" (screenshot:
       the selected row lights the indent gutter as a separate block left of
-      the item). Plan: Fable.
+      the item). Plan: Fable (PLAN-sidebar). Done (lane sidebar-look):
+      delegate-drawn pill inside the row, themed chevrons + indent guides,
+      .md hidden with type tags for other files, F2 renames through the
+      vault (links follow), collapse-all + sort (files.sortOrder).
+      Left: tree drag-and-drop, created-time sort.
 - [ ] Icons on folders and notes, "UI only, not actually saved in the file
-      name". Plan: Fable (storage outside the vault's file names).
+      name". Plan: Fable (storage outside the vault's file names). Lane B
+      launch was refused by the auto-mode classifier 2026-10-17; asked
+      Jernej how to proceed.
