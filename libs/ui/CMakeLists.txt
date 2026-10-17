@@ -3,6 +3,8 @@ add_library(noteAppC_ui STATIC
     DictClient.cpp
     DictClient.h
     ExportPdfDialog.cpp
+    FileTree.cpp
+    FileTree.h
     InlineTitleEdit.cpp
     InlineTitleEdit.h
     ExportPdfDialog.h

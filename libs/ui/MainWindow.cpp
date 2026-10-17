@@ -57,6 +57,7 @@
 
 #include "BacklinksPane.h"
 #include "Hotkeys.h"
+#include "FileTree.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
 #include "MermaidBlock.h"
@@ -596,8 +597,7 @@ QWidget *MainWindow::buildSidebar()
     m_files->setReadOnly(false);
     m_files->setIconProvider(noIcons());
 
-    m_tree = new QTreeView(m_sidebar);
-    m_tree->setObjectName(QStringLiteral("fileExplorer"));
+    m_tree = new FileTree(m_sidebar);
     m_tree->setModel(m_files);
     m_tree->setHeaderHidden(true);
     m_tree->setSortingEnabled(true);
@@ -3667,12 +3667,10 @@ void MainWindow::applyTheme()
     }
 
     m_sidebar->setStyleSheet(
-        QStringLiteral(
-            "QLabel#filesLabel { color: %1; font-size: 11px; font-weight: 700; padding-left: 4px; }"
-            "QTreeView#fileExplorer::item:selected, QTreeView#fileExplorer::item:selected:active { "
-            "background: %2; border-radius: 6px; color: %3; }")
-            .arg(m_theme.value(QStringLiteral("--text-faint")), rgbaString(accentColor, 0.16),
-                m_theme.value(QStringLiteral("--text-normal"))));
+        QStringLiteral("QLabel#filesLabel { color: %1; font-size: 11px; font-weight: 700; "
+                       "padding-left: 4px; }")
+            .arg(m_theme.value(QStringLiteral("--nav-heading-color"))));
+    static_cast<FileTree *>(m_tree)->setColours(m_theme);
 }
 
 void MainWindow::chooseVault()

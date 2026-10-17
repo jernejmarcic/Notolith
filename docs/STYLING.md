@@ -278,6 +278,34 @@ changes - edit the selected scheme and the window restyles with no restart -
 and adding or removing a file in a themes directory updates the settings
 page's list while it is open.
 
+## The file explorer
+
+Jernej, 2026-10-17: "Improve look and feel of the sidebar please ... especially
+the gap on the left being lit up."
+
+- **One pill per row.** `QTreeView` paints an item's background over the indent
+  columns left of the row as well, and `show-decoration-selected: 0` only picks
+  which colour fills them, so a QSS `::item:selected` or `::item:hover`
+  background always lit the gutter. Those two states are `transparent` in the
+  stylesheet and `FileRowDelegate` (`libs/ui/FileTree.cpp`) draws the pill
+  itself inside the row rectangle: selected (the accent at 0.16, 0.12 in light),
+  hovered, or the keyboard-focus row. `WindowTest` samples the gutter pixels of a
+  selected and a hovered row to keep it that way.
+- **Names.** A note shows without `.md`; any other file shows without its
+  extension and carries it as a small upper-case tag at the right (`BASE`,
+  `CANVAS`, `PDF`). Folders show their name. A row cut off by the sidebar width
+  shows the full name as a tooltip.
+- **Chevrons and indent guides** are drawn by `FileTree::drawBranches` from the
+  tokens, so they follow the theme (the old SVGs were a fixed grey). The guide
+  is a faint 1px line under the parent's chevron, always visible; Obsidian also
+  brightens the hovered folder's guide, which is not done.
+- **Row height** is fixed by the delegate (26px at the default 13px) and does
+  not depend on the row, so a 20 000 note vault never asks the model per row.
+- **Tokens**, under Obsidian's names so a scheme or an imported theme can set
+  them: `--nav-item-size`, `--nav-item-padding`, `--nav-item-weight`,
+  `--nav-item-color-hover`, `--nav-item-background-hover/-active/-selected`,
+  `--nav-collapse-icon-color` (and `-collapsed`), `--nav-indentation-guide-color`
+  and `-width`, `--nav-file-tag-size/-color/-background`, `--nav-heading-color`.
 ## Popups, the status bar and the inline title
 
 Jernej, 2026-10-16: "the general design is fine, I just want refinements".
