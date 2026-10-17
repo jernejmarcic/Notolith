@@ -5057,7 +5057,7 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error)
     return true;
 #else
     if (error)
-        *error = tr("This build of noteAppC cannot open encrypted notes");
+        *error = tr("This build of Notolith cannot open encrypted notes");
     return false;
 #endif
 }
@@ -5087,7 +5087,7 @@ bool MainWindow::writeNote(const QString &path, const Note &note, QString *error
     return !sealed.isEmpty() && Vault::writeBytes(path, sealed, error);
 #else
     if (error)
-        *error = tr("This build of noteAppC cannot write encrypted notes");
+        *error = tr("This build of Notolith cannot write encrypted notes");
     return false;
 #endif
 }
@@ -5707,7 +5707,7 @@ void MainWindow::updateTitle()
     }
     if (m_vault.isValid())
         title += m_vault.name() + QLatin1String(" - ");
-    title += QStringLiteral("noteAppC");
+    title += QStringLiteral("Notolith");
     setWindowTitle(modified ? QLatin1Char('*') + title : title);
 
     syncTabs(m_active->group);

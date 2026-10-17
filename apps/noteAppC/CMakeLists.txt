@@ -2,6 +2,10 @@ qt_add_executable(noteAppC main.cpp)
 
 target_compile_definitions(noteAppC PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
 target_link_libraries(noteAppC PRIVATE noteAppC_ui)
+# The product name; the target keeps the code name every build script uses.
+if(NOT ANDROID)
+    set_target_properties(noteAppC PROPERTIES OUTPUT_NAME notolith)
+endif()
 
 # Qt's generated manifest would request RECORD_AUDIO, MODIFY_AUDIO_SETTINGS and
 # BLUETOOTH purely because Qt Multimedia is linked (audio/video embeds play

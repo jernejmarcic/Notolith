@@ -11,17 +11,22 @@ int main(int argc, char *argv[])
     // Fusion, so the window looks the same whatever desktop theme is set;
     // everything visible on top of it comes from Theme's tokens.
     QApplication::setStyle(new noteAppC::PopupStyle);
+    // The product is Notolith; the organisation and application names stay
+    // noteAppC, its code name, because they name the directories under
+    // ~/.config, ~/.cache and ~/.local/share that hold everything a person
+    // has set and saved - renaming them would strand all of it.
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC"));
+    QGuiApplication::setApplicationDisplayName(QStringLiteral("Notolith"));
     QCoreApplication::setApplicationVersion(QStringLiteral(NOTEAPPC_VERSION));
     // The installed icon by name when the desktop has it, the built-in copy
     // otherwise; the desktop file name lets a Wayland compositor match the window.
-    QGuiApplication::setDesktopFileName(QStringLiteral("noteAppC"));
-    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("noteAppC"), QIcon(QStringLiteral(":/icons/noteAppC.svg"))));
+    QGuiApplication::setDesktopFileName(QStringLiteral("io.github.jernejmarcic.Notolith"));
+    QApplication::setWindowIcon(QIcon::fromTheme(QStringLiteral("io.github.jernejmarcic.Notolith"), QIcon(QStringLiteral(":/icons/noteAppC.svg"))));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("A Linux-native Obsidian alternative in C++"));
+        QStringLiteral("Notolith: Markdown notes and Obsidian vaults, native and fast"));
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument(QStringLiteral("vault"),

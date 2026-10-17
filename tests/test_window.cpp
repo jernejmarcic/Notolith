@@ -157,6 +157,7 @@ TEST_F(WindowTest, OpensAVaultAndShowsItsTree)
     QSignalSpy loaded(files, &QFileSystemModel::directoryLoaded);
 
     window.openVault(dir.path());
+    EXPECT_TRUE(window.windowTitle().endsWith(QStringLiteral(" - Notolith")));
     EXPECT_TRUE(window.windowTitle().contains(QDir(dir.path()).dirName()));
     ASSERT_TRUE(loaded.wait(5000));
 
