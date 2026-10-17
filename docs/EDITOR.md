@@ -478,8 +478,21 @@ moved (typing above a run) it rewrites them in place and rebuilds nothing.
 The status bar shows "N meta notes" (click: opens the pane), hidden at zero.
 `Alt+]` / `Alt+[` report "Meta note 2 of 3" there, "(wrapped around)" past either
 end and "No meta notes in this note" with none. Changing the delimiters in
-Settings refreshes the pane and the count from the next parse. Tests:
-`WindowTest.TheMetaNotesPane*`, `AltBracketJumps*`, `ChangingTheDelimiters*`.
+Settings refreshes the pane and the count from the next parse.
+
+**Vault mode.** The Vault toggle beside the filter swaps the list for the notes
+of the whole vault that have meta notes: an embedded `SearchPane` (built on the
+first press, with its own object names `metaVaultSearch` / `metaVaultQuery` /
+`metaVaultList`, query box hidden) running `meta:` - or `meta:(<filter>)` when
+the filter box has text, after the usual 150 ms - through `Index::searchIn`, so
+it works with Global search off. One row per note with its run count and a
+snippet; picking one opens the note at its first run and flips the pane back to
+"This note" (vault -> note -> run). Deliberate ceiling: one snippet per note,
+every run only after the drill-down. `MainWindow::applyFeatures` passes
+`parseOptions()` to `Indexer::setMetaNotes`, so the index holds the runs only
+while the setting is on (see SEARCH.md, `meta:`). Tests: 
+`WindowTest.TheMetaNotesPane*`, `AltBracketJumps*`, `ChangingTheDelimiters*`
+(vault mode: `TheMetaNotesPaneVaultMode*`).
 Fixture: `fixtures/demo-vault/notes/Meta notes.md`; to see the pane in
 `noteAppC_shot`, put `[editor]` / `meta-notes = true` in a private
 `$XDG_CONFIG_HOME/noteAppC/settings.ini` and set `NOTEAPPC_SHOT_KEEP_CONFIG=1`.

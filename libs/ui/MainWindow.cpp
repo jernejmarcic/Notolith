@@ -1896,6 +1896,16 @@ void MainWindow::applyFeatures()
          [this, parent] {
              m_metaPane = new MetaNotesPane(parent);
              m_metaPane->setTheme(m_theme);
+             m_metaPane->setIndex(&m_index);
+             connect(m_metaPane, &MetaNotesPane::noteActivated, this,
+                     [this](const QString &relativePath, qsizetype offset) {
+                         // Vault -> note -> run: the note opens and the pane goes
+                         // back to listing its own runs.
+                         m_metaPane->setVaultMode(false);
+                         openRelative(relativePath);
+                         m_active->editor->setCursorOffset(offset);
+                         m_active->editor->setFocus();
+                     });
              const ParseOptions options = parseOptions();
              m_metaPane->setDelimiters(options.open, options.close);
              connect(m_metaPane, &MetaNotesPane::jumpRequested, this, [this](const Range &run) {
@@ -2027,6 +2037,7 @@ void MainWindow::applyFeatures()
     // here rather than leave the microphone on.
     if (m_recorder && !featureOn("audio-recorder"))
         m_recorder->stop();
+    m_indexer->setMetaNotes(parseOptions()); // index the runs only while the setting is on
     updateNotebookIndex();
     if (m_painted)
         syncPlugins();

@@ -40,6 +40,9 @@ public:
     /// what a caller handing over a ready-made query wants (TagsPane's
     /// tagActivated, say, becoming `tag:#work`) rather than typing it out.
     void setQuery(const QString &text);
+    /// Hides the box for a host that feeds the query itself (the Meta notes
+    /// pane's vault mode).
+    void setQueryBoxVisible(bool visible);
 
 signals:
     /// `offset` is into the target note's own raw text (UTF-16 code units);

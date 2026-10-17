@@ -6,15 +6,19 @@
 #include <QWidget>
 
 #include "Metadata.h"
+#include "Theme.h"
 
 class QLabel;
+class QTimer;
+class QToolButton;
 class QLineEdit;
 class QTreeWidget;
 class QTreeWidgetItem;
 
 namespace noteAppC {
 
-class Theme;
+class Index;
+class SearchPane;
 
 /// The active note's meta notes (editor.metaNotes), in document order and
 /// grouped under the heading above each, so a writer can see what is still
@@ -44,10 +48,18 @@ public:
     /// empty state names them.
     void setDelimiters(const QString &open, const QString &close);
     void setTheme(const Theme &theme);
+    /// For vault mode: the notes that have meta notes, found by `meta:` through
+    /// the index. Not needed (nor used) until the Vault toggle is first pressed.
+    void setIndex(Index *index);
+    /// "This note" (false) or "Vault" (true), as the toggle beside the filter.
+    void setVaultMode(bool on);
+    bool vaultMode() const;
 
 signals:
     /// A row was activated; the editor selects `run`.
     void jumpRequested(const Range &run);
+    /// A note was picked in vault mode; `offset` is its first run.
+    void noteActivated(const QString &relativePath, qsizetype offset);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -66,12 +78,20 @@ private:
 
     void populate();
     void updateHighlight();
+    void updateMode();
+    /// Vault mode's query for the filter box, after the debounce.
+    void runVaultQuery();
     QString rowHTML(const Row &row) const;
 
     QLabel *m_header = nullptr;
     QLineEdit *m_filter = nullptr;
     QTreeWidget *m_tree = nullptr;
     QLabel *m_empty = nullptr;
+    QToolButton *m_vaultButton = nullptr;
+    SearchPane *m_search = nullptr; ///< built by the first press of Vault
+    QTimer *m_debounce = nullptr;
+    Index *m_index = nullptr;
+    Theme m_theme; ///< for the search pane, which is built later
     QString m_open = QStringLiteral("[");
     QString m_close = QStringLiteral("]");
     QList<Row> m_rows;

@@ -4816,3 +4816,42 @@ TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)
     EXPECT_TRUE(label->text().contains(QStringLiteral(">b<"))) << qPrintable(label->text());
     WAIT_TRUE(metaStatus(window) == QStringLiteral("1 meta note"), 2000);
 }
+
+TEST_F(WindowTest, TheMetaNotesPaneVaultModeListsEveryNoteWithRunsAndDrillsDown)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Alpha.md"), "A [one] x.\n");
+    write(QStringLiteral("Beta.md"), "B [two] and [three].\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    switchMetaNotesOn(window);
+    window.openNote(path(QStringLiteral("Alpha.md")));
+    auto *pane = window.findChild<noteAppC::MetaNotesPane *>();
+    ASSERT_NE(pane, nullptr);
+    EXPECT_EQ(pane->findChild<QWidget *>(QStringLiteral("metaVaultSearch")), nullptr) << "built on the first press";
+
+    const auto queryBoxes = window.findChildren<QLineEdit *>(QStringLiteral("quickSwitcherQuery")).size();
+    window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->click();
+    QTreeWidget *list = nullptr;
+    WAIT_TRUE((list = pane->findChild<QTreeWidget *>(QStringLiteral("metaVaultList"))) && list->topLevelItemCount() == 2, 8000);
+    QTreeWidgetItem *beta = nullptr;
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+        if (list->topLevelItem(i)->text(0) == QStringLiteral("Beta"))
+            beta = list->topLevelItem(i);
+    }
+    ASSERT_NE(beta, nullptr);
+    EXPECT_EQ(beta->text(1), QStringLiteral("2")) << "one count per note: its runs";
+
+    // The window's own Search pane is still the only one by its names.
+    EXPECT_EQ(window.findChildren<QLineEdit *>(QStringLiteral("quickSwitcherQuery")).size(), queryBoxes);
+    EXPECT_EQ(window.findChildren<QWidget *>(QStringLiteral("searchPane")).size(), 1);
+
+    // A row opens the note at its first run and the pane lists that note's runs.
+    emit list->itemClicked(beta->child(0), 0);
+    WAIT_TRUE(window.editor()->noteText().startsWith(QStringLiteral("B [two]")), 2000);
+    EXPECT_EQ(window.editor()->cursorOffset(), window.editor()->noteText().indexOf(QStringLiteral("[two]")));
+    EXPECT_FALSE(window.findChild<QToolButton *>(QStringLiteral("metaNotesVaultButton"))->isChecked());
+    QTreeWidget *tree = nullptr;
+    WAIT_TRUE((tree = metaTree(window)) && !tree->isHidden() && tree->topLevelItemCount() == 2, 2000);
+}

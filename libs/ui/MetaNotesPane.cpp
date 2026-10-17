@@ -1,12 +1,16 @@
 #include "MetaNotesPane.h"
 
 #include <QEvent>
+#include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QTimer>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include "SearchPane.h"
 #include "Theme.h"
 
 namespace noteAppC {
@@ -70,13 +74,36 @@ MetaNotesPane::MetaNotesPane(QWidget *parent)
     };
     connect(m_tree, &QTreeWidget::itemActivated, this, activate);
     connect(m_tree, &QTreeWidget::itemClicked, this, activate);
-    connect(m_filter, &QLineEdit::textChanged, this, [this] { populate(); });
+    connect(m_filter, &QLineEdit::textChanged, this, [this] {
+        populate();
+        if (vaultMode())
+            m_debounce->start();
+    });
+
+    m_vaultButton = new QToolButton(this);
+    m_vaultButton->setObjectName(QStringLiteral("metaNotesVaultButton"));
+    m_vaultButton->setText(tr("Vault"));
+    m_vaultButton->setToolTip(tr("List the notes of the whole vault that have meta notes"));
+    m_vaultButton->setCheckable(true);
+    m_vaultButton->setAutoRaise(true);
+    m_vaultButton->setCursor(Qt::PointingHandCursor);
+    m_vaultButton->setFocusPolicy(Qt::NoFocus);
+    connect(m_vaultButton, &QToolButton::toggled, this, &MetaNotesPane::setVaultMode);
+
+    m_debounce = new QTimer(this);
+    m_debounce->setSingleShot(true);
+    m_debounce->setInterval(150); // as the search pane's own box
+    connect(m_debounce, &QTimer::timeout, this, &MetaNotesPane::runVaultQuery);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 6, 6);
     layout->setSpacing(6);
     layout->addWidget(m_header);
-    layout->addWidget(m_filter);
+    auto *filterRow = new QHBoxLayout;
+    filterRow->setSpacing(4);
+    filterRow->addWidget(m_filter, 1);
+    filterRow->addWidget(m_vaultButton);
+    layout->addLayout(filterRow);
     layout->addWidget(m_tree, 1);
     layout->addWidget(m_empty, 1);
 
@@ -179,6 +206,9 @@ void MetaNotesPane::setDelimiters(const QString &open, const QString &close)
 
 void MetaNotesPane::setTheme(const Theme &theme)
 {
+    m_theme = theme;
+    if (m_search)
+        m_search->setTheme(theme);
     const QColor normal = theme.color(QStringLiteral("--text-normal"));
     const QColor muted = theme.color(QStringLiteral("--text-faint"));
     const QColor meta = theme.color(QStringLiteral("--meta-note-color"));
@@ -190,6 +220,62 @@ void MetaNotesPane::setTheme(const Theme &theme)
     m_meta = meta;
     m_highlightBackground = background;
     populate();
+}
+
+void MetaNotesPane::setIndex(Index *index)
+{
+    m_index = index;
+    if (m_search)
+        m_search->setIndex(index);
+}
+
+bool MetaNotesPane::vaultMode() const
+{
+    return m_vaultButton->isChecked();
+}
+
+void MetaNotesPane::setVaultMode(bool on)
+{
+    if (m_vaultButton->isChecked() != on) {
+        m_vaultButton->setChecked(on); // toggled() calls back here
+        return;
+    }
+    if (on && !m_search) {
+        // Built on the first press: a writer who never asks for the vault view
+        // never pays for it. It has names of its own so the window's Search
+        // pane stays the only "searchPane" for findChild and the tools.
+        m_search = new SearchPane(this);
+        m_search->setObjectName(QStringLiteral("metaVaultSearch"));
+        m_search->findChild<QLineEdit *>()->setObjectName(QStringLiteral("metaVaultQuery"));
+        m_search->findChild<QTreeWidget *>()->setObjectName(QStringLiteral("metaVaultList"));
+        m_search->setQueryBoxVisible(false);
+        m_search->setIndex(m_index);
+        m_search->setTheme(m_theme);
+        connect(m_search, &SearchPane::matchActivated, this, &MetaNotesPane::noteActivated);
+        static_cast<QVBoxLayout *>(layout())->addWidget(m_search, 1);
+    }
+    updateMode();
+    if (on)
+        runVaultQuery();
+}
+
+void MetaNotesPane::runVaultQuery()
+{
+    if (!m_search)
+        return;
+    const QString filter = m_filter->text().trimmed();
+    m_search->setQuery(filter.isEmpty() ? QStringLiteral("meta:") : QStringLiteral("meta:(%1)").arg(filter));
+}
+
+void MetaNotesPane::updateMode()
+{
+    const bool vault = vaultMode();
+    const bool any = m_tree->topLevelItemCount() > 0;
+    m_header->setVisible(!vault); // the search pane has its own header, "N notes"
+    m_tree->setVisible(!vault && any);
+    m_empty->setVisible(!vault && !any);
+    if (m_search)
+        m_search->setVisible(vault);
 }
 
 QString MetaNotesPane::rowHTML(const Row &row) const
@@ -250,8 +336,7 @@ void MetaNotesPane::populate()
     m_header->setText(m_rows.isEmpty()   ? tr("Meta notes")
                       : needle.isEmpty() ? tr("Meta notes  %1").arg(m_rows.size())
                                          : tr("Meta notes  %1 of %2").arg(m_items.size()).arg(m_rows.size()));
-    m_tree->setVisible(any);
-    m_empty->setVisible(!any);
+    updateMode();
     m_empty->setStyleSheet(QStringLiteral("color:%1;").arg(cssColor(m_muted)));
     m_empty->setText(m_rows.isEmpty() ? tr("No meta notes in this note. Write one between %1 and %2.").arg(m_open, m_close)
                                       : tr("No meta notes match."));
