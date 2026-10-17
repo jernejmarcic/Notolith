@@ -26,6 +26,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
+#include <QPointer>
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
@@ -4741,6 +4742,7 @@ TEST_F(WindowTest, TheMetaNotesPaneGroupsRunsUnderHeadingsAndJumps)
     auto *second = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(1)->child(0), 0));
     ASSERT_NE(second, nullptr);
     EXPECT_TRUE(second->property("current").toBool());
+    const QPointer<QLabel> label = second; // a rebuild deletes it, and a new one may take its address
 
     // Typing a letter outside the runs leaves the rows alone (no rebuild)...
     QTreeWidgetItem *before = tree->topLevelItem(1)->child(0);
@@ -4748,6 +4750,13 @@ TEST_F(WindowTest, TheMetaNotesPaneGroupsRunsUnderHeadingsAndJumps)
     QTest::keyClicks(editor, QStringLiteral("x"));
     QTest::qWait(150); // the parse
     EXPECT_EQ(tree->topLevelItem(1)->child(0), before);
+    EXPECT_FALSE(label.isNull());
+    // ...typing inside a run rewrites that row's label, not the list...
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("second]")) + 6);
+    QTest::keyClicks(editor, QStringLiteral("ly"));
+    WAIT_TRUE(rowText(tree->topLevelItem(1)->child(0)).contains(QStringLiteral(">secondly<")), 2000);
+    EXPECT_EQ(tree->topLevelItem(1)->child(0), before);
+    EXPECT_FALSE(label.isNull()) << "the same label widget, not a rebuilt one";
     // ...a fourth run adds a row and bumps the count once the parse lands.
     editor->setCursorOffset(editor->noteText().size());
     QTest::keyClicks(editor, QStringLiteral(" [fourth]"));
