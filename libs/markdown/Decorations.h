@@ -37,6 +37,13 @@ struct StyleSpan {
         /// nothing: it only makes the caret reveal it by touching it, the way
         /// an inline element's markers are, rather than by being on its line.
         HtmlTag,
+        /// A meta note - `[like this]`, delimiters included - when the
+        /// parser was asked for them (ParseOptions). Formats only; the same
+        /// ranges are in Decorations::metaNotes.
+        MetaNote,
+        /// A bare `[text]` - no link, footnote, task or callout - when the
+        /// parser was asked for them (ParseOptions::brackets). Formats only.
+        BareBracket,
     };
 
     Kind kind = Kind::Bold;
@@ -310,6 +317,13 @@ struct Decorations {
     /// them (HtmlEdit.cpp). Disjoint; the editor sorts them by position.
     QList<Substitution> substitutions;
     QList<HtmlTextSpan> HTMLtext;
+    /// Every meta note in the note, outermost only, delimiters included,
+    /// sorted by position. Empty unless the parse was asked for them.
+    QList<Range> metaNotes;
+    /// What the word and character counts leave out, sorted, merged and
+    /// disjoint: the excluded runs and, if asked, the unrendered syntax
+    /// (ParseOptions). Empty when the count is of everything.
+    QList<Range> uncounted;
 
     /// Ranges to hide for the block containing `sourceOffset`, or all of them
     /// when `activeBlock` is not a real offset.

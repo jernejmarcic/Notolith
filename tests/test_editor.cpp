@@ -7316,3 +7316,158 @@ TEST(CodeInCalloutTest, ALongListingInsideACalloutWrapsInLivePreview)
     };
     EXPECT_GT(heightOf(QString(400, QLatin1Char('x')) + QStringLiteral(" y")), heightOf(QStringLiteral("x y")) + 20);
 }
+
+// --- bare brackets, meta notes and what the counts leave out -------------------
+
+namespace {
+
+constexpr QLatin1StringView kBracketNote{"She left early [check the date] and never came back. Also [[wiki]] and [a](u).\n"};
+
+/// A shown editor whose theme gives bare brackets and meta notes colours of
+/// their own, so each can be told from the other and from plain text.
+std::unique_ptr<MarkdownEditor> bracketEditor(const ParseOptions &options, MarkdownEditor::Mode mode)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin(Theme::Mode::Dark);
+    theme.setToken(QStringLiteral("--bracket-color"), QStringLiteral("#ff0000"));
+    theme.setToken(QStringLiteral("--meta-note-color"), QStringLiteral("#00ff00"));
+    editor->setTheme(theme);
+    editor->setParseOptions(options);
+    editor->resize(900, 600);
+    editor->setNoteText(QString(kBracketNote));
+    editor->show();
+    QTest::qWait(60);
+    editor->setMode(mode); // after the note is up, as a user switches
+    QTest::qWait(60);
+    return editor;
+}
+
+QColor colourOf(const MarkdownEditor &editor, const QString &needle, int into = 1)
+{
+    const qsizetype at = editor.noteText().indexOf(needle);
+    EXPECT_GE(at, 0);
+    return editor.formatAt(at + into).foreground().color();
+}
+
+} // namespace
+
+TEST(BracketStyleTest, ABareBracketTakesItsTokenInEveryMode)
+{
+    for (const auto mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source,
+                            MarkdownEditor::Mode::Reading}) {
+        auto editor = bracketEditor(ParseOptions{.brackets = true}, mode);
+        const QColor red(0xff, 0, 0);
+        const QString needle = QStringLiteral("[check the date]");
+        EXPECT_EQ(colourOf(*editor, needle, 0), red) << "the opening bracket is in the run";
+        EXPECT_EQ(colourOf(*editor, needle, 6), red);
+        EXPECT_EQ(colourOf(*editor, needle, int(needle.size()) - 1), red) << "and the closing one";
+        EXPECT_NE(colourOf(*editor, QStringLiteral("She left")), red);
+        EXPECT_NE(colourOf(*editor, QStringLiteral(" and never"), 1), red);
+        EXPECT_NE(colourOf(*editor, QStringLiteral("[a](u)"), 3), red) << "a link keeps the link colour";
+    }
+}
+
+TEST(BracketStyleTest, OffInTheParseOptionsIsPlainText)
+{
+    auto editor = bracketEditor(ParseOptions{}, MarkdownEditor::Mode::LivePreview);
+    EXPECT_NE(colourOf(*editor, QStringLiteral("[check the date]"), 5), QColor(0xff, 0, 0));
+}
+
+TEST(MetaNoteStyleTest, ANoteTakesItsOwnTokenInEveryModeAndWinsOverTheBracket)
+{
+    for (const auto mode : {MarkdownEditor::Mode::LivePreview, MarkdownEditor::Mode::Source,
+                            MarkdownEditor::Mode::Reading}) {
+        auto editor = bracketEditor(ParseOptions{.brackets = true, .metaNotes = true}, mode);
+        const QColor green(0, 0xff, 0);
+        const QString needle = QStringLiteral("[check the date]");
+        EXPECT_EQ(colourOf(*editor, needle, 0), green);
+        EXPECT_EQ(colourOf(*editor, needle, 6), green);
+        EXPECT_EQ(colourOf(*editor, needle, int(needle.size()) - 1), green);
+        EXPECT_NE(colourOf(*editor, QStringLiteral("She left")), green);
+        EXPECT_NE(colourOf(*editor, QStringLiteral(" and never"), 1), green);
+        EXPECT_EQ(editor->metaNoteRanges().size(), 1);
+    }
+}
+
+TEST(MetaNoteStyleTest, ACustomPairIsTheNoteAndTheBracketsStayBrackets)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin(Theme::Mode::Dark);
+    theme.setToken(QStringLiteral("--bracket-color"), QStringLiteral("#ff0000"));
+    theme.setToken(QStringLiteral("--meta-note-color"), QStringLiteral("#00ff00"));
+    editor->setTheme(theme);
+    editor->setParseOptions(ParseOptions{.brackets = true, .metaNotes = true, .open = QStringLiteral("<<"),
+                                         .close = QStringLiteral(">>")});
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("a << fix this >> b [bare] c\n"));
+    editor->show();
+    QTest::qWait(60);
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("<< fix"), 0), QColor(0, 0xff, 0));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("fix this"), 2), QColor(0, 0xff, 0));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("[bare]"), 2), QColor(0xff, 0, 0));
+}
+
+TEST(MetaNoteStyleTest, ARunInATableCellIsColouredToo)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin(Theme::Mode::Dark);
+    theme.setToken(QStringLiteral("--meta-note-color"), QStringLiteral("#00ff00"));
+    editor->setTheme(theme);
+    editor->setParseOptions(ParseOptions{.metaNotes = true});
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("| A | B |\n|---|---|\n| x [check] y | z |\n"));
+    editor->show();
+    QTest::qWait(60);
+    ASSERT_EQ(editor->metaNoteRanges().size(), 1);
+    // The cell is laid out by the grid; the editor's own cell format is what is read.
+    editor->setMode(MarkdownEditor::Mode::Source);
+    QTest::qWait(30);
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("[check]"), 2), QColor(0, 0xff, 0));
+}
+
+TEST(MetaNoteStyleTest, TheDefaultTokensAreTheAccent)
+{
+    const Theme theme = Theme::builtin(Theme::Mode::Dark);
+    EXPECT_EQ(theme.color(QStringLiteral("--meta-note-color")), theme.color(QStringLiteral("--text-accent")));
+    EXPECT_EQ(theme.color(QStringLiteral("--bracket-color")), theme.color(QStringLiteral("--text-accent")));
+}
+
+TEST(CountTest, TheCharacterCountLeavesOutWhatTheWordCountDoes)
+{
+    ParseOptions options;
+    auto editor = editorWith(QStringLiteral("one [two three] four\n"));
+    const qsizetype all = editor->characterCount();
+    EXPECT_EQ(editor->wordCount(), 4);
+    options.excludeBetween = true;
+    options.brackets = true;
+    editor->setParseOptions(options);
+    EXPECT_EQ(editor->wordCount(), 2);
+    EXPECT_EQ(editor->characterCount(), all - QStringLiteral("[two three]").size());
+    // The selection of the whole note is counted the same way.
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    EXPECT_EQ(editor->selectionCount().words, 2);
+    options.excludeBetween = false;
+    editor->setParseOptions(options);
+    EXPECT_EQ(editor->wordCount(), 4);
+    EXPECT_EQ(editor->characterCount(), all);
+}
+
+TEST(BracketStyleTest, SwitchingModeInANoteWithFootnotesKeepsItsColours)
+{
+    // Reading view adds a footnotes block, so the mode switch rebuilds the
+    // blocks; they must still know which styles are theirs.
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin(Theme::Mode::Dark);
+    theme.setToken(QStringLiteral("--bracket-color"), QStringLiteral("#ff0000"));
+    editor->setTheme(theme);
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("a [bare] b[^1]\n\n[^1]: the note\n"));
+    editor->show();
+    QTest::qWait(60);
+    for (const auto mode : {MarkdownEditor::Mode::Source, MarkdownEditor::Mode::Reading,
+                            MarkdownEditor::Mode::LivePreview}) {
+        editor->setMode(mode);
+        QTest::qWait(30);
+        EXPECT_EQ(colourOf(*editor, QStringLiteral("[bare]"), 2), QColor(0xff, 0, 0)) << int(mode);
+    }
+}

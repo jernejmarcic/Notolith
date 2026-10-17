@@ -28,6 +28,7 @@
 #include "PluginRegistry.h"
 #endif
 #include "BulletGlyphs.h"
+#include "Parser.h"
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
 #include "PdfPage.h"
@@ -303,6 +304,66 @@ void SettingsPage::addLineEditRow(QVBoxLayout *into, const QString &key, const Q
           [this, key, edit] { edit->setText(m_settings->text(key)); });
 }
 
+void SettingsPage::addDelimiterRow(QVBoxLayout *into, const QString &openKey, const QString &closeKey,
+                                   const QString &label, const QString &description, bool anySyntax,
+                                   bool mayBeEmpty)
+{
+    auto *box = new QWidget(this);
+    auto *boxLayout = new QVBoxLayout(box);
+    boxLayout->setContentsMargins(0, 0, 0, 0);
+    boxLayout->setSpacing(4);
+    auto *edits = new QWidget(box);
+    auto *editsLayout = new QHBoxLayout(edits);
+    editsLayout->setContentsMargins(0, 0, 0, 0);
+    editsLayout->setSpacing(8);
+    // `mayBeEmpty`: both blank means "as the meta notes".
+    const auto makeEdit = [&](const QString &key, const QString &placeholder) {
+        auto *edit = new QLineEdit(edits);
+        edit->setObjectName(QStringLiteral("settingsLineEdit_") + key);
+        edit->setMaxLength(3);
+        edit->setFixedWidth(64);
+        edit->setAlignment(Qt::AlignCenter);
+        edit->setPlaceholderText(placeholder);
+        edit->setText(m_settings->text(key));
+        editsLayout->addWidget(edit);
+        return edit;
+    };
+    const QString metaOpen = m_settings->text(QStringLiteral("editor.metaNoteOpen"));
+    const QString metaClose = m_settings->text(QStringLiteral("editor.metaNoteClose"));
+    QLineEdit *openEdit = makeEdit(openKey, mayBeEmpty ? metaOpen : QString());
+    editsLayout->addWidget(new QLabel(QStringLiteral("\u2026"), edits));
+    QLineEdit *closeEdit = makeEdit(closeKey, mayBeEmpty ? metaClose : QString());
+    auto *error = new QLabel(box);
+    error->setObjectName(QStringLiteral("settingsRowError"));
+    error->setWordWrap(true);
+    error->hide();
+    boxLayout->addWidget(edits);
+    boxLayout->addWidget(error);
+    // A pair that cannot delimit is explained and not stored, so the setting
+    // always holds one the parser accepts.
+    const auto check = [=, this] {
+        const QString open = openEdit->text();
+        const QString close = closeEdit->text();
+        const QString message = mayBeEmpty && open.isEmpty() && close.isEmpty()
+                                    ? QString()
+                                    : metaNoteDelimitersError(open, close, anySyntax);
+        error->setText(message);
+        error->setVisible(!message.isEmpty());
+        if (!message.isEmpty())
+            return;
+        m_settings->setValue(openKey, open);
+        m_settings->setValue(closeKey, close);
+        changed();
+    };
+    connect(openEdit, &QLineEdit::textEdited, this, check);
+    connect(closeEdit, &QLineEdit::textEdited, this, check);
+    addRow(into, {openKey, closeKey}, label, description, box, [=, this] {
+        openEdit->setText(m_settings->text(openKey));
+        closeEdit->setText(m_settings->text(closeKey));
+        error->hide();
+    });
+}
+
 void SettingsPage::addAccentRow(QVBoxLayout *into)
 {
     static const QString hueKey = QStringLiteral("appearance.accentHue");
@@ -538,6 +599,25 @@ QWidget *SettingsPage::buildEditorPage()
     addToggleRow(layout, QStringLiteral("editor.tableHandles"), tr("Table handles"),
                 tr("Drag grips to reorder a table's rows and columns, \"+\" bars to add one, and "
                    "select a rectangle of cells to copy, cut, paste or clear as a table."));
+    addToggleRow(layout, QStringLiteral("editor.metaNotes"), tr("Meta notes"),
+                tr("Draw a run of text between the delimiters below, such as [check the date], in "
+                   "its own colour (--meta-note-color), delimiters kept and never hidden. Off, "
+                   "nothing looks for it. A bare [bracket] is drawn like a link either way."));
+    addDelimiterRow(layout, QStringLiteral("editor.metaNoteOpen"), QStringLiteral("editor.metaNoteClose"),
+                    tr("Meta note delimiters"),
+                    tr("The characters that open and close a note, 1 to 3 each; the same on both "
+                       "sides pairs them left to right. Markdown's own characters (* _ ~ = ` $ % # |) "
+                       "are refused."),
+                    false, false);
+    addToggleRow(layout, QStringLiteral("editor.countExcludeBetween"), tr("Exclude text between characters"),
+                tr("Leave everything between the two delimiters below, delimiters included, out of "
+                   "the status bar's word and character counts."));
+    addDelimiterRow(layout, QStringLiteral("editor.countExcludeOpen"), QStringLiteral("editor.countExcludeClose"),
+                    tr("Excluded between"),
+                    tr("Empty: the meta note delimiters. Any 1 to 3 characters otherwise."), true, true);
+    addToggleRow(layout, QStringLiteral("editor.countIgnoreFormatting"), tr("Ignore formatting in counts"),
+                tr("Count only rendered words: not Markdown markers, link targets, HTML tags, list "
+                   "numbers or %% comments (comment text included)."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
     addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
@@ -991,6 +1071,7 @@ QLabel#settingsVaultTag {
 QToolButton#settingsResetButton { color: %8; font-size: 12px; border: none; }
 QToolButton#settingsResetButton:hover { text-decoration: underline; }
 QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath { color: %4; font-size: 12px; }
+QLabel#settingsRowError { color: %9; font-size: 12px; }
 )")
             .arg(theme.value(QStringLiteral("--background-primary")),
                 theme.value(QStringLiteral("--background-secondary")),
@@ -999,7 +1080,8 @@ QLabel#settingsAboutDescription, QLabel#settingsAboutConfigPath { color: %4; fon
             .arg(theme.value(QStringLiteral("--background-modifier-hover")),
                 theme.value(QStringLiteral("--background-modifier-active")),
                 theme.value(QStringLiteral("--text-normal")),
-                theme.value(QStringLiteral("--interactive-accent")));
+                theme.value(QStringLiteral("--interactive-accent")))
+            .arg(theme.value(QStringLiteral("--text-error")));
     setStyleSheet(sheet);
 }
 

@@ -1165,6 +1165,30 @@ QImage MainWindow::renderCanvasEmbed(CanvasView &canvas) const
 }
 #endif
 
+ParseOptions MainWindow::parseOptions() const
+{
+    const auto text = [this](const char *key) { return m_settings.text(QLatin1String(key)); };
+    ParseOptions options;
+    options.brackets = true;
+    options.metaNotes = m_settings.boolean(QStringLiteral("editor.metaNotes"));
+    options.open = text("editor.metaNoteOpen");
+    options.close = text("editor.metaNoteClose");
+    // A hand-edited pair the parser refuses falls back to the brackets.
+    if (!metaNoteDelimitersError(options.open, options.close).isEmpty()) {
+        options.open = QStringLiteral("[");
+        options.close = QStringLiteral("]");
+    }
+    options.excludeBetween = m_settings.boolean(QStringLiteral("editor.countExcludeBetween"));
+    options.excludeOpen = text("editor.countExcludeOpen");
+    options.excludeClose = text("editor.countExcludeClose");
+    if (options.excludeOpen.isEmpty() || options.excludeClose.isEmpty()) {
+        options.excludeOpen = options.open;
+        options.excludeClose = options.close;
+    }
+    options.ignoreFormatting = m_settings.boolean(QStringLiteral("editor.countIgnoreFormatting"));
+    return options;
+}
+
 void MainWindow::applyEditorSettings(MarkdownEditor *editor)
 {
     editor->setReadableLineLength(m_settings.boolean(QStringLiteral("editor.readableLineLength")));
@@ -1183,6 +1207,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
+    editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
     editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
     editor->setContextActions(contextActions());

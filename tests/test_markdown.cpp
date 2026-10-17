@@ -1832,3 +1832,287 @@ TEST(WordsInTest, CountsRunsOfLettersDigitsAndApostrophes)
     EXPECT_EQ(wordsIn(u"one two, don't  3rd_x"), 4);
     EXPECT_EQ(wordsIn(u""), 0);
 }
+
+// --- meta notes --------------------------------------------------------------
+
+namespace {
+
+/// The text of every meta note in `text`, with `open`/`close` as delimiters.
+QStringList metaNotesOf(const QString &text, const QString &open = QStringLiteral("["),
+                        const QString &close = QStringLiteral("]"))
+{
+    static Parser parser;
+    ParseOptions options;
+    options.metaNotes = true;
+    options.open = open;
+    options.close = close;
+    QStringList out;
+    for (const Range &range : parser.parseAll(text, {}, options).decorations.metaNotes)
+        out << sliceOf(text, range);
+    return out;
+}
+
+} // namespace
+
+TEST(MetaNoteTest, ABracketedRunInProseIsOne)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("She left early [check the date] and never came back.")),
+              QStringList{QStringLiteral("[check the date]")});
+    EXPECT_EQ(metaNotesOf(QStringLiteral("[a] and [b]")), (QStringList{"[a]", "[b]"}));
+}
+
+TEST(MetaNoteTest, AlsoGivesAStyleSpanPerRun)
+{
+    const QString text = QStringLiteral("x [note] y");
+    ParseOptions options;
+    options.metaNotes = true;
+    const auto styles = Parser().parseAll(text, {}, options).decorations.styles;
+    const auto it = std::find_if(styles.cbegin(), styles.cend(),
+                                 [](const StyleSpan &s) { return s.kind == StyleSpan::Kind::MetaNote; });
+    ASSERT_NE(it, styles.cend());
+    EXPECT_EQ(sliceOf(text, it->range), QStringLiteral("[note]"));
+}
+
+TEST(MetaNoteTest, OffUnlessAskedFor)
+{
+    const QString text = QStringLiteral("x [note] y");
+    EXPECT_TRUE(Parser().parseAll(text).decorations.metaNotes.isEmpty());
+    EXPECT_TRUE(metaNotesOf(text, QStringLiteral("{"), QStringLiteral("}")).isEmpty());
+}
+
+TEST(MetaNoteTest, NestedBracketsAreOneOutermostRun)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [b [c] d] e")), QStringList{QStringLiteral("[b [c] d]")});
+}
+
+TEST(MetaNoteTest, AnUnclosedOpenerIsNotARun)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [b c")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a b] c")).isEmpty());
+    // The closed pair inside an unclosed one still counts.
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [b [c] d")), QStringList{QStringLiteral("[c]")});
+}
+
+TEST(MetaNoteTest, LinksAreNotNotes)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [[wikilink]] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [[wiki|alias]] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a ![[embed.png]] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [text](https://example.com) b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a ![alt](img.png) b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [text][ref] b\n\n[ref]: https://example.com")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [text][] b\n\n[text]: https://example.com")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [text][nodef] b")).isEmpty()) << "an undefined label is not a note either";
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [text] b\n\n[text]: https://example.com")).isEmpty())
+        << "a shortcut that matches a definition is a link";
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [text] b\n\n[other]: https://example.com")),
+              QStringList{QStringLiteral("[text]")})
+        << "no definition for it: plain text";
+}
+
+TEST(MetaNoteTest, LinkDefinitionsAreNotNotes)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("x\n\n[ref]: https://example.com \"Title [t]\"\n")).isEmpty());
+}
+
+TEST(MetaNoteTest, FootnotesTasksAndCalloutsAreNotNotes)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a[^1] b\n\n[^1]: the note\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a ^[inline note] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("- [ ] open\n- [x] done\n1. [X] numbered\n  * [ ] nested\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("> [!note] Title\n> body\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("> [!warning]- Folded\n> body\n")).isEmpty());
+    // But a box mid-sentence, or a note in a task's text, is one.
+    EXPECT_EQ(metaNotesOf(QStringLiteral("- [ ] write [chapter 2] today\n")), QStringList{QStringLiteral("[chapter 2]")});
+}
+
+TEST(MetaNoteTest, EscapedBracketsDoNotOpenOrClose)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a \\[not a note] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [not a note\\] b")).isEmpty());
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [x \\] y] b")), QStringList{QStringLiteral("[x \\] y]")});
+}
+
+TEST(MetaNoteTest, CodeMathHtmlFrontmatterAndURLsAreOpaque)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a `[code]` b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("```\n[block]\n```\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a $[x]$ b\n\n$$\n[y]\n$$\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a <span title=\"[t]\">x</span> b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("<div>\n[in html]\n</div>\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("---\ntitle: [a, b]\ntags: [x]\n---\n\nbody\n")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("see https://example.com/a[1] now")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a %%[hidden]%% b")).isEmpty());
+    // A closing bracket inside code does not end a run.
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [see `x]` here] b")), QStringList{QStringLiteral("[see `x]` here]")});
+}
+
+TEST(MetaNoteTest, ARunMayCrossASoftBreakButNotABlock)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a [one\ntwo] b")), QStringList{QStringLiteral("[one\ntwo]")});
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [one\n\ntwo] b")).isEmpty()) << "a blank line ends the paragraph";
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [one\n   \ntwo] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [one\n# Heading\ntwo] b")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("- a [one\n- two] b")).isEmpty()) << "the next item is another block";
+}
+
+TEST(MetaNoteTest, ATableCellHoldsItsOwnRun)
+{
+    const QString table = QStringLiteral("| A | B |\n|---|---|\n| x [one] y | [two] |\n| [a | b] | c |\n");
+    EXPECT_EQ(metaNotesOf(table), (QStringList{"[one]", "[two]"})) << "a run does not cross a cell";
+}
+
+TEST(MetaNoteTest, EmphasisAndHeadingsKeepTheirRuns)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("**bold [note] text**")), QStringList{QStringLiteral("[note]")});
+    EXPECT_EQ(metaNotesOf(QStringLiteral("# Title [todo]\n")), QStringList{QStringLiteral("[todo]")});
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [] b and [ ] c")).isEmpty()) << "an empty pair says nothing";
+}
+
+TEST(MetaNoteTest, AnyPairOfDelimitersWorks)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a {the date} b {c {d} e} f"), QStringLiteral("{"), QStringLiteral("}")),
+              (QStringList{"{the date}", "{c {d} e}"}));
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a << fix this >> b [kept] c"), QStringLiteral("<<"), QStringLiteral(">>")),
+              QStringList{QStringLiteral("<< fix this >>")});
+    // The brackets are ordinary text then, and so are wikilinks' - never a note.
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [[link]] b [c] d"), QStringLiteral("{"), QStringLiteral("}")).isEmpty());
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a ( aside ) b"), QStringLiteral("("), QStringLiteral(")")),
+              QStringList{QStringLiteral("( aside )")});
+}
+
+TEST(MetaNoteTest, IdenticalDelimitersPairLeftToRight)
+{
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a ;; one ;; b ;; two ;; c ;; open"), QStringLiteral(";;"), QStringLiteral(";;")),
+              (QStringList{";; one ;;", ";; two ;;"}));
+    EXPECT_EQ(metaNotesOf(QStringLiteral("a !x! b !y! c"), QStringLiteral("!"), QStringLiteral("!")),
+              (QStringList{"!x!", "!y!"}));
+}
+
+TEST(MetaNoteTest, CustomDelimitersStillSkipCodeAndLinks)
+{
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a `{x}` b <https://e.com/{y}> c"), QStringLiteral("{"), QStringLiteral("}")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a [t](https://e.com/{y}) c"), QStringLiteral("{"), QStringLiteral("}")).isEmpty());
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("---\nk: {a: b}\n---\n"), QStringLiteral("{"), QStringLiteral("}")).isEmpty());
+}
+
+TEST(MetaNoteTest, MarkdownSyntaxCannotBeADelimiter)
+{
+    EXPECT_TRUE(metaNoteDelimitersError(QStringLiteral("["), QStringLiteral("]")).isEmpty());
+    for (const char *bad : {"*", "_", "~", "=", "`", "$", "%", "#", "|", "**", "a|", "\\"})
+        EXPECT_FALSE(metaNoteDelimitersError(QString::fromLatin1(bad), QStringLiteral("]")).isEmpty()) << bad;
+    EXPECT_FALSE(metaNoteDelimitersError(QStringLiteral("["), QStringLiteral("=")).isEmpty()) << "either side";
+    EXPECT_FALSE(metaNoteDelimitersError(QString(), QStringLiteral("]")).isEmpty());
+    EXPECT_FALSE(metaNoteDelimitersError(QStringLiteral("<<<<"), QStringLiteral(">>")).isEmpty()) << "four characters";
+    EXPECT_FALSE(metaNoteDelimitersError(QStringLiteral("a b"), QStringLiteral("]")).isEmpty()) << "a space";
+    EXPECT_TRUE(metaNoteDelimitersError(QStringLiteral("<<"), QStringLiteral(">>")).isEmpty());
+    EXPECT_TRUE(metaNoteDelimitersError(QStringLiteral(";;"), QStringLiteral(";;")).isEmpty());
+    // The parser takes it as no notes at all rather than guessing.
+    EXPECT_TRUE(metaNotesOf(QStringLiteral("a *b* c"), QStringLiteral("*"), QStringLiteral("*")).isEmpty());
+}
+
+namespace {
+
+/// Source of every style span of `kind`.
+QStringList spansOf(const QString &text, const ParseOptions &options, StyleSpan::Kind kind)
+{
+    QStringList out;
+    for (const StyleSpan &span : Parser().parseAll(text, {}, options).decorations.styles) {
+        if (span.kind == kind)
+            out << sliceOf(text, span.range);
+    }
+    return out;
+}
+
+} // namespace
+
+TEST(BareBracketTest, ABareBracketIsStyledButALinkIsNot)
+{
+    ParseOptions options;
+    options.brackets = true;
+    const auto bare = [&](const QString &text) { return spansOf(text, options, StyleSpan::Kind::BareBracket); };
+    EXPECT_EQ(bare(QStringLiteral("She left [check the date] early")), QStringList{QStringLiteral("[check the date]")});
+    EXPECT_EQ(bare(QStringLiteral("a [b [c] d] e")), QStringList{QStringLiteral("[b [c] d]")});
+    EXPECT_TRUE(bare(QStringLiteral("[[wiki]] ![[embed.png]] [t](u) ![a](b.png) [a][r] [^1] - [ ] t\n\n[r]: http://e.com\n[^1]: n")).isEmpty());
+    EXPECT_TRUE(bare(QStringLiteral("a [text] b\n\n[text]: https://example.com")).isEmpty()) << "a resolved shortcut is a link";
+    EXPECT_TRUE(bare(QStringLiteral("`[code]` $[m]$ <b title=\"[t]\">x</b> \\[no]")).isEmpty());
+    EXPECT_TRUE(bare(QStringLiteral("> [!note] Title\n> body")).isEmpty());
+}
+
+TEST(BareBracketTest, NotLookedForUnlessAsked)
+{
+    EXPECT_TRUE(spansOf(QStringLiteral("a [note] b"), ParseOptions{}, StyleSpan::Kind::BareBracket).isEmpty());
+}
+
+TEST(BareBracketTest, AMetaNoteOnTheSameBracketsReplacesIt)
+{
+    const QString text = QStringLiteral("a [note] b");
+    ParseOptions options;
+    options.brackets = true;
+    options.metaNotes = true;
+    EXPECT_EQ(spansOf(text, options, StyleSpan::Kind::MetaNote), QStringList{QStringLiteral("[note]")});
+    EXPECT_TRUE(spansOf(text, options, StyleSpan::Kind::BareBracket).isEmpty()) << "the meta colour wins";
+    options.open = QStringLiteral("{");
+    options.close = QStringLiteral("}");
+    EXPECT_EQ(spansOf(text, options, StyleSpan::Kind::BareBracket), QStringList{QStringLiteral("[note]")});
+    EXPECT_TRUE(spansOf(text, options, StyleSpan::Kind::MetaNote).isEmpty());
+}
+
+namespace {
+
+int wordCountOf(const QString &text, const ParseOptions &options = {})
+{
+    return Parser().parseAll(text, {}, options).metadata.wordCount;
+}
+
+} // namespace
+
+TEST(WordCountTest, ExcludesWhatIsBetweenTheDelimiters)
+{
+    const QString text = QStringLiteral("one two [three four] five {six seven} [[a wikilink]] [a link](u v)");
+    const int all = wordCountOf(text);
+    ParseOptions options;
+    options.excludeBetween = true;
+    // [three four] goes; a wikilink and a link's text and target are not "between brackets".
+    EXPECT_EQ(wordCountOf(text, options), all - 2);
+    options.excludeOpen = QStringLiteral("{");
+    options.excludeClose = QStringLiteral("}");
+    EXPECT_EQ(wordCountOf(text, options), all - 2);
+    options.excludeBetween = false;
+    EXPECT_EQ(wordCountOf(text, options), all);
+}
+
+TEST(WordCountTest, ExclusionAlsoListsTheCharactersLeftOut)
+{
+    const QString text = QStringLiteral("one [two] three");
+    ParseOptions options;
+    options.excludeBetween = true;
+    const auto uncounted = Parser().parseAll(text, {}, options).decorations.uncounted;
+    ASSERT_EQ(uncounted.size(), 1);
+    EXPECT_EQ(sliceOf(text, uncounted.first()), QStringLiteral("[two]"));
+    EXPECT_TRUE(Parser().parseAll(text).decorations.uncounted.isEmpty());
+}
+
+TEST(WordCountTest, IgnoreFormattingCountsRenderedWordsOnly)
+{
+    const QString text = QStringLiteral(
+        "# Title\n\n"
+        "1. first **bold** item\n"
+        "2. [a link](https://example.com/some/path) and [[Other Note|alias]]\n\n"
+        "<div class=\"box\">html text</div>\n\n"
+        "visible %%hidden comment words%% end\n");
+    const int plain = wordCountOf(text);
+    ParseOptions options;
+    options.ignoreFormatting = true;
+    // Title, first, bold, item, a, link, and, alias, html, text, visible, end
+    EXPECT_EQ(wordCountOf(text, options), 12);
+    EXPECT_GT(plain, 12);
+}
+
+TEST(WordCountTest, ExclusionAndFormattingCompose)
+{
+    ParseOptions options;
+    options.ignoreFormatting = true;
+    options.excludeBetween = true;
+    EXPECT_EQ(wordCountOf(QStringLiteral("- one [skip this] **two**\n"), options), 2);
+}

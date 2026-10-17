@@ -5,7 +5,8 @@ and reading are three modes of it. This page covers the optional parts of how
 it takes input: [HTML edited in place](#html-edited-in-place),
 [the `</>` edit button](#the--edit-button-on-rendered-blocks) and its
 [callout menu](#the-callout-menu), [embedded notes](#embedded-notes),
-[the status bar counts](#status-bar-counts) and
+[the status bar counts](#status-bar-counts),
+[bare brackets](#bare-brackets), [meta notes](#meta-notes--) and
 [Vim key bindings](#vim-key-bindings).
 
 ## Scripts never run
@@ -376,6 +377,76 @@ instead, "N words, M characters", as Obsidian does. The note's counts still
 come with each parse; the selection's are recounted 200 ms after the caret
 last moved (`MainWindow::m_selectionCountTimer`), never on the keystroke or drag
 path, and cost one pass over the selected text.
+
+Two settings change what is counted (Settings > Editor), words and characters
+alike, the selection's included:
+
+- **Exclude text between characters** (`editor.countExcludeBetween`, off):
+  everything between an opening and a closing delimiter, delimiters included,
+  is left out. The delimiters are `editor.countExcludeOpen` / `Close`, 1 to 3
+  characters each (any, Markdown's own too); empty means the meta note
+  delimiters. Runs are found as meta notes are, so a link's or wikilink's
+  brackets are not a pair.
+- **Ignore formatting in counts** (`editor.countIgnoreFormatting`, off): only
+  rendered words count. Left out: what live preview hides (heading, quote and
+  list markers, link and wikilink targets and brackets, fences and language
+  tags, footnote labels), a list item's number and task box, a callout's
+  `[!type]` marker, every HTML tag (its text still counts) and `%%` comments.
+  A comment's text does not count either: it is not rendered, and counting the
+  words of what the note hides would be the surprise. Code and maths content
+  still counts.
+
+The parser does the sums: `Metadata::wordCount` follows the options, and
+`Decorations::uncounted` holds the left-out ranges (sorted, disjoint, after the
+frontmatter) that the editor takes off the character count and the selection's.
+Both off, the list is empty and the count is the plain one. Tests:
+`WordCountTest` in `tests/test_markdown.cpp`, `CountTest` in `tests/test_editor.cpp`.
+
+## Bare brackets
+
+A `[text]` that is not a link is drawn in `--bracket-color`, which is the link
+colour (`--text-accent`) unless a theme says otherwise; delimiters kept, in
+Live preview, Source and Reading. It is ordinary syntax colouring, on for
+everyone, with no setting. It is not one when it is a wikilink, an embed,
+`[text](url)`, `![alt](img)`, a reference link (`[text][ref]`, `[text][]`, or a
+shortcut `[text]` whose `[text]: url` definition exists - md4qt decides), a link
+definition, a footnote (`[^1]`, `^[inline]`), a task box at an item's start or
+a callout marker; nor inside code, maths, HTML, the frontmatter, `%%` comments
+or a bare URL; nor after a backslash. Brackets nest (`[a [b] c]` is one run, the
+outermost), a run may cross a soft line break but not a blank line, a line that
+starts another block, or a table cell, and an unclosed `[` is not a run.
+
+The runs come from one linear pass (`scanRuns` in `libs/markdown/Parser.cpp`),
+asked for through `ParseOptions::brackets` - the editor does, the indexer and
+publisher do not, so they pay nothing. Output: `StyleSpan::Kind::BareBracket`.
+
+## Meta notes ([...])
+
+Setting `editor.metaNotes` (Settings > Editor, **off** by default). A writer's
+notes to themselves, such as `She left early [check the date] and never came
+back.`, are drawn in their own colour, `--meta-note-color` (the accent unless a
+theme sets it), delimiters kept. They stay visible while you write - nothing
+hides them, and there is no switch that would. The delimiters are
+`editor.metaNoteOpen` / `editor.metaNoteClose`, default `[` and `]`; each is 1
+to 3 characters, and the same string on both sides (`;;`) pairs them left to
+right. Characters Markdown already
+owns are refused with a message in the settings page, not guessed at: `* _ ~ =`
+backtick `$ % # |` (`metaNoteDelimitersError`). A pair the settings file holds
+that fails the check falls back to the brackets.
+
+Matching is the bare bracket scan with the delimiters as parameters. With the
+brackets all the exclusions above apply; with any other pair only the generic
+ones do - code, maths, HTML, links, wikilinks, footnotes, comments, the
+frontmatter and URLs are never looked inside. With the brackets a run is a meta
+note instead of a bare bracket (the meta colour wins); with another pair both
+are drawn, a bracket inside a note keeping the later span.
+
+Off, `ParseOptions::metaNotes` is false and the parse never looks. On, each run is
+a `StyleSpan::Kind::MetaNote` and the ranges are in `Decorations::metaNotes`
+(`MarkdownEditor::metaNoteRanges()`), outermost, delimiters included, in source
+order - what a later meta pane or next/previous jump builds on. Tests:
+`MetaNoteTest` and `BareBracketTest` in `tests/test_markdown.cpp`,
+`BracketStyleTest` and `MetaNoteStyleTest` in `tests/test_editor.cpp`.
 
 ## Fenced code and the caret
 

@@ -329,8 +329,10 @@ void MarkdownEditor::setMode(Mode mode)
     // Reading view appends a trailing footnotes-list block that no other
     // mode shows; rebuildBlocks() is what adds or drops it. Skipped when
     // there is nothing to list - a note without footnotes costs nothing.
-    if (!m_decorations.footnoteDefinitions.isEmpty())
+    if (!m_decorations.footnoteDefinitions.isEmpty()) {
         rebuildBlocks();
+        indexDecorations(); // new BlockViews hold no styles or syntax until told which
+    }
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -461,6 +463,32 @@ void MarkdownEditor::setStrictLineBreaks(bool on)
     invalidateLayouts();
     updateLayout();
     viewport()->update();
+}
+
+void MarkdownEditor::setParseOptions(const ParseOptions &options)
+{
+    const auto same = [](const ParseOptions &l, const ParseOptions &r) {
+        // A delimiter pair matters only while its feature is on.
+        return l.brackets == r.brackets && l.metaNotes == r.metaNotes
+               && (!l.metaNotes || (l.open == r.open && l.close == r.close))
+               && l.excludeBetween == r.excludeBetween
+               && (!l.excludeBetween || (l.excludeOpen == r.excludeOpen && l.excludeClose == r.excludeClose))
+               && l.ignoreFormatting == r.ignoreFormatting;
+    };
+    if (same(options, m_parseOptions))
+        return; // every settings pass asks
+    m_parseOptions = options;
+    // The runs and counts come from the parse, so a change is a new parse.
+    if (!m_text.isEmpty()) {
+        // A parse in flight has the old options: let it end unadopted.
+        if (m_parseWatcher.isRunning())
+            m_parseWatcher.waitForFinished();
+        m_parsePending = false;
+        reparse();
+        invalidateLayouts();
+        updateLayout();
+        viewport()->update();
+    }
 }
 
 void MarkdownEditor::setIndentGuides(bool on)
@@ -870,7 +898,7 @@ void sortDecorations(Decorations &decorations)
 void MarkdownEditor::reparse()
 {
     m_parseTimer.stop();
-    Parser::Result result = m_parser.parseAll(m_text);
+    Parser::Result result = m_parser.parseAll(m_text, {}, m_parseOptions);
     if (m_features.HTMLblocks)
         expandEditableHTML(result.decorations, m_text);
     sortDecorations(result.decorations);
@@ -912,8 +940,9 @@ void MarkdownEditor::startParse()
     const QString snapshot = m_text;
     const quint64 version = m_textVersion;
     const bool HTML = m_features.HTMLblocks;
-    m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version, HTML] {
-        Parser::Result result = threadParser().parseAll(snapshot);
+    const ParseOptions options = m_parseOptions;
+    m_parseWatcher.setFuture(QtConcurrent::run([snapshot, version, HTML, options] {
+        Parser::Result result = threadParser().parseAll(snapshot, {}, options);
         if (HTML)
             expandEditableHTML(result.decorations, snapshot);
         ParseJob job;
@@ -1667,6 +1696,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     const QColor codeColour = m_theme.color(QStringLiteral("--text-normal"));
     const QColor codeBackground = m_theme.color(QStringLiteral("--background-primary-alt"));
     const QColor highlight = m_theme.color(QStringLiteral("--color-yellow"));
+    const QColor metaNote = m_theme.color(QStringLiteral("--meta-note-color"));
+    const QColor bracket = m_theme.color(QStringLiteral("--bracket-color"));
 
     const auto add = [&](const Range &source, const QTextCharFormat &format) {
         const Range shown = map.toDisplay(source);
@@ -1753,6 +1784,12 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             // Only tints the raw source, once the caret reveals it -
             // layoutFootnotes paints the hidden case's number itself.
             format.setForeground(accent);
+            break;
+        case StyleSpan::Kind::MetaNote:
+            format.setForeground(metaNote);
+            break;
+        case StyleSpan::Kind::BareBracket:
+            format.setForeground(bracket);
             break;
         case StyleSpan::Kind::Highlight:
             format.setBackground(highlight);
@@ -5067,7 +5104,12 @@ void MarkdownEditor::reloadStyleFiles()
 qsizetype MarkdownEditor::characterCount() const
 {
     const Range front = Frontmatter::find(m_text);
-    return m_text.size() - (front.isValid() ? front.end : 0);
+    qsizetype count = m_text.size() - (front.isValid() ? front.end : 0);
+    // What the last parse left out of the count; the note may have moved on
+    // since, so it can only overshoot a little, never below nothing.
+    for (const Range &range : m_decorations.uncounted)
+        count -= qMax<qsizetype>(0, qMin<qsizetype>(range.end, m_text.size()) - range.start);
+    return qMax<qsizetype>(0, count);
 }
 
 MarkdownEditor::TextCount MarkdownEditor::selectionCount() const
@@ -5075,7 +5117,20 @@ MarkdownEditor::TextCount MarkdownEditor::selectionCount() const
     const Range range = selection();
     if (range.length() <= 0)
         return {};
-    return {wordsIn(QStringView(m_text).mid(range.start, range.length())), range.length()};
+    if (m_decorations.uncounted.isEmpty())
+        return {wordsIn(QStringView(m_text).mid(range.start, range.length())), range.length()};
+    // The same things the note's count leaves out, in the selection too.
+    QString shown = m_text.mid(range.start, range.length());
+    qsizetype left = range.length();
+    for (const Range &out : m_decorations.uncounted) {
+        const qsizetype from = qMax(out.start, range.start);
+        const qsizetype to = qMin(out.end, range.end);
+        if (from >= to)
+            continue;
+        std::fill_n(shown.data() + (from - range.start), to - from, QLatin1Char(' '));
+        left -= to - from;
+    }
+    return {wordsIn(shown), left};
 }
 
 QString MarkdownEditor::selectedText() const

@@ -57,6 +57,14 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.hoverEditButton"), true},
         {QStringLiteral("editor.tableHandles"), true}, // row/column grips, add bars, cell selection on a drawn table
         {QStringLiteral("editor.complexCodeBlocks"), true}, // bg/fg/border/syntax.* on code blocks; nothing configured draws as before
+        {QStringLiteral("editor.metaNotes"), false}, // [like this] in --meta-note-color; off: the parse never looks
+        {QStringLiteral("editor.metaNoteOpen"), QStringLiteral("[")},   // 1-3 characters
+        {QStringLiteral("editor.metaNoteClose"), QStringLiteral("]")},
+        // Word and character counts. Empty delimiters mean the meta-note ones.
+        {QStringLiteral("editor.countExcludeBetween"), false},
+        {QStringLiteral("editor.countExcludeOpen"), QString()},
+        {QStringLiteral("editor.countExcludeClose"), QString()},
+        {QStringLiteral("editor.countIgnoreFormatting"), false},
         {QStringLiteral("editor.tabWidth"), 4},
 
         // Files and links

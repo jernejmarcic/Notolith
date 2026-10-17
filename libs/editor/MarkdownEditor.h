@@ -118,6 +118,16 @@ public:
     void setStrictLineBreaks(bool on);
     bool strictLineBreaks() const { return m_strictLineBreaks; }
 
+    /// What the parse looks for beyond Markdown (Parser.h): bare `[brackets]`
+    /// drawn in --bracket-color (on by default, like other syntax colouring),
+    /// meta notes in --meta-note-color, and what the word and character counts
+    /// leave out. Off, the parse does not look at all. A change reparses.
+    void setParseOptions(const ParseOptions &options);
+    const ParseOptions &parseOptions() const { return m_parseOptions; }
+    /// Every meta note, outermost, delimiters included, in source order -
+    /// empty unless ParseOptions::metaNotes. For a pane or a jump to build on.
+    const QList<Range> &metaNoteRanges() const { return m_decorations.metaNotes; }
+
     /// A faint vertical rule at each level of list indentation.
     void setIndentGuides(bool on);
     bool indentGuides() const { return m_indentGuides; }
@@ -2656,6 +2666,7 @@ private:
     bool m_readable = true;
     bool m_lineNumbers = true; ///< shown in source mode only
     bool m_strictLineBreaks = false; ///< Obsidian's app.json setting
+    ParseOptions m_parseOptions = [] { ParseOptions o; o.brackets = true; return o; }();
     bool m_indentGuides = false;
     bool m_outlineNumbering = false;
     QString m_listNumberSuffix = QStringLiteral(".");

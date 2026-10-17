@@ -278,6 +278,21 @@ changes - edit the selected scheme and the window restyles with no restart -
 and adding or removing a file in a themes directory updates the settings
 page's list while it is open.
 
+## Bare brackets and meta notes
+
+Two tokens, both defaulting to `--text-accent` (a link's colour) and both
+overridable from a theme, a scheme or a snippet:
+
+- `--bracket-color` - a bare `[text]` that is not a link, in every mode.
+- `--meta-note-color` - a meta note (the `editor.metaNotes` setting), delimiters
+  included; it wins over `--bracket-color` where the two are the same run.
+
+```css
+.theme-dark { --bracket-color: var(--color-purple); --meta-note-color: var(--color-orange); }
+```
+
+What counts as a bracket and a note is in [EDITOR.md](EDITOR.md#bare-brackets).
+
 ## Popups, the status bar and the inline title
 
 Jernej, 2026-10-16: "the general design is fine, I just want refinements".
