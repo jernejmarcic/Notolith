@@ -672,6 +672,37 @@ TEST_F(RenameLinksTest, MovingAFolderRewritesOnlyTheLinksThatLeaveIt)
               QByteArray("[in](a.md) ![](img/p.png) [out](../../Top.md)\n"));
 }
 
+// A note that is not valid UTF-8 (a Latin-1 export) is searched by what it
+// says: each bad byte reads as the Latin-1 letter it most likely is, not as
+// U+FFFD, and the file itself is never rewritten.
+TEST_F(IndexTest, ANoteThatIsNotValidUTF8IsSearchedByItsLatin1Text)
+{
+    const QByteArray latin("caf\xE9 au lait, then the word zebra\n[[Ideas]]\n");
+    write(QStringLiteral("Latin.md"), latin);
+    write(QStringLiteral("Cut.md"), "a cut \xE2\x82 sequence then quokka\n"); // not one byte per bad character
+
+    Index index;
+    build(index);
+    const auto found = [&](const QString &query) {
+        QStringList paths;
+        for (const SearchResult &result : index.search(query))
+            paths << result.path;
+        return paths;
+    };
+    EXPECT_EQ(found(QStringLiteral("zebra")), QStringList{QStringLiteral("Latin.md")});
+    EXPECT_EQ(found(QStringLiteral("caf\u00E9")), QStringList{QStringLiteral("Latin.md")});
+    EXPECT_EQ(found(QStringLiteral("quokka")), QStringList{QStringLiteral("Cut.md")});
+    // Its links are still its links.
+    bool linksIdeas = false;
+    for (const Backlink &backlink : index.backlinks(vault.absolute(QStringLiteral("Ideas.md"))))
+        linksIdeas = linksIdeas || backlink.fromPath == QLatin1String("Latin.md");
+    EXPECT_TRUE(linksIdeas);
+
+    QFile file(vault.absolute(QStringLiteral("Latin.md")));
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), latin);
+}
+
 // An alias is offered as [[Note|alias]]; with two notes of one name that Note
 // has to be the path, or the link goes to whichever resolves first.
 TEST_F(RenameLinksTest, AnAliasOfOneOfTwoSameNameNotesNamesItByPath)

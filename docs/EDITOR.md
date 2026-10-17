@@ -404,6 +404,10 @@ writes such a note either: `Vault::write` refuses a `Note::lossy` one, which
 also stops link updates on rename and merge from rewriting it (merge refuses a
 source like that outright).
 
+The index (and so search) reads such a note's bad bytes as the Latin-1 letters
+they most likely were, so searching "café" finds a note saved as Latin-1; the
+file and the editor still show it as it is.
+
 ## Deleting
 
 Settings > Files > "Deleted files" (`files.deletedFiles`, read from
