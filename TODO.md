@@ -817,6 +817,8 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
 - [ ] **An app id** (and maybe a new name: Jernej 2026-10-16 asked for name suggestions) for Flatpak, AppStream and Android:
+      2026-10-17 Jernej floated "Skorja? Biblolith? Notolith?"; a web search
+      found no app or software under any of the three. Awaiting his pick.
       `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
 - [x] **An app icon.** Hand-written SVG, libs/theme/icons/noteAppC.svg (Jernej 2026-10-16: "Draw an SVG"). Was: The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
