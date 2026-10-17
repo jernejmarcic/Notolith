@@ -4,6 +4,7 @@
 #include <QColorDialog>
 #include <QHBoxLayout>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -19,6 +20,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLineF>
+#include <QContextMenuEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -1480,6 +1483,40 @@ void GraphView::mouseReleaseEvent(QMouseEvent *event)
         m_dragNode = -1;
     }
     m_panning = false;
+}
+
+void GraphView::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape && !m_localMode) {
+        emit closeRequested();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void GraphView::contextMenuEvent(QContextMenuEvent *event)
+{
+    const int hit = nodeAt(event->pos());
+    if (hit < 0) {
+        event->ignore();
+        return;
+    }
+    const GraphNode &data = m_nodes[hit].data;
+    if (data.kind != GraphNode::Kind::Note && data.kind != GraphNode::Kind::Attachment) {
+        event->ignore(); // a tag or an unresolved link has nothing to open
+        return;
+    }
+    const QString id = data.id;
+    QMenu menu(this);
+    menu.setObjectName(QStringLiteral("graphNodeMenu"));
+    QAction *open = menu.addAction(tr("Open"));
+    QAction *openInTab = menu.addAction(tr("Open in new tab"));
+    event->accept();
+    const QAction *chosen = menu.exec(event->globalPos());
+    if (chosen == open)
+        emit noteActivated(id);
+    else if (chosen == openInTab)
+        emit noteActivatedInNewTab(id);
 }
 
 void GraphView::leaveEvent(QEvent *event)

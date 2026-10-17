@@ -14,12 +14,15 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSlider>
 #include <QPainter>
 #include <QSignalSpy>
+#include <QContextMenuEvent>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QTest>
 
 #include "GraphLayout.h"
@@ -284,6 +287,67 @@ TEST(GraphViewTest, LocalGraphCanFollowOnlyIncomingOrOnlyOutgoingLinks)
     const GraphOptions restored = GraphOptions::fromJson(view.options().toJson());
     EXPECT_TRUE(restored.localIncoming);
     EXPECT_FALSE(restored.localOutgoing);
+}
+
+// Escape leaves the global graph page (the owner returns to the note it came
+// from); a sidebar's local graph has nowhere to return to.
+TEST(GraphViewTest, EscapeAsksTheOwnerToCloseTheGlobalGraphOnly)
+{
+    GraphView view;
+    QSignalSpy closing(&view, &GraphView::closeRequested);
+    QTest::keyClick(&view, Qt::Key_Escape);
+    EXPECT_EQ(closing.count(), 1);
+    view.setLocalGraph(true, QStringLiteral("A"));
+    QTest::keyClick(&view, Qt::Key_Escape);
+    EXPECT_EQ(closing.count(), 1);
+}
+
+// A right-click on a note node offers Open and Open in new tab; elsewhere nothing.
+TEST(GraphViewTest, RightClickingANodeOffersOpenAndOpenInNewTab)
+{
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor({QStringLiteral("A.md"), QStringLiteral("B.md")}),
+                      {{QStringLiteral("A.md"), QStringLiteral("B.md")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(200);
+    QSignalSpy opened(&view, &GraphView::noteActivated);
+    QSignalSpy openedInTab(&view, &GraphView::noteActivatedInNewTab);
+
+    // Picks the menu entry named `text` from the popup the event opens.
+    const auto rightClickAndChoose = [&](const QPoint &at, const QString &text) {
+        QTimer::singleShot(100, [text] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (!menu)
+                return;
+            for (QAction *action : menu->actions()) {
+                if (action->text() == text) {
+                    menu->setActiveAction(action);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                    return;
+                }
+            }
+            menu->close();
+        });
+        QContextMenuEvent event(QContextMenuEvent::Mouse, at, view.mapToGlobal(at));
+        QApplication::sendEvent(&view, &event);
+        return event.isAccepted();
+    };
+
+    const auto onB = [&] { return view.screenPosition(QStringLiteral("B.md")).toPoint(); }; // the layout may still drift
+    EXPECT_TRUE(rightClickAndChoose(onB(), QStringLiteral("Open in new tab")));
+    ASSERT_EQ(openedInTab.count(), 1);
+    EXPECT_EQ(openedInTab.first().first().toString(), QStringLiteral("B.md"));
+    EXPECT_EQ(opened.count(), 0);
+
+    EXPECT_TRUE(rightClickAndChoose(onB(), QStringLiteral("Open")));
+    ASSERT_EQ(opened.count(), 1);
+    EXPECT_EQ(opened.first().first().toString(), QStringLiteral("B.md"));
+    EXPECT_EQ(openedInTab.count(), 1);
+
+    EXPECT_FALSE(rightClickAndChoose(QPoint(5, 5), QStringLiteral("Open"))) << "no node there, no menu";
+    EXPECT_EQ(opened.count(), 1);
 }
 
 TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)

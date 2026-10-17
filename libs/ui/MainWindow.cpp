@@ -1819,7 +1819,8 @@ void MainWindow::applyFeatures()
 #ifdef NOTEAPPC_HAVE_GRAPH
         {"graph", m_localGraph,
          [this, parent] {
-             // Cheap while hidden: GraphView reads the index only once shown.
+             // The factory runs on first use (the first time the pane is shown),
+             // because setIndex() below starts the index read at once.
              m_localGraph = new GraphView(parent);
              m_localGraph->setObjectName(QStringLiteral("localGraph"));
              wireGraphOptions(m_localGraph);
@@ -1827,6 +1828,7 @@ void MainWindow::applyFeatures()
              m_localGraph->setTheme(m_theme);
              m_localGraph->setIndex(&m_index);
              connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
+             connect(m_localGraph, &GraphView::noteActivatedInNewTab, this, &MainWindow::openRelativeInNewTab);
              return m_localGraph.data();
          },
          "localGraphTabButton", "git-fork", tr("Local graph")},
@@ -2473,6 +2475,8 @@ void MainWindow::openGraph()
         wireGraphOptions(m_graph);
         m_graph->setIndex(&m_index);
         connect(m_graph, &GraphView::noteActivated, this, &MainWindow::openRelative);
+        connect(m_graph, &GraphView::noteActivatedInNewTab, this, &MainWindow::openRelativeInNewTab);
+        connect(m_graph, &GraphView::closeRequested, this, &MainWindow::leaveSettings);
         m_mainStack->addWidget(m_graph);
     }
     m_graph->setCurrentNote(m_vault.isValid() && !m_active->notePath.isEmpty() ? m_vault.relative(m_active->notePath)
@@ -2656,6 +2660,14 @@ void MainWindow::openRelative(const QString &relativePath)
 {
     if (!relativePath.isEmpty() && m_vault.isValid())
         openNote(m_vault.absolute(relativePath));
+}
+
+void MainWindow::openRelativeInNewTab(const QString &relativePath)
+{
+    if (relativePath.isEmpty() || !m_vault.isValid())
+        return;
+    newTab();
+    openNote(m_vault.absolute(relativePath));
 }
 
 void MainWindow::onIndexChanged()

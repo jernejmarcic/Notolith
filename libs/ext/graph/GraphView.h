@@ -21,6 +21,8 @@
 #include "GraphLayout.h"
 
 class QMouseEvent;
+class QKeyEvent;
+class QContextMenuEvent;
 class QResizeEvent;
 class QShowEvent;
 class QHideEvent;
@@ -232,6 +234,11 @@ signals:
     /// GraphNode::id. Never fired for a tag or unresolved node - there is
     /// nothing to open.
     void noteActivated(const QString &relativePath);
+    /// The node's right-click menu chose "Open in new tab"; same ids as noteActivated().
+    void noteActivatedInNewTab(const QString &relativePath);
+    /// Escape on the global graph: the owner returns to the note it came from.
+    /// Never fired by a local graph (a sidebar pane has nowhere to return to).
+    void closeRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -239,6 +246,8 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;

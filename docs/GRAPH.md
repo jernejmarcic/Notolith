@@ -27,6 +27,9 @@ sections whose open or folded state is kept like the rest.
 
 Hover a node to light it and its neighbours; drag to move (the node is pinned
 while held); scroll to zoom about the pointer; drag the background to pan.
+Right-click a note or attachment node for "Open" and "Open in new tab". Escape
+on the graph page returns to the note it was opened from (the local graph in the
+sidebar ignores it).
 
 ## Where the settings live
 
@@ -44,7 +47,10 @@ own, because no real Obsidian `graph.json` was available to confirm Obsidian's.
 
 See the comment on `GraphView` for the contract. In short: the layout and the
 frame are produced by one background job at a time; the UI thread draws the
-latest image. Numbers: docs/PERFORMANCE.md, "The graph view at 20 000 notes".
+latest image. A rebuild (note switch, index change, filter) never waits for the
+job: it swaps in a fresh layout and a new generation, the superseded job stops
+after its current step and its output is dropped. So the UI thread's cost is the
+rebuild itself (about 1 ms at 3000 nodes), not a job's 30-250 ms. Numbers: docs/PERFORMANCE.md, "The graph view at 20 000 notes".
 
 ## Checking it without a display
 
