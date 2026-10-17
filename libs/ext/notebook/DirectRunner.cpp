@@ -121,12 +121,17 @@ QString withoutAnsi(QString text)
 constexpr qint64 kMaxOutput = 1 << 20; // a runaway print loop stops here
 constexpr qint64 kWasmMemory = qint64(1) << 30; // a guest's linear memory, 1 GiB
 
-/// `path` itself when it needs binding into the sandbox: /usr already is.
-void bindIfOutsideUsr(QStringList *binds, const QString &path)
+/// `path` with its symlinks resolved, bound into the sandbox unless it is
+/// under /usr (already bound). The caller runs the returned path: a symlink's
+/// own location does not exist inside the sandbox.
+QString bindIfOutsideUsr(QStringList *binds, const QString &path)
 {
     const QString real = QFileInfo(path).canonicalFilePath();
-    if (!real.isEmpty() && !real.startsWith(QLatin1String("/usr/")) && !binds->contains(real))
+    if (real.isEmpty())
+        return path;
+    if (!real.startsWith(QLatin1String("/usr/")) && !binds->contains(real))
         binds->append(real);
+    return real;
 }
 
 } // namespace
@@ -227,7 +232,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     // Haskell with a `main` is a program; without, a ghci session.
     Recipe chosen = *recipe;
     QString text = request.source;
-    if (chosen.tool == QLatin1String("ghci")) {
+    if (chosen.tool == QLatin1String("ghci") && !wasm) { // a wasm module gets the block as written
         static const QRegularExpression main(QStringLiteral("^main\\s*(::|=)"), QRegularExpression::MultilineOption);
         if (main.match(text).hasMatch()) {
             chosen.file = QStringLiteral("cell.hs");
@@ -265,24 +270,24 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         // memory is capped. `request.readOnlyBinds` (a runnable embed's
         // folder) is deliberately not granted: wasmtime 49 has no read-only
         // --dir, so the guest could write into the user's vault.
-        const QString module = isModule ? file : request.wasmModule;
-        QStringList wasmArgs = {QStringLiteral("run"), QStringLiteral("-C"), QStringLiteral("cache=n"),
-                                QStringLiteral("--dir"), dir + QStringLiteral("::/cell"),
-                                QStringLiteral("-W"), QStringLiteral("max-memory-size=%1").arg(kWasmMemory),
-                                module};
-        if (!isModule)
-            wasmArgs << QStringLiteral("/cell/") + chosen.file;
         // Then the whole of wasmtime inside tier 1's bubblewrap + seccomp, so
         // a wasmtime bug is still contained; only the module and the runtime
         // (when they are outside /usr) are bound in, as single files.
         sandbox.readOnlyBinds.clear();
-        bindIfOutsideUsr(&sandbox.readOnlyBinds, wasmtime);
-        if (!isModule) // a wat/wasm block's module is in the cell directory already
-            bindIfOutsideUsr(&sandbox.readOnlyBinds, module);
-        wrapCommand(SandboxTier::Bubblewrap, wasmtime, wasmArgs, sandbox, &program, &args, &used, &filterFD);
+        const QString runtime = bindIfOutsideUsr(&sandbox.readOnlyBinds, wasmtime);
+        // A wat/wasm block's module is in the cell directory, bound already.
+        const QString module = isModule ? file : bindIfOutsideUsr(&sandbox.readOnlyBinds, request.wasmModule);
+        // `--` so a module path starting with '-' is not read as an option.
+        QStringList wasmArgs = {QStringLiteral("run"), QStringLiteral("-C"), QStringLiteral("cache=n"),
+                                QStringLiteral("--dir"), dir + QStringLiteral("::/cell"),
+                                QStringLiteral("-W"), QStringLiteral("max-memory-size=%1").arg(kWasmMemory),
+                                QStringLiteral("--"), module};
+        if (!isModule)
+            wasmArgs << QStringLiteral("/cell/") + chosen.file;
+        wrapCommand(SandboxTier::Bubblewrap, runtime, wasmArgs, sandbox, &program, &args, &used, &filterFD);
         if (program.isEmpty()) {
             // No bubblewrap: WASI is the sandbox (no files but /cell, no network).
-            program = wasmtime;
+            program = runtime;
             args = wasmArgs;
         }
         used = SandboxTier::Wasm;

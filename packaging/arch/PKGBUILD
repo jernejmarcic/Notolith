@@ -14,6 +14,9 @@ pkgrel=1
 pkgdesc='Markdown notes and Obsidian vaults, native and fast'
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
+# The package was called noteappc before the app was named Notolith.
+conflicts=('noteappc')
+replaces=('noteappc')
 # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
 # would fall back to running unsandboxed.
 depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'

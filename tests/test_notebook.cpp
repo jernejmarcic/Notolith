@@ -674,7 +674,8 @@ namespace {
 /// Runs `source` and waits for the answer; nullopt if none came.
 std::optional<NotebookRunResult> runDirect(const QString &language, const QString &source,
                                            SandboxTier tier = SandboxTier::Bubblewrap, int timeoutMs = 30'000,
-                                           const QString &wasmModule = QString())
+                                           const QString &wasmModule = QString(),
+                                           const QStringList &readOnlyBinds = {})
 {
     DirectRunner runner;
     std::optional<NotebookRunResult> result;
@@ -684,6 +685,7 @@ std::optional<NotebookRunResult> runDirect(const QString &language, const QStrin
     request.tier = tier;
     request.timeoutMs = timeoutMs;
     request.wasmModule = wasmModule;
+    request.readOnlyBinds = readOnlyBinds;
     runner.run(request, [&result](NotebookRunResult r) { result = r; });
     (void)QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
     return result;
@@ -804,6 +806,25 @@ constexpr char kHelloWat[] = R"((module
     (drop (call $w (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
 )";
 
+// Prints the name of the guest's first preopened directory (fd 3), then
+// " and more" if there is a second one (fd 4).
+constexpr char kPreopensWat[] = R"((module
+  (import "wasi_snapshot_preview1" "fd_prestat_get" (func $p (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_prestat_dir_name" (func $n (param i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $w (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 200) "\0a")
+  (data (i32.const 210) " and more\0a")
+  (func (export "_start")
+    (drop (call $p (i32.const 3) (i32.const 32)))
+    (drop (call $n (i32.const 3) (i32.const 64) (i32.load (i32.const 36))))
+    (i32.store (i32.const 0) (i32.const 64))
+    (i32.store (i32.const 4) (i32.load (i32.const 36)))
+    (i32.store (i32.const 8) (select (i32.const 210) (i32.const 200) (i32.eqz (call $p (i32.const 4) (i32.const 40)))))
+    (i32.store (i32.const 12) (select (i32.const 10) (i32.const 1) (i32.eqz (call $p (i32.const 4) (i32.const 40)))))
+    (drop (call $w (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 16)))
+    (drop (call $w (i32.const 1) (i32.const 8) (i32.const 1) (i32.const 16))))))";
+
 // An interpreter stand-in: prints its whole argv (NUL separated).
 constexpr char kArgvWat[] = R"((module
   (import "wasi_snapshot_preview1" "args_sizes_get" (func $sizes (param i32 i32) (result i32)))
@@ -913,6 +934,41 @@ TEST(WasmTierTest, WithoutBubblewrapTheWasmTierRunsWasmtimeAlone)
     ASSERT_TRUE(refused.has_value());
     EXPECT_FALSE(refused->ok);
     EXPECT_TRUE(refused->kernelError.contains(QStringLiteral("bubblewrap"))) << refused->kernelError.toStdString();
+}
+
+TEST(WasmTierTest, TheGuestSeesOnlyItsOwnDirectory)
+{
+    if (!haveWasmtime())
+        GTEST_SKIP() << "wasmtime is not installed";
+    // A runnable embed's folder is asked for and must still not be granted.
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    const auto result = runDirect(QStringLiteral("wat"), QString::fromLatin1(kPreopensWat), SandboxTier::Wasm, 30'000,
+                                  QString(), {vault.path()});
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << result->kernelError.toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("/cell\n"));
+}
+
+TEST(WasmTierTest, ASymlinkedWasmtimeRunsInsideBubblewrap)
+{
+    const QString wasmtime = QStandardPaths::findExecutable(QStringLiteral("wasmtime"));
+    const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
+    if (wasmtime.isEmpty() || bwrap.isEmpty())
+        GTEST_SKIP() << "needs wasmtime and bubblewrap";
+    // wasmtime found through a link outside /usr (a shim, Homebrew, Nix): the
+    // link itself does not exist inside the sandbox, its target does.
+    QTemporaryDir bin;
+    ASSERT_TRUE(bin.isValid());
+    ASSERT_TRUE(QFile::link(wasmtime, bin.filePath(QStringLiteral("wasmtime"))));
+    ASSERT_TRUE(QFile::link(bwrap, bin.filePath(QStringLiteral("bwrap"))));
+    const QByteArray path = qgetenv("PATH");
+    qputenv("PATH", QFile::encodeName(bin.path()));
+    const auto result = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
+    qputenv("PATH", path);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << result->kernelError.toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("hi from wasm\n"));
 }
 
 TEST(WasmTierTest, TheModuleSettingIsLookedUpByAnyNameOfTheLanguage)

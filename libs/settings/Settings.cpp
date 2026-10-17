@@ -733,7 +733,7 @@ bool Settings::save(QString *error) const
             settings.insert(key, m_user.value(key));
     }
     static const QString settingsHeader = QStringLiteral(
-        "# noteAppC settings.\n"
+        "# Notolith settings.\n"
         "#\n"
         "# Every value here overrides a built-in default. Delete a line to go\n"
         "# back to that default. Comments and anything the app does not know\n"
@@ -751,7 +751,7 @@ bool Settings::save(QString *error) const
     for (auto it = m_index.constBegin(); it != m_index.constEnd(); ++it)
         index.insert(it.key(), it.value());
     static const QString indexHeader = QStringLiteral(
-        "# What noteAppC remembers. Safe to delete; it fills itself in again.\n");
+        "# What Notolith remembers. Safe to delete; it fills itself in again.\n");
     return writeINI(indexFile(), index, known, indexHeader, error);
 }
 

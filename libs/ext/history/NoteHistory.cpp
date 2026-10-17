@@ -173,7 +173,7 @@ bool NoteHistory::record(const QString &relativePath, const QString &text, const
     git_tree *tree = nullptr;
     git_signature *signature = nullptr;
     ok = ok && git_tree_lookup(&tree, repo, &child) == 0
-      && git_signature_new(&signature, "noteAppC", "noteappc@localhost", when.toSecsSinceEpoch(),
+      && git_signature_new(&signature, "Notolith", "noteappc@localhost", when.toSecsSinceEpoch(),
                            when.offsetFromUtc() / 60)
              == 0;
     git_oid commit;

@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <cstdio>
 #include <QCommandLineParser>
 #include <QIcon>
 
@@ -28,10 +29,17 @@ int main(int argc, char *argv[])
     parser.setApplicationDescription(
         QStringLiteral("Notolith: Markdown notes and Obsidian vaults, native and fast"));
     parser.addHelpOption();
-    parser.addVersionOption();
+    // Not addVersionOption(): it prints applicationName(), the code name.
+    const QCommandLineOption version({QStringLiteral("v"), QStringLiteral("version")},
+                                     QStringLiteral("Displays version information."));
+    parser.addOption(version);
     parser.addPositionalArgument(QStringLiteral("vault"),
                                  QStringLiteral("Vault directory to open."));
     parser.process(app);
+    if (parser.isSet(version)) {
+        std::printf("Notolith %s\n", NOTEAPPC_VERSION);
+        return 0;
+    }
 
     noteAppC::MainWindow window;
     const QStringList args = parser.positionalArguments();

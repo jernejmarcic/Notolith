@@ -11,4 +11,4 @@ Categories=Office;
 MimeType=text/markdown;text/x-markdown;inode/directory;
 Keywords=markdown;notes;wiki;vault;obsidian;
 StartupNotify=true
-StartupWMClass=io.github.jernejmarcic.Notolith
+StartupWMClass=notolith
