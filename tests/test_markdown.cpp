@@ -1880,6 +1880,19 @@ TEST(MetaNoteTest, OffUnlessAskedFor)
     EXPECT_TRUE(metaNotesOf(text, QStringLiteral("{"), QStringLiteral("}")).isEmpty());
 }
 
+TEST(MetaNoteTest, MetadataCarriesTheRunsWhenAskedFor)
+{
+    // The index stores the runs from the metadata, so the meta: search can
+    // find them without parsing every note again.
+    const QString text = QStringLiteral("She left early [check the date] and never came back.");
+    ParseOptions options;
+    options.metaNotes = true;
+    const QList<Range> runs = Parser().parse(text, {}, options).metaNotes;
+    ASSERT_EQ(runs.size(), 1);
+    EXPECT_EQ(sliceOf(text, runs.first()), QStringLiteral("[check the date]"));
+    EXPECT_TRUE(Parser().parse(text).metaNotes.isEmpty()) << "off unless asked for";
+}
+
 TEST(MetaNoteTest, NestedBracketsAreOneOutermostRun)
 {
     EXPECT_EQ(metaNotesOf(QStringLiteral("a [b [c] d] e")), QStringList{QStringLiteral("[b [c] d]")});
