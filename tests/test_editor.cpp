@@ -1602,6 +1602,17 @@ TEST(CalloutTitleTest, AnExternalEditKeepsTheTypedTitleOnItsCallout)
     EXPECT_FALSE(editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"))->isVisible());
 }
 
+TEST(CalloutTitleTest, TheCaretLandsWhereTheTitleWasClicked)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note] A longer title here\n> body\n"));
+    const QRectF rect = fixture.editor->calloutTitleRectAt(0);
+    fixture.title = QPoint(int(rect.left()) + 4, int(rect.center().y()));
+    fixture.click();
+    QLineEdit *edit = fixture.edit();
+    ASSERT_TRUE(edit);
+    EXPECT_LT(edit->cursorPosition(), 3) << "a click at the start is not the end of the text";
+}
+
 // --- neighbouring blocks never overlap ------------------------------------
 
 /// Scrolls through the whole note, the way reading it would, and says where two

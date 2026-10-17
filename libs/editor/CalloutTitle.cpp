@@ -53,6 +53,9 @@ bool MarkdownEditor::pressCalloutTitle(const QPoint &point)
         const QRectF rect = calloutTitleRect(view, left, top);
         if (rect.contains(point)) {
             openCalloutTitleEditor(*view.callout, rect, view);
+            // The caret goes where the title was clicked, not to its end.
+            m_calloutTitleEdit->setCursorPosition(
+                m_calloutTitleEdit->cursorPositionAt(m_calloutTitleEdit->mapFrom(viewport(), point)));
             return true;
         }
     }
