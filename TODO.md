@@ -668,8 +668,26 @@ What the spec asks for:
       ptrace, keyring, bpf, io_uring, module loading or TIOCSTI. Landlock
       left out on purpose: the mount and network namespaces already cover
       what it would restrict. The same filter now covers the plugin host
-      and TeX too (libs/sandbox). Left: the server/mobile tiers, blocked:
-      no wasmtime, wasmer, runsc or firecracker on starbase-1.
+      and TeX too (libs/sandbox). Left: gVisor and Firecracker (not
+      installed, not approved); the WASM tier below.
+      **WASM tier** (Jernej 2026-10-17 installed wasmtime 49.0.2: CLI only,
+      no C API, so a `wasmtime run` subprocess). Plan (lane wasm):
+      - [ ] `#| sandbox: wasm` parsed (Parser, Decorations NotebookOptions)
+            and carried through editor, cache key and badge ("wasm").
+      - [ ] `SandboxTier::Wasm = 2`: `wasmtime run -C cache=n --dir
+            <cell>::/cell -W max-memory-size=... module args`; nested in
+            bwrap + seccomp when bwrap exists, alone when not (WASI is the
+            sandbox: no files but /cell, no network). Refused with a clear
+            message when wasmtime is missing (SandboxAvailability::wasmtime).
+      - [ ] `wat`/`wasm` blocks run themselves as the module, in any tier.
+      - [ ] Other languages in the wasm tier: the module from setting
+            `notebooks.wasmModules` (`python=/path/python.wasm;...`), its
+            file at /cell/<cell file>; no module, refused, saying which.
+      - [ ] Tests: a WAT fixture printing to stdout via fd_write runs in
+            tier 1 and tier 2; the module map exercised with a WAT fixture
+            standing in for an interpreter; missing wasmtime refuses.
+      - [ ] Docs; check.sh green. Honest ceiling: no real interpreter
+            module (python.wasm) has run through it - none is installed.
 - [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
       (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to
@@ -816,25 +834,33 @@ Built in waves of parallel lanes, each in its own `/tmp` worktree, builds under
       AppStream, README. Was: none chosen; the PKGBUILD said `LicenseRef-unknown`
       and the AppStream file states none. Bundled: md4qt and MicroTeX (MIT),
       tinyxml2 (zlib), Lucide icons (ISC); poppler (GPL) is linked when on.
-- [ ] **An app id** (and maybe a new name: Jernej 2026-10-16 asked for name suggestions) for Flatpak, AppStream and Android:
+- [x] **An app id** (and maybe a new name: Jernej 2026-10-16 asked for name suggestions) for Flatpak, AppStream and Android:
       2026-10-17 Jernej floated "Skorja? Biblolith? Notolith?"; a web search
       found no app or software under any of the three. He picked Notolith.
       Plan (lane rename):
-      - [ ] Product name "Notolith" wherever a person reads it: window title,
+      - [x] Product name "Notolith" wherever a person reads it: window title,
             About page, error and settings texts naming the app, PDF creator.
-      - [ ] App id `io.github.jernejmarcic.Notolith`: desktop file named after
+      - [x] App id `io.github.jernejmarcic.Notolith`: desktop file named after
             it (Flatpak needs that), Wayland app_id via setDesktopFileName,
             icon installed under that name, metainfo, Flatpak manifest,
             Android package and label.
-      - [ ] Binary `notolith` (OUTPUT_NAME; the CMake target stays noteAppC),
+      - [x] Binary `notolith` (OUTPUT_NAME; the CMake target stays noteAppC),
             Arch package `notolith`, AppImage script.
-      - [ ] Kept as noteAppC on purpose, so nothing is lost or migrated:
+      - [x] Kept as noteAppC on purpose, so nothing is lost or migrated:
             ~/.config, ~/.cache and ~/.local/share directories, the keyring
             service, command ids in hotkeys.json (`noteAppC:...`), the C++
             namespace and target names, the repo directory.
-      - [ ] README and packaging/README say Notolith (code name noteAppC);
+      - [x] README and packaging/README say Notolith (code name noteAppC);
             tests green; check.sh green.
-      `io.github.jernejmarcic.noteAppC`, following basket's, unconfirmed.
+      Done 2026-10-17 (lane/rename, 1b227de): `cmake --install` puts
+      bin/notolith and share/{applications,icons/hicolor/scalable/apps,metainfo}/
+      io.github.jernejmarcic.Notolith.*; desktop-file-validate clean,
+      appstreamcli only warns about the missing homepage (as before).
+      setApplicationDisplayName("Notolith") also makes Qt's xcb/wayland
+      windows append " - Notolith" to other windows' titles (dialogs), the
+      KDE convention; kept. Not checked: X11/XWayland WM_CLASS still comes
+      from the application name noteAppC, so StartupWMClass may not group
+      there (`xprop WM_CLASS` would tell; Hyprland uses the Wayland app_id).
 - [x] **An app icon.** Hand-written SVG, libs/theme/icons/noteAppC.svg (Jernej 2026-10-16: "Draw an SVG"). Was: The desktop file borrows `accessories-text-editor`;
       drawing one is image making, which is off unless you say otherwise.
 - [x] **Autosave.** Jernej 2026-09-23: "Autosave like Obsidian". A note or
