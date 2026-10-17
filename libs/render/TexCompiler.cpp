@@ -1,5 +1,6 @@
 #include "TexCompiler.h"
 
+#include "Bubblewrap.h"
 #include "SyscallFilter.h"
 
 #include <QCryptographicHash>
@@ -114,42 +115,19 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
     process.setWorkingDirectory(work.path());
     process.setStandardInputFile(QProcess::nullDevice());
     process.setProcessChannelMode(QProcess::MergedChannels);
-    int filterFD = -1;
-    QString program = engine;
-    QStringList arguments = {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
-                             QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
-                             inputPath};
-    // Where bubblewrap exists, the engine sees the system and its own
-    // directory and nothing else: no home, no other drive, no socket, no
-    // network. -no-shell-escape stops \write18, but \input can still read
-    // any file the user can and set it into the PDF.
-    if (const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap")); !bwrap.isEmpty()) {
-        const QString dir = work.path();
-        arguments = QStringList{QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
-                                QStringLiteral("--ro-bind"), QStringLiteral("/etc"), QStringLiteral("/etc"),
-                                QStringLiteral("--ro-bind-try"), QStringLiteral("/var/lib/texmf"),
-                                QStringLiteral("/var/lib/texmf"),
-                                QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
-                                QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib"),
-                                QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib64"),
-                                QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/sbin"),
-                                QStringLiteral("--proc"), QStringLiteral("/proc"),
-                                QStringLiteral("--dev"), QStringLiteral("/dev"),
-                                QStringLiteral("--tmpfs"), QStringLiteral("/tmp"),
-                                QStringLiteral("--bind"), dir, dir,
-                                QStringLiteral("--setenv"), QStringLiteral("HOME"), dir,
-                                QStringLiteral("--unshare-all"), QStringLiteral("--die-with-parent"),
-                                QStringLiteral("--new-session"), QStringLiteral("--chdir"), dir,
-                                QStringLiteral("--"), engine}
-                  + arguments;
-        program = bwrap;
-        filterFD = sandbox::addSyscallFilter(arguments);
-    } else {
-        // Refused rather than run bare: \input would read any file of the
-        // user's into the PDF.
+    const QStringList arguments = {QStringLiteral("-no-shell-escape"), QStringLiteral("-interaction=nonstopmode"),
+                                   QStringLiteral("-halt-on-error"), QStringLiteral("-jobname=") + jobName,
+                                   inputPath};
+    // The engine sees the system and its own directory and nothing else: no
+    // home, no other drive, no socket, no network. -no-shell-escape stops
+    // \write18, but \input can still read any file the user can and set it
+    // into the PDF - so without bubblewrap the run is refused, not bare.
+    const sandbox::Command wrapped = sandbox::bubblewrapCommand(work.path(), engine, arguments);
+    if (wrapped.program.isEmpty()) {
         result.error = QStringLiteral("TeX runs only inside bubblewrap's sandbox; install bubblewrap");
         return result;
     }
+    const int filterFD = wrapped.filterFD;
     // A memory and CPU ceiling in the child, applied between fork and exec -
     // a runaway or hostile document is capped before it can touch the
     // machine noteAppC runs on, not after.
@@ -160,7 +138,7 @@ TexCompiler::Result TexCompiler::compile(const QString &texPath)
         setrlimit(RLIMIT_CPU, &cpu);
         sandbox::keepInChild(filterFD);
     });
-    process.start(program, arguments);
+    process.start(wrapped.program, wrapped.arguments);
     // The fork has happened; bwrap holds its own copy of the filter.
     if (filterFD >= 0)
         close(filterFD);

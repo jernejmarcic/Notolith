@@ -87,6 +87,12 @@ target_link_libraries(test_mermaid PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME mermaid COMMAND test_mermaid)
 set_tests_properties(mermaid PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+# PlantUML, TikZ and Graphviz fences with the real tools in their sandbox (skipped where a tool is missing).
+add_executable(test_diagrams test_diagrams.cpp)
+target_link_libraries(test_diagrams PRIVATE noteAppC_ui noteAppC_sandbox Qt6::Test GTest::gtest)
+add_test(NAME diagrams COMMAND test_diagrams)
+set_tests_properties(diagrams PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_demo test_demo.cpp)
 target_link_libraries(test_demo PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 target_compile_definitions(test_demo PRIVATE NOTEAPPC_DEMO_VAULT_PATH="${CMAKE_SOURCE_DIR}/demo"

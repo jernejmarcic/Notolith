@@ -1312,27 +1312,38 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.mediaEmbeds = featureOn("media-embeds");
     features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);
-    // Mermaid: the renderer is the switch. Off, nothing is registered; on, nothing is looked up or
-    // started until a fence is laid out. Handing it over resets an editor's code blocks, so only
-    // when the setting or the tool changed since this editor last had it.
-    const QString mermaidKey = m_settings.boolean(QStringLiteral("render.mermaid"))
-                                   ? QLatin1Char('1') + m_settings.text(QStringLiteral("render.mermaidTool"))
-                                   : QString();
-    if (mermaidKey != m_mermaidKey) {
-        m_mermaidKey = mermaidKey;
-        m_mermaidRenderer = mermaidKey.isEmpty()
-                                ? MarkdownEditor::CodeBlockRenderer()
-                                : mermaidRenderer(mermaidKey.mid(1), [this] { return m_theme; });
-    }
-    if (editor->property("mermaidKey").toString() != mermaidKey) {
-        editor->setProperty("mermaidKey", mermaidKey);
-        if (!m_mermaidRenderer) {
-            editor->setCodeBlockRenderer({QStringLiteral("mermaid")}, nullptr);
+    // Diagrams (Mermaid, PlantUML, TikZ, Graphviz): the renderer is the switch. Off, nothing is registered; on,
+    // nothing is looked up or started until a fence is laid out. Handing it over resets an editor's code
+    // blocks, so only when the setting or the tool changed since this editor last had it.
+    static const struct {
+        DiagramKind kind;
+        const char *on;
+        const char *tool;
+    } diagrams[] = {{DiagramKind::Mermaid, "render.mermaid", "render.mermaidTool"},
+                    {DiagramKind::PlantUML, "render.plantuml", "render.plantumlTool"},
+                    {DiagramKind::TikZ, "render.tikz", "render.latexTool"},
+                    {DiagramKind::Graphviz, "render.graphviz", "render.dotTool"}};
+    for (const auto &diagram : diagrams) {
+        const int index = int(diagram.kind);
+        const QString key = m_settings.boolean(QLatin1String(diagram.on))
+                                ? QLatin1Char('1') + m_settings.text(QLatin1String(diagram.tool))
+                                : QString();
+        if (key != m_diagramKey[index]) {
+            m_diagramKey[index] = key;
+            m_diagramRenderer[index] = key.isEmpty() ? MarkdownEditor::CodeBlockRenderer()
+                                                     : diagramRenderer(diagram.kind, key.mid(1), [this] { return m_theme; });
+        }
+        const QString property = QStringLiteral("diagramKey%1").arg(index);
+        if (editor->property(property.toUtf8().constData()).toString() == key)
+            continue;
+        editor->setProperty(property.toUtf8().constData(), key);
+        if (!m_diagramRenderer[index]) {
+            editor->setCodeBlockRenderer(diagramLanguages(diagram.kind), nullptr);
         } else {
             // The source goes to a tool that writes it to a temporary file and a cache: not for an encrypted note.
             editor->setCodeBlockRenderer(
-                {QStringLiteral("mermaid")},
-                [this, editor, renderer = m_mermaidRenderer](
+                diagramLanguages(diagram.kind),
+                [this, editor, renderer = m_diagramRenderer[index]](
                     const QString &language, const QString &source, int width, const QString &theme,
                     const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
                     if (showsEncryptedNote(editor)) {

@@ -590,22 +590,28 @@ private:
         return nullptr;
     }
 
-    /// The diagram the editor already made for a ```mermaid fence's source,
-    /// inlined, or empty (the fence is then an ordinary code block, its
-    /// source in a <pre>). Publishing never starts mmdr. The SVG's ids are
-    /// prefixed per diagram: mmdr numbers its markers from 0 in every file,
-    /// and ids are page-wide once inlined.
-    QString cachedDiagram(const QString &source)
+    /// The diagram the editor already made for a fence's source (mermaid,
+    /// plantuml, tikz, dot), inlined, or empty (the fence is then an ordinary
+    /// code block, its source in a <pre>). Publishing never starts a tool.
+    /// The SVG's ids are prefixed per diagram: mmdr numbers its markers from
+    /// 0 in every file, and ids are page-wide once inlined.
+    QString cachedDiagram(noteAppC::DiagramKind kind, const QString &source)
     {
-        QByteArray bytes = noteAppC::mermaidCachedSVG(source, m_env.themeDark);
-        QString svg = QString::fromUtf8(bytes).trimmed();
-        if (!svg.startsWith(QLatin1String("<svg")) || svg.contains(QLatin1String("<script"), Qt::CaseInsensitive)
-            || svg.contains(QLatin1String("<foreignObject"), Qt::CaseInsensitive))
+        QByteArray bytes = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
+        QString svg = QString::fromUtf8(bytes);
+        const qsizetype start = svg.indexOf(QLatin1String("<svg")); // dot and dvisvgm start with an XML prolog
+        svg = start < 0 ? QString() : svg.mid(start).trimmed();
+        if (svg.isEmpty() || svg.contains(QLatin1String("<script"), Qt::CaseInsensitive)
+            || svg.contains(QLatin1String("<foreignObject"), Qt::CaseInsensitive)
+            || svg.contains(QLatin1String("javascript:"), Qt::CaseInsensitive))
             return QString();
         const QString prefix = QStringLiteral("mm%1-").arg(++m_diagramCount);
-        svg.replace(QLatin1String(" id=\""), QStringLiteral(" id=\"") + prefix);
+        for (const QChar quote : {QLatin1Char('"'), QLatin1Char('\'')}) { // dvisvgm quotes with '
+            const QString q(quote);
+            svg.replace(QStringLiteral(" id=") + q, QStringLiteral(" id=") + q + prefix);
+            svg.replace(QStringLiteral("href=") + q + QStringLiteral("#"), QStringLiteral("href=") + q + QStringLiteral("#") + prefix);
+        }
         svg.replace(QLatin1String("url(#"), QStringLiteral("url(#") + prefix);
-        svg.replace(QLatin1String("href=\"#"), QStringLiteral("href=\"#") + prefix);
         return QStringLiteral("<div class=\"mermaid-diagram\">") + svg + QStringLiteral("</div>\n");
     }
 
@@ -646,8 +652,11 @@ private:
         const QString text = stripHiddenRanges(fence.content, note);
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
-        if (lang.compare(QLatin1String("mermaid"), Qt::CaseInsensitive) == 0) {
-            const QString diagram = cachedDiagram(note.text.mid(fence.content.start, fence.content.length()));
+        for (const noteAppC::DiagramKind kind : {noteAppC::DiagramKind::Mermaid, noteAppC::DiagramKind::PlantUML,
+                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz}) {
+            if (!noteAppC::diagramLanguages(kind).contains(lang, Qt::CaseInsensitive))
+                continue;
+            const QString diagram = cachedDiagram(kind, note.text.mid(fence.content.start, fence.content.length()));
             if (!diagram.isEmpty())
                 return diagram;
         }

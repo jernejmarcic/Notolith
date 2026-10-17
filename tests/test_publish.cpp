@@ -356,6 +356,43 @@ TEST(PublishTest, AMermaidFenceBecomesTheCachedSVGAndNeverStartsTheTool)
     EXPECT_FALSE(QFile::exists(ran)) << "publish started mmdr";
 }
 
+// dot and dvisvgm start their SVG with an XML prolog and dvisvgm quotes with ': the prolog is
+// dropped and the ids are still made page-unique; a tikz fence the editor never drew stays its listing.
+TEST(PublishTest, DotAndTikZFencesBecomeTheirCachedSVGs)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    const Theme dark = Theme::builtin(Theme::Mode::Dark);
+    using noteAppC::DiagramKind;
+    ASSERT_TRUE(mermaidCacheStore(
+        noteAppC::diagramCachePath(DiagramKind::Graphviz, QStringLiteral("digraph{a->b}"), noteAppC::diagramConfig(DiagramKind::Graphviz, dark)),
+        "<?xml version=\"1.0\"?>\n<!DOCTYPE svg>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><g id=\"graph0\"><text>DOTMARK</text></g></svg>"));
+    ASSERT_TRUE(mermaidCacheStore(
+        noteAppC::diagramCachePath(DiagramKind::TikZ, QStringLiteral("\\draw (0,0);"), noteAppC::diagramConfig(DiagramKind::TikZ, dark)),
+        "<?xml version='1.0'?>\n<svg xmlns='http://www.w3.org/2000/svg'><defs><path id='g0-65' d='M0 0'/></defs>"
+        "<use xlink:href='#g0-65'/></svg>"));
+    TestSite site({
+        {QStringLiteral("Note.md"), "```dot\ndigraph{a->b}\n```\n\n```tikz\n\\draw (0,0);\n```\n\n```plantuml\nNEVERDRAWN -> B\n```\n"},
+    });
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+
+    EXPECT_TRUE(page.contains(QStringLiteral("<div class=\"mermaid-diagram\"><svg"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QStringLiteral("DOTMARK")));
+    EXPECT_FALSE(page.contains(QStringLiteral("<?xml")));
+    EXPECT_TRUE(page.contains(QStringLiteral("id=\"mm1-graph0\"")));
+    EXPECT_TRUE(page.contains(QStringLiteral("id='mm2-g0-65'")));
+    EXPECT_TRUE(page.contains(QStringLiteral("href='#mm2-g0-65'")));
+    EXPECT_TRUE(page.contains(QStringLiteral("NEVERDRAWN")));
+    EXPECT_TRUE(page.contains(QStringLiteral("language-plantuml")));
+}
+
 TEST(PublishTest, ImageEmbedCopiesOnlyReferencedAttachments)
 {
     TestSite site({

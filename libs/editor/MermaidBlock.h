@@ -5,6 +5,7 @@
 #include <QString>
 
 #include "MarkdownEditor.h"
+#include "MermaidCache.h"
 #include "Theme.h"
 
 namespace noteAppC {
@@ -38,11 +39,30 @@ namespace noteAppC {
 /// out, to colour the diagram with.
 MarkdownEditor::CodeBlockRenderer mermaidRenderer(const QString &tool, std::function<Theme()> theme);
 
+/// The same for the other kinds (MermaidCache.h's DiagramKind), through the
+/// same machinery (a pool thread, the tool resolved by the first job and
+/// remembered, memo, disk cache, source and one dim hint on a failure);
+/// mermaidRenderer is the Mermaid case. What differs is the tool and how it
+/// is run. PlantUML, TikZ and Graphviz run in bubblewrap's sandbox with the
+/// syscall filter (sandbox/Bubblewrap.h): no network, only a temporary
+/// directory writable, nothing of the user's home visible, and never
+/// without it - no bwrap, no diagram, a hint. `tool` is the setting (a name
+/// on PATH or a path; for TikZ the `latex` that dvisvgm sits next to or on
+/// PATH), so it has to be something under /usr, which is all the sandbox sees.
+/// TikZ takes TikZJax's block (`\usepackage` lines, `\begin{document}...
+/// \end{document}`) or a bare tikzpicture; the theme's colours reach
+/// PlantUML (--dark-mode), Graphviz (default colours, the user's own
+/// attributes win) and TikZ (black becomes the text colour on a dark theme).
+MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QString &tool, std::function<Theme()> theme);
+
 /// A renderer that only reads MermaidCache.h's directory and answers at once
 /// (the editor still posts the answer, so the caller processes events): the
 /// diagram if one was made for this source, in `theme`'s colours or any, else
 /// an empty answer, which leaves the fence as its listing. For PDF export,
 /// which must not start a tool.
 MarkdownEditor::CodeBlockRenderer mermaidCachedRenderer(Theme theme);
+
+/// mermaidCachedRenderer for any kind.
+MarkdownEditor::CodeBlockRenderer diagramCachedRenderer(DiagramKind kind, Theme theme);
 
 } // namespace noteAppC

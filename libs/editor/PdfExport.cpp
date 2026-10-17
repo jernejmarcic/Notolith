@@ -55,9 +55,10 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.setReadableLineLength(false);
     editor.setLinkResolver(std::move(resolver));
     editor.setMode(Mode::Reading);
-    // A mermaid fence is the diagram the editor already made (never the tool: an export
-    // waits for nothing); one it never made stays its listing.
-    editor.setCodeBlockRenderer({QStringLiteral("mermaid")}, mermaidCachedRenderer(Theme::builtin(Theme::Mode::Light)));
+    // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the
+    // tool: an export waits for nothing); one it never made stays its listing.
+    for (const DiagramKind kind : {DiagramKind::Mermaid, DiagramKind::PlantUML, DiagramKind::TikZ, DiagramKind::Graphviz})
+        editor.setCodeBlockRenderer(diagramLanguages(kind), diagramCachedRenderer(kind, Theme::builtin(Theme::Mode::Light)));
     const QSize viewport(int(page.width() / scale), int(page.height() / scale));
     editor.resize(viewport);
     editor.setNoteText(printed);

@@ -91,6 +91,14 @@ const QVariantMap &defaults()
         // ```mermaid fence is on screen; the tool is a name looked up on PATH and in the cargo bin directories, or a path.
         {QStringLiteral("render.mermaid"), true},
         {QStringLiteral("render.mermaidTool"), QStringLiteral("mmdr")},
+        // PlantUML, TikZ and Graphviz fences the same way, each tool run inside bubblewrap's sandbox
+        // (so under /usr). TikZ is latex then dvisvgm (found next to it, or on PATH).
+        {QStringLiteral("render.plantuml"), true},
+        {QStringLiteral("render.plantumlTool"), QStringLiteral("plantuml")},
+        {QStringLiteral("render.tikz"), true},
+        {QStringLiteral("render.latexTool"), QStringLiteral("latex")},
+        {QStringLiteral("render.graphviz"), true},
+        {QStringLiteral("render.dotTool"), QStringLiteral("dot")},
     {QStringLiteral("links.useWikilinks"), true},
         {QStringLiteral("links.autoUpdate"), true},
 
