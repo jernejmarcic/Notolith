@@ -913,7 +913,7 @@ TEST(WasmTierTest, WithoutAModuleOrWithoutWasmtimeABlockIsRefused)
     EXPECT_TRUE(missing->kernelError.contains(QStringLiteral("wasmtime")));
 }
 
-TEST(WasmTierTest, WithoutBubblewrapTheWasmTierRunsWasmtimeAlone)
+TEST(WasmTierTest, WithoutBubblewrapTheWasmTierRefusesAsTierOneDoes)
 {
     const QString wasmtime = QStandardPaths::findExecutable(QStringLiteral("wasmtime"));
     if (wasmtime.isEmpty())
@@ -924,16 +924,15 @@ TEST(WasmTierTest, WithoutBubblewrapTheWasmTierRunsWasmtimeAlone)
     ASSERT_TRUE(QFile::link(wasmtime, bin.filePath(QStringLiteral("wasmtime"))));
     const QByteArray path = qgetenv("PATH");
     qputenv("PATH", QFile::encodeName(bin.path()));
-    const auto alone = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
-    // Tier 1 in the same PATH still refuses rather than running unsandboxed.
-    const auto refused = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat));
+    // Never wasmtime alone: no seccomp, no network namespace.
+    const auto wasm = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
+    const auto tierOne = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat));
     qputenv("PATH", path);
-    ASSERT_TRUE(alone.has_value());
-    EXPECT_TRUE(alone->ok) << alone->kernelError.toStdString();
-    EXPECT_EQ(textOf(*alone), QStringLiteral("hi from wasm\n"));
-    ASSERT_TRUE(refused.has_value());
-    EXPECT_FALSE(refused->ok);
-    EXPECT_TRUE(refused->kernelError.contains(QStringLiteral("bubblewrap"))) << refused->kernelError.toStdString();
+    for (const auto &refused : {wasm, tierOne}) {
+        ASSERT_TRUE(refused.has_value());
+        EXPECT_FALSE(refused->ok);
+        EXPECT_TRUE(refused->kernelError.contains(QStringLiteral("bubblewrap"))) << refused->kernelError.toStdString();
+    }
 }
 
 TEST(WasmTierTest, TheGuestSeesOnlyItsOwnDirectory)
@@ -1464,6 +1463,37 @@ TEST(IpynbTest, UnknownKeysSurviveAnEditAndTheLanguageComesFromTheKernelspec)
     const QJsonObject edited = merged.value(QStringLiteral("cells")).toArray().at(0).toObject();
     EXPECT_EQ(edited.value(QStringLiteral("future_key")).toString(), QStringLiteral("kept"));
     EXPECT_TRUE(joinedSource(edited).contains(QStringLiteral("Heading")));
+}
+
+TEST(IpynbTest, ACellsOwnSandboxLineChoosesTheKeyItsOutputIsSeededUnder)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    const auto cell = [](const char *source) {
+        return QJsonObject{{QStringLiteral("cell_type"), QStringLiteral("code")},
+                           {QStringLiteral("source"), QString::fromLatin1(source)},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("execution_count"), 1},
+                           {QStringLiteral("outputs"), QJsonArray{QJsonObject{{QStringLiteral("output_type"), QStringLiteral("stream")},
+                                                                              {QStringLiteral("name"), QStringLiteral("stdout")},
+                                                                              {QStringLiteral("text"), QStringLiteral("1\n")}}}}};
+    };
+    const QJsonObject root{{QStringLiteral("nbformat"), 4}, {QStringLiteral("nbformat_minor"), 5},
+                           {QStringLiteral("metadata"), QJsonObject{{QStringLiteral("language_info"),
+                                                                     QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                           {QStringLiteral("cells"), QJsonArray{cell("#| sandbox: wasm\nprint(1)"), cell("#| sandbox: host\nprint(2)")}}};
+    QString text;
+    ASSERT_TRUE(readIpynb(QJsonDocument(root).toJson(), &text));
+    const auto seeded = [](const QString &source, SandboxTier tier) {
+        return readNotebookCache(notebookCacheKey(QStringLiteral("python"), source, tier)).hasRun;
+    };
+    const QString wasm = QStringLiteral("#| sandbox: wasm\nprint(1)");
+    EXPECT_TRUE(seeded(wasm, SandboxTier::Wasm));
+    EXPECT_FALSE(seeded(wasm, SandboxTier::Bubblewrap));
+    // Host runs in tier 1 unless Settings allows it, so either key finds it.
+    const QString host = QStringLiteral("#| sandbox: host\nprint(2)");
+    EXPECT_TRUE(seeded(host, SandboxTier::Host));
+    EXPECT_TRUE(seeded(host, SandboxTier::Bubblewrap));
 }
 
 TEST(IpynbTest, StoredOutputsAreSeededWhereTheEditorLooksForThem)

@@ -285,10 +285,11 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         if (!isModule)
             wasmArgs << QStringLiteral("/cell/") + chosen.file;
         wrapCommand(SandboxTier::Bubblewrap, runtime, wasmArgs, sandbox, &program, &args, &used, &filterFD);
+        // No bubblewrap, no run, as in tier 1: WASI alone would leave a
+        // wasmtime bug with the user's files and network, and no seccomp.
         if (program.isEmpty()) {
-            // No bubblewrap: WASI is the sandbox (no files but /cell, no network).
-            program = runtime;
-            args = wasmArgs;
+            delete running;
+            return fail(tr("code runs only inside bubblewrap's sandbox; install bubblewrap"));
         }
         used = SandboxTier::Wasm;
     } else {

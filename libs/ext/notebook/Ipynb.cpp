@@ -378,8 +378,11 @@ QString ipynbMarkdown(const IpynbDocument &document)
 
 // Lazily (seedNotebookCache): decoding every stored PNG and writing it out at each read was 230 ms of a 350 ms
 // open for a notebook of 40 plots, on the GUI thread; now only the blocks laid out pay, when they look themselves up.
-void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier)
+void seedIpynbOutputs(const IpynbDocument &document)
 {
+    // Quarto's hash-pipe in any comment style: `#| sandbox: wasm`, `//| sandbox: host`.
+    static const QRegularExpression sandboxLine(QStringLiteral("^\\s*\\S{1,2}\\|\\s*sandbox\\s*:\\s*[\"']?(\\w+)"),
+                                                QRegularExpression::MultilineOption);
     for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
         const QJsonObject cell = value.toObject();
         if (cell.value(QStringLiteral("cell_type")).toString() != QLatin1String("code"))
@@ -393,7 +396,16 @@ void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier)
         QString source = joined(cell.value(QStringLiteral("source")));
         while (source.startsWith(QLatin1Char('\n')))
             source.remove(0, 1);
-        seedNotebookCache(notebookCacheKey(document.language, source, tier), [cell] { return resultOfCell(cell); });
+        // A host cell runs in tier 1 unless Settings allows the host, so it is
+        // looked up under either key; anything else the parser reads as tier 1.
+        const QString asked = sandboxLine.match(source).captured(1).toLower();
+        QList<SandboxTier> tiers = {SandboxTier::Bubblewrap};
+        if (asked == QLatin1String("wasm"))
+            tiers = {SandboxTier::Wasm};
+        else if (asked == QLatin1String("host"))
+            tiers << SandboxTier::Host;
+        for (const SandboxTier tier : std::as_const(tiers))
+            seedNotebookCache(notebookCacheKey(document.language, source, tier), [cell] { return resultOfCell(cell); });
     }
 }
 

@@ -144,9 +144,9 @@ settings.
 
 `#| sandbox: wasm` runs the block as a WebAssembly module under `wasmtime`
 (a CLI subprocess; install it) and is stricter than the default, so no
-setting gates it. When bubblewrap is there too, the whole `wasmtime` process
-runs inside the tier-1 bubblewrap and seccomp filter; without it, WASI alone
-is the sandbox. The module sees only the block's own directory, as `/cell`,
+setting gates it. The whole `wasmtime` process runs inside the tier-1
+bubblewrap and seccomp filter; without bubblewrap the block is refused, as in
+tier 1. The module sees only the block's own directory, as `/cell`,
 and has no network and 1 GiB of memory. The limits:
 
 - `wat` (and `wasm`) blocks are WebAssembly text and are the module

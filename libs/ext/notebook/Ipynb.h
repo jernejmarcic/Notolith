@@ -38,8 +38,9 @@ QString ipynbMarkdown(const IpynbDocument &document);
 
 /// Puts every code cell's stored outputs in the output cache, under the key the
 /// editor looks a block up with, so opening the note shows them. A cell that
-/// never ran has nothing to put.
-void seedIpynbOutputs(const IpynbDocument &document, SandboxTier tier = SandboxTier::Bubblewrap);
+/// never ran has nothing to put. The key follows the cell's own
+/// `#| sandbox:` line, as the editor's does.
+void seedIpynbOutputs(const IpynbDocument &document);
 
 /// parse + ipynbMarkdown + seedIpynbOutputs: what opening a notebook does.
 bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error = nullptr);
