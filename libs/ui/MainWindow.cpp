@@ -4211,10 +4211,9 @@ void MainWindow::openFromOtherInstance(const QString &argument)
     } else if (!target.filePath.isEmpty()) {
         openNote(target.filePath); // a tab in the open vault, loose files included
     }
-    if (isMinimized())
-        showNormal();
+    setWindowState(windowState() & ~Qt::WindowMinimized); // not showNormal(): that would un-maximize
     raise();
-    activateWindow(); // a Wayland compositor may only flag the window as wanting attention
+    activateWindow(); // on Wayland this needs the launcher's activation token, see SingleInstance
 }
 
 void MainWindow::paintEvent(QPaintEvent *event)

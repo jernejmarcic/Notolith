@@ -46,13 +46,12 @@ int main(int argc, char *argv[])
     const QStringList args = parser.positionalArguments();
     // One Notolith per user: a launch while one runs (a note opened from the
     // file manager) gives it the path and ends here.
-    const QString socketName = noteAppC::SingleInstance::defaultName();
-    if (noteAppC::SingleInstance::handOver(
-            socketName, args.isEmpty() ? QString() : QFileInfo(args.first()).absoluteFilePath()))
+    noteAppC::SingleInstance instance(noteAppC::SingleInstance::defaultName());
+    if (instance.handOver(args.isEmpty() ? QString() : QFileInfo(args.first()).absoluteFilePath()))
         return 0;
 
     noteAppC::MainWindow window;
-    noteAppC::SingleInstance instance(&window, socketName);
+    instance.serve(&window);
     const noteAppC::LaunchTarget target =
         args.isEmpty() ? noteAppC::LaunchTarget{} : noteAppC::resolveLaunchTarget(args.first());
 

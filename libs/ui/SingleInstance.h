@@ -1,6 +1,8 @@
 #pragma once
 
+#include <QByteArray>
 #include <QLocalServer>
+#include <QLockFile>
 #include <QObject>
 #include <QString>
 
@@ -14,8 +16,8 @@ class MainWindow;
 /// and autosaver on the same files.
 ///
 /// The first instance listens on a local socket in the user's runtime
-/// directory; the protocol is one line, the absolute path to open (empty for
-/// "just show yourself"), answered by one line, "ok".
+/// directory; the protocol is one line, "token<TAB>path" (path empty for "just
+/// show yourself"), answered by one line, "ok".
 class SingleInstance : public QObject {
     Q_OBJECT
 
@@ -25,18 +27,25 @@ public:
     /// runtime directory.
     static QString defaultName();
 
-    /// Gives `argument` to the instance listening on `name`. False when none
-    /// is - the common case, which costs one failed connect() - and the
-    /// caller starts up as usual.
-    static bool handOver(const QString &name, const QString &argument);
+    explicit SingleInstance(const QString &name);
 
-    /// Serves `window` on `name`, replacing a socket file left by a crash.
-    SingleInstance(MainWindow *window, const QString &name);
+    /// Gives `argument` to the instance on this name. True when one took it.
+    /// False means this process is the first: it holds the lock that keeps
+    /// two launches in the same moment from both becoming "first", and the
+    /// caller starts up and calls serve(). The common case costs a failed
+    /// connect() and one lock file. `token` is the launcher's
+    /// XDG_ACTIVATION_TOKEN, which lets the other window take focus.
+    bool handOver(const QString &argument, const QByteArray &token = qgetenv("XDG_ACTIVATION_TOKEN"));
+
+    /// Serves `window`: from here on, what other launches hand over opens in
+    /// it. Replaces a socket file left by a crash.
+    void serve(MainWindow *window);
 
     bool ok() const { return m_server.isListening(); }
 
 private:
-    MainWindow *m_window;
+    QString m_name;
+    QLockFile m_lock;
     QLocalServer m_server;
 };
 

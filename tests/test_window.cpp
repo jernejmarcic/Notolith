@@ -5178,58 +5178,99 @@ TEST_F(WindowTest, TheMoveCommandOffersVisibleFoldersAndMovesTheActiveNote)
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
 }
 
+namespace {
+
+/// A second launch, as its own process would make it: its own SingleInstance,
+/// asked on a thread because handOver() blocks and the window under test needs
+/// this one for its event loop.
+std::future<bool> secondLaunch(const QString &name, const QString &argument, const QByteArray &token = {})
+{
+    return std::async(std::launch::async, [=] {
+        SingleInstance launch(name);
+        return launch.handOver(argument, token);
+    });
+}
+
+bool ready(std::future<bool> &result)
+{
+    return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+}
+
+} // namespace
+
 // A second launch (a note opened from the file manager) hands its path to the
 // running window instead of starting another copy. The socket is the test's
 // own, never the one a running Notolith listens on.
 TEST_F(WindowTest, ASecondLaunchOpensItsNoteInTheRunningWindow)
 {
     const QString name = dir.filePath(QStringLiteral("instance.sock"));
-    EXPECT_FALSE(SingleInstance::handOver(name, QString())); // nobody there: start normally
-
     MainWindow window;
     window.openTarget(LaunchTarget{}); // startup over: the window has been painted
     window.openVault(dir.path());
     window.show();
     ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
-    SingleInstance instance(&window, name);
+    SingleInstance instance(name);
+    ASSERT_FALSE(instance.handOver(QString())); // nobody there: this one is first
+    instance.serve(&window);
     ASSERT_TRUE(instance.ok());
 
-    // The sender blocks on its socket, so it runs beside this event loop.
-    auto handed = std::async(std::launch::async,
-                             [&] { return SingleInstance::handOver(name, path(QStringLiteral("Projects/Crlf.md"))); });
+    auto handed = secondLaunch(name, path(QStringLiteral("Projects/Crlf.md")));
     auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
     ASSERT_NE(tabs, nullptr);
     WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Crlf")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
     EXPECT_TRUE(handed.get());
     EXPECT_EQ(tabs->count(), 1);
 
     // Same vault, another note: opened in the open window, the vault not reopened.
-    handed = std::async(std::launch::async,
-                        [&] { return SingleInstance::handOver(name, path(QStringLiteral("Welcome.md"))); });
+    handed = secondLaunch(name, path(QStringLiteral("Welcome.md")));
     WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Welcome")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
     EXPECT_TRUE(handed.get());
     EXPECT_EQ(tabs->count(), 1); // replaces the tab, as clicking a link does
-    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Welcome"));
 
-    // Nothing to open still answers, and the window stays as it was.
-    handed = std::async(std::launch::async, [&] { return SingleInstance::handOver(name, QString()); });
-    WAIT_TRUE(handed.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    // A note from outside the vault opens too, not the vault replaced by it.
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(elsewhere.isValid());
+    QFile loose(elsewhere.filePath(QStringLiteral("Loose.md")));
+    ASSERT_TRUE(loose.open(QIODevice::WriteOnly));
+    loose.write("# Loose\n");
+    loose.close();
+    handed = secondLaunch(name, loose.fileName());
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Loose")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
     EXPECT_TRUE(handed.get());
-    EXPECT_EQ(tabs->tabText(0), QStringLiteral("Welcome"));
+    EXPECT_FALSE(window.findChild<QWidget *>(QStringLiteral("sidebar"))->isHidden()); // still the vault
+
+    // The launcher's activation token reaches the window, where Qt's Wayland
+    // plugin picks it up for activateWindow(); focus itself needs a compositor.
+    qunsetenv("XDG_ACTIVATION_TOKEN");
+    handed = secondLaunch(name, QString(), "tok-123");
+    WAIT_EQ(qgetenv("XDG_ACTIVATION_TOKEN"), QByteArray("tok-123"), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    qunsetenv("XDG_ACTIVATION_TOKEN");
+    EXPECT_EQ(tabTexts(tabs).value(0), QStringLiteral("Loose")); // nothing to open: left as it was
 }
 
 // Handed a path before its first paint, the window must not let the open it
-// has queued for startup (the last vault) overwrite it.
-TEST_F(WindowTest, APathHandedOverDuringStartupIsOpenedByTheFirstPaint)
+// has queued for startup (the last vault) overwrite it - and two launches in
+// the same moment, the second arriving while the first is still building its
+// window, must end up as one window, not two.
+TEST_F(WindowTest, ALaunchDuringAnotherOnesStartupIsHandedOnceItListens)
 {
     const QString name = dir.filePath(QStringLiteral("early.sock"));
+    SingleInstance first(name);
+    ASSERT_FALSE(first.handOver(QString())); // first: holds the lock, not listening yet
+
+    auto handed = secondLaunch(name, path(QStringLiteral("Welcome.md")));
+    QTest::qWait(200); // it finds the lock held and waits rather than starting a window
+    EXPECT_FALSE(ready(handed));
+
     MainWindow window;
-    SingleInstance instance(&window, name);
-    ASSERT_TRUE(instance.ok());
+    first.serve(&window);
     window.openWhenShown(LaunchTarget{}); // what main() queues for a bare launch
-    auto handed = std::async(std::launch::async,
-                             [&] { return SingleInstance::handOver(name, path(QStringLiteral("Welcome.md"))); });
-    WAIT_TRUE(handed.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    WAIT_TRUE(ready(handed), 5000);
     EXPECT_TRUE(handed.get());
     window.show();
     auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
@@ -5251,6 +5292,8 @@ TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
     ASSERT_TRUE(QFileInfo::exists(name));
 
     MainWindow window;
-    SingleInstance instance(&window, name);
+    SingleInstance instance(name);
+    ASSERT_FALSE(instance.handOver(QString())); // nothing answers on a dead socket
+    instance.serve(&window);
     EXPECT_TRUE(instance.ok());
 }
