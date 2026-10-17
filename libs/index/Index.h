@@ -145,7 +145,8 @@ public:
     /// entries are left out, aliases() lists those.
     QStringList linkTargets() const;
     /// Every `aliases:` entry as {alias, note name}: the suggester offers it
-    /// as `[[Note|alias]]`.
+    /// as `[[Note|alias]]`. The note name is its basename, or its extensionless
+    /// vault path (`folder/Note`) when another note answers to that basename.
     QList<QPair<QString, QString>> aliases() const;
     /// Headings, or block ids, of the note at vault-relative `path`, in source
     /// order: what `[[Note#` and `[[Note#^` complete.

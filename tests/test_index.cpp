@@ -672,6 +672,29 @@ TEST_F(RenameLinksTest, MovingAFolderRewritesOnlyTheLinksThatLeaveIt)
               QByteArray("[in](a.md) ![](img/p.png) [out](../../Top.md)\n"));
 }
 
+// An alias is offered as [[Note|alias]]; with two notes of one name that Note
+// has to be the path, or the link goes to whichever resolves first.
+TEST_F(RenameLinksTest, AnAliasOfOneOfTwoSameNameNotesNamesItByPath)
+{
+    write(QStringLiteral("A/Dup.md"), "---\naliases: [First]\n---\n");
+    write(QStringLiteral("B/Dup.md"), "---\naliases: [Second, Dup]\n---\n");
+    write(QStringLiteral("Solo.md"), "---\naliases: [Lone]\n---\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    const QList<QPair<QString, QString>> aliases = index.aliases();
+    EXPECT_TRUE(aliases.contains({QStringLiteral("First"), QStringLiteral("A/Dup")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Second"), QStringLiteral("B/Dup")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Lone"), QStringLiteral("Solo")}));
+    // Each name the suggester would insert reaches the note it was offered for.
+    EXPECT_EQ(index.resolve(QStringLiteral("A/Dup")), QStringLiteral("A/Dup.md"));
+    EXPECT_EQ(index.resolve(QStringLiteral("B/Dup")), QStringLiteral("B/Dup.md"));
+    // An alias equal to its note's own name does not take that name out of the plain list.
+    EXPECT_EQ(index.linkTargets().count(QStringLiteral("Dup")), 1);
+}
+
 TEST_F(RenameLinksTest, FallsBackToAFullPathWhenTheNewBasenameIsAmbiguous)
 {
     write(QStringLiteral("Folder/Solo.md"), "# Solo\n");

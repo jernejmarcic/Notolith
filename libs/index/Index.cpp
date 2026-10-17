@@ -868,7 +868,7 @@ QStringList Index::linkTargets() const
     // plain list and shows only as the alias entry.
     QSet<QString> aliasNames;
     for (const auto &entry : aliases()) {
-        if (entry.first != entry.second)
+        if (entry.first != QFileInfo(entry.second).fileName())
             aliasNames.insert(entry.first);
     }
     QStringList names;
@@ -890,7 +890,13 @@ QList<QPair<QString, QString>> Index::aliases() const
                               "JOIN files ON files.id = props.file "
                               "WHERE lower(props.key) IN ('aliases', 'alias')"));
     while (query.next()) {
-        const QString note = QFileInfo(query.value(0).toString()).completeBaseName();
+        // The name a link to the note can use: its basename, or its path
+        // when another note answers to that basename (the rule a rename
+        // follows for the links it rewrites).
+        const QString path = query.value(0).toString();
+        const QString base = QFileInfo(path).completeBaseName();
+        const QString note = basenameStillUnique(base, path)
+                                 ? base : path.chopped(QFileInfo(path).suffix().size() + 1);
         // The parser's rule (Frontmatter.cpp): a plain string is a comma list.
         const bool list = query.value(1).toInt() == int(Property::Type::List);
         for (const QString &piece : query.value(2).toString().split(list ? QLatin1Char('\n') : QLatin1Char(','),

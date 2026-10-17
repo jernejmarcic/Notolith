@@ -374,7 +374,9 @@ in the text, not only at its start. Four more things complete, as in Obsidian:
   Obsidian's search over every block (`[[^^`) is not offered.
 - **Aliases.** A note's frontmatter `aliases:` appear in the name list as
   "alias -> Note"; picking one inserts `[[Note|alias]]`, which shows the alias
-  and links to the note. An alias is not also listed as a plain name.
+  and links to the note. When another note has the same name it inserts the
+  path (`[[folder/Note|alias]]`) so the link is not ambiguous. An alias is not
+  also listed as a plain name.
 - **Embeds** (`![[`) behave identically.
 
 Another note's headings or block ids come from the index, with one small query

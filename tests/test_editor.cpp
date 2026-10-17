@@ -569,6 +569,14 @@ TEST(MarkdownEditorTest, LinkCompletionOffersAnAliasAndInsertsItWithTheNote)
     // A plain name still inserts as itself, and an embed completes the same way.
     editor->setNoteText(QStringLiteral("\n"));
     editor->setCursorOffset(0);
+    editor->setLinkAliases({{QStringLiteral("Brainwaves"), QStringLiteral("Folder/Ideas")}});
+    QTest::keyClicks(editor.get(), QStringLiteral("[[Brain"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("Brainwaves -> Folder/Ideas")});
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("[[Folder/Ideas|Brainwaves]]\n"));
+
+    editor->setNoteText(QStringLiteral("\n"));
+    editor->setCursorOffset(0);
     QTest::keyClicks(editor.get(), QStringLiteral("![[Oth"));
     acceptLinkPopup(*editor);
     EXPECT_EQ(editor->noteText(), QStringLiteral("![[Other]]\n"));
