@@ -19,6 +19,7 @@
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
+#include <QHeaderView>
 #include <QHoverEvent>
 #include <QTreeView>
 #include <QFile>
@@ -4561,6 +4562,53 @@ TEST_F(WindowTest, F2RenamesThroughTheVaultSoLinksFollow)
     ASSERT_TRUE(QTest::qWaitFor([&] { return QFile::exists(path(QStringLiteral("Hello.md"))); }, 5000));
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
     EXPECT_EQ(readAll(path(QStringLiteral("Linker.md"))), QByteArray("See [[Hello]].\n"));
+}
+
+TEST_F(WindowTest, SidebarHeaderHasCollapseAllAndSortButtons)
+{
+    MainWindow window;
+    window.resize(1000, 700);
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = tree ? qobject_cast<QFileSystemModel *>(tree->model()) : nullptr;
+    ASSERT_NE(model, nullptr);
+    QPersistentModelIndex projects;
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            projects = model->index(path(QStringLiteral("Projects")));
+            return projects.isValid() && tree->visualRect(projects).isValid();
+        },
+        5000));
+    tree->expand(projects);
+    ASSERT_TRUE(tree->isExpanded(projects));
+
+    auto *collapse = window.findChild<QToolButton *>(QStringLiteral("sidebarCollapseButton"));
+    ASSERT_NE(collapse, nullptr);
+    collapse->click();
+    EXPECT_FALSE(tree->isExpanded(projects));
+
+    auto *sort = window.findChild<QToolButton *>(QStringLiteral("sidebarSortButton"));
+    auto *menu = window.findChild<QMenu *>(QStringLiteral("sidebarSortMenu"));
+    ASSERT_NE(sort, nullptr);
+    ASSERT_NE(menu, nullptr);
+    const auto trigger = [&](const QString &text) {
+        for (QAction *action : menu->actions()) {
+            if (action->text() == text) {
+                action->trigger();
+                return true;
+            }
+        }
+        return false;
+    };
+    ASSERT_TRUE(trigger(QStringLiteral("File name (Z to A)")));
+    EXPECT_EQ(tree->header()->sortIndicatorSection(), 0);
+    EXPECT_EQ(tree->header()->sortIndicatorOrder(), Qt::DescendingOrder);
+    ASSERT_TRUE(trigger(QStringLiteral("Modified time (old to new)")));
+    EXPECT_EQ(tree->header()->sortIndicatorSection(), 3);
+    EXPECT_EQ(tree->header()->sortIndicatorOrder(), Qt::AscendingOrder);
 }
 
 TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)

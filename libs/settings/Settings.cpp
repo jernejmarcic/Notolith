@@ -65,6 +65,7 @@ const QVariantMap &defaults()
         {QStringLiteral("files.newNoteFolder"), QString()},               // for "folder"
         {QStringLiteral("encryption.unlockAtStartup"), false}, // false: asked when an encrypted note opens
         {QStringLiteral("encryption.autoLockMinutes"), 15},
+        {QStringLiteral("files.sortOrder"), QStringLiteral("nameAsc")}, // nameAsc, nameDesc, modifiedDesc, modifiedAsc
         {QStringLiteral("files.confirmDelete"), true},
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
         {QStringLiteral("sync.serverURL"), QString()},

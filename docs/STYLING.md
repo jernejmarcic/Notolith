@@ -306,6 +306,10 @@ the gap on the left being lit up."
   `--nav-item-color-hover`, `--nav-item-background-hover/-active/-selected`,
   `--nav-collapse-icon-color` (and `-collapsed`), `--nav-indentation-guide-color`
   and `-width`, `--nav-file-tag-size/-color/-background`, `--nav-heading-color`.
+- **The header** has a sort menu (name A to Z / Z to A, modified new to old / old
+  to new; the choice is `files.sortOrder`, per vault) and Collapse all.
+  QFileSystemModel has no created-time column and does not keep folders first on
+  a modified-time sort, so there is no created order.
 - **Renaming** with F2 or the context menu opens an inline editor in the row
   (no extension shown). It never writes to the model: the new name goes through
   the vault, so links, history, plugins and open tabs follow, exactly as with

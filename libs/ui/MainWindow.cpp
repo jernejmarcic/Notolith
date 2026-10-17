@@ -28,6 +28,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QActionGroup>
+#include <QHeaderView>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -588,9 +589,49 @@ QWidget *MainWindow::buildSidebar()
                                         QStringLiteral("folder-plus"), tr("New folder"), 14);
     connect(newFolder, &QToolButton::clicked, this, [this] { newFolderIn(QString()); });
 
+    // Sorting. QFileSystemModel has no created-time column and does not keep
+    // folders first on a modified-time sort, so those two are not offered.
+    QToolButton *sortButton = iconButton(QStringLiteral("sidebarSortButton"),
+                                         QStringLiteral("arrow-up-down"), tr("Change sort order"), 14);
+    sortButton->setPopupMode(QToolButton::InstantPopup);
+    auto *sortMenu = new QMenu(sortButton);
+    sortMenu->setObjectName(QStringLiteral("sidebarSortMenu"));
+    auto *sortGroup = new QActionGroup(sortMenu);
+    static const struct {
+        const char *key;
+        const char *label;
+        int column;
+        Qt::SortOrder order;
+    } sortOrders[] = {
+        {"nameAsc", QT_TR_NOOP("File name (A to Z)"), 0, Qt::AscendingOrder},
+        {"nameDesc", QT_TR_NOOP("File name (Z to A)"), 0, Qt::DescendingOrder},
+        {"modifiedDesc", QT_TR_NOOP("Modified time (new to old)"), 3, Qt::DescendingOrder},
+        {"modifiedAsc", QT_TR_NOOP("Modified time (old to new)"), 3, Qt::AscendingOrder},
+    };
+    for (const auto &entry : sortOrders) {
+        QAction *action = sortMenu->addAction(tr(entry.label));
+        action->setCheckable(true);
+        action->setData(QLatin1String(entry.key));
+        action->setProperty("column", entry.column);
+        action->setProperty("order", int(entry.order));
+        sortGroup->addAction(action);
+        connect(action, &QAction::triggered, this, [this, entry] {
+            m_tree->sortByColumn(entry.column, entry.order);
+            m_settings.setValue(QStringLiteral("files.sortOrder"), QLatin1String(entry.key));
+            m_settings.save();
+        });
+    }
+    sortButton->setMenu(sortMenu);
+
+    QToolButton *collapseAll = iconButton(QStringLiteral("sidebarCollapseButton"),
+                                          QStringLiteral("chevrons-down-up"), tr("Collapse all"), 14);
+    connect(collapseAll, &QToolButton::clicked, this, [this] { m_tree->collapseAll(); });
+
     headerLayout->addWidget(filesLabel, 1);
     headerLayout->addWidget(newNote);
     headerLayout->addWidget(newFolder);
+    headerLayout->addWidget(sortButton);
+    headerLayout->addWidget(collapseAll);
 
     m_files = new QFileSystemModel(this);
     m_files->setFilter(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot);
@@ -2740,6 +2781,20 @@ void MainWindow::applySettings()
     // Every switch on the settings page comes here, and restyling the window
     // and relaying out every open note was most of it - 17 ms with a 1 MB
     // note open - so that waits for the theme itself to change.
+    // The sidebar's sort order, as the settings file has it (per vault).
+    if (auto *sortMenu = m_sidebar->findChild<QMenu *>(QStringLiteral("sidebarSortMenu"))) {
+        const QString key = m_settings.text(QStringLiteral("files.sortOrder"));
+        for (QAction *action : sortMenu->actions()) {
+            if (action->data().toString() != key)
+                continue;
+            action->setChecked(true);
+            const int column = action->property("column").toInt();
+            const auto order = Qt::SortOrder(action->property("order").toInt());
+            if (m_tree->header()->sortIndicatorSection() != column
+                || m_tree->header()->sortIndicatorOrder() != order)
+                m_tree->sortByColumn(column, order);
+        }
+    }
     const Theme theme = themeFromSettings();
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
