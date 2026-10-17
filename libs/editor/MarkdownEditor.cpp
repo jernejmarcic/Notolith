@@ -1522,7 +1522,7 @@ void MarkdownEditor::pasteClipboard(bool plain)
         insertMimeData(QApplication::clipboard()->mimeData());
 }
 
-std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset)
+std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset, const QPoint &anchor)
 {
     auto menu = std::make_unique<QMenu>(this);
     menu->setObjectName(QStringLiteral("editorContextMenu"));
@@ -1610,7 +1610,9 @@ std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset)
             gap();
         if (m_contextActions.lookup) {
             connect(menu->addAction(tr("Look up \"%1\"").arg(label)), &QAction::triggered, this,
-                    [this, target] { emit lookupRequested(target, QCursor::pos()); });
+                    [this, target, anchor] {
+                        emit lookupRequested(target, anchor.isNull() ? QCursor::pos() : anchor);
+                    });
         }
         if (m_contextActions.vaultSearch) {
             connect(menu->addAction(tr("Search for \"%1\"").arg(label)), &QAction::triggered, this,
@@ -1644,11 +1646,13 @@ std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset)
 void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
 {
     const QPoint point = viewport()->mapFrom(this, event->pos());
-    const qsizetype offset = offsetAt(point);
+    // The menu key acts on the caret itself, not on the point Qt guessed for it.
+    const qsizetype offset = event->reason() == QContextMenuEvent::Keyboard ? m_cursor : offsetAt(point);
     // A click outside the selection moves the caret there, inside keeps it.
     if (const Range chosen = selection(); offset < chosen.start || offset > chosen.end)
         setCursorOffset(offset);
-    if (const auto menu = contextMenuAt(offset))
+    // The menu key opens it at the caret: the popover goes there, not to the mouse.
+    if (const auto menu = contextMenuAt(offset, event->globalPos()))
         menu->exec(event->globalPos());
 }
 
@@ -4691,6 +4695,14 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         const QPoint global = QCursor::pos();
         updateLinkHover(viewport()->mapFromGlobal(global), true, global);
     }
+#ifndef Q_OS_WIN // Windows turns Shift+F10 into the menu event itself
+    if (event->key() == Qt::Key_F10 && event->modifiers() == Qt::ShiftModifier) {
+        const QPoint caret = viewport()->mapTo(this, caretRect().center().toPoint());
+        QContextMenuEvent menuEvent(QContextMenuEvent::Keyboard, caret, mapToGlobal(caret));
+        contextMenuEvent(&menuEvent);
+        return;
+    }
+#endif
     // Ctrl+Space and Shift+Tab in a code block with a running kernel, and the
     // popups they open (NotebookComplete.cpp).
     if (m_notebookIntrospector && handleNotebookIntrospectKey(event))

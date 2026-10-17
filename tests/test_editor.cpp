@@ -5054,6 +5054,54 @@ TEST(ContextMenuTest, CutCopyAndPasteWork)
     EXPECT_FALSE(menuAction(*menu, QStringLiteral("Copy"))->isEnabled());
 }
 
+/// Runs `open` (which blocks in the context menu's exec) and, once the menu is
+/// up, triggers its "Look up" item, which closes it. False if no menu came.
+bool openMenuAndLookUp(const std::function<void()> &open)
+{
+    bool found = false;
+    QTimer::singleShot(100, [&found] {
+        for (QWidget *top : QApplication::topLevelWidgets()) {
+            if (top->objectName() != QLatin1String("editorContextMenu") || !top->isVisible())
+                continue;
+            if (QAction *look = menuAction(*static_cast<QMenu *>(top), QStringLiteral("Look up"))) {
+                found = true;
+                look->trigger();
+            }
+            top->close();
+        }
+    });
+    open();
+    return found;
+}
+
+TEST(ContextMenuTest, LookUpFromTheKeyboardAnchorsAtTheMenuNotTheMouse)
+{
+    auto editor = editorWith(QStringLiteral("good words here\n"));
+    editor->move(300, 200);
+    editor->setContextActions({false, true, {}});
+    editor->setCursorOffset(7); // inside "words"
+    QSignalSpy lookup(editor.get(), &MarkdownEditor::lookupRequested);
+
+    // The menu key: Qt sends a Keyboard event at the caret; the popover goes
+    // where the event says, whatever the mouse is doing.
+    const QPoint where(521, 223);
+    ASSERT_TRUE(openMenuAndLookUp([&] {
+        QContextMenuEvent event(QContextMenuEvent::Keyboard, QPoint(40, 20), where);
+        QCoreApplication::sendEvent(editor.get(), &event);
+    }));
+    ASSERT_EQ(lookup.size(), 1);
+    EXPECT_EQ(lookup.first().at(1).toPoint(), where);
+
+    // Shift+F10 does the same from the caret, on platforms that do not.
+    lookup.clear();
+    ASSERT_TRUE(openMenuAndLookUp([&] { QTest::keyClick(editor.get(), Qt::Key_F10, Qt::ShiftModifier); }));
+    ASSERT_EQ(lookup.size(), 1);
+    EXPECT_EQ(lookup.first().at(0).toString(), QStringLiteral("words")) << "the word at the caret";
+    const QPoint anchor = lookup.first().at(1).toPoint();
+    EXPECT_TRUE(QRect(editor->mapToGlobal(QPoint(0, 0)), editor->size()).contains(anchor))
+        << anchor.x() << "," << anchor.y();
+}
+
 TEST(ContextMenuTest, LookUpAndSearchFollowTheContextActions)
 {
     const QString note = QStringLiteral("good words here\n");

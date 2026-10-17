@@ -165,6 +165,42 @@ TEST(DictClientTest, AllServersDownReportsOffline)
     EXPECT_LT(elapsed.elapsed(), 500);
 }
 
+TEST(DictClientTest, ASilentServerTimesOutAndFallsThrough)
+{
+    // Accepts the connection and never says a word: the connected-but-dead path.
+    QTcpServer silent;
+    ASSERT_TRUE(silent.listen(QHostAddress::LocalHost, 0));
+    std::vector<QTcpSocket *> held;
+    QObject::connect(&silent, &QTcpServer::newConnection, &silent,
+                     [&] { held.push_back(silent.nextPendingConnection()); });
+
+    FakeServer fake;
+    DictClient client;
+    client.setTimeouts(300, 300);
+    client.setServers({{QStringLiteral("127.0.0.1"), silent.serverPort()}, fake.server()});
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const auto result = define(client, QStringLiteral("hello"));
+    EXPECT_TRUE(result.error.isEmpty()) << result.error.toStdString();
+    EXPECT_EQ(held.size(), size_t(1));
+    EXPECT_LT(elapsed.elapsed(), 1000);
+
+    client.setServers({{QStringLiteral("127.0.0.1"), silent.serverPort()}});
+    const auto alone = define(client, QStringLiteral("hello"));
+    EXPECT_TRUE(alone.error.contains(QStringLiteral("timed out"))) << alone.error.toStdString();
+}
+
+TEST(DictClientTest, AnEndlessReplyIsCutOff)
+{
+    // 2 MiB of one "definition" that never ends: well past what an entry is.
+    FakeServer fake("151 \"hello\" wn \"x\"\r\n" + QByteArray(2 << 20, 'a'));
+    DictClient client;
+    client.setServers({fake.server()});
+    const auto result = define(client, QStringLiteral("hello"));
+    EXPECT_TRUE(result.error.contains(QStringLiteral("reply too long"))) << result.error.toStdString();
+    EXPECT_TRUE(result.definitions.isEmpty());
+}
+
 TEST(DictClientTest, ANewLookupReplacesAnOldOne)
 {
     FakeServer fake;

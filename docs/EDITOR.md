@@ -285,7 +285,9 @@ every database it has - on dict.org that includes WordNet (definitions and
 `[syn: ...]`) and a thesaurus. Servers come from the "Dictionary server"
 setting (`lookup.server`, `host` or `host:port`), else `~/.dictrc`, then
 `/etc/dict/dict.conf`, tried in order; a refused one costs under a
-millisecond, a dead one 1.5 s.
+millisecond, a host that never answers the connection 1.5 s, one that accepts
+and then says nothing (or never finishes) 4 s. A reply over 1 MiB is dropped
+as not being a dictionary.
 
 Nothing is sent on a right click. Only when "Look up" is chosen, a TCP
 connection to port 2628 of the first server that answers carries exactly
@@ -295,6 +297,8 @@ localhost, and when `dictd` is not running, dict.org over the internet. To stay
 offline install `dictd` with a database (`dict-gcide`, `dict-wn`) and enable
 it. The popover (a second `PagePreview`, `lookupPopover`) says "Looking up..."
 at once, fills when the answer comes, and goes with Escape or a click outside.
+It opens beside where the menu did: the pointer for a right click, the caret
+for the menu key or Shift+F10 (not on Windows, where Qt sends that itself).
 
 Switches: Settings > Core plugins > "Look up words" (`plugins.wordLookup`, on;
 off, no item, no popover and no client are built), "Search" for "Search

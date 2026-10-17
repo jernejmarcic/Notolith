@@ -11,8 +11,7 @@ namespace noteAppC {
 
 namespace {
 
-constexpr int connectTimeout = 1500; // ms: a refused port answers at once, a dead host never does
-constexpr int readTimeout = 4000;
+constexpr qsizetype maxReply = 1 << 20; // a dictionary entry is kilobytes; a server streaming more is not one
 
 QByteArray quoted(const QString &word)
 {
@@ -193,13 +192,17 @@ void DictClient::tryServer(int index)
     }
 
     m_socket = new QTcpSocket(this);
-    connect(m_socket, &QTcpSocket::connected, this, [this] { m_timer.start(readTimeout); });
+    connect(m_socket, &QTcpSocket::connected, this, [this] { m_timer.start(m_readTimeout); });
     connect(m_socket, &QTcpSocket::errorOccurred, this, [this] {
         if (m_socket)
             failServer(m_socket->errorString());
     });
     connect(m_socket, &QTcpSocket::readyRead, this, [this] {
         m_reply += m_socket->readAll();
+        if (m_reply.size() > maxReply) {
+            failServer(tr("reply too long"));
+            return;
+        }
         if (!m_sent) {
             const qsizetype end = m_reply.indexOf('\n');
             if (end < 0)
@@ -232,7 +235,7 @@ void DictClient::tryServer(int index)
         }
     });
     connect(&m_timer, &QTimer::timeout, m_socket, [this] { failServer(tr("timed out")); });
-    m_timer.start(connectTimeout);
+    m_timer.start(m_connectTimeout);
     m_socket->connectToHost(m_servers.at(index).host, m_servers.at(index).port);
 }
 
