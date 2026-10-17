@@ -6,6 +6,7 @@
 #include <QFileSystemModel>
 #include <QHelpEvent>
 #include <QLineEdit>
+#include <QMimeData>
 #include <QPainter>
 #include <QSet>
 #include <QToolTip>
@@ -19,6 +20,8 @@ namespace {
 
 constexpr int kIconSize = 16;
 constexpr int kRowPadding = 6; // text starts this far inside the pill
+/// The mime format that marks a drag as this tree's own (see dragData()).
+constexpr const char *kDragMarker = "application/x-noteappc-file-tree";
 
 /// The bundled ids, read once: a name that is not one of these is a glyph.
 bool isBundledIcon(const QString &name)
@@ -252,17 +255,33 @@ void FileTree::startDrag(Qt::DropActions)
     // The base class deletes the dragged rows from the model when a drop
     // ends in a move, which for QFileSystemModel deletes the files. A drag
     // here only carries the paths; the window does the moving.
-    const QModelIndexList rows = selectionModel()->selectedRows(0);
-    if (rows.isEmpty())
+    QMimeData *data = dragData();
+    if (!data)
         return;
     auto *drag = new QDrag(this);
-    drag->setMimeData(model()->mimeData(rows));
+    drag->setMimeData(data);
     drag->exec(Qt::MoveAction, Qt::MoveAction);
+}
+
+QMimeData *FileTree::dragData() const
+{
+    const QModelIndexList rows = selectionModel()->selectedRows(0);
+    QMimeData *data = rows.isEmpty() ? nullptr : model()->mimeData(rows);
+    if (data)
+        data->setData(QLatin1String(kDragMarker), QByteArray::number(quintptr(this)));
+    return data;
+}
+
+// Not QDropEvent::source(): that is the platform's drag in progress, which a
+// test cannot start (the offscreen platform's drag ends at once).
+bool FileTree::isOwnDrag(const QMimeData *data) const
+{
+    return data && data->data(QLatin1String(kDragMarker)) == QByteArray::number(quintptr(this));
 }
 
 void FileTree::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (event->source() == this)
+    if (isOwnDrag(event->mimeData()))
         event->acceptProposedAction();
     else
         event->ignore();
@@ -273,7 +292,7 @@ void FileTree::dragMoveEvent(QDragMoveEvent *event)
     // The base keeps the drop indicator, auto-scroll and hover-expand going;
     // whether this spot takes the drop is decided here.
     QTreeView::dragMoveEvent(event);
-    if (event->source() == this && !dropFolderAt(event->position().toPoint()).isEmpty()) {
+    if (isOwnDrag(event->mimeData()) && !dropFolderAt(event->position().toPoint()).isEmpty()) {
         event->setDropAction(Qt::MoveAction);
         event->accept();
     } else {
@@ -288,7 +307,7 @@ void FileTree::dropEvent(QDropEvent *event)
     const QString folder = dropFolderAt(event->position().toPoint());
     const QModelIndex dragged = currentIndex();
     const auto *files = qobject_cast<const QFileSystemModel *>(model());
-    const bool ours = event->source() == this && files && dragged.isValid() && !folder.isEmpty();
+    const bool ours = isOwnDrag(event->mimeData()) && files && dragged.isValid() && !folder.isEmpty();
     if (ours) {
         event->setDropAction(Qt::MoveAction);
         event->accept();

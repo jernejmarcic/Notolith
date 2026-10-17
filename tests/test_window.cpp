@@ -16,6 +16,7 @@
 #include <QComboBox>
 #include <QPlainTextEdit>
 #include <QDir>
+#include <QDrag>
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFileSystemModel>
@@ -5318,6 +5319,114 @@ TEST_F(WindowTest, ADropInTheTreeMovesThroughTheWindowAndOnlyIfItStartedThere)
     emit tree->moveRequested(path(QStringLiteral("Src/Target.md")), path(QStringLiteral("Projects")));
     WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Target.md"))), 5000);
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+}
+
+// The drag events the tree gets, sent to its viewport with the mime data its
+// own startDrag would carry. (A real QDrag cannot run here: the offscreen
+// platform ends a drag at once, so QDropEvent::source() is never the tree.)
+TEST_F(WindowTest, TheTreesDragEventsAcceptOnlyItsOwnDragOntoARoomThatIsNotItself)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src/Sub")));
+    write(QStringLiteral("Src/Target.md"), "# Target\n");
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) >= 4, 5000);
+    tree->expand(model->index(path(QStringLiteral("Src"))));
+    WAIT_TRUE(model->index(path(QStringLiteral("Src/Sub"))).isValid() && tree->visualRect(model->index(path(QStringLiteral("Src/Sub")))).isValid(), 5000);
+
+    QSignalSpy moved(tree, &noteAppC::FileTree::moveRequested);
+    QWidget *viewport = tree->viewport();
+    const auto rowAt = [&](const QString &relative) {
+        return QPointF(tree->visualRect(model->index(path(relative))).center());
+    };
+    const auto select = [&](const QString &relative) {
+        const QModelIndex index = model->index(path(relative));
+        tree->setCurrentIndex(index);
+        tree->selectionModel()->select(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    };
+    // Whether a drag over `where` is accepted, and, then dropped there, what it asks for.
+    const auto over = [&](QMimeData *data, const QPointF &where) {
+        QDragEnterEvent enter(where.toPoint(), Qt::MoveAction, data, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &enter);
+        QDragMoveEvent move(where.toPoint(), Qt::MoveAction, data, Qt::LeftButton, Qt::NoModifier);
+        move.setAccepted(false);
+        QApplication::sendEvent(viewport, &move);
+        return enter.isAccepted() && move.isAccepted();
+    };
+    const auto drop = [&](QMimeData *data, const QPointF &where) {
+        QDropEvent event(where, Qt::MoveAction, data, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(viewport, &event);
+        return event.isAccepted();
+    };
+
+    // A folder cannot be dropped onto itself or into its own subfolder.
+    select(QStringLiteral("Src"));
+    std::unique_ptr<QMimeData> folderDrag(tree->dragData());
+    ASSERT_NE(folderDrag, nullptr);
+    EXPECT_FALSE(over(folderDrag.get(), rowAt(QStringLiteral("Src"))));
+    EXPECT_FALSE(drop(folderDrag.get(), rowAt(QStringLiteral("Src"))));
+    EXPECT_FALSE(over(folderDrag.get(), rowAt(QStringLiteral("Src/Sub"))));
+    EXPECT_FALSE(drop(folderDrag.get(), rowAt(QStringLiteral("Src/Sub"))));
+    EXPECT_EQ(moved.size(), 0);
+
+    // The same URL list without the tree's marker is another app's drag.
+    select(QStringLiteral("Src/Target.md"));
+    std::unique_ptr<QMimeData> noteDrag(tree->dragData());
+    ASSERT_NE(noteDrag, nullptr);
+    QMimeData foreign;
+    foreign.setUrls(noteDrag->urls());
+    EXPECT_FALSE(over(&foreign, rowAt(QStringLiteral("Projects"))));
+    EXPECT_FALSE(drop(&foreign, rowAt(QStringLiteral("Projects"))));
+    EXPECT_EQ(moved.size(), 0);
+
+    // Its own drag onto a folder row is accepted and asks for the move.
+    EXPECT_TRUE(over(noteDrag.get(), rowAt(QStringLiteral("Projects"))));
+    EXPECT_TRUE(drop(noteDrag.get(), rowAt(QStringLiteral("Projects"))));
+    ASSERT_EQ(moved.size(), 1);
+    EXPECT_EQ(moved.first().at(0).toString(), path(QStringLiteral("Src/Target.md")));
+    EXPECT_EQ(moved.first().at(1).toString(), path(QStringLiteral("Projects")));
+    WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Target.md"))), 5000);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
+}
+
+// The gesture that starts a drag: a press and a move on a row reach startDrag,
+// whose exec ends at once offscreen. Nothing moves, and the file stays.
+TEST_F(WindowTest, PressingAndDraggingARowStartsADragThatDeletesNothing)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    write(QStringLiteral("Src/Target.md"), "# Target\n");
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) >= 4, 5000);
+    tree->expand(model->index(path(QStringLiteral("Src"))));
+    WAIT_TRUE(model->index(path(QStringLiteral("Src/Target.md"))).isValid() && tree->visualRect(model->index(path(QStringLiteral("Src/Target.md")))).isValid(), 5000);
+
+    QSignalSpy moved(tree, &noteAppC::FileTree::moveRequested);
+    const QModelIndex row = model->index(path(QStringLiteral("Src/Target.md")));
+    QTest::qWait(300); // the model sorts a loaded folder after it announces it
+    const QPoint from = tree->visualRect(row).center();
+    ASSERT_EQ(tree->indexAt(from), row);
+    QTest::mousePress(tree->viewport(), Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(tree->viewport(), from + QPoint(0, 12));
+    // The QDrag startDrag made is still there until the event loop runs.
+    const auto *drag = tree->findChild<QDrag *>();
+    ASSERT_NE(drag, nullptr) << "the move did not start a drag";
+    EXPECT_EQ(drag->mimeData()->urls(), QList<QUrl>({QUrl::fromLocalFile(path(QStringLiteral("Src/Target.md")))}));
+    EXPECT_EQ(model->filePath(tree->currentIndex()), path(QStringLiteral("Src/Target.md")));
+    QTest::mouseRelease(tree->viewport(), Qt::LeftButton, Qt::NoModifier, from + QPoint(0, 12));
+    QTest::qWait(100);
+    EXPECT_EQ(moved.size(), 0);
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Src/Target.md"))));
 }
 
 TEST_F(WindowTest, TheMoveCommandOffersVisibleFoldersAndMovesTheActiveNote)

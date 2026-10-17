@@ -87,6 +87,12 @@ public:
     /// itself or one of its own subfolders).
     QString dropFolderAt(const QPoint &viewportPos) const;
 
+    /// What a drag from this tree carries: the model's mime data for the
+    /// selected row (its file URL) plus a marker naming this tree, so a drop
+    /// can tell its own drag from another app's or another window's. Null
+    /// when nothing is selected. The caller owns it.
+    QMimeData *dragData() const;
+
 signals:
     /// A drop wants `path` moved into `targetFolder`. The tree never moves a
     /// file itself - QFileSystemModel would skip the links, history and tabs
@@ -102,6 +108,8 @@ protected:
     bool viewportEvent(QEvent *event) override;
 
 private:
+    bool isOwnDrag(const QMimeData *data) const;
+
     FileRowDelegate *m_delegate = nullptr;
     QColor m_guide;
     int m_guideWidth = 1;
