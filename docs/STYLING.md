@@ -306,6 +306,12 @@ the gap on the left being lit up."
   `--nav-item-color-hover`, `--nav-item-background-hover/-active/-selected`,
   `--nav-collapse-icon-color` (and `-collapsed`), `--nav-indentation-guide-color`
   and `-width`, `--nav-file-tag-size/-color/-background`, `--nav-heading-color`.
+- **Renaming** with F2 or the context menu opens an inline editor in the row
+  (no extension shown). It never writes to the model: the new name goes through
+  the vault, so links, history, plugins and open tabs follow, exactly as with
+  the inline title. Dragging files in the tree is not supported (a drop through
+  QFileSystemModel would rename around the vault).
+
 ## Popups, the status bar and the inline title
 
 Jernej, 2026-10-16: "the general design is fine, I just want refinements".

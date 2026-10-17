@@ -4525,6 +4525,44 @@ TEST_F(WindowTest, HoveringATreeRowDoesNotLightTheIndentGutter)
     EXPECT_NE(pixels.inside, pixels.belowNear) << "the hovered row is drawn at all";
 }
 
+TEST_F(WindowTest, F2RenamesThroughTheVaultSoLinksFollow)
+{
+    write(QStringLiteral("Linker.md"), "See [[Welcome]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = tree ? qobject_cast<QFileSystemModel *>(tree->model()) : nullptr;
+    ASSERT_NE(model, nullptr);
+    QPersistentModelIndex welcome;
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            welcome = model->index(path(QStringLiteral("Welcome.md")));
+            return welcome.isValid() && tree->visualRect(welcome).isValid();
+        },
+        5000));
+    QTest::qWait(300); // the sort settles
+    tree->setCurrentIndex(welcome);
+    tree->setFocus();
+
+    QTest::keyClick(tree, Qt::Key_F2);
+    auto *edit = tree->findChild<QLineEdit *>(QStringLiteral("fileRenameEditor"));
+    ASSERT_NE(edit, nullptr) << "F2 opens the vault's own rename editor";
+    EXPECT_EQ(edit->text(), QStringLiteral("Welcome")) << "no extension in the editor";
+    edit->setText(QStringLiteral("Hello"));
+    QTest::keyClick(edit, Qt::Key_Return);
+
+    // The rename is queued out of the editor's own close; wait for it.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return QFile::exists(path(QStringLiteral("Hello.md"))); }, 5000));
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("Linker.md"))), QByteArray("See [[Hello]].\n"));
+}
+
 TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
 {
     // Pure functions on the file name: no pixels, no model.

@@ -712,6 +712,9 @@ every link that resolves to a note under it: `[[Folder/A]]` and
 `[[A]]` while the name is unique, and a linking note that sat inside the
 folder is rewritten at its new path.
 
+Renaming from the file tree (F2, or Rename in its menu) edits the name in place and goes
+through the same path as the inline title.
+
 A rename first saves every note with unsaved typing, whatever `files.autosave`
 says, so the rewrite works on what is on screen and the next autosave cannot
 put the old link back. The open editor then picks up the rewritten text from

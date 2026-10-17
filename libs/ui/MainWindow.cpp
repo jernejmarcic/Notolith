@@ -597,7 +597,8 @@ QWidget *MainWindow::buildSidebar()
     m_files->setReadOnly(false);
     m_files->setIconProvider(noIcons());
 
-    m_tree = new FileTree(m_sidebar);
+    auto *fileTree = new FileTree(m_sidebar);
+    m_tree = fileTree;
     m_tree->setModel(m_files);
     m_tree->setHeaderHidden(true);
     m_tree->setSortingEnabled(true);
@@ -624,6 +625,23 @@ QWidget *MainWindow::buildSidebar()
     connect(m_tree, &QTreeView::clicked, this, &MainWindow::onTreeClicked);
     connect(m_tree, &QTreeView::customContextMenuRequested, this,
            &MainWindow::showTreeContextMenu);
+    // The inline editor (F2, context menu) hands the new name here instead of
+    // writing to QFileSystemModel, so links, history and plugins follow. Queued:
+    // the delegate calls this from inside the view closing the editor, and a
+    // synchronous rename would change rows under it.
+    connect(fileTree->rowDelegate(), &FileRowDelegate::renameRequested, this,
+            [this](const QPersistentModelIndex &index, const QString &name) {
+                if (!index.isValid() || name.isEmpty())
+                    return;
+                const QString oldPath = m_files->filePath(index);
+                const bool isDir = m_files->isDir(index);
+                if (name == FileRowDelegate::displayName(QFileInfo(oldPath)))
+                    return;
+                QString error;
+                if (!renameVaultPath(oldPath, isDir, name, &error))
+                    statusBar()->showMessage(tr("Could not rename: %1").arg(error), 4000);
+            },
+            Qt::QueuedConnection);
     // QFileSystemModel fills a directory on a worker thread, so the root
     // index is not usable until it says so.
     connect(m_files, &QFileSystemModel::directoryLoaded, this, [this](const QString &path) {
@@ -5638,7 +5656,7 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     else if (chosen == newFolderAction)
         newFolderIn(folderRelativeFor(index));
     else if (chosen == renameAction)
-        renamePathAt(index);
+        m_tree->edit(index);
     else if (chosen == deleteAction)
         deletePathAt(index);
 }
