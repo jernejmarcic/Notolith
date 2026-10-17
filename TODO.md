@@ -1231,20 +1231,25 @@ title), L (look-up), K (edited listing chrome).
 
 ## Fable audit round 4, 2026-10-17 (scratchpad AUDIT4.md)
 
-- [ ] 1. openVault sets the indexer's vault before the vault's own settings:
-      a per-vault meta setting re-parses the whole vault on every open.
-- [ ] 2. Delimiter rows apply per keystroke: a forced vault scan + editor
+- [x] 1. openVault sets the indexer's vault before the vault's own settings:
+      a per-vault meta setting re-parses the whole vault on every open. Not
+      reachable today (editor.metaNotes is global, only Obsidian keys are per
+      vault); reordered anyway, warm-open test guards it.
+- [x] 2. Delimiter rows apply per keystroke: a forced vault scan + editor
       reparse per valid intermediate pair. Commit on editingFinished.
-- [ ] 3. updateLinksAfterRename and Bases parse without ParseOptions and erase
+- [x] 3. updateLinksAfterRename and Bases parse without ParseOptions and erase
       meta rows of linking notes; the watcher then skips them as current.
-- [ ] 4. FileIcons::save on every rename/delete even with no change.
-- [ ] 5. Icon picker rejects multi-code-point emoji; count graphemes.
-- [ ] 6. Typing in a meta note repopulates every pane row per parse.
-- [ ] 7. setMetaNotes(off) mid-scan: DELETE contends with the writer's
+- [x] 4. FileIcons::save on every rename/delete even with no change.
+- [x] 5. Icon picker rejects multi-code-point emoji; count graphemes.
+- [x] 6. Typing in a meta note repopulates every pane row per parse.
+- [x] 7. setMetaNotes(off) mid-scan: DELETE contends with the writer's
       transaction on the UI thread; skip it while a scan runs.
-- [ ] 8. Vault-mode filter pasted raw into `meta:(...)`; quote it.
-- [ ] 9. `[a][` jumps to the next `]` anywhere; stop at the line end.
-- [ ] 10. Icon entries never pruned; drop missing paths on load.
-- [ ] 11. shiftRanges does not shift `uncounted`.
+- [x] 8. Vault-mode filter pasted raw into `meta:(...)`; quote it.
+- [x] 9. `[a][` jumps to the next `]` anywhere; stop at the line end.
+- [x] 10. Icon entries never pruned; drop missing paths on load.
+- [x] 11. shiftRanges does not shift `uncounted`.
+  Lane audit4 (f239eaf..a33e595). Tests seen failing without the fix: 2
+  (4 scans vs 1), 3, 6. New tests for 4, 5, 7, 9, 10 pass and guard them
+  (7: old code was right, only blocking). No test: 8, 11.
 - [ ] 12. For Jernej: meta notes and bare brackets share the accent colour by
       default (pinned by a test). Distinct default (orange) wanted?
