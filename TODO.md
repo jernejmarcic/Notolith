@@ -1401,8 +1401,15 @@ Wave 2
       Plan: QLocalSocket handoff in main.cpp, QLocalServer in MainWindow;
       vault detection also via the recent-vaults list (a vault without
       .obsidian).
-- [ ] 6. (lane complete) `[[` completion: headings after `#`, block ids
+- [x] 6. (lane complete, a9b48ef) `[[` completion: headings after `#`, block ids
       after `#^`, aliases inserting `[[Note|alias]]`.
+      Done: index headings/block ids per note (current note read live),
+      alias rows "alias -> Note", `![[` too; asked once per popup.
+      Follow-ups:
+      - [ ] Heading text with `#`, `|`, `^` inserted verbatim (Obsidian
+            strips them); nested `[[N#H1#H2]]` not offered.
+      - [ ] An alias inserts the note's basename, not its shortest unique
+            path: two notes with one name give an ambiguous link.
 - [ ] 5. (lane workspace) Autosave is debounce only: continuous typing never
       saves. Plan: a 30 s max-wait timer.
 - [ ] 7. (lane workspace) Undo close tab (Ctrl+Shift+T), 20 deep.
