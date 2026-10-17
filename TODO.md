@@ -1175,7 +1175,7 @@ title), L (look-up), K (edited listing chrome).
 - [x] Toggleable, and the delimiters are the writer's choice ("another
       writer can select any character to behave like a meta note");
       default `[` `]`. Lane meta (scanner, settings, validation).
-- [ ] Meta pane + jump (Jernej's pick from the proposed workflow): right
+- [x] Meta pane + jump (Jernej's pick from the proposed workflow): right
       sidebar pane listing the note's meta notes, vault-wide toggle, a
       `meta:` search operator, Alt+] / Alt+[ next/previous. "Plan this
       feature out and think about how it may work" - Fable plans it after
@@ -1185,8 +1185,13 @@ title), L (look-up), K (edited listing chrome).
         search, docs/SEARCH.md. Found while doing it, not in the plan: a warm
         start trusted rows written under other delimiters, so the cache now
         records them (state table) and re-parses on a mismatch.
-  - [ ] B: jump + Delete meta note (done in lane), pane + status count +
-        commands, vault mode on the index (after A merges).
+  - [x] B: Alt+] / Alt+[ select whole runs (wraps, status says "Meta note
+        2 of 3"), "Delete meta note" in the context menu (one undo step),
+        MetaNotesPane (grouped by heading, filter, caret follow), status-bar
+        count, Vault toggle running `meta:`; all absent while the setting is
+        off. Merged 81b091c.
+  - Known limits: pane rows clip at two lines (full run in the tooltip);
+    vault mode shows one snippet per note.
   - Gotcha found: `<<x>>` with `<` delimiters is an HTML tag to the parser,
     not a run; `<< x >>` works. Documented in SEARCH.md; revisit if Jernej
     picks angle brackets.
