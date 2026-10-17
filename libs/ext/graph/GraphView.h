@@ -12,13 +12,17 @@
 #include <QStringList>
 #include <QWidget>
 
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
 #include "GraphLayout.h"
 
 class QMouseEvent;
+class QKeyEvent;
+class QContextMenuEvent;
 class QResizeEvent;
 class QShowEvent;
 class QHideEvent;
@@ -26,6 +30,7 @@ class QTimer;
 class QToolButton;
 class QLineEdit;
 class QSlider;
+class QCheckBox;
 class QFormLayout;
 class QVBoxLayout;
 class QWheelEvent;
@@ -89,6 +94,12 @@ struct GraphOptions {
     double linkDistance = 250.0;
     QList<GraphColorGroup> colorGroups;
     int localDepth = 1;
+    /// The local graph follows links into the centre note (`localIncoming`) and
+    /// out of it (`localOutgoing`), at every hop. Both on: the plain neighbourhood.
+    /// These two key names are this app's own - no real Obsidian graph.json was
+    /// at hand to confirm what Obsidian calls them.
+    bool localIncoming = true;
+    bool localOutgoing = true;
 
     static GraphOptions defaults() { return GraphOptions{}; }
 
@@ -131,9 +142,13 @@ struct GraphOptions {
 ///    the last job returned, for hit tests, fitToView() and screenPosition().
 ///    It edits the layout (pin, move, wake, force options) only through
 ///    editLayout(): applied at once when idle, queued behind the job when not.
-///  - rebuild() waits for the job (bounded by one job, ~65 ms at 20 000
-///    notes) and bumps m_generation, so an output from before the rebuild is
-///    dropped when its signal arrives.
+///  - rebuild() never waits. It gives the view a fresh ForceLayout (the job
+///    holds the old one by shared_ptr) and bumps m_generation, so an output
+///    from before the rebuild is dropped when its signal arrives; the job
+///    sees the new generation in m_liveGeneration after the step it is on
+///    and bails out without painting. The next job launches once the stale
+///    one has been delivered. Only the destructor and stepSimulation() (a
+///    test hook) wait for a job.
 ///  - paintEvent() only draws the last frame, mapped from the camera it was
 ///    rendered with to the current one, so panning and zooming move the old
 ///    picture instantly while the real frame catches up.
@@ -167,8 +182,8 @@ public:
     void setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdge> &edges);
 
     /// Global: every node currently in the data. Local: `path`'s
-    /// neighbourhood out to `depth` hops (both directions - Obsidian's local
-    /// graph does not distinguish incoming from outgoing), meant for a
+    /// neighbourhood out to `depth` hops, following incoming and outgoing
+    /// links as GraphOptions::localIncoming / localOutgoing say, meant for a
     /// sidebar pane. An empty `path` leaves the current note unchanged.
     /// `depth` 0 keeps the current depth (the slider owns it).
     void setLocalGraph(bool local, const QString &path = {}, int depth = 0);
@@ -219,6 +234,11 @@ signals:
     /// GraphNode::id. Never fired for a tag or unresolved node - there is
     /// nothing to open.
     void noteActivated(const QString &relativePath);
+    /// The node's right-click menu chose "Open in new tab"; same ids as noteActivated().
+    void noteActivatedInNewTab(const QString &relativePath);
+    /// Escape on the global graph: the owner returns to the note it came from.
+    /// Never fired by a local graph (a sidebar pane has nowhere to return to).
+    void closeRequested();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -226,6 +246,8 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
@@ -291,6 +313,7 @@ private:
     QWidget *buildControlsPanel();
     void layoutControls();
     void syncControls();
+    void showLocalRows(); ///< Depth and the two link switches: local mode only
     void rebuildGroupRows();
     void reapplyData();
 
@@ -320,7 +343,12 @@ private:
     QList<std::pair<int, int>> m_edgeIndices; // into m_nodes
     QHash<QString, int> m_idToIndex;
 
-    ForceLayout m_layout; ///< owned by the job while one runs - see the class comment
+    /// Owned by the job while one runs - see the class comment. A shared_ptr so
+    /// rebuild() can replace it under a job that still holds the old one.
+    std::shared_ptr<ForceLayout> m_layout = std::make_shared<ForceLayout>();
+    /// The generation a job should still be working for; a job whose own
+    /// generation differs has been superseded and stops stepping.
+    std::shared_ptr<std::atomic<int>> m_liveGeneration = std::make_shared<std::atomic<int>>(0);
     QVector<QPointF> m_positions; ///< the UI thread's snapshot of m_layout
     QTimer *m_stepTimer = nullptr;
 
@@ -345,8 +373,11 @@ private:
     QVBoxLayout *m_groupsLayout = nullptr;
     QFormLayout *m_filtersForm = nullptr;
     QSlider *m_depthSlider = nullptr;
+    QCheckBox *m_localIncomingBox = nullptr; ///< local mode's Incoming/Outgoing switches
+    QCheckBox *m_localOutgoingBox = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QTimer *m_searchDebounce = nullptr;
+    QTimer *m_groupDebounce = nullptr; ///< a group query's keystrokes, before the nodes are rescanned
     std::vector<std::function<void()>> m_controlSyncs; ///< each pushes one option into its widget
 
     double m_zoom = 1.0;

@@ -4,6 +4,7 @@
 #include <QColorDialog>
 #include <QHBoxLayout>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
@@ -19,6 +20,8 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QLineF>
+#include <QContextMenuEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
@@ -217,6 +220,8 @@ GraphOptions GraphOptions::fromJson(const QJsonObject &root, const GraphOptions 
     options.linkStrength = numberField("linkStrength", options.linkStrength);
     options.linkDistance = numberField("linkDistance", options.linkDistance);
     options.localDepth = std::max(1, int(numberField("localJumps", options.localDepth)));
+    options.localIncoming = boolField("localIncoming", options.localIncoming);
+    options.localOutgoing = boolField("localOutgoing", options.localOutgoing);
 
     // Obsidian's own shape: [{query, color:{a, rgb}}], rgb a packed 24-bit int.
     if (root.contains(QLatin1String("colorGroups"))) {
@@ -262,7 +267,9 @@ QJsonObject GraphOptions::toJson() const
                        {QLatin1String("repelStrength"), repelStrength},
                        {QLatin1String("linkStrength"), linkStrength},
                        {QLatin1String("linkDistance"), linkDistance},
-                       {QLatin1String("localJumps"), localDepth}};
+                       {QLatin1String("localJumps"), localDepth},
+                       {QLatin1String("localIncoming"), localIncoming},
+                       {QLatin1String("localOutgoing"), localOutgoing}};
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +308,7 @@ GraphView::GraphView(QWidget *parent)
 
 GraphView::~GraphView()
 {
-    m_frameWatcher.waitForFinished(); // the job holds a pointer to m_layout
+    m_frameWatcher.waitForFinished(); // the job paints from members' snapshots, but is not worth outliving
     m_dataWatcher.waitForFinished();
 }
 
@@ -409,6 +416,14 @@ QWidget *GraphView::buildControlsPanel()
     m_searchDebounce->setSingleShot(true);
     m_searchDebounce->setInterval(300);
     connect(m_searchDebounce, &QTimer::timeout, this, &GraphView::rebuild);
+    m_groupDebounce = new QTimer(this);
+    m_groupDebounce->setSingleShot(true);
+    m_groupDebounce->setInterval(300);
+    connect(m_groupDebounce, &QTimer::timeout, this, [this] {
+        assignColorGroups();
+        markDirty();
+        ensureTimerRunning();
+    });
     connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString &text) {
         m_options.search = text;
         m_searchDebounce->start(); // a keystroke is not worth a rebuild
@@ -440,6 +455,16 @@ QWidget *GraphView::buildControlsPanel()
         rebuild();
     });
     m_depthSlider->setObjectName(QStringLiteral("graphDepthSlider"));
+    m_localIncomingBox = addToggle(filters, tr("Incoming links"), [this] { return m_options.localIncoming; }, [this](bool on) {
+        m_options.localIncoming = on;
+        rebuild();
+    });
+    m_localIncomingBox->setObjectName(QStringLiteral("graphLocalIncoming"));
+    m_localOutgoingBox = addToggle(filters, tr("Outgoing links"), [this] { return m_options.localOutgoing; }, [this](bool on) {
+        m_options.localOutgoing = on;
+        rebuild();
+    });
+    m_localOutgoingBox->setObjectName(QStringLiteral("graphLocalOutgoing"));
 
     // Groups
     QFormLayout *groups = addSection(tr("Groups"), &GraphOptions::collapseColorGroups);
@@ -564,14 +589,13 @@ void GraphView::rebuildGroupRows()
             if (i >= m_options.colorGroups.size())
                 return;
             m_options.colorGroups[i].query = text;
-            assignColorGroups();
-            markDirty();
-            ensureTimerRunning();
+            m_groupDebounce->start(); // a keystroke is not worth rescanning every node
             emit optionsChanged();
         });
         connect(swatch, &QToolButton::clicked, this, [this, i, paintSwatch] {
             const QColor picked = QColorDialog::getColor(m_options.colorGroups.at(i).color, this, tr("Group colour"));
-            if (!picked.isValid())
+            // The dialog is modal but the event loop runs: the list may have shrunk under it.
+            if (!picked.isValid() || i >= m_options.colorGroups.size())
                 return;
             m_options.colorGroups[i].color = picked;
             paintSwatch();
@@ -590,6 +614,15 @@ void GraphView::rebuildGroupRows()
     }
 }
 
+void GraphView::showLocalRows()
+{
+    if (!m_filtersForm)
+        return;
+    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    m_filtersForm->setRowVisible(m_localIncomingBox, m_localMode);
+    m_filtersForm->setRowVisible(m_localOutgoingBox, m_localMode);
+}
+
 /// Puts every control back in step with m_options - after setOptions(), or
 /// when the local/global mode (which shows the Depth slider) changes.
 void GraphView::syncControls()
@@ -598,7 +631,7 @@ void GraphView::syncControls()
         return;
     for (const auto &sync : m_controlSyncs)
         sync();
-    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    showLocalRows();
     layoutControls();
 }
 
@@ -701,8 +734,7 @@ void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdg
 void GraphView::setLocalGraph(bool local, const QString &path, int depth)
 {
     m_localMode = local;
-    if (m_filtersForm)
-        m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    showLocalRows();
     if (!path.isEmpty())
         m_currentNote = path;
     if (depth > 0) {
@@ -725,19 +757,25 @@ void GraphView::setCurrentNote(const QString &relativePath)
 
 void GraphView::rebuild()
 {
-    // The job owns m_layout: let it finish, and drop whatever it hands back.
-    m_frameWatcher.waitForFinished();
-    ++m_generation;
+    // The job owns the layout it holds: leave it that one, take a new one for
+    // the new graph, and drop whatever the old job hands back. Waiting here
+    // froze the UI for a whole job (up to 250 ms with Animate off).
+    m_layout = std::make_shared<ForceLayout>();
+    m_liveGeneration->store(++m_generation);
     m_layoutEdits.clear(); // aimed at nodes that may no longer exist
 
     QList<GraphNode> nodes = m_rawNodes;
     QList<GraphEdge> edges = m_rawEdges;
 
     if (m_localMode && !m_currentNote.isEmpty()) {
+        // Which neighbours a hop may follow: through an outgoing link (id
+        // links to it) and/or an incoming one (it links to id).
         QHash<QString, QStringList> adjacency;
         for (const GraphEdge &edge : std::as_const(edges)) {
-            adjacency[edge.fromID].append(edge.toID);
-            adjacency[edge.toID].append(edge.fromID);
+            if (m_options.localOutgoing)
+                adjacency[edge.fromID].append(edge.toID);
+            if (m_options.localIncoming)
+                adjacency[edge.toID].append(edge.fromID);
         }
 
         QSet<QString> visited{m_currentNote};
@@ -860,18 +898,18 @@ void GraphView::rebuild()
         layoutEdges.append({a, b});
     }
 
-    m_layout.setOptions(forceOptionsFor(m_options));
-    m_layout.reset(m_nodes.size(), layoutEdges);
+    m_layout->setOptions(forceOptionsFor(m_options));
+    m_layout->reset(m_nodes.size(), layoutEdges);
     int kept = 0;
     for (int i = 0; i < m_nodes.size(); ++i) {
         const auto it = keep.constFind(m_nodes[i].data.id);
         if (it != keep.constEnd()) {
-            m_layout.setPosition(i, it.value());
+            m_layout->setPosition(i, it.value());
             ++kept;
         }
     }
 
-    m_positions = m_layout.positions();
+    m_positions = m_layout->positions();
     m_settled = m_nodes.isEmpty();
 
     m_hoverNode = -1;
@@ -890,12 +928,12 @@ void GraphView::rebuild()
 void GraphView::stepSimulation(int steps)
 {
     m_frameWatcher.waitForFinished();
-    ++m_generation; // the finished job's output is older than this
+    m_liveGeneration->store(++m_generation); // the finished job's output is older than this
     flushLayoutEdits();
     for (int i = 0; i < steps; ++i)
-        m_layout.step();
-    m_positions = m_layout.positions();
-    m_settled = m_layout.isSettled();
+        m_layout->step();
+    m_positions = m_layout->positions();
+    m_settled = m_layout->isSettled();
     markDirty();
 }
 
@@ -919,13 +957,13 @@ void GraphView::editLayout(std::function<void(ForceLayout &)> edit)
         return;
     }
     flushLayoutEdits();
-    edit(m_layout);
+    edit(*m_layout);
 }
 
 void GraphView::flushLayoutEdits()
 {
     for (const auto &edit : m_layoutEdits)
-        edit(m_layout);
+        edit(*m_layout);
     m_layoutEdits.clear();
 }
 
@@ -959,10 +997,11 @@ void GraphView::launchFrame()
     // GraphLayout.h.
     input.steps = m_settled ? 0 : !m_options.animate ? 300 : (m_nodes.size() > 1000 ? 1 : 3);
     m_frameDirty = false;
-    ForceLayout *layout = &m_layout;
     m_jobInFlight = true;
-    m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout]() mutable {
+    m_frameWatcher.setFuture(QtConcurrent::run([input = std::move(input), layout = m_layout,
+                                                live = m_liveGeneration]() mutable {
         FrameOutput output;
+        output.generation = input.generation;
         // Animate off: settle before the picture moves, up to 300 steps - but
         // never more than a quarter second a job, which a rebuild may have
         // to wait out; the next job carries on.
@@ -970,6 +1009,8 @@ void GraphView::launchFrame()
         budget.start();
         for (int i = 0; i < input.steps; ++i) {
             layout->step();
+            if (live->load() != input.generation)
+                return output; // superseded by a rebuild: nothing to paint, nothing to keep
             if (!input.options.animate && (layout->isSettled() || budget.elapsed() > 250))
                 break;
         }
@@ -1442,6 +1483,40 @@ void GraphView::mouseReleaseEvent(QMouseEvent *event)
         m_dragNode = -1;
     }
     m_panning = false;
+}
+
+void GraphView::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape && !m_localMode) {
+        emit closeRequested();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
+void GraphView::contextMenuEvent(QContextMenuEvent *event)
+{
+    const int hit = nodeAt(event->pos());
+    if (hit < 0) {
+        event->ignore();
+        return;
+    }
+    const GraphNode &data = m_nodes[hit].data;
+    if (data.kind != GraphNode::Kind::Note && data.kind != GraphNode::Kind::Attachment) {
+        event->ignore(); // a tag or an unresolved link has nothing to open
+        return;
+    }
+    const QString id = data.id;
+    QMenu menu(this);
+    menu.setObjectName(QStringLiteral("graphNodeMenu"));
+    QAction *open = menu.addAction(tr("Open"));
+    QAction *openInTab = menu.addAction(tr("Open in new tab"));
+    event->accept();
+    const QAction *chosen = menu.exec(event->globalPos());
+    if (chosen == open)
+        emit noteActivated(id);
+    else if (chosen == openInTab)
+        emit noteActivatedInNewTab(id);
 }
 
 void GraphView::leaveEvent(QEvent *event)

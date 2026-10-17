@@ -7,18 +7,22 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLineEdit>
+#include <QMenu>
 #include <QPushButton>
 #include <QSlider>
 #include <QPainter>
 #include <QSignalSpy>
+#include <QContextMenuEvent>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QTest>
 
 #include "GraphLayout.h"
@@ -244,6 +248,108 @@ TEST(GraphViewTest, LocalGraphRespectsDepth)
     EXPECT_EQ(view.nodeCount(), 5);
 }
 
+// Obsidian's local graph has Incoming and Outgoing switches: from B, A -> B is
+// an incoming link and B -> C an outgoing one.
+TEST(GraphViewTest, LocalGraphCanFollowOnlyIncomingOrOnlyOutgoingLinks)
+{
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")}),
+                      {{QStringLiteral("A"), QStringLiteral("B")}, {QStringLiteral("B"), QStringLiteral("C")}});
+    view.setLocalGraph(true, QStringLiteral("B"), 1);
+    EXPECT_EQ(view.nodeCount(), 3);
+
+    GraphOptions options = view.options();
+    options.localOutgoing = false;
+    view.setOptions(options);
+    EXPECT_TRUE(view.containsNode(QStringLiteral("A")));
+    EXPECT_FALSE(view.containsNode(QStringLiteral("C"))) << "outgoing off: B's link to C is not followed";
+
+    options.localOutgoing = true;
+    options.localIncoming = false;
+    view.setOptions(options);
+    EXPECT_FALSE(view.containsNode(QStringLiteral("A"))) << "incoming off: A's link to B is not followed";
+    EXPECT_TRUE(view.containsNode(QStringLiteral("C")));
+
+    // The switches sit in the Filters section, local mode only, and persist.
+    auto *incoming = view.findChild<QCheckBox *>(QStringLiteral("graphLocalIncoming"));
+    auto *outgoing = view.findChild<QCheckBox *>(QStringLiteral("graphLocalOutgoing"));
+    ASSERT_NE(incoming, nullptr);
+    ASSERT_NE(outgoing, nullptr);
+    EXPECT_FALSE(incoming->isChecked());
+    QSignalSpy changed(&view, &GraphView::optionsChanged);
+    incoming->setChecked(true);
+    outgoing->setChecked(false);
+    EXPECT_EQ(changed.count(), 2);
+    EXPECT_TRUE(view.containsNode(QStringLiteral("A")));
+    EXPECT_FALSE(view.containsNode(QStringLiteral("C")));
+
+    const GraphOptions restored = GraphOptions::fromJson(view.options().toJson());
+    EXPECT_TRUE(restored.localIncoming);
+    EXPECT_FALSE(restored.localOutgoing);
+}
+
+// Escape leaves the global graph page (the owner returns to the note it came
+// from); a sidebar's local graph has nowhere to return to.
+TEST(GraphViewTest, EscapeAsksTheOwnerToCloseTheGlobalGraphOnly)
+{
+    GraphView view;
+    QSignalSpy closing(&view, &GraphView::closeRequested);
+    QTest::keyClick(&view, Qt::Key_Escape);
+    EXPECT_EQ(closing.count(), 1);
+    view.setLocalGraph(true, QStringLiteral("A"));
+    QTest::keyClick(&view, Qt::Key_Escape);
+    EXPECT_EQ(closing.count(), 1);
+}
+
+// A right-click on a note node offers Open and Open in new tab; elsewhere nothing.
+TEST(GraphViewTest, RightClickingANodeOffersOpenAndOpenInNewTab)
+{
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor({QStringLiteral("A.md"), QStringLiteral("B.md")}),
+                      {{QStringLiteral("A.md"), QStringLiteral("B.md")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(200);
+    QSignalSpy opened(&view, &GraphView::noteActivated);
+    QSignalSpy openedInTab(&view, &GraphView::noteActivatedInNewTab);
+
+    // Picks the menu entry named `text` from the popup the event opens.
+    const auto rightClickAndChoose = [&](const QPoint &at, const QString &text) {
+        QTimer::singleShot(100, [text] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            if (!menu)
+                return;
+            for (QAction *action : menu->actions()) {
+                if (action->text() == text) {
+                    menu->setActiveAction(action);
+                    QTest::keyClick(menu, Qt::Key_Return);
+                    return;
+                }
+            }
+            menu->close();
+        });
+        QContextMenuEvent event(QContextMenuEvent::Mouse, at, view.mapToGlobal(at));
+        QApplication::sendEvent(&view, &event);
+        return event.isAccepted();
+    };
+
+    const auto onB = [&] { return view.screenPosition(QStringLiteral("B.md")).toPoint(); }; // the layout may still drift
+    EXPECT_TRUE(rightClickAndChoose(onB(), QStringLiteral("Open in new tab")));
+    ASSERT_EQ(openedInTab.count(), 1);
+    EXPECT_EQ(openedInTab.first().first().toString(), QStringLiteral("B.md"));
+    EXPECT_EQ(opened.count(), 0);
+
+    EXPECT_TRUE(rightClickAndChoose(onB(), QStringLiteral("Open")));
+    ASSERT_EQ(opened.count(), 1);
+    EXPECT_EQ(opened.first().first().toString(), QStringLiteral("B.md"));
+    EXPECT_EQ(openedInTab.count(), 1);
+
+    EXPECT_FALSE(rightClickAndChoose(QPoint(5, 5), QStringLiteral("Open"))) << "no node there, no menu";
+    EXPECT_EQ(opened.count(), 1);
+}
+
 TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)
 {
     // A local graph's shape: one note and its eight links, in a sidebar-wide
@@ -312,6 +418,10 @@ TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)
     const QPointF held = view.screenPosition(QStringLiteral("A"));
     EXPECT_LT(std::hypot(held.x() - drop.x(), held.y() - drop.y()), 2.0);
     QTest::qWait(300);
+    // screenPosition() reads the UI's own snapshot, which the UI overwrites
+    // itself whatever the layout did with the pin; copy the layout's positions
+    // into it first, so this fails if setPinned()/setPosition() never landed.
+    view.stepSimulation(0);
     const QPointF later = view.screenPosition(QStringLiteral("A"));
     EXPECT_LT(std::hypot(later.x() - drop.x(), later.y() - drop.y()), 2.0) << "the pinned node slid away";
     QTest::mouseRelease(&view, Qt::LeftButton, Qt::NoModifier, drop);
@@ -413,7 +523,11 @@ TEST(GraphViewTest, GroupsEditorAddsAGroup)
     }
     ASSERT_NE(query, nullptr);
     query->setText(QStringLiteral("path:Projects"));
-    EXPECT_EQ(view.nodeColor(QStringLiteral("Projects/A.md")), view.options().colorGroups.first().color);
+    // The tint follows a typing pause, not every keystroke; the option is kept at once.
+    EXPECT_EQ(view.options().colorGroups.first().query, QStringLiteral("path:Projects"));
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        return view.nodeColor(QStringLiteral("Projects/A.md")) == view.options().colorGroups.first().color;
+    }, 2000));
     EXPECT_EQ(view.nodeColor(QStringLiteral("B.md")), before);
 }
 
@@ -789,6 +903,73 @@ TEST(GraphPerformanceTest, LargeGraphStepAndFrameStayInsideBudget)
 
     EXPECT_LT(stepMedian, 16.0);
     EXPECT_LT(frameMedian, 16.0);
+}
+
+// A rebuild (every note switch in a local graph, every index change while the
+// graph is shown) used to wait for the worker job, which with Animate off runs
+// for up to a quarter second. A smaller graph than the 20 000-note case is
+// enough: it is the wait, not the rebuild itself, that is measured.
+TEST(GraphPerformanceTest, ARebuildDoesNotWaitForTheWorkerJob)
+{
+    constexpr int kNodes = 3000;
+    GraphView view;
+    view.resize(1600, 1000);
+    GraphOptions options = view.options();
+    options.animate = false;
+    view.setOptions(options);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    const QList<GraphEdge> edges = makeEdges(nodes, 2);
+    view.setGraphData(nodes, edges);
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(40); // a settling job is now running
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    QElapsedTimer clock;
+    const double ms = perf::bestOf([&] {
+        clock.start();
+        view.setGraphData(nodes, edges);
+        const double took = clock.nsecsElapsed() / 1e6;
+        QTest::qWait(40); // let the next job start
+        return took;
+    }, 3, 10.0);
+    std::printf("[ PERF     ] rebuild of %d nodes with a job running: %.3f ms\n", kNodes, ms);
+    EXPECT_LT(ms, 10.0);
+    EXPECT_EQ(view.nodeCount(), kNodes);
+}
+
+// Typing in a colour group's query rescans every node; per keystroke that is
+// work the Filters search box already debounces.
+TEST(GraphPerformanceTest, TypingAGroupQueryDoesNotRescanEveryNodePerKeystroke)
+{
+    constexpr int kNodes = 20000;
+    GraphView view;
+    view.resize(1600, 1000);
+    const QList<GraphNode> nodes = makeNodes(kNodes);
+    view.setGraphData(nodes, makeEdges(nodes, 1));
+    auto *add = view.findChild<QPushButton *>(QStringLiteral("graphNewGroupButton"));
+    ASSERT_NE(add, nullptr);
+    add->click();
+    QLineEdit *query = nullptr;
+    for (auto *edit : view.findChildren<QLineEdit *>()) {
+        if (edit->placeholderText() == QStringLiteral("Enter query..."))
+            query = edit;
+    }
+    ASSERT_NE(query, nullptr);
+
+    const QString id = QStringLiteral("note-7");
+    const QColor before = view.nodeColor(id);
+    QElapsedTimer clock;
+    clock.start();
+    QString typed;
+    for (const QChar ch : QStringLiteral("path:note-7"))
+        query->setText(typed += ch);
+    const double ms = clock.nsecsElapsed() / 1e6;
+    std::printf("[ PERF     ] 11 group-query keystrokes at %d nodes: %.3f ms\n", kNodes, ms);
+    EXPECT_EQ(view.nodeColor(id), before) << "the nodes are rescanned after a pause, not per keystroke";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeColor(id) != before; }, 3000));
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    EXPECT_LT(ms, 10.0);
 }
 
 // Reports, does not budget: what a 20 000-note vault costs per step, per

@@ -14,7 +14,8 @@ sections whose open or folded state is kept like the rest.
 - **Filters** - "Search files..." (the search grammar: `path:`, `tag:`, a bare
   word matches the file name; a tag or unresolved node stays while a kept note
   links to it), Tags, Attachments, Unresolved links, Orphans; in the local
-  graph also Depth (1-5).
+  graph also Depth (1-5) and Incoming / Outgoing links (follow links into the
+  note, out of it, or both - the default).
 - **Groups** - one row per colour group: a query (same grammar), a swatch that
   opens a colour dialog, and a remove button; "New group" adds one. First match
   wins; an empty query colours nothing.
@@ -26,6 +27,9 @@ sections whose open or folded state is kept like the rest.
 
 Hover a node to light it and its neighbours; drag to move (the node is pinned
 while held); scroll to zoom about the pointer; drag the background to pan.
+Right-click a note or attachment node for "Open" and "Open in new tab". Escape
+on the graph page returns to the note it was opened from (the local graph in the
+sidebar ignores it).
 
 ## Where the settings live
 
@@ -35,13 +39,18 @@ Obsidian's key names (`collapse-filter`, `colorGroups[{query, color:{a, rgb}}]`,
 `localJumps`, ...) plus `animate`. The vault's `.obsidian/graph.json` is only
 read - as the starting point when there is no copy yet - and never written. The
 global and the local graph share the file, except that the local depth
-(`localJumps`) is the local graph's own.
+(`localJumps`) and the two link switches are the local graph's own. The switches
+are stored as `localIncoming` / `localOutgoing`: those two names are this app's
+own, because no real Obsidian `graph.json` was available to confirm Obsidian's.
 
 ## Threads
 
 See the comment on `GraphView` for the contract. In short: the layout and the
 frame are produced by one background job at a time; the UI thread draws the
-latest image. Numbers: docs/PERFORMANCE.md, "The graph view at 20 000 notes".
+latest image. A rebuild (note switch, index change, filter) never waits for the
+job: it swaps in a fresh layout and a new generation, the superseded job stops
+after its current step and its output is dropped. So the UI thread's cost is the
+rebuild itself (about 1 ms at 3000 nodes), not a job's 30-250 ms. Numbers: docs/PERFORMANCE.md, "The graph view at 20 000 notes".
 
 ## Checking it without a display
 

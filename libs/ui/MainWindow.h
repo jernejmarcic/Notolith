@@ -460,6 +460,7 @@ void updateVimStatus();
     void onIndexChanged();
     /// Opens a vault-relative path from the index or the switcher.
     void openRelative(const QString &relativePath);
+    void openRelativeInNewTab(const QString &relativePath); ///< the graph's node menu
     void openSingleFile(const QString &path);
     /// Drops the open vault: back to the empty-window state, chrome intact.
     void closeVault();

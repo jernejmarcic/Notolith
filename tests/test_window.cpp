@@ -64,6 +64,7 @@
 #include <QTableView>
 #include "BaseView.h"
 #endif
+#include <QCryptographicHash>
 #include <QSettings>
 #include <QDropEvent>
 #include <QMimeData>
@@ -352,6 +353,54 @@ TEST_F(WindowTest, GraphViewOpensInTheMainAreaAndANodeOpensItsNote)
     EXPECT_EQ(stack->currentIndex(), 0);
 }
 
+// Escape on the graph page goes back to the note it was opened from.
+TEST_F(WindowTest, EscapeLeavesTheGraphForTheNoteItWasOpenedFrom)
+{
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "b\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("A.md")));
+
+    window.findChild<QAction *>(QStringLiteral("graph:open"))->trigger();
+    auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
+    ASSERT_NE(graph, nullptr);
+    ASSERT_EQ(stack->currentWidget(), graph);
+    QTest::keyClick(graph, Qt::Key_Escape);
+    EXPECT_EQ(stack->currentIndex(), 0);
+    EXPECT_EQ(window.findChild<MarkdownEditor *>()->noteText(), QStringLiteral("[[B]]\n"));
+}
+
+// The node menu's "Open in new tab" opens the note beside the current tab.
+TEST_F(WindowTest, GraphOpenInNewTabAddsATab)
+{
+    write(QStringLiteral("A.md"), "[[B]]\n");
+    write(QStringLiteral("B.md"), "b\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("A.md")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    const int before = tabs->count();
+
+    window.findChild<QAction *>(QStringLiteral("graph:open"))->trigger();
+    auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+    ASSERT_NE(graph, nullptr);
+    emit graph->noteActivatedInNewTab(QStringLiteral("B.md"));
+    EXPECT_EQ(window.findChild<QStackedWidget *>(QStringLiteral("mainStack"))->currentIndex(), 0);
+    EXPECT_EQ(tabs->count(), before + 1);
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("B"));
+}
+
 // The header carries a graph button: nothing on screen opened the graph before.
 TEST_F(WindowTest, TheHeaderGraphButtonOpensTheGraph)
 {
@@ -407,6 +456,36 @@ TEST_F(WindowTest, GraphControlsSurviveARestartInTheAppsOwnCopy)
         EXPECT_TRUE(graph->options().showTags);
         EXPECT_EQ(graph->options().search, QStringLiteral("path:A"));
     }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// The save is debounced 500 ms; opening another vault inside that window used
+// to leave the change unwritten (the timer then saved the new vault's options).
+TEST_F(WindowTest, AGraphChangeJustBeforeAVaultSwitchIsSavedForItsOwnVault)
+{
+    QTemporaryDir config;
+    QTemporaryDir other;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("A.md"), "a\n");
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.findChild<QAction *>(QStringLiteral("graph:open"))->trigger();
+        auto *graph = window.findChild<GraphView *>(QStringLiteral("graphView"));
+        ASSERT_NE(graph, nullptr);
+        noteAppC::GraphOptions options = graph->options();
+        options.repelStrength = 42;
+        graph->setOptions(options);
+        emit graph->optionsChanged(); // what a control does
+        window.openVault(other.path()); // well inside the 500 ms
+        QTest::qWait(900);
+    }
+    const QString key = QString::fromLatin1(QCryptographicHash::hash(QDir(dir.path()).absolutePath().toUtf8(),
+                                                                     QCryptographicHash::Sha1).toHex());
+    QFile saved(config.path() + QStringLiteral("/noteAppC/vaults/%1/graph.json").arg(key));
+    ASSERT_TRUE(saved.open(QIODevice::ReadOnly)) << "the first vault's change was never written";
+    EXPECT_EQ(QJsonDocument::fromJson(saved.readAll()).object().value(QStringLiteral("repelStrength")).toDouble(), 42.0);
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
