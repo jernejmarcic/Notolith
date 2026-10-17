@@ -1168,11 +1168,11 @@ title), L (look-up), K (edited listing chrome).
 
 ## Requested by Jernej 2026-10-17: meta notes
 
-- [ ] "I want [] to be purple or at least distinct like in Obsidian. I was
+- [x] "I want [] to be purple or at least distinct like in Obsidian. I was
       mostly using them for meta notes in writing." Bare `[text]` in prose
       drawn in a link-colour token (purple) in every mode, as Obsidian does;
       not links, wikilinks, footnotes, tasks, callouts. Lane meta.
-- [ ] Toggleable, and the delimiters are the writer's choice ("another
+- [x] Toggleable, and the delimiters are the writer's choice ("another
       writer can select any character to behave like a meta note");
       default `[` `]`. Lane meta (scanner, settings, validation).
 - [ ] Meta pane + jump (Jernej's pick from the proposed workflow): right
@@ -1185,10 +1185,14 @@ title), L (look-up), K (edited listing chrome).
   bare `[text]` gets Obsidian's link-style colour for everyone (plain
   markdown styling); meta notes are a separate opt-in (default off) with the
   writer's own delimiters.
-- [ ] Word count settings: "can be toggled in settings to exclude
+- [x] Word count settings: "can be toggled in settings to exclude
       everything within certain characters, and also toggled to ignore
       formatting". Lane meta.
 - Never hide meta notes while writing: "always there until deleted".
+  Lane meta merged 2026-10-17: --bracket-color (all users), editor.metaNotes
+  (off by default) + editor.metaNoteOpen/Close, two count toggles; also fixed
+  setMode dropping style spans in notes with footnotes. Gaps: no test of
+  MainWindow::parseOptions / settings rows; publisher draws neither.
 - Proposed, not picked (2026-10-17): clean export; quick insert + resolve
   menu; typed meta notes via meta.ini.
 
