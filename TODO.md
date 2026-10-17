@@ -1287,6 +1287,52 @@ title), L (look-up), K (edited listing chrome).
       Left: more icons need a Lucide download (ask first); icons in the
       quick switcher and inline title; Iconize import; a test of the picker.
 
+## Fable review round 6, 2026-10-17: what TODO did not have
+
+Fable read the whole tree for bugs and missing Obsidian behaviour not listed
+or deferred here. Built in waves of parallel lanes (3 at a time: 25 GB free).
+
+Wave 1
+- [ ] 1. (lane utf8) A note with an invalid UTF-8 byte is rewritten on its
+      first edit: Vault::decode substitutes U+FFFD, autosave writes it back.
+      Plan: QStringDecoder, Note::lossy; autosave and plain save refuse a
+      lossy note with a status message; an explicit choice saves anyway;
+      a banner on open. Test: "a\xE8b" survives typing + autosave byte-exact.
+- [ ] 12. (lane utf8) Deletes always go to the vault's .trash; Obsidian's
+      default is the system trash. Plan: setting files.deletedFiles =
+      system (default, QFile::moveToTrash) / local / permanent, Obsidian's
+      app.json trashOption read when present; sync pulls keep .trash.
+- [ ] 2. (lane syncfix) A sync pull of a delete whose trash move fails still
+      drops the entity, so the next scan re-creates the note everywhere.
+      Plan: keep the entity on failure, retry next pull, show it in status.
+- [ ] 10. (lane syncfix) inotify addPaths() failures are dropped silently.
+      Plan: status message + periodic rescan fallback.
+- [ ] 4. (lane move) Notes and folders cannot be moved between folders.
+      Plan: Vault move with renamePath's checks; renameVaultPath gains a
+      target folder (links, history, tabs, icons, index follow); tree drag
+      and drop (InternalMove, own dropEvent); command "Move file to..."
+      with a folder picker.
+- [ ] 11. (lane move) Case-only rename refused on case-insensitive file
+      systems ("already exists").
+
+Wave 2
+- [ ] 3. (lane single) No single instance: opening a note from the file
+      manager starts a second copy on the same index.db/journal.db.
+      Plan: QLocalSocket handoff in main.cpp, QLocalServer in MainWindow;
+      vault detection also via the recent-vaults list (a vault without
+      .obsidian).
+- [ ] 6. (lane complete) `[[` completion: headings after `#`, block ids
+      after `#^`, aliases inserting `[[Note|alias]]`.
+- [ ] 5. (lane workspace) Autosave is debounce only: continuous typing never
+      saves. Plan: a 30 s max-wait timer.
+- [ ] 7. (lane workspace) Undo close tab (Ctrl+Shift+T), 20 deep.
+- [ ] 8. (lane workspace) Bench row for saveLeaf on a 1 MB note (two
+      fdatasyncs on the UI thread); act only if it shows.
+
+Wave 3
+- [ ] 9. MarkdownEditor.h (2 791 lines, 46 TUs) private part behind a
+      private header, so editing the editor rebuilds ~10 TUs, not 46.
+
 ## Fable audit round 5, 2026-10-17 (rename + WASM tier)
 
 No sandbox escape found: a note cannot pick the module, reach the network or
