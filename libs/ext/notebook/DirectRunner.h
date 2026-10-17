@@ -33,6 +33,11 @@ public:
     static QString toolFor(const QString &language);
     /// Known and installed.
     static bool canRun(const QString &language);
+    /// The module `language` has in `setting` (`python=/p/python.wasm;
+    /// ruby=/p/ruby.wasm`, the `notebooks.wasmModules` format), matched by
+    /// any of the language's names ("py" finds the `python=` entry); empty
+    /// when it has none.
+    static QString wasmModuleFor(const QString &setting, const QString &language);
 
     using Deliver = std::function<void(NotebookRunResult)>;
     struct Request {
@@ -40,6 +45,10 @@ public:
         QString source;
         SandboxTier tier = SandboxTier::Bubblewrap;
         QStringList readOnlyBinds;
+        /// SandboxTier::Wasm only: the WebAssembly module that stands in for
+        /// the language's interpreter, run with the block's file as its
+        /// argument. Unused for `wat`/`wasm` blocks, which are the module.
+        QString wasmModule;
         int timeoutMs = 30'000;
     };
     /// Runs it; `deliver` gets stdout as text and, when it fails, stderr as

@@ -1080,6 +1080,25 @@ TEST(CodeOptionTest, NotebookKeysOutputIncludeCacheTimeoutAndKernel)
     EXPECT_EQ(options.timeoutSeconds, 0);
 }
 
+TEST(CodeOptionTest, SandboxWasmIsItsOwnTierNotHost)
+{
+    const auto optionsOf = [](const QString &line) {
+        const Decorations decorations = decorationsOf(QStringLiteral("```python\n") + line + QStringLiteral("print(1)\n```\n"));
+        EXPECT_EQ(decorations.codeOptions.size(), 1);
+        return decorations.codeOptions.value(0);
+    };
+    CodeOptions options = optionsOf(QStringLiteral("#| sandbox: wasm\n"));
+    EXPECT_TRUE(options.sandboxWasm);
+    EXPECT_FALSE(options.sandboxHost);
+    EXPECT_TRUE(optionsOf(QStringLiteral("#| sandbox: WASM\n")).sandboxWasm);
+    options = optionsOf(QStringLiteral("#| sandbox: host\n"));
+    EXPECT_TRUE(options.sandboxHost);
+    EXPECT_FALSE(options.sandboxWasm);
+    options = optionsOf(QStringLiteral("#| sandbox: bubblewrap\n"));
+    EXPECT_FALSE(options.sandboxHost);
+    EXPECT_FALSE(options.sandboxWasm);
+}
+
 TEST(CodeOptionTest, QuartoExecutionKeysAreParsed)
 {
     const QString text = QStringLiteral(

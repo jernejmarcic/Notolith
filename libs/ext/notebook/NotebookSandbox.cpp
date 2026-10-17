@@ -14,6 +14,7 @@ SandboxAvailability detectSandboxAvailability()
     availability.containerRuntime =
         !QStandardPaths::findExecutable(QStringLiteral("podman")).isEmpty()
         || !QStandardPaths::findExecutable(QStringLiteral("docker")).isEmpty();
+    availability.wasmtime = !QStandardPaths::findExecutable(QStringLiteral("wasmtime")).isEmpty();
     return availability;
 }
 
@@ -24,7 +25,7 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     if (filterFD)
         *filterFD = -1;
     const QString bwrap = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
-    if (tier != SandboxTier::Bubblewrap) {
+    if (tier == SandboxTier::Host) {
         *outProgram = program;
         *outArgs = args;
         *usedTier = SandboxTier::Host;

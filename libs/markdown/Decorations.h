@@ -192,6 +192,9 @@ struct CodeOptions {
     /// `sandbox: host` - tier 0, opt-in: the kernel runs as the user, unsandboxed.
     /// Anything else (absent, or `bubblewrap`) is the tier-1 default.
     bool sandboxHost = false;
+    /// `sandbox: wasm` - the block runs as a WebAssembly module under wasmtime,
+    /// stricter than the default; never set together with `sandboxHost`.
+    bool sandboxWasm = false;
     /// `output: false` - the block still runs and is cached, its output is
     /// just not shown (Quarto's key). `include: false` is echo and output both.
     bool output = true;

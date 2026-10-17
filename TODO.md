@@ -672,22 +672,30 @@ What the spec asks for:
       installed, not approved); the WASM tier below.
       **WASM tier** (Jernej 2026-10-17 installed wasmtime 49.0.2: CLI only,
       no C API, so a `wasmtime run` subprocess). Plan (lane wasm):
-      - [ ] `#| sandbox: wasm` parsed (Parser, Decorations NotebookOptions)
+      - [x] `#| sandbox: wasm` parsed (Parser, Decorations `sandboxWasm`)
             and carried through editor, cache key and badge ("wasm").
-      - [ ] `SandboxTier::Wasm = 2`: `wasmtime run -C cache=n --dir
-            <cell>::/cell -W max-memory-size=... module args`; nested in
+      - [x] `SandboxTier::Wasm = 2`: `wasmtime run -C cache=n --dir
+            <cell>::/cell -W max-memory-size=1GiB module args`; nested in
             bwrap + seccomp when bwrap exists, alone when not (WASI is the
             sandbox: no files but /cell, no network). Refused with a clear
-            message when wasmtime is missing (SandboxAvailability::wasmtime).
-      - [ ] `wat`/`wasm` blocks run themselves as the module, in any tier.
-      - [ ] Other languages in the wasm tier: the module from setting
-            `notebooks.wasmModules` (`python=/path/python.wasm;...`), its
-            file at /cell/<cell file>; no module, refused, saying which.
-      - [ ] Tests: a WAT fixture printing to stdout via fd_write runs in
-            tier 1 and tier 2; the module map exercised with a WAT fixture
-            standing in for an interpreter; missing wasmtime refuses.
-      - [ ] Docs; check.sh green. Honest ceiling: no real interpreter
-            module (python.wasm) has run through it - none is installed.
+            message when wasmtime is missing. wrapCommand treats any tier
+            but Host as bubblewrap, so a kernel is never run as the user in
+            this tier (and the controller never gives a wasm block one).
+      - [x] `wat`/`wasm` blocks run themselves as the module, in any tier.
+      - [x] Other languages in the wasm tier: the module from setting
+            `notebooks.wasmModules` (`python=/path/python.wasm;...`, also a
+            Settings row), its file at /cell/<cell file>; no module, refused,
+            saying which. A runnable embed's folder is not granted.
+      - [x] Tests: a WAT fixture printing to stdout via fd_write runs in
+            tier 1 and the wasm tier; the module map exercised with a WAT
+            fixture standing in for an interpreter (prints its argv);
+            missing module and missing wasmtime refuse; parser, editor and
+            cache-key cases.
+      - [x] Docs (docs/NOTEBOOKS.md); check.sh green. Honest ceiling: no
+            real interpreter module (python.wasm) has run through it - none
+            is installed; only WAT fixtures have. The no-bubblewrap path
+            (wasmtime alone) is written but was not run: bwrap is installed
+            here.
 - [x] **Without bubblewrap, everything that runs in a sandbox runs as the
       user, silently**: plugins (PluginHost::sandboxArguments), TeX
       (TexCompiler) and tier 1 code blocks (wrapCommand) all fell back to

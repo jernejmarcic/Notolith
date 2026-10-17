@@ -673,7 +673,8 @@ namespace {
 
 /// Runs `source` and waits for the answer; nullopt if none came.
 std::optional<NotebookRunResult> runDirect(const QString &language, const QString &source,
-                                           SandboxTier tier = SandboxTier::Bubblewrap, int timeoutMs = 30'000)
+                                           SandboxTier tier = SandboxTier::Bubblewrap, int timeoutMs = 30'000,
+                                           const QString &wasmModule = QString())
 {
     DirectRunner runner;
     std::optional<NotebookRunResult> result;
@@ -682,6 +683,7 @@ std::optional<NotebookRunResult> runDirect(const QString &language, const QStrin
     request.source = source;
     request.tier = tier;
     request.timeoutMs = timeoutMs;
+    request.wasmModule = wasmModule;
     runner.run(request, [&result](NotebookRunResult r) { result = r; });
     (void)QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
     return result;
@@ -786,6 +788,127 @@ TEST(DirectRunnerTest, TheSandboxKeepsOtherFilesOut)
     const auto host = runDirect(QStringLiteral("bash"), QStringLiteral("cat '%1'\n").arg(secret.fileName()), SandboxTier::Host);
     ASSERT_TRUE(host.has_value());
     EXPECT_TRUE(textOf(*host).contains(QStringLiteral("do not read")));
+}
+
+// --- the WebAssembly tier ----------------------------------------------------
+
+namespace {
+
+// Prints "hi from wasm" through WASI's fd_write.
+constexpr char kHelloWat[] = R"((module
+  (import "wasi_snapshot_preview1" "fd_write" (func $w (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 16) "hi from wasm\0a")
+  (func (export "_start")
+    (i32.store (i32.const 0) (i32.const 16)) (i32.store (i32.const 4) (i32.const 13))
+    (drop (call $w (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))
+)";
+
+// An interpreter stand-in: prints its whole argv (NUL separated).
+constexpr char kArgvWat[] = R"((module
+  (import "wasi_snapshot_preview1" "args_sizes_get" (func $sizes (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "args_get" (func $get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $w (param i32 i32 i32 i32) (result i32)))
+  (memory (export "memory") 1)
+  (func (export "_start")
+    (drop (call $sizes (i32.const 0) (i32.const 4)))
+    (drop (call $get (i32.const 64) (i32.const 128)))
+    (i32.store (i32.const 8) (i32.const 128))
+    (i32.store (i32.const 12) (i32.load (i32.const 4)))
+    (drop (call $w (i32.const 1) (i32.const 8) (i32.const 1) (i32.const 16)))))
+)";
+
+bool haveWasmtime()
+{
+    return !QStandardPaths::findExecutable(QStringLiteral("wasmtime")).isEmpty();
+}
+
+QString writeFile(const QTemporaryDir &dir, const QString &name, const char *text)
+{
+    const QString path = dir.filePath(name);
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(text);
+    return path;
+}
+
+} // namespace
+
+TEST(WasmTierTest, AWatBlockRunsInTheDefaultTier)
+{
+    if (!haveWasmtime() || !DirectRunner::canRun(QStringLiteral("wat")))
+        GTEST_SKIP() << "wasmtime is not installed";
+    const auto result = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString() << result->kernelError.toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("hi from wasm\n"));
+}
+
+TEST(WasmTierTest, AWatBlockRunsInTheWasmTier)
+{
+    if (!haveWasmtime())
+        GTEST_SKIP() << "wasmtime is not installed";
+    const auto result = runDirect(QStringLiteral("wasm"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString() << result->kernelError.toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("hi from wasm\n"));
+}
+
+TEST(WasmTierTest, AnotherLanguageRunsThroughItsConfiguredModule)
+{
+    if (!haveWasmtime())
+        GTEST_SKIP() << "wasmtime is not installed";
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString module = writeFile(dir, QStringLiteral("interp.wat"), kArgvWat);
+    // "python" blocks, though python3 itself is not what runs.
+    const auto result = runDirect(QStringLiteral("python"), QStringLiteral("print('x')\n"), SandboxTier::Wasm, 30'000, module);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString() << result->kernelError.toStdString();
+    // The module's argv: its own name, then the block's file as the guest sees it.
+    const QStringList argv = textOf(*result).split(QChar(0), Qt::SkipEmptyParts);
+    ASSERT_EQ(argv.size(), 2) << "python's own -c wrapper must not be passed";
+    EXPECT_EQ(argv.last(), QStringLiteral("/cell/cell.py"));
+}
+
+TEST(WasmTierTest, WithoutAModuleOrWithoutWasmtimeABlockIsRefused)
+{
+    if (!haveWasmtime())
+        GTEST_SKIP() << "wasmtime is not installed";
+    const auto none = runDirect(QStringLiteral("python"), QStringLiteral("print(1)\n"), SandboxTier::Wasm);
+    ASSERT_TRUE(none.has_value());
+    EXPECT_FALSE(none->ok);
+    EXPECT_TRUE(none->kernelError.contains(QStringLiteral("no WebAssembly module set for \"python\" blocks")))
+        << none->kernelError.toStdString();
+    EXPECT_TRUE(none->kernelError.contains(QStringLiteral("notebooks.wasmModules")));
+
+    // wasmtime gone from PATH: refused in the tier, never run another way.
+    const QByteArray path = qgetenv("PATH");
+    qputenv("PATH", "");
+    const auto missing = runDirect(QStringLiteral("wat"), QString::fromLatin1(kHelloWat), SandboxTier::Wasm);
+    qputenv("PATH", path);
+    ASSERT_TRUE(missing.has_value());
+    EXPECT_FALSE(missing->ok);
+    EXPECT_TRUE(missing->kernelError.contains(QStringLiteral("wasmtime")));
+}
+
+TEST(WasmTierTest, TheModuleSettingIsLookedUpByAnyNameOfTheLanguage)
+{
+    const QString setting = QStringLiteral(" python = /m/python.wasm ;ruby=/m/ruby.wasm;;junk");
+    EXPECT_EQ(DirectRunner::wasmModuleFor(setting, QStringLiteral("python")), QStringLiteral("/m/python.wasm"));
+    EXPECT_EQ(DirectRunner::wasmModuleFor(setting, QStringLiteral("PY")), QStringLiteral("/m/python.wasm"));
+    EXPECT_EQ(DirectRunner::wasmModuleFor(setting, QStringLiteral("rb")), QStringLiteral("/m/ruby.wasm"));
+    EXPECT_TRUE(DirectRunner::wasmModuleFor(setting, QStringLiteral("lua")).isEmpty());
+    EXPECT_TRUE(DirectRunner::wasmModuleFor(QString(), QStringLiteral("python")).isEmpty());
+}
+
+TEST(WasmTierTest, TheTierIsPartOfTheCacheKey)
+{
+    const QString source = QStringLiteral("print(1)");
+    EXPECT_NE(notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Bubblewrap),
+              notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Wasm));
+    EXPECT_NE(notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Host),
+              notebookCacheKey(QStringLiteral("python"), source, SandboxTier::Wasm));
 }
 
 // ASan caught this one: erasing a kernel session killed its process, and

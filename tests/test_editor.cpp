@@ -1776,6 +1776,25 @@ TEST(NotebookBlockTest, EvalFalseNeverRunsAndSandboxHostIsPassedOn)
     EXPECT_EQ(hostRequests, QList<bool>{true}); // asked for; the window decides whether to honour it
 }
 
+TEST(NotebookBlockTest, SandboxWasmIsPassedOnAndIsNotHost)
+{
+    const QString note = QStringLiteral("```python\n#| sandbox: wasm\nprint(3)\n```\n");
+    auto editor = editorWith(note);
+    QList<QPair<bool, bool>> requests;
+    editor->setNotebookRunner([&requests](const QString &, const QString &, bool forceRun,
+                                          const MarkdownEditor::NotebookRunOptions &options,
+                                          const MarkdownEditor::NotebookDeliver &deliver) {
+        if (forceRun)
+            requests.append({options.sandboxHost, options.sandboxWasm});
+        QTimer::singleShot(0, [deliver] { deliver(MarkdownEditor::NotebookRunResult{}); });
+    });
+    QTest::qWait(20);
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(3)"))));
+    ASSERT_EQ(requests.size(), 1);
+    EXPECT_FALSE(requests.first().first);
+    EXPECT_TRUE(requests.first().second);
+}
+
 TEST(NotebookBlockTest, AnEmbeddedScriptRunsFromItsOwnFolder)
 {
     QTemporaryDir dir;

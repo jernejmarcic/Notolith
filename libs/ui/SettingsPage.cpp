@@ -778,6 +778,10 @@ QWidget *SettingsPage::buildCorePluginsPage()
     addToggleRow(layout, QStringLiteral("notebooks.allowHostTier"), tr("Let notes run code outside the sandbox"),
                  tr("A code block's \"#| sandbox: host\" runs it as you, with your files. Off, every block "
                     "runs sandboxed whatever it asks."));
+    addLineEditRow(layout, QStringLiteral("notebooks.wasmModules"), tr("WebAssembly modules for \"#| sandbox: wasm\""),
+                   tr("The module that runs each language in the wasm sandbox, as language=path pairs "
+                      "separated by semicolons. \"wat\" blocks need none."),
+                   QStringLiteral("python=/path/python.wasm;ruby=/path/ruby.wasm"));
     addToggleRow(layout, QStringLiteral("notebooks.sharedKernel"), tr("Share one kernel between a note's code blocks"),
                  tr("Like a Jupyter notebook: a variable one block sets is there for the next, and a block's "
                     "number counts its runs. Needs the language's Jupyter kernel (Python: ipykernel); "

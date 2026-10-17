@@ -83,6 +83,9 @@ const QVariantMap &defaults()
         // false: each block is a short process of the system's own tool. true: a note's blocks share
         // one Jupyter kernel per language (variables persist, execution counts, rich output) where one is installed.
         {QStringLiteral("notebooks.sharedKernel"), false},
+        // `#| sandbox: wasm` blocks run a WebAssembly module in place of the language's interpreter:
+        // `python=/path/python.wasm;ruby=/path/ruby.wasm`. A language with no entry is refused there.
+        {QStringLiteral("notebooks.wasmModules"), QString()},
         {QStringLiteral("editor.gpuAcceleration"), false},
         // Mermaid diagrams, drawn by an external tool on a thread pool. On is free until a
         // ```mermaid fence is on screen; the tool is a name looked up on PATH and in the cargo bin directories, or a path.

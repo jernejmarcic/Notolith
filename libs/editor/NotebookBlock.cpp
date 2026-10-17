@@ -252,6 +252,7 @@ MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const Block
 {
     NotebookRunOptions options;
     options.sandboxHost = view.notebookSandboxHost;
+    options.sandboxWasm = view.notebookSandboxWasm;
     options.workingDir = view.notebookWorkingDir;
     options.cache = view.notebookCacheOn;
     options.timeoutSeconds = view.notebookTimeout;
@@ -272,19 +273,21 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
                                               const CodeOptions *options)
 {
     const bool sandboxHost = options && options->sandboxHost;
+    const bool sandboxWasm = options && options->sandboxWasm;
     // The tier is part of the key: a host-tier and a bubblewrap-tier run of
     // the same source must never share a cached result (this stage's own
     // requirement) - the working directory is not, since it never changes
     // what the code itself does, only what files sit beside it. The kernel
     // choice is: it changes what state the code runs against.
     const QString key = language.trimmed().toLower() + QLatin1Char('|')
-                       + (sandboxHost ? QStringLiteral("host") : QStringLiteral("bwrap"))
+                       + (sandboxHost ? QStringLiteral("host") : sandboxWasm ? QStringLiteral("wasm") : QStringLiteral("bwrap"))
                        + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
     view.notebookKey = key;
     view.notebookLanguage = language;
     view.notebookSource = source;
     view.notebookWorkingDir = workingDir;
     view.notebookSandboxHost = sandboxHost;
+    view.notebookSandboxWasm = sandboxWasm;
     view.notebookCacheOn = !options || options->cache;
     view.notebookShowOutput = !options || options->output;
     view.notebookTimeout = options ? options->timeoutSeconds : 0;
@@ -465,11 +468,13 @@ void MarkdownEditor::paintNotebookRunControl(QPainter &painter, const BlockView 
 void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &view, qreal left,
                                             qreal top) const
 {
-    // "host" for tier 0, then Jupyter's execution count: [3] after a run in a
+    // "host" for tier 0, "wasm" for the WebAssembly tier, then Jupyter's execution count: [3] after a run in a
     // kernel, [*] while one runs there.
     QString text;
     if (view.notebookSandboxHost)
         text = tr("host");
+    else if (view.notebookSandboxWasm)
+        text = tr("wasm");
     if (view.notebookRunning && view.notebookCount > 0)
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[*]");
     else if (view.notebookCount > 0)

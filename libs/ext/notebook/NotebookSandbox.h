@@ -13,6 +13,11 @@ namespace noteAppC::notebook {
 enum class SandboxTier {
     Host = 0,       ///< no sandbox: the kernel runs as the user, full filesystem access
     Bubblewrap = 1, ///< namespaces + an explicit bind allowlist (the desktop default)
+    /// A WebAssembly module under `wasmtime run`, nested inside tier 1's
+    /// bubblewrap when it is installed. Only DirectRunner builds this one:
+    /// wrapCommand knows nothing of it and treats it as Bubblewrap, so a
+    /// kernel asked for in this tier is confined, never run as the user.
+    Wasm = 2,
 };
 
 /// What a launch needs bound in, beyond the read-only system directories
@@ -29,16 +34,21 @@ struct SandboxRequest {
 /// stage 13's "check what is installed before building on it".
 struct SandboxAvailability {
     bool bubblewrap = false;
-    /// Tier 2 (gVisor/Firecracker/a container runtime) is documented, not
-    /// built: neither podman nor docker is installed on the machine this
-    /// lane was built on, and the requirement says leave what is missing for
-    /// Jernej rather than install anything. True here would mean a future
-    /// tier 2 could actually run, not that this build implements one.
+    /// A container tier (gVisor/Firecracker/a container runtime) is
+    /// documented, not built: neither podman nor docker is installed on the
+    /// machine this lane was built on, and the requirement says leave what
+    /// is missing for Jernej rather than install anything. True here would
+    /// mean such a tier could actually run, not that this build implements
+    /// one.
     bool containerRuntime = false;
+    /// The WebAssembly tier's runtime (a `wasmtime` CLI; there is no C API
+    /// here), needed for SandboxTier::Wasm and for `wat`/`wasm` blocks.
+    bool wasmtime = false;
 };
 SandboxAvailability detectSandboxAvailability();
 
-/// Wraps `program`+`args` for `tier`. When Bubblewrap was asked for and
+/// Wraps `program`+`args` for `tier`. Only SandboxTier::Host is left alone;
+/// every other tier (Wasm included) gets bubblewrap. When Bubblewrap was asked for and
 /// `bwrap` is not on PATH, `*outProgram` comes back empty and the caller
 /// refuses the run: a block never falls back to running as the user unless
 /// it asked for SandboxTier::Host (which Settings has to allow).
