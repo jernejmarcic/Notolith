@@ -99,11 +99,15 @@ void MarkdownEditor::finishCalloutTitleEdit(bool commit)
     QLineEdit *edit = m_calloutTitleEdit;
     m_calloutTitleEdit = nullptr;
     const QString typed = edit->text().trimmed();
+    // Only a field that held the focus hands it back: one closed by an edit
+    // from another tab must not take the focus off whatever is being typed in.
+    const bool focused = edit->hasFocus();
     edit->removeEventFilter(this);
     edit->disconnect(this);
     edit->hide();
     edit->deleteLater();
-    setFocus();
+    if (focused)
+        setFocus();
     viewport()->update();
     if (!commit)
         return;

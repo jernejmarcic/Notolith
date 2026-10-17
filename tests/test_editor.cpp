@@ -1583,6 +1583,25 @@ TEST(CalloutTitleTest, ReadingModeNeverFillsAShortRow)
     }
 }
 
+TEST(CalloutTitleTest, AnExternalEditKeepsTheTypedTitleOnItsCallout)
+{
+    const QString note = QStringLiteral("> [!note] First\n> a\n\n> [!tip] Second\n> b\n");
+    auto editor = editorWith(note);
+    editor->show();
+    QApplication::processEvents();
+    const qsizetype second = note.indexOf(QStringLiteral("> [!tip]"));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->calloutTitleRectAt(second).center().toPoint());
+    auto *edit = editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"));
+    ASSERT_TRUE(edit && edit->isVisible());
+    QTest::keyClicks(edit, QStringLiteral(" 2"));
+    // Another tab on the same note typed above it, while this title is open:
+    // what was typed lands on its own callout, not lost, not on another.
+    editor->applyExternalEdit(0, 0, QStringLiteral("intro\n\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("intro\n\n> [!note] First\n> a\n\n> [!tip] Second 2\n> b\n"));
+    EXPECT_FALSE(editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"))->isVisible());
+}
+
 // --- neighbouring blocks never overlap ------------------------------------
 
 /// Scrolls through the whole note, the way reading it would, and says where two
