@@ -17,6 +17,7 @@
 #include "MarkdownEditor.h"
 #include "Settings.h"
 #include "Theme.h"
+#include "FileIcons.h"
 #include "Vault.h"
 
 class QButtonGroup;
@@ -181,6 +182,10 @@ private slots:
     /// file, then links, history, tabs and the index follow. False with `error`.
     bool renameVaultPath(const QString &oldPath, bool isDir, const QString &newName, QString *error);
     void deletePathAt(const QModelIndex &index);
+    /// A UI-only icon for a file or folder in the tree and on its tabs: a
+    /// bundled icon id or one character; empty removes it. Kept outside the
+    /// vault (FileIcons).
+    Q_INVOKABLE void setFileIcon(const QString &absolutePath, const QString &icon);
 
 private:
     struct TabGroup;
@@ -235,6 +240,12 @@ private:
     /// only tab while nothing is open in it, which shows no tab at all.
     void syncTabs(TabGroup *group);
     QString tabTitle(const Leaf *leaf) const;
+    QIcon tabIcon(const Leaf *leaf) const;
+    /// appearance.fileIcons; off hides every icon and the menu items, the icons are kept.
+    bool fileIconsOn() const;
+    void chooseFileIcon(const QString &absolutePath);
+    /// The tree and every tab, after an icon or the setting changed.
+    void refreshFileIcons();
     /// The editor's modified flag, or the canvas's when the tab shows one.
     bool isModified(const Leaf *leaf) const;
     /// A file a tab shows in a view of its own rather than the editor: a
@@ -540,6 +551,7 @@ void updateVimStatus();
     Settings m_settings = Settings::load();
     OpenMode m_openMode = OpenMode::Empty;
     Vault m_vault;
+    FileIcons m_fileIcons;
     Index m_index;
     Indexer *m_indexer = nullptr;
     /// What openWhenShown() is waiting to open, cleared by the first paint.

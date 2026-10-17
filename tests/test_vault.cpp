@@ -2,6 +2,7 @@
 #include "Snapshots.h"
 
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -9,6 +10,8 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include "FileIcons.h"
+#include "Settings.h"
 #include "Vault.h"
 
 using noteAppC::Note;
@@ -463,3 +466,66 @@ TEST_F(SnapshotsTest, OldVersionsArePrunedAndTheirNoteForgotten)
     EXPECT_EQ(noteAppC::Snapshots::notes(), QStringList{QStringLiteral("/v/New.md")});
 }
 
+
+namespace {
+
+/// Every path under `root`, hidden ones too.
+QStringList listing(const QString &root)
+{
+    QStringList paths;
+    QDirIterator it(root, QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext())
+        paths << it.next();
+    paths.sort();
+    return paths;
+}
+
+} // namespace
+
+TEST(FileIconsTest, RoundTripAndStoragePathIsOutsideTheVault)
+{
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    QFile note(vault.filePath(QStringLiteral("Note.md")));
+    ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+    note.close();
+    const QStringList before = listing(vault.path());
+
+    noteAppC::FileIcons icons(vault.path());
+    icons.load();
+    EXPECT_TRUE(icons.isEmpty()) << "no file yet is no icons";
+    icons.set(QStringLiteral("Note.md"), QStringLiteral("zap"));
+    icons.set(QStringLiteral("Projects"), QStringLiteral("folder-open"));
+    icons.set(QStringLiteral("Daily"), QStringLiteral("D"));
+    ASSERT_TRUE(icons.save());
+
+    noteAppC::FileIcons again(vault.path());
+    again.load();
+    EXPECT_EQ(again.iconFor(QStringLiteral("Note.md")), QStringLiteral("zap"));
+    EXPECT_EQ(again.iconFor(QStringLiteral("Projects")), QStringLiteral("folder-open"));
+    EXPECT_EQ(again.iconFor(QStringLiteral("Daily")), QStringLiteral("D"));
+    again.set(QStringLiteral("Daily"), QString());
+    EXPECT_TRUE(again.iconFor(QStringLiteral("Daily")).isEmpty()) << "an empty icon removes it";
+
+    const QString stored = noteAppC::FileIcons::storagePathFor(vault.path());
+    EXPECT_TRUE(stored.startsWith(noteAppC::Settings::configDirectory()));
+    EXPECT_FALSE(stored.startsWith(vault.path()));
+    EXPECT_EQ(listing(vault.path()), before) << "nothing written into the vault";
+}
+
+TEST(FileIconsTest, RenamePrefixMovesAFolderAndItsChildren)
+{
+    noteAppC::FileIcons icons;
+    icons.set(QStringLiteral("A"), QStringLiteral("folder"));
+    icons.set(QStringLiteral("A/x.md"), QStringLiteral("zap"));
+    icons.set(QStringLiteral("AB/y.md"), QStringLiteral("tag"));
+    icons.renamePrefix(QStringLiteral("A"), QStringLiteral("B"));
+    EXPECT_EQ(icons.iconFor(QStringLiteral("B")), QStringLiteral("folder"));
+    EXPECT_EQ(icons.iconFor(QStringLiteral("B/x.md")), QStringLiteral("zap"));
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("A/x.md")).isEmpty());
+    EXPECT_EQ(icons.iconFor(QStringLiteral("AB/y.md")), QStringLiteral("tag")) << "a sibling sharing the prefix stays";
+    icons.removeUnder(QStringLiteral("B"));
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("B")).isEmpty());
+    EXPECT_TRUE(icons.iconFor(QStringLiteral("B/x.md")).isEmpty());
+    EXPECT_EQ(icons.iconFor(QStringLiteral("AB/y.md")), QStringLiteral("tag"));
+}

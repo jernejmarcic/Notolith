@@ -315,6 +315,15 @@ the gap on the left being lit up."
   the vault, so links, history, plugins and open tabs follow, exactly as with
   the inline title. Dragging files in the tree is not supported (a drop through
   QFileSystemModel would rename around the vault).
+- **Icons.** "Change icon..." in a row's context menu picks one of the bundled
+  icons (searchable, each shown) or takes one typed character; "Remove icon"
+  clears it. The icon shows left of the name in the tree and on the note's tabs,
+  in `--text-normal` and `--text-muted`. UI only: kept in
+  `<config dir>/noteAppC/vaults/<digest>/icons.json` next to the bookmarks, never
+  in the vault or a file name; a rename or move takes it along (a folder's
+  children too), a delete drops it. Settings > Appearance > "Icons on files and
+  folders" hides them all and keeps them. Not shown in the quick switcher or the
+  inline title; Obsidian's Iconize data is not imported.
 
 ## Bare brackets and meta notes
 

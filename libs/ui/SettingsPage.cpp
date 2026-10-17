@@ -508,6 +508,9 @@ QWidget *SettingsPage::buildAppearancePage()
 
     addToggleRow(layout, QStringLiteral("appearance.showInlineTitle"), tr("Show inline title"),
                 tr("Show the note's file name as a heading above its text."));
+    addToggleRow(layout, QStringLiteral("appearance.fileIcons"), tr("Icons on files and folders"),
+                tr("Show the icons set with 'Change icon...' in the file explorer and on tabs. "
+                   "They are kept outside the vault, never in a file name."));
     // appearance.showRibbon has no control here: the ribbon this key used to
     // gate is gone, replaced by the header bar, and nothing in the new shell
     // reads it. Left alone since Settings' key list is not this session's.
