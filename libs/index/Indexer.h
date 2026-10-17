@@ -76,6 +76,7 @@ private:
     };
     static Parsed parseFile(const QString &path, const NotebookReader &notebooks, const ParseOptions &options);
     bool isNotebook(const QString &path) const;
+    void clearMetaNotes(); ///< the rows and the key, at once
 
     /// What a scan tells the Index's thread, a chunk at a time.
     struct Batch {
@@ -108,6 +109,7 @@ private:
     bool m_forceRescan = false; ///< and that walk re-parses every note
     ParseOptions m_scanOptions; ///< what the running scan parses with
     bool m_scanSetsKey = false; ///< it re-parses every note, so its end records m_scanOptions
+    bool m_clearMetaNotes = false; ///< switched off during a scan: its end clears the rows
     ParseOptions m_parseOptions; ///< only the meta-note fields set
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
     NotebookReader m_notebookReader;

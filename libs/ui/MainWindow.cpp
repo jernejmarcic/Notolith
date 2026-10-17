@@ -1606,7 +1606,7 @@ void MainWindow::chooseFileIcon(const QString &absolutePath)
     connect(picker, &QuickSwitcher::createRequested, this, [this, absolutePath, picker](const QString &typed) {
         picker->deleteLater();
         const QString text = typed.trimmed();
-        if (text.toUcs4().size() == 1)
+        if (FileIcons::isGlyph(text))
             setFileIcon(absolutePath, text);
         else
             statusBar()->showMessage(tr("Not an icon name: type one character, or pick from the list"), 4000);
@@ -3130,8 +3130,8 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
         QMessageBox::warning(this, tr("Merge"), tr("Merged, but %1 stays:\n%2").arg(QFileInfo(source).fileName(), error));
         return false;
     }
-    m_fileIcons.removeUnder(m_vault.relative(source));
-    m_fileIcons.save();
+    if (m_fileIcons.removeUnder(m_vault.relative(source)))
+        m_fileIcons.save();
     openNote(target);
     QList<Leaf *> gone;
     for (const auto &leaf : m_leaves) {
@@ -4035,11 +4035,13 @@ void MainWindow::openVault(const QString &path)
     syncTabs(m_active->group);
 
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
-    updateNotebookIndex(); // before the scan: a vault's notebooks are indexed by the first one
-    m_indexer->setVault(m_vault);
-
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
+    // Before the scan, by this vault's settings: its notebooks and meta notes
+    // are indexed by the first one, and a warm cache is checked against them.
+    updateNotebookIndex();
+    m_indexer->setMetaNotes(parseOptions());
+    m_indexer->setVault(m_vault);
     applySettings();
     if (m_bookmarks)
         m_bookmarks->setVaultRoot(m_vault.root());
@@ -5546,10 +5548,9 @@ void MainWindow::followLostNotes(bool final)
         const QString moved = findMovedNote(path, (*first)->note);
         if (!moved.isEmpty()) {
             m_lostNotes.remove(path);
-            if (m_vault.contains(path) && m_vault.contains(moved)) {
-                m_fileIcons.renamePrefix(m_vault.relative(path), m_vault.relative(moved));
+            if (m_vault.contains(path) && m_vault.contains(moved)
+                && m_fileIcons.renamePrefix(m_vault.relative(path), m_vault.relative(moved)))
                 m_fileIcons.save();
-            }
             // The caret, the scroll and what is typed stay: only the name changes.
             for (const auto &leaf : m_leaves) {
                 if (!leaf->view && leaf->notePath == path) {
@@ -6039,8 +6040,8 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))
         return false;
     const QString newRelative = m_vault.relative(newPath);
-    m_fileIcons.renamePrefix(oldRelative, newRelative);
-    m_fileIcons.save();
+    if (m_fileIcons.renamePrefix(oldRelative, newRelative))
+        m_fileIcons.save();
     notifyPlugins("note-renamed", newPath);
 #ifdef NOTEAPPC_HAVE_HISTORY
     // The history follows the note: every note under a renamed folder too.
@@ -6138,8 +6139,8 @@ void MainWindow::deletePathAt(const QModelIndex &index)
         QMessageBox::warning(this, tr("Delete"), tr("Could not delete %1:\n%2").arg(name, error));
         return;
     }
-    m_fileIcons.removeUnder(m_vault.relative(path));
-    m_fileIcons.save();
+    if (m_fileIcons.removeUnder(m_vault.relative(path)))
+        m_fileIcons.save();
 
     // Obsidian closes the tabs of what was deleted.
     QList<Leaf *> gone;

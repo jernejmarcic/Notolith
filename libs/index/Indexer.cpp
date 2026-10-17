@@ -65,6 +65,7 @@ void Indexer::stop()
     m_scan.waitForFinished();
     m_rescan = false;
     m_forceRescan = false;
+    m_clearMetaNotes = false; // the key still says what the rows are: setVault() compares it
     m_pending.clear();
 }
 
@@ -83,8 +84,7 @@ void Indexer::setVault(const Vault &vault)
     if (m_index->metaNotesKey() == metaNotesKey(m_parseOptions)) {
         rebuild();
     } else if (!m_parseOptions.metaNotes) {
-        m_index->clearMetaNotes();
-        m_index->setMetaNotesKey({});
+        clearMetaNotes();
         rebuild();
     } else {
         start({}, true); // the cache's runs are by other delimiters, or none: every note again
@@ -113,11 +113,20 @@ void Indexer::setMetaNotes(const ParseOptions &options)
     if (!m_vault.isValid() || !m_index->isOpen())
         return;
     if (next.metaNotes) {
+        m_clearMetaNotes = false;
         start({}, true);
+    } else if (m_scan.isRunning()) {
+        m_clearMetaNotes = true; // its writer holds the database: cleared when it ends
     } else {
-        m_index->clearMetaNotes(); // a scan running now clears what it wrote when it ends
-        m_index->setMetaNotesKey({});
+        clearMetaNotes();
     }
+}
+
+void Indexer::clearMetaNotes()
+{
+    m_clearMetaNotes = false;
+    m_index->clearMetaNotes();
+    m_index->setMetaNotesKey({});
 }
 
 bool Indexer::isNotebook(const QString &path) const
@@ -273,8 +282,8 @@ void Indexer::apply(const Batch &batch)
         return;
     }
     m_scan.waitForFinished(); // it posted this as its last act
-    if (m_scanOptions.metaNotes && !m_parseOptions.metaNotes) {
-        m_index->clearMetaNotes(); // switched off while it ran: what it wrote is stale
+    if (!m_parseOptions.metaNotes && (m_clearMetaNotes || m_scanOptions.metaNotes)) {
+        clearMetaNotes(); // switched off while it ran: what it or the cache held is stale
     } else if (m_scanSetsKey) {
         // Every note was parsed by the options it started with. Changed since,
         // another forced pass is queued and sets the key again.

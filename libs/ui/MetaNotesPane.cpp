@@ -177,8 +177,44 @@ void MetaNotesPane::setNote(const QString &text, const QList<Range> &runs, const
         updateHighlight();
         return;
     }
+    if (sameShape(rows, m_rows)) {
+        // Typing inside a run changed its words, not the list: rewrite those
+        // rows' labels in place (a populate() is a widget per row, per parse).
+        m_rows = rows;
+        for (qsizetype i = 0; i < m_items.size(); ++i) {
+            const Row &row = m_rows.at(m_itemRow.at(i));
+            QTreeWidgetItem *item = m_items.at(i);
+            item->setData(0, kRunData, qlonglong(row.range.start));
+            item->setData(0, kRunData + 1, qlonglong(row.range.end));
+            item->setToolTip(0, row.run);
+            if (auto *label = qobject_cast<QLabel *>(m_tree->itemWidget(item, 0))) {
+                const QString html = rowHTML(row);
+                if (label->text() != html)
+                    label->setText(html);
+            }
+        }
+        updateHighlight();
+        return;
+    }
     m_rows = rows;
     populate();
+}
+
+bool MetaNotesPane::sameShape(const QList<Row> &a, const QList<Row> &b) const
+{
+    if (a.size() != b.size())
+        return false;
+    const QString needle = m_filter->text().trimmed();
+    for (qsizetype i = 0; i < a.size(); ++i) {
+        const Row &l = a.at(i);
+        const Row &r = b.at(i);
+        if (l.group != r.group || l.line != r.line || l.heading != r.heading)
+            return false;
+        if (!needle.isEmpty()
+            && l.inner.contains(needle, Qt::CaseInsensitive) != r.inner.contains(needle, Qt::CaseInsensitive))
+            return false; // the filter shows another set of rows
+    }
+    return true;
 }
 
 void MetaNotesPane::clear()
@@ -264,7 +300,11 @@ void MetaNotesPane::runVaultQuery()
     if (!m_search)
         return;
     const QString filter = m_filter->text().trimmed();
-    m_search->setQuery(filter.isEmpty() ? QStringLiteral("meta:") : QStringLiteral("meta:(%1)").arg(filter));
+    // A phrase, as this note's filter matches it: the text to find, not search
+    // syntax. ponytail: a trailing backslash escapes the closing quote.
+    QString quoted = filter;
+    quoted.replace(QLatin1Char('"'), QStringLiteral("\\\""));
+    m_search->setQuery(filter.isEmpty() ? QStringLiteral("meta:") : QStringLiteral("meta:\"%1\"").arg(quoted));
 }
 
 void MetaNotesPane::updateMode()

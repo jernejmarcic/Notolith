@@ -26,6 +26,7 @@
 #include <QFileInfo>
 #include <QInputDialog>
 #include <QLabel>
+#include <QPointer>
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
@@ -84,6 +85,7 @@
 #include <QTreeWidget>
 
 #include "Index.h"
+#include "Indexer.h"
 #include "CodeHighlighter.h"
 #include "HtmlRenderer.h"
 #include "MathRenderer.h"
@@ -4740,6 +4742,7 @@ TEST_F(WindowTest, TheMetaNotesPaneGroupsRunsUnderHeadingsAndJumps)
     auto *second = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(1)->child(0), 0));
     ASSERT_NE(second, nullptr);
     EXPECT_TRUE(second->property("current").toBool());
+    const QPointer<QLabel> label = second; // a rebuild deletes it, and a new one may take its address
 
     // Typing a letter outside the runs leaves the rows alone (no rebuild)...
     QTreeWidgetItem *before = tree->topLevelItem(1)->child(0);
@@ -4747,6 +4750,13 @@ TEST_F(WindowTest, TheMetaNotesPaneGroupsRunsUnderHeadingsAndJumps)
     QTest::keyClicks(editor, QStringLiteral("x"));
     QTest::qWait(150); // the parse
     EXPECT_EQ(tree->topLevelItem(1)->child(0), before);
+    EXPECT_FALSE(label.isNull());
+    // ...typing inside a run rewrites that row's label, not the list...
+    editor->setCursorOffset(editor->noteText().indexOf(QStringLiteral("second]")) + 6);
+    QTest::keyClicks(editor, QStringLiteral("ly"));
+    WAIT_TRUE(rowText(tree->topLevelItem(1)->child(0)).contains(QStringLiteral(">secondly<")), 2000);
+    EXPECT_EQ(tree->topLevelItem(1)->child(0), before);
+    EXPECT_FALSE(label.isNull()) << "the same label widget, not a rebuilt one";
     // ...a fourth run adds a row and bumps the count once the parse lands.
     editor->setCursorOffset(editor->noteText().size());
     QTest::keyClicks(editor, QStringLiteral(" [fourth]"));
@@ -4796,6 +4806,17 @@ TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)
     window.openNote(path(QStringLiteral("Meta.md")));
     WAIT_TRUE(metaStatus(window) == QStringLiteral("2 meta notes") || metaStatus(window) == QStringLiteral("1 meta note"), 2000);
 
+    auto *indexer = window.findChild<noteAppC::Indexer *>();
+    QSignalSpy scans(indexer, &noteAppC::Indexer::finished);
+    const auto settled = [&] { // no scan running, and none started for a while
+        for (qsizetype seen = -1; seen != scans.count();) {
+            seen = scans.count();
+            EXPECT_TRUE(QTest::qWaitFor([&] { return !indexer->isRunning(); }, 5000));
+            QTest::qWait(300);
+        }
+        return scans.count();
+    };
+    const qsizetype before = settled();
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
     const auto type = [&window](const char *key, const QString &text) {
         QLineEdit *edit = nullptr;
@@ -4812,10 +4833,13 @@ TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)
     QTreeWidget *tree = nullptr;
     WAIT_TRUE((tree = metaTree(window)) && !tree->isHidden() && tree->topLevelItemCount() == 1, 2000);
     EXPECT_EQ(tree->topLevelItem(0)->childCount(), 0) << "no headings: the rows are flat";
-    auto *label = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(0), 0));
-    ASSERT_NE(label, nullptr);
-    EXPECT_TRUE(label->text().contains(QStringLiteral(">b<"))) << qPrintable(label->text());
+    // Stored once typing pauses.
+    QLabel *label = nullptr;
+    WAIT_TRUE((label = qobject_cast<QLabel *>(tree->itemWidget(tree->topLevelItem(0), 0)))
+                  && label->text().contains(QStringLiteral(">b<")),
+              2000);
     WAIT_TRUE(metaStatus(window) == QStringLiteral("1 meta note"), 2000);
+    EXPECT_EQ(settled() - before, 1) << "one rescan for the new pair, not one per key";
 }
 
 TEST_F(WindowTest, TheMetaNotesPaneVaultModeListsEveryNoteWithRunsAndDrillsDown)
@@ -4913,6 +4937,20 @@ TEST_F(WindowTest, AnIconShowsOnTheTabAndGoesWhenTheToggleIsOff)
     EXPECT_EQ(icons.iconFor(QStringLiteral("Welcome.md")), QStringLiteral("zap")) << "and keeps it";
 }
 
+TEST_F(WindowTest, ARenameWithoutIconsWritesNoIconFile)
+{
+    PrivateConfig config;
+    MainWindow window;
+    window.openVault(dir.path());
+    bool renamed = false;
+    QString error;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                          Q_ARG(QString, path(QStringLiteral("Welcome.md"))), Q_ARG(bool, false),
+                                          Q_ARG(QString, QStringLiteral("Target")), Q_ARG(QString *, &error)));
+    ASSERT_TRUE(renamed) << error.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(noteAppC::FileIcons::storagePathFor(dir.path())));
+}
+
 TEST_F(WindowTest, DeletingANoteDropsItsIcon)
 {
     PrivateConfig config;
@@ -4933,4 +4971,37 @@ TEST_F(WindowTest, DeletingANoteDropsItsIcon)
     noteAppC::FileIcons icons(dir.path());
     icons.load();
     EXPECT_TRUE(icons.iconFor(QStringLiteral("Welcome.md")).isEmpty());
+}
+
+// The vault's meta notes are indexed by the settings in force when it opens:
+// a warm cache built with them on is trusted, not cleared and re-parsed.
+TEST_F(WindowTest, AWarmOpenWithMetaNotesOnReparsesNothing)
+{
+    PrivateConfig config;
+    {
+        Settings settings = Settings::load();
+        settings.setValue(QStringLiteral("editor.metaNotes"), true);
+        ASSERT_TRUE(settings.save());
+    }
+    write(QStringLiteral("Meta.md"), QByteArray(kMetaNote.data()));
+    const auto open = [this](int *indexed) {
+        MainWindow window;
+        auto *indexer = window.findChild<noteAppC::Indexer *>();
+        ASSERT_NE(indexer, nullptr);
+        QSignalSpy done(indexer, &noteAppC::Indexer::finished);
+        window.openVault(dir.path());
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !done.isEmpty() && !indexer->isRunning(); }, 20000));
+        QTest::qWait(200); // a queued second scan would have started by now
+        ASSERT_FALSE(indexer->isRunning());
+        *indexed = 0;
+        for (const QList<QVariant> &scan : std::as_const(done))
+            *indexed += scan.at(0).toInt();
+        EXPECT_EQ(window.index()->search(QStringLiteral("meta:")).size(), 1);
+    };
+    int cold = 0;
+    open(&cold);
+    EXPECT_GT(cold, 0);
+    int warm = -1;
+    open(&warm);
+    EXPECT_EQ(warm, 0) << "nothing changed on disk or in the settings";
 }

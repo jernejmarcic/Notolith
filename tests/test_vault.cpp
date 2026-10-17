@@ -489,6 +489,8 @@ TEST(FileIconsTest, RoundTripAndStoragePathIsOutsideTheVault)
     QFile note(vault.filePath(QStringLiteral("Note.md")));
     ASSERT_TRUE(note.open(QIODevice::WriteOnly));
     note.close();
+    ASSERT_TRUE(QDir(vault.path()).mkpath(QStringLiteral("Projects")));
+    ASSERT_TRUE(QDir(vault.path()).mkpath(QStringLiteral("Daily")));
     const QStringList before = listing(vault.path());
 
     noteAppC::FileIcons icons(vault.path());
@@ -497,6 +499,7 @@ TEST(FileIconsTest, RoundTripAndStoragePathIsOutsideTheVault)
     icons.set(QStringLiteral("Note.md"), QStringLiteral("zap"));
     icons.set(QStringLiteral("Projects"), QStringLiteral("folder-open"));
     icons.set(QStringLiteral("Daily"), QStringLiteral("D"));
+    icons.set(QStringLiteral("Gone.md"), QStringLiteral("zap")); // moved away outside the app
     ASSERT_TRUE(icons.save());
 
     noteAppC::FileIcons again(vault.path());
@@ -504,6 +507,7 @@ TEST(FileIconsTest, RoundTripAndStoragePathIsOutsideTheVault)
     EXPECT_EQ(again.iconFor(QStringLiteral("Note.md")), QStringLiteral("zap"));
     EXPECT_EQ(again.iconFor(QStringLiteral("Projects")), QStringLiteral("folder-open"));
     EXPECT_EQ(again.iconFor(QStringLiteral("Daily")), QStringLiteral("D"));
+    EXPECT_TRUE(again.iconFor(QStringLiteral("Gone.md")).isEmpty()) << "a path no longer there is dropped";
     again.set(QStringLiteral("Daily"), QString());
     EXPECT_TRUE(again.iconFor(QStringLiteral("Daily")).isEmpty()) << "an empty icon removes it";
 
@@ -519,13 +523,26 @@ TEST(FileIconsTest, RenamePrefixMovesAFolderAndItsChildren)
     icons.set(QStringLiteral("A"), QStringLiteral("folder"));
     icons.set(QStringLiteral("A/x.md"), QStringLiteral("zap"));
     icons.set(QStringLiteral("AB/y.md"), QStringLiteral("tag"));
-    icons.renamePrefix(QStringLiteral("A"), QStringLiteral("B"));
+    EXPECT_TRUE(icons.renamePrefix(QStringLiteral("A"), QStringLiteral("B")));
+    EXPECT_FALSE(icons.renamePrefix(QStringLiteral("C"), QStringLiteral("D"))) << "nothing moved: nothing to save";
     EXPECT_EQ(icons.iconFor(QStringLiteral("B")), QStringLiteral("folder"));
     EXPECT_EQ(icons.iconFor(QStringLiteral("B/x.md")), QStringLiteral("zap"));
     EXPECT_TRUE(icons.iconFor(QStringLiteral("A/x.md")).isEmpty());
     EXPECT_EQ(icons.iconFor(QStringLiteral("AB/y.md")), QStringLiteral("tag")) << "a sibling sharing the prefix stays";
-    icons.removeUnder(QStringLiteral("B"));
+    EXPECT_TRUE(icons.removeUnder(QStringLiteral("B")));
+    EXPECT_FALSE(icons.removeUnder(QStringLiteral("B")));
     EXPECT_TRUE(icons.iconFor(QStringLiteral("B")).isEmpty());
     EXPECT_TRUE(icons.iconFor(QStringLiteral("B/x.md")).isEmpty());
     EXPECT_EQ(icons.iconFor(QStringLiteral("AB/y.md")), QStringLiteral("tag"));
+}
+
+TEST(FileIconsTest, AGlyphIsOneCharacterAsAReaderSeesIt)
+{
+    using noteAppC::FileIcons;
+    EXPECT_TRUE(FileIcons::isGlyph(QStringLiteral("A")));
+    EXPECT_TRUE(FileIcons::isGlyph(QString::fromUcs4(U"\U00002764\U0000FE0F"))) << "with a variation selector";
+    EXPECT_TRUE(FileIcons::isGlyph(QString::fromUcs4(U"\U0001F1F8\U0001F1EE"))) << "a flag: two regional indicators";
+    EXPECT_TRUE(FileIcons::isGlyph(QString::fromUcs4(U"\U0001F44D\U0001F3FD"))) << "with a skin tone";
+    EXPECT_FALSE(FileIcons::isGlyph(QStringLiteral("ab")));
+    EXPECT_FALSE(FileIcons::isGlyph(QString()));
 }

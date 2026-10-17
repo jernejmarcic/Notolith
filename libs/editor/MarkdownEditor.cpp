@@ -4409,6 +4409,8 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(range);
     for (Range &range : m_decorations.metaNotes) // a jump or a delete in these 20 ms
         shift(range);
+    for (Range &range : m_decorations.uncounted) // a selection count in these 20 ms
+        shift(range);
     for (StyleSpan &span : m_decorations.styles)
         shift(span.range);
     // m_decorations.blocks is not shifted: only rebuildBlocks reads it, and

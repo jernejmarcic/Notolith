@@ -75,6 +75,9 @@ private:
         Range range;
     };
     static bool sameDisplay(const QList<Row> &a, const QList<Row> &b);
+    /// Same rows, groups and lines, and the filter shows the same ones: only
+    /// the words differ, so the labels can be rewritten in place.
+    bool sameShape(const QList<Row> &a, const QList<Row> &b) const;
 
     void populate();
     void updateHighlight();

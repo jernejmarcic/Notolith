@@ -19,6 +19,7 @@
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QToolButton>
+#include <QTimer>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -340,8 +341,10 @@ void SettingsPage::addDelimiterRow(QVBoxLayout *into, const QString &openKey, co
     boxLayout->addWidget(edits);
     boxLayout->addWidget(error);
     // A pair that cannot delimit is explained and not stored, so the setting
-    // always holds one the parser accepts.
-    const auto check = [=, this] {
+    // always holds one the parser accepts. Stored once typing pauses, not per
+    // key: each new pair re-parses every open note and the whole vault, and
+    // typing `<<` over `[` passes through two pairs nobody meant.
+    const auto valid = [=] {
         const QString open = openEdit->text();
         const QString close = closeEdit->text();
         const QString message = mayBeEmpty && open.isEmpty() && close.isEmpty()
@@ -349,14 +352,28 @@ void SettingsPage::addDelimiterRow(QVBoxLayout *into, const QString &openKey, co
                                     : metaNoteDelimitersError(open, close, anySyntax);
         error->setText(message);
         error->setVisible(!message.isEmpty());
-        if (!message.isEmpty())
+        return message.isEmpty();
+    };
+    auto *pause = new QTimer(box);
+    pause->setSingleShot(true);
+    pause->setInterval(400);
+    const auto commit = [=, this] {
+        pause->stop();
+        if (!valid() || (openEdit->text() == m_settings->text(openKey) && closeEdit->text() == m_settings->text(closeKey)))
             return;
-        m_settings->setValue(openKey, open);
-        m_settings->setValue(closeKey, close);
+        m_settings->setValue(openKey, openEdit->text());
+        m_settings->setValue(closeKey, closeEdit->text());
         changed();
     };
-    connect(openEdit, &QLineEdit::textEdited, this, check);
-    connect(closeEdit, &QLineEdit::textEdited, this, check);
+    const auto edited = [=] {
+        valid();
+        pause->start();
+    };
+    connect(pause, &QTimer::timeout, this, commit);
+    for (QLineEdit *edit : {openEdit, closeEdit}) {
+        connect(edit, &QLineEdit::textEdited, this, edited);
+        connect(edit, &QLineEdit::editingFinished, this, commit);
+    }
     addRow(into, {openKey, closeKey}, label, description, box, [=, this] {
         openEdit->setText(m_settings->text(openKey));
         closeEdit->setText(m_settings->text(closeKey));
