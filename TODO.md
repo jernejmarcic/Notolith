@@ -1228,3 +1228,23 @@ title), L (look-up), K (edited listing chrome).
       rename/move/delete/merge, appearance.fileIcons toggle. Merged 1d327d7.
       Left: more icons need a Lucide download (ask first); icons in the
       quick switcher and inline title; Iconize import; a test of the picker.
+
+## Fable audit round 4, 2026-10-17 (scratchpad AUDIT4.md)
+
+- [ ] 1. openVault sets the indexer's vault before the vault's own settings:
+      a per-vault meta setting re-parses the whole vault on every open.
+- [ ] 2. Delimiter rows apply per keystroke: a forced vault scan + editor
+      reparse per valid intermediate pair. Commit on editingFinished.
+- [ ] 3. updateLinksAfterRename and Bases parse without ParseOptions and erase
+      meta rows of linking notes; the watcher then skips them as current.
+- [ ] 4. FileIcons::save on every rename/delete even with no change.
+- [ ] 5. Icon picker rejects multi-code-point emoji; count graphemes.
+- [ ] 6. Typing in a meta note repopulates every pane row per parse.
+- [ ] 7. setMetaNotes(off) mid-scan: DELETE contends with the writer's
+      transaction on the UI thread; skip it while a scan runs.
+- [ ] 8. Vault-mode filter pasted raw into `meta:(...)`; quote it.
+- [ ] 9. `[a][` jumps to the next `]` anywhere; stop at the line end.
+- [ ] 10. Icon entries never pruned; drop missing paths on load.
+- [ ] 11. shiftRanges does not shift `uncounted`.
+- [ ] 12. For Jernej: meta notes and bare brackets share the accent colour by
+      default (pinned by a test). Distinct default (orange) wanted?
