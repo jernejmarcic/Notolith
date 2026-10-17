@@ -1179,7 +1179,17 @@ title), L (look-up), K (edited listing chrome).
       sidebar pane listing the note's meta notes, vault-wide toggle, a
       `meta:` search operator, Alt+] / Alt+[ next/previous. "Plan this
       feature out and think about how it may work" - Fable plans it after
-      lane meta lands.
+      lane meta lands. Plan: scratchpad PLAN-meta-pane.md.
+  - [x] A: Metadata::metaNotes, meta_notes table (schema 6),
+        Indexer::setMetaNotes (forced re-parse, off = delete rows), `meta:`
+        search, docs/SEARCH.md. Found while doing it, not in the plan: a warm
+        start trusted rows written under other delimiters, so the cache now
+        records them (state table) and re-parses on a mismatch.
+  - [ ] B: jump + Delete meta note (done in lane), pane + status count +
+        commands, vault mode on the index (after A merges).
+  - Gotcha found: `<<x>>` with `<` delimiters is an HTML tag to the parser,
+    not a run; `<< x >>` works. Documented in SEARCH.md; revisit if Jernej
+    picks angle brackets.
 - Design corrected by Jernej 2026-10-17: "[] is just link normally, no? I
   just use them as such does not mean that this is the correct way." So:
   bare `[text]` gets Obsidian's link-style colour for everyone (plain
