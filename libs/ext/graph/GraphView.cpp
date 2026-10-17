@@ -217,6 +217,8 @@ GraphOptions GraphOptions::fromJson(const QJsonObject &root, const GraphOptions 
     options.linkStrength = numberField("linkStrength", options.linkStrength);
     options.linkDistance = numberField("linkDistance", options.linkDistance);
     options.localDepth = std::max(1, int(numberField("localJumps", options.localDepth)));
+    options.localIncoming = boolField("localIncoming", options.localIncoming);
+    options.localOutgoing = boolField("localOutgoing", options.localOutgoing);
 
     // Obsidian's own shape: [{query, color:{a, rgb}}], rgb a packed 24-bit int.
     if (root.contains(QLatin1String("colorGroups"))) {
@@ -262,7 +264,9 @@ QJsonObject GraphOptions::toJson() const
                        {QLatin1String("repelStrength"), repelStrength},
                        {QLatin1String("linkStrength"), linkStrength},
                        {QLatin1String("linkDistance"), linkDistance},
-                       {QLatin1String("localJumps"), localDepth}};
+                       {QLatin1String("localJumps"), localDepth},
+                       {QLatin1String("localIncoming"), localIncoming},
+                       {QLatin1String("localOutgoing"), localOutgoing}};
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +452,16 @@ QWidget *GraphView::buildControlsPanel()
         rebuild();
     });
     m_depthSlider->setObjectName(QStringLiteral("graphDepthSlider"));
+    m_localIncomingBox = addToggle(filters, tr("Incoming links"), [this] { return m_options.localIncoming; }, [this](bool on) {
+        m_options.localIncoming = on;
+        rebuild();
+    });
+    m_localIncomingBox->setObjectName(QStringLiteral("graphLocalIncoming"));
+    m_localOutgoingBox = addToggle(filters, tr("Outgoing links"), [this] { return m_options.localOutgoing; }, [this](bool on) {
+        m_options.localOutgoing = on;
+        rebuild();
+    });
+    m_localOutgoingBox->setObjectName(QStringLiteral("graphLocalOutgoing"));
 
     // Groups
     QFormLayout *groups = addSection(tr("Groups"), &GraphOptions::collapseColorGroups);
@@ -597,6 +611,15 @@ void GraphView::rebuildGroupRows()
     }
 }
 
+void GraphView::showLocalRows()
+{
+    if (!m_filtersForm)
+        return;
+    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    m_filtersForm->setRowVisible(m_localIncomingBox, m_localMode);
+    m_filtersForm->setRowVisible(m_localOutgoingBox, m_localMode);
+}
+
 /// Puts every control back in step with m_options - after setOptions(), or
 /// when the local/global mode (which shows the Depth slider) changes.
 void GraphView::syncControls()
@@ -605,7 +628,7 @@ void GraphView::syncControls()
         return;
     for (const auto &sync : m_controlSyncs)
         sync();
-    m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    showLocalRows();
     layoutControls();
 }
 
@@ -708,8 +731,7 @@ void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdg
 void GraphView::setLocalGraph(bool local, const QString &path, int depth)
 {
     m_localMode = local;
-    if (m_filtersForm)
-        m_filtersForm->setRowVisible(m_depthSlider, m_localMode);
+    showLocalRows();
     if (!path.isEmpty())
         m_currentNote = path;
     if (depth > 0) {
@@ -743,10 +765,14 @@ void GraphView::rebuild()
     QList<GraphEdge> edges = m_rawEdges;
 
     if (m_localMode && !m_currentNote.isEmpty()) {
+        // Which neighbours a hop may follow: through an outgoing link (id
+        // links to it) and/or an incoming one (it links to id).
         QHash<QString, QStringList> adjacency;
         for (const GraphEdge &edge : std::as_const(edges)) {
-            adjacency[edge.fromID].append(edge.toID);
-            adjacency[edge.toID].append(edge.fromID);
+            if (m_options.localOutgoing)
+                adjacency[edge.fromID].append(edge.toID);
+            if (m_options.localIncoming)
+                adjacency[edge.toID].append(edge.fromID);
         }
 
         QSet<QString> visited{m_currentNote};

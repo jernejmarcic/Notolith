@@ -14,7 +14,8 @@ sections whose open or folded state is kept like the rest.
 - **Filters** - "Search files..." (the search grammar: `path:`, `tag:`, a bare
   word matches the file name; a tag or unresolved node stays while a kept note
   links to it), Tags, Attachments, Unresolved links, Orphans; in the local
-  graph also Depth (1-5).
+  graph also Depth (1-5) and Incoming / Outgoing links (follow links into the
+  note, out of it, or both - the default).
 - **Groups** - one row per colour group: a query (same grammar), a swatch that
   opens a colour dialog, and a remove button; "New group" adds one. First match
   wins; an empty query colours nothing.
@@ -35,7 +36,9 @@ Obsidian's key names (`collapse-filter`, `colorGroups[{query, color:{a, rgb}}]`,
 `localJumps`, ...) plus `animate`. The vault's `.obsidian/graph.json` is only
 read - as the starting point when there is no copy yet - and never written. The
 global and the local graph share the file, except that the local depth
-(`localJumps`) is the local graph's own.
+(`localJumps`) and the two link switches are the local graph's own. The switches
+are stored as `localIncoming` / `localOutgoing`: those two names are this app's
+own, because no real Obsidian `graph.json` was available to confirm Obsidian's.
 
 ## Threads
 

@@ -2521,10 +2521,13 @@ void MainWindow::saveGraphOptions()
 #ifdef NOTEAPPC_HAVE_GRAPH
     if (!m_graphChanged || !m_vault.isValid())
         return;
-    // One file serves both graphs; the local depth is the local pane's alone.
+    // One file serves both graphs; the local depth and link switches are the local pane's alone.
     GraphOptions options = m_graphChanged->options();
-    if (m_localGraph)
+    if (m_localGraph) {
         options.localDepth = m_localGraph->options().localDepth;
+        options.localIncoming = m_localGraph->options().localIncoming;
+        options.localOutgoing = m_localGraph->options().localOutgoing;
+    }
     const QString path = graphOptionsPath();
     QDir().mkpath(QFileInfo(path).path());
     QSaveFile file(path);

@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QCheckBox>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QImage>
@@ -242,6 +243,47 @@ TEST(GraphViewTest, LocalGraphRespectsDepth)
     view.setLocalGraph(false);
     EXPECT_FALSE(view.isLocalGraph());
     EXPECT_EQ(view.nodeCount(), 5);
+}
+
+// Obsidian's local graph has Incoming and Outgoing switches: from B, A -> B is
+// an incoming link and B -> C an outgoing one.
+TEST(GraphViewTest, LocalGraphCanFollowOnlyIncomingOrOnlyOutgoingLinks)
+{
+    GraphView view;
+    view.resize(600, 500);
+    view.setGraphData(nodesFor({QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")}),
+                      {{QStringLiteral("A"), QStringLiteral("B")}, {QStringLiteral("B"), QStringLiteral("C")}});
+    view.setLocalGraph(true, QStringLiteral("B"), 1);
+    EXPECT_EQ(view.nodeCount(), 3);
+
+    GraphOptions options = view.options();
+    options.localOutgoing = false;
+    view.setOptions(options);
+    EXPECT_TRUE(view.containsNode(QStringLiteral("A")));
+    EXPECT_FALSE(view.containsNode(QStringLiteral("C"))) << "outgoing off: B's link to C is not followed";
+
+    options.localOutgoing = true;
+    options.localIncoming = false;
+    view.setOptions(options);
+    EXPECT_FALSE(view.containsNode(QStringLiteral("A"))) << "incoming off: A's link to B is not followed";
+    EXPECT_TRUE(view.containsNode(QStringLiteral("C")));
+
+    // The switches sit in the Filters section, local mode only, and persist.
+    auto *incoming = view.findChild<QCheckBox *>(QStringLiteral("graphLocalIncoming"));
+    auto *outgoing = view.findChild<QCheckBox *>(QStringLiteral("graphLocalOutgoing"));
+    ASSERT_NE(incoming, nullptr);
+    ASSERT_NE(outgoing, nullptr);
+    EXPECT_FALSE(incoming->isChecked());
+    QSignalSpy changed(&view, &GraphView::optionsChanged);
+    incoming->setChecked(true);
+    outgoing->setChecked(false);
+    EXPECT_EQ(changed.count(), 2);
+    EXPECT_TRUE(view.containsNode(QStringLiteral("A")));
+    EXPECT_FALSE(view.containsNode(QStringLiteral("C")));
+
+    const GraphOptions restored = GraphOptions::fromJson(view.options().toJson());
+    EXPECT_TRUE(restored.localIncoming);
+    EXPECT_FALSE(restored.localOutgoing);
 }
 
 TEST(GraphViewTest, AStarIsFramedInANarrowPaneAndItsLeavesSpread)

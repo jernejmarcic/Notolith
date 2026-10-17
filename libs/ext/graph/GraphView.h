@@ -28,6 +28,7 @@ class QTimer;
 class QToolButton;
 class QLineEdit;
 class QSlider;
+class QCheckBox;
 class QFormLayout;
 class QVBoxLayout;
 class QWheelEvent;
@@ -91,6 +92,12 @@ struct GraphOptions {
     double linkDistance = 250.0;
     QList<GraphColorGroup> colorGroups;
     int localDepth = 1;
+    /// The local graph follows links into the centre note (`localIncoming`) and
+    /// out of it (`localOutgoing`), at every hop. Both on: the plain neighbourhood.
+    /// These two key names are this app's own - no real Obsidian graph.json was
+    /// at hand to confirm what Obsidian calls them.
+    bool localIncoming = true;
+    bool localOutgoing = true;
 
     static GraphOptions defaults() { return GraphOptions{}; }
 
@@ -173,8 +180,8 @@ public:
     void setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdge> &edges);
 
     /// Global: every node currently in the data. Local: `path`'s
-    /// neighbourhood out to `depth` hops (both directions - Obsidian's local
-    /// graph does not distinguish incoming from outgoing), meant for a
+    /// neighbourhood out to `depth` hops, following incoming and outgoing
+    /// links as GraphOptions::localIncoming / localOutgoing say, meant for a
     /// sidebar pane. An empty `path` leaves the current note unchanged.
     /// `depth` 0 keeps the current depth (the slider owns it).
     void setLocalGraph(bool local, const QString &path = {}, int depth = 0);
@@ -297,6 +304,7 @@ private:
     QWidget *buildControlsPanel();
     void layoutControls();
     void syncControls();
+    void showLocalRows(); ///< Depth and the two link switches: local mode only
     void rebuildGroupRows();
     void reapplyData();
 
@@ -356,6 +364,8 @@ private:
     QVBoxLayout *m_groupsLayout = nullptr;
     QFormLayout *m_filtersForm = nullptr;
     QSlider *m_depthSlider = nullptr;
+    QCheckBox *m_localIncomingBox = nullptr; ///< local mode's Incoming/Outgoing switches
+    QCheckBox *m_localOutgoingBox = nullptr;
     QLineEdit *m_searchEdit = nullptr;
     QTimer *m_searchDebounce = nullptr;
     QTimer *m_groupDebounce = nullptr; ///< a group query's keystrokes, before the nodes are rescanned
