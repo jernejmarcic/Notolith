@@ -39,6 +39,9 @@ QRectF MarkdownEditor::calloutTitleRectAt(qsizetype offset) const
 
 bool MarkdownEditor::pressCalloutTitle(const QPoint &point)
 {
+    // Reading draws the title but never edits it.
+    if (m_mode == Mode::Reading)
+        return false;
     const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
     for (const BlockView &view : m_blocks) {
@@ -50,6 +53,9 @@ bool MarkdownEditor::pressCalloutTitle(const QPoint &point)
         const QRectF rect = calloutTitleRect(view, left, top);
         if (rect.contains(point)) {
             openCalloutTitleEditor(*view.callout, rect, view);
+            // The caret goes where the title was clicked, not to its end.
+            m_calloutTitleEdit->setCursorPosition(
+                m_calloutTitleEdit->cursorPositionAt(m_calloutTitleEdit->mapFrom(viewport(), point)));
             return true;
         }
     }
@@ -96,11 +102,15 @@ void MarkdownEditor::finishCalloutTitleEdit(bool commit)
     QLineEdit *edit = m_calloutTitleEdit;
     m_calloutTitleEdit = nullptr;
     const QString typed = edit->text().trimmed();
+    // Only a field that held the focus hands it back: one closed by an edit
+    // from another tab must not take the focus off whatever is being typed in.
+    const bool focused = edit->hasFocus();
     edit->removeEventFilter(this);
     edit->disconnect(this);
     edit->hide();
     edit->deleteLater();
-    setFocus();
+    if (focused)
+        setFocus();
     viewport()->update();
     if (!commit)
         return;

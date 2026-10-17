@@ -4429,6 +4429,9 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // for the 20 ms until the reparse. An edit that keeps the length still
     // changes the text, so the block relays out either way.
     shiftRanges(at + removed, delta);
+    // The open title's callout moves with the text, by shiftRanges' own rule.
+    if (m_calloutTitleEdit && m_calloutTitleAt >= at + removed)
+        m_calloutTitleAt += delta;
     const qsizetype index = blockAt(at);
     if (index >= 0 && index < qsizetype(m_blocks.size())) {
         BlockView &view = m_blocks[size_t(index)];
@@ -4541,7 +4544,9 @@ void MarkdownEditor::applyExternalEdit(qsizetype at, qsizetype removed, const QS
     const qsizetype cursor = follow(m_cursor);
     const qsizetype anchor = follow(m_anchor);
     if (at == 0 && removed == m_text.size()) {
-        // An undo or redo over there: the whole text, as undo() takes it.
+        // An undo or redo over there: the whole text, as undo() takes it. The
+        // callouts may be gone or new, so an open title has nowhere to land.
+        finishCalloutTitleEdit(false);
         m_text = inserted;
         ++m_textVersion;
         m_cursor = m_anchor = qMin(m_cursor, m_text.size());
@@ -4556,6 +4561,9 @@ void MarkdownEditor::applyExternalEdit(qsizetype at, qsizetype removed, const QS
     m_cursor = qMin(cursor, m_text.size());
     m_anchor = qMin(anchor, m_text.size());
     m_activeBlock = blockAt(m_cursor);
+    // An open title keeps what was typed: written back to its (moved) callout
+    // now, since the field no longer sits over the text it was opened on.
+    finishCalloutTitleEdit(true);
     viewport()->update();
 }
 

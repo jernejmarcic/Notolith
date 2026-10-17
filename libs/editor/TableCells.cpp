@@ -246,6 +246,8 @@ QString MarkdownEditor::cellSafe(const QString &text) const
 
 bool MarkdownEditor::fillShortRow(qsizetype table, int row)
 {
+    if (m_mode == Mode::Reading) // filling writes to the note
+        return false;
     if (table < 0 || table >= m_decorations.tables.size())
         return false;
     const TableSpan &span = m_decorations.tables.at(table);

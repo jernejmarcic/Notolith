@@ -325,7 +325,12 @@ panel, with the `[!type]` marker still hidden. Return or leaving the field
 writes it back as one undo step, Escape throws it away; an implicit title
 (`> [!note]`, drawn "Note") opens empty and gains a space and the typed text.
 The rest of the header row, and the fold arrow, still fold a foldable callout;
-`</>` or the menu's "Edit block source" reaches the raw line.
+`</>` or the menu's "Edit block source" reaches the raw line. The caret lands
+where the title was clicked. Reading mode never opens the field (nor fills a
+short table row: `fillShortRow` is a no-op there). An edit from another tab on
+the same note (`applyExternalEdit`) writes an open title back to its callout,
+which moves with the text; a whole-text replacement (the other tab's undo)
+drops it, as the callouts may be gone.
 `CalloutTitle.cpp`; tests `CalloutTitleTest.*`.
 
 ## Embedded notes

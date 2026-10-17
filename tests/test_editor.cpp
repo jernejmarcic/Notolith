@@ -1556,6 +1556,63 @@ TEST(CalloutTitleTest, ClickingTheBodyStillPlacesTheCaret)
     EXPECT_FALSE(fixture.edit());
 }
 
+TEST(CalloutTitleTest, ReadingModeNeverOpensTheTitle)
+{
+    // A read-only view must not write to the note, through the overlay or otherwise.
+    const QString note = QStringLiteral("> [!note] Title\n> body\n");
+    CalloutTitleFixture fixture(note);
+    fixture.editor->setMode(MarkdownEditor::Mode::Reading);
+    QApplication::processEvents();
+    fixture.title = fixture.editor->calloutTitleRectAt(0).center().toPoint();
+    fixture.click();
+    EXPECT_FALSE(fixture.edit());
+    EXPECT_EQ(fixture.editor->noteText(), note);
+}
+
+TEST(CalloutTitleTest, ReadingModeNeverFillsAShortRow)
+{
+    const QString note = QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 |\n\nafter\n");
+    for (int y = 4; y < 200; y += 6) {
+        for (int x = 4; x < 880; x += 40) {
+            auto editor = editorWith(note);
+            editor->setMode(MarkdownEditor::Mode::Reading);
+            editor->show();
+            QTest::mouseClick(editor->viewport(), Qt::LeftButton, {}, QPoint(x, y));
+            ASSERT_EQ(editor->noteText(), note) << "click at " << x << "," << y;
+        }
+    }
+}
+
+TEST(CalloutTitleTest, AnExternalEditKeepsTheTypedTitleOnItsCallout)
+{
+    const QString note = QStringLiteral("> [!note] First\n> a\n\n> [!tip] Second\n> b\n");
+    auto editor = editorWith(note);
+    editor->show();
+    QApplication::processEvents();
+    const qsizetype second = note.indexOf(QStringLiteral("> [!tip]"));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      editor->calloutTitleRectAt(second).center().toPoint());
+    auto *edit = editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"));
+    ASSERT_TRUE(edit && edit->isVisible());
+    QTest::keyClicks(edit, QStringLiteral(" 2"));
+    // Another tab on the same note typed above it, while this title is open:
+    // what was typed lands on its own callout, not lost, not on another.
+    editor->applyExternalEdit(0, 0, QStringLiteral("intro\n\n"));
+    EXPECT_EQ(editor->noteText(), QStringLiteral("intro\n\n> [!note] First\n> a\n\n> [!tip] Second 2\n> b\n"));
+    EXPECT_FALSE(editor->findChild<QLineEdit *>(QStringLiteral("calloutTitleEdit"))->isVisible());
+}
+
+TEST(CalloutTitleTest, TheCaretLandsWhereTheTitleWasClicked)
+{
+    CalloutTitleFixture fixture(QStringLiteral("> [!note] A longer title here\n> body\n"));
+    const QRectF rect = fixture.editor->calloutTitleRectAt(0);
+    fixture.title = QPoint(int(rect.left()) + 4, int(rect.center().y()));
+    fixture.click();
+    QLineEdit *edit = fixture.edit();
+    ASSERT_TRUE(edit);
+    EXPECT_LT(edit->cursorPosition(), 3) << "a click at the start is not the end of the text";
+}
+
 // --- neighbouring blocks never overlap ------------------------------------
 
 /// Scrolls through the whole note, the way reading it would, and says where two
