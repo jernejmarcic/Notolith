@@ -448,7 +448,7 @@ void SettingsPage::addSchemeRow(QVBoxLayout *into)
                changed();
            });
     addRow(into, {key}, tr("Colour scheme"),
-          tr("A noteAppC scheme, or the colours of an Obsidian theme already in this vault."),
+          tr("A Notolith scheme, or the colours of an Obsidian theme already in this vault."),
           combo, sync);
 }
 
@@ -1004,7 +1004,7 @@ QWidget *SettingsPage::buildAboutPage()
     layout->setContentsMargins(28, 20, 28, 20);
     layout->setSpacing(6);
 
-    auto *name = new QLabel(QStringLiteral("noteAppC"), page);
+    auto *name = new QLabel(QStringLiteral("Notolith"), page);
     name->setObjectName(QStringLiteral("settingsAboutName"));
     QFont nameFont = name->font();
     nameFont.setPointSize(nameFont.pointSize() + 8);

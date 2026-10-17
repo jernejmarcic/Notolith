@@ -1,4 +1,9 @@
-# noteAppC
+# Notolith
+
+Code name noteAppC: the repository, the targets, the C++ namespace and the
+directories it keeps settings and caches in still carry it. The product, its
+window, its binary (`notolith`) and its app id (`io.github.jernejmarcic.Notolith`) are
+Notolith.
 
 A Linux-native alternative to Obsidian, written in C++ with Qt 6 Widgets.
 No JavaScript, no browser engine, no Electron.
@@ -57,9 +62,9 @@ sh tools/check.sh                         # everything: both configurations, eve
 cmake -B /tmp/noteAppC-build -G Ninja     # once, and again only if CMakeLists changes
 cmake --build /tmp/noteAppC-build         # after every edit - this is the one you repeat
 ctest --test-dir /tmp/noteAppC-build      # all 35 suites
-/tmp/noteAppC-build/apps/noteAppC/noteAppC            # opens the last vault
-/tmp/noteAppC-build/apps/noteAppC/noteAppC ~/notes    # a vault
-/tmp/noteAppC-build/apps/noteAppC/noteAppC note.md    # one file, no vault, no dotfile
+/tmp/noteAppC-build/apps/noteAppC/notolith            # opens the last vault
+/tmp/noteAppC-build/apps/noteAppC/notolith ~/notes    # a vault
+/tmp/noteAppC-build/apps/noteAppC/notolith note.md    # one file, no vault, no dotfile
 ```
 
 `cmake --build /tmp/noteAppC-build` is incremental and takes a second or two when little

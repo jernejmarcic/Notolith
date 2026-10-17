@@ -165,7 +165,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     };
     const Recipe *recipe = recipeFor(request.language);
     if (!recipe)
-        return fail(tr("noteAppC does not know how to run \"%1\"").arg(request.language));
+        return fail(tr("Notolith does not know how to run \"%1\"").arg(request.language));
     if (!canRun(request.language))
         return fail(tr("%1 is not installed, so \"%2\" blocks cannot run").arg(recipe->tool, request.language));
 

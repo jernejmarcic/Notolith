@@ -1,4 +1,4 @@
-# Builds the noteAppC working tree this file sits in: there is no remote to
+# Builds the Notolith (code name noteAppC) working tree this file sits in: there is no remote to
 # fetch a release from. makepkg makes src/ and pkg/ beside this file, and
 # ~/Documents is synced to other machines, so point it at /tmp:
 #
@@ -8,7 +8,7 @@
 # The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
 # CMakeLists.txt), so it needs the network.
 
-pkgname=noteappc
+pkgname=notolith
 pkgver=0.0.1
 pkgrel=1
 pkgdesc='Markdown notes and Obsidian vaults, native and fast'

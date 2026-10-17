@@ -36,7 +36,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
 {
     QPdfWriter writer(path);
     writer.setTitle(title);
-    writer.setCreator(QStringLiteral("noteAppC"));
+    writer.setCreator(QStringLiteral("Notolith"));
     // One unit a pixel at 96 dpi, the density the editor lays out for.
     writer.setResolution(96);
     writer.setPageLayout(QPageLayout(options.pageSize, options.orientation,

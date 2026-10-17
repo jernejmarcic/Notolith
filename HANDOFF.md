@@ -154,7 +154,7 @@ python3 tools/gen_bench_vault.py /tmp/bench-vault 20000
 
 ```sh
 sh tools/check.sh              # both configurations, every suite; --bench adds the bench
-/tmp/noteAppC-build/apps/noteAppC/noteAppC <vault-or-file>
+/tmp/noteAppC-build/apps/noteAppC/notolith <vault-or-file>
 ```
 
 Run builds and tests in a memory-capped scope (a runaway test once took the

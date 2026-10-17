@@ -1,14 +1,14 @@
 [Desktop Entry]
 Type=Application
-Name=noteAppC
+Name=Notolith
 GenericName=Markdown Notes
 Comment=Read and edit Markdown notes and vaults
-Exec=noteAppC %f
-TryExec=noteAppC
-Icon=noteAppC
+Exec=notolith %f
+TryExec=notolith
+Icon=io.github.jernejmarcic.Notolith
 Terminal=false
 Categories=Office;
 MimeType=text/markdown;text/x-markdown;inode/directory;
 Keywords=markdown;notes;wiki;vault;obsidian;
 StartupNotify=true
-StartupWMClass=noteAppC
+StartupWMClass=io.github.jernejmarcic.Notolith

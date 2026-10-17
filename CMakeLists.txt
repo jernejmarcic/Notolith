@@ -315,12 +315,13 @@ endif()
 if(NOT ANDROID)
     include(GNUInstallDirs)
     install(TARGETS noteAppC RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(FILES packaging/noteAppC.desktop
+    install(FILES packaging/io.github.jernejmarcic.Notolith.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES libs/theme/icons/noteAppC.svg
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps
+        RENAME io.github.jernejmarcic.Notolith.svg)
     # What software centres and Flatpak read to describe the app.
-    install(FILES packaging/io.github.jernejmarcic.noteAppC.metainfo.xml
+    install(FILES packaging/io.github.jernejmarcic.Notolith.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATADIR}/metainfo)
     # The AI plugin ships as part of the package, the same layout
     # ~/.local/share/noteAppC/plugins/ai/ uses (docs/PLUGINS.md) so a

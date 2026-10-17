@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The app id follows basket's (io.github.jernejmarcic.basket) and is not
-     confirmed yet: it is what Flatpak installs under. There is no homepage yet
-     (appstreamcli warns about that one). -->
+<!-- The app id follows basket's (io.github.jernejmarcic.basket); it is what
+     Flatpak installs under. There is no homepage yet (appstreamcli warns about
+     that one). -->
 <component type="desktop-application">
-  <id>io.github.jernejmarcic.noteAppC</id>
+  <id>io.github.jernejmarcic.Notolith</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
-  <name>noteAppC</name>
+  <name>Notolith</name>
   <summary>Markdown notes and Obsidian vaults, native and fast</summary>
   <description>
     <p>
-      noteAppC reads and edits Markdown notes and Obsidian vaults in a native
+      Notolith reads and edits Markdown notes and Obsidian vaults in a native
       Qt application: live preview, wikilinks and backlinks, search, tags,
       callouts, tables, maths, the graph view, canvases and bases, in tabs and
       splits.
@@ -24,9 +24,9 @@
   <developer id="io.github.jernejmarcic">
     <name>Jernej</name>
   </developer>
-  <launchable type="desktop-id">noteAppC.desktop</launchable>
+  <launchable type="desktop-id">io.github.jernejmarcic.Notolith.desktop</launchable>
   <provides>
-    <binary>noteAppC</binary>
+    <binary>notolith</binary>
   </provides>
   <categories>
     <category>Office</category>
