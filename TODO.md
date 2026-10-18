@@ -1824,7 +1824,7 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [x] Lane B (windows persistence, merged; Leaves pop-outs + active leaf in a pop-out): workspace.json "floating" written and
       read (Obsidian shape), Obsidian's own floating node read never
       written, detached sidebar restored. 3 tests.
-- [ ] Lane C (detachable sidebars): whole left/right sidebar and single
+- [x] Lane C (detachable sidebars, merged; 4 tests + 2 strengthened): whole left/right sidebar and single
       right panes into their own window and back on close; narrow-mode,
       toggle and showRightPane guards; context menus + commands. 3 tests.
 - [x] Lane D (drag-to-tile, merged): tab drag with drop zones (edges split,
@@ -1845,8 +1845,7 @@ WINDOWS-PLAN.md; items below get filled from it.
       in lane popside at the same time).
 - [ ] After lanes B + C: persist detached sidebars / panes (Pane::viewType
       column, file-explorer etc.), test ADetachedSidebarIsRestoredAsAFile
-      ExplorerWindow; main-splitter 3-children assertion in
-      ClosingTheMainWindowClosesEveryPopout once sidebars detach.
+      ExplorerWindow. (Main-splitter 3-children assertion: done, lane C.)
 
 ## Fable sync audit round 10, 2026-10-18 (scratchpad SYNC-ROUND10.md)
 Lane sync10 (in this order, one function region, one lane):
@@ -1894,3 +1893,32 @@ After sync10 (needs C):
       device. Equal texts (daily notes from one template, the common case):
       re-key to one entity instead of two files (coordinator decision:
       a duplicate daily note on every first sync is worse than 15 lines).
+
+## Install on starbase-1 (Jernej, 2026-10-18: "make the app appear in the app menu")
+- [x] ~/.local/bin/notolith + desktop entry + icon (SYS_CHANGES starbase-1).
+      MimeType line dropped from the installed copy: with it Notolith became
+      the default for .md and folders.
+- [x] Packaging bug found: vendored tinyxml2 built shared (global
+      BUILD_SHARED_LIBS=TRUE), install() ships only the binary, so an
+      installed notolith failed with libtinyxml2.so.10 not found (the
+      PKGBUILD package too, unless its build differed). Fixed: tinyxml2
+      static; main check running.
+- [x] (written; first run pending) Installed copy goes stale as main moves: tools/install-local.sh
+      (build, stage in /tmp, copy binary + desktop + icon, no MimeType
+      unless asked). Ask Jernej whether Notolith should open .md files.
+- [ ] Version is 0.0.1 (CMake project + PKGBUILD), never bumped.
+- [ ] ~/Documents/AI/projects/noteAppC/build/ (2.1 GB, 2026-10-17,
+      gitignored) is a build dir inside Syncthing; not made by this
+      session's lanes. Ask Jernej before deleting.
+
+## Sharing a note with another person, peer to peer (Jernej, 2026-10-18)
+Jernej: "Does multi user work and how? Also for multi user, can it be done so
+a person can share a note and that is done in a p2p fashion?"
+Today: no multi-user. One sync account = one person's devices (password or
+lockbox enrolment). Roadmap 11 (CRDT per note via yrs C FFI, E2EE relay,
+presence) is not built; SYNC.md's lockbox section names the hook: the same
+X25519 lockbox call with a collaborator's public key, scoped to one note's key.
+- [ ] Jernej's choices (asked 2026-10-18): live co-editing vs sending a copy;
+      LAN only vs over the internet (NAT: relay fallback or not); reuse
+      Hearth's P2P transport or not.
+- [ ] Fable plan once chosen.
