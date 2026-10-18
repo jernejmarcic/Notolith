@@ -598,13 +598,16 @@ private:
     /// script or loads anything, and a note decides what goes into its SVG
     /// (TikZ's \special{dvisvgm:raw ...} writes markup straight through), so
     /// inlining would need a full SVG sanitiser. Its ids stay its own too.
+    /// The source is the alt text (capped, escaped): the picture's words for
+    /// a screen reader, and for whatever indexes the page.
     QString cachedDiagram(noteAppC::DiagramKind kind, const QString &source)
     {
         const QByteArray svg = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
         if (!svg.contains("<svg"))
             return QString();
-        return QStringLiteral("<div class=\"diagram\"><img alt=\"diagram\" src=\"data:image/svg+xml;base64,")
-             + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
+        return QStringLiteral("<div class=\"diagram\"><img alt=\"")
+             + escapeAttr(source.trimmed().left(2000))
+             + QStringLiteral("\" src=\"data:image/svg+xml;base64,") + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
     }
 
     /// A fence, or - for the first `tab` fence of a group - the whole group as

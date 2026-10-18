@@ -371,6 +371,36 @@ TEST_F(MermaidTest, AToolThatHangsIsKilled)
     EXPECT_TRUE(answer->result.text.contains(QLatin1String("timed out")));
 }
 
+// One hung fence must not hold the others: the hang (30 s of sleep, killed at 5 s) has a thread, the next fence
+// of the kind has the other, and answers long before the hang is killed.
+TEST_F(MermaidTest, AHungToolDoesNotBlockTheOtherFences)
+{
+    const QString tool = rawFake(QStringLiteral("mmdr"),
+                                 QStringLiteral("in=$(cat)\ncase \"$in\" in *HANG*) sleep 30;; esac\ncat <<'EOF'\n") + QLatin1String(kSVG)
+                                     + QStringLiteral("\nEOF\n"));
+    const auto renderer = rendererFor(tool);
+    auto hung = std::make_shared<Answer>();
+    auto hungAgain = std::make_shared<Answer>();
+    QElapsedTimer timer;
+    timer.start();
+    // The same text twice, as the editor asks at two widths: the second waits for the first, not on a thread.
+    for (const auto &answer : {hung, hungAgain})
+        renderer(QStringLiteral("mermaid"), QStringLiteral("graph TD\nHANG-->A"), 600, QStringLiteral("dark"),
+                 [answer](MarkdownEditor::CodeBlockResult result) {
+                     answer->result = std::move(result);
+                     answer->done = true;
+                 });
+    QTest::qWait(300); // the hang has its thread and is sleeping
+    const auto fast = ask(renderer, QStringLiteral("graph TD\nFAST-->B"));
+    EXPECT_FALSE(fast->result.isMarkdown) << fast->result.text.toStdString();
+    EXPECT_LT(timer.elapsed(), 3000) << "behind the hang's 5 s kill";
+    EXPECT_FALSE(hung->done.load());
+    // Not left for the test to end: the kill comes, and says so.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return hung->done.load() && hungAgain->done.load(); }, 15000));
+    EXPECT_TRUE(hung->result.text.contains(QLatin1String("timed out")));
+    EXPECT_TRUE(hungAgain->result.text.contains(QLatin1String("timed out")));
+}
+
 // --- the sandbox --------------------------------------------------------------
 
 TEST_F(MermaidTest, InTheSandboxTheToolStillGetsTheSourceAndTheColoursAndItsSVGIsCached)

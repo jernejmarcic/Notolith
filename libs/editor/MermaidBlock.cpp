@@ -39,6 +39,10 @@ namespace {
 
 constexpr int kRunMilliseconds = 5000; ///< a diagram that takes longer is killed
 constexpr int kSandboxedMilliseconds = 20000; ///< ... for the tools that start slowly (a JVM, TeX), and each of TeX's two steps
+constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools' RLIMIT_AS
+constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
+/// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
+const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
 constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
 constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
@@ -126,7 +130,7 @@ struct Ran {
 };
 
 Ran runSandboxed(const QString &dir, const QString &program, const QStringList &arguments, const QStringList &environment,
-                 const QByteArray &input, bool limitMemory, int milliseconds = kSandboxedMilliseconds)
+                 const QByteArray &input, bool jvm, int milliseconds = kSandboxedMilliseconds)
 {
     Ran ran;
     // A tool outside /usr (a path in the setting, a symlink into a home) is not in the sandbox: bind what it
@@ -147,14 +151,13 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
         return ran;
     }
     QProcess process;
-    // A CPU ceiling in the child, and a memory one where the tool is not a JVM (which reserves far more than it uses).
-    process.setChildProcessModifier([fd = command.filterFD, limitMemory] {
+    // A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
+    // than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
+    process.setChildProcessModifier([fd = command.filterFD, jvm] {
         rlimit cpu{25, 30};
         setrlimit(RLIMIT_CPU, &cpu);
-        if (limitMemory) {
-            rlimit memory{4ULL * 1024 * 1024 * 1024, 4ULL * 1024 * 1024 * 1024};
-            setrlimit(RLIMIT_AS, &memory);
-        }
+        rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
+        setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
         sandbox::keepInChild(fd);
     });
     process.start(command.program, command.arguments);
@@ -207,7 +210,7 @@ Made runMermaid(const QString &tool, const QString &source, const QByteArray &co
     if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
         return runMermaidUnsandboxed(tool, configPath, source);
     const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
-                                 source.toUtf8(), true, kRunMilliseconds);
+                                 source.toUtf8(), false, kRunMilliseconds);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
 }
 
@@ -232,7 +235,7 @@ Made runPlantUML(const QString &tool, const QString &source, const QByteArray &c
     QStringList arguments = {QStringLiteral("-tsvg"), QStringLiteral("-pipe"), QStringLiteral("-charset"), QStringLiteral("UTF-8")};
     if (colours(config).value(QStringLiteral("dark")).toBool())
         arguments << QStringLiteral("--dark-mode");
-    const Ran ran = runSandboxed(dir.path(), tool, arguments, {QStringLiteral("PLANTUML_SECURITY_PROFILE=SANDBOX")}, text.toUtf8(), false);
+    const Ran ran = runSandboxed(dir.path(), tool, arguments, {QStringLiteral("PLANTUML_SECURITY_PROFILE=SANDBOX"), QString::fromLatin1(kJVMOptions)}, text.toUtf8(), true);
     return fromRan(ran, lastLine(QString::fromUtf8(ran.err)));
 }
 
@@ -262,7 +265,7 @@ Made runGraphviz(const QString &tool, const QString &source, const QByteArray &c
             break;
         }
     }
-    const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-Tsvg")}, {}, themed.toUtf8(), true);
+    const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-Tsvg")}, {}, themed.toUtf8(), false);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
 }
 
@@ -331,7 +334,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
     const Ran tex = runSandboxed(dir.path(), tool,
                                  {QStringLiteral("-interaction=nonstopmode"), QStringLiteral("-halt-on-error"),
                                   QStringLiteral("-no-shell-escape"), QStringLiteral("cell.tex")},
-                                 {}, {}, true);
+                                 {}, {}, false);
     if (!tex.failure.isEmpty() || tex.code != 0) {
         // The log's first "! ..." line is TeX's own error.
         QString message;
@@ -346,7 +349,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
     const Ran convert = runSandboxed(dir.path(), dvisvgm,
                                      {QStringLiteral("--no-fonts"), QStringLiteral("--exact-bbox"), QStringLiteral("--stdout"),
                                       QStringLiteral("cell.dvi")},
-                                     {}, {}, true);
+                                     {}, {}, false);
     Made made = fromRan(convert, firstLine(QString::fromUtf8(convert.err)));
     if (made.error.isEmpty())
         made.svg = themeTikZ(made.svg, colours(config));
@@ -379,6 +382,9 @@ struct State {
     bool resolved = false;
     QString tool; ///< empty once resolved: not installed
     QHash<QByteArray, Made> memo;
+    /// The texts a job is making now, each with the jobs for the same text that came meanwhile (the editor asks
+    /// again at another width): they wait here, not on a thread, and are run when the text is made.
+    QHash<QByteArray, QList<std::function<void()>>> making;
 };
 
 using Result = MarkdownEditor::CodeBlockResult;
@@ -425,22 +431,39 @@ Result rasterise(DiagramKind kind, const QByteArray &svg, const QString &source,
 }
 
 /// The whole job: memo, then disk, then the tool. On a pool thread.
-Result make(const std::shared_ptr<State> &state, const QString &source, const QByteArray &config, int width,
-            qreal ratio)
+void make(const std::shared_ptr<State> &state, const QString &source, const QByteArray &config, int width, qreal ratio,
+          const std::function<void(Result)> &deliver)
 {
     const Kind &kind = kindOf(state->kind);
     const QString label = QLatin1String(kind.label);
     const QString cacheFile = diagramCachePath(state->kind, source, config);
     const QByteArray key = cacheFile.toUtf8(); // the hash is in the name
     Made made;
-    bool have = false;
+    bool have = false, owner = false;
     {
         QMutexLocker lock(&state->mutex);
         if (const auto it = state->memo.constFind(key); it != state->memo.cend()) {
             made = it.value();
             have = true;
+        } else if (const auto making = state->making.find(key); making != state->making.end()) {
+            making->append([=] { make(state, source, config, width, ratio, deliver); });
+            return;
+        } else {
+            state->making.insert(key, {});
+            owner = true;
         }
     }
+    // Answers, then the jobs that waited for the same text (which find it in the memo).
+    const auto finish = [&](Result result) {
+        QList<std::function<void()>> followers;
+        if (owner) {
+            QMutexLocker lock(&state->mutex);
+            followers = state->making.take(key);
+        }
+        deliver(std::move(result));
+        for (const auto &follower : std::as_const(followers))
+            follower();
+    };
     if (!have) {
         made.svg = mermaidCachedSVG(cacheFile);
         have = !made.svg.isEmpty();
@@ -457,9 +480,10 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const QB
         }
         if (tool.isEmpty()) {
             const QString name = state->setting.trimmed();
-            return sourceWithHint(source, name.isEmpty() || name == QLatin1String(kind.defaultTool)
+            finish(sourceWithHint(source, name.isEmpty() || name == QLatin1String(kind.defaultTool)
                                               ? QCoreApplication::translate("MermaidBlock", "%1: install %2 to render").arg(label, QLatin1String(kind.defaultTool))
-                                              : QCoreApplication::translate("MermaidBlock", "%1: %2 was not found").arg(label, name));
+                                              : QCoreApplication::translate("MermaidBlock", "%1: %2 was not found").arg(label, name)));
+            return;
         }
         made = kind.run(tool, source, config);
         if (made.error.isEmpty())
@@ -472,20 +496,26 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const QB
         state->memo.insert(key, made);
     }
     if (!made.error.isEmpty())
-        return sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: %2").arg(label, made.error));
-    return rasterise(state->kind, made.svg, source, width, ratio);
+        return finish(sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: %2").arg(label, made.error)));
+    finish(rasterise(state->kind, made.svg, source, width, ratio));
 }
 
-/// One thread, not the global pool's (parsing, search) while a tool runs for
-/// seconds: diagrams queue, and a second ask for a text already being made
-/// finds it in the memo instead of starting the tool twice. ponytail: a hung
-/// tool holds the queue for its 5 s (20 s for the JVM and TeX ones); widen it with per-key locking if that is felt.
-QThreadPool *pool()
+/// A pool per kind, two threads each, not the global pool's (parsing, search)
+/// while a tool runs for seconds: a hung PlantUML or TeX (20 s, TeX's two
+/// steps 40) leaves the other kinds untouched, and one hung fence leaves a
+/// thread for the next of its kind. Few threads, as a JVM or TeX is heavy.
+/// Built on the first diagram; the threads on the first job. ponytail: two
+/// hung fences of one kind still block it; per-key timeouts if that is felt.
+QThreadPool *pool(DiagramKind kind)
 {
-    static QThreadPool instance;
-    static const bool once = (instance.setMaxThreadCount(1), true);
+    static QThreadPool pools[4];
+    static const bool once = [] {
+        for (QThreadPool &instance : pools)
+            instance.setMaxThreadCount(2);
+        return true;
+    }();
     Q_UNUSED(once);
-    return &instance;
+    return &pools[int(kind)];
 }
 
 } // namespace
@@ -500,8 +530,8 @@ MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QStrin
         // The UI thread's part: two reads, one queued job.
         const QByteArray config = diagramConfig(kind, theme());
         const qreal ratio = qGuiApp ? qGuiApp->devicePixelRatio() : 1.0;
-        (void)QtConcurrent::run(pool(), [state, kind, source, config, width, ratio, deliver] {
-            deliver(make(state, source, config, width, ratio));
+        (void)QtConcurrent::run(pool(kind), [state, kind, source, config, width, ratio, deliver] {
+            make(state, source, config, width, ratio, deliver);
             // Once per process and kind, after the first diagram is out, never at startup.
             static std::atomic_flag pruned[4];
             if (!pruned[int(kind)].test_and_set())

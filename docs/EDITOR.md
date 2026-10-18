@@ -835,7 +835,8 @@ already linked for notebook output).
 - **Off the UI thread**: `libs/editor/MermaidBlock.cpp` is a renderer for
   `MarkdownEditor::setCodeBlockRenderer`, so the fence, its placeholder and its
   in-memory cache (by width, theme and source) are `CodeBlockHook.cpp`'s. A job
-  runs `mmdr -i - -c config.json` on a one-thread pool (source on stdin, SVG on
+  runs `mmdr -i - -c config.json` on the kind's pool of two threads (a hung tool
+  holds one, so the next fence still draws; source on stdin, SVG on
   stdout; `-o -` is not used, 0.3.1 writes a file named `-` for it) and
   rasterises the SVG with `QSvgRenderer` at the column width and the display's
   pixel ratio. The tool gets 5 s, then is killed.
@@ -869,8 +870,11 @@ already linked for notebook output).
 - **Publish and PDF export** never start the tool: they use the SVG the editor
   already cached for that source (the theme's colours if it has them, else the
   most recently used in any colours - the diagram carries its own background, so
-  a dark one is a dark card on a light page). Publish inlines it as
-  `<div class="diagram">` with its ids prefixed per diagram; PDF export
+  a dark one is a dark card on a light page). Publish embeds it as
+  `<div class="diagram"><img src="data:image/svg+xml...">`, never inlined (an
+  SVG drawn as an image runs no script), with the fence's source as the alt
+  text (escaped, first 2000 characters) for screen readers and the site's
+  search; PDF export
   draws it as an image. A fence never drawn in the editor is its source, as a
   code block.
 - **Not drawn**: encrypted notes (the source would go into the cache), slides.
@@ -888,7 +892,7 @@ one test against the installed tool, run in the sandbox (skipped when absent, a 
 ````plantuml` (also `puml`), ````tikz` and ````dot` (also `graphviz`) fences are
 drawn the same way and by the same code (`diagramRenderer` in
 `libs/editor/MermaidBlock.cpp`; `mermaidRenderer` is its Mermaid case): the one
-pool thread, the tool found by the first fence and remembered, the memo, the
+pool (one per kind, two threads), the tool found by the first fence and remembered, the memo, the
 disk cache (one directory per kind: `.../noteAppC/{mermaid,plantuml,tikz,dot}`),
 the source with one dim hint when the tool is missing or fails, nothing at
 startup, a cached diagram drawn without starting a process, and the caret
@@ -914,7 +918,8 @@ is the wrong place for it).
   itself (a wrapper script's jar, a home's libraries) is not, so install those
   under `/usr`. 20 s for a
   tool (and for each of TeX's two steps; Mermaid's 5 s), a CPU limit, and 4 GB of address space
-  for all but the JVM.
+  for all but the JVM, which reserves far more than it uses: it gets `JAVA_TOOL_OPTIONS`
+  heap caps (`-Xmx512m`, metaspace 256 MB, direct memory 128 MB) and a 2 GB `RLIMIT_DATA` instead.
 - **PlantUML**: `plantuml -tsvg -pipe -charset UTF-8` with the source on stdin
   (wrapped in `@startuml` when it has no `@start...`), `--dark-mode` on a dark
   theme, and `PLANTUML_SECURITY_PROFILE=SANDBOX`, so `!include` of a file or a
