@@ -1652,26 +1652,38 @@ Lane sync8:
       entity for identical paths after the first conflict.
 
 Lane index8:
-- [ ] 2. waitIdle before rename stalls the UI (debounce rebuild = full
+- [x] 2. (lane index8, 12a77ed: waitIdle gone; saved + in-flight paths as extra candidates) waitIdle before rename stalls the UI (debounce rebuild = full
       vault walk, up to 1 s) and re-enters every Index::changed consumer
       mid-rename; past the cap the link is missed silently. Plan: drop
       waitIdle; autosave() returns the paths it saved, Indexer exposes
       paths in flight, both added as extra candidates to
       updateLinksAfterRename. Test: rename right after a timer save; no
       Index::changed during renameVaultPath.
-- [ ] 3. Indexer::start gates on isRunning(), not on the last batch being
+- [x] 3. (lane index8, 20b919f) Indexer::start gates on isRunning(), not on the last batch being
       applied; apply() then blocks on the next scan's waitForFinished and
       skips notifyChanged for the previous writes (stale panes). Plan: gate
       on m_active, drop the waitForFinished. Unit test.
-- [ ] 6. updateLinksAfterRename writes notes whose text did not change
+- [x] 6. (lane index8, 0b847c0) updateLinksAfterRename writes notes whose text did not change
       (folder rename with sibling [[links]]: every note rewritten). Plan:
       skip unchanged text. Test: rewritten == 0, mtimes unchanged.
-- [ ] 7. One unreadable candidate (deleted externally) aborts the rewrite
+- [x] 7. (lane index8, a1bdbfc) One unreadable candidate (deleted externally) aborts the rewrite
       after the file moved. Plan: skip and name it like a lossy note.
-- [ ] 12. linkTargets() rebuild ~22 ms on 20 000 notes on the UI thread
+- [x] 12. (lane index8, ec277e5: 16.0 -> 3.6 ms) linkTargets() rebuild ~22 ms on 20 000 notes on the UI thread
       after a name change (TODO above): derive from the in-memory names.
-- [ ] 13. Every in-app save arms the watcher debounce -> rebuild() (full
+- [x] 13. (lane index8, 0b5aa1f: only the named folders; save to idle 440 -> ~360 ms) Every in-app save arms the watcher debounce -> rebuild() (full
       walk). Plan: reindex only the changed paths the watcher reported.
+- [ ] 20. (lane watch) An external program editing a note in place (no
+      temp file + rename) that is not open is never seen: QFileSystemWatcher
+      directory watches report entry changes only. Obsidian sees such
+      edits. Plan: inotify IN_CLOSE_WRITE/IN_MODIFY on the vault folders
+      (Linux; QFileSystemWatcher stays the fallback elsewhere), feeding the
+      same incremental debounce. Cost when idle: zero. Test: write in place
+      to an unopened note; the index sees the new text.
+- [ ] 21. A whole-vault scan in flight cannot be listed as rename
+      candidates (documented ceiling); merge-note calls the rewrite without
+      extra candidates.
+- [ ] 22. WindowTest.LocalGraphFollowsTheOpenNote failed once in a full run
+      and under --gtest_repeat (state leak between repeats?); investigate.
 
 Lane misc8:
 - [x] 4. (lane misc8, ee3c6b4) The unsandboxed mmdr fallback (no bwrap) has no rlimits and the
