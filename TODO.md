@@ -1370,8 +1370,9 @@ Wave 1
       .trash (never permanent). Behaviour change: notes deleted in the app
       now go to the desktop trash, as in Obsidian, not the vault's .trash.
       Follow-ups:
-      - [ ] The indexer and other read-only readers index a lossy note's
-            U+FFFD text (search for the original bytes misses).
+      - [x] The indexer and other read-only readers index a lossy note's
+            U+FFFD text (lane links, 2090c5f: index re-reads bad bytes as
+            Latin-1; cp1252 quotes still not).
       - [ ] Mermaid tests time out (mmdr 5 s) when several lanes build at
             once: make them load-robust like the 1 MB open test.
 - [x] 2. (lane syncfix, 10a430f; done by Opus: the agent launch was refused) A sync pull of a delete whose trash move fails still
@@ -1401,33 +1402,50 @@ Wave 1
       with a folder picker. Case-only rename via std::filesystem::rename
       when the destination is the same file.
       Follow-ups:
-      - [ ] Relative Markdown links inside a moved note (`[x](../a.md)`)
-            are not rewritten (same as rename today); Obsidian rewrites them.
-      - [ ] The real drag gesture (startDrag/dragMove/dropEvent) has not run
-            under test; only dropFolderAt and the signal path have.
+      - [x] Relative Markdown links inside a moved note (lane links, 769dd12).
+      - [ ] `<angle bracket>` Markdown link targets are stored with their
+            brackets by the parser, so they never resolve as backlinks or
+            follow a rename of their target.
+      - [x] The real drag gesture (lane links, 8c4506a: own mime marker,
+            a foreign window's drag is refused).
       - [ ] Case-only rename not run on a real case-insensitive filesystem
             (needs a mount; ask Jernej or skip).
 
 Wave 2
-- [ ] 3. (lane single) No single instance: opening a note from the file
+- [x] 3. (lane single, 65c557b 9131e80) No single instance: opening a note from the file
       manager starts a second copy on the same index.db/journal.db.
       Plan: QLocalSocket handoff in main.cpp, QLocalServer in MainWindow;
       vault detection also via the recent-vaults list (a vault without
       .obsidian).
+      Done: $XDG_RUNTIME_DIR/notolith.sock (owner-only) + a lock file held
+      from before the window (Qt's listen() unlinks a live socket, so two
+      racing launches would both serve); XDG_ACTIVATION_TOKEN handed over;
+      miss costs ~0.1-0.3 ms. Follow-ups:
+      - [ ] Wayland focus with the token not seen on a real compositor.
+      - [ ] A note outside the vault opened by hand-over is saved in the
+            layout as `../` and its restore is untested.
+      - [ ] A different-vault hand-over has no test of its own.
 - [x] 6. (lane complete, a9b48ef) `[[` completion: headings after `#`, block ids
       after `#^`, aliases inserting `[[Note|alias]]`.
       Done: index headings/block ids per note (current note read live),
       alias rows "alias -> Note", `![[` too; asked once per popup.
       Follow-ups:
-      - [ ] Heading text with `#`, `|`, `^` inserted verbatim (Obsidian
-            strips them); nested `[[N#H1#H2]]` not offered.
-      - [ ] An alias inserts the note's basename, not its shortest unique
-            path: two notes with one name give an ambiguous link.
-- [ ] 5. (lane workspace) Autosave is debounce only: continuous typing never
+      - [x] Heading text with `#`, `|`, `^` inserted verbatim (lane links,
+            786b051: ObsidianSyntax::headingLinkText both sides; strip set
+            from memory, not checked against Obsidian).
+      - [ ] Nested `[[N#H1#H2]]` not offered or resolved (resolver is
+            single-level).
+      - [x] An alias inserts the note's basename (lane links, 87af41f:
+            `folder/Note` when the basename is shared).
+- [x] 5. (lane workspace, 2e72085) Autosave is debounce only: continuous typing never
       saves. Plan: a 30 s max-wait timer.
-- [ ] 7. (lane workspace) Undo close tab (Ctrl+Shift+T), 20 deep.
-- [ ] 8. (lane workspace) Bench row for saveLeaf on a 1 MB note (two
+- [x] 7. (lane workspace, 2e72085) Undo close tab (Ctrl+Shift+T), 20 deep.
+      Follow-ups: [ ] encrypted-note skip and scroll restore not asserted.
+- [x] 8. (lane workspace, 2e72085) Bench row for saveLeaf on a 1 MB note (two
       fdatasyncs on the UI thread); act only if it shows.
+      Measured on NVMe btrfs/LUKS: median 6.0 ms (1 MB), worst 17.4 ms
+      (likely first save + snapshot, not checked). Under 10 ms median: no
+      change.
 
 Wave 3
 - [ ] 9. MarkdownEditor.h (2 791 lines, 46 TUs) private part behind a
