@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <thread>
 
@@ -285,6 +286,25 @@ TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)
     ASSERT_TRUE(again.wait(20000));
     EXPECT_EQ(index.noteCount(), 4);
     EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 3);
+}
+
+// The scan thread posts its last batch and ends; until the Index's thread applies
+// it, a new scan must queue rather than start, or the apply would wait for the new
+// scan and lose the first one's changed().
+TEST_F(IndexTest, ARebuildBeforeTheLastBatchIsAppliedQueuesBehindIt)
+{
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    QSignalSpy changed(&index, &Index::changed); // after open() has announced itself
+    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // the scan ends; no event is processed
+    indexer.rebuild();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return done.size() >= 2 && !indexer.isRunning(); }, 20000));
+    EXPECT_EQ(done.size(), 2) << "one finished per scan";
+    EXPECT_EQ(done.first().at(0).toInt(), 3) << "the first scan's count is its own";
+    EXPECT_EQ(changed.size(), 1) << "the first scan's writes are announced";
+    EXPECT_EQ(index.noteCount(), 3);
 }
 
 // linkTargets() and aliases() are cached between index changes; a write that

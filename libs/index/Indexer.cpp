@@ -102,7 +102,7 @@ bool Indexer::isIgnored(const QString &relativePath)
 
 bool Indexer::isRunning() const
 {
-    return m_scan.isRunning();
+    return m_active;
 }
 
 void Indexer::waitIdle(int milliseconds)
@@ -180,7 +180,7 @@ void Indexer::setMetaNotes(const ParseOptions &options)
     if (next.metaNotes) {
         m_clearMetaNotes = false;
         start({}, true);
-    } else if (m_scan.isRunning()) {
+    } else if (m_active) {
         m_clearMetaNotes = true; // its writer holds the database: cleared when it ends
     } else {
         clearMetaNotes();
@@ -214,7 +214,9 @@ void Indexer::start(const QStringList &paths, bool force)
 {
     if (!m_vault.isValid() || !m_index->isOpen())
         return;
-    if (m_scan.isRunning()) {
+    // Not m_scan.isRunning(): the scan thread's last batch may be posted and not
+    // applied yet, and a new scan then resets what that apply still needs.
+    if (m_active) {
         if (paths.isEmpty()) {
             m_rescan = true;
             m_forceRescan = m_forceRescan || force;
@@ -347,7 +349,6 @@ void Indexer::apply(const Batch &batch)
         emit progress(batch.done, batch.total);
         return;
     }
-    m_scan.waitForFinished(); // it posted this as its last act
     m_active = false; // unless the end of this queues another scan, below
     if (!m_parseOptions.metaNotes && (m_clearMetaNotes || m_scanOptions.metaNotes)) {
         clearMetaNotes(); // switched off while it ran: what it or the cache held is stale

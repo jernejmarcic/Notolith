@@ -39,6 +39,7 @@ public:
     /// and every note no longer there. Queued behind a scan in progress.
     void rebuild();
     void reindex(const QString &path);
+    /// A scan is running, or its last batch is not applied yet.
     bool isRunning() const;
     /// Brings the index up to date with what is on disk now, for at most
     /// `milliseconds`: a change the watcher has not acted on yet is acted on
