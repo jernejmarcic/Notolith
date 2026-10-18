@@ -30,6 +30,7 @@
 /// off) the pass compiles to nothing and HTML shows as it did before.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QHash>
 #include <QRegularExpression>
@@ -1032,8 +1033,8 @@ void expandEditableHTML(Decorations &, const QString &) {}
 
 const Substitution *MarkdownEditor::shownSubstitution(qsizetype offset) const
 {
-    const QList<Substitution> &all = m_decorations.substitutions;
-    if (all.isEmpty() || m_mode == Mode::Source)
+    const QList<Substitution> &all = d->m_decorations.substitutions;
+    if (all.isEmpty() || d->m_mode == Mode::Source)
         return nullptr;
     auto it = std::upper_bound(all.cbegin(), all.cend(), offset,
                                [](qsizetype at, const Substitution &s) { return at < s.range.start; });
@@ -1041,8 +1042,8 @@ const Substitution *MarkdownEditor::shownSubstitution(qsizetype offset) const
         return nullptr;
     // A block shown as its source - a <pre> under the caret - shows it raw.
     const qsizetype index = blockAt(offset);
-    if (index >= 0 && index < qsizetype(m_blocks.size())) {
-        const BlockView &view = m_blocks[size_t(index)];
+    if (index >= 0 && index < qsizetype(d->m_blocks.size())) {
+        const BlockView &view = d->m_blocks[size_t(index)];
         if (view.active && view.cells.empty() && revealsWholeBlock(view))
             return nullptr;
     }
@@ -1055,21 +1056,21 @@ bool MarkdownEditor::entityRevealed(const Substitution &substitution) const
 {
     // Vim's normal and visual modes keep an entity one character, as `l` and
     // `x` step over it; its insert mode opens it like any other editing.
-    const bool vimStepping = m_vim.enabled && m_vim.mode != VimState::Mode::Insert;
-    return m_mode == Mode::LivePreview && !vimStepping && m_anchor == m_cursor
-           && substitution.range.start <= m_cursor
-           && m_cursor <= substitution.range.end && m_text.at(substitution.range.start) == QLatin1Char('&');
+    const bool vimStepping = d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert;
+    return d->m_mode == Mode::LivePreview && !vimStepping && d->m_anchor == d->m_cursor
+           && substitution.range.start <= d->m_cursor
+           && d->m_cursor <= substitution.range.end && d->m_text.at(substitution.range.start) == QLatin1Char('&');
 }
 
 QList<Range> MarkdownEditor::revealedEntities() const
 {
     QList<Range> touched;
-    const QList<Substitution> &all = m_decorations.substitutions;
-    if (all.isEmpty() || m_mode != Mode::LivePreview || m_anchor != m_cursor)
+    const QList<Substitution> &all = d->m_decorations.substitutions;
+    if (all.isEmpty() || d->m_mode != Mode::LivePreview || d->m_anchor != d->m_cursor)
         return touched;
-    for (auto it = std::lower_bound(all.cbegin(), all.cend(), m_cursor,
+    for (auto it = std::lower_bound(all.cbegin(), all.cend(), d->m_cursor,
                                     [](const Substitution &s, qsizetype at) { return s.range.end < at; });
-         it != all.cend() && it->range.start <= m_cursor; ++it) {
+         it != all.cend() && it->range.start <= d->m_cursor; ++it) {
         if (entityRevealed(*it))
             touched.append(it->range);
     }
@@ -1078,7 +1079,7 @@ QList<Range> MarkdownEditor::revealedEntities() const
 
 QList<Substitution> MarkdownEditor::substitutionsWithout(const QList<Range> &revealed) const
 {
-    QList<Substitution> drawn = m_decorations.substitutions;
+    QList<Substitution> drawn = d->m_decorations.substitutions;
     drawn.removeIf([&revealed](const Substitution &s) { return revealed.contains(s.range); });
     return drawn;
 }
@@ -1093,14 +1094,14 @@ qsizetype MarkdownEditor::stepOverSubstitution(qsizetype target, int direction) 
 
 const HtmlTextSpan *MarkdownEditor::HTMLtextAt(qsizetype offset) const
 {
-    const QList<HtmlTextSpan> &all = m_decorations.HTMLtext;
-    if (all.isEmpty() || m_mode != Mode::LivePreview)
+    const QList<HtmlTextSpan> &all = d->m_decorations.HTMLtext;
+    if (all.isEmpty() || d->m_mode != Mode::LivePreview)
         return nullptr;
     // Inside a tag the caret has revealed, typing edits the tag.
-    const QList<Range> &syntax = m_decorations.syntax;
+    const QList<Range> &syntax = d->m_decorations.syntax;
     auto tag = std::lower_bound(syntax.cbegin(), syntax.cend(), offset,
                                 [](const Range &range, qsizetype at) { return range.start < at; });
-    if (tag != syntax.cbegin() && (tag - 1)->end > offset && m_text.at((tag - 1)->start) == QLatin1Char('<'))
+    if (tag != syntax.cbegin() && (tag - 1)->end > offset && d->m_text.at((tag - 1)->start) == QLatin1Char('<'))
         return nullptr;
     // The innermost: a nested item starts after the item holding it.
     for (auto it = std::upper_bound(all.cbegin(), all.cend(), offset,
@@ -1132,7 +1133,7 @@ bool MarkdownEditor::handleHTMLenter()
 {
     if (selection().length() > 0)
         return false;
-    const HtmlTextSpan *span = HTMLtextAt(m_cursor);
+    const HtmlTextSpan *span = HTMLtextAt(d->m_cursor);
     if (!span)
         return false;
     const QString tag = span->tag.toLower();
@@ -1142,13 +1143,13 @@ bool MarkdownEditor::handleHTMLenter()
     }
     // Inside <b> or a link a split would cross its tags: a line break instead.
     bool inInline = false;
-    const qsizetype index = blockAt(m_cursor);
-    if (index >= 0 && index < qsizetype(m_blocks.size())) {
-        const BlockView &view = m_blocks[size_t(index)];
+    const qsizetype index = blockAt(d->m_cursor);
+    if (index >= 0 && index < qsizetype(d->m_blocks.size())) {
+        const BlockView &view = d->m_blocks[size_t(index)];
         for (int i = view.firstStyle; i < view.lastStyle && !inInline; ++i) {
-            const StyleSpan &style = m_decorations.styles.at(i);
+            const StyleSpan &style = d->m_decorations.styles.at(i);
             inInline = (style.kind == StyleSpan::Kind::HtmlText || style.kind == StyleSpan::Kind::Link)
-                       && style.range.start < m_cursor && m_cursor < style.range.end;
+                       && style.range.start < d->m_cursor && d->m_cursor < style.range.end;
         }
     }
     if ((tag != QLatin1String("p") && tag != QLatin1String("li")) || inInline) {
@@ -1159,7 +1160,7 @@ bool MarkdownEditor::handleHTMLenter()
     const QString indent = indentBefore(span->openTag.start).value_or(QString());
     QString split = span->closed ? QStringLiteral("</%1>").arg(span->tag) : QString();
     split += QLatin1Char('\n') + indent + QStringLiteral("<%1>").arg(span->tag);
-    m_lastEdit.invalidate(); // its own undo step
+    d->m_lastEdit.invalidate(); // its own undo step
     insertText(split);
     reparse(); // the new element is one before the next key needs it
     return true;
@@ -1188,8 +1189,8 @@ QString sameCase(const QString &name, const QString &like)
 QString MarkdownEditor::HTMLrowText(const TableSpan &table, int like, bool header) const
 {
     const QList<Range> &cells = table.cellElements.value(like);
-    const QString row = tagNameAt(m_text, table.rowElements.value(like).start);
-    const QString cell = cells.isEmpty() ? QStringLiteral("td") : tagNameAt(m_text, cells.first().start);
+    const QString row = tagNameAt(d->m_text, table.rowElements.value(like).start);
+    const QString cell = cells.isEmpty() ? QStringLiteral("td") : tagNameAt(d->m_text, cells.first().start);
     const QString name = sameCase(header ? QStringLiteral("th") : QStringLiteral("td"), cell);
     QString text = QStringLiteral("<%1>").arg(row.isEmpty() ? QStringLiteral("tr") : row);
     for (int c = 0; c < table.columns; ++c)
@@ -1199,8 +1200,8 @@ QString MarkdownEditor::HTMLrowText(const TableSpan &table, int like, bool heade
 
 std::optional<QString> MarkdownEditor::indentBefore(qsizetype offset) const
 {
-    const qsizetype lineStart = m_lines.lineStart(m_lines.lineAt(offset));
-    const QString indent = m_text.mid(lineStart, offset - lineStart);
+    const qsizetype lineStart = d->m_lines.lineStart(d->m_lines.lineAt(offset));
+    const QString indent = d->m_text.mid(lineStart, offset - lineStart);
     if (!indent.trimmed().isEmpty())
         return std::nullopt; // something else on the line before it
     return indent;
@@ -1213,24 +1214,24 @@ bool MarkdownEditor::applyHTMLtableEdits(QList<HTMLtableEdit> edits, qsizetype t
     // Stable: edits at one offset go in in the order given, the first one last.
     std::stable_sort(edits.begin(), edits.end(),
                      [](const HTMLtableEdit &l, const HTMLtableEdit &r) { return l.start > r.start; });
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     pushUndo();
-    m_formattingTables = true; // an HTML table is never aligned anyway
+    d->m_formattingTables = true; // an HTML table is never aligned anyway
     for (const HTMLtableEdit &edit : std::as_const(edits))
         applyEdit(edit.start, edit.removed, edit.text);
-    m_formattingTables = false;
-    m_lastEdit.invalidate();
+    d->m_formattingTables = false;
+    d->m_lastEdit.invalidate();
     // The new row or column has to be cells before the caret goes in.
     reparse();
-    const QList<QList<Range>> &rows = m_decorations.tables.value(table).rows;
+    const QList<QList<Range>> &rows = d->m_decorations.tables.value(table).rows;
     const QList<Range> &cells = rows.value(qBound(0, row, int(rows.size()) - 1));
-    moveCursor(cells.value(qBound(0, column, int(cells.size()) - 1), Range{m_cursor, m_cursor}).start, false);
+    moveCursor(cells.value(qBound(0, column, int(cells.size()) - 1), Range{d->m_cursor, d->m_cursor}).start, false);
     return true;
 }
 
 bool MarkdownEditor::insertHTMLrow(qsizetype table, int row, bool after, int column)
 {
-    const TableSpan &span = m_decorations.tables.at(table);
+    const TableSpan &span = d->m_decorations.tables.at(table);
     // Nothing goes into the header: a row "after" it is the body's first.
     const bool intoHeader = row < span.headerRows;
     if (intoHeader) {
@@ -1255,41 +1256,41 @@ bool MarkdownEditor::insertHTMLrow(qsizetype table, int row, bool after, int col
 
 bool MarkdownEditor::fillShortHTMLrow(qsizetype table, int row)
 {
-    const TableSpan &span = m_decorations.tables.at(table);
+    const TableSpan &span = d->m_decorations.tables.at(table);
     const QList<Range> &elements = span.cellElements.value(row);
     if (elements.isEmpty() || elements.size() >= span.columns)
         return false;
-    const QString name = tagNameAt(m_text, elements.last().start);
+    const QString name = tagNameAt(d->m_text, elements.last().start);
     QString added;
     for (qsizetype c = elements.size(); c < span.columns; ++c)
         added += QStringLiteral("<%1></%1>").arg(name);
-    const qsizetype caret = m_cursor;
-    m_lastEdit.invalidate();
+    const qsizetype caret = d->m_cursor;
+    d->m_lastEdit.invalidate();
     pushUndo();
     applyEdit(elements.last().end, 0, added);
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     reparse();
-    m_cursor = m_anchor = caret <= elements.last().end ? caret : caret + added.size();
+    d->m_cursor = d->m_anchor = caret <= elements.last().end ? caret : caret + added.size();
     return true;
 }
 
 bool MarkdownEditor::runHTMLtableCommand(const QString &id, qsizetype table, int row, int column)
 {
-    const TableSpan &span = m_decorations.tables.at(table);
+    const TableSpan &span = d->m_decorations.tables.at(table);
     const bool header = row < span.headerRows;
     const auto lineOf = [this](const Range &element) {
         // An element alone on its lines goes with them; otherwise just itself.
-        const qsizetype lineStart = m_lines.lineStart(m_lines.lineAt(element.start));
-        const qsizetype lineEnd = m_lines.lineEnd(m_lines.lineAt(qMax(element.start, element.end - 1)));
-        const bool alone = m_text.mid(lineStart, element.start - lineStart).trimmed().isEmpty()
-                           && m_text.mid(element.end, lineEnd - element.end).trimmed().isEmpty();
-        if (alone && lineEnd < m_text.size())
+        const qsizetype lineStart = d->m_lines.lineStart(d->m_lines.lineAt(element.start));
+        const qsizetype lineEnd = d->m_lines.lineEnd(d->m_lines.lineAt(qMax(element.start, element.end - 1)));
+        const bool alone = d->m_text.mid(lineStart, element.start - lineStart).trimmed().isEmpty()
+                           && d->m_text.mid(element.end, lineEnd - element.end).trimmed().isEmpty();
+        if (alone && lineEnd < d->m_text.size())
             return Range{lineStart, lineEnd + 1};
         return element;
     };
     const auto swap = [this](QList<HTMLtableEdit> &edits, const Range &a, const Range &b) {
-        edits.append({a.start, a.length(), m_text.mid(b.start, b.length())});
-        edits.append({b.start, b.length(), m_text.mid(a.start, a.length())});
+        edits.append({a.start, a.length(), d->m_text.mid(b.start, b.length())});
+        edits.append({b.start, b.length(), d->m_text.mid(a.start, a.length())});
     };
     QList<HTMLtableEdit> edits;
     if (id.endsWith(QLatin1String("insert-row-before")))
@@ -1317,7 +1318,7 @@ bool MarkdownEditor::runHTMLtableCommand(const QString &id, qsizetype table, int
             if (cells.isEmpty())
                 continue;
             const QString name = sameCase(r < span.headerRows ? QStringLiteral("th") : QStringLiteral("td"),
-                                          tagNameAt(m_text, cells.first().start));
+                                          tagNameAt(d->m_text, cells.first().start));
             const QString cell = QStringLiteral("<%1></%1>").arg(name);
             if (column < cells.size())
                 edits.append({after ? cells.at(column).end : cells.at(column).start, 0, cell});
@@ -1352,7 +1353,7 @@ bool MarkdownEditor::runHTMLtableCommand(const QString &id, qsizetype table, int
 
 bool MarkdownEditor::moveHTMLline(qsizetype table, bool column, int from, int final)
 {
-    const TableSpan span = m_decorations.tables.at(table); // a copy: the edits reparse
+    const TableSpan span = d->m_decorations.tables.at(table); // a copy: the edits reparse
     const int low = qMin(from, final);
     const int high = qMax(from, final);
     // The text each slot between `low` and `high` takes: moving down rotates
@@ -1375,7 +1376,7 @@ bool MarkdownEditor::moveHTMLline(qsizetype table, bool column, int from, int fi
                 continue;
             const Range &slot = line.at(low + k);
             const Range &source = line.at(order.at(k));
-            edits.append({slot.start, slot.length(), m_text.mid(source.start, source.length())});
+            edits.append({slot.start, slot.length(), d->m_text.mid(source.start, source.length())});
         }
     };
     if (column) {
@@ -1389,7 +1390,7 @@ bool MarkdownEditor::moveHTMLline(qsizetype table, bool column, int from, int fi
 
 bool MarkdownEditor::appendHTMLline(qsizetype table, bool column, int count)
 {
-    const TableSpan span = m_decorations.tables.at(table);
+    const TableSpan span = d->m_decorations.tables.at(table);
     QList<HTMLtableEdit> edits;
     if (!column) {
         // After the last row, written like it and on lines of its own.
@@ -1407,7 +1408,7 @@ bool MarkdownEditor::appendHTMLline(qsizetype table, bool column, int count)
         if (cells.isEmpty())
             continue;
         const QString name = sameCase(r < span.headerRows ? QStringLiteral("th") : QStringLiteral("td"),
-                                      tagNameAt(m_text, cells.first().start));
+                                      tagNameAt(d->m_text, cells.first().start));
         QString added;
         for (int i = 0; i < count; ++i)
             added += QStringLiteral("<%1></%1>").arg(name);

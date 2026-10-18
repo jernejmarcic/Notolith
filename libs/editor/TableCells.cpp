@@ -15,6 +15,7 @@
 /// and the few places that write Markdown hand over to an HTML counterpart.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Parser.h"
 #include "TableFormat.h"
@@ -36,9 +37,9 @@ constexpr qreal kCellPadY = 6;
 
 MarkdownEditor::CellRef MarkdownEditor::tableCellAt(qsizetype source) const
 {
-    if (m_mode == Mode::Source)
+    if (d->m_mode == Mode::Source)
         return {};
-    for (const TableSpan &table : m_decorations.tables) {
+    for (const TableSpan &table : d->m_decorations.tables) {
         if (source < table.range.start || source > table.range.end)
             continue;
         for (int r = 0; r < table.rows.size(); ++r) {
@@ -74,7 +75,7 @@ qsizetype MarkdownEditor::snapToTableCell(qsizetype offset, qsizetype from) cons
         return forward ? best->start : best->end;
     // Past the last cell, or before the first: out of the table altogether.
     if (forward)
-        return qMin<qsizetype>(m_text.size(), table.range.end + 1);
+        return qMin<qsizetype>(d->m_text.size(), table.range.end + 1);
     return table.range.start > 0 ? table.range.start - 1 : table.rows.value(0).value(0).start;
 }
 
@@ -95,10 +96,10 @@ QPointF MarkdownEditor::cellTextOrigin(const BlockView &view, const Cell &cell) 
 
 const MarkdownEditor::Cell *MarkdownEditor::caretCell(const BlockView &view) const
 {
-    if (view.cells.empty() || m_anchor != m_cursor)
+    if (view.cells.empty() || d->m_anchor != d->m_cursor)
         return nullptr;
     for (const Cell &cell : view.cells) {
-        if (cell.source.start <= m_cursor && m_cursor <= cell.source.end)
+        if (cell.source.start <= d->m_cursor && d->m_cursor <= cell.source.end)
             return &cell;
     }
     return nullptr;
@@ -106,9 +107,9 @@ const MarkdownEditor::Cell *MarkdownEditor::caretCell(const BlockView &view) con
 
 qsizetype MarkdownEditor::tableAround(qsizetype offset) const
 {
-    for (qsizetype i = 0; i < m_decorations.tables.size(); ++i) {
-        const Range &range = m_decorations.tables.at(i).range;
-        if (m_lines.lineStart(m_lines.lineAt(range.start)) <= offset && offset <= range.end)
+    for (qsizetype i = 0; i < d->m_decorations.tables.size(); ++i) {
+        const Range &range = d->m_decorations.tables.at(i).range;
+        if (d->m_lines.lineStart(d->m_lines.lineAt(range.start)) <= offset && offset <= range.end)
             return i;
     }
     return -1;
@@ -127,13 +128,13 @@ bool MarkdownEditor::formatTables(qsizetype offset)
     const qsizetype only = offset < 0 ? -1 : tableAround(offset);
     if (offset >= 0 && only < 0)
         return false;
-    for (qsizetype i = 0; i < m_decorations.tables.size(); ++i) {
-        if ((only >= 0 && i != only) || m_decorations.tables.at(i).html)
+    for (qsizetype i = 0; i < d->m_decorations.tables.size(); ++i) {
+        if ((only >= 0 && i != only) || d->m_decorations.tables.at(i).html)
             continue; // an HTML table's source is left as written
-        const Range &range = m_decorations.tables.at(i).range;
-        const qsizetype start = m_lines.lineStart(m_lines.lineAt(range.start));
-        const qsizetype end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
-        const QString source = m_text.mid(start, end - start);
+        const Range &range = d->m_decorations.tables.at(i).range;
+        const qsizetype start = d->m_lines.lineStart(d->m_lines.lineAt(range.start));
+        const qsizetype end = d->m_lines.lineEnd(d->m_lines.lineAt(qMax(range.start, range.end - 1)));
+        const QString source = d->m_text.mid(start, end - start);
         const QString aligned = formatTable(source);
         if (aligned != source)
             edits.append({i, start, end, aligned});
@@ -143,33 +144,33 @@ bool MarkdownEditor::formatTables(qsizetype offset)
 
     // The caret stays in its cell, at the same place in its text; outside
     // every table it moves with the text around it.
-    const CellRef cell = tableCellAt(m_cursor);
-    qsizetype inCell = cell.row >= 0 ? m_cursor - cell.range.start : -1;
-    qsizetype caret = m_cursor;
+    const CellRef cell = tableCellAt(d->m_cursor);
+    qsizetype inCell = cell.row >= 0 ? d->m_cursor - cell.range.start : -1;
+    qsizetype caret = d->m_cursor;
     for (const Edit &edit : std::as_const(edits)) {
-        if (edit.end <= m_cursor && !(cell.row >= 0 && tableAround(m_cursor) == edit.table))
+        if (edit.end <= d->m_cursor && !(cell.row >= 0 && tableAround(d->m_cursor) == edit.table))
             caret += edit.text.size() - (edit.end - edit.start);
     }
-    const qsizetype caretTable = cell.row >= 0 ? tableAround(m_cursor) : -1;
+    const qsizetype caretTable = cell.row >= 0 ? tableAround(d->m_cursor) : -1;
     const int row = cell.row;
     const int column = cell.column;
 
-    m_lastEdit.invalidate(); // one step of its own, not the end of the typing before it
+    d->m_lastEdit.invalidate(); // one step of its own, not the end of the typing before it
     pushUndo();
-    m_formattingTables = true;
+    d->m_formattingTables = true;
     for (qsizetype i = edits.size() - 1; i >= 0; --i)
         applyEdit(edits.at(i).start, edits.at(i).end - edits.at(i).start, edits.at(i).text);
-    m_formattingTables = false;
-    m_lastEdit.invalidate();
+    d->m_formattingTables = false;
+    d->m_lastEdit.invalidate();
     reparse();
 
-    if (caretTable >= 0 && caretTable < m_decorations.tables.size()) {
-        const TableSpan &table = m_decorations.tables.at(caretTable);
+    if (caretTable >= 0 && caretTable < d->m_decorations.tables.size()) {
+        const TableSpan &table = d->m_decorations.tables.at(caretTable);
         const Range moved = table.rows.value(row).value(column);
         if (moved.isValid())
             caret = moved.start + qMin(inCell, moved.length());
     }
-    m_tableEdited = false;
+    d->m_tableEdited = false;
     moveCursor(caret, false);
     return true;
 }
@@ -177,15 +178,15 @@ bool MarkdownEditor::formatTables(qsizetype offset)
 bool MarkdownEditor::tableRenderedAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(m_blocks.size()) && !m_blocks[size_t(index)].cells.empty();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].cells.empty();
 }
 
 void MarkdownEditor::revealCaretCell()
 {
-    const qsizetype index = blockAt(m_cursor);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    const qsizetype index = blockAt(d->m_cursor);
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    BlockView &view = m_blocks[size_t(index)];
+    BlockView &view = d->m_blocks[size_t(index)];
     const Cell *cell = caretCell(view);
     if (!cell)
         return;
@@ -204,28 +205,28 @@ void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
 {
     const TableSpan &table = *cell.table;
     if (table.html) {
-        insertHTMLrow(&table - m_decorations.tables.constData(), cell.row, true, column);
+        insertHTMLrow(&table - d->m_decorations.tables.constData(), cell.row, true, column);
         return;
     }
-    const qsizetype lineEnd = m_lines.lineEnd(m_lines.lineAt(cell.range.start));
+    const qsizetype lineEnd = d->m_lines.lineEnd(d->m_lines.lineAt(cell.range.start));
     // The new row copies the one it follows up to its first pipe, so a row
     // inside a callout keeps its "> ".
-    const qsizetype lineStart = m_lines.lineStart(m_lines.lineAt(cell.range.start));
+    const qsizetype lineStart = d->m_lines.lineStart(d->m_lines.lineAt(cell.range.start));
     qsizetype prefixEnd = lineStart;
-    while (prefixEnd < lineEnd && (m_text.at(prefixEnd) == QLatin1Char('>') || m_text.at(prefixEnd).isSpace()))
+    while (prefixEnd < lineEnd && (d->m_text.at(prefixEnd) == QLatin1Char('>') || d->m_text.at(prefixEnd).isSpace()))
         ++prefixEnd;
-    QString row = QLatin1Char('\n') + m_text.mid(lineStart, prefixEnd - lineStart) + QLatin1Char('|');
+    QString row = QLatin1Char('\n') + d->m_text.mid(lineStart, prefixEnd - lineStart) + QLatin1Char('|');
     for (int c = 0; c < table.columns; ++c)
         row += QStringLiteral("  |");
 
-    m_lastEdit.invalidate(); // its own undo step, not part of the typing before it
+    d->m_lastEdit.invalidate(); // its own undo step, not part of the typing before it
     pushUndo();
     applyEdit(lineEnd, 0, row);
     // The row has to be a row before the caret can go into it: parse now,
     // not in 20 ms, or the caret lands in no cell and is snapped away.
     reparse();
-    const qsizetype newLine = m_lines.lineAt(lineEnd + 1);
-    const QList<Range> cells = tableRowCells(m_text, m_lines.lineStart(newLine), m_lines.lineEnd(newLine));
+    const qsizetype newLine = d->m_lines.lineAt(lineEnd + 1);
+    const QList<Range> cells = tableRowCells(d->m_text, d->m_lines.lineStart(newLine), d->m_lines.lineEnd(newLine));
     moveCursor(cells.value(qBound(0, column, int(cells.size()) - 1)).start, false);
 }
 
@@ -246,33 +247,33 @@ QString MarkdownEditor::cellSafe(const QString &text) const
 
 bool MarkdownEditor::fillShortRow(qsizetype table, int row)
 {
-    if (m_mode == Mode::Reading) // filling writes to the note
+    if (d->m_mode == Mode::Reading) // filling writes to the note
         return false;
-    if (table < 0 || table >= m_decorations.tables.size())
+    if (table < 0 || table >= d->m_decorations.tables.size())
         return false;
-    const TableSpan &span = m_decorations.tables.at(table);
+    const TableSpan &span = d->m_decorations.tables.at(table);
     if (span.html)
         return fillShortHTMLrow(table, row);
     const QList<Range> cells = span.rows.value(row);
     if (cells.isEmpty() || cells.size() >= span.columns)
         return false;
-    const qsizetype lineEnd = m_lines.lineEnd(m_lines.lineAt(cells.last().start));
+    const qsizetype lineEnd = d->m_lines.lineEnd(d->m_lines.lineAt(cells.last().start));
     // A row written without its closing pipe gets one before the new cells.
     qsizetype last = lineEnd;
-    while (last > cells.last().end && m_text.at(last - 1).isSpace())
+    while (last > cells.last().end && d->m_text.at(last - 1).isSpace())
         --last;
-    QString added = last > cells.last().end && m_text.at(last - 1) == QLatin1Char('|') ? QString() : QStringLiteral(" |");
+    QString added = last > cells.last().end && d->m_text.at(last - 1) == QLatin1Char('|') ? QString() : QStringLiteral(" |");
     for (qsizetype c = cells.size(); c < span.columns; ++c)
         added += QStringLiteral("  |");
 
-    const qsizetype caret = m_cursor;
-    m_lastEdit.invalidate();
+    const qsizetype caret = d->m_cursor;
+    d->m_lastEdit.invalidate();
     pushUndo();
     applyEdit(last, lineEnd - last, added);
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     reparse();
     // The caret stays where it was; the click or the key that asked moves it.
-    m_cursor = m_anchor = caret <= last ? caret : caret + added.size() - (lineEnd - last);
+    d->m_cursor = d->m_anchor = caret <= last ? caret : caret + added.size() - (lineEnd - last);
     return true;
 }
 
@@ -280,15 +281,15 @@ bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
 {
     const qreal y = viewportPoint.y() + verticalScrollBar()->value();
     const qreal x = viewportPoint.x() - contentLeft();
-    for (const BlockView &view : m_blocks) {
-        if (view.cells.empty() || y < view.y || y > view.y + view.height || m_mode == Mode::Source)
+    for (const BlockView &view : d->m_blocks) {
+        if (view.cells.empty() || y < view.y || y > view.y + view.height || d->m_mode == Mode::Source)
             continue;
         const TableSpan *table = tableFor(view);
         if (!table)
             return false; // a base's cells, not a table's
         for (const Cell &cell : view.cells) {
             if (!cell.source.isValid() && cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
-                return fillShortRow(table - m_decorations.tables.constData(), cell.row);
+                return fillShortRow(table - d->m_decorations.tables.constData(), cell.row);
         }
         return false;
     }
@@ -297,10 +298,10 @@ bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
 
 bool MarkdownEditor::handleTableKey(QKeyEvent *event)
 {
-    if (m_anchor != m_cursor)
+    if (d->m_anchor != d->m_cursor)
         return false;
-    const CellRef cell = tableCellAt(m_cursor);
-    if (!cell.valid() || cell.row < 0 || !tableRenderedAt(m_cursor))
+    const CellRef cell = tableCellAt(d->m_cursor);
+    if (!cell.valid() || cell.row < 0 || !tableRenderedAt(d->m_cursor))
         return false;
     const TableSpan &table = *cell.table;
     const QList<Range> &row = table.rows.at(cell.row);
@@ -310,11 +311,11 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
     case Qt::Key_Tab: {
         // The next cell is one this short row lacks: give the row its cells.
         if (cell.column + 1 < table.columns && cell.column + 1 >= columns) {
-            const qsizetype index = &table - m_decorations.tables.constData();
+            const qsizetype index = &table - d->m_decorations.tables.constData();
             const int rowIndex = cell.row;
             const int next = cell.column + 1;
             if (fillShortRow(index, rowIndex)) {
-                moveCursor(m_decorations.tables.at(index).rows.value(rowIndex).value(next).start, false);
+                moveCursor(d->m_decorations.tables.at(index).rows.value(rowIndex).value(next).start, false);
                 return true;
             }
         }
@@ -352,9 +353,9 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
         moveCursor(cell.range.end, event->modifiers().testFlag(Qt::ShiftModifier));
         return true;
     case Qt::Key_Backspace:
-        return m_cursor == cell.range.start; // swallowed: the pipe before it stays
+        return d->m_cursor == cell.range.start; // swallowed: the pipe before it stays
     case Qt::Key_Delete:
-        return m_cursor == cell.range.end;
+        return d->m_cursor == cell.range.end;
     default:
         return false;
     }
@@ -362,68 +363,68 @@ bool MarkdownEditor::handleTableKey(QKeyEvent *event)
 
 void MarkdownEditor::rewriteTable(qsizetype start, qsizetype end, const QString &text, bool reparseNow)
 {
-    m_lastEdit.invalidate(); // its own undo step, not the end of the typing before it
+    d->m_lastEdit.invalidate(); // its own undo step, not the end of the typing before it
     pushUndo();
-    m_formattingTables = true; // aligned already: leaving it has nothing to do
+    d->m_formattingTables = true; // aligned already: leaving it has nothing to do
     applyEdit(start, end - start, text);
-    m_formattingTables = false;
-    m_lastEdit.invalidate();
-    m_tableEdited = false;
+    d->m_formattingTables = false;
+    d->m_lastEdit.invalidate();
+    d->m_tableEdited = false;
     if (reparseNow)
         reparse(); // else the debounced parse applyEdit started catches up
 }
 
 bool MarkdownEditor::handleSourceTableKey(int key)
 {
-    if (!m_alignTables || m_mode == Mode::Reading || m_anchor != m_cursor)
+    if (!d->m_alignTables || d->m_mode == Mode::Reading || d->m_anchor != d->m_cursor)
         return false;
     // Prose is the common case, and a line without a pipe is not a row.
-    const qsizetype caretLine = m_lines.lineAt(m_cursor);
-    const qsizetype lineStart = m_lines.lineStart(caretLine);
-    if (!QStringView(m_text).mid(lineStart, m_lines.lineEnd(caretLine) - lineStart).contains(QLatin1Char('|'))
-        || tableRenderedAt(m_cursor)) // a drawn table's cells are handleTableKey's
+    const qsizetype caretLine = d->m_lines.lineAt(d->m_cursor);
+    const qsizetype lineStart = d->m_lines.lineStart(caretLine);
+    if (!QStringView(d->m_text).mid(lineStart, d->m_lines.lineEnd(caretLine) - lineStart).contains(QLatin1Char('|'))
+        || tableRenderedAt(d->m_cursor)) // a drawn table's cells are handleTableKey's
         return false;
     // Inside the parse debounce the last parse's table still holds: every
     // edit since has shifted its range and cells (shiftRanges), and the cells
     // are read again from its lines below. Whole-note reparse, synchronous,
     // was 340 ms a Tab in a 1 MB note. ponytail: a table typed since that
     // parse is not in it yet, and that first Tab still reparses the note.
-    qsizetype index = tableAround(m_cursor);
-    if (index < 0 && m_parsedVersion != m_textVersion) {
+    qsizetype index = tableAround(d->m_cursor);
+    if (index < 0 && d->m_parsedVersion != d->m_textVersion) {
         reparse();
-        index = tableAround(m_cursor);
+        index = tableAround(d->m_cursor);
     }
-    if (index < 0 || m_decorations.tables.at(index).html)
+    if (index < 0 || d->m_decorations.tables.at(index).html)
         return false;
 
-    TableSpan table = m_decorations.tables.at(index);
-    const qsizetype firstLine = m_lines.lineAt(table.range.start);
-    const qsizetype lastLine = m_lines.lineAt(qMax(table.range.start, table.range.end - 1));
-    const qsizetype start = m_lines.lineStart(firstLine);
-    const qsizetype end = m_lines.lineEnd(lastLine);
+    TableSpan table = d->m_decorations.tables.at(index);
+    const qsizetype firstLine = d->m_lines.lineAt(table.range.start);
+    const qsizetype lastLine = d->m_lines.lineAt(qMax(table.range.start, table.range.end - 1));
+    const qsizetype start = d->m_lines.lineStart(firstLine);
+    const qsizetype end = d->m_lines.lineEnd(lastLine);
     // The rows as the text has them now, by the parser's own rule
     // (Parser.cpp: line by line, the delimiter row skipped).
     table.rows.clear();
     for (qsizetype line = firstLine; line <= lastLine; ++line) {
         if (line != firstLine + 1)
-            table.rows << tableRowCells(m_text, m_lines.lineStart(line), m_lines.lineEnd(line));
+            table.rows << tableRowCells(d->m_text, d->m_lines.lineStart(line), d->m_lines.lineEnd(line));
     }
     if (table.rows.isEmpty())
         return false;
     // A header that no longer has the table's columns (a `|` typed into it)
     // may be no table at all: that one is the parser's to say.
-    if (m_parsedVersion != m_textVersion && table.rows.first().size() != table.columns) {
+    if (d->m_parsedVersion != d->m_textVersion && table.rows.first().size() != table.columns) {
         reparse();
         return handleSourceTableKey(key);
     }
-    const int lineIndex = int(m_lines.lineAt(m_cursor) - firstLine); // 0 header, 1 delimiter
+    const int lineIndex = int(d->m_lines.lineAt(d->m_cursor) - firstLine); // 0 header, 1 delimiter
     const int columns = table.columns;
 
     // Which row and cell the caret is in, then where the key sends it.
     int row = lineIndex <= 1 ? 0 : lineIndex - 1;
     int column = 0;
     for (int c = 0; c < table.rows.at(row).size() && c < columns; ++c) {
-        if (table.rows.at(row).at(c).start <= m_cursor)
+        if (table.rows.at(row).at(c).start <= d->m_cursor)
             column = c;
     }
     int toRow = row;
@@ -450,11 +451,11 @@ bool MarkdownEditor::handleSourceTableKey(int key)
     }
 
     // Past the last row there is none: a new one is written with the table.
-    const QString source = m_text.mid(start, end - start);
+    const QString source = d->m_text.mid(start, end - start);
     QString text = source;
     if (toRow >= table.rows.size()) {
         qsizetype lead = 0;
-        const QString lastText = m_text.mid(m_lines.lineStart(lastLine), end - m_lines.lineStart(lastLine));
+        const QString lastText = d->m_text.mid(d->m_lines.lineStart(lastLine), end - d->m_lines.lineStart(lastLine));
         while (lead < lastText.size() && (lastText.at(lead) == QLatin1Char('>') || lastText.at(lead).isSpace()))
             ++lead;
         text += QLatin1Char('\n') + lastText.left(lead) + QLatin1Char('|');
@@ -465,13 +466,13 @@ bool MarkdownEditor::handleSourceTableKey(int key)
     // Source mode draws no table, so the parse can wait for the debounce. In
     // live preview this is the moment a raw table starts being drawn.
     if (text != source)
-        rewriteTable(start, end, text, m_mode != Mode::Source);
+        rewriteTable(start, end, text, d->m_mode != Mode::Source);
 
     // Where the cell is now, from the rewritten lines: row r is line r, or
     // r + 1 past the header.
     const qsizetype line = firstLine + (toRow == 0 ? 0 : toRow + 1);
-    if (line < m_lines.lineCount()) {
-        const Range cell = tableRowCells(m_text, m_lines.lineStart(line), m_lines.lineEnd(line)).value(toColumn);
+    if (line < d->m_lines.lineCount()) {
+        const Range cell = tableRowCells(d->m_text, d->m_lines.lineStart(line), d->m_lines.lineEnd(line)).value(toColumn);
         if (cell.isValid())
             moveCursor(cell.start, false);
     }
@@ -480,16 +481,16 @@ bool MarkdownEditor::handleSourceTableKey(int key)
 
 bool MarkdownEditor::loadTableText(qsizetype index, TableText &table) const
 {
-    if (index < 0 || index >= m_decorations.tables.size() || m_decorations.tables.at(index).html)
+    if (index < 0 || index >= d->m_decorations.tables.size() || d->m_decorations.tables.at(index).html)
         return false;
-    const Range &range = m_decorations.tables.at(index).range;
+    const Range &range = d->m_decorations.tables.at(index).range;
     table.index = index;
-    table.start = m_lines.lineStart(m_lines.lineAt(range.start));
-    table.end = m_lines.lineEnd(m_lines.lineAt(qMax(range.start, range.end - 1)));
+    table.start = d->m_lines.lineStart(d->m_lines.lineAt(range.start));
+    table.end = d->m_lines.lineEnd(d->m_lines.lineAt(qMax(range.start, range.end - 1)));
 
     // The table as rows of cell text; line 1 is the delimiter row, so the
     // parser's row r is line r, or r + 1 past the header.
-    const QStringList lines = m_text.mid(table.start, table.end - table.start).split(QLatin1Char('\n'));
+    const QStringList lines = d->m_text.mid(table.start, table.end - table.start).split(QLatin1Char('\n'));
     table.rows.clear();
     table.prefix.clear();
     for (const QString &line : lines) {
@@ -519,7 +520,7 @@ bool MarkdownEditor::storeTableText(const TableText &table)
     for (const QStringList &row : table.rows)
         rebuilt << table.prefix + QStringLiteral("| ") + row.join(QStringLiteral(" | ")) + QStringLiteral(" |");
     const QString text = formatTable(rebuilt.join(QLatin1Char('\n')));
-    if (text == m_text.mid(table.start, table.end - table.start))
+    if (text == d->m_text.mid(table.start, table.end - table.start))
         return false; // already so: no step on the undo stack for nothing
     rewriteTable(table.start, table.end, text);
     return true;
@@ -527,11 +528,11 @@ bool MarkdownEditor::storeTableText(const TableText &table)
 
 bool MarkdownEditor::runTableCommand(const QString &id)
 {
-    const CellRef cell = tableCellAt(m_cursor);
+    const CellRef cell = tableCellAt(d->m_cursor);
     if (cell.row < 0)
         return false;
-    const qsizetype index = tableAround(m_cursor);
-    if (m_decorations.tables.at(index).html)
+    const qsizetype index = tableAround(d->m_cursor);
+    if (d->m_decorations.tables.at(index).html)
         return runHTMLtableCommand(id, index, cell.row, cell.column);
     TableText table;
     if (!loadTableText(index, table))
@@ -616,7 +617,7 @@ bool MarkdownEditor::runTableCommand(const QString &id)
 
     if (!storeTableText(table))
         return true;
-    const QList<QList<Range>> &after = m_decorations.tables.value(index).rows;
+    const QList<QList<Range>> &after = d->m_decorations.tables.value(index).rows;
     const int row = line == 0 ? 0 : line - 1;
     moveCursor(after.value(row).value(column, Range{start, start}).start, false);
     return true;

@@ -5,6 +5,7 @@
 /// clear the handles.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QPainter>
 #include <QScroller>
@@ -20,7 +21,7 @@ constexpr qreal kHandleRadius = 7;
 
 QRectF MarkdownEditor::touchable(const QRectF &rect, qreal mouseSlop) const
 {
-    const qreal slop = qMax(mouseSlop, m_touchSlop);
+    const qreal slop = qMax(mouseSlop, d->m_touchSlop);
     return rect.adjusted(-slop, -slop, slop, slop);
 }
 
@@ -35,12 +36,12 @@ QRectF MarkdownEditor::selectionHandleRect(bool end) const
 
 void MarkdownEditor::paintSelectionHandles(QPainter &painter) const
 {
-    if (!m_touchHandles || selection().length() == 0 || m_mode == Mode::Reading)
+    if (!d->m_touchHandles || selection().length() == 0 || d->m_mode == Mode::Reading)
         return;
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setPen(Qt::NoPen);
-    painter.setBrush(m_theme.color(QStringLiteral("--interactive-accent")));
+    painter.setBrush(d->m_theme.color(QStringLiteral("--interactive-accent")));
     for (const bool end : {false, true}) {
         const QRectF drop = selectionHandleRect(end);
         painter.drawEllipse(drop);
@@ -51,16 +52,16 @@ void MarkdownEditor::paintSelectionHandles(QPainter &painter) const
 
 bool MarkdownEditor::pressSelectionHandle(const QPoint &point)
 {
-    if (!m_touchHandles || selection().length() == 0)
+    if (!d->m_touchHandles || selection().length() == 0)
         return false;
     const Range range = selection();
     for (const bool end : {true, false}) {
         if (!touchable(selectionHandleRect(end), 12).contains(point))
             continue;
         // The other end holds still; this one follows the finger.
-        m_anchor = end ? range.start : range.end;
-        m_cursor = end ? range.end : range.start;
-        m_draggingHandle = end ? 1 : -1;
+        d->m_anchor = end ? range.start : range.end;
+        d->m_cursor = end ? range.end : range.start;
+        d->m_draggingHandle = end ? 1 : -1;
         // The finger drags the handle, not the page.
         if (QScroller::hasScroller(viewport()))
             QScroller::scroller(viewport())->stop();
@@ -71,21 +72,21 @@ bool MarkdownEditor::pressSelectionHandle(const QPoint &point)
 
 bool MarkdownEditor::dragSelectionHandle(const QPoint &point)
 {
-    if (m_draggingHandle == 0)
+    if (d->m_draggingHandle == 0)
         return false;
     // The finger sits on the drop under the line; the text it points at is
     // a line above it.
     const qreal lineHeight = QFontMetricsF(font()).height() * 1.4;
     moveCursor(offsetAt(point - QPoint(0, int(lineHeight))), true);
-    m_touchHandles = true;
+    d->m_touchHandles = true;
     return true;
 }
 
 bool MarkdownEditor::releaseSelectionHandle()
 {
-    if (m_draggingHandle == 0)
+    if (d->m_draggingHandle == 0)
         return false;
-    m_draggingHandle = 0;
+    d->m_draggingHandle = 0;
     viewport()->update();
     return true;
 }

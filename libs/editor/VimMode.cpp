@@ -15,6 +15,7 @@
 /// MarkdownEditor::VimState.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QClipboard>
 #include <QGuiApplication>
@@ -578,7 +579,7 @@ struct Move {
 class VimEngine {
 public:
     explicit VimEngine(MarkdownEditor &editor)
-        : m(editor), s(editor.m_vim), t(editor.m_text)
+        : m(editor), s(editor.d->m_vim), t(editor.d->m_text)
     {
     }
 
@@ -608,7 +609,7 @@ private:
     void normalize();
     void go(Pos pos)
     {
-        m.m_goalX = -1; // gj and gk aim for a pixel column; any other move forgets it
+        m.d->m_goalX = -1; // gj and gk aim for a pixel column; any other move forgets it
         m.moveCursor(pos, visual());
     }
     void edit(Pos at, qsizetype removed, const QString &inserted);
@@ -638,7 +639,7 @@ private:
     using Register = MarkdownEditor::VimState::Register;
     void storeReg(const QString &text, int kind, bool yank);
     bool loadReg(QString &text, int &kind) const;
-    void setJumpMark() { s.marks.insert(QLatin1Char('\''), m.m_cursor); }
+    void setJumpMark() { s.marks.insert(QLatin1Char('\''), m.d->m_cursor); }
     void saveVisualMarks();
     void applyObject(bool inner, QChar object);
     bool wordUnder(Pos at, Pos &from, Pos &to) const;
@@ -677,7 +678,7 @@ private:
 void VimEngine::edit(Pos at, qsizetype removed, const QString &inserted)
 {
     if (!s.hold) { // each command outside an insert session is its own undo step
-        m.m_lastEdit.invalidate();
+        m.d->m_lastEdit.invalidate();
         m.pushUndo();
     }
     m.applyEdit(at, removed, inserted);
@@ -687,7 +688,7 @@ void VimEngine::beginGroup()
 {
     if (s.hold)
         return;
-    m.m_lastEdit.invalidate();
+    m.d->m_lastEdit.invalidate();
     m.pushUndo();
     s.hold = true;
 }
@@ -697,10 +698,10 @@ void VimEngine::endGroup()
     if (!s.hold)
         return;
     s.hold = false;
-    m.m_lastEdit.invalidate();
+    m.d->m_lastEdit.invalidate();
     // `i` then Escape changed nothing: no undo step to show for it.
-    if (!m.m_undo.isEmpty() && m.m_undo.last().text == t)
-        m.m_undo.removeLast();
+    if (!m.d->m_undo.isEmpty() && m.d->m_undo.last().text == t)
+        m.d->m_undo.removeLast();
 }
 
 void VimEngine::enterInsert(Pos at)
@@ -708,14 +709,14 @@ void VimEngine::enterInsert(Pos at)
     beginGroup();
     s.mode = Mode::Insert;
     m.moveCursor(at, false);
-    s.insertStart = m.m_cursor;
+    s.insertStart = m.d->m_cursor;
 }
 
 void VimEngine::leaveInsert()
 {
     if (s.recordInsert && !s.replaying) {
-        s.lastInserted = m.m_cursor >= s.insertStart && s.insertStart <= t.size()
-                             ? t.mid(s.insertStart, m.m_cursor - s.insertStart)
+        s.lastInserted = m.d->m_cursor >= s.insertStart && s.insertStart <= t.size()
+                             ? t.mid(s.insertStart, m.d->m_cursor - s.insertStart)
                              : QString();
     }
     s.recordInsert = false;
@@ -725,25 +726,25 @@ void VimEngine::leaveInsert()
     }
     endGroup();
     s.mode = Mode::Normal;
-    Pos p = m.m_cursor;
+    Pos p = m.d->m_cursor;
     if (p > ls(p))
         --p;
     m.moveCursor(p, false);
-    m.m_goalX = -1;
+    m.d->m_goalX = -1;
     s.goalCol = -1;
 }
 
 void VimEngine::enterVisual(Mode mode)
 {
     s.mode = mode;
-    m.moveCursor(m.m_cursor, false); // anchor here
+    m.moveCursor(m.d->m_cursor, false); // anchor here
     syncVisual();
 }
 
 void VimEngine::saveVisualMarks()
 {
-    s.marks.insert(QLatin1Char('<'), qMin(m.m_anchor, m.m_cursor));
-    s.marks.insert(QLatin1Char('>'), qMax(m.m_anchor, m.m_cursor));
+    s.marks.insert(QLatin1Char('<'), qMin(m.d->m_anchor, m.d->m_cursor));
+    s.marks.insert(QLatin1Char('>'), qMax(m.d->m_anchor, m.d->m_cursor));
 }
 
 void VimEngine::exitVisual()
@@ -752,14 +753,14 @@ void VimEngine::exitVisual()
     s.mode = Mode::Normal;
     s.overrideRange = {-1, -1};
     s.overrideBlocks.clear();
-    m.moveCursor(m.m_cursor, false);
+    m.moveCursor(m.d->m_cursor, false);
     m.viewport()->update();
 }
 
 void VimEngine::syncVisual()
 {
-    const Pos low = qMin(m.m_anchor, m.m_cursor);
-    const Pos high = qMax(m.m_anchor, m.m_cursor);
+    const Pos low = qMin(m.d->m_anchor, m.d->m_cursor);
+    const Pos high = qMax(m.d->m_anchor, m.d->m_cursor);
     s.overrideBlocks.clear();
     if (s.mode == Mode::VisualBlock) { // painted as strips; copied as the span between
         s.overrideBlocks = blockRanges(blockGeometry());
@@ -767,8 +768,8 @@ void VimEngine::syncVisual()
     } else {
         s.overrideRange = s.mode == Mode::VisualLine ? Range{ls(low), le(high)} : Range{low, afterChar(t, high)};
     }
-    s.overrideCursor = m.m_cursor;
-    s.overrideAnchor = m.m_anchor;
+    s.overrideCursor = m.d->m_cursor;
+    s.overrideAnchor = m.d->m_anchor;
     m.viewport()->update();
 }
 
@@ -777,7 +778,7 @@ void VimEngine::normalize()
 {
     if (s.mode == Mode::Insert)
         return;
-    const Pos p = m.m_cursor;
+    const Pos p = m.d->m_cursor;
     const Pos end = le(p);
     if (p >= end && end > ls(p))
         m.moveCursor(end - 1, visual());
@@ -829,7 +830,7 @@ bool VimEngine::key(QKeyEvent *event)
     }
     // A click moved the caret out from under visual mode's selection: that
     // selection is gone, and so is the mode.
-    if (visual() && (m.m_cursor != s.overrideCursor || m.m_anchor != s.overrideAnchor)) {
+    if (visual() && (m.d->m_cursor != s.overrideCursor || m.d->m_anchor != s.overrideAnchor)) {
         s.mode = Mode::Normal;
         s.overrideRange = {-1, -1};
         s.overrideBlocks.clear();
@@ -969,7 +970,7 @@ void VimEngine::feed(QChar c)
                 abort();
         } else if (pending == QLatin1Char('m')) {
             if (c.isLetter() && c.unicode() < 128)
-                s.marks.insert(c, m.m_cursor);
+                s.marks.insert(c, m.d->m_cursor);
             finish(false);
         } else if (pending == QLatin1Char('\'') || pending == QLatin1Char('`')) {
             s.markChar = c == QLatin1Char('`') ? QLatin1Char('\'') : c;
@@ -1124,11 +1125,11 @@ void VimEngine::feed(QChar c)
         repeatLastChange();
         return;
     case 'i':
-        enterInsert(m.m_cursor);
+        enterInsert(m.d->m_cursor);
         finish(true);
         return;
     case 'a':
-        enterInsert(m.m_cursor < le(m.m_cursor) ? m.m_cursor + 1 : m.m_cursor);
+        enterInsert(m.d->m_cursor < le(m.d->m_cursor) ? m.d->m_cursor + 1 : m.d->m_cursor);
         finish(true);
         return;
     case 'I':
@@ -1136,16 +1137,16 @@ void VimEngine::feed(QChar c)
         if (s.mode == Mode::VisualBlock) {
             blockInsert(c == QLatin1Char('A'));
         } else {
-            enterInsert(c == QLatin1Char('I') ? firstNonBlank(t, m.m_cursor) : le(m.m_cursor));
+            enterInsert(c == QLatin1Char('I') ? firstNonBlank(t, m.d->m_cursor) : le(m.d->m_cursor));
             finish(true);
         }
         return;
     case 'o':
         if (vis) { // the other end of the selection
-            const Pos cursor = m.m_cursor;
-            m.m_cursor = m.m_anchor;
-            m.m_anchor = cursor;
-            m.moveCursor(m.m_cursor, true);
+            const Pos cursor = m.d->m_cursor;
+            m.d->m_cursor = m.d->m_anchor;
+            m.d->m_anchor = cursor;
+            m.moveCursor(m.d->m_cursor, true);
             finish(false);
             return;
         }
@@ -1195,7 +1196,7 @@ void VimEngine::feed(QChar c)
 
 bool VimEngine::motion(QChar key, int n, bool hasCount, Move &out)
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     const bool op = !s.op.isNull();
     out = {cur, false, false};
 
@@ -1459,17 +1460,17 @@ void VimEngine::runMotion(QChar key)
 /// searchFrom reads it.
 bool VimEngine::searchMove(bool forward, int n, Pos from, Pos &out)
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     Pos p = from;
     for (int i = 0; i < n; ++i) {
-        m.m_cursor = p;
+        m.d->m_cursor = p;
         if (!searchFrom(forward, p)) {
-            m.m_cursor = cur;
+            m.d->m_cursor = cur;
             s.message = QStringLiteral("E486: Pattern not found: ") + s.lastSearch;
             return false;
         }
     }
-    m.m_cursor = cur;
+    m.d->m_cursor = cur;
     out = p;
     return true;
 }
@@ -1507,7 +1508,7 @@ void VimEngine::displayLines(int direction)
 
 void VimEngine::applyMove(const Move &mv)
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     Pos a = qMin(cur, mv.pos);
     Pos b = qMax(cur, mv.pos);
     bool linewise = mv.linewise;
@@ -1535,7 +1536,7 @@ void VimEngine::applyMove(const Move &mv)
 
 void VimEngine::lineOperator(QChar op)
 {
-    Pos last = ls(m.m_cursor);
+    Pos last = ls(m.d->m_cursor);
     for (int i = 1; i < total(); ++i) {
         const Pos next = nextLine(t, last);
         if (next < 0)
@@ -1543,7 +1544,7 @@ void VimEngine::lineOperator(QChar op)
         last = next;
     }
     s.op = op;
-    doOperator(op, {ls(m.m_cursor), le(last)}, true, m.m_cursor);
+    doOperator(op, {ls(m.d->m_cursor), le(last)}, true, m.d->m_cursor);
 }
 
 /// `r` is the lines (or characters) the operator covers, `hint` where a
@@ -1561,7 +1562,7 @@ void VimEngine::doOperator(QChar op, Range r, bool linewise, Pos hint, int times
              linewise ? 1 : 0, yank);
 
     if (yank) {
-        go(linewise ? qMin(m.m_cursor, hint) : r.start);
+        go(linewise ? qMin(m.d->m_cursor, hint) : r.start);
         finish(false);
         return;
     }
@@ -1614,8 +1615,8 @@ void VimEngine::visualOperator(QChar op)
         blockOperator(op, total());
         return;
     }
-    const Pos low = qMin(m.m_anchor, m.m_cursor);
-    const Pos high = qMax(m.m_anchor, m.m_cursor);
+    const Pos low = qMin(m.d->m_anchor, m.d->m_cursor);
+    const Pos high = qMax(m.d->m_anchor, m.d->m_cursor);
     const bool linewise = s.mode == Mode::VisualLine;
     const Range r = linewise ? Range{ls(low), le(high)} : Range{low, afterChar(t, high)};
     const int times = total();
@@ -1623,7 +1624,7 @@ void VimEngine::visualOperator(QChar op)
     s.mode = Mode::Normal;
     s.overrideRange = {-1, -1};
     s.overrideBlocks.clear();
-    m.moveCursor(m.m_cursor, false);
+    m.moveCursor(m.d->m_cursor, false);
     doOperator(op, r, linewise, low, times);
 }
 
@@ -1632,7 +1633,7 @@ void VimEngine::shiftLines(QChar op, Range r, bool linewise, int times)
 {
     const Pos first = ls(r.start);
     const Pos last = linewise ? ls(r.end) : ls(qMax(r.start, r.end - 1));
-    const QString unit = QString(m.m_tabWidth, QLatin1Char(' '));
+    const QString unit = QString(m.d->m_tabWidth, QLatin1Char(' '));
     QString out;
     Pos end = first;
     for (Pos p = first;;) {
@@ -1648,7 +1649,7 @@ void VimEngine::shiftLines(QChar op, Range r, bool linewise, int times)
                     line.remove(0, 1);
                 } else {
                     int spaces = 0;
-                    while (spaces < m.m_tabWidth && spaces < line.size() && line.at(spaces) == QLatin1Char(' '))
+                    while (spaces < m.d->m_tabWidth && spaces < line.size() && line.at(spaces) == QLatin1Char(' '))
                         ++spaces;
                     line.remove(0, spaces);
                 }
@@ -1745,7 +1746,7 @@ bool VimEngine::loadReg(QString &text, int &kind) const
 /// i{x} / a{x} after an operator or in visual mode.
 void VimEngine::applyObject(bool inner, QChar object)
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     const int n = total();
     Range r;
     bool linewise = false;
@@ -1801,8 +1802,8 @@ void VimEngine::applyObject(bool inner, QChar object)
 
 VimEngine::Block VimEngine::blockGeometry() const
 {
-    const Pos a = ls(m.m_anchor);
-    const Pos b = ls(m.m_cursor);
+    const Pos a = ls(m.d->m_anchor);
+    const Pos b = ls(m.d->m_cursor);
     Block g;
     g.first = qMin(a, b);
     for (Pos p = g.first; p < qMax(a, b);) {
@@ -1812,8 +1813,8 @@ VimEngine::Block VimEngine::blockGeometry() const
         p = next;
         ++g.lines;
     }
-    const qsizetype ca = m.m_anchor - a;
-    const qsizetype cb = m.m_cursor - b;
+    const qsizetype ca = m.d->m_anchor - a;
+    const qsizetype cb = m.d->m_cursor - b;
     g.c1 = qMin(ca, cb);
     g.c2 = qMax(ca, cb);
     g.toEnd = s.goalCol == std::numeric_limits<int>::max();
@@ -1844,7 +1845,7 @@ void VimEngine::blockOperator(QChar op, int times)
     s.mode = Mode::Normal;
     s.overrideRange = {-1, -1};
     s.overrideBlocks.clear();
-    m.moveCursor(m.m_cursor, false);
+    m.moveCursor(m.d->m_cursor, false);
     if (op == QLatin1Char('>') || op == QLatin1Char('<')) {
         doOperator(op, {g.first, le(ls(ranges.constLast().start))}, true, g.first, times);
         return;
@@ -1865,7 +1866,7 @@ void VimEngine::blockOperator(QChar op, int times)
     if (op == QLatin1Char('c')) {
         s.mode = Mode::Insert;
         m.moveCursor(ranges.constFirst().start, false);
-        s.insertStart = m.m_cursor;
+        s.insertStart = m.d->m_cursor;
         s.block = {true, g.first, int(ranges.size()), g.c1, false, g.toEnd};
     } else {
         endGroup();
@@ -1883,7 +1884,7 @@ void VimEngine::blockInsert(bool append)
     s.mode = Mode::Normal;
     s.overrideRange = {-1, -1};
     s.overrideBlocks.clear();
-    m.moveCursor(m.m_cursor, false);
+    m.moveCursor(m.d->m_cursor, false);
     const qsizetype column = append ? g.c2 + 1 : g.c1;
     Pos at = g.first + column;
     const Pos end = le(g.first);
@@ -1904,8 +1905,8 @@ void VimEngine::blockInsert(bool append)
 
 void VimEngine::replicateBlockInsert()
 {
-    const QString typed = m.m_cursor >= s.insertStart && s.insertStart <= t.size()
-                              ? t.mid(s.insertStart, m.m_cursor - s.insertStart)
+    const QString typed = m.d->m_cursor >= s.insertStart && s.insertStart <= t.size()
+                              ? t.mid(s.insertStart, m.d->m_cursor - s.insertStart)
                               : QString();
     if (typed.isEmpty() || typed.contains(QLatin1Char('\n')))
         return;
@@ -1942,7 +1943,7 @@ void VimEngine::replicateBlockInsert()
 void VimEngine::pasteBlock(const QString &text, bool after)
 {
     const QStringList pieces = text.split(QLatin1Char('\n'));
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     const Pos top = ls(cur);
     const qsizetype column = cur - top + (after && cur < le(cur) ? 1 : 0);
     qsizetype width = 0;
@@ -2016,7 +2017,7 @@ void VimEngine::paste(bool after)
     QString text;
     for (int i = 0; i < total(); ++i)
         text += reg;
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     if (kind == 1) {
         if (!after) {
             const Pos at = ls(cur);
@@ -2057,7 +2058,7 @@ void VimEngine::replaceChars(QChar c)
         });
         return;
     }
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     const int n = total();
     if (!c.isPrint() || cur + n > le(cur)) {
         abort();
@@ -2070,7 +2071,7 @@ void VimEngine::replaceChars(QChar c)
 
 void VimEngine::toggleCase()
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     const qsizetype n = qMin<qsizetype>(total(), le(cur) - cur);
     if (n <= 0) {
         abort();
@@ -2088,8 +2089,8 @@ void VimEngine::toggleCase()
 /// line of a block), and the caret lands on the selection's start.
 void VimEngine::mapSelection(const std::function<QString(const QString &)> &fn)
 {
-    const Pos low = qMin(m.m_anchor, m.m_cursor);
-    const Pos high = qMax(m.m_anchor, m.m_cursor);
+    const Pos low = qMin(m.d->m_anchor, m.d->m_cursor);
+    const Pos high = qMax(m.d->m_anchor, m.d->m_cursor);
     QList<Range> spans;
     if (s.mode == Mode::VisualBlock)
         spans = blockRanges(blockGeometry());
@@ -2113,13 +2114,13 @@ void VimEngine::join()
 {
     int lines = qMax(2, total());
     if (visual()) { // the selected lines, or this one and the next
-        const Pos a = ls(m.m_anchor), b = ls(m.m_cursor);
+        const Pos a = ls(m.d->m_anchor), b = ls(m.d->m_cursor);
         lines = qMax(2, 1 + int(QStringView(t).mid(qMin(a, b), qAbs(a - b)).count(QLatin1Char('\n'))));
-        const Pos low = qMin(m.m_anchor, m.m_cursor);
+        const Pos low = qMin(m.d->m_anchor, m.d->m_cursor);
         exitVisual();
         m.moveCursor(low, false);
     }
-    const Pos start = ls(m.m_cursor);
+    const Pos start = ls(m.d->m_cursor);
     Pos last = start;
     int joined = 0;
     for (int i = 1; i < lines; ++i) {
@@ -2154,7 +2155,7 @@ void VimEngine::join()
 
 void VimEngine::openLine(bool below)
 {
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     beginGroup();
     if (below) {
         const Pos end = le(cur);
@@ -2167,18 +2168,18 @@ void VimEngine::openLine(bool below)
         s.mode = Mode::Insert;
         m.moveCursor(begin, false);
     }
-    s.insertStart = m.m_cursor;
+    s.insertStart = m.d->m_cursor;
     finish(true);
 }
 
 void VimEngine::undoRedo(bool redo)
 {
     for (int i = 0; i < total(); ++i) {
-        if (redo ? m.m_redo.isEmpty() : m.m_undo.isEmpty())
+        if (redo ? m.d->m_redo.isEmpty() : m.d->m_undo.isEmpty())
             break;
         redo ? m.redo() : m.undo();
     }
-    m.moveCursor(m.m_cursor, false);
+    m.moveCursor(m.d->m_cursor, false);
     finish(false);
 }
 
@@ -2195,7 +2196,7 @@ void VimEngine::repeatLastChange()
         feed(c);
     if (s.mode == Mode::Insert) {
         if (!s.lastInserted.isEmpty())
-            m.applyEdit(m.m_cursor, 0, s.lastInserted);
+            m.applyEdit(m.d->m_cursor, 0, s.lastInserted);
         leaveInsert();
     }
     s.replaying = false;
@@ -2244,7 +2245,7 @@ bool VimEngine::address(const QString &x, qsizetype &i, Pos &line) const
     if (i < x.size()) {
         const QChar c = x.at(i);
         if (c == QLatin1Char('.')) {
-            base = ls(m.m_cursor);
+            base = ls(m.d->m_cursor);
             ++i;
         } else if (c == QLatin1Char('$')) {
             base = lastLineStart(t);
@@ -2268,7 +2269,7 @@ bool VimEngine::address(const QString &x, qsizetype &i, Pos &line) const
         bool digits = false;
         for (; i < x.size() && x.at(i).isDigit(); ++i, digits = true)
             amount = qMin(amount * 10 + x.at(i).digitValue(), 1000000);
-        base = lineAdd(base < 0 ? ls(m.m_cursor) : base, sign * (digits ? amount : 1));
+        base = lineAdd(base < 0 ? ls(m.d->m_cursor) : base, sign * (digits ? amount : 1));
     }
     if (base < 0)
         return false;
@@ -2313,7 +2314,7 @@ void VimEngine::exCommand(const QString &whole)
     }
     if (text.startsWith(QLatin1Char('s')) && (text.size() == 1 || !text.at(1).isLetterOrNumber())
         && text.size() > 1 && !text.at(1).isSpace()) {
-        substitute(ranged ? first : ls(m.m_cursor), ranged ? last : ls(m.m_cursor), text);
+        substitute(ranged ? first : ls(m.d->m_cursor), ranged ? last : ls(m.d->m_cursor), text);
         return;
     }
     if (text == QLatin1String("w") || text == QLatin1String("write")) {
@@ -2437,14 +2438,14 @@ void VimEngine::substitute(Pos first, Pos last, const QString &spec)
 /// own find matches, so they are also what the editor highlights.
 bool VimEngine::searchFrom(bool forward, Pos &out)
 {
-    if (m.m_find.pattern != s.lastSearch || !m.m_find.regex) {
+    if (m.d->m_find.pattern != s.lastSearch || !m.d->m_find.regex) {
         const bool sensitive = s.lastSearch != s.lastSearch.toLower(); // smartcase
         m.setFindQuery(s.lastSearch, sensitive, true);
     }
-    const QList<Range> &matches = m.m_find.matches;
-    if (!m.m_find.valid || matches.isEmpty())
+    const QList<Range> &matches = m.d->m_find.matches;
+    if (!m.d->m_find.valid || matches.isEmpty())
         return false;
-    const Pos cur = m.m_cursor;
+    const Pos cur = m.d->m_cursor;
     if (forward) {
         const auto it = std::find_if(matches.cbegin(), matches.cend(),
                                      [cur](const Range &r) { return r.start > cur; });
@@ -2482,18 +2483,18 @@ void VimEngine::search(const QString &pattern, bool forward)
 bool MarkdownEditor::handleVimKey(QKeyEvent *event)
 {
     // q{x} records the keys as they come, replays are not recorded again
-    if (!m_vim.recording.isNull() && m_vim.macroDepth == 0) {
+    if (!d->m_vim.recording.isNull() && d->m_vim.macroDepth == 0) {
         switch (event->key()) {
         case Qt::Key_Shift: case Qt::Key_Control: case Qt::Key_Alt: case Qt::Key_AltGr:
         case Qt::Key_Meta: case Qt::Key_CapsLock: case Qt::Key_Super_L: case Qt::Key_Super_R:
             break;
         default:
-            m_vim.recorded.append({event->key(), int(event->modifiers()), event->text()});
+            d->m_vim.recorded.append({event->key(), int(event->modifiers()), event->text()});
         }
     }
     const bool handled = VimEngine(*this).key(event);
     if (handled) {
-        m_cursorOn = true;
+        d->m_cursorOn = true;
         viewport()->update();
     }
     emitVimStatus();
@@ -2502,34 +2503,34 @@ bool MarkdownEditor::handleVimKey(QKeyEvent *event)
 
 void MarkdownEditor::setVimMode(bool on)
 {
-    if (on == m_vim.enabled)
+    if (on == d->m_vim.enabled)
         return;
-    const QString shown = m_vim.lastStatus; // what listeners last heard
+    const QString shown = d->m_vim.lastStatus; // what listeners last heard
     if (on) {
-        m_vim = VimState();
-        m_vim.enabled = true;
+        d->m_vim = VimState();
+        d->m_vim.enabled = true;
         // A fresh editor starts in normal mode, the caret on a character.
-        const qsizetype end = lineEndOf(m_text, m_cursor);
-        if (m_cursor >= end && end > lineStartOf(m_text, m_cursor))
+        const qsizetype end = lineEndOf(d->m_text, d->m_cursor);
+        if (d->m_cursor >= end && end > lineStartOf(d->m_text, d->m_cursor))
             moveCursor(end - 1, false);
     } else {
-        if (m_vim.hold) { // leave an open insert session undoable
-            m_vim.hold = false;
-            m_lastEdit.invalidate();
+        if (d->m_vim.hold) { // leave an open insert session undoable
+            d->m_vim.hold = false;
+            d->m_lastEdit.invalidate();
         }
-        m_vim = VimState();
-        moveCursor(m_cursor, false);
+        d->m_vim = VimState();
+        moveCursor(d->m_cursor, false);
     }
-    m_vim.lastStatus = shown;
+    d->m_vim.lastStatus = shown;
     viewport()->update();
     emitVimStatus();
 }
 
 QString MarkdownEditor::vimModeName() const
 {
-    if (!m_vim.enabled)
+    if (!d->m_vim.enabled)
         return QString();
-    switch (m_vim.mode) {
+    switch (d->m_vim.mode) {
     case VimState::Mode::Normal:
         return QStringLiteral("normal");
     case VimState::Mode::Insert:
@@ -2546,26 +2547,26 @@ QString MarkdownEditor::vimModeName() const
 
 QString MarkdownEditor::vimStatus() const
 {
-    if (!m_vim.enabled)
+    if (!d->m_vim.enabled)
         return QString();
-    if (!m_vim.cmdKind.isNull())
-        return m_vim.cmdKind + m_vim.cmdline;
-    if (!m_vim.message.isEmpty())
-        return m_vim.message;
+    if (!d->m_vim.cmdKind.isNull())
+        return d->m_vim.cmdKind + d->m_vim.cmdline;
+    if (!d->m_vim.message.isEmpty())
+        return d->m_vim.message;
     QString text = QStringLiteral("-- ") + vimModeName().toUpper() + QStringLiteral(" --");
-    if (!m_vim.keys.isEmpty())
-        text += QStringLiteral("  ") + m_vim.keys;
-    if (!m_vim.recording.isNull())
-        text += QStringLiteral("  recording @") + m_vim.recording;
+    if (!d->m_vim.keys.isEmpty())
+        text += QStringLiteral("  ") + d->m_vim.keys;
+    if (!d->m_vim.recording.isNull())
+        text += QStringLiteral("  recording @") + d->m_vim.recording;
     return text;
 }
 
 void MarkdownEditor::emitVimStatus()
 {
     const QString status = vimStatus();
-    if (status == m_vim.lastStatus)
+    if (status == d->m_vim.lastStatus)
         return;
-    m_vim.lastStatus = status;
+    d->m_vim.lastStatus = status;
     emit vimStatusChanged(status);
 }
 

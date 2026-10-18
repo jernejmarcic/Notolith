@@ -15,6 +15,7 @@
 /// layoutTexEmbed.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "PdfPage.h"
 
@@ -59,15 +60,15 @@ bool MarkdownEditor::layoutTexEmbed(BlockView &view, const EmbedSpan &embed, con
                                 .arg(path)
                                 .arg(info.lastModified().toSecsSinceEpoch())
                                 .arg(contentWidth());
-        QPixmap pixmap = m_images.value(key);
+        QPixmap pixmap = d->m_images.value(key);
         if (pixmap.isNull()) {
-            const QImage image = m_math.render(latex, m_theme.textFont().pixelSize() * 1.2,
-                                               m_theme.color(QStringLiteral("--text-normal")),
+            const QImage image = d->m_math.render(latex, d->m_theme.textFont().pixelSize() * 1.2,
+                                               d->m_theme.color(QStringLiteral("--text-normal")),
                                                contentWidth(), ratio);
             if (image.isNull())
                 return false; // falls back to showing the source, as layoutMath does
             pixmap = QPixmap::fromImage(image);
-            m_images.insert(key, pixmap);
+            d->m_images.insert(key, pixmap);
         }
         const int width = int(pixmap.width() / pixmap.devicePixelRatio());
         const int height = int(pixmap.height() / pixmap.devicePixelRatio());
@@ -110,14 +111,14 @@ void MarkdownEditor::pdfMetadata(const QString &path, qint64 mtime, int &count,
                                  QList<QSizeF> &sizes) const
 {
     const QString key = QStringLiteral("%1|%2").arg(path).arg(mtime);
-    auto it = m_pdfMetaCache.find(key);
-    if (it == m_pdfMetaCache.end()) {
+    auto it = d->m_pdfMetaCache.find(key);
+    if (it == d->m_pdfMetaCache.end()) {
         PdfMeta meta;
         meta.count = PdfPage::pageCount(path);
         meta.sizes.reserve(meta.count);
         for (int page = 0; page < meta.count; ++page)
             meta.sizes.append(PdfPage::pageSize(path, page));
-        it = m_pdfMetaCache.insert(key, meta);
+        it = d->m_pdfMetaCache.insert(key, meta);
     }
     count = it->count;
     sizes = it->sizes;
@@ -178,8 +179,8 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
 
     if (view.pdfArgs.layout == PdfEmbedArgs::Layout::Slides) {
         const qsizetype key = view.span.range.start;
-        const int index = qBound(0, m_pdfSlideIndex.value(key, 0), int(pages.size()) - 1);
-        m_pdfSlideIndex.insert(key, index);
+        const int index = qBound(0, d->m_pdfSlideIndex.value(key, 0), int(pages.size()) - 1);
+        d->m_pdfSlideIndex.insert(key, index);
         view.pdfSlideIndex = index;
         view.pdfSlideCount = int(pages.size());
         view.pdfCounterText = tr("%1 / %2").arg(index + 1).arg(pages.size());
@@ -254,19 +255,19 @@ bool MarkdownEditor::buildPdfBlock(BlockView &view, const QString &pdfPath, cons
 QPixmap MarkdownEditor::ensurePdfPageAsync(const QString &path, qint64 mtime, int page, int width)
 {
     const QString key = QStringLiteral("%1|%2|%3|%4").arg(path).arg(mtime).arg(page).arg(width);
-    auto it = m_pdfPageCache.find(key);
-    if (it != m_pdfPageCache.end())
+    auto it = d->m_pdfPageCache.find(key);
+    if (it != d->m_pdfPageCache.end())
         return it->pending ? QPixmap() : it->image;
 
     PdfPageCacheEntry entry;
     entry.pending = true;
-    entry.generation = ++m_pdfGeneration;
-    it = m_pdfPageCache.insert(key, entry);
+    entry.generation = ++d->m_pdfGeneration;
+    it = d->m_pdfPageCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
     // Through m_lifeline: a render that outlives the editor (its tab was
     // closed, say) is dropped rather than posted to freed memory.
-    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, generation, path, page, width] {
+    (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, generation, path, page, width] {
         QImage image = PdfPage::render(path, page, width);
         lifeline->post(this, [this, key, generation, path, image = std::move(image)]() mutable {
             deliverPdfPage(key, generation, path, std::move(image));
@@ -278,18 +279,18 @@ QPixmap MarkdownEditor::ensurePdfPageAsync(const QString &path, qint64 mtime, in
 void MarkdownEditor::deliverPdfPage(const QString &key, quint64 generation, const QString &path,
                                     QImage image)
 {
-    auto it = m_pdfPageCache.find(key);
+    auto it = d->m_pdfPageCache.find(key);
     // A newer request for the same (path, mtime, page, width) landed first -
     // cannot happen today (nothing re-requests before delivery), kept for
     // the same reason QueryBlock's own generation guard is kept: so a future
     // caller that does re-request stays safe by construction.
-    if (it == m_pdfPageCache.end() || it->generation != generation)
+    if (it == d->m_pdfPageCache.end() || it->generation != generation)
         return;
     it->pending = false;
     it->image = image.isNull() ? QPixmap() : QPixmap::fromImage(image);
 
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isPdfEmbed || block.pdfPath != path)
             continue;
         block.layout.reset();
@@ -307,17 +308,17 @@ const MarkdownEditor::TexCacheEntry &MarkdownEditor::ensureTexCompiled(const QSt
                                                                         qint64 mtime)
 {
     const QString key = QStringLiteral("%1|%2").arg(path).arg(mtime);
-    auto it = m_texCache.find(key);
-    if (it != m_texCache.end())
+    auto it = d->m_texCache.find(key);
+    if (it != d->m_texCache.end())
         return *it;
 
     TexCacheEntry entry;
     entry.pending = true;
-    entry.generation = ++m_texGeneration;
-    it = m_texCache.insert(key, entry);
+    entry.generation = ++d->m_texGeneration;
+    it = d->m_texCache.insert(key, entry);
     const quint64 generation = entry.generation;
 
-    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, generation, path] {
+    (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, generation, path] {
         TexCompiler::Result result = TexCompiler::compile(path);
         lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
             deliverTexCompiled(key, generation, std::move(result));
@@ -329,8 +330,8 @@ const MarkdownEditor::TexCacheEntry &MarkdownEditor::ensureTexCompiled(const QSt
 void MarkdownEditor::deliverTexCompiled(const QString &key, quint64 generation,
                                         TexCompiler::Result result)
 {
-    auto it = m_texCache.find(key);
-    if (it == m_texCache.end() || it->generation != generation)
+    auto it = d->m_texCache.find(key);
+    if (it == d->m_texCache.end() || it->generation != generation)
         return;
     it->result = std::move(result);
     it->pending = false;
@@ -340,7 +341,7 @@ void MarkdownEditor::deliverTexCompiled(const QString &key, quint64 generation,
     // out all of them is simpler than tracking each block's own source path
     // for what is, in practice, at most a handful of .tex embeds in a note.
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isPdfEmbed)
             continue;
         block.layout.reset();
@@ -357,12 +358,12 @@ void MarkdownEditor::deliverTexCompiled(const QString &key, quint64 generation,
 void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qreal left,
                                    qreal top) const
 {
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor placeholder = m_theme.color(QStringLiteral("--background-modifier-border"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor placeholder = d->m_theme.color(QStringLiteral("--background-modifier-border"));
 
     if (!view.pdfError.isEmpty()) {
         painter.save();
-        painter.setFont(m_theme.textFont());
+        painter.setFont(d->m_theme.textFont());
         painter.setPen(muted);
         painter.drawText(QRectF(left, top + view.textTop, contentWidth(),
                                 qMax<qreal>(24, view.height - view.textTop)),
@@ -386,8 +387,8 @@ void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qre
 
     if (view.pdfArgs.layout == PdfEmbedArgs::Layout::Slides && !view.pdfCells.empty()) {
         painter.save();
-        QFont small = m_theme.uiFont();
-        small.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+        QFont small = d->m_theme.uiFont();
+        small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
         painter.setFont(small);
         painter.setPen(muted);
         const QRectF prev = view.pdfPrevRect.translated(left, top + view.textTop);
@@ -423,9 +424,9 @@ MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) co
 {
     PdfEmbedInfo info;
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return info;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isPdfEmbed)
         return info;
     info.isPdfEmbed = true;
@@ -441,17 +442,17 @@ MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) co
 void MarkdownEditor::pdfSlideStep(qsizetype offset, int direction)
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    BlockView &view = m_blocks[size_t(index)];
+    BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isPdfEmbed || view.pdfSlideCount <= 0)
         return;
     const qsizetype key = view.span.range.start;
-    const int current = m_pdfSlideIndex.value(key, 0);
+    const int current = d->m_pdfSlideIndex.value(key, 0);
     const int next = qBound(0, current + direction, view.pdfSlideCount - 1);
     if (next == current)
         return;
-    m_pdfSlideIndex.insert(key, next);
+    d->m_pdfSlideIndex.insert(key, next);
     view.layout.reset();
     view.laidOut = false;
     view.heightEstimated = false;

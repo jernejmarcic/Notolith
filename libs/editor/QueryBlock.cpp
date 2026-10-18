@@ -25,6 +25,7 @@
 /// only if it is still the most recent request for that text.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QScrollBar>
 #include <QTextLayout>
@@ -38,9 +39,9 @@ QList<MarkdownEditor::QueryResultRow> MarkdownEditor::queryRowsAt(qsizetype offs
 {
     QList<QueryResultRow> rows;
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return rows;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isQuery)
         return rows;
     const qreal left = contentLeft();
@@ -61,9 +62,9 @@ void MarkdownEditor::setQueryRunner(
     // text. Dropping the results outright, rather than keeping them until a
     // fresh search lands, avoids showing a search result if the new runner
     // never actually delivers.
-    m_queryCache.clear();
+    d->m_queryCache.clear();
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isQuery)
             continue;
         block.layout.reset();
@@ -79,14 +80,14 @@ void MarkdownEditor::setQueryRunner(
 
 void MarkdownEditor::refreshQueries()
 {
-    if (!m_queryRefreshTimer) {
-        m_queryRefreshTimer = new QTimer(this);
-        m_queryRefreshTimer->setSingleShot(true);
-        m_queryRefreshTimer->setInterval(200);
-        connect(m_queryRefreshTimer, &QTimer::timeout, this, [this] {
-            m_queryCache.clear();
+    if (!d->m_queryRefreshTimer) {
+        d->m_queryRefreshTimer = new QTimer(this);
+        d->m_queryRefreshTimer->setSingleShot(true);
+        d->m_queryRefreshTimer->setInterval(200);
+        connect(d->m_queryRefreshTimer, &QTimer::timeout, this, [this] {
+            d->m_queryCache.clear();
             bool touched = false;
-            for (BlockView &block : m_blocks) {
+            for (BlockView &block : d->m_blocks) {
                 if (!block.isQuery)
                     continue;
                 block.layout.reset();
@@ -100,19 +101,19 @@ void MarkdownEditor::refreshQueries()
             }
         });
     }
-    m_queryRefreshTimer->start(); // restarts: a burst of index changes costs one refresh
+    d->m_queryRefreshTimer->start(); // restarts: a burst of index changes costs one refresh
 }
 
 const MarkdownEditor::QueryCacheEntry &MarkdownEditor::ensureQuerySearch(const QString &queryText)
 {
-    auto it = m_queryCache.find(queryText);
-    if (it != m_queryCache.end())
+    auto it = d->m_queryCache.find(queryText);
+    if (it != d->m_queryCache.end())
         return *it;
 
     QueryCacheEntry entry;
     entry.pending = true;
-    entry.generation = ++m_queryGeneration;
-    it = m_queryCache.insert(queryText, entry);
+    entry.generation = ++d->m_queryGeneration;
+    it = d->m_queryCache.insert(queryText, entry);
 
     if (m_queryRunner) {
         const quint64 generation = entry.generation;
@@ -121,7 +122,7 @@ const MarkdownEditor::QueryCacheEntry &MarkdownEditor::ensureQuerySearch(const Q
         // the delivery is marshalled back onto this object's own thread
         // before it touches m_queryCache or a single BlockView, through
         // m_lifeline: the editor may be gone by the time a search finishes.
-        m_queryRunner(queryText, [this, lifeline = m_lifeline, queryText, generation](QueryResults results) {
+        m_queryRunner(queryText, [this, lifeline = d->m_lifeline, queryText, generation](QueryResults results) {
             lifeline->post(this, [this, queryText, generation, results = std::move(results)]() mutable {
                 deliverQueryResults(queryText, generation, std::move(results));
             });
@@ -133,24 +134,24 @@ const MarkdownEditor::QueryCacheEntry &MarkdownEditor::ensureQuerySearch(const Q
 void MarkdownEditor::deliverQueryResults(const QString &queryText, quint64 generation,
                                          QueryResults results)
 {
-    auto it = m_queryCache.find(queryText);
+    auto it = d->m_queryCache.find(queryText);
     // Not the entry's current generation: refreshQueries (or a fresh
     // setQueryRunner) started a newer request for the same text while this
     // one was still in flight, and that one's delivery, not this one, is
     // what any block waiting on it should show.
-    if (it == m_queryCache.end() || it->generation != generation)
+    if (it == d->m_queryCache.end() || it->generation != generation)
         return;
     it->results = std::move(results);
     it->pending = false;
 
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isQuery)
             continue;
         const CodeFenceSpan *fence = codeFenceOf(block);
         if (!fence)
             continue;
-        if (m_text.mid(fence->content.start, fence->content.length()).trimmed() != queryText)
+        if (d->m_text.mid(fence->content.start, fence->content.length()).trimmed() != queryText)
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -167,7 +168,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Code)
         return false;
-    if (!m_features.queryBlocks)
+    if (!d->m_features.queryBlocks)
         return false; // the fence shows as a plain, uncoloured code listing
     const CodeFenceSpan *fence = codeFenceOf(view);
     if (!fence || fence->language.compare(QLatin1String("query"), Qt::CaseInsensitive) != 0)
@@ -177,20 +178,20 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
     view.image = QPixmap();
     view.cells.clear();
 
-    const QString queryText = m_text.mid(fence->content.start, fence->content.length()).trimmed();
+    const QString queryText = d->m_text.mid(fence->content.start, fence->content.length()).trimmed();
     // The header's collapsed/sort-by-name state is remembered by the
     // block's own source position, the same key m_folds uses - see
     // toggleQueryCollapsed.
     const qsizetype blockKey = view.span.range.start;
-    const bool collapsed = m_queryCollapsed.value(blockKey, false);
-    const bool sortByName = m_queryNameSort.value(blockKey, false);
+    const bool collapsed = d->m_queryCollapsed.value(blockKey, false);
+    const bool sortByName = d->m_queryNameSort.value(blockKey, false);
 
-    const QColor pathColour = m_theme.color(QStringLiteral("--text-accent"));
-    const QColor mutedColour = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor textColour = m_theme.color(QStringLiteral("--text-normal"));
-    const QColor accentColour = m_theme.color(QStringLiteral("--text-accent"));
-    const QColor highlightBg = m_theme.color(QStringLiteral("--color-yellow"));
-    const QColor highlightFg = m_theme.color(QStringLiteral("--color-base-00"));
+    const QColor pathColour = d->m_theme.color(QStringLiteral("--text-accent"));
+    const QColor mutedColour = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor textColour = d->m_theme.color(QStringLiteral("--text-normal"));
+    const QColor accentColour = d->m_theme.color(QStringLiteral("--text-accent"));
+    const QColor highlightBg = d->m_theme.color(QStringLiteral("--color-yellow"));
+    const QColor highlightFg = d->m_theme.color(QStringLiteral("--color-base-00"));
 
     struct Row {
         qsizetype start = 0;
@@ -315,7 +316,7 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
         }
     }
 
-    const QFont bodyFont = m_theme.textFont();
+    const QFont bodyFont = d->m_theme.textFont();
     view.layout = std::make_unique<QTextLayout>(display);
     view.layout->setCacheEnabled(true);
     view.layout->setFont(bodyFont);
@@ -381,13 +382,13 @@ bool MarkdownEditor::layoutQuery(BlockView &view)
 void MarkdownEditor::toggleQueryCollapsed(qsizetype offset)
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    BlockView &view = m_blocks[size_t(index)];
+    BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isQuery)
         return;
     const qsizetype key = view.span.range.start;
-    m_queryCollapsed.insert(key, !m_queryCollapsed.value(key, false));
+    d->m_queryCollapsed.insert(key, !d->m_queryCollapsed.value(key, false));
     view.layout.reset();
     view.laidOut = false;
     view.heightEstimated = false;
@@ -398,24 +399,24 @@ void MarkdownEditor::toggleQueryCollapsed(qsizetype offset)
 bool MarkdownEditor::queryCollapsedAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return false;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isQuery)
         return false;
-    return m_queryCollapsed.value(view.span.range.start, false);
+    return d->m_queryCollapsed.value(view.span.range.start, false);
 }
 
 void MarkdownEditor::cycleQuerySort(qsizetype offset)
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    BlockView &view = m_blocks[size_t(index)];
+    BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isQuery)
         return;
     const qsizetype key = view.span.range.start;
-    m_queryNameSort.insert(key, !m_queryNameSort.value(key, false));
+    d->m_queryNameSort.insert(key, !d->m_queryNameSort.value(key, false));
     view.layout.reset();
     view.laidOut = false;
     view.heightEstimated = false;
@@ -427,17 +428,17 @@ MarkdownEditor::QueryHeader MarkdownEditor::queryHeaderAt(qsizetype offset) cons
 {
     QueryHeader header;
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return header;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isQuery || !view.queryCollapseRect.isValid())
         return header; // no header yet: still searching, empty, or no runner
     const qreal left = contentLeft();
     const qreal top = view.y - verticalScrollBar()->value();
     header.collapseRect = view.queryCollapseRect.translated(left, top);
     header.sortRect = view.querySortRect.translated(left, top);
-    header.collapsed = m_queryCollapsed.value(view.span.range.start, false);
-    header.sortByName = m_queryNameSort.value(view.span.range.start, false);
+    header.collapsed = d->m_queryCollapsed.value(view.span.range.start, false);
+    header.sortByName = d->m_queryNameSort.value(view.span.range.start, false);
     header.countText = view.queryResultCountText;
     return header;
 }

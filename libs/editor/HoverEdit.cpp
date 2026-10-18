@@ -10,6 +10,7 @@
 /// is painted rather than a widget, and with the setting off none of it runs.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Icons.h"
 
@@ -38,16 +39,16 @@ constexpr qreal kFoldClearance = 28;
 
 void MarkdownEditor::setHoverEditButton(bool on)
 {
-    if (m_hoverEditButton == on)
+    if (d->m_hoverEditButton == on)
         return;
-    m_hoverEditButton = on;
+    d->m_hoverEditButton = on;
     if (!on)
         clearHover();
 }
 
 bool MarkdownEditor::hasEditButton(const BlockView &view) const
 {
-    if (m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.piece != 0)
+    if (d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.piece != 0)
         return false;
     // A table is edited where it is drawn, so its grid stays while the caret
     // is in a cell; every other block drops its widget for the source.
@@ -65,19 +66,19 @@ qsizetype MarkdownEditor::blockAtPoint(const QPoint &point) const
     const qreal y = point.y() + verticalScrollBar()->value();
     // Panels reach 8 px past the block, so the block that owns a point is the
     // last one whose panel has started.
-    const auto it = std::partition_point(m_blocks.cbegin(), m_blocks.cend(),
+    const auto it = std::partition_point(d->m_blocks.cbegin(), d->m_blocks.cend(),
                                          [y](const BlockView &view) { return view.y - 8 <= y; });
-    if (it == m_blocks.cbegin())
+    if (it == d->m_blocks.cbegin())
         return -1;
     const BlockView &view = *(it - 1);
     if (y > view.y + view.height + 8)
         return -1;
-    return qsizetype(it - m_blocks.cbegin()) - 1 - view.piece;
+    return qsizetype(it - d->m_blocks.cbegin()) - 1 - view.piece;
 }
 
 QRectF MarkdownEditor::panelRectOf(qsizetype first) const
 {
-    const BlockView &view = m_blocks[size_t(first)];
+    const BlockView &view = d->m_blocks[size_t(first)];
     const BlockView &last = lastPiece(view);
     const qreal scroll = verticalScrollBar()->value();
     // The panel paintCallout and codeLabelOf draw: wider than the column by
@@ -95,7 +96,7 @@ Range MarkdownEditor::wholeBlockRange(const BlockView &first) const
         if (const CodeFenceSpan *fence = codeFenceOf(first))
             range = {qMin(range.start, fence->block.start), qMax(range.end, fence->block.end)};
     }
-    while (range.end > range.start && m_text.at(range.end - 1) == QLatin1Char('\n'))
+    while (range.end > range.start && d->m_text.at(range.end - 1) == QLatin1Char('\n'))
         --range.end;
     return range;
 }
@@ -105,44 +106,44 @@ QRectF MarkdownEditor::blockPanelAt(qsizetype sourceOffset) const
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0)
         return {};
-    return panelRectOf(index - m_blocks[size_t(index)].piece);
+    return panelRectOf(index - d->m_blocks[size_t(index)].piece);
 }
 
 QRectF MarkdownEditor::editButtonRectOf(qsizetype first) const
 {
     const QRectF panel = panelRectOf(first);
-    const qreal clear = isFoldable(m_blocks[size_t(first)]) ? kFoldClearance : 0;
+    const qreal clear = isFoldable(d->m_blocks[size_t(first)]) ? kFoldClearance : 0;
     return QRectF(panel.right() - kButtonInset - clear - kButtonSize, panel.top() + kButtonInset,
                   kButtonSize, kButtonSize);
 }
 
 QRectF MarkdownEditor::editButtonRect() const
 {
-    if (m_hoveredBlock < 0 || m_hoveredBlock >= qsizetype(m_blocks.size())
-        || !hasEditButton(m_blocks[size_t(m_hoveredBlock)]))
+    if (d->m_hoveredBlock < 0 || d->m_hoveredBlock >= qsizetype(d->m_blocks.size())
+        || !hasEditButton(d->m_blocks[size_t(d->m_hoveredBlock)]))
         return {};
-    return editButtonRectOf(m_hoveredBlock);
+    return editButtonRectOf(d->m_hoveredBlock);
 }
 
 qsizetype MarkdownEditor::editButtonAt(const QPoint &point) const
 {
-    if (!m_hoverEditButton)
+    if (!d->m_hoverEditButton)
         return -1;
     const qsizetype index = blockAtPoint(point);
-    if (index < 0 || !hasEditButton(m_blocks[size_t(index)]))
+    if (index < 0 || !hasEditButton(d->m_blocks[size_t(index)]))
         return -1;
     return editButtonRectOf(index).contains(point) ? index : -1;
 }
 
 void MarkdownEditor::editBlockSource(qsizetype blockIndex)
 {
-    if (blockIndex < 0 || blockIndex >= qsizetype(m_blocks.size()))
+    if (blockIndex < 0 || blockIndex >= qsizetype(d->m_blocks.size()))
         return;
-    const BlockView &first = firstPiece(m_blocks[size_t(blockIndex)]);
+    const BlockView &first = firstPiece(d->m_blocks[size_t(blockIndex)]);
     const Range whole = wholeBlockRange(first);
-    m_interacted = true;
-    m_sourceReveal = first.span.range.start;
-    m_sourceRange = whole;
+    d->m_interacted = true;
+    d->m_sourceReveal = first.span.range.start;
+    d->m_sourceRange = whole;
     // Anchor at the end and the caret at the start, as Obsidian's own
     // select-the-widget does: the caret lands on the block's first line.
     setSelectionRange(whole.end, whole.start);
@@ -153,7 +154,7 @@ void MarkdownEditor::editBlockSource(qsizetype blockIndex)
 
 const CalloutSpan *MarkdownEditor::topCalloutAt(qsizetype offset) const
 {
-    for (const CalloutSpan &callout : m_decorations.callouts) {
+    for (const CalloutSpan &callout : d->m_decorations.callouts) {
         if (callout.depth == 0 && callout.range.contains(offset))
             return &callout;
     }
@@ -165,7 +166,7 @@ QString MarkdownEditor::calloutSourceAt(qsizetype offset) const
     const CalloutSpan *callout = topCalloutAt(offset);
     if (!callout)
         return {};
-    QString source = m_text.mid(callout->range.start, callout->range.length());
+    QString source = d->m_text.mid(callout->range.start, callout->range.length());
     while (source.endsWith(QLatin1Char('\n')))
         source.chop(1);
     return source;
@@ -181,23 +182,23 @@ bool MarkdownEditor::changeCalloutType(qsizetype offset, const QString &type)
     // Where the type word sits: after `[!` in a quote, after the colons (and
     // `{`, `.`) of a `:::` fence.
     qsizetype at = -1;
-    if (m_text.at(callout->marker.start) == QLatin1Char('[')) {
+    if (d->m_text.at(callout->marker.start) == QLatin1Char('[')) {
         at = callout->marker.start + 2;
     } else {
         static const QRegularExpression fence(QStringLiteral("^:{3,}[ \\t]*\\{?[ \\t]*(?:#[^\\s}]+[ \\t]+)*\\.?"));
-        const qsizetype lineEnd = m_text.indexOf(QLatin1Char('\n'), callout->marker.start);
-        const auto match = fence.match(QStringView(m_text).mid(
-            callout->marker.start, (lineEnd < 0 ? m_text.size() : lineEnd) - callout->marker.start));
+        const qsizetype lineEnd = d->m_text.indexOf(QLatin1Char('\n'), callout->marker.start);
+        const auto match = fence.match(QStringView(d->m_text).mid(
+            callout->marker.start, (lineEnd < 0 ? d->m_text.size() : lineEnd) - callout->marker.start));
         if (match.hasMatch())
             at = callout->marker.start + match.capturedLength();
     }
     const qsizetype length = callout->type.size();
-    if (at < 0 || m_text.mid(at, length).toLower() != callout->type)
+    if (at < 0 || d->m_text.mid(at, length).toLower() != callout->type)
         return false;
 
-    const qsizetype caret = m_cursor;
+    const qsizetype caret = d->m_cursor;
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(at, length, type);
     setCursorOffset(caret >= at + length ? caret + type.size() - length : qMin(caret, at));
     return true;
@@ -209,19 +210,19 @@ bool MarkdownEditor::removeCallout(qsizetype offset)
     if (!callout)
         return false;
     const Range range = callout->range;
-    QString text = m_text.mid(range.start, range.length());
+    QString text = d->m_text.mid(range.start, range.length());
     const bool newline = text.endsWith(QLatin1Char('\n'));
     if (newline)
         text.chop(1);
     QStringList lines = text.split(QLatin1Char('\n'));
 
     QString title;
-    if (m_text.at(callout->marker.start) == QLatin1Char('[')) {
+    if (d->m_text.at(callout->marker.start) == QLatin1Char('[')) {
         // `> [!note]+ Title`: one level of `>` off every line, then the
         // first line is the title alone.
         static const QRegularExpression prefix(QStringLiteral("^[ \\t]*>[ \\t]?"));
         if (callout->titleRange.isValid())
-            title = m_text.mid(callout->titleRange.start, callout->titleRange.length()).trimmed();
+            title = d->m_text.mid(callout->titleRange.start, callout->titleRange.length()).trimmed();
         for (QString &line : lines)
             line.remove(prefix);
         lines.removeFirst();
@@ -245,15 +246,15 @@ bool MarkdownEditor::removeCallout(qsizetype offset)
         result += QLatin1Char('\n');
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(range.start, range.length(), result);
-    setCursorOffset(qMin<qsizetype>(range.start, m_text.size()));
+    setCursorOffset(qMin<qsizetype>(range.start, d->m_text.size()));
     return true;
 }
 
 void MarkdownEditor::addCalloutActions(QMenu &menu, qsizetype blockIndex)
 {
-    const BlockView &view = firstPiece(m_blocks[size_t(blockIndex)]);
+    const BlockView &view = firstPiece(d->m_blocks[size_t(blockIndex)]);
     if (!view.callout)
         return;
     const qsizetype at = view.callout->range.start;
@@ -263,7 +264,7 @@ void MarkdownEditor::addCalloutActions(QMenu &menu, qsizetype blockIndex)
     });
     QMenu *types = menu.addMenu(tr("Change type"));
     const QString current = view.callout->type;
-    QStringList known = m_calloutStyles.knownTypes();
+    QStringList known = d->m_calloutStyles.knownTypes();
     if (!known.contains(current))
         known.prepend(current);
     for (const QString &type : std::as_const(known)) {
@@ -282,39 +283,39 @@ void MarkdownEditor::updateHover(const QPoint &point, bool tables)
     qsizetype codeHover = -1;
     qsizetype editHover = -1;
     if (found >= 0) {
-        const BlockView &view = m_blocks[size_t(found)];
+        const BlockView &view = d->m_blocks[size_t(found)];
         if (view.span.kind == BlockSpan::Kind::Code)
             codeHover = view.span.range.start;
-        if (m_hoverEditButton && hasEditButton(view))
+        if (d->m_hoverEditButton && hasEditButton(view))
             editHover = found;
     }
 
     const bool overButton = editHover >= 0 && editButtonRectOf(editHover).contains(point);
-    if (codeHover != m_hoveredCodeBlock || editHover != m_hoveredBlock || overButton != m_overEditButton) {
+    if (codeHover != d->m_hoveredCodeBlock || editHover != d->m_hoveredBlock || overButton != d->m_overEditButton) {
         // Only the panel the pointer left and the one it entered change.
-        const QRect old = m_hoverRect;
-        m_hoveredCodeBlock = codeHover;
-        m_hoveredBlock = editHover;
-        m_overEditButton = overButton;
+        const QRect old = d->m_hoverRect;
+        d->m_hoveredCodeBlock = codeHover;
+        d->m_hoveredBlock = editHover;
+        d->m_overEditButton = overButton;
         const qsizetype shown = editHover >= 0 ? editHover : found;
-        m_hoverRect = (editHover >= 0 || codeHover >= 0) ? panelRectOf(shown).toAlignedRect() : QRect();
+        d->m_hoverRect = (editHover >= 0 || codeHover >= 0) ? panelRectOf(shown).toAlignedRect() : QRect();
         if (!old.isNull())
             viewport()->update(old);
-        if (!m_hoverRect.isNull())
-            viewport()->update(m_hoverRect);
+        if (!d->m_hoverRect.isNull())
+            viewport()->update(d->m_hoverRect);
         viewport()->setToolTip(overButton ? tr("Edit this block") : QString());
     }
-    if (m_tableHandles && tables)
+    if (d->m_tableHandles && tables)
         updateTableHover(point); // the grips and bars of a table (TableHandles.cpp)
 }
 
 void MarkdownEditor::clearHover()
 {
-    const QRect old = m_hoverRect;
-    m_hoveredCodeBlock = -1;
-    m_hoveredBlock = -1;
-    m_overEditButton = false;
-    m_hoverRect = QRect();
+    const QRect old = d->m_hoverRect;
+    d->m_hoveredCodeBlock = -1;
+    d->m_hoveredBlock = -1;
+    d->m_overEditButton = false;
+    d->m_hoverRect = QRect();
     viewport()->setToolTip(QString());
     if (!old.isNull())
         viewport()->update(old);
@@ -323,28 +324,28 @@ void MarkdownEditor::clearHover()
 
 void MarkdownEditor::paintEditHover(QPainter &painter) const
 {
-    if (m_hoveredBlock < 0)
+    if (d->m_hoveredBlock < 0)
         return;
     const QRectF button = editButtonRect();
     if (!button.isValid())
         return;
-    const QRectF panel = panelRectOf(m_hoveredBlock);
-    const qreal radius = m_theme.value(QStringLiteral("--radius-s")).toDouble();
+    const QRectF panel = panelRectOf(d->m_hoveredBlock);
+    const qreal radius = d->m_theme.value(QStringLiteral("--radius-s")).toDouble();
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(m_theme.color(QStringLiteral("--background-modifier-border")), 1));
+    painter.setPen(QPen(d->m_theme.color(QStringLiteral("--background-modifier-border")), 1));
     painter.drawRoundedRect(panel.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
-    if (m_overEditButton) {
+    if (d->m_overEditButton) {
         painter.setPen(Qt::NoPen);
-        painter.setBrush(m_theme.color(QStringLiteral("--background-modifier-hover")));
+        painter.setBrush(d->m_theme.color(QStringLiteral("--background-modifier-hover")));
         painter.drawRoundedRect(button, radius, radius);
     }
     painter.restore();
 
     const QIcon icon = Icons::icon(QStringLiteral("code-2"),
-                                   m_theme.color(QStringLiteral("--text-muted")), kIconSize);
+                                   d->m_theme.color(QStringLiteral("--text-muted")), kIconSize);
     const QRectF target(button.center().x() - kIconSize / 2.0, button.center().y() - kIconSize / 2.0,
                         kIconSize, kIconSize);
     icon.paint(&painter, target.toRect());

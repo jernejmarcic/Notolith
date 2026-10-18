@@ -1,4 +1,5 @@
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 // Completion and documentation from a running Jupyter kernel (docs/NOTEBOOKS.md):
 // Ctrl+Space in a code block asks the block's kernel for completions at the
@@ -37,16 +38,16 @@ bool isModifierKey(int key)
 
 void MarkdownEditor::setNotebookIntrospector(NotebookIntrospector introspector)
 {
-    m_notebookIntrospector = std::move(introspector);
+    d->m_notebookIntrospector = std::move(introspector);
     hideNotebookIntrospection();
 }
 
 QStringList MarkdownEditor::notebookCompletionRows() const
 {
     QStringList rows;
-    if (!m_notebookCompleter || !m_notebookCompleter->popup()->isVisible())
+    if (!d->m_notebookCompleter || !d->m_notebookCompleter->popup()->isVisible())
         return rows;
-    const QAbstractItemModel *model = m_notebookCompleter->popup()->model();
+    const QAbstractItemModel *model = d->m_notebookCompleter->popup()->model();
     for (int row = 0; model && row < model->rowCount(); ++row)
         rows << model->index(row, 0).data().toString();
     return rows;
@@ -54,17 +55,17 @@ QStringList MarkdownEditor::notebookCompletionRows() const
 
 QString MarkdownEditor::notebookInspectText() const
 {
-    const auto *view = qobject_cast<const QPlainTextEdit *>(m_notebookInspect);
+    const auto *view = qobject_cast<const QPlainTextEdit *>(d->m_notebookInspect);
     return view && view->isVisible() ? view->toPlainText() : QString();
 }
 
 void MarkdownEditor::hideNotebookIntrospection()
 {
-    ++m_introGeneration; // an answer still on its way is not wanted any more
-    if (m_notebookCompleter)
-        m_notebookCompleter->popup()->hide();
-    if (m_notebookInspect)
-        m_notebookInspect->hide();
+    ++d->m_introGeneration; // an answer still on its way is not wanted any more
+    if (d->m_notebookCompleter)
+        d->m_notebookCompleter->popup()->hide();
+    if (d->m_notebookInspect)
+        d->m_notebookInspect->hide();
 }
 
 bool MarkdownEditor::handleNotebookIntrospectKey(QKeyEvent *event)
@@ -72,10 +73,10 @@ bool MarkdownEditor::handleNotebookIntrospectKey(QKeyEvent *event)
     const int key = event->key();
     if (isModifierKey(key))
         return false;
-    const bool completing = m_notebookCompleter && m_notebookCompleter->popup()->isVisible();
-    const bool documenting = m_notebookInspect && m_notebookInspect->isVisible();
+    const bool completing = d->m_notebookCompleter && d->m_notebookCompleter->popup()->isVisible();
+    const bool documenting = d->m_notebookInspect && d->m_notebookInspect->isVisible();
     if (completing) {
-        QAbstractItemView *popup = m_notebookCompleter->popup();
+        QAbstractItemView *popup = d->m_notebookCompleter->popup();
         const QAbstractItemModel *rows = popup->model();
         switch (key) {
         case Qt::Key_Return:
@@ -112,18 +113,18 @@ bool MarkdownEditor::handleNotebookIntrospectKey(QKeyEvent *event)
 
     const bool completionKey = key == Qt::Key_Space && (event->modifiers() & ~Qt::KeypadModifier) == Qt::ControlModifier;
     const bool inspectKey = key == Qt::Key_Backtab || (key == Qt::Key_Tab && event->modifiers().testFlag(Qt::ShiftModifier));
-    if ((!completionKey && !inspectKey) || m_mode == Mode::Reading)
+    if ((!completionKey && !inspectKey) || d->m_mode == Mode::Reading)
         return false;
     return requestNotebookIntrospection(inspectKey, completionKey);
 }
 
 bool MarkdownEditor::requestNotebookIntrospection(bool inspect, bool tellWhenNone)
 {
-    if (!m_features.notebooks || !m_notebookIntrospector)
+    if (!d->m_features.notebooks || !d->m_notebookIntrospector)
         return false;
     const CodeFenceSpan *fence = nullptr;
-    for (const CodeFenceSpan &candidate : m_decorations.codeFences) {
-        if (candidate.depth == 0 && candidate.content.start <= m_cursor && m_cursor <= candidate.content.end
+    for (const CodeFenceSpan &candidate : d->m_decorations.codeFences) {
+        if (candidate.depth == 0 && candidate.content.start <= d->m_cursor && d->m_cursor <= candidate.content.end
             && !candidate.language.trimmed().isEmpty()) {
             fence = &candidate;
             break;
@@ -133,7 +134,7 @@ bool MarkdownEditor::requestNotebookIntrospection(bool inspect, bool tellWhenNon
         return false;
 
     NotebookRunOptions options;
-    for (const CodeOptions &declared : m_decorations.codeOptions) {
+    for (const CodeOptions &declared : d->m_decorations.codeOptions) {
         if (declared.block.overlaps(fence->content)) {
             options.sandboxHost = declared.sandboxHost;
             options.sandboxWasm = declared.sandboxWasm;
@@ -142,17 +143,17 @@ bool MarkdownEditor::requestNotebookIntrospection(bool inspect, bool tellWhenNon
         }
     }
     const qsizetype origin = fence->content.start;
-    const QString code = m_text.mid(origin, fence->content.end - origin);
+    const QString code = d->m_text.mid(origin, fence->content.end - origin);
 
     hideNotebookIntrospection(); // also makes this request the only one that counts
-    const quint64 generation = m_introGeneration;
-    m_introVersion = m_textVersion;
-    m_introCursor = m_cursor;
-    const bool sent = m_notebookIntrospector(
-        fence->language.trimmed().toLower(), code, m_cursor - origin, inspect, options,
-        [this, lifeline = m_lifeline, generation, inspect, origin](NotebookIntrospection answer) {
+    const quint64 generation = d->m_introGeneration;
+    d->m_introVersion = d->m_textVersion;
+    d->m_introCursor = d->m_cursor;
+    const bool sent = d->m_notebookIntrospector(
+        fence->language.trimmed().toLower(), code, d->m_cursor - origin, inspect, options,
+        [this, lifeline = d->m_lifeline, generation, inspect, origin](NotebookIntrospection answer) {
             lifeline->post(this, [this, generation, inspect, origin, answer = std::move(answer)] {
-                if (generation != m_introGeneration || m_textVersion != m_introVersion || m_cursor != m_introCursor)
+                if (generation != d->m_introGeneration || d->m_textVersion != d->m_introVersion || d->m_cursor != d->m_introCursor)
                     return; // typed or moved since: it answers a question nobody is asking
                 if (inspect) {
                     if (answer.text.trimmed().isEmpty())
@@ -178,49 +179,49 @@ bool MarkdownEditor::requestNotebookIntrospection(bool inspect, bool tellWhenNon
 void MarkdownEditor::showNotebookCompletion(const QStringList &all, qsizetype from, qsizetype to)
 {
     const QStringList matches = all.size() > kMaxMatches ? all.mid(0, kMaxMatches) : all;
-    from = qBound<qsizetype>(0, from, m_text.size());
-    to = qBound<qsizetype>(from, to, m_text.size());
-    m_introFrom = from;
-    m_introTo = to;
+    from = qBound<qsizetype>(0, from, d->m_text.size());
+    to = qBound<qsizetype>(from, to, d->m_text.size());
+    d->m_introFrom = from;
+    d->m_introTo = to;
     if (matches.size() == 1) { // as Jupyter does: one way to finish it is not a choice
         acceptNotebookCompletion(matches.first());
         return;
     }
-    if (!m_notebookCompleter) {
-        m_notebookCompleter = new QCompleter(new QStringListModel(this), this);
-        m_notebookCompleter->setWidget(this);
-        m_notebookCompleter->popup()->setObjectName(QStringLiteral("notebookCompletePopup"));
-        if (auto *list = qobject_cast<QListView *>(m_notebookCompleter->popup()))
+    if (!d->m_notebookCompleter) {
+        d->m_notebookCompleter = new QCompleter(new QStringListModel(this), this);
+        d->m_notebookCompleter->setWidget(this);
+        d->m_notebookCompleter->popup()->setObjectName(QStringLiteral("notebookCompletePopup"));
+        if (auto *list = qobject_cast<QListView *>(d->m_notebookCompleter->popup()))
             list->setUniformItemSizes(true);
-        m_notebookCompleter->setCompletionMode(QCompleter::PopupCompletion);
-        m_notebookCompleter->setFilterMode(Qt::MatchContains);
-        m_notebookCompleter->setMaxVisibleItems(10);
+        d->m_notebookCompleter->setCompletionMode(QCompleter::PopupCompletion);
+        d->m_notebookCompleter->setFilterMode(Qt::MatchContains);
+        d->m_notebookCompleter->setMaxVisibleItems(10);
         // The kernel has already filtered and ranked: every row stays.
-        connect(m_notebookCompleter, qOverload<const QString &>(&QCompleter::activated), this,
+        connect(d->m_notebookCompleter, qOverload<const QString &>(&QCompleter::activated), this,
                 [this](const QString &match) {
                     hideNotebookIntrospection();
                     acceptNotebookCompletion(match);
                 });
     }
-    qobject_cast<QStringListModel *>(m_notebookCompleter->model())->setStringList(matches);
-    m_notebookCompleter->setCompletionPrefix(QString());
-    m_notebookCompleter->popup()->setCurrentIndex(m_notebookCompleter->completionModel()->index(0, 0));
+    qobject_cast<QStringListModel *>(d->m_notebookCompleter->model())->setStringList(matches);
+    d->m_notebookCompleter->setCompletionPrefix(QString());
+    d->m_notebookCompleter->popup()->setCurrentIndex(d->m_notebookCompleter->completionModel()->index(0, 0));
     QRect anchor(cursorPoint().toPoint(), QSize(1, int(QFontMetricsF(font()).height())));
     anchor.moveTopLeft(viewport()->mapTo(this, anchor.topLeft()));
-    anchor.setWidth(m_notebookCompleter->popup()->sizeHintForColumn(0) + 32);
-    m_notebookCompleter->complete(anchor);
+    anchor.setWidth(d->m_notebookCompleter->popup()->sizeHintForColumn(0) + 32);
+    d->m_notebookCompleter->complete(anchor);
 }
 
 void MarkdownEditor::acceptNotebookCompletion(const QString &match)
 {
-    const qsizetype from = qBound<qsizetype>(0, m_introFrom, m_text.size());
-    const qsizetype to = qBound<qsizetype>(from, m_introTo, m_text.size());
+    const qsizetype from = qBound<qsizetype>(0, d->m_introFrom, d->m_text.size());
+    const qsizetype to = qBound<qsizetype>(from, d->m_introTo, d->m_text.size());
     applyEdit(from, to - from, match);
 }
 
 void MarkdownEditor::showNotebookInspect(const QString &text)
 {
-    if (!m_notebookInspect) {
+    if (!d->m_notebookInspect) {
         auto *view = new QPlainTextEdit(this);
         view->setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint);
         view->setObjectName(QStringLiteral("notebookInspect"));
@@ -228,9 +229,9 @@ void MarkdownEditor::showNotebookInspect(const QString &text)
         view->setFocusPolicy(Qt::NoFocus);
         view->setAttribute(Qt::WA_ShowWithoutActivating);
         view->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        m_notebookInspect = view;
+        d->m_notebookInspect = view;
     }
-    auto *view = static_cast<QPlainTextEdit *>(m_notebookInspect);
+    auto *view = static_cast<QPlainTextEdit *>(d->m_notebookInspect);
     view->setPlainText(text.trimmed());
     const int lineHeight = int(QFontMetricsF(font()).height());
     const QFontMetrics metrics(view->font());

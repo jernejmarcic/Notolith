@@ -8,6 +8,7 @@
 /// scanFootnotes); nothing here counts.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QFontMetricsF>
 #include <QPainter>
@@ -39,17 +40,17 @@ QString firstLineOf(const QString &text, const Range &content)
 QList<MarkdownEditor::FootnoteEntry> MarkdownEditor::footnotes() const
 {
     QList<FootnoteEntry> entries;
-    if (m_decorations.footnotes.isEmpty())
+    if (d->m_decorations.footnotes.isEmpty())
         return entries;
     QSet<int> seen;
-    for (const FootnoteSpan &span : m_decorations.footnotes) {
+    for (const FootnoteSpan &span : d->m_decorations.footnotes) {
         if (seen.contains(span.number))
             continue;
         seen.insert(span.number);
         FootnoteEntry entry;
         entry.number = span.number;
         entry.label = span.label;
-        entry.preview = firstLineOf(m_text, span.content);
+        entry.preview = firstLineOf(d->m_text, span.content);
         // A labelled footnote opens at its definition; an inline one is
         // its own text, where it was written.
         entry.jumpOffset = span.content.isValid() ? span.content.start : span.range.start;
@@ -63,7 +64,7 @@ QList<MarkdownEditor::FootnoteEntry> MarkdownEditor::footnotes() const
 QStringList MarkdownEditor::footnoteMarkTexts() const
 {
     QStringList texts;
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         for (const BlockView::FootnoteMark &mark : view.footnoteMarks)
             texts << mark.text;
     }
@@ -72,7 +73,7 @@ QStringList MarkdownEditor::footnoteMarkTexts() const
 
 int MarkdownEditor::footnotesListRowCount() const
 {
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         if (view.isFootnotesList)
             return int(view.footnoteListRows.size());
     }
@@ -95,31 +96,31 @@ QFont MarkdownEditor::footnoteMarkFont(const QFont &blockFont, bool superscript)
 
 void MarkdownEditor::layoutFootnotes(BlockView &view, QList<Range> &hidden)
 {
-    if (m_decorations.footnotes.isEmpty() && m_decorations.footnoteDefinitions.isEmpty())
+    if (d->m_decorations.footnotes.isEmpty() && d->m_decorations.footnoteDefinitions.isEmpty())
         return;
     const auto hides = [&hidden](qsizetype at) {
         return std::any_of(hidden.cbegin(), hidden.cend(), [at](const Range &range) { return range.contains(at); });
     };
-    const QColor accent = m_theme.color(QStringLiteral("--text-accent"));
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    const QColor accent = d->m_theme.color(QStringLiteral("--text-accent"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
-        const StyleSpan &span = m_decorations.styles.at(i);
+        const StyleSpan &span = d->m_decorations.styles.at(i);
         if (span.kind != StyleSpan::Kind::Footnote || span.range.length() < 2)
             continue;
         // Only a rendered footnote: with the caret on it the source shows.
         if (!hides(span.range.start + 1))
             continue;
         const auto reference =
-            std::find_if(m_decorations.footnotes.cbegin(), m_decorations.footnotes.cend(),
+            std::find_if(d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                          [&span](const FootnoteSpan &footnote) { return footnote.range == span.range; });
-        if (reference != m_decorations.footnotes.cend()) {
+        if (reference != d->m_decorations.footnotes.cend()) {
             view.footnoteMarks.push_back({span.range.start, 0, QString::number(reference->number), accent, true});
             continue;
         }
         const auto definition =
-            std::find_if(m_decorations.footnoteDefinitions.cbegin(), m_decorations.footnoteDefinitions.cend(),
+            std::find_if(d->m_decorations.footnoteDefinitions.cbegin(), d->m_decorations.footnoteDefinitions.cend(),
                          [&span](const FootnoteDefinition &def) { return def.range.start == span.range.start; });
-        if (definition != m_decorations.footnoteDefinitions.cend() && definition->number > 0) {
+        if (definition != d->m_decorations.footnoteDefinitions.cend() && definition->number > 0) {
             view.footnoteMarks.push_back(
                 {span.range.start, 0, QString::number(definition->number) + QStringLiteral(". "), muted, false});
         }
@@ -149,7 +150,7 @@ void MarkdownEditor::paintFootnoteMarks(QPainter &painter, const BlockView &view
 
 bool MarkdownEditor::footnoteDefinitionBlock(const BlockView &view) const
 {
-    for (const FootnoteDefinition &definition : m_decorations.footnoteDefinitions) {
+    for (const FootnoteDefinition &definition : d->m_decorations.footnoteDefinitions) {
         if (definition.number <= 0)
             continue;
         // The block is the definition, or the part of one an indented line
@@ -158,11 +159,11 @@ bool MarkdownEditor::footnoteDefinitionBlock(const BlockView &view) const
         const qsizetype start = view.span.range.start;
         const bool begins = start >= definition.range.start
                             || (start < definition.range.start
-                                && QStringView(m_text).mid(start, definition.range.start - start).trimmed().isEmpty());
+                                && QStringView(d->m_text).mid(start, definition.range.start - start).trimmed().isEmpty());
         // ... and take the blank lines after it.
         const qsizetype end = view.span.range.end;
         const bool ends = end <= definition.range.end + 1
-                          || QStringView(m_text).mid(definition.range.end, end - definition.range.end).trimmed().isEmpty();
+                          || QStringView(d->m_text).mid(definition.range.end, end - definition.range.end).trimmed().isEmpty();
         if (begins && start < definition.range.end + 1 && ends)
             return true;
     }
@@ -177,7 +178,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
     view.textTop = 0;
 
     QList<const FootnoteDefinition *> numbered;
-    for (const FootnoteDefinition &definition : m_decorations.footnoteDefinitions) {
+    for (const FootnoteDefinition &definition : d->m_decorations.footnoteDefinitions) {
         if (definition.number > 0)
             numbered.append(&definition);
     }
@@ -189,7 +190,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
         return;
     }
 
-    const QFont font = footnoteMarkFont(m_theme.textFont(), false);
+    const QFont font = footnoteMarkFont(d->m_theme.textFont(), false);
     const QFontMetricsF metrics(font);
     const qreal rule = 24; // air, then the rule, above the list
     const qreal width = contentWidth();
@@ -198,7 +199,7 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
     qreal y = rule;
     for (const FootnoteDefinition *definition : std::as_const(numbered)) {
         BlockView::FootnotesListRow row;
-        const QString body = m_text.mid(definition->content.start, definition->content.length()).simplified();
+        const QString body = d->m_text.mid(definition->content.start, definition->content.length()).simplified();
         row.layout = std::make_unique<QTextLayout>(QString::number(definition->number) + QStringLiteral(". ") + body,
                                                    font);
         row.layout->setCacheEnabled(true);
@@ -221,11 +222,11 @@ void MarkdownEditor::layoutFootnotesList(BlockView &view)
         row.rect = QRectF(0, y, width, qMax(height, metrics.height()));
         row.backRef = QRectF(lastWidth + 4, y + height - metrics.height(), backWidth, metrics.height());
         // The way back: the footnote's first reference.
-        const auto first = std::find_if(m_decorations.footnotes.cbegin(), m_decorations.footnotes.cend(),
+        const auto first = std::find_if(d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                                         [definition](const FootnoteSpan &span) {
                                             return span.label == definition->label;
                                         });
-        row.jumpOffset = first != m_decorations.footnotes.cend() ? first->range.end : definition->range.start;
+        row.jumpOffset = first != d->m_decorations.footnotes.cend() ? first->range.end : definition->range.start;
         y += row.rect.height() + 4;
         view.footnoteListRows.push_back(std::move(row));
     }
@@ -239,12 +240,12 @@ void MarkdownEditor::paintFootnotesList(QPainter &painter, const BlockView &view
     if (view.footnoteListRows.empty())
         return;
     painter.save();
-    painter.setPen(QPen(m_theme.color(QStringLiteral("--background-modifier-border")), 1));
+    painter.setPen(QPen(d->m_theme.color(QStringLiteral("--background-modifier-border")), 1));
     painter.drawLine(QPointF(left, top + 12.5), QPointF(left + contentWidth(), top + 12.5));
-    const QFont font = footnoteMarkFont(m_theme.textFont(), false);
+    const QFont font = footnoteMarkFont(d->m_theme.textFont(), false);
     painter.setFont(font);
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor accent = m_theme.color(QStringLiteral("--text-accent"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor accent = d->m_theme.color(QStringLiteral("--text-accent"));
     for (const BlockView::FootnotesListRow &row : view.footnoteListRows) {
         painter.setPen(muted);
         row.layout->draw(&painter, QPointF(left + row.rect.x(), top + row.rect.y()));
@@ -263,7 +264,7 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
         setCursorOffset(offset);
         ensureCursorVisible();
     };
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         const qreal top = view.y - scroll;
         if (viewportPoint.y() < top || viewportPoint.y() > top + view.height)
             continue;
@@ -294,12 +295,12 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
                 // A reference: to its definition, or in reading view (where
                 // the definitions are listed at the end) to its row there.
                 const auto reference = std::find_if(
-                    m_decorations.footnotes.cbegin(), m_decorations.footnotes.cend(),
+                    d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                     [&mark](const FootnoteSpan &span) { return span.range.start == mark.sourcePos; });
-                if (reference == m_decorations.footnotes.cend() || !reference->content.isValid())
+                if (reference == d->m_decorations.footnotes.cend() || !reference->content.isValid())
                     return false;
-                if (m_mode == Mode::Reading) {
-                    for (const BlockView &list : m_blocks) {
+                if (d->m_mode == Mode::Reading) {
+                    for (const BlockView &list : d->m_blocks) {
                         if (!list.isFootnotesList)
                             continue;
                         for (const BlockView::FootnotesListRow &row : list.footnoteListRows) {
@@ -316,15 +317,15 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
             }
             // A definition's label: back to the first reference.
             const auto definition = std::find_if(
-                m_decorations.footnoteDefinitions.cbegin(), m_decorations.footnoteDefinitions.cend(),
+                d->m_decorations.footnoteDefinitions.cbegin(), d->m_decorations.footnoteDefinitions.cend(),
                 [&mark](const FootnoteDefinition &def) { return def.range.start == mark.sourcePos; });
-            if (definition == m_decorations.footnoteDefinitions.cend())
+            if (definition == d->m_decorations.footnoteDefinitions.cend())
                 return false;
-            const auto first = std::find_if(m_decorations.footnotes.cbegin(), m_decorations.footnotes.cend(),
+            const auto first = std::find_if(d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                                             [&definition](const FootnoteSpan &span) {
                                                 return span.label == definition->label;
                                             });
-            if (first == m_decorations.footnotes.cend())
+            if (first == d->m_decorations.footnotes.cend())
                 return false;
             goTo(first->range.end);
             return true;
