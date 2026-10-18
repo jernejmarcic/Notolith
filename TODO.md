@@ -1931,3 +1931,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       moving and resizing (Obsidian's "snap to objects"), snap to grid,
       toggles, zero cost when off; plus align/distribute for a selection if
       Fable judges it worth it.
+- [ ] Jernej: "clicking in a note should allow ot be scrolled in the canvas".
+      As in Obsidian: once a card is clicked (selected/focused), the wheel
+      scrolls that card's content instead of panning the canvas; an
+      unselected card still pans. Same Fable plan.
