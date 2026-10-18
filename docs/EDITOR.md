@@ -835,7 +835,8 @@ already linked for notebook output).
 - **Off the UI thread**: `libs/editor/MermaidBlock.cpp` is a renderer for
   `MarkdownEditor::setCodeBlockRenderer`, so the fence, its placeholder and its
   in-memory cache (by width, theme and source) are `CodeBlockHook.cpp`'s. A job
-  runs `mmdr -i - -c config.json` on a one-thread pool (source on stdin, SVG on
+  runs `mmdr -i - -c config.json` on the kind's pool of two threads (a hung tool
+  holds one, so the next fence still draws; source on stdin, SVG on
   stdout; `-o -` is not used, 0.3.1 writes a file named `-` for it) and
   rasterises the SVG with `QSvgRenderer` at the column width and the display's
   pixel ratio. The tool gets 5 s, then is killed.
@@ -888,7 +889,7 @@ one test against the installed tool, run in the sandbox (skipped when absent, a 
 ````plantuml` (also `puml`), ````tikz` and ````dot` (also `graphviz`) fences are
 drawn the same way and by the same code (`diagramRenderer` in
 `libs/editor/MermaidBlock.cpp`; `mermaidRenderer` is its Mermaid case): the one
-pool thread, the tool found by the first fence and remembered, the memo, the
+pool (one per kind, two threads), the tool found by the first fence and remembered, the memo, the
 disk cache (one directory per kind: `.../noteAppC/{mermaid,plantuml,tikz,dot}`),
 the source with one dim hint when the tool is missing or fails, nothing at
 startup, a cached diagram drawn without starting a process, and the caret

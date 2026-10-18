@@ -379,6 +379,9 @@ struct State {
     bool resolved = false;
     QString tool; ///< empty once resolved: not installed
     QHash<QByteArray, Made> memo;
+    /// The texts a job is making now, each with the jobs for the same text that came meanwhile (the editor asks
+    /// again at another width): they wait here, not on a thread, and are run when the text is made.
+    QHash<QByteArray, QList<std::function<void()>>> making;
 };
 
 using Result = MarkdownEditor::CodeBlockResult;
@@ -425,22 +428,39 @@ Result rasterise(DiagramKind kind, const QByteArray &svg, const QString &source,
 }
 
 /// The whole job: memo, then disk, then the tool. On a pool thread.
-Result make(const std::shared_ptr<State> &state, const QString &source, const QByteArray &config, int width,
-            qreal ratio)
+void make(const std::shared_ptr<State> &state, const QString &source, const QByteArray &config, int width, qreal ratio,
+          const std::function<void(Result)> &deliver)
 {
     const Kind &kind = kindOf(state->kind);
     const QString label = QLatin1String(kind.label);
     const QString cacheFile = diagramCachePath(state->kind, source, config);
     const QByteArray key = cacheFile.toUtf8(); // the hash is in the name
     Made made;
-    bool have = false;
+    bool have = false, owner = false;
     {
         QMutexLocker lock(&state->mutex);
         if (const auto it = state->memo.constFind(key); it != state->memo.cend()) {
             made = it.value();
             have = true;
+        } else if (const auto making = state->making.find(key); making != state->making.end()) {
+            making->append([=] { make(state, source, config, width, ratio, deliver); });
+            return;
+        } else {
+            state->making.insert(key, {});
+            owner = true;
         }
     }
+    // Answers, then the jobs that waited for the same text (which find it in the memo).
+    const auto finish = [&](Result result) {
+        QList<std::function<void()>> followers;
+        if (owner) {
+            QMutexLocker lock(&state->mutex);
+            followers = state->making.take(key);
+        }
+        deliver(std::move(result));
+        for (const auto &follower : std::as_const(followers))
+            follower();
+    };
     if (!have) {
         made.svg = mermaidCachedSVG(cacheFile);
         have = !made.svg.isEmpty();
@@ -457,9 +477,10 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const QB
         }
         if (tool.isEmpty()) {
             const QString name = state->setting.trimmed();
-            return sourceWithHint(source, name.isEmpty() || name == QLatin1String(kind.defaultTool)
+            finish(sourceWithHint(source, name.isEmpty() || name == QLatin1String(kind.defaultTool)
                                               ? QCoreApplication::translate("MermaidBlock", "%1: install %2 to render").arg(label, QLatin1String(kind.defaultTool))
-                                              : QCoreApplication::translate("MermaidBlock", "%1: %2 was not found").arg(label, name));
+                                              : QCoreApplication::translate("MermaidBlock", "%1: %2 was not found").arg(label, name)));
+            return;
         }
         made = kind.run(tool, source, config);
         if (made.error.isEmpty())
@@ -472,20 +493,26 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const QB
         state->memo.insert(key, made);
     }
     if (!made.error.isEmpty())
-        return sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: %2").arg(label, made.error));
-    return rasterise(state->kind, made.svg, source, width, ratio);
+        return finish(sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: %2").arg(label, made.error)));
+    finish(rasterise(state->kind, made.svg, source, width, ratio));
 }
 
-/// One thread, not the global pool's (parsing, search) while a tool runs for
-/// seconds: diagrams queue, and a second ask for a text already being made
-/// finds it in the memo instead of starting the tool twice. ponytail: a hung
-/// tool holds the queue for its 5 s (20 s for the JVM and TeX ones); widen it with per-key locking if that is felt.
-QThreadPool *pool()
+/// A pool per kind, two threads each, not the global pool's (parsing, search)
+/// while a tool runs for seconds: a hung PlantUML or TeX (20 s, TeX's two
+/// steps 40) leaves the other kinds untouched, and one hung fence leaves a
+/// thread for the next of its kind. Few threads, as a JVM or TeX is heavy.
+/// Built on the first diagram; the threads on the first job. ponytail: two
+/// hung fences of one kind still block it; per-key timeouts if that is felt.
+QThreadPool *pool(DiagramKind kind)
 {
-    static QThreadPool instance;
-    static const bool once = (instance.setMaxThreadCount(1), true);
+    static QThreadPool pools[4];
+    static const bool once = [] {
+        for (QThreadPool &instance : pools)
+            instance.setMaxThreadCount(2);
+        return true;
+    }();
     Q_UNUSED(once);
-    return &instance;
+    return &pools[int(kind)];
 }
 
 } // namespace
@@ -500,8 +527,8 @@ MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QStrin
         // The UI thread's part: two reads, one queued job.
         const QByteArray config = diagramConfig(kind, theme());
         const qreal ratio = qGuiApp ? qGuiApp->devicePixelRatio() : 1.0;
-        (void)QtConcurrent::run(pool(), [state, kind, source, config, width, ratio, deliver] {
-            deliver(make(state, source, config, width, ratio));
+        (void)QtConcurrent::run(pool(kind), [state, kind, source, config, width, ratio, deliver] {
+            make(state, source, config, width, ratio, deliver);
             // Once per process and kind, after the first diagram is out, never at startup.
             static std::atomic_flag pruned[4];
             if (!pruned[int(kind)].test_and_set())
