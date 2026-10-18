@@ -821,6 +821,69 @@ TEST_F(WindowTest, UndoCloseTabReopensInTheSameSplitWithTheCaret)
     EXPECT_EQ(tabTexts(group).size(), 2);
 }
 
+TEST_F(WindowTest, UndoCloseTabRestoresTheScrollPosition)
+{
+    QByteArray longNote;
+    for (int i = 0; i < 400; ++i)
+        longNote += "line " + QByteArray::number(i) + "\n\n";
+    write(QStringLiteral("Long.md"), longNote);
+    MainWindow window;
+    window.resize(900, 500);
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.openNote(path(QStringLiteral("Long.md")));
+    QScrollBar *bar = window.editor()->verticalScrollBar();
+    WAIT_TRUE(bar->maximum() > 2000, 5000);
+    bar->setValue(1500);
+    ASSERT_EQ(bar->value(), 1500);
+
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    window.findChild<QAction *>(QStringLiteral("workspace:undo-close-pane"))->trigger();
+    ASSERT_TRUE(window.editor()->noteText().startsWith(QStringLiteral("line 0")));
+    WAIT_EQ(window.editor()->verticalScrollBar()->value(), 1500, 5000);
+}
+
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+// An encrypted note closed and then locked is passed over by undo, without a
+// password prompt out of nowhere, and stays on the list for when it is unlocked.
+TEST_F(WindowTest, UndoCloseTabSkipsALockedEncryptedNoteButKeepsIt)
+{
+    MainWindow window;
+    int asked = 0;
+    window.setEncryptionPromptForTests([&asked](bool, bool) {
+        ++asked;
+        return QStringLiteral("correct horse battery");
+    });
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+    const QString locked = path(QStringLiteral("Untitled.mdlock"));
+    ASSERT_TRUE(QFileInfo::exists(locked));
+    QTest::keyClicks(window.editor(), QStringLiteral("hidden words"));
+    window.findChild<QAction *>(QStringLiteral("editor:save-file"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    flushDeletes();
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:lock"))->trigger();
+    const int promptsBefore = asked;
+
+    auto *undo = window.findChild<QAction *>(QStringLiteral("workspace:undo-close-pane"));
+    undo->trigger();
+    EXPECT_EQ(asked, promptsBefore) << "no password asked for a note undo cannot open";
+    EXPECT_EQ(tabEditors(window).size(), 1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    // Unlocked again (a new encrypted note asks for the password): the closed one is still there.
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:new"))->trigger();
+    undo->trigger();
+    EXPECT_TRUE(window.editor()->noteText().contains(QStringLiteral("hidden words")));
+}
+#endif
+
 TEST_F(WindowTest, UndoCloseTabKeepsTwentyAndSkipsADeletedFile)
 {
     for (int i = 1; i <= 21; ++i)
