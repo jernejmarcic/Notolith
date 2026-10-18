@@ -1691,7 +1691,7 @@ Lane index8:
       after a name change (TODO above): derive from the in-memory names.
 - [x] 13. (lane index8, 0b5aa1f: only the named folders; save to idle 440 -> ~360 ms) Every in-app save arms the watcher debounce -> rebuild() (full
       walk). Plan: reindex only the changed paths the watcher reported.
-- [ ] 20. (lane watch) An external program editing a note in place (no
+- [x] 20. (lane watch, e645dc0: DirWatcher on inotify, IN_CLOSE_WRITE; held-open writes seen on close) An external program editing a note in place (no
       temp file + rename) that is not open is never seen: QFileSystemWatcher
       directory watches report entry changes only. Obsidian sees such
       edits. Plan: inotify IN_CLOSE_WRITE/IN_MODIFY on the vault folders
@@ -1701,7 +1701,7 @@ Lane index8:
 - [ ] 21. A whole-vault scan in flight cannot be listed as rename
       candidates (documented ceiling); merge-note calls the rewrite without
       extra candidates.
-- [ ] 22. WindowTest.LocalGraphFollowsTheOpenNote failed once in a full run
+- [x] 22. (lane watch, c8d1420: GraphView::showEvent race, 0/1500 after) WindowTest.LocalGraphFollowsTheOpenNote failed once in a full run
       and under --gtest_repeat (state leak between repeats?); investigate.
 
 Lane misc8:
