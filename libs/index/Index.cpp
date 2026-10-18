@@ -317,6 +317,7 @@ void Index::close()
     }
     m_names.clear();
     m_pathNames.clear();
+    m_linkTargetsValid = m_aliasesValid = false;
 }
 
 bool Index::isOpen() const
@@ -400,6 +401,7 @@ void Index::loadNames()
 {
     m_names.clear();
     m_pathNames.clear();
+    m_linkTargetsValid = m_aliasesValid = false;
 
     QSqlQuery query(m_db);
     query.exec(QStringLiteral("SELECT files.path, names.name FROM names "
@@ -447,8 +449,12 @@ void Index::rememberNames(const QString &path, const QStringList &names)
 
 void Index::setNames(const QString &relative, const QStringList &names)
 {
+    const QStringList before = m_pathNames.value(relative);
     forgetNames(relative);
     rememberNames(relative, names);
+    // A save that leaves the note's names alone leaves both lists alone.
+    if (m_pathNames.value(relative) != before)
+        m_linkTargetsValid = m_aliasesValid = false;
 }
 
 void Index::beginBatch()
@@ -475,11 +481,16 @@ void Index::put(const Metadata &metadata, const QString &body)
     const QString path = QDir(m_vaultRoot).relativeFilePath(metadata.path);
     NoteRows rows(m_db);
     rows.erase(path);
+    const QStringList before = m_pathNames.value(path);
     forgetNames(path);
     const QStringList names = noteNames(path, metadata);
-    if (!rows.insertNote(path, metadata, body, names, &m_error))
+    if (!rows.insertNote(path, metadata, body, names, &m_error)) {
+        m_linkTargetsValid = m_aliasesValid = false;
         return;
+    }
     rememberNames(path, names);
+    if (m_pathNames.value(path) != before)
+        m_linkTargetsValid = m_aliasesValid = false;
     if (!m_inBatch)
         emit changed();
 }
@@ -531,6 +542,7 @@ void Index::remove(const QString &path)
     const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
     NoteRows(m_db).erase(relative);
     forgetNames(relative);
+    m_linkTargetsValid = m_aliasesValid = false;
 }
 
 struct Index::Writer::Private {
@@ -864,12 +876,22 @@ QStringList Index::findByName(const QString &query, int limit) const
 
 QStringList Index::linkTargets() const
 {
-    // ponytail: an alias that is also another note's name drops out of the
-    // plain list and shows only as the alias entry.
+    if (m_linkTargetsValid)
+        return m_linkTargetsCache;
+    // An alias is offered as `Note|alias` (aliases()), so it is not also a
+    // plain name - unless it is some note's own name, which stays completable.
     QSet<QString> aliasNames;
     for (const auto &entry : aliases()) {
         if (entry.first != QFileInfo(entry.second).fileName())
             aliasNames.insert(entry.first);
+    }
+    for (auto it = aliasNames.begin(); it != aliasNames.end();) {
+        bool isNoteName = false;
+        for (const QString &path : m_names.value(foldCase(*it))) {
+            isNoteName = isNoteName || ((path.endsWith(QLatin1String(".md")) || path.endsWith(QLatin1String(".mdlock")))
+                                        && QFileInfo(path).completeBaseName() == *it);
+        }
+        it = isNoteName ? aliasNames.erase(it) : std::next(it);
     }
     QStringList names;
     QSqlQuery query(m_db);
@@ -879,11 +901,15 @@ QStringList Index::linkTargets() const
         if (!aliasNames.contains(name))
             names << name;
     }
+    m_linkTargetsCache = names;
+    m_linkTargetsValid = true;
     return names;
 }
 
 QList<QPair<QString, QString>> Index::aliases() const
 {
+    if (m_aliasesValid)
+        return m_aliasesCache;
     QList<QPair<QString, QString>> found;
     QSqlQuery query(m_db);
     query.exec(QStringLiteral("SELECT files.path, props.type, props.value FROM props "
@@ -905,6 +931,8 @@ QList<QPair<QString, QString>> Index::aliases() const
                 found.append({piece.trimmed(), note});
         }
     }
+    m_aliasesCache = found;
+    m_aliasesValid = true;
     return found;
 }
 
@@ -1243,7 +1271,6 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         QString movedTo;  // the same note after the rename
         bool own = false; // a link written in a moved note, to a file that stays
     };
-    QHash<QString, QList<Hit>> perFile;
 
     // Where a path ends up after the rename; "" for one that does not move.
     const auto movedPath = [&](const QString &path) -> QString {
@@ -1254,18 +1281,12 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         return {};
     };
 
-    QSqlQuery query(m_db);
-    query.exec(QStringLiteral(
-        "SELECT files.path, links.target, links.subpath, links.wiki, links.tstart, "
-        "links.tfinish FROM links JOIN files ON files.id = links.file "
-        "WHERE links.external = 0"));
-    while (query.next()) {
-        const QString fromPath = query.value(0).toString();
-        const QString target = query.value(1).toString();
+    // Whether one internal link, in the note at `fromPath` (old path), has
+    // to change, and what it resolved to. Used on the index's rows to pick
+    // the notes to open, and again on the links parsed from each note's text.
+    const auto classify = [&](const QString &fromPath, const QString &target, bool wiki, Hit &hit) {
         if (target.isEmpty())
-            continue; // a link into the note's own headings, nothing to resolve
-        if (query.isNull(4) || query.isNull(5))
-            continue; // indexed before tstart/tfinish existed; rebuild will fix it
+            return false; // a link into the note's own headings, nothing to resolve
 
         // oldRelative is a note or a folder: a folder's notes move with it,
         // each to the same spot under the new name.
@@ -1281,30 +1302,44 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             // ponytail: only a path that exists relative to the old folder;
             // one that resolved by name alone (a bare `a.md`) is left to
             // that lookup.
-            if (query.value(3).toBool() || movedPath(fromPath).isEmpty() || target.startsWith(QLatin1Char('/')))
-                continue;
+            if (wiki || movedPath(fromPath).isEmpty() || target.startsWith(QLatin1Char('/')))
+                return false;
             resolved = QDir::cleanPath(QFileInfo(fromPath).path() + QLatin1Char('/') + target);
             if (resolved.startsWith(QLatin1String("..")) || !movedPath(resolved).isEmpty()
                 || !QFileInfo(vault.absolute(resolved)).isFile())
-                continue;
+                return false;
             movedTo = resolved;
             own = true;
         }
-
-        Hit hit;
         hit.resolved = resolved;
         hit.movedTo = movedTo;
         hit.own = own;
-        hit.subpath = query.value(2).toString();
-        hit.wiki = query.value(3).toBool();
-        hit.targetRange = {query.value(4).toLongLong(), query.value(5).toLongLong()};
-        perFile[fromPath].append(hit);
+        return true;
+    };
+
+    // The index lags a save, so its rows only say which notes to open; the
+    // offsets to splice at come from the text read below.
+    QStringList candidates;
+    {
+        QSqlQuery query(m_db);
+        query.exec(QStringLiteral("SELECT files.path, links.target, links.wiki FROM links "
+                                  "JOIN files ON files.id = links.file WHERE links.external = 0"));
+        QSet<QString> seen;
+        Hit unused;
+        while (query.next()) {
+            const QString fromPath = query.value(0).toString();
+            if (!seen.contains(fromPath) && classify(fromPath, query.value(1).toString(), query.value(2).toBool(), unused)) {
+                seen.insert(fromPath);
+                candidates.append(fromPath);
+            }
+        }
     }
 
     beginBatch();
     const Parser parser;
     const ParseOptions options = parseOptions();
     int rewritten = 0;
+    QStringList skippedLossy;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
         Metadata metadata = parser.parse(text, absolutePath, options);
@@ -1315,8 +1350,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         put(metadata, text);
     };
 
-    for (auto it = perFile.constBegin(); it != perFile.constEnd(); ++it) {
-        const QString fromPath = it.key();
+    for (const QString &fromPath : std::as_const(candidates)) {
         // The renamed note (or every note under the renamed folder) has
         // already moved on disk by the time this runs; every other linking
         // note is still where the index found it.
@@ -1328,8 +1362,25 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             endBatch();
             return -1;
         }
+        // Write would refuse it; leave its bytes alone and say so.
+        if (note.lossy) {
+            skippedLossy.append(actualRelative);
+            continue;
+        }
 
-        QList<Hit> hits = it.value();
+        QList<Hit> hits;
+        for (const Link &link : parser.parse(note.text, absolutePath, options).links) {
+            Hit hit;
+            if (link.external || !classify(fromPath, link.target, link.wiki, hit))
+                continue;
+            hit.subpath = link.subpath;
+            hit.wiki = link.wiki;
+            hit.targetRange = link.targetRange;
+            hits.append(hit);
+        }
+        if (hits.isEmpty())
+            continue; // the links to it were removed since the index last looked
+
         // Last link first, so an earlier link's offsets stay valid while a
         // later one's replacement text changes length.
         std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b) {
@@ -1415,6 +1466,10 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     }
 
     endBatch();
+    if (!skippedLossy.isEmpty() && error) {
+        *error = QStringLiteral("not UTF-8, so its links were left as they are: %1")
+                     .arg(skippedLossy.join(QStringLiteral(", ")));
+    }
     return rewritten;
 }
 

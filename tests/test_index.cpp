@@ -273,6 +273,38 @@ TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)
     EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 3);
 }
 
+// linkTargets() and aliases() are cached between index changes; a write that
+// changes either must show in the next call.
+TEST_F(IndexTest, TheLinkListsFollowEditsAfterBeingQueried)
+{
+    Index index;
+    build(index);
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+
+    write(QStringLiteral("Fresh.md"), "---\naliases: [Nick]\n---\n");
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_TRUE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Nick")));
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+
+    write(QStringLiteral("Fresh.md"), "---\naliases: [Other]\n---\n");
+    QSignalSpy again(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(again.wait(20000));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Other"), QStringLiteral("Fresh")}));
+
+    // A note that goes takes its name and aliases out of both.
+    QFile::remove(vault.absolute(QStringLiteral("Fresh.md")));
+    index.remove(vault.absolute(QStringLiteral("Fresh.md")));
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Other"), QStringLiteral("Fresh")}));
+}
+
 // A notebook is a note only while the indexer has a reader for it (the window
 // gives it one with the notebooks feature on): indexed by the reader's text,
 // named by its file name with the extension, and a plain file again without.
@@ -632,6 +664,60 @@ TEST_F(RenameLinksTest, AnAngleBracketMarkdownLinkIsABacklinkAndKeepsItsBrackets
     EXPECT_EQ(read(vault.absolute(QStringLiteral("Sub/Deep.md"))), QByteArray("[c](<../New Note.md>)\n"));
 }
 
+// The index lags a save: a note edited after it was indexed reaches the rename
+// with new text and old offsets. Links are found again in the text read, so
+// the prose around them is never overwritten.
+TEST_F(RenameLinksTest, ANoteEditedSinceItWasIndexedIsRewrittenFromItsCurrentText)
+{
+    write(QStringLiteral("Old.md"), "# Old\n");
+    write(QStringLiteral("Home.md"), "See [[Old]] for more.\n");
+    write(QStringLiteral("More.md"), "[[Old]]\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    // Typed at the top, and a second link, both unseen by the index.
+    write(QStringLiteral("Home.md"), "Hello there, a long new line. [[Old#Part]] too.\nSee [[Old]] for more, ![[Old]].\n");
+    write(QStringLiteral("More.md"), "A [x](Old.md) first.\n[[Old]]\n");
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Old.md")), QStringLiteral("New"), &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Old.md"), QStringLiteral("New.md"), vault, &error), 2)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Home.md"))),
+              QByteArray("Hello there, a long new line. [[New#Part]] too.\nSee [[New]] for more, ![[New]].\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("More.md"))), QByteArray("A [x](New.md) first.\n[[New]]\n"));
+}
+
+// Vault::write refuses a lossy note. It is skipped and named, and the rest of
+// the batch is still rewritten.
+TEST_F(RenameLinksTest, ANonUTF8LinkingNoteIsSkippedAndNamedWhileTheRestAreRewritten)
+{
+    write(QStringLiteral("Old.md"), "# Old\n");
+    const QByteArray lossy("caf\xe9 [[Old]]\n");
+    write(QStringLiteral("A-lossy.md"), lossy);
+    write(QStringLiteral("B-clean.md"), "[[Old]]\n");
+    write(QStringLiteral("C-clean.md"), "[[Old]]\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Old.md")), QStringLiteral("New"), &newPath, &error))
+        << error.toStdString();
+    error.clear();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Old.md"), QStringLiteral("New.md"), vault, &error), 2);
+    EXPECT_TRUE(error.contains(QStringLiteral("A-lossy.md"))) << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A-lossy.md"))), lossy);
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("B-clean.md"))), QByteArray("[[New]]\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("C-clean.md"))), QByteArray("[[New]]\n"));
+}
+
 // A moved note's own Markdown links are paths from its folder; Obsidian
 // rewrites them so they still reach the same files. Wikilinks (found by name),
 // URLs and same-note anchors are not paths and stay as written.
@@ -755,6 +841,22 @@ TEST_F(RenameLinksTest, AnAliasOfOneOfTwoSameNameNotesNamesItByPath)
     EXPECT_EQ(index.resolve(QStringLiteral("B/Dup")), QStringLiteral("B/Dup.md"));
     // An alias equal to its note's own name does not take that name out of the plain list.
     EXPECT_EQ(index.linkTargets().count(QStringLiteral("Dup")), 1);
+}
+
+// Obsidian lists both: the note named Foo and Bar's alias Foo.
+TEST_F(IndexTest, AnAliasThatIsAnotherNotesNameLeavesThatNoteCompletable)
+{
+    write(QStringLiteral("Foo.md"), "# Foo\n");
+    write(QStringLiteral("Bar.md"), "---\naliases: [Foo, Baz]\n---\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    const QStringList targets = index.linkTargets();
+    EXPECT_TRUE(targets.contains(QStringLiteral("Foo")));
+    EXPECT_FALSE(targets.contains(QStringLiteral("Baz"))); // a plain alias is only offered as Bar|Baz
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Foo"), QStringLiteral("Bar")}));
 }
 
 TEST_F(RenameLinksTest, FallsBackToAFullPathWhenTheNewBasenameIsAmbiguous)

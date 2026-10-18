@@ -193,6 +193,9 @@ public:
     /// (`[[old#heading]]`), an embed stays an embed, a Markdown link keeps its
     /// percent-encoding, and a link written as a shortest-unique basename stays a
     /// basename when that is still unique. Only the link's bytes change.
+    /// The index picks the notes to open; each one's links are found again in
+    /// the text read, so a note saved since it was indexed is spliced right.
+    /// A note that is not valid UTF-8 is left untouched and named in `error`.
     /// Returns the number of notes rewritten, or -1 with `error` filled.
     int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
                                const Vault &vault, QString *error = nullptr);
@@ -269,6 +272,13 @@ private:
     QHash<QString, QStringList> m_names;
     /// vault-relative path -> the names it registered, so a remove is exact.
     QHash<QString, QStringList> m_pathNames;
+    /// linkTargets() and aliases() cost ~20 ms on a 20 000-note vault and run
+    /// on every index change; dropped when a note's names change (an alias is
+    /// one of them) or a note goes, so a plain edit of the text keeps them.
+    mutable QStringList m_linkTargetsCache;
+    mutable QList<QPair<QString, QString>> m_aliasesCache;
+    mutable bool m_linkTargetsValid = false;
+    mutable bool m_aliasesValid = false;
 
     // --- graph view (libs/ext/graph) ----------------------------------
     // Added for the optional graph module. Kept in its own block at the end
