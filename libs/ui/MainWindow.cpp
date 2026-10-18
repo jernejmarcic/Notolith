@@ -6,6 +6,8 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QDesktopServices>
+#include <QDrag>
+#include <QDropEvent>
 #include <QUrl>
 #include <QDialog>
 #include <QDir>
@@ -31,6 +33,7 @@
 #include <QHeaderView>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QPointer>
 #include <QRandomGenerator>
@@ -1966,6 +1969,7 @@ MainWindow::TabGroup *MainWindow::newPopout(Leaf *leaf)
     m_popouts.emplace_back(window);
     connect(window, &PopoutWindow::closing, this, &MainWindow::closePopout);
     window->addActions(m_commands); // a hotkey works in the window it is pressed in
+    window->setAcceptDrops(true); // so a tab dragged over its edges is still seen as inside a window
     window->resize(size() * 0.6);
     if (leaf)
         moveLeaf(leaf, group, 0);
@@ -2119,8 +2123,229 @@ void MainWindow::applyPopoutFeature()
     }
     for (const auto &group : m_groups)
         group->widget->setAcceptDrops(m_popoutsOn);
+    setAcceptDrops(m_popoutsOn);
     if (!m_popoutsOn && !m_popouts.empty())
         dockAll();
+}
+
+// --- drag-to-tile --------------------------------------------------------
+
+namespace {
+constexpr const char *kLeafMime = "application/x-notolith-leaf";
+}
+
+MainWindow::DropZone MainWindow::dropZoneAt(const QRect &rect, const QPoint &pos)
+{
+    // Each edge's distance as a share of the rect, so a corner goes to the nearer edge.
+    const double dx = double(pos.x() - rect.left()) / qMax(1, rect.width());
+    const double dy = double(pos.y() - rect.top()) / qMax(1, rect.height());
+    const std::pair<double, DropZone> edges[] = {{dx, DropZone::Left}, {1 - dx, DropZone::Right},
+                                                 {dy, DropZone::Top}, {1 - dy, DropZone::Bottom}};
+    const auto nearest = std::min_element(std::begin(edges), std::end(edges),
+                                          [](const auto &a, const auto &b) { return a.first < b.first; });
+    return nearest->first < 0.25 ? nearest->second : DropZone::Center;
+}
+
+// The leaf travels as its address, like FileTree's drag marker: a drag never
+// leaves the process, and leafFromMime() only ever compares it, never follows it.
+QMimeData *MainWindow::leafMime(const Leaf *leaf) const
+{
+    auto *mime = new QMimeData;
+    mime->setData(QLatin1String(kLeafMime), QByteArray::number(quintptr(leaf)));
+    return mime;
+}
+
+MainWindow::Leaf *MainWindow::leafFromMime(const QMimeData *mime) const
+{
+    if (!mime || !mime->hasFormat(QLatin1String(kLeafMime)))
+        return nullptr;
+    const quintptr address = mime->data(QLatin1String(kLeafMime)).toULongLong();
+    const auto it = std::find_if(m_leaves.cbegin(), m_leaves.cend(),
+                                 [address](const auto &leaf) { return quintptr(leaf.get()) == address; });
+    return it == m_leaves.cend() ? nullptr : it->get();
+}
+
+QMimeData *MainWindow::tabDragMimeForTests(const QTabBar *tabs, int index) const
+{
+    for (const auto &group : m_groups) {
+        if (group->tabs == tabs && index >= 0 && index < group->leaves.size())
+            return leafMime(group->leaves.at(index));
+    }
+    return nullptr;
+}
+
+bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
+{
+    if (!m_popoutsOn)
+        return false;
+    // The group a drag event over `widget` belongs to. A child that takes drops
+    // itself (the editor does, for files) gets the event first and Qt hands it
+    // on only if that child refuses; this takes the tab drag from it either way.
+    const auto groupOf = [this](const QWidget *widget) -> TabGroup * {
+        for (const auto &group : m_groups) {
+            if (group->widget == widget || group->widget->isAncestorOf(widget))
+                return group.get();
+        }
+        return nullptr;
+    };
+    switch (event->type()) {
+    case QEvent::MouseButtonPress: {
+        auto *mouse = static_cast<QMouseEvent *>(event);
+        if (mouse->button() != Qt::LeftButton)
+            return false;
+        m_pressedLeaf = nullptr;
+        for (const auto &group : m_groups) {
+            if (watched == group->tabs) {
+                m_pressPos = mouse->position().toPoint();
+                m_pressedLeaf = group->leaves.value(group->tabs->tabAt(m_pressPos), nullptr);
+            }
+        }
+        return false;
+    }
+    case QEvent::MouseButtonRelease:
+        m_pressedLeaf = nullptr;
+        return false;
+    case QEvent::MouseMove: {
+        auto *mouse = static_cast<QMouseEvent *>(event);
+        if (!m_pressedLeaf || !(mouse->buttons() & Qt::LeftButton))
+            return false;
+        for (const auto &group : m_groups) {
+            if (watched != group->tabs || !group->leaves.contains(m_pressedLeaf))
+                continue;
+            // Inside the strip the bar's own drag reorders the tabs; a drag
+            // that leaves it is ours.
+            const QPoint pos = mouse->position().toPoint();
+            const QRect strip(group->tabs->mapFromGlobal(group->strip->mapToGlobal(QPoint())), group->strip->size());
+            if (strip.contains(pos) || (pos - m_pressPos).manhattanLength() < QApplication::startDragDistance())
+                return false;
+            startTabDrag(group.get(), std::exchange(m_pressedLeaf, nullptr), pos);
+            return true;
+        }
+        return false;
+    }
+    case QEvent::DragEnter:
+    case QEvent::DragMove: {
+        auto *drag = static_cast<QDragMoveEvent *>(event);
+        auto *widget = qobject_cast<QWidget *>(watched);
+        if (!widget || !leafFromMime(drag->mimeData()))
+            return false;
+        TabGroup *group = groupOf(widget);
+        // A window is a target of its own only so that it hears the drag leave:
+        // over a sidebar or header the drag is inside, and a drop there cancels.
+        if (!group && !(widget->isWindow() && isWorkspaceWindow(widget)))
+            return false;
+        m_dragInside = true;
+        const QPoint pos = group ? group->widget->mapFromGlobal(widget->mapToGlobal(drag->position().toPoint())) : QPoint();
+        if (!group || group->strip->geometry().contains(pos))
+            hideDropOverlay();
+        else
+            showDropOverlay(group, dropZoneAt(group->stack->geometry(), pos));
+        drag->setDropAction(Qt::MoveAction);
+        drag->accept();
+        return true;
+    }
+    case QEvent::DragLeave:
+        m_dragInside = false;
+        hideDropOverlay();
+        return false;
+    case QEvent::Drop: {
+        auto *widget = qobject_cast<QWidget *>(watched);
+        auto *drop = static_cast<QDropEvent *>(event);
+        TabGroup *group = widget && leafFromMime(drop->mimeData()) ? groupOf(widget) : nullptr;
+        if (!group)
+            return false;
+        hideDropOverlay();
+        return handleGroupDrop(group, drop, group->widget->mapFromGlobal(widget->mapToGlobal(drop->position().toPoint())));
+    }
+    default:
+        return false;
+    }
+}
+
+void MainWindow::startTabDrag(TabGroup *group, Leaf *leaf, const QPoint &pos)
+{
+    // The bar is mid-way through its own tab move, and the platform drag
+    // swallows the release that would end it.
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(pos), QPointF(group->tabs->mapToGlobal(pos)),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(group->tabs, &release);
+
+    auto *drag = new QDrag(this);
+    drag->setMimeData(leafMime(leaf));
+    const int index = group->leaves.indexOf(leaf);
+    if (index >= 0)
+        drag->setPixmap(group->tabs->grab(group->tabs->tabRect(index)));
+    m_dragInside = m_dragHandled = false;
+    drag->exec(Qt::MoveAction);
+    hideDropOverlay();
+    // Taken by no group and let go outside every window: a window of its own.
+    // (An Escape cancels the same way, which Qt does not tell apart.)
+    if (!m_dragHandled && !m_dragInside && m_popoutsOn
+        && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [leaf](const auto &owned) { return owned.get() == leaf; }))
+        newPopout(leaf);
+}
+
+void MainWindow::showDropOverlay(TabGroup *group, DropZone zone)
+{
+    if (!m_dropOverlay) {
+        m_dropOverlay = new QWidget(group->widget);
+        m_dropOverlay->setObjectName(QStringLiteral("dropOverlay"));
+        m_dropOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+        m_dropOverlay->setAttribute(Qt::WA_StyledBackground);
+    }
+    if (m_dropOverlay->parentWidget() != group->widget)
+        m_dropOverlay->setParent(group->widget);
+    if (!m_dropOverlay->isVisible()) {
+        QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
+        accent.setAlpha(80);
+        m_dropOverlay->setStyleSheet(
+            QStringLiteral("#dropOverlay { background: %1; }").arg(accent.name(QColor::HexArgb)));
+    }
+    QRect area = group->stack->geometry();
+    switch (zone) {
+    case DropZone::Left: area.setWidth(area.width() / 2); break;
+    case DropZone::Right: area.setLeft(area.left() + area.width() / 2); break;
+    case DropZone::Top: area.setHeight(area.height() / 2); break;
+    case DropZone::Bottom: area.setTop(area.top() + area.height() / 2); break;
+    case DropZone::Center: break;
+    }
+    m_dropOverlay->setGeometry(area);
+    m_dropOverlay->show();
+    m_dropOverlay->raise();
+}
+
+void MainWindow::hideDropOverlay()
+{
+    if (m_dropOverlay)
+        m_dropOverlay->hide();
+}
+
+bool MainWindow::handleGroupDrop(TabGroup *group, QDropEvent *event, const QPoint &pos)
+{
+    Leaf *leaf = leafFromMime(event->mimeData());
+    if (!leaf)
+        return false;
+    if (group->strip->geometry().contains(pos)) {
+        // On the bar: at the tab under the pointer, else last.
+        int index = group->tabs->tabAt(group->tabs->mapFrom(group->widget, pos));
+        if (index < 0)
+            index = int(group->leaves.size());
+        if (leaf->group == group)
+            group->tabs->moveTab(group->leaves.indexOf(leaf), qMin(index, int(group->leaves.size()) - 1));
+        else
+            moveLeaf(leaf, group, index);
+    } else if (const DropZone zone = dropZoneAt(group->stack->geometry(), pos); zone == DropZone::Center) {
+        moveLeaf(leaf, group, int(group->leaves.size()));
+    } else if (leaf->group != group || group->leaves.size() > 1) { // a group's only tab has nothing to split from
+        const bool sideBySide = zone == DropZone::Left || zone == DropZone::Right;
+        TabGroup *beside = splitBeside(group, sideBySide ? Qt::Horizontal : Qt::Vertical,
+                                       zone == DropZone::Right || zone == DropZone::Bottom);
+        moveLeaf(leaf, beside, 0);
+    }
+    m_dragHandled = true;
+    event->setDropAction(Qt::MoveAction);
+    event->accept();
+    return true;
 }
 
 bool MainWindow::maybeSaveAll()
@@ -2824,6 +3049,8 @@ void MainWindow::applyHotkeys()
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event)
 {
+    if (popoutEventFilter(watched, event))
+        return true;
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     // A person at the keys keeps unlocked notes from timing out.
     if (m_encryption && (event->type() == QEvent::KeyPress || event->type() == QEvent::MouseButtonPress))

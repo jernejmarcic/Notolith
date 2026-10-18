@@ -455,8 +455,34 @@ window it is. Dialogs, the settings page and the graph open in the main window.
   menu items stop, and every tab in a pop-out returns to the main window. Off,
   no window object, drop target or timer exists.
 
-Not yet: a pop-out is not remembered across restarts, and tabs cannot be
-dragged between windows or onto a split's edge.
+Dragging does the same without a command. Drag a tab out of its tab strip (a
+drag inside the strip still reorders), and while it is over a split a
+translucent zone shows where it will land: the outer quarter of a split's
+body along an edge splits there (left or right: side by side; top or bottom:
+stacked) and moves the tab into the new split, the rest of the body joins the
+tab to that split, and a drop on a tab strip puts it at the tab under the
+pointer. This works between windows too. Let go outside every Notolith window
+and the tab opens in a window of its own, as "Move current tab to new window"
+does; let go over a sidebar or the header and nothing happens. Dropping a
+split's only tab on its own edge does nothing, there being nothing to split
+from. A drop only ever moves a tab: no tab is made or lost, and a note open
+in it keeps its place in history, caret and view. The Pop-out windows switch
+turns all of this off, drop targets included.
+
+Limits. Qt reports a drag cancelled with Escape the same way as one let go
+outside the windows, so an Escape pressed while the pointer is outside every
+window also opens the tab in a window of its own. Tabs in the sidebars are not
+draggable: a right-sidebar pane cannot be dragged out into a window (panes are
+not tabs here), which waits on detaching panes. A pop-out is not remembered
+across restarts.
+
+The tests send the drag-enter and drop events themselves, because the offscreen
+platform cannot start a drag: they cover the zone arithmetic, the drop on an
+edge, on the centre, on foreign data and with the feature off. Not covered, and
+to try by hand once on a real display: the drag itself (`QDrag::exec`, its
+pixmap), the synthetic release that ends the tab bar's own move when a drag
+leaves it, dragging between two real windows, how the overlay looks, and the
+drop outside every window (which is `newPopout`, tested under pop-out windows).
 
 ## Undo close tab
 

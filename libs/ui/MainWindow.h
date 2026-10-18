@@ -24,9 +24,11 @@ class QButtonGroup;
 class QSplitter;
 class QFileSystemModel;
 class QFileSystemWatcher;
+class QDropEvent;
 class QLabel;
 class QLineEdit;
 class QMenu;
+class QMimeData;
 class QModelIndex;
 class QStackedWidget;
 class QTabBar;
@@ -153,6 +155,14 @@ public:
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
     /// The autosave pause and its longest wait, in ms. For the tests.
     void setAutosaveIntervalsForTests(int pause, int maxWait);
+
+    /// Where a dragged tab lands over a tab group's body: the outer quarter
+    /// along an edge splits there, the rest joins the group.
+    enum class DropZone { Left, Right, Top, Bottom, Center };
+    static DropZone dropZoneAt(const QRect &rect, const QPoint &pos);
+    /// What dragging tab `index` of `tabs` carries. For the tests: the drag
+    /// itself cannot run offscreen.
+    QMimeData *tabDragMimeForTests(const QTabBar *tabs, int index) const;
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -336,6 +346,24 @@ private:
     void retitlePopout(TabGroup *group);
     /// The feature switch: commands, drop targets, and docking when it goes off.
     void applyPopoutFeature();
+    /// Drag-to-tile: a tab dragged out of its bar is dropped on a group's
+    /// body (zone), on a tab bar (position) or outside every window (a pop-out).
+    /// Called first by eventFilter(); true when it consumed the event.
+    bool popoutEventFilter(QObject *watched, QEvent *event);
+    void startTabDrag(TabGroup *group, Leaf *leaf, const QPoint &pos);
+    /// application/x-notolith-leaf carrying a leaf, and the leaf one carries (null when foreign or gone).
+    QMimeData *leafMime(const Leaf *leaf) const;
+    Leaf *leafFromMime(const QMimeData *mime) const;
+    /// The translucent zone over `group`'s body; one child widget made on first use.
+    void showDropOverlay(TabGroup *group, DropZone zone);
+    void hideDropOverlay();
+    /// A leaf dropped on `group` at `pos` (in the group's own coordinates); false when it is not ours.
+    bool handleGroupDrop(TabGroup *group, QDropEvent *event, const QPoint &pos);
+    QPointer<QWidget> m_dropOverlay;
+    Leaf *m_pressedLeaf = nullptr; ///< the tab the left button went down on, until it is released
+    QPoint m_pressPos;
+    bool m_dragInside = false;  ///< the drag in progress is over one of our windows
+    bool m_dragHandled = false; ///< and a group took its drop
     std::vector<std::unique_ptr<PopoutWindow>> m_popouts;
     bool m_popoutsOn = false; ///< the popout-windows feature, as last applied
 
