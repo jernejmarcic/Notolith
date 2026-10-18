@@ -1329,11 +1329,11 @@ title), L (look-up), K (edited listing chrome).
       Follow-ups:
       - [x] (lane fixes, c9b478a; only the tool file is bound) A tool set by path (render.*Tool) outside /usr is not bound into
             the sandbox: document or bind it read-only like DirectRunner.
-      - [ ] A hung tool holds a pool thread up to its 20-40 s timeout;
+      - [x] (lane diagrams2, eaef779: pool per kind, 2 threads, in-flight dedupe; two hung fences of one kind still block it) A hung tool holds a pool thread up to its 20-40 s timeout;
             other fences wait behind it.
-      - [ ] The JVM (PlantUML) runs with no address-space limit (RLIMIT_AS
+      - [x] (lane diagrams2, 1eb447c: -Xmx512m etc. + RLIMIT_DATA 2 GiB) The JVM (PlantUML) runs with no address-space limit (RLIMIT_AS
             breaks it); only the scope memory cap applies.
-      - [ ] Published diagram text is not selectable or searchable (image).
+      - [x] (lane diagrams2, d1e384a: source as escaped alt, 2000 chars) Published diagram text is not selectable or searchable (image).
       - [x] (lane fixes, ea28195: `diagram`) Publish CSS class is still `mermaid-diagram` for every kind.
 - [ ] **A central server with only a local cache, like Trilium** - Jernej:
       "is there an API, like trillium notes so a central "server" node can
