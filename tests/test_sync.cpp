@@ -1713,8 +1713,10 @@ TEST_F(SyncIntegrationTest, ThreeDevicesOnOneLineKeepAllThreeTextsInTwoCopies)
 
 // The text on disk when a conflict arrives has no row in the history (saved
 // between the scan and the pull, or a journal from before rows): no record
-// carries it, so this device announces it. The row is deleted by hand here;
-// nothing else makes the window long enough to hit on purpose.
+// carries it, so this device announces it - and copies the incoming text, which
+// the other device (it won, over a text it never saw) will not. The row is
+// deleted by hand here; nothing else makes the window long enough to hit on
+// purpose.
 TEST_F(SyncIntegrationTest, AConflictOverATextWithNoRowAnnouncesIt)
 {
     statesMayMiss = true;
@@ -1762,8 +1764,14 @@ TEST_F(SyncIntegrationTest, AConflictOverATextWithNoRowAnnouncesIt)
     EXPECT_EQ(watchA2.conflicts, 1);
     engineA2.syncNow();
     ASSERT_TRUE(watchA2.waitForCycle());
-    EXPECT_EQ(watchA2.pushed, 1) << "the text with no row goes out as a record";
+    EXPECT_EQ(watchA2.pushed, 2) << "the text with no row goes out as a record, and so does the copy as a new note";
     expectConverged({{&engineA2, &watchA2}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        // Both texts survive, on both devices: A's in the note, B's as one copy.
+        EXPECT_EQ(readNoteText(root + QStringLiteral("/shared.md")), QStringLiteral("one\nTWO from A\nthree")) << snapshot(root);
+        EXPECT_EQ(filesContaining(root, "TWO from B"), 1) << snapshot(root);
+        EXPECT_EQ(conflictCopies(root).size(), 1) << snapshot(root);
+    }
 }
 
 // B's edit holds A's (and one more line), so when B merges A's record the
@@ -3216,6 +3224,42 @@ TEST_F(SyncIntegrationTest, ForgettingTheKeysRemovesTheEntryAndTheNextStartAsks)
     EXPECT_TRUE(keyEntries().isEmpty());
 }
 
+// The journal of a device that last ran before records carried digests: no
+// states table and no digest columns, the file as the old engine left it. The
+// engine on `vaultRoot` must be stopped. Empty on success; "skip: ..." when this
+// SQLite cannot DROP COLUMN (it needs 3.35); anything else is a failure.
+QString downgradeJournal(const QString &vaultRoot)
+{
+    const QString dbPath = SyncJournal::dataDirectoryFor(vaultRoot) + QStringLiteral("/journal.db");
+    const QString name = QStringLiteral("downgrade-test");
+    QString problem;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+        db.setDatabaseName(dbPath);
+        if (!db.open())
+            return QStringLiteral("cannot open ") + dbPath;
+        QSqlQuery q(db);
+        if (!q.exec(QStringLiteral("SELECT sqlite_version()")) || !q.next())
+            problem = QStringLiteral("no sqlite_version()");
+        const QString version = problem.isEmpty() ? q.value(0).toString() : QString();
+        if (problem.isEmpty()) {
+            std::cout << "[ INFO     ] SQLite " << version.toStdString() << "\n";
+            const QStringList parts = version.split(QLatin1Char('.'));
+            if (parts.size() < 2 || parts.at(0).toInt() < 3 || (parts.at(0).toInt() == 3 && parts.at(1).toInt() < 35))
+                problem = QStringLiteral("skip: SQLite %1 cannot DROP COLUMN (needs 3.35)").arg(version);
+        }
+        for (const char *sql : {"DROP TABLE states", "ALTER TABLE entities DROP COLUMN baseDigest",
+                                "ALTER TABLE entities DROP COLUMN headDigest", "ALTER TABLE outbox DROP COLUMN digest"}) {
+            if (!problem.isEmpty())
+                break;
+            if (!q.exec(QString::fromLatin1(sql)))
+                problem = QStringLiteral("%1: %2").arg(QString::fromLatin1(sql), q.lastError().text());
+        }
+    }
+    QSqlDatabase::removeDatabase(name);
+    return problem;
+}
+
 // A device that last ran before records carried digests: its journal has no
 // states table and no digest columns. Starting it again must upgrade the file
 // in place and then sync like any other device - fast-forward, merge and
@@ -3241,32 +3285,10 @@ TEST_F(SyncIntegrationTest, AnOldJournalUpgradesThroughARealCycle)
     watchB.reset();
     engineB.reset();
 
-    // Downgrade B's journal: DROP COLUMN needs SQLite 3.35.
-    const QString dbPath = SyncJournal::dataDirectoryFor(vaultB.path()) + QStringLiteral("/journal.db");
-    {
-        const QString name = QStringLiteral("downgrade-test");
-        {
-            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
-            db.setDatabaseName(dbPath);
-            ASSERT_TRUE(db.open());
-            QSqlQuery q(db);
-            ASSERT_TRUE(q.exec(QStringLiteral("SELECT sqlite_version()")) && q.next());
-            const QString version = q.value(0).toString();
-            std::cout << "[ INFO     ] SQLite " << version.toStdString() << "\n";
-            const QList<int> parts = [&version] {
-                QList<int> out;
-                for (const QString &part : version.split(QLatin1Char('.')))
-                    out << part.toInt();
-                return out;
-            }();
-            if (parts.size() < 2 || parts.at(0) < 3 || (parts.at(0) == 3 && parts.at(1) < 35))
-                GTEST_SKIP() << "SQLite " << version.toStdString() << " cannot DROP COLUMN (needs 3.35)";
-            for (const char *sql : {"DROP TABLE states", "ALTER TABLE entities DROP COLUMN baseDigest",
-                                    "ALTER TABLE entities DROP COLUMN headDigest", "ALTER TABLE outbox DROP COLUMN digest"})
-                ASSERT_TRUE(q.exec(QString::fromLatin1(sql))) << sql << ": " << q.lastError().text().toStdString();
-        }
-        QSqlDatabase::removeDatabase(name);
-    }
+    const QString downgraded = downgradeJournal(vaultB.path());
+    if (downgraded.startsWith(QStringLiteral("skip")))
+        GTEST_SKIP() << downgraded.toStdString();
+    ASSERT_TRUE(downgraded.isEmpty()) << downgraded.toStdString();
 
     engineB = std::make_unique<SyncEngine>();
     watchB = std::make_unique<Watcher>(*engineB);
@@ -3327,6 +3349,47 @@ TEST_F(SyncIntegrationTest, AnOldJournalUpgradesThroughARealCycle)
     EXPECT_FALSE(entity->headDigest.isEmpty());
     EXPECT_TRUE(journal.state(entity->entityID, entity->baseDigest));
     EXPECT_TRUE(journal.state(entity->entityID, entity->headDigest));
+}
+
+// The first true conflict of a device that was upgraded: the text it pushed
+// before the upgrade has no row in the new history.
+TEST_F(SyncIntegrationTest, AnUpgradedJournalsFirstConflictLosesNothing)
+{
+    statesMayMiss = true;
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo\nthree"));
+    auto engineA = std::make_unique<SyncEngine>();
+    auto watchA = std::make_unique<Watcher>(*engineA);
+    engineA->start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA->waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\nTWO from A\nthree"));
+    engineA->syncNow();
+    ASSERT_TRUE(watchA->waitForCycle());
+    watchA.reset();
+    engineA.reset();
+    const QString downgraded = downgradeJournal(vaultA.path());
+    if (downgraded.startsWith(QStringLiteral("skip")))
+        GTEST_SKIP() << downgraded.toStdString();
+    ASSERT_TRUE(downgraded.isEmpty()) << downgraded.toStdString();
+    engineA = std::make_unique<SyncEngine>();
+    watchA = std::make_unique<Watcher>(*engineA);
+    engineA->start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA->waitForCycle());
+
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("one\nTWO from B\nthree"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA->syncNow();
+    ASSERT_TRUE(watchA->waitForCycle());
+    expectConverged({{engineA.get(), watchA.get()}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_EQ(filesContaining(root, "TWO from A"), 1) << snapshot(root);
+        EXPECT_EQ(filesContaining(root, "TWO from B"), 1) << snapshot(root);
+    }
 }
 
 TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)

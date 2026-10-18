@@ -1246,7 +1246,20 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // device last confirmed (docs/SYNC.md "Conflict rules"). An empty parent
     // (a new entity, an old client) or an empty base (an old journal) is taken
     // as "in line": the decision then rests on this device's own state alone.
-    const QByteArray baseDigest = existing ? existing->baseDigest : QByteArray();
+    QByteArray baseDigest = existing ? existing->baseDigest : QByteArray();
+    bool baseHasNoRow = false; // the digest below comes from base/, no states row holds it
+    // A journal from before digests has the confirmed text in base/ but no
+    // digest for it: without one every record reads as in line, and a device
+    // that never saw this one's text fast-forwards over it. A note whose file
+    // still is what was confirmed takes the digest of base/; a changed one is
+    // judged by merge or conflict below as before.
+    if (existing && baseDigest.isEmpty() && !localChanged && remote.entityType == QStringLiteral("note")) {
+        const QString base = m_journal->readBase(record.entityID);
+        if (!base.isEmpty()) {
+            baseDigest = SyncCrypto::digest(base.toUtf8());
+            baseHasNoRow = true;
+        }
+    }
     const bool inLine = remote.parent.isEmpty() || baseDigest.isEmpty() || remote.parent == baseDigest;
     const QByteArray parentDigest = inLine ? baseDigest : remote.parent;
 
@@ -1276,7 +1289,8 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // Only while the newest row at that state is this device's own: a
     // rename-only record keeps its parent's hash, so renaming back to a
     // former name matches an older row too, and must not be taken for "no rename".
-    const auto newestAtParent = existing ? m_journal->state(record.entityID, parentDigest) : std::nullopt;
+    const auto newestAtParent =
+        existing && !(inLine && baseHasNoRow) ? m_journal->state(record.entityID, parentDigest) : std::nullopt;
     if (newestAtParent && newestAtParent->own && m_journal->sawPath(record.entityID, parentDigest, remote.path))
         remote.path = existing->path;
 
@@ -1438,9 +1452,17 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             const bool localWins = diskSeq == 0 || diskSeq > record.seq;
             if (localWins) {
                 // The disk text has no row: saved between the scan and this
-                // pull, so no record carries it. It goes out as a record of its own.
-                if (!diskState)
+                // pull, or from before rows. It goes out as a record of its
+                // own, and the incoming text is copied here: the other device
+                // may have won over a text it never saw, and will not copy it.
+                if (!diskState) {
+                    const QString copy = conflictCopyPath(remote.path, record.deviceID);
+                    const bool saved = isNote ? m_vault.writeNoteNoFollow(copy, Note{remoteText, false, false})
+                                              : m_vault.writeBytesNoFollow(copy, remoteRaw);
+                    if (!saved)
+                        return dropRecord();
                     m_toAnnounce.insert(record.entityID);
+                }
             } else {
                 if (diskState->own) { // seq != 0: there is a row
                     const QString copy = conflictCopyPath(remote.path, m_journal->deviceID());

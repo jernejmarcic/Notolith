@@ -438,6 +438,10 @@ seq). On pull, for a note:
   pull, delete), so a re-save that only changes the line endings or the BOM is
   no edit: it pushes nothing and does not stop a remote delete.
   Local changed is a three-way merge against `base/`.
+  A journal from before digests has no `baseDigest`; the first record that meets
+  an unchanged note takes the digest of `base/` (the confirmed text) instead, so
+  a record built on another state is not read as in line and fast-forwarded over
+  a text its sender never saw.
 - **not in line** - the sender built on a state this device has since moved
   past (two devices wrote concurrently, and a third record or this device's own
   confirmation came in between): the state is looked up in `states` and the
@@ -510,8 +514,12 @@ the text the base and the synced hash are moved to.
   the other device's to copy if it loses there, so three devices changing one
   line three ways end with exactly two copies and the winner's text in the
   note, on every device. If the text on disk has no row in `states` (saved
-  between the scan and the pull) this device is the winner by the rule above
-  and announces that text as a record of its own, so it is not left out.
+  between the scan and the pull, or pushed before this journal had rows) this
+  device is the winner by the rule above and announces that text as a record of
+  its own, so it is not left out - and, as the one exception, it also writes a
+  copy of the **incoming** text: the other device may have won over a text it
+  never saw, and the loser who would copy it is this device, which sees no
+  conflict where the winner is elsewhere.
   Folding a copy in by hand is an ordinary local edit.
 - **The device whose history moved on takes the conflict.** A record built on
   a state older than the 32 this device keeps cannot be merged here, so this
