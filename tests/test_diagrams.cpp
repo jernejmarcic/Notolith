@@ -356,6 +356,49 @@ TEST_F(DiagramTest, AToolOutsideUsrIsBoundIntoTheSandboxAndASymlinkedOneIsResolv
     }
 }
 
+// What a tool is given is the sandbox's to show: a stand-in that draws its own environment and limits. The JVM
+// gets heap, metaspace and direct-memory caps and RLIMIT_DATA (RLIMIT_AS breaks it); every other tool the address-space cap.
+TEST_F(DiagramTest, TheJVMGetsHeapCapsAndADataLimitAndTheOtherToolsAnAddressSpaceLimit)
+{
+    NEED("sh");
+    const QString tool = dir.filePath(QStringLiteral("real/limits-tool"));
+    QDir().mkpath(QFileInfo(tool).path());
+    QFile file(tool);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("#!/bin/sh\ncat > /dev/null\n"
+               "echo \"<svg xmlns='http://www.w3.org/2000/svg' width='200' height='80'><desc>JVM=[$JAVA_TOOL_OPTIONS] "
+               "DATA=[$(ulimit -d)] AS=[$(ulimit -v)]</desc></svg>\"\n");
+    file.close();
+    QFile::setPermissions(tool, QFile::permissions(tool) | QFile::ExeOwner);
+
+    ASSERT_FALSE(ask(rendererFor(DiagramKind::PlantUML, tool), QStringLiteral("plantuml"), kPlantUML)->result.isMarkdown);
+    const QByteArray jvm = cached(DiagramKind::PlantUML, kPlantUML);
+    EXPECT_TRUE(jvm.contains("-Xmx512m")) << jvm.constData();
+    EXPECT_TRUE(jvm.contains("-XX:MaxMetaspaceSize=256m")) << jvm.constData();
+    EXPECT_TRUE(jvm.contains("-XX:MaxDirectMemorySize=128m")) << jvm.constData();
+    EXPECT_TRUE(jvm.contains("DATA=[2097152]")) << jvm.constData();
+    EXPECT_TRUE(jvm.contains("AS=[unlimited]")) << "RLIMIT_AS breaks a JVM: " << jvm.constData();
+
+    ASSERT_FALSE(ask(rendererFor(DiagramKind::Graphviz, tool), QStringLiteral("dot"), kDot)->result.isMarkdown);
+    const QByteArray plain = cached(DiagramKind::Graphviz, kDot);
+    EXPECT_TRUE(plain.contains("JVM=[]")) << plain.constData();
+    EXPECT_TRUE(plain.contains("AS=[4194304]")) << plain.constData();
+    EXPECT_TRUE(plain.contains("DATA=[unlimited]")) << plain.constData();
+}
+
+// The real JVM under those caps: a diagram of a few hundred nodes still draws.
+TEST_F(DiagramTest, PlantUMLStillDrawsALargeDiagramUnderTheJVMCaps)
+{
+    NEED("plantuml");
+    QString source = QStringLiteral("@startuml\n");
+    for (int i = 0; i < 300; ++i)
+        source += QStringLiteral("[n%1] --> [n%2]\n").arg(i).arg((i * 7 + 3) % 300);
+    source += QStringLiteral("@enduml");
+    const auto answer = ask(rendererFor(DiagramKind::PlantUML, QString()), QStringLiteral("plantuml"), source);
+    EXPECT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+    EXPECT_TRUE(cached(DiagramKind::PlantUML, source).contains("<svg"));
+}
+
 TEST_F(DiagramTest, PdfExportDrawsACachedDotDiagramAndOtherwiseTheListing)
 {
     const QString note = QStringLiteral("```dot\n") + kDot + QStringLiteral("\n```\n");

@@ -39,6 +39,10 @@ namespace {
 
 constexpr int kRunMilliseconds = 5000; ///< a diagram that takes longer is killed
 constexpr int kSandboxedMilliseconds = 20000; ///< ... for the tools that start slowly (a JVM, TeX), and each of TeX's two steps
+constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools' RLIMIT_AS
+constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
+/// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
+const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
 constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
 constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
@@ -126,7 +130,7 @@ struct Ran {
 };
 
 Ran runSandboxed(const QString &dir, const QString &program, const QStringList &arguments, const QStringList &environment,
-                 const QByteArray &input, bool limitMemory, int milliseconds = kSandboxedMilliseconds)
+                 const QByteArray &input, bool jvm, int milliseconds = kSandboxedMilliseconds)
 {
     Ran ran;
     // A tool outside /usr (a path in the setting, a symlink into a home) is not in the sandbox: bind what it
@@ -147,14 +151,13 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
         return ran;
     }
     QProcess process;
-    // A CPU ceiling in the child, and a memory one where the tool is not a JVM (which reserves far more than it uses).
-    process.setChildProcessModifier([fd = command.filterFD, limitMemory] {
+    // A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
+    // than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
+    process.setChildProcessModifier([fd = command.filterFD, jvm] {
         rlimit cpu{25, 30};
         setrlimit(RLIMIT_CPU, &cpu);
-        if (limitMemory) {
-            rlimit memory{4ULL * 1024 * 1024 * 1024, 4ULL * 1024 * 1024 * 1024};
-            setrlimit(RLIMIT_AS, &memory);
-        }
+        rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
+        setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
         sandbox::keepInChild(fd);
     });
     process.start(command.program, command.arguments);
@@ -207,7 +210,7 @@ Made runMermaid(const QString &tool, const QString &source, const QByteArray &co
     if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
         return runMermaidUnsandboxed(tool, configPath, source);
     const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
-                                 source.toUtf8(), true, kRunMilliseconds);
+                                 source.toUtf8(), false, kRunMilliseconds);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
 }
 
@@ -232,7 +235,7 @@ Made runPlantUML(const QString &tool, const QString &source, const QByteArray &c
     QStringList arguments = {QStringLiteral("-tsvg"), QStringLiteral("-pipe"), QStringLiteral("-charset"), QStringLiteral("UTF-8")};
     if (colours(config).value(QStringLiteral("dark")).toBool())
         arguments << QStringLiteral("--dark-mode");
-    const Ran ran = runSandboxed(dir.path(), tool, arguments, {QStringLiteral("PLANTUML_SECURITY_PROFILE=SANDBOX")}, text.toUtf8(), false);
+    const Ran ran = runSandboxed(dir.path(), tool, arguments, {QStringLiteral("PLANTUML_SECURITY_PROFILE=SANDBOX"), QString::fromLatin1(kJVMOptions)}, text.toUtf8(), true);
     return fromRan(ran, lastLine(QString::fromUtf8(ran.err)));
 }
 
@@ -262,7 +265,7 @@ Made runGraphviz(const QString &tool, const QString &source, const QByteArray &c
             break;
         }
     }
-    const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-Tsvg")}, {}, themed.toUtf8(), true);
+    const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-Tsvg")}, {}, themed.toUtf8(), false);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
 }
 
@@ -331,7 +334,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
     const Ran tex = runSandboxed(dir.path(), tool,
                                  {QStringLiteral("-interaction=nonstopmode"), QStringLiteral("-halt-on-error"),
                                   QStringLiteral("-no-shell-escape"), QStringLiteral("cell.tex")},
-                                 {}, {}, true);
+                                 {}, {}, false);
     if (!tex.failure.isEmpty() || tex.code != 0) {
         // The log's first "! ..." line is TeX's own error.
         QString message;
@@ -346,7 +349,7 @@ Made runTikZ(const QString &tool, const QString &source, const QByteArray &confi
     const Ran convert = runSandboxed(dir.path(), dvisvgm,
                                      {QStringLiteral("--no-fonts"), QStringLiteral("--exact-bbox"), QStringLiteral("--stdout"),
                                       QStringLiteral("cell.dvi")},
-                                     {}, {}, true);
+                                     {}, {}, false);
     Made made = fromRan(convert, firstLine(QString::fromUtf8(convert.err)));
     if (made.error.isEmpty())
         made.svg = themeTikZ(made.svg, colours(config));

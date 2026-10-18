@@ -915,7 +915,8 @@ is the wrong place for it).
   itself (a wrapper script's jar, a home's libraries) is not, so install those
   under `/usr`. 20 s for a
   tool (and for each of TeX's two steps; Mermaid's 5 s), a CPU limit, and 4 GB of address space
-  for all but the JVM.
+  for all but the JVM, which reserves far more than it uses: it gets `JAVA_TOOL_OPTIONS`
+  heap caps (`-Xmx512m`, metaspace 256 MB, direct memory 128 MB) and a 2 GB `RLIMIT_DATA` instead.
 - **PlantUML**: `plantuml -tsvg -pipe -charset UTF-8` with the source on stdin
   (wrapped in `@startuml` when it has no `@start...`), `--dark-mode` on a dark
   theme, and `PLANTUML_SECURITY_PROFILE=SANDBOX`, so `!include` of a file or a
