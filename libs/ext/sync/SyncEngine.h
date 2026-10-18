@@ -137,6 +137,7 @@ private:
     bool ensureSession();      ///< sign in / register, get a bearer token and vaultID
     bool loadDeviceIdentity(); ///< this device's X25519 keypair, from the OS keyring or freshly made
     bool deriveKeysFromPassword(QByteArray *salt, bool refreshSalt); ///< asks the prompt (NeedsPassword if none given), fetches the salt if missing or refreshSalt
+    void adoptContentKey();    ///< contentKey is a per-device secret in journal meta, seeded once from the derived key
     bool loadStoredKeys();     ///< loginKey/wrapKey/contentKey from the keyring; false if absent or malformed
     void storeKeys() const;    ///< writes the session's three keys to the keyring (never the password)
     void dropStoredKeys() const;

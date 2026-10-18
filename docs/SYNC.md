@@ -126,7 +126,8 @@ keyring. Without Qt6Keychain sync is not built at all (see the root
 ### Subkeys
 
 `crypto_kdf_derive_from_key(subkey, 32, subkey_id, context, masterKey)`,
-`masterKey` as the 32-byte KDF key, three 8-byte ASCII contexts:
+`masterKey` as the 32-byte KDF key, three 8-byte ASCII contexts (the `contentKey`
+one only seeds the per-device key described under "Content addresses"):
 
 | context | subkey_id | produces |
 |---|---|---|
@@ -197,6 +198,17 @@ compare against. That is an honest, documented leak, not an oversight; see
 users care most about - only attachments use the shared blob store, where the
 storage win is worth the caveat.
 
+`contentKey` is a **per-device local secret**, not something the devices share:
+it keys this device's own change detection (`localHash`, `syncedHash`) and the
+blob addresses it writes, and nothing a second device must reproduce - a
+blob's address travels in the record, and the hashes are only ever compared
+with this device's own. It is stored in the journal's `meta` table
+(`"contentKey"`), seeded once from the key derived at first sign-in, and from
+then on read back from there instead of derived: **a password change leaves it
+alone**, so the hashes already on file stay valid and the next scan does not
+see every file as changed. It sits in the journal beside the itemsKeys, which
+are already held in the clear there, so it exposes nothing new.
+
 ### Padding
 
 `sodium_pad`/`sodium_unpad` round every plaintext blob up to the next entry in
@@ -253,8 +265,8 @@ hash         : 32 B, optional: the digest of this record's own content (note:
 ```
 
 A *digest* is `SyncCrypto::digest`: BLAKE2b-256 with no key. Unkeyed on
-purpose - `changePassword` replaces `contentKey`, so a keyed hash sealed into a
-record would never match again. Both fields live inside the AEAD payload, so
+purpose - `contentKey` is per device (see "Content addresses"), so a keyed hash
+sealed into a record could only be checked by the device that wrote it. Both fields live inside the AEAD payload, so
 the server learns nothing from them, and a client that does not know them
 ignores them; a record without them is a legacy record and is applied by this
 device's own state alone (see "Conflict rules").
@@ -621,6 +633,8 @@ stage.
 
 1. New salt, new `masterKey'` (Argon2id over the new password), new
    `wrapKey'` and `loginKey'` (same KDF contexts as before).
+   `contentKey` is not derived again (see "Content addresses"): it never
+   follows the password.
 2. Every itemsKey this device currently holds in plaintext (it must, to be
    useful) is re-wrapped with `wrapKey'` under a fresh nonce - **only the
    wrap changes**, the itemsKey bytes themselves do not, so every noteKey and

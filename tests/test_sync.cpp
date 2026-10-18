@@ -2330,6 +2330,58 @@ TEST_F(SyncIntegrationTest, PasswordChangeKeepsEverythingReadable)
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/note2.md")), QStringLiteral("content after the change"));
 }
 
+TEST_F(SyncIntegrationTest, PasswordChangeKeepsTheJournalHashesValid)
+{
+    // contentKey is a per-device secret that a password change must not
+    // replace: the keyed hashes already in the journal would all go stale,
+    // every file would look edited and the next remote edit a conflict.
+    const QStringList names = {QStringLiteral("one.md"), QStringLiteral("two.md"), QStringLiteral("three.md")};
+    for (const QString &name : names)
+        writeNote(vaultA.path(), name, QStringLiteral("body of ") + name);
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    ASSERT_EQ(watchA.pushed, 3);
+    const auto contentKeyOnA = [this] {
+        const SyncJournal journal(vaultA.path());
+        return journal.meta(QStringLiteral("contentKey"));
+    };
+    const QByteArray before = contentKeyOnA();
+    ASSERT_EQ(before.size(), SyncCrypto::kKeyBytes);
+
+    const QString newPassword = QStringLiteral("a different, also-decent passphrase");
+    engineA.changePassword(newPassword);
+    watchA.pump(500);
+    EXPECT_EQ(contentKeyOnA(), before);
+
+    // Same bytes, new mtime: the scanner hashes it again and finds nothing to push.
+    QFile touched(vaultA.path() + QLatin1Char('/') + names.first());
+    ASSERT_TRUE(touched.open(QIODevice::ReadWrite));
+    ASSERT_TRUE(touched.setFileTime(QDateTime::currentDateTime().addSecs(10), QFileDevice::FileModificationTime));
+    touched.close();
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(watchA.pushed, 0);
+
+    // A remote edit lands on A as a plain fast-forward, and A does not push it back.
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(newPassword));
+    ASSERT_TRUE(watchB.waitForCycle());
+    writeNote(vaultB.path(), names.first(), QStringLiteral("edited on B"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(watchA.conflicts, 0);
+    EXPECT_EQ(readNoteText(vaultA.path() + QLatin1Char('/') + names.first()), QStringLiteral("edited on B"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(watchA.pushed, 0);
+    EXPECT_EQ(contentKeyOnA(), before);
+}
+
 TEST_F(SyncIntegrationTest, ASecondDeviceEnrolledByLockboxReadsEverything)
 {
     writeNote(vaultA.path(), QStringLiteral("note.md"), QStringLiteral("only ever synced via lockbox"));

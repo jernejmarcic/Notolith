@@ -33,8 +33,8 @@ public:
         /// Keyed fingerprint of the content as of the last confirmed sync
         /// (the text of the last record applied, or of this device's own
         /// record once it came back - see SyncEngine::applyRecord). Keyed
-        /// with contentKey, so a password change invalidates it; baseDigest
-        /// below is unkeyed. Deliberately a separate field from
+        /// with contentKey (a per-device secret, journal meta "contentKey");
+        /// baseDigest below is unkeyed. Deliberately a separate field from
         /// localHash and updated only by applyRecord, never by
         /// queueLocalChange: the two answer different questions ("have I
         /// already queued this content to push" vs "do local and the
