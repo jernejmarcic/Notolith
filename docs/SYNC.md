@@ -409,6 +409,16 @@ user of line-diffing turns up, not before (YAGNI).
   the rename goes through by itself on the first record that finds the target
   free. It counts as a conflict unless the target already holds the incoming
   content.
+- **A rename of a note this device edited**: the file moves to the new path
+  first and the merge happens there, so the file and the entity agree. This
+  device's edit has already been pushed with the old path by then, and that
+  record would move every other device back, so the note is pushed again at
+  its new path (one extra record, only in this case). A move that cannot be
+  done leaves the note at its own path, like an occupied target.
+- **Known limit**: a rename and an edit made on one device before a scan in
+  between look like a delete and a new note (renames are matched by exact
+  content), so another device's edit of the old note beats the delete and
+  both paths stay.
 
 ### Delete-vs-edit
 

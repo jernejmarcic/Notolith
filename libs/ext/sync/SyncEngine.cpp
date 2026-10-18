@@ -1073,13 +1073,27 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         remote.path = existing->path;
     }
 
-    const QString targetPath = m_vault.absolute(remote.path);
+    QString targetPath = m_vault.absolute(remote.path);
     // A remote rename/move into a folder this device has never had may
     // name a directory that does not exist here yet - Vault::write() and
     // QFile::rename() do not create parent directories, so this does.
     // Covers the conflict-copy path below too: same directory as `remote.path`.
     QDir().mkpath(QFileInfo(targetPath).path());
     bool wroteConflict = false;
+
+    // A rename or move takes the local file along before anything is merged
+    // or written, whether or not it has a local edit: the merge then happens
+    // at the new path and the entity saved below agrees with the file. A move
+    // that cannot be done leaves the note at its own path, like an occupied
+    // target above.
+    bool moved = false;
+    if (existing && existing->path != remote.path && hasLocalFile) {
+        moved = QFile::rename(existingPath, targetPath);
+        if (!moved) {
+            remote.path = existing->path;
+            targetPath = existingPath;
+        }
+    }
 
     // No entity of this record's own, yet a file already sits at its path
     // (a parked delete's file the person has since edited, or the same path
@@ -1105,8 +1119,6 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     }
 
     if (!localChanged) {
-        if (existing && existing->path != remote.path && hasLocalFile)
-            QFile::rename(existingPath, targetPath);
         if (remote.entityType == QStringLiteral("note")) {
             Note note;
             note.text = remoteText;
@@ -1117,14 +1129,14 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     } else if (remote.entityType == QStringLiteral("note")) {
         const QString base = m_journal->readBase(record.entityID);
         Note onDisk;
-        Vault::read(existingPath, onDisk);
+        Vault::read(targetPath, onDisk);
         const SyncMerge::Result merged = SyncMerge::merge(base, onDisk.text, remoteText);
         if (merged.clean) {
             Note note;
             note.text = merged.merged;
             note.crlf = onDisk.crlf;
             note.bom = onDisk.bom;
-            Vault::write(existingPath, note);
+            Vault::write(targetPath, note);
             remoteText = merged.merged; // the new base - and what the next scan will find on disk
         } else {
             Vault::write(conflictCopyPath(m_vault, remote.path, record.deviceID), Note{remoteText, false, false});
@@ -1137,18 +1149,17 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         wroteConflict = true;
     }
 
-    const QString finalPath = wroteConflict && existing ? existingPath : targetPath;
     const QByteArray finalBytes = wroteConflict && existing
                                     ? localBytes
                                     : (remote.entityType == QStringLiteral("note") ? remoteText.toUtf8() : remoteRaw);
 
     SyncJournal::Entity entity;
     entity.entityID = record.entityID;
-    entity.path = wroteConflict && existing ? existing->path : remote.path;
+    entity.path = remote.path;
     entity.entityType = remote.entityType;
     entity.itemsKeyID = record.itemsKeyID;
     entity.wrappedNoteKey = record.wrappedNoteKey;
-    const QFileInfo info(finalPath);
+    const QFileInfo info(targetPath);
     entity.localMtime = info.lastModified().toMSecsSinceEpoch();
     entity.localSize = info.size();
     entity.localHash = SyncCrypto::contentAddress(m_contentKey, finalBytes);
@@ -1157,6 +1168,22 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     m_journal->putEntity(entity);
     if (remote.entityType == QStringLiteral("note"))
         m_journal->writeBase(record.entityID, remoteText);
+
+    // This device's own edit went out before this rename was applied, at the
+    // old path: left alone, the record carrying it would move every other
+    // device back to that path while this one stays at the new one. So the
+    // entity is announced again where it now is.
+    if (moved && localChanged) {
+        SyncScanner::Change change;
+        change.kind = SyncScanner::Change::Modified;
+        change.entityID = record.entityID;
+        change.path = remote.path;
+        change.entityType = remote.entityType;
+        change.mtime = entity.localMtime;
+        change.size = entity.localSize;
+        change.hash = entity.localHash;
+        queueLocalChange(change);
+    }
 
     if (wroteConflict)
         ++*conflicts;
