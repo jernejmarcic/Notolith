@@ -193,6 +193,8 @@ public:
     /// (`[[old#heading]]`), an embed stays an embed, a Markdown link keeps its
     /// percent-encoding, and a link written as a shortest-unique basename stays a
     /// basename when that is still unique. Only the link's bytes change.
+    /// The index picks the notes to open; each one's links are found again in
+    /// the text read, so a note saved since it was indexed is spliced right.
     /// Returns the number of notes rewritten, or -1 with `error` filled.
     int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
                                const Vault &vault, QString *error = nullptr);

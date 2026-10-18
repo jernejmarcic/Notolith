@@ -950,7 +950,9 @@ it (`Index::updateLinksAfterRename`). Renaming a folder does the same for
 every link that resolves to a note under it: `[[Folder/A]]` and
 `[y](Folder/A.md)` become `Moved/A`, `Moved/A.md`, a bare `[[A]]` stays
 `[[A]]` while the name is unique, and a linking note that sat inside the
-folder is rewritten at its new path.
+folder is rewritten at its new path. Each linking note is rewritten from the
+text on disk at that moment, not from where the index last saw its links, so a
+note saved a moment ago is never spliced at stale offsets.
 
 Renaming from the file tree (F2, or Rename in its menu) edits the name in place and goes
 through the same path as the inline title.

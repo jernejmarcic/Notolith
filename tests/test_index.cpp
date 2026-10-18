@@ -632,6 +632,34 @@ TEST_F(RenameLinksTest, AnAngleBracketMarkdownLinkIsABacklinkAndKeepsItsBrackets
     EXPECT_EQ(read(vault.absolute(QStringLiteral("Sub/Deep.md"))), QByteArray("[c](<../New Note.md>)\n"));
 }
 
+// The index lags a save: a note edited after it was indexed reaches the rename
+// with new text and old offsets. Links are found again in the text read, so
+// the prose around them is never overwritten.
+TEST_F(RenameLinksTest, ANoteEditedSinceItWasIndexedIsRewrittenFromItsCurrentText)
+{
+    write(QStringLiteral("Old.md"), "# Old\n");
+    write(QStringLiteral("Home.md"), "See [[Old]] for more.\n");
+    write(QStringLiteral("More.md"), "[[Old]]\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    // Typed at the top, and a second link, both unseen by the index.
+    write(QStringLiteral("Home.md"), "Hello there, a long new line. [[Old#Part]] too.\nSee [[Old]] for more, ![[Old]].\n");
+    write(QStringLiteral("More.md"), "A [x](Old.md) first.\n[[Old]]\n");
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Old.md")), QStringLiteral("New"), &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Old.md"), QStringLiteral("New.md"), vault, &error), 2)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Home.md"))),
+              QByteArray("Hello there, a long new line. [[New#Part]] too.\nSee [[New]] for more, ![[New]].\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("More.md"))), QByteArray("A [x](New.md) first.\n[[New]]\n"));
+}
+
 // A moved note's own Markdown links are paths from its folder; Obsidian
 // rewrites them so they still reach the same files. Wikilinks (found by name),
 // URLs and same-note anchors are not paths and stay as written.
