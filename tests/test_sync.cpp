@@ -1390,6 +1390,93 @@ TEST_F(SyncIntegrationTest, ConcurrentAttachmentEditsKeepBothVersions)
     EXPECT_EQ(vaultFiles(vaultB.path()).size(), 2) << snapshot(vaultB.path());
 }
 
+// Two entities whose attachments hold the same bytes used to share one blob
+// address, so one blob sealed under the first entity's noteKey: the second
+// could not be opened on another device.
+TEST_F(SyncIntegrationTest, TwoNotesWithTheSameAttachmentBytesBothArrive)
+{
+    const QByteArray bytes("the very same picture");
+    writeRaw(vaultA.path() + QStringLiteral("/one.png"), bytes);
+    writeRaw(vaultA.path() + QStringLiteral("/two.png"), bytes);
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    EXPECT_EQ(watchB.pulled, 2) << watchB.lastMessage.toStdString();
+    for (const QString &name : {QStringLiteral("one.png"), QStringLiteral("two.png")}) {
+        QFile f(vaultB.path() + QLatin1Char('/') + name);
+        ASSERT_TRUE(f.open(QIODevice::ReadOnly)) << name.toStdString();
+        EXPECT_EQ(f.readAll(), bytes);
+    }
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
+    EXPECT_TRUE(watchB.lastMessage.isEmpty()) << watchB.lastMessage.toStdString();
+}
+
+// A blob that cannot be fetched holds the pull (the cursor stays, nothing
+// after it applies out of order) for three cycles, then is parked: later
+// records apply, and the message names the attachment.
+TEST_F(SyncIntegrationTest, AnUnreachableBlobHoldsThePullThenIsParkedAndNamed)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/lost.png"), QByteArray("bytes the server loses"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultA.path(), QStringLiteral("later.md"), QStringLiteral("written after"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    ASSERT_TRUE(QDir(serverData.path() + QStringLiteral("/blobs")).removeRecursively());
+
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    for (int cycle = 1; cycle <= 3; ++cycle) {
+        EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error) << "cycle " << cycle;
+        EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lost.png"))) << watchB.lastMessage.toStdString();
+        EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/later.md"))) << "cycle " << cycle;
+        engineB.syncNow(); // the next cycle: the third of these is the fourth blocked attempt
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle) << watchB.lastMessage.toStdString();
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lost.png"))) << watchB.lastMessage.toStdString();
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("could not be read"))) << watchB.lastMessage.toStdString();
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/later.md")), QStringLiteral("written after"));
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/lost.png")));
+
+    // Parked for good: the next cycle neither retries nor loses the name.
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lost.png")));
+}
+
+// The scanner sees every file on disk; a name no other device may write
+// (a backslash) is not pushed, and says so - the files beside it are.
+TEST_F(SyncIntegrationTest, ANameOutsideTheRulesIsNotPushedAndIsNamed)
+{
+    writeNote(vaultA.path(), QStringLiteral("a\\b.md"), QStringLiteral("odd name"));
+    writeNote(vaultA.path(), QStringLiteral("fine.md"), QStringLiteral("normal"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(watchA.pushed, 1);
+    EXPECT_TRUE(watchA.lastMessage.contains(QStringLiteral("a\\b.md"))) << watchA.lastMessage.toStdString();
+
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/fine.md")), QStringLiteral("normal"));
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), 1) << snapshot(vaultB.path());
+}
+
 // A deletes a note B has not yet seen change: B's edit was already on the
 // server, so the delete is older than B's state and does nothing.
 TEST_F(SyncIntegrationTest, ADeleteConcurrentWithAPushedEditKeepsTheEdit)

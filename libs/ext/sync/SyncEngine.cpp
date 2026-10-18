@@ -25,6 +25,7 @@ namespace noteAppC {
 namespace {
 
 constexpr qsizetype kInlineBodyLimit = 16 * 1024; ///< docs/SYNC.md "Record and blob formats"
+constexpr int kFetchStalls = 3;  ///< cycles an unfetchable blob may hold the pull back
 constexpr int kDeleteStalls = 3; ///< cycles a remote delete that cannot be applied may hold the pull back
 const QByteArray kWrapGeneration0 = QByteArrayLiteral("0"); ///< placeholder until itemsKey rotation exists
 
@@ -287,6 +288,8 @@ void SyncEngine::startOnWorker(QString vaultRoot, QString serverURL, QString ema
     m_keysFromStore = false;
     m_forgotten = false;
     m_refusedPaths.clear();
+    m_unreadable.clear();
+    m_fetchStalls.clear();
     m_prompt = std::move(prompt);
     m_viaLockbox = viaLockbox;
     m_running = true;
@@ -363,7 +366,7 @@ void SyncEngine::runCycle()
 
     maintainEnrolment();
     QStringList warnings;
-    for (const QString &w : {pendingDeleteWarning(), refusedWarning()}) {
+    for (const QString &w : {pendingDeleteWarning(), refusedWarning(), unreadableWarning()}) {
         if (!w.isEmpty())
             warnings << w;
     }
@@ -725,6 +728,15 @@ void SyncEngine::changePassword(const QString &newPassword)
 
 void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
 {
+    // The scanner can see names no other device may be asked to write (a
+    // backslash, a dot folder, a link out of the vault): not pushed, named.
+    if (!m_vault.isConfinedPath(change.path)) {
+        if (!m_refusedPaths.contains(change.path))
+            m_refusedPaths.append(change.path);
+        if (change.kind == SyncScanner::Change::Deleted)
+            m_journal->removeEntity(change.entityID);
+        return;
+    }
     const auto activeKey = m_journal->activeItemsKey();
     if (!activeKey)
         return;
@@ -792,7 +804,10 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
             plain.body = text;
         } else {
             const QByteArray padded = SyncCrypto::pad(bodyBytes);
-            const QByteArray address = SyncCrypto::contentAddress(m_contentKey, padded);
+            // entityID is in the preimage because the blob is sealed under this
+            // entity's noteKey: two entities with equal bytes were one blob
+            // under one noteKey, and the second could not open it.
+            const QByteArray address = SyncCrypto::contentAddress(m_contentKey, entityID + padded);
             const QByteArray framed = SyncCrypto::sealBlob(noteKey, SyncCrypto::buildAD("BL", {address}), padded);
             if (framed.isEmpty() || !m_client->putBlob(m_vaultID, address, framed))
                 return;
@@ -987,9 +1002,54 @@ QString SyncEngine::refusedWarning() const
 {
     if (m_refusedPaths.isEmpty())
         return {};
-    return QStringLiteral("%1 record(s) from other devices refused for naming a path outside the vault: %2")
+    return QStringLiteral("%1 record(s) refused: paths outside the vault or with odd names: %2")
         .arg(m_refusedPaths.size())
         .arg(m_refusedPaths.mid(0, 5).join(QStringLiteral(", ")));
+}
+
+bool SyncEngine::loadRemoteContent(const QByteArray &recordID, const QString &path, const QByteArray &blobAddress,
+                                   bool isNote, const QByteArray &noteKey, QString *text, QByteArray *raw,
+                                   QString *error)
+{
+    if (blobAddress.isEmpty())
+        return true; // inline body: *text already holds it
+    const auto park = [&] {
+        m_fetchStalls.remove(recordID);
+        if (!m_unreadable.contains(path))
+            m_unreadable.append(path);
+        return false; // with *error empty: dropped, the pull moves on
+    };
+    const SyncClient::BlobResult blob = m_client->getBlob(m_vaultID, blobAddress);
+    if (!blob.ok) {
+        // Not dropped on the first failure (a blip must not lose an
+        // attachment for good), and not allowed to hold every later record
+        // forever either: kFetchStalls blocked cycles, then it is parked.
+        if (++m_fetchStalls[recordID] > kFetchStalls)
+            return park();
+        *error = QStringLiteral("attachment %1 could not be fetched; retried next sync").arg(path);
+        return false;
+    }
+    m_fetchStalls.remove(recordID);
+    bool blobOk = false;
+    const QByteArray padded =
+        SyncCrypto::openBlob(noteKey, SyncCrypto::buildAD("BL", {blobAddress}), blob.bytes, &blobOk);
+    if (!blobOk)
+        return park(); // sealed under a key this device cannot use: retrying cannot help
+    const QByteArray unpadded = SyncCrypto::unpad(padded, padded.size());
+    if (isNote)
+        *text = QString::fromUtf8(unpadded);
+    else
+        *raw = unpadded;
+    return true;
+}
+
+QString SyncEngine::unreadableWarning() const
+{
+    if (m_unreadable.isEmpty())
+        return {};
+    return QStringLiteral("%1 attachment(s) from other devices could not be read: %2")
+        .arg(m_unreadable.size())
+        .arg(m_unreadable.mid(0, 5).join(QStringLiteral(", ")));
 }
 
 bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error)
@@ -1144,21 +1204,9 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     QString remoteText = remote.body;
     QByteArray remoteRaw;
-    if (!remote.blobAddress.isEmpty()) {
-        const SyncClient::BlobResult blob = m_client->getBlob(m_vaultID, remote.blobAddress);
-        if (!blob.ok)
-            return true;
-        bool blobOk = false;
-        const QByteArray padded =
-            SyncCrypto::openBlob(noteKey, SyncCrypto::buildAD("BL", {remote.blobAddress}), blob.bytes, &blobOk);
-        if (!blobOk)
-            return true;
-        const QByteArray unpadded = SyncCrypto::unpad(padded, padded.size());
-        if (remote.entityType == QStringLiteral("note"))
-            remoteText = QString::fromUtf8(unpadded);
-        else
-            remoteRaw = unpadded;
-    }
+    if (!loadRemoteContent(record.recordID, remote.path, remote.blobAddress, remote.entityType == QStringLiteral("note"),
+                           noteKey, &remoteText, &remoteRaw, error))
+        return error->isEmpty(); // an error: retry the record; none: parked, dropped
     const bool isNote = remote.entityType == QStringLiteral("note");
     const QByteArray remoteBytes = isNote ? remoteText.toUtf8() : remoteRaw;
     // Computed, not taken from remote.hash: that is only trusted to find a self-echo's own state.
