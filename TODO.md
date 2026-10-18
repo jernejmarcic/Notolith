@@ -1655,17 +1655,17 @@ Lane index8:
       walk). Plan: reindex only the changed paths the watcher reported.
 
 Lane misc8:
-- [ ] 4. The unsandboxed mmdr fallback (no bwrap) has no rlimits and the
+- [x] 4. (lane misc8, ee3c6b4) The unsandboxed mmdr fallback (no bwrap) has no rlimits and the
       full environment. Plan: same child modifier (RLIMIT_AS/CPU) and an
       environment of PATH + HOME=temp dir. Test with the limits fake.
-- [ ] 8. Sandboxed tools rebuild the fontconfig cache each first render
+- [x] 8. (lane misc8, 0b99669: dot first render 158 -> 13 ms) Sandboxed tools rebuild the fontconfig cache each first render
       (/var/cache/fontconfig not bound, HOME is a temp dir). Plan:
       --ro-bind-try /var/cache/fontconfig; time a first dot render.
-- [ ] 5. headingKey merges `C`, `C++`, `C#` (first wins): `[[N#C++]]`
+- [x] 5. (lane misc8, 64e81fc) headingKey merges `C`, `C++`, `C#` (first wins): `[[N#C++]]`
       jumps to `## C`. Plan: exact headingLinkText match first, key as
       fallback; NFC before keying. Test C / C++.
-- [ ] 14. PluginHost binds all of /etc: use etcBinds plus resolv.conf,
+- [x] 14. (lane misc8, 0a081d8) PluginHost binds all of /etc: use etcBinds plus resolv.conf,
       hosts, ssl, ca-certificates, nsswitch.conf, localtime for plugins
       with the network permission, the default list otherwise.
-- [ ] 11. Nits: alt text left(2000) may split a surrogate pair;
+- [x] 11. (lane misc8, 8c1c2a8) Nits: alt text left(2000) may split a surrogate pair;
       static_assert pools/pruned arrays against DiagramKind.
