@@ -1638,15 +1638,34 @@ Lane sync8:
       conflict copy; the local file stays. Test: B has note X at path P
       (its own entity), A renames Y to P; B keeps X, Y's text in a copy.
 - [x] 16. (lane sync9, 1a0e9bd) Item 1 has no attachment test; add one.
-- [ ] 18. (lane sync10) BUG: B edits y.md, A meanwhile renames y.md to
+- [x] 18. (lane sync10, 84580ab; partly: the reported case is the items below) BUG: B edits y.md, A meanwhile renames y.md to
       z.md and edits it; after B syncs both devices hold y.md (B's edit)
       and z.md, unmerged. Suspected: the localChanged branch merges into
       existingPath but saves the entity with remote.path, so file and
       entity disagree. Plan: confirm with a test, then move the merged file
       to remote.path (or keep the entity at the old path) consistently;
       no data loss either way.
-- [ ] 19. A directory (or symlink) at a pulled rename's target is not
+- [x] 19. (lane sync10, 9249899: a dangling link let a pull write outside the vault) A directory (or symlink) at a pulled rename's target is not
       checked (isFile only); verify nothing is lost.
+- [ ] 23. (lane syncbase, Fable plans) BUG, data divergence/loss: pushed
+      records carry no parent/base hash, so a record from a device that has
+      not seen this device's push is applied as a fast-forward over local
+      work, and a clean merge advances the base to the merged text instead
+      of the sender's. Probe: OfflineEditsOnDisjointLinesOfTheSameNote-
+      MergeCleanly, more rounds: A ends `alpha|beta|gamma|DELTA` (its ALPHA
+      edit gone), B has the merge. Three DISABLED_ rename+edit tests in
+      tests/test_sync.cpp show the same. Plan: Fable designs (parent hash
+      per record and/or push the merge result; old records stay readable),
+      Sonnet implements, the DISABLED_ tests and a multi-round convergence
+      check on every merge test pass.
+- [ ] 24. Rename + edit in one scan is seen as delete + new note (scanner
+      matches renames by exact hash only): match by similarity to the
+      stored base text. DISABLED_ARenameAndEditInOneScanMergesAtTheNewPath.
+- [ ] 25. (lane confine) Pulled record paths are not confined to the vault
+      (`../`, absolute, under a symlinked folder; the engine never calls
+      Vault::confinedNotePath) and a symlink at an entity's own path is
+      written through by a plain pulled edit. Needs a device with the vault
+      keys, but confine anyway: refuse such records with a status message.
 - [ ] 17. A note created on two devices at one path conflicts again on each
       later edit until one side renames it (documented). Later: adopt one
       entity for identical paths after the first conflict.
