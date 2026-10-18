@@ -24,6 +24,7 @@ namespace noteAppC {
 namespace {
 
 constexpr qsizetype kInlineBodyLimit = 16 * 1024; ///< docs/SYNC.md "Record and blob formats"
+constexpr int kDeleteStalls = 3; ///< cycles a remote delete that cannot be applied may hold the pull back
 const QByteArray kWrapGeneration0 = QByteArrayLiteral("0"); ///< placeholder until itemsKey rotation exists
 
 /// The plaintext structure a journal payload decrypts to - docs/SYNC.md
@@ -332,13 +333,17 @@ void SyncEngine::runCycle()
     const int pushed = pushOutbox();
     int pulled = 0;
     int conflicts = 0;
+    retryPendingDeletes();
     const QString pullError = pullJournal(&pulled, &conflicts);
 
     maintainEnrolment();
-    if (pullError.isEmpty())
-        setStatus(Status::Idle);
-    else
+    const QString warning = pendingDeleteWarning();
+    if (!pullError.isEmpty())
         setStatus(Status::Error, pullError);
+    else if (!warning.isEmpty())
+        setStatus(Status::Error, warning); // stays visible until the deletions go through
+    else
+        setStatus(Status::Idle);
     emit syncFinished(pushed, pulled, conflicts);
 }
 
@@ -833,6 +838,79 @@ QString SyncEngine::pullJournal(int *pulled, int *conflicts)
     return {};
 }
 
+bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
+{
+    const auto existing = m_journal->entity(entityID);
+    const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
+    QByteArray localBytes;
+    bool hasLocalFile = false;
+    if (existing) {
+        QFile f(existingPath);
+        hasLocalFile = f.open(QIODevice::ReadOnly);
+        if (hasLocalFile)
+            localBytes = f.readAll();
+    }
+    // An edit beats a delete, in both directions (docs/SYNC.md): only
+    // remove the file when nothing local disagrees with the delete.
+    const bool localChanged =
+        existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+    // The entity goes only once the file has: dropped with the file
+    // still there, the next scan would push it back as a new note and
+    // undo the delete on every device.
+    QString trashError;
+    if (!localChanged && hasLocalFile && !m_vault.moveToTrash(existingPath, &trashError)) {
+        *error = QStringLiteral("could not move %1 to the trash (%2); its deletion is retried next sync")
+                     .arg(existing->path, trashError);
+        return false;
+    }
+    m_journal->removeEntity(entityID);
+    return true;
+}
+
+QList<QByteArray> SyncEngine::pendingDeletes() const
+{
+    QList<QByteArray> ids;
+    for (const QByteArray &hex : m_journal->meta(QStringLiteral("pendingDeletes")).split('\n')) {
+        if (!hex.isEmpty())
+            ids.append(QByteArray::fromHex(hex));
+    }
+    return ids;
+}
+
+void SyncEngine::setPendingDeletes(const QList<QByteArray> &ids)
+{
+    QByteArray joined;
+    for (const QByteArray &id : ids)
+        joined += (joined.isEmpty() ? "" : "\n") + id.toHex();
+    m_journal->setMeta(QStringLiteral("pendingDeletes"), joined);
+}
+
+void SyncEngine::retryPendingDeletes()
+{
+    QList<QByteArray> pending = pendingDeletes();
+    for (int i = pending.size() - 1; i >= 0; --i) {
+        QString error;
+        if (applyRemoteDelete(pending.at(i), &error))
+            pending.removeAt(i);
+    }
+    if (pending.size() != pendingDeletes().size())
+        setPendingDeletes(pending);
+}
+
+QString SyncEngine::pendingDeleteWarning() const
+{
+    QStringList names;
+    for (const QByteArray &id : pendingDeletes()) {
+        if (const auto entity = m_journal->entity(id))
+            names << entity->path;
+    }
+    if (names.isEmpty())
+        return {};
+    return QStringLiteral("%1 deletion(s) from other devices could not be applied: %2; retried each sync")
+        .arg(names.size())
+        .arg(names.join(QStringLiteral(", ")));
+}
+
 bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error)
 {
     const auto key = m_journal->itemsKey(record.itemsKeyID);
@@ -858,6 +936,15 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
     const bool isSelfEcho = record.deviceID == m_journal->deviceID();
 
+    if (remote.op != QStringLiteral("delete")) {
+        // A newer record for the entity (an edit, a rename, a re-create)
+        // wins over a delete still waiting to be applied: drop it.
+        m_deleteFailures.remove(record.entityID);
+        QList<QByteArray> pending = pendingDeletes();
+        if (pending.removeAll(record.entityID))
+            setPendingDeletes(pending);
+    }
+
     if (remote.op == QStringLiteral("delete")) {
         if (isSelfEcho) {
             // queueLocalChange() already removed the entity when it
@@ -865,28 +952,27 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             ++*pulled;
             return true;
         }
-        QByteArray localBytes;
-        bool hasLocalFile = false;
-        if (existing) {
-            QFile f(existingPath);
-            hasLocalFile = f.open(QIODevice::ReadOnly);
-            if (hasLocalFile)
-                localBytes = f.readAll();
+        if (pendingDeletes().contains(record.entityID)) { // already given up on blocking for this one
+            ++*pulled;
+            return true;
         }
-        // An edit beats a delete, in both directions (docs/SYNC.md): only
-        // remove the file when nothing local disagrees with the delete.
-        const bool localChanged =
-            existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
-        // The entity goes only once the file has: dropped with the file
-        // still there, the next scan would push it back as a new note and
-        // undo the delete on every device.
-        QString trashError;
-        if (!localChanged && hasLocalFile && !m_vault.moveToTrash(existingPath, &trashError)) {
-            *error = QStringLiteral("could not move %1 to the trash (%2); its deletion is retried next sync")
-                         .arg(existing->path, trashError);
-            return false;
+        if (!applyRemoteDelete(record.entityID, error)) {
+            // The same record failing cycle after cycle (a read-only file,
+            // a trash that never works) must not hold every later record,
+            // from every device, behind it forever. After kDeleteStalls
+            // blocked cycles the pull moves on and the delete is retried
+            // each cycle on its own (retryPendingDeletes); the entity stays,
+            // so the scan still sees the file as synced and never pushes it
+            // back as a new note.
+            if (++m_deleteFailures[record.entityID] <= kDeleteStalls)
+                return false;
+            m_deleteFailures.remove(record.entityID);
+            QList<QByteArray> pending = pendingDeletes();
+            pending.append(record.entityID);
+            setPendingDeletes(pending);
+            return true;
         }
-        m_journal->removeEntity(record.entityID);
+        m_deleteFailures.remove(record.entityID);
         ++*pulled;
         return true;
     }

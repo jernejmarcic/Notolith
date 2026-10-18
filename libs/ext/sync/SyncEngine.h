@@ -4,6 +4,7 @@
 #include <memory>
 
 #include <QByteArray>
+#include <QHash>
 #include <QObject>
 #include <QSet>
 #include <QThread>
@@ -144,6 +145,15 @@ private:
     /// False only when the record must be retried: a remote delete whose
     /// file could not be moved to the trash.
     bool applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error);
+    /// Moves a deleted entity's file to the trash (unless edited locally) and
+    /// forgets the entity. False, with `error`, only when the trash move fails.
+    bool applyRemoteDelete(const QByteArray &entityID, QString *error);
+    /// Remote deletes that kept failing and stopped blocking the pull; kept in
+    /// the journal's meta so a restart still retries them.
+    QList<QByteArray> pendingDeletes() const;
+    void setPendingDeletes(const QList<QByteArray> &ids);
+    void retryPendingDeletes();
+    QString pendingDeleteWarning() const; ///< empty when nothing is pending
     void queueLocalChange(const SyncScanner::Change &change);
 
     QThread m_thread;
@@ -183,6 +193,7 @@ private:
     QByteArray m_vaultID;
     QByteArray m_boxSecretKey; ///< this device's lockbox identity, cached from the OS keyring
     QByteArray m_boxPublicKey;
+    QHash<QByteArray, int> m_deleteFailures; ///< entityID -> cycles its remote delete has blocked the pull
     QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session
 };
 

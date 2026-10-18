@@ -416,6 +416,18 @@ status says which note, and the next cycle tries again. Dropping the entity
 with the file still there would make the next scan push it back as a new
 note and undo the delete on every device.
 
+A failure that never goes away (a read-only file, a trash that never works)
+must not hold every later record from every device behind it forever. After
+three cycles of the same delete failing, the pull moves on past it and the
+delete becomes a *pending delete*: the entity stays (so the scan still sees
+the file as synced and never pushes it back as a new note), the entity's ID
+is kept in the journal's `meta` (`pendingDeletes`, so a restart still retries
+it), and every cycle retries the pending deletes before it pulls. The status
+stays `Error` with "N deletion(s) from other devices could not be applied:
+names; retried each sync" until they all go through. A later record for the
+same note from any device (an edit, a rename) wins over the waiting delete
+and cancels it; a local edit does too, as above.
+
 ## What the server stores and learns
 
 Stores, all under `--data`: an `accounts` table (email, salt, `loginKey`'s
