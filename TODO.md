@@ -1821,7 +1821,7 @@ WINDOWS-PLAN.md; items below get filled from it.
       hotkeys inside pop-outs; feature switch + dockAll; docs EDITOR.md
       "Windows and splits", PLATFORMS.md Hyprland note; bench pop-out open
       (25 ms budget) and move tab (5 ms). 7 tests.
-- [ ] Lane B (windows persistence): workspace.json "floating" written and
+- [x] Lane B (windows persistence, merged; Leaves pop-outs + active leaf in a pop-out): workspace.json "floating" written and
       read (Obsidian shape), Obsidian's own floating node read never
       written, detached sidebar restored. 3 tests.
 - [ ] Lane C (detachable sidebars): whole left/right sidebar and single
