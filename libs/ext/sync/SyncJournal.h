@@ -44,6 +44,24 @@ public:
         /// where it silently discarded the other device's edit.
         QByteArray syncedHash;
         bool deleted = false;     ///< last known state was a delete
+        /// Digest (SyncCrypto::digest) of what base/<entityID> holds: the
+        /// last confirmed sync point. Moves only in SyncEngine::applyRecord.
+        /// Empty on a row from before records carried digests.
+        QByteArray baseDigest;
+        /// Digest of the last state this device enqueued or applied: the
+        /// parent the next record it writes carries.
+        QByteArray headDigest;
+    };
+
+    /// One state of an entity this device applied from the server or wrote
+    /// itself - what a record's `parent` names (docs/SYNC.md "Conflict rules").
+    struct State {
+        QByteArray digest;
+        QByteArray keyedHash; ///< contentAddress of the same content: syncedHash once confirmed
+        QString path;         ///< the entity's local path after this state was applied
+        QString text;         ///< note body; empty for attachments
+        bool own = false;     ///< enqueued here (true) or applied from the server
+        qint64 seq = 0;       ///< server seq; 0 = not pushed or not yet acknowledged
     };
 
     struct OutboxRecord {
@@ -53,6 +71,7 @@ public:
         QByteArray itemsKeyID;
         QByteArray wrappedNoteKey;
         QByteArray payload; ///< sealed EntityRecord, ready to send as-is
+        QByteArray digest;  ///< the record's content digest, to put the server seq on its state
     };
 
     struct ItemsKeyRecord {
@@ -98,6 +117,19 @@ public:
     QString readBase(const QByteArray &entityID) const;
     void writeBase(const QByteArray &entityID, const QString &text);
     void removeBase(const QByteArray &entityID);
+
+    // --- states: the last kStateHistory per entity, merge bases for records
+    //     written against a state this device has since moved past ------
+
+    static constexpr int kStateHistory = 32;
+    /// Inserts, then prunes the entity to its newest kStateHistory rows.
+    void addState(const QByteArray &entityID, const State &state);
+    /// The newest row with that digest.
+    std::optional<State> state(const QByteArray &entityID, const QByteArray &digest) const;
+    /// Whether this entity's local path was `path` after the state `digest`.
+    bool sawPath(const QByteArray &entityID, const QByteArray &digest, const QString &path) const;
+    /// Own rows only: a state applied from the server already has its seq.
+    void setStateSeq(const QByteArray &entityID, const QByteArray &digest, qint64 seq);
 
     // --- outbox: local changes waiting to be pushed ------------------
 

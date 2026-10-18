@@ -37,6 +37,8 @@
 #include <QUuid>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 
 #include "ServerStore.h"
 #include "SyncClient.h"
@@ -583,6 +585,119 @@ TEST(SyncJournalTest, FailedWriteBaseKeepsThePreviousBase)
 
     journal.writeBase(id, QStringLiteral("three")); // and it works again once the directory is writable
     EXPECT_EQ(journal.readBase(id), QStringLiteral("three"));
+}
+
+TEST(SyncJournalTest, StatesArePrunedToTheNewestThirtyTwo)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    SyncJournal journal(dir.path());
+    ASSERT_TRUE(journal.isOpen());
+    const QByteArray id = SyncCrypto::randomID();
+    const QByteArray other = SyncCrypto::randomID();
+    const auto digestOf = [](int i) { return SyncCrypto::digest(QByteArray::number(i)); };
+
+    journal.addState(other, {digestOf(0), {}, QStringLiteral("o.md"), QStringLiteral("other"), false, 1});
+    for (int i = 0; i < SyncJournal::kStateHistory + 8; ++i)
+        journal.addState(id, {digestOf(i), {}, QStringLiteral("a.md"), QStringLiteral("text %1").arg(i), false, i});
+
+    for (int i = 0; i < 8; ++i)
+        EXPECT_FALSE(journal.state(id, digestOf(i))) << i;
+    for (int i = 8; i < SyncJournal::kStateHistory + 8; ++i) {
+        const auto row = journal.state(id, digestOf(i));
+        ASSERT_TRUE(row) << i;
+        EXPECT_EQ(row->text, QStringLiteral("text %1").arg(i));
+    }
+    EXPECT_TRUE(journal.state(other, digestOf(0))) << "pruning is per entity";
+    EXPECT_TRUE(journal.sawPath(id, digestOf(20), QStringLiteral("a.md")));
+    EXPECT_FALSE(journal.sawPath(id, digestOf(20), QStringLiteral("b.md")));
+
+    journal.removeEntity(id);
+    EXPECT_FALSE(journal.state(id, digestOf(20)));
+    EXPECT_TRUE(journal.state(other, digestOf(0)));
+}
+
+TEST(SyncJournalTest, SetStateSeqOnlyTouchesOwnRows)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    SyncJournal journal(dir.path());
+    const QByteArray id = SyncCrypto::randomID();
+    const QByteArray applied = SyncCrypto::digest("applied");
+    const QByteArray mine = SyncCrypto::digest("mine");
+    journal.addState(id, {applied, {}, QStringLiteral("a.md"), QStringLiteral("applied"), false, 7});
+    journal.addState(id, {mine, {}, QStringLiteral("a.md"), QStringLiteral("mine"), true, 0});
+
+    journal.setStateSeq(id, applied, 99);
+    journal.setStateSeq(id, mine, 99);
+    EXPECT_EQ(journal.state(id, applied)->seq, 7);
+    EXPECT_EQ(journal.state(id, mine)->seq, 99);
+}
+
+// A journal written before records carried digests has none of the new
+// columns; opening it adds them and keeps its rows.
+TEST(SyncJournalTest, OpeningAnOldJournalAddsTheColumns)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    const QString dataDir = SyncJournal::dataDirectoryFor(dir.path());
+    ASSERT_TRUE(QDir().mkpath(dataDir));
+    const QByteArray id = SyncCrypto::randomID();
+    {
+        const QString name = QStringLiteral("old-journal-test");
+        {
+            QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+            old.setDatabaseName(dataDir + QStringLiteral("/journal.db"));
+            ASSERT_TRUE(old.open());
+            QSqlQuery q(old);
+            ASSERT_TRUE(q.exec(QStringLiteral("CREATE TABLE entities (entityID BLOB PRIMARY KEY, path TEXT, "
+                                              "entityType TEXT, itemsKeyID BLOB, wrappedNoteKey BLOB, "
+                                              "localMtime INTEGER, localSize INTEGER, localHash BLOB, "
+                                              "syncedHash BLOB, deleted INTEGER)")));
+            ASSERT_TRUE(q.exec(QStringLiteral("CREATE TABLE outbox (seq INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                              "entityID BLOB, recordID BLOB, itemsKeyID BLOB, "
+                                              "wrappedNoteKey BLOB, payload BLOB, sent INTEGER DEFAULT 0)")));
+            q.prepare(QStringLiteral("INSERT INTO entities(entityID, path, entityType, deleted) VALUES(?,?,?,0)"));
+            q.addBindValue(id);
+            q.addBindValue(QStringLiteral("old.md"));
+            q.addBindValue(QStringLiteral("note"));
+            ASSERT_TRUE(q.exec());
+        }
+        QSqlDatabase::removeDatabase(name);
+    }
+
+    for (int reopen = 0; reopen < 2; ++reopen) { // the second open meets the columns already there
+        SyncJournal journal(dir.path());
+        ASSERT_TRUE(journal.isOpen());
+        EXPECT_TRUE(journal.error().isEmpty()) << journal.error().toStdString();
+        auto entity = journal.entity(id);
+        ASSERT_TRUE(entity);
+        EXPECT_EQ(entity->path, QStringLiteral("old.md"));
+        if (reopen == 0)
+            EXPECT_TRUE(entity->baseDigest.isEmpty());
+        entity->baseDigest = SyncCrypto::digest("base");
+        entity->headDigest = SyncCrypto::digest("head");
+        journal.putEntity(*entity);
+        EXPECT_EQ(journal.entity(id)->baseDigest, SyncCrypto::digest("base"));
+        EXPECT_EQ(journal.entity(id)->headDigest, SyncCrypto::digest("head"));
+
+        SyncJournal::OutboxRecord record;
+        record.entityID = id;
+        record.recordID = SyncCrypto::randomID();
+        record.payload = QByteArrayLiteral("p");
+        record.digest = SyncCrypto::digest("d");
+        journal.enqueue(record);
+        const auto pending = journal.pendingOutbox(10);
+        ASSERT_FALSE(pending.isEmpty());
+        EXPECT_EQ(pending.last().digest, SyncCrypto::digest("d"));
+        journal.markSent({record.recordID});
+    }
 }
 
 // ---------------------------------------------------------------------
