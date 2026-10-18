@@ -2004,3 +2004,10 @@ Shared/<title>.md.
 - [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
+- [ ] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
+      there should be something called implicit imports, or implicit code
+      ... something that is a part of every other codeblock. so that in
+      every codeblock you dont need imports"). Frontmatter per-language
+      prelude (imports, a main wrapper) applied to every runnable block of
+      that language in the note; error line numbers mapped back. Fable
+      plan; build after lane/nomain merges (DirectRunner.cpp).
