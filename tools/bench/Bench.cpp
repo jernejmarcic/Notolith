@@ -430,6 +430,35 @@ Timing benchWindowKeystroke(const QString &vaultPath, const QString &notePath, i
                   QStringLiteral("%1 kB note").arg(QFileInfo(notePath).size() / 1024), samples);
 }
 
+/// The whole save path of a vault note with one character typed since the last
+/// save: the QSaveFile commit (fdatasync), the recovery snapshot, the history
+/// record. Timed on the UI thread, as Ctrl+S and an autosave both run it. The
+/// vault is a small one of its own, so file recovery and history are on (they
+/// only record notes inside a vault) and nothing else is indexed.
+Timing benchSave(const QString &scratchDir, int kb, int runs)
+{
+    QTemporaryDir vault(scratchDir + QStringLiteral("/save-vault-XXXXXX"));
+    const QString notePath = vault.path() + QStringLiteral("/Save.md");
+    writeNote(notePath, buildNote(kb));
+    auto window = std::make_unique<MainWindow>();
+    window->openVault(vault.path());
+    window->openNote(notePath);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    MarkdownEditor *editor = window->editor();
+    editor->setCursorOffset(editor->noteText().size() / 2);
+
+    std::vector<double> samples;
+    samples.reserve(size_t(runs));
+    for (int i = 0; i < runs; ++i) {
+        QTest::keyClick(editor, Qt::Key_X);
+        QElapsedTimer clock;
+        clock.start();
+        QMetaObject::invokeMethod(window.get(), "save");
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+    }
+    return reduce(QStringLiteral("Save"), QStringLiteral("%1 kB note, in a vault").arg(kb), samples);
+}
+
 Timing benchKeystroke(const QString &noteText, const QString &detail, int runs)
 {
     auto editor = std::make_unique<MarkdownEditor>();
@@ -1428,6 +1457,10 @@ int main(int argc, char *argv[])
     QTemporaryDir configHome;
     if (configHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
         qputenv("XDG_CONFIG_HOME", configHome.path().toLocal8Bit());
+    // File recovery snapshots go to the data home: a save row must not fill the real one.
+    QTemporaryDir dataHome;
+    if (dataHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+        qputenv("XDG_DATA_HOME", dataHome.path().toLocal8Bit());
 
     // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
     // to the systemd journal whenever stderr is not a terminal - piped, run
@@ -1478,8 +1511,8 @@ int main(int argc, char *argv[])
     parser.addOption(viewportOption);
     // One phase alone, so `perf record` sees only it.
     QCommandLineOption phaseOption(QStringLiteral("phase"),
-                                   QStringLiteral("Run one phase: memory, start, open, keystroke, relayout, "
-                                                  "scroll or pdfview."),
+                                   QStringLiteral("Run one phase: memory, start, open, keystroke, save, "
+                                                  "relayout, scroll or pdfview."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
     parser.process(app);
@@ -1651,6 +1684,12 @@ int main(int argc, char *argv[])
         timings << benchHtmlTableKeystroke(30);
         timings << benchHtmlTableParse(30);
         timings << benchPdfKeystroke(workDir.path(), 30);
+    }
+
+    // The save path, on the two sizes a long note reaches.
+    if (runs("save")) {
+        for (int kb : {200, 1024})
+            timings << benchSave(workDir.path(), kb, 15);
     }
 
     // Relayouts that are not keystrokes: a resize, a fold, an embed's late

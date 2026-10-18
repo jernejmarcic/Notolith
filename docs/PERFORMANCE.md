@@ -157,7 +157,7 @@ pieces and the vault generator.
 cmake --build /tmp/noteAppC-build
 /tmp/noteAppC-build/tools/bench/noteAppC-bench                     # the table, headless
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --json              # also JSON, for diffing
-/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, relayout, scroll, pdfview
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --phase open        # one phase: memory, start, open, keystroke, save, relayout, scroll, pdfview
 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 3440x1440
 QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
@@ -172,6 +172,32 @@ main panel regardless of `setScreen()`.
 
 The bench generates its vault with `tools/gen_bench_vault.py` unless one is
 given, never touches `~/.config/noteAppC`, and reports median, p95 and worst.
+
+The `save` phase times `MainWindow::save()` (the path an autosave and Ctrl+S
+share: `QSaveFile` commit with `fdatasync`, the recovery snapshot, the history
+record) after one typed character, on a 200 kB and a 1 MB note in a small
+vault of their own, 15 saves each. Run it with `TMPDIR` on a real disk: `/tmp`
+is tmpfs on starbase-1 and `fdatasync` there costs nothing (0.14 / 0.48 ms
+median, which says nothing about a disk). The bench also points
+`XDG_DATA_HOME` at a private directory, so the snapshots stay out of the real
+`~/.local/share/noteAppC/recovery`.
+
+```sh
+mkdir ~/.cache/bench-tmp && TMPDIR=~/.cache/bench-tmp \
+    /tmp/noteAppC-build/tools/bench/noteAppC-bench --phase save
+```
+
+| save | median | p95 / worst | where |
+|---|---|---|---|
+| 200 kB note | 5.7 ms | 15.7 ms | starbase-1, NVMe (btrfs on LUKS), 2026-10-17, three runs |
+| 1 MB note | 6.0 ms | 17.4 ms | as above |
+
+The cost is the disk's flush, not the note's size: 200 kB and 1 MB are within
+0.4 ms of each other. The worst sample is probably the first save of the note
+(not checked sample by sample), which also keeps the pre-edit text as a
+snapshot; later saves inside the recovery interval skip it. Nothing here runs on a keystroke, only 2 s after typing stops
+(or 30 s into continuous typing), and a note is saved once however many tabs
+show it.
 
 To find where time goes, `perf` works on the real binaries:
 

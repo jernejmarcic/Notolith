@@ -381,8 +381,9 @@ is queried while the popup is closed.
 ## Autosave
 
 With `files.autosave` on (the default) every modified note is saved two
-seconds after typing stops, and leaving a note, closing a tab or quitting saves
-it too; nothing asks. A save that fails (disk full, read-only folder) says so in
+seconds after typing stops - or 30 seconds after the first edit since the last
+save, when the typing never stops that long - and leaving a note, closing a tab
+or quitting saves it too; nothing asks. A save that fails (disk full, read-only folder) says so in
 the status bar and is tried again at the next pause, with no further edit
 needed. If leaving or quitting then still cannot save, the usual
 Save / Discard / Cancel box appears with the error in its text, so a window is
@@ -409,6 +410,14 @@ It applies to the file tree's Delete and to the source of a merge. When there is
 no system trash to use, the file goes to the vault's `.trash` and the status bar
 says so; a failed trash is never turned into a permanent delete. Sync pulls
 that remove a note keep using the vault's `.trash`.
+
+## Undo close tab
+
+Ctrl+Shift+T (`workspace:undo-close-pane`, rebindable like any command) reopens
+the tab closed last, in the split it was in (the focused one if that split is
+gone), with the caret and scroll it had. The last 20 closed tabs are kept for
+the session; a note deleted since, or an encrypted one while the notes are
+locked, is passed over, and an empty tab is not remembered.
 
 ## Status bar counts
 
