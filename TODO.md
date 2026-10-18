@@ -1327,14 +1327,14 @@ title), L (look-up), K (edited listing chrome).
       embeds each cached SVG as an <img> data URI (a diagram's own markup,
       e.g. TeX \special raw SVG, can never script the page).
       Follow-ups:
-      - [ ] A tool set by path (render.*Tool) outside /usr is not bound into
+      - [x] (lane fixes, c9b478a; only the tool file is bound) A tool set by path (render.*Tool) outside /usr is not bound into
             the sandbox: document or bind it read-only like DirectRunner.
       - [ ] A hung tool holds a pool thread up to its 20-40 s timeout;
             other fences wait behind it.
       - [ ] The JVM (PlantUML) runs with no address-space limit (RLIMIT_AS
             breaks it); only the scope memory cap applies.
       - [ ] Published diagram text is not selectable or searchable (image).
-      - [ ] Publish CSS class is still `mermaid-diagram` for every kind.
+      - [x] (lane fixes, ea28195: `diagram`) Publish CSS class is still `mermaid-diagram` for every kind.
 - [ ] **A central server with only a local cache, like Trilium** - Jernej:
       "is there an API, like trillium notes so a central "server" node can
       store the data with just a local cache?" Today: no. Sync
@@ -1373,7 +1373,7 @@ Wave 1
       - [x] The indexer and other read-only readers index a lossy note's
             U+FFFD text (lane links, 2090c5f: index re-reads bad bytes as
             Latin-1; cp1252 quotes still not).
-      - [ ] Mermaid tests time out (mmdr 5 s) when several lanes build at
+      - [x] (lane fixes, 96c93eb: retry on timeout, real-tool test no longer skips on failure) Mermaid tests time out (mmdr 5 s) when several lanes build at
             once: make them load-robust like the 1 MB open test.
 - [x] 2. (lane syncfix, 10a430f; done by Opus: the agent launch was refused) A sync pull of a delete whose trash move fails still
       drops the entity, so the next scan re-creates the note everywhere.
@@ -1403,7 +1403,7 @@ Wave 1
       when the destination is the same file.
       Follow-ups:
       - [x] Relative Markdown links inside a moved note (lane links, 769dd12).
-      - [ ] `<angle bracket>` Markdown link targets are stored with their
+      - [x] (lane fixes, 3043c45) `<angle bracket>` Markdown link targets are stored with their
             brackets by the parser, so they never resolve as backlinks or
             follow a rename of their target.
       - [x] The real drag gesture (lane links, 8c4506a: own mime marker,
@@ -1422,9 +1422,9 @@ Wave 2
       racing launches would both serve); XDG_ACTIVATION_TOKEN handed over;
       miss costs ~0.1-0.3 ms. Follow-ups:
       - [ ] Wayland focus with the token not seen on a real compositor.
-      - [ ] A note outside the vault opened by hand-over is saved in the
+      - [x] (lane fixes, a2e4cd0) A note outside the vault opened by hand-over is saved in the
             layout as `../` and its restore is untested.
-      - [ ] A different-vault hand-over has no test of its own.
+      - [x] (lane fixes, a2e4cd0) A different-vault hand-over has no test of its own.
 - [x] 6. (lane complete, a9b48ef) `[[` completion: headings after `#`, block ids
       after `#^`, aliases inserting `[[Note|alias]]`.
       Done: index headings/block ids per note (current note read live),
@@ -1440,7 +1440,7 @@ Wave 2
 - [x] 5. (lane workspace, 2e72085) Autosave is debounce only: continuous typing never
       saves. Plan: a 30 s max-wait timer.
 - [x] 7. (lane workspace, 2e72085) Undo close tab (Ctrl+Shift+T), 20 deep.
-      Follow-ups: [ ] encrypted-note skip and scroll restore not asserted.
+      Follow-ups: [x] (lane fixes, d0bc503) encrypted-note skip and scroll restore not asserted.
 - [x] 8. (lane workspace, 2e72085) Bench row for saveLeaf on a 1 MB note (two
       fdatasyncs on the UI thread); act only if it shows.
       Measured on NVMe btrfs/LUKS: median 6.0 ms (1 MB), worst 17.4 ms
