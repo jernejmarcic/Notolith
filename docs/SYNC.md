@@ -393,6 +393,14 @@ user of line-diffing turns up, not before (YAGNI).
   re-flagging the same conflict every cycle until the user acts. Folding
   the conflict copy in by hand is then just an ordinary local edit against
   that base, pushed and reconciled like any other.
+- **A different entity on the same path**: a pulled note or attachment this
+  device has no entity for, whose path already holds a file (a parked
+  delete's file the person has edited since, or the same path created on two
+  devices), never overwrites it. Different content is written as a conflict
+  copy and the local file stays; identical content writes nothing. No entity
+  is made for the incoming one - two entities on a path would make the scan
+  read one of them as deleted - so a later edit to it from the other device
+  conflicts again until one side renames the note.
 
 ### Delete-vs-edit
 
@@ -423,8 +431,11 @@ delete becomes a *pending delete*: the entity stays (so the scan still sees
 the file as synced and never pushes it back as a new note), the entity's ID
 is kept in the journal's `meta` (`pendingDeletes`, so a restart still retries
 it), and every cycle retries the pending deletes before it pulls. The status
-stays `Error` with "N deletion(s) from other devices could not be applied:
-names; retried each sync" until they all go through. A later record for the
+is `Idle` (a parked delete is not a failure, so the bar still reads "synced")
+with the message "N deletion(s) from other devices could not be applied:
+names; retried each sync" as its tooltip until they all go through. The
+failure count is in memory only and restarts at each launch, so after a
+restart a delete that was not yet parked blocks three more cycles. A later record for the
 same note from any device (an edit, a rename) wins over the waiting delete
 and cancels it; a local edit does too, as above.
 

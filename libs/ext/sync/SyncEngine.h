@@ -149,8 +149,10 @@ private:
     /// forgets the entity. False, with `error`, only when the trash move fails.
     bool applyRemoteDelete(const QByteArray &entityID, QString *error);
     /// Remote deletes that kept failing and stopped blocking the pull; kept in
-    /// the journal's meta so a restart still retries them.
-    QList<QByteArray> pendingDeletes() const;
+    /// the journal's meta so a restart still retries them. Read from there
+    /// once per cycle (loadPendingDeletes), written through by the setter.
+    const QList<QByteArray> &pendingDeletes() const { return m_pendingDeletes; }
+    void loadPendingDeletes();
     void setPendingDeletes(const QList<QByteArray> &ids);
     void retryPendingDeletes();
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
@@ -193,6 +195,7 @@ private:
     QByteArray m_vaultID;
     QByteArray m_boxSecretKey; ///< this device's lockbox identity, cached from the OS keyring
     QByteArray m_boxPublicKey;
+    QList<QByteArray> m_pendingDeletes; ///< cache of the journal's pendingDeletes meta, loaded each cycle
     QHash<QByteArray, int> m_deleteFailures; ///< entityID -> cycles its remote delete has blocked the pull
     QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session
 };

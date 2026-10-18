@@ -333,6 +333,7 @@ void SyncEngine::runCycle()
     const int pushed = pushOutbox();
     int pulled = 0;
     int conflicts = 0;
+    loadPendingDeletes();
     retryPendingDeletes();
     const QString pullError = pullJournal(&pulled, &conflicts);
 
@@ -340,10 +341,8 @@ void SyncEngine::runCycle()
     const QString warning = pendingDeleteWarning();
     if (!pullError.isEmpty())
         setStatus(Status::Error, pullError);
-    else if (!warning.isEmpty())
-        setStatus(Status::Error, warning); // stays visible until the deletions go through
     else
-        setStatus(Status::Idle);
+        setStatus(Status::Idle, warning); // a parked delete is not a failure; the message stays until it goes through
     emit syncFinished(pushed, pulled, conflicts);
 }
 
@@ -867,14 +866,13 @@ bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
     return true;
 }
 
-QList<QByteArray> SyncEngine::pendingDeletes() const
+void SyncEngine::loadPendingDeletes()
 {
-    QList<QByteArray> ids;
+    m_pendingDeletes.clear();
     for (const QByteArray &hex : m_journal->meta(QStringLiteral("pendingDeletes")).split('\n')) {
         if (!hex.isEmpty())
-            ids.append(QByteArray::fromHex(hex));
+            m_pendingDeletes.append(QByteArray::fromHex(hex));
     }
-    return ids;
 }
 
 void SyncEngine::setPendingDeletes(const QList<QByteArray> &ids)
@@ -882,6 +880,7 @@ void SyncEngine::setPendingDeletes(const QList<QByteArray> &ids)
     QByteArray joined;
     for (const QByteArray &id : ids)
         joined += (joined.isEmpty() ? "" : "\n") + id.toHex();
+    m_pendingDeletes = ids;
     m_journal->setMeta(QStringLiteral("pendingDeletes"), joined);
 }
 
@@ -940,9 +939,11 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         // A newer record for the entity (an edit, a rename, a re-create)
         // wins over a delete still waiting to be applied: drop it.
         m_deleteFailures.remove(record.entityID);
-        QList<QByteArray> pending = pendingDeletes();
-        if (pending.removeAll(record.entityID))
+        if (pendingDeletes().contains(record.entityID)) {
+            QList<QByteArray> pending = pendingDeletes();
+            pending.removeAll(record.entityID);
             setPendingDeletes(pending);
+        }
     }
 
     if (remote.op == QStringLiteral("delete")) {
@@ -1054,6 +1055,37 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // Covers the conflict-copy path below too: same directory as `remote.path`.
     QDir().mkpath(QFileInfo(targetPath).path());
     bool wroteConflict = false;
+
+    // No entity of this record's own, yet a file already sits at its path
+    // (a parked delete's file the person has since edited, or the same path
+    // created independently on two devices): the incoming text must not
+    // replace it. Different content goes to a conflict copy and the local
+    // file is left alone; the same content needs nothing written. Either way
+    // no entity is created here: another one may own the path, and two
+    // entities on one path would make the scan read one of them as deleted.
+    if (!existing && QFileInfo(targetPath).isFile()) {
+        bool same = false;
+        if (remote.entityType == QStringLiteral("note")) {
+            Note onDisk;
+            same = Vault::read(targetPath, onDisk) && onDisk.text == remoteText;
+        } else {
+            QFile f(targetPath);
+            same = f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
+        }
+        if (!same) {
+            const QString copy = conflictCopyPath(m_vault, remote.path, record.deviceID);
+            if (remote.entityType == QStringLiteral("note"))
+                Vault::write(copy, Note{remoteText, false, false});
+            else
+                writeRawFile(copy, remoteRaw);
+            ++*conflicts;
+            return true;
+        }
+        if (m_journal->entityForPath(remote.path)) {
+            ++*pulled;
+            return true;
+        }
+    }
 
     if (!localChanged) {
         if (existing && existing->path != remote.path && hasLocalFile)
