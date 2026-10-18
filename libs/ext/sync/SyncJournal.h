@@ -30,9 +30,11 @@ public:
         qint64 localMtime = 0;    ///< of the vault file, for the scanner's cheap check
         qint64 localSize = 0;
         QByteArray localHash;     ///< fingerprint of what SyncScanner last saw on disk - scanner dedup only
-        /// Fingerprint of the content as of the last confirmed sync
-        /// (fast-forward, clean merge, or a self-echo - see
-        /// SyncEngine::applyRecord). Deliberately a separate field from
+        /// Keyed fingerprint of the content as of the last confirmed sync
+        /// (the text of the last record applied, or of this device's own
+        /// record once it came back - see SyncEngine::applyRecord). Keyed
+        /// with contentKey, so a password change invalidates it; baseDigest
+        /// below is unkeyed. Deliberately a separate field from
         /// localHash and updated only by applyRecord, never by
         /// queueLocalChange: the two answer different questions ("have I
         /// already queued this content to push" vs "do local and the
