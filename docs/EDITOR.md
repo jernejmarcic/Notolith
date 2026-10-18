@@ -449,14 +449,21 @@ window it is. Dialogs, the settings page and the graph open in the main window.
   first (with `files.autosave` on; a failed save or a declined prompt keeps the
   window open) and Ctrl+Shift+T brings the last one back in the main window.
   A pop-out whose last tab goes closes with it.
-- Closing the main window closes every pop-out with it.
+- Closing the main window closes every pop-out with it, after saving the
+  layout: the pop-outs, with their splits, tabs, size and the active tab, are
+  written in Obsidian's `floating` node and come back at the next start. A
+  window is sized, never moved (the compositor decides where it goes), and a
+  background tab is read when it is first shown. A `floating` node written by
+  Obsidian is read the same way; a tab of a view type Notolith does not have
+  is skipped, and a window with nothing left to show is not made. With the
+  feature off, `floating` is ignored. Without pop-outs the layout has no
+  `floating` node.
 - **Core plugins > Pop-out windows** (`plugins.popoutWindows`, Notolith's own
   switch; Obsidian has none) turns the feature off: the two commands and the
   menu items stop, and every tab in a pop-out returns to the main window. Off,
   no window object, drop target or timer exists.
 
-Not yet: a pop-out is not remembered across restarts, and tabs cannot be
-dragged between windows or onto a split's edge.
+Not yet: tabs cannot be dragged between windows or onto a split's edge.
 
 ## Undo close tab
 
