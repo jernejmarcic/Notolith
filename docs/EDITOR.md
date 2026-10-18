@@ -895,7 +895,10 @@ is the wrong place for it).
   compile step uses too): `/usr`, `/etc` and `/var/lib/texmf` read-only, no home,
   no other disk, no network, no inherited environment, and one temporary
   directory writable. Without bwrap there is no diagram, only the hint: never an
-  unsandboxed run. So a tool set by path must live under `/usr`. 20 s for a
+  unsandboxed run. A tool set by path outside `/usr` is resolved (a symlink
+  to the file it points to) and bound in read-only; whatever it needs besides
+  itself (a wrapper script's jar, a home's libraries) is not, so install those
+  under `/usr`. 20 s for a
   tool (and for each of TeX's two steps), a CPU limit, and 4 GB of address space
   for all but the JVM.
 - **PlantUML**: `plantuml -tsvg -pipe -charset UTF-8` with the source on stdin
@@ -967,7 +970,8 @@ A moved note's own Markdown links and embeds are paths from its folder, so
 they are rewritten to reach the same files from the new one: `[a](../a.md)` and
 `![](img/p.png)` moved a level down become `[a](../../a.md)` and
 `![](../img/p.png)`. Percent-encoding and `<angle bracket>` forms are kept as
-written. Wikilinks (found by name), URLs, `#anchor` links and bare `[x](a.md)`
+written (`[x](<a b.md>)` is a link to `a b.md`, a backlink like any other, and a
+rename rewrites what is inside the brackets). Wikilinks (found by name), URLs, `#anchor` links and bare `[x](a.md)`
 names are left alone, and a folder moved whole keeps the links between its own
 files byte for byte. A Markdown link to a moved note from elsewhere stays a
 relative path (`../A/n.md` becomes `../A/B/n.md`).
