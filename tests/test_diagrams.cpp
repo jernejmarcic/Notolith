@@ -280,6 +280,23 @@ TEST_F(DiagramTest, TikZCannotReadAFileOutsideTheSandboxOrStartAShell)
     EXPECT_FALSE(QFile::exists(written));
 }
 
+// /etc is not bound whole: a shared note's \input of the machine id, the hostname or the user list is a file that
+// is not there, so no diagram is drawn from it (Publish would ship it).
+TEST_F(DiagramTest, TikZCannotReadFilesUnderEtc)
+{
+    NEED("latex");
+    const auto renderer = rendererFor(DiagramKind::TikZ, QString());
+    for (const QString &file : {QStringLiteral("/etc/machine-id"), QStringLiteral("/etc/hostname"), QStringLiteral("/etc/passwd")}) {
+        if (!QFileInfo(file).isReadable())
+            continue;
+        SCOPED_TRACE(file.toStdString());
+        const QString read = QStringLiteral("\\input{%1}\\begin{tikzpicture}\\draw (0,0) -- (1,1);\\end{tikzpicture}").arg(file);
+        const auto answer = ask(renderer, QStringLiteral("tikz"), read);
+        EXPECT_TRUE(answer->result.isMarkdown) << "\\input of " << file.toStdString() << " drew a diagram";
+        EXPECT_TRUE(cached(DiagramKind::TikZ, read).isEmpty());
+    }
+}
+
 // The sandbox itself, whatever tool runs in it.
 TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
 {
@@ -291,7 +308,7 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     ASSERT_TRUE(work.isValid() && outside.isValid());
     qputenv("DIAGRAM_SANDBOX_LEAK", "leaked");
     const QString script = QStringLiteral("echo in > %1/inside; echo out > %2/outside; echo \"env=$DIAGRAM_SANDBOX_LEAK\" "
-                                          "> %1/env; ls %2 > %1/listing 2>&1; cat /etc/hostname > /dev/null && echo etc > %1/etc")
+                                          "> %1/env; ls %2 > %1/listing 2>&1; cat /etc/machine-id /etc/hostname /etc/passwd > %1/etc 2>/dev/null")
                                .arg(work.path(), outside.path());
     const noteAppC::sandbox::Command command =
         noteAppC::sandbox::bubblewrapCommand(work.path(), QStringLiteral("/bin/sh"), {QStringLiteral("-c"), script});
@@ -311,7 +328,7 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     EXPECT_FALSE(QFile::exists(outside.filePath(QStringLiteral("outside")))) << "a write outside the directory reached the real disk";
     EXPECT_EQ(read(QStringLiteral("env")), QByteArray("env=\n")) << "the environment is not inherited";
     EXPECT_TRUE(read(QStringLiteral("listing")).contains("No such file")) << "the other directory is not there";
-    EXPECT_EQ(read(QStringLiteral("etc")), QByteArray("etc\n")) << "/etc is";
+    EXPECT_EQ(read(QStringLiteral("etc")), QByteArray()) << "the machine id, hostname and user list are not in the sandbox";
 }
 
 // A tool set by path in the settings is often outside /usr (a home's bin), where the sandbox has nothing: it is

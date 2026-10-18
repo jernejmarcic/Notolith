@@ -133,7 +133,9 @@ a reopened note shows only output that matches the code as written.
 
 ## Sandbox
 
-By default a block runs under bubblewrap: `/usr` and `/etc` read-only, a
+By default a block runs under bubblewrap: `/usr` and a few `/etc` entries (the
+loader cache, fonts, the timezone, the passwd, group and nsswitch files; not the
+machine id or hostname) read-only, a
 fresh empty `/tmp`, no network, and nothing of the home directory - only
 its own temporary directory, which is its `HOME` too. Built with libseccomp,
 it also cannot make namespaces or mounts, ptrace, reach the kernel keyring,

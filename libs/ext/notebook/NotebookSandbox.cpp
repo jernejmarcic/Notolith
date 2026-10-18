@@ -1,5 +1,6 @@
 #include "NotebookSandbox.h"
 
+#include "Bubblewrap.h"
 #include "SyscallFilter.h"
 
 #include <QStandardPaths>
@@ -41,7 +42,7 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     }
 
     // The same allowlist TexCompiler::compile and PluginHost::sandboxArguments
-    // build: /usr and /etc read-only, /bin, /lib, /lib64 and /sbin as
+    // build: /usr and a few /etc entries read-only, /bin, /lib, /lib64 and /sbin as
     // symlinks into /usr (Arch's merged-usr layout, which is what both of
     // those already assume), /proc and /dev handed out fresh, /tmp an empty
     // tmpfs. What is specific to a kernel: transport is always "ipc" (see
@@ -50,9 +51,15 @@ void wrapCommand(SandboxTier tier, const QString &program, const QStringList &ar
     // outright, which TexCompiler cannot do (a TeX engine may need to reach
     // a proxy) and PluginHost only does when a plugin was not granted the
     // network permission.
-    QStringList wrapped = {
+    // /etc is the few entries sandbox::etcBinds names, not all of it: a cell
+    // is user-run code, but the machine id and hostname still have no
+    // business in a note's saved output. Added for a cell: the timezone
+    // and the passwd/group/nsswitch trio, without which `whoami`, `ls -l`
+    // and getpwuid() in a cell fail on a uid with no name.
+    QStringList wrapped = sandbox::etcBinds({QStringLiteral("localtime"), QStringLiteral("passwd"), QStringLiteral("group"),
+                                             QStringLiteral("nsswitch.conf")});
+    wrapped << QStringList{
         QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
-        QStringLiteral("--ro-bind"), QStringLiteral("/etc"), QStringLiteral("/etc"),
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
         QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib"),
         QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib64"),
