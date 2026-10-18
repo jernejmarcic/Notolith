@@ -137,6 +137,8 @@ public:
     static void resetStateMisses();
     /// Whether this entity's local path was `path` after the state `digest`.
     bool sawPath(const QByteArray &entityID, const QByteArray &digest, const QString &path) const;
+    /// The server seq this entity was first seen at, from the rows kept; 0 if none pushed.
+    qint64 firstSeq(const QByteArray &entityID) const;
     /// Own rows only: a state applied from the server already has its seq.
     void setStateSeq(const QByteArray &entityID, const QByteArray &digest, qint64 seq);
 

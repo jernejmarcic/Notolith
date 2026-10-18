@@ -546,14 +546,21 @@ the last one's row is there and matches the file.
   old rule had the winner copy the loser's text, the new one has the loser copy
   its own, and neither side knows what the other does. This was so before and
   is not fixed here; update every device.
-- **A different entity on the same path**: a pulled note or attachment this
-  device has no entity for, whose path already holds a file (or anything else) (a parked
-  delete's file the person has edited since, or the same path created on two
-  devices), never overwrites it. Different content is written as a conflict
-  copy and the local file stays; identical content writes nothing. No entity
-  is made for the incoming one - two entities on a path would make the scan
-  read one of them as deleted - so a later edit to it from the other device
-  conflicts again until one side renames the note.
+- **A different entity on the same path**: two entities on one path (a note
+  created on two devices, or one a device deleted while another kept editing
+  it) are settled the same way on every device. The entity the server saw
+  first keeps the path (a record with a parent is older than any creation).
+  Equal text is one note: the later entity is dropped where it exists and
+  skipped where it does not. Different text moves the loser to
+  `<name> (<4 hex of its entity ID>).<ext>` beside it, on every device, with
+  no record exchanged (the name is a function of the ID); that counts as a
+  conflict, so the status bar says a note got a new name. Anything else
+  that sits there (a parked delete's file the person has edited since, a
+  stray file) is never overwritten: different content is written as a
+  conflict copy and the local file stays. Limits: a loser's edits pushed
+  while its pull failed still name the old path and count one held-back
+  rename each; the first-seen comparison reads the kept rows, so 32 pushes
+  with no pull in between would misjudge it.
 - **A rename onto an occupied path**: a pulled rename or move whose target
   already holds a file the renamed note does not own (another note of this
   device, or a stray file) is not applied - the move would overwrite that
@@ -649,7 +656,8 @@ applied again, quietly: a fetch that still fails re-parks at once, with no
 stall count and no `Error`; one that works writes the file and clears the
 message. A later record for the same entity from any device (an edit, a rename,
 a delete) makes the parked one moot and removes it, so the retry never lays
-old bytes over newer ones. A blob that is there but cannot be opened (sealed
+old bytes over newer ones. So does a record of this device's own for the entity
+(its own announce): the content comes back through the author's merge. A blob that is there but cannot be opened (sealed
 under a key this device lacks) is dropped at once, retrying cannot help, and
 named for the session only: it is not kept, so a restart forgets the name (the
 cursor has passed the record, so the file reappears when its entity next
