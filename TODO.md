@@ -1783,7 +1783,7 @@ Lane misc8:
       the save (scan may not have started yet) and a failed ASSERT left the
       lock thread joinable -> "terminate called". Fixed: qWaitFor +
       qScopeGuard join. Verify in main check.
-- [ ] Parked blobs are forgotten on restart (lane blob, documented): the
+- [ ] Parked blobs are forgotten on restart (lane parked, round 10 plan; was documented): the
       cursor is past the record, so the attachment only reappears when its
       entity next changes; the status line about it vanishes too. Plan:
       a journal table parked(recordID, entityID, path, blobAddress,
@@ -1832,3 +1832,36 @@ WINDOWS-PLAN.md; items below get filled from it.
       right tab buttons dragged out -> detached pane. 4 tests.
 - [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
       between windows, focus; offscreen cannot show these.
+
+## Fable sync audit round 10, 2026-10-18 (scratchpad SYNC-ROUND10.md)
+Lane sync10 (in this order, one function region, one lane):
+- [ ] B. HIGH: CRLF/BOM notes always "locally changed" (raw-byte hash vs
+      LF syncedHash): a remote delete never applies (note resurrects), F2(1)
+      never fires, and the CRLF format test passes for the wrong reason.
+      One note hash definition (SyncScanner::contentHash on the read text);
+      writeRemote always keeps the disk format.
+- [ ] A. HIGH: a conflict over a disk text with no state row (upgraded
+      journal, save between scan and pull) fast-forwards the other device's
+      text away with no copy. Winner writes the remote as a copy there.
+- [ ] D. MEDIUM: conflict winner's headDigest names the loser's text, so
+      its next edit merges against the wrong ancestor (spurious conflicts).
+- [ ] C. MEDIUM: path rule's own gate breaks with a third device (C moves
+      a renamed file back) and concurrent renames never converge: pure
+      renames settled by server seq, content records by sawPath.
+- [ ] E. LOW-MED: an announce whose blob upload fails is lost for good:
+      reset localMtime so the scanner retries.
+- [ ] Cleanups: delete F3 fallback once B lands (redundant), delete the
+      unreachable applyRemoteDelete link guard (keep its test, fix
+      comment), stale AnEditBeatsADeleteInBothDirections comment, document
+      F (equal-merge announce can revive a concurrently deleted note).
+Lane parked (parallel with sync10):
+- [ ] Journal table parked(...whole record), retryParked after pullJournal,
+      later record for the entity unparks; openBlob failures stay
+      session-only. Tests AParkedBlobIsRetriedAfterARestart,
+      ALaterRecordDropsAParkedBlob.
+After sync10 (needs C):
+- [ ] Item 17: same path created on two devices: first-to-server keeps
+      the path, loser moves to "<base> (<4 hex of entityID>)" on every
+      device. Equal texts (daily notes from one template, the common case):
+      re-key to one entity instead of two files (coordinator decision:
+      a duplicate daily note on every first sync is worse than 15 lines).
