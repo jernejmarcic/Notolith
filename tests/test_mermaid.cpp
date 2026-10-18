@@ -3,6 +3,10 @@
 // its own and through the editor and the window's `render.mermaid` setting.
 // Only TheInstalledMmdrDrawsADarkDiagram needs the real tool: it is skipped
 // when `mmdr` is absent, and fails instead when NOTEAPPC_REQUIRE_TOOLS=1.
+// mmdr runs in bubblewrap's sandbox where bwrap is installed and as a plain
+// process where not: the fake keeps its books in files outside its own
+// directory, which the sandbox hides, so the fixture hides bwrap from PATH
+// (the unsandboxed run) and the tests of the sandbox put it back.
 
 #include <gtest/gtest.h>
 
@@ -15,6 +19,7 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTest>
@@ -47,6 +52,35 @@ protected:
         ASSERT_TRUE(dir.isValid());
         // The disk cache is per test: an earlier test's diagram must not answer for this one.
         qputenv("XDG_CACHE_HOME", dir.filePath(QStringLiteral("cache")).toUtf8());
+        // A PATH of what the fake script runs (sh, cat, cp, sleep) and no bwrap: see the top of the file.
+        oldPath = qgetenv("PATH");
+        ASSERT_TRUE(QDir().mkpath(dir.filePath(QStringLiteral("bin"))));
+        for (const QString &name : {QStringLiteral("sh"), QStringLiteral("cat"), QStringLiteral("cp"), QStringLiteral("sleep")})
+            ASSERT_TRUE(QFile::link(QStandardPaths::findExecutable(name), dir.filePath(QStringLiteral("bin/") + name)));
+        qputenv("PATH", dir.filePath(QStringLiteral("bin")).toUtf8());
+    }
+    void TearDown() override { qputenv("PATH", oldPath); }
+
+    /// The tests of the sandbox: a PATH that finds bwrap, skipping (failing under NOTEAPPC_REQUIRE_TOOLS=1) without it.
+    bool withBubblewrap()
+    {
+        qputenv("PATH", oldPath);
+        if (!QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+            return true;
+        EXPECT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1")) << "NOTEAPPC_REQUIRE_TOOLS=1 and bwrap is missing";
+        return false;
+    }
+
+    /// A tool at dir/name that runs `script` as it is: for the sandbox, where the fake's books are out of reach.
+    QString rawFake(const QString &name, const QString &script)
+    {
+        const QString path = dir.filePath(name);
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(("#!/bin/sh\n" + script).toUtf8());
+        file.close();
+        QFile::setPermissions(path, QFile::permissions(path) | QFile::ExeOwner);
+        return path;
     }
 
     /// A tool at dir/name that appends a line to dir/runs per run, keeps the
@@ -105,6 +139,7 @@ protected:
     }
 
     QTemporaryDir dir;
+    QByteArray oldPath;
 };
 
 } // namespace
@@ -188,12 +223,10 @@ TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
 TEST_F(MermaidTest, ResolvesTheToolFromTheCargoHomeBin)
 {
     // A launcher's PATH has no cargo bin: the stub is only in $CARGO_HOME/bin.
-    const QByteArray oldPath = qgetenv("PATH"), oldCargo = qgetenv("CARGO_HOME");
-    qputenv("PATH", "/usr/bin:/bin");
+    const QByteArray oldCargo = qgetenv("CARGO_HOME");
     qputenv("CARGO_HOME", dir.filePath(QStringLiteral("cargo")).toUtf8());
     fake(QStringLiteral("cargo/bin/mmdr"));
     const auto answer = ask(rendererFor(QStringLiteral("mmdr")), QStringLiteral("graph TD\nA-->I"));
-    qputenv("PATH", oldPath);
     if (oldCargo.isNull())
         qunsetenv("CARGO_HOME");
     else
@@ -223,7 +256,8 @@ TEST_F(MermaidTest, PdfExportDrawsTheCachedDiagramAndOtherwiseTheListing)
 
 TEST_F(MermaidTest, TheInstalledMmdrDrawsADarkDiagram)
 {
-    // The real tool, on a machine that may be busy: asked again on a timeout.
+    // The real tool, in the sandbox where bwrap is installed, on a machine that may be busy: asked again on a timeout.
+    withBubblewrap();
     const auto answer = ask(diagramtest::retryingOnTimeout([] { return rendererFor(QStringLiteral("mmdr")); }),
                             QStringLiteral("flowchart LR\n  A[Start] --> B{Ok?}\n  B -- yes --> C[Done]\n  B -- no --> D[Retry]"));
     if (answer->result.isMarkdown && answer->result.text.contains(QLatin1String("install mmdr"))) {
@@ -337,6 +371,60 @@ TEST_F(MermaidTest, AToolThatHangsIsKilled)
     EXPECT_TRUE(answer->result.text.contains(QLatin1String("timed out")));
 }
 
+// --- the sandbox --------------------------------------------------------------
+
+TEST_F(MermaidTest, InTheSandboxTheToolStillGetsTheSourceAndTheColoursAndItsSVGIsCached)
+{
+    if (!withBubblewrap())
+        GTEST_SKIP() << "bwrap is not installed";
+    // It cannot keep books outside its directory: what it was given comes back in its SVG.
+    const QString tool = rawFake(QStringLiteral("mmdr"),
+                                 QStringLiteral("cfg=\nwhile [ $# -gt 0 ]; do case \"$1\" in -c) cfg=\"$2\";; esac; shift; done\n"
+                                                "echo '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"100\"><desc>'\n"
+                                                "cat \"$cfg\"; echo; cat\necho '</desc></svg>'\n"));
+    const auto answer = ask(rendererFor(tool), QStringLiteral("graph TD\nA-->C"));
+    ASSERT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+    const QByteArray cached = noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->C"), Theme::builtin(Theme::Mode::Dark));
+    EXPECT_TRUE(cached.contains("\"theme\":\"dark\"")) << cached.constData();
+    EXPECT_TRUE(cached.contains(Theme::builtin().color(QStringLiteral("--background-primary")).name().toUtf8())) << cached.constData();
+    EXPECT_TRUE(cached.contains("graph TD\nA-->C")) << cached.constData();
+}
+
+TEST_F(MermaidTest, InTheSandboxTheToolCannotReadTheHomeOrWriteOutsideItsDirectory)
+{
+    if (!withBubblewrap())
+        GTEST_SKIP() << "bwrap is not installed";
+    const QString secret = dir.filePath(QStringLiteral("secret"));
+    const QString written = dir.filePath(QStringLiteral("written"));
+    QFile file(secret);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("SECRETTEXT");
+    file.close();
+    // A fence is a stranger's input: a compromised mmdr tries the files a note's reader owns.
+    const QString tool = rawFake(QStringLiteral("mmdr"),
+                                 QStringLiteral("echo '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"300\" height=\"100\"><desc>'\n"
+                                                "cat '%1' 2>&1; cat /etc/passwd 2>&1; echo x > '%2' 2>&1\n"
+                                                "echo '</desc></svg>'\n")
+                                     .arg(secret, written));
+    const auto answer = ask(rendererFor(tool), QStringLiteral("graph TD\nA-->R"));
+    ASSERT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+    const QByteArray cached = noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->R"), Theme::builtin(Theme::Mode::Dark));
+    EXPECT_FALSE(cached.isEmpty());
+    EXPECT_FALSE(cached.contains("SECRETTEXT")) << "the tool read a file in the home";
+    EXPECT_FALSE(cached.contains("root:")) << "the tool read /etc/passwd";
+    EXPECT_FALSE(QFile::exists(written)) << "the tool wrote outside its directory";
+}
+
+TEST_F(MermaidTest, WithoutBubblewrapTheDiagramIsStillDrawnByAPlainProcess)
+{
+    // The fixture's PATH has no bwrap: unlike the other tools, Mermaid is not refused (it is on by default).
+    ASSERT_TRUE(QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty());
+    const auto answer = ask(rendererFor(fake(QStringLiteral("mmdr"))), QStringLiteral("graph TD\nA-->N"));
+    EXPECT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+    EXPECT_EQ(runs(), 1);
+    EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->N"), Theme::builtin(Theme::Mode::Dark)).isEmpty());
+}
+
 // --- the window's setting ---------------------------------------------------
 
 namespace {
@@ -352,6 +440,7 @@ protected:
     }
     void TearDown() override
     {
+        MermaidTest::TearDown();
         Settings config = Settings::load();
         config.reset(QStringLiteral("render.mermaid"));
         config.reset(QStringLiteral("render.mermaidTool"));

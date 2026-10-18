@@ -94,20 +94,10 @@ struct Made {
     QString error;
 };
 
-/// `mmdr -i - -c config.json`: the source on stdin, the SVG on stdout, so the
-/// only file is the config (which mmdr takes by path alone). Not `-o -`: 0.3.1
-/// writes that to a file named "-".
-Made runMermaid(const QString &tool, const QString &source, const QByteArray &config)
+/// mmdr as a plain process: the way it runs where there is no bubblewrap (see
+/// runMermaid).
+Made runMermaidUnsandboxed(const QString &tool, const QString &configPath, const QString &source)
 {
-    QTemporaryDir dir;
-    if (!dir.isValid())
-        return {{}, QCoreApplication::translate("MermaidBlock", "no temporary directory")};
-    const QString configPath = dir.filePath(QStringLiteral("config.json"));
-    QFile file(configPath);
-    if (!file.open(QIODevice::WriteOnly) || file.write(config) != config.size())
-        return {{}, QCoreApplication::translate("MermaidBlock", "no temporary file")};
-    file.close();
-
     QProcess process;
     process.start(tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath});
     if (!process.waitForStarted(kRunMilliseconds))
@@ -136,7 +126,7 @@ struct Ran {
 };
 
 Ran runSandboxed(const QString &dir, const QString &program, const QStringList &arguments, const QStringList &environment,
-                 const QByteArray &input, bool limitMemory)
+                 const QByteArray &input, bool limitMemory, int milliseconds = kSandboxedMilliseconds)
 {
     Ran ran;
     // A tool outside /usr (a path in the setting, a symlink into a home) is not in the sandbox: bind what it
@@ -170,16 +160,16 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
     process.start(command.program, command.arguments);
     if (command.filterFD >= 0)
         close(command.filterFD); // the fork has happened; bwrap holds its own copy
-    if (!process.waitForStarted(kSandboxedMilliseconds)) {
+    if (!process.waitForStarted(milliseconds)) {
         ran.failure = QCoreApplication::translate("MermaidBlock", "could not start %1").arg(program);
         return ran;
     }
     process.write(input);
     process.closeWriteChannel();
-    if (!process.waitForFinished(kSandboxedMilliseconds)) {
+    if (!process.waitForFinished(milliseconds)) {
         process.kill();
         process.waitForFinished(1000);
-        ran.failure = QCoreApplication::translate("MermaidBlock", "timed out after %1 s").arg(kSandboxedMilliseconds / 1000);
+        ran.failure = QCoreApplication::translate("MermaidBlock", "timed out after %1 s").arg(milliseconds / 1000);
         return ran;
     }
     ran.out = process.readAllStandardOutput();
@@ -195,6 +185,30 @@ Made fromRan(const Ran &ran, const QString &message)
     if (ran.code == 0 && !ran.out.isEmpty())
         return {ran.out, QString()};
     return {{}, !message.isEmpty() ? message : QCoreApplication::translate("MermaidBlock", "exit code %1").arg(ran.code)};
+}
+
+/// `mmdr -i - -c config.json`: the source on stdin, the SVG on stdout, so the
+/// only file is the config (which mmdr takes by path alone; the sandbox binds
+/// its directory at the same path). Not `-o -`: 0.3.1 writes that to a file
+/// named "-". In the sandbox like the other tools, as a shared note's fence
+/// is its input; where there is no bubblewrap it still runs, unsandboxed
+/// (mmdr is a parser of data, like poppler and QSvg in this process, and
+/// Mermaid is on by default, so refusing would silently remove it).
+Made runMermaid(const QString &tool, const QString &source, const QByteArray &config)
+{
+    QTemporaryDir dir;
+    if (!dir.isValid())
+        return {{}, QCoreApplication::translate("MermaidBlock", "no temporary directory")};
+    const QString configPath = dir.filePath(QStringLiteral("config.json"));
+    QFile file(configPath);
+    if (!file.open(QIODevice::WriteOnly) || file.write(config) != config.size())
+        return {{}, QCoreApplication::translate("MermaidBlock", "no temporary file")};
+    file.close();
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        return runMermaidUnsandboxed(tool, configPath, source);
+    const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
+                                 source.toUtf8(), true, kRunMilliseconds);
+    return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
 }
 
 QJsonObject colours(const QByteArray &config)
@@ -465,7 +479,7 @@ Result make(const std::shared_ptr<State> &state, const QString &source, const QB
 /// One thread, not the global pool's (parsing, search) while a tool runs for
 /// seconds: diagrams queue, and a second ask for a text already being made
 /// finds it in the memo instead of starting the tool twice. ponytail: a hung
-/// tool holds the queue for its 5 s (20 s for the sandboxed ones); widen it with per-key locking if that is felt.
+/// tool holds the queue for its 5 s (20 s for the JVM and TeX ones); widen it with per-key locking if that is felt.
 QThreadPool *pool()
 {
     static QThreadPool instance;

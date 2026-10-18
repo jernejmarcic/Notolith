@@ -839,6 +839,14 @@ already linked for notebook output).
   stdout; `-o -` is not used, 0.3.1 writes a file named `-` for it) and
   rasterises the SVG with `QSvgRenderer` at the column width and the display's
   pixel ratio. The tool gets 5 s, then is killed.
+- **Sandbox**: a fence can come from a shared note, so where bubblewrap is
+  installed mmdr runs in the same sandbox as the other diagram tools (see
+  "Sandbox" under PlantUML, TikZ and Graphviz below), with the 5 s budget and
+  the 4 GB address-space limit; the config goes in the temporary directory,
+  the one writable place. Unlike the other tools it is not refused without
+  bwrap: mmdr only parses text, comparable to the poppler and QSvg parsers
+  this process runs, and Mermaid is on by default, so it runs as a plain
+  process there and the diagram still draws.
 - **Cache**: `libs/render/MermaidCache.{h,cpp}` (in libs/render because publish
   does not link the editor). The SVG is kept as
   `$XDG_CACHE_HOME/noteAppC/mermaid/<hash of source>-<hash of config>.svg`, and in
@@ -867,8 +875,11 @@ already linked for notebook output).
   code block.
 - **Not drawn**: encrypted notes (the source would go into the cache), slides.
 
-`tests/test_mermaid.cpp` runs all of this against a fake `mmdr` script, plus
-one test against the installed tool (skipped when absent, a failure under
+`tests/test_mermaid.cpp` runs all of this against a fake `mmdr` script (with
+bwrap hidden from `PATH`, as the fake keeps its books outside its directory;
+the sandbox tests put it back: the tool gets its input there, cannot read the
+home or write outside its directory, and still draws without bwrap), plus
+one test against the installed tool, run in the sandbox (skipped when absent, a failure under
 `NOTEAPPC_REQUIRE_TOOLS=1`, which the lane check sets); the publish test is in
 `tests/test_publish.cpp`.
 
@@ -892,17 +903,17 @@ and Graphviz's libgvc was left out on purpose: a C parser with a CVE history
 reading a shared note's graph inside the editor process, with its unsaved text,
 is the wrong place for it).
 
-- **Sandbox**: each tool runs inside bubblewrap with the syscall filter
+- **Sandbox**: each of these runs inside bubblewrap with the syscall filter
   (`sandbox::bubblewrapCommand`, `libs/sandbox/Bubblewrap.h`, which TeX's
   compile step uses too): `/usr`, `/var/lib/texmf` and, from `/etc`, only `texmf`, `fonts`,
   `ld.so.cache`, `alternatives` and the JVM's `java*` directory (each if it exists) read-only, no home,
   no other disk, no network, no inherited environment, and one temporary
   directory writable. Without bwrap there is no diagram, only the hint: never an
-  unsandboxed run. A tool set by path outside `/usr` is resolved (a symlink
+  unsandboxed run (Mermaid alone is the exception, above). A tool set by path outside `/usr` is resolved (a symlink
   to the file it points to) and bound in read-only; whatever it needs besides
   itself (a wrapper script's jar, a home's libraries) is not, so install those
   under `/usr`. 20 s for a
-  tool (and for each of TeX's two steps), a CPU limit, and 4 GB of address space
+  tool (and for each of TeX's two steps; Mermaid's 5 s), a CPU limit, and 4 GB of address space
   for all but the JVM.
 - **PlantUML**: `plantuml -tsvg -pipe -charset UTF-8` with the source on stdin
   (wrapped in `@startuml` when it has no `@start...`), `--dark-mode` on a dark
