@@ -714,6 +714,15 @@ void SyncEngine::changePassword(const QString &newPassword)
 
 void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
 {
+    // The scanner can see names no other device may be asked to write (a
+    // backslash, a dot folder, a link out of the vault): not pushed, named.
+    if (!m_vault.isConfinedPath(change.path)) {
+        if (!m_refusedPaths.contains(change.path))
+            m_refusedPaths.append(change.path);
+        if (change.kind == SyncScanner::Change::Deleted)
+            m_journal->removeEntity(change.entityID);
+        return;
+    }
     const auto activeKey = m_journal->activeItemsKey();
     if (!activeKey)
         return;
@@ -979,7 +988,7 @@ QString SyncEngine::refusedWarning() const
 {
     if (m_refusedPaths.isEmpty())
         return {};
-    return QStringLiteral("%1 record(s) from other devices refused for naming a path outside the vault: %2")
+    return QStringLiteral("%1 record(s) refused: paths outside the vault or with odd names: %2")
         .arg(m_refusedPaths.size())
         .arg(m_refusedPaths.mid(0, 5).join(QStringLiteral(", ")));
 }

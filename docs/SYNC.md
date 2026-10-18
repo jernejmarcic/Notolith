@@ -366,7 +366,11 @@ occupied-path case in "Conflict rules": kept as a copy beside it.) A refused
 record is dropped, like one that cannot be decrypted - it could never succeed,
 so it must not hold the cursor back - and its path is named in the status
 message for the rest of the session. Outgoing, the scanner skips symlinks, so
-a link's target (maybe outside the vault) is never pushed as a note.
+a link's target (maybe outside the vault) is never pushed as a note, and a
+local change whose path fails the same check (a backslash in the name, a dot
+folder) is not pushed either: it is named in the status message ("refused:
+paths outside the vault or with odd names"), and a delete of such a file just
+forgets the entity.
 
 ### Resumption
 

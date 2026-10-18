@@ -1327,6 +1327,27 @@ TEST_F(SyncIntegrationTest, AnUnreachableBlobHoldsThePullThenIsParkedAndNamed)
     EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lost.png")));
 }
 
+// The scanner sees every file on disk; a name no other device may write
+// (a backslash) is not pushed, and says so - the files beside it are.
+TEST_F(SyncIntegrationTest, ANameOutsideTheRulesIsNotPushedAndIsNamed)
+{
+    writeNote(vaultA.path(), QStringLiteral("a\\b.md"), QStringLiteral("odd name"));
+    writeNote(vaultA.path(), QStringLiteral("fine.md"), QStringLiteral("normal"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(watchA.pushed, 1);
+    EXPECT_TRUE(watchA.lastMessage.contains(QStringLiteral("a\\b.md"))) << watchA.lastMessage.toStdString();
+
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/fine.md")), QStringLiteral("normal"));
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), 1) << snapshot(vaultB.path());
+}
+
 // A deletes a note B has not yet seen change: B's edit was already on the
 // server, so the delete is older than B's state and does nothing.
 TEST_F(SyncIntegrationTest, ADeleteConcurrentWithAPushedEditKeepsTheEdit)
