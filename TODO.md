@@ -1561,7 +1561,7 @@ when off.
       - [x] (lane links2, 6dc99aa: Indexer::waitIdle(1000) before the rewrite; move path untested) A note whose first link to A was added since the last index run
             is not a rename candidate (same lag as before; would need a
             full scan).
-      - [ ] The first list query after a name change still costs ~22 ms
+      - [x] (moved to audit 8 item 12) The first list query after a name change still costs ~22 ms
             on 20 000 notes (build incrementally if it shows).
       - [x] (lane links2, b216af9) The status-bar "links in a note were not updated" path has no
             window test.
@@ -1607,6 +1607,65 @@ Found 2026-10-18 (lane etc report):
       rendering unsandboxed (a parser of data, like poppler in-process, and
       Mermaid is on by default), with the behaviour documented. Tests with
       the fake mmdr must still assert what they did (stdin, colours).
-- [ ] PluginHost still binds all of /etc: plugins are user-installed native
+- [x] (moved to audit 8 item 14) PluginHost still binds all of /etc: plugins are user-installed native
       code with granted permissions (network needs resolv.conf, ssl); left
       as is, outside the shared-note threat.
+
+## Fable audit round 8, 2026-10-18 (relink .. syncwedge)
+
+Clean: JAVA_TOOL_OPTIONS inside --clearenv; alt-text escaping; etcBinds;
+findHeading linear on hostile input; diagram in-flight dedupe; link-list
+cache invalidation; fresh-parse rewrite; parked-delete ordering vs local
+edits; every new test can fail.
+
+Lane sync8:
+- [ ] 1. BUG, data loss: after a delete is parked, a later put of a new
+      entity at the same path (`!existing`, so not localChanged) overwrites
+      the locally edited file. Plan: in the put branch, when no entity owns
+      the path but a file exists there with a different content address,
+      write the incoming as a conflict copy and keep the local file (same
+      for attachments; also covers two devices creating one path). Test:
+      A deletes, B parks, B edits, A recreates, B syncs: B's text kept.
+- [ ] 9. pendingDeletes() read from the journal per pulled record: load
+      once per cycle, write-through.
+- [ ] 10. A parked delete shows Status::Error forever: a Warning status
+      (or Idle + message) so healthy sync does not read as broken.
+- [ ] 11c. Document that the 3-failure count restarts each launch.
+
+Lane index8:
+- [ ] 2. waitIdle before rename stalls the UI (debounce rebuild = full
+      vault walk, up to 1 s) and re-enters every Index::changed consumer
+      mid-rename; past the cap the link is missed silently. Plan: drop
+      waitIdle; autosave() returns the paths it saved, Indexer exposes
+      paths in flight, both added as extra candidates to
+      updateLinksAfterRename. Test: rename right after a timer save; no
+      Index::changed during renameVaultPath.
+- [ ] 3. Indexer::start gates on isRunning(), not on the last batch being
+      applied; apply() then blocks on the next scan's waitForFinished and
+      skips notifyChanged for the previous writes (stale panes). Plan: gate
+      on m_active, drop the waitForFinished. Unit test.
+- [ ] 6. updateLinksAfterRename writes notes whose text did not change
+      (folder rename with sibling [[links]]: every note rewritten). Plan:
+      skip unchanged text. Test: rewritten == 0, mtimes unchanged.
+- [ ] 7. One unreadable candidate (deleted externally) aborts the rewrite
+      after the file moved. Plan: skip and name it like a lossy note.
+- [ ] 12. linkTargets() rebuild ~22 ms on 20 000 notes on the UI thread
+      after a name change (TODO above): derive from the in-memory names.
+- [ ] 13. Every in-app save arms the watcher debounce -> rebuild() (full
+      walk). Plan: reindex only the changed paths the watcher reported.
+
+Lane misc8:
+- [ ] 4. The unsandboxed mmdr fallback (no bwrap) has no rlimits and the
+      full environment. Plan: same child modifier (RLIMIT_AS/CPU) and an
+      environment of PATH + HOME=temp dir. Test with the limits fake.
+- [ ] 8. Sandboxed tools rebuild the fontconfig cache each first render
+      (/var/cache/fontconfig not bound, HOME is a temp dir). Plan:
+      --ro-bind-try /var/cache/fontconfig; time a first dot render.
+- [ ] 5. headingKey merges `C`, `C++`, `C#` (first wins): `[[N#C++]]`
+      jumps to `## C`. Plan: exact headingLinkText match first, key as
+      fallback; NFC before keying. Test C / C++.
+- [ ] 14. PluginHost binds all of /etc: use etcBinds plus resolv.conf,
+      hosts, ssl, ca-certificates, nsswitch.conf, localtime for plugins
+      with the network permission, the default list otherwise.
+- [ ] 11. Nits: alt text left(2000) may split a surrogate pair;
+      static_assert pools/pruned arrays against DiagramKind.
