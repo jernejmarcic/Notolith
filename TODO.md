@@ -1695,7 +1695,7 @@ Lane sync8:
       on the parent fd in Vault::write/raw writes; re-check in
       applyRemoteDelete; refuse backslash names on push too, with a status
       line, so both sides agree.
-- [ ] 17. A note created on two devices at one path conflicts again on each
+- [x] 17. A note created on two devices at one path conflicts again on each
       later edit until one side renames it (documented). Later: adopt one
       entity for identical paths after the first conflict.
 
@@ -1882,13 +1882,13 @@ Lane parked (parallel with sync10):
       guard (a rename on a pre-digest journal counts a state miss).
       Residual: rename back to a former name + edit before any sync reads
       as no rename (documented).
-- [ ] Attachment twin of finding A on an upgraded journal: unchanged
+- [x] Attachment twin of finding A on an upgraded journal: unchanged
       attachment with empty baseDigest fast-forwards over its own pushed
       bytes. Fix: digest of the disk bytes as base (lane same17).
-- [ ] Dead guard !(inLine && baseHasNoRow) in the path rule; parked
+- [x] Dead guard !(inLine && baseHasNoRow) in the path rule; parked
       paragraph: own record also unparks (lane same17).
 After sync10 (needs C):
-- [ ] Item 17: same path created on two devices: first-to-server keeps
+- [x] Item 17: same path created on two devices: first-to-server keeps
       the path, loser moves to "<base> (<4 hex of entityID>)" on every
       device. Equal texts (daily notes from one template, the common case):
       re-key to one entity instead of two files (coordinator decision:
@@ -1918,7 +1918,7 @@ Today: no multi-user. One sync account = one person's devices (password or
 lockbox enrolment). Roadmap 11 (CRDT per note via yrs C FFI, E2EE relay,
 presence) is not built; SYNC.md's lockbox section names the hook: the same
 X25519 lockbox call with a collaborator's public key, scoped to one note's key.
-- [ ] Jernej's choices (asked 2026-10-18): live co-editing vs sending a copy;
-      LAN only vs over the internet (NAT: relay fallback or not); reuse
-      Hearth's P2P transport or not.
+- [x] Jernej's choices (2026-10-18): "Live co-editing"; reach: "LAN +
+      tailscale, self hosted server in the future"; transport: "Share code
+      with Hearth" (extract Hearth's link layer into a library both use).
 - [ ] Fable plan once chosen.
