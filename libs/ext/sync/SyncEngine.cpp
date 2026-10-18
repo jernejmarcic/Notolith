@@ -919,12 +919,6 @@ QString SyncEngine::pullJournal(int *pulled, int *conflicts)
 bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, const QByteArray &parent, QString *error)
 {
     const auto existing = m_journal->entity(entityID);
-    // A parked delete is retried later, by when the file may have become a
-    // link (out of the vault, or anywhere): never touched, never trashed.
-    if (existing && !m_vault.isConfinedPath(existing->path)) {
-        refuse(existing->path);
-        return true;
-    }
     // The deleter had not seen a state this device has since applied: the
     // delete is stale. Nothing is touched - the deleter gets that state as an
     // upsert in its next pull and re-creates the file (an edit beats a delete).
@@ -1201,22 +1195,6 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             m_journal->putEntity(entity);
             if (existing->entityType == QStringLiteral("note"))
                 m_journal->writeBase(record.entityID, own->text);
-        } else if (!own && remote.parent == existing->baseDigest) {
-            // The row was pruned before its echo came back (a note scanned
-            // more than kStateHistory times between two cycles): the record
-            // itself, written here, holds the content.
-            const bool isNote = existing->entityType == QStringLiteral("note");
-            QString text = remote.body;
-            QByteArray raw;
-            if (!loadRemoteContent(record.recordID, remote.path, remote.blobAddress, isNote, noteKey, &text, &raw,
-                                   error))
-                return error->isEmpty(); // an error: retry the record; none: parked, dropped
-            SyncJournal::Entity entity = *existing;
-            entity.baseDigest = remote.hash;
-            entity.syncedHash = SyncCrypto::contentAddress(m_contentKey, isNote ? text.toUtf8() : raw);
-            m_journal->putEntity(entity);
-            if (isNote)
-                m_journal->writeBase(record.entityID, text);
         }
         ++*pulled;
         return true;

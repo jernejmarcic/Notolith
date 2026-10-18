@@ -472,13 +472,13 @@ Once a record is applied, `base/` holds its text, `baseDigest` and
 records are confirmed the same way when they come back (the self-echo), from the
 state the device wrote - never from whatever the vault file holds by then. An
 echo whose `parent` is no longer the `baseDigest` is skipped: a remote record
-was applied in between and its merge result carries that content. Two
-exceptions keep the base from falling behind a file that already holds the
+was applied in between and its merge result carries that content. One
+exception keeps the base from falling behind a file that already holds the
 content: the echo still moves it when the file's own hash (what the scanner
-last saw) is the echoed record's, and when the record's row was pruned from
-`states` (a note scanned more than 32 times with no push in between, say) and
-its `parent` is the base, the record itself (inline body, or its blob) supplies
-the text the base and the synced hash are moved to.
+last saw) is the echoed record's. That is also what walks the base along a
+chain of own records whose first rows were pruned from `states` (a note scanned
+more than 32 times with no push in between, say): their echoes are skipped, and
+the last one's row is there and matches the file.
 
 - **Clean merge**: write the merged text (atomic, preserves this file's
   CRLF/BOM) and confirm the sender's record as above. When the merged text

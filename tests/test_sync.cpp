@@ -1316,8 +1316,8 @@ TEST_F(SyncIntegrationTest, AnEditBeatsADeleteInBothDirections)
     EXPECT_TRUE(QFile::exists(vaultB.path() + QStringLiteral("/shared.md")));
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/shared.md")), QStringLiteral("B's edit, offline"));
 
-    // B's next scan notices the file has no known entity any more (the
-    // delete dropped it from B's journal) and re-pushes it fresh.
+    // The edit beat the delete: B kept the entity, and the pull that applied
+    // the delete queued the file as the entity's next record, pushed now.
     engineB.syncNow();
     ASSERT_TRUE(watchB.waitForCycle());
     EXPECT_EQ(watchB.pushed, 1);
@@ -2225,11 +2225,12 @@ TEST_F(SyncIntegrationTest, ARecordBeneathAFolderLinkIsNotWrittenThroughIt)
 
 // A delete parked while its file could not be trashed is retried later; if
 // the file is a link by then, nothing may touch it or what it points to
-// (moving it to the trash would move the link). Here the scan at the start of
-// the cycle sees the link first (the scanner skips links, so the file looks
-// deleted: the entity goes, the path is named); applyRemoteDelete()'s own
-// confinement check is for a link that appears after the scan, which a test
-// cannot arrange, and is not what this test pins.
+// (moving it to the trash would move the link). What protects it is the
+// scanner: it skips links, so at the start of the cycle the file looks deleted,
+// queueLocalChange() refuses the path and drops the entity, and the retry has
+// no entity left to act on. applyRemoteDelete() has no check of its own: the
+// scan runs before the retry every cycle, and a link put there in between would
+// still only be renamed itself, never its target.
 TEST_F(SyncIntegrationTest, AParkedDeleteWhoseFileBecameALinkLeavesTheLinkAlone)
 {
     if (geteuid() == 0)
