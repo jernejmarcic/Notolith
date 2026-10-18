@@ -31,6 +31,7 @@
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QScopeGuard>
 #include <QTimer>
 
 #include "ServerStore.h"
@@ -223,6 +224,7 @@ protected:
         ASSERT_TRUE(serverData.isValid());
         ASSERT_TRUE(vaultA.isValid());
         ASSERT_TRUE(vaultB.isValid());
+        ASSERT_TRUE(vaultC.isValid());
         store = std::make_unique<ServerStore>(serverData.path());
         ASSERT_TRUE(store->isOpen()) << store->error().toStdString();
         server = std::make_unique<SyncServer>(store.get());
@@ -235,6 +237,7 @@ protected:
     QTemporaryDir serverData;
     QTemporaryDir vaultA;
     QTemporaryDir vaultB;
+    QTemporaryDir vaultC;
     std::unique_ptr<ServerStore> store;
     std::unique_ptr<SyncServer> server;
     QString serverURL;
@@ -856,6 +859,135 @@ TEST_F(SyncIntegrationTest, ADeleteThatCannotBeTrashedIsRetriedNotUndone)
     engineA.syncNow();
     ASSERT_TRUE(watchA.waitForCycle());
     EXPECT_FALSE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
+}
+
+// The retry above must not wedge sync for good: a trash that never works held
+// every later record from every device behind the one delete. After three
+// blocked cycles the pull moves on and the delete is retried on its own.
+TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("text"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/shared.md");
+    const QString otherOnB = vaultB.path() + QStringLiteral("/other.md");
+    ASSERT_TRUE(QFile::exists(onB));
+
+    QFile::remove(vaultA.path() + QStringLiteral("/shared.md"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultA.path(), QStringLiteral("other.md"), QStringLiteral("from A, after the delete"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const QString trash = vaultB.path() + QStringLiteral("/.trash");
+    ASSERT_TRUE(QDir().mkpath(trash));
+    ASSERT_TRUE(QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restoreTrash = qScopeGuard([&trash] {
+        QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    });
+
+    // Three cycles the delete holds everything behind it...
+    for (int cycle = 1; cycle <= 3; ++cycle) {
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error) << cycle;
+        EXPECT_FALSE(QFile::exists(otherOnB)) << "cycle " << cycle;
+    }
+    // ...the fourth lets the later record through, and says what is left.
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_TRUE(QFile::exists(otherOnB));
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error);
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("deletion"))) << watchB.lastMessage.toStdString();
+
+    // Still pending: the file stays and is never pushed back as a new note.
+    for (int cycle = 0; cycle < 2; ++cycle) {
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        EXPECT_TRUE(QFile::exists(onB));
+        EXPECT_EQ(watchB.pushed, 0) << "the file was pushed back as a new note";
+        EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error);
+    }
+
+    // Deletable again: the next cycle applies it and the status clears.
+    QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_FALSE(QFile::exists(onB));
+    EXPECT_TRUE(QFile::exists(trash + QStringLiteral("/shared.md")));
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
+    EXPECT_EQ(watchB.pushed, 0);
+
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_FALSE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
+}
+
+TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("original"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    SyncEngine engineC;
+    Watcher watchC(engineC);
+    engineC.start(vaultC.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchC.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/shared.md");
+    ASSERT_TRUE(QFile::exists(onB));
+
+    QFile::remove(vaultA.path() + QStringLiteral("/shared.md"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultA.path(), QStringLiteral("other.md"), QStringLiteral("marker"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const QString trash = vaultB.path() + QStringLiteral("/.trash");
+    ASSERT_TRUE(QDir().mkpath(trash));
+    ASSERT_TRUE(QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restoreTrash = qScopeGuard([&trash] {
+        QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    });
+    for (int cycle = 0; cycle < 4; ++cycle) { // the delete is pending after the fourth
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+    ASSERT_TRUE(QFile::exists(vaultB.path() + QStringLiteral("/other.md")));
+    ASSERT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
+
+    // C, which never saw the delete, edits the note: the edit comes after it.
+    writeNote(vaultC.path(), QStringLiteral("shared.md"), QStringLiteral("edited on C"));
+    engineC.syncNow();
+    ASSERT_TRUE(watchC.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(readNoteText(onB), QStringLiteral("edited on C"));
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle) << watchB.lastMessage.toStdString();
+
+    // The pending delete is gone for good: a working trash does not take the note.
+    QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_TRUE(QFile::exists(onB));
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
 }
 
 TEST_F(SyncIntegrationTest, NoPlaintextReachesTheServer)
