@@ -317,6 +317,7 @@ void Index::close()
     }
     m_names.clear();
     m_pathNames.clear();
+    m_linkTargetsValid = m_aliasesValid = false;
 }
 
 bool Index::isOpen() const
@@ -400,6 +401,7 @@ void Index::loadNames()
 {
     m_names.clear();
     m_pathNames.clear();
+    m_linkTargetsValid = m_aliasesValid = false;
 
     QSqlQuery query(m_db);
     query.exec(QStringLiteral("SELECT files.path, names.name FROM names "
@@ -447,8 +449,12 @@ void Index::rememberNames(const QString &path, const QStringList &names)
 
 void Index::setNames(const QString &relative, const QStringList &names)
 {
+    const QStringList before = m_pathNames.value(relative);
     forgetNames(relative);
     rememberNames(relative, names);
+    // A save that leaves the note's names alone leaves both lists alone.
+    if (m_pathNames.value(relative) != before)
+        m_linkTargetsValid = m_aliasesValid = false;
 }
 
 void Index::beginBatch()
@@ -475,11 +481,16 @@ void Index::put(const Metadata &metadata, const QString &body)
     const QString path = QDir(m_vaultRoot).relativeFilePath(metadata.path);
     NoteRows rows(m_db);
     rows.erase(path);
+    const QStringList before = m_pathNames.value(path);
     forgetNames(path);
     const QStringList names = noteNames(path, metadata);
-    if (!rows.insertNote(path, metadata, body, names, &m_error))
+    if (!rows.insertNote(path, metadata, body, names, &m_error)) {
+        m_linkTargetsValid = m_aliasesValid = false;
         return;
+    }
     rememberNames(path, names);
+    if (m_pathNames.value(path) != before)
+        m_linkTargetsValid = m_aliasesValid = false;
     if (!m_inBatch)
         emit changed();
 }
@@ -531,6 +542,7 @@ void Index::remove(const QString &path)
     const QString relative = QDir(m_vaultRoot).relativeFilePath(path);
     NoteRows(m_db).erase(relative);
     forgetNames(relative);
+    m_linkTargetsValid = m_aliasesValid = false;
 }
 
 struct Index::Writer::Private {
@@ -864,6 +876,8 @@ QStringList Index::findByName(const QString &query, int limit) const
 
 QStringList Index::linkTargets() const
 {
+    if (m_linkTargetsValid)
+        return m_linkTargetsCache;
     // An alias is offered as `Note|alias` (aliases()), so it is not also a
     // plain name - unless it is some note's own name, which stays completable.
     QSet<QString> aliasNames;
@@ -887,11 +901,15 @@ QStringList Index::linkTargets() const
         if (!aliasNames.contains(name))
             names << name;
     }
+    m_linkTargetsCache = names;
+    m_linkTargetsValid = true;
     return names;
 }
 
 QList<QPair<QString, QString>> Index::aliases() const
 {
+    if (m_aliasesValid)
+        return m_aliasesCache;
     QList<QPair<QString, QString>> found;
     QSqlQuery query(m_db);
     query.exec(QStringLiteral("SELECT files.path, props.type, props.value FROM props "
@@ -913,6 +931,8 @@ QList<QPair<QString, QString>> Index::aliases() const
                 found.append({piece.trimmed(), note});
         }
     }
+    m_aliasesCache = found;
+    m_aliasesValid = true;
     return found;
 }
 

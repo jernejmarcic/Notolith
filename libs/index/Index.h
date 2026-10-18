@@ -272,6 +272,13 @@ private:
     QHash<QString, QStringList> m_names;
     /// vault-relative path -> the names it registered, so a remove is exact.
     QHash<QString, QStringList> m_pathNames;
+    /// linkTargets() and aliases() cost ~20 ms on a 20 000-note vault and run
+    /// on every index change; dropped when a note's names change (an alias is
+    /// one of them) or a note goes, so a plain edit of the text keeps them.
+    mutable QStringList m_linkTargetsCache;
+    mutable QList<QPair<QString, QString>> m_aliasesCache;
+    mutable bool m_linkTargetsValid = false;
+    mutable bool m_aliasesValid = false;
 
     // --- graph view (libs/ext/graph) ----------------------------------
     // Added for the optional graph module. Kept in its own block at the end

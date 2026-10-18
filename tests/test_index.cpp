@@ -273,6 +273,38 @@ TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)
     EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 3);
 }
 
+// linkTargets() and aliases() are cached between index changes; a write that
+// changes either must show in the next call.
+TEST_F(IndexTest, TheLinkListsFollowEditsAfterBeingQueried)
+{
+    Index index;
+    build(index);
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+
+    write(QStringLiteral("Fresh.md"), "---\naliases: [Nick]\n---\n");
+    Indexer indexer(&index);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_TRUE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Nick")));
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+
+    write(QStringLiteral("Fresh.md"), "---\naliases: [Other]\n---\n");
+    QSignalSpy again(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(again.wait(20000));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Nick"), QStringLiteral("Fresh")}));
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Other"), QStringLiteral("Fresh")}));
+
+    // A note that goes takes its name and aliases out of both.
+    QFile::remove(vault.absolute(QStringLiteral("Fresh.md")));
+    index.remove(vault.absolute(QStringLiteral("Fresh.md")));
+    EXPECT_FALSE(index.linkTargets().contains(QStringLiteral("Fresh")));
+    EXPECT_FALSE(index.aliases().contains({QStringLiteral("Other"), QStringLiteral("Fresh")}));
+}
+
 // A notebook is a note only while the indexer has a reader for it (the window
 // gives it one with the notebooks feature on): indexed by the reader's text,
 // named by its file name with the extension, and a plain file again without.
