@@ -96,6 +96,31 @@ QString Vault::confinedNotePath(const QString &relativePath) const
     return real.startsWith(root + QLatin1Char('/')) ? path : QString();
 }
 
+bool Vault::isConfinedPath(const QString &relativePath, bool leafMayBeLink) const
+{
+    if (!isValid() || relativePath.isEmpty() || QDir::isAbsolutePath(relativePath)
+        || relativePath.contains(QLatin1Char('\\')) || relativePath.contains(QChar(0)))
+        return false;
+    for (const QStringView part : QStringView(relativePath).split(QLatin1Char('/'))) {
+        if (part.isEmpty() || part.startsWith(QLatin1Char('.')))
+            return false; // empty, ".", "..", and the app's own hidden folders
+    }
+    const QFileInfo leaf(absolute(relativePath));
+    if (!leafMayBeLink && leaf.isSymLink())
+        return false;
+    // The nearest ancestor that is there (a dangling link counts: its
+    // canonical path is empty, so it fails below) decides where a new folder
+    // or file would really land.
+    // ponytail: checked, not held open - a link swapped in between this and
+    // the write wins the race; openat(O_NOFOLLOW) would close it.
+    QFileInfo dir(leaf.path());
+    while (!dir.exists() && !dir.isSymLink())
+        dir = QFileInfo(dir.path());
+    const QString real = dir.canonicalFilePath();
+    const QString root = QFileInfo(m_root).canonicalFilePath();
+    return real == root || real.startsWith(root + QLatin1Char('/'));
+}
+
 QString Vault::attachmentFolderFor(const QString &setting, const QString &notePath) const
 {
     const QString wanted = setting.trimmed();

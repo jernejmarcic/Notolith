@@ -330,6 +330,23 @@ that references it, itself encrypted.
 4. `limit=500` plus resumption from `lastPulledSeq` is what makes a large
    pull safe to interrupt - there is no "start the pull over" path.
 
+### Paths from records are confined to the vault
+
+A record is authenticated, but a path inside it is still input from another
+device, and a device holding the vault keys can be compromised or buggy (it
+must not be able to write `~/.bashrc`). So before any file is read, written,
+moved or trashed, `Vault::isConfinedPath` checks the record's path, and the
+path the entity already has here: relative; no empty, `.`, `..` or dot-prefixed
+segment (so no `.obsidian/plugins/...`); no backslash or NUL; and the nearest
+existing ancestor really inside the vault, so a symlinked folder that points
+out of it is no way out. The entity's own file may not be a symlink either, so
+a pulled edit is never written through one. (A link at a *new* target is the
+occupied-path case in "Conflict rules": kept as a copy beside it.) A refused
+record is dropped, like one that cannot be decrypted - it could never succeed,
+so it must not hold the cursor back - and its path is named in the status
+message for the rest of the session. Outgoing, the scanner skips symlinks, so
+a link's target (maybe outside the vault) is never pushed as a note.
+
 ### Resumption
 
 `lastPulledSeq` and the outbox both live in `SyncJournal`'s SQLite database

@@ -382,6 +382,36 @@ TEST(VaultConfinedNotePath, OnlyNotesInsideTheVault)
     EXPECT_TRUE(vault.confinedNotePath(QStringLiteral(".obsidian/app.json")).isEmpty());
 }
 
+TEST(VaultIsConfinedPath, AnythingThatLeavesTheVaultOrHidesInItIsRefused)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub")));
+    QFile(outside.filePath(QStringLiteral("secret.md"))).open(QIODevice::WriteOnly);
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("secret.md")), dir.filePath(QStringLiteral("link.md"))));
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("away"))));
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("missing")), dir.filePath(QStringLiteral("dangling"))));
+    const Vault vault(dir.path());
+
+    EXPECT_TRUE(vault.isConfinedPath(QStringLiteral("sub/New.md")));
+    EXPECT_TRUE(vault.isConfinedPath(QStringLiteral("not/there/yet/New.png"))); // a folder a pull may create
+    for (const QString &bad : {QString(), QStringLiteral("../x.md"), QStringLiteral("sub/../../x.md"),
+                               QStringLiteral("sub/../x.md"), QStringLiteral("./x.md"), QStringLiteral("sub//x.md"),
+                               QStringLiteral("sub/"), outside.filePath(QStringLiteral("x.md")),
+                               QStringLiteral("a\\b.md"), QString::fromUtf8(QByteArray("a\0b.md", 6)),
+                               QStringLiteral(".obsidian/plugins/p/main.js"), QStringLiteral("sub/.git/hooks/x"),
+                               QStringLiteral("away/x.md"), QStringLiteral("away/new/x.md"),
+                               QStringLiteral("dangling/x.md")}) {
+        EXPECT_FALSE(vault.isConfinedPath(bad)) << bad.toStdString();
+        EXPECT_FALSE(vault.isConfinedPath(bad, true)) << bad.toStdString();
+    }
+    // The file itself being a link: only where the caller says it may be.
+    EXPECT_FALSE(vault.isConfinedPath(QStringLiteral("link.md")));
+    EXPECT_TRUE(vault.isConfinedPath(QStringLiteral("link.md"), true));
+    EXPECT_FALSE(vault.isConfinedPath(QStringLiteral("dangling")));
+    EXPECT_TRUE(vault.isConfinedPath(QStringLiteral("dangling"), true));
+}
+
 TEST(VaultAttachmentFolder, ObsidiansFourForms)
 {
     QTemporaryDir dir;
