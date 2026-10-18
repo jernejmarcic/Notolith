@@ -1683,7 +1683,7 @@ Lane sync8:
       parent; keep convergence tests green.
 - [ ] 30. Not verified: an old journal upgraded through a real cycle (only
       the schema upgrade is tested); Dice 0.5 and the 64-pair cap untuned.
-- [ ] 27. A password change replaces the content key, so every keyed
+- [x] 27. A password change replaces the content key, so every keyed
       localHash/syncedHash stops matching: full re-push and "local changed"
       on every incoming record afterwards (pre-existing; found by Fable).
       Plan after syncbase: rehash the journal under the new key in
@@ -1765,10 +1765,11 @@ Lane misc8:
 - [ ] Item 28 + F5 (lane B blob): per-entity blob address; blob fetch
       failure parks after 3 cycles with a status line, never dropped
       silently; push-side confinement (backslash names).
-- [ ] Item 27 (lane C contentkey): content key kept per device in journal
+- [x] Item 27 (lane C contentkey): content key kept per device in journal
       meta, never changed by a password change.
 - [ ] Item 26 (lane D nofollow, then lane A): Vault::writeBytesNoFollow /
       writeNoteNoFollow (openat O_NOFOLLOW, renameat); engine writes use
-      them; applyRemoteDelete re-checks its path.
+      them; applyRemoteDelete re-checks its path. Vault part merged
+      (keeps the file mode); engine call sites left for lane A.
 - [ ] Item 30 (lane E upgrade): old journal through a real cycle; scanner
       Dice tests; journal.db size numbers; F8 documented.
