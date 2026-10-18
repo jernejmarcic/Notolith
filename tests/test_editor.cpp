@@ -830,20 +830,22 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
     const QString small = generateNote(200);
     const QString large = generateNote(1000);
 
-    // Best of three for each: a busy machine (parallel builds) only ever adds
-    // time, so the minimum is the cost of the code, not of the neighbours.
-    auto bestOpenMs = [](const QString &text) {
-        double best = 1e9;
-        for (int run = 0; run < 3; ++run) {
-            QElapsedTimer clock;
-            clock.start();
-            auto editor = editorWith(text);
-            best = qMin(best, clock.nsecsElapsed() / 1e6);
-        }
-        return best;
+    // Best of seven for each, the two interleaved: a busy machine (parallel
+    // builds) only ever adds time, so the minimum is the cost of the code, and
+    // a slow stretch then hits both sizes instead of one (best of three, one
+    // size after the other, failed about one run in four under load).
+    auto openMs = [](const QString &text) {
+        QElapsedTimer clock;
+        clock.start();
+        auto editor = editorWith(text);
+        return clock.nsecsElapsed() / 1e6;
     };
-    const double smallMs = bestOpenMs(small);
-    const double largeMs = bestOpenMs(large);
+    double smallMs = 1e9;
+    double largeMs = 1e9;
+    for (int run = 0; run < 7; ++run) {
+        smallMs = qMin(smallMs, openMs(small));
+        largeMs = qMin(largeMs, openMs(large));
+    }
 
     const double sizeRatio = double(large.size()) / double(small.size());
     const double timeRatio = largeMs / qMax(0.001, smallMs);
