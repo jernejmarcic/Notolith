@@ -165,6 +165,7 @@ private:
     void setPendingDeletes(const QList<QByteArray> &ids);
     void retryPendingDeletes();
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
+    void refuse(const QString &path);     ///< names a path a record was dropped for (refusedWarning)
     QString refusedWarning() const;       ///< empty when no record was refused
     QString unreadableWarning() const;    ///< empty when no attachment was parked
     /// Fills *text (notes) or *raw (the rest) from the record's blob; an

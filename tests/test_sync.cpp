@@ -1988,6 +1988,87 @@ TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
     EXPECT_FALSE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
 }
 
+// isConfinedPath() lets a folder that is a link to somewhere else inside the
+// vault pass; the write itself does not follow it, so a record naming a file
+// beneath it is refused, named, and nothing is written through the link.
+TEST_F(SyncIntegrationTest, ARecordBeneathAFolderLinkIsNotWrittenThroughIt)
+{
+    writeNote(vaultA.path(), QStringLiteral("lnk/x.md"), QStringLiteral("arrives through a link"));
+    writeNote(vaultA.path(), QStringLiteral("after.md"), QStringLiteral("later records still apply"));
+    ASSERT_TRUE(QDir().mkpath(vaultB.path() + QStringLiteral("/real")));
+    ASSERT_TRUE(QFile::link(vaultB.path() + QStringLiteral("/real"), vaultB.path() + QStringLiteral("/lnk")));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/real/x.md"))) << snapshot(vaultB.path());
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lnk/x.md"))) << watchB.lastMessage.toStdString();
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/after.md")), QStringLiteral("later records still apply"));
+}
+
+// A delete parked while its file could not be trashed is retried later; if
+// the file is a link by then, nothing may touch it or what it points to
+// (moving it to the trash would move the link). Here the scan at the start of
+// the cycle sees the link first (the scanner skips links, so the file looks
+// deleted: the entity goes, the path is named); applyRemoteDelete()'s own
+// confinement check is for a link that appears after the scan, which a test
+// cannot arrange, and is not what this test pins.
+TEST_F(SyncIntegrationTest, AParkedDeleteWhoseFileBecameALinkLeavesTheLinkAlone)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("original"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/shared.md");
+    ASSERT_TRUE(QFile::exists(onB));
+
+    ASSERT_TRUE(QFile::remove(vaultA.path() + QStringLiteral("/shared.md")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const QString trash = vaultB.path() + QStringLiteral("/.trash");
+    ASSERT_TRUE(QDir().mkpath(trash));
+    ASSERT_TRUE(QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restoreTrash = qScopeGuard([&trash] {
+        QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    });
+    for (int cycle = 0; cycle < 4; ++cycle) { // the delete is parked after the fourth
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+    ASSERT_TRUE(watchB.lastMessage.contains(QStringLiteral("deletion"))) << watchB.lastMessage.toStdString();
+
+    // The file becomes a link to a file elsewhere with the very text it had.
+    QTemporaryDir outside;
+    ASSERT_TRUE(outside.isValid());
+    const QString target = writeNote(outside.path(), QStringLiteral("target.md"), QStringLiteral("original"));
+    ASSERT_TRUE(QFile::remove(onB));
+    ASSERT_TRUE(QFile::link(target, onB));
+    QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    EXPECT_TRUE(QFileInfo(onB).isSymLink()) << "the link was moved or removed";
+    EXPECT_FALSE(QFile::exists(trash + QStringLiteral("/shared.md")));
+    EXPECT_EQ(readNoteText(target), QStringLiteral("original"));
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
+    EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("refused"))) << watchB.lastMessage.toStdString();
+    EXPECT_FALSE(watchB.lastMessage.contains(QStringLiteral("deletion"))) << "still pending: " << watchB.lastMessage.toStdString();
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
 // The parked delete lives in the journal, not just in memory: a restarted
 // engine still retries it.
 TEST_F(SyncIntegrationTest, AParkedDeleteIsStillRetriedAfterARestart)
