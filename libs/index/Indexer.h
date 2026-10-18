@@ -5,7 +5,6 @@
 #include <optional>
 
 #include <QElapsedTimer>
-#include <QFileSystemWatcher>
 #include <QHash>
 #include <QFuture>
 #include <QObject>
@@ -13,6 +12,7 @@
 #include <QThreadPool>
 #include <QTimer>
 
+#include "DirWatcher.h"
 #include "Index.h"
 #include "Parser.h"
 #include "Vault.h"
@@ -125,6 +125,7 @@ private:
     void watch(const QHash<QString, qint64> &directories, bool partial);
     void addWatches(const QStringList &directories); ///< addPaths, and the poll for what it could not watch
     void onDirectoryChanged(const QString &path);
+    void onFileChanged(const QString &path);
 
     Index *m_index = nullptr;
     Vault m_vault;
@@ -141,10 +142,11 @@ private:
     ParseOptions m_parseOptions; ///< only the meta-note fields set
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
     QSet<QString> m_changedDirs; ///< folders the watcher reported, until the debounce hands them to a scan
+    QSet<QString> m_changedFiles; ///< notes it saw written in place, the same
     QSet<QString> m_queuedDirs;  ///< folders handed over during a scan, read after it
     QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
     NotebookReader m_notebookReader;
-    QFileSystemWatcher m_files;
+    DirWatcher m_files;
     QTimer m_debounce;
     QTimer m_poll; ///< runs only while some folder has no watch
     QElapsedTimer m_clock;

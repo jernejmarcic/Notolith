@@ -1147,3 +1147,19 @@ times as the indexer's own clock reports them.
 - A rename no longer waits for the indexer (it could start a full walk on the UI
   thread and wait up to a second): the notes just saved, and those the indexer has
   been asked to read, are named to the rewrite, which reads them from disk.
+
+## 2026-10-18 watch: edits made in place
+
+`Indexer` reads inotify directly on Linux (`libs/index/DirWatcher`) instead of
+through QFileSystemWatcher, whose folder watch reports only entries appearing,
+going or being renamed. A program that opens a note, writes it and closes it (no
+temp file, no rename) is now seen: the watch adds `IN_CLOSE_WRITE`, and the note
+alone goes to the same 300 ms debounce and is reindexed (no folder read, no
+whole walk). Still one watch per folder; the fd is read through a
+`QSocketNotifier` (no thread, no timer), so nothing wakes while the vault is
+idle. `IN_MODIFY` is not used: a program that holds a note open and writes
+without closing it is seen when it closes. A file that is not a note (an
+attachment, a temp file) is read with its folder, as before. A full kernel queue
+(`IN_Q_OVERFLOW`) starts a whole rescan. A folder the kernel will not watch still
+turns on the 30 s poll and the status message. Other platforms keep
+QFileSystemWatcher (folder events only).

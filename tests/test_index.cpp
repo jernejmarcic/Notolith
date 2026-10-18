@@ -1593,6 +1593,44 @@ TEST_F(WatchedVaultTest, ANoteChangedOutsideTheAppIsReindexedWithoutAWholeWalk)
     EXPECT_EQ(indexer->wholeScans(), walks);
 }
 
+// Another program that opens a note, writes and closes it (no temp file, no
+// rename) raises no folder entry event: inotify's IN_CLOSE_WRITE does.
+TEST_F(WatchedVaultTest, ANoteWrittenInPlaceAndAppendedToIsReindexedWithoutAWholeWalk)
+{
+    {
+        QFile file(dir.filePath(QStringLiteral("a/b/First.md")));
+        ASSERT_TRUE(file.open(QIODevice::ReadWrite | QIODevice::Truncate));
+        file.write("# First\n\nzeppelin\n");
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.search(QStringLiteral("zeppelin")).isEmpty(); }, 5000));
+    {
+        QFile file(dir.filePath(QStringLiteral("a/b/First.md")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Append));
+        file.write("\nblimp\n");
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.search(QStringLiteral("blimp")).isEmpty(); }, 5000));
+    EXPECT_FALSE(index.search(QStringLiteral("zeppelin")).isEmpty()) << "the earlier text is still there";
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
+// A moved folder's watches follow the inodes, not the names: the folder and the
+// one inside it must both be watched again under the new names.
+TEST_F(WatchedVaultTest, ANoteWrittenInPlaceInsideARenamedFolderIsSeen)
+{
+    write(QStringLiteral("a/b/sub/Inner.md"), "# Inner\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return found(QStringLiteral("Inner")); }, 5000));
+    ASSERT_TRUE(QDir(dir.path()).rename(QStringLiteral("a/b"), QStringLiteral("a/c")));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return index.resolve(QStringLiteral("Inner")) == QStringLiteral("a/c/sub/Inner.md"); },
+                                5000));
+    {
+        QFile file(dir.filePath(QStringLiteral("a/c/sub/Inner.md")));
+        ASSERT_TRUE(file.open(QIODevice::ReadWrite | QIODevice::Truncate));
+        file.write("# Inner\n\nzeppelin\n");
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.search(QStringLiteral("zeppelin")).isEmpty(); }, 5000));
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
 TEST_F(WatchedVaultTest, ANewNoteAndANewFolderWithNotesAreFoundWithoutAWholeWalk)
 {
     write(QStringLiteral("a/b/Third.md"), "# Third\n");
