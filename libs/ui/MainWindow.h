@@ -57,6 +57,7 @@ class OutgoingLinksPane;
 class MetaNotesPane;
 class OutlinePane;
 class PagePreview;
+class PopoutWindow;
 class QuickSwitcher;
 class SearchPane;
 class SettingsPage;
@@ -300,6 +301,43 @@ private:
     /// "Manage workspace layouts": save, load and delete named ones.
     void manageLayouts();
     void gotoTab(int index);
+
+    // --- pop-out windows -------------------------------------------------
+    // Top-level windows MainWindow owns: tabs in splits of their own (and,
+    // later, a detached sidebar or pane). m_leaves and m_active stay global,
+    // so every command, side pane and save follows a tab wherever it is.
+    /// The root splits tabs live in: m_workspace and each pop-out's own.
+    bool isRootSplit(const QSplitter *split) const;
+    QList<QSplitter *> rootSplits() const;
+    /// This window or one of its pop-outs: where an app-wide event may belong to the workspace.
+    bool isWorkspaceWindow(const QWidget *window) const;
+    /// Moves `leaf` (its view with it) into `to` at tab `index`, collapses the
+    /// group it left, and makes it the active tab.
+    void moveLeaf(Leaf *leaf, TabGroup *to, int index);
+    /// A new, empty group next to `beside`, after it or before; splits `beside`'s parent.
+    TabGroup *splitBeside(TabGroup *beside, Qt::Orientation orientation, bool after);
+    /// Removes `group` when it holds no tab, collapsing the splits it leaves
+    /// with one child, and a pop-out left empty with it. The main workspace
+    /// never ends empty: it gets a fresh empty tab. True when the group is gone.
+    bool collapseIfEmpty(TabGroup *group);
+    /// A pop-out window with one split: holds `leaf` when given, else a new empty tab.
+    TabGroup *newPopout(Leaf *leaf = nullptr);
+    /// The user closed `window`: its tabs close like any other (a save that
+    /// fails or is declined vetoes the close), and can be undone.
+    void closePopout(PopoutWindow *window, bool *veto);
+    /// Forgets `window` and deletes it, unasked and unsaved: after its last tab
+    /// is gone, or at shutdown (tabs it still holds leave the model).
+    void deletePopout(PopoutWindow *window);
+    /// Every pop-out's tabs back into the main workspace; the windows go.
+    void dockAll();
+    void buildPopoutActions();
+    void showTabMenu(TabGroup *group, const QPoint &globalPos);
+    /// The pop-out `group` is in follows its current tab's title.
+    void retitlePopout(TabGroup *group);
+    /// The feature switch: commands, drop targets, and docking when it goes off.
+    void applyPopoutFeature();
+    std::vector<std::unique_ptr<PopoutWindow>> m_popouts;
+    bool m_popoutsOn = false; ///< the popout-windows feature, as last applied
 
     // --- optional features ---------------------------------------------------
     /// Whether an optional feature is on: noteAppC's own switch. A feature

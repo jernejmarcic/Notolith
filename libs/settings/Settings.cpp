@@ -678,6 +678,11 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Create a note named by the date and time, for a Zettelkasten."), true},
         {"workspaces", QT_TRANSLATE_NOOP("Settings", "Workspaces"),
          QT_TRANSLATE_NOOP("Settings", "Save and load named layouts of tabs and splits."), true},
+        // Notolith's own: Obsidian has pop-out windows built in, with no switch.
+        {"popout-windows", QT_TRANSLATE_NOOP("Settings", "Pop-out windows"),
+         QT_TRANSLATE_NOOP("Settings", "Open tabs in windows of their own: right-click a tab, or run "
+                                       "\"Open current tab in new window\"."),
+         false},
     };
     return list;
 }

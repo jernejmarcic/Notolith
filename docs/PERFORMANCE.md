@@ -37,6 +37,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | window on screen from process start | 50.5 ms | - |
 | cold start, the process's first window (bench, includes `openVault`) | 36.3 ms (2026-10-16, perf2) | 40 ms |
 | cold start to first painted frame, later in-process windows (bench) | 19.5 ms (2026-10-16) | - |
+| pop-out window: command to first painted frame (bench, 2 000 notes, busy machine) | 10.7-11.8 ms (2026-10-18; three runs' medians) | 25 ms |
+| move a tab to a new window (bench, same) | 3.1-3.4 ms (2026-10-18; includes the empty tab main gets in its place) | 5 ms |
 | vault usable from process start | 204 ms | - |
 | note open, 1 kB | 1.8 ms (2026-10-16) | 300 ms |
 | note open, 50 kB | 7.9 ms (2026-10-16) | 300 ms |
@@ -225,6 +227,14 @@ once (fonts, plugins, the style sheet), so that row is what a launch pays. The
 generated vault carries `tag-heavy.md` (3 000 flat and 1 500 nested tags) so
 the Tags pane has real work; `firstNoteIn` skips it, so the "vault note" rows
 stay about an ordinary note.
+
+The `start` phase also times pop-out windows (`benchPopout`): "Pop-out: open to
+first painted frame" runs `workspace:open-in-new-window` through one painted
+frame of the new window (a second window and one editor); "Move tab to new
+window" runs `workspace:move-to-new-window` alone. Off costs nothing
+measurable: the `popout-windows` feature is one `bool` and one
+`Settings::Feature` row, and `PopoutWindowsOffBuildsNothingAndDocksEverything`
+pins that no window object exists then.
 
 On a shared machine compare builds **interleaved**: base and candidate
 alternate run for run (three each, best median per row), each run in a fresh

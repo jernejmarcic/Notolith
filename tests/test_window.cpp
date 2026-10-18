@@ -40,6 +40,7 @@
 #include <QSqlQuery>
 #include <QLayout>
 #include <QLineEdit>
+#include <QContextMenuEvent>
 #include <QMenu>
 #include <QDialog>
 #include <QPushButton>
@@ -105,6 +106,7 @@
 #include "PublishDialog.h"
 #include "MainWindow.h"
 #include "PagePreview.h"
+#include "PopoutWindow.h"
 #include "OutlinePane.h"
 #include "BookmarksPane.h"
 #include "BacklinksPane.h"
@@ -760,6 +762,234 @@ TEST_F(WindowTest, SplitDownThenRightNestsTheSplits)
     flushDeletes();
     EXPECT_EQ(root->count(), 2);
     EXPECT_EQ(qobject_cast<QSplitter *>(root->widget(1)), nullptr);
+}
+
+// --- pop-out windows (offscreen: nothing here reaches a real display) -------
+
+namespace {
+
+/// Every pop-out window of the process, hidden or not, once deletions have run.
+QList<noteAppC::PopoutWindow *> popoutWindows()
+{
+    flushDeletes();
+    QList<noteAppC::PopoutWindow *> found;
+    for (QWidget *top : QApplication::topLevelWidgets()) {
+        if (auto *popout = qobject_cast<noteAppC::PopoutWindow *>(top))
+            found << popout;
+    }
+    return found;
+}
+
+QAction *command(MainWindow &window, const char *id)
+{
+    return window.findChild<QAction *>(QLatin1String(id));
+}
+
+QList<QTabBar *> mainBars(MainWindow &window)
+{
+    return window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+}
+
+} // namespace
+
+TEST_F(WindowTest, OpenInNewWindowShowsTheNoteInAWindowOfItsOwn)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+
+    command(window, "workspace:open-in-new-window")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_TRUE(popouts.first()->isVisible());
+    EXPECT_EQ(popouts.first()->parentWidget(), nullptr) << "a top-level of its own, not a child";
+    const auto editors = popouts.first()->findChildren<MarkdownEditor *>();
+    ASSERT_EQ(editors.size(), 1);
+    EXPECT_EQ(editors.first()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    EXPECT_EQ(tabEditors(window).size(), 1);
+    EXPECT_TRUE(popouts.first()->windowTitle().startsWith(QStringLiteral("Welcome")));
+    EXPECT_EQ(window.editor(), editors.first()) << "the new tab is the one the window follows";
+}
+
+TEST_F(WindowTest, MoveToNewWindowTakesTheTabAndCollapsesItsSplit)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:split-vertical")->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    ASSERT_EQ(mainBars(window).size(), 2);
+
+    command(window, "workspace:move-to-new-window")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_EQ(mainBars(window).size(), 1) << "the split Other left is gone";
+    EXPECT_EQ(tabEditors(window).size(), 1);
+    EXPECT_EQ(tabEditors(window).first()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+    const auto editors = popouts.first()->findChildren<MarkdownEditor *>();
+    ASSERT_EQ(editors.size(), 1);
+    EXPECT_EQ(editors.first()->noteText(), QStringLiteral("other note text\n"));
+    EXPECT_EQ(window.editor(), editors.first());
+}
+
+TEST_F(WindowTest, MovingTheLastTabOutLeavesAnEmptyTabInMain)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+
+    command(window, "workspace:move-to-new-window")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    // Main is never left without a tab, as when the only tab is closed.
+    const auto bars = mainBars(window);
+    ASSERT_EQ(bars.size(), 1);
+    EXPECT_EQ(tabTexts(bars.first()), QStringList{QStringLiteral("New tab")});
+    ASSERT_EQ(tabEditors(window).size(), 1);
+    EXPECT_FALSE(tabEditors(window).first()->isEnabled()) << "nothing open in it";
+    ASSERT_EQ(popouts.first()->findChildren<MarkdownEditor *>().size(), 1);
+    EXPECT_EQ(popouts.first()->findChildren<MarkdownEditor *>().first()->noteText(),
+              QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, ClosingAPopoutSavesItsTextAndClosesItsTabs)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    // Autosave on explicitly: a close that had to ask would hang on a message box.
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("files.autosave"), true);
+    ASSERT_TRUE(settings.save());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:new-tab")->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    command(window, "workspace:move-to-new-window")->trigger();
+    auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    MarkdownEditor *inPopout = window.editor();
+    inPopout->setCursorOffset(0);
+    QTest::keyClicks(inPopout, QStringLiteral("x"));
+
+    popouts.first()->close();
+    EXPECT_EQ(readAll(path(QStringLiteral("Other.md"))), QByteArray("xother note text\n"));
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    EXPECT_EQ(tabEditors(window).size(), 1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+
+    command(window, "workspace:undo-close-pane")->trigger();
+    EXPECT_EQ(tabEditors(window).size(), 2) << "reopened in the main window, the pop-out being gone";
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("xother note text\n"));
+    EXPECT_TRUE(popoutWindows().isEmpty());
+}
+
+TEST_F(WindowTest, ClosingTheMainWindowClosesEveryPopout)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:open-in-new-window")->trigger();
+    command(window, "workspace:open-in-new-window")->trigger();
+    ASSERT_EQ(popoutWindows().size(), 2);
+
+    window.close();
+    for (const noteAppC::PopoutWindow *popout : popoutWindows())
+        EXPECT_FALSE(popout->isVisible());
+    // The splitter state saved is the three-child main one, which a fresh window restores.
+    MainWindow fresh;
+    auto *splitter = fresh.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    ASSERT_NE(splitter, nullptr);
+    EXPECT_EQ(splitter->count(), 3);
+    EXPECT_TRUE(splitter->restoreState(QSettings().value(QStringLiteral("window/splitter")).toByteArray()));
+}
+
+TEST_F(WindowTest, HotkeysWorkInsideAPopout)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:move-to-new-window")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    noteAppC::PopoutWindow *popout = popouts.first();
+    // The same QAction objects, so a rebinding and setEnabled() reach it too.
+    EXPECT_TRUE(popout->actions().contains(command(window, "workspace:new-tab")));
+    EXPECT_TRUE(popout->actions().contains(command(window, "workspace:move-to-new-window")));
+
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(popout));
+    popout->activateWindow();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(popout));
+    QTest::keyClick(popout->findChild<MarkdownEditor *>(), Qt::Key_T, Qt::ControlModifier);
+    const auto bars = popout->findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(bars.size(), 1);
+    EXPECT_EQ(bars.first()->count(), 2) << "Ctrl+T made a tab in the window it was pressed in";
+    EXPECT_EQ(tabEditors(window).size(), 1) << "the tab opened in the pop-out, not in main";
+}
+
+TEST_F(WindowTest, ATabsContextMenuOffersTheWindowCommands)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    auto *tabs = mainBars(window).first();
+    QStringList offered;
+    QTimer::singleShot(0, [&offered] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+            return;
+        for (const QAction *action : menu->actions())
+            offered << action->text();
+        menu->close();
+    });
+    const QPoint at = tabs->tabRect(0).center();
+    QContextMenuEvent event(QContextMenuEvent::Mouse, at, tabs->mapToGlobal(at));
+    QCoreApplication::sendEvent(tabs, &event);
+    EXPECT_TRUE(offered.contains(QStringLiteral("Open in new window")));
+    EXPECT_TRUE(offered.contains(QStringLiteral("Move to new window")));
+    EXPECT_TRUE(offered.contains(QStringLiteral("Split right")));
+}
+
+TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    QTemporaryDir config; // the switch is the user's, kept apart from other tests
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show(); // the settings page builds its rows when shown
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "workspace:new-tab")->trigger();
+        window.openNote(path(QStringLiteral("Other.md")));
+        command(window, "workspace:move-to-new-window")->trigger();
+        ASSERT_EQ(popoutWindows().size(), 1);
+        EXPECT_TRUE(command(window, "workspace:open-in-new-window")->isEnabled());
+
+        command(window, "app:open-settings")->trigger();
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
+                        QStringLiteral("settingsToggle_plugins.popoutWindows")));
+        }));
+        toggle->click();
+
+        EXPECT_TRUE(popoutWindows().isEmpty()) << "off builds no window";
+        EXPECT_EQ(tabEditors(window).size(), 2) << "Other came back to the main window";
+        for (const QWidget *group : window.findChildren<QWidget *>(QStringLiteral("tabGroup")))
+            EXPECT_FALSE(group->acceptDrops());
+        EXPECT_FALSE(command(window, "workspace:open-in-new-window")->isEnabled());
+        EXPECT_FALSE(command(window, "workspace:move-to-new-window")->isEnabled());
+
+        toggle->click(); // back on: the commands work again
+        EXPECT_TRUE(command(window, "workspace:move-to-new-window")->isEnabled());
+        for (const QWidget *group : window.findChildren<QWidget *>(QStringLiteral("tabGroup")))
+            EXPECT_TRUE(group->acceptDrops());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
 }
 
 // Typing with no pause long enough for the 2 s timer still saves: the max

@@ -304,6 +304,61 @@ Timing benchFirstWindow(const QString &vaultPath)
                   {double(clock.nsecsElapsed()) / 1e6});
 }
 
+/// A pop-out window of the process, if one is up.
+QWidget *popoutWindowOf()
+{
+    for (QWidget *top : QApplication::topLevelWidgets()) {
+        if (top->objectName() == QLatin1String("popoutWindow") && top->isVisible())
+            return top;
+    }
+    return nullptr;
+}
+
+/// Pop-out windows in a window that already has a note open: the command to
+/// the first painted frame of the second window (it builds one editor), and
+/// moving a tab out, which is one reparent and builds no editor.
+QList<Timing> benchPopout(const QString &vaultPath, const QString &note, int runs)
+{
+    QList<Timing> out;
+    auto window = std::make_unique<MainWindow>();
+    window->openVault(vaultPath);
+    window->show();
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    window->openNote(note);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    const auto trigger = [&window](const char *id) {
+        window->findChild<QAction *>(QLatin1String(id))->trigger();
+    };
+    const auto closePopout = [&window, note] {
+        if (QWidget *popout = popoutWindowOf())
+            popout->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        window->openNote(note); // the tab a move leaves behind is empty
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    };
+    std::vector<double> open;
+    std::vector<double> move;
+    for (int i = 0; i < runs; ++i) {
+        QElapsedTimer clock;
+        clock.start();
+        trigger("workspace:open-in-new-window");
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (QWidget *popout = popoutWindowOf())
+            (void)paintedFrame(popout);
+        open.push_back(double(clock.nsecsElapsed()) / 1e6);
+        closePopout();
+
+        clock.restart();
+        trigger("workspace:move-to-new-window");
+        move.push_back(double(clock.nsecsElapsed()) / 1e6);
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        closePopout();
+    }
+    out << reduce(QStringLiteral("Pop-out: open to first painted frame"), QString(), open)
+        << reduce(QStringLiteral("Move tab to new window"), QString(), move);
+    return out;
+}
+
 /// A full scan into an empty cache, as on a vault's first open: the time the
 /// indexer itself reports. Deletes the vault's index cache before each run, so
 /// only ever called on the generated vault.
@@ -1607,6 +1662,8 @@ int main(int argc, char *argv[])
         if (phase == QLatin1String("start")) // in a full run the memory phase opened the first window
             timings << benchFirstWindow(vaultPath);
         timings << benchColdStart(vaultPath, 7);
+        if (const QString note = firstNoteIn(vaultPath); !note.isEmpty())
+            timings << benchPopout(vaultPath, note, 9);
         if (args.isEmpty()) // a vault given on the command line keeps its cache
             timings << benchColdIndex(vaultPath, 3);
     }
