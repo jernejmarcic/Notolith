@@ -339,6 +339,20 @@ TEST(SyncCryptoTest, PaddingHidesTheExactSizeButRoundTrips)
     }
 }
 
+TEST(SyncCryptoTest, DigestIsDeterministicAndUnkeyed)
+{
+    ASSERT_TRUE(SyncCrypto::init());
+    const QByteArray text = QByteArrayLiteral("the quick brown fox");
+    const QByteArray d = SyncCrypto::digest(text);
+    ASSERT_EQ(d.size(), 32);
+    EXPECT_EQ(d, SyncCrypto::digest(text));
+    EXPECT_NE(d, SyncCrypto::digest(QByteArrayLiteral("the quick brown fox.")));
+    // Not keyed: a keyed address of the same bytes is a different value.
+    EXPECT_NE(d, SyncCrypto::contentAddress(SyncCrypto::randomKey(), text));
+    // Defined for the empty content too (an empty note is a state).
+    EXPECT_EQ(SyncCrypto::digest({}).size(), 32);
+}
+
 TEST(SyncCryptoTest, SealBlobOpenBlobRoundTripsAcrossChunkBoundary)
 {
     ASSERT_TRUE(SyncCrypto::init());
@@ -2052,6 +2066,9 @@ TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)
     const QList<SyncScanner::Change> changes = SyncScanner::scan(vault, journal, contentKey);
     const qint64 ms = clock.elapsed();
     std::cout << "[ INFO     ] no-change scan of " << kNotes << " notes: " << ms << " ms\n";
+    std::cout << "[ INFO     ] journal.db after " << kNotes << " notes: "
+              << QFileInfo(SyncJournal::dataDirectoryFor(bigVault.path()) + QStringLiteral("/journal.db")).size()
+              << " bytes\n";
     EXPECT_TRUE(changes.isEmpty());
     EXPECT_LT(ms, 5000);
 }

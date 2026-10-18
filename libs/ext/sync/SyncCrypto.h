@@ -76,6 +76,12 @@ public:
     /// and does not hide.
     static QByteArray contentAddress(const QByteArray &contentKey, const QByteArray &paddedPlaintext);
 
+    /// The same BLAKE2b-256 with no key: a state's name inside a sealed
+    /// record (docs/SYNC.md "Conflict rules"). Unkeyed on purpose - a
+    /// password change replaces contentKey, and a keyed digest sealed into
+    /// a record would never match again.
+    static QByteArray digest(const QByteArray &plaintext);
+
     /// Smallest bucket that fits `size` (docs/SYNC.md's table), and the
     /// pad()/unpad() pair built on it (ISO/IEC 7816-4 via sodium_pad).
     static qint64 bucketFor(qint64 size);
