@@ -778,6 +778,29 @@ TEST(SyncJournalTest, StatesArePrunedToTheNewestThirtyTwo)
     EXPECT_TRUE(journal.state(other, digestOf(0)));
 }
 
+// One note saved over and over: the history is a window, not a log.
+TEST(SyncJournalTest, AHotNoteKeepsTheStateTableBounded)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    SyncJournal journal(dir.path());
+    ASSERT_TRUE(journal.isOpen());
+    const QByteArray id = SyncCrypto::randomID();
+    constexpr int kNoteBytes = 4096;
+    constexpr int kSaves = 3000;
+    for (int i = 0; i < kSaves; ++i) {
+        const QString text = QString::number(i).repeated(kNoteBytes / 4).left(kNoteBytes);
+        journal.addState(id, {SyncCrypto::digest(text.toUtf8()), {}, QStringLiteral("hot.md"), text, true, i});
+    }
+    const QString dbPath = SyncJournal::dataDirectoryFor(dir.path()) + QStringLiteral("/journal.db");
+    const qint64 size = QFileInfo(dbPath).size();
+    std::cout << "[ INFO     ] journal.db after " << kSaves << " saves of one " << kNoteBytes << " B note: " << size
+              << " bytes (+ " << QFileInfo(dbPath + QStringLiteral("-wal")).size() << " B write-ahead log)\n";
+    EXPECT_LT(size, qint64(SyncJournal::kStateHistory + 8) * kNoteBytes * 3) << "the file must not grow with the number of saves";
+}
+
 TEST(SyncJournalTest, SetStateSeqOnlyTouchesOwnRows)
 {
     QTemporaryDir dir;
