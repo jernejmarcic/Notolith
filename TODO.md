@@ -1874,7 +1874,7 @@ Lane parked (parallel with sync10):
       later record for the entity unparks; openBlob failures stay
       session-only. Tests AParkedBlobIsRetriedAfterARestart,
       ALaterRecordDropsAParkedBlob.
-- [ ] Fable confirm sync10 decisions: (1) pre-digest journal: an unchanged
+- [x] (Fable: all correct; scratchpad SYNC-ITEM17.md) Fable confirm sync10 decisions: (1) pre-digest journal: an unchanged
       note with empty baseDigest takes digest(base/) as its base (else a
       fast-forward overwrites its own pushed text); a disjoint edit across
       an upgrade now falls to a conflict copy. (3) in the no-row win branch
@@ -1883,6 +1883,11 @@ Lane parked (parallel with sync10):
       guard (a rename on a pre-digest journal counts a state miss).
       Residual: rename back to a former name + edit before any sync reads
       as no rename (documented).
+- [ ] Attachment twin of finding A on an upgraded journal: unchanged
+      attachment with empty baseDigest fast-forwards over its own pushed
+      bytes. Fix: digest of the disk bytes as base (lane same17).
+- [ ] Dead guard !(inLine && baseHasNoRow) in the path rule; parked
+      paragraph: own record also unparks (lane same17).
 After sync10 (needs C):
 - [ ] Item 17: same path created on two devices: first-to-server keeps
       the path, loser moves to "<base> (<4 hex of entityID>)" on every
