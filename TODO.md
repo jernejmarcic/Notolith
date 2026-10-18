@@ -1942,7 +1942,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       MarkdownEditor.cpp layout uses WrapAtWordBoundaryOrAnywhere for fences
       unless `#| wrap: false`. Fable plan: per-block horizontal scroll (or
       no-wrap + scrollbar) matching Obsidian, cost when no long lines = 0.
-- [ ] A ```rust fence with no `fn main` (a struct + impl, as in the demo)
+- [x] A ```rust fence with no `fn main` (a struct + impl, as in the demo)
       runs rustc and shows E0601 in red. Like Haskell (no main -> ghci): no
       main -> check only (rustc --crate-type=lib --emit=metadata; gcc/g++
       -fsyntax-only for c/cpp; java without main: javac), output "checked,
