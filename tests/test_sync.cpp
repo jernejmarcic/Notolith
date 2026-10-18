@@ -631,6 +631,89 @@ TEST(SyncScannerTest, RenameIsDetectedByContent)
     EXPECT_EQ(renamed.first().path, QStringLiteral("new.md"));
 }
 
+namespace {
+
+/// A journal entity for the note at `relativePath`, as the engine would leave it
+/// after a sync: stat and hash of the file, and `text` as the merge base.
+SyncJournal::Entity trackNote(SyncJournal &journal, const QString &root, const QString &relativePath,
+                              const QString &text, const QByteArray &contentKey)
+{
+    const QString absolute = writeNote(root, relativePath, text);
+    const QFileInfo info(absolute);
+    QFile f(absolute);
+    EXPECT_TRUE(f.open(QIODevice::ReadOnly));
+    SyncJournal::Entity entity;
+    entity.entityID = SyncCrypto::randomID();
+    entity.path = relativePath;
+    entity.entityType = QStringLiteral("note");
+    entity.localMtime = info.lastModified().toMSecsSinceEpoch();
+    entity.localSize = info.size();
+    entity.localHash = SyncCrypto::contentAddress(contentKey, f.readAll());
+    journal.putEntity(entity);
+    journal.writeBase(entity.entityID, text);
+    return entity;
+}
+
+QString lines(int from, int to)
+{
+    QStringList out;
+    for (int i = from; i <= to; ++i)
+        out << QStringLiteral("line %1 of the note").arg(i);
+    return out.join(QLatin1Char('\n'));
+}
+
+} // namespace
+
+// Renamed and edited before any scan in between: no exact match, but the new
+// file is the base with one line changed.
+TEST(SyncScannerTest, ARenamedAndEditedNoteIsMatchedToItsBase)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    const Vault vault(dir.path());
+    SyncJournal journal(dir.path());
+    const QByteArray contentKey = SyncCrypto::randomKey();
+    const SyncJournal::Entity moved = trackNote(journal, dir.path(), QStringLiteral("old.md"), lines(1, 8), contentKey);
+    trackNote(journal, dir.path(), QStringLiteral("stays.md"), QStringLiteral("quite another text\nwith other lines"), contentKey);
+
+    ASSERT_TRUE(QFile::remove(dir.path() + QStringLiteral("/old.md")));
+    writeNote(dir.path(), QStringLiteral("folder/new.md"), lines(1, 4) + QStringLiteral("\nline 5 EDITED\n") + lines(6, 8));
+    const QList<SyncScanner::Change> changes = SyncScanner::scan(vault, journal, contentKey);
+    ASSERT_EQ(changes.size(), 1);
+    EXPECT_EQ(changes.first().kind, SyncScanner::Change::Renamed);
+    EXPECT_EQ(changes.first().entityID, moved.entityID);
+    EXPECT_EQ(changes.first().oldPath, QStringLiteral("old.md"));
+    EXPECT_EQ(changes.first().path, QStringLiteral("folder/new.md"));
+}
+
+// Alike is not enough: a new note that two vanished ones fit equally well, or
+// that none of them resembles, is a new note and the others are deleted.
+TEST(SyncScannerTest, AnUnrelatedNewNoteIsNotTakenForARename)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    const Vault vault(dir.path());
+    SyncJournal journal(dir.path());
+    const QByteArray contentKey = SyncCrypto::randomKey();
+    trackNote(journal, dir.path(), QStringLiteral("one.md"), lines(1, 8), contentKey);
+    trackNote(journal, dir.path(), QStringLiteral("two.md"), lines(1, 8), contentKey);
+    ASSERT_TRUE(QFile::remove(dir.path() + QStringLiteral("/one.md")));
+    ASSERT_TRUE(QFile::remove(dir.path() + QStringLiteral("/two.md")));
+    writeNote(dir.path(), QStringLiteral("new.md"), lines(1, 7) + QStringLiteral("\nline 8 EDITED"));
+    writeNote(dir.path(), QStringLiteral("other.md"), QStringLiteral("nothing\nin\ncommon\nwith\nthose"));
+
+    QMap<int, int> kinds;
+    for (const SyncScanner::Change &change : SyncScanner::scan(vault, journal, contentKey))
+        ++kinds[change.kind];
+    EXPECT_EQ(kinds.value(SyncScanner::Change::Renamed), 0);
+    EXPECT_EQ(kinds.value(SyncScanner::Change::Created), 2);
+    EXPECT_EQ(kinds.value(SyncScanner::Change::Deleted), 2);
+}
+
 // writeBase() goes through QSaveFile: a crash between truncate and write used
 // to leave an empty base, and the next cycle made a conflict copy of a
 // two-device edit instead of merging it. The stand-in for the crash is a
@@ -1830,10 +1913,10 @@ TEST_F(RenameWithALocalEditTest, ALocalRenameTakesTheRemoteEdit)
     expectConvergedBoth();
 }
 
-// Renamed and edited before any scan in between: the scanner matches renames
-// by exact content only, so A's change is a delete of y.md plus a new note,
-// and B's edit beats the delete.
-TEST_F(RenameWithALocalEditTest, DISABLED_ARenameAndEditInOneScanMergesAtTheNewPath)
+// Renamed and edited before any scan in between: the scanner matches the new
+// note to the vanished one by its lines, so A's change is one rename-and-edit
+// record, not a delete and a new note.
+TEST_F(RenameWithALocalEditTest, ARenameAndEditInOneScanMergesAtTheNewPath)
 {
     writeNote(vaultB.path(), QStringLiteral("y.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta"));
     ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/z.md")));
@@ -1843,6 +1926,7 @@ TEST_F(RenameWithALocalEditTest, DISABLED_ARenameAndEditInOneScanMergesAtTheNewP
 
     EXPECT_EQ(snapshot(vaultA.path()), "z.md=ALPHA|beta|gamma|DELTA");
     EXPECT_EQ(snapshot(vaultB.path()), "z.md=ALPHA|beta|gamma|DELTA");
+    expectConvergedBoth();
 }
 
 // Something that is not a regular file sits at the path an incoming rename or
