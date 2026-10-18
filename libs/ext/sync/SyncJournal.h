@@ -128,6 +128,11 @@ public:
     void addState(const QByteArray &entityID, const State &state);
     /// The newest row with that digest.
     std::optional<State> state(const QByteArray &entityID, const QByteArray &digest) const;
+    /// Debug counter, process-wide: how many state() calls found no row for
+    /// a non-empty digest. A miss means the history was too short (or the
+    /// engine looked in the wrong place); tests assert it stays 0.
+    static int stateMisses();
+    static void resetStateMisses();
     /// Whether this entity's local path was `path` after the state `digest`.
     bool sawPath(const QByteArray &entityID, const QByteArray &digest, const QString &path) const;
     /// Own rows only: a state applied from the server already has its seq.

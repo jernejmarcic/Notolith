@@ -9,11 +9,15 @@
 #include <QStandardPaths>
 #include <QUuid>
 
+#include <atomic>
+
 #include "SyncCrypto.h"
 
 namespace noteAppC {
 
 namespace {
+
+std::atomic<int> g_stateMisses{0}; ///< see SyncJournal::stateMisses
 
 bool exec(QSqlQuery &query, const QString &sql)
 {
@@ -261,6 +265,9 @@ void SyncJournal::addState(const QByteArray &entityID, const State &state)
     prune.exec();
 }
 
+int SyncJournal::stateMisses() { return g_stateMisses; }
+void SyncJournal::resetStateMisses() { g_stateMisses = 0; }
+
 std::optional<SyncJournal::State> SyncJournal::state(const QByteArray &entityID, const QByteArray &digest) const
 {
     QSqlQuery q(m_db);
@@ -268,8 +275,11 @@ std::optional<SyncJournal::State> SyncJournal::state(const QByteArray &entityID,
                              "WHERE entityID=? AND digest=? ORDER BY id DESC LIMIT 1"));
     q.addBindValue(entityID);
     q.addBindValue(digest);
-    if (!q.exec() || !q.next())
+    if (!q.exec() || !q.next()) {
+        if (!digest.isEmpty())
+            ++g_stateMisses;
         return std::nullopt;
+    }
     return State{q.value(0).toByteArray(), q.value(1).toByteArray(),       q.value(2).toString(),
                  QString::fromUtf8(q.value(3).toByteArray()), q.value(4).toInt() != 0, q.value(5).toLongLong()};
 }
