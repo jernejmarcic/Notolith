@@ -110,6 +110,10 @@ public:
     };
     static void setSecretStore(SecretStore store);
 
+    /// Test seam: while set, records are written the way a client from before
+    /// parents did - without `parent` and `hash`. Process-wide.
+    static void setLegacyRecordFormatForTests(bool legacy);
+
 signals:
     void statusChanged(noteAppC::SyncEngine::Status status, const QString &message);
     /// One pass of the sync cycle finished (pushed/pulled record counts;

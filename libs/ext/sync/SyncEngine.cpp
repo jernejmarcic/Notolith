@@ -1,6 +1,7 @@
 #include "SyncEngine.h"
 
 #include <algorithm>
+#include <atomic>
 
 #include <QDateTime>
 #include <QDir>
@@ -36,7 +37,16 @@ struct EntityPlain {
     qint64 mtime = 0;
     QString body;           ///< inline note text, when blobAddress is empty
     QByteArray blobAddress; ///< set instead of body for attachments and oversized notes
+    /// SyncCrypto::digest of the state the writer built on (empty: a new
+    /// entity, or a writer from before parents), and of this record's own
+    /// content (note: UTF-8 of the LF-normalised text; attachment: the raw
+    /// bytes; empty for a delete). docs/SYNC.md "Record and blob formats".
+    QByteArray parent;
+    QByteArray hash;
 };
+
+/// Test seam: a writer from before records carried parent and hash.
+std::atomic<bool> g_legacyRecordFormat{false};
 
 QByteArray serialize(const EntityPlain &e)
 {
@@ -48,6 +58,10 @@ QByteArray serialize(const EntityPlain &e)
         o.insert(QStringLiteral("blobAddress"), QString::fromLatin1(e.blobAddress.toBase64()));
     else
         o.insert(QStringLiteral("body"), e.body);
+    if (!e.parent.isEmpty() && !g_legacyRecordFormat)
+        o.insert(QStringLiteral("parent"), QString::fromLatin1(e.parent.toBase64()));
+    if (!e.hash.isEmpty() && !g_legacyRecordFormat)
+        o.insert(QStringLiteral("hash"), QString::fromLatin1(e.hash.toBase64()));
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -70,6 +84,10 @@ EntityPlain parse(const QByteArray &json, bool *ok)
         e.blobAddress = QByteArray::fromBase64(o.value(QStringLiteral("blobAddress")).toString().toLatin1());
     else
         e.body = o.value(QStringLiteral("body")).toString();
+    if (o.contains(QStringLiteral("parent")))
+        e.parent = QByteArray::fromBase64(o.value(QStringLiteral("parent")).toString().toLatin1());
+    if (o.contains(QStringLiteral("hash")))
+        e.hash = QByteArray::fromBase64(o.value(QStringLiteral("hash")).toString().toLatin1());
     if (ok)
         *ok = !e.entityType.isEmpty() && !e.path.isEmpty() && !e.op.isEmpty();
     return e;
@@ -174,6 +192,11 @@ bool secretRemove(const QString &key)
 void SyncEngine::setSecretStore(SecretStore store)
 {
     secretStore() = std::move(store);
+}
+
+void SyncEngine::setLegacyRecordFormatForTests(bool legacy)
+{
+    g_legacyRecordFormat = legacy;
 }
 
 SyncEngine::SyncEngine()
@@ -697,6 +720,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     QByteArray wrappedNoteKey;
     QByteArray noteKey;
     QByteArray syncedHash; // carried over from the existing entity, if any - see the field's own comment
+    QByteArray baseDigest; // likewise: only applyRecord() moves it
+    QByteArray parent;     // the state this record builds on: the entity's headDigest, none for a new entity
 
     if (change.kind == SyncScanner::Change::Created) {
         entityID = SyncCrypto::randomID();
@@ -710,6 +735,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
         itemsKeyID = existing->itemsKeyID;
         wrappedNoteKey = existing->wrappedNoteKey;
         syncedHash = existing->syncedHash;
+        baseDigest = existing->baseDigest;
+        parent = existing->headDigest;
         const auto key = itemsKeyID == activeKey->itemsKeyID ? activeKey : m_journal->itemsKey(itemsKeyID);
         if (!key)
             return;
@@ -724,8 +751,10 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     plain.entityType = change.entityType;
     plain.path = change.path;
     plain.mtime = change.mtime;
+    plain.parent = parent;
 
-    QString text; // note bodies only - also becomes the new merge base below
+    QString text; // note bodies only
+    QByteArray bodyBytes;
 
     if (change.kind == SyncScanner::Change::Deleted) {
         plain.op = QStringLiteral("delete");
@@ -743,7 +772,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
                 return;
             raw = f.readAll();
         }
-        const QByteArray bodyBytes = change.entityType == QStringLiteral("note") ? text.toUtf8() : raw;
+        bodyBytes = change.entityType == QStringLiteral("note") ? text.toUtf8() : raw;
+        plain.hash = SyncCrypto::digest(bodyBytes);
         if (change.entityType == QStringLiteral("note") && bodyBytes.size() < kInlineBodyLimit) {
             plain.body = text;
         } else {
@@ -767,6 +797,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     record.itemsKeyID = itemsKeyID;
     record.wrappedNoteKey = wrappedNoteKey;
     record.payload = payload;
+    record.digest = plain.hash;
     m_journal->enqueue(record);
 
     if (change.kind == SyncScanner::Change::Deleted) {
@@ -785,7 +816,11 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     entity.localHash = change.hash; // scanner dedup only
     entity.syncedHash = syncedHash; // unchanged by a local edit - see the field's own comment in SyncJournal.h
     entity.deleted = false;
+    entity.baseDigest = baseDigest;
+    entity.headDigest = plain.hash; // the next record's parent: not baseDigest, or two scans pushed in one cycle would both claim the old base
     m_journal->putEntity(entity);
+    m_journal->addState(entityID, {plain.hash, SyncCrypto::contentAddress(m_contentKey, bodyBytes), change.path, text,
+                                   true, 0});
     // Deliberately no writeBase() here: the base (and syncedHash above)
     // record what this device and the server last agreed on, and a local
     // edit that has not even been pushed yet has not agreed on anything.
@@ -819,6 +854,13 @@ int SyncEngine::pushOutbox()
     for (const SyncJournal::OutboxRecord &r : pending)
         ids << r.recordID;
     m_journal->markSent(ids);
+    // The server's seq orders two devices' edits when they cannot be merged.
+    if (result.seqs.size() == pending.size()) {
+        for (int i = 0; i < pending.size(); ++i) {
+            if (!pending.at(i).digest.isEmpty())
+                m_journal->setStateSeq(pending.at(i).entityID, pending.at(i).digest, result.seqs.at(i));
+        }
+    }
     return pending.size();
 }
 
