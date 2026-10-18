@@ -136,6 +136,11 @@ QByteArray SyncCrypto::contentAddress(const QByteArray &contentKey, const QByteA
     return out;
 }
 
+QByteArray SyncCrypto::digest(const QByteArray &plaintext)
+{
+    return contentAddress({}, plaintext);
+}
+
 QString SyncCrypto::fingerprint(const QByteArray &publicKey)
 {
     QByteArray digest(10, Qt::Uninitialized);

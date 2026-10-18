@@ -244,7 +244,20 @@ body         : inline UTF-8 text, when entityType == note and body fits
                touch the blob store at all
 blobAddress  : 32 B, present instead of body for attachments and oversized
                notes
+parent       : 32 B, optional: the digest of the state the writer built this
+               record on (absent for a new entity, and from a client that
+               predates parents)
+hash         : 32 B, optional: the digest of this record's own content (note:
+               the UTF-8 of the LF-normalised text; attachment: the raw
+               bytes; absent on a delete)
 ```
+
+A *digest* is `SyncCrypto::digest`: BLAKE2b-256 with no key. Unkeyed on
+purpose - `changePassword` replaces `contentKey`, so a keyed hash sealed into a
+record would never match again. Both fields live inside the AEAD payload, so
+the server learns nothing from them, and a client that does not know them
+ignores them; a record without them is a legacy record and is applied by this
+device's own state alone (see "Conflict rules").
 
 Folders are not their own entity: an empty folder carries nothing worth
 syncing, and a folder rename already surfaces as every note under it getting
@@ -257,7 +270,15 @@ than a new one created - ambiguous only when two files have byte-identical
 content and both move in the same scan, in which case one is picked
 arbitrarily (`SyncScanner::scan`, `libs/ext/sync/SyncScanner.cpp`); documented
 rather than solved, since Obsidian's own rename tracking has the same
-limitation.
+limitation. A note renamed *and* edited before the next scan has no exact
+match; it is then compared line by line (Dice coefficient over the non-blank
+lines) with the notes that vanished in the same scan, against each one's merge
+base, and taken as that note moved when the best match scores at least 0.5 and
+clearly beats the second best. Only when the new notes times the vanished notes
+come to at most 64 (a folder of edited notes moved at once falls back to a
+delete plus new notes), and only on a scan that has both, so a scan with
+nothing new reads no file. A wrong match gives the new note the old one's
+identity; no text is lost.
 
 There is no separate "rename" or "move" op: a rename is an `upsert` whose
 `path` differs from the last one recorded for the same `entityID`, the same
@@ -358,23 +379,42 @@ rebuilds itself from a full rescan.
 
 ## Conflict rules
 
-Three-way merge needs a base: the last plaintext body both sides agreed on.
-`SyncJournal` keeps that base per note-entity under
+Three-way merge needs a base: the text both sides last agreed on. `SyncJournal`
+keeps the *current* base per note-entity under
 `$XDG_DATA_HOME/noteAppC/sync/<vault digest>/base/<entityID>` - a plain UTF-8
 copy, written (through `QSaveFile`, so a crash or a failed write leaves the
-previous base, never an empty one) only when a push or a clean pull succeeds,
-never touched by anything else. It is local-only and never syncs.
+previous base, never an empty one) only when a pull is applied or a push is
+confirmed. It is local-only and never syncs. The base is always **the sender's
+text**, never a merge result: a merge result is a text no server record holds,
+and a later record built on the sender's text would then be merged against the
+wrong ancestor.
 
-On pull, for a note entity, compare three hashes: `base` (what
-`SyncJournal` has on file), `local` (what's on disk right now), `remote`
-(what just arrived):
+### Which state a record builds on
 
-| base = local? | base = remote? | outcome |
-|---|---|---|
-| yes | yes | nothing changed either side - no-op |
-| yes | no | fast-forward: write remote, update base |
-| no | yes | local-only change, nothing to do (it will be pushed) |
-| no | no | **both changed since base - three-way merge** |
+Every record names the state its writer built it on (`parent`, a digest) and
+its own (`hash`). A device keeps, per entity, the digest of its last confirmed
+sync point (`baseDigest`, what `base/` holds), the digest of the last state it
+wrote or applied (`headDigest`, the `parent` of its next record), and the last
+32 states it wrote or applied (`states` table: digest, text, local path, server
+seq). On pull, for a note:
+
+- **in line** - the record's `parent` is empty (a new entity, or a legacy
+  writer), or this device has no `baseDigest`, or `parent == baseDigest`: the
+  sender saw what this device last confirmed. Local unchanged (the file still
+  hashes to what was last confirmed) is a fast-forward: write the record's text.
+  Local changed is a three-way merge against `base/`.
+- **not in line** - the sender built on a state this device has since moved
+  past (two devices wrote concurrently, and a third record or this device's own
+  confirmation came in between): the state is looked up in `states` and the
+  merge is `(that state's text, local, remote)`. This is what a fold over
+  `seq` order alone cannot do - the fold merged against whatever the previous
+  record left behind, and applied a record written without seeing this
+  device's edit as a fast-forward over it. A state older than the 32 kept (a
+  device offline for more than 32 saves of one note) is not found and takes the
+  conflict rule below, never a loss; an attachment has no text to merge and
+  always does.
+- identical content on disk and in the record: nothing to write; only the path
+  (below) and the confirmation.
 
 The merge is a line-based diff3 (`SyncMerge::merge`,
 `libs/ext/sync/SyncMerge.cpp`): the LCS-based line matcher already in
@@ -382,34 +422,43 @@ The merge is a line-based diff3 (`SyncMerge::merge`,
 way - diff `base` against `local` and `base` against `remote`, then walk both
 edit scripts together, taking a hunk from whichever side touched it and
 flagging a **true conflict** only where both sides edited the same base lines
-differently. `libs/ui` is out of this lane's file ownership, so the LCS
+differently (edits on neighbouring lines count as the same region).
+`libs/ui` is out of this lane's file ownership, so the LCS
 matcher is a small, separate copy in `libs/ext/sync/SyncMerge.cpp` rather than
 a shared extraction - worth moving to somewhere both can include if a third
 user of line-diffing turns up, not before (YAGNI).
 
-- **Clean merge** (no overlapping hunks): write the merged text through
-  `Vault::write` (atomic, preserves CRLF/BOM - the same path any other
-  vault-write uses) and update the base to it. The merge result is **not**
-  itself pushed as a new record - it does not need to be. The merge is a
-  pure function of `(base, local, remote)`, so any other device that pulls
-  the same two raw edits (its own, and the one that was just applied here)
-  recomputes the identical text independently; pushing it too would only
-  be extra traffic and a theoretical ping-pong if two devices both decided
-  to "helpfully" re-announce a merge they just computed. Applying pulled
-  records one at a time, in `seq` order, each against whatever `base` the
-  *previous* record in the batch left behind, is what makes this converge
-  for more than two devices too - it is a fold, not a pairwise special
-  case.
-- **True conflict**: the local file is left exactly as it is (local wins in
-  place - never silently discard what's on screen), the remote version is
-  written next to it as `<name> (sync conflict, <device>, <timestamp>).md`
-  through the same atomic write path, and a status signal reports the
-  conflict so the UI can surface it. The base is updated to match what is
-  now on disk, i.e. the *local* text, not the remote one just declined -
-  so the next cycle sees no change at all and stays quiet rather than
-  re-flagging the same conflict every cycle until the user acts. Folding
-  the conflict copy in by hand is then just an ordinary local edit against
-  that base, pushed and reconciled like any other.
+Once a record is applied, `base/` holds its text, `baseDigest` and
+`headDigest` its digest, and `syncedHash` its keyed hash; a device's own pushed
+records are confirmed the same way when they come back (the self-echo), from the
+state the device wrote - never from whatever the vault file holds by then. An
+echo whose `parent` is no longer the `baseDigest` is skipped: a remote record
+was applied in between and its merge result carries that content.
+
+- **Clean merge**: write the merged text through `Vault::write` (atomic,
+  preserves this file's CRLF/BOM) and confirm the sender's record as above. When
+  the merged text holds something the sender's did not and no state of this note
+  has exactly that text, **it is pushed**: one record, `parent` the sender's text,
+  so every device that has not seen it reaches the same text from one source
+  instead of re-deriving it. Equal content, a fast-forward and a conflict
+  resolution never push, and a merge result is only pushed when it adds
+  something, so the exchange ends: three devices editing three different lines
+  converge in a handful of records. (Two devices holding the same two edits do
+  not both announce a different text.)
+- **True conflict** (an unreconcilable merge, a state that is not found, an
+  attachment): the server's order decides, because both devices see it. This
+  device's text is the one it last wrote or applied; its server seq is in
+  `states` (0 while not yet pushed or acknowledged, which counts as newest). If
+  this device's text has the higher seq (or none), the file stays exactly as it
+  is and the incoming text is written next to it as
+  `<name> (sync conflict, <device>, <timestamp>).md`. If the record's seq is
+  higher, the file is replaced with the incoming text and no copy is made here:
+  the device that holds the newer text makes it. Either way a status signal
+  reports the conflict. So there is exactly one copy for two devices, made by the
+  winner, and it reaches the other as a new note; the loser's file is replaced
+  (and the loser's text arrives back as that copy next round). With three
+  devices editing the same line the oldest text can end up copied twice. Folding
+  a copy in by hand is an ordinary local edit.
 - **A different entity on the same path**: a pulled note or attachment this
   device has no entity for, whose path already holds a file (or anything else) (a parked
   delete's file the person has edited since, or the same path created on two
@@ -432,21 +481,26 @@ user of line-diffing turns up, not before (YAGNI).
 - **A rename of a note this device edited**: the file moves to the new path
   first and the merge happens there, so the file and the entity agree. This
   device's edit has already been pushed with the old path by then, and that
-  record would move every other device back, so the note is pushed again at
-  its new path (one extra record, only in this case). A move that cannot be
+  record would move every other device back, so the merge result is pushed at
+  the new path like any merge result that adds something. A move that cannot be
   done leaves the note at its own path, like an occupied target.
-- **Known limit**: a rename and an edit made on one device before a scan in
-  between look like a delete and a new note (renames are matched by exact
-  content), so another device's edit of the old note beats the delete and
-  both paths stay.
+- **Which path wins**: the states also record the local path each was applied
+  at. A record whose path is what this device had at the state the record builds
+  on did not rename the note, so this device's current path stands: a rename
+  made here (against an edit made elsewhere at the old path) or a rename held
+  back above. Any other path is a rename and is applied as above.
 
 ### Delete-vs-edit
 
-**An edit beats a delete, in both directions.** If a remote record says
-`delete` but the entity has a local edit since `base` (`base != local`), the
-delete is not applied - the local file survives, and it is re-pushed as a
-fresh `upsert` (so other devices' delete does not keep winning a race against
-an edit that only needed to arrive). Symmetrically, if the local scanner
+**An edit beats a delete, in both directions.** A delete record carries the
+state its writer last saw, like any record. If that is not the state this device
+last confirmed, the deleter had not seen a later edit: the delete is ignored
+whole, and the deleter receives that edit as an upsert in its next pull and
+gets the file back. If the entity has a local edit since `base` (`base !=
+local`), the delete is not applied either - the local file survives, the entity
+is kept (not dropped and later pushed as an unrelated new note), and the note is
+pushed again as that entity's next record, so other devices' delete does not
+keep winning a race against an edit that only needed to arrive. Symmetrically, if the local scanner
 finds a note gone (removed or trashed via `Vault::moveToTrash`) but a pull
 brings in a remote edit newer than `base`, the edit is written back to the
 vault path (undeleting it locally) rather than discarded. Losing content is
@@ -602,9 +656,19 @@ a vault.
 journal.db      SQLite: outbox, lastPulledSeq, entity table (entityID <->
                 current path, itemsKeyID, noteKey wrapped for local storage
                 by a key derived from the OS keyring's device secret - see
-                below), device row, known itemsKeys (wrapped)
+                below; baseDigest and headDigest), device row, known
+                itemsKeys (wrapped), and the states table (the last 32
+                states of each entity this device wrote or applied: digest,
+                text, local path, own or applied, server seq)
 base/<entityID> last-synced plaintext body, for three-way merge
 ```
+
+The states table is what lets a record be merged against the state its writer
+saw. It is bounded (32 rows per entity, the oldest dropped as new ones are
+added), so a note saved a thousand times costs 32 note-sizes, not a thousand.
+A journal from before parents has none of the new columns or rows; they are
+added when it is opened and fill in as records are applied, and a record or
+echo that carries no digest is handled the old way.
 
 Each entity's row caches its `wrappedNoteKey` exactly as it travels on the
 wire - still AEAD ciphertext under `itemsKey`, so storing it here adds no

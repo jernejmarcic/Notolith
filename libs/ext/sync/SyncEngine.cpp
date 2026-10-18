@@ -1,6 +1,7 @@
 #include "SyncEngine.h"
 
 #include <algorithm>
+#include <atomic>
 
 #include <QDateTime>
 #include <QDir>
@@ -36,7 +37,16 @@ struct EntityPlain {
     qint64 mtime = 0;
     QString body;           ///< inline note text, when blobAddress is empty
     QByteArray blobAddress; ///< set instead of body for attachments and oversized notes
+    /// SyncCrypto::digest of the state the writer built on (empty: a new
+    /// entity, or a writer from before parents), and of this record's own
+    /// content (note: UTF-8 of the LF-normalised text; attachment: the raw
+    /// bytes; empty for a delete). docs/SYNC.md "Record and blob formats".
+    QByteArray parent;
+    QByteArray hash;
 };
+
+/// Test seam: a writer from before records carried parent and hash.
+std::atomic<bool> g_legacyRecordFormat{false};
 
 QByteArray serialize(const EntityPlain &e)
 {
@@ -48,6 +58,10 @@ QByteArray serialize(const EntityPlain &e)
         o.insert(QStringLiteral("blobAddress"), QString::fromLatin1(e.blobAddress.toBase64()));
     else
         o.insert(QStringLiteral("body"), e.body);
+    if (!e.parent.isEmpty() && !g_legacyRecordFormat)
+        o.insert(QStringLiteral("parent"), QString::fromLatin1(e.parent.toBase64()));
+    if (!e.hash.isEmpty() && !g_legacyRecordFormat)
+        o.insert(QStringLiteral("hash"), QString::fromLatin1(e.hash.toBase64()));
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
@@ -70,6 +84,10 @@ EntityPlain parse(const QByteArray &json, bool *ok)
         e.blobAddress = QByteArray::fromBase64(o.value(QStringLiteral("blobAddress")).toString().toLatin1());
     else
         e.body = o.value(QStringLiteral("body")).toString();
+    if (o.contains(QStringLiteral("parent")))
+        e.parent = QByteArray::fromBase64(o.value(QStringLiteral("parent")).toString().toLatin1());
+    if (o.contains(QStringLiteral("hash")))
+        e.hash = QByteArray::fromBase64(o.value(QStringLiteral("hash")).toString().toLatin1());
     if (ok)
         *ok = !e.entityType.isEmpty() && !e.path.isEmpty() && !e.op.isEmpty();
     return e;
@@ -174,6 +192,11 @@ bool secretRemove(const QString &key)
 void SyncEngine::setSecretStore(SecretStore store)
 {
     secretStore() = std::move(store);
+}
+
+void SyncEngine::setLegacyRecordFormatForTests(bool legacy)
+{
+    g_legacyRecordFormat = legacy;
 }
 
 SyncEngine::SyncEngine()
@@ -697,6 +720,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     QByteArray wrappedNoteKey;
     QByteArray noteKey;
     QByteArray syncedHash; // carried over from the existing entity, if any - see the field's own comment
+    QByteArray baseDigest; // likewise: only applyRecord() moves it
+    QByteArray parent;     // the state this record builds on: the entity's headDigest, none for a new entity
 
     if (change.kind == SyncScanner::Change::Created) {
         entityID = SyncCrypto::randomID();
@@ -710,6 +735,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
         itemsKeyID = existing->itemsKeyID;
         wrappedNoteKey = existing->wrappedNoteKey;
         syncedHash = existing->syncedHash;
+        baseDigest = existing->baseDigest;
+        parent = existing->headDigest;
         const auto key = itemsKeyID == activeKey->itemsKeyID ? activeKey : m_journal->itemsKey(itemsKeyID);
         if (!key)
             return;
@@ -724,8 +751,10 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     plain.entityType = change.entityType;
     plain.path = change.path;
     plain.mtime = change.mtime;
+    plain.parent = parent;
 
-    QString text; // note bodies only - also becomes the new merge base below
+    QString text; // note bodies only
+    QByteArray bodyBytes;
 
     if (change.kind == SyncScanner::Change::Deleted) {
         plain.op = QStringLiteral("delete");
@@ -743,7 +772,8 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
                 return;
             raw = f.readAll();
         }
-        const QByteArray bodyBytes = change.entityType == QStringLiteral("note") ? text.toUtf8() : raw;
+        bodyBytes = change.entityType == QStringLiteral("note") ? text.toUtf8() : raw;
+        plain.hash = SyncCrypto::digest(bodyBytes);
         if (change.entityType == QStringLiteral("note") && bodyBytes.size() < kInlineBodyLimit) {
             plain.body = text;
         } else {
@@ -767,6 +797,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     record.itemsKeyID = itemsKeyID;
     record.wrappedNoteKey = wrappedNoteKey;
     record.payload = payload;
+    record.digest = plain.hash;
     m_journal->enqueue(record);
 
     if (change.kind == SyncScanner::Change::Deleted) {
@@ -785,7 +816,11 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     entity.localHash = change.hash; // scanner dedup only
     entity.syncedHash = syncedHash; // unchanged by a local edit - see the field's own comment in SyncJournal.h
     entity.deleted = false;
+    entity.baseDigest = baseDigest;
+    entity.headDigest = plain.hash; // the next record's parent: not baseDigest, or two scans pushed in one cycle would both claim the old base
     m_journal->putEntity(entity);
+    m_journal->addState(entityID, {plain.hash, SyncCrypto::contentAddress(m_contentKey, bodyBytes), change.path, text,
+                                   true, 0});
     // Deliberately no writeBase() here: the base (and syncedHash above)
     // record what this device and the server last agreed on, and a local
     // edit that has not even been pushed yet has not agreed on anything.
@@ -819,6 +854,13 @@ int SyncEngine::pushOutbox()
     for (const SyncJournal::OutboxRecord &r : pending)
         ids << r.recordID;
     m_journal->markSent(ids);
+    // The server's seq orders two devices' edits when they cannot be merged.
+    if (result.seqs.size() == pending.size()) {
+        for (int i = 0; i < pending.size(); ++i) {
+            if (!pending.at(i).digest.isEmpty())
+                m_journal->setStateSeq(pending.at(i).entityID, pending.at(i).digest, result.seqs.at(i));
+        }
+    }
     return pending.size();
 }
 
@@ -843,9 +885,14 @@ QString SyncEngine::pullJournal(int *pulled, int *conflicts)
     return {};
 }
 
-bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
+bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, const QByteArray &parent, QString *error)
 {
     const auto existing = m_journal->entity(entityID);
+    // The deleter had not seen a state this device has since applied: the
+    // delete is stale. Nothing is touched - the deleter gets that state as an
+    // upsert in its next pull and re-creates the file (an edit beats a delete).
+    if (existing && !parent.isEmpty() && !existing->baseDigest.isEmpty() && parent != existing->baseDigest)
+        return true;
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
     QByteArray localBytes;
     bool hasLocalFile = false;
@@ -859,6 +906,12 @@ bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
     // remove the file when nothing local disagrees with the delete.
     const bool localChanged =
         existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+    if (existing && hasLocalFile && localChanged) {
+        // The entity stays and says so again: the edit goes out as that
+        // entity's next record, so every device that dropped it gets it back.
+        announce(entityID);
+        return true;
+    }
     // The entity goes only once the file has: dropped with the file
     // still there, the next scan would push it back as a new note and
     // undo the delete on every device.
@@ -895,7 +948,7 @@ void SyncEngine::retryPendingDeletes()
     QList<QByteArray> pending = pendingDeletes();
     for (int i = pending.size() - 1; i >= 0; --i) {
         QString error;
-        if (applyRemoteDelete(pending.at(i), &error))
+        if (applyRemoteDelete(pending.at(i), {}, &error))
             pending.removeAt(i);
     }
     if (pending.size() != pendingDeletes().size())
@@ -981,7 +1034,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             ++*pulled;
             return true;
         }
-        if (!applyRemoteDelete(record.entityID, error)) {
+        if (!applyRemoteDelete(record.entityID, remote.parent, error)) {
             // The same record failing cycle after cycle (a read-only file,
             // a trash that never works) must not hold every later record,
             // from every device, behind it forever. After kDeleteStalls
@@ -1004,40 +1057,61 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     if (isSelfEcho) {
         // Confirms a push this device already made - never re-derive file
-        // content from this record's payload, which may already be stale
-        // by now if an earlier record in this same pull batch triggered a
-        // merge (docs/SYNC.md's own note on why a clean merge is not
-        // itself re-pushed: this is the other half of that - the device
-        // that pushed the raw edit has to recognise its own echo as
-        // "already accounted for" rather than as new remote content).
-        // Just mark whatever is on disk right now as the synced state.
+        // content from this record's payload or from the vault file: both
+        // may be stale by now if an earlier record in this same pull batch
+        // triggered a merge. The state this device wrote is in the journal.
         if (!existing) {
             ++*pulled; // queueLocalChange always creates the entity before pushing - nothing to confirm
             return true;
         }
-        QByteArray syncedHash;
-        bool hasLocalFile = false;
-        if (existing->entityType == QStringLiteral("note")) {
-            Note onDisk;
-            hasLocalFile = Vault::read(existingPath, onDisk);
-            if (hasLocalFile) {
-                syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
-                m_journal->writeBase(record.entityID, onDisk.text);
+        if (remote.hash.isEmpty()) {
+            // A record queued before records carried a hash: the old way,
+            // mark whatever is on disk right now as the synced state.
+            QByteArray syncedHash;
+            QByteArray diskDigest;
+            bool hasLocalFile = false;
+            if (existing->entityType == QStringLiteral("note")) {
+                Note onDisk;
+                hasLocalFile = Vault::read(existingPath, onDisk);
+                if (hasLocalFile) {
+                    syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
+                    diskDigest = SyncCrypto::digest(onDisk.text.toUtf8());
+                    m_journal->writeBase(record.entityID, onDisk.text);
+                }
+            } else {
+                QFile f(existingPath);
+                hasLocalFile = f.open(QIODevice::ReadOnly);
+                if (hasLocalFile) {
+                    const QByteArray bytes = f.readAll();
+                    syncedHash = SyncCrypto::contentAddress(m_contentKey, bytes);
+                    diskDigest = SyncCrypto::digest(bytes);
+                }
             }
-        } else {
-            QFile f(existingPath);
-            hasLocalFile = f.open(QIODevice::ReadOnly);
-            if (hasLocalFile)
-                syncedHash = SyncCrypto::contentAddress(m_contentKey, f.readAll());
+            if (hasLocalFile) {
+                const QFileInfo info(existingPath);
+                SyncJournal::Entity entity = *existing;
+                entity.localMtime = info.lastModified().toMSecsSinceEpoch();
+                entity.localSize = info.size();
+                entity.localHash = syncedHash;
+                entity.syncedHash = syncedHash;
+                entity.baseDigest = diskDigest; // the base file now holds this: the digest must say so too
+                m_journal->putEntity(entity);
+            }
+            ++*pulled;
+            return true;
         }
-        if (hasLocalFile) {
-            const QFileInfo info(existingPath);
+        const auto own = m_journal->state(record.entityID, remote.hash);
+        m_journal->setStateSeq(record.entityID, remote.hash, record.seq); // even when skipped below
+        // Walks the chain orig -> T1 -> T2. A remote record applied in between
+        // moved baseDigest elsewhere, so superseded own records are skipped:
+        // their content is in the merge result that was announced.
+        if (own && remote.parent == existing->baseDigest) {
             SyncJournal::Entity entity = *existing;
-            entity.localMtime = info.lastModified().toMSecsSinceEpoch();
-            entity.localSize = info.size();
-            entity.localHash = syncedHash;
-            entity.syncedHash = syncedHash;
+            entity.baseDigest = remote.hash;
+            entity.syncedHash = own->keyedHash;
             m_journal->putEntity(entity);
+            if (existing->entityType == QStringLiteral("note"))
+                m_journal->writeBase(record.entityID, own->text);
         }
         ++*pulled;
         return true;
@@ -1071,6 +1145,18 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         else
             remoteRaw = unpadded;
     }
+    const bool isNote = remote.entityType == QStringLiteral("note");
+    const QByteArray remoteBytes = isNote ? remoteText.toUtf8() : remoteRaw;
+    // Computed, not taken from remote.hash: that is only trusted to find a self-echo's own state.
+    const QByteArray remoteDigest = SyncCrypto::digest(remoteBytes);
+
+    // Which state of this entity the sender built on, against the one this
+    // device last confirmed (docs/SYNC.md "Conflict rules"). An empty parent
+    // (a new entity, an old client) or an empty base (an old journal) is taken
+    // as "in line": the decision then rests on this device's own state alone.
+    const QByteArray baseDigest = existing ? existing->baseDigest : QByteArray();
+    const bool inLine = remote.parent.isEmpty() || baseDigest.isEmpty() || remote.parent == baseDigest;
+    const QByteArray parentDigest = inLine ? baseDigest : remote.parent;
 
     // Whether anything - a file, a directory, a link, even a dangling one -
     // sits at `path`. isFile() would call a directory or a broken link free,
@@ -1084,13 +1170,19 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     const auto holdsRemote = [&](const QString &path) {
         if (QFileInfo(path).isSymLink())
             return false; // a link is not the file: it must not be written through, nor count as a match
-        if (remote.entityType == QStringLiteral("note")) {
+        if (isNote) {
             Note onDisk;
             return Vault::read(path, onDisk) && onDisk.text == remoteText;
         }
         QFile f(path);
         return f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
     };
+
+    // The sender's path is what this device had at the state the sender built
+    // on, so the sender did not rename: this device's path stands - a local
+    // rename, or a rename it held back (the rows record the path as applied).
+    if (existing && m_journal->sawPath(record.entityID, parentDigest, remote.path))
+        remote.path = existing->path;
 
     // A rename (or move) onto a path that already holds something this entity
     // does not own - another entity's note, a stray file, a directory, a link
@@ -1113,7 +1205,6 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // QFile::rename() do not create parent directories, so this does.
     // Covers the conflict-copy path below too: same directory as `remote.path`.
     QDir().mkpath(QFileInfo(targetPath).path());
-    bool wroteConflict = false;
 
     // A rename or move takes the local file along before anything is merged
     // or written, whether or not it has a local edit: the merge then happens
@@ -1139,7 +1230,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     if (!existing && occupied(targetPath)) {
         if (!holdsRemote(targetPath)) {
             const QString copy = conflictCopyPath(m_vault, remote.path, record.deviceID);
-            if (remote.entityType == QStringLiteral("note"))
+            if (isNote)
                 Vault::write(copy, Note{remoteText, false, false});
             else
                 writeRawFile(copy, remoteRaw);
@@ -1152,41 +1243,104 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         }
     }
 
-    if (!localChanged) {
-        if (remote.entityType == QStringLiteral("note")) {
+    const auto writeRemote = [&](bool keepDiskFormat) {
+        if (isNote) {
             Note note;
             note.text = remoteText;
+            if (keepDiskFormat) {
+                Note onDisk;
+                Vault::read(targetPath, onDisk);
+                note.crlf = onDisk.crlf;
+                note.bom = onDisk.bom;
+            }
             Vault::write(targetPath, note);
         } else {
             writeRawFile(targetPath, remoteRaw);
         }
-    } else if (remote.entityType == QStringLiteral("note")) {
-        const QString base = m_journal->readBase(record.entityID);
-        Note onDisk;
-        Vault::read(targetPath, onDisk);
-        const SyncMerge::Result merged = SyncMerge::merge(base, onDisk.text, remoteText);
-        if (merged.clean) {
-            Note note;
-            note.text = merged.merged;
-            note.crlf = onDisk.crlf;
-            note.bom = onDisk.bom;
-            Vault::write(targetPath, note);
-            remoteText = merged.merged; // the new base - and what the next scan will find on disk
-        } else {
-            Vault::write(conflictCopyPath(m_vault, remote.path, record.deviceID), Note{remoteText, false, false});
-            wroteConflict = true;
-            remoteText = onDisk.text; // local is left exactly as it is
-        }
+    };
+
+    bool conflicted = false;
+    bool announceMerge = false;
+    // Whether the sender's content is on disk and the base moves to it with
+    // nothing more to do (a new entity, a fast-forward, or the same content).
+    if (!existing || !hasLocalFile) {
+        writeRemote(false); // no local file: an edit beats a local delete
+    } else if (holdsRemote(targetPath)) {
+        // Same content: nothing to write, only the path (handled above) and the confirmation below.
     } else {
-        // Two sides touched the same attachment: never silently pick one.
-        writeRawFile(conflictCopyPath(m_vault, remote.path, record.deviceID), remoteRaw);
-        wroteConflict = true;
+        if (inLine && !localChanged) {
+            writeRemote(false); // fast-forward
+        } else {
+            // What the merge is based on: this device's own sync point when the
+            // sender saw it, else the state the sender names. A state this
+            // device no longer holds, or an attachment, cannot be merged: both
+            // sides changed something and nothing says what.
+            QString mergeBase;
+            bool canMerge = false;
+            if (isNote && inLine) {
+                canMerge = true;
+                mergeBase = m_journal->readBase(record.entityID);
+            } else if (isNote) {
+                if (const auto ancestor = m_journal->state(record.entityID, remote.parent)) {
+                    canMerge = true;
+                    mergeBase = ancestor->text;
+                }
+            }
+            if (canMerge) {
+                Note onDisk;
+                Vault::read(targetPath, onDisk);
+                const SyncMerge::Result merged = SyncMerge::merge(mergeBase, onDisk.text, remoteText);
+                if (merged.clean) {
+                    Note note;
+                    note.text = merged.merged;
+                    note.crlf = onDisk.crlf;
+                    note.bom = onDisk.bom;
+                    Vault::write(targetPath, note);
+                    // The merge holds something the sender never had: it goes out
+                    // with the sender's text as its parent, once - unless this
+                    // very text is a state this device already wrote or applied.
+                    announceMerge =
+                        merged.merged != remoteText
+                        && (moved || !m_journal->state(record.entityID, SyncCrypto::digest(merged.merged.toUtf8())));
+                } else {
+                    conflicted = true;
+                }
+            } else {
+                conflicted = true;
+            }
+        }
+        if (conflicted) {
+            // Two edits that cannot be reconciled: the one the server saw last
+            // is kept in the file, the other becomes a copy beside it. Exactly
+            // one copy for two devices - the device holding the newer text
+            // writes it (an own edit not yet acknowledged is the newest).
+            QByteArray diskBytes = localBytes;
+            if (isNote) {
+                Note onDisk;
+                Vault::read(targetPath, onDisk);
+                diskBytes = onDisk.text.toUtf8();
+            }
+            const auto diskState = m_journal->state(record.entityID, SyncCrypto::digest(diskBytes));
+            const qint64 diskSeq = diskState ? diskState->seq : 0;
+            const bool localWins = diskSeq == 0 || diskSeq > record.seq;
+            if (localWins) {
+                const QString copy = conflictCopyPath(m_vault, remote.path, record.deviceID);
+                if (isNote)
+                    Vault::write(copy, Note{remoteText, false, false});
+                else
+                    writeRawFile(copy, remoteRaw);
+            } else {
+                writeRemote(true);
+            }
+        }
     }
 
-    const QByteArray finalBytes = wroteConflict && existing
-                                    ? localBytes
-                                    : (remote.entityType == QStringLiteral("note") ? remoteText.toUtf8() : remoteRaw);
-
+    // The base is always the sender's text, never this device's merge result:
+    // a later record built on it then merges against the state the sender saw.
+    QFile written(targetPath);
+    QByteArray diskNow;
+    if (written.open(QIODevice::ReadOnly))
+        diskNow = written.readAll();
     SyncJournal::Entity entity;
     entity.entityID = record.entityID;
     entity.path = remote.path;
@@ -1196,34 +1350,43 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     const QFileInfo info(targetPath);
     entity.localMtime = info.lastModified().toMSecsSinceEpoch();
     entity.localSize = info.size();
-    entity.localHash = SyncCrypto::contentAddress(m_contentKey, finalBytes);
-    entity.syncedHash = entity.localHash; // fast-forward and clean-merge both leave local and synced in agreement
+    entity.localHash = SyncCrypto::contentAddress(m_contentKey, diskNow);
+    entity.syncedHash = SyncCrypto::contentAddress(m_contentKey, remoteBytes);
     entity.deleted = false;
+    entity.baseDigest = remoteDigest;
+    entity.headDigest = remoteDigest;
     m_journal->putEntity(entity);
-    if (remote.entityType == QStringLiteral("note"))
+    if (isNote)
         m_journal->writeBase(record.entityID, remoteText);
+    m_journal->addState(record.entityID, {remoteDigest, entity.syncedHash, entity.path, remoteText, false, record.seq});
 
-    // This device's own edit went out before this rename was applied, at the
-    // old path: left alone, the record carrying it would move every other
-    // device back to that path while this one stays at the new one. So the
-    // entity is announced again where it now is.
-    if (moved && localChanged) {
-        SyncScanner::Change change;
-        change.kind = SyncScanner::Change::Modified;
-        change.entityID = record.entityID;
-        change.path = remote.path;
-        change.entityType = remote.entityType;
-        change.mtime = entity.localMtime;
-        change.size = entity.localSize;
-        change.hash = entity.localHash;
-        queueLocalChange(change);
-    }
+    if (announceMerge)
+        announce(record.entityID);
 
-    if (wroteConflict)
+    if (conflicted)
         ++*conflicts;
     else
         ++*pulled;
     return true;
+}
+
+// The entity as it now is on disk, queued for the other devices: a merge result
+// they have not seen. queueLocalChange() puts the entity's headDigest, which
+// applyRecord() has just set to the incoming text, as the record's parent.
+void SyncEngine::announce(const QByteArray &entityID)
+{
+    const auto entity = m_journal->entity(entityID);
+    if (!entity)
+        return;
+    SyncScanner::Change change;
+    change.kind = SyncScanner::Change::Modified;
+    change.entityID = entityID;
+    change.path = entity->path;
+    change.entityType = entity->entityType;
+    change.mtime = entity->localMtime;
+    change.size = entity->localSize;
+    change.hash = entity->localHash;
+    queueLocalChange(change);
 }
 
 } // namespace noteAppC

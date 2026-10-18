@@ -81,9 +81,19 @@ void SyncJournal::open(const QString &vaultRoot)
                                   "seq INTEGER PRIMARY KEY AUTOINCREMENT, entityID BLOB, recordID BLOB, "
                                   "itemsKeyID BLOB, wrappedNoteKey BLOB, payload BLOB, sent INTEGER DEFAULT 0)"))
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS items_keys ("
-                                  "itemsKeyID BLOB PRIMARY KEY, plaintext BLOB, active INTEGER)"));
+                                  "itemsKeyID BLOB PRIMARY KEY, plaintext BLOB, active INTEGER)"))
+        && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS states ("
+                                  "id INTEGER PRIMARY KEY AUTOINCREMENT, entityID BLOB, digest BLOB, "
+                                  "keyedHash BLOB, path TEXT, text BLOB, own INTEGER, seq INTEGER DEFAULT 0)"))
+        && exec(q, QStringLiteral("CREATE INDEX IF NOT EXISTS states_entity ON states(entityID, digest)"));
     if (!ok)
         m_error = q.lastError().text();
+    // A journal from before records carried digests: the columns are added,
+    // and a database that already has them answers "duplicate column", which
+    // is the point and not an error.
+    exec(q, QStringLiteral("ALTER TABLE entities ADD COLUMN baseDigest BLOB"));
+    exec(q, QStringLiteral("ALTER TABLE entities ADD COLUMN headDigest BLOB"));
+    exec(q, QStringLiteral("ALTER TABLE outbox ADD COLUMN digest BLOB"));
 }
 
 bool SyncJournal::isOpen() const
@@ -147,11 +157,13 @@ SyncJournal::Entity entityFromQuery(const QSqlQuery &q)
     entity.localHash = q.value(7).toByteArray();
     entity.syncedHash = q.value(8).toByteArray();
     entity.deleted = q.value(9).toInt() != 0;
+    entity.baseDigest = q.value(10).toByteArray();
+    entity.headDigest = q.value(11).toByteArray();
     return entity;
 }
 
 constexpr const char *kEntityColumns = "entityID, path, entityType, itemsKeyID, wrappedNoteKey, localMtime, "
-                                       "localSize, localHash, syncedHash, deleted";
+                                       "localSize, localHash, syncedHash, deleted, baseDigest, headDigest";
 
 } // namespace
 
@@ -191,11 +203,13 @@ void SyncJournal::putEntity(const Entity &entity)
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(
         "INSERT INTO entities(entityID, path, entityType, itemsKeyID, wrappedNoteKey, "
-        "localMtime, localSize, localHash, syncedHash, deleted) VALUES(?,?,?,?,?,?,?,?,?,?) "
+        "localMtime, localSize, localHash, syncedHash, deleted, baseDigest, headDigest) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(entityID) DO UPDATE SET path=excluded.path, entityType=excluded.entityType, "
         "itemsKeyID=excluded.itemsKeyID, wrappedNoteKey=excluded.wrappedNoteKey, "
         "localMtime=excluded.localMtime, localSize=excluded.localSize, localHash=excluded.localHash, "
-        "syncedHash=excluded.syncedHash, deleted=excluded.deleted"));
+        "syncedHash=excluded.syncedHash, deleted=excluded.deleted, "
+        "baseDigest=excluded.baseDigest, headDigest=excluded.headDigest"));
     q.addBindValue(entity.entityID);
     q.addBindValue(entity.path);
     q.addBindValue(entity.entityType);
@@ -206,6 +220,8 @@ void SyncJournal::putEntity(const Entity &entity)
     q.addBindValue(entity.localHash);
     q.addBindValue(entity.syncedHash);
     q.addBindValue(entity.deleted ? 1 : 0);
+    q.addBindValue(entity.baseDigest);
+    q.addBindValue(entity.headDigest);
     q.exec();
 }
 
@@ -215,7 +231,68 @@ void SyncJournal::removeEntity(const QByteArray &entityID)
     q.prepare(QStringLiteral("DELETE FROM entities WHERE entityID=?"));
     q.addBindValue(entityID);
     q.exec();
+    QSqlQuery states(m_db);
+    states.prepare(QStringLiteral("DELETE FROM states WHERE entityID=?"));
+    states.addBindValue(entityID);
+    states.exec();
     removeBase(entityID);
+}
+
+void SyncJournal::addState(const QByteArray &entityID, const State &state)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT INTO states(entityID, digest, keyedHash, path, text, own, seq) "
+                             "VALUES(?,?,?,?,?,?,?)"));
+    q.addBindValue(entityID);
+    q.addBindValue(state.digest);
+    q.addBindValue(state.keyedHash);
+    q.addBindValue(state.path);
+    q.addBindValue(state.text.toUtf8());
+    q.addBindValue(state.own ? 1 : 0);
+    q.addBindValue(state.seq);
+    q.exec();
+    // ponytail: 32 states per note; a device offline longer than that for one note falls back to a conflict copy, never to loss
+    QSqlQuery prune(m_db);
+    prune.prepare(QStringLiteral("DELETE FROM states WHERE entityID=? AND id NOT IN "
+                                 "(SELECT id FROM states WHERE entityID=? ORDER BY id DESC LIMIT ?)"));
+    prune.addBindValue(entityID);
+    prune.addBindValue(entityID);
+    prune.addBindValue(kStateHistory);
+    prune.exec();
+}
+
+std::optional<SyncJournal::State> SyncJournal::state(const QByteArray &entityID, const QByteArray &digest) const
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT digest, keyedHash, path, text, own, seq FROM states "
+                             "WHERE entityID=? AND digest=? ORDER BY id DESC LIMIT 1"));
+    q.addBindValue(entityID);
+    q.addBindValue(digest);
+    if (!q.exec() || !q.next())
+        return std::nullopt;
+    return State{q.value(0).toByteArray(), q.value(1).toByteArray(),       q.value(2).toString(),
+                 QString::fromUtf8(q.value(3).toByteArray()), q.value(4).toInt() != 0, q.value(5).toLongLong()};
+}
+
+bool SyncJournal::sawPath(const QByteArray &entityID, const QByteArray &digest, const QString &path) const
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT 1 FROM states WHERE entityID=? AND digest=? AND path=? LIMIT 1"));
+    q.addBindValue(entityID);
+    q.addBindValue(digest);
+    q.addBindValue(path);
+    return q.exec() && q.next();
+}
+
+void SyncJournal::setStateSeq(const QByteArray &entityID, const QByteArray &digest, qint64 seq)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("UPDATE states SET seq=? WHERE id=(SELECT MAX(id) FROM states "
+                             "WHERE entityID=? AND digest=? AND own=1)"));
+    q.addBindValue(seq);
+    q.addBindValue(entityID);
+    q.addBindValue(digest);
+    q.exec();
 }
 
 QString SyncJournal::readBase(const QByteArray &entityID) const
@@ -247,13 +324,14 @@ void SyncJournal::removeBase(const QByteArray &entityID)
 void SyncJournal::enqueue(const OutboxRecord &record)
 {
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("INSERT INTO outbox(entityID, recordID, itemsKeyID, wrappedNoteKey, payload) "
-                             "VALUES(?,?,?,?,?)"));
+    q.prepare(QStringLiteral("INSERT INTO outbox(entityID, recordID, itemsKeyID, wrappedNoteKey, payload, digest) "
+                             "VALUES(?,?,?,?,?,?)"));
     q.addBindValue(record.entityID);
     q.addBindValue(record.recordID);
     q.addBindValue(record.itemsKeyID);
     q.addBindValue(record.wrappedNoteKey);
     q.addBindValue(record.payload);
+    q.addBindValue(record.digest);
     q.exec();
 }
 
@@ -261,7 +339,7 @@ QList<SyncJournal::OutboxRecord> SyncJournal::pendingOutbox(int limit) const
 {
     QList<OutboxRecord> out;
     QSqlQuery q(m_db);
-    q.prepare(QStringLiteral("SELECT seq, entityID, recordID, itemsKeyID, wrappedNoteKey, payload "
+    q.prepare(QStringLiteral("SELECT seq, entityID, recordID, itemsKeyID, wrappedNoteKey, payload, digest "
                              "FROM outbox WHERE sent=0 ORDER BY seq ASC LIMIT ?"));
     q.addBindValue(limit);
     q.exec();
@@ -273,6 +351,7 @@ QList<SyncJournal::OutboxRecord> SyncJournal::pendingOutbox(int limit) const
         record.itemsKeyID = q.value(3).toByteArray();
         record.wrappedNoteKey = q.value(4).toByteArray();
         record.payload = q.value(5).toByteArray();
+        record.digest = q.value(6).toByteArray();
         out.append(record);
     }
     return out;

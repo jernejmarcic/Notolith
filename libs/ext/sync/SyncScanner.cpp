@@ -6,6 +6,8 @@
 #include <QHash>
 #include <QSet>
 
+#include <algorithm>
+
 #include "SyncCrypto.h"
 #include "SyncJournal.h"
 #include "Vault.h"
@@ -32,6 +34,20 @@ QByteArray hashFile(const QString &absolutePath, const QByteArray &contentKey)
     if (!f.open(QIODevice::ReadOnly))
         return {};
     return SyncCrypto::contentAddress(contentKey, f.readAll());
+}
+
+/// The non-blank lines of `text` with how often each occurs, and their count.
+QHash<QString, int> lineBag(const QString &text, int *total)
+{
+    QHash<QString, int> bag;
+    *total = 0;
+    for (const QStringView line : QStringView(text).split(QLatin1Char('\n'))) {
+        if (line.trimmed().isEmpty())
+            continue;
+        ++bag[line.toString()];
+        ++*total;
+    }
+    return bag;
 }
 
 } // namespace
@@ -119,6 +135,78 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
             changeIt->entityID = knownIt->entityID;
             known.erase(knownIt);
             break;
+        }
+    }
+
+    // A note renamed and edited in the same scan has no exact match: compare
+    // the new notes with the vanished ones line by line (Dice over the
+    // non-blank lines) and take a pair that is alike and clearly the best for
+    // that file. A wrong pair hands the new note the old one's identity;
+    // nothing is lost either way.
+    // ponytail: only when new * vanished notes <= 64, a folder of edited notes
+    // moved at once falls back to delete + create; raise it if that turns up.
+    QList<qsizetype> created;
+    for (qsizetype i = 0; i < changes.size(); ++i) {
+        if (changes.at(i).kind == Change::Created && changes.at(i).entityType == QStringLiteral("note"))
+            created.append(i);
+    }
+    QList<SyncJournal::Entity> vanished;
+    for (const SyncJournal::Entity &gone : std::as_const(known)) {
+        if (gone.entityType == QStringLiteral("note"))
+            vanished.append(gone);
+    }
+    if (!created.isEmpty() && !vanished.isEmpty() && created.size() * vanished.size() <= 64) {
+        struct Pair {
+            qsizetype created, vanished;
+            double score;
+        };
+        QList<Pair> pairs;
+        QList<QHash<QString, int>> bases;
+        QList<int> baseTotals;
+        for (const SyncJournal::Entity &gone : std::as_const(vanished)) {
+            int total = 0;
+            bases.append(lineBag(journal.readBase(gone.entityID), &total)); // no base yet: never matched
+            baseTotals.append(total);
+        }
+        for (qsizetype c = 0; c < created.size(); ++c) {
+            Note note;
+            if (!Vault::read(vault.absolute(changes.at(created.at(c)).path), note))
+                continue;
+            int total = 0;
+            const QHash<QString, int> bag = lineBag(note.text, &total);
+            double best = 0;
+            double second = 0;
+            qsizetype bestVanished = -1;
+            for (qsizetype v = 0; v < vanished.size(); ++v) {
+                if (total == 0 || baseTotals.at(v) == 0)
+                    continue;
+                int common = 0;
+                for (auto line = bag.cbegin(); line != bag.cend(); ++line)
+                    common += std::min(line.value(), bases.at(v).value(line.key()));
+                const double score = 2.0 * common / (total + baseTotals.at(v));
+                if (score > best) {
+                    second = best;
+                    best = score;
+                    bestVanished = v;
+                } else if (score > second) {
+                    second = score;
+                }
+            }
+            if (bestVanished >= 0 && best >= 0.5 && best > second)
+                pairs.append({c, bestVanished, best});
+        }
+        std::sort(pairs.begin(), pairs.end(), [](const Pair &a, const Pair &b) { return a.score > b.score; });
+        QSet<qsizetype> claimed;
+        for (const Pair &pair : std::as_const(pairs)) {
+            if (claimed.contains(pair.vanished))
+                continue;
+            claimed.insert(pair.vanished);
+            const SyncJournal::Entity &gone = vanished.at(pair.vanished);
+            Change &change = changes[created.at(pair.created)];
+            change.kind = Change::Renamed;
+            change.oldPath = gone.path;
+            change.entityID = gone.entityID;
+            known.remove(gone.path);
         }
     }
 

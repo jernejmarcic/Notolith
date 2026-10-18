@@ -110,11 +110,16 @@ public:
     };
     static void setSecretStore(SecretStore store);
 
+    /// Test seam: while set, records are written the way a client from before
+    /// parents did - without `parent` and `hash`. Process-wide.
+    static void setLegacyRecordFormatForTests(bool legacy);
+
 signals:
     void statusChanged(noteAppC::SyncEngine::Status status, const QString &message);
     /// One pass of the sync cycle finished (pushed/pulled record counts;
-    /// conflicts is how many notes got a conflict copy written, or a rename held
-    /// back, this pass).
+    /// conflicts is how many records met an edit they could not be merged
+    /// with - a conflict copy written, or this device's text replaced by the
+    /// newer one - or a rename held back, this pass).
     void syncFinished(int pushed, int pulled, int conflicts);
     /// A device enrolling without the password wants this vault's keys.
     /// Nothing is sealed for it until approveDevice(): a person compares
@@ -147,8 +152,10 @@ private:
     /// file could not be moved to the trash.
     bool applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error);
     /// Moves a deleted entity's file to the trash (unless edited locally) and
-    /// forgets the entity. False, with `error`, only when the trash move fails.
-    bool applyRemoteDelete(const QByteArray &entityID, QString *error);
+    /// forgets the entity. `parent` is the state the deleter saw (empty: not
+    /// known); a delete older than this device's own sync point is ignored.
+    /// False, with `error`, only when the trash move fails.
+    bool applyRemoteDelete(const QByteArray &entityID, const QByteArray &parent, QString *error);
     /// Remote deletes that kept failing and stopped blocking the pull; kept in
     /// the journal's meta so a restart still retries them. Read from there
     /// once per cycle (loadPendingDeletes), written through by the setter.
@@ -159,6 +166,8 @@ private:
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
     QString refusedWarning() const;       ///< empty when no record was refused
     void queueLocalChange(const SyncScanner::Change &change);
+    /// Queues the entity as it is on disk right now as a local change.
+    void announce(const QByteArray &entityID);
 
     QThread m_thread;
     QTimer *m_debounce = nullptr; ///< a change kicks this, single-shot, a few seconds out
