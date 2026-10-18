@@ -1585,7 +1585,7 @@ when off.
       punctuation in links it writes; no official list exists. Space is
       right. Staff: links to headings are compared with non-alphanumerics
       stripped, so `[[N#heading!]]` resolves to `## heading?`.
-      - [ ] Resolve heading links punctuation-insensitively like Obsidian
+      - [x] (Opus, headingKey; both tests seen failing under mutation) Resolve heading links punctuation-insensitively like Obsidian
             (compare both sides with all non-letter/digit folded to
             space), so links Obsidian 0.16+ writes with kept punctuation
             still resolve. After lane relink merges (MainWindow
