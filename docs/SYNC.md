@@ -558,19 +558,30 @@ the text the base and the synced hash are moved to.
   as a conflict copy beside it.
 - **A rename of a note this device edited**: the file moves to the new path
   first and the merge happens there, so the file and the entity agree. This
-  device's edit has already been pushed with the old path by then, and that
-  record would move every other device back, so the merge result is pushed at
-  the new path like any merge result that adds something. A move that cannot be
-  done leaves the note at its own path, like an occupied target.
+  device's edit may already have been pushed with the old path, but a record
+  that names the old path does not move other devices back (see "Which path
+  wins"). A move that cannot be done leaves the note at its own path, like an
+  occupied target.
 - **Which path wins**: the states also record the local path each was applied
-  at. A record whose path is what this device had at the state the record builds
-  on did not rename the note, so this device's current path stands: a rename
-  made here (against an edit made elsewhere at the old path) or a rename held
-  back above. Only while the newest row at that state is this device's own: a
-  rename-only record has its parent's hash, so renaming a note back to a name it
-  had before matches an older row too, and an applied rename after that must
-  not be read as "no rename". Any other path is a rename and is applied as
-  above.
+  at, and a record whose path differs from this device's is judged by what it
+  is.
+  - A **pure rename** (its content is its parent's) is settled by the server's
+    order: this device's own rename stands only if it was pushed after the
+    record (or not pushed yet, which counts as newest); otherwise the record's
+    path is applied. So when two devices rename one note concurrently, every
+    device - the two renamers and any third - ends on the one the server saw
+    last, and no device's own-ness decides.
+  - Any **other record** (an edit, possibly with a rename in it) carries the
+    path its sender had. When that is a path this device had at the state the
+    record builds on, the sender did not rename, and this device's current path
+    stands: a rename made here, or a rename it held back above. A third device
+    that applied a rename keeps it against a crossing edit still naming the old
+    path, because it recorded the old path at that state too. A path the device
+    never had there is a rename and is applied as above.
+  - Known edge: renaming a note back to a name it had before *and* editing it,
+    before any sync between, is one record whose path matches an older row, so
+    it is read as "no rename" and the note stays at the other name there. A
+    rename alone (the rename back with no edit) is unaffected.
 
 ### Delete-vs-edit
 

@@ -1283,16 +1283,25 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         return f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
     };
 
-    // The sender's path is what this device had at the state the sender built
-    // on, so the sender did not rename: this device's path stands - a local
-    // rename, or a rename it held back (the rows record the path as applied).
-    // Only while the newest row at that state is this device's own: a
-    // rename-only record keeps its parent's hash, so renaming back to a
-    // former name matches an older row too, and must not be taken for "no rename".
-    const auto newestAtParent =
-        existing && !(inLine && baseHasNoRow) ? m_journal->state(record.entityID, parentDigest) : std::nullopt;
-    if (newestAtParent && newestAtParent->own && m_journal->sawPath(record.entityID, parentDigest, remote.path))
-        remote.path = existing->path;
+    // Which path stands when the record's differs from this device's
+    // (docs/SYNC.md "Which path wins"). A pure rename (the content is the
+    // parent's) is settled by the server's order, so every device ends on the
+    // later of two concurrent renames: this device's own rename stands unless
+    // the record is the later one (0: not pushed yet, newest). Any other
+    // record - an edit - carries the path its sender had: when that is a path
+    // this device had at the state the sender built on, the sender did not
+    // rename, and this device's path (a rename made here, or one held back
+    // below) stands.
+    if (existing && existing->path != remote.path) {
+        const bool pureRename = !remote.parent.isEmpty() && remoteDigest == remote.parent;
+        if (pureRename) {
+            const auto mine = m_journal->state(record.entityID, remote.parent);
+            if (mine && mine->own && (mine->seq == 0 || mine->seq > record.seq))
+                remote.path = existing->path;
+        } else if (!(inLine && baseHasNoRow) && m_journal->sawPath(record.entityID, parentDigest, remote.path)) {
+            remote.path = existing->path;
+        }
+    }
 
     // A rename (or move) onto a path that already holds something this entity
     // does not own - another entity's note, a stray file, a directory, a link

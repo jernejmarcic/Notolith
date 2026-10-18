@@ -1955,6 +1955,67 @@ TEST_F(SyncIntegrationTest, ARenameBackToTheOldNameReachesTheOtherDevice)
     }
 }
 
+// A renames a note while B edits it at the old path. C pulls the rename and
+// then the edit, which still carries the old path: C's newest state at the
+// edit's parent is the rename's, not its own, and used to take the path back.
+TEST_F(SyncIntegrationTest, AThirdDeviceKeepsARenameAgainstACrossingEdit)
+{
+    writeNote(vaultA.path(), QStringLiteral("old.md"), QStringLiteral("alpha\nbeta\ngamma\ndelta"));
+    SyncEngine engineA, engineB, engineC;
+    Watcher watchA(engineA), watchB(engineB), watchC(engineC);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineC.start(vaultC.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchC.waitForCycle());
+
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/old.md"), vaultA.path() + QStringLiteral("/new.md")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultB.path(), QStringLiteral("old.md"), QStringLiteral("alpha\nbeta\ngamma\nDELTA"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineC.syncNow();
+    ASSERT_TRUE(watchC.waitForCycle());
+    EXPECT_TRUE(QFile::exists(vaultC.path() + QStringLiteral("/new.md"))) << snapshot(vaultC.path());
+    EXPECT_FALSE(QFile::exists(vaultC.path() + QStringLiteral("/old.md"))) << snapshot(vaultC.path());
+
+    // C's own next edit would carry the path it holds, and move the others if it were the old one.
+    writeNote(vaultC.path(), QStringLiteral("new.md"), QStringLiteral("ALPHA\nbeta\ngamma\nDELTA"));
+    expectConverged({{&engineC, &watchC}, {&engineA, &watchA}, {&engineB, &watchB}},
+                    {vaultA.path(), vaultB.path(), vaultC.path()}, 4);
+    for (const QString &root : {vaultA.path(), vaultB.path(), vaultC.path()})
+        EXPECT_EQ(snapshot(root), "new.md=ALPHA|beta|gamma|DELTA");
+}
+
+// Two devices rename one note to different names before either syncs: the one
+// the server saw last is the name everywhere, on the two renamers and on a
+// third device alike.
+TEST_F(SyncIntegrationTest, ConcurrentRenamesSettleOnTheLaterOne)
+{
+    writeNote(vaultA.path(), QStringLiteral("old.md"), QStringLiteral("the text stays put"));
+    SyncEngine engineA, engineB, engineC;
+    Watcher watchA(engineA), watchB(engineB), watchC(engineC);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineC.start(vaultC.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchC.waitForCycle());
+
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/old.md"), vaultA.path() + QStringLiteral("/x.md")));
+    ASSERT_TRUE(QFile::rename(vaultB.path() + QStringLiteral("/old.md"), vaultB.path() + QStringLiteral("/y.md")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow(); // the later rename
+    ASSERT_TRUE(watchB.waitForCycle());
+    expectConverged({{&engineC, &watchC}, {&engineA, &watchA}, {&engineB, &watchB}},
+                    {vaultA.path(), vaultB.path(), vaultC.path()}, 4);
+    for (const QString &root : {vaultA.path(), vaultB.path(), vaultC.path()})
+        EXPECT_EQ(snapshot(root), "y.md=the text stays put");
+}
+
 // A pulled delete whose file cannot go to the trash used to drop the entity
 // anyway; the next scan then pushed the still-present file back as a new
 // note, undoing the delete everywhere.
