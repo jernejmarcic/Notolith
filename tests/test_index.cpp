@@ -811,6 +811,22 @@ TEST_F(RenameLinksTest, AnAliasOfOneOfTwoSameNameNotesNamesItByPath)
     EXPECT_EQ(index.linkTargets().count(QStringLiteral("Dup")), 1);
 }
 
+// Obsidian lists both: the note named Foo and Bar's alias Foo.
+TEST_F(IndexTest, AnAliasThatIsAnotherNotesNameLeavesThatNoteCompletable)
+{
+    write(QStringLiteral("Foo.md"), "# Foo\n");
+    write(QStringLiteral("Bar.md"), "---\naliases: [Foo, Baz]\n---\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    const QStringList targets = index.linkTargets();
+    EXPECT_TRUE(targets.contains(QStringLiteral("Foo")));
+    EXPECT_FALSE(targets.contains(QStringLiteral("Baz"))); // a plain alias is only offered as Bar|Baz
+    EXPECT_TRUE(index.aliases().contains({QStringLiteral("Foo"), QStringLiteral("Bar")}));
+}
+
 TEST_F(RenameLinksTest, FallsBackToAFullPathWhenTheNewBasenameIsAmbiguous)
 {
     write(QStringLiteral("Folder/Solo.md"), "# Solo\n");

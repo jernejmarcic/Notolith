@@ -864,12 +864,20 @@ QStringList Index::findByName(const QString &query, int limit) const
 
 QStringList Index::linkTargets() const
 {
-    // ponytail: an alias that is also another note's name drops out of the
-    // plain list and shows only as the alias entry.
+    // An alias is offered as `Note|alias` (aliases()), so it is not also a
+    // plain name - unless it is some note's own name, which stays completable.
     QSet<QString> aliasNames;
     for (const auto &entry : aliases()) {
         if (entry.first != QFileInfo(entry.second).fileName())
             aliasNames.insert(entry.first);
+    }
+    for (auto it = aliasNames.begin(); it != aliasNames.end();) {
+        bool isNoteName = false;
+        for (const QString &path : m_names.value(foldCase(*it))) {
+            isNoteName = isNoteName || ((path.endsWith(QLatin1String(".md")) || path.endsWith(QLatin1String(".mdlock")))
+                                        && QFileInfo(path).completeBaseName() == *it);
+        }
+        it = isNoteName ? aliasNames.erase(it) : std::next(it);
     }
     QStringList names;
     QSqlQuery query(m_db);
