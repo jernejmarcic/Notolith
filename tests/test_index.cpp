@@ -662,6 +662,36 @@ TEST_F(RenameLinksTest, TheIndexerNamesTheNotesItHasNotAppliedYet)
     EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
 }
 
+// A note whose links all stay right through a folder rename (wikilinks by name
+// to a sibling that moved with it) is not rewritten: no bytes touched, not counted.
+TEST_F(RenameLinksTest, AFolderRenameLeavesNotesWithSiblingLinksUntouched)
+{
+    write(QStringLiteral("Folder/A.md"), "see [[Sibling]]\n");
+    write(QStringLiteral("Folder/Sibling.md"), "back to [[A]]\n");
+    write(QStringLiteral("Other.md"), "[[Folder/A]]\n");
+    vault = Vault(dir.path());
+    const QDateTime past = QDateTime::currentDateTime().addDays(-3);
+    for (const QString &name : {QStringLiteral("Folder/A.md"), QStringLiteral("Folder/Sibling.md")}) {
+        QFile file(vault.absolute(name));
+        ASSERT_TRUE(file.open(QIODevice::ReadWrite));
+        ASSERT_TRUE(file.setFileTime(past, QFileDevice::FileModificationTime));
+    }
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Folder")), QStringLiteral("Moved"), &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Folder"), QStringLiteral("Moved"), vault, &error), 1)
+        << "only Other.md's path link changes: " << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other.md"))), QByteArray("[[Moved/A]]\n"));
+    for (const QString &name : {QStringLiteral("Moved/A.md"), QStringLiteral("Moved/Sibling.md")}) {
+        EXPECT_EQ(QFileInfo(vault.absolute(name)).lastModified().toSecsSinceEpoch(), past.toSecsSinceEpoch())
+            << name.toStdString() << " was rewritten byte for byte";
+    }
+}
+
 TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
 {
     write(QStringLiteral("Old Note.md"), "# Old Note\n\nSome content.\n");

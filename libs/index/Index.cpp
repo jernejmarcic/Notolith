@@ -1397,6 +1397,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         }
         if (hits.isEmpty())
             continue; // the links to it were removed since the index last looked
+        const QString textBefore = note.text;
 
         // Last link first, so an earlier link's offsets stay valid while a
         // later one's replacement text changes length.
@@ -1462,6 +1463,9 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
 
             note.text.replace(rawStart, rawLength, rebased);
         }
+
+        if (note.text == textBefore)
+            continue; // a sibling link in a moved folder: still right, nothing to write
 
         if (!Vault::write(absolutePath, note, error)) {
             endBatch();
