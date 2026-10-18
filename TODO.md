@@ -1619,18 +1619,28 @@ cache invalidation; fresh-parse rewrite; parked-delete ordering vs local
 edits; every new test can fail.
 
 Lane sync8:
-- [ ] 1. BUG, data loss: after a delete is parked, a later put of a new
+- [x] 1. (lane sync8, 4558461) BUG, data loss: after a delete is parked, a later put of a new
       entity at the same path (`!existing`, so not localChanged) overwrites
       the locally edited file. Plan: in the put branch, when no entity owns
       the path but a file exists there with a different content address,
       write the incoming as a conflict copy and keep the local file (same
       for attachments; also covers two devices creating one path). Test:
       A deletes, B parks, B edits, A recreates, B syncs: B's text kept.
-- [ ] 9. pendingDeletes() read from the journal per pulled record: load
+- [x] 9. (lane sync8, 34b6c44) pendingDeletes() read from the journal per pulled record: load
       once per cycle, write-through.
-- [ ] 10. A parked delete shows Status::Error forever: a Warning status
+- [x] 10. (lane sync8, 423dbed: Idle + message tooltip) A parked delete shows Status::Error forever: a Warning status
       (or Idle + message) so healthy sync does not read as broken.
-- [ ] 11c. Document that the 3-failure count restarts each launch.
+- [x] 11c. (lane sync8, 5013853) Document that the 3-failure count restarts each launch.
+- [ ] 15. (lane sync9) BUG, data loss: a pulled rename onto a path owned by
+      a different entity (or any existing file) takes QFile::rename, which
+      fails, then Vault::write overwrites the target. Plan: same rule as
+      item 1: an occupied target with other content gets the incoming as a
+      conflict copy; the local file stays. Test: B has note X at path P
+      (its own entity), A renames Y to P; B keeps X, Y's text in a copy.
+- [ ] 16. (lane sync9) Item 1 has no attachment test; add one.
+- [ ] 17. A note created on two devices at one path conflicts again on each
+      later edit until one side renames it (documented). Later: adopt one
+      entity for identical paths after the first conflict.
 
 Lane index8:
 - [ ] 2. waitIdle before rename stalls the UI (debounce rebuild = full
