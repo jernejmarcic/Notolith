@@ -1330,6 +1330,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     // The index lags a save, so its rows only say which notes to open; the
     // offsets to splice at come from the text read below.
     QStringList candidates;
+    QSet<QString> extra; // those only the caller named
     {
         QSqlQuery query(m_db);
         query.exec(QStringLiteral("SELECT files.path, links.target, links.wiki FROM links "
@@ -1347,6 +1348,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         for (const QString &path : extraCandidates) {
             if (!seen.contains(path)) {
                 seen.insert(path);
+                extra.insert(path);
                 candidates.append(path);
             }
         }
@@ -1357,6 +1359,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     const ParseOptions options = parseOptions();
     int rewritten = 0;
     QStringList skippedLossy;
+    QStringList skippedUnreadable;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
         Metadata metadata = parser.parse(text, absolutePath, options);
@@ -1375,9 +1378,13 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         const QString absolutePath = vault.absolute(actualRelative);
 
         Note note;
-        if (!Vault::read(absolutePath, note, error)) {
-            endBatch();
-            return -1;
+        if (!Vault::read(absolutePath, note)) {
+            // Gone or unreadable since the index looked (the file has already
+            // moved): one note's links must not undo the rest. A note only
+            // named by the caller may simply be gone, which is no news.
+            if (!extra.contains(fromPath))
+                skippedUnreadable.append(actualRelative);
+            continue;
         }
         // Write would refuse it; leave its bytes alone and say so.
         if (note.lossy) {
@@ -1487,9 +1494,15 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     }
 
     endBatch();
-    if (!skippedLossy.isEmpty() && error) {
-        *error = QStringLiteral("not UTF-8, so its links were left as they are: %1")
-                     .arg(skippedLossy.join(QStringLiteral(", ")));
+    if (error && (!skippedLossy.isEmpty() || !skippedUnreadable.isEmpty())) {
+        QStringList notes;
+        if (!skippedLossy.isEmpty())
+            notes << QStringLiteral("not UTF-8, so its links were left as they are: %1")
+                         .arg(skippedLossy.join(QStringLiteral(", ")));
+        if (!skippedUnreadable.isEmpty())
+            notes << QStringLiteral("could not be read, so its links were left as they are: %1")
+                         .arg(skippedUnreadable.join(QStringLiteral(", ")));
+        *error = notes.join(QStringLiteral("; "));
     }
     return rewritten;
 }

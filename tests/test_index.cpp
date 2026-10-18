@@ -692,6 +692,29 @@ TEST_F(RenameLinksTest, AFolderRenameLeavesNotesWithSiblingLinksUntouched)
     }
 }
 
+// A linking note deleted outside the app since the index looked is named, not
+// fatal: the notes after it are still rewritten.
+TEST_F(RenameLinksTest, ALinkingNoteGoneFromDiskDoesNotStopTheRewrite)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    for (const char *name : {"A", "B", "C"})
+        write(QStringLiteral("%1.md").arg(QLatin1String(name)), "[[Target]]\n");
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+    ASSERT_TRUE(QFile::remove(vault.absolute(QStringLiteral("B.md"))));
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Target.md")), QStringLiteral("Renamed"), &newPath,
+                                 &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Target.md"), QStringLiteral("Renamed.md"), vault, &error), 2);
+    EXPECT_TRUE(error.contains(QStringLiteral("B.md"))) << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A.md"))), QByteArray("[[Renamed]]\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("C.md"))), QByteArray("[[Renamed]]\n"));
+}
+
 TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
 {
     write(QStringLiteral("Old Note.md"), "# Old Note\n\nSome content.\n");

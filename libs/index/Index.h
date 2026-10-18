@@ -197,7 +197,8 @@ public:
     /// basename when that is still unique. Only the link's bytes change.
     /// The index picks the notes to open; each one's links are found again in
     /// the text read, so a note saved since it was indexed is spliced right.
-    /// A note that is not valid UTF-8 is left untouched and named in `error`.
+    /// A note that is not valid UTF-8, or that can no longer be read (deleted
+    /// since the index looked), is skipped and named in `error`; the rest go on.
     /// `extraCandidates` are notes (vault-relative, at their paths before the
     /// rename) to open besides the ones the index names: those saved since it
     /// last looked, whose links it may not hold yet.
