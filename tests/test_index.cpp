@@ -616,6 +616,52 @@ TEST_F(RenameLinksTest, FolderRenameRewritesPathLinksIntoIt)
               QByteArray("[[Moved/A]] [[A]] [y](Moved/A.md)"));
 }
 
+// A note saved since the index last looked may hold a first link to the renamed
+// note: named as an extra candidate, it is read from disk and rewritten.
+TEST_F(RenameLinksTest, ANoteNamedAsAnExtraCandidateIsReadFromDisk)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "Nothing yet.\n");
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+    write(QStringLiteral("Home.md"), "Nothing yet. [[Target]]\n"); // saved, not indexed
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Target.md")), QStringLiteral("Renamed"),
+                                 &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Target.md"), QStringLiteral("Renamed.md"), vault,
+                                           &error, {QStringLiteral("Home.md")}),
+              1)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Home.md"))), QByteArray("Nothing yet. [[Renamed]]\n"));
+}
+
+// What a rename must open besides the index's own list: the notes of the scan
+// running and those queued behind it.
+TEST_F(RenameLinksTest, TheIndexerNamesTheNotesItHasNotAppliedYet)
+{
+    write(QStringLiteral("Home.md"), "Home\n");
+    vault = Vault(dir.path());
+    Index index;
+    Indexer indexer(&index);
+    EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
+
+    const QString home = vault.absolute(QStringLiteral("Home.md"));
+    indexer.reindex(home);
+    EXPECT_EQ(indexer.pathsInFlight(), QStringList{home});
+    indexer.reindex(home); // queued behind the running one
+    EXPECT_EQ(indexer.pathsInFlight(), (QStringList{home, home}));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer.isRunning(); }, 20000));
+    EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
+}
+
 TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
 {
     write(QStringLiteral("Old Note.md"), "# Old Note\n\nSome content.\n");

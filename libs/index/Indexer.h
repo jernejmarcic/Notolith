@@ -41,13 +41,12 @@ public:
     void reindex(const QString &path);
     /// A scan is running, or its last batch is not applied yet.
     bool isRunning() const;
-    /// Brings the index up to date with what is on disk now, for at most
-    /// `milliseconds`: a change the watcher has not acted on yet is acted on
-    /// now, and the scans queued or running are waited for. Only the indexer's
-    /// own results are delivered meanwhile, no other event. Returns at once
-    /// when nothing is pending. For a caller about to read links the index
-    /// must already know, such as a rename's rewrite.
-    void waitIdle(int milliseconds);
+    /// The notes (absolute paths) a reindex() has asked for that the Index does
+    /// not hold as saved yet: the running scan's, and those queued behind it.
+    /// A rename reads them from disk as candidates, so a note saved a moment ago
+    /// has its link rewritten without waiting for the scan. A whole-vault scan
+    /// in progress is not listed: its files are not known until it has walked.
+    QStringList pathsInFlight() const;
     /// Cancels a scan in progress and waits for it, dropping what it had not
     /// yet reported: afterwards the Index can be closed or reopened.
     void stop();
@@ -129,6 +128,7 @@ private:
     bool m_clearMetaNotes = false; ///< switched off during a scan: its end clears the rows
     ParseOptions m_parseOptions; ///< only the meta-note fields set
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
+    QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
     NotebookReader m_notebookReader;
     QFileSystemWatcher m_files;
     QTimer m_debounce;

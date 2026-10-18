@@ -3,12 +3,10 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
-#include <QCoreApplication>
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
 #include <QStringDecoder>
-#include <QThread>
 #include <QtConcurrent>
 
 #include "Parser.h"
@@ -105,22 +103,9 @@ bool Indexer::isRunning() const
     return m_active;
 }
 
-void Indexer::waitIdle(int milliseconds)
+QStringList Indexer::pathsInFlight() const
 {
-    if (m_debounce.isActive()) {
-        m_debounce.stop();
-        rebuild();
-    }
-    QElapsedTimer waited;
-    waited.start();
-    // Only this object's queued results are delivered: a nested event loop
-    // would also run the deferred deletes and input of the caller's widgets.
-    // A scan's end may queue another (a rescan, notes changed meanwhile).
-    while (m_active && waited.elapsed() < milliseconds) {
-        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
-        if (m_active)
-            QThread::msleep(1);
-    }
+    return m_active ? m_scanPaths + m_pending : QStringList();
 }
 
 void Indexer::stop()
@@ -229,6 +214,7 @@ void Indexer::start(const QStringList &paths, bool force)
     m_wrote = false;
     m_scanOptions = m_parseOptions;
     m_scanSetsKey = force && paths.isEmpty();
+    m_scanPaths = paths;
     m_active = true;
     m_scan = QtConcurrent::run(&m_pool, [this, paths, scan = m_scanNumber.load(), vault = m_vault,
                                          database = m_index->databasePath(), notebooks = m_notebookReader,

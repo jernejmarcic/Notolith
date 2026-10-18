@@ -5,7 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <future>
+#include <thread>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -32,6 +35,8 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QPointer>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include <QLayout>
 #include <QLineEdit>
 #include <QMenu>
@@ -1559,6 +1564,66 @@ QLineEdit *titleOf(MarkdownEditor *editor)
     return editor->parentWidget()->findChild<QLineEdit *>(QStringLiteral("inlineTitle"));
 }
 } // namespace
+
+// The timer, not the rename, saved the note: its reindex has not been applied
+// when the rename runs. The rename reads it from disk all the same, and does
+// not wait for the indexer - its own changed() is the only one it causes.
+TEST_F(WindowTest, RenamingRightAfterATimerSaveRewritesTheLinkWithoutWaitingForTheIndexer)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "Nothing yet.\n");
+
+    MainWindow window;
+    window.setAutosaveIntervalsForTests(1, 1);
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Home.md")));
+    auto *editor = window.editor();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("[[Target]]"));
+    ASSERT_TRUE(editor->isModified());
+    // Another connection holds the index's write lock, so the scan the timer's
+    // save starts cannot write the new link yet: only the disk has it. Released
+    // a moment after the rename starts, which then waits for its own writes.
+    std::atomic<bool> locked{false}, release{false};
+    std::thread holder([&] {
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("index8-holder"));
+            db.setDatabaseName(window.index()->databasePath());
+            if (db.open()) {
+                QSqlQuery lock(db);
+                locked = lock.exec(QStringLiteral("BEGIN IMMEDIATE"));
+                while (!release)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                lock.exec(QStringLiteral("ROLLBACK"));
+            }
+        }
+        QSqlDatabase::removeDatabase(QStringLiteral("index8-holder"));
+    });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return locked.load(); }, 5000));
+    // The timer saves; the scan it starts is not applied before the rename below.
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->isModified(); }, 5000));
+    auto *indexer = window.findChild<noteAppC::Indexer *>();
+    ASSERT_NE(indexer, nullptr);
+
+    // The inline title renames without a dialog's event loop applying the scan first.
+    window.show();
+    window.openNote(path(QStringLiteral("Target.md")));
+    QLineEdit *title = titleOf(window.editor());
+    ASSERT_NE(title, nullptr);
+    ASSERT_TRUE(indexer->isRunning()) << "the reindex of the save must still be unapplied";
+    title->setText(QStringLiteral("Renamed"));
+    const qsizetype before = indexed.size();
+    release = true;
+    QTest::keyClick(title, Qt::Key_Return);
+    holder.join();
+
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("Nothing yet.\n[[Renamed]]"));
+    EXPECT_EQ(indexed.size() - before, 1) << "the rename's own announcement, no scan applied meanwhile";
+}
 
 TEST_F(WindowTest, TheInlineTitleRenamesTheNoteInEveryPaneAndFollowsLinks)
 {

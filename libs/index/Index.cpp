@@ -1262,7 +1262,7 @@ QString Index::rebasedTarget(const QString &oldTarget, const QString &oldRelativ
 }
 
 int Index::updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
-                                  const Vault &vault, QString *error)
+                                  const Vault &vault, QString *error, const QStringList &extraCandidates)
 {
     if (!m_db.isOpen()) {
         if (error)
@@ -1341,6 +1341,13 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             if (!seen.contains(fromPath) && classify(fromPath, query.value(1).toString(), query.value(2).toBool(), unused)) {
                 seen.insert(fromPath);
                 candidates.append(fromPath);
+            }
+        }
+        // Their links are found in the text read, like the others'.
+        for (const QString &path : extraCandidates) {
+            if (!seen.contains(path)) {
+                seen.insert(path);
+                candidates.append(path);
             }
         }
     }
