@@ -1026,6 +1026,18 @@ TEST(SyncJournalTest, OpeningAnOldJournalAddsTheColumns)
         ASSERT_FALSE(pending.isEmpty());
         EXPECT_EQ(pending.last().digest, SyncCrypto::digest("d"));
         journal.markSent({record.recordID});
+
+        // The parked table is created on open and keeps what it is given.
+        SyncClient::JournalRecord parked;
+        parked.seq = 5;
+        parked.entityID = id;
+        parked.payload = QByteArrayLiteral("sealed");
+        journal.park(parked, QStringLiteral("lost.png"));
+        ASSERT_EQ(journal.parkedRecords().size(), 1);
+        EXPECT_EQ(journal.parkedRecords().first().record.payload, QByteArrayLiteral("sealed"));
+        EXPECT_EQ(journal.parkedRecords().first().path, QStringLiteral("lost.png"));
+        journal.unparkEntity(id);
+        EXPECT_TRUE(journal.parkedRecords().isEmpty());
     }
 }
 
@@ -1466,11 +1478,107 @@ TEST_F(SyncIntegrationTest, AnUnreachableBlobHoldsThePullThenIsParkedAndNamed)
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/later.md")), QStringLiteral("written after"));
     EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/lost.png")));
 
-    // Parked for good: the next cycle neither retries nor loses the name.
+    // Parked: the next cycle retries quietly (the blob is still gone) and keeps the name.
     engineB.syncNow();
     ASSERT_TRUE(watchB.waitForCycle());
     EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
     EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("lost.png")));
+}
+
+/// A's lost.png and later.md are on the server, the blob is hidden away, and
+/// B has given up on it: parked, later.md applied.
+class ParkedBlobTest : public SyncIntegrationTest {
+protected:
+    void park()
+    {
+        writeRaw(vaultA.path() + QStringLiteral("/lost.png"), QByteArray("bytes the server loses"));
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        writeNote(vaultA.path(), QStringLiteral("later.md"), QStringLiteral("written after"));
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+        hideBlobs();
+        engineB->start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB->waitForCycle());
+        for (int cycle = 0; cycle < 3; ++cycle) { // the fourth blocked attempt parks it
+            engineB->syncNow();
+            ASSERT_TRUE(watchB->waitForCycle());
+        }
+        ASSERT_EQ(watchB->lastStatus, SyncEngine::Status::Idle) << watchB->lastMessage.toStdString();
+        ASSERT_TRUE(watchB->lastMessage.contains(QStringLiteral("lost.png"))) << watchB->lastMessage.toStdString();
+        ASSERT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/lost.png")));
+    }
+    void hideBlobs()
+    {
+        ASSERT_TRUE(QDir().rename(serverData.path() + QStringLiteral("/blobs"), serverData.path() + QStringLiteral("/blobs.away")));
+    }
+    void restoreBlobs()
+    {
+        ASSERT_TRUE(QDir().rename(serverData.path() + QStringLiteral("/blobs.away"), serverData.path() + QStringLiteral("/blobs")));
+    }
+
+    SyncEngine engineA;
+    Watcher watchA{engineA};
+    std::unique_ptr<SyncEngine> engineB = std::make_unique<SyncEngine>();
+    std::unique_ptr<Watcher> watchB = std::make_unique<Watcher>(*engineB);
+};
+
+// The parked record lives in the journal: a restarted engine still retries it
+// once the blob is back.
+TEST_F(ParkedBlobTest, AParkedBlobIsRetriedAfterARestart)
+{
+    park();
+    watchB.reset();
+    engineB.reset();
+    restoreBlobs();
+
+    SyncEngine engineB2;
+    Watcher watchB2(engineB2);
+    engineB2.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB2.waitForCycle());
+    QFile f(vaultB.path() + QStringLiteral("/lost.png"));
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly)) << snapshot(vaultB.path());
+    EXPECT_EQ(f.readAll(), QByteArray("bytes the server loses"));
+    EXPECT_EQ(watchB2.lastStatus, SyncEngine::Status::Idle);
+    EXPECT_FALSE(watchB2.lastMessage.contains(QStringLiteral("lost.png"))) << watchB2.lastMessage.toStdString();
+    EXPECT_EQ(watchB2.conflicts, 0);
+}
+
+// A record written after the parked one makes it moot: the retry must not
+// apply the old bytes over the new ones, nor count a conflict doing it.
+TEST_F(ParkedBlobTest, ALaterRecordDropsAParkedBlob)
+{
+    park();
+    restoreBlobs(); // reachable again, so only the drop keeps the retry away
+    writeRaw(vaultA.path() + QStringLiteral("/lost.png"), QByteArray("rewritten bytes"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    engineB->syncNow();
+    ASSERT_TRUE(watchB->waitForCycle());
+    QFile f(vaultB.path() + QStringLiteral("/lost.png"));
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly)) << snapshot(vaultB.path());
+    EXPECT_EQ(f.readAll(), QByteArray("rewritten bytes"));
+    EXPECT_FALSE(watchB->lastMessage.contains(QStringLiteral("lost.png"))) << watchB->lastMessage.toStdString();
+    EXPECT_EQ(watchB->conflicts, 0);
+    engineB->syncNow();
+    ASSERT_TRUE(watchB->waitForCycle());
+    EXPECT_EQ(watchB->conflicts, 0);
+}
+
+// Nor may a retry bring back a file whose entity was deleted since.
+TEST_F(ParkedBlobTest, ALaterDeleteDropsAParkedBlob)
+{
+    park();
+    restoreBlobs();
+    QFile::remove(vaultA.path() + QStringLiteral("/lost.png"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    engineB->syncNow();
+    ASSERT_TRUE(watchB->waitForCycle());
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/lost.png"))) << snapshot(vaultB.path());
+    EXPECT_FALSE(watchB->lastMessage.contains(QStringLiteral("lost.png"))) << watchB->lastMessage.toStdString();
 }
 
 // The scanner sees every file on disk; a name no other device may write
