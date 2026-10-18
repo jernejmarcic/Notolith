@@ -297,6 +297,14 @@ bool SyncJournal::sawPath(const QByteArray &entityID, const QByteArray &digest, 
     return q.exec() && q.next();
 }
 
+qint64 SyncJournal::firstSeq(const QByteArray &entityID) const
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("SELECT MIN(seq) FROM states WHERE entityID=? AND seq>0"));
+    q.addBindValue(entityID);
+    return q.exec() && q.next() ? q.value(0).toLongLong() : 0; // NULL reads as 0
+}
+
 void SyncJournal::setStateSeq(const QByteArray &entityID, const QByteArray &digest, qint64 seq)
 {
     QSqlQuery q(m_db);

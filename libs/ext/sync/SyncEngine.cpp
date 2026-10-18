@@ -93,16 +93,28 @@ EntityPlain parse(const QByteArray &json, bool *ok)
     return e;
 }
 
+/// "<name> (<tag>).md" beside the file, relative to the vault.
+QString taggedPath(const QString &relativePath, const QString &tag)
+{
+    const QFileInfo info(relativePath);
+    const QString suffix = info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix();
+    const QString dirPrefix = info.path() == QStringLiteral(".") ? QString() : info.path() + QLatin1Char('/');
+    return QStringLiteral("%1%2 (%3)%4").arg(dirPrefix, info.completeBaseName(), tag, suffix);
+}
+
 /// "<name> (sync conflict, <device>, <timestamp>).md", relative to the vault -
 /// docs/SYNC.md "Conflict rules".
 QString conflictCopyPath(const QString &relativePath, const QByteArray &deviceID)
 {
-    const QFileInfo info(relativePath);
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
-    const QString tag = QString::fromLatin1(deviceID.left(4).toHex());
-    const QString suffix = info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix();
-    const QString dirPrefix = info.path() == QStringLiteral(".") ? QString() : info.path() + QLatin1Char('/');
-    return QStringLiteral("%1%2 (sync conflict, %3, %4)%5").arg(dirPrefix, info.completeBaseName(), tag, stamp, suffix);
+    return taggedPath(relativePath, QStringLiteral("sync conflict, %1, %2").arg(QString::fromLatin1(deviceID.left(4).toHex()), stamp));
+}
+
+/// "<name> (<4 hex of the entity ID>).md": where the loser of two entities on one
+/// path goes, the same on every device - docs/SYNC.md "A different entity on the same path".
+QString siblingPath(const QString &relativePath, const QByteArray &entityID)
+{
+    return taggedPath(relativePath, QString::fromLatin1(entityID.left(2).toHex()));
 }
 
 /// Runs a QKeychain job to completion on the calling thread's own event
@@ -1355,26 +1367,60 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         }
     }
 
-    // No entity of this record's own, yet a file already sits at its path
-    // (a parked delete's file the person has since edited, or the same path
-    // created independently on two devices): the incoming text must not
-    // replace it. Different content goes to a conflict copy and the local
-    // file is left alone; the same content needs nothing written. Either way
-    // no entity is created here: another one may own the path, and two
-    // entities on one path would make the scan read one of them as deleted.
+    // No entity of this record's own, yet a file already sits at its path.
+    // When another entity owns that path - created on two devices, or a note
+    // this device deleted that another kept editing - the one the server saw
+    // first keeps it, equal text is one note, and different text moves the loser
+    // aside under a name that is a function of its entity ID, so every device
+    // places it alike without a record exchanged (docs/SYNC.md "A different
+    // entity on the same path"). Otherwise (a parked delete's file the person
+    // has since edited, a stray file) the incoming text must not replace it:
+    // different content goes to a conflict copy and the local file is left
+    // alone; the same content needs nothing written.
+    bool conflicted = false;
     if (!existing && occupied(targetPath)) {
-        if (!holdsRemote(targetPath)) {
-            const QString copy = conflictCopyPath(remote.path, record.deviceID);
-            const bool saved = isNote ? m_vault.writeNoteNoFollow(copy, Note{remoteText, false, false})
-                                      : m_vault.writeBytesNoFollow(copy, remoteRaw);
-            if (!saved)
-                refuse(remote.path);
-            ++*conflicts;
-            return true;
+        const bool same = holdsRemote(targetPath);
+        const auto owner = m_journal->entityForPath(remote.path);
+        if (owner && owner->entityID != record.entityID) {
+            // A record with a parent is not the entity's first: it predates a creation, so it wins.
+            // ponytail: firstSeq reads the kept rows; 32 pushes with no pull would prune the
+            // oldest and misjudge this. A firstSeq column on entities if it turns up.
+            const qint64 ownerFirst = m_journal->firstSeq(owner->entityID); // 0: nothing of it pushed yet
+            const bool incomingWins = ownerFirst == 0 || !remote.parent.isEmpty() || record.seq < ownerFirst;
+            if (!incomingWins) {
+                if (same) { // the author re-keys its copy to this entity
+                    ++*pulled;
+                    return true;
+                }
+                remote.path = siblingPath(remote.path, record.entityID);
+                targetPath = m_vault.absolute(remote.path);
+                conflicted = true;
+            } else if (same) {
+                m_journal->removeEntity(owner->entityID); // this device's twin: re-keyed to the incoming below
+            } else {
+                const QString aside = siblingPath(owner->path, owner->entityID);
+                if (QFile::rename(targetPath, m_vault.absolute(aside))) {
+                    SyncJournal::Entity movedOwner = *owner;
+                    movedOwner.path = aside;
+                    m_journal->putEntity(movedOwner);
+                    conflicted = true;
+                } // a failed move falls through to a copy
+            }
         }
-        if (m_journal->entityForPath(remote.path)) {
-            ++*pulled;
-            return true;
+        if (occupied(targetPath)) {
+            if (!holdsRemote(targetPath)) {
+                const QString copy = conflictCopyPath(remote.path, record.deviceID);
+                const bool saved = isNote ? m_vault.writeNoteNoFollow(copy, Note{remoteText, false, false})
+                                          : m_vault.writeBytesNoFollow(copy, remoteRaw);
+                if (!saved)
+                    refuse(remote.path);
+                ++*conflicts;
+                return true;
+            }
+            if (m_journal->entityForPath(remote.path)) {
+                ++*pulled;
+                return true;
+            }
         }
     }
 
@@ -1399,7 +1445,6 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         return true;
     };
 
-    bool conflicted = false;
     bool announceMerge = false;
     // The state the next record of this entity builds on: the incoming text,
     // unless this device won a conflict and kept its own, which is on disk.

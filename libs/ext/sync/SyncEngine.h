@@ -119,7 +119,8 @@ signals:
     /// One pass of the sync cycle finished (pushed/pulled record counts;
     /// conflicts is how many records met an edit they could not be merged
     /// with - a conflict copy written, or this device's text replaced by the
-    /// newer one - or a rename held back, this pass).
+    /// newer one - or a rename held back, or a note moved aside because another
+    /// entity holds its path, this pass).
     void syncFinished(int pushed, int pulled, int conflicts);
     /// A device enrolling without the password wants this vault's keys.
     /// Nothing is sealed for it until approveDevice(): a person compares
