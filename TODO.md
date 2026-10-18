@@ -1814,7 +1814,7 @@ WINDOWS-PLAN.md; items below get filled from it.
       parented Qt::Window is an xdg transient Hyprland floats like a
       dialog); never move(); m_active stays global; feature
       "popout-windows" (off = zero objects, no acceptDrops).
-- [ ] Lane A (windows core): PopoutWindow class; root-split helpers,
+- [x] Lane A (windows core, merged; open 11 ms, move tab 3.3 ms): PopoutWindow class; root-split helpers,
       collapseIfEmpty (main never empty), moveLeaf, splitBeside,
       newPopout/closePopout/deletePopout, closeEvent order; commands
       workspace:open-in-new-window / move-to-new-window + tab context menu;
@@ -1832,6 +1832,13 @@ WINDOWS-PLAN.md; items below get filled from it.
       right tab buttons dragged out -> detached pane. 4 tests.
 - [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
       between windows, focus; offscreen cannot show these.
+- [ ] Obsidian command ids workspace:open-in-new-window /
+      workspace:move-to-new-window unverified: check against a real
+      Obsidian hotkeys.json (Jernej) or a public source.
+- [ ] After lanes B + C: persist detached sidebars / panes (Pane::viewType
+      column, file-explorer etc.), test ADetachedSidebarIsRestoredAsAFile
+      ExplorerWindow; main-splitter 3-children assertion in
+      ClosingTheMainWindowClosesEveryPopout once sidebars detach.
 
 ## Fable sync audit round 10, 2026-10-18 (scratchpad SYNC-ROUND10.md)
 Lane sync10 (in this order, one function region, one lane):
