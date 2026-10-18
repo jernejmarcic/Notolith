@@ -1484,6 +1484,41 @@ TEST_F(WindowTest, RenamingWithAModifiedLinkingNoteOpenKeepsTheLinkRewrite)
     EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Renamed]].\nxy"));
 }
 
+// A linking note that is not valid UTF-8 cannot be rewritten without changing
+// its bytes: the rename still goes through, the status bar names the note.
+TEST_F(WindowTest, RenamingNamesALinkingNoteThatWasNotUpdated)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    const QByteArray lossy("caf\xe9 [[Target]]\n");
+    write(QStringLiteral("A-lossy.md"), lossy);
+    write(QStringLiteral("B-clean.md"), "See [[Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+
+    const QString message = window.statusBar()->currentMessage();
+    EXPECT_TRUE(message.contains(QStringLiteral("links in a note were not updated"))) << message.toStdString();
+    EXPECT_TRUE(message.contains(QStringLiteral("A-lossy.md"))) << message.toStdString();
+    EXPECT_FALSE(message.contains(QStringLiteral("B-clean.md"))) << message.toStdString();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Renamed.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("A-lossy.md"))), lossy);
+    EXPECT_EQ(readAll(path(QStringLiteral("B-clean.md"))), QByteArray("See [[Renamed]].\n"));
+}
+
 // The index only learns of a note's new link when the save is indexed; the
 // rename must not read the links before that.
 TEST_F(WindowTest, RenamingRewritesALinkTypedAMomentAgo)
