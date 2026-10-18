@@ -105,7 +105,7 @@ QString ObsidianSyntax::headingLinkText(const QString &heading)
 
 QString ObsidianSyntax::headingKey(const QString &heading)
 {
-    QString key = heading;
+    QString key = heading.normalized(QString::NormalizationForm_C);
     for (QChar &c : key) {
         if (!c.isLetterOrNumber() && !c.isSurrogate())
             c = QLatin1Char(' ');
@@ -113,19 +113,36 @@ QString ObsidianSyntax::headingKey(const QString &heading)
     return key.simplified();
 }
 
+namespace {
+
+/// The heading in [first, last) a link names: the one whose link text is `name` (case aside) wins, so `C++`
+/// finds `## C++` after `## C`; else the first with the same key, which forgives punctuation.
+qsizetype matchHeading(const QList<Heading> &headings, qsizetype first, qsizetype last, const QString &name)
+{
+    const auto exact = [](const QString &text) {
+        return ObsidianSyntax::headingLinkText(text).normalized(QString::NormalizationForm_C);
+    };
+    const QString wantedText = exact(name);
+    for (qsizetype i = first; i < last; ++i) {
+        if (exact(headings.at(i).text).compare(wantedText, Qt::CaseInsensitive) == 0)
+            return i;
+    }
+    const QString key = ObsidianSyntax::headingKey(name);
+    for (qsizetype i = first; i < last; ++i) {
+        if (ObsidianSyntax::headingKey(headings.at(i).text).compare(key, Qt::CaseInsensitive) == 0)
+            return i;
+    }
+    return -1;
+}
+
+} // namespace
+
 QList<qsizetype> ObsidianSyntax::headingsUnder(const QList<Heading> &headings, const QStringList &parents)
 {
     qsizetype first = 0;
     qsizetype last = headings.size();
     for (const QString &parent : parents) {
-        const QString key = headingKey(parent);
-        qsizetype found = -1;
-        for (qsizetype i = first; i < last; ++i) {
-            if (headingKey(headings.at(i).text).compare(key, Qt::CaseInsensitive) == 0) {
-                found = i;
-                break;
-            }
-        }
+        const qsizetype found = matchHeading(headings, first, last, parent);
         if (found < 0)
             return {};
         first = found + 1;
@@ -146,12 +163,7 @@ qsizetype ObsidianSyntax::findHeading(const QList<Heading> &headings, const QStr
     if (path.isEmpty())
         return -1;
     const auto firstNamed = [&headings](const QList<qsizetype> &among, const QString &name) {
-        const QString key = headingKey(name);
-        for (const qsizetype i : among) {
-            if (headingKey(headings.at(i).text).compare(key, Qt::CaseInsensitive) == 0)
-                return i;
-        }
-        return qsizetype(-1);
+        return among.isEmpty() ? qsizetype(-1) : matchHeading(headings, among.first(), among.last() + 1, name); // a contiguous range
     };
     const QString whole = path.size() > 1 ? wanted : QString();
     const qsizetype nested = firstNamed(headingsUnder(headings, path.mid(0, path.size() - 1)), path.last());
