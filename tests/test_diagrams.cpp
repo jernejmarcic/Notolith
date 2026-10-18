@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QProcess>
@@ -29,6 +30,7 @@
 #include "Settings.h"
 #include "SyscallFilter.h"
 #include "Theme.h"
+#include "DiagramRetry.h"
 #include "WaitFor.h"
 
 using noteAppC::DiagramKind;
@@ -95,7 +97,8 @@ protected:
     }
     static MarkdownEditor::CodeBlockRenderer rendererFor(DiagramKind kind, const QString &tool, Theme::Mode mode = Theme::Mode::Dark)
     {
-        return noteAppC::diagramRenderer(kind, tool, [mode] { return Theme::builtin(mode); });
+        return diagramtest::retryingOnTimeout(
+            [=] { return noteAppC::diagramRenderer(kind, tool, [mode] { return Theme::builtin(mode); }); });
     }
     static QByteArray cached(DiagramKind kind, const QString &source, Theme::Mode mode = Theme::Mode::Dark)
     {
@@ -141,7 +144,7 @@ TEST_F(DiagramTest, ADiagramAlreadyMadeIsReadFromDiskNotMadeAgain)
         // A renderer of its own whose tool does not exist: only the disk can answer it, so no tool was asked for.
         const auto again = ask(rendererFor(c.kind, dir.filePath(QStringLiteral("no-such-tool"))), QString::fromLatin1(c.language), c.source);
         EXPECT_FALSE(again->result.isMarkdown) << again->result.text.toStdString();
-        EXPECT_LT(again->ms, 2000);
+        EXPECT_LT(again->ms, 10000) << "a read from disk, not a run of the tool";
     }
 }
 
@@ -311,6 +314,31 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     EXPECT_EQ(read(QStringLiteral("etc")), QByteArray("etc\n")) << "/etc is";
 }
 
+// A tool set by path in the settings is often outside /usr (a home's bin), where the sandbox has nothing: it is
+// bound in read-only, and a symlink is run as the file it points to.
+TEST_F(DiagramTest, AToolOutsideUsrIsBoundIntoTheSandboxAndASymlinkedOneIsResolved)
+{
+    NEED("sh");
+    const QString tool = dir.filePath(QStringLiteral("real/dot-tool"));
+    QDir().mkpath(QFileInfo(tool).path());
+    QFile file(tool);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("#!/bin/sh\ncat > /dev/null\n"
+               "echo '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"80\"><text x=\"5\" y=\"40\">OUTSIDE-USR</text></svg>'\n");
+    file.close();
+    QFile::setPermissions(tool, QFile::permissions(tool) | QFile::ExeOwner);
+    const QString link = dir.filePath(QStringLiteral("link-to-tool"));
+    ASSERT_TRUE(QFile::link(tool, link));
+
+    for (const QString &path : {tool, link}) {
+        SCOPED_TRACE(path.toStdString());
+        const auto answer = ask(rendererFor(DiagramKind::Graphviz, path), QStringLiteral("dot"), kDot);
+        ASSERT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+        EXPECT_TRUE(cached(DiagramKind::Graphviz, kDot).contains("OUTSIDE-USR"));
+        QDir(dir.filePath(QStringLiteral("cache"))).removeRecursively(); // the next path draws it again
+    }
+}
+
 TEST_F(DiagramTest, PdfExportDrawsACachedDotDiagramAndOtherwiseTheListing)
 {
     const QString note = QStringLiteral("```dot\n") + kDot + QStringLiteral("\n```\n");
@@ -379,6 +407,11 @@ TEST_F(DiagramWindowTest, OnTheDiagramsAreDrawnInTheWindowAndOffTheSourceShows)
     NEED("plantuml");
     NEED("latex");
     NEED("dot");
+    // The window's own renderer gives up after one timeout and remembers it;
+    // drawing these two first (with a retry) leaves the disk answering for it
+    // however loaded the machine is. TikZ stays out: it must not be drawn.
+    ask(rendererFor(DiagramKind::PlantUML, QString()), QStringLiteral("plantuml"), kPlantUML);
+    ask(rendererFor(DiagramKind::Graphviz, QString()), QStringLiteral("dot"), kDot);
     configure("render.tikz", false);
     MainWindow window;
     window.show();

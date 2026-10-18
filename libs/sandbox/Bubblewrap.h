@@ -20,8 +20,9 @@ struct Command {
 /// `dir` the only writable place and the working directory, HOME, a private
 /// /tmp and /proc and /dev, no network, no inherited environment (PATH and
 /// HOME, then `environment` as NAME=value entries). `program` is run by the
-/// path given.
+/// path given. `readOnlyBinds` are further paths (a tool installed outside
+/// /usr) bound read-only at the same place.
 Command bubblewrapCommand(const QString &dir, const QString &program, const QStringList &arguments,
-                          const QStringList &environment = {});
+                          const QStringList &environment = {}, const QStringList &readOnlyBinds = {});
 
 } // namespace noteAppC::sandbox

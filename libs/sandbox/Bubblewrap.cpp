@@ -7,7 +7,7 @@
 namespace noteAppC::sandbox {
 
 Command bubblewrapCommand(const QString &dir, const QString &program, const QStringList &arguments,
-                          const QStringList &environment)
+                          const QStringList &environment, const QStringList &readOnlyBinds)
 {
     Command command;
     command.program = QStandardPaths::findExecutable(QStringLiteral("bwrap"));
@@ -27,6 +27,8 @@ Command bubblewrapCommand(const QString &dir, const QString &program, const QStr
                          QStringLiteral("--clearenv"),
                          QStringLiteral("--setenv"), QStringLiteral("PATH"), QStringLiteral("/usr/bin:/bin"),
                          QStringLiteral("--setenv"), QStringLiteral("HOME"), dir};
+    for (const QString &path : readOnlyBinds)
+        command.arguments << QStringLiteral("--ro-bind") << path << path;
     for (const QString &entry : environment) {
         const qsizetype equals = entry.indexOf(QLatin1Char('='));
         command.arguments << QStringLiteral("--setenv") << entry.left(equals) << entry.mid(equals + 1);

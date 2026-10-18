@@ -1485,6 +1485,10 @@ void walkItem(MD::Item *item, Walk &walk)
             walk.links.append(out);
             walk.pendingReferences.append({walk.links.size() - 1, target});
         } else {
+            // CommonMark's `<path with spaces.md>` form: the brackets are
+            // syntax, not part of the target.
+            if (target.size() >= 2 && target.startsWith(QLatin1Char('<')) && target.endsWith(QLatin1Char('>')))
+                target = target.mid(1, target.size() - 2);
             const qsizetype hash = target.indexOf(QLatin1Char('#'));
             if (hash > 0) {
                 out.subpath = target.mid(hash);
