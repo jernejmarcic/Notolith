@@ -870,8 +870,11 @@ already linked for notebook output).
 - **Publish and PDF export** never start the tool: they use the SVG the editor
   already cached for that source (the theme's colours if it has them, else the
   most recently used in any colours - the diagram carries its own background, so
-  a dark one is a dark card on a light page). Publish inlines it as
-  `<div class="diagram">` with its ids prefixed per diagram; PDF export
+  a dark one is a dark card on a light page). Publish embeds it as
+  `<div class="diagram"><img src="data:image/svg+xml...">`, never inlined (an
+  SVG drawn as an image runs no script), with the fence's source as the alt
+  text (escaped, first 2000 characters) for screen readers and the site's
+  search; PDF export
   draws it as an image. A fence never drawn in the editor is its source, as a
   code block.
 - **Not drawn**: encrypted notes (the source would go into the cache), slides.

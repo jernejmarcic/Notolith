@@ -316,7 +316,7 @@ TEST(PublishTest, MathsBecomesSvg)
 // The SVGs of the page's diagrams, decoded from their <img> data URIs.
 QStringList diagramImages(const QString &page)
 {
-    static const QRegularExpression image(QStringLiteral("<div class=\"diagram\"><img alt=\"diagram\" src=\"data:image/svg\\+xml;base64,([A-Za-z0-9+/=]*)\">"));
+    static const QRegularExpression image(QStringLiteral("<div class=\"diagram\"><img alt=\"[^\"]*\" src=\"data:image/svg\\+xml;base64,([A-Za-z0-9+/=]*)\">"));
     QStringList svgs;
     for (auto it = image.globalMatch(page); it.hasNext();)
         svgs << QString::fromUtf8(QByteArray::fromBase64(it.next().captured(1).toLatin1()));
@@ -350,6 +350,35 @@ TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
     const QString css = site.read(QStringLiteral("site.css"));
     EXPECT_TRUE(css.contains(QStringLiteral(".diagram img")));
     EXPECT_FALSE(css.contains(QStringLiteral("mermaid-diagram")));
+}
+
+// The picture's words, for a screen reader and the site's search: the source is the alt text, escaped (a
+// source is a stranger's input: it cannot close the attribute) and capped.
+TEST(PublishTest, ADiagramsSourceIsItsAltTextEscapedAndCapped)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    using noteAppC::DiagramKind;
+    const Theme dark = Theme::builtin(Theme::Mode::Dark);
+    const QString evil = QStringLiteral("digraph{ \"><script>alert(1)</script> a->b }");
+    const QString longer = QStringLiteral("digraph{ ") + QString(3000, QLatin1Char('x')) + QStringLiteral(" a->b }");
+    for (const QString &source : {evil, longer})
+        ASSERT_TRUE(mermaidCacheStore(noteAppC::diagramCachePath(DiagramKind::Graphviz, source, noteAppC::diagramConfig(DiagramKind::Graphviz, dark)),
+                                      "<svg xmlns=\"http://www.w3.org/2000/svg\"><text>X</text></svg>"));
+    TestSite site({{QStringLiteral("Note.md"), ("```dot\n" + evil + "\n```\n\n```dot\n" + longer + "\n```\n").toUtf8()}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+    ASSERT_EQ(diagramImages(page).size(), 2) << page.toStdString();
+    EXPECT_TRUE(page.contains(QStringLiteral("<img alt=\"digraph{ &quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt; a-&gt;b }\" src="))) << page.toStdString();
+    EXPECT_FALSE(page.contains(QStringLiteral("<script>alert(1)")));
+    EXPECT_TRUE(page.contains(QStringLiteral("<img alt=\"digraph{ ") + QString(1991, QLatin1Char('x')) + QStringLiteral("\" src=")));
+    EXPECT_FALSE(page.contains(QString(1992, QLatin1Char('x')))) << "capped at 2000 characters of source";
 }
 
 // A fence the editor drew is put in from the cache; publishing never runs mmdr
