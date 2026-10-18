@@ -433,7 +433,10 @@ seq). On pull, for a note:
 - **in line** - the record's `parent` is empty (a new entity, or a legacy
   writer), or this device has no `baseDigest`, or `parent == baseDigest`: the
   sender saw what this device last confirmed. Local unchanged (the file still
-  hashes to what was last confirmed) is a fast-forward: write the record's text.
+  hashes to what was last confirmed) is a fast-forward: write the record's text,
+  in this file's CRLF/BOM. A note hashes as its decoded text everywhere (scanner,
+  pull, delete), so a re-save that only changes the line endings or the BOM is
+  no edit: it pushes nothing and does not stop a remote delete.
   Local changed is a three-way merge against `base/`.
 - **not in line** - the sender built on a state this device has since moved
   past (two devices wrote concurrently, and a third record or this device's own

@@ -1191,9 +1191,11 @@ TEST_F(SyncIntegrationTest, AnEditFromAnotherDeviceKeepsThisFilesLineEndingsAndB
     writeRaw(onB, QByteArrayLiteral("\xEF\xBB\xBFone\r\ntwo"));
     engineB.syncNow();
     ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.pushed, 0) << "a re-save that only changes the line endings and the BOM is no edit";
 
     // Two edits on A, each pulled on its own: the second comes in on top of
-    // a copy the first left in agreement with the server.
+    // a copy the first left in agreement with the server - so each is a
+    // fast-forward, and has to keep this file's format by itself.
     for (const QString &text : {QStringLiteral("one\ntwo\nthree"), QStringLiteral("one\ntwo\nthree\nfour")}) {
         engineA.syncNow();
         ASSERT_TRUE(watchA.waitForCycle());
@@ -1202,6 +1204,7 @@ TEST_F(SyncIntegrationTest, AnEditFromAnotherDeviceKeepsThisFilesLineEndingsAndB
         ASSERT_TRUE(watchA.waitForCycle());
         engineB.syncNow();
         ASSERT_TRUE(watchB.waitForCycle());
+        EXPECT_EQ(watchB.conflicts, 0);
         QByteArray expected = "\xEF\xBB\xBF" + text.toUtf8();
         expected.replace("\n", "\r\n");
         QFile file(onB);
@@ -1213,6 +1216,39 @@ TEST_F(SyncIntegrationTest, AnEditFromAnotherDeviceKeepsThisFilesLineEndingsAndB
     ASSERT_TRUE(watchB.waitForCycle());
     EXPECT_EQ(watchB.pushed, 0);
     expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+}
+
+// A note saved with CRLF line endings and a BOM is the same note: a delete
+// from another device removes it, and nothing pushes it back.
+TEST_F(SyncIntegrationTest, ADeleteReachesACrlfNote)
+{
+    writeNote(vaultA.path(), QStringLiteral("crlf.md"), QStringLiteral("one\ntwo"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/crlf.md");
+    writeRaw(onB, QByteArrayLiteral("\xEF\xBB\xBFone\r\ntwo"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.pushed, 0);
+
+    ASSERT_TRUE(QFile::remove(vaultA.path() + QStringLiteral("/crlf.md")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_FALSE(QFile::exists(onB)) << "the delete was not applied to the CRLF note";
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.pushed, 0) << "B pushed the note back";
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    EXPECT_TRUE(vaultFiles(vaultA.path()).isEmpty()) << snapshot(vaultA.path());
+    EXPECT_TRUE(vaultFiles(vaultB.path()).isEmpty()) << snapshot(vaultB.path());
 }
 
 TEST_F(SyncIntegrationTest, ATrueConflictWritesAConflictCopyAndKeepsLocalInPlace)

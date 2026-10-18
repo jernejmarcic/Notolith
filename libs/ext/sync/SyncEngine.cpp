@@ -936,18 +936,11 @@ bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, const QByteArray 
             return true;
     }
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
-    QByteArray localBytes;
-    bool hasLocalFile = false;
-    if (existing) {
-        QFile f(existingPath);
-        hasLocalFile = f.open(QIODevice::ReadOnly);
-        if (hasLocalFile)
-            localBytes = f.readAll();
-    }
+    const QByteArray localHash = existing ? SyncScanner::contentHash(existingPath, m_contentKey) : QByteArray();
+    const bool hasLocalFile = !localHash.isEmpty();
     // An edit beats a delete, in both directions (docs/SYNC.md): only
     // remove the file when nothing local disagrees with the delete.
-    const bool localChanged =
-        existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+    const bool localChanged = existing && (!hasLocalFile || localHash != existing->syncedHash);
     if (existing && hasLocalFile && localChanged) {
         // The entity stays and says so again: the edit goes out as that
         // entity's next record, so every device that dropped it gets it back.
@@ -1237,7 +1230,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             localBytes = f.readAll();
     }
     const bool localChanged =
-        existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+        existing && (!hasLocalFile || SyncScanner::contentHash(existingPath, m_contentKey) != existing->syncedHash);
 
     QString remoteText = remote.body;
     QByteArray remoteRaw;
@@ -1350,17 +1343,15 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // path the file now has): a link on the way, put there since the check at
     // the top, fails the write instead of leading out of the vault. A failed
     // write drops the record, named, with nothing recorded as applied.
-    const auto writeRemote = [&](bool keepDiskFormat) {
+    const auto writeRemote = [&] {
         if (!isNote)
             return m_vault.writeBytesNoFollow(remote.path, remoteRaw);
         Note note;
         note.text = remoteText;
-        if (keepDiskFormat) {
-            Note onDisk;
-            Vault::read(targetPath, onDisk);
-            note.crlf = onDisk.crlf;
-            note.bom = onDisk.bom;
-        }
+        Note onDisk; // a missing file leaves the defaults: LF, no BOM
+        Vault::read(targetPath, onDisk);
+        note.crlf = onDisk.crlf;
+        note.bom = onDisk.bom;
         return m_vault.writeNoteNoFollow(remote.path, note);
     };
 
@@ -1374,13 +1365,13 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // Whether the sender's content is on disk and the base moves to it with
     // nothing more to do (a new entity, a fast-forward, or the same content).
     if (!existing || !hasLocalFile) {
-        if (!writeRemote(false)) // no local file: an edit beats a local delete
+        if (!writeRemote()) // no local file: an edit beats a local delete
             return dropRecord();
     } else if (holdsRemote(targetPath)) {
         // Same content: nothing to write, only the path (handled above) and the confirmation below.
     } else {
         if (inLine && !localChanged) {
-            if (!writeRemote(false)) // fast-forward
+            if (!writeRemote()) // fast-forward
                 return dropRecord();
         } else {
             // What the merge is based on: this device's own sync point when the
@@ -1458,7 +1449,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
                     if (!saved) // the text this takes the place of must not be lost
                         return dropRecord();
                 }
-                if (!writeRemote(true))
+                if (!writeRemote())
                     return dropRecord();
             }
         }
@@ -1466,10 +1457,6 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     // The base is always the sender's text, never this device's merge result:
     // a later record built on it then merges against the state the sender saw.
-    QFile written(targetPath);
-    QByteArray diskNow;
-    if (written.open(QIODevice::ReadOnly))
-        diskNow = written.readAll();
     SyncJournal::Entity entity;
     entity.entityID = record.entityID;
     entity.path = remote.path;
@@ -1479,7 +1466,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     const QFileInfo info(targetPath);
     entity.localMtime = info.lastModified().toMSecsSinceEpoch();
     entity.localSize = info.size();
-    entity.localHash = SyncCrypto::contentAddress(m_contentKey, diskNow);
+    entity.localHash = SyncScanner::contentHash(targetPath, m_contentKey);
     entity.syncedHash = SyncCrypto::contentAddress(m_contentKey, remoteBytes);
     entity.deleted = false;
     entity.baseDigest = remoteDigest;

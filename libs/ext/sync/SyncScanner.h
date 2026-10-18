@@ -33,6 +33,12 @@ public:
     /// `contentKey` fingerprints file content for change detection and
     /// rename matching (SyncCrypto::contentAddress, unpadded - this never
     /// leaves the device, so padding buys nothing here).
+    /// The one definition of "this file's content" for change detection: a
+    /// note is its decoded text (so line endings and a BOM do not count, and
+    /// the hash matches the synced one), anything else its bytes. Empty when
+    /// the file cannot be read.
+    static QByteArray contentHash(const QString &absolutePath, const QByteArray &contentKey);
+
     static QList<Change> scan(const Vault &vault, const SyncJournal &journal, const QByteArray &contentKey);
 };
 

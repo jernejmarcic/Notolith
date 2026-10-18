@@ -28,14 +28,6 @@ bool dotIgnored(const QString &relativePath)
     return false;
 }
 
-QByteArray hashFile(const QString &absolutePath, const QByteArray &contentKey)
-{
-    QFile f(absolutePath);
-    if (!f.open(QIODevice::ReadOnly))
-        return {};
-    return SyncCrypto::contentAddress(contentKey, f.readAll());
-}
-
 /// The non-blank lines of `text` with how often each occurs, and their count.
 QHash<QString, int> lineBag(const QString &text, int *total)
 {
@@ -51,6 +43,18 @@ QHash<QString, int> lineBag(const QString &text, int *total)
 }
 
 } // namespace
+
+QByteArray SyncScanner::contentHash(const QString &absolutePath, const QByteArray &contentKey)
+{
+    if (Vault::isNote(absolutePath)) {
+        Note note;
+        return Vault::read(absolutePath, note) ? SyncCrypto::contentAddress(contentKey, note.text.toUtf8()) : QByteArray();
+    }
+    QFile f(absolutePath);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return SyncCrypto::contentAddress(contentKey, f.readAll());
+}
 
 QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJournal &journal,
                                              const QByteArray &contentKey)
@@ -92,7 +96,7 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
             known.erase(existingIt);
             if (existing.localMtime == mtime && existing.localSize == size)
                 continue; // cheap path: stat matched, no content read at all
-            const QByteArray hash = hashFile(absolute, contentKey);
+            const QByteArray hash = contentHash(absolute, contentKey);
             if (hash == existing.localHash)
                 continue; // touched but byte-identical (e.g. a re-save with no change)
             Change change;
@@ -115,7 +119,7 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
         change.entityType = Vault::isNote(absolute) ? QStringLiteral("note") : QStringLiteral("attachment");
         change.mtime = mtime;
         change.size = size;
-        change.hash = hashFile(absolute, contentKey);
+        change.hash = contentHash(absolute, contentKey);
         changes.append(change);
     }
 
