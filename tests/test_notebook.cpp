@@ -16,6 +16,7 @@
 #include <QJsonDocument>
 #include <QFile>
 #include <QProcess>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -634,6 +635,43 @@ TEST(NotebookKernelFeatureTest, ATimedOutRunIsInterruptedAndADeadKernelIsReplace
     named.kernelName = QStringLiteral("no-such-kernel");
     EXPECT_FALSE(runThrough(controller, named, QStringLiteral("1")).kernelError.isEmpty());
 
+    controller.shutdownAll();
+}
+
+TEST(NotebookKernelFeatureTest, ATimeoutCountsFromTheRunNotTheKernelsStartUp)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    // A kernel that takes longer to start than the block's timeout, as a
+    // cold one does on a loaded machine.
+    QTemporaryDir root;
+    const QString kernelDir = root.path() + QStringLiteral("/kernels/slow-python");
+    ASSERT_TRUE(QDir().mkpath(kernelDir));
+    QFile kernelJSON(kernelDir + QStringLiteral("/kernel.json"));
+    ASSERT_TRUE(kernelJSON.open(QIODevice::WriteOnly));
+    kernelJSON.write(R"({"argv":["sh","-c","sleep 1.5; exec python -m ipykernel_launcher -f \"$0\"","{connection_file}"],)"
+                     R"("display_name":"Slow","language":"python"})");
+    kernelJSON.close();
+    const QByteArray previous = qgetenv("JUPYTER_PATH");
+    qputenv("JUPYTER_PATH", root.path().toUtf8());
+    const auto restore = qScopeGuard([&] {
+        if (previous.isNull())
+            qunsetenv("JUPYTER_PATH");
+        else
+            qputenv("JUPYTER_PATH", previous);
+    });
+
+    NotebookController controller;
+    NotebookController::RunRequest request = kernelRequest();
+    request.kernelName = QStringLiteral("slow-python");
+    request.timeoutMs = 700;
+    const NotebookRunResult slow = runThrough(controller, request, QStringLiteral("import time\ntime.sleep(60)"), 30000);
+    EXPECT_TRUE(slow.kernelError.isEmpty()) << slow.kernelError.toStdString() << " - interrupted while starting";
+    ASSERT_FALSE(slow.outputs.isEmpty());
+    EXPECT_EQ(slow.outputs.last().ename, QStringLiteral("Timed out"));
+    request.timeoutMs = 0;
+    EXPECT_EQ(joinedText(runThrough(controller, request, QStringLiteral("print('alive')"))).trimmed(), QStringLiteral("alive"));
     controller.shutdownAll();
 }
 

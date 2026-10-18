@@ -133,20 +133,25 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
     inFlight.cache = request.cache;
     inFlight.timeoutMs = request.timeoutMs;
     session->inFlight.insert(msgID, inFlight);
-    if (request.timeoutMs > 0) {
-        // Looked up again when it fires: the kernel may have been restarted
-        // and the block long since answered.
-        QTimer::singleShot(request.timeoutMs, this, [this, key = session->key, msgID] {
-            const auto kernel = m_kernels.find(key);
-            if (kernel == m_kernels.end())
-                return;
-            const auto pending = kernel->second->inFlight.find(msgID);
-            if (pending == kernel->second->inFlight.end())
-                return;
-            pending->timedOut = true;
-            interruptSession(kernel->second.get());
-        });
-    }
+    // The timeout is armed by the kernel's "busy" for this request, not here:
+    // a fresh kernel may still be starting, and a SIGINT before its handler
+    // is in place kills it instead of stopping the block.
+}
+
+void NotebookController::armTimeout(KernelSession *session, const QString &msgID, int timeoutMs)
+{
+    // Looked up again when it fires: the kernel may have been restarted
+    // and the block long since answered.
+    QTimer::singleShot(timeoutMs, this, [this, key = session->key, msgID] {
+        const auto kernel = m_kernels.find(key);
+        if (kernel == m_kernels.end())
+            return;
+        const auto pending = kernel->second->inFlight.find(msgID);
+        if (pending == kernel->second->inFlight.end())
+            return;
+        pending->timedOut = true;
+        interruptSession(kernel->second.get());
+    });
 }
 
 NotebookController::KernelSession *NotebookController::ensureKernel(const RunRequest &request,
@@ -383,10 +388,14 @@ void NotebookController::wireKernel(KernelSession *session)
            });
     connect(client, &KernelClient::statusChanged, this,
            [this, session](const QString &parent, const QString &state) {
-               if (state != QLatin1String("idle"))
-                   return; // "busy" carries nothing this needs
                auto it = session->inFlight.find(parent);
                if (it == session->inFlight.end())
+                   return;
+               if (state == QLatin1String("busy") && it->timeoutMs > 0 && !it->timeoutArmed) {
+                   it->timeoutArmed = true;
+                   armTimeout(session, parent, it->timeoutMs);
+               }
+               if (state != QLatin1String("idle"))
                    return;
                it->gotIdle = true;
                finalizeIfDone(session, it);

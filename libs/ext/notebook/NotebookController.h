@@ -136,6 +136,7 @@ private:
         QString language;
         bool cache = true;
         bool timedOut = false;
+        bool timeoutArmed = false;
         bool truncated = false;
         InputHandler onInput;
         int timeoutMs = 0;
@@ -175,6 +176,7 @@ private:
     void failInFlight(KernelSession *session, const QString &error);
     KernelSession *runningKernelFor(const RunRequest &request);
     void interruptSession(KernelSession *session);
+    void armTimeout(KernelSession *session, const QString &msgID, int timeoutMs); ///< from the kernel's "busy" for that request
 
     /// std::map, not QHash: QHash's copy-on-write detach needs a copyable
     /// value, and std::unique_ptr<KernelSession> is deliberately not one -

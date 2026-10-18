@@ -26,7 +26,8 @@ block cannot use a variable an earlier one set. A language noteAppC has no
 recipe for runs through its Jupyter kernel if one is installed; otherwise
 the block says which tool is missing.
 
-A run stops after 30 s (or `#| timeout:`), or with "Notebooks: Interrupt the
+A run stops after 30 s (or `#| timeout:`; a kernel's clock starts when it
+begins the block, not while it starts up), or with "Notebooks: Interrupt the
 kernel", or a click on the stop square a running block shows where its run
 control was. Output is capped at 1 MB. Colour codes are stripped. An error is
 named the way its traceback names it (`ZeroDivisionError: division by zero`).

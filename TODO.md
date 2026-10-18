@@ -1774,7 +1774,7 @@ Lane misc8:
 - [x] Item 30 (lane E upgrade): old journal through a real cycle; scanner
       Dice tests; journal.db size numbers; F8 documented. 20000 notes =
       2.7 MiB journal (143 B/note); hot note 3000 saves = 204 KiB + WAL.
-- [ ] Flaky under load (seen in lane gates at load ~15): test_window
+- [x] Flaky under load (seen in lane gates at load ~15): test_window
       inline-title rename test asserted indexer->isRunning() right after
       the save (scan may not have started yet) and a failed ASSERT left the
       lock thread joinable -> "terminate called". Fixed: qWaitFor +
@@ -1789,9 +1789,10 @@ Lane misc8:
       entity arrived; unreadableWarning reads the table. Test: park, stop,
       restore the blob dir, restart, next cycle writes the file and the
       warning is gone. Mutation: skip the retry -> file absent.
-- [ ] Flaky under load: NotebookKernelFeatureTest
-      .ATimedOutRunIsInterruptedAndADeadKernelIsReplaced failed once in a
-      lane gate (failure line not captured). Plan: run it 20x under a
-      parallel build load, capture the failing EXPECT, then widen only the
-      budget that is a wall-clock guess (likely the 700 ms timeout racing
-      kernel start-up).
+- [x] Flaky under load: NotebookKernelFeatureTest
+      .ATimedOutRunIsInterruptedAndADeadKernelIsReplaced. Real bug: the
+      block timeout was armed at submit, so a kernel slower to start than
+      the timeout got SIGINT before its handler and the run was never
+      delivered (block stuck). Now armed on the kernel's "busy" for that
+      request; test with a kernelspec that sleeps 1.5 s before starting
+      (mutation: arm at submit -> never delivered).
