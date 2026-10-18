@@ -885,9 +885,14 @@ QString SyncEngine::pullJournal(int *pulled, int *conflicts)
     return {};
 }
 
-bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
+bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, const QByteArray &parent, QString *error)
 {
     const auto existing = m_journal->entity(entityID);
+    // The deleter had not seen a state this device has since applied: the
+    // delete is stale. Nothing is touched - the deleter gets that state as an
+    // upsert in its next pull and re-creates the file (an edit beats a delete).
+    if (existing && !parent.isEmpty() && !existing->baseDigest.isEmpty() && parent != existing->baseDigest)
+        return true;
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
     QByteArray localBytes;
     bool hasLocalFile = false;
@@ -937,7 +942,7 @@ void SyncEngine::retryPendingDeletes()
     QList<QByteArray> pending = pendingDeletes();
     for (int i = pending.size() - 1; i >= 0; --i) {
         QString error;
-        if (applyRemoteDelete(pending.at(i), &error))
+        if (applyRemoteDelete(pending.at(i), {}, &error))
             pending.removeAt(i);
     }
     if (pending.size() != pendingDeletes().size())
@@ -1023,7 +1028,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             ++*pulled;
             return true;
         }
-        if (!applyRemoteDelete(record.entityID, error)) {
+        if (!applyRemoteDelete(record.entityID, remote.parent, error)) {
             // The same record failing cycle after cycle (a read-only file,
             // a trash that never works) must not hold every later record,
             // from every device, behind it forever. After kDeleteStalls

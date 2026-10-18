@@ -151,8 +151,10 @@ private:
     /// file could not be moved to the trash.
     bool applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error);
     /// Moves a deleted entity's file to the trash (unless edited locally) and
-    /// forgets the entity. False, with `error`, only when the trash move fails.
-    bool applyRemoteDelete(const QByteArray &entityID, QString *error);
+    /// forgets the entity. `parent` is the state the deleter saw (empty: not
+    /// known); a delete older than this device's own sync point is ignored.
+    /// False, with `error`, only when the trash move fails.
+    bool applyRemoteDelete(const QByteArray &entityID, const QByteArray &parent, QString *error);
     /// Remote deletes that kept failing and stopped blocking the pull; kept in
     /// the journal's meta so a restart still retries them. Read from there
     /// once per cycle (loadPendingDeletes), written through by the setter.
