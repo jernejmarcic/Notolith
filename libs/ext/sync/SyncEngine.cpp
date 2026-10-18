@@ -906,6 +906,12 @@ bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, const QByteArray 
     // remove the file when nothing local disagrees with the delete.
     const bool localChanged =
         existing && (!hasLocalFile || SyncCrypto::contentAddress(m_contentKey, localBytes) != existing->syncedHash);
+    if (existing && hasLocalFile && localChanged) {
+        // The entity stays and says so again: the edit goes out as that
+        // entity's next record, so every device that dropped it gets it back.
+        announce(entityID);
+        return true;
+    }
     // The entity goes only once the file has: dropped with the file
     // still there, the next scan would push it back as a new note and
     // undo the delete on every device.
