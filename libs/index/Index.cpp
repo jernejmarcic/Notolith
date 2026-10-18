@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <future>
+#include <map>
 #include <optional>
 
 #include <QCryptographicHash>
@@ -318,6 +319,7 @@ void Index::close()
     }
     m_names.clear();
     m_pathNames.clear();
+    m_nameCounts.clear();
     m_linkTargetsValid = m_aliasesValid = false;
 }
 
@@ -402,6 +404,7 @@ void Index::loadNames()
 {
     m_names.clear();
     m_pathNames.clear();
+    m_nameCounts.clear();
     m_linkTargetsValid = m_aliasesValid = false;
 
     QSqlQuery query(m_db);
@@ -412,6 +415,7 @@ void Index::loadNames()
         const QString name = query.value(1).toString();
         m_names[foldCase(name)].append(path);
         m_pathNames[path].append(name);
+        ++m_nameCounts[name];
     }
 }
 
@@ -428,6 +432,9 @@ bool Index::isCurrent(const QString &path, qint64 mtime, qint64 size) const
 void Index::forgetNames(const QString &path)
 {
     for (const QString &name : std::as_const(m_pathNames[path])) {
+        const auto counted = m_nameCounts.find(name);
+        if (counted != m_nameCounts.end() && --counted->second == 0)
+            m_nameCounts.erase(counted);
         auto it = m_names.find(foldCase(name));
         if (it != m_names.end()) {
             it->removeAll(path);
@@ -445,6 +452,7 @@ void Index::rememberNames(const QString &path, const QStringList &names)
             continue;
         m_names[foldCase(name)].append(path);
         m_pathNames[path].append(name);
+        ++m_nameCounts[name];
     }
 }
 
@@ -894,13 +902,15 @@ QStringList Index::linkTargets() const
         }
         it = isNoteName ? aliasNames.erase(it) : std::next(it);
     }
+    // From the names kept in memory, already in order, not a second pass over
+    // the table: sorting them on every name change was most of the cost.
+    // ponytail: ordered by UTF-16 unit, which differs from the table's byte
+    // order only between U+E000-U+FFFF and characters outside the BMP.
     QStringList names;
-    QSqlQuery query(m_db);
-    query.exec(QStringLiteral("SELECT DISTINCT name FROM names ORDER BY name"));
-    while (query.next()) {
-        const QString name = query.value(0).toString();
-        if (!aliasNames.contains(name))
-            names << name;
+    names.reserve(qsizetype(m_nameCounts.size()));
+    for (const auto &entry : m_nameCounts) {
+        if (!aliasNames.contains(entry.first))
+            names << entry.first;
     }
     m_linkTargetsCache = names;
     m_linkTargetsValid = true;
