@@ -1566,9 +1566,20 @@ when off.
 - [ ] 8. (lane etc) Tests: wall-clock bounds at test_window.cpp:780 and
       the qWait(200) EXPECT_FALSE at :5826 can flake under load; make them
       load-robust without making them unable to fail.
-- [ ] 5. Heading link text: we replace `#|^[]:\` and `%%` with a space;
+- [x] 5. Heading link text: we replace `#|^[]:\` and `%%` with a space;
       Obsidian may remove them instead. Check Obsidian's documented
       behaviour (help site / forum; never launch Obsidian) and match it.
+      Checked 2026-10-18 (forum.obsidian.md/t/40707, /t/40724): Obsidian
+      replaces punctuation with spaces, not removal (`[src](https://a.b)`
+      in a heading became `src https a b`); since 0.16 it keeps more
+      punctuation in links it writes; no official list exists. Space is
+      right. Staff: links to headings are compared with non-alphanumerics
+      stripped, so `[[N#heading!]]` resolves to `## heading?`.
+      - [ ] Resolve heading links punctuation-insensitively like Obsidian
+            (compare both sides with all non-letter/digit folded to
+            space), so links Obsidian 0.16+ writes with kept punctuation
+            still resolve. After lane relink merges (MainWindow
+            subpathOffset/jumpToHeading, PageBody).
 - [ ] 6. NOTE: a remote delete whose trash move fails permanently stops
       every later pull record each cycle (Status::Error). Defensible (never
       drop a delete); later: skip after N cycles and show it in the UI.
