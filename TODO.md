@@ -1647,7 +1647,7 @@ Lane sync8:
       no data loss either way.
 - [x] 19. (lane sync10, 9249899: a dangling link let a pull write outside the vault) A directory (or symlink) at a pulled rename's target is not
       checked (isFile only); verify nothing is lost.
-- [ ] 23. (lane syncbase, Fable plans) BUG, data divergence/loss: pushed
+- [ ] 23. (lane syncbase, Fable design in the session scratchpad SYNCBASE-DESIGN.md: parent/hash in records, 32-state history, merge results pushed, seq-ordered conflicts) BUG, data divergence/loss: pushed
       records carry no parent/base hash, so a record from a device that has
       not seen this device's push is applied as a fast-forward over local
       work, and a clean merge advances the base to the merged text instead
@@ -1666,6 +1666,11 @@ Lane sync8:
       Vault::confinedNotePath) and a symlink at an entity's own path is
       written through by a plain pulled edit. Needs a device with the vault
       keys, but confine anyway: refuse such records with a status message.
+- [ ] 27. A password change replaces the content key, so every keyed
+      localHash/syncedHash stops matching: full re-push and "local changed"
+      on every incoming record afterwards (pre-existing; found by Fable).
+      Plan after syncbase: rehash the journal under the new key in
+      changePassword.
 - [ ] 26. Confinement follow-ups: check-then-write, not openat(O_NOFOLLOW)
       (a link swapped in between wins the race); retryPendingDeletes does
       not re-check its journal path; a backslash in a Linux filename is now
