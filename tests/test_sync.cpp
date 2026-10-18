@@ -2016,6 +2016,62 @@ TEST_F(SyncIntegrationTest, ConcurrentRenamesSettleOnTheLaterOne)
         EXPECT_EQ(snapshot(root), "y.md=the text stays put");
 }
 
+// A merge result of 16 KiB or more goes out as a blob. When the upload fails,
+// the merge has already told the entity that the file is synced, so the scanner
+// would never queue it and the other device would never get the merge.
+TEST_F(SyncIntegrationTest, AnAnnounceWhoseUploadFailsIsRetried)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    const auto bigNote = [](const QString &first, const QString &later) {
+        QStringList lines;
+        for (int i = 0; i < 400; ++i)
+            lines << (i == 0 ? first : i == 300 ? later : QStringLiteral("line %1 of a note that is long enough for a blob").arg(i));
+        return lines.join(QLatin1Char('\n'));
+    };
+    ASSERT_GT(bigNote(QStringLiteral("one"), QStringLiteral("two")).toUtf8().size(), 16 * 1024);
+    writeNote(vaultA.path(), QStringLiteral("big.md"), bigNote(QStringLiteral("one"), QStringLiteral("two")));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultA.path(), QStringLiteral("big.md"), bigNote(QStringLiteral("ONE"), QStringLiteral("two")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultB.path(), QStringLiteral("big.md"), bigNote(QStringLiteral("one"), QStringLiteral("TWO")));
+
+    // No upload works while B pulls A's edit and merges it into its own.
+    QStringList readOnly;
+    QDirIterator dirs(serverData.path() + QStringLiteral("/blobs"), QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (dirs.hasNext())
+        readOnly << dirs.next();
+    readOnly << serverData.path() + QStringLiteral("/blobs");
+    const auto setWritable = [&readOnly](bool writable) {
+        for (const QString &dir : std::as_const(readOnly))
+            QFile::setPermissions(dir, writable ? QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner
+                                                : QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    };
+    setWritable(false);
+    engineB.syncNow();
+    const bool cycled = watchB.waitForCycle();
+    setWritable(true);
+    ASSERT_TRUE(cycled);
+    EXPECT_EQ(watchB.pushed, 0);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/big.md")), bigNote(QStringLiteral("ONE"), QStringLiteral("TWO")));
+
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.pushed, 1) << "the merge result was never retried";
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()})
+        EXPECT_EQ(readNoteText(root + QStringLiteral("/big.md")), bigNote(QStringLiteral("ONE"), QStringLiteral("TWO")));
+}
+
 // A pulled delete whose file cannot go to the trash used to drop the entity
 // anyway; the next scan then pushed the still-present file back as a new
 // note, undoing the delete everywhere.

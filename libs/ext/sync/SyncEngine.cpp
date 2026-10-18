@@ -715,7 +715,7 @@ void SyncEngine::changePassword(const QString &newPassword)
         Qt::QueuedConnection);
 }
 
-void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
+bool SyncEngine::queueLocalChange(const SyncScanner::Change &change)
 {
     // The scanner can see names no other device may be asked to write (a
     // backslash, a dot folder, a link out of the vault): not pushed, named.
@@ -724,11 +724,11 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
             m_refusedPaths.append(change.path);
         if (change.kind == SyncScanner::Change::Deleted)
             m_journal->removeEntity(change.entityID);
-        return;
+        return false;
     }
     const auto activeKey = m_journal->activeItemsKey();
     if (!activeKey)
-        return;
+        return false;
 
     QByteArray entityID = change.entityID;
     QByteArray itemsKeyID = activeKey->itemsKeyID;
@@ -746,7 +746,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     } else {
         const auto existing = m_journal->entity(entityID);
         if (!existing)
-            return; // scanner referenced an entity this journal has never seen - next scan recovers
+            return false; // scanner referenced an entity this journal has never seen - next scan recovers
         itemsKeyID = existing->itemsKeyID;
         wrappedNoteKey = existing->wrappedNoteKey;
         syncedHash = existing->syncedHash;
@@ -754,12 +754,12 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
         parent = existing->headDigest;
         const auto key = itemsKeyID == activeKey->itemsKeyID ? activeKey : m_journal->itemsKey(itemsKeyID);
         if (!key)
-            return;
+            return false;
         bool ok = false;
         noteKey =
             SyncCrypto::open(key->plaintext, wrappedNoteKey, SyncCrypto::buildAD("IK", {entityID, itemsKeyID}), &ok);
         if (!ok)
-            return;
+            return false;
     }
 
     EntityPlain plain;
@@ -779,12 +779,12 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
         if (change.entityType == QStringLiteral("note")) {
             Note note;
             if (!Vault::read(m_vault.absolute(change.path), note))
-                return;
+                return false;
             text = note.text;
         } else {
             QFile f(m_vault.absolute(change.path));
             if (!f.open(QIODevice::ReadOnly))
-                return;
+                return false;
             raw = f.readAll();
         }
         bodyBytes = change.entityType == QStringLiteral("note") ? text.toUtf8() : raw;
@@ -799,7 +799,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
             const QByteArray address = SyncCrypto::contentAddress(m_contentKey, entityID + padded);
             const QByteArray framed = SyncCrypto::sealBlob(noteKey, SyncCrypto::buildAD("BL", {address}), padded);
             if (framed.isEmpty() || !m_client->putBlob(m_vaultID, address, framed))
-                return;
+                return false;
             plain.blobAddress = address;
         }
     }
@@ -820,7 +820,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
 
     if (change.kind == SyncScanner::Change::Deleted) {
         m_journal->removeEntity(entityID);
-        return;
+        return true;
     }
 
     SyncJournal::Entity entity;
@@ -846,6 +846,7 @@ void SyncEngine::queueLocalChange(const SyncScanner::Change &change)
     // self-echo of this very push, which is how the common single-device
     // case still ends up with an up-to-date base without ever touching it
     // here.
+    return true;
 }
 
 int SyncEngine::pushOutbox()
@@ -1538,7 +1539,15 @@ void SyncEngine::announce(const QByteArray &entityID)
     change.mtime = entity->localMtime;
     change.size = entity->localSize;
     change.hash = entity->localHash;
-    queueLocalChange(change);
+    if (queueLocalChange(change))
+        return;
+    // Nothing was queued (a blob that would not upload), and the merge just
+    // told the entity its stat and hash are synced: the scanner would never look
+    // at the file again. Cleared, it reads the file as changed and tries again.
+    SyncJournal::Entity unsynced = *entity;
+    unsynced.localMtime = -1;
+    unsynced.localHash.clear();
+    m_journal->putEntity(unsynced);
 }
 
 } // namespace noteAppC

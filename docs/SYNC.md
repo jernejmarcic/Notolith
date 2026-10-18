@@ -488,10 +488,19 @@ the text the base and the synced hash are moved to.
   is the sender's (equal content, a fast-forward: nothing to say), and not when
   the merge left this device's own record's text as it was: that record is
   already on its way, and a second record for the same text could revive a note
-  deleted in between. The announce is **coalesced**: a pull marks the entities
+  deleted in between. The other way round is accepted: a merge that lands on
+  a text another device wrote (not this device's own record) is still
+  announced, though that device reaches the same text by its own merge, so the
+  record is redundant for it and, if it deleted the note meanwhile, revives it
+  (an edit that added nothing beats the delete). Rare, and nothing is lost.
+  The announce is **coalesced**: a pull marks the entities
   whose merge holds something new and sends one record per entity when the pull
   ends (on success or on the error that stops it), whatever number of records
-  of the batch merged; its `parent` is the last state the batch applied. So a
+  of the batch merged; its `parent` is the last state the batch applied. An
+  announce that cannot be made (a merge result of 16 KiB or more is a blob, and
+  the upload failed) clears the entity's stat and hash, so the next scan reads
+  the file as changed and pushes it; otherwise the scanner would take the file
+  for already synced and the other devices would never get the merge. So a
   device sends at most one merge record per note per pull, and the exchange
   ends: three devices editing three different lines of one note converge in
   7 records (3 edits and 4 merge results, one device merging in two pulls).

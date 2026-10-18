@@ -173,7 +173,9 @@ private:
     /// cycle. False with *error empty: parked (m_unreadable), skip it.
     bool loadRemoteContent(const QByteArray &recordID, const QString &path, const QByteArray &blobAddress, bool isNote,
                            const QByteArray &noteKey, QString *text, QByteArray *raw, QString *error);
-    void queueLocalChange(const SyncScanner::Change &change);
+    /// False when nothing was queued (a refused name, a note that cannot be
+    /// read, a blob that would not upload).
+    bool queueLocalChange(const SyncScanner::Change &change);
     /// Queues the entity as it is on disk right now as a local change (callers
     /// insert into m_toAnnounce; pullJournal() calls this once per entity).
     void announce(const QByteArray &entityID);
