@@ -701,3 +701,108 @@ TEST(VaultFileOps, ACaseOnlyChangeIsNotAClash)
         EXPECT_TRUE(QFileInfo::exists(lower));
     }
 }
+
+namespace {
+QStringList dirNames(const QString &path)
+{
+    return QDir(path).entryList(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden | QDir::System);
+}
+} // namespace
+
+TEST(VaultWriteNoFollow, WritesNestedFilesAndMakesTheFolders)
+{
+    QTemporaryDir dir;
+    const Vault vault(dir.path());
+    QString error;
+    ASSERT_TRUE(vault.writeBytesNoFollow(QStringLiteral("a/b/c/New.png"), QByteArray("\x89PNG\0\1", 6), &error)) << error.toStdString();
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("a/b/c/New.png"))), QByteArray("\x89PNG\0\1", 6));
+    ASSERT_TRUE(vault.writeBytesNoFollow(QStringLiteral("a/b/c/New.png"), QByteArray("again"), &error)) << error.toStdString();
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("a/b/c/New.png"))), QByteArray("again"));
+    EXPECT_EQ(dirNames(dir.filePath(QStringLiteral("a/b/c"))), QStringList{QStringLiteral("New.png")}); // no temp left
+}
+
+TEST(VaultWriteNoFollow, ALeafSymlinkIsReplacedNotFollowed)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    const QString target = outside.filePath(QStringLiteral("secret.md"));
+    {
+        QFile f(target);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("secret");
+    }
+    ASSERT_TRUE(QFile::link(target, dir.filePath(QStringLiteral("link.md"))));
+    const Vault vault(dir.path());
+    QString error;
+    ASSERT_TRUE(vault.writeBytesNoFollow(QStringLiteral("link.md"), QByteArray("mine"), &error)) << error.toStdString();
+    EXPECT_FALSE(QFileInfo(dir.filePath(QStringLiteral("link.md"))).isSymLink());
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("link.md"))), QByteArray("mine"));
+    EXPECT_EQ(readAll(target), QByteArray("secret")); // untouched
+}
+
+TEST(VaultWriteNoFollow, ALinkAsAFolderOfThePathRefusesAndWritesNothing)
+{
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("away"))));
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("missing")), dir.filePath(QStringLiteral("dangling"))));
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("ok")));
+    ASSERT_TRUE(QFile::link(outside.path(), dir.filePath(QStringLiteral("ok/inner"))));
+    const Vault vault(dir.path());
+    for (const QString &bad : {QStringLiteral("away/x.md"), QStringLiteral("away/new/x.md"),
+                               QStringLiteral("dangling/x.md"), QStringLiteral("ok/inner/deep/x.md")}) {
+        QString error;
+        EXPECT_FALSE(vault.writeBytesNoFollow(bad, QByteArray("x"), &error)) << bad.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << bad.toStdString();
+    }
+    EXPECT_TRUE(dirNames(outside.path()).isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral("dangling")) + QLatin1String("/x.md")));
+}
+
+TEST(VaultWriteNoFollow, AFileWhereAFolderIsNeededAndOddPathsFail)
+{
+    QTemporaryDir dir;
+    {
+        QFile f(dir.filePath(QStringLiteral("file.md")));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("keep");
+    }
+    const Vault vault(dir.path());
+    for (const QString &bad : {QStringLiteral("file.md/x.md"), QStringLiteral("../x.md"), QStringLiteral("a/../x.md"),
+                               QStringLiteral("a//x.md"), QString()}) {
+        QString error;
+        EXPECT_FALSE(vault.writeBytesNoFollow(bad, QByteArray("x"), &error)) << bad.toStdString();
+        EXPECT_FALSE(error.isEmpty()) << bad.toStdString();
+    }
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("file.md"))), QByteArray("keep"));
+    EXPECT_EQ(dirNames(dir.path()), QStringList{QStringLiteral("file.md")});
+}
+
+TEST(VaultWriteNoFollow, AFailedWriteLeavesNoTempFile)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub/Taken.md"))); // the leaf is a folder: the rename fails
+    const Vault vault(dir.path());
+    QString error;
+    EXPECT_FALSE(vault.writeBytesNoFollow(QStringLiteral("sub/Taken.md"), QByteArray("x"), &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_EQ(dirNames(dir.filePath(QStringLiteral("sub"))), QStringList{QStringLiteral("Taken.md")});
+    EXPECT_TRUE(QFileInfo(dir.filePath(QStringLiteral("sub/Taken.md"))).isDir());
+}
+
+TEST(VaultWriteNoFollow, ANoteKeepsItsLineEndingsAndBomAndALossyOneIsRefused)
+{
+    QTemporaryDir dir;
+    const Vault vault(dir.path());
+    const QByteArray original("\xEF\xBB\xBF" "one\r\ntwo\r\n");
+    Note note = Vault::decode(original);
+    QString error;
+    ASSERT_TRUE(vault.writeNoteNoFollow(QStringLiteral("n/Note.md"), note, &error)) << error.toStdString();
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("n/Note.md"))), original);
+
+    Note lossy = Vault::decode(QByteArray("a\xFF" "b"));
+    ASSERT_TRUE(lossy.lossy);
+    EXPECT_FALSE(vault.writeNoteNoFollow(QStringLiteral("n/Lossy.md"), lossy, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral("n/Lossy.md"))));
+}

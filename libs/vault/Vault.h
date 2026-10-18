@@ -79,6 +79,17 @@ public:
     /// The same atomic replace for bytes already encoded - an encrypted note.
     static bool writeBytes(const QString &path, const QByteArray &bytes, QString *error = nullptr);
 
+    /// For a path from outside this device (a sync record): writes
+    /// `relativePath` under the vault root walking it with openat(O_NOFOLLOW),
+    /// so a symbolic link on any folder of the way makes it fail instead of
+    /// leading out of the vault. Missing folders are created. A link as the
+    /// file itself is replaced, never followed. Same temp file + fsync +
+    /// rename as write(); the temp file is dot-prefixed and removed on failure.
+    /// Linux only. `relativePath` should already pass isConfinedPath().
+    bool writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error = nullptr) const;
+    /// encode() then writeBytesNoFollow(); fails for a `lossy` note.
+    bool writeNoteNoFollow(const QString &relativePath, const Note &note, QString *error = nullptr) const;
+
     /// Round-trip helper used by the tests: the exact bytes `note` would write.
     static QByteArray encode(const Note &note);
     static Note decode(const QByteArray &bytes);
