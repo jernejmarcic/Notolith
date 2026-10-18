@@ -822,6 +822,27 @@ TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
     EXPECT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
 }
 
+// A local graph that was hidden while the open note changed and the index
+// changed: shown, it has the new note's neighbourhood at once, not the old
+// one's (or the whole vault's) until the read on the worker lands.
+TEST_F(GraphDataTest, AHiddenLocalGraphShowsTheCurrentNotesNeighbourhoodWhenShown)
+{
+    Index index;
+    build(index);
+    GraphView view;
+    view.setLocalGraph(true);
+    view.setIndex(&index);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000)); // no current note: all of it
+
+    emit index.changed();
+    view.setCurrentNote(QStringLiteral("Orphan.md"));
+    view.show();
+    EXPECT_EQ(view.nodeCount(), 1) << "before the worker's read lands";
+    EXPECT_TRUE(view.containsNode(QStringLiteral("Orphan.md")));
+    QTest::qWait(300); // the read lands: still the neighbourhood
+    EXPECT_EQ(view.nodeCount(), 1);
+}
+
 // ---------------------------------------------------------------------------
 // Performance guard: the plan's budget is 5 000 nodes / ~10 000 edges at 60 fps.
 

@@ -1,4 +1,6 @@
 add_library(noteAppC_index STATIC
+    DirWatcher.cpp
+    DirWatcher.h
     Fuzzy.cpp
     Fuzzy.h
     Index.cpp

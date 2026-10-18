@@ -80,8 +80,9 @@ Indexer::Indexer(Index *index, QObject *parent)
     connect(&m_debounce, &QTimer::timeout, this, &Indexer::flushChanges);
     m_poll.setInterval(30'000);
     connect(&m_poll, &QTimer::timeout, this, &Indexer::rebuild);
-    connect(&m_files, &QFileSystemWatcher::directoryChanged, this, &Indexer::onDirectoryChanged);
-    connect(&m_files, &QFileSystemWatcher::fileChanged, this, &Indexer::reindex);
+    connect(&m_files, &DirWatcher::directoryChanged, this, &Indexer::onDirectoryChanged);
+    connect(&m_files, &DirWatcher::fileChanged, this, &Indexer::onFileChanged);
+    connect(&m_files, &DirWatcher::overflowed, this, &Indexer::rebuild); // events were lost: read it all
 }
 
 Indexer::~Indexer()
@@ -118,6 +119,7 @@ void Indexer::stop()
     m_clearMetaNotes = false; // the key still says what the rows are: setVault() compares it
     m_pending.clear();
     m_changedDirs.clear();
+    m_changedFiles.clear();
     m_queuedDirs.clear();
 }
 
@@ -125,8 +127,7 @@ void Indexer::setVault(const Vault &vault)
 {
     stop();
     m_vault = vault;
-    if (!m_files.directories().isEmpty())
-        m_files.removePaths(m_files.directories());
+    m_files.removePaths(m_files.directories());
     // The scan's walk hands its directories to watch(), so the UI thread does
     // not walk the vault a second time (6.7 ms on 20 000 notes, every window).
     if (!m_vault.isValid() || !m_index->open(m_vault.root())) {
@@ -223,6 +224,7 @@ void Indexer::start(const QStringList &paths, bool force, const QStringList &dir
     if (whole) {
         ++m_wholeScans;
         m_changedDirs.clear(); // this walk reads them
+        m_changedFiles.clear();
         m_queuedDirs.clear();
     }
     QSet<QString> watched; // which folders a partial walk finds new
@@ -449,8 +451,7 @@ Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &no
 
 void Indexer::rewatch()
 {
-    if (!m_files.directories().isEmpty())
-        m_files.removePaths(m_files.directories());
+    m_files.removePaths(m_files.directories());
     m_poll.stop(); // a new vault: its own watches decide
     if (!m_vault.isValid())
         return;
@@ -521,10 +522,22 @@ void Indexer::onDirectoryChanged(const QString &path)
     m_debounce.start();
 }
 
+// A note written in place and closed by another program: that note alone. Any
+// other file (an attachment, an editor's temp file) is read with its folder.
+void Indexer::onFileChanged(const QString &path)
+{
+    const QString relative = m_vault.relative(path);
+    if (Vault::isNote(path) && !isIgnored(relative) && !m_vault.isIgnored(relative))
+        m_changedFiles.insert(path);
+    else
+        m_changedDirs.insert(QFileInfo(path).absolutePath());
+    m_debounce.start();
+}
+
 void Indexer::flushChanges()
 {
-    if (!m_changedDirs.isEmpty())
-        start({}, false, std::exchange(m_changedDirs, {}).values()); // behind a running scan, queued
+    if (!m_changedDirs.isEmpty() || !m_changedFiles.isEmpty()) // behind a running scan, queued
+        start(std::exchange(m_changedFiles, {}).values(), false, std::exchange(m_changedDirs, {}).values());
 }
 
 } // namespace noteAppC

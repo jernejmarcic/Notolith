@@ -1105,10 +1105,12 @@ void GraphView::fitToView()
 void GraphView::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    // The note changed while hidden: show its neighbourhood now, from the data
+    // held, not the old one's until the read below lands.
+    if (m_staleLayout)
+        rebuild();
     if (m_staleData)
         applyIndexData();
-    else if (m_staleLayout)
-        rebuild();
     m_staleData = m_staleLayout = false;
     if (!m_settled || m_frameDirty)
         ensureTimerRunning();
