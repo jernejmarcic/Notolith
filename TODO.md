@@ -1988,3 +1988,19 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
 - [ ] Zoom inside an embedded PDF (Jernej 2026-10-19: "allow for zooming in
       on PDFs when in embedded mode"). Fable plan; build after lane/pdfnav
       merges (same file, PdfEmbedBlock.cpp).
+
+## Sharing lanes (plan: scratchpad SHARE-PLAN.md, Fable 2026-10-19)
+Jernej's answers 2026-10-19: CRDT "try both" (yrs via cargo approved, and a
+hand-rolled native C++ CRDT, same CrdtDoc interface, compare); member "first
+device then person. just do device for now"; collaborator copy at
+Shared/<title>.md.
+- [ ] Lane H (Hearth): node.cpp off account.h, proto/link.proto, Node
+      serviceType/prefix, tools/link-files.txt
+- [ ] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
+- [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
+- [ ] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
+- [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
+      applyExternalEdit, disk fold-in
+- [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
+- [ ] Lane P: remote carets (optional)
+- [ ] Later: person identity across devices; self-hosted relay
