@@ -292,6 +292,13 @@ delete plus new notes), and only on a scan that has both, so a scan with
 nothing new reads no file. A wrong match gives the new note the old one's
 identity; no text is lost.
 
+The false positive that does happen: notes made from one template share most
+of their lines, so deleting one and creating another from the same template
+before the next scan scores well above 0.5 and reads as a rename. The new note
+then carries the deleted note's identity (its history and merge base), so
+other devices see an edit and a rename of the old note instead of a delete and
+a new note; the new text still arrives everywhere. Pinned by `SyncScannerTest.ANewNoteFromTheSameTemplateAsADeletedOneIsTakenForItsRename`.
+
 There is no separate "rename" or "move" op: a rename is an `upsert` whose
 `path` differs from the last one recorded for the same `entityID`, the same
 way Trilium's own entity-change log has no rename op either (a note's title
