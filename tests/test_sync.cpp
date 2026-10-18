@@ -38,6 +38,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSqlDatabase>
+#include <QSqlError>
 #include <QSqlQuery>
 
 #include "ServerStore.h"
@@ -712,6 +713,134 @@ TEST(SyncScannerTest, AnUnrelatedNewNoteIsNotTakenForARename)
     EXPECT_EQ(kinds.value(SyncScanner::Change::Renamed), 0);
     EXPECT_EQ(kinds.value(SyncScanner::Change::Created), 2);
     EXPECT_EQ(kinds.value(SyncScanner::Change::Deleted), 2);
+}
+
+namespace {
+
+/// What one scan makes of `created` new notes, after `vanished` tracked notes
+/// went missing: kind -> count, plus the changes themselves.
+struct RenameScan {
+    QMap<int, int> kinds;
+    QList<SyncScanner::Change> changes;
+};
+
+RenameScan scanAfterVanishing(const QStringList &vanishedPaths, const QMap<QString, QString> &createdNotes,
+                              const QMap<QString, QString> &trackedTexts, const QStringList &staying = {},
+                              const QMap<QString, QString> &stayingTexts = {})
+{
+    QTemporaryDir dir;
+    EXPECT_TRUE(dir.isValid());
+    QTemporaryDir dataHome;
+    qputenv("XDG_DATA_HOME", dataHome.path().toUtf8());
+    const Vault vault(dir.path());
+    SyncJournal journal(dir.path());
+    const QByteArray contentKey = SyncCrypto::randomKey();
+    for (const QString &path : vanishedPaths)
+        trackNote(journal, dir.path(), path, trackedTexts.value(path), contentKey);
+    for (const QString &path : staying)
+        trackNote(journal, dir.path(), path, stayingTexts.value(path), contentKey);
+    for (const QString &path : vanishedPaths)
+        EXPECT_TRUE(QFile::remove(dir.path() + QLatin1Char('/') + path));
+    for (auto it = createdNotes.cbegin(); it != createdNotes.cend(); ++it)
+        writeNote(dir.path(), it.key(), it.value());
+    RenameScan out;
+    out.changes = SyncScanner::scan(vault, journal, contentKey);
+    for (const SyncScanner::Change &change : std::as_const(out.changes))
+        ++out.kinds[change.kind];
+    return out;
+}
+
+/// Eight distinct lines of note `tag`.
+QString eightLines(const QString &tag)
+{
+    QStringList out;
+    for (int i = 1; i <= 8; ++i)
+        out << QStringLiteral("%1 line %2").arg(tag).arg(i);
+    return out.join(QLatin1Char('\n'));
+}
+
+/// `total` lines, the first `keep` of them those of eightLines(tag), the rest new.
+QString keptLines(const QString &tag, int keep, int total)
+{
+    QStringList out;
+    for (int i = 1; i <= total; ++i)
+        out << (i <= keep ? QStringLiteral("%1 line %2").arg(tag).arg(i) : QStringLiteral("rewritten %1 %2").arg(tag).arg(i));
+    return out.join(QLatin1Char('\n'));
+}
+
+} // namespace
+
+// The rename pass takes a pair at Dice >= 0.5: 4 of 8 lines kept in an
+// 8-line note is exactly 2*4/16 = 0.5 and is a rename, 3 of 8 (0.375) and 4
+// kept in a 9-line note (8/17) are new notes. Pins the threshold from both sides.
+TEST(SyncScannerTest, TheRenameThresholdIsHalfTheLinesInCommon)
+{
+    const QMap<QString, QString> tracked{{QStringLiteral("old.md"), eightLines(QStringLiteral("n"))}};
+    const RenameScan half = scanAfterVanishing({QStringLiteral("old.md")},
+                                               {{QStringLiteral("new.md"), keptLines(QStringLiteral("n"), 4, 8)}}, tracked);
+    ASSERT_EQ(half.changes.size(), 1);
+    EXPECT_EQ(half.changes.first().kind, SyncScanner::Change::Renamed);
+    EXPECT_EQ(half.changes.first().oldPath, QStringLiteral("old.md"));
+
+    const RenameScan below = scanAfterVanishing({QStringLiteral("old.md")},
+                                                {{QStringLiteral("new.md"), keptLines(QStringLiteral("n"), 3, 8)}}, tracked);
+    EXPECT_EQ(below.kinds.value(SyncScanner::Change::Renamed), 0);
+    EXPECT_EQ(below.kinds.value(SyncScanner::Change::Created), 1);
+    EXPECT_EQ(below.kinds.value(SyncScanner::Change::Deleted), 1);
+
+    const RenameScan justBelow = scanAfterVanishing({QStringLiteral("old.md")},
+                                                    {{QStringLiteral("new.md"), keptLines(QStringLiteral("n"), 4, 9)}}, tracked);
+    EXPECT_EQ(justBelow.kinds.value(SyncScanner::Change::Renamed), 0);
+    EXPECT_EQ(justBelow.kinds.value(SyncScanner::Change::Created), 1);
+}
+
+// Known false positive (docs/SYNC.md, rename paragraph): notes made from one
+// template share most lines, so a note deleted and a new one created from the
+// same template in one scan look like a rename. The new note then carries the
+// deleted one's identity, nothing is lost. Asserted so a change is deliberate.
+TEST(SyncScannerTest, ANewNoteFromTheSameTemplateAsADeletedOneIsTakenForItsRename)
+{
+    const QString templateLines = QStringLiteral("# Daily\nmorning\nnoon\nafternoon\nevening\nnight");
+    const QMap<QString, QString> texts{
+        {QStringLiteral("day1.md"), templateLines + QStringLiteral("\nmet Ann\nbought tea")},
+        {QStringLiteral("day2.md"), templateLines + QStringLiteral("\nran 5 km\nread a book")},
+    };
+    const RenameScan scan = scanAfterVanishing({QStringLiteral("day1.md")},
+                                               {{QStringLiteral("day3.md"), templateLines + QStringLiteral("\nwrote a test\nslept")}},
+                                               texts, {QStringLiteral("day2.md")}, texts);
+    ASSERT_EQ(scan.changes.size(), 1);
+    EXPECT_EQ(scan.changes.first().kind, SyncScanner::Change::Renamed);
+    EXPECT_EQ(scan.changes.first().oldPath, QStringLiteral("day1.md"));
+    EXPECT_EQ(scan.changes.first().path, QStringLiteral("day3.md"));
+}
+
+// The pass runs only when new * vanished notes <= 64: 8 x 8 pairs every
+// edited note with its own base, 9 x 9 skips the pass and leaves 9 deletes
+// and 9 new notes (no file read at all).
+TEST(SyncScannerTest, TheSimilarityPassStopsAtSixtyFourCandidates)
+{
+    for (const int n : {8, 9}) {
+        QStringList vanishedPaths;
+        QMap<QString, QString> tracked;
+        QMap<QString, QString> created;
+        for (int i = 0; i < n; ++i) {
+            const QString tag = QStringLiteral("note%1").arg(i);
+            const QString old = QStringLiteral("old%1.md").arg(i);
+            vanishedPaths << old;
+            tracked.insert(old, eightLines(tag));
+            created.insert(QStringLiteral("new%1.md").arg(i), keptLines(tag, 7, 8));
+        }
+        const RenameScan scan = scanAfterVanishing(vanishedPaths, created, tracked);
+        if (n == 8) {
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Renamed), 8);
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Created), 0);
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Deleted), 0);
+        } else {
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Renamed), 0);
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Created), 9);
+            EXPECT_EQ(scan.kinds.value(SyncScanner::Change::Deleted), 9);
+        }
+    }
 }
 
 // writeBase() goes through QSaveFile: a crash between truncate and write used
@@ -2546,6 +2675,119 @@ TEST_F(SyncIntegrationTest, ForgettingTheKeysRemovesTheEntryAndTheNextStartAsks)
     ASSERT_TRUE(watchNext.waitForStatus(SyncEngine::Status::NeedsPassword, 10000));
     EXPECT_GE(nobody->load(), 1);
     EXPECT_TRUE(keyEntries().isEmpty());
+}
+
+// A device that last ran before records carried digests: its journal has no
+// states table and no digest columns. Starting it again must upgrade the file
+// in place and then sync like any other device - fast-forward, merge and
+// conflict-free concurrent edits - ending with digests and state rows.
+TEST_F(SyncIntegrationTest, AnOldJournalUpgradesThroughARealCycle)
+{
+    const auto note = [](const QString &first, const QString &second, const QString &third, const QString &fourth,
+                         const QString &fifth, const QString &sixth) {
+        return QStringList{first, second, third, fourth, fifth, sixth}.join(QLatin1Char('\n'));
+    };
+    const QString shared = QStringLiteral("/shared.md");
+    writeNote(vaultA.path(), shared.mid(1), note(QStringLiteral("one"), QStringLiteral("two"), QStringLiteral("three"),
+                                                  QStringLiteral("four"), QStringLiteral("five"), QStringLiteral("six")));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    auto engineB = std::make_unique<SyncEngine>();
+    auto watchB = std::make_unique<Watcher>(*engineB);
+    engineB->start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB->waitForCycle());
+    ASSERT_TRUE(QFile::exists(vaultB.path() + shared));
+    watchB.reset();
+    engineB.reset();
+
+    // Downgrade B's journal: DROP COLUMN needs SQLite 3.35.
+    const QString dbPath = SyncJournal::dataDirectoryFor(vaultB.path()) + QStringLiteral("/journal.db");
+    {
+        const QString name = QStringLiteral("downgrade-test");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+            db.setDatabaseName(dbPath);
+            ASSERT_TRUE(db.open());
+            QSqlQuery q(db);
+            ASSERT_TRUE(q.exec(QStringLiteral("SELECT sqlite_version()")) && q.next());
+            const QString version = q.value(0).toString();
+            std::cout << "[ INFO     ] SQLite " << version.toStdString() << "\n";
+            const QList<int> parts = [&version] {
+                QList<int> out;
+                for (const QString &part : version.split(QLatin1Char('.')))
+                    out << part.toInt();
+                return out;
+            }();
+            if (parts.size() < 2 || parts.at(0) < 3 || (parts.at(0) == 3 && parts.at(1) < 35))
+                GTEST_SKIP() << "SQLite " << version.toStdString() << " cannot DROP COLUMN (needs 3.35)";
+            for (const char *sql : {"DROP TABLE states", "ALTER TABLE entities DROP COLUMN baseDigest",
+                                    "ALTER TABLE entities DROP COLUMN headDigest", "ALTER TABLE outbox DROP COLUMN digest"})
+                ASSERT_TRUE(q.exec(QString::fromLatin1(sql))) << sql << ": " << q.lastError().text().toStdString();
+        }
+        QSqlDatabase::removeDatabase(name);
+    }
+
+    engineB = std::make_unique<SyncEngine>();
+    watchB = std::make_unique<Watcher>(*engineB);
+    engineB->start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB->waitForCycle()) << watchB->lastMessage.toStdString();
+    EXPECT_NE(watchB->lastStatus, SyncEngine::Status::Error) << watchB->lastMessage.toStdString();
+    const QString onA = vaultA.path() + shared;
+    const QString onB = vaultB.path() + shared;
+    const auto syncBoth = [&](SyncEngine &first, Watcher &firstWatch, SyncEngine &second, Watcher &secondWatch) {
+        first.syncNow();
+        ASSERT_TRUE(firstWatch.waitForCycle());
+        second.syncNow();
+        ASSERT_TRUE(secondWatch.waitForCycle());
+    };
+
+    // Round 1: A edits, B (journal without history) fast-forwards.
+    writeNote(vaultA.path(), shared.mid(1), note(QStringLiteral("ONE"), QStringLiteral("two"), QStringLiteral("three"),
+                                                  QStringLiteral("four"), QStringLiteral("five"), QStringLiteral("six")));
+    syncBoth(engineA, watchA, *engineB, *watchB);
+    EXPECT_EQ(watchB->conflicts, 0);
+    EXPECT_EQ(readNoteText(onB), readNoteText(onA)) << snapshot(vaultB.path());
+    EXPECT_TRUE(readNoteText(onB).startsWith(QStringLiteral("ONE\n")));
+
+    // Round 2: B edits, A merges it into its own text in line.
+    writeNote(vaultB.path(), shared.mid(1), note(QStringLiteral("ONE"), QStringLiteral("two"), QStringLiteral("three"),
+                                                  QStringLiteral("four"), QStringLiteral("five"), QStringLiteral("SIX")));
+    syncBoth(*engineB, *watchB, engineA, watchA);
+    EXPECT_EQ(watchA.conflicts, 0);
+    EXPECT_EQ(readNoteText(onA), readNoteText(onB)) << snapshot(vaultA.path());
+    EXPECT_TRUE(readNoteText(onA).endsWith(QStringLiteral("SIX")));
+
+    // Round 3: both edit different lines before either syncs.
+    writeNote(vaultA.path(), shared.mid(1), note(QStringLiteral("ONE"), QStringLiteral("TWO"), QStringLiteral("three"),
+                                                  QStringLiteral("four"), QStringLiteral("five"), QStringLiteral("SIX")));
+    writeNote(vaultB.path(), shared.mid(1), note(QStringLiteral("ONE"), QStringLiteral("two"), QStringLiteral("three"),
+                                                  QStringLiteral("four"), QStringLiteral("FIVE"), QStringLiteral("SIX")));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB->syncNow();
+    ASSERT_TRUE(watchB->waitForCycle());
+    EXPECT_EQ(watchB->conflicts, 0);
+    const QString merged = note(QStringLiteral("ONE"), QStringLiteral("TWO"), QStringLiteral("three"), QStringLiteral("four"),
+                                QStringLiteral("FIVE"), QStringLiteral("SIX"));
+    EXPECT_EQ(readNoteText(onB), merged) << snapshot(vaultB.path());
+    expectConverged({{&engineA, &watchA}, {engineB.get(), watchB.get()}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_EQ(readNoteText(root + shared), merged) << snapshot(root);
+        EXPECT_EQ(vaultFiles(root).size(), 1) << snapshot(root); // no conflict copy
+    }
+
+    watchB.reset();
+    engineB.reset();
+    SyncJournal journal(vaultB.path());
+    ASSERT_TRUE(journal.isOpen());
+    const auto entity = journal.entityForPath(QStringLiteral("shared.md"));
+    ASSERT_TRUE(entity);
+    EXPECT_FALSE(entity->baseDigest.isEmpty());
+    EXPECT_FALSE(entity->headDigest.isEmpty());
+    EXPECT_TRUE(journal.state(entity->entityID, entity->baseDigest));
+    EXPECT_TRUE(journal.state(entity->entityID, entity->headDigest));
 }
 
 TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)
