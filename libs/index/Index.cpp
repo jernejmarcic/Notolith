@@ -1311,6 +1311,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     const Parser parser;
     const ParseOptions options = parseOptions();
     int rewritten = 0;
+    QStringList skippedLossy;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
         Metadata metadata = parser.parse(text, absolutePath, options);
@@ -1332,6 +1333,11 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         if (!Vault::read(absolutePath, note, error)) {
             endBatch();
             return -1;
+        }
+        // Write would refuse it; leave its bytes alone and say so.
+        if (note.lossy) {
+            skippedLossy.append(actualRelative);
+            continue;
         }
 
         QList<Hit> hits;
@@ -1432,6 +1438,10 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     }
 
     endBatch();
+    if (!skippedLossy.isEmpty() && error) {
+        *error = QStringLiteral("not UTF-8, so its links were left as they are: %1")
+                     .arg(skippedLossy.join(QStringLiteral(", ")));
+    }
     return rewritten;
 }
 

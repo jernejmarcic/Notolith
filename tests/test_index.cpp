@@ -660,6 +660,32 @@ TEST_F(RenameLinksTest, ANoteEditedSinceItWasIndexedIsRewrittenFromItsCurrentTex
     EXPECT_EQ(read(vault.absolute(QStringLiteral("More.md"))), QByteArray("A [x](New.md) first.\n[[New]]\n"));
 }
 
+// Vault::write refuses a lossy note. It is skipped and named, and the rest of
+// the batch is still rewritten.
+TEST_F(RenameLinksTest, ANonUTF8LinkingNoteIsSkippedAndNamedWhileTheRestAreRewritten)
+{
+    write(QStringLiteral("Old.md"), "# Old\n");
+    const QByteArray lossy("caf\xe9 [[Old]]\n");
+    write(QStringLiteral("A-lossy.md"), lossy);
+    write(QStringLiteral("B-clean.md"), "[[Old]]\n");
+    write(QStringLiteral("C-clean.md"), "[[Old]]\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Old.md")), QStringLiteral("New"), &newPath, &error))
+        << error.toStdString();
+    error.clear();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Old.md"), QStringLiteral("New.md"), vault, &error), 2);
+    EXPECT_TRUE(error.contains(QStringLiteral("A-lossy.md"))) << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A-lossy.md"))), lossy);
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("B-clean.md"))), QByteArray("[[New]]\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("C-clean.md"))), QByteArray("[[New]]\n"));
+}
+
 // A moved note's own Markdown links are paths from its folder; Obsidian
 // rewrites them so they still reach the same files. Wikilinks (found by name),
 // URLs and same-note anchors are not paths and stay as written.

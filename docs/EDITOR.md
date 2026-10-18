@@ -952,7 +952,9 @@ every link that resolves to a note under it: `[[Folder/A]]` and
 `[[A]]` while the name is unique, and a linking note that sat inside the
 folder is rewritten at its new path. Each linking note is rewritten from the
 text on disk at that moment, not from where the index last saw its links, so a
-note saved a moment ago is never spliced at stale offsets.
+note saved a moment ago is never spliced at stale offsets. A linking note that
+is not valid UTF-8 is left byte for byte as it is and named in the status bar; the other notes are still
+rewritten.
 
 Renaming from the file tree (F2, or Rename in its menu) edits the name in place and goes
 through the same path as the inline title.

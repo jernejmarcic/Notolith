@@ -6248,6 +6248,10 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         if (m_index.updateLinksAfterRename(oldRelative, newRelative, m_vault, &linkError) < 0) {
             statusBar()->showMessage(tr("Renamed, but links could not be updated: %1").arg(linkError),
                                      4000);
+        } else if (!linkError.isEmpty()) {
+            // A note that is not valid UTF-8 was left as it is.
+            statusBar()->showMessage(tr("Renamed, but links in a note were not updated: %1").arg(linkError),
+                                     6000);
         }
     }
 

@@ -195,6 +195,7 @@ public:
     /// basename when that is still unique. Only the link's bytes change.
     /// The index picks the notes to open; each one's links are found again in
     /// the text read, so a note saved since it was indexed is spliced right.
+    /// A note that is not valid UTF-8 is left untouched and named in `error`.
     /// Returns the number of notes rewritten, or -1 with `error` filled.
     int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
                                const Vault &vault, QString *error = nullptr);
