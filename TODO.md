@@ -1647,7 +1647,7 @@ Lane sync8:
       no data loss either way.
 - [x] 19. (lane sync10, 9249899: a dangling link let a pull write outside the vault) A directory (or symlink) at a pulled rename's target is not
       checked (isFile only); verify nothing is lost.
-- [ ] 23. (lane syncbase, Fable design in the session scratchpad SYNCBASE-DESIGN.md: parent/hash in records, 32-state history, merge results pushed, seq-ordered conflicts) BUG, data divergence/loss: pushed
+- [x] 23. (lane syncbase, 14fcef1..c2c92a9; Fable design in the session scratchpad SYNCBASE-DESIGN.md: parent/hash in records, 32-state history, merge results pushed, seq-ordered conflicts) BUG, data divergence/loss: pushed
       records carry no parent/base hash, so a record from a device that has
       not seen this device's push is applied as a fast-forward over local
       work, and a clean merge advances the base to the merged text instead
@@ -1658,7 +1658,7 @@ Lane sync8:
       per record and/or push the merge result; old records stay readable),
       Sonnet implements, the DISABLED_ tests and a multi-round convergence
       check on every merge test pass.
-- [ ] 24. Rename + edit in one scan is seen as delete + new note (scanner
+- [x] 24. (lane syncbase, 00d855c: Dice >= 0.5, unique best, <= 64 pairs) Rename + edit in one scan is seen as delete + new note (scanner
       matches renames by exact hash only): match by similarity to the
       stored base text. DISABLED_ARenameAndEditInOneScanMergesAtTheNewPath.
 - [x] 25. (lane confine, a75aec7: Vault::isConfinedPath at one choke point; refused records dropped and named; scanner skips symlinks) Pulled record paths are not confined to the vault
@@ -1666,6 +1666,23 @@ Lane sync8:
       Vault::confinedNotePath) and a symlink at an entity's own path is
       written through by a plain pulled edit. Needs a device with the vault
       keys, but confine anyway: refuse such records with a status message.
+- [ ] 28. BUG: an attachment (or oversized note) copy whose bytes are
+      already in the blob store never reaches other devices: the server keeps
+      the first blob per content address, sealed under the first entity's
+      noteKey; the copy's record references that address with another
+      noteKey, openBlob fails and applyRecord returns silently. Seen in
+      ConcurrentAttachmentEditsKeepBothVersions (weakened to match). Plan
+      (Fable): blobs sealed under a key independent of the entity, or a
+      per-entity address; and never drop a record silently - status line.
+- [ ] 29. Announce noise (syncbase): every merge announces, so 3 devices
+      push 9 records for 3 edits, and a device offline across 33 edits makes
+      the other push 33 merge records and take 34 counted conflicts (no loss,
+      converges). Measured: the announce is load-bearing only when the
+      ancestor is pruned. Plan (Fable): coalesce to one announce per entity
+      per pull batch, or announce only when the sender cannot have the
+      parent; keep convergence tests green.
+- [ ] 30. Not verified: an old journal upgraded through a real cycle (only
+      the schema upgrade is tested); Dice 0.5 and the 64-pair cap untuned.
 - [ ] 27. A password change replaces the content key, so every keyed
       localHash/syncedHash stops matching: full re-push and "local changed"
       on every incoming record afterwards (pre-existing; found by Fable).
