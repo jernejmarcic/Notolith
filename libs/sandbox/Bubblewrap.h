@@ -21,7 +21,7 @@ struct Command {
 /// machine id, hostname or user list.
 QStringList etcBinds(const QStringList &extra = {});
 
-/// `program arguments` with /usr, /var/lib/texmf and etcBinds() read-only (the
+/// `program arguments` with /usr, /var/lib/texmf, /var/cache/fontconfig and etcBinds() read-only (the
 /// rest of the system is not there: no home, no other drive, no socket),
 /// `dir` the only writable place and the working directory, HOME, a private
 /// /tmp and /proc and /dev, no network, no inherited environment (PATH and

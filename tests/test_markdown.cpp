@@ -383,6 +383,21 @@ TEST(WikilinkTest, ANestedHeadingPathFindsTheHeadingUnderItsParent)
     EXPECT_TRUE(ObsidianSyntax::headingsUnder(headings, {QStringLiteral("Detail"), QStringLiteral("X")}).isEmpty());
 }
 
+// The key forgives punctuation, which made `C`, `C++` and `C#` one heading, the first: the exact text wins.
+TEST(WikilinkTest, AHeadingLinkPrefersTheHeadingWithTheSameText)
+{
+    const QList<Heading> headings = Parser().parseAll(QStringLiteral("# C\n# C++\n## Notes\n# cafe\u0301\n")).metadata.headings;
+    ASSERT_EQ(headings.size(), 4);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C++")), 1);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C")), 0);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#c++")), 1);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C+")), 0) << "no exact text: the key answers, first match";
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C++#Notes")), 2);
+    // Decomposed and precomposed accents are the same heading.
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#caf\u00e9")), 3);
+    EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("e\u0301")), ObsidianSyntax::headingKey(QStringLiteral("\u00e9")));
+}
+
 TEST(WikilinkTest, AHeadingLinkMatchesWithPunctuationIgnored)
 {
     EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("Part 1: Intro?")),

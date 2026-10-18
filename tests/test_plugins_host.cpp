@@ -518,6 +518,36 @@ TEST_F(PluginHostTest, APluginReadsItsOwnConfigAndNoneOfTheAppsOwn)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+TEST_F(PluginHostTest, OnlyAPluginWithTheNetworkSeesWhatNameResolutionReadsInEtc)
+{
+    if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
+        GTEST_SKIP() << "bubblewrap not installed on this machine";
+
+    const auto readAs = [this](const QSet<PluginPermission> &permissions, const QString &path) {
+        QString notice;
+        PluginHost host(manifest, permissions, callbacksReturning(QStringLiteral("x"), &notice));
+        bool done = false;
+        host.runCommand(QStringLiteral("read-path:") + path, [&](bool, const QJsonObject &, const QString &) { done = true; });
+        EXPECT_TRUE(waitUntil([&] { return done; }));
+        host.stop();
+        return notice;
+    };
+    const QSet<PluginPermission> offline = {PluginPermission::ReadNotes};
+    const QSet<PluginPermission> online = {PluginPermission::ReadNotes, PluginPermission::Network};
+    for (const QString &name : {QStringLiteral("/etc/machine-id"), QStringLiteral("/etc/hostname")}) {
+        if (!QFileInfo::exists(name))
+            continue;
+        EXPECT_EQ(readAs(offline, name), QStringLiteral("cannot-read")) << name.toStdString();
+        EXPECT_EQ(readAs(online, name), QStringLiteral("cannot-read")) << name.toStdString() << ": not even with the network";
+    }
+    for (const QString &name : {QStringLiteral("/etc/resolv.conf"), QStringLiteral("/etc/hosts")}) {
+        if (!QFileInfo::exists(name))
+            continue;
+        EXPECT_EQ(readAs(offline, name), QStringLiteral("cannot-read")) << name.toStdString();
+        EXPECT_NE(readAs(online, name), QStringLiteral("cannot-read")) << name.toStdString();
+    }
+}
+
 // --- PluginRegistry: the community-plugins feature switch -------------------
 
 TEST(PluginRegistryTest, NothingIsReadWhenTheFeatureIsOff)

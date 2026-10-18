@@ -308,7 +308,8 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     ASSERT_TRUE(work.isValid() && outside.isValid());
     qputenv("DIAGRAM_SANDBOX_LEAK", "leaked");
     const QString script = QStringLiteral("echo in > %1/inside; echo out > %2/outside; echo \"env=$DIAGRAM_SANDBOX_LEAK\" "
-                                          "> %1/env; ls %2 > %1/listing 2>&1; cat /etc/machine-id /etc/hostname /etc/passwd > %1/etc 2>/dev/null")
+                                          "> %1/env; ls %2 > %1/listing 2>&1; cat /etc/machine-id /etc/hostname /etc/passwd > %1/etc 2>/dev/null; "
+                                          "ls /var/cache/fontconfig > %1/fontcache 2>&1; : > /var/cache/fontconfig/probe 2>/dev/null && echo w > %1/fontwrite")
                                .arg(work.path(), outside.path());
     const noteAppC::sandbox::Command command =
         noteAppC::sandbox::bubblewrapCommand(work.path(), QStringLiteral("/bin/sh"), {QStringLiteral("-c"), script});
@@ -329,6 +330,12 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     EXPECT_EQ(read(QStringLiteral("env")), QByteArray("env=\n")) << "the environment is not inherited";
     EXPECT_TRUE(read(QStringLiteral("listing")).contains("No such file")) << "the other directory is not there";
     EXPECT_EQ(read(QStringLiteral("etc")), QByteArray()) << "the machine id, hostname and user list are not in the sandbox";
+    // The system's font cache is there, read-only (a tool in a fresh HOME would rebuild one every run).
+    if (QFileInfo(QStringLiteral("/var/cache/fontconfig")).isDir() && !QDir(QStringLiteral("/var/cache/fontconfig")).isEmpty()) {
+        const QByteArray fontCache = read(QStringLiteral("fontcache"));
+        EXPECT_FALSE(fontCache.isEmpty() || fontCache.contains("No such file")) << fontCache.constData();
+        EXPECT_FALSE(QFile::exists(work.filePath(QStringLiteral("fontwrite")))) << "the font cache is read-only";
+    }
 }
 
 // A tool set by path in the settings is often outside /usr (a home's bin), where the sandbox has nothing: it is

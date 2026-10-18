@@ -605,8 +605,10 @@ private:
         const QByteArray svg = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
         if (!svg.contains("<svg"))
             return QString();
-        return QStringLiteral("<div class=\"diagram\"><img alt=\"")
-             + escapeAttr(source.trimmed().left(2000))
+        QString alt = source.trimmed().left(2000);
+        if (alt.size() == 2000 && alt.back().isHighSurrogate())
+            alt.chop(1); // not half of a pair
+        return QStringLiteral("<div class=\"diagram\"><img alt=\"") + escapeAttr(alt)
              + QStringLiteral("\" src=\"data:image/svg+xml;base64,") + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
     }
 

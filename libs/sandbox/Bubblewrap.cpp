@@ -36,6 +36,9 @@ Command bubblewrapCommand(const QString &dir, const QString &program, const QStr
     command.arguments = etcBinds();
     command.arguments << QStringList{QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
                          QStringLiteral("--ro-bind-try"), QStringLiteral("/var/lib/texmf"), QStringLiteral("/var/lib/texmf"),
+                         // The system's font cache: without it Graphviz, pango and dvisvgm rebuild one in the
+                         // fresh HOME on every first render (150 ms for dot, seconds with many fonts).
+                         QStringLiteral("--ro-bind-try"), QStringLiteral("/var/cache/fontconfig"), QStringLiteral("/var/cache/fontconfig"),
                          QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
                          QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib"),
                          QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib64"),

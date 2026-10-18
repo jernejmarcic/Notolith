@@ -43,6 +43,8 @@ constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools'
 constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
 /// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
 const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
+constexpr int kKindCount = 4; ///< the arrays below hold one entry per DiagramKind
+static_assert(int(DiagramKind::Graphviz) + 1 == kKindCount, "a new DiagramKind: grow kKindCount (the pools and prune flags)");
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
 constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
 constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
@@ -98,11 +100,28 @@ struct Made {
     QString error;
 };
 
+/// A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
+/// than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
+void limitChild(bool jvm)
+{
+    rlimit cpu{25, 30};
+    setrlimit(RLIMIT_CPU, &cpu);
+    rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
+    setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
+}
+
 /// mmdr as a plain process: the way it runs where there is no bubblewrap (see
-/// runMermaid).
-Made runMermaidUnsandboxed(const QString &tool, const QString &configPath, const QString &source)
+/// runMermaid). A shared note's fence reaches it, so it gets the sandbox's
+/// limits and none of this process's environment (tokens, session variables):
+/// PATH, and HOME in the temporary directory `dir`.
+Made runMermaidUnsandboxed(const QString &dir, const QString &tool, const QString &configPath, const QString &source)
 {
     QProcess process;
+    QProcessEnvironment environment;
+    environment.insert(QStringLiteral("PATH"), qEnvironmentVariable("PATH"));
+    environment.insert(QStringLiteral("HOME"), dir);
+    process.setProcessEnvironment(environment);
+    process.setChildProcessModifier([] { limitChild(false); });
     process.start(tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath});
     if (!process.waitForStarted(kRunMilliseconds))
         return {{}, QCoreApplication::translate("MermaidBlock", "could not start %1").arg(tool)};
@@ -151,13 +170,8 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
         return ran;
     }
     QProcess process;
-    // A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
-    // than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
     process.setChildProcessModifier([fd = command.filterFD, jvm] {
-        rlimit cpu{25, 30};
-        setrlimit(RLIMIT_CPU, &cpu);
-        rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
-        setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
+        limitChild(jvm);
         sandbox::keepInChild(fd);
     });
     process.start(command.program, command.arguments);
@@ -208,7 +222,7 @@ Made runMermaid(const QString &tool, const QString &source, const QByteArray &co
         return {{}, QCoreApplication::translate("MermaidBlock", "no temporary file")};
     file.close();
     if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        return runMermaidUnsandboxed(tool, configPath, source);
+        return runMermaidUnsandboxed(dir.path(), tool, configPath, source);
     const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
                                  source.toUtf8(), false, kRunMilliseconds);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
@@ -508,7 +522,7 @@ void make(const std::shared_ptr<State> &state, const QString &source, const QByt
 /// hung fences of one kind still block it; per-key timeouts if that is felt.
 QThreadPool *pool(DiagramKind kind)
 {
-    static QThreadPool pools[4];
+    static QThreadPool pools[kKindCount];
     static const bool once = [] {
         for (QThreadPool &instance : pools)
             instance.setMaxThreadCount(2);
@@ -533,7 +547,7 @@ MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QStrin
         (void)QtConcurrent::run(pool(kind), [state, kind, source, config, width, ratio, deliver] {
             make(state, source, config, width, ratio, deliver);
             // Once per process and kind, after the first diagram is out, never at startup.
-            static std::atomic_flag pruned[4];
+            static std::atomic_flag pruned[kKindCount];
             if (!pruned[int(kind)].test_and_set())
                 pruneMermaidCache(diagramCacheDirectory(kind), kCacheDays, kCacheBytes);
         });

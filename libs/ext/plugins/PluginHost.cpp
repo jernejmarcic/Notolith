@@ -1,5 +1,6 @@
 #include "PluginHost.h"
 
+#include "Bubblewrap.h"
 #include "SyscallFilter.h"
 
 #include <noteappc/plugin.h>
@@ -137,9 +138,17 @@ QStringList PluginHost::sandboxArguments(QString *program) const
     const QString noteAppCConfigDir = configHome + QStringLiteral("/noteAppC/plugins/") + m_manifest.id();
 
     *program = bwrap;
-    QStringList args = {
+    // Not all of /etc (machine-id, hostname, user list): the sandbox's short list, and for a plugin that was
+    // granted the network what name resolution and TLS read.
+    QStringList args;
+    if (permissionGranted(PluginPermission::Network))
+        args = sandbox::etcBinds({QStringLiteral("resolv.conf"), QStringLiteral("hosts"), QStringLiteral("ssl"),
+                                  QStringLiteral("ca-certificates"), QStringLiteral("nsswitch.conf"),
+                                  QStringLiteral("localtime"), QStringLiteral("gai.conf")});
+    else
+        args = sandbox::etcBinds();
+    args << QStringList{
         QStringLiteral("--ro-bind"), QStringLiteral("/usr"), QStringLiteral("/usr"),
-        QStringLiteral("--ro-bind"), QStringLiteral("/etc"), QStringLiteral("/etc"),
         QStringLiteral("--symlink"), QStringLiteral("usr/bin"), QStringLiteral("/bin"),
         QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib"),
         QStringLiteral("--symlink"), QStringLiteral("usr/lib"), QStringLiteral("/lib64"),
