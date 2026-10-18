@@ -1448,8 +1448,16 @@ Wave 2
       change.
 
 Wave 3
-- [ ] 9. MarkdownEditor.h (2 791 lines, 46 TUs) private part behind a
+- [x] 9. (lane split, f90951b..1008bb9; partly) MarkdownEditor.h (2 791 lines, 46 TUs) private part behind a
       private header, so editing the editor rebuilds ~10 TUs, not 46.
+      Done: 154 members + 29 nested types in MarkdownEditor_p.h (d-pointer,
+      like MediaPlayback); a private-state edit rebuilds 24 TUs (28.8 s)
+      instead of 50 (1:24.9); 13 includes dropped; bench unchanged.
+      24 is the floor without splitting the editor: every editor .cpp uses
+      d->. Follow-up:
+      - [ ] ~355 private method declarations still in MarkdownEditor.h, so
+            adding a helper rebuilds all 48 TUs; moving them needs Q_D-style
+            Private methods (not mechanical). Do only if rebuilds hurt.
 
 ## Fable audit round 5, 2026-10-17 (rename + WASM tier)
 
