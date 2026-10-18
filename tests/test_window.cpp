@@ -893,11 +893,19 @@ TEST_F(WindowTest, ClosingTheMainWindowClosesEveryPopout)
     command(window, "workspace:open-in-new-window")->trigger();
     command(window, "workspace:open-in-new-window")->trigger();
     ASSERT_EQ(popoutWindows().size(), 2);
+    command(window, "app:detach-left-sidebar")->trigger(); // the splitter has two children now
+    ASSERT_EQ(popoutWindows().size(), 3);
 
     window.close();
     for (const noteAppC::PopoutWindow *popout : popoutWindows())
         EXPECT_FALSE(popout->isVisible());
-    // The splitter state saved is the three-child main one, which a fresh window restores.
+    // The splitter state saved is the three-child main one (the sidebar was docked
+    // before it was saved), which a fresh window restores.
+    QDataStream saved(QSettings().value(QStringLiteral("window/splitter")).toByteArray());
+    qint32 magic = 0, version = 0;
+    QList<int> sizes;
+    saved >> magic >> version >> sizes; // what QSplitter::saveState() starts with
+    EXPECT_EQ(sizes.size(), 3);
     MainWindow fresh;
     auto *splitter = fresh.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
     ASSERT_NE(splitter, nullptr);
@@ -966,8 +974,10 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
         command(window, "workspace:new-tab")->trigger();
         window.openNote(path(QStringLiteral("Other.md")));
         command(window, "workspace:move-to-new-window")->trigger();
-        ASSERT_EQ(popoutWindows().size(), 1);
+        command(window, "app:detach-left-sidebar")->trigger();
+        ASSERT_EQ(popoutWindows().size(), 2);
         EXPECT_TRUE(command(window, "workspace:open-in-new-window")->isEnabled());
+        EXPECT_TRUE(command(window, "app:detach-right-sidebar")->isEnabled());
 
         command(window, "app:open-settings")->trigger();
         noteAppC::ToggleSwitch *toggle = nullptr;
@@ -983,13 +993,189 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
             EXPECT_FALSE(group->acceptDrops());
         EXPECT_FALSE(command(window, "workspace:open-in-new-window")->isEnabled());
         EXPECT_FALSE(command(window, "workspace:move-to-new-window")->isEnabled());
+        EXPECT_FALSE(command(window, "app:detach-left-sidebar")->isEnabled());
+        EXPECT_FALSE(command(window, "app:detach-right-sidebar")->isEnabled());
+        auto *splitter = window.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+        EXPECT_EQ(splitter->count(), 3) << "the sidebar came back to the splitter";
+        EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("sidebar"))->window(), &window);
 
         toggle->click(); // back on: the commands work again
         EXPECT_TRUE(command(window, "workspace:move-to-new-window")->isEnabled());
+        EXPECT_TRUE(command(window, "app:detach-left-sidebar")->isEnabled());
         for (const QWidget *group : window.findChildren<QWidget *>(QStringLiteral("tabGroup")))
             EXPECT_TRUE(group->acceptDrops());
     }
     qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// --- detached sidebars and panes ---------------------------------------------
+
+namespace {
+
+/// Right-clicks `at` in `anchor` and takes the menu item `text`, if the menu has it.
+void chooseFromContextMenu(QWidget *anchor, const QPoint &at, const QString &text)
+{
+    QTimer::singleShot(0, [text] {
+        auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+        if (!menu)
+            return;
+        for (QAction *action : menu->actions()) {
+            if (action->text() == text)
+                action->trigger();
+        }
+        menu->close();
+    });
+    QContextMenuEvent event(QContextMenuEvent::Mouse, at, anchor->mapToGlobal(at));
+    QCoreApplication::sendEvent(anchor, &event);
+}
+
+} // namespace
+
+TEST_F(WindowTest, DetachingTheLeftSidebarPutsItInItsOwnWindowAndBackOnClose)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    auto *splitter = window.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    auto *sidebar = window.findChild<QWidget *>(QStringLiteral("sidebar"));
+    ASSERT_EQ(splitter->count(), 3);
+
+    command(window, "app:detach-left-sidebar")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_EQ(popouts.first()->kind(), noteAppC::PopoutWindow::Kind::Sidebar);
+    EXPECT_EQ(splitter->count(), 2);
+    EXPECT_EQ(sidebar->window(), popouts.first());
+    EXPECT_TRUE(sidebar->isVisible());
+    EXPECT_NE(popouts.first()->findChild<QTreeView *>(QStringLiteral("fileExplorer")), nullptr);
+    command(window, "app:toggle-left-sidebar")->trigger();
+    EXPECT_TRUE(sidebar->isVisible()) << "the toggle leaves a detached sidebar alone";
+
+    popouts.first()->close();
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    EXPECT_EQ(splitter->count(), 3);
+    EXPECT_EQ(splitter->indexOf(sidebar), 0) << "back where it was built";
+    EXPECT_EQ(sidebar->window(), &window);
+    EXPECT_TRUE(sidebar->isVisible());
+
+    // The same through the context menu of the header.
+    auto *header = window.findChild<QWidget *>(QStringLiteral("sidebarHeader"));
+    chooseFromContextMenu(header, header->rect().center(), QStringLiteral("Detach sidebar"));
+    const auto again = popoutWindows();
+    ASSERT_EQ(again.size(), 1);
+    EXPECT_EQ(sidebar->window(), again.first());
+}
+
+TEST_F(WindowTest, DetachingAPaneHidesItsTabAndShowRightPaneRaisesTheWindow)
+{
+    write(QStringLiteral("Target.md"), "Target text.\n");
+    write(QStringLiteral("Source.md"), "See [[Target]].\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.openNote(path(QStringLiteral("Target.md")));
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+    ASSERT_TRUE(pane && tab);
+    const auto mentions = [pane] { return pane->findChildren<QTreeWidget *>(QStringLiteral("backlinkList")).first()->topLevelItemCount(); };
+    WAIT_TRUE(mentions() == 1, 5000);
+    const int before = panes->count();
+
+    auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+    chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_EQ(popouts.first()->kind(), noteAppC::PopoutWindow::Kind::Pane);
+    EXPECT_EQ(pane->window(), popouts.first());
+    EXPECT_TRUE(popouts.first()->isVisible());
+    EXPECT_TRUE(pane->isVisible());
+    EXPECT_EQ(panes->indexOf(pane), -1);
+    EXPECT_EQ(panes->count(), before - 1);
+    EXPECT_FALSE(tab->isVisible()) << "its tab went with it";
+    EXPECT_TRUE(tab->isHidden());
+    QToolButton *current = nullptr;
+    for (auto *button : window.findChildren<QToolButton *>()) {
+        if (button->isChecked() && button->property("pane").value<QObject *>() == panes->currentWidget())
+            current = button;
+    }
+    EXPECT_NE(current, nullptr) << "the pane the sidebar shows now has its tab checked";
+
+    // Asking for the pane brings its window; the sidebar's own stack does not switch.
+    QWidget *stillShowing = panes->currentWidget();
+    window.findChild<QToolButton *>(QStringLiteral("backlinkStatus"))->click();
+    EXPECT_TRUE(popouts.first()->isVisible());
+    EXPECT_EQ(panes->currentWidget(), stillShowing);
+    EXPECT_FALSE(tab->isChecked());
+    EXPECT_TRUE(current->isChecked());
+
+    // The pane is still fed: opening Source (nothing links to it) empties it.
+    window.openNote(path(QStringLiteral("Source.md")));
+    WAIT_TRUE(mentions() == 0, 5000);
+
+    popouts.first()->close();
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    EXPECT_EQ(pane->window(), &window);
+    EXPECT_GE(panes->indexOf(pane), 0);
+    EXPECT_TRUE(tab->isVisible());
+}
+
+TEST_F(WindowTest, SwitchingAFeatureOffClosesTheWindowOfItsDetachedPane)
+{
+    QTemporaryDir config; // the switch is the user's, kept apart from other tests
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show(); // the settings page builds its rows when shown
+        window.openVault(dir.path());
+        auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+        auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+        ASSERT_TRUE(tab);
+        chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+        ASSERT_EQ(popoutWindows().size(), 1);
+
+        command(window, "app:open-settings")->trigger();
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.backlink")));
+        }));
+        toggle->click(); // applyFeatures() deletes the pane; its window has nothing to show
+
+        EXPECT_TRUE(QTest::qWaitFor([] { return popoutWindows().isEmpty(); })) << "closed once the pane is gone";
+        EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("backlinksPane")), nullptr);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+TEST_F(WindowTest, ANarrowWindowLeavesADetachedSidebarAlone)
+{
+    MainWindow window;
+    window.resize(1180, 760);
+    window.show();
+    window.openVault(dir.path());
+    auto *sidebar = window.findChild<QWidget *>(QStringLiteral("sidebar"));
+    auto *right = window.findChild<QWidget *>(QStringLiteral("rightSidebar"));
+    command(window, "app:detach-right-sidebar")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    ASSERT_TRUE(right->isVisible());
+
+    window.resize(500, 760); // a phone held upright: the sidebar beside the note folds
+    QApplication::processEvents();
+    EXPECT_FALSE(sidebar->isVisible());
+    EXPECT_TRUE(right->isVisible()) << "in its own window it has all the width it wants";
+    EXPECT_EQ(right->window(), popouts.first());
+
+    window.resize(1180, 760);
+    QApplication::processEvents();
+    EXPECT_TRUE(sidebar->isVisible());
+    EXPECT_TRUE(right->isVisible());
+    EXPECT_EQ(right->window(), popouts.first()) << "still detached";
+    EXPECT_EQ(popoutWindows().size(), 1);
 }
 
 // Typing with no pause long enough for the 2 s timer still saves: the max
