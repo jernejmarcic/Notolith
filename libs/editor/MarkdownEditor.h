@@ -369,7 +369,8 @@ public:
     void setLinkAliases(const QList<QPair<QString, QString>> &aliases);
     /// The headings (`blocks` false) or block ids of a note, for `[[Note#` and
     /// `[[Note#^`. Asked once per popup, never for the note being edited:
-    /// `[[#` is answered from the editor itself.
+    /// `[[#` is answered from the editor itself. After `[[Note#H1#` `note` is
+    /// `Note#H1` and the answer is the headings nested under H1.
     void setLinkFragmentProvider(std::function<QStringList(const QString &note, bool blocks)> provider);
 
     /// Turns a link target into an absolute path, or an empty string when it

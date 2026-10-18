@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QString>
+#include <QStringList>
 
 #include "Metadata.h"
 
@@ -45,6 +46,17 @@ public:
     /// heading links with punctuation stripped, so `[[N#a!]]` finds
     /// `## a?` and links it writes with punctuation kept still resolve.
     static QString headingKey(const QString &heading);
+    /// Indices of the headings lying under the chain `parents` (heading texts,
+    /// matched by headingKey): each is the first match inside the previous
+    /// one's section, which runs to the next heading of its level or higher.
+    /// All headings when `parents` is empty; none when a link of the chain
+    /// finds nothing.
+    static QList<qsizetype> headingsUnder(const QList<Heading> &headings, const QStringList &parents);
+    /// Index of the heading a link subpath names, `#A` or the nested `#A#B`
+    /// (B under A, as Obsidian reads it), or -1. A single segment is the first
+    /// match anywhere; a nested path that finds nothing is tried whole, as
+    /// the text of one heading with a `#` in it.
+    static qsizetype findHeading(const QList<Heading> &headings, const QString &subpath);
 };
 
 } // namespace noteAppC

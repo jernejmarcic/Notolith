@@ -353,6 +353,36 @@ TEST(WikilinkTest, Parts)
     EXPECT_EQ(here.subpath, QStringLiteral("#Heading"));
 }
 
+// `[[N#A#B]]` names the B nested under A, not the first B in the note.
+TEST(WikilinkTest, ANestedHeadingPathFindsTheHeadingUnderItsParent)
+{
+    const QString text = QStringLiteral(
+        "# Intro\n### Detail\n# A\n## Plan\n### Detail\n# C\n## Plan\n### Detail\n### Other\n");
+    const QList<Heading> headings = Parser().parseAll(text).metadata.headings;
+    ASSERT_EQ(headings.size(), 9);
+    // Single segment: first match anywhere, as before.
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#Detail")), 1);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("Detail")), 1);
+    // Nested: inside the parent's section only, however far down.
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#A#Detail")), 4);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C#Detail")), 7);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#C#Plan#Detail")), 7);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#a#plan!#detail")), 4);
+    // Not under that parent, or the parent is absent: no match.
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#A#Other")), -1);
+    EXPECT_EQ(ObsidianSyntax::findHeading(headings, QStringLiteral("#Nowhere#Detail")), -1);
+    // A heading with a `#` in its text still answers to the whole path.
+    const QList<Heading> sharp = Parser().parseAll(QStringLiteral("# C# tips\n")).metadata.headings;
+    EXPECT_EQ(ObsidianSyntax::findHeading(sharp, QStringLiteral("#C# tips")), 0);
+
+    // What `[[N#A#` offers: the headings in A's section.
+    EXPECT_EQ(ObsidianSyntax::headingsUnder(headings, {QStringLiteral("A")}), (QList<qsizetype>{3, 4}));
+    EXPECT_EQ(ObsidianSyntax::headingsUnder(headings, {QStringLiteral("C"), QStringLiteral("Plan")}),
+              (QList<qsizetype>{7, 8}));
+    EXPECT_EQ(ObsidianSyntax::headingsUnder(headings, {}).size(), 9);
+    EXPECT_TRUE(ObsidianSyntax::headingsUnder(headings, {QStringLiteral("Detail"), QStringLiteral("X")}).isEmpty());
+}
+
 TEST(WikilinkTest, AHeadingLinkMatchesWithPunctuationIgnored)
 {
     EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("Part 1: Intro?")),

@@ -1484,6 +1484,74 @@ TEST_F(WindowTest, RenamingWithAModifiedLinkingNoteOpenKeepsTheLinkRewrite)
     EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Renamed]].\nxy"));
 }
 
+// A linking note that is not valid UTF-8 cannot be rewritten without changing
+// its bytes: the rename still goes through, the status bar names the note.
+TEST_F(WindowTest, RenamingNamesALinkingNoteThatWasNotUpdated)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    const QByteArray lossy("caf\xe9 [[Target]]\n");
+    write(QStringLiteral("A-lossy.md"), lossy);
+    write(QStringLiteral("B-clean.md"), "See [[Target]].\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+
+    const QString message = window.statusBar()->currentMessage();
+    EXPECT_TRUE(message.contains(QStringLiteral("links in a note were not updated"))) << message.toStdString();
+    EXPECT_TRUE(message.contains(QStringLiteral("A-lossy.md"))) << message.toStdString();
+    EXPECT_FALSE(message.contains(QStringLiteral("B-clean.md"))) << message.toStdString();
+    EXPECT_TRUE(QFile::exists(path(QStringLiteral("Renamed.md"))));
+    EXPECT_EQ(readAll(path(QStringLiteral("A-lossy.md"))), lossy);
+    EXPECT_EQ(readAll(path(QStringLiteral("B-clean.md"))), QByteArray("See [[Renamed]].\n"));
+}
+
+// The index only learns of a note's new link when the save is indexed; the
+// rename must not read the links before that.
+TEST_F(WindowTest, RenamingRewritesALinkTypedAMomentAgo)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "Nothing yet.\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Home.md")));
+    auto *editor = window.editor();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("[[Target]]"));
+    ASSERT_TRUE(editor->isModified()) << "the rename must beat the autosave timer";
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("Nothing yet.\n[[Renamed]]"));
+}
+
 namespace {
 /// The inline title of the tab `editor` is in.
 QLineEdit *titleOf(MarkdownEditor *editor)
@@ -2443,6 +2511,32 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     // Moving off the link lets it go, after a moment to reach the preview.
     emit window.editor()->linkHoverEnded();
     WAIT_TRUE(!preview->isVisible(), 2000);
+}
+
+TEST_F(WindowTest, ANestedHeadingLinkOpensTheHeadingUnderItsParent)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\n## First\n\n### Detail\n\n## Second\n\n### Detail\n\ntail\n");
+    write(QStringLiteral("Linking.md"), "See [[Other#Second#Detail]].\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    emit window.editor()->linkHovered(QStringLiteral("Other#Second#Detail"), QPoint(200, 200));
+    noteAppC::PagePreview *preview = nullptr;
+    WAIT_TRUE(
+        (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
+        2000);
+    const QString shown = preview->editor()->noteText();
+    EXPECT_EQ(preview->editor()->cursorOffset(), shown.lastIndexOf(QLatin1String("### Detail")));
+    EXPECT_NE(preview->editor()->cursorOffset(), shown.indexOf(QLatin1String("### Detail")));
+
+    // Opening the link jumps to the same heading.
+    emit window.editor()->linkActivated(QStringLiteral("Other#Second#Detail"));
+    WAIT_TRUE(window.editor()->noteText().startsWith(QLatin1String("# Other")), 2000);
+    const QString opened = window.editor()->noteText();
+    WAIT_EQ(window.editor()->cursorOffset(), opened.lastIndexOf(QLatin1String("### Detail")), 2000);
 }
 
 TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)

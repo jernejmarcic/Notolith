@@ -113,6 +113,53 @@ QString ObsidianSyntax::headingKey(const QString &heading)
     return key.simplified();
 }
 
+QList<qsizetype> ObsidianSyntax::headingsUnder(const QList<Heading> &headings, const QStringList &parents)
+{
+    qsizetype first = 0;
+    qsizetype last = headings.size();
+    for (const QString &parent : parents) {
+        const QString key = headingKey(parent);
+        qsizetype found = -1;
+        for (qsizetype i = first; i < last; ++i) {
+            if (headingKey(headings.at(i).text).compare(key, Qt::CaseInsensitive) == 0) {
+                found = i;
+                break;
+            }
+        }
+        if (found < 0)
+            return {};
+        first = found + 1;
+        const int level = headings.at(found).level;
+        for (last = first; last < headings.size() && headings.at(last).level > level;)
+            ++last;
+    }
+    QList<qsizetype> under;
+    for (qsizetype i = first; i < last; ++i)
+        under << i;
+    return under;
+}
+
+qsizetype ObsidianSyntax::findHeading(const QList<Heading> &headings, const QString &subpath)
+{
+    const QString wanted = subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath;
+    QStringList path = wanted.split(QLatin1Char('#'), Qt::SkipEmptyParts);
+    if (path.isEmpty())
+        return -1;
+    const auto firstNamed = [&headings](const QList<qsizetype> &among, const QString &name) {
+        const QString key = headingKey(name);
+        for (const qsizetype i : among) {
+            if (headingKey(headings.at(i).text).compare(key, Qt::CaseInsensitive) == 0)
+                return i;
+        }
+        return qsizetype(-1);
+    };
+    const QString whole = path.size() > 1 ? wanted : QString();
+    const qsizetype nested = firstNamed(headingsUnder(headings, path.mid(0, path.size() - 1)), path.last());
+    if (nested >= 0 || whole.isEmpty())
+        return nested;
+    return firstNamed(headingsUnder(headings, {}), whole);
+}
+
 Link ObsidianSyntax::parseWikilink(const QString &raw, bool embed)
 {
     Link link;

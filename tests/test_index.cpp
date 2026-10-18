@@ -248,6 +248,20 @@ TEST_F(IndexTest, LinkCompletionListsAliasesHeadingsAndBlockIDs)
     EXPECT_TRUE(index.fragmentsOf(QStringLiteral("Nowhere.md"), false).isEmpty());
 }
 
+TEST_F(IndexTest, NestedLinkCompletionListsOnlyTheHeadingsUnderTheParent)
+{
+    write(QStringLiteral("Nested.md"), "# A\n## One\n### Deep\n# B\n## Two\n");
+    Index index;
+    build(index);
+    EXPECT_EQ(index.fragmentsOf(QStringLiteral("Nested.md"), false, {QStringLiteral("A")}),
+              (QStringList{QStringLiteral("One"), QStringLiteral("Deep")}));
+    EXPECT_EQ(index.fragmentsOf(QStringLiteral("Nested.md"), false, {QStringLiteral("a"), QStringLiteral("one")}),
+              QStringList{QStringLiteral("Deep")});
+    EXPECT_EQ(index.fragmentsOf(QStringLiteral("Nested.md"), false, {QStringLiteral("B")}),
+              QStringList{QStringLiteral("Two")});
+    EXPECT_TRUE(index.fragmentsOf(QStringLiteral("Nested.md"), false, {QStringLiteral("Two")}).isEmpty());
+}
+
 TEST_F(IndexTest, RescanSkipsUnchangedAndPicksUpEdits)
 {
     Index index;

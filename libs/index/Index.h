@@ -149,8 +149,10 @@ public:
     /// vault path (`folder/Note`) when another note answers to that basename.
     QList<QPair<QString, QString>> aliases() const;
     /// Headings, or block ids, of the note at vault-relative `path`, in source
-    /// order: what `[[Note#` and `[[Note#^` complete.
-    QStringList fragmentsOf(const QString &path, bool blocks) const;
+    /// order: what `[[Note#` and `[[Note#^` complete. With `parents` (heading
+    /// texts, outermost first) only the headings nested under that chain, for
+    /// `[[Note#H1#`.
+    QStringList fragmentsOf(const QString &path, bool blocks, const QStringList &parents = {}) const;
 
     // --- search (libs/index/Search.h has the grammar and the evaluator) ---
 

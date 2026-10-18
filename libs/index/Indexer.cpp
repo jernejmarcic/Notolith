@@ -3,10 +3,12 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
+#include <QCoreApplication>
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
 #include <QStringDecoder>
+#include <QThread>
 #include <QtConcurrent>
 
 #include "Parser.h"
@@ -103,8 +105,27 @@ bool Indexer::isRunning() const
     return m_scan.isRunning();
 }
 
+void Indexer::waitIdle(int milliseconds)
+{
+    if (m_debounce.isActive()) {
+        m_debounce.stop();
+        rebuild();
+    }
+    QElapsedTimer waited;
+    waited.start();
+    // Only this object's queued results are delivered: a nested event loop
+    // would also run the deferred deletes and input of the caller's widgets.
+    // A scan's end may queue another (a rescan, notes changed meanwhile).
+    while (m_active && waited.elapsed() < milliseconds) {
+        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
+        if (m_active)
+            QThread::msleep(1);
+    }
+}
+
 void Indexer::stop()
 {
+    m_active = false;
     ++m_scanNumber; // what it has queued already is dropped on arrival
     m_scan.waitForFinished();
     m_rescan = false;
@@ -206,6 +227,7 @@ void Indexer::start(const QStringList &paths, bool force)
     m_wrote = false;
     m_scanOptions = m_parseOptions;
     m_scanSetsKey = force && paths.isEmpty();
+    m_active = true;
     m_scan = QtConcurrent::run(&m_pool, [this, paths, scan = m_scanNumber.load(), vault = m_vault,
                                          database = m_index->databasePath(), notebooks = m_notebookReader,
                                          options = m_parseOptions, force] {
@@ -326,6 +348,7 @@ void Indexer::apply(const Batch &batch)
         return;
     }
     m_scan.waitForFinished(); // it posted this as its last act
+    m_active = false; // unless the end of this queues another scan, below
     if (!m_parseOptions.metaNotes && (m_clearMetaNotes || m_scanOptions.metaNotes)) {
         clearMetaNotes(); // switched off while it ran: what it or the cache held is stale
     } else if (m_scanSetsKey) {
