@@ -681,7 +681,8 @@ const QList<Settings::Feature> &Settings::features()
         // Notolith's own: Obsidian has pop-out windows built in, with no switch.
         {"popout-windows", QT_TRANSLATE_NOOP("Settings", "Pop-out windows"),
          QT_TRANSLATE_NOOP("Settings", "Open tabs in windows of their own: right-click a tab, or run "
-                                       "\"Open current tab in new window\"."),
+                                       "\"Open current tab in new window\". Drag a tab out of the window "
+                                       "for a new one, or onto a split's edge to tile it."),
          false},
     };
     return list;

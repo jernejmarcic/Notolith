@@ -993,6 +993,183 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// --- drag-to-tile -----------------------------------------------------------
+// Offscreen cannot start a platform drag, so QDrag::exec, the synthetic release
+// that ends QTabBar's own move, a drag between two real windows, the overlay's
+// painting and the drop-outside-every-window path (newPopout, tested above) are
+// not exercised here: the tests deliver the enter and drop events themselves.
+
+namespace {
+
+struct DropResult {
+    bool entered = false;
+    bool dropped = false;
+};
+
+/// What the platform sends a drop target: an enter, then the drop, at `at`.
+DropResult dropOn(QWidget *target, const QMimeData *mime, const QPoint &at, bool sendDrop = true)
+{
+    DropResult result;
+    QDragEnterEvent enter(at, Qt::MoveAction, mime, Qt::LeftButton, Qt::NoModifier);
+    enter.ignore();
+    QCoreApplication::sendEvent(target, &enter);
+    result.entered = enter.isAccepted();
+    if (sendDrop) {
+        QDropEvent drop(QPointF(at), Qt::MoveAction, mime, Qt::LeftButton, Qt::NoModifier);
+        drop.ignore();
+        QCoreApplication::sendEvent(target, &drop);
+        result.dropped = drop.isAccepted();
+    }
+    return result;
+}
+
+} // namespace
+
+TEST_F(WindowTest, DropZoneIsPickedByEdgeQuarters)
+{
+    const QRect rect(0, 0, 400, 300);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {10, 150}), MainWindow::DropZone::Left);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {390, 150}), MainWindow::DropZone::Right);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {200, 10}), MainWindow::DropZone::Top);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {200, 290}), MainWindow::DropZone::Bottom);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {200, 150}), MainWindow::DropZone::Center);
+    // The quarter ends at 100 px of 400: just inside it is an edge, at it the centre.
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {99, 150}), MainWindow::DropZone::Left);
+    EXPECT_EQ(MainWindow::dropZoneAt(rect, {100, 150}), MainWindow::DropZone::Center);
+    // A corner goes to the nearer edge, and a rect off the origin is measured from its own corner.
+    EXPECT_EQ(MainWindow::dropZoneAt(QRect(50, 50, 400, 300), {60, 90}), MainWindow::DropZone::Left);
+    EXPECT_EQ(MainWindow::dropZoneAt(QRect(50, 50, 400, 300), {200, 55}), MainWindow::DropZone::Top);
+}
+
+TEST_F(WindowTest, DroppingATabOnASplitsRightEdgeSplitsAndMovesIt)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:new-tab")->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    auto *root = window.findChild<QSplitter *>(QStringLiteral("workspace"));
+    auto *group = window.findChild<QWidget *>(QStringLiteral("tabGroup"));
+    auto *tabs = group->findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(tabs->count(), 2);
+    const std::unique_ptr<QMimeData> mime(window.tabDragMimeForTests(tabs, 1));
+    ASSERT_NE(mime, nullptr);
+
+    const QPoint edge(group->width() - 5, group->height() / 2);
+    const DropResult result = dropOn(group, mime.get(), edge, false);
+    EXPECT_TRUE(result.entered);
+    auto *overlay = window.findChild<QWidget *>(QStringLiteral("dropOverlay"));
+    ASSERT_NE(overlay, nullptr) << "the zone is shown while the tab is over it";
+    EXPECT_TRUE(overlay->isVisible());
+    EXPECT_GE(overlay->geometry().left(), group->width() / 2 - 1) << "the right half";
+    QDropEvent drop{QPointF(edge), Qt::MoveAction, mime.get(), Qt::LeftButton, Qt::NoModifier};
+    drop.ignore();
+    QCoreApplication::sendEvent(group, &drop);
+    EXPECT_TRUE(drop.isAccepted());
+    EXPECT_FALSE(overlay->isVisible());
+    flushDeletes();
+
+    ASSERT_EQ(mainBars(window).size(), 2);
+    EXPECT_EQ(root->orientation(), Qt::Horizontal) << "right is beside, not below";
+    ASSERT_EQ(root->count(), 2);
+    EXPECT_EQ(tabTexts(root->widget(0)->findChild<QTabBar *>()), QStringList{QStringLiteral("Welcome")});
+    EXPECT_EQ(tabTexts(root->widget(1)->findChild<QTabBar *>()), QStringList{QStringLiteral("Other")});
+    EXPECT_EQ(tabEditors(window).size(), 2) << "the tab moved, none was made or lost";
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("other note text\n"));
+}
+
+TEST_F(WindowTest, DroppingATabOnTheCenterMovesItIntoThatGroup)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:split-vertical")->trigger();
+    window.openNote(path(QStringLiteral("Other.md")));
+    auto *root = window.findChild<QSplitter *>(QStringLiteral("workspace"));
+    ASSERT_EQ(root->count(), 2);
+    QWidget *first = root->widget(0);
+    QWidget *second = root->widget(1);
+    auto *firstTabs = first->findChild<QTabBar *>();
+    ASSERT_EQ(firstTabs->count(), 1);
+    const std::unique_ptr<QMimeData> mime(window.tabDragMimeForTests(firstTabs, 0));
+
+    // Over the editor, which takes drops of its own (files): the group still gets the tab.
+    QWidget *viewport = second->findChild<MarkdownEditor *>()->viewport();
+    const DropResult result = dropOn(viewport, mime.get(), viewport->rect().center());
+    EXPECT_TRUE(result.entered);
+    EXPECT_TRUE(result.dropped);
+    flushDeletes();
+
+    ASSERT_EQ(mainBars(window).size(), 1) << "the group the tab left was emptied and went";
+    EXPECT_EQ(root->count(), 1);
+    EXPECT_EQ(tabTexts(mainBars(window).first()),
+              (QStringList{QStringLiteral("Other"), QStringLiteral("Welcome")}));
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+}
+
+TEST_F(WindowTest, DropsIgnoreForeignMimeAndAreOffWhenTheFeatureIs)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    QTemporaryDir config; // the switch is the user's, kept apart from other tests
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "workspace:new-tab")->trigger();
+        window.openNote(path(QStringLiteral("Other.md")));
+        auto *group = window.findChild<QWidget *>(QStringLiteral("tabGroup"));
+        auto *tabs = group->findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        const QPoint edge(group->width() - 5, group->height() / 2);
+
+        QMimeData stranger;
+        stranger.setText(QStringLiteral("not a tab"));
+        const DropResult foreign = dropOn(group, &stranger, edge);
+        EXPECT_FALSE(foreign.entered);
+        EXPECT_FALSE(foreign.dropped);
+        EXPECT_EQ(mainBars(window).size(), 1);
+        EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("dropOverlay")), nullptr) << "no zone for what is not a tab";
+        // A tab id that names nothing (the tab is gone) is foreign too.
+        QMimeData stale;
+        stale.setData(QStringLiteral("application/x-notolith-leaf"), "12345");
+        EXPECT_FALSE(dropOn(group, &stale, edge).dropped);
+
+        command(window, "app:open-settings")->trigger();
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
+                        QStringLiteral("settingsToggle_plugins.popoutWindows")));
+        }));
+        toggle->click();
+        EXPECT_FALSE(window.acceptDrops());
+        for (const QWidget *each : window.findChildren<QWidget *>(QStringLiteral("tabGroup")))
+            EXPECT_FALSE(each->acceptDrops());
+
+        // A group that still accepts drops (set by hand here) is refused by the filter itself.
+        group->setAcceptDrops(true);
+        const std::unique_ptr<QMimeData> mime(window.tabDragMimeForTests(tabs, 1));
+        ASSERT_NE(mime, nullptr);
+        const DropResult off = dropOn(group, mime.get(), edge);
+        EXPECT_FALSE(off.entered);
+        EXPECT_FALSE(off.dropped);
+        flushDeletes();
+        EXPECT_EQ(mainBars(window).size(), 1) << "off, a tab dropped on an edge splits nothing";
+        EXPECT_EQ(tabs->count(), 2);
+        group->setAcceptDrops(false);
+
+        toggle->click(); // back on
+        EXPECT_TRUE(window.acceptDrops());
+        EXPECT_TRUE(dropOn(group, mime.get(), edge).dropped);
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // Typing with no pause long enough for the 2 s timer still saves: the max
 // wait counts from the first edit after a save. The pause timer is set far
 // beyond the test, so a save can only be the max wait's - however slow the
