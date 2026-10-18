@@ -103,6 +103,16 @@ QString ObsidianSyntax::headingLinkText(const QString &heading)
     return text.simplified();
 }
 
+QString ObsidianSyntax::headingKey(const QString &heading)
+{
+    QString key = heading;
+    for (QChar &c : key) {
+        if (!c.isLetterOrNumber() && !c.isSurrogate())
+            c = QLatin1Char(' ');
+    }
+    return key.simplified();
+}
+
 Link ObsidianSyntax::parseWikilink(const QString &raw, bool embed)
 {
     Link link;

@@ -3362,9 +3362,9 @@ qsizetype MainWindow::subpathOffset(const QString &text, const QString &subpath)
         }
         return -1;
     }
-    const QString linked = ObsidianSyntax::headingLinkText(wanted);
+    const QString linked = ObsidianSyntax::headingKey(wanted);
     for (const Heading &heading : metadata.headings) {
-        if (ObsidianSyntax::headingLinkText(heading.text).compare(linked, Qt::CaseInsensitive) == 0)
+        if (ObsidianSyntax::headingKey(heading.text).compare(linked, Qt::CaseInsensitive) == 0)
             return heading.range.start;
     }
     return -1;
@@ -3375,10 +3375,10 @@ void MainWindow::jumpToHeading(const QString &subpath)
     const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
     if (wanted.isEmpty())
         return;
-    const QString linked = ObsidianSyntax::headingLinkText(wanted);
+    const QString linked = ObsidianSyntax::headingKey(wanted);
     const auto jump = [this, linked] {
         for (const Heading &heading : m_active->editor->headings()) {
-            if (ObsidianSyntax::headingLinkText(heading.text).compare(linked, Qt::CaseInsensitive) == 0) {
+            if (ObsidianSyntax::headingKey(heading.text).compare(linked, Qt::CaseInsensitive) == 0) {
                 m_active->editor->setCursorOffset(heading.range.start);
                 return true;
             }

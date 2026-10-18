@@ -38,9 +38,13 @@ public:
 
     /// A heading as `[[Note#Heading]]` spells it: `# | ^ [ ] : \` and `%%`,
     /// which the link syntax cannot hold, become spaces and runs of space
-    /// collapse, as Obsidian's completion writes them. A link's subpath is
-    /// matched against a heading by comparing both through this.
+    /// collapse, as Obsidian's completion writes them.
     static QString headingLinkText(const QString &heading);
+    /// What a heading link is matched by: every character that is not a
+    /// letter or digit becomes a space, runs collapse. Obsidian compares
+    /// heading links with punctuation stripped, so `[[N#a!]]` finds
+    /// `## a?` and links it writes with punctuation kept still resolve.
+    static QString headingKey(const QString &heading);
 };
 
 } // namespace noteAppC

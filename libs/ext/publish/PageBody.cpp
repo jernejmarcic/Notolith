@@ -1200,9 +1200,9 @@ private:
         if (subpath.startsWith(QLatin1String("#^"))) {
             return Slugs::blockAnchor(subpath.mid(2));
         }
-        const QString headingText = ObsidianSyntax::headingLinkText(subpath.mid(1).trimmed());
+        const QString headingText = ObsidianSyntax::headingKey(subpath.mid(1).trimmed());
         for (const Heading &h : target.metadata.headings) {
-            if (ObsidianSyntax::headingLinkText(h.text).compare(headingText, Qt::CaseInsensitive) == 0)
+            if (ObsidianSyntax::headingKey(h.text).compare(headingText, Qt::CaseInsensitive) == 0)
                 return Slugs::headingAnchor(h.text);
         }
         return {};
@@ -1297,9 +1297,9 @@ private:
     {
         const QList<Heading> &headings = target.metadata.headings;
         qsizetype index = -1;
-        const QString wanted = ObsidianSyntax::headingLinkText(headingText);
+        const QString wanted = ObsidianSyntax::headingKey(headingText);
         for (qsizetype i = 0; i < headings.size(); ++i) {
-            if (ObsidianSyntax::headingLinkText(headings.at(i).text).compare(wanted, Qt::CaseInsensitive) == 0) {
+            if (ObsidianSyntax::headingKey(headings.at(i).text).compare(wanted, Qt::CaseInsensitive) == 0) {
                 index = i;
                 break;
             }

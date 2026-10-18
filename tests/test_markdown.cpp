@@ -353,6 +353,18 @@ TEST(WikilinkTest, Parts)
     EXPECT_EQ(here.subpath, QStringLiteral("#Heading"));
 }
 
+TEST(WikilinkTest, AHeadingLinkMatchesWithPunctuationIgnored)
+{
+    EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("Part 1: Intro?")),
+              ObsidianSyntax::headingKey(QStringLiteral("Part 1 Intro!")));
+    EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("Q&A | notes [x] #1")),
+              QStringLiteral("Q A notes x 1"));
+    EXPECT_EQ(ObsidianSyntax::headingKey(QStringLiteral("Caf\u00e9 \U00020000")),
+              QStringLiteral("Caf\u00e9 \U00020000"));
+    EXPECT_NE(ObsidianSyntax::headingKey(QStringLiteral("Part 1")),
+              ObsidianSyntax::headingKey(QStringLiteral("Part 2")));
+}
+
 TEST(LinkTest, WikilinksEmbedsAndMarkdownLinks)
 {
     const QString text = QStringLiteral(

@@ -2525,6 +2525,21 @@ TEST_F(WindowTest, ACompletedLinkToAHeadingWithLinkSyntaxInItOpensTheHeading)
     WAIT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Q&A")), 2000);
 }
 
+TEST_F(WindowTest, AHeadingLinkWrittenWithOtherPunctuationOpensTheHeading)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Part 1: Intro?\n\nBody.\n");
+    write(QStringLiteral("Linking.md"), "See it.\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+    emit window.editor()->linkActivated(QStringLiteral("Other#Part 1: Intro!"));
+    const QString shown = window.editor()->noteText();
+    ASSERT_TRUE(shown.startsWith(QLatin1String("# Other")));
+    WAIT_EQ(window.editor()->cursorOffset(), shown.indexOf(QLatin1String("## Part 1")), 2000);
+}
+
 TEST_F(WindowTest, AnImageOpensInATabOfItsOwn)
 {
     QImage picture(400, 200, QImage::Format_RGB32);
