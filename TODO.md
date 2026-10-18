@@ -1597,3 +1597,16 @@ when off.
       the running window instead of opening a second one (Obsidian opens a
       window per vault). Documented in docs/PLATFORMS.md; kept: one window
       per user is what lane single was for.
+
+Found 2026-10-18 (lane etc report):
+- [ ] (lane mmdr) Mermaid's mmdr runs as a plain QProcess, outside the
+      sandbox, on every shared note's ```mermaid fence (on by default);
+      every other diagram tool runs in bwrap. Plan: run mmdr through
+      runSandboxed (bind its canonical path when outside /usr, e.g.
+      ~/.local/share/cargo/bin), keep the 5 s budget; without bwrap keep
+      rendering unsandboxed (a parser of data, like poppler in-process, and
+      Mermaid is on by default), with the behaviour documented. Tests with
+      the fake mmdr must still assert what they did (stdin, colours).
+- [ ] PluginHost still binds all of /etc: plugins are user-installed native
+      code with granted permissions (network needs resolv.conf, ssl); left
+      as is, outside the shared-note threat.
