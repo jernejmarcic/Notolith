@@ -1631,13 +1631,22 @@ Lane sync8:
 - [x] 10. (lane sync8, 423dbed: Idle + message tooltip) A parked delete shows Status::Error forever: a Warning status
       (or Idle + message) so healthy sync does not read as broken.
 - [x] 11c. (lane sync8, 5013853) Document that the 3-failure count restarts each launch.
-- [ ] 15. (lane sync9) BUG, data loss: a pulled rename onto a path owned by
+- [x] 15. (lane sync9, 6f68676: rename held back, entity keeps its old path and takes the content; lands once the target is free) BUG, data loss: a pulled rename onto a path owned by
       a different entity (or any existing file) takes QFile::rename, which
       fails, then Vault::write overwrites the target. Plan: same rule as
       item 1: an occupied target with other content gets the incoming as a
       conflict copy; the local file stays. Test: B has note X at path P
       (its own entity), A renames Y to P; B keeps X, Y's text in a copy.
-- [ ] 16. (lane sync9) Item 1 has no attachment test; add one.
+- [x] 16. (lane sync9, 1a0e9bd) Item 1 has no attachment test; add one.
+- [ ] 18. (lane sync10) BUG: B edits y.md, A meanwhile renames y.md to
+      z.md and edits it; after B syncs both devices hold y.md (B's edit)
+      and z.md, unmerged. Suspected: the localChanged branch merges into
+      existingPath but saves the entity with remote.path, so file and
+      entity disagree. Plan: confirm with a test, then move the merged file
+      to remote.path (or keep the entity at the old path) consistently;
+      no data loss either way.
+- [ ] 19. A directory (or symlink) at a pulled rename's target is not
+      checked (isFile only); verify nothing is lost.
 - [ ] 17. A note created on two devices at one path conflicts again on each
       later edit until one side renames it (documented). Later: adopt one
       entity for identical paths after the first conflict.
