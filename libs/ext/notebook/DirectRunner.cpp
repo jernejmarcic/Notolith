@@ -112,6 +112,35 @@ QString ghciScript(const QString &source)
     return chunks.join(QLatin1Char('\n')) + QLatin1Char('\n');
 }
 
+/// The shell script that only type-checks a block with no entry point (a
+/// snippet in a note, not a program), `$1` the block's directory and `$2` the
+/// line to print when it is fine; empty when the language has no such mode or
+/// the block has a `main`. Comments are stripped first so a mention of main
+/// in one does not count.
+QString checkScript(const QString &tool, QString source)
+{
+    static const QRegularExpression comments(QStringLiteral("//[^\\n]*|/\\*.*?\\*/"),
+                                             QRegularExpression::DotMatchesEverythingOption);
+    struct Check {
+        const char *tool;
+        const char *entry;
+        const char *command;
+    };
+    static const Check checks[] = {
+        {"gcc", "\\bmain\\s*\\(", "gcc -fsyntax-only \"$1/cell.c\""},
+        {"g++", "\\bmain\\s*\\(", "g++ -std=c++20 -fsyntax-only \"$1/cell.cpp\""},
+        {"rustc", "\\bfn\\s+main\\s*\\(",
+         "rustc --crate-type=lib --emit=metadata -A dead_code -o \"$1/check\" \"$1/cell.rs\""},
+        {"java", "\\bvoid\\s+main\\s*\\(", "javac -d \"$1\" \"$1/Main.java\""},
+    };
+    source.remove(comments);
+    for (const Check &check : checks) {
+        if (tool == QLatin1String(check.tool) && !QRegularExpression(QString::fromLatin1(check.entry)).match(source).hasMatch())
+            return QString::fromLatin1(check.command) + QStringLiteral(" && printf '%s\\n' \"$2\"");
+    }
+    return {};
+}
+
 QString withoutAnsi(QString text)
 {
     static const QRegularExpression ansi(QStringLiteral("\x1b\\[[0-9;?]*[ -/]*[@-~]"));
@@ -219,6 +248,12 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     if (!wasm && !canRun(request.language))
         return fail(tr("%1 is not installed, so \"%2\" blocks cannot run").arg(recipe->tool, request.language));
 
+    // Haskell below, and these: a block with no `main` is only checked.
+    const QString checker = wasm ? QString() : checkScript(recipe->tool, request.source);
+    if (!checker.isEmpty() && recipe->tool == QLatin1String("java")
+        && QStandardPaths::findExecutable(QStringLiteral("javac")).isEmpty())
+        return fail(tr("javac is needed to check a java block with no main, and it is not installed"));
+
     auto *running = new Running;
     running->language = request.language.trimmed().toLower();
     running->deliver = deliver;
@@ -240,6 +275,10 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         } else {
             text = ghciScript(text);
         }
+    }
+    if (!checker.isEmpty()) {
+        chosen.command = {QStringLiteral("sh"), QStringLiteral("-c"), checker, QStringLiteral("sh"), QStringLiteral("%d"),
+                          tr("Checked, no errors. Nothing to run: this block has no main.")};
     }
     const QString file = dir + QLatin1Char('/') + chosen.file;
     {
