@@ -139,7 +139,19 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
                  const QByteArray &input, bool limitMemory)
 {
     Ran ran;
-    const sandbox::Command command = sandbox::bubblewrapCommand(dir, program, arguments, environment);
+    // A tool outside /usr (a path in the setting, a symlink into a home) is not in the sandbox: bind what it
+    // really is, read-only, and run that, as the notebook runner does. Inside /usr it keeps its own name:
+    // TeX picks its format by the name it is run as (latex -> pdftex).
+    QStringList binds;
+    QString runPath = program;
+    const QString real = QFileInfo(program).canonicalFilePath();
+    const auto inUsr = [](const QString &path) { return path.startsWith(QLatin1String("/usr/")); };
+    if (!real.isEmpty() && !(inUsr(program) && inUsr(real))) {
+        runPath = real;
+        if (!inUsr(real))
+            binds << real;
+    }
+    const sandbox::Command command = sandbox::bubblewrapCommand(dir, runPath, arguments, environment, binds);
     if (command.program.isEmpty()) {
         ran.failure = QCoreApplication::translate("MermaidBlock", "it runs only inside bubblewrap's sandbox; install bubblewrap");
         return ran;

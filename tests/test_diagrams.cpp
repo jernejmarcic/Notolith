@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFileInfo>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QProcess>
@@ -311,6 +312,31 @@ TEST(DiagramSandboxTest, SeesTheSystemAndOneWritableDirectoryAndNothingElse)
     EXPECT_EQ(read(QStringLiteral("env")), QByteArray("env=\n")) << "the environment is not inherited";
     EXPECT_TRUE(read(QStringLiteral("listing")).contains("No such file")) << "the other directory is not there";
     EXPECT_EQ(read(QStringLiteral("etc")), QByteArray("etc\n")) << "/etc is";
+}
+
+// A tool set by path in the settings is often outside /usr (a home's bin), where the sandbox has nothing: it is
+// bound in read-only, and a symlink is run as the file it points to.
+TEST_F(DiagramTest, AToolOutsideUsrIsBoundIntoTheSandboxAndASymlinkedOneIsResolved)
+{
+    NEED("sh");
+    const QString tool = dir.filePath(QStringLiteral("real/dot-tool"));
+    QDir().mkpath(QFileInfo(tool).path());
+    QFile file(tool);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("#!/bin/sh\ncat > /dev/null\n"
+               "echo '<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"80\"><text x=\"5\" y=\"40\">OUTSIDE-USR</text></svg>'\n");
+    file.close();
+    QFile::setPermissions(tool, QFile::permissions(tool) | QFile::ExeOwner);
+    const QString link = dir.filePath(QStringLiteral("link-to-tool"));
+    ASSERT_TRUE(QFile::link(tool, link));
+
+    for (const QString &path : {tool, link}) {
+        SCOPED_TRACE(path.toStdString());
+        const auto answer = ask(rendererFor(DiagramKind::Graphviz, path), QStringLiteral("dot"), kDot);
+        ASSERT_FALSE(answer->result.isMarkdown) << answer->result.text.toStdString();
+        EXPECT_TRUE(cached(DiagramKind::Graphviz, kDot).contains("OUTSIDE-USR"));
+        QDir(dir.filePath(QStringLiteral("cache"))).removeRecursively(); // the next path draws it again
+    }
 }
 
 TEST_F(DiagramTest, PdfExportDrawsACachedDotDiagramAndOtherwiseTheListing)
