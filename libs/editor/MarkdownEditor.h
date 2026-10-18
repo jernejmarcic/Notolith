@@ -2,20 +2,11 @@
 
 #include <QAbstractScrollArea>
 #include <QColor>
-#include <QElapsedTimer>
-#include <QFutureWatcher>
 #include <QHash>
-#include <QIcon>
-#include <QImage>
-#include <QKeySequence>
 #include <QPageLayout>
 #include <QPageSize>
-#include <QPair>
-#include <QPixmap>
 #include <QPointer>
-#include <QSizeF>
 #include <QTextLayout>
-#include <QTimer>
 
 #include <functional>
 #include <memory>
@@ -34,10 +25,6 @@ class QDragMoveEvent;
 class QDropEvent;
 
 #include "BulletGlyphs.h"
-#include "CodeHighlighter.h"
-#include "Lifeline.h"
-#include "MathRenderer.h"
-#include "FindBar.h"
 #include "Decorations.h"
 #include "DisplayMap.h"
 #include "Parser.h"
@@ -54,6 +41,7 @@ class QMenu;
 
 namespace noteAppC {
 
+class SyntaxMap;
 class VimEngine;
 
 /// Turns each HTML block whose every tag the editor can lay out itself into
