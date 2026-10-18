@@ -183,19 +183,19 @@ probe from learning anything.
 ### Content addresses
 
 `crypto_generichash` (BLAKE2b), keyed with `contentKey`, 32-byte output, over
-the **padded, still-plaintext** blob before encryption. Keying is what makes
+`entityID || ` the **padded, still-plaintext** blob before encryption (the
+entity's ID is in the preimage because the blob is sealed under that entity's
+`noteKey`: with the bytes alone, two entities holding equal bytes shared one
+blob sealed under one `noteKey`, and the other could not open it - fixed in
+round 9; receivers read the address from the record, so blobs written under
+the old rule still open). Keying is what makes
 "never raw SHA of plaintext" true: an attacker who does not have `contentKey`
 cannot precompute the address of a guessed plaintext ("does this vault contain
-the string X") the way they could against an unkeyed hash. It does **not**
-hide equality *within* one vault once you have `contentKey` - a
-content-addressed blob store is inherently a dedup store, so two attachments
-with identical bytes address the same blob and the server can see that they
-match, the same way it could with an unkeyed hash if it already had a copy to
-compare against. That is an honest, documented leak, not an oversight; see
-"What the server learns". Note bodies are **not** content-addressed for dedup
-(see "Record and blob formats") specifically to avoid that leak on the data
-users care most about - only attachments use the shared blob store, where the
-storage win is worth the caveat.
+the string X") the way they could against an unkeyed hash. With the entity ID in
+the preimage there is no cross-entity dedup: two attachments with identical
+bytes are two blobs, so the server no longer learns that they match (the same
+bytes pushed again by the same entity do address the same blob, so a retried
+`PUT` is a no-op). Note bodies too big to inline use the same rule.
 
 ### Padding
 
@@ -315,7 +315,7 @@ assigned, not a duplicate row.
 
 Stored server-side at `<data>/blobs/<address[0:2]>/<address>`, `PUT` is
 idempotent (content-addressed - writing the same bytes twice is a no-op, and
-this is the one place two entities' ciphertext can visibly coincide, per
+one entity's retried push is a no-op; two entities never share a blob, per
 "Content addresses" above). The file on disk is exactly `secretstream`'s
 output: its header, then one or more `push` chunks, the last tagged
 `TAG_FINAL`. The blob's own `contentAddress` never appears inside the
@@ -531,6 +531,20 @@ restart a delete that was not yet parked blocks three more cycles. A later recor
 same note from any device (an edit, a rename) wins over the waiting delete
 and cancels it; a local edit does too, as above.
 
+A blob that cannot be fetched (the server answers with an error, or the
+blob is gone) is handled the same way. A record for an attachment or an
+oversized note body holds the pull - the status is `Error` with "attachment
+`path` could not be fetched; retried next sync", the cursor stays before it -
+for three cycles, so a passing network failure never loses it. After the third
+the record is parked: dropped from the pull (later records apply), the path
+kept for the session, and the status is `Idle` with "N attachment(s) from
+other devices could not be read: paths". A blob that is there but cannot be
+opened (sealed under a key this device lacks) is parked at once, retrying
+cannot help. The count is in memory only, like the delete count; a restart
+starts it over and forgets what was parked, so the record is not re-pulled
+(the cursor has passed it) - the file reappears when its entity next changes
+on any device.
+
 ## What the server stores and learns
 
 Stores, all under `--data`: an `accounts` table (email, salt, `loginKey`'s
@@ -549,8 +563,8 @@ how often each changes (record counts and `seq` gaps per `entityID`); ciphertext
 sizes rounded up to a padding bucket (so "a 3 KB note" is visible as "a note in
 the 4 KiB-or-under bucket", never 3 072 bytes exactly); timing of when pushes
 and pulls happen (sync is not batched to disguise activity patterns - out of
-scope, see threat model); which attachments are byte-identical within one
-vault (the content-address dedup caveat above); account existence is only
+scope, see threat model); (only blobs written before round 9, which were addressed by their bytes
+alone, show which attachments are byte-identical within one vault); account existence is only
 mitigated, not eliminated, by the salt-lookup response shape (a sufficiently
 persistent enumeration attempt - timing the salt endpoint, watching account
 creation - is not defended against, it is out of scope for a first cut);
