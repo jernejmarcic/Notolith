@@ -1807,6 +1807,28 @@ your app, you can also detach the sidebar or note windows from the app, like
 in zed or vscode, so its a child window owned by main app outside it".
 Splits right/down exist already. Plan by Fable in the session scratchpad
 WINDOWS-PLAN.md; items below get filled from it.
-- [ ] Fable plan: drag-to-tile, pop-out note windows, detachable sidebars and
+- [x] Fable plan: drag-to-tile, pop-out note windows, detachable sidebars and
       sidebar views, child windows owned by the main window (one process,
       one index), layout persisted in workspace.json, off-switch at zero cost.
+      Decisions: pop-outs are parentless top-levels owned by MainWindow (a
+      parented Qt::Window is an xdg transient Hyprland floats like a
+      dialog); never move(); m_active stays global; feature
+      "popout-windows" (off = zero objects, no acceptDrops).
+- [ ] Lane A (windows core): PopoutWindow class; root-split helpers,
+      collapseIfEmpty (main never empty), moveLeaf, splitBeside,
+      newPopout/closePopout/deletePopout, closeEvent order; commands
+      workspace:open-in-new-window / move-to-new-window + tab context menu;
+      hotkeys inside pop-outs; feature switch + dockAll; docs EDITOR.md
+      "Windows and splits", PLATFORMS.md Hyprland note; bench pop-out open
+      (25 ms budget) and move tab (5 ms). 7 tests.
+- [ ] Lane B (windows persistence): workspace.json "floating" written and
+      read (Obsidian shape), Obsidian's own floating node read never
+      written, detached sidebar restored. 3 tests.
+- [ ] Lane C (detachable sidebars): whole left/right sidebar and single
+      right panes into their own window and back on close; narrow-mode,
+      toggle and showRightPane guards; context menus + commands. 3 tests.
+- [ ] Lane D (drag-to-tile): tab drag with drop zones (edges split,
+      center joins, tab bar inserts), overlay, drop outside -> new window,
+      right tab buttons dragged out -> detached pane. 4 tests.
+- [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
+      between windows, focus; offscreen cannot show these.
