@@ -11,6 +11,7 @@
 /// aligned afterwards. With `editor.tableHandles` off none of it runs.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Parser.h"
 #include "TableFormat.h"
@@ -61,14 +62,14 @@ int maskOf(MarkdownEditor::TablePart part)
 
 void MarkdownEditor::setTableHandles(bool on)
 {
-    if (m_tableHandles == on)
+    if (d->m_tableHandles == on)
         return;
-    m_tableHandles = on;
+    d->m_tableHandles = on;
     if (!on) {
         clearTableHover();
-        m_tableDrag = TableDrag{};
-        m_cellSel = CellSelection{};
-        m_cellPress = -1;
+        d->m_tableDrag = TableDrag{};
+        d->m_cellSel = CellSelection{};
+        d->m_cellPress = -1;
         stopTableAutoScroll();
         viewport()->update();
     }
@@ -76,10 +77,10 @@ void MarkdownEditor::setTableHandles(bool on)
 
 const TableSpan *MarkdownEditor::chromeTable(const BlockView &view) const
 {
-    if (!m_tableHandles || m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden
+    if (!d->m_tableHandles || d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden
         || view.piece != 0 || view.isBase || view.cells.empty())
         return nullptr;
-    const QList<TableSpan> &tables = m_decorations.tables;
+    const QList<TableSpan> &tables = d->m_decorations.tables;
     const auto it = std::lower_bound(tables.cbegin(), tables.cend(), view.span.range.start,
                                      [](const TableSpan &table, qsizetype start) { return table.range.start < start; });
     if (it == tables.cend() || it->range.start != view.span.range.start || (it->html && !it->simple) || it->columns <= 0
@@ -166,9 +167,9 @@ QRectF MarkdownEditor::addColumnRect(const BlockView &view) const
 
 QRegion MarkdownEditor::chromeDirty(const TableChrome &chrome, int mask) const
 {
-    if (chrome.block < 0 || chrome.block >= qsizetype(m_blocks.size()))
+    if (chrome.block < 0 || chrome.block >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(chrome.block)];
+    const BlockView &view = d->m_blocks[size_t(chrome.block)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return {};
@@ -191,26 +192,26 @@ QRegion MarkdownEditor::chromeDirty(const TableChrome &chrome, int mask) const
 
 MarkdownEditor::TableChrome MarkdownEditor::tableChromeAt(const QPoint &point) const
 {
-    if (!m_tableHandles || m_mode != Mode::LivePreview)
+    if (!d->m_tableHandles || d->m_mode != Mode::LivePreview)
         return {};
     const qreal y = point.y() + verticalScrollBar()->value();
     // The grips straddle the table's top edge and the bars sit below it, so
     // a block owns the points a little above it - and the block above may be
     // the one whose bar the pointer is on, when the next starts right under it.
-    const auto it = std::partition_point(m_blocks.cbegin(), m_blocks.cend(),
+    const auto it = std::partition_point(d->m_blocks.cbegin(), d->m_blocks.cend(),
                                          [y](const BlockView &view) { return view.y - 16 <= y; });
-    for (int back = 1; back <= 2 && it - m_blocks.cbegin() >= back; ++back) {
+    for (int back = 1; back <= 2 && it - d->m_blocks.cbegin() >= back; ++back) {
         const BlockView &view = *(it - back);
         const TableSpan *table = chromeTable(view);
         if (!table || !tableViewRect(view).adjusted(-10, -10, 16, 18).contains(point))
             continue;
 
         TableChrome chrome;
-        chrome.block = qsizetype(it - m_blocks.cbegin()) - back;
+        chrome.block = qsizetype(it - d->m_blocks.cbegin()) - back;
         chrome.row = cellRowAt(view, *table, point.y());
         chrome.column = cellColumnAt(view, *table, point.x());
         // The `</>` button is the one thing a press there means.
-        if (m_hoverEditButton && hasEditButton(view) && editButtonRectOf(chrome.block).contains(point))
+        if (d->m_hoverEditButton && hasEditButton(view) && editButtonRectOf(chrome.block).contains(point))
             return chrome;
         // A finger is bigger than a pointer (touchable: no growth for a mouse).
         const auto hit = [this, &point](const QRectF &rect) { return !rect.isEmpty() && touchable(rect, 0).contains(point); };
@@ -230,9 +231,9 @@ MarkdownEditor::TableChrome MarkdownEditor::tableChromeAt(const QPoint &point) c
 void MarkdownEditor::updateTableHover(const QPoint &point)
 {
     const TableChrome now = tableChromeAt(point);
-    if (now == m_tableHover)
+    if (now == d->m_tableHover)
         return;
-    const TableChrome before = m_tableHover;
+    const TableChrome before = d->m_tableHover;
     // Another table: everything of both. The same table: what moved or
     // lit up, and only that.
     int mask = kEverything;
@@ -243,31 +244,31 @@ void MarkdownEditor::updateTableHover(const QPoint &point)
         if (before.column != now.column)
             mask |= kColumnGrip;
     }
-    m_tableHover = now;
+    d->m_tableHover = now;
     viewport()->update(chromeDirty(before, mask) + chromeDirty(now, mask));
 }
 
 void MarkdownEditor::clearTableHover()
 {
-    if (m_tableHover.block < 0)
+    if (d->m_tableHover.block < 0)
         return;
-    const TableChrome before = m_tableHover;
-    m_tableHover = TableChrome{};
+    const TableChrome before = d->m_tableHover;
+    d->m_tableHover = TableChrome{};
     viewport()->update(chromeDirty(before, kEverything));
 }
 
 void MarkdownEditor::paintTableChrome(QPainter &painter) const
 {
-    const bool dragging = m_tableDrag.part != TablePart::None;
-    const qsizetype index = dragging ? m_tableDrag.block : m_tableHover.block;
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    const bool dragging = d->m_tableDrag.part != TablePart::None;
+    const qsizetype index = dragging ? d->m_tableDrag.block : d->m_tableHover.block;
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return;
-    const QColor accent = m_theme.color(QStringLiteral("--interactive-accent"));
-    QColor quiet = m_theme.color(QStringLiteral("--text-faint"));
+    const QColor accent = d->m_theme.color(QStringLiteral("--interactive-accent"));
+    QColor quiet = d->m_theme.color(QStringLiteral("--text-faint"));
     quiet.setAlphaF(0.7f);
     const qreal radius = kGripThick / 2;
 
@@ -280,10 +281,10 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         painter.setBrush(active ? accent : quiet);
         painter.drawRoundedRect(rect, radius, radius);
     };
-    const bool rowActive = m_tableHover.part == TablePart::RowGrip || m_tableDrag.part == TablePart::RowGrip;
-    const bool columnActive = m_tableHover.part == TablePart::ColumnGrip || m_tableDrag.part == TablePart::ColumnGrip;
-    const int row = dragging && m_tableDrag.part == TablePart::RowGrip ? m_tableDrag.from : m_tableHover.row;
-    const int column = dragging && m_tableDrag.part == TablePart::ColumnGrip ? m_tableDrag.from : m_tableHover.column;
+    const bool rowActive = d->m_tableHover.part == TablePart::RowGrip || d->m_tableDrag.part == TablePart::RowGrip;
+    const bool columnActive = d->m_tableHover.part == TablePart::ColumnGrip || d->m_tableDrag.part == TablePart::ColumnGrip;
+    const int row = dragging && d->m_tableDrag.part == TablePart::RowGrip ? d->m_tableDrag.from : d->m_tableHover.row;
+    const int column = dragging && d->m_tableDrag.part == TablePart::ColumnGrip ? d->m_tableDrag.from : d->m_tableHover.column;
     if (row >= 0 && row < table->rows.size())
         grip(rowGripRect(view, *table, row, false), rowActive);
     if (column >= 0 && column < table->columns)
@@ -293,7 +294,7 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
     const auto bar = [&](const QRectF &rect, bool active) {
         if (rect.isEmpty())
             return;
-        QColor fill = m_theme.color(QStringLiteral("--background-modifier-hover"));
+        QColor fill = d->m_theme.color(QStringLiteral("--background-modifier-hover"));
         fill.setAlphaF(active ? 1.0f : 0.55f);
         painter.setBrush(fill);
         painter.drawRoundedRect(rect, 2, 2);
@@ -304,14 +305,14 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         painter.drawLine(QPointF(middle.x(), middle.y() - arm), QPointF(middle.x(), middle.y() + arm));
         painter.setPen(Qt::NoPen);
     };
-    bar(addRowRect(view), m_tableHover.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddRow);
-    bar(addColumnRect(view), m_tableHover.part == TablePart::AddColumn || m_tableDrag.part == TablePart::AddColumn);
+    bar(addRowRect(view), d->m_tableHover.part == TablePart::AddRow || d->m_tableDrag.part == TablePart::AddRow);
+    bar(addColumnRect(view), d->m_tableHover.part == TablePart::AddColumn || d->m_tableDrag.part == TablePart::AddColumn);
 
     // The rows or columns a dragged add bar would add: a tinted strip, one
     // cell to each.
-    if (dragging && m_tableDrag.moved && m_tableDrag.to > 0
-        && (m_tableDrag.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddColumn)) {
-        const QRectF ghost = addBarGhost(view, *table, m_tableDrag.to);
+    if (dragging && d->m_tableDrag.moved && d->m_tableDrag.to > 0
+        && (d->m_tableDrag.part == TablePart::AddRow || d->m_tableDrag.part == TablePart::AddColumn)) {
+        const QRectF ghost = addBarGhost(view, *table, d->m_tableDrag.to);
         QColor tint = accent;
         tint.setAlphaF(0.16f);
         painter.setBrush(tint);
@@ -320,9 +321,9 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
         line.setAlphaF(0.55f);
         painter.setPen(QPen(line, 1));
         painter.setBrush(Qt::NoBrush);
-        const bool rows = m_tableDrag.part == TablePart::AddRow;
-        for (int i = 0; i <= m_tableDrag.to; ++i) {
-            const qreal step = (rows ? ghost.height() : ghost.width()) * i / m_tableDrag.to;
+        const bool rows = d->m_tableDrag.part == TablePart::AddRow;
+        for (int i = 0; i <= d->m_tableDrag.to; ++i) {
+            const qreal step = (rows ? ghost.height() : ghost.width()) * i / d->m_tableDrag.to;
             painter.drawLine(rows ? QPointF(ghost.left(), ghost.top() + step) : QPointF(ghost.left() + step, ghost.top()),
                              rows ? QPointF(ghost.right(), ghost.top() + step) : QPointF(ghost.left() + step, ghost.bottom()));
         }
@@ -331,19 +332,19 @@ void MarkdownEditor::paintTableChrome(QPainter &painter) const
     }
 
     // Where a dragged row or column would land.
-    if (dragging && m_tableDrag.moved) {
+    if (dragging && d->m_tableDrag.moved) {
         const QRectF area = tableViewRect(view);
         painter.setBrush(accent);
         const int rows = int(table->rows.size());
-        if (m_tableDrag.part == TablePart::RowGrip) {
-            const qreal y = m_tableDrag.to >= rows
+        if (d->m_tableDrag.part == TablePart::RowGrip) {
+            const qreal y = d->m_tableDrag.to >= rows
                                 ? area.bottom()
-                                : cellViewRect(view, view.cells[size_t(m_tableDrag.to) * size_t(table->columns)]).top();
+                                : cellViewRect(view, view.cells[size_t(d->m_tableDrag.to) * size_t(table->columns)]).top();
             painter.drawRect(QRectF(area.left(), y - 1, area.width(), 2));
         } else {
-            const qreal x = m_tableDrag.to >= table->columns
+            const qreal x = d->m_tableDrag.to >= table->columns
                                 ? cellViewRect(view, view.cells[size_t(table->columns) - 1]).right()
-                                : cellViewRect(view, view.cells[size_t(m_tableDrag.to)]).left();
+                                : cellViewRect(view, view.cells[size_t(d->m_tableDrag.to)]).left();
             painter.drawRect(QRectF(x - 1, area.top(), 2, area.height()));
         }
     }
@@ -357,16 +358,16 @@ bool MarkdownEditor::pressTableChrome(const QPoint &point, bool touch)
     const TableChrome chrome = tableChromeAt(point);
     // A finger has no hover: its first tap in a table brings the grips and
     // bars up (for the row and column it is on), and only then are they its.
-    if (chrome.part == TablePart::None || (touch && chrome.block != m_tableHover.block)) {
+    if (chrome.part == TablePart::None || (touch && chrome.block != d->m_tableHover.block)) {
         if (touch)
             updateTableHover(point);
         return false;
     }
-    const BlockView &view = m_blocks[size_t(chrome.block)];
+    const BlockView &view = d->m_blocks[size_t(chrome.block)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return false;
-    m_interacted = true;
+    d->m_interacted = true;
     // The finger drags the grip, not the page.
     if (touch && QScroller::hasScroller(viewport()))
         QScroller::scroller(viewport())->stop();
@@ -376,10 +377,10 @@ bool MarkdownEditor::pressTableChrome(const QPoint &point, bool touch)
         const bool column = chrome.part == TablePart::AddColumn;
         const qreal origin = column ? point.x() - contentLeft() + view.tableScroll
                                     : point.y() + verticalScrollBar()->value() - view.y;
-        m_tableDrag = {chrome.part, chrome.block, -1, 0, false, point, origin};
+        d->m_tableDrag = {chrome.part, chrome.block, -1, 0, false, point, origin};
         return true;
     }
-    m_tableDrag = {chrome.part, chrome.block, chrome.part == TablePart::RowGrip ? chrome.row : chrome.column,
+    d->m_tableDrag = {chrome.part, chrome.block, chrome.part == TablePart::RowGrip ? chrome.row : chrome.column,
                    chrome.part == TablePart::RowGrip ? chrome.row : chrome.column, false, point};
     viewport()->setCursor(Qt::ClosedHandCursor);
     return true;
@@ -387,26 +388,26 @@ bool MarkdownEditor::pressTableChrome(const QPoint &point, bool touch)
 
 bool MarkdownEditor::dragTableChrome(const QPoint &point)
 {
-    if (m_tableDrag.part == TablePart::None)
+    if (d->m_tableDrag.part == TablePart::None)
         return false;
-    if (m_tableDrag.block >= qsizetype(m_blocks.size()))
+    if (d->m_tableDrag.block >= qsizetype(d->m_blocks.size()))
         return true;
-    const BlockView &view = m_blocks[size_t(m_tableDrag.block)];
+    const BlockView &view = d->m_blocks[size_t(d->m_tableDrag.block)];
     const TableSpan *table = chromeTable(view);
-    const bool column = m_tableDrag.part == TablePart::ColumnGrip;
-    if (table && (m_tableDrag.part == TablePart::AddRow || m_tableDrag.part == TablePart::AddColumn)) {
-        if (!m_tableDrag.moved && (point - m_tableDrag.start).manhattanLength() < 4)
+    const bool column = d->m_tableDrag.part == TablePart::ColumnGrip;
+    if (table && (d->m_tableDrag.part == TablePart::AddRow || d->m_tableDrag.part == TablePart::AddColumn)) {
+        if (!d->m_tableDrag.moved && (point - d->m_tableDrag.start).manhattanLength() < 4)
             return true;
         const int count = addBarCount(view, *table, point);
-        if (!m_tableDrag.moved || count != m_tableDrag.to) {
+        if (!d->m_tableDrag.moved || count != d->m_tableDrag.to) {
             // Both the strip it was and the one it is: only that is repainted.
             QRegion dirty;
-            for (const int shown : {m_tableDrag.moved ? m_tableDrag.to : 0, count}) {
+            for (const int shown : {d->m_tableDrag.moved ? d->m_tableDrag.to : 0, count}) {
                 if (shown > 0)
                     dirty += addBarGhost(view, *table, shown).adjusted(-2, -2, 2, 2).toAlignedRect();
             }
-            m_tableDrag.moved = true;
-            m_tableDrag.to = count;
+            d->m_tableDrag.moved = true;
+            d->m_tableDrag.to = count;
             viewport()->update(dirty);
         }
         updateTableAutoScroll(point);
@@ -415,8 +416,8 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
     // A header row stays where it is: its grip only selects. (An HTML table
     // may have several, or none.)
     const int firstRow = table && table->html ? table->headerRows : 1;
-    if (!table || (!column && m_tableDrag.from < firstRow)
-        || (!m_tableDrag.moved && (point - m_tableDrag.start).manhattanLength() < 4))
+    if (!table || (!column && d->m_tableDrag.from < firstRow)
+        || (!d->m_tableDrag.moved && (point - d->m_tableDrag.start).manhattanLength() < 4))
         return true;
 
     // The boundary nearest the pointer: before the first row or column whose
@@ -431,9 +432,9 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
             break;
         }
     }
-    if (!m_tableDrag.moved || to != m_tableDrag.to) {
-        m_tableDrag.moved = true;
-        m_tableDrag.to = to;
+    if (!d->m_tableDrag.moved || to != d->m_tableDrag.to) {
+        d->m_tableDrag.moved = true;
+        d->m_tableDrag.to = to;
         viewport()->update(tableViewRect(view).adjusted(-10, -10, 16, 16).toAlignedRect());
     }
     updateTableAutoScroll(point);
@@ -442,13 +443,13 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
 
 int MarkdownEditor::addBarCount(const BlockView &view, const TableSpan &table, const QPoint &point) const
 {
-    const bool column = m_tableDrag.part == TablePart::AddColumn;
+    const bool column = d->m_tableDrag.part == TablePart::AddColumn;
     const qreal local = column ? point.x() - contentLeft() + view.tableScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
     const Cell &last = view.cells[column ? size_t(table.columns) - 1
                                          : (size_t(table.rows.size()) - 1) * size_t(table.columns)];
     const qreal unit = qMax<qreal>(8, column ? last.rect.width() : last.rect.height());
-    return qBound(0, int((local - m_tableDrag.origin) / unit), 100);
+    return qBound(0, int((local - d->m_tableDrag.origin) / unit), 100);
 }
 
 QRectF MarkdownEditor::addBarGhost(const BlockView &view, const TableSpan &table, int count) const
@@ -456,7 +457,7 @@ QRectF MarkdownEditor::addBarGhost(const BlockView &view, const TableSpan &table
     if (count <= 0)
         return {};
     const QRectF area = tableViewRect(view);
-    if (m_tableDrag.part == TablePart::AddColumn) {
+    if (d->m_tableDrag.part == TablePart::AddColumn) {
         const QRectF last = cellViewRect(view, view.cells[size_t(table.columns) - 1]);
         return QRectF(last.right(), area.top(), last.width() * count, area.height());
     }
@@ -468,10 +469,10 @@ QRectF MarkdownEditor::addBarGhost(const BlockView &view, const TableSpan &table
 
 QPoint MarkdownEditor::tableScrollDelta(const QPoint &point, qsizetype &block) const
 {
-    block = m_tableDrag.part != TablePart::None ? m_tableDrag.block : m_cellPress >= 0 ? blockAt(m_cellPress) : -1;
-    if (block < 0 || block >= qsizetype(m_blocks.size()))
+    block = d->m_tableDrag.part != TablePart::None ? d->m_tableDrag.block : d->m_cellPress >= 0 ? blockAt(d->m_cellPress) : -1;
+    if (block < 0 || block >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(block)];
+    const BlockView &view = d->m_blocks[size_t(block)];
     // Faster the farther past the edge, from a couple of pixels a tick.
     const auto step = [](qreal over) { return over == 0 ? 0 : (over < 0 ? -1 : 1) * qBound(2, 2 + int(qAbs(over) / 4), 40); };
     QPoint delta;
@@ -488,27 +489,27 @@ QPoint MarkdownEditor::tableScrollDelta(const QPoint &point, qsizetype &block) c
 void MarkdownEditor::updateTableAutoScroll(const QPoint &point)
 {
     qsizetype block = -1;
-    m_tableScrollPoint = point;
+    d->m_tableScrollPoint = point;
     if (tableScrollDelta(point, block).isNull())
         stopTableAutoScroll();
-    else if (!m_tableScrollTimer.isActive())
-        m_tableScrollTimer.start();
+    else if (!d->m_tableScrollTimer.isActive())
+        d->m_tableScrollTimer.start();
 }
 
 void MarkdownEditor::stopTableAutoScroll()
 {
-    m_tableScrollTimer.stop();
+    d->m_tableScrollTimer.stop();
 }
 
 void MarkdownEditor::tableAutoScrollTick()
 {
     qsizetype block = -1;
-    const QPoint delta = tableScrollDelta(m_tableScrollPoint, block);
+    const QPoint delta = tableScrollDelta(d->m_tableScrollPoint, block);
     if (delta.isNull()) {
         stopTableAutoScroll();
         return;
     }
-    BlockView &view = m_blocks[size_t(block)];
+    BlockView &view = d->m_blocks[size_t(block)];
     bool scrolled = false;
     if (delta.x() != 0) {
         const qreal wanted = qBound<qreal>(0, view.tableScroll + delta.x(), view.tableWidth - contentWidth());
@@ -527,29 +528,29 @@ void MarkdownEditor::tableAutoScrollTick()
         return;
     viewport()->update();
     // The cells moved under a pointer that did not: take them as it is.
-    if (m_tableDrag.part != TablePart::None)
-        dragTableChrome(m_tableScrollPoint);
-    else if (m_cellPress >= 0)
-        dragCellSelection(m_tableScrollPoint);
+    if (d->m_tableDrag.part != TablePart::None)
+        dragTableChrome(d->m_tableScrollPoint);
+    else if (d->m_cellPress >= 0)
+        dragCellSelection(d->m_tableScrollPoint);
 }
 
 bool MarkdownEditor::releaseTableChrome(const QPoint &)
 {
-    if (m_tableDrag.part == TablePart::None)
+    if (d->m_tableDrag.part == TablePart::None)
         return false;
-    const TableDrag drag = m_tableDrag;
-    m_tableDrag = TableDrag{};
+    const TableDrag drag = d->m_tableDrag;
+    d->m_tableDrag = TableDrag{};
     stopTableAutoScroll();
     const bool bar = drag.part == TablePart::AddRow || drag.part == TablePart::AddColumn;
     viewport()->setCursor(bar ? (drag.part == TablePart::AddRow ? Qt::SizeVerCursor : Qt::SizeHorCursor)
                               : Qt::OpenHandCursor);
-    if (drag.block >= qsizetype(m_blocks.size()))
+    if (drag.block >= qsizetype(d->m_blocks.size()))
         return true;
-    const BlockView &view = m_blocks[size_t(drag.block)];
+    const BlockView &view = d->m_blocks[size_t(drag.block)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return true;
-    const qsizetype index = table - m_decorations.tables.constData();
+    const qsizetype index = table - d->m_decorations.tables.constData();
     if (bar) {
         const int count = drag.moved ? drag.to : 1; // a click adds one
         if (count > 0)
@@ -573,14 +574,14 @@ bool MarkdownEditor::releaseTableChrome(const QPoint &)
 
 bool MarkdownEditor::moveTableLine(qsizetype index, bool column, int from, int to)
 {
-    const bool html = index >= 0 && index < m_decorations.tables.size() && m_decorations.tables.at(index).html;
+    const bool html = index >= 0 && index < d->m_decorations.tables.size() && d->m_decorations.tables.at(index).html;
     TableText text;
     if (!html && !loadTableText(index, text))
         return false;
     // Parser rows; an HTML table's header is as many rows as it says.
-    const int count = html ? (column ? m_decorations.tables.at(index).columns : int(m_decorations.tables.at(index).rows.size()))
+    const int count = html ? (column ? d->m_decorations.tables.at(index).columns : int(d->m_decorations.tables.at(index).rows.size()))
                       : column ? text.columns : int(text.rows.size()) - 1;
-    const int first = column ? 0 : html ? m_decorations.tables.at(index).headerRows : 1;
+    const int first = column ? 0 : html ? d->m_decorations.tables.at(index).headerRows : 1;
     const int final = to > from ? to - 1 : to;
     if (from < first || final < first || from >= count || final >= count || final == from)
         return false;
@@ -595,7 +596,7 @@ bool MarkdownEditor::moveTableLine(qsizetype index, bool column, int from, int t
     }
     if (!html && !storeTableText(text))
         return false;
-    const TableSpan &after = m_decorations.tables.at(index);
+    const TableSpan &after = d->m_decorations.tables.at(index);
     if (column)
         setCellSelection(index, 0, final, int(after.rows.size()) - 1, final);
     else
@@ -605,12 +606,12 @@ bool MarkdownEditor::moveTableLine(qsizetype index, bool column, int from, int t
 
 bool MarkdownEditor::appendTableLine(qsizetype index, bool column, int count)
 {
-    const bool html = index >= 0 && index < m_decorations.tables.size() && m_decorations.tables.at(index).html;
+    const bool html = index >= 0 && index < d->m_decorations.tables.size() && d->m_decorations.tables.at(index).html;
     TableText text;
     if (!html && !loadTableText(index, text))
         return false;
     // The column index the new cells start at, for the caret below.
-    const int before = html ? m_decorations.tables.at(index).columns : text.columns;
+    const int before = html ? d->m_decorations.tables.at(index).columns : text.columns;
     if (html) {
         if (!appendHTMLline(index, column, count))
             return false;
@@ -627,7 +628,7 @@ bool MarkdownEditor::appendTableLine(qsizetype index, bool column, int count)
             return false;
     }
     // The caret goes into the first cell of what was added.
-    const TableSpan &after = m_decorations.tables.at(index);
+    const TableSpan &after = d->m_decorations.tables.at(index);
     const Range cell = column ? after.rows.value(0).value(before)
                               : after.rows.value(int(after.rows.size()) - count).value(0);
     if (cell.isValid())
@@ -640,10 +641,10 @@ bool MarkdownEditor::appendTableLine(qsizetype index, bool column, int count)
 
 const MarkdownEditor::CellSelection *MarkdownEditor::cellSelection() const
 {
-    if (m_cellSel.tableStart < 0 || m_cellSel.version != m_textVersion || m_cursor != m_cellSel.caret
-        || m_anchor != m_cursor)
+    if (d->m_cellSel.tableStart < 0 || d->m_cellSel.version != d->m_textVersion || d->m_cursor != d->m_cellSel.caret
+        || d->m_anchor != d->m_cursor)
         return nullptr;
-    return &m_cellSel;
+    return &d->m_cellSel;
 }
 
 QRect MarkdownEditor::cellSelectionRect() const
@@ -657,14 +658,14 @@ QRect MarkdownEditor::cellSelectionRect() const
 
 void MarkdownEditor::setCellSelection(qsizetype index, int anchorRow, int anchorColumn, int headRow, int headColumn)
 {
-    if (index < 0 || index >= m_decorations.tables.size())
+    if (index < 0 || index >= d->m_decorations.tables.size())
         return;
     // Leaving another table it edited aligns that one first, as any caret move does.
-    if (m_tableEdited && m_alignTables && tableAround(m_cursor) != index) {
-        m_tableEdited = false;
-        formatTables(m_cursor);
+    if (d->m_tableEdited && d->m_alignTables && tableAround(d->m_cursor) != index) {
+        d->m_tableEdited = false;
+        formatTables(d->m_cursor);
     }
-    const TableSpan &table = m_decorations.tables.at(index);
+    const TableSpan &table = d->m_decorations.tables.at(index);
     const Range cell = table.rows.value(anchorRow).value(anchorColumn);
     if (!cell.isValid())
         return;
@@ -674,21 +675,21 @@ void MarkdownEditor::setCellSelection(qsizetype index, int anchorRow, int anchor
     moveCursor(cell.end, false);
     verticalScrollBar()->setValue(scrolled);
     if (anchorRow == headRow && anchorColumn == headColumn) {
-        m_cellSel = CellSelection{}; // one cell is the caret
+        d->m_cellSel = CellSelection{}; // one cell is the caret
     } else {
-        m_cellSel = {table.range.start, m_cursor, m_textVersion, anchorRow, anchorColumn, headRow, headColumn};
+        d->m_cellSel = {table.range.start, d->m_cursor, d->m_textVersion, anchorRow, anchorColumn, headRow, headColumn};
     }
     viewport()->update();
 }
 
 bool MarkdownEditor::dragCellSelection(const QPoint &point)
 {
-    const qsizetype block = blockAt(m_cellPress);
-    if (block < 0 || block >= qsizetype(m_blocks.size()))
+    const qsizetype block = blockAt(d->m_cellPress);
+    if (block < 0 || block >= qsizetype(d->m_blocks.size()))
         return false;
-    const BlockView &view = m_blocks[size_t(block)];
+    const BlockView &view = d->m_blocks[size_t(block)];
     const TableSpan *table = chromeTable(view);
-    if (!table || table->range.start != m_cellPress)
+    if (!table || table->range.start != d->m_cellPress)
         return false;
     const int row = cellRowAt(view, *table, point.y());
     const int column = cellColumnAt(view, *table, point.x());
@@ -707,17 +708,17 @@ bool MarkdownEditor::dragCellSelection(const QPoint &point)
         reach.setBottom(kFar);
     // Out of the table, or back in the cell the press began in: a text
     // selection again, as a drag out of a table always was.
-    if ((row == m_cellPressRow && column == m_cellPressColumn) || !reach.contains(point)) {
+    if ((row == d->m_cellPressRow && column == d->m_cellPressColumn) || !reach.contains(point)) {
         if (sel) {
-            m_cellSel = CellSelection{};
-            m_anchor = m_pressOffset;
+            d->m_cellSel = CellSelection{};
+            d->m_anchor = d->m_pressOffset;
             viewport()->update();
         }
         stopTableAutoScroll();
         return false;
     }
     if (!sel || sel->headRow != row || sel->headColumn != column)
-        setCellSelection(table - m_decorations.tables.constData(), m_cellPressRow, m_cellPressColumn, row, column);
+        setCellSelection(table - d->m_decorations.tables.constData(), d->m_cellPressRow, d->m_cellPressColumn, row, column);
     updateTableAutoScroll(point);
     return true;
 }
@@ -730,27 +731,27 @@ bool MarkdownEditor::handleCellSelectionKey(QKeyEvent *event)
     const bool arrow = key == Qt::Key_Left || key == Qt::Key_Right || key == Qt::Key_Up || key == Qt::Key_Down;
     const bool shift = event->modifiers().testFlag(Qt::ShiftModifier);
     const CellSelection *sel = cellSelection();
-    if (!sel && !(shift && arrow && m_anchor == m_cursor))
+    if (!sel && !(shift && arrow && d->m_anchor == d->m_cursor))
         return false;
     if (event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
         return false;
 
-    const qsizetype index = tableAround(m_cursor);
-    if (index < 0 || index >= m_decorations.tables.size()
-        || (m_decorations.tables.at(index).html && !m_decorations.tables.at(index).simple))
+    const qsizetype index = tableAround(d->m_cursor);
+    if (index < 0 || index >= d->m_decorations.tables.size()
+        || (d->m_decorations.tables.at(index).html && !d->m_decorations.tables.at(index).simple))
         return false;
-    const TableSpan &table = m_decorations.tables.at(index);
+    const TableSpan &table = d->m_decorations.tables.at(index);
     int anchorRow = 0, anchorColumn = 0, headRow = 0, headColumn = 0;
     if (sel) {
         if (key == Qt::Key_Delete || key == Qt::Key_Backspace)
             return clearCellSelection();
         if (key == Qt::Key_Escape) {
-            m_cellSel = CellSelection{};
+            d->m_cellSel = CellSelection{};
             viewport()->update();
             return true;
         }
         if (!arrow || !shift) {
-            m_cellSel = CellSelection{}; // an arrow without Shift moves the caret from the anchor cell
+            d->m_cellSel = CellSelection{}; // an arrow without Shift moves the caret from the anchor cell
             viewport()->update();
             return false;
         }
@@ -761,13 +762,13 @@ bool MarkdownEditor::handleCellSelectionKey(QKeyEvent *event)
     } else {
         // Shift+arrow in a cell: a text selection until the caret is at the
         // edge the arrow points over, and a rectangle from there.
-        const CellRef cell = tableCellAt(m_cursor);
-        if (!cell.valid() || cell.row < 0 || !tableRenderedAt(m_cursor))
+        const CellRef cell = tableCellAt(d->m_cursor);
+        if (!cell.valid() || cell.row < 0 || !tableRenderedAt(d->m_cursor))
             return false;
         anchorRow = headRow = cell.row;
         anchorColumn = headColumn = cell.column;
-        if ((key == Qt::Key_Left && m_cursor != cell.range.start)
-            || (key == Qt::Key_Right && m_cursor != cell.range.end))
+        if ((key == Qt::Key_Left && d->m_cursor != cell.range.start)
+            || (key == Qt::Key_Right && d->m_cursor != cell.range.end))
             return false;
     }
     switch (key) {
@@ -803,10 +804,10 @@ QString plainCell(QString text)
 bool MarkdownEditor::copyCellSelection(bool cut)
 {
     const CellSelection *sel = cellSelection();
-    const qsizetype index = sel ? tableAround(m_cursor) : -1;
+    const qsizetype index = sel ? tableAround(d->m_cursor) : -1;
     if (index < 0)
         return false;
-    const TableSpan &table = m_decorations.tables.at(index);
+    const TableSpan &table = d->m_decorations.tables.at(index);
     const QRect rect = cellSelectionRect();
     QStringList pipe;
     QStringList delimiter;
@@ -816,7 +817,7 @@ bool MarkdownEditor::copyCellSelection(bool cut)
         QStringList plain;
         for (int c = rect.left(); c <= rect.right(); ++c) {
             const Range range = table.rows.value(r).value(c);
-            QString text = range.isValid() ? m_text.mid(range.start, range.length()) : QString();
+            QString text = range.isValid() ? d->m_text.mid(range.start, range.length()) : QString();
             if (table.html) {
                 // What the cell shows: tags and entities gone, one line, a
                 // pipe escaped in the table and not in the plain text.
@@ -874,10 +875,10 @@ Range HTMLcellText(const QString &text, Range content, Range element)
 bool MarkdownEditor::clearCellSelection()
 {
     const CellSelection *sel = cellSelection();
-    const qsizetype index = sel ? tableAround(m_cursor) : -1;
-    if (index >= 0 && m_decorations.tables.at(index).html) {
+    const qsizetype index = sel ? tableAround(d->m_cursor) : -1;
+    if (index >= 0 && d->m_decorations.tables.at(index).html) {
         // An HTML cell's content, between its tags, goes; the tags stay.
-        const TableSpan &table = m_decorations.tables.at(index);
+        const TableSpan &table = d->m_decorations.tables.at(index);
         const CellSelection keep = *sel;
         const QRect rect = cellSelectionRect();
         QList<HTMLtableEdit> edits;
@@ -886,7 +887,7 @@ bool MarkdownEditor::clearCellSelection()
                 const Range content = table.rows.value(r).value(c);
                 if (!content.isValid())
                     continue;
-                const Range gone = HTMLcellText(m_text, content, table.cellElements.value(r).value(c));
+                const Range gone = HTMLcellText(d->m_text, content, table.cellElements.value(r).value(c));
                 if (gone.length() > 0)
                     edits.append({gone.start, gone.length(), QString()});
             }
@@ -950,7 +951,7 @@ QList<QStringList> cellGrid(const QString &text, bool &structured)
 
 bool MarkdownEditor::pasteIntoCells()
 {
-    if (!m_tableHandles || m_mode != Mode::LivePreview)
+    if (!d->m_tableHandles || d->m_mode != Mode::LivePreview)
         return false;
     const QMimeData *mime = QApplication::clipboard()->mimeData();
     if (!mime)
@@ -959,8 +960,8 @@ bool MarkdownEditor::pasteIntoCells()
                              ? QString::fromUtf8(mime->data(QStringLiteral("text/markdown")))
                              : mime->text();
     const CellSelection *sel = cellSelection();
-    const CellRef cell = tableCellAt(m_cursor);
-    if (text.isEmpty() || !cell.valid() || cell.row < 0 || !tableRenderedAt(m_cursor)
+    const CellRef cell = tableCellAt(d->m_cursor);
+    if (text.isEmpty() || !cell.valid() || cell.row < 0 || !tableRenderedAt(d->m_cursor)
         || (cell.table->html && !cell.table->simple))
         return false; // a merged cell: no grid to fill
     bool structured = false;
@@ -972,14 +973,14 @@ bool MarkdownEditor::pasteIntoCells()
         columnsWide = qMax(columnsWide, int(row.size()));
 
     const QRect rect = sel ? cellSelectionRect() : QRect(cell.column, cell.row, 1, 1);
-    const qsizetype index = tableAround(m_cursor);
+    const qsizetype index = tableAround(d->m_cursor);
     if (index < 0)
         return false;
     // One value into several cells fills them all, as a spreadsheet does.
     const bool fill = cells.size() == 1 && columnsWide == 1 && (rect.width() > 1 || rect.height() > 1);
     const int rowsWide = fill ? rect.height() : int(cells.size());
     const int across = fill ? rect.width() : columnsWide;
-    if (m_decorations.tables.at(index).html) {
+    if (d->m_decorations.tables.at(index).html) {
         if (pasteIntoHTMLcells(index, rect, cells, fill, rowsWide, across))
             setCellSelection(index, rect.top(), rect.left(), rect.top() + rowsWide - 1, rect.left() + across - 1);
         return true;
@@ -1014,7 +1015,7 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
     // The table grows the way its source is written: a new cell copies its
     // row's last cell's tag and the gap before it, a new row the last row's
     // tags and layout; th stays th only in the header.
-    const TableSpan &span = m_decorations.tables.at(index);
+    const TableSpan &span = d->m_decorations.tables.at(index);
     const int haveRows = int(span.rows.size());
     const int newColumns = qMax(0, rect.left() + across - span.columns);
     const auto value = [&](int r, int c) {
@@ -1028,9 +1029,9 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
     const auto openTag = [&](int r, int c) {
         const Range element = span.cellElements.at(r).at(c);
         Range inner = span.rows.at(r).at(c);
-        while (inner.start > element.start && m_text.at(inner.start - 1).isSpace())
+        while (inner.start > element.start && d->m_text.at(inner.start - 1).isSpace())
             --inner.start;
-        return m_text.mid(element.start, inner.start - element.start);
+        return d->m_text.mid(element.start, inner.start - element.start);
     };
     const auto written = [](const QString &open, const QString &content) {
         qsizetype end = 1;
@@ -1039,7 +1040,7 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
         return open + content + QStringLiteral("</") + open.mid(1, end - 1) + QLatin1Char('>');
     };
     const auto gapIn = [&](const QList<Range> &elements) {
-        return elements.size() > 1 ? m_text.mid(elements.at(0).end, elements.at(1).start - elements.at(0).end)
+        return elements.size() > 1 ? d->m_text.mid(elements.at(0).end, elements.at(1).start - elements.at(0).end)
                                    : QString();
     };
 
@@ -1051,14 +1052,14 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
         const QString indent = indentBefore(row.start).value_or(QString());
         QString added;
         for (int r = haveRows; r < rect.top() + rowsWide; ++r) {
-            added += QLatin1Char('\n') + indent + m_text.mid(row.start, elements.first().start - row.start);
+            added += QLatin1Char('\n') + indent + d->m_text.mid(row.start, elements.first().start - row.start);
             for (int c = 0; c < span.columns + newColumns; ++c) {
                 QString open = openTag(like, qMin(c, int(elements.size()) - 1));
                 if (like < span.headerRows) // a body row under a header-only table
                     open = open.at(1).isUpper() ? QStringLiteral("<TD>") : QStringLiteral("<td>");
                 added += (c > 0 ? gapIn(elements) : QString()) + written(open, value(r, c));
             }
-            added += m_text.mid(elements.last().end, row.end - elements.last().end);
+            added += d->m_text.mid(elements.last().end, row.end - elements.last().end);
         }
         edits.append({row.end, 0, added});
     }
@@ -1066,7 +1067,7 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
         const QList<Range> &elements = span.cellElements.at(r);
         if (r >= rect.top() && r < rect.top() + rowsWide) {
             for (int c = rect.left(); c < qMin(rect.left() + across, span.columns); ++c) {
-                const Range target = HTMLcellText(m_text, span.rows.at(r).at(c), elements.at(c));
+                const Range target = HTMLcellText(d->m_text, span.rows.at(r).at(c), elements.at(c));
                 edits.append({target.start, target.length(), value(r, c)});
             }
         }
@@ -1085,9 +1086,9 @@ bool MarkdownEditor::pasteIntoHTMLcells(qsizetype index, const QRect &rect, cons
 QRectF MarkdownEditor::tableCellRect(qsizetype offset, int row, int column) const
 {
     const qsizetype block = blockAt(offset);
-    if (block < 0 || block >= qsizetype(m_blocks.size()))
+    if (block < 0 || block >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(block)];
+    const BlockView &view = d->m_blocks[size_t(block)];
     const TableSpan *table = chromeTable(view);
     if (!table || row < 0 || row >= table->rows.size() || column < 0 || column >= table->columns)
         return {};
@@ -1097,9 +1098,9 @@ QRectF MarkdownEditor::tableCellRect(qsizetype offset, int row, int column) cons
 QRectF MarkdownEditor::tableChromeRect(qsizetype offset, TablePart part, int index) const
 {
     const qsizetype block = blockAt(offset);
-    if (block < 0 || block >= qsizetype(m_blocks.size()))
+    if (block < 0 || block >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(block)];
+    const BlockView &view = d->m_blocks[size_t(block)];
     const TableSpan *table = chromeTable(view);
     if (!table)
         return {};

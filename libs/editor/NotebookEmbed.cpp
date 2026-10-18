@@ -8,6 +8,7 @@
 /// extensions a real Jupyter kernel install actually registers would.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QFileInfo>
 #include <QHash>
@@ -46,7 +47,7 @@ QString languageForExtension(const QString &suffix)
 
 void MarkdownEditor::layoutRunnableEmbed(BlockView &view, const QString &path, const QString &body)
 {
-    if (!m_features.notebooks || !m_notebookRunner)
+    if (!d->m_features.notebooks || !d->m_notebookRunner)
         return;
     const QString language = languageForExtension(QFileInfo(path).suffix());
     if (language.isEmpty())

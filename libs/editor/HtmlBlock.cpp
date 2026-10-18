@@ -28,6 +28,7 @@
 /// by litehtml.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "HtmlRenderer.h"
 
@@ -38,9 +39,9 @@ namespace noteAppC {
 QSize MarkdownEditor::htmlImageSizeAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return view.isHtml ? view.imageSize : QSize();
 }
 
@@ -48,12 +49,12 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Html)
         return false;
-    if (!m_features.HTMLblocks)
+    if (!d->m_features.HTMLblocks)
         return false; // source shows; litehtml is never asked to build a document
     if (!HtmlRenderer::isAvailable())
         return false; // NOTEAPPC_WITH_HTML off, or litehtml not found: source shows, as today
 
-    const QString raw = m_text.mid(view.span.range.start, view.span.range.length());
+    const QString raw = d->m_text.mid(view.span.range.start, view.span.range.length());
     if (raw.trimmed().isEmpty())
         return false;
 
@@ -69,7 +70,7 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
         QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
     QString shown = raw;
     const QString scriptStyle = QStringLiteral("<code style=\"color:%1;font-weight:bold;white-space:pre-wrap\">")
-                                    .arg(m_theme.color(QStringLiteral("--text-error")).name());
+                                    .arg(d->m_theme.color(QStringLiteral("--text-error")).name());
     for (qsizetype from = 0;;) {
         const QRegularExpressionMatch match = scriptElement.match(shown, from);
         if (!match.hasMatch())
@@ -81,8 +82,8 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
     const QString html = resolveHtmlImages(shown);
     const qreal ratio = devicePixelRatioF();
     const int width = contentWidth();
-    const QColor text = m_theme.color(QStringLiteral("--text-normal"));
-    const QColor background = m_theme.color(QStringLiteral("--background-primary"));
+    const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
+    const QColor background = d->m_theme.color(QStringLiteral("--background-primary"));
     // Cached by exactly what render() takes: the markup (already resolved to
     // real paths, so an image that starts resolving does invalidate this),
     // the width, and the two theme colours a re-skin can change. Everything
@@ -94,23 +95,23 @@ bool MarkdownEditor::layoutHtml(BlockView &view)
                             .arg(text.name(QColor::HexArgb))
                             .arg(background.name(QColor::HexArgb));
 
-    QPixmap pixmap = m_images.value(key);
+    QPixmap pixmap = d->m_images.value(key);
     if (pixmap.isNull()) {
         HtmlRenderer::Theme theme;
         theme.text = text;
         theme.background = background;
-        theme.link = m_theme.color(QStringLiteral("--text-accent"));
-        theme.border = m_theme.color(QStringLiteral("--background-modifier-border"));
-        theme.codeBackground = m_theme.color(QStringLiteral("--background-primary-alt"));
-        theme.textFont = m_theme.textFont();
-        theme.codeFont = m_theme.monospaceFont();
+        theme.link = d->m_theme.color(QStringLiteral("--text-accent"));
+        theme.border = d->m_theme.color(QStringLiteral("--background-modifier-border"));
+        theme.codeBackground = d->m_theme.color(QStringLiteral("--background-primary-alt"));
+        theme.textFont = d->m_theme.textFont();
+        theme.codeFont = d->m_theme.monospaceFont();
         // resolveHtmlImages already turned every local <img src> into an
         // absolute path, so HtmlRenderer needs no base directory of its own.
         const QImage image = HtmlRenderer::render(html, theme, width, QString(), ratio);
         if (image.isNull())
             return false; // falls back to showing the source, not to an error
         pixmap = QPixmap::fromImage(image);
-        m_images.insert(key, pixmap);
+        d->m_images.insert(key, pixmap);
     }
 
     const int height = int(pixmap.height() / pixmap.devicePixelRatio());
@@ -183,11 +184,11 @@ QList<MarkdownEditor::InlineHTMLpair> MarkdownEditor::inlineHTMLpairs(const Bloc
     std::vector<OpenTag> stack;
 
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
-        const StyleSpan &span = m_decorations.styles.at(i);
+        const StyleSpan &span = d->m_decorations.styles.at(i);
         if (span.kind != StyleSpan::Kind::Html || !span.range.overlaps(view.span.range))
             continue;
 
-        const QString raw = m_text.mid(span.range.start, span.range.length());
+        const QString raw = d->m_text.mid(span.range.start, span.range.length());
         const bool closing = raw.startsWith(QLatin1String("</"));
         static const QRegularExpression nameRe(QStringLiteral("^</?\\s*([a-zA-Z][a-zA-Z0-9]*)"));
         const QRegularExpressionMatch match = nameRe.match(raw);
@@ -207,10 +208,10 @@ QList<MarkdownEditor::InlineHTMLpair> MarkdownEditor::inlineHTMLpairs(const Bloc
         const OpenTag open = stack.back();
         stack.pop_back();
         const std::optional<QTextCharFormat> format =
-            htmlTagFormat(name, m_text.mid(open.range.start, open.range.length()));
+            htmlTagFormat(name, d->m_text.mid(open.range.start, open.range.length()));
         if (name == QLatin1String("script")) {
             QTextCharFormat warning;
-            warning.setForeground(m_theme.color(QStringLiteral("--text-error")));
+            warning.setForeground(d->m_theme.color(QStringLiteral("--text-error")));
             warning.setFontWeight(QFont::Bold);
             pairs.append({open.range, span.range, warning, true});
         } else if (format) {
@@ -251,12 +252,12 @@ std::optional<QTextCharFormat> MarkdownEditor::htmlTagFormat(const QString &name
               || name == QLatin1String("strike")) {
         format.setFontStrikeOut(true);
     } else if (name == QLatin1String("kbd") || name == QLatin1String("code")) {
-        format.setFont(m_theme.monospaceFont());
-        format.setForeground(m_theme.color(QStringLiteral("--text-normal")));
-        format.setBackground(m_theme.color(QStringLiteral("--background-primary-alt")));
+        format.setFont(d->m_theme.monospaceFont());
+        format.setForeground(d->m_theme.color(QStringLiteral("--text-normal")));
+        format.setBackground(d->m_theme.color(QStringLiteral("--background-primary-alt")));
     } else if (name == QLatin1String("mark")) {
-        format.setBackground(m_theme.color(QStringLiteral("--color-yellow")));
-        format.setForeground(m_theme.color(QStringLiteral("--color-base-00")));
+        format.setBackground(d->m_theme.color(QStringLiteral("--color-yellow")));
+        format.setForeground(d->m_theme.color(QStringLiteral("--color-base-00")));
     } else if (name == QLatin1String("sup")) {
         format.setVerticalAlignment(QTextCharFormat::AlignSuperScript);
     } else if (name == QLatin1String("sub")) {

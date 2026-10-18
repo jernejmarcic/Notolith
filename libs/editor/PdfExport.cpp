@@ -1,4 +1,5 @@
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "MermaidBlock.h"
 
@@ -65,12 +66,12 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     editor.finishParse(); // a big note parses on the pool
 
     // Everything laid out, not just what a screen would show.
-    for (BlockView &view : editor.m_blocks) {
+    for (BlockView &view : editor.d->m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);
     }
     QCoreApplication::processEvents(); // the cached diagrams the layout asked for land, and re-lay-out their blocks
-    for (BlockView &view : editor.m_blocks) {
+    for (BlockView &view : editor.d->m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);
     }
@@ -80,14 +81,14 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     // it is drawn here rather than written into the text, where it would sit
     // in front of the frontmatter and stop it being frontmatter.
     const bool withTitle = options.includeTitle && !title.isEmpty();
-    QFont titleFont = editor.m_theme.textFont();
+    QFont titleFont = editor.d->m_theme.textFont();
     titleFont.setPixelSize(int(titleFont.pixelSize() * 2.0));
     titleFont.setWeight(QFont::Bold);
     const qreal titleHeight = withTitle ? QFontMetricsF(titleFont).height() * 1.8 : 0;
 
     // Laid out as if the title were a block of its own at the top.
     QList<QPair<qreal, qreal>> extents;
-    for (const BlockView &view : editor.m_blocks) {
+    for (const BlockView &view : editor.d->m_blocks) {
         if (!view.tabHidden && view.height > 0)
             extents.append({view.y + titleHeight, view.height});
     }
@@ -112,7 +113,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
         painter.setClipRect(QRectF(0, 0, viewport.width(), end - start));
         if (i == 0 && withTitle) {
             painter.setFont(titleFont);
-            painter.setPen(editor.m_theme.color(QStringLiteral("--text-normal")));
+            painter.setPen(editor.d->m_theme.color(QStringLiteral("--text-normal")));
             painter.drawText(QRectF(editor.contentLeft(), 0, editor.contentWidth(), titleHeight),
                              Qt::AlignLeft | Qt::AlignVCenter, title);
         }

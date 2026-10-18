@@ -7,6 +7,7 @@
 /// image is drawn as it is.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 namespace noteAppC {
 
@@ -14,12 +15,12 @@ void MarkdownEditor::setCodeBlockRenderer(const QStringList &languages, CodeBloc
 {
     for (const QString &language : languages) {
         if (renderer)
-            m_codeBlockRenderers.insert(language.toLower(), renderer);
+            d->m_codeBlockRenderers.insert(language.toLower(), renderer);
         else
-            m_codeBlockRenderers.remove(language.toLower());
+            d->m_codeBlockRenderers.remove(language.toLower());
     }
-    m_codeBlockCache.clear();
-    for (BlockView &block : m_blocks) {
+    d->m_codeBlockCache.clear();
+    for (BlockView &block : d->m_blocks) {
         if (block.span.kind != BlockSpan::Kind::Code)
             continue;
         block.layout.reset();
@@ -32,31 +33,31 @@ void MarkdownEditor::setCodeBlockRenderer(const QStringList &languages, CodeBloc
 
 bool MarkdownEditor::layoutPluginCode(BlockView &view)
 {
-    if (view.span.kind != BlockSpan::Kind::Code || m_codeBlockRenderers.isEmpty())
+    if (view.span.kind != BlockSpan::Kind::Code || d->m_codeBlockRenderers.isEmpty())
         return false;
     const CodeFenceSpan *fence = codeFenceOf(view);
     if (!fence)
         return false;
     const QString language = fence->language.toLower();
-    const auto rendererIt = m_codeBlockRenderers.constFind(language);
-    if (rendererIt == m_codeBlockRenderers.cend())
+    const auto rendererIt = d->m_codeBlockRenderers.constFind(language);
+    if (rendererIt == d->m_codeBlockRenderers.cend())
         return false;
 
-    const QString source = m_text.mid(fence->content.start, fence->content.length());
+    const QString source = d->m_text.mid(fence->content.start, fence->content.length());
     const int width = contentWidth();
     const QString key =
         language + QLatin1Char('|') + QString::number(width) + QLatin1Char('|') + embedThemeTag() + QLatin1Char('|') + source;
 
-    auto it = m_codeBlockCache.find(key);
-    if (it == m_codeBlockCache.end()) {
+    auto it = d->m_codeBlockCache.find(key);
+    if (it == d->m_codeBlockCache.end()) {
         CodeBlockCacheEntry entry;
-        entry.generation = ++m_codeBlockGeneration;
-        it = m_codeBlockCache.insert(key, entry);
+        entry.generation = ++d->m_codeBlockGeneration;
+        it = d->m_codeBlockCache.insert(key, entry);
         const quint64 generation = entry.generation;
         // Any thread, at most once: only deliverCodeBlock touches the cache
         // or a block, back on this object's thread while the editor lives.
-        rendererIt.value()(language, source, width, m_theme.isDark() ? QStringLiteral("dark") : QStringLiteral("light"),
-                           [this, lifeline = m_lifeline, key, generation](CodeBlockResult result) {
+        rendererIt.value()(language, source, width, d->m_theme.isDark() ? QStringLiteral("dark") : QStringLiteral("light"),
+                           [this, lifeline = d->m_lifeline, key, generation](CodeBlockResult result) {
                                lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
                                    deliverCodeBlock(key, generation, std::move(result));
                                });
@@ -91,8 +92,8 @@ bool MarkdownEditor::layoutPluginCode(BlockView &view)
 
 void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, CodeBlockResult result)
 {
-    auto it = m_codeBlockCache.find(key);
-    if (it == m_codeBlockCache.end() || it->generation != generation)
+    auto it = d->m_codeBlockCache.find(key);
+    if (it == d->m_codeBlockCache.end() || it->generation != generation)
         return;
     it->pending = false;
     if (result.isMarkdown) {
@@ -103,7 +104,7 @@ void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, Co
     }
 
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (block.codeBlockKey != key)
             continue;
         block.layout.reset();

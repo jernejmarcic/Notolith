@@ -18,6 +18,7 @@ add_library(noteAppC_editor STATIC
     HtmlEdit.cpp
     MarkdownEditor.cpp
     MarkdownEditor.h
+    MarkdownEditor_p.h
     MermaidBlock.cpp
     MermaidBlock.h
     NotebookBlock.cpp

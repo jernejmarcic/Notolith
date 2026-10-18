@@ -12,6 +12,7 @@
 /// that conversion is not built.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -60,12 +61,12 @@ QByteArray imageBytes(const QMimeData *mime)
 
 void MarkdownEditor::setAttachmentSaver(AttachmentSaver saver)
 {
-    m_attachmentSaver = std::move(saver);
+    d->m_attachmentSaver = std::move(saver);
 }
 
 void MarkdownEditor::setFileImporter(FileImporter importer)
 {
-    m_fileImporter = std::move(importer);
+    d->m_fileImporter = std::move(importer);
 }
 
 void MarkdownEditor::insertMimeData(const QMimeData *mime)
@@ -74,8 +75,8 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
         return;
 
     if (const QByteArray bytes = imageBytes(mime); !bytes.isEmpty()) {
-        if (m_attachmentSaver) {
-            const QString link = m_attachmentSaver(pastedImageName(), bytes);
+        if (d->m_attachmentSaver) {
+            const QString link = d->m_attachmentSaver(pastedImageName(), bytes);
             if (!link.isEmpty())
                 insertText(cellSafe(link));
         }
@@ -89,8 +90,8 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
             if (!url.isLocalFile())
                 continue;
             const QString path = url.toLocalFile();
-            if (m_fileImporter) {
-                const QString link = m_fileImporter(path);
+            if (d->m_fileImporter) {
+                const QString link = d->m_fileImporter(path);
                 if (!link.isEmpty())
                     parts << link;
             } else {
@@ -113,7 +114,7 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
 void MarkdownEditor::dragEnterEvent(QDragEnterEvent *event)
 {
     const QMimeData *mime = event->mimeData();
-    if (m_mode == Mode::Reading || !mime
+    if (d->m_mode == Mode::Reading || !mime
         || !(mime->hasUrls() || mime->hasText() || mime->hasImage()))
         return;
     event->acceptProposedAction();
@@ -121,7 +122,7 @@ void MarkdownEditor::dragEnterEvent(QDragEnterEvent *event)
 
 void MarkdownEditor::dragMoveEvent(QDragMoveEvent *event)
 {
-    if (m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Reading)
         return;
     event->acceptProposedAction();
     // The drop indicator caret: the real caret, moved to track the pointer.
@@ -132,7 +133,7 @@ void MarkdownEditor::dragMoveEvent(QDragMoveEvent *event)
 
 void MarkdownEditor::dropEvent(QDropEvent *event)
 {
-    if (m_mode == Mode::Reading) {
+    if (d->m_mode == Mode::Reading) {
         event->ignore();
         return;
     }

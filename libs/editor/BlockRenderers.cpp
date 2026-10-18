@@ -8,6 +8,7 @@
 /// `applyEdit`", and the engine file is long enough already.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Frontmatter.h"
 #include "Icons.h"
@@ -74,7 +75,7 @@ QString oneLine(const QString &value)
 bool MarkdownEditor::isFoldable(const BlockView &view) const
 {
     if (view.span.kind == BlockSpan::Kind::Frontmatter)
-        return m_mode != Mode::Source && !m_properties.isEmpty();
+        return d->m_mode != Mode::Source && !d->m_properties.isEmpty();
     if (view.callout)
         return view.callout->foldable;
     return view.options != nullptr;
@@ -93,7 +94,7 @@ bool MarkdownEditor::defaultFoldOf(const BlockView &view) const
 
 void MarkdownEditor::setFolded(const BlockView &view, bool folded)
 {
-    m_folds.insert(firstPiece(view).span.range.start, folded);
+    d->m_folds.insert(firstPiece(view).span.range.start, folded);
     invalidateBlock(blockAt(view.span.range.start)); // what follows it moves, nothing else changes
     updateLayout();
     viewport()->update();
@@ -102,9 +103,9 @@ void MarkdownEditor::setFolded(const BlockView &view, bool folded)
 void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
 {
     // A nested callout is not a block, so it is looked up by its own start.
-    for (const CalloutSpan &callout : m_decorations.callouts) {
+    for (const CalloutSpan &callout : d->m_decorations.callouts) {
         if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset) {
-            m_folds.insert(sourceOffset, !m_folds.value(sourceOffset, callout.collapsed));
+            d->m_folds.insert(sourceOffset, !d->m_folds.value(sourceOffset, callout.collapsed));
             invalidateBlock(blockAt(sourceOffset)); // it lives inside its parent's layout
             updateLayout();
             viewport()->update();
@@ -112,23 +113,23 @@ void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
         }
     }
     const qsizetype index = blockAt(sourceOffset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
-    const BlockView &view = m_blocks.at(size_t(index));
-    setFolded(view, !m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view)));
+    const BlockView &view = d->m_blocks.at(size_t(index));
+    setFolded(view, !d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view)));
 }
 
 bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
 {
-    for (const CalloutSpan &callout : m_decorations.callouts) {
+    for (const CalloutSpan &callout : d->m_decorations.callouts) {
         if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset)
-            return m_folds.value(sourceOffset, callout.collapsed);
+            return d->m_folds.value(sourceOffset, callout.collapsed);
     }
     const qsizetype index = blockAt(sourceOffset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return false;
-    const BlockView &view = m_blocks.at(size_t(index));
-    return m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
+    const BlockView &view = d->m_blocks.at(size_t(index));
+    return d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
 }
 
 QRectF MarkdownEditor::foldHandleRect(const BlockView &view, qreal left, qreal top) const
@@ -159,7 +160,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
     const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
 
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         const qreal top = view.y - scroll;
         if (top + view.height < 0)
             continue;
@@ -253,13 +254,13 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 if (!tab.rect.contains(point))
                     continue;
                 if (!tab.selected)
-                    selectCodeTab(m_tabGroups.at(size_t(view.tabGroup)).span.start, tab.member);
+                    selectCodeTab(d->m_tabGroups.at(size_t(view.tabGroup)).span.start, tab.member);
                 return true; // a click on the strip never moves the caret into the group
             }
         }
 
-        if (view.span.kind == BlockSpan::Kind::Frontmatter && m_mode != Mode::Source
-            && !m_properties.isEmpty()) {
+        if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source
+            && !d->m_properties.isEmpty()) {
             const QRectF handle = foldHandleRect(view, left, top);
             // Folded, the single row is the only thing left to click.
             if (touchable(handle, 6).contains(point)
@@ -275,7 +276,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                     }
                     continue;
                 }
-                const qsizetype at = m_properties.at(row.property).range.start;
+                const qsizetype at = d->m_properties.at(row.property).range.start;
                 for (int i = 0; i < row.removers.size(); ++i) {
                     if (touchable(row.removers.at(i).translated(left, top)).contains(point)) {
                         removeListItemAt(at, i);
@@ -291,7 +292,7 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
                 }
                 // The value column of a scalar: click to edit it in place.
                 const QRectF value = row.rect.translated(left, top).adjusted(kKeyColumn, 0, 0, 0);
-                if (m_properties.at(row.property).type != Property::Type::List
+                if (d->m_properties.at(row.property).type != Property::Type::List
                     && value.contains(point) && editPropertyAt(at))
                     return true;
             }
@@ -321,7 +322,7 @@ qreal MarkdownEditor::propertyRowHeight() const
 bool MarkdownEditor::layoutProperties(BlockView &view)
 {
     view.propertyRows.clear();
-    if (m_properties.isEmpty())
+    if (d->m_properties.isEmpty())
         return false; // nothing to show: fall back to the hidden YAML
 
     // The YAML itself is syntax either way, so the table is drawn over the gap
@@ -330,13 +331,13 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
     QList<Range> hidden;
     hidden.reserve(view.lastSyntax - view.firstSyntax);
     for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
-        hidden.append(m_decorations.syntax.at(i));
-    view.map = DisplayMap::build(m_text, view.span.range, hidden);
+        hidden.append(d->m_decorations.syntax.at(i));
+    view.map = DisplayMap::build(d->m_text, view.span.range, hidden);
     view.layout.reset();
     view.cells.clear();
 
     const qreal rowHeight = propertyRowHeight();
-    view.folded = m_folds.value(view.span.range.start, false);
+    view.folded = d->m_folds.value(view.span.range.start, false);
     if (view.folded) {
         view.height = rowHeight;
         view.laidOut = true;
@@ -345,13 +346,13 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
 
     // One metrics object for the whole table: building one per row is the bug
     // that cost 375 ms once.
-    const QFontMetricsF metrics(m_theme.textFont());
+    const QFontMetricsF metrics(d->m_theme.textFont());
     const qreal chipHeight = metrics.height() + 4;
     const qreal valueWidth = qMax<qreal>(80, contentWidth() - kKeyColumn);
 
     qreal y = 0;
-    for (int i = 0; i < m_properties.size(); ++i) {
-        const Property &property = m_properties.at(i);
+    for (int i = 0; i < d->m_properties.size(); ++i) {
+        const Property &property = d->m_properties.at(i);
         PropertyRow row;
         row.property = i;
         qreal height = rowHeight;
@@ -362,7 +363,7 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
         } else if (property.type == Property::Type::List) {
             // Only a list that can be rewritten gets the controls to change it,
             // and not in reading view, which is for reading - and for print.
-            const bool editable = m_mode != Mode::Reading && listIsRewritable(property);
+            const bool editable = d->m_mode != Mode::Reading && listIsRewritable(property);
             qreal x = kKeyColumn;
             qreal chipTop = y + (rowHeight - chipHeight) / 2;
             for (const QString &value : property.values) {
@@ -403,11 +404,11 @@ bool MarkdownEditor::layoutProperties(BlockView &view)
 void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, qreal left,
                                      qreal top) const
 {
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
-    const QColor normal = m_theme.color(QStringLiteral("--text-normal"));
-    const QColor border = m_theme.color(QStringLiteral("--background-modifier-border"));
-    const QColor chip = m_theme.color(QStringLiteral("--background-modifier-hover"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
+    const QColor normal = d->m_theme.color(QStringLiteral("--text-normal"));
+    const QColor border = d->m_theme.color(QStringLiteral("--background-modifier-border"));
+    const QColor chip = d->m_theme.color(QStringLiteral("--background-modifier-hover"));
 
     if (!view.laidOut)
         return;
@@ -415,7 +416,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
     painter.save();
     paintFoldArrow(painter, foldHandleRect(view, left, top), view.folded, faint);
 
-    const QFont textFont = m_theme.textFont();
+    const QFont textFont = d->m_theme.textFont();
     const QFontMetricsF metrics(textFont);
     painter.setFont(textFont);
 
@@ -423,7 +424,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
         painter.setPen(faint);
         painter.drawText(QRectF(left, top, contentWidth(), view.height),
                          Qt::AlignVCenter | Qt::AlignLeft,
-                         tr("%1 properties").arg(m_properties.size()));
+                         tr("%1 properties").arg(d->m_properties.size()));
         painter.setPen(QPen(border, 1));
         painter.drawLine(QPointF(left, top + view.height),
                          QPointF(left + contentWidth(), top + view.height));
@@ -433,7 +434,7 @@ void MarkdownEditor::paintProperties(QPainter &painter, const BlockView &view, q
 
     const qreal iconSize = qMin<qreal>(15, metrics.height());
     for (const PropertyRow &row : view.propertyRows) {
-        const Property &property = m_properties.at(row.property);
+        const Property &property = d->m_properties.at(row.property);
         const QRectF rect = row.rect.translated(left, top);
         const qreal keyTop = rect.top() + (propertyRowHeight() - metrics.height()) / 2;
 
@@ -498,8 +499,8 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
 
     painter.save();
     if (done) {
-        painter.fillPath(rounded, m_theme.color(QStringLiteral("--interactive-accent")));
-        painter.setPen(QPen(m_theme.color(QStringLiteral("--text-on-accent")), 2, Qt::SolidLine,
+        painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--interactive-accent")));
+        painter.setPen(QPen(d->m_theme.color(QStringLiteral("--text-on-accent")), 2, Qt::SolidLine,
                             Qt::RoundCap, Qt::RoundJoin));
         // A tick, drawn rather than shipped as an icon so it scales with the
         // font it sits beside.
@@ -510,7 +511,7 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
         }));
     } else {
         painter.setPen(
-            QPen(m_theme.color(QStringLiteral("--background-modifier-border-hover")), 1.5));
+            QPen(d->m_theme.color(QStringLiteral("--background-modifier-border-hover")), 1.5));
         painter.drawPath(rounded);
     }
     painter.restore();
@@ -531,26 +532,26 @@ Range MarkdownEditor::editableValueOf(const Property &property) const
         return {};
     // One line, key and value, and nothing after it that belongs to the
     // entry: a comment, a block scalar, a flow value run over lines.
-    const qsizetype lineEnd = m_text.indexOf(QLatin1Char('\n'), property.range.start);
+    const qsizetype lineEnd = d->m_text.indexOf(QLatin1Char('\n'), property.range.start);
     if (lineEnd < 0 || lineEnd + 1 != property.range.end)
         return {};
-    const qsizetype colon = m_text.indexOf(QLatin1Char(':'), property.range.start);
+    const qsizetype colon = d->m_text.indexOf(QLatin1Char(':'), property.range.start);
     if (colon < 0 || colon >= lineEnd)
         return {};
 
     if (property.raw.isEmpty() || property.raw.first().isEmpty()) {
         // `key:` with no value yet: it goes after the colon.
-        if (!QStringView(m_text).mid(colon + 1, lineEnd - colon - 1).trimmed().isEmpty())
+        if (!QStringView(d->m_text).mid(colon + 1, lineEnd - colon - 1).trimmed().isEmpty())
             return {};
         return {colon + 1, lineEnd};
     }
     const QString &raw = property.raw.first();
-    const qsizetype at = m_text.indexOf(raw, colon + 1);
+    const qsizetype at = d->m_text.indexOf(raw, colon + 1);
     if (at < 0 || at + raw.size() > lineEnd || raw.contains(QLatin1String(" #")))
         return {};
     // Only blanks may follow; anything else is a part of the line this does
     // not understand, and it is left alone.
-    if (!QStringView(m_text).mid(at + raw.size(), lineEnd - at - raw.size()).trimmed().isEmpty())
+    if (!QStringView(d->m_text).mid(at + raw.size(), lineEnd - at - raw.size()).trimmed().isEmpty())
         return {};
     return {at, at + raw.size()};
 }
@@ -559,13 +560,13 @@ bool MarkdownEditor::listIsRewritable(const Property &property) const
 {
     if (property.type != Property::Type::List || !property.range.isValid())
         return false;
-    const QStringView entry = QStringView(m_text).mid(property.range.start, property.range.length());
+    const QStringView entry = QStringView(d->m_text).mid(property.range.start, property.range.length());
     return Frontmatter::rewriteList(entry, property.raw).has_value();
 }
 
 const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qreal *top) const
 {
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         if (view.span.kind != BlockSpan::Kind::Frontmatter || view.propertyRows.empty()
             || view.folded)
             continue;
@@ -581,8 +582,8 @@ const MarkdownEditor::PropertyRow *MarkdownEditor::propertyRowOf(int index, qrea
 
 int MarkdownEditor::propertyAt(qsizetype sourceOffset) const
 {
-    for (int i = 0; i < m_properties.size(); ++i) {
-        if (m_properties.at(i).range.contains(sourceOffset))
+    for (int i = 0; i < d->m_properties.size(); ++i) {
+        if (d->m_properties.at(i).range.contains(sourceOffset))
             return i;
     }
     return -1;
@@ -590,28 +591,28 @@ int MarkdownEditor::propertyAt(qsizetype sourceOffset) const
 
 bool MarkdownEditor::editPropertyAt(qsizetype sourceOffset)
 {
-    if (m_mode == Mode::Source || m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Source || d->m_mode == Mode::Reading)
         return false;
     finishPropertyEdit(true);
     const int index = propertyAt(sourceOffset);
-    if (index < 0 || !editableValueOf(m_properties.at(index)).isValid())
+    if (index < 0 || !editableValueOf(d->m_properties.at(index)).isValid())
         return false;
     qreal top = 0;
     const PropertyRow *row = propertyRowOf(index, &top);
     if (!row)
         return false;
     openPropertyEditor(index, row->rect.translated(contentLeft(), top).adjusted(kKeyColumn - 4, 0, 0, 0),
-                       m_properties.at(index).values.value(0), kEditValue);
+                       d->m_properties.at(index).values.value(0), kEditValue);
     return true;
 }
 
 bool MarkdownEditor::editListItemAt(qsizetype sourceOffset, int item)
 {
-    if (m_mode == Mode::Source || m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Source || d->m_mode == Mode::Reading)
         return false;
     finishPropertyEdit(true);
     const int index = propertyAt(sourceOffset);
-    if (index < 0 || !listIsRewritable(m_properties.at(index)))
+    if (index < 0 || !listIsRewritable(d->m_properties.at(index)))
         return false;
     qreal top = 0;
     const PropertyRow *row = propertyRowOf(index, &top);
@@ -620,17 +621,17 @@ bool MarkdownEditor::editListItemAt(qsizetype sourceOffset, int item)
     // Over the chip, wide enough to type into.
     QRectF cell = row->chips.at(item).translated(contentLeft(), top);
     cell.setWidth(qMax<qreal>(cell.width(), 140));
-    openPropertyEditor(index, cell, m_properties.at(index).values.value(item), item);
+    openPropertyEditor(index, cell, d->m_properties.at(index).values.value(item), item);
     return true;
 }
 
 bool MarkdownEditor::addListItemAt(qsizetype sourceOffset)
 {
-    if (m_mode == Mode::Source || m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Source || d->m_mode == Mode::Reading)
         return false;
     finishPropertyEdit(true);
     const int index = propertyAt(sourceOffset);
-    if (index < 0 || !listIsRewritable(m_properties.at(index)))
+    if (index < 0 || !listIsRewritable(d->m_properties.at(index)))
         return false;
     qreal top = 0;
     const PropertyRow *row = propertyRowOf(index, &top);
@@ -643,22 +644,22 @@ bool MarkdownEditor::addListItemAt(qsizetype sourceOffset)
 bool MarkdownEditor::removeListItemAt(qsizetype sourceOffset, int item)
 {
     const int index = propertyAt(sourceOffset);
-    if (index < 0 || !listIsRewritable(m_properties.at(index))
-        || item < 0 || item >= m_properties.at(index).raw.size())
+    if (index < 0 || !listIsRewritable(d->m_properties.at(index))
+        || item < 0 || item >= d->m_properties.at(index).raw.size())
         return false;
-    QStringList raws = m_properties.at(index).raw;
+    QStringList raws = d->m_properties.at(index).raw;
     raws.removeAt(item);
-    QStringList values = m_properties.at(index).values;
+    QStringList values = d->m_properties.at(index).values;
     values.removeAt(item);
     return replaceListEntry(index, raws, values);
 }
 
 bool MarkdownEditor::replaceListEntry(int index, const QStringList &raws, const QStringList &values)
 {
-    Property &property = m_properties[index];
+    Property &property = d->m_properties[index];
     const Range range = property.range;
     const std::optional<QString> entry = Frontmatter::rewriteList(
-        QStringView(m_text).mid(range.start, range.length()), raws);
+        QStringView(d->m_text).mid(range.start, range.length()), raws);
     if (!entry)
         return false;
     // Before the edit: applying it relays the table out, and the chips are
@@ -666,10 +667,10 @@ bool MarkdownEditor::replaceListEntry(int index, const QStringList &raws, const 
     property.raw = raws;
     property.values = values;
     const qsizetype delta = entry->size() - range.length();
-    const qsizetype anchor = m_anchor >= range.end ? m_anchor + delta : m_anchor;
-    const qsizetype caret = m_cursor >= range.end ? m_cursor + delta : m_cursor;
+    const qsizetype anchor = d->m_anchor >= range.end ? d->m_anchor + delta : d->m_anchor;
+    const qsizetype caret = d->m_cursor >= range.end ? d->m_cursor + delta : d->m_cursor;
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(range.start, range.length(), *entry);
     setSelectionRange(anchor, caret);
     return true;
@@ -680,11 +681,11 @@ void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QSt
 {
     auto *edit = new QLineEdit(viewport());
     edit->setFrame(false);
-    edit->setFont(m_theme.textFont());
+    edit->setFont(d->m_theme.textFont());
     QPalette palette = edit->palette();
-    palette.setColor(QPalette::Base, m_theme.color(QStringLiteral("--background-modifier-hover")));
-    palette.setColor(QPalette::Text, m_theme.color(QStringLiteral("--text-normal")));
-    palette.setColor(QPalette::Highlight, m_theme.color(QStringLiteral("--interactive-accent")));
+    palette.setColor(QPalette::Base, d->m_theme.color(QStringLiteral("--background-modifier-hover")));
+    palette.setColor(QPalette::Text, d->m_theme.color(QStringLiteral("--text-normal")));
+    palette.setColor(QPalette::Highlight, d->m_theme.color(QStringLiteral("--interactive-accent")));
     edit->setPalette(palette);
     edit->setGeometry(cell.toRect());
     edit->setText(text);
@@ -692,9 +693,9 @@ void MarkdownEditor::openPropertyEditor(int index, const QRectF &cell, const QSt
     edit->installEventFilter(this);
     // Enter, or the focus going elsewhere, keeps what was typed.
     connect(edit, &QLineEdit::editingFinished, this, [this] { finishPropertyEdit(true); });
-    m_propertyEdit = edit;
-    m_editedKey = m_properties.at(index).key;
-    m_editedItem = item;
+    d->m_propertyEdit = edit;
+    d->m_editedKey = d->m_properties.at(index).key;
+    d->m_editedItem = item;
     edit->show();
     edit->setFocus();
 }
@@ -704,11 +705,11 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
     // Every site that ends a property edit (a mode change, a new note, a scroll,
     // a resize) ends an open callout title the same way.
     finishCalloutTitleEdit(commit);
-    if (!m_propertyEdit)
+    if (!d->m_propertyEdit)
         return;
     // Cleared first: hiding the editor moves the focus, which finishes it again.
-    QLineEdit *edit = m_propertyEdit;
-    m_propertyEdit = nullptr;
+    QLineEdit *edit = d->m_propertyEdit;
+    d->m_propertyEdit = nullptr;
     const QString typed = edit->text();
     edit->removeEventFilter(this);
     edit->disconnect(this);
@@ -719,28 +720,28 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
     if (!commit)
         return;
     // By key, not by index: a reparse may have renumbered the properties.
-    const auto property = std::find_if(m_properties.begin(), m_properties.end(),
+    const auto property = std::find_if(d->m_properties.begin(), d->m_properties.end(),
                                        [this](const Property &candidate) {
-                                           return candidate.key == m_editedKey;
+                                           return candidate.key == d->m_editedKey;
                                        });
-    if (property == m_properties.end())
+    if (property == d->m_properties.end())
         return;
-    if (m_editedItem != kEditValue) {
+    if (d->m_editedItem != kEditValue) {
         const std::optional<QString> item = Frontmatter::scalarFor(typed, Property::Type::Text);
         if (typed.trimmed().isEmpty() || !item || !listIsRewritable(*property))
             return; // an item emptied out is removed with its cross, not here
         QStringList raws = property->raw;
         QStringList values = property->values;
-        if (m_editedItem == kEditNewItem) {
+        if (d->m_editedItem == kEditNewItem) {
             raws << *item;
             values << typed.trimmed();
-        } else if (m_editedItem < raws.size() && typed.trimmed() != values.at(m_editedItem)) {
-            raws[m_editedItem] = *item;
-            values[m_editedItem] = typed.trimmed();
+        } else if (d->m_editedItem < raws.size() && typed.trimmed() != values.at(d->m_editedItem)) {
+            raws[d->m_editedItem] = *item;
+            values[d->m_editedItem] = typed.trimmed();
         } else {
             return;
         }
-        replaceListEntry(int(property - m_properties.begin()), raws, values);
+        replaceListEntry(int(property - d->m_properties.begin()), raws, values);
         return;
     }
     if (typed == property->values.value(0))
@@ -753,10 +754,10 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
         property->raw.isEmpty() || property->raw.first().isEmpty() ? QLatin1Char(' ') + *yaml : *yaml;
 
     const qsizetype delta = written.size() - value.length();
-    const qsizetype anchor = m_anchor > value.start ? m_anchor + delta : m_anchor;
-    const qsizetype caret = m_cursor > value.start ? m_cursor + delta : m_cursor;
+    const qsizetype anchor = d->m_anchor > value.start ? d->m_anchor + delta : d->m_anchor;
+    const qsizetype caret = d->m_cursor > value.start ? d->m_cursor + delta : d->m_cursor;
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(value.start, value.length(), written);
     property->values = QStringList{typed.trimmed()};
     property->raw = QStringList{*yaml};
@@ -765,8 +766,8 @@ void MarkdownEditor::finishPropertyEdit(bool commit)
 
 bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
 {
-    const bool title = watched == m_calloutTitleEdit;
-    if ((title || watched == m_propertyEdit) && event->type() == QEvent::KeyPress) {
+    const bool title = watched == d->m_calloutTitleEdit;
+    if ((title || watched == d->m_propertyEdit) && event->type() == QEvent::KeyPress) {
         // Handled here, not left to QLineEdit: it lets Return go on to its
         // parent, and the editor would type it into the note.
         switch (static_cast<QKeyEvent *>(event)->key()) {
@@ -786,9 +787,9 @@ bool MarkdownEditor::eventFilter(QObject *watched, QEvent *event)
 
 void MarkdownEditor::toggleProperty(int index)
 {
-    if (index < 0 || index >= m_properties.size())
+    if (index < 0 || index >= d->m_properties.size())
         return;
-    Property &property = m_properties[index];
+    Property &property = d->m_properties[index];
     // Only a plain `true`/`false` scalar round trips safely. Anything else -
     // a quoted value, a nested map, an anchor - stays read-only rather than
     // risk rewriting bytes nobody asked about.
@@ -800,10 +801,10 @@ void MarkdownEditor::toggleProperty(int index)
         && raw.compare(QLatin1String("false"), Qt::CaseInsensitive) != 0)
         return;
 
-    const qsizetype colon = m_text.indexOf(QLatin1Char(':'), property.range.start);
+    const qsizetype colon = d->m_text.indexOf(QLatin1Char(':'), property.range.start);
     if (colon < 0 || colon >= property.range.end)
         return;
-    const qsizetype at = m_text.indexOf(raw, colon);
+    const qsizetype at = d->m_text.indexOf(raw, colon);
     if (at < 0 || at + raw.size() > property.range.end)
         return;
 
@@ -813,11 +814,11 @@ void MarkdownEditor::toggleProperty(int index)
     // Ticking a box must not take the caret with it; it is only ever a
     // character or two away from where it was.
     const qsizetype delta = written.size() - raw.size();
-    const qsizetype anchor = m_anchor > at ? m_anchor + delta : m_anchor;
-    const qsizetype caret = m_cursor > at ? m_cursor + delta : m_cursor;
+    const qsizetype anchor = d->m_anchor > at ? d->m_anchor + delta : d->m_anchor;
+    const qsizetype caret = d->m_cursor > at ? d->m_cursor + delta : d->m_cursor;
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(at, raw.size(), written);
     // The table repaints now, on the buffer; the parse behind the debounce
     // will say the same thing in a moment.
@@ -832,7 +833,7 @@ const CodeOptions *MarkdownEditor::codeOptionsFor(const BlockView &view) const
 {
     // Every piece of a long fence takes the options its first line declares.
     const qsizetype start = firstPiece(view).span.range.start;
-    for (const CodeOptions &options : m_decorations.codeOptions) {
+    for (const CodeOptions &options : d->m_decorations.codeOptions) {
         if (options.block.start == start)
             return &options;
     }
@@ -867,9 +868,9 @@ QString MarkdownEditor::codeTitleOf(const BlockView &view) const
 QString MarkdownEditor::codeTitleAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return view.span.kind == BlockSpan::Kind::Code && hasCodeHeader(view) ? codeTitleOf(view) : QString();
 }
 
@@ -896,8 +897,8 @@ qreal MarkdownEditor::codeGutterWidth(const BlockView &view) const
     const BlockView &first = firstPiece(view);
     const BlockView &closing = lastPiece(view);
     const int lines = view.pieces > 1
-                          ? int(m_lines.lineAt(closing.span.range.end - 1)
-                                - m_lines.lineAt(first.span.range.start))
+                          ? int(d->m_lines.lineAt(closing.span.range.end - 1)
+                                - d->m_lines.lineAt(first.span.range.start))
                           : int(view.map.text().count(QLatin1Char('\n')));
     const int last = view.options->firstLine + lines;
     return QFontMetricsF(fontFor(view.span)).horizontalAdvance(QLatin1Char('0'))
@@ -965,7 +966,7 @@ void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &vie
         // The icon has to fit the step the indent opened, whatever size the
         // style gives the title - a larger heading font must not push the icon
         // out over the text.
-        const qreal iconSize = qMin(QFontMetricsF(nested.style.titleFont(m_theme)).height(),
+        const qreal iconSize = qMin(QFontMetricsF(nested.style.titleFont(d->m_theme)).height(),
                                     kCalloutIndent - 8);
         const QIcon icon = Icons::icon(nested.style.icon, nested.style.bar, int(iconSize));
         if (!icon.isNull() && title.height() > 0) {
@@ -976,7 +977,7 @@ void MarkdownEditor::paintNestedCallouts(QPainter &painter, const BlockView &vie
         }
         if (nested.span->foldable && title.height() > 0) {
             paintFoldArrow(painter, nestedFoldHandleRect(view, nested, left, top),
-                           m_folds.value(nested.span->range.start, nested.span->collapsed),
+                           d->m_folds.value(nested.span->range.start, nested.span->collapsed),
                            nested.style.bar);
         }
     }
@@ -1003,9 +1004,9 @@ QRectF MarkdownEditor::nestedFoldHandleRect(const BlockView &view, const NestedC
 void MarkdownEditor::paintNestedCodePanels(QPainter &painter, const BlockView &view, qreal left,
                                            qreal top) const
 {
-    const QColor panelColour = m_theme.color(QStringLiteral("--background-primary-alt"));
+    const QColor panelColour = d->m_theme.color(QStringLiteral("--background-primary-alt"));
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
-        const StyleSpan &span = m_decorations.styles.at(i);
+        const StyleSpan &span = d->m_decorations.styles.at(i);
         if (span.kind != StyleSpan::Kind::CodeBlock || !span.range.overlaps(view.span.range))
             continue;
         const QRectF band = bandOf(view, span.range);
@@ -1039,7 +1040,7 @@ const CodeFenceSpan *MarkdownEditor::codeFenceOf(const BlockView &view) const
     // Matched by the listing, not the start - md4qt's code item covers the
     // listing alone, so the two ranges agree about the middle and not
     // necessarily about the fences.
-    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    const QList<CodeFenceSpan> &fences = d->m_decorations.codeFences;
     auto it = std::lower_bound(fences.cbegin(), fences.cend(), view.span.range.start,
                                [](const CodeFenceSpan &fence, qsizetype start) {
                                    return fence.block.end <= start;
@@ -1066,15 +1067,15 @@ LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
     const QColor colour = CalloutStyle::parseColor(own.value(QStringLiteral("color")));
     if (colour.isValid())
         style.color = colour;
-    if (m_complexCodeBlocks)
+    if (d->m_complexCodeBlocks)
         style.applyColours(own); // `bg=`, `fg=`, `border=`, `syntax.<capture>=`
     return style;
 }
 
 LanguageStyle MarkdownEditor::styleOfLanguage(const QString &language) const
 {
-    LanguageStyle style = m_languageStyles.resolve(language);
-    if (!m_complexCodeBlocks) {
+    LanguageStyle style = d->m_languageStyles.resolve(language);
+    if (!d->m_complexCodeBlocks) {
         // Off is "as if codeblocks.ini never said any of it".
         style.bg = style.fg = style.border = QColor();
         style.syntax.clear();
@@ -1084,17 +1085,17 @@ LanguageStyle MarkdownEditor::styleOfLanguage(const QString &language) const
 
 bool MarkdownEditor::syntaxMapFor(const LanguageStyle &style, SyntaxMap *out) const
 {
-    if (!m_complexCodeBlocks || (style.syntax.isEmpty() && m_themeSyntax.isEmpty()))
+    if (!d->m_complexCodeBlocks || (style.syntax.isEmpty() && d->m_themeSyntax.isEmpty()))
         return false;
-    *out = SyntaxMap({style.syntax, m_themeSyntax});
+    *out = SyntaxMap({style.syntax, d->m_themeSyntax});
     return !out->isEmpty();
 }
 
 void MarkdownEditor::setComplexCodeBlocks(bool on)
 {
-    if (m_complexCodeBlocks == on)
+    if (d->m_complexCodeBlocks == on)
         return;
-    m_complexCodeBlocks = on;
+    d->m_complexCodeBlocks = on;
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -1114,10 +1115,10 @@ void MarkdownEditor::selectCodeTab(qsizetype sourceOffset, int member)
     const TabGroup *group = tabGroupAt(sourceOffset);
     if (!group || member < 0 || member >= group->count)
         return;
-    m_selectedTabs.insert(group->span.start, member);
+    d->m_selectedTabs.insert(group->span.start, member);
     // Only the group's own blocks change what they show; relaying out the
     // whole note for a tab click is what this used to do.
-    for (BlockView &view : m_blocks) {
+    for (BlockView &view : d->m_blocks) {
         if (view.span.range.start < group->span.start || view.span.range.start >= group->span.end)
             continue;
         view.layout.reset();
@@ -1133,8 +1134,8 @@ void MarkdownEditor::collectTabGroups()
 {
     // Rebuilt once per parse, so layout finds a block's group by binary
     // search instead of scanning every fence for every block.
-    m_tabGroups.clear();
-    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    d->m_tabGroups.clear();
+    const QList<CodeFenceSpan> &fences = d->m_decorations.codeFences;
     for (int i = 0; i < fences.size(); ++i) {
         if (fences.at(i).tabGroup != i)
             continue; // only a group's first member carries its own index
@@ -1146,18 +1147,18 @@ void MarkdownEditor::collectTabGroups()
         group.hiddenEnd = fences.at(end - 1).content.end;
         group.first = i;
         group.count = end - i;
-        m_tabGroups.push_back(group);
+        d->m_tabGroups.push_back(group);
         i = end - 1;
     }
 }
 
 const MarkdownEditor::TabGroup *MarkdownEditor::tabGroupAt(qsizetype source) const
 {
-    auto it = std::upper_bound(m_tabGroups.cbegin(), m_tabGroups.cend(), source,
+    auto it = std::upper_bound(d->m_tabGroups.cbegin(), d->m_tabGroups.cend(), source,
                                [](qsizetype at, const TabGroup &group) {
                                    return at < group.span.start;
                                });
-    if (it == m_tabGroups.cbegin())
+    if (it == d->m_tabGroups.cbegin())
         return nullptr;
     --it;
     return source < it->span.end ? &*it : nullptr;
@@ -1165,31 +1166,31 @@ const MarkdownEditor::TabGroup *MarkdownEditor::tabGroupAt(qsizetype source) con
 
 const MarkdownEditor::TabGroup *MarkdownEditor::caretTabGroup() const
 {
-    if (m_mode != Mode::LivePreview || !m_interacted || m_tabGroups.empty())
+    if (d->m_mode != Mode::LivePreview || !d->m_interacted || d->m_tabGroups.empty())
         return nullptr;
-    if (const TabGroup *group = tabGroupAt(m_cursor))
+    if (const TabGroup *group = tabGroupAt(d->m_cursor))
         return group;
     // Just past the closing fence still counts as inside.
-    const TabGroup *before = m_cursor > 0 ? tabGroupAt(m_cursor - 1) : nullptr;
-    return before && m_cursor == before->span.end ? before : nullptr;
+    const TabGroup *before = d->m_cursor > 0 ? tabGroupAt(d->m_cursor - 1) : nullptr;
+    return before && d->m_cursor == before->span.end ? before : nullptr;
 }
 
 int MarkdownEditor::selectedTabOf(const TabGroup &group) const
 {
-    return qBound(0, m_selectedTabs.value(group.span.start, 0), group.count - 1);
+    return qBound(0, d->m_selectedTabs.value(group.span.start, 0), group.count - 1);
 }
 
 std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &view, qreal left,
                                                             qreal top) const
 {
     std::vector<TabRect> tabs;
-    if (view.tabGroup < 0 || view.tabGroup >= int(m_tabGroups.size()) || view.piece > 0)
+    if (view.tabGroup < 0 || view.tabGroup >= int(d->m_tabGroups.size()) || view.piece > 0)
         return tabs;
-    const TabGroup &group = m_tabGroups.at(size_t(view.tabGroup));
+    const TabGroup &group = d->m_tabGroups.at(size_t(view.tabGroup));
     const int selected = selectedTabOf(group);
 
-    QFont font = m_theme.uiFont();
-    font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+    QFont font = d->m_theme.uiFont();
+    font.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-small")).toInt());
     const QFontMetricsF metrics(font);
     const qreal iconSize = metrics.height();
     const QRectF panel(left - 14, top - 8, contentWidth() + 28, view.height + 16);
@@ -1197,7 +1198,7 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
 
     qreal x = panel.left() + 8;
     for (int i = 0; i < group.count; ++i) {
-        const CodeFenceSpan &fence = m_decorations.codeFences.at(group.first + i);
+        const CodeFenceSpan &fence = d->m_decorations.codeFences.at(group.first + i);
         const LanguageStyle style = styleOfFence(fence);
         TabRect tab;
         tab.member = i;
@@ -1210,7 +1211,7 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
         if (!style.icon.isEmpty())
             tab.icon = Icons::icon(style.icon,
                                    style.color.isValid() ? style.color
-                                                         : m_theme.color(QStringLiteral("--text-muted")),
+                                                         : d->m_theme.color(QStringLiteral("--text-muted")),
                                    int(iconSize));
         const qreal width = 12 + (tab.icon.isNull() ? 0 : iconSize + 5)
                             + metrics.horizontalAdvance(tab.text) + 12;
@@ -1225,9 +1226,9 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
 QRectF MarkdownEditor::selectedTabRectAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     for (const TabRect &tab : tabsOf(view, contentLeft(), view.y - verticalScrollBar()->value())) {
         if (tab.selected)
             return tab.rect;
@@ -1243,8 +1244,8 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
     // an embed's panel is not a listing to copy.
     if (view.piece > 0 || plainSource(view) || view.span.kind != BlockSpan::Kind::Code)
         return label;
-    const bool copied = m_copiedBlock == view.span.range.start;
-    const bool hovered = m_hoveredCodeBlock == view.span.range.start;
+    const bool copied = d->m_copiedBlock == view.span.range.start;
+    const bool hovered = d->m_hoveredCodeBlock == view.span.range.start;
     const bool header = hasCodeHeader(view);
 
     // The copy button. The header already names the block (codeTitleOf), so
@@ -1256,9 +1257,9 @@ MarkdownEditor::CodeLabel MarkdownEditor::codeLabelOf(const BlockView &view, qre
         return label;
     label.text = copied ? tr("Copied") : tr("Copy");
 
-    label.font = m_theme.uiFont();
-    label.font.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
-    label.colour = m_theme.color(QStringLiteral("--text-muted"));
+    label.font = d->m_theme.uiFont();
+    label.font.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    label.colour = d->m_theme.color(QStringLiteral("--text-muted"));
     const QFontMetricsF metrics(label.font);
     const qreal width = metrics.horizontalAdvance(label.text);
 
@@ -1279,7 +1280,7 @@ const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point
 {
     const qreal scroll = verticalScrollBar()->value();
     const qreal left = contentLeft();
-    for (const BlockView &view : m_blocks) {
+    for (const BlockView &view : d->m_blocks) {
         const qreal top = view.y - scroll;
         if (top + view.height < 0)
             continue;
@@ -1301,16 +1302,16 @@ void MarkdownEditor::copyCodeBlock(const BlockView &view)
     // for a fence long enough to be in pieces.
     const Range content{codeContentOf(firstPiece(view), nullptr).start,
                         codeContentOf(lastPiece(view), nullptr).end};
-    QString code = m_text.mid(content.start, content.length());
+    QString code = d->m_text.mid(content.start, content.length());
     if (code.endsWith(QLatin1Char('\n')))
         code.chop(1);
     QGuiApplication::clipboard()->setText(code);
 
-    m_copiedBlock = firstPiece(view).span.range.start;
-    const qsizetype copied = m_copiedBlock;
+    d->m_copiedBlock = firstPiece(view).span.range.start;
+    const qsizetype copied = d->m_copiedBlock;
     QTimer::singleShot(1500, this, [this, copied] {
-        if (m_copiedBlock == copied) {
-            m_copiedBlock = -1;
+        if (d->m_copiedBlock == copied) {
+            d->m_copiedBlock = -1;
             viewport()->update();
         }
     });
@@ -1344,11 +1345,11 @@ QRectF MarkdownEditor::editedListingPanel(const BlockView &view, qreal left, qre
         return fence && block->span.kind == BlockSpan::Kind::Paragraph && block->active
                && block->span.range.overlaps(fence->block);
     };
-    const BlockView *data = m_blocks.data();
+    const BlockView *data = d->m_blocks.data();
     const qsizetype index = &first - data;
     const qsizetype lastIndex = &closing - data;
     const qreal above = index > 0 && showsFence(data + index - 1) ? lineHeightFor(data[index - 1].span) : 0;
-    const qreal below = lastIndex + 1 < qsizetype(m_blocks.size()) && showsFence(data + lastIndex + 1)
+    const qreal below = lastIndex + 1 < qsizetype(d->m_blocks.size()) && showsFence(data + lastIndex + 1)
                             ? lineHeightFor(data[lastIndex + 1].span)
                             : 0;
     if (fenceLine)
@@ -1367,7 +1368,7 @@ void MarkdownEditor::paintEditedListingPanel(QPainter &painter, const BlockView 
     const LanguageStyle style = codeStyleOf(view);
     painter.fillPath(rounded, style.bg.isValid()
                                   ? style.bg
-                                  : m_theme.color(QStringLiteral("--background-primary-alt")));
+                                  : d->m_theme.color(QStringLiteral("--background-primary-alt")));
     if (style.border.isValid()) {
         painter.setPen(QPen(style.border, 1));
         painter.setBrush(Qt::NoBrush);
@@ -1400,7 +1401,7 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
     const LanguageStyle style = codeStyleOf(view);
     painter.fillPath(rounded, style.bg.isValid()
                                   ? style.bg
-                                  : m_theme.color(QStringLiteral("--background-primary-alt")));
+                                  : d->m_theme.color(QStringLiteral("--background-primary-alt")));
 
     if (isFirst)
         paintCodeHeader(painter, view, left, top, panel);
@@ -1409,11 +1410,11 @@ void MarkdownEditor::paintCodeChrome(QPainter &painter, const BlockView &view, q
 
     const qreal caption = codeCaptionHeight(view);
     if (caption > 0) {
-        QFont captionFont = m_theme.textFont();
-        captionFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+        QFont captionFont = d->m_theme.textFont();
+        captionFont.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-small")).toInt());
         captionFont.setItalic(true);
         painter.setFont(captionFont);
-        painter.setPen(m_theme.color(QStringLiteral("--text-muted")));
+        painter.setPen(d->m_theme.color(QStringLiteral("--text-muted")));
         painter.drawText(QRectF(left, panel.bottom() - 8 - caption, contentWidth(), caption),
                          Qt::AlignVCenter | Qt::AlignLeft, view.options->caption);
     }
@@ -1437,10 +1438,10 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
         return;
     }
 
-    QFont badgeFont = m_theme.uiFont();
-    badgeFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
-    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
+    QFont badgeFont = d->m_theme.uiFont();
+    badgeFont.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
 
     // The header strip: the block's name on the left, the copy button and run
     // control on the right, and a hairline under it when there is a listing
@@ -1448,11 +1449,11 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
     const QRectF header(panel.left(), panel.top(), panel.width(), view.textTop + 8);
     QPainterPath headerPath;
     headerPath.addRoundedRect(header, 6, 6);
-    painter.fillPath(headerPath, m_theme.color(QStringLiteral("--background-secondary")));
+    painter.fillPath(headerPath, d->m_theme.color(QStringLiteral("--background-secondary")));
     if (!view.folded) {
         painter.fillRect(QRectF(header.left(), header.bottom() - 4, header.width(), 4),
-                         m_theme.color(QStringLiteral("--background-secondary")));
-        painter.setPen(QPen(m_theme.color(QStringLiteral("--background-modifier-border")), 1));
+                         d->m_theme.color(QStringLiteral("--background-secondary")));
+        painter.setPen(QPen(d->m_theme.color(QStringLiteral("--background-modifier-border")), 1));
         painter.drawLine(header.bottomLeft(), header.bottomRight());
     }
 
@@ -1462,14 +1463,14 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
         // sides, with the hairline under the strip left out beneath it. The
         // others are muted text on the strip. The tabs own the header, so a
         // `#|` title has nowhere to go here and is not drawn.
-        QFont tabFont = m_theme.uiFont();
-        tabFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+        QFont tabFont = d->m_theme.uiFont();
+        tabFont.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-small")).toInt());
         painter.setFont(tabFont);
-        const QColor normal = m_theme.color(QStringLiteral("--text-normal"));
+        const QColor normal = d->m_theme.color(QStringLiteral("--text-normal"));
         const QColor panelColour = codeStyleOf(view).bg.isValid()
                                        ? codeStyleOf(view).bg
-                                       : m_theme.color(QStringLiteral("--background-primary-alt"));
-        const QColor border = m_theme.color(QStringLiteral("--background-modifier-border"));
+                                       : d->m_theme.color(QStringLiteral("--background-primary-alt"));
+        const QColor border = d->m_theme.color(QStringLiteral("--background-modifier-border"));
         for (const TabRect &tab : tabsOf(view, left, top)) {
             if (tab.selected) {
                 painter.save();
@@ -1510,8 +1511,8 @@ void MarkdownEditor::paintCodeHeader(QPainter &painter, const BlockView &view, q
 
     // The name: `#| title:`, else the style's (the language, or `name="..."`),
     // with the style's icon in front.
-    QFont titleFont = m_theme.uiFont();
-    titleFont.setPixelSize(m_theme.value(QStringLiteral("--font-ui-small")).toInt());
+    QFont titleFont = d->m_theme.uiFont();
+    titleFont.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-small")).toInt());
     painter.setFont(titleFont);
     QRectF titleRect(header.left() + 14, header.top(), header.width() - 36 - kFoldHandle, header.height());
     QColor titleColour = muted;
@@ -1546,15 +1547,15 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
         return;
     int sourceLine = 0;
     if (view.piece > 0) {
-        sourceLine = int(m_lines.lineAt(view.span.range.start)
-                         - m_lines.lineAt(codeContentOf(firstPiece(view), nullptr).start));
+        sourceLine = int(d->m_lines.lineAt(view.span.range.start)
+                         - d->m_lines.lineAt(codeContentOf(firstPiece(view), nullptr).start));
     }
 
     // `--text-highlight-bg` is meant for a run of words; a whole row of it
     // would drown the listing, so it goes on at a fraction of its alpha.
     QColor tint = findHighlightColor();
-    tint.setAlphaF(m_theme.isDark() ? 0.13f : 0.22f);
-    const QColor faint = m_theme.color(QStringLiteral("--text-faint"));
+    tint.setAlphaF(d->m_theme.isDark() ? 0.13f : 0.22f);
+    const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
 
     const qreal textTop = top + view.textTop;
     const qreal gutter = codeGutterWidth(view);
@@ -1564,7 +1565,7 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
         const QTextLine line = view.layout->lineAt(i);
         const qsizetype start = view.map.toSource(line.textStart());
         const bool wrapped = previousStart >= 0
-                             && !QStringView(m_text)
+                             && !QStringView(d->m_text)
                                      .mid(previousStart, start - previousStart)
                                      .contains(QLatin1Char('\n'));
         if (i > 0 && !wrapped)

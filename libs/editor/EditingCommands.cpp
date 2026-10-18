@@ -8,6 +8,7 @@
 /// and the decoration pass sees exactly one edit.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Parser.h"
 #include "TableFormat.h"
@@ -221,20 +222,20 @@ RunLine classify(QStringView line, const ListLine &base)
 
 void MarkdownEditor::setSelectionRange(qsizetype anchor, qsizetype cursor)
 {
-    m_anchor = qBound<qsizetype>(0, anchor, m_text.size());
-    m_cursor = qBound<qsizetype>(0, cursor, m_text.size());
-    m_activeBlock = blockAt(m_cursor);
-    m_goalX = -1;
+    d->m_anchor = qBound<qsizetype>(0, anchor, d->m_text.size());
+    d->m_cursor = qBound<qsizetype>(0, cursor, d->m_text.size());
+    d->m_activeBlock = blockAt(d->m_cursor);
+    d->m_goalX = -1;
     updateLayout();
     ensureCursorVisible();
-    m_cursorOn = true;
+    d->m_cursorOn = true;
     viewport()->update();
-    emit cursorMoved(m_cursor);
+    emit cursorMoved(d->m_cursor);
 }
 
 MarkdownEditor::MetaJump MarkdownEditor::selectMetaNote(int direction, int *index, int *count)
 {
-    const QList<Range> &runs = m_decorations.metaNotes;
+    const QList<Range> &runs = d->m_decorations.metaNotes;
     if (count)
         *count = int(runs.size());
     if (runs.isEmpty())
@@ -273,7 +274,7 @@ void MarkdownEditor::selectRange(const Range &range)
 
 bool MarkdownEditor::handleAutoPair(QChar typed)
 {
-    if (!m_autoPairs || m_mode == Mode::Reading)
+    if (!d->m_autoPairs || d->m_mode == Mode::Reading)
         return false;
 
     // A selection is wrapped, never replaced - and it stays selected, so a
@@ -285,17 +286,17 @@ bool MarkdownEditor::handleAutoPair(QChar typed)
         if (close.isNull())
             return false;
         pushUndo();
-        m_lastEdit.invalidate();
+        d->m_lastEdit.invalidate();
         applyEdit(selected.start, selected.length(),
-                  typed + m_text.mid(selected.start, selected.length()) + close);
+                  typed + d->m_text.mid(selected.start, selected.length()) + close);
         setSelectionRange(selected.start + 1, selected.start + 1 + selected.length());
         return true;
     }
 
     // Typing the closer that is already there steps over it.
     static const QString closers = QStringLiteral(")]}\"'");
-    if (closers.contains(typed) && m_cursor < m_text.size() && m_text.at(m_cursor) == typed) {
-        moveCursor(m_cursor + 1, false);
+    if (closers.contains(typed) && d->m_cursor < d->m_text.size() && d->m_text.at(d->m_cursor) == typed) {
+        moveCursor(d->m_cursor + 1, false);
         return true;
     }
 
@@ -306,19 +307,19 @@ bool MarkdownEditor::handleAutoPair(QChar typed)
     // CodeMirror's rule, which is what Obsidian runs: close only when what
     // follows can take a closing bracket, so "(" before a word stays alone.
     static const QString closeBefore = QStringLiteral(")]}:;>");
-    const QChar next = m_cursor < m_text.size() ? m_text.at(m_cursor) : QChar();
+    const QChar next = d->m_cursor < d->m_text.size() ? d->m_text.at(d->m_cursor) : QChar();
     if (!(next.isNull() || next.isSpace() || closeBefore.contains(next)))
         return false;
     // A quote is its own closer, so it must never open inside a word:
     // "don't" would otherwise become "don''t".
     if (typed == close) {
-        const QChar previous = m_cursor > 0 ? m_text.at(m_cursor - 1) : QChar();
+        const QChar previous = d->m_cursor > 0 ? d->m_text.at(d->m_cursor - 1) : QChar();
         if (previous.isLetterOrNumber() || previous == typed)
             return false;
     }
 
     pushUndo();
-    const qsizetype at = m_cursor;
+    const qsizetype at = d->m_cursor;
     applyEdit(at, 0, QString(typed) + close);
     setSelectionRange(at + 1, at + 1);
     return true;
@@ -326,17 +327,17 @@ bool MarkdownEditor::handleAutoPair(QChar typed)
 
 bool MarkdownEditor::deleteAutoPair()
 {
-    if (!m_autoPairs || m_mode == Mode::Reading || selection().length() > 0 || m_cursor <= 0
-        || m_cursor >= m_text.size())
+    if (!d->m_autoPairs || d->m_mode == Mode::Reading || selection().length() > 0 || d->m_cursor <= 0
+        || d->m_cursor >= d->m_text.size())
         return false;
 
-    const QChar open = m_text.at(m_cursor - 1);
+    const QChar open = d->m_text.at(d->m_cursor - 1);
     const QChar close = pairCloser(open, false);
-    if (close.isNull() || m_text.at(m_cursor) != close)
+    if (close.isNull() || d->m_text.at(d->m_cursor) != close)
         return false;
 
     pushUndo();
-    applyEdit(m_cursor - 1, 2, QString());
+    applyEdit(d->m_cursor - 1, 2, QString());
     return true;
 }
 
@@ -394,14 +395,14 @@ bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
     // ponytail: only that run (at most 100 lines) is read, so a fence typed
     // above a blank line the caret has since crossed is missed until the parse
     // lands; ``` and ~~~ are not told apart.
-    const QStringView text(m_text);
+    const QStringView text(d->m_text);
     qsizetype oldest = -1;
     int fenceLines = 0;
     bool unseen = false;
     constexpr int kLinesLooked = 100; // a 5 000-line listing is not read to its top
     int looked = 0;
-    for (qsizetype lineStart = lineStartOf(m_text, offset); lineStart > 0 && looked++ < kLinesLooked;) {
-        const qsizetype above = lineStartOf(m_text, lineStart - 1);
+    for (qsizetype lineStart = lineStartOf(d->m_text, offset); lineStart > 0 && looked++ < kLinesLooked;) {
+        const qsizetype above = lineStartOf(d->m_text, lineStart - 1);
         const qsizetype lineEnd = lineStart - 1;
         const QStringView line = text.mid(above, lineEnd - above);
         if (line.trimmed().isEmpty())
@@ -409,7 +410,7 @@ bool MarkdownEditor::inCodeFenceAt(qsizetype offset) const
         if (isFenceLine(line)) {
             oldest = above;
             ++fenceLines;
-            unseen = unseen || std::none_of(m_decorations.codeFences.cbegin(), m_decorations.codeFences.cend(),
+            unseen = unseen || std::none_of(d->m_decorations.codeFences.cbegin(), d->m_decorations.codeFences.cend(),
                                             [&](const CodeFenceSpan &fence) {
                                                 return fence.block.start == above || fence.block.end == lineEnd;
                                             });
@@ -425,7 +426,7 @@ bool MarkdownEditor::decoratedFenceAt(qsizetype offset) const
 {
     // Sorted by start, and a note can hold thousands: the last fence that
     // begins at or before the offset is the only one that can hold it.
-    const QList<CodeFenceSpan> &fences = m_decorations.codeFences;
+    const QList<CodeFenceSpan> &fences = d->m_decorations.codeFences;
     const auto next = std::upper_bound(fences.cbegin(), fences.cend(), offset,
                                        [](qsizetype at, const CodeFenceSpan &fence) {
                                            return at < fence.block.start;
@@ -457,34 +458,34 @@ bool isDelimiterCell(QStringView cell)
 
 bool MarkdownEditor::handleTableEnter()
 {
-    if (!m_alignTables || m_mode == Mode::Reading || selection().length() > 0)
+    if (!d->m_alignTables || d->m_mode == Mode::Reading || selection().length() > 0)
         return false;
 
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
     // Every Enter in prose ends here, after one scan for the first pipe.
     qsizetype lead = lineStart;
-    while (lead < lineEnd && (m_text.at(lead) == QLatin1Char('>') || m_text.at(lead).isSpace()))
+    while (lead < lineEnd && (d->m_text.at(lead) == QLatin1Char('>') || d->m_text.at(lead).isSpace()))
         ++lead;
-    if (lead >= lineEnd || m_text.at(lead) != QLatin1Char('|'))
+    if (lead >= lineEnd || d->m_text.at(lead) != QLatin1Char('|'))
         return false;
     // Indented four columns or more outside a quote is code, not a table.
-    if (lead - lineStart >= 4 && !QStringView(m_text).mid(lineStart, lead - lineStart).contains(QLatin1Char('>')))
+    if (lead - lineStart >= 4 && !QStringView(d->m_text).mid(lineStart, lead - lineStart).contains(QLatin1Char('>')))
         return false;
     // The row is finished: the caret is past its closing pipe.
     qsizetype last = lineEnd;
-    while (last > lead && m_text.at(last - 1).isSpace())
+    while (last > lead && d->m_text.at(last - 1).isSpace())
         --last;
-    if (last - lead < 2 || m_text.at(last - 1) != QLatin1Char('|') || m_cursor < last)
+    if (last - lead < 2 || d->m_text.at(last - 1) != QLatin1Char('|') || d->m_cursor < last)
         return false;
 
     // The parser's own rule for cells: an escaped pipe or one in code is text.
-    const QList<Range> cells = tableRowCells(m_text, lineStart, lineEnd);
+    const QList<Range> cells = tableRowCells(d->m_text, lineStart, lineEnd);
     bool anyText = false;
     bool allDelimiters = true;
     for (const Range &cell : cells) {
         anyText = anyText || cell.length() > 0;
-        allDelimiters = allDelimiters && isDelimiterCell(QStringView(m_text).mid(cell.start, cell.length()));
+        allDelimiters = allDelimiters && isDelimiterCell(QStringView(d->m_text).mid(cell.start, cell.length()));
     }
     if (!anyText || allDelimiters)
         return false; // an empty `| |` or a delimiter row typed on its own
@@ -492,48 +493,48 @@ bool MarkdownEditor::handleTableEnter()
     // A line above that has pipes: this is a row of a table, or of one in
     // the making, and gets no separator pushed in.
     if (lineStart > 0) {
-        const qsizetype above = lineStartOf(m_text, lineStart - 1);
-        if (QStringView(m_text).mid(above, lineStart - 1 - above).contains(QLatin1Char('|')))
+        const qsizetype above = lineStartOf(d->m_text, lineStart - 1);
+        if (QStringView(d->m_text).mid(above, lineStart - 1 - above).contains(QLatin1Char('|')))
             return false;
     }
     // A line below: a delimiter row says the table has one already; any other
     // text would become a row of the table about to be written.
-    if (lineEnd < m_text.size()) {
+    if (lineEnd < d->m_text.size()) {
         const qsizetype below = lineEnd + 1;
-        const qsizetype belowEnd = lineEndOf(m_text, below);
+        const qsizetype belowEnd = lineEndOf(d->m_text, below);
         qsizetype text = below;
-        while (text < belowEnd && (m_text.at(text) == QLatin1Char('>') || m_text.at(text).isSpace()))
+        while (text < belowEnd && (d->m_text.at(text) == QLatin1Char('>') || d->m_text.at(text).isSpace()))
             ++text;
         if (text < belowEnd)
             return false;
     }
-    if (inCodeFenceAt(m_cursor))
+    if (inCodeFenceAt(d->m_cursor))
         return false;
 
-    const QString prefix = m_text.mid(lineStart, lead - lineStart);
+    const QString prefix = d->m_text.mid(lineStart, lead - lineStart);
     QString delimiter = prefix + QLatin1Char('|');
     QString body = delimiter;
     for (qsizetype c = 0; c < cells.size(); ++c) {
         delimiter += QStringLiteral(" --- |");
         body += QStringLiteral("   |");
     }
-    const QString table = formatTable(m_text.mid(lineStart, lineEnd - lineStart) + QLatin1Char('\n')
+    const QString table = formatTable(d->m_text.mid(lineStart, lineEnd - lineStart) + QLatin1Char('\n')
                                       + delimiter + QLatin1Char('\n') + body);
     rewriteTable(lineStart, lineEnd, table);
 
     const qsizetype bodyStart = lineStart + table.lastIndexOf(QLatin1Char('\n')) + 1;
-    const QList<Range> bodyCells = tableRowCells(m_text, bodyStart, lineEndOf(m_text, bodyStart));
+    const QList<Range> bodyCells = tableRowCells(d->m_text, bodyStart, lineEndOf(d->m_text, bodyStart));
     moveCursor(bodyCells.value(0, Range{bodyStart, bodyStart}).start, false);
     return true;
 }
 
 void MarkdownEditor::insertTable()
 {
-    if (m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Reading)
         return;
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const bool blank = QStringView(m_text).mid(lineStart, lineEnd - lineStart).trimmed().isEmpty();
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
+    const bool blank = QStringView(d->m_text).mid(lineStart, lineEnd - lineStart).trimmed().isEmpty();
     // A line with text keeps it: the table goes below, a paragraph of its own.
     const qsizetype at = blank ? lineStart : lineEnd;
     const qsizetype removed = blank ? lineEnd - lineStart : 0;
@@ -542,34 +543,34 @@ void MarkdownEditor::insertTable()
     if (!blank)
         text.prepend(QStringLiteral("\n\n"));
     // Text straight below would read as one more row.
-    if (lineEnd < m_text.size()) {
+    if (lineEnd < d->m_text.size()) {
         const qsizetype below = lineEnd + 1;
-        if (!QStringView(m_text).mid(below, lineEndOf(m_text, below) - below).trimmed().isEmpty())
+        if (!QStringView(d->m_text).mid(below, lineEndOf(d->m_text, below) - below).trimmed().isEmpty())
             text += QLatin1Char('\n');
     }
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     pushUndo();
     applyEdit(at, removed, text);
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     reparse();
     moveCursor(tableStart + 2, false); // after the first "| "
 }
 
 bool MarkdownEditor::handleListEnter(bool lineBreak)
 {
-    if (m_mode == Mode::Reading || selection().length() > 0)
+    if (d->m_mode == Mode::Reading || selection().length() > 0)
         return false;
 
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
     if (!item.valid)
         return false;
     // Enter inside the marker itself is just a newline.
-    if (m_cursor < lineStart + item.contentColumn)
+    if (d->m_cursor < lineStart + item.contentColumn)
         return false;
     // A listing is text: "- x" inside a fence is code, not a list.
-    if (inCodeFenceAt(m_cursor))
+    if (inCodeFenceAt(d->m_cursor))
         return false;
 
     if (lineBreak) {
@@ -582,19 +583,19 @@ bool MarkdownEditor::handleListEnter(bool lineBreak)
 
     // The whole run is rewritten in one splice so that the renumbering below
     // is part of the same edit, and so undo takes the caret back in one step.
-    const Range run = listRun(m_cursor);
-    const QString before = m_text.mid(run.start, run.length());
+    const Range run = listRun(d->m_cursor);
+    const QString before = d->m_text.mid(run.start, run.length());
     QStringList lines = before.split(QLatin1Char('\n'));
-    const qsizetype index = m_text.mid(run.start, lineStart - run.start)
+    const qsizetype index = d->m_text.mid(run.start, lineStart - run.start)
                                 .count(QLatin1Char('\n'));
-    const qsizetype column = m_cursor - lineStart;
+    const qsizetype column = d->m_cursor - lineStart;
 
     qsizetype caretLine = index;
     qsizetype caretColumn = 0;
     qsizetype from = index;
     qsizetype stopWidth = item.width();
 
-    const QString content = m_text.mid(lineStart + item.contentColumn,
+    const QString content = d->m_text.mid(lineStart + item.contentColumn,
                                        lineEnd - lineStart - item.contentColumn);
     if (content.trimmed().isEmpty()) {
         // An empty item leaves the list in steps, as Obsidian does: out of a
@@ -650,21 +651,21 @@ bool MarkdownEditor::handleListEnter(bool lineBreak)
 
 bool MarkdownEditor::handleListIndent(int direction)
 {
-    if (m_mode == Mode::Reading || direction == 0 || selection().length() > 0)
+    if (d->m_mode == Mode::Reading || direction == 0 || selection().length() > 0)
         return false;
 
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
-    if (!item.valid || inCodeFenceAt(m_cursor))
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
+    if (!item.valid || inCodeFenceAt(d->m_cursor))
         return false;
     if (direction < 0 && item.indent.isEmpty())
         return true; // already flush left: swallow the key, change nothing
 
-    const Range run = listRun(m_cursor);
-    const QString before = m_text.mid(run.start, run.length());
+    const Range run = listRun(d->m_cursor);
+    const QString before = d->m_text.mid(run.start, run.length());
     QStringList lines = before.split(QLatin1Char('\n'));
-    const qsizetype index = m_text.mid(run.start, lineStart - run.start)
+    const qsizetype index = d->m_text.mid(run.start, lineStart - run.start)
                                 .count(QLatin1Char('\n'));
     if (direction > 0) {
         // CommonMark cannot nest the first item of a list under nothing, and
@@ -689,7 +690,7 @@ bool MarkdownEditor::handleListIndent(int direction)
     // The caret keeps its place in the text; one inside the marker goes to
     // where the item's text now starts.
     const ListLine moved = parseListLine(lines.at(int(index)));
-    const qsizetype oldColumn = m_cursor - lineStart;
+    const qsizetype oldColumn = d->m_cursor - lineStart;
     const qsizetype newColumn = oldColumn < item.contentColumn
                                     ? (moved.valid ? moved.contentColumn : 0)
                                     : oldColumn + lines.at(int(index)).size() - sizeBefore;
@@ -704,25 +705,25 @@ bool MarkdownEditor::handleListIndent(int direction)
 
 bool MarkdownEditor::handleListBackspace()
 {
-    if (m_mode == Mode::Reading || selection().length() > 0 || m_cursor == 0)
+    if (d->m_mode == Mode::Reading || selection().length() > 0 || d->m_cursor == 0)
         return false;
     // A marker ends in whitespace, and this runs on every Backspace.
-    const QChar before = m_text.at(m_cursor - 1);
+    const QChar before = d->m_text.at(d->m_cursor - 1);
     if (before != QLatin1Char(' ') && before != QLatin1Char('\t'))
         return false;
 
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const ListLine item = parseListLine(QStringView(m_text).mid(lineStart, lineEnd - lineStart));
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
     // Only at the very start of the item's text: Backspace there takes the
     // bullet (or number) off and leaves the text, as Obsidian does.
-    if (!item.valid || m_cursor != lineStart + item.contentColumn || inCodeFenceAt(m_cursor))
+    if (!item.valid || d->m_cursor != lineStart + item.contentColumn || inCodeFenceAt(d->m_cursor))
         return false;
 
-    const Range run = listRun(m_cursor);
-    const QString beforeRun = m_text.mid(run.start, run.length());
+    const Range run = listRun(d->m_cursor);
+    const QString beforeRun = d->m_text.mid(run.start, run.length());
     QStringList lines = beforeRun.split(QLatin1Char('\n'));
-    const qsizetype index = m_text.mid(run.start, lineStart - run.start).count(QLatin1Char('\n'));
+    const qsizetype index = d->m_text.mid(run.start, lineStart - run.start).count(QLatin1Char('\n'));
     const qsizetype markerStart = item.quote.size() + item.indent.size();
     lines[int(index)].remove(markerStart, item.contentColumn - markerStart);
     renumber(lines, index, item.width()); // the items after it close up
@@ -740,9 +741,9 @@ void MarkdownEditor::commitRun(const Range &run, const QString &before, const QS
 {
     // Its own undo step, even straight after typing; undo then takes the
     // whole structural edit back, text and caret.
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     const RunEdit edit = diffRun(before, after, run.start);
     applyEdit(edit.at, edit.removed, edit.inserted);
     setSelectionRange(caret, caret);
@@ -754,16 +755,16 @@ Range MarkdownEditor::listRun(qsizetype offset) const
     // blank lines between them: a loose or multi-paragraph list is still one
     // list, and the items after an insert have to count on past them. It
     // ends at the first line that is neither, or that is in another quote.
-    const qsizetype here = lineStartOf(m_text, offset);
-    const ListLine base = parseListLine(QStringView(m_text).mid(here, lineEndOf(m_text, here) - here));
+    const qsizetype here = lineStartOf(d->m_text, offset);
+    const ListLine base = parseListLine(QStringView(d->m_text).mid(here, lineEndOf(d->m_text, here) - here));
     const auto lineAt = [this](qsizetype start) {
-        return QStringView(m_text).mid(start, lineEndOf(m_text, start) - start);
+        return QStringView(d->m_text).mid(start, lineEndOf(d->m_text, start) - start);
     };
 
     qsizetype start = here;
     qsizetype cursor = here;
     while (cursor > 0) {
-        const qsizetype previous = lineStartOf(m_text, cursor - 1);
+        const qsizetype previous = lineStartOf(d->m_text, cursor - 1);
         const RunLine kind = classify(lineAt(previous), base);
         if (kind == RunLine::Other)
             break;
@@ -772,15 +773,15 @@ Range MarkdownEditor::listRun(qsizetype offset) const
             start = previous;
     }
 
-    qsizetype end = lineEndOf(m_text, here);
+    qsizetype end = lineEndOf(d->m_text, here);
     qsizetype pending = end; // the end of the last item line seen
     cursor = end;
-    while (cursor < m_text.size()) {
+    while (cursor < d->m_text.size()) {
         const qsizetype next = cursor + 1;
         const RunLine kind = classify(lineAt(next), base);
         if (kind == RunLine::Other)
             break;
-        cursor = lineEndOf(m_text, next);
+        cursor = lineEndOf(d->m_text, next);
         if (kind == RunLine::Item)
             pending = cursor;
     }
@@ -791,18 +792,18 @@ Range MarkdownEditor::listRun(qsizetype offset) const
 
 void MarkdownEditor::toggleTaskAtCursor()
 {
-    if (m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Reading)
         return;
 
-    const qsizetype lineStart = lineStartOf(m_text, m_cursor);
-    const qsizetype lineEnd = lineEndOf(m_text, m_cursor);
-    const QString line = m_text.mid(lineStart, lineEnd - lineStart);
+    const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
+    const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
+    const QString line = d->m_text.mid(lineStart, lineEnd - lineStart);
     const ListLine item = parseListLine(line);
 
-    const qsizetype anchor = m_anchor;
-    const qsizetype caret = m_cursor;
+    const qsizetype anchor = d->m_anchor;
+    const qsizetype caret = d->m_cursor;
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
 
     if (item.valid && item.checkboxColumn >= 0) {
         // "[x]" and "[ ]" are the same width, so nothing after it moves.
@@ -826,34 +827,34 @@ void MarkdownEditor::toggleTaskAtCursor()
 
 void MarkdownEditor::moveLines(int direction)
 {
-    if (m_mode == Mode::Reading || direction == 0)
+    if (d->m_mode == Mode::Reading || direction == 0)
         return;
 
     const Range selected = selection();
-    const qsizetype first = lineStartOf(m_text, selected.start);
-    const qsizetype last = lineEndOf(m_text, selected.end);
+    const qsizetype first = lineStartOf(d->m_text, selected.start);
+    const qsizetype last = lineEndOf(d->m_text, selected.end);
 
     if (direction < 0) {
         if (first == 0)
             return;
-        const qsizetype above = lineStartOf(m_text, first - 1);
-        const QString moved = m_text.mid(first, last - first);
-        const QString displaced = m_text.mid(above, first - 1 - above);
+        const qsizetype above = lineStartOf(d->m_text, first - 1);
+        const QString moved = d->m_text.mid(first, last - first);
+        const QString displaced = d->m_text.mid(above, first - 1 - above);
         pushUndo();
-        m_lastEdit.invalidate();
+        d->m_lastEdit.invalidate();
         applyEdit(above, last - above, moved + QLatin1Char('\n') + displaced);
         const qsizetype shift = first - above;
         setSelectionRange(selected.start - shift, selected.end - shift);
         return;
     }
 
-    if (last >= m_text.size())
+    if (last >= d->m_text.size())
         return;
-    const qsizetype belowEnd = lineEndOf(m_text, last + 1);
-    const QString moved = m_text.mid(first, last - first);
-    const QString displaced = m_text.mid(last + 1, belowEnd - last - 1);
+    const qsizetype belowEnd = lineEndOf(d->m_text, last + 1);
+    const QString moved = d->m_text.mid(first, last - first);
+    const QString displaced = d->m_text.mid(last + 1, belowEnd - last - 1);
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(first, belowEnd - first, displaced + QLatin1Char('\n') + moved);
     const qsizetype shift = displaced.size() + 1;
     setSelectionRange(selected.start + shift, selected.end + shift);
@@ -861,16 +862,16 @@ void MarkdownEditor::moveLines(int direction)
 
 void MarkdownEditor::duplicateLines()
 {
-    if (m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Reading)
         return;
 
     const Range selected = selection();
-    const qsizetype first = lineStartOf(m_text, selected.start);
-    const qsizetype last = lineEndOf(m_text, selected.end);
-    const QString copied = m_text.mid(first, last - first);
+    const qsizetype first = lineStartOf(d->m_text, selected.start);
+    const qsizetype last = lineEndOf(d->m_text, selected.end);
+    const QString copied = d->m_text.mid(first, last - first);
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(last, 0, QLatin1Char('\n') + copied);
     // The caret follows the copy, the way every editor's duplicate does.
     const qsizetype shift = copied.size() + 1;
@@ -881,38 +882,38 @@ void MarkdownEditor::duplicateLines()
 
 void MarkdownEditor::toggleWrap(const QString &marker)
 {
-    if (m_mode == Mode::Reading || marker.isEmpty())
+    if (d->m_mode == Mode::Reading || marker.isEmpty())
         return;
 
     const Range selected = selection();
     const qsizetype width = marker.size();
-    const QStringView text(m_text);
+    const QStringView text(d->m_text);
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
 
     // Already wrapped, with the markers inside the selection.
     if (selected.length() >= 2 * width && text.mid(selected.start, width) == marker
         && text.mid(selected.end - width, width) == marker) {
         applyEdit(selected.start, selected.length(),
-                  m_text.mid(selected.start + width, selected.length() - 2 * width));
+                  d->m_text.mid(selected.start + width, selected.length() - 2 * width));
         setSelectionRange(selected.start, selected.end - 2 * width);
         return;
     }
 
     // Already wrapped, with the markers just outside it - which is what a
     // reader selecting the words themselves gets.
-    if (selected.start >= width && selected.end + width <= m_text.size()
+    if (selected.start >= width && selected.end + width <= d->m_text.size()
         && text.mid(selected.start - width, width) == marker
         && text.mid(selected.end, width) == marker) {
         applyEdit(selected.start - width, selected.length() + 2 * width,
-                  m_text.mid(selected.start, selected.length()));
+                  d->m_text.mid(selected.start, selected.length()));
         setSelectionRange(selected.start - width, selected.end - width);
         return;
     }
 
     applyEdit(selected.start, selected.length(),
-              marker + m_text.mid(selected.start, selected.length()) + marker);
+              marker + d->m_text.mid(selected.start, selected.length()) + marker);
     setSelectionRange(selected.start + width, selected.start + width + selected.length());
 }
 
@@ -933,7 +934,7 @@ void MarkdownEditor::toggleHighlight()
 
 void MarkdownEditor::insertLink()
 {
-    if (m_mode == Mode::Reading)
+    if (d->m_mode == Mode::Reading)
         return;
 
     static const QRegularExpression wrapped(QStringLiteral("^\\[([^\\]]*)\\]\\(([^)]*)\\)$"));
@@ -942,10 +943,10 @@ void MarkdownEditor::insertLink()
         QRegularExpression::CaseInsensitiveOption);
 
     const Range selected = selection();
-    const QString text = m_text.mid(selected.start, selected.length());
+    const QString text = d->m_text.mid(selected.start, selected.length());
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
 
     const auto already = wrapped.match(text);
     if (already.hasMatch()) {
@@ -956,7 +957,7 @@ void MarkdownEditor::insertLink()
 
     if (text.isEmpty()) {
         // An empty selection opens the form the vault prefers, caret inside it.
-        if (m_useWikilinks) {
+        if (d->m_useWikilinks) {
             applyEdit(selected.start, 0, QStringLiteral("[[]]"));
             setSelectionRange(selected.start + 2, selected.start + 2);
         } else {
@@ -977,7 +978,7 @@ void MarkdownEditor::insertLink()
     // Selected text that is not a URL becomes the link's target. A vault that
     // writes wikilinks wants `[[Note]]`, where the target is the text itself
     // and there is no second slot to fill.
-    if (m_useWikilinks) {
+    if (d->m_useWikilinks) {
         applyEdit(selected.start, selected.length(),
                   QLatin1String("[[") + text + QLatin1String("]]"));
         const qsizetype end = selected.start + text.size() + 2;
@@ -994,59 +995,59 @@ void MarkdownEditor::insertLink()
 
 void MarkdownEditor::setFindQuery(const QString &pattern, bool caseSensitive, bool regex)
 {
-    m_find.pattern = pattern;
-    m_find.caseSensitive = caseSensitive;
-    m_find.regex = regex;
+    d->m_find.pattern = pattern;
+    d->m_find.caseSensitive = caseSensitive;
+    d->m_find.regex = regex;
     updateFindMatches();
 }
 
 void MarkdownEditor::updateFindMatches()
 {
-    const Range previous = m_find.current >= 0 && m_find.current < m_find.matches.size()
-                               ? m_find.matches.at(m_find.current)
-                               : Range{m_cursor, m_cursor};
+    const Range previous = d->m_find.current >= 0 && d->m_find.current < d->m_find.matches.size()
+                               ? d->m_find.matches.at(d->m_find.current)
+                               : Range{d->m_cursor, d->m_cursor};
 
-    m_find.matches.clear();
-    m_find.valid = true;
+    d->m_find.matches.clear();
+    d->m_find.valid = true;
 
-    if (!m_find.pattern.isEmpty()) {
-        if (m_find.regex) {
-            QRegularExpression expression(m_find.pattern,
-                                          m_find.caseSensitive
+    if (!d->m_find.pattern.isEmpty()) {
+        if (d->m_find.regex) {
+            QRegularExpression expression(d->m_find.pattern,
+                                          d->m_find.caseSensitive
                                               ? QRegularExpression::NoPatternOption
                                               : QRegularExpression::CaseInsensitiveOption);
-            m_find.valid = expression.isValid();
-            if (m_find.valid) {
-                auto it = expression.globalMatch(m_text);
+            d->m_find.valid = expression.isValid();
+            if (d->m_find.valid) {
+                auto it = expression.globalMatch(d->m_text);
                 while (it.hasNext()) {
                     const auto match = it.next();
                     if (match.capturedLength() == 0)
                         continue; // an empty match would never advance
-                    m_find.matches.append({match.capturedStart(), match.capturedEnd()});
+                    d->m_find.matches.append({match.capturedStart(), match.capturedEnd()});
                 }
             }
         } else {
             const auto sensitivity =
-                m_find.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+                d->m_find.caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
             qsizetype at = 0;
-            while ((at = m_text.indexOf(m_find.pattern, at, sensitivity)) >= 0) {
-                m_find.matches.append({at, at + m_find.pattern.size()});
-                at += m_find.pattern.size();
+            while ((at = d->m_text.indexOf(d->m_find.pattern, at, sensitivity)) >= 0) {
+                d->m_find.matches.append({at, at + d->m_find.pattern.size()});
+                at += d->m_find.pattern.size();
             }
         }
     }
 
     // Stay on the match the reader was looking at, or on the first one after
     // the caret when the query changed under them.
-    m_find.current = -1;
-    for (qsizetype i = 0; i < m_find.matches.size(); ++i) {
-        if (m_find.matches.at(i).start >= previous.start) {
-            m_find.current = int(i);
+    d->m_find.current = -1;
+    for (qsizetype i = 0; i < d->m_find.matches.size(); ++i) {
+        if (d->m_find.matches.at(i).start >= previous.start) {
+            d->m_find.current = int(i);
             break;
         }
     }
-    if (m_find.current < 0 && !m_find.matches.isEmpty())
-        m_find.current = 0;
+    if (d->m_find.current < 0 && !d->m_find.matches.isEmpty())
+        d->m_find.current = 0;
 
     syncFindBar();
     viewport()->update();
@@ -1054,15 +1055,15 @@ void MarkdownEditor::updateFindMatches()
 
 void MarkdownEditor::findStep(int direction)
 {
-    if (m_find.matches.isEmpty())
+    if (d->m_find.matches.isEmpty())
         return;
-    const int count = int(m_find.matches.size());
-    if (m_find.current < 0)
-        m_find.current = direction >= 0 ? 0 : count - 1;
+    const int count = int(d->m_find.matches.size());
+    if (d->m_find.current < 0)
+        d->m_find.current = direction >= 0 ? 0 : count - 1;
     else
-        m_find.current = ((m_find.current + (direction >= 0 ? 1 : -1)) % count + count) % count;
+        d->m_find.current = ((d->m_find.current + (direction >= 0 ? 1 : -1)) % count + count) % count;
 
-    const Range match = m_find.matches.at(m_find.current);
+    const Range match = d->m_find.matches.at(d->m_find.current);
     setSelectionRange(match.start, match.end);
     scrollToOffset(match.start);
     syncFindBar();
@@ -1072,11 +1073,11 @@ void MarkdownEditor::findStep(int direction)
 void MarkdownEditor::scrollToOffset(qsizetype offset)
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
 
     QScrollBar *bar = verticalScrollBar();
-    const qreal top = m_blocks.at(size_t(index)).y;
+    const qreal top = d->m_blocks.at(size_t(index)).y;
     if (top < bar->value() || top > bar->value() + viewport()->height()) {
         // Setting the bar runs updateLayout() through its own valueChanged
         // connection, which lays out the blocks near the viewport and nothing
@@ -1088,43 +1089,43 @@ void MarkdownEditor::scrollToOffset(qsizetype offset)
 
 void MarkdownEditor::replaceCurrent(const QString &with)
 {
-    if (m_find.current < 0 || m_find.current >= m_find.matches.size())
+    if (d->m_find.current < 0 || d->m_find.current >= d->m_find.matches.size())
         return;
 
-    const Range match = m_find.matches.at(m_find.current);
-    const int index = m_find.current;
+    const Range match = d->m_find.matches.at(d->m_find.current);
+    const int index = d->m_find.current;
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(match.start, match.length(), with);
     setSelectionRange(match.start + with.size(), match.start + with.size());
 
     updateFindMatches();
-    if (!m_find.matches.isEmpty())
-        m_find.current = qBound(0, index, int(m_find.matches.size()) - 1);
+    if (!d->m_find.matches.isEmpty())
+        d->m_find.current = qBound(0, index, int(d->m_find.matches.size()) - 1);
     syncFindBar();
     viewport()->update();
 }
 
 int MarkdownEditor::replaceAll(const QString &with)
 {
-    if (m_find.matches.isEmpty())
+    if (d->m_find.matches.isEmpty())
         return 0;
 
     // One splice over the whole span the matches cover: one undo step, and
     // the decoration pass sees a single edit rather than hundreds.
-    const Range span{m_find.matches.first().start, m_find.matches.last().end};
+    const Range span{d->m_find.matches.first().start, d->m_find.matches.last().end};
     QString rewritten;
     rewritten.reserve(span.length());
     qsizetype cursor = span.start;
-    for (const Range &match : std::as_const(m_find.matches)) {
-        rewritten += QStringView(m_text).mid(cursor, match.start - cursor);
+    for (const Range &match : std::as_const(d->m_find.matches)) {
+        rewritten += QStringView(d->m_text).mid(cursor, match.start - cursor);
         rewritten += with;
         cursor = match.end;
     }
-    const int replaced = int(m_find.matches.size());
+    const int replaced = int(d->m_find.matches.size());
 
     pushUndo();
-    m_lastEdit.invalidate();
+    d->m_lastEdit.invalidate();
     applyEdit(span.start, span.length(), rewritten);
     setSelectionRange(span.start, span.start);
     updateFindMatches();
@@ -1133,7 +1134,7 @@ int MarkdownEditor::replaceAll(const QString &with)
 
 QColor MarkdownEditor::findHighlightColor() const
 {
-    const QColor token = m_theme.color(QStringLiteral("--text-highlight-bg"));
+    const QColor token = d->m_theme.color(QStringLiteral("--text-highlight-bg"));
     // Obsidian's own default, for a scheme that does not carry the token.
     return token.isValid() ? token : QColor(255, 208, 0, 102);
 }
@@ -1141,7 +1142,7 @@ QColor MarkdownEditor::findHighlightColor() const
 void MarkdownEditor::appendFindHighlights(const BlockView &view,
                                           QList<QTextLayout::FormatRange> &into) const
 {
-    if (m_find.matches.isEmpty())
+    if (d->m_find.matches.isEmpty())
         return;
 
     const QColor base = findHighlightColor();
@@ -1150,12 +1151,12 @@ void MarkdownEditor::appendFindHighlights(const BlockView &view,
 
     // Matches are sorted, so only the ones that can touch this block are
     // looked at however long the note is.
-    auto it = std::lower_bound(m_find.matches.cbegin(), m_find.matches.cend(),
+    auto it = std::lower_bound(d->m_find.matches.cbegin(), d->m_find.matches.cend(),
                                view.span.range.start,
                                [](const Range &match, qsizetype start) {
                                    return match.end <= start;
                                });
-    for (; it != m_find.matches.cend() && it->start < view.span.range.end; ++it) {
+    for (; it != d->m_find.matches.cend() && it->start < view.span.range.end; ++it) {
         const Range shown = view.map.toDisplay(
             {qMax(it->start, view.span.range.start), qMin(it->end, view.span.range.end)});
         if (shown.length() <= 0)
@@ -1164,15 +1165,15 @@ void MarkdownEditor::appendFindHighlights(const BlockView &view,
         range.start = int(shown.start);
         range.length = int(shown.length());
         range.format.setBackground(
-            int(it - m_find.matches.cbegin()) == m_find.current ? strong : base);
+            int(it - d->m_find.matches.cbegin()) == d->m_find.current ? strong : base);
         into.append(range);
     }
 }
 
 void MarkdownEditor::syncFindBar()
 {
-    if (m_findBar)
-        m_findBar->setStatus(m_find.current, int(m_find.matches.size()), m_find.valid);
+    if (d->m_findBar)
+        d->m_findBar->setStatus(d->m_find.current, int(d->m_find.matches.size()), d->m_find.valid);
 }
 
 } // namespace noteAppC

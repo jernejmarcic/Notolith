@@ -8,6 +8,7 @@
 /// MarkdownEditor.h.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include "Icons.h"
 #ifdef NOTEAPPC_HAVE_EPUBCOVER
@@ -53,7 +54,7 @@ bool MarkdownEditor::layoutTextPanel(BlockView &view, const QString &label, cons
 
     const BlockSpan span{monospace ? BlockSpan::Kind::Code : BlockSpan::Kind::Paragraph,
                          view.span.range, 0};
-    view.map = DisplayMap::build(m_text, view.span.range, {view.span.range});
+    view.map = DisplayMap::build(d->m_text, view.span.range, {view.span.range});
     view.layout = std::make_unique<QTextLayout>(shown);
     view.layout->setCacheEnabled(true);
     view.layout->setFont(fontFor(span));
@@ -163,7 +164,7 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     // kMaxEmbedDepth deep stays the plain text panel, as Obsidian stops at
     // five levels; nothing is drawn for it, so the recursion ends here.
     const QString canonical = QFileInfo(path).canonicalFilePath();
-    if (m_embedAncestors.contains(canonical) || m_embedAncestors.size() >= kMaxEmbedDepth)
+    if (d->m_embedAncestors.contains(canonical) || d->m_embedAncestors.size() >= kMaxEmbedDepth)
         return layoutTextPanel(view, label, slice, false);
 
     const QString key = QStringLiteral("%1|%2|%3|%4|%5")
@@ -172,18 +173,18 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
                             .arg(embed.subpath)
                             .arg(width)
                             .arg(embedThemeTag());
-    auto it = m_fileEmbedCache.find(key);
-    if (it == m_fileEmbedCache.end()) {
+    auto it = d->m_fileEmbedCache.find(key);
+    if (it == d->m_fileEmbedCache.end()) {
         FileEmbedCacheEntry entry;
-        entry.generation = ++m_fileEmbedGeneration;
-        if (!m_embedAncestors.isEmpty()) {
+        entry.generation = ++d->m_fileEmbedGeneration;
+        if (!d->m_embedAncestors.isEmpty()) {
             // A nested editor is gone as soon as it has been drawn, so a
             // turn of the event loop would never come: draw this level now.
             entry.image = renderNoteEmbed(slice, width, canonical);
             entry.pending = false;
-            it = m_fileEmbedCache.insert(key, entry);
+            it = d->m_fileEmbedCache.insert(key, entry);
         } else {
-            it = m_fileEmbedCache.insert(key, entry);
+            it = d->m_fileEmbedCache.insert(key, entry);
             QTimer::singleShot(0, this, [this, key, generation = entry.generation, slice, width, canonical] {
                 deliverFileEmbed(key, generation, renderNoteEmbed(slice, width, canonical));
             });
@@ -216,13 +217,13 @@ QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width, const QS
     // the ancestors is the cycle guard.
     constexpr int kMaxNoteEmbedHeight = 1200;
     MarkdownEditor nested;
-    nested.m_embedAncestors = m_embedAncestors;
+    nested.d->m_embedAncestors = d->m_embedAncestors;
     if (!fromNote.isEmpty())
-        nested.m_embedAncestors.append(fromNote);
-    nested.setTheme(m_theme);
+        nested.d->m_embedAncestors.append(fromNote);
+    nested.setTheme(d->m_theme);
     nested.setMode(Mode::Reading);
     nested.setReadableLineLength(false);
-    nested.setFeatures(m_features);
+    nested.setFeatures(d->m_features);
     nested.setLinkResolver(m_resolver);
     nested.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     nested.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -236,8 +237,8 @@ QImage MarkdownEditor::renderNoteEmbed(const QString &slice, int width, const QS
 
 QString MarkdownEditor::embedThemeTag() const
 {
-    return m_theme.color(QStringLiteral("--background-primary")).name()
-         + m_theme.color(QStringLiteral("--text-normal")).name() + QString::number(m_theme.textFont().pointSizeF());
+    return d->m_theme.color(QStringLiteral("--background-primary")).name()
+         + d->m_theme.color(QStringLiteral("--text-normal")).name() + QString::number(d->m_theme.textFont().pointSizeF());
 }
 
 // --- a card for a file with no richer renderer ------------------------------
@@ -310,10 +311,10 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     painter.save();
     QPainterPath rounded;
     rounded.addRoundedRect(card, 6, 6);
-    painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
+    painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--background-primary-alt")));
 
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor text = m_theme.color(QStringLiteral("--text-normal"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
     const qreal iconSize = card.height() - 20;
     QRectF iconRect(card.left() + 12, card.top() + 10, iconSize, iconSize);
     if (!view.fileCardCover.isNull()) {
@@ -332,14 +333,14 @@ void MarkdownEditor::paintFileCard(QPainter &painter, const BlockView &view, qre
     }
 
     const qreal textLeft = iconRect.right() + 12;
-    QFont name = m_theme.uiFont();
+    QFont name = d->m_theme.uiFont();
     painter.setFont(name);
     painter.setPen(text);
     painter.drawText(QRectF(textLeft, card.top() + 6, card.width() - textLeft - 12, card.height() / 2),
                      Qt::AlignVCenter | Qt::AlignLeft, view.fileCardLabel);
 
-    QFont small = m_theme.uiFont();
-    small.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+    QFont small = d->m_theme.uiFont();
+    small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
     painter.setFont(small);
     painter.setPen(muted);
     painter.drawText(QRectF(textLeft, card.top() + card.height() / 2, card.width() - textLeft - 12,
@@ -352,14 +353,14 @@ QPixmap MarkdownEditor::ensureEpubCoverAsync(const QString &path, qint64 mtime, 
 {
 #ifdef NOTEAPPC_HAVE_EPUBCOVER
     const QString key = QStringLiteral("%1|%2|%3").arg(path).arg(mtime).arg(size);
-    const auto it = m_epubCoverCache.constFind(key);
-    if (it != m_epubCoverCache.constEnd())
+    const auto it = d->m_epubCoverCache.constFind(key);
+    if (it != d->m_epubCoverCache.constEnd())
         return it->pending ? QPixmap() : it->cover;
-    if (m_epubCoverCache.size() >= 64)
-        m_epubCoverCache.clear(); // ponytail: a flush, not an LRU; a card asks again
-    m_epubCoverCache.insert(key, EpubCoverEntry{true, QPixmap()});
+    if (d->m_epubCoverCache.size() >= 64)
+        d->m_epubCoverCache.clear(); // ponytail: a flush, not an LRU; a card asks again
+    d->m_epubCoverCache.insert(key, EpubCoverEntry{true, QPixmap()});
     // Through m_lifeline, as the PDF pages: a read that outlives the editor is dropped.
-    (void)QtConcurrent::run([this, lifeline = m_lifeline, key, path] {
+    (void)QtConcurrent::run([this, lifeline = d->m_lifeline, key, path] {
         QImage cover = epubCover(path);
         lifeline->post(this, [this, key, path, cover = std::move(cover)]() mutable {
             deliverEpubCover(key, path, std::move(cover));
@@ -376,11 +377,11 @@ QPixmap MarkdownEditor::ensureEpubCoverAsync(const QString &path, qint64 mtime, 
 void MarkdownEditor::deliverEpubCover(const QString &key, const QString &path, QImage cover)
 {
     // A book with no cover is cached as a null pixmap, so it is asked once.
-    m_epubCoverCache.insert(key, EpubCoverEntry{false, cover.isNull() ? QPixmap() : QPixmap::fromImage(cover)});
+    d->m_epubCoverCache.insert(key, EpubCoverEntry{false, cover.isNull() ? QPixmap() : QPixmap::fromImage(cover)});
     if (cover.isNull())
         return; // the card stays as laid out
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isFileCard || block.fileCardPath != path)
             continue;
         block.layout.reset();
@@ -422,26 +423,26 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
                                            const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
-    auto rendererIt = m_fileEmbedRenderers.find(suffix);
-    if (rendererIt == m_fileEmbedRenderers.end())
+    auto rendererIt = d->m_fileEmbedRenderers.find(suffix);
+    if (rendererIt == d->m_fileEmbedRenderers.end())
         return false;
 
     const int width = qMin(embed.width > 0 ? embed.width : contentWidth(), contentWidth());
     const QString key = fileEmbedCacheKey(path, embed.subpath, width);
 
-    auto it = m_fileEmbedCache.find(key);
-    if (it == m_fileEmbedCache.end()) {
+    auto it = d->m_fileEmbedCache.find(key);
+    if (it == d->m_fileEmbedCache.end()) {
         FileEmbedCacheEntry entry;
         entry.pending = true;
-        entry.generation = ++m_fileEmbedGeneration;
-        it = m_fileEmbedCache.insert(key, entry);
+        entry.generation = ++d->m_fileEmbedGeneration;
+        it = d->m_fileEmbedCache.insert(key, entry);
         const quint64 generation = entry.generation;
         const FileEmbedRenderer renderer = rendererIt.value();
         // May run synchronously or on any thread - deliverFileEmbed is the
         // only place that touches m_fileEmbedCache or a BlockView, and it
         // always does so marshalled onto this object's own thread, the same
         // contract setQueryRunner documents for its own deliver callback.
-        renderer(path, embed.subpath, width, [this, lifeline = m_lifeline, key, generation](QImage image) {
+        renderer(path, embed.subpath, width, [this, lifeline = d->m_lifeline, key, generation](QImage image) {
             lifeline->post(this, [this, key, generation, image = std::move(image)]() mutable {
                 deliverFileEmbed(key, generation, std::move(image));
             });
@@ -475,15 +476,15 @@ bool MarkdownEditor::layoutHookedFileEmbed(BlockView &view, const EmbedSpan &emb
 
 void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QImage image)
 {
-    auto it = m_fileEmbedCache.find(key);
-    if (it == m_fileEmbedCache.end() || it->generation != generation)
+    auto it = d->m_fileEmbedCache.find(key);
+    if (it == d->m_fileEmbedCache.end() || it->generation != generation)
         return;
     it->pending = false;
     it->image = image;
 
     const QString path = key.section(QLatin1Char('|'), 0, 0);
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (block.imagePath != path || block.isPdfEmbed || block.isFileCard
             || !block.mediaPath.isEmpty())
             continue;
@@ -509,9 +510,9 @@ QRectF MarkdownEditor::hookedEmbedImageRect(const BlockView &view) const
 QRect MarkdownEditor::hookedEmbedImageRectAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty())
         return {};
     return hookedEmbedImageRect(view).toRect();
@@ -519,12 +520,12 @@ QRect MarkdownEditor::hookedEmbedImageRectAt(qsizetype offset) const
 
 qsizetype MarkdownEditor::hookedEmbedBlockAt(const QPoint &viewportPoint) const
 {
-    for (qsizetype i = 0; i < qsizetype(m_blocks.size()); ++i) {
-        const BlockView &view = m_blocks[size_t(i)];
+    for (qsizetype i = 0; i < qsizetype(d->m_blocks.size()); ++i) {
+        const BlockView &view = d->m_blocks[size_t(i)];
         if (!view.embedPanel || view.image.isNull() || view.imagePath.isEmpty()
             || view.isPdfEmbed || view.isFileCard || !view.mediaPath.isEmpty())
             continue;
-        if (!m_fileEmbedInputHandlers.contains(QFileInfo(view.imagePath).suffix().toLower()))
+        if (!d->m_fileEmbedInputHandlers.contains(QFileInfo(view.imagePath).suffix().toLower()))
             continue;
         if (hookedEmbedImageRect(view).contains(viewportPoint))
             return i;
@@ -534,16 +535,16 @@ qsizetype MarkdownEditor::hookedEmbedBlockAt(const QPoint &viewportPoint) const
 
 QPoint MarkdownEditor::embedLocalPoint(qsizetype blockIndex, const QPoint &viewportPoint) const
 {
-    return viewportPoint - hookedEmbedImageRect(m_blocks[size_t(blockIndex)]).topLeft().toPoint();
+    return viewportPoint - hookedEmbedImageRect(d->m_blocks[size_t(blockIndex)]).topLeft().toPoint();
 }
 
 bool MarkdownEditor::applyFileEmbedInput(qsizetype blockIndex, const FileEmbedInputEvent &event)
 {
-    if (blockIndex < 0 || size_t(blockIndex) >= m_blocks.size())
+    if (blockIndex < 0 || size_t(blockIndex) >= d->m_blocks.size())
         return false; // the gesture outlived a relayout - vanishingly rare, and harmless to drop
-    BlockView &view = m_blocks[size_t(blockIndex)];
-    auto it = m_fileEmbedInputHandlers.find(QFileInfo(view.imagePath).suffix().toLower());
-    if (it == m_fileEmbedInputHandlers.end())
+    BlockView &view = d->m_blocks[size_t(blockIndex)];
+    auto it = d->m_fileEmbedInputHandlers.find(QFileInfo(view.imagePath).suffix().toLower());
+    if (it == d->m_fileEmbedInputHandlers.end())
         return false;
 
     const FileEmbedInputResult result = it.value()(view.imagePath, view.embedSubpath, event);
@@ -555,7 +556,7 @@ bool MarkdownEditor::applyFileEmbedInput(qsizetype blockIndex, const FileEmbedIn
         // just interacted with, not the stale image it was cold-rendered
         // with.
         const QString key = fileEmbedCacheKey(view.imagePath, view.embedSubpath, view.imageSize.width());
-        if (auto cacheIt = m_fileEmbedCache.find(key); cacheIt != m_fileEmbedCache.end())
+        if (auto cacheIt = d->m_fileEmbedCache.find(key); cacheIt != d->m_fileEmbedCache.end())
             cacheIt->image = result.image;
         viewport()->update();
     }
@@ -575,14 +576,14 @@ void MarkdownEditor::collectTextEmbeds(const BlockView &view, QList<Range> &hidd
     // plain link text, the way Obsidian shows an embed it cannot resolve
     // either, not an upgrade to a trailing file card.
     const EmbedSpan *sole = soleEmbedOf(view);
-    for (const EmbedSpan &embed : m_decorations.embeds) {
+    for (const EmbedSpan &embed : d->m_decorations.embeds) {
         if (&embed == sole)
             continue;
         if (!view.span.range.contains(embed.range.start)
             || !view.span.range.contains(embed.range.end))
             continue;
         // The caret inside one shows its source, to edit it.
-        if (view.active && m_cursor > embed.range.start && m_cursor < embed.range.end)
+        if (view.active && d->m_cursor > embed.range.start && d->m_cursor < embed.range.end)
             continue;
         found.append(&embed);
         // The "!" stays, as the carrier prepareTextEmbeds reserves the
@@ -596,10 +597,10 @@ void MarkdownEditor::collectTextEmbeds(const BlockView &view, QList<Range> &hidd
     }
 }
 
-MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
+MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
                                                                      qreal maxWidth)
 {
-    BlockView::EmbedCell cell;
+    EmbedCell cell;
     cell.source = embed.range;
 
     const QString path = m_resolver ? m_resolver(embed.target) : QString();
@@ -616,11 +617,11 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
     // decode a PDF as a flat image, but a PDF page always goes through the
     // richer, page-aware path below instead.
     if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8())) {
-        QPixmap pixmap = m_images.value(path);
+        QPixmap pixmap = d->m_images.value(path);
         if (pixmap.isNull()) {
             pixmap = QPixmap(path);
             if (!pixmap.isNull())
-                m_images.insert(path, pixmap);
+                d->m_images.insert(path, pixmap);
         }
         if (!pixmap.isNull()) {
             // |width still applies to a cell in a row - a reader who asked
@@ -641,7 +642,7 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
     // same file also appears as a sole embed elsewhere in the note. The full
     // page-argument grammar (ranges, slides, a grid) is still there in the
     // fragment for a reader to move the embed onto its own line and get.
-    if (m_features.PDFembeds && suffix == QLatin1String("pdf")) {
+    if (d->m_features.PDFembeds && suffix == QLatin1String("pdf")) {
         const qint64 mtime = QFileInfo(path).lastModified().toSecsSinceEpoch();
         const PdfEmbedArgs args = parsePdfEmbedArgs(embed.subpath);
         int count = 0;
@@ -662,7 +663,7 @@ MarkdownEditor::BlockView::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedS
         }
     }
 
-    if (m_features.fileEmbeds && Vault::isNote(path)) {
+    if (d->m_features.fileEmbeds && Vault::isNote(path)) {
         cell.isFileCard = true;
         cell.isNote = true;
         cell.label = QFileInfo(path).completeBaseName();
@@ -700,7 +701,7 @@ void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedS
     const qreal maxWidth = contentWidth() - (view.callout ? 28 : 0);
     const qreal bang = QFontMetricsF(view.layout->font()).horizontalAdvance(QLatin1Char('!'));
     for (const EmbedSpan *embed : embeds) {
-        BlockView::EmbedCell cell = buildEmbedCell(*embed, maxWidth);
+        EmbedCell cell = buildEmbedCell(*embed, maxWidth);
         QTextCharFormat format;
         format.setForeground(Qt::transparent);
         format.setFontLetterSpacingType(QFont::AbsoluteSpacing);
@@ -713,7 +714,7 @@ void MarkdownEditor::prepareTextEmbeds(BlockView &view, const QList<const EmbedS
 qreal MarkdownEditor::textEmbedHeightOn(const BlockView &view, const QTextLine &line) const
 {
     qreal tallest = 0;
-    for (const BlockView::EmbedCell &cell : view.embedCells) {
+    for (const EmbedCell &cell : view.embedCells) {
         const qsizetype carrier = view.map.toDisplay(cell.source.start);
         if (carrier >= line.textStart() && carrier < line.textStart() + line.textLength())
             tallest = qMax(tallest, cellHeight(cell));
@@ -725,7 +726,7 @@ void MarkdownEditor::placeTextEmbeds(BlockView &view, qreal lineHeight)
 {
     // The same origin the paint step draws the text at.
     const qreal indent = view.callout ? 14 : (view.embedPanel ? 2 : 0);
-    for (BlockView::EmbedCell &cell : view.embedCells) {
+    for (EmbedCell &cell : view.embedCells) {
         const int carrier = int(view.map.toDisplay(cell.source.start));
         const QTextLine line = view.layout->lineForTextPosition(carrier);
         if (!line.isValid())
@@ -745,15 +746,15 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
     if (view.embedCells.empty())
         return;
 
-    const QColor muted = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor text = m_theme.color(QStringLiteral("--text-normal"));
-    for (const BlockView::EmbedCell &cell : view.embedCells) {
+    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
+    for (const EmbedCell &cell : view.embedCells) {
         const QRectF rect = cell.rect.translated(left, top);
         if (cell.isFileCard) {
             painter.save();
             QPainterPath rounded;
             rounded.addRoundedRect(rect, 6, 6);
-            painter.fillPath(rounded, m_theme.color(QStringLiteral("--background-primary-alt")));
+            painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--background-primary-alt")));
             const qreal iconSize = rect.height() - 16;
             const QIcon icon = Icons::icon(cell.isNote ? QStringLiteral("file-text")
                                                         : QStringLiteral("file"),
@@ -761,7 +762,7 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
             const QRectF iconRect(rect.left() + 8, rect.top() + 8, iconSize, iconSize);
             if (!icon.isNull())
                 icon.paint(&painter, iconRect.toRect());
-            QFont font = m_theme.uiFont();
+            QFont font = d->m_theme.uiFont();
             painter.setFont(font);
             painter.setPen(text);
             const qreal textLeft = iconRect.right() + 8;
@@ -780,8 +781,8 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
         painter.drawPixmap(rect.toRect(), cell.image);
         if (cell.panel && !cell.label.isEmpty()) {
             painter.save();
-            QFont small = m_theme.uiFont();
-            small.setPixelSize(m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
+            QFont small = d->m_theme.uiFont();
+            small.setPixelSize(d->m_theme.value(QStringLiteral("--font-ui-smaller")).toInt());
             painter.setFont(small);
             painter.setPen(muted);
             painter.drawText(QRectF(rect.left(), rect.bottom() + 2, rect.width(), 16),
@@ -794,9 +795,9 @@ void MarkdownEditor::paintEmbedCells(QPainter &painter, const BlockView &view, q
 QRectF MarkdownEditor::embedCellRectAt(qsizetype offset, int cell) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return cell >= 0 && size_t(cell) < view.embedCells.size() ? view.embedCells[size_t(cell)].rect
                                                                : QRectF();
 }
@@ -804,68 +805,68 @@ QRectF MarkdownEditor::embedCellRectAt(qsizetype offset, int cell) const
 bool MarkdownEditor::isFileCardAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return false;
-    return m_blocks[size_t(index)].isFileCard;
+    return d->m_blocks[size_t(index)].isFileCard;
 }
 
 bool MarkdownEditor::fileCardHasCoverAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(m_blocks.size()) && !m_blocks[size_t(index)].fileCardCover.isNull();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].fileCardCover.isNull();
 }
 
 bool MarkdownEditor::isMediaCardAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index >= 0 && index < qsizetype(m_blocks.size()) && !m_blocks[size_t(index)].mediaPath.isEmpty();
+    return index >= 0 && index < qsizetype(d->m_blocks.size()) && !d->m_blocks[size_t(index)].mediaPath.isEmpty();
 }
 
 int MarkdownEditor::embedCellCountAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return 0;
-    return int(m_blocks[size_t(index)].embedCells.size());
+    return int(d->m_blocks[size_t(index)].embedCells.size());
 }
 
 QString MarkdownEditor::panelTextAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return QString();
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return view.layout ? view.layout->text() : QString();
 }
 
 QString MarkdownEditor::panelLabelAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    return index < 0 || index >= qsizetype(m_blocks.size()) ? QString() : m_blocks[size_t(index)].embedLabel;
+    return index < 0 || index >= qsizetype(d->m_blocks.size()) ? QString() : d->m_blocks[size_t(index)].embedLabel;
 }
 
 QImage MarkdownEditor::embedImageAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return view.embedPanel ? view.image.toImage() : QImage();
 }
 
 QSize MarkdownEditor::embedImageSizeAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     return view.embedPanel && !view.image.isNull() ? view.imageSize : QSize();
 }
 
 bool MarkdownEditor::handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
                                           qreal top)
 {
-    for (const BlockView::EmbedCell &cell : view.embedCells) {
+    for (const EmbedCell &cell : view.embedCells) {
         if (!cell.rect.translated(left, top).contains(point))
             continue;
         if (cell.isNote)

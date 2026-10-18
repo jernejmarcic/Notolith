@@ -21,6 +21,7 @@
 /// see QueryBlock.cpp's header comment for why.
 
 #include "MarkdownEditor.h"
+#include "MarkdownEditor_p.h"
 
 #include <QFontMetricsF>
 #include <QPainter>
@@ -50,9 +51,9 @@ QList<MarkdownEditor::BaseRowRect> MarkdownEditor::baseRowsAt(qsizetype offset) 
 {
     QList<BaseRowRect> rows;
     const qsizetype index = blockAt(offset);
-    if (index < 0 || index >= qsizetype(m_blocks.size()))
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return rows;
-    const BlockView &view = m_blocks[size_t(index)];
+    const BlockView &view = d->m_blocks[size_t(index)];
     if (!view.isBase)
         return rows;
     const qreal left = contentLeft();
@@ -71,9 +72,9 @@ void MarkdownEditor::setBaseRunner(
     // on it; a stray delivery from it will still be dropped correctly since
     // ensureBaseSearch below hands out a fresh generation for the same text
     // - see setQueryRunner, the same trade-off for the same reason.
-    m_baseCache.clear();
+    d->m_baseCache.clear();
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isBase)
             continue;
         block.layout.reset();
@@ -90,14 +91,14 @@ void MarkdownEditor::setBaseRunner(
 
 void MarkdownEditor::refreshBases()
 {
-    if (!m_baseRefreshTimer) {
-        m_baseRefreshTimer = new QTimer(this);
-        m_baseRefreshTimer->setSingleShot(true);
-        m_baseRefreshTimer->setInterval(200);
-        connect(m_baseRefreshTimer, &QTimer::timeout, this, [this] {
-            m_baseCache.clear();
+    if (!d->m_baseRefreshTimer) {
+        d->m_baseRefreshTimer = new QTimer(this);
+        d->m_baseRefreshTimer->setSingleShot(true);
+        d->m_baseRefreshTimer->setInterval(200);
+        connect(d->m_baseRefreshTimer, &QTimer::timeout, this, [this] {
+            d->m_baseCache.clear();
             bool touched = false;
-            for (BlockView &block : m_blocks) {
+            for (BlockView &block : d->m_blocks) {
                 if (!block.isBase)
                     continue;
                 block.layout.reset();
@@ -112,21 +113,21 @@ void MarkdownEditor::refreshBases()
             }
         });
     }
-    m_baseRefreshTimer->start(); // restarts: a burst of index changes costs one refresh
+    d->m_baseRefreshTimer->start(); // restarts: a burst of index changes costs one refresh
 }
 
 const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QString &yamlText,
                                                                         const QString &viewName)
 {
     const QString key = baseCacheKey(yamlText, viewName);
-    auto it = m_baseCache.find(key);
-    if (it != m_baseCache.end())
+    auto it = d->m_baseCache.find(key);
+    if (it != d->m_baseCache.end())
         return *it;
 
     BaseCacheEntry entry;
     entry.pending = true;
-    entry.generation = ++m_baseGeneration;
-    it = m_baseCache.insert(key, entry);
+    entry.generation = ++d->m_baseGeneration;
+    it = d->m_baseCache.insert(key, entry);
 
     if (m_baseRunner) {
         const quint64 generation = entry.generation;
@@ -136,7 +137,7 @@ const MarkdownEditor::BaseCacheEntry &MarkdownEditor::ensureBaseSearch(const QSt
         // before it touches m_baseCache or a single BlockView, through
         // m_lifeline: the editor may be gone by the time the base is ready.
         m_baseRunner(yamlText, viewName,
-                     [this, lifeline = m_lifeline, yamlText, viewName, generation](BaseTableData results) {
+                     [this, lifeline = d->m_lifeline, yamlText, viewName, generation](BaseTableData results) {
                          lifeline->post(this, [this, yamlText, viewName, generation,
                                                results = std::move(results)]() mutable {
                              deliverBaseResults(yamlText, viewName, generation, std::move(results));
@@ -150,18 +151,18 @@ void MarkdownEditor::deliverBaseResults(const QString &yamlText, const QString &
                                         quint64 generation, BaseTableData results)
 {
     const QString key = baseCacheKey(yamlText, viewName);
-    auto it = m_baseCache.find(key);
+    auto it = d->m_baseCache.find(key);
     // Not the entry's current generation: refreshBases (or a fresh
     // setBaseRunner) started a newer evaluation for the same text while this
     // one was still in flight - see deliverQueryResults, the same check for
     // the same reason.
-    if (it == m_baseCache.end() || it->generation != generation)
+    if (it == d->m_baseCache.end() || it->generation != generation)
         return;
     it->results = std::move(results);
     it->pending = false;
 
     bool touched = false;
-    for (BlockView &block : m_blocks) {
+    for (BlockView &block : d->m_blocks) {
         if (!block.isBase || block.baseYAML != yamlText || block.baseRequestedView != viewName)
             continue;
         block.layout.reset();
@@ -180,13 +181,13 @@ bool MarkdownEditor::layoutBase(BlockView &view)
 {
     if (view.span.kind != BlockSpan::Kind::Code)
         return false;
-    if (!m_features.baseBlocks)
+    if (!d->m_features.baseBlocks)
         return false; // the fence shows as a plain, uncoloured code listing
     const CodeFenceSpan *fence = codeFenceOf(view);
     if (!fence || fence->language.compare(QLatin1String("base"), Qt::CaseInsensitive) != 0)
         return false;
 
-    return layoutBaseTable(view, m_text.mid(fence->content.start, fence->content.length()).trimmed());
+    return layoutBaseTable(view, d->m_text.mid(fence->content.start, fence->content.length()).trimmed());
 }
 
 bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName)
@@ -199,8 +200,8 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     view.baseYAML = yamlText;
     view.baseRequestedView = viewName;
 
-    const QColor mutedColour = m_theme.color(QStringLiteral("--text-muted"));
-    const QColor errorColour = m_theme.color(QStringLiteral("--text-error"));
+    const QColor mutedColour = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor errorColour = d->m_theme.color(QStringLiteral("--text-error"));
     const qreal lineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
 
     // A plain, single-line message in place of a table - pending, empty,
@@ -210,7 +211,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     const auto plainMessage = [&](const QString &text, const QColor &colour) {
         view.layout = std::make_unique<QTextLayout>(text);
         view.layout->setCacheEnabled(true);
-        view.layout->setFont(m_theme.textFont());
+        view.layout->setFont(d->m_theme.textFont());
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         view.layout->setTextOption(option);
@@ -278,13 +279,13 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     const int footerRow = footer ? (truncated ? summaryRow : shownRows) + 1 : -1;
     const int totalRows = (footer ? footerRow : (truncated ? summaryRow : shownRows)) + 1; // +1 for the header row
 
-    const QFont font = m_theme.textFont();
+    const QFont font = d->m_theme.textFont();
     const qreal cellLineHeight = QFontMetricsF(font).height() * 1.4;
     const qreal padX = 10;
     const qreal padY = 6;
     const qreal minimum = QFontMetricsF(font).horizontalAdvance(QLatin1Char('m')) * 3;
     const int columns = entry.results.headers.size();
-    const QColor textColour = m_theme.color(QStringLiteral("--text-normal"));
+    const QColor textColour = d->m_theme.color(QStringLiteral("--text-normal"));
 
     QList<qreal> natural(columns, minimum);
     std::vector<Cell> cells;
@@ -342,7 +343,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     }
     view.tableWidth = x;
 
-    QFont headingFont = m_theme.uiFont();
+    QFont headingFont = d->m_theme.uiFont();
     headingFont.setWeight(QFont::DemiBold);
     view.textTop = view.baseViewName.isEmpty() ? 0 : QFontMetricsF(headingFont).height() + 10;
 
@@ -399,11 +400,11 @@ void MarkdownEditor::paintBase(QPainter &painter, const BlockView &view, qreal l
                                qreal top) const
 {
     if (!view.baseViewName.isEmpty()) {
-        QFont headingFont = m_theme.uiFont();
+        QFont headingFont = d->m_theme.uiFont();
         headingFont.setWeight(QFont::DemiBold);
         painter.save();
         painter.setFont(headingFont);
-        painter.setPen(m_theme.color(QStringLiteral("--text-normal")));
+        painter.setPen(d->m_theme.color(QStringLiteral("--text-normal")));
         painter.drawText(QRectF(left, top, contentWidth(), view.textTop),
                          Qt::AlignVCenter | Qt::AlignLeft, view.baseViewName);
         painter.restore();

@@ -619,7 +619,7 @@ renderer that forgets to ask `plainSource()` shows up as a panel in Source mode.
 Settings > Editor > "Vim key bindings" (`editor.vimMode`, off by default).
 Off, `keyPressEvent` pays one bool test and nothing else runs. There is no
 CMake option, because there is no dependency to drop: the whole thing is
-`libs/editor/VimMode.cpp` and a small state struct in `MarkdownEditor.h`.
+`libs/editor/VimMode.cpp` and a small state struct in `MarkdownEditor_p.h`.
 
 No vim-emulation library is installed (FakeVim ships inside Qt Creator only),
 and none is downloaded, so this is hand-rolled. It is a friend of
