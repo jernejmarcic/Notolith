@@ -341,10 +341,8 @@ void SyncEngine::runCycle()
     const QString warning = pendingDeleteWarning();
     if (!pullError.isEmpty())
         setStatus(Status::Error, pullError);
-    else if (!warning.isEmpty())
-        setStatus(Status::Error, warning); // stays visible until the deletions go through
     else
-        setStatus(Status::Idle);
+        setStatus(Status::Idle, warning); // a parked delete is not a failure; the message stays until it goes through
     emit syncFinished(pushed, pulled, conflicts);
 }
 

@@ -431,8 +431,9 @@ delete becomes a *pending delete*: the entity stays (so the scan still sees
 the file as synced and never pushes it back as a new note), the entity's ID
 is kept in the journal's `meta` (`pendingDeletes`, so a restart still retries
 it), and every cycle retries the pending deletes before it pulls. The status
-stays `Error` with "N deletion(s) from other devices could not be applied:
-names; retried each sync" until they all go through. A later record for the
+is `Idle` (a parked delete is not a failure, so the bar still reads "synced")
+with the message "N deletion(s) from other devices could not be applied:
+names; retried each sync" as its tooltip until they all go through. A later record for the
 same note from any device (an edit, a rename) wins over the waiting delete
 and cancels it; a local edit does too, as above.
 

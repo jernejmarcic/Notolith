@@ -906,7 +906,7 @@ TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
     engineB.syncNow();
     ASSERT_TRUE(watchB.waitForCycle());
     EXPECT_TRUE(QFile::exists(otherOnB));
-    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error);
+    EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle) << "a parked delete is not an error";
     EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
     EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("deletion"))) << watchB.lastMessage.toStdString();
 
@@ -916,7 +916,8 @@ TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
         ASSERT_TRUE(watchB.waitForCycle());
         EXPECT_TRUE(QFile::exists(onB));
         EXPECT_EQ(watchB.pushed, 0) << "the file was pushed back as a new note";
-        EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Error);
+        EXPECT_EQ(watchB.lastStatus, SyncEngine::Status::Idle);
+        EXPECT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
     }
 
     // Deletable again: the next cycle applies it and the status clears.
