@@ -5668,6 +5668,87 @@ TEST_F(WindowTest, ASecondLaunchOpensItsNoteInTheRunningWindow)
     EXPECT_EQ(tabTexts(tabs).value(0), QStringLiteral("Loose")); // nothing to open: left as it was
 }
 
+// A hand-over that names another vault (a folder, or a note inside one) opens
+// that vault in the running window; with nothing unsaved there is no prompt.
+TEST_F(WindowTest, ASecondLaunchNamingAnotherVaultOpensThatVault)
+{
+    const QString name = dir.filePath(QStringLiteral("instance.sock"));
+    QTemporaryDir other;
+    ASSERT_TRUE(other.isValid());
+    ASSERT_TRUE(QDir(other.path()).mkpath(QStringLiteral(".obsidian")));
+    QFile note(other.filePath(QStringLiteral("Other.md")));
+    ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+    note.write("# Other\n");
+    note.close();
+
+    MainWindow window;
+    window.openTarget(LaunchTarget{}); // startup over: the window has been painted
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    SingleInstance instance(name);
+    ASSERT_FALSE(instance.handOver(QString()));
+    instance.serve(&window);
+    ASSERT_TRUE(instance.ok());
+    const auto explorerRoot = [&] {
+        auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        return model->filePath(tree->rootIndex());
+    };
+    ASSERT_EQ(explorerRoot(), dir.path());
+
+    auto handed = secondLaunch(name, other.path());
+    WAIT_EQ(explorerRoot(), other.path(), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    EXPECT_TRUE(window.windowTitle().contains(QDir(other.path()).dirName())) << window.windowTitle().toStdString();
+
+    handed = secondLaunch(name, other.filePath(QStringLiteral("Other.md")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Other")), 5000);
+    WAIT_TRUE(ready(handed), 5000);
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(explorerRoot(), other.path()) << "the same vault, not reopened or switched back";
+}
+
+// A note outside the vault opened by a hand-over is a tab like any other: the
+// layout saved when the window closes brings it back when the vault reopens.
+TEST_F(WindowTest, ANoteFromOutsideTheVaultHandedOverComesBackWithTheLayout)
+{
+    const QString name = dir.filePath(QStringLiteral("instance.sock"));
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(elsewhere.isValid());
+    QFile loose(elsewhere.filePath(QStringLiteral("Loose.md")));
+    ASSERT_TRUE(loose.open(QIODevice::WriteOnly));
+    loose.write("# Loose\n");
+    loose.close();
+    {
+        MainWindow window;
+        window.openTarget(LaunchTarget{});
+        window.openVault(dir.path());
+        window.show();
+        ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+        SingleInstance instance(name);
+        ASSERT_FALSE(instance.handOver(QString()));
+        instance.serve(&window);
+        auto handed = secondLaunch(name, loose.fileName());
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        ASSERT_NE(tabs, nullptr);
+        WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Loose")), 5000);
+        WAIT_TRUE(ready(handed), 5000);
+        EXPECT_TRUE(handed.get());
+        window.close(); // saves the layout
+    }
+
+    MainWindow window;
+    window.openVault(dir.path());
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    EXPECT_TRUE(tabTexts(tabs).contains(QStringLiteral("Loose"))) << tabTexts(tabs).join(QLatin1Char(',')).toStdString();
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Loose\n"));
+}
+
 // Handed a path before its first paint, the window must not let the open it
 // has queued for startup (the last vault) overwrite it - and two launches in
 // the same moment, the second arriving while the first is still building its
