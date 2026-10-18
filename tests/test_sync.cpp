@@ -52,6 +52,16 @@
 
 using namespace noteAppC;
 
+// Readable failure output for the Qt strings the assertions compare.
+void PrintTo(const QString &s, std::ostream *os)
+{
+    *os << '"' << s.toStdString() << '"';
+}
+void PrintTo(const QByteArray &b, std::ostream *os)
+{
+    *os << '"' << b.toStdString() << '"';
+}
+
 namespace {
 
 QString writeNote(const QString &vaultRoot, const QString &relativePath, const QString &text)
@@ -1021,6 +1031,221 @@ TEST_F(SyncIntegrationTest, AnEditBeatsADeleteInBothDirections)
     EXPECT_TRUE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
     EXPECT_EQ(readNoteText(vaultA.path() + QStringLiteral("/shared.md")), QStringLiteral("B's edit, offline"));
     expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+}
+
+// Two saves of one note pushed one after the other and pulled together: the
+// second record names the first as its parent, so it is a fast-forward, not a
+// conflict with the copy the first one left.
+TEST_F(SyncIntegrationTest, TwoSavesPushedTogetherFastForwardWithoutAConflict)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo\nthree"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo, first save\nthree"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo, second save\nthree"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/shared.md")), QStringLiteral("one\ntwo, second save\nthree"));
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), 1);
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+}
+
+// Three devices each edit their own line while offline. Every device ends with
+// all three edits, no copy, and the extra records are the merge results.
+TEST_F(SyncIntegrationTest, ThreeDevicesEditDisjointLinesAndConverge)
+{
+    const QString original = QStringLiteral("alpha\nbeta\ngamma\ndelta\nepsilon");
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), original);
+    SyncEngine engineA, engineB, engineC;
+    Watcher watchA(engineA), watchB(engineB), watchC(engineC);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineC.start(vaultC.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchC.waitForCycle());
+
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta\nepsilon"));
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("alpha\nbeta\nGAMMA\ndelta\nepsilon"));
+    writeNote(vaultC.path(), QStringLiteral("shared.md"), QStringLiteral("alpha\nbeta\ngamma\ndelta\nEPSILON"));
+
+    int pushedTotal = 0;
+    int conflictsTotal = 0;
+    for (const auto &device : QList<QPair<SyncEngine *, Watcher *>>{{&engineA, &watchA}, {&engineB, &watchB}, {&engineC, &watchC}}) {
+        device.first->syncNow();
+        ASSERT_TRUE(device.second->waitForCycle());
+        pushedTotal += device.second->pushed;
+        conflictsTotal += device.second->conflicts;
+    }
+    for (int round = 0; round < 4; ++round) {
+        for (const auto &device : QList<QPair<SyncEngine *, Watcher *>>{{&engineA, &watchA}, {&engineB, &watchB}, {&engineC, &watchC}}) {
+            device.first->syncNow();
+            ASSERT_TRUE(device.second->waitForCycle());
+            pushedTotal += device.second->pushed;
+            conflictsTotal += device.second->conflicts;
+        }
+    }
+    std::cout << "[ INFO     ] three devices, three disjoint edits: " << pushedTotal << " records pushed\n";
+    EXPECT_EQ(conflictsTotal, 0);
+    // The three edits, and a merge result from each device for every record it
+    // merged on the way (measured: 6, not the 3 a final-result-only rule would give).
+    EXPECT_LE(pushedTotal, 3 + 6);
+    for (const QString &root : {vaultA.path(), vaultB.path(), vaultC.path()}) {
+        EXPECT_EQ(readNoteText(root + QStringLiteral("/shared.md")), QStringLiteral("ALPHA\nbeta\nGAMMA\ndelta\nEPSILON")) << snapshot(root);
+        EXPECT_EQ(vaultFiles(root).size(), 1) << snapshot(root);
+    }
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}, {&engineC, &watchC}},
+                    {vaultA.path(), vaultB.path(), vaultC.path()}, 4);
+}
+
+// An attachment cannot be merged: both devices' bytes survive, the one the
+// server saw last in photo.png, the other as exactly one copy made by the
+// device that holds the newer bytes. (The copy reaches the other device only
+// when its bytes are not already in the blob store: the server keeps one blob
+// per content address, sealed under the first entity's noteKey, so a copy made
+// from bytes the other device uploaded cannot be opened there. Not a conflict
+// rule, and not fixed here.)
+TEST_F(SyncIntegrationTest, ConcurrentAttachmentEditsKeepBothVersions)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("bytes before"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("bytes from A"));
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("bytes from B"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.conflicts, 1);
+
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 3, false);
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        QFile f(root + QStringLiteral("/photo.png"));
+        ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+        EXPECT_EQ(f.readAll(), QByteArray("bytes from B")) << snapshot(root); // B's reached the server last
+    }
+    EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1) << snapshot(vaultB.path());
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), 2) << snapshot(vaultB.path());
+}
+
+// A deletes a note B has not yet seen change: B's edit was already on the
+// server, so the delete is older than B's state and does nothing.
+TEST_F(SyncIntegrationTest, ADeleteConcurrentWithAPushedEditKeepsTheEdit)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("original text"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("edited on B"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle()); // the edit is on the server, A has not pulled it
+    QFile::remove(vaultA.path() + QStringLiteral("/shared.md"));
+    engineA.syncNow(); // pushes the delete, then pulls the edit
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()})
+        EXPECT_EQ(readNoteText(root + QStringLiteral("/shared.md")), QStringLiteral("edited on B")) << snapshot(root);
+}
+
+// Records from a client that wrote no parent and no hash still apply: the
+// decision falls back to what this device holds, and the merge is pushed.
+TEST_F(SyncIntegrationTest, ARecordWithoutParentStillAppliesAndMerges)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("alpha\nbeta\ngamma\ndelta"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    {
+        SyncEngine::setLegacyRecordFormatForTests(true);
+        const auto modern = qScopeGuard([] { SyncEngine::setLegacyRecordFormatForTests(false); });
+        writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta"));
+        engineA.syncNow(); // queued, pushed and echoed without a hash: the old disk-based echo
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("alpha\nbeta\ngamma\nDELTA"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/shared.md")), QStringLiteral("ALPHA\nbeta\ngamma\nDELTA"));
+
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_EQ(readNoteText(root + QStringLiteral("/shared.md")), QStringLiteral("ALPHA\nbeta\ngamma\nDELTA")) << snapshot(root);
+        EXPECT_EQ(vaultFiles(root).size(), 1) << snapshot(root);
+    }
+}
+
+// A device keeps the last 32 states of a note. A record built on one older
+// than that cannot be merged on its own; it takes the conflict rule instead.
+// Here B has merged every record of A's into its own edit (that is where
+// nothing is lost), so A's file is replaced by the newer text of the server's
+// order and then by B's merge results, and the devices still agree.
+TEST_F(SyncIntegrationTest, AStateOlderThanTheHistoryFallsBackToAConflictCopy)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo\nthree\nfour"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("one\ntwo\nthree\nfour, from B"));
+    constexpr int kEdits = SyncJournal::kStateHistory + 1;
+    for (int i = 1; i <= kEdits; ++i) {
+        writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("one, A%1\ntwo\nthree\nfour").arg(i));
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+    int conflicts = 0;
+    for (const auto &device : QList<QPair<SyncEngine *, Watcher *>>{{&engineB, &watchB}, {&engineA, &watchA}, {&engineB, &watchB}, {&engineA, &watchA}}) {
+        device.first->syncNow();
+        ASSERT_TRUE(device.second->waitForCycle());
+        conflicts += device.second->conflicts;
+    }
+    EXPECT_GE(conflicts, 1);
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 4);
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_GE(filesContaining(root, "A33"), 1) << snapshot(root);
+        EXPECT_GE(filesContaining(root, "from B"), 1) << snapshot(root);
+    }
 }
 
 // A pulled delete whose file cannot go to the trash used to drop the entity

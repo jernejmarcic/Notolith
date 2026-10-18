@@ -1062,19 +1062,24 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             // A record queued before records carried a hash: the old way,
             // mark whatever is on disk right now as the synced state.
             QByteArray syncedHash;
+            QByteArray diskDigest;
             bool hasLocalFile = false;
             if (existing->entityType == QStringLiteral("note")) {
                 Note onDisk;
                 hasLocalFile = Vault::read(existingPath, onDisk);
                 if (hasLocalFile) {
                     syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
+                    diskDigest = SyncCrypto::digest(onDisk.text.toUtf8());
                     m_journal->writeBase(record.entityID, onDisk.text);
                 }
             } else {
                 QFile f(existingPath);
                 hasLocalFile = f.open(QIODevice::ReadOnly);
-                if (hasLocalFile)
-                    syncedHash = SyncCrypto::contentAddress(m_contentKey, f.readAll());
+                if (hasLocalFile) {
+                    const QByteArray bytes = f.readAll();
+                    syncedHash = SyncCrypto::contentAddress(m_contentKey, bytes);
+                    diskDigest = SyncCrypto::digest(bytes);
+                }
             }
             if (hasLocalFile) {
                 const QFileInfo info(existingPath);
@@ -1083,6 +1088,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
                 entity.localSize = info.size();
                 entity.localHash = syncedHash;
                 entity.syncedHash = syncedHash;
+                entity.baseDigest = diskDigest; // the base file now holds this: the digest must say so too
                 m_journal->putEntity(entity);
             }
             ++*pulled;
