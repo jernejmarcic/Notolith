@@ -753,7 +753,8 @@ journal.db      SQLite: outbox, lastPulledSeq, entity table (entityID <->
                 below; baseDigest and headDigest), device row, known
                 itemsKeys (wrapped), and the states table (the last 32
                 states of each entity this device wrote or applied: digest,
-                text, local path, own or applied, server seq)
+                text, local path, own or applied, server seq), and the parked
+                table (pulled records whose blob never came, kept whole)
 base/<entityID> last-synced plaintext body, for three-way merge
 ```
 
