@@ -163,6 +163,8 @@ private:
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
     QString refusedWarning() const;       ///< empty when no record was refused
     void queueLocalChange(const SyncScanner::Change &change);
+    /// Queues the entity as it is on disk right now as a local change.
+    void announce(const QByteArray &entityID);
 
     QThread m_thread;
     QTimer *m_debounce = nullptr; ///< a change kicks this, single-shot, a few seconds out

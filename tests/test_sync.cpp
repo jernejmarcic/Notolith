@@ -679,8 +679,9 @@ TEST(SyncJournalTest, OpeningAnOldJournalAddsTheColumns)
         auto entity = journal.entity(id);
         ASSERT_TRUE(entity);
         EXPECT_EQ(entity->path, QStringLiteral("old.md"));
-        if (reopen == 0)
+        if (reopen == 0) {
             EXPECT_TRUE(entity->baseDigest.isEmpty());
+        }
         entity->baseDigest = SyncCrypto::digest("base");
         entity->headDigest = SyncCrypto::digest("head");
         journal.putEntity(*entity);
