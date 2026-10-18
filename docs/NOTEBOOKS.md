@@ -18,8 +18,8 @@ kernel, should use system itself, or in a docker, most efficient way").
 | `bash`, `sh`, `shell` | bash | |
 | `javascript`, `js` | node | |
 | `ruby`, `perl`, `lua` | the same | |
-| `c`, `cpp`, `rust` | gcc, g++ -std=c++20, rustc | compiled in a temporary directory, then run |
-| `java` | java | single-file source launch |
+| `c`, `cpp`, `rust` | gcc, g++ -std=c++20, rustc | compiled in a temporary directory, then run; a block with no `main` is only type-checked (`-fsyntax-only`, `rustc --crate-type=lib --emit=metadata`) and says so |
+| `java` | java | single-file source launch; a block with no `main` is only compiled with javac |
 
 By default blocks share nothing: each run is a fresh process, so a later
 block cannot use a variable an earlier one set. A language noteAppC has no

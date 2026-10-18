@@ -795,6 +795,68 @@ TEST(DirectRunnerTest, ACBlockIsCompiledAndRun)
     EXPECT_EQ(textOf(*result), QStringLiteral("42\n"));
 }
 
+namespace {
+
+/// A snippet with no `main` is checked, not run: ok with the one line, or
+/// the compiler's own error. `tool` is the extra program a language needs.
+void expectCheckedWhenNoMain(const QString &language, const QString &good, const QString &bad, const QString &error,
+                             const QString &tool)
+{
+    if (!DirectRunner::canRun(language) || QStandardPaths::findExecutable(tool).isEmpty())
+        GTEST_SKIP() << tool.toStdString() << " is not installed";
+    auto result = runDirect(language, good);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral("Nothing to run"))) << textOf(*result).toStdString();
+
+    result = runDirect(language, bad);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->ok);
+    EXPECT_TRUE(textOf(*result).contains(error)) << textOf(*result).toStdString();
+}
+
+} // namespace
+
+TEST(DirectRunnerTest, ARustBlockWithNoMainIsCheckedNotRun)
+{
+    expectCheckedWhenNoMain(QStringLiteral("rust"),
+                            QStringLiteral("struct Note { title: String }\nimpl Note { fn slug(&self) -> String { self.title.to_lowercase() } }\n"),
+                            QStringLiteral("fn f() -> u32 { \"x\" }\n"), QStringLiteral("E0308"), QStringLiteral("rustc"));
+}
+
+TEST(DirectRunnerTest, ACBlockWithNoMainIsCheckedNotRun)
+{
+    expectCheckedWhenNoMain(QStringLiteral("c"), QStringLiteral("static int twice(int x) { return 2 * x; }\n"),
+                            QStringLiteral("int f(void) { return undeclared; }\n"), QStringLiteral("undeclared"),
+                            QStringLiteral("gcc"));
+}
+
+TEST(DirectRunnerTest, ACppBlockWithNoMainIsCheckedNotRun)
+{
+    expectCheckedWhenNoMain(QStringLiteral("cpp"), QStringLiteral("struct P { int x; int twice() const { return 2 * x; } };\n"),
+                            QStringLiteral("int f() { return undeclared; }\n"), QStringLiteral("undeclared"),
+                            QStringLiteral("g++"));
+}
+
+TEST(DirectRunnerTest, AJavaBlockWithNoMainIsCheckedNotRun)
+{
+    expectCheckedWhenNoMain(QStringLiteral("java"), QStringLiteral("class Note { int twice(int x) { return 2 * x; } }\n"),
+                            QStringLiteral("class Note { int f() { return undeclared; } }\n"), QStringLiteral("undeclared"),
+                            QStringLiteral("javac"));
+}
+
+TEST(DirectRunnerTest, BlocksWithMainStillRunAndAMainInACommentDoesNotCount)
+{
+    if (!DirectRunner::canRun(QStringLiteral("c")) || !DirectRunner::canRun(QStringLiteral("rust")))
+        GTEST_SKIP() << "gcc or rustc is not installed";
+    auto result = runDirect(QStringLiteral("rust"), QStringLiteral("fn main() { println!(\"{}\", 6 * 7); }\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(textOf(*result), QStringLiteral("42\n"));
+    result = runDirect(QStringLiteral("c"), QStringLiteral("/* main( */ // int main(\nint f(void) { return 1; }\n"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral("Nothing to run"))) << textOf(*result).toStdString();
+}
+
 TEST(DirectRunnerTest, ARunawayBlockIsStoppedAndAnUnknownLanguageSaysSo)
 {
     if (!DirectRunner::canRun(QStringLiteral("bash")))
