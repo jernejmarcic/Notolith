@@ -1623,6 +1623,7 @@ TEST_F(SyncIntegrationTest, TheSamePathCreatedOnTwoDevicesKeepsBothTexts)
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/shared.md")), QStringLiteral("from B"));
     EXPECT_TRUE(texts(vaultA.path()).contains(QStringLiteral("from B")));
     EXPECT_TRUE(texts(vaultB.path()).contains(QStringLiteral("from A")));
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 3, false);
 }
 
 TEST_F(SyncIntegrationTest, TheSamePathAndTextCreatedOnTwoDevicesMakesNoConflictCopy)
@@ -1644,6 +1645,7 @@ TEST_F(SyncIntegrationTest, TheSamePathAndTextCreatedOnTwoDevicesMakesNoConflict
     EXPECT_EQ(watchB.conflicts, 0);
     EXPECT_EQ(QDir(vaultA.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
     EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 3, false);
 }
 
 // Two devices created the same attachment path with different bytes: both
@@ -1683,6 +1685,7 @@ TEST_F(SyncIntegrationTest, TheSameAttachmentPathWithDifferentBytesKeepsBoth)
     EXPECT_EQ(read(vaultB.path() + QStringLiteral("/photo.png")), QByteArray("bytes from B"));
     EXPECT_EQ(filesContaining(vaultA.path(), "bytes from B"), 1);
     EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1);
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 3, false);
 }
 
 TEST_F(SyncIntegrationTest, TheSameAttachmentPathAndBytesMakesNoConflictCopy)
@@ -1704,6 +1707,7 @@ TEST_F(SyncIntegrationTest, TheSameAttachmentPathAndBytesMakesNoConflictCopy)
     EXPECT_EQ(watchB.conflicts, 0);
     EXPECT_EQ(vaultFiles(vaultA.path()).keys(), QStringList{QStringLiteral("photo.png")});
     EXPECT_EQ(vaultFiles(vaultB.path()).keys(), QStringList{QStringLiteral("photo.png")});
+    expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()}, 3, false);
 }
 
 // A has note Y, B has its own note X at p.md; A then renames Y to p.md. B
