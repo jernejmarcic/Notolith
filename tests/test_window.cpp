@@ -99,6 +99,7 @@
 
 #include "Index.h"
 #include "Indexer.h"
+#include "Workspaces.h"
 #include "CodeHighlighter.h"
 #include "HtmlRenderer.h"
 #include "MathRenderer.h"
@@ -1354,6 +1355,137 @@ TEST_F(WindowTest, ObsidiansOwnLayoutIsReadAndNeverWritten)
     MainWindow window;
     window.openVault(dir.path());
     EXPECT_EQ(window.findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 1);
+}
+
+TEST_F(WindowTest, FloatingWindowsComeBackWithTheLayout)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "workspace:new-tab")->trigger();
+        window.openNote(path(QStringLiteral("Other.md")));
+        command(window, "workspace:move-to-new-window")->trigger();
+        command(window, "workspace:new-tab")->trigger(); // in the pop-out, where the focus is
+        window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+        const auto popouts = popoutWindows();
+        ASSERT_EQ(popouts.size(), 1);
+        popouts.first()->resize(640, 480);
+        // Other is the pop-out's shown tab and the active one; Crlf waits in its background.
+        popouts.first()->findChild<QTabBar *>(QStringLiteral("noteTabs"))->setCurrentIndex(0);
+        window.close();
+    }
+    EXPECT_TRUE(popoutWindows().isEmpty()) << "closing the window took its pop-out along";
+
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_TRUE(popouts.first()->isVisible());
+    EXPECT_EQ(popouts.first()->size(), QSize(640, 480));
+    QTabBar *bar = popouts.first()->findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(bar, nullptr);
+    EXPECT_EQ(tabTexts(bar), (QStringList{QStringLiteral("Other"), QStringLiteral("Crlf")}));
+    const auto editors = popouts.first()->findChildren<MarkdownEditor *>();
+    ASSERT_EQ(editors.size(), 2);
+    EXPECT_TRUE(editors.contains(window.editor())) << "the active tab was in the pop-out";
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("other note text\n"));
+    EXPECT_EQ(tabEditors(window).size(), 1) << "Welcome stayed in the main window";
+    // Crlf was deferred: nothing read until its tab is shown.
+    int loaded = 0;
+    for (MarkdownEditor *editor : editors)
+        loaded += !editor->noteText().isEmpty();
+    EXPECT_EQ(loaded, 1);
+    bar->setCurrentIndex(1);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("one\ntwo\n"));
+}
+
+TEST_F(WindowTest, TheActiveTabOfAPopoutIsTheActiveOneAgain)
+{
+    write(QStringLiteral("Other.md"), "other note text\n");
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "workspace:new-tab")->trigger();
+        window.openNote(path(QStringLiteral("Other.md")));
+        command(window, "workspace:move-to-new-window")->trigger();
+        command(window, "workspace:new-tab")->trigger();
+        window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+        QTabBar *first = popoutWindows().first()->findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        command(window, "workspace:open-in-new-window")->trigger(); // a second window, now the active one
+        ASSERT_EQ(popoutWindows().size(), 2);
+        first->setCurrentIndex(0); // back to the first window's Other
+        ASSERT_EQ(window.editor()->noteText(), QStringLiteral("other note text\n"));
+        window.close();
+    }
+    MainWindow window;
+    window.openVault(dir.path());
+    ASSERT_EQ(popoutWindows().size(), 2);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("other note text\n"));
+}
+
+TEST_F(WindowTest, ALayoutHasAFloatingNodeOnlyWhileThereAreWindows)
+{
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        window.close();
+    }
+    EXPECT_FALSE(noteAppC::Workspaces::current(dir.path()).contains(QStringLiteral("floating")));
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        command(window, "workspace:open-in-new-window")->trigger();
+        window.close();
+    }
+    EXPECT_TRUE(noteAppC::Workspaces::current(dir.path()).contains(QStringLiteral("floating")));
+}
+
+TEST_F(WindowTest, ObsidiansFloatingNodeIsReadAndNeverWritten)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    const QByteArray obsidian = R"({
+  "main": {"id": "5f", "type": "split", "direction": "vertical", "children": [
+    {"id": "a1", "type": "tabs", "children": [
+      {"id": "b1", "type": "leaf", "state": {"type": "markdown", "state": {"file": "Welcome.md"}}}]}]},
+  "floating": {"id": "f0", "type": "floating", "children": [
+    {"id": "w1", "type": "window", "direction": "vertical", "x": 10, "y": 20, "width": 700, "height": 500,
+     "maximized": false, "zoom": 0, "children": [
+      {"id": "t1", "type": "tabs", "children": [
+        {"id": "c1", "type": "leaf", "state": {"type": "markdown", "state": {"file": "Projects/Crlf.md"}}},
+        {"id": "c2", "type": "leaf", "state": {"type": "some-plugin-view", "state": {}}}]}]},
+    {"id": "w2", "type": "window", "width": 300, "height": 300, "children": [
+      {"id": "t2", "type": "tabs", "children": [
+        {"id": "c3", "type": "leaf", "state": {"type": "some-plugin-view", "state": {}}}]}]},
+    {"id": "w3", "type": "window", "width": 500, "height": 400, "children": [
+      {"id": "s3", "type": "split", "direction": "vertical", "children": [
+        {"id": "t3", "type": "tabs", "children": [
+          {"id": "c4", "type": "leaf", "state": {"type": "markdown", "state": {"file": "Welcome.md"}}}]}]}]}]},
+  "left": {"id": "l", "type": "split", "children": [], "collapsed": false},
+  "right": {"id": "r", "type": "split", "children": [], "collapsed": false},
+  "active": "b1",
+  "lastOpenFiles": []
+})";
+    write(QStringLiteral(".obsidian/workspace.json"), obsidian);
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        const auto popouts = popoutWindows();
+        ASSERT_EQ(popouts.size(), 2) << "the window with nothing we can show is not made";
+        QList<QSize> sizes{popouts.at(0)->size(), popouts.at(1)->size()};
+        std::sort(sizes.begin(), sizes.end(), [](const QSize &a, const QSize &b) { return a.width() < b.width(); });
+        EXPECT_EQ(sizes, (QList<QSize>{QSize(500, 400), QSize(700, 500)}));
+        for (const auto *popout : popouts) {
+            EXPECT_EQ(popout->findChildren<MarkdownEditor *>().size(), 1) << "the unknown view is skipped";
+            EXPECT_EQ(popout->findChildren<QTabBar *>(QStringLiteral("noteTabs")).size(), 1);
+        }
+        EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Welcome\n\nBody.\n"));
+        window.close();
+    }
+    EXPECT_EQ(readAll(path(QStringLiteral(".obsidian/workspace.json"))), obsidian);
 }
 
 TEST_F(WindowTest, NamedLayoutsSaveAndLoad)

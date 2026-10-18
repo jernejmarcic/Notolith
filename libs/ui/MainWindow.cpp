@@ -4738,6 +4738,27 @@ QJsonObject MainWindow::layoutJSON() const
                 {QStringLiteral("currentTab"), currentTab}};
     };
     QJsonObject layout{{QStringLiteral("main"), node(m_workspace)}};
+    // Obsidian's pop-outs: floating > window > the split (or tabs) it holds.
+    // Only when there are some, so a layout without them is as it always was.
+    QJsonArray windows;
+    for (const auto &popout : m_popouts) {
+        if (popout->kind() != PopoutWindow::Kind::Leaves || !popout->content())
+            continue;
+        windows.append(QJsonObject{{QStringLiteral("id"), nextID()},
+                                   {QStringLiteral("type"), QStringLiteral("window")},
+                                   {QStringLiteral("children"), QJsonArray{node(popout->content())}},
+                                   {QStringLiteral("direction"), QStringLiteral("vertical")},
+                                   {QStringLiteral("x"), popout->x()},
+                                   {QStringLiteral("y"), popout->y()},
+                                   {QStringLiteral("width"), popout->width()},
+                                   {QStringLiteral("height"), popout->height()},
+                                   {QStringLiteral("maximized"), popout->isMaximized()},
+                                   {QStringLiteral("zoom"), 0}});
+    }
+    if (!windows.isEmpty())
+        layout.insert(QStringLiteral("floating"), QJsonObject{{QStringLiteral("id"), nextID()},
+                                                              {QStringLiteral("type"), QStringLiteral("floating")},
+                                                              {QStringLiteral("children"), windows}});
     layout.insert(QStringLiteral("left"),
                   QJsonObject{{QStringLiteral("collapsed"), !m_sidebar->isVisible()}});
     layout.insert(QStringLiteral("right"),
@@ -4756,12 +4777,27 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
     Leaf *spareLeaf = m_active;
     QHash<QString, Leaf *> byID;
     QList<std::pair<TabGroup *, int>> shown;
+    // What a tab opens, as an absolute path; empty when it opens nothing we can show.
+    const auto tabFile = [this](const QJsonObject &tab) {
+        const QJsonObject view = tab.value(QStringLiteral("state")).toObject();
+        const QString file =
+            view.value(QStringLiteral("state")).toObject().value(QStringLiteral("file")).toString();
+        const QString kind = view.value(QStringLiteral("type")).toString();
+        const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
+                        || kind == QLatin1String("bases") || kind == QLatin1String("epub")
+                        || kind == QLatin1String("pdf") || kind == QLatin1String("image")
+                        || kind == QLatin1String("audio") || kind == QLatin1String("video");
+        return opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)) ? m_vault.absolute(file)
+                                                                                      : QString();
+    };
+    QSplitter *rootSplit = m_workspace; // the split a node with no parent becomes
+    bool floating = false;              // a pop-out's tabs: only those that open something
 
     const std::function<void(const QJsonObject &, QSplitter *)> build =
         [&](const QJsonObject &node, QSplitter *parent) {
             const QString type = node.value(QStringLiteral("type")).toString();
             if (type == QLatin1String("split")) {
-                QSplitter *split = parent ? new QSplitter : m_workspace;
+                QSplitter *split = parent ? new QSplitter : rootSplit;
                 split->setChildrenCollapsible(false);
                 split->setOrientation(node.value(QStringLiteral("direction")).toString()
                                               == QLatin1String("horizontal")
@@ -4774,35 +4810,68 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
                     build(child.toObject(), split);
                     sizes << int(child.toObject().value(QStringLiteral("dimension")).toDouble(0) * 100);
                 }
+                if (floating && split != rootSplit && split->count() == 0) {
+                    delete split; // nothing in it could be restored
+                    return;
+                }
                 if (!sizes.contains(0) && sizes.size() == split->count())
                     split->setSizes(sizes);
                 return;
             }
             if (type != QLatin1String("tabs") || !parent)
                 return;
-            TabGroup *group = spareGroup ? std::exchange(spareGroup, nullptr) : newGroup();
-            parent->addWidget(group->widget);
+            QList<QJsonObject> tabs;
             for (const QJsonValue &value : node.value(QStringLiteral("children")).toArray()) {
                 const QJsonObject tab = value.toObject();
-                if (tab.value(QStringLiteral("type")).toString() != QLatin1String("leaf"))
-                    continue;
+                if (tab.value(QStringLiteral("type")).toString() == QLatin1String("leaf")
+                    && (!floating || !tabFile(tab).isEmpty()))
+                    tabs << tab;
+            }
+            if (tabs.isEmpty() && floating)
+                return;
+            TabGroup *group = spareGroup ? std::exchange(spareGroup, nullptr) : newGroup();
+            parent->addWidget(group->widget);
+            for (const QJsonObject &tab : std::as_const(tabs)) {
                 Leaf *leaf = spareLeaf ? std::exchange(spareLeaf, nullptr) : newLeaf(group);
-                const QJsonObject view = tab.value(QStringLiteral("state")).toObject();
-                const QString file =
-                    view.value(QStringLiteral("state")).toObject().value(QStringLiteral("file")).toString();
-                const QString kind = view.value(QStringLiteral("type")).toString();
-                const bool opens = kind == QLatin1String("markdown") || kind == QLatin1String("canvas")
-                                || kind == QLatin1String("bases") || kind == QLatin1String("epub")
-                                || kind == QLatin1String("pdf") || kind == QLatin1String("image")
-                                || kind == QLatin1String("audio") || kind == QLatin1String("video");
-                if (opens && !file.isEmpty() && QFileInfo::exists(m_vault.absolute(file)))
-                    leaf->pendingPath = m_vault.absolute(file);
+                leaf->pendingPath = tabFile(tab);
                 byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
             }
             shown << std::pair{group, node.value(QStringLiteral("currentTab")).toInt()};
             syncTabs(group);
         };
     build(main, nullptr);
+
+    // Obsidian's pop-outs. Sized, never moved: where a window goes is the
+    // compositor's to say. A window nothing could be restored into is not made.
+    floating = true;
+    spareGroup = nullptr;
+    spareLeaf = nullptr;
+    const QJsonArray windows = layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray();
+    for (const QJsonValue &value : m_popoutsOn ? windows : QJsonArray()) {
+        const QJsonObject window = value.toObject();
+        const QJsonArray inside = window.value(QStringLiteral("children")).toArray();
+        const QJsonObject content = inside.isEmpty() ? QJsonObject() : inside.first().toObject();
+        const QString contentType = content.value(QStringLiteral("type")).toString();
+        if (window.value(QStringLiteral("type")).toString() != QLatin1String("window")
+            || (contentType != QLatin1String("split") && contentType != QLatin1String("tabs")))
+            continue;
+        auto *root = new QSplitter(Qt::Horizontal);
+        root->setObjectName(QStringLiteral("popoutWorkspace"));
+        root->setChildrenCollapsible(false);
+        rootSplit = root;
+        build(content, contentType == QLatin1String("split") ? nullptr : root);
+        if (root->count() == 0) {
+            delete root;
+            continue;
+        }
+        auto *popout = new PopoutWindow(PopoutWindow::Kind::Leaves, root);
+        m_popouts.emplace_back(popout);
+        connect(popout, &PopoutWindow::closing, this, &MainWindow::closePopout);
+        popout->addActions(m_commands);
+        const QSize wanted(window.value(QStringLiteral("width")).toInt(), window.value(QStringLiteral("height")).toInt());
+        popout->resize(wanted.isEmpty() ? size() * 0.6 : wanted);
+        popout->show();
+    }
 
     // Each split's own tab first, the focused one last so it ends up active.
     for (const auto &[group, index] : std::as_const(shown)) {
