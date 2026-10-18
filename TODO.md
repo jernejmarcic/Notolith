@@ -1674,7 +1674,7 @@ Lane sync8:
       ConcurrentAttachmentEditsKeepBothVersions (weakened to match). Plan
       (Fable): blobs sealed under a key independent of the entity, or a
       per-entity address; and never drop a record silently - status line.
-- [ ] 29. Announce noise (syncbase): every merge announces, so 3 devices
+- [x] 29. Announce noise (syncbase): every merge announces, so 3 devices
       push 9 records for 3 edits, and a device offline across 33 edits makes
       the other push 33 merge records and take 34 counted conflicts (no loss,
       converges). Measured: the announce is load-bearing only when the
@@ -1688,7 +1688,7 @@ Lane sync8:
       on every incoming record afterwards (pre-existing; found by Fable).
       Plan after syncbase: rehash the journal under the new key in
       changePassword.
-- [ ] 26. Confinement follow-ups: check-then-write, not openat(O_NOFOLLOW)
+- [x] 26. Confinement follow-ups: check-then-write, not openat(O_NOFOLLOW)
       (a link swapped in between wins the race); retryPendingDeletes does
       not re-check its journal path; a backslash in a Linux filename is now
       refused on pull (the scanner pushes it). Plan: O_NOFOLLOW + openat
@@ -1751,23 +1751,27 @@ Lane misc8:
 
 ## Fable round 9, 2026-10-18 (syncbase review; plan in the session scratchpad SYNC-ROUND9-PLAN.md)
 
-- [ ] F1. (lane A conflicts) BUG: a conflict seen on one side only loses
+- [x] F1. (lane A conflicts) BUG: a conflict seen on one side only loses
       the loser's text (masked by the announce cascade); fix: the loser
       copies its own text, announce iff merged != remote, announce an
       unrecorded local winner.
-- [ ] F2. (lane A) BUG: a skipped own echo leaves the base behind; a later
+- [x] F2. (lane A) BUG: a skipped own echo leaves the base behind; a later
       delete is ignored forever. Echo advance when own == localHash; delete
       ordered by seq.
-- [ ] F3. (lane A) BUG: own rows pruned before their echo (33+ scans
+- [x] F3. (lane A) BUG: own rows pruned before their echo (33+ scans
       offline) break the echo chain; take the base from the record itself.
-- [ ] F4. (lane A) BUG: renaming back to a former name is ignored.
-- [ ] Item 29 (lane A): coalesce announces per pull batch; bound k + n.
+- [x] F4. (lane A) BUG: renaming back to a former name is ignored.
+- [x] Item 29 (lane A): coalesce announces per pull batch; bound k + n.
+      Merged: bound is one merge record per (device, entity, pull), so 3
+      devices measured 7 pushes (was 9); F3 overlaps F2(1) (killed only
+      jointly); parked-delete link guard is defence in depth (scanner
+      refuses the link first).
 - [x] Item 28 + F5 (lane B blob): per-entity blob address; blob fetch
       failure parks after 3 cycles with a status line, never dropped
       silently; push-side confinement (backslash names).
 - [x] Item 27 (lane C contentkey): content key kept per device in journal
       meta, never changed by a password change.
-- [ ] Item 26 (lane D nofollow, then lane A): Vault::writeBytesNoFollow /
+- [x] Item 26 (lane D nofollow, then lane A): Vault::writeBytesNoFollow /
       writeNoteNoFollow (openat O_NOFOLLOW, renameat); engine writes use
       them; applyRemoteDelete re-checks its path. Vault part merged
       (keeps the file mode); engine call sites left for lane A.
