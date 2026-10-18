@@ -1748,3 +1748,27 @@ Lane misc8:
       with the network permission, the default list otherwise.
 - [x] 11. (lane misc8, 8c1c2a8) Nits: alt text left(2000) may split a surrogate pair;
       static_assert pools/pruned arrays against DiagramKind.
+
+## Fable round 9, 2026-10-18 (syncbase review; plan in the session scratchpad SYNC-ROUND9-PLAN.md)
+
+- [ ] F1. (lane A conflicts) BUG: a conflict seen on one side only loses
+      the loser's text (masked by the announce cascade); fix: the loser
+      copies its own text, announce iff merged != remote, announce an
+      unrecorded local winner.
+- [ ] F2. (lane A) BUG: a skipped own echo leaves the base behind; a later
+      delete is ignored forever. Echo advance when own == localHash; delete
+      ordered by seq.
+- [ ] F3. (lane A) BUG: own rows pruned before their echo (33+ scans
+      offline) break the echo chain; take the base from the record itself.
+- [ ] F4. (lane A) BUG: renaming back to a former name is ignored.
+- [ ] Item 29 (lane A): coalesce announces per pull batch; bound k + n.
+- [ ] Item 28 + F5 (lane B blob): per-entity blob address; blob fetch
+      failure parks after 3 cycles with a status line, never dropped
+      silently; push-side confinement (backslash names).
+- [ ] Item 27 (lane C contentkey): content key kept per device in journal
+      meta, never changed by a password change.
+- [ ] Item 26 (lane D nofollow, then lane A): Vault::writeBytesNoFollow /
+      writeNoteNoFollow (openat O_NOFOLLOW, renameat); engine writes use
+      them; applyRemoteDelete re-checks its path.
+- [ ] Item 30 (lane E upgrade): old journal through a real cycle; scanner
+      Dice tests; journal.db size numbers; F8 documented.
