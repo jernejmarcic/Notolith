@@ -1565,7 +1565,7 @@ when off.
             on 20 000 notes (build incrementally if it shows).
       - [ ] The status-bar "links in a note were not updated" path has no
             window test.
-- [ ] 4. (lane etc) RISK, security: bwrap binds all of /etc; a shared
+- [x] 4. (lane etc, f527ed3) RISK, security: bwrap binds all of /etc; a shared
       note's tikz fence can `\input{/etc/machine-id}` (or hostname,
       passwd) and Publish ships it in the SVG. Plan: bind only what the
       tools need (fonts, texmf, ld.so.*, alternatives, java-*, localtime,
@@ -1573,7 +1573,7 @@ when off.
       tests/test_diagrams.cpp:314 to assert /etc/machine-id unreadable;
       every kind still renders; notebook runner too if it shares the
       helper.
-- [ ] 8. (lane etc) Tests: wall-clock bounds at test_window.cpp:780 and
+- [x] 8. (lane etc, ee97769) Tests: wall-clock bounds at test_window.cpp:780 and
       the qWait(200) EXPECT_FALSE at :5826 can flake under load; make them
       load-robust without making them unable to fail.
 - [x] 5. Heading link text: we replace `#|^[]:\` and `%%` with a space;
