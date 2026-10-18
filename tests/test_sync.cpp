@@ -1292,6 +1292,249 @@ TEST_F(RenameOntoAnOccupiedPathTest, AnIdenticalTargetIsNotAConflict)
     EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("same text"));
 }
 
+/// "name=text" for every file under `root`, newlines shown as '|', so a
+/// failure prints what each device holds.
+static std::string snapshot(const QString &root)
+{
+    QStringList parts;
+    const QMap<QString, QByteArray> files = vaultFiles(root);
+    for (auto it = files.cbegin(); it != files.cend(); ++it)
+        parts << it.key() + QLatin1Char('=') + QString::fromUtf8(it.value()).replace(QLatin1Char('\n'), QLatin1Char('|'));
+    return parts.join(QStringLiteral("; ")).toStdString();
+}
+
+// A renames a note; B edited the same note at its old path and has not
+// synced yet. B's edit has already gone out with the old path by the time B
+// pulls the rename, so B moves its file and says so again - never y.md on one
+// device and z.md on the other, never y.md and z.md side by side.
+class RenameWithALocalEditTest : public SyncIntegrationTest
+{
+protected:
+    void SetUp() override
+    {
+        SyncIntegrationTest::SetUp();
+        writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("alpha\nbeta\ngamma\ndelta"));
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB.waitForCycle());
+        ASSERT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("alpha\nbeta\ngamma\ndelta"));
+    }
+
+    void syncA()
+    {
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+    void syncB()
+    {
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+    /// `rounds` more rounds of both devices, B first.
+    void settle(int rounds)
+    {
+        for (int round = 0; round < rounds; ++round) {
+            syncB();
+            syncA();
+        }
+    }
+
+    SyncEngine engineA, engineB;
+    Watcher watchA{engineA}, watchB{engineB};
+};
+
+TEST_F(RenameWithALocalEditTest, ARenameMovesTheEditedFileOnBothDevices)
+{
+    writeNote(vaultB.path(), QStringLiteral("y.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta"));
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/z.md")));
+    syncA();
+    settle(4);
+
+    const std::string edited = "z.md=ALPHA|beta|gamma|delta";
+    EXPECT_EQ(snapshot(vaultA.path()), edited);
+    EXPECT_EQ(snapshot(vaultB.path()), edited);
+    EXPECT_EQ(watchA.pushed, 0);
+    EXPECT_EQ(watchB.pushed, 0);
+    EXPECT_EQ(watchB.conflicts, 0);
+}
+
+// The three tests below are disabled on purpose: they fail for a reason that
+// is not about renames (TODO.md, "Lane sync10" finding). Records carry no
+// parent, so a record written without seeing this device's push is applied
+// as a fast-forward over its edit, and a clean merge advances the base to the
+// merged text instead of the sender's. Seen: B ends z.md=alpha|beta|gamma|DELTA
+// (its own ALPHA edit gone) and A z.md=ALPHA|beta|gamma|delta here; the
+// conflicting variant ends with z.md=B line on B, z.md=A line on A and no
+// conflict copy anywhere; the reverse order ends A z.md=...|delta, B
+// y.md=...|DELTA. OfflineEditsOnDisjointLinesOfTheSameNoteMergeCleanly shows
+// the same split with no rename in it (A keeps B's line, not its own).
+//
+// The rename and A's edit are two records here (A synced between them), the
+// order the app produces; B merges at the new path.
+TEST_F(RenameWithALocalEditTest, DISABLED_ARenameThenAnEditMergesAtTheNewPath)
+{
+    writeNote(vaultB.path(), QStringLiteral("y.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta"));
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/z.md")));
+    syncA();
+    writeNote(vaultA.path(), QStringLiteral("z.md"), QStringLiteral("alpha\nbeta\ngamma\nDELTA"));
+    syncA();
+    settle(4);
+
+    EXPECT_EQ(snapshot(vaultB.path()), "z.md=ALPHA|beta|gamma|DELTA");
+    EXPECT_EQ(snapshot(vaultA.path()), "z.md=ALPHA|beta|gamma|DELTA");
+}
+
+TEST_F(RenameWithALocalEditTest, DISABLED_ARenameThenAConflictingEditKeepsBothTexts)
+{
+    writeNote(vaultB.path(), QStringLiteral("y.md"), QStringLiteral("B line\nbeta\ngamma\ndelta"));
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/z.md")));
+    syncA();
+    writeNote(vaultA.path(), QStringLiteral("z.md"), QStringLiteral("A line\nbeta\ngamma\ndelta"));
+    syncA();
+    settle(4);
+
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_FALSE(QFile::exists(root + QStringLiteral("/y.md"))) << snapshot(root);
+        EXPECT_EQ(filesContaining(root, "A line"), 1) << snapshot(root);
+        EXPECT_EQ(filesContaining(root, "B line"), 1) << snapshot(root);
+        EXPECT_EQ(vaultFiles(root).size(), 2) << snapshot(root);
+    }
+}
+
+// The other way round: B renamed locally, A edited at the old path.
+TEST_F(RenameWithALocalEditTest, DISABLED_ALocalRenameTakesTheRemoteEdit)
+{
+    ASSERT_TRUE(QFile::rename(vaultB.path() + QStringLiteral("/y.md"), vaultB.path() + QStringLiteral("/z.md")));
+    writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("alpha\nbeta\ngamma\nDELTA"));
+    syncA();
+    settle(4);
+
+    const std::string edited = "z.md=alpha|beta|gamma|DELTA";
+    EXPECT_EQ(snapshot(vaultA.path()), edited);
+    EXPECT_EQ(snapshot(vaultB.path()), edited);
+}
+
+// Renamed and edited before any scan in between: the scanner matches renames
+// by exact content only, so A's change is a delete of y.md plus a new note,
+// and B's edit beats the delete.
+TEST_F(RenameWithALocalEditTest, DISABLED_ARenameAndEditInOneScanMergesAtTheNewPath)
+{
+    writeNote(vaultB.path(), QStringLiteral("y.md"), QStringLiteral("ALPHA\nbeta\ngamma\ndelta"));
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/z.md")));
+    writeNote(vaultA.path(), QStringLiteral("z.md"), QStringLiteral("alpha\nbeta\ngamma\nDELTA"));
+    syncA();
+    settle(4);
+
+    EXPECT_EQ(snapshot(vaultA.path()), "z.md=ALPHA|beta|gamma|DELTA");
+    EXPECT_EQ(snapshot(vaultB.path()), "z.md=ALPHA|beta|gamma|DELTA");
+}
+
+// Something that is not a regular file sits at the path an incoming rename or
+// new note wants: a directory, or a link to a file outside the vault. It is
+// occupied like any other file - nothing is overwritten, nothing is written
+// through the link, and the incoming text is kept (in place, or as a copy).
+class NonFileAtTheTargetTest : public SyncIntegrationTest
+{
+protected:
+    void SetUp() override
+    {
+        SyncIntegrationTest::SetUp();
+        ASSERT_TRUE(outside.isValid());
+        writeRaw(outsideFile(), outsideBytes);
+        writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("text of Y"));
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+
+    QString outsideFile() const { return outside.path() + QStringLiteral("/secret.md"); }
+    QString missingFile() const { return outside.path() + QStringLiteral("/missing.md"); }
+
+    /// What B's p.md is: "dir", "link" (to a file outside the vault) or
+    /// "dangling" (a link to a file that is not there - isFile() calls it
+    /// free, and a write through it creates the file outside).
+    void blockB(const QString &kind)
+    {
+        const QString path = vaultB.path() + QStringLiteral("/p.md");
+        if (kind == QStringLiteral("dir"))
+            ASSERT_TRUE(QDir().mkpath(path));
+        else
+            ASSERT_TRUE(QFile::link(kind == QStringLiteral("link") ? outsideFile() : missingFile(), path));
+    }
+
+    void expectUntouched(const QString &kind)
+    {
+        const QFileInfo info(vaultB.path() + QStringLiteral("/p.md"));
+        if (kind == QStringLiteral("dir")) {
+            EXPECT_TRUE(info.isDir() && !info.isSymLink());
+            EXPECT_TRUE(QDir(info.filePath()).isEmpty());
+        } else {
+            EXPECT_TRUE(info.isSymLink());
+        }
+        QFile f(outsideFile());
+        ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+        EXPECT_EQ(f.readAll(), outsideBytes);
+        EXPECT_EQ(QDir(outside.path()).entryList(QDir::Files).size(), 1);
+        EXPECT_FALSE(QFileInfo::exists(missingFile()));
+    }
+
+    void syncBoth(int rounds)
+    {
+        for (int round = 0; round < rounds; ++round) {
+            engineA.syncNow();
+            ASSERT_TRUE(watchA.waitForCycle());
+            engineB.syncNow();
+            ASSERT_TRUE(watchB.waitForCycle());
+        }
+    }
+
+    const QByteArray outsideBytes = QByteArrayLiteral("outside the vault");
+    QTemporaryDir outside;
+    SyncEngine engineA, engineB;
+    Watcher watchA{engineA}, watchB{engineB};
+};
+
+class NonFileAtTheTargetKindTest : public NonFileAtTheTargetTest, public ::testing::WithParamInterface<QString>
+{
+};
+
+TEST_P(NonFileAtTheTargetKindTest, ARenameIsHeldBackAndTheNoteKeepsItsPath)
+{
+    blockB(GetParam());
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/p.md")));
+    syncBoth(1);
+    EXPECT_EQ(watchB.conflicts, 1);
+
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("text of Y"));
+    expectUntouched(GetParam());
+    syncBoth(3);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("text of Y"));
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of Y"), 1);
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
+TEST_P(NonFileAtTheTargetKindTest, ANewNoteIsKeptAsACopyBesideIt)
+{
+    blockB(GetParam());
+    writeNote(vaultA.path(), QStringLiteral("p.md"), QStringLiteral("text of P"));
+    syncBoth(1);
+    EXPECT_EQ(watchB.conflicts, 1);
+
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of P"), 1);
+    syncBoth(3);
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of P"), 1);
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(DirectoryAndLinks, NonFileAtTheTargetKindTest,
+                         ::testing::Values(QStringLiteral("dir"), QStringLiteral("link"), QStringLiteral("dangling")),
+                         [](const ::testing::TestParamInfo<QString> &info) { return info.param.toStdString(); });
+
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
 {
     if (geteuid() == 0)
