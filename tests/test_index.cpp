@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <thread>
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QSaveFile>
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
@@ -1539,4 +1541,110 @@ TEST(IndexerThreadTest, TheScansWalkWatchesEveryFolderIncludingNewOnes)
     write(QStringLiteral("a/c/Third.md"), "# Third\n");
     ASSERT_TRUE(QTest::qWaitFor([&] { return !index.resolve(QStringLiteral("Third")).isEmpty(); }, 5000))
         << "a note in a folder made after the first scan";
+}
+
+namespace {
+
+/// A temp vault with a few notes in a subfolder, indexed and watched.
+class WatchedVaultTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("a/b")));
+        write(QStringLiteral("Root.md"), "# Root\n");
+        write(QStringLiteral("a/b/First.md"), "# First\n");
+        write(QStringLiteral("a/b/Second.md"), "# Second\n");
+        indexer = std::make_unique<Indexer>(&index);
+        QSignalSpy done(indexer.get(), &Indexer::finished);
+        indexer->setVault(Vault(dir.path()));
+        ASSERT_TRUE(done.wait(20000));
+        // The watch-race rescan, if the walk saw a folder mid-change.
+        QTest::qWait(500);
+        walks = indexer->wholeScans();
+    }
+
+    void write(const QString &relative, const QByteArray &text)
+    {
+        QFile file(dir.filePath(relative));
+        ASSERT_TRUE(QDir().mkpath(QFileInfo(file).absolutePath()));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(text);
+    }
+
+    bool found(const QString &name) const { return !index.resolve(name).isEmpty(); }
+
+    QTemporaryDir dir;
+    Index index;
+    std::unique_ptr<Indexer> indexer;
+    int walks = 0;
+};
+
+} // namespace
+
+TEST_F(WatchedVaultTest, ANoteChangedOutsideTheAppIsReindexedWithoutAWholeWalk)
+{
+    {
+        QSaveFile save(dir.filePath(QStringLiteral("a/b/First.md"))); // an editor's save: a temp file renamed over it
+        ASSERT_TRUE(save.open(QIODevice::WriteOnly));
+        save.write("# First\n\nzeppelin\n");
+        ASSERT_TRUE(save.commit());
+    }
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !index.search(QStringLiteral("zeppelin")).isEmpty(); }, 5000));
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
+TEST_F(WatchedVaultTest, ANewNoteAndANewFolderWithNotesAreFoundWithoutAWholeWalk)
+{
+    write(QStringLiteral("a/b/Third.md"), "# Third\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return found(QStringLiteral("Third")); }, 5000));
+    // Folder and note made together, two levels deep: no watch exists for it yet.
+    write(QStringLiteral("x/y/Deep.md"), "# Deep\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return found(QStringLiteral("Deep")); }, 5000));
+    // And the new folders are watched from then on.
+    write(QStringLiteral("x/y/Later.md"), "# Later\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return found(QStringLiteral("Later")); }, 5000));
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
+TEST_F(WatchedVaultTest, ADeletedNoteAndADeletedFolderLeaveTheIndexWithoutAWholeWalk)
+{
+    ASSERT_TRUE(QFile::remove(dir.filePath(QStringLiteral("a/b/First.md"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !found(QStringLiteral("First")); }, 5000));
+    EXPECT_TRUE(found(QStringLiteral("Second")));
+    ASSERT_TRUE(QDir(dir.filePath(QStringLiteral("a"))).removeRecursively());
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !found(QStringLiteral("Second")); }, 5000))
+        << "a note in a folder that went with its folder";
+    EXPECT_TRUE(found(QStringLiteral("Root")));
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
+TEST_F(WatchedVaultTest, ARenamedFolderMovesItsNotesWithoutAWholeWalk)
+{
+    ASSERT_TRUE(QDir(dir.path()).rename(QStringLiteral("a/b"), QStringLiteral("a/c")));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return index.resolve(QStringLiteral("Second")) == QStringLiteral("a/c/Second.md"); },
+                                5000));
+    EXPECT_EQ(index.noteCount(), 3) << "nothing left under the old name";
+    EXPECT_EQ(indexer->wholeScans(), walks);
+}
+
+// saveLeaf() reindexes the note itself; the folder change its save also causes
+// is read for that folder alone, and finds nothing left to do.
+TEST_F(WatchedVaultTest, AnInAppSaveCausesNoWholeWalkAndNoSecondChange)
+{
+    const QString path = dir.filePath(QStringLiteral("a/b/First.md"));
+    QSignalSpy done(indexer.get(), &Indexer::finished);
+    QSignalSpy changed(&index, &Index::changed);
+    {
+        QSaveFile save(path); // as Vault::write: a temp file renamed over the note
+        ASSERT_TRUE(save.open(QIODevice::WriteOnly));
+        save.write("# First\n\nsaved in the app\n");
+        ASSERT_TRUE(save.commit());
+    }
+    indexer->reindex(path);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return done.size() >= 2; }, 5000)) << "the note's scan, then the folder's";
+    QTest::qWait(500);
+    EXPECT_EQ(indexer->wholeScans(), walks);
+    EXPECT_EQ(done.size(), 2);
+    EXPECT_EQ(changed.size(), 1) << "the folder's read found the note current";
+    EXPECT_FALSE(index.search(QStringLiteral("saved in the app")).isEmpty());
 }

@@ -1126,3 +1126,24 @@ row is more than 15% worse. Cold start to first painted frame 35.1 -> 18.8 ms,
 1036 -> 1059 ms (+2%, noise). New rows (tags pane 36.7 ms, notebook open
 34.3 ms, resize/fold/media 0.2-1.4 ms, source table Tab 1.9 ms) have no
 before value.
+
+## 2026-10-18 index8: saves, renames and the link list
+
+20 000 notes (`tools/gen_bench_vault.py`), starbase-1 CCD1 under load, scan-thread
+times as the indexer's own clock reports them.
+
+- An in-app save used to cause two scans: the note's own, then, 300 ms later, the
+  watcher's debounced full walk (130-140 ms, nothing to index). The debounce now
+  hands the scan only the folders the watcher named (a folder it did not hold yet
+  is read whole and watched), so the second scan reads one folder: 30-40 ms, and
+  the index is idle 340-380 ms after the save instead of 440 ms. A whole-vault walk
+  is left to explicit rebuilds, a setting that changes how notes parse, and the 30 s
+  poll while a folder cannot be watched. Edits made in place by another program to a
+  note that is not open raise no folder event (inotify on a folder does not report
+  them); editors that save through a temp file do.
+- `Index::linkTargets()` after a name change: 16.0 -> 3.6 ms (cold 16.8 -> 8.2 ms),
+  by reading the names kept in memory (kept in order) instead of a second pass over
+  the names table.
+- A rename no longer waits for the indexer (it could start a full walk on the UI
+  thread and wait up to a second): the notes just saved, and those the indexer has
+  been asked to read, are named to the rewrite, which reads them from disk.
