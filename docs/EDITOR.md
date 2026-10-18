@@ -366,12 +366,17 @@ in the text, not only at its start. Four more things complete, as in Obsidian:
 - **Headings.** After `#` the popup lists that note's headings, `[[Note#`
   for another note and `[[#` for the note being edited (read from the editor,
   so a heading typed a moment ago is there). Picking one inserts
-  `Note#Heading` and closes the brackets.
+  `Note#Heading` and closes the brackets. A heading holding `# | ^ [ ] :`
+  or `\` is inserted with those as spaces, as Obsidian does, and a link's
+  heading is matched against the headings read the same way, so it opens
+  the heading (nested `[[Note#H1#H2]]` paths are not offered).
 - **Block ids.** `[[Note#^` and `[[#^` list the `^id` markers the same way.
   Obsidian's search over every block (`[[^^`) is not offered.
 - **Aliases.** A note's frontmatter `aliases:` appear in the name list as
   "alias -> Note"; picking one inserts `[[Note|alias]]`, which shows the alias
-  and links to the note. An alias is not also listed as a plain name.
+  and links to the note. When another note has the same name it inserts the
+  path (`[[folder/Note|alias]]`) so the link is not ambiguous. An alias is not
+  also listed as a plain name.
 - **Embeds** (`![[`) behave identically.
 
 Another note's headings or block ids come from the index, with one small query
@@ -399,6 +404,10 @@ invalid bytes and from then on the note saves like any other. Nothing else
 writes such a note either: `Vault::write` refuses a `Note::lossy` one, which
 also stops link updates on rename and merge from rewriting it (merge refuses a
 source like that outright).
+
+The index (and so search) reads such a note's bad bytes as the Latin-1 letters
+they most likely were, so searching "café" finds a note saved as Latin-1; the
+file and the editor still show it as it is.
 
 ## Deleting
 
@@ -953,6 +962,15 @@ folder cannot go into itself or its own subfolder, onto a name that is taken,
 or into `.obsidian`, `.trash` or another hidden folder. Changing only the
 letter case of a name works on case-insensitive filesystems (exFAT, NTFS,
 SMB) too.
+
+A moved note's own Markdown links and embeds are paths from its folder, so
+they are rewritten to reach the same files from the new one: `[a](../a.md)` and
+`![](img/p.png)` moved a level down become `[a](../../a.md)` and
+`![](../img/p.png)`. Percent-encoding and `<angle bracket>` forms are kept as
+written. Wikilinks (found by name), URLs, `#anchor` links and bare `[x](a.md)`
+names are left alone, and a folder moved whole keeps the links between its own
+files byte for byte. A Markdown link to a moved note from elsewhere stays a
+relative path (`../A/n.md` becomes `../A/B/n.md`).
 
 A rename or move first saves every note with unsaved typing, whatever `files.autosave`
 says, so the rewrite works on what is on screen and the next autosave cannot

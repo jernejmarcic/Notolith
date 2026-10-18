@@ -601,6 +601,131 @@ TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
                                     QStringLiteral("Home.md"), QStringLiteral("MdLink.md")}));
 }
 
+// A moved note's own Markdown links are paths from its folder; Obsidian
+// rewrites them so they still reach the same files. Wikilinks (found by name),
+// URLs and same-note anchors are not paths and stay as written.
+TEST_F(RenameLinksTest, MovingANoteKeepsItsRelativeMarkdownLinksPointingAtTheSameFiles)
+{
+    write(QStringLiteral("Top.md"), "# Top\n");
+    write(QStringLiteral("A/a.md"), "# a\n");
+    write(QStringLiteral("A/img/p.png"), "png");
+    write(QStringLiteral("A/B/Keep.md"), "# Keep\n");
+    write(QStringLiteral("A/n.md"),
+          "# n\n\n[a](a.md) ![](img/p.png) [t](../Top.md) [u](img/p%20x.png#frag)\n"
+          "[w](https://example.com/a.md) [h](#n) [[a]] [e](<img/p x.png>)\n");
+    write(QStringLiteral("A/x.md"), "[bare](n.md) [rel](./n.md)\n");
+    write(QStringLiteral("Other/o.md"), "[to n](../A/n.md) [to n again](../A/n.md#n)\n");
+    write(QStringLiteral("A/img/p x.png"), "png");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A/n.md")), vault.absolute(QStringLiteral("A/B")),
+                               &newPath, &error)) << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A/n.md"), QStringLiteral("A/B/n.md"), vault, &error), 0)
+        << error.toStdString();
+
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A/B/n.md"))),
+              QByteArray("# n\n\n[a](../a.md) ![](../img/p.png) [t](../../Top.md) [u](../img/p%20x.png#frag)\n"
+                         "[w](https://example.com/a.md) [h](#n) [[a]] [e](<../img/p x.png>)\n"));
+    // Links to the moved note: a bare name stays a name, a path stays a path.
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("A/x.md"))), QByteArray("[bare](n.md) [rel](B/n.md)\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other/o.md"))),
+              QByteArray("[to n](../A/B/n.md) [to n again](../A/B/n.md#n)\n"));
+
+    // And up to the vault root again, from the rewritten state.
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A/B/n.md")), dir.path(), &newPath, &error))
+        << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A/B/n.md"), QStringLiteral("n.md"), vault, &error), 0)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("n.md"))),
+              QByteArray("# n\n\n[a](A/a.md) ![](A/img/p.png) [t](Top.md) [u](A/img/p%20x.png#frag)\n"
+                         "[w](https://example.com/a.md) [h](#n) [[a]] [e](<A/img/p x.png>)\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Other/o.md"))),
+              QByteArray("[to n](../n.md) [to n again](../n.md#n)\n"));
+}
+
+// A folder moves whole: links between its own files keep their bytes, links
+// out of it are rewritten for the new depth.
+TEST_F(RenameLinksTest, MovingAFolderRewritesOnlyTheLinksThatLeaveIt)
+{
+    write(QStringLiteral("Top.md"), "# Top\n");
+    write(QStringLiteral("A/a.md"), "# a\n");
+    write(QStringLiteral("A/img/p.png"), "png");
+    write(QStringLiteral("A/n.md"), "[in](a.md) ![](img/p.png) [out](../Top.md)\n");
+    write(QStringLiteral("Z/z.md"), "# z\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.movePath(vault.absolute(QStringLiteral("A")), vault.absolute(QStringLiteral("Z")), &newPath, &error))
+        << error.toStdString();
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("A"), QStringLiteral("Z/A"), vault, &error), 0)
+        << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Z/A/n.md"))),
+              QByteArray("[in](a.md) ![](img/p.png) [out](../../Top.md)\n"));
+}
+
+// A note that is not valid UTF-8 (a Latin-1 export) is searched by what it
+// says: each bad byte reads as the Latin-1 letter it most likely is, not as
+// U+FFFD, and the file itself is never rewritten.
+TEST_F(IndexTest, ANoteThatIsNotValidUTF8IsSearchedByItsLatin1Text)
+{
+    const QByteArray latin("caf\xE9 au lait, then the word zebra\n[[Ideas]]\n");
+    write(QStringLiteral("Latin.md"), latin);
+    write(QStringLiteral("Cut.md"), "a cut \xE2\x82 sequence then quokka\n"); // not one byte per bad character
+
+    Index index;
+    build(index);
+    const auto found = [&](const QString &query) {
+        QStringList paths;
+        for (const SearchResult &result : index.search(query))
+            paths << result.path;
+        return paths;
+    };
+    EXPECT_EQ(found(QStringLiteral("zebra")), QStringList{QStringLiteral("Latin.md")});
+    EXPECT_EQ(found(QStringLiteral("caf\u00E9")), QStringList{QStringLiteral("Latin.md")});
+    EXPECT_EQ(found(QStringLiteral("quokka")), QStringList{QStringLiteral("Cut.md")});
+    // Its links are still its links.
+    bool linksIdeas = false;
+    for (const Backlink &backlink : index.backlinks(vault.absolute(QStringLiteral("Ideas.md"))))
+        linksIdeas = linksIdeas || backlink.fromPath == QLatin1String("Latin.md");
+    EXPECT_TRUE(linksIdeas);
+
+    QFile file(vault.absolute(QStringLiteral("Latin.md")));
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), latin);
+}
+
+// An alias is offered as [[Note|alias]]; with two notes of one name that Note
+// has to be the path, or the link goes to whichever resolves first.
+TEST_F(RenameLinksTest, AnAliasOfOneOfTwoSameNameNotesNamesItByPath)
+{
+    write(QStringLiteral("A/Dup.md"), "---\naliases: [First]\n---\n");
+    write(QStringLiteral("B/Dup.md"), "---\naliases: [Second, Dup]\n---\n");
+    write(QStringLiteral("Solo.md"), "---\naliases: [Lone]\n---\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    const QList<QPair<QString, QString>> aliases = index.aliases();
+    EXPECT_TRUE(aliases.contains({QStringLiteral("First"), QStringLiteral("A/Dup")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Second"), QStringLiteral("B/Dup")}));
+    EXPECT_TRUE(aliases.contains({QStringLiteral("Lone"), QStringLiteral("Solo")}));
+    // Each name the suggester would insert reaches the note it was offered for.
+    EXPECT_EQ(index.resolve(QStringLiteral("A/Dup")), QStringLiteral("A/Dup.md"));
+    EXPECT_EQ(index.resolve(QStringLiteral("B/Dup")), QStringLiteral("B/Dup.md"));
+    // An alias equal to its note's own name does not take that name out of the plain list.
+    EXPECT_EQ(index.linkTargets().count(QStringLiteral("Dup")), 1);
+}
+
 TEST_F(RenameLinksTest, FallsBackToAFullPathWhenTheNewBasenameIsAmbiguous)
 {
     write(QStringLiteral("Folder/Solo.md"), "# Solo\n");

@@ -12,6 +12,7 @@
 
 #include "CodeHighlighter.h"
 #include "MermaidCache.h"
+#include "ObsidianSyntax.h"
 #include "HtmlRenderer.h"
 #include "Slugs.h"
 #include "Theme.h"
@@ -1199,9 +1200,9 @@ private:
         if (subpath.startsWith(QLatin1String("#^"))) {
             return Slugs::blockAnchor(subpath.mid(2));
         }
-        const QString headingText = subpath.mid(1).trimmed();
+        const QString headingText = ObsidianSyntax::headingLinkText(subpath.mid(1).trimmed());
         for (const Heading &h : target.metadata.headings) {
-            if (h.text.compare(headingText, Qt::CaseInsensitive) == 0)
+            if (ObsidianSyntax::headingLinkText(h.text).compare(headingText, Qt::CaseInsensitive) == 0)
                 return Slugs::headingAnchor(h.text);
         }
         return {};
@@ -1296,8 +1297,9 @@ private:
     {
         const QList<Heading> &headings = target.metadata.headings;
         qsizetype index = -1;
+        const QString wanted = ObsidianSyntax::headingLinkText(headingText);
         for (qsizetype i = 0; i < headings.size(); ++i) {
-            if (headings.at(i).text.compare(headingText, Qt::CaseInsensitive) == 0) {
+            if (ObsidianSyntax::headingLinkText(headings.at(i).text).compare(wanted, Qt::CaseInsensitive) == 0) {
                 index = i;
                 break;
             }

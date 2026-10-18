@@ -95,6 +95,14 @@ bool ObsidianSyntax::isExternalTarget(const QString &target)
     return scheme.match(target).hasMatch() || target.startsWith(QLatin1String("//"));
 }
 
+QString ObsidianSyntax::headingLinkText(const QString &heading)
+{
+    static const QRegularExpression unlinkable(QStringLiteral(R"(%%|[#|^\[\]:\\])"));
+    QString text = heading;
+    text.replace(unlinkable, QStringLiteral(" "));
+    return text.simplified();
+}
+
 Link ObsidianSyntax::parseWikilink(const QString &raw, bool embed)
 {
     Link link;

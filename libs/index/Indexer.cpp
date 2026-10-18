@@ -4,7 +4,9 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QFile>
 #include <QSet>
+#include <QStringDecoder>
 #include <QtConcurrent>
 
 #include "Parser.h"
@@ -24,6 +26,46 @@ Parser &threadParser()
 {
     static thread_local Parser parser;
     return parser;
+}
+
+/// Vault::read() shows each byte of a note that is not valid UTF-8 as U+FFFD,
+/// which no search for the note's own words can match. For the index, give each
+/// such byte the Latin-1 letter it most likely was (a Latin-1 export's "caf\xE9"
+/// is "caf\u00E9"); the note on disk and in the editor stays as it is.
+/// ponytail: Latin-1, not Windows-1252, so 0x80-0x9F are control characters;
+/// and only when each U+FFFD stands for exactly one bad byte (Qt may show a cut
+/// multi-byte sequence as one), else the text is left as it was, so the offsets
+/// the index keeps still match what the editor shows.
+void readInvalidBytesAsLatin1(const QString &path, Note &note)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return;
+    const QByteArray bytes = file.readAll();
+    QString units; // one character per U+FFFD the decode of `bytes` produced
+    for (qsizetype i = note.bom ? 3 : 0; i < bytes.size();) {
+        const uchar lead = uchar(bytes.at(i));
+        const qsizetype length = lead < 0x80 ? 1 : lead >= 0xC2 && lead <= 0xDF ? 2 : lead >= 0xE0 && lead <= 0xEF ? 3
+                                                                                : lead >= 0xF0 && lead <= 0xF4 ? 4 : 0;
+        QStringDecoder decoder(QStringDecoder::Utf8, QStringDecoder::Flag::Stateless);
+        const QString piece = length > 0 && i + length <= bytes.size() ? decoder(QByteArrayView(bytes).sliced(i, length))
+                                                                        : QString();
+        if (length > 0 && !piece.isEmpty() && !decoder.hasError()) {
+            if (piece == QChar(0xFFFD)) // really in the file
+                units += piece;
+            i += length;
+        } else {
+            units += QChar(lead); // Latin-1: the byte is the code point
+            ++i;
+        }
+    }
+    if (note.text.count(QChar(0xFFFD)) != units.size())
+        return;
+    qsizetype next = 0;
+    for (QChar &c : note.text) {
+        if (c.unicode() == 0xFFFD)
+            c = units.at(next++);
+    }
 }
 
 } // namespace
@@ -316,6 +358,8 @@ Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &no
         note.text = *text;
     } else if (!Vault::read(path, note)) {
         return parsed;
+    } else if (note.lossy) {
+        readInvalidBytesAsLatin1(path, note);
     }
 
     const QFileInfo info(path);
