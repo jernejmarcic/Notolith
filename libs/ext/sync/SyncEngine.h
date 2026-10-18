@@ -165,6 +165,7 @@ private:
     void setPendingDeletes(const QList<QByteArray> &ids);
     void retryPendingDeletes();
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
+    void refuse(const QString &path);     ///< names a path a record was dropped for (refusedWarning)
     QString refusedWarning() const;       ///< empty when no record was refused
     QString unreadableWarning() const;    ///< empty when no attachment was parked
     /// Fills *text (notes) or *raw (the rest) from the record's blob; an
@@ -173,7 +174,8 @@ private:
     bool loadRemoteContent(const QByteArray &recordID, const QString &path, const QByteArray &blobAddress, bool isNote,
                            const QByteArray &noteKey, QString *text, QByteArray *raw, QString *error);
     void queueLocalChange(const SyncScanner::Change &change);
-    /// Queues the entity as it is on disk right now as a local change.
+    /// Queues the entity as it is on disk right now as a local change (callers
+    /// insert into m_toAnnounce; pullJournal() calls this once per entity).
     void announce(const QByteArray &entityID);
 
     QThread m_thread;
@@ -218,6 +220,7 @@ private:
     QHash<QByteArray, int> m_fetchStalls; ///< recordID -> cycles its blob has blocked the pull
     QStringList m_unreadable; ///< paths of records parked for a blob that never came or never opened, kept for the session
     QStringList m_refusedPaths; ///< paths of records dropped for leaving the vault, kept for the session so the message stays
+    QSet<QByteArray> m_toAnnounce; ///< entities whose on-disk text goes out as a record when this pull finishes
     QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session
 };
 

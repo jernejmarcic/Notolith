@@ -381,7 +381,16 @@ segment (so no `.obsidian/plugins/...`); no backslash or NUL; and the nearest
 existing ancestor really inside the vault, so a symlinked folder that points
 out of it is no way out. The entity's own file may not be a symlink either, so
 a pulled edit is never written through one. (A link at a *new* target is the
-occupied-path case in "Conflict rules": kept as a copy beside it.) A refused
+occupied-path case in "Conflict rules": kept as a copy beside it.) The check is
+made once, so every write that follows (the record's text, a merge result, a
+conflict copy) goes through `Vault::writeBytesNoFollow` / `writeNoteNoFollow`,
+which walk the path with `openat(O_NOFOLLOW)`: a link that appeared since, or a
+folder that is a link to somewhere else inside the vault, fails the write
+instead of being followed. A failed write drops the record like a refused one -
+named, nothing recorded as applied, and never after the text it would replace
+was lost (a conflict copy that cannot be written stops the replacement too).
+A delete retried later (a parked one, below) repeats the check on the entity's
+own path first, since the file may be a link by then. A refused
 record is dropped, like one that cannot be decrypted - it could never succeed,
 so it must not hold the cursor back - and its path is named in the status
 message for the rest of the session. Outgoing, the scanner skips symlinks, so
@@ -456,32 +465,65 @@ Once a record is applied, `base/` holds its text, `baseDigest` and
 records are confirmed the same way when they come back (the self-echo), from the
 state the device wrote - never from whatever the vault file holds by then. An
 echo whose `parent` is no longer the `baseDigest` is skipped: a remote record
-was applied in between and its merge result carries that content.
+was applied in between and its merge result carries that content. Two
+exceptions keep the base from falling behind a file that already holds the
+content: the echo still moves it when the file's own hash (what the scanner
+last saw) is the echoed record's, and when the record's row was pruned from
+`states` (a note scanned more than 32 times with no push in between, say) and
+its `parent` is the base, the record itself (inline body, or its blob) supplies
+the text the base and the synced hash are moved to.
 
-- **Clean merge**: write the merged text through `Vault::write` (atomic,
-  preserves this file's CRLF/BOM) and confirm the sender's record as above. When
-  the merged text holds something the sender's did not and no state of this note
-  has exactly that text, **it is pushed**: one record, `parent` the sender's text,
-  so every device that has not seen it reaches the same text from one source
-  instead of re-deriving it. Equal content, a fast-forward and a conflict
-  resolution never push, and a merge result is only pushed when it adds
-  something, so the exchange ends: three devices editing three different lines
-  converge in a handful of records. (Two devices holding the same two edits do
-  not both announce a different text.)
+- **Clean merge**: write the merged text (atomic, preserves this file's
+  CRLF/BOM) and confirm the sender's record as above. When the merged text
+  holds something the sender's did not, **it is announced**: one record,
+  `parent` the sender's text, so every device that has not seen it reaches the
+  same text from one source instead of re-deriving it. Not when the merged text
+  is the sender's (equal content, a fast-forward: nothing to say), and not when
+  the merge left this device's own record's text as it was: that record is
+  already on its way, and a second record for the same text could revive a note
+  deleted in between. The announce is **coalesced**: a pull marks the entities
+  whose merge holds something new and sends one record per entity when the pull
+  ends (on success or on the error that stops it), whatever number of records
+  of the batch merged; its `parent` is the last state the batch applied. So a
+  device sends at most one merge record per note per pull, and the exchange
+  ends: three devices editing three different lines of one note converge in
+  7 records (3 edits and 4 merge results, one device merging in two pulls).
 - **True conflict** (an unreconcilable merge, a state that is not found, an
   attachment): the server's order decides, because both devices see it. This
   device's text is the one it last wrote or applied; its server seq is in
   `states` (0 while not yet pushed or acknowledged, which counts as newest). If
   this device's text has the higher seq (or none), the file stays exactly as it
-  is and the incoming text is written next to it as
-  `<name> (sync conflict, <device>, <timestamp>).md`. If the record's seq is
-  higher, the file is replaced with the incoming text and no copy is made here:
-  the device that holds the newer text makes it. Either way a status signal
-  reports the conflict. So there is exactly one copy for two devices, made by the
-  winner, and it reaches the other as a new note; the loser's file is replaced
-  (and the loser's text arrives back as that copy next round). With three
-  devices editing the same line the oldest text can end up copied twice. Folding
-  a copy in by hand is an ordinary local edit.
+  is and nothing is written: the other device, whose text is the older, makes
+  the copy. If the record's seq is higher, this device is the **loser**: it
+  writes a copy of **its own text** beside the file,
+  `<name> (sync conflict, <device>, <timestamp>).md`, then replaces the file
+  with the incoming text. The loser copies, not the winner, because a conflict
+  may be seen by one device only (the other merged cleanly, having a state this
+  device has pruned): a rule that has the winner copy the loser's text loses
+  that text. The copy is an ordinary new note and reaches the other device
+  through the next push. Either way a status signal reports the conflict. So
+  there is exactly one copy for two devices. A loser whose text on disk is
+  another device's (a state it applied, not wrote) makes no copy: that text is
+  the other device's to copy if it loses there, so three devices changing one
+  line three ways end with exactly two copies and the winner's text in the
+  note, on every device. If the text on disk has no row in `states` (saved
+  between the scan and the pull) this device is the winner by the rule above
+  and announces that text as a record of its own, so it is not left out.
+  Folding a copy in by hand is an ordinary local edit.
+- **The device whose history moved on takes the conflict.** A record built on
+  a state older than the 32 this device keeps cannot be merged here, so this
+  device sees a conflict where a device that still has the state merges
+  cleanly. If its text is the older one it is the loser, makes the copy of its
+  text and takes the sender's, and the clean merge from the other device then
+  reaches it as an ordinary record (announced as above) - nothing is lost, but
+  the device that kept up is not the one that pays for it.
+- **Devices from before `parent` and `hash`** (their records carry neither)
+  are applied by what this device holds alone, as in "in line" above, and
+  their conflicts are decided by the same seq rule. A conflict between an old
+  client and a new one is the one case that is not guaranteed to converge: the
+  old rule had the winner copy the loser's text, the new one has the loser copy
+  its own, and neither side knows what the other does. This was so before and
+  is not fixed here; update every device.
 - **A different entity on the same path**: a pulled note or attachment this
   device has no entity for, whose path already holds a file (or anything else) (a parked
   delete's file the person has edited since, or the same path created on two
@@ -511,7 +553,11 @@ was applied in between and its merge result carries that content.
   at. A record whose path is what this device had at the state the record builds
   on did not rename the note, so this device's current path stands: a rename
   made here (against an edit made elsewhere at the old path) or a rename held
-  back above. Any other path is a rename and is applied as above.
+  back above. Only while the newest row at that state is this device's own: a
+  rename-only record has its parent's hash, so renaming a note back to a name it
+  had before matches an older row too, and an applied rename after that must
+  not be read as "no rename". Any other path is a rename and is applied as
+  above.
 
 ### Delete-vs-edit
 
@@ -519,7 +565,10 @@ was applied in between and its merge result carries that content.
 state its writer last saw, like any record. If that is not the state this device
 last confirmed, the deleter had not seen a later edit: the delete is ignored
 whole, and the deleter receives that edit as an upsert in its next pull and
-gets the file back. If the entity has a local edit since `base` (`base !=
+gets the file back. (Only when the deleter is the one behind - its state is
+older than this device's base by server seq, or either is unknown. A deleter
+that is ahead of a base that fell behind a skipped echo is judged by the local
+edit rule below instead.) If the entity has a local edit since `base` (`base !=
 local`), the delete is not applied either - the local file survives, the entity
 is kept (not dropped and later pushed as an unrelated new note), and the note is
 pushed again as that entity's next record, so other devices' delete does not
