@@ -1014,6 +1014,13 @@ TEST_F(SyncIntegrationTest, OfflineEditsOnDisjointLinesOfTheSameNoteMergeCleanly
 
     // No conflict-copy file should have appeared.
     EXPECT_FALSE(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*conflict*")).size());
+
+    // B's merge result is queued, not pushed yet. A pulls only B's raw edit,
+    // written against the text before A's own: it must merge it, not take it
+    // over its ALPHA line.
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    EXPECT_EQ(readNoteText(vaultA.path() + QStringLiteral("/shared.md")), QStringLiteral("ALPHA\nbeta\ngamma\nDELTA"));
     expectConverged({{&engineA, &watchA}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
     for (const QString &root : {vaultA.path(), vaultB.path()}) {
         EXPECT_EQ(readNoteText(root + QStringLiteral("/shared.md")), QStringLiteral("ALPHA\nbeta\ngamma\nDELTA")) << snapshot(root);
