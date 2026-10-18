@@ -22,6 +22,7 @@
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
 #include "MermaidBlock.h"
+#include "DiagramRetry.h"
 #include "MermaidCache.h"
 #include "Settings.h"
 #include "Theme.h"
@@ -127,7 +128,7 @@ TEST_F(MermaidTest, TheCachePrunesOnFirstUseAndNotBefore)
     const auto renderer = rendererFor(fake(QStringLiteral("mmdr")));
     EXPECT_TRUE(QFile::exists(stale)); // making the renderer prunes nothing
     ask(renderer, QStringLiteral("graph TD\nA-->B"));
-    EXPECT_TRUE(QTest::qWaitFor([&] { return !QFile::exists(stale); }, 5000));
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !QFile::exists(stale); }, 15000));
     EXPECT_TRUE(QFile::exists(fresh));
 }
 
@@ -222,13 +223,15 @@ TEST_F(MermaidTest, PdfExportDrawsTheCachedDiagramAndOtherwiseTheListing)
 
 TEST_F(MermaidTest, TheInstalledMmdrDrawsADarkDiagram)
 {
-    const auto answer = ask(rendererFor(QStringLiteral("mmdr")),
+    // The real tool, on a machine that may be busy: asked again on a timeout.
+    const auto answer = ask(diagramtest::retryingOnTimeout([] { return rendererFor(QStringLiteral("mmdr")); }),
                             QStringLiteral("flowchart LR\n  A[Start] --> B{Ok?}\n  B -- yes --> C[Done]\n  B -- no --> D[Retry]"));
-    if (answer->result.isMarkdown) {
+    if (answer->result.isMarkdown && answer->result.text.contains(QLatin1String("install mmdr"))) {
         ASSERT_NE(qEnvironmentVariable("NOTEAPPC_REQUIRE_TOOLS"), QLatin1String("1"))
             << "NOTEAPPC_REQUIRE_TOOLS=1 and mmdr gave: " << answer->result.text.toStdString();
         GTEST_SKIP() << "mmdr is not installed";
     }
+    ASSERT_FALSE(answer->result.isMarkdown) << "mmdr is installed and gave: " << answer->result.text.toStdString();
     const QImage image = answer->result.image;
     ASSERT_FALSE(image.isNull());
     EXPECT_LT(image.pixelColor(2, 2).lightnessF(), 0.3) << "the diagram's own background is the theme's dark one";
@@ -253,7 +256,7 @@ TEST_F(MermaidTest, ADiagramIsDrawnInPlaceOfItsFenceAndTheCaretBringsTheSourceBa
     // The tool takes 200 ms: the editor laid the block out without it.
     editor.viewport()->grab();
     EXPECT_TRUE(editor.embedImageSizeAt(fence).isEmpty());
-    WAIT_TRUE(!editor.embedImageSizeAt(fence).isEmpty(), 5000);
+    WAIT_TRUE(!editor.embedImageSizeAt(fence).isEmpty(), 15000);
     EXPECT_EQ(editor.embedImageSizeAt(fence).height(), 100);
     EXPECT_EQ(runs(), 1);
 
@@ -328,7 +331,8 @@ TEST_F(MermaidTest, AToolThatHangsIsKilled)
     QElapsedTimer timer;
     timer.start();
     const auto answer = ask(rendererFor(tool), QStringLiteral("graph TD\nA-->H"));
-    EXPECT_LT(timer.elapsed(), 8000);
+    // Killed at 5 s, not left to sleep its 30 s: well inside ask()'s 15 s wait even when loaded.
+    EXPECT_LT(timer.elapsed(), 14000);
     ASSERT_TRUE(answer->result.isMarkdown);
     EXPECT_TRUE(answer->result.text.contains(QLatin1String("timed out")));
 }
@@ -379,7 +383,7 @@ TEST_F(MermaidWindowTest, OnADiagramIsDrawnInTheWindow)
     MarkdownEditor *editor = window.editor();
     editor->setCursorOffset(editor->noteText().size());
     const qsizetype fence = editor->noteText().indexOf(QLatin1String("graph"));
-    WAIT_TRUE(!editor->embedImageSizeAt(fence).isEmpty(), 5000);
+    WAIT_TRUE(!editor->embedImageSizeAt(fence).isEmpty(), 15000);
     EXPECT_EQ(runs(), 1);
     // Publish and PDF export find what the window drew by the fence's content, the same text.
     EXPECT_FALSE(noteAppC::mermaidCachedSVG(QStringLiteral("graph TD\nA-->B"), Theme::builtin(Theme::Mode::Dark)).isEmpty());

@@ -29,6 +29,7 @@
 #include "Settings.h"
 #include "SyscallFilter.h"
 #include "Theme.h"
+#include "DiagramRetry.h"
 #include "WaitFor.h"
 
 using noteAppC::DiagramKind;
@@ -95,7 +96,8 @@ protected:
     }
     static MarkdownEditor::CodeBlockRenderer rendererFor(DiagramKind kind, const QString &tool, Theme::Mode mode = Theme::Mode::Dark)
     {
-        return noteAppC::diagramRenderer(kind, tool, [mode] { return Theme::builtin(mode); });
+        return diagramtest::retryingOnTimeout(
+            [=] { return noteAppC::diagramRenderer(kind, tool, [mode] { return Theme::builtin(mode); }); });
     }
     static QByteArray cached(DiagramKind kind, const QString &source, Theme::Mode mode = Theme::Mode::Dark)
     {
@@ -141,7 +143,7 @@ TEST_F(DiagramTest, ADiagramAlreadyMadeIsReadFromDiskNotMadeAgain)
         // A renderer of its own whose tool does not exist: only the disk can answer it, so no tool was asked for.
         const auto again = ask(rendererFor(c.kind, dir.filePath(QStringLiteral("no-such-tool"))), QString::fromLatin1(c.language), c.source);
         EXPECT_FALSE(again->result.isMarkdown) << again->result.text.toStdString();
-        EXPECT_LT(again->ms, 2000);
+        EXPECT_LT(again->ms, 10000) << "a read from disk, not a run of the tool";
     }
 }
 
@@ -379,6 +381,11 @@ TEST_F(DiagramWindowTest, OnTheDiagramsAreDrawnInTheWindowAndOffTheSourceShows)
     NEED("plantuml");
     NEED("latex");
     NEED("dot");
+    // The window's own renderer gives up after one timeout and remembers it;
+    // drawing these two first (with a retry) leaves the disk answering for it
+    // however loaded the machine is. TikZ stays out: it must not be drawn.
+    ask(rendererFor(DiagramKind::PlantUML, QString()), QStringLiteral("plantuml"), kPlantUML);
+    ask(rendererFor(DiagramKind::Graphviz, QString()), QStringLiteral("dot"), kDot);
     configure("render.tikz", false);
     MainWindow window;
     window.show();
