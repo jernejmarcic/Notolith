@@ -1536,7 +1536,7 @@ socket, undo close tab, autosave max-wait, movePath, lossy write refusal,
 Latin-1 index text, syncfix retry; nothing costs at startup or per keystroke
 when off.
 
-- [ ] 1. (lane relink) BUG, data loss: `Index::updateLinksAfterRename`
+- [x] 1. (lane relink, 1436af5) BUG, data loss: `Index::updateLinksAfterRename`
       splices at link offsets from the index, which lags a save (reindex on
       the pool, 300 ms watcher debounce). Type at the top of B, then move A
       within a second: B's prose is overwritten at stale offsets.
@@ -1544,17 +1544,27 @@ when off.
       just read and take ranges/targets from that, matching by resolve()
       as the DB pass does. Test: prepend text to B on disk without
       reindexing, rename A, B intact and its link rewritten.
-- [ ] 2. (lane relink) BUG: a lossy (non-UTF-8) linking note makes the
+- [x] 2. (lane relink, 714608e) BUG: a lossy (non-UTF-8) linking note makes the
       rename's write fail and `return -1` mid-batch, leaving later notes
       with dead links. Plan: skip a lossy note (count it, name it in the
       warning), continue. Test: lossy + clean linker; clean rewritten,
       lossy bytes unchanged, result >= 0.
-- [ ] 3. (lane relink) BUG vs Obsidian: `linkTargets()` drops a note name
+- [x] 3. (lane relink, 1c3a3b2) BUG vs Obsidian: `linkTargets()` drops a note name
       that is also another note's alias, so note Foo cannot be completed
       when Bar has alias Foo. Plan: keep both rows. Test in test_index.
-- [ ] 7. (lane relink) IMPROVEMENT: onIndexChanged/configureEditor query
+- [x] 7. (lane relink, b1adf86) IMPROVEMENT: onIndexChanged/configureEditor query
       aliases twice plus all names on the UI thread per index change.
       Measure; if it shows, share the alias list / cache in Index.
+      Measured on 20 000 notes: linkTargets 18-22 ms, aliases ~2 ms, per
+      index change and per tab. Now cached until a note's names change.
+      Follow-ups:
+      - [ ] A note whose first link to A was added since the last index run
+            is not a rename candidate (same lag as before; would need a
+            full scan).
+      - [ ] The first list query after a name change still costs ~22 ms
+            on 20 000 notes (build incrementally if it shows).
+      - [ ] The status-bar "links in a note were not updated" path has no
+            window test.
 - [ ] 4. (lane etc) RISK, security: bwrap binds all of /etc; a shared
       note's tikz fence can `\input{/etc/machine-id}` (or hostname,
       passwd) and Publish ships it in the SVG. Plan: bind only what the
