@@ -241,7 +241,8 @@ TEST_F(MermaidTest, WithoutBubblewrapTheToolKeepsTheSandboxsLimitsAndNoneOfTheEn
     for (const QString &line : lines.mid(2))
         if (line.startsWith(QLatin1String("export ")))
             names << line.mid(7).section(QLatin1Char('='), 0, 0);
-    names.removeAll(QStringLiteral("PWD")); // a shell may export its own
+    for (const char *own : {"PWD", "OLDPWD", "SHLVL", "_"}) // what the shell itself exports
+        names.removeAll(QLatin1String(own));
     names.sort();
     EXPECT_EQ(names, (QStringList{QStringLiteral("HOME"), QStringLiteral("PATH")}));
 }
