@@ -1376,6 +1376,9 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     bool conflicted = false;
     bool announceMerge = false;
+    // The state the next record of this entity builds on: the incoming text,
+    // unless this device won a conflict and kept its own, which is on disk.
+    QByteArray headDigest = remoteDigest;
     // Whether the sender's content is on disk and the base moves to it with
     // nothing more to do (a new entity, a fast-forward, or the same content).
     if (!existing || !hasLocalFile) {
@@ -1455,7 +1458,9 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
                 // pull, or from before rows. It goes out as a record of its
                 // own, and the incoming text is copied here: the other device
                 // may have won over a text it never saw, and will not copy it.
-                if (!diskState) {
+                if (diskState) {
+                    headDigest = diskState->digest;
+                } else {
                     const QString copy = conflictCopyPath(remote.path, record.deviceID);
                     const bool saved = isNote ? m_vault.writeNoteNoFollow(copy, Note{remoteText, false, false})
                                               : m_vault.writeBytesNoFollow(copy, remoteRaw);
@@ -1492,7 +1497,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     entity.syncedHash = SyncCrypto::contentAddress(m_contentKey, remoteBytes);
     entity.deleted = false;
     entity.baseDigest = remoteDigest;
-    entity.headDigest = remoteDigest;
+    entity.headDigest = headDigest;
     m_journal->putEntity(entity);
     if (isNote)
         m_journal->writeBase(record.entityID, remoteText);

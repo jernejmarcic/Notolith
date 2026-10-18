@@ -1711,6 +1711,57 @@ TEST_F(SyncIntegrationTest, ThreeDevicesOnOneLineKeepAllThreeTextsInTwoCopies)
     }
 }
 
+// The device that wins a conflict keeps its own text and writes nothing, so the
+// next thing it writes builds on that text - not on the loser's, which the
+// incoming record named. Built on the loser's, B's second edit read to C as
+// "a change to A's text" and conflicted with C's own edit of another line.
+TEST_F(SyncIntegrationTest, AConflictWinnersNextEditBuildsOnItsOwnText)
+{
+    const auto note = [](const QString &first, const QString &last) {
+        return QStringLiteral("%1\ntwo\nthree\nfour\n%2").arg(first, last);
+    };
+    const QString shared = QStringLiteral("shared.md");
+    writeNote(vaultA.path(), shared, note(QStringLiteral("one"), QStringLiteral("five")));
+    SyncEngine engineA, engineB, engineC;
+    Watcher watchA(engineA), watchB(engineB), watchC(engineC);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineC.start(vaultC.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchC.waitForCycle());
+    const QList<Device> all{{&engineA, &watchA}, {&engineB, &watchB}, {&engineC, &watchC}};
+    const auto sync = [](const Device &device) {
+        device.first->syncNow();
+        return device.second->waitForCycle();
+    };
+
+    // A and B change line 1: A is on the server first, B wins and keeps its text.
+    writeNote(vaultA.path(), shared, note(QStringLiteral("A1"), QStringLiteral("five")));
+    ASSERT_TRUE(sync(all.at(0)));
+    writeNote(vaultB.path(), shared, note(QStringLiteral("B1"), QStringLiteral("five")));
+    ASSERT_TRUE(sync(all.at(1)));
+    EXPECT_EQ(watchB.conflicts, 1);
+    ASSERT_TRUE(sync(all.at(2))); // C applies A's text, then B's: B's is newer, nothing to copy
+    ASSERT_TRUE(sync(all.at(0))); // A loses and copies its own text
+    ASSERT_TRUE(sync(all.at(2)));
+    ASSERT_EQ(readNoteText(vaultC.path() + QLatin1Char('/') + shared), note(QStringLiteral("B1"), QStringLiteral("five")));
+
+    // C edits the last line; B, not having pulled it, edits line 1 again.
+    writeNote(vaultC.path(), shared, note(QStringLiteral("B1"), QStringLiteral("C5")));
+    ASSERT_TRUE(sync(all.at(2)));
+    writeNote(vaultB.path(), shared, note(QStringLiteral("B2"), QStringLiteral("five")));
+    ASSERT_TRUE(sync(all.at(1)));
+    ASSERT_TRUE(sync(all.at(2)));
+    EXPECT_EQ(watchC.conflicts, 0) << "C's line and B's line are different lines";
+    expectConverged(all, {vaultA.path(), vaultB.path(), vaultC.path()}, 4);
+    for (const QString &root : {vaultA.path(), vaultB.path(), vaultC.path()}) {
+        EXPECT_EQ(readNoteText(root + QLatin1Char('/') + shared), note(QStringLiteral("B2"), QStringLiteral("C5"))) << snapshot(root);
+        EXPECT_EQ(conflictCopies(root).size(), 1) << snapshot(root); // A's text, once
+        EXPECT_EQ(filesContaining(root, "A1"), 1) << snapshot(root);
+    }
+}
+
 // The text on disk when a conflict arrives has no row in the history (saved
 // between the scan and the pull, or a journal from before rows): no record
 // carries it, so this device announces it - and copies the incoming text, which

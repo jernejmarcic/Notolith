@@ -500,8 +500,10 @@ the text the base and the synced hash are moved to.
   device's text is the one it last wrote or applied; its server seq is in
   `states` (0 while not yet pushed or acknowledged, which counts as newest). If
   this device's text has the higher seq (or none), the file stays exactly as it
-  is and nothing is written: the other device, whose text is the older, makes
-  the copy. If the record's seq is higher, this device is the **loser**: it
+  is and nothing is written (the base moves to the incoming text as for any
+  record, but the state its next record builds on stays its own text, which is
+  what the other devices that took it hold): the other device, whose text is the
+  older, makes the copy. If the record's seq is higher, this device is the **loser**: it
   writes a copy of **its own text** beside the file,
   `<name> (sync conflict, <device>, <timestamp>).md`, then replaces the file
   with the incoming text. The loser copies, not the winner, because a conflict
