@@ -113,7 +113,8 @@ public:
 signals:
     void statusChanged(noteAppC::SyncEngine::Status status, const QString &message);
     /// One pass of the sync cycle finished (pushed/pulled record counts;
-    /// conflicts is how many notes got a conflict copy written this pass).
+    /// conflicts is how many notes got a conflict copy written, or a rename held
+    /// back, this pass).
     void syncFinished(int pushed, int pulled, int conflicts);
     /// A device enrolling without the password wants this vault's keys.
     /// Nothing is sealed for it until approveDevice(): a person compares
