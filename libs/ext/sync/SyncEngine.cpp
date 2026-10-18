@@ -927,7 +927,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         return true; // tampered, swapped between entities, or replayed - dropped, never applied
 
     bool parseOk = false;
-    const EntityPlain remote = parse(plaintext, &parseOk);
+    EntityPlain remote = parse(plaintext, &parseOk);
     if (!parseOk)
         return true;
 
@@ -1048,6 +1048,31 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             remoteRaw = unpadded;
     }
 
+    // Whether the file at `path` already holds exactly the incoming content.
+    const auto holdsRemote = [&](const QString &path) {
+        if (remote.entityType == QStringLiteral("note")) {
+            Note onDisk;
+            return Vault::read(path, onDisk) && onDisk.text == remoteText;
+        }
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
+    };
+
+    // A rename (or move) onto a path that already holds a file this entity
+    // does not own - another entity's note, or a stray file - would have
+    // QFile::rename fail and the write below overwrite that file. The rename
+    // is not applied instead: the entity stays at its own path and takes the
+    // incoming content there, so nothing is lost, no second copy is made and
+    // the journal stays consistent (path, file and hashes all agree). It is
+    // a conflict unless the target already holds that very content. Later
+    // records of the entity keep landing on its own path, and the rename
+    // takes effect on its own once the target is free.
+    if (existing && existing->path != remote.path && QFileInfo(m_vault.absolute(remote.path)).isFile()) {
+        if (!holdsRemote(m_vault.absolute(remote.path)))
+            ++*conflicts;
+        remote.path = existing->path;
+    }
+
     const QString targetPath = m_vault.absolute(remote.path);
     // A remote rename/move into a folder this device has never had may
     // name a directory that does not exist here yet - Vault::write() and
@@ -1064,15 +1089,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // no entity is created here: another one may own the path, and two
     // entities on one path would make the scan read one of them as deleted.
     if (!existing && QFileInfo(targetPath).isFile()) {
-        bool same = false;
-        if (remote.entityType == QStringLiteral("note")) {
-            Note onDisk;
-            same = Vault::read(targetPath, onDisk) && onDisk.text == remoteText;
-        } else {
-            QFile f(targetPath);
-            same = f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
-        }
-        if (!same) {
+        if (!holdsRemote(targetPath)) {
             const QString copy = conflictCopyPath(m_vault, remote.path, record.deviceID);
             if (remote.entityType == QStringLiteral("note"))
                 Vault::write(copy, Note{remoteText, false, false});

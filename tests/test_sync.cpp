@@ -25,6 +25,7 @@
 #include <QMutex>
 #include <QDir>
 #include <QDirIterator>
+#include <QMap>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -1089,6 +1090,206 @@ TEST_F(SyncIntegrationTest, TheSamePathAndTextCreatedOnTwoDevicesMakesNoConflict
     EXPECT_EQ(watchB.conflicts, 0);
     EXPECT_EQ(QDir(vaultA.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
     EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
+}
+
+/// Every visible file under `root` with its bytes, keyed by relative path.
+static QMap<QString, QByteArray> vaultFiles(const QString &root)
+{
+    QMap<QString, QByteArray> files;
+    QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QFile f(it.next());
+        if (f.open(QIODevice::ReadOnly))
+            files.insert(QDir(root).relativeFilePath(f.fileName()), f.readAll());
+    }
+    return files;
+}
+
+/// How many files under `root` contain `needle`.
+static int filesContaining(const QString &root, const QByteArray &needle)
+{
+    int n = 0;
+    for (const QByteArray &bytes : vaultFiles(root))
+        n += bytes.contains(needle) ? 1 : 0;
+    return n;
+}
+
+// Two devices created the same attachment path with different bytes: both
+// versions survive, one as a conflict copy, and it settles.
+TEST_F(SyncIntegrationTest, TheSameAttachmentPathWithDifferentBytesKeepsBoth)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("bytes from A"));
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("bytes from B"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const auto read = [](const QString &path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    };
+    EXPECT_EQ(read(vaultA.path() + QStringLiteral("/photo.png")), QByteArray("bytes from A"));
+    EXPECT_EQ(read(vaultB.path() + QStringLiteral("/photo.png")), QByteArray("bytes from B"));
+    EXPECT_EQ(filesContaining(vaultA.path(), "bytes from B"), 1);
+    EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1);
+    EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("photo (sync conflict*.png")).size(), 1);
+
+    for (int round = 0; round < 3; ++round) {
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+    EXPECT_EQ(read(vaultA.path() + QStringLiteral("/photo.png")), QByteArray("bytes from A"));
+    EXPECT_EQ(read(vaultB.path() + QStringLiteral("/photo.png")), QByteArray("bytes from B"));
+    EXPECT_EQ(filesContaining(vaultA.path(), "bytes from B"), 1);
+    EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1);
+}
+
+TEST_F(SyncIntegrationTest, TheSameAttachmentPathAndBytesMakesNoConflictCopy)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("same bytes"));
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("same bytes"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    EXPECT_EQ(watchA.conflicts, 0);
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(vaultFiles(vaultA.path()).keys(), QStringList{QStringLiteral("photo.png")});
+    EXPECT_EQ(vaultFiles(vaultB.path()).keys(), QStringList{QStringLiteral("photo.png")});
+}
+
+// A has note Y, B has its own note X at p.md; A then renames Y to p.md. B
+// cannot move Y there without overwriting X, so the rename waits: Y stays at
+// its own path with whatever A sends, X is untouched.
+class RenameOntoAnOccupiedPathTest : public SyncIntegrationTest
+{
+protected:
+    /// Brings both devices to "A renamed y.md to p.md, B has its own p.md"
+    /// without B having applied the rename yet.
+    void setUpCollision(const QString &textY, const QString &textX, SyncEngine &engineA, Watcher &watchA,
+                        SyncEngine &engineB, Watcher &watchB)
+    {
+        writeNote(vaultA.path(), QStringLiteral("y.md"), textY);
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB.waitForCycle());
+        ASSERT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), textY);
+        writeNote(vaultB.path(), QStringLiteral("p.md"), textX);
+        engineB.syncNow(); // X is on the server, A has not pulled it yet
+        ASSERT_TRUE(watchB.waitForCycle());
+        ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/p.md")));
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+};
+
+TEST_F(RenameOntoAnOccupiedPathTest, KeepsTheLocalFileAndLosesNothingAndSettles)
+{
+    SyncEngine engineA, engineB;
+    Watcher watchA(engineA), watchB(engineB);
+    setUpCollision(QStringLiteral("text of Y"), QStringLiteral("text of X"), engineA, watchA, engineB, watchB);
+
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.conflicts, 1);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/p.md")), QStringLiteral("text of X"));
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of Y"), 1);
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of X"), 1);
+
+    // Several more rounds on both sides: nothing is re-uploaded, nothing
+    // changes on disk, no copies pile up.
+    // (A's conflict copy of X is pushed as a note of its own and arrives on B
+    // in the first round; after that nothing may change.)
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QMap<QString, QByteArray> settledB = vaultFiles(vaultB.path());
+    for (int round = 0; round < 4; ++round) {
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        {
+            EXPECT_EQ(watchA.pushed, 0) << "round " << round;
+            EXPECT_EQ(watchB.pushed, 0) << "round " << round;
+            EXPECT_EQ(watchB.conflicts, 0) << "round " << round;
+        }
+    }
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/p.md")), QStringLiteral("text of X"));
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of Y"), 1);
+    EXPECT_EQ(vaultFiles(vaultB.path()), settledB);
+    EXPECT_EQ(readNoteText(vaultA.path() + QStringLiteral("/p.md")), QStringLiteral("text of Y"));
+    EXPECT_EQ(filesContaining(vaultA.path(), "text of Y"), 1);
+    EXPECT_EQ(filesContaining(vaultA.path(), "text of X"), 1); // A's copy of B's note
+}
+
+// A later edit of the renamed note still reaches B at the note's own path,
+// with no new copy; once B's own note moves away the rename goes through.
+TEST_F(RenameOntoAnOccupiedPathTest, LaterEditsFollowTheNoteAndTheRenameLandsOnceThePathIsFree)
+{
+    SyncEngine engineA, engineB;
+    Watcher watchA(engineA), watchB(engineB);
+    setUpCollision(QStringLiteral("text of Y"), QStringLiteral("text of X"), engineA, watchA, engineB, watchB);
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString yOnB = vaultB.path() + QStringLiteral("/y.md");
+    ASSERT_TRUE(QFile::exists(yOnB));
+    engineA.syncNow(); // A's copy of X reaches B now, so the file count below is steady
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeNote(vaultA.path(), QStringLiteral("p.md"), QStringLiteral("text of Y, edited"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    const int filesBefore = vaultFiles(vaultB.path()).size();
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(readNoteText(yOnB), QStringLiteral("text of Y, edited"));
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/p.md")), QStringLiteral("text of X"));
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), filesBefore);
+
+    ASSERT_TRUE(QFile::remove(vaultB.path() + QStringLiteral("/p.md")));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    writeNote(vaultA.path(), QStringLiteral("p.md"), QStringLiteral("text of Y, edited again"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_FALSE(QFile::exists(yOnB));
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/p.md")), QStringLiteral("text of Y, edited again"));
+}
+
+// The target already holds the incoming text: nothing to flag.
+TEST_F(RenameOntoAnOccupiedPathTest, AnIdenticalTargetIsNotAConflict)
+{
+    SyncEngine engineA, engineB;
+    Watcher watchA(engineA), watchB(engineB);
+    setUpCollision(QStringLiteral("same text"), QStringLiteral("same text"), engineA, watchA, engineB, watchB);
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/p.md")), QStringLiteral("same text"));
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("same text"));
 }
 
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)

@@ -401,6 +401,14 @@ user of line-diffing turns up, not before (YAGNI).
   is made for the incoming one - two entities on a path would make the scan
   read one of them as deleted - so a later edit to it from the other device
   conflicts again until one side renames the note.
+- **A rename onto an occupied path**: a pulled rename or move whose target
+  already holds a file the renamed note does not own (another note of this
+  device, or a stray file) is not applied - the move would overwrite that
+  file. The note stays at its own path and takes the incoming content there,
+  so nothing is lost and no copy is made; later edits keep landing on it, and
+  the rename goes through by itself on the first record that finds the target
+  free. It counts as a conflict unless the target already holds the incoming
+  content.
 
 ### Delete-vs-edit
 
