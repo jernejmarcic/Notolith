@@ -15,8 +15,10 @@ PopoutWindow::PopoutWindow(Kind kind, QWidget *content)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(content);
     // The owner may delete the content (a feature switched off deletes its pane):
-    // the window has nothing left to show then.
-    connect(content, &QObject::destroyed, this, [this] { close(); });
+    // the window has nothing left to show then. Queued: destroyed() is emitted
+    // while the content is still among this window's children but no longer a
+    // whole widget, and a close (a hide, a restyle) walks the children.
+    connect(content, &QObject::destroyed, this, [this] { close(); }, Qt::QueuedConnection);
 }
 
 PopoutWindow::~PopoutWindow()

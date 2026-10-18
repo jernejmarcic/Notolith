@@ -20,6 +20,7 @@
 #include "FileIcons.h"
 #include "Vault.h"
 
+class QAbstractButton;
 class QButtonGroup;
 class QSplitter;
 class QFileSystemModel;
@@ -313,9 +314,10 @@ private:
     void gotoTab(int index);
 
     // --- pop-out windows -------------------------------------------------
-    // Top-level windows MainWindow owns: tabs in splits of their own (and,
-    // later, a detached sidebar or pane). m_leaves and m_active stay global,
-    // so every command, side pane and save follows a tab wherever it is.
+    // Top-level windows MainWindow owns: tabs in splits of their own, a
+    // detached sidebar, or a detached sidebar pane. m_leaves and m_active
+    // stay global, so every command, side pane and save follows a tab
+    // wherever it is.
     /// The root splits tabs live in: m_workspace and each pop-out's own.
     bool isRootSplit(const QSplitter *split) const;
     QList<QSplitter *> rootSplits() const;
@@ -341,6 +343,22 @@ private:
     /// Every pop-out's tabs back into the main workspace; the windows go.
     void dockAll();
     void buildPopoutActions();
+    /// Adds a new pop-out to the ones owned, with every command a hotkey of.
+    void registerPopout(PopoutWindow *window);
+    /// The pop-out `widget` is in, or null while it is in the main window.
+    PopoutWindow *popoutHolding(QWidget *widget) const;
+    /// The whole left or right sidebar in a window of its own, lifted out of
+    /// mainSplitter the way a narrow drawer is; closing the window docks it again.
+    void detachSidebar(QWidget *side);
+    void dockSidebar(QWidget *side);
+    /// One right-sidebar pane in a window of its own, its tab hidden meanwhile.
+    void detachPane(QWidget *pane);
+    void dockPane(QWidget *pane);
+    /// The tab of the right sidebar that shows `pane`.
+    QAbstractButton *tabButtonOf(QWidget *pane) const;
+    /// "Detach" in the context menu of the left header and the right tab row.
+    void showDetachMenu(QWidget *side, QWidget *anchor, const QPoint &pos);
+    void buildSidebarPopoutActions();
     void showTabMenu(TabGroup *group, const QPoint &globalPos);
     /// The pop-out `group` is in follows its current tab's title.
     void retitlePopout(TabGroup *group);

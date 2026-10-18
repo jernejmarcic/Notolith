@@ -597,6 +597,9 @@ QWidget *MainWindow::buildSidebar()
 
     auto *header = new QWidget(m_sidebar);
     header->setObjectName(QStringLiteral("sidebarHeader"));
+    header->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(header, &QWidget::customContextMenuRequested, this,
+            [this, header](const QPoint &pos) { showDetachMenu(m_sidebar, header, pos); });
     auto *headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(10, 10, 8, 6);
     headerLayout->setSpacing(2);
@@ -1966,10 +1969,7 @@ MainWindow::TabGroup *MainWindow::newPopout(Leaf *leaf)
     TabGroup *group = newGroup();
     root->addWidget(group->widget);
     auto *window = new PopoutWindow(PopoutWindow::Kind::Leaves, root);
-    m_popouts.emplace_back(window);
-    connect(window, &PopoutWindow::closing, this, &MainWindow::closePopout);
-    window->addActions(m_commands); // a hotkey works in the window it is pressed in
-    window->setAcceptDrops(true); // so a tab dragged over its edges is still seen as inside a window
+    registerPopout(window);
     window->resize(size() * 0.6);
     if (leaf)
         moveLeaf(leaf, group, 0);
@@ -1983,8 +1983,10 @@ MainWindow::TabGroup *MainWindow::newPopout(Leaf *leaf)
 
 void MainWindow::closePopout(PopoutWindow *window, bool *veto)
 {
-    if (window->kind() != PopoutWindow::Kind::Leaves)
+    if (window->kind() != PopoutWindow::Kind::Leaves) {
+        deletePopout(window); // docks what it holds
         return;
+    }
     QList<Leaf *> leaves;
     for (const auto &leaf : m_leaves) {
         if (window->isAncestorOf(leaf->group->widget))
@@ -2014,6 +2016,15 @@ void MainWindow::closePopout(PopoutWindow *window, bool *veto)
 
 void MainWindow::deletePopout(PopoutWindow *window)
 {
+    // A sidebar or pane goes home first; only the window is deleted. There is
+    // no content left to dock when the window is closing because applyFeatures()
+    // deleted it.
+    if (QWidget *content = window->content()) {
+        if (window->kind() == PopoutWindow::Kind::Sidebar)
+            dockSidebar(content);
+        else if (window->kind() == PopoutWindow::Kind::Pane)
+            dockPane(content);
+    }
     // Tabs still in it (shutdown) leave the model first; nothing of them may call back in.
     for (auto it = m_groups.begin(); it != m_groups.end();) {
         if (!window->isAncestorOf((*it)->widget)) {
@@ -2049,7 +2060,10 @@ void MainWindow::dockAll()
         }
     }
     // The last tab out takes its window with it (collapseIfEmpty).
-    // Sidebar and Pane windows are docked by their own functions (sidebar lane).
+    for (size_t i = m_popouts.size(); i-- > 0;) { // sidebars and panes dock as their window goes
+        if (m_popouts[i]->kind() != PopoutWindow::Kind::Leaves)
+            deletePopout(m_popouts[i].get());
+    }
     QList<Leaf *> inPopouts;
     for (const auto &leaf : m_leaves) {
         if (leaf->group->widget->window() != this)
@@ -2057,6 +2071,104 @@ void MainWindow::dockAll()
     }
     for (Leaf *leaf : std::as_const(inPopouts))
         moveLeaf(leaf, home, int(home->leaves.size()));
+}
+
+void MainWindow::registerPopout(PopoutWindow *window)
+{
+    m_popouts.emplace_back(window);
+    connect(window, &PopoutWindow::closing, this, &MainWindow::closePopout);
+    window->addActions(m_commands); // a hotkey works in the window it is pressed in
+    window->setAcceptDrops(true); // so a tab dragged over it is still seen as inside a window
+}
+
+PopoutWindow *MainWindow::popoutHolding(QWidget *widget) const
+{
+    return qobject_cast<PopoutWindow *>(widget->window());
+}
+
+void MainWindow::detachSidebar(QWidget *side)
+{
+    if (!m_popoutsOn || popoutHolding(side) || m_openMode == OpenMode::SingleFile)
+        return; // a single file has no sidebars to show
+    closeDrawer(); // a drawer is the sidebar lifted out of the splitter already
+    auto *window = new PopoutWindow(PopoutWindow::Kind::Sidebar, side);
+    window->setWindowTitle(side == m_sidebar ? tr("Files - Notolith") : tr("Sidebar - Notolith"));
+    registerPopout(window);
+    window->resize(qMax(side->width(), 280), height());
+    side->show(); // a narrow window had it folded
+    window->show();
+}
+
+void MainWindow::dockSidebar(QWidget *side)
+{
+    // Positional, as built: the left sidebar is the splitter's first child, the right its last.
+    if (auto *splitter = findChild<QSplitter *>(QStringLiteral("mainSplitter")))
+        splitter->insertWidget(side == m_sidebar ? 0 : splitter->count(), side);
+    side->setVisible(!m_narrow);
+}
+
+QAbstractButton *MainWindow::tabButtonOf(QWidget *pane) const
+{
+    for (QAbstractButton *tab : m_rightTabs->buttons()) {
+        if (tab->property("pane").value<QObject *>() == pane)
+            return tab;
+    }
+    return nullptr;
+}
+
+void MainWindow::detachPane(QWidget *pane)
+{
+    QAbstractButton *tab = tabButtonOf(pane);
+    if (!m_popoutsOn || !tab || m_rightPanes->indexOf(pane) < 0)
+        return;
+    m_rightPanes->removeWidget(pane); // the pane itself lives on: showNoteInPanes() still feeds it
+    tab->hide();
+    if (QAbstractButton *next = m_rightPanes->count() ? tabButtonOf(m_rightPanes->currentWidget()) : nullptr)
+        next->setChecked(true);
+    auto *window = new PopoutWindow(PopoutWindow::Kind::Pane, pane);
+    window->setWindowTitle(tr("%1 - Notolith").arg(tab->toolTip()));
+    registerPopout(window);
+    window->resize(width() / 3, height());
+    pane->show(); // a pane the stack was not showing is hidden
+    window->show();
+}
+
+void MainWindow::dockPane(QWidget *pane)
+{
+    m_rightPanes->addWidget(pane);
+    if (QAbstractButton *tab = tabButtonOf(pane))
+        tab->show();
+}
+
+void MainWindow::showDetachMenu(QWidget *side, QWidget *anchor, const QPoint &pos)
+{
+    if (!m_popoutsOn)
+        return;
+    QMenu menu(anchor);
+    if (side == m_rightSidebar) { // over a pane's tab: that pane alone can go
+        const QWidget *tab = anchor->childAt(pos);
+        const QPointer<QWidget> pane = tab ? qobject_cast<QWidget *>(tab->property("pane").value<QObject *>()) : nullptr;
+        if (pane)
+            connect(menu.addAction(tr("Detach pane")), &QAction::triggered, this, [this, pane] { detachPane(pane); });
+    }
+    if (!popoutHolding(side))
+        connect(menu.addAction(tr("Detach sidebar")), &QAction::triggered, this, [this, side] { detachSidebar(side); });
+    if (!menu.isEmpty())
+        menu.exec(anchor->mapToGlobal(pos));
+}
+
+void MainWindow::buildSidebarPopoutActions()
+{
+    const auto add = [this](const QString &id, const QString &name, bool left) {
+        auto *action = new QAction(name, this);
+        action->setObjectName(id);
+        action->setShortcutContext(Qt::WindowShortcut);
+        connect(action, &QAction::triggered, this, [this, left] { detachSidebar(left ? m_sidebar : m_rightSidebar); });
+        addAction(action);
+        m_commands << action;
+    };
+    add(QStringLiteral("app:detach-left-sidebar"), tr("Detach left sidebar"), true);
+    add(QStringLiteral("app:detach-right-sidebar"), tr("Detach right sidebar"), false);
 }
 
 void MainWindow::retitlePopout(TabGroup *group)
@@ -2117,7 +2229,8 @@ void MainWindow::showTabMenu(TabGroup *group, const QPoint &globalPos)
 void MainWindow::applyPopoutFeature()
 {
     m_popoutsOn = featureOn("popout-windows");
-    for (const char *id : {"workspace:open-in-new-window", "workspace:move-to-new-window"}) {
+    for (const char *id : {"workspace:open-in-new-window", "workspace:move-to-new-window",
+                           "app:detach-left-sidebar", "app:detach-right-sidebar"}) {
         if (QAction *action = findChild<QAction *>(QLatin1String(id)))
             action->setEnabled(m_popoutsOn);
     }
@@ -2423,6 +2536,9 @@ QWidget *MainWindow::buildRightSidebar()
 
     auto *tabRow = new QWidget(m_rightSidebar);
     tabRow->setObjectName(QStringLiteral("rightSidebarTabs"));
+    tabRow->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tabRow, &QWidget::customContextMenuRequested, this,
+            [this, tabRow](const QPoint &pos) { showDetachMenu(m_rightSidebar, tabRow, pos); });
     auto *tabLayout = new QHBoxLayout(tabRow);
     tabLayout->setContentsMargins(6, 6, 6, 2);
     tabLayout->setSpacing(2);
@@ -3022,6 +3138,7 @@ void MainWindow::buildActions()
         });
 
     buildPopoutActions();
+    buildSidebarPopoutActions();
 
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
@@ -3166,6 +3283,8 @@ void MainWindow::updateInlineTitleMargins(Leaf *leaf)
 
 void MainWindow::toggleSidebar()
 {
+    if (popoutHolding(m_sidebar))
+        return; // in a window of its own: closing that window is how it goes
     if (m_narrow) {
         m_drawer == m_sidebar ? closeDrawer() : openDrawer(m_sidebar);
         return;
@@ -3175,6 +3294,8 @@ void MainWindow::toggleSidebar()
 
 void MainWindow::toggleRightSidebar()
 {
+    if (popoutHolding(m_rightSidebar))
+        return;
     if (m_narrow) {
         m_drawer == m_rightSidebar ? closeDrawer() : openDrawer(m_rightSidebar);
         return;
@@ -3224,12 +3345,22 @@ void MainWindow::closeDrawer()
 
 void MainWindow::showRightPane(QWidget *pane)
 {
+    PopoutWindow *own = popoutHolding(pane);
+    if (own && own->kind() == PopoutWindow::Kind::Pane) { // a window of its own: bring that
+        own->raise();
+        own->activateWindow();
+        return;
+    }
     if (!m_rightSidebar->isVisible())
         toggleRightSidebar();
     m_rightPanes->setCurrentWidget(pane);
     for (QAbstractButton *tab : m_rightTabs->buttons()) {
         if (tab->property("pane").value<QObject *>() == pane)
             tab->setChecked(true);
+    }
+    if (own) { // the whole sidebar is in a window
+        own->raise();
+        own->activateWindow();
     }
 }
 
@@ -5092,9 +5223,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
             continue;
         }
         auto *popout = new PopoutWindow(PopoutWindow::Kind::Leaves, root);
-        m_popouts.emplace_back(popout);
-        connect(popout, &PopoutWindow::closing, this, &MainWindow::closePopout);
-        popout->addActions(m_commands);
+        registerPopout(popout);
         const QSize wanted(window.value(QStringLiteral("width")).toInt(), window.value(QStringLiteral("height")).toInt());
         popout->resize(wanted.isEmpty() ? size() * 0.6 : wanted);
         popout->show();
@@ -6563,14 +6692,23 @@ void MainWindow::resizeEvent(QResizeEvent *event)
         return;
     closeDrawer();
     m_narrow = narrow;
+    // A sidebar in a window of its own is not short of width: left as it is.
+    const bool leftHere = !popoutHolding(m_sidebar);
+    const bool rightHere = !popoutHolding(m_rightSidebar);
     if (narrow) {
-        m_leftBeforeNarrow = m_sidebar->isVisible();
-        m_rightBeforeNarrow = m_rightSidebar->isVisible();
-        m_sidebar->hide();
-        m_rightSidebar->hide();
+        if (leftHere) {
+            m_leftBeforeNarrow = m_sidebar->isVisible();
+            m_sidebar->hide();
+        }
+        if (rightHere) {
+            m_rightBeforeNarrow = m_rightSidebar->isVisible();
+            m_rightSidebar->hide();
+        }
     } else if (m_openMode != OpenMode::SingleFile) {
-        m_sidebar->setVisible(m_leftBeforeNarrow);
-        m_rightSidebar->setVisible(m_rightBeforeNarrow);
+        if (leftHere)
+            m_sidebar->setVisible(m_leftBeforeNarrow);
+        if (rightHere)
+            m_rightSidebar->setVisible(m_rightBeforeNarrow);
     }
 }
 

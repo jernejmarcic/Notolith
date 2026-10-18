@@ -459,9 +459,29 @@ window it is. Dialogs, the settings page and the graph open in the main window.
   feature off, `floating` is ignored. Without pop-outs the layout has no
   `floating` node.
 - **Core plugins > Pop-out windows** (`plugins.popoutWindows`, Notolith's own
-  switch; Obsidian has none) turns the feature off: the two commands and the
-  menu items stop, and every tab in a pop-out returns to the main window. Off,
-  no window object, drop target or timer exists.
+  switch; Obsidian has none) turns the feature off: the four commands and the
+  menu items stop, and every tab in a pop-out returns to the main window, every
+  detached sidebar and pane to its place. Off, no window object, drop target or
+  timer exists.
+
+A sidebar can leave the window as well. "Detach left sidebar"
+(`app:detach-left-sidebar`) and "Detach right sidebar" (`app:detach-right-sidebar`)
+are Notolith's own commands (Obsidian only drags): they put the whole sidebar in
+a window of its own, the same entry as "Detach sidebar" in the context menu of
+the left header or the right tab row. Right-clicking one of the right sidebar's
+tabs also offers "Detach pane", which takes that pane alone and hides its tab;
+the other panes stay. The detached sidebar or pane keeps working: the file
+tree, backlinks and the rest still follow the active note. Closing its window
+puts it back in the splitter where it was. While a sidebar is in a window,
+"Toggle left sidebar" and "Toggle right sidebar" leave it alone, a narrow main
+window does not fold it, and asking for a detached pane (the status bar's
+backlink count, Search) raises its window instead of switching the sidebar.
+Panes are not tabs here, so unlike Obsidian a sidebar view cannot be dragged
+into the main area. Closing the main window, or turning the feature off, docks
+them first.
+
+Not yet: a detached sidebar or pane is not remembered across restarts (pop-outs
+holding tabs are).
 
 Dragging does the same without a command. Drag a tab out of its tab strip (a
 drag inside the strip still reorders), and while it is over a split a
@@ -480,8 +500,8 @@ turns all of this off, drop targets included.
 Limits. Qt reports a drag cancelled with Escape the same way as one let go
 outside the windows, so an Escape pressed while the pointer is outside every
 window also opens the tab in a window of its own. Tabs in the sidebars are not
-draggable: a right-sidebar pane cannot be dragged out into a window (panes are
-not tabs here), which waits on detaching panes.
+draggable: a right-sidebar pane cannot be dragged out into a window yet (use
+"Detach pane" from its tab's context menu).
 
 The tests send the drag-enter and drop events themselves, because the offscreen
 platform cannot start a drag: they cover the zone arithmetic, the drop on an
