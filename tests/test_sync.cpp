@@ -933,6 +933,50 @@ TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
     EXPECT_FALSE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
 }
 
+// The parked delete lives in the journal, not just in memory: a restarted
+// engine still retries it.
+TEST_F(SyncIntegrationTest, AParkedDeleteIsStillRetriedAfterARestart)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("text"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    auto engineB = std::make_unique<SyncEngine>();
+    auto watchB = std::make_unique<Watcher>(*engineB);
+    engineB->start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB->waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/shared.md");
+    ASSERT_TRUE(QFile::exists(onB));
+
+    QFile::remove(vaultA.path() + QStringLiteral("/shared.md"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    const QString trash = vaultB.path() + QStringLiteral("/.trash");
+    ASSERT_TRUE(QDir().mkpath(trash));
+    ASSERT_TRUE(QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restoreTrash = qScopeGuard([&trash] {
+        QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    });
+    for (int cycle = 0; cycle < 4; ++cycle) { // parked after the fourth
+        engineB->syncNow();
+        ASSERT_TRUE(watchB->waitForCycle());
+    }
+    ASSERT_TRUE(QFile::exists(onB));
+    watchB.reset();
+    engineB.reset();
+
+    QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    SyncEngine engineB2;
+    Watcher watchB2(engineB2);
+    engineB2.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB2.waitForCycle());
+    EXPECT_FALSE(QFile::exists(onB));
+    EXPECT_TRUE(QFile::exists(trash + QStringLiteral("/shared.md")));
+}
+
 // A parked delete leaves the file on B; B edits it; A then creates a new note
 // at the same path. The incoming put names a different entity, so B has no
 // entity for it and used to overwrite the edit with it.

@@ -333,6 +333,7 @@ void SyncEngine::runCycle()
     const int pushed = pushOutbox();
     int pulled = 0;
     int conflicts = 0;
+    loadPendingDeletes();
     retryPendingDeletes();
     const QString pullError = pullJournal(&pulled, &conflicts);
 
@@ -867,14 +868,13 @@ bool SyncEngine::applyRemoteDelete(const QByteArray &entityID, QString *error)
     return true;
 }
 
-QList<QByteArray> SyncEngine::pendingDeletes() const
+void SyncEngine::loadPendingDeletes()
 {
-    QList<QByteArray> ids;
+    m_pendingDeletes.clear();
     for (const QByteArray &hex : m_journal->meta(QStringLiteral("pendingDeletes")).split('\n')) {
         if (!hex.isEmpty())
-            ids.append(QByteArray::fromHex(hex));
+            m_pendingDeletes.append(QByteArray::fromHex(hex));
     }
-    return ids;
 }
 
 void SyncEngine::setPendingDeletes(const QList<QByteArray> &ids)
@@ -882,6 +882,7 @@ void SyncEngine::setPendingDeletes(const QList<QByteArray> &ids)
     QByteArray joined;
     for (const QByteArray &id : ids)
         joined += (joined.isEmpty() ? "" : "\n") + id.toHex();
+    m_pendingDeletes = ids;
     m_journal->setMeta(QStringLiteral("pendingDeletes"), joined);
 }
 
@@ -940,9 +941,11 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
         // A newer record for the entity (an edit, a rename, a re-create)
         // wins over a delete still waiting to be applied: drop it.
         m_deleteFailures.remove(record.entityID);
-        QList<QByteArray> pending = pendingDeletes();
-        if (pending.removeAll(record.entityID))
+        if (pendingDeletes().contains(record.entityID)) {
+            QList<QByteArray> pending = pendingDeletes();
+            pending.removeAll(record.entityID);
             setPendingDeletes(pending);
+        }
     }
 
     if (remote.op == QStringLiteral("delete")) {
