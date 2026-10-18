@@ -1433,7 +1433,7 @@ Wave 2
       - [x] Heading text with `#`, `|`, `^` inserted verbatim (lane links,
             786b051: ObsidianSyntax::headingLinkText both sides; strip set
             from memory, not checked against Obsidian).
-      - [ ] Nested `[[N#H1#H2]]` not offered or resolved (resolver is
+      - [x] (lane links2, bbd976f; published anchors of embedded headings may still shift the -2 numbering) Nested `[[N#H1#H2]]` not offered or resolved (resolver is
             single-level).
       - [x] An alias inserts the note's basename (lane links, 87af41f:
             `folder/Note` when the basename is shared).
@@ -1558,12 +1558,12 @@ when off.
       Measured on 20 000 notes: linkTargets 18-22 ms, aliases ~2 ms, per
       index change and per tab. Now cached until a note's names change.
       Follow-ups:
-      - [ ] A note whose first link to A was added since the last index run
+      - [x] (lane links2, 6dc99aa: Indexer::waitIdle(1000) before the rewrite; move path untested) A note whose first link to A was added since the last index run
             is not a rename candidate (same lag as before; would need a
             full scan).
       - [ ] The first list query after a name change still costs ~22 ms
             on 20 000 notes (build incrementally if it shows).
-      - [ ] The status-bar "links in a note were not updated" path has no
+      - [x] (lane links2, b216af9) The status-bar "links in a note were not updated" path has no
             window test.
 - [x] 4. (lane etc, f527ed3) RISK, security: bwrap binds all of /etc; a shared
       note's tikz fence can `\input{/etc/machine-id}` (or hostname,
