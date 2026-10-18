@@ -293,6 +293,10 @@ bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &by
     Fd file(::openat(dir.fd, temp.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
     if (file.fd < 0)
         return fail(QStringLiteral("cannot write %1: %2").arg(relativePath, errnoText(errno)));
+    // Keep a file's own permissions, as QSaveFile does: a private 0600 note stays private.
+    struct stat old {};
+    if (::fstatat(dir.fd, leaf.constData(), &old, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(old.st_mode))
+        ::fchmod(file.fd, old.st_mode & 07777);
     const auto cleanup = [&](int err) {
         file.reset(-1);
         ::unlinkat(dir.fd, temp.constData(), 0);

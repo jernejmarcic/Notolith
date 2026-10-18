@@ -721,6 +721,23 @@ TEST(VaultWriteNoFollow, WritesNestedFilesAndMakesTheFolders)
     EXPECT_EQ(dirNames(dir.filePath(QStringLiteral("a/b/c"))), QStringList{QStringLiteral("New.png")}); // no temp left
 }
 
+TEST(VaultWriteNoFollow, AnExistingNoteKeepsItsPermissions)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("private.md"));
+    {
+        QFile f(path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("old");
+    }
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    const Vault vault(dir.path());
+    QString error;
+    ASSERT_TRUE(vault.writeBytesNoFollow(QStringLiteral("private.md"), QByteArray("new"), &error)) << error.toStdString();
+    EXPECT_EQ(readAll(path), QByteArray("new"));
+    EXPECT_FALSE(QFile::permissions(path) & (QFileDevice::ReadGroup | QFileDevice::ReadOther)); // still 0600
+}
+
 TEST(VaultWriteNoFollow, ALeafSymlinkIsReplacedNotFollowed)
 {
     QTemporaryDir dir;
