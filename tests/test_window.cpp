@@ -35,6 +35,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QLayout>
@@ -1603,6 +1604,11 @@ TEST_F(WindowTest, RenamingRightAfterATimerSaveRewritesTheLinkWithoutWaitingForT
         }
         QSqlDatabase::removeDatabase(QStringLiteral("index8-holder"));
     });
+    const auto joinHolder = qScopeGuard([&] { // a failed ASSERT must not leave the thread joinable
+        release = true;
+        if (holder.joinable())
+            holder.join();
+    });
     ASSERT_TRUE(QTest::qWaitFor([&] { return locked.load(); }, 5000));
     // The timer saves; the scan it starts is not applied before the rename below.
     ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->isModified(); }, 5000));
@@ -1614,7 +1620,7 @@ TEST_F(WindowTest, RenamingRightAfterATimerSaveRewritesTheLinkWithoutWaitingForT
     window.openNote(path(QStringLiteral("Target.md")));
     QLineEdit *title = titleOf(window.editor());
     ASSERT_NE(title, nullptr);
-    ASSERT_TRUE(indexer->isRunning()) << "the reindex of the save must still be unapplied";
+    ASSERT_TRUE(QTest::qWaitFor([&] { return indexer->isRunning(); }, 5000)) << "the reindex of the save must still be unapplied";
     title->setText(QStringLiteral("Renamed"));
     const qsizetype before = indexed.size();
     release = true;

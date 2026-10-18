@@ -1771,5 +1771,27 @@ Lane misc8:
       writeNoteNoFollow (openat O_NOFOLLOW, renameat); engine writes use
       them; applyRemoteDelete re-checks its path. Vault part merged
       (keeps the file mode); engine call sites left for lane A.
-- [ ] Item 30 (lane E upgrade): old journal through a real cycle; scanner
-      Dice tests; journal.db size numbers; F8 documented.
+- [x] Item 30 (lane E upgrade): old journal through a real cycle; scanner
+      Dice tests; journal.db size numbers; F8 documented. 20000 notes =
+      2.7 MiB journal (143 B/note); hot note 3000 saves = 204 KiB + WAL.
+- [ ] Flaky under load (seen in lane gates at load ~15): test_window
+      inline-title rename test asserted indexer->isRunning() right after
+      the save (scan may not have started yet) and a failed ASSERT left the
+      lock thread joinable -> "terminate called". Fixed: qWaitFor +
+      qScopeGuard join. Verify in main check.
+- [ ] Parked blobs are forgotten on restart (lane blob, documented): the
+      cursor is past the record, so the attachment only reappears when its
+      entity next changes; the status line about it vanishes too. Plan:
+      a journal table parked(recordID, entityID, path, blobAddress,
+      itemsKeyID, record bytes) written on park; each cycle retries the
+      parked rows first (fetch + apply through applyRecord with the stored
+      record), drops a row once applied or once a newer state of that
+      entity arrived; unreadableWarning reads the table. Test: park, stop,
+      restore the blob dir, restart, next cycle writes the file and the
+      warning is gone. Mutation: skip the retry -> file absent.
+- [ ] Flaky under load: NotebookKernelFeatureTest
+      .ATimedOutRunIsInterruptedAndADeadKernelIsReplaced failed once in a
+      lane gate (failure line not captured). Plan: run it 20x under a
+      parallel build load, capture the failing EXPECT, then widen only the
+      budget that is a wall-clock guess (likely the 700 ms timeout racing
+      kernel start-up).
