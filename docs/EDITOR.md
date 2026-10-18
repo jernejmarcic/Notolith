@@ -894,7 +894,8 @@ is the wrong place for it).
 
 - **Sandbox**: each tool runs inside bubblewrap with the syscall filter
   (`sandbox::bubblewrapCommand`, `libs/sandbox/Bubblewrap.h`, which TeX's
-  compile step uses too): `/usr`, `/etc` and `/var/lib/texmf` read-only, no home,
+  compile step uses too): `/usr`, `/var/lib/texmf` and, from `/etc`, only `texmf`, `fonts`,
+  `ld.so.cache`, `alternatives` and the JVM's `java*` directory (each if it exists) read-only, no home,
   no other disk, no network, no inherited environment, and one temporary
   directory writable. Without bwrap there is no diagram, only the hint: never an
   unsandboxed run. A tool set by path outside `/usr` is resolved (a symlink
@@ -912,8 +913,9 @@ is the wrong place for it).
   `\begin{document}...\end{document}`) or a bare `tikzpicture`, put in a
   `standalone` document and run through `latex -no-shell-escape` and
   `dvisvgm --no-fonts --exact-bbox`. TeX can still `\input` a system file under
-  `/usr` or `/etc` (TeX Live 2026's `openin_any` does nothing); the user's files
-  are not in the sandbox. On a dark theme black (explicit, and the SVG's implicit
+  `/usr` (TeX Live 2026's `openin_any` does nothing), but not the machine id,
+  hostname or user list in `/etc`, which a shared note would otherwise put into
+  a published SVG; the user's files are not in the sandbox either. On a dark theme black (explicit, and the SVG's implicit
   default) becomes the theme's text colour, like TikZJax's invert option; other
   colours stay. The SVG gets a background rect in the theme's background, so
   like Mermaid's and PlantUML's it is a card (not pale lines invisible on a

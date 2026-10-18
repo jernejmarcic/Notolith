@@ -13,7 +13,15 @@
 # in a memory-capped scope where systemd is there, so a runaway test is
 # killed alone instead of taking the session with it. CFLAGS and CXXFLAGS are
 # dropped for the configure: a distribution's -march=native must not leak in.
+#
+# A test whose real tool (bwrap, latex, java, a Jupyter kernel...) is missing
+# is skipped, not failed, unless NOTEAPPC_REQUIRE_TOOLS=1 is exported first -
+# set it on a machine that has them all, or a green run can hide skipped
+# sandbox tests. It is not forced here: a machine without the tools could
+# never pass.
 set -eu
+
+[ "${NOTEAPPC_REQUIRE_TOOLS:-}" = 1 ] || echo "note: NOTEAPPC_REQUIRE_TOOLS is not 1, so tests that need a missing tool skip silently"
 
 src=$(cd "$(dirname "$0")/.." && pwd)
 cores=$(nproc)

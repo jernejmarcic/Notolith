@@ -757,11 +757,13 @@ TEST_F(WindowTest, SplitDownThenRightNestsTheSplits)
 }
 
 // Typing with no pause long enough for the 2 s timer still saves: the max
-// wait counts from the first edit after a save.
+// wait counts from the first edit after a save. The pause timer is set far
+// beyond the test, so a save can only be the max wait's - however slow the
+// machine is, no gap in the typing can let the pause timer do it.
 TEST_F(WindowTest, ContinuousTypingIsSavedAtTheMaxWaitNotOnlyAtThePause)
 {
     MainWindow window;
-    window.setAutosaveIntervalsForTests(300, 500);
+    window.setAutosaveIntervalsForTests(600000, 500);
     window.openVault(dir.path());
     const QString note = path(QStringLiteral("Welcome.md"));
     window.openNote(note);
@@ -771,13 +773,12 @@ TEST_F(WindowTest, ContinuousTypingIsSavedAtTheMaxWaitNotOnlyAtThePause)
     QElapsedTimer typing;
     typing.start();
     bool savedWhileTyping = false;
-    for (int i = 0; i < 40 && !savedWhileTyping; ++i) { // a key every 40 ms: never a 300 ms pause
+    while (!savedWhileTyping && typing.elapsed() < 20000) { // a key every 40 ms until the save, or give up
         QTest::keyClicks(editor, QStringLiteral("x"));
         QTest::qWait(40);
         savedWhileTyping = readAll(note) != before;
     }
-    EXPECT_TRUE(savedWhileTyping);
-    EXPECT_LT(typing.elapsed(), 1300) << "saved by the max wait, long before the typing could stop";
+    EXPECT_TRUE(savedWhileTyping) << "the max wait never saved while the typing went on";
 }
 
 TEST_F(WindowTest, UndoCloseTabReopensInTheSameSplitWithTheCaret)
@@ -5838,8 +5839,14 @@ TEST_F(WindowTest, ALaunchDuringAnotherOnesStartupIsHandedOnceItListens)
     ASSERT_FALSE(first.handOver(QString())); // first: holds the lock, not listening yet
 
     auto handed = secondLaunch(name, path(QStringLiteral("Welcome.md")));
+    QElapsedTimer waited;
+    waited.start();
     QTest::qWait(200); // it finds the lock held and waits rather than starting a window
-    EXPECT_FALSE(ready(handed));
+    const bool early = ready(handed);
+    // handOver gives up after 40 tries 50 ms apart (2 s): past that a starved
+    // test thread proves nothing, so the check only counts when it ran in time.
+    if (waited.elapsed() < 1500)
+        EXPECT_FALSE(early) << "it must wait for the lock holder to listen";
 
     MainWindow window;
     first.serve(&window);

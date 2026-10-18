@@ -15,7 +15,13 @@ struct Command {
     int filterFD = -1; ///< SyscallFilter.h's: keepInChild() it, close() it after QProcess::start
 };
 
-/// `program arguments` with /usr, /etc and /var/lib/texmf read-only (the
+/// bwrap arguments binding the few /etc entries the tools need read-only,
+/// plus `extra` (names under /etc), each only when it exists. Never all of
+/// /etc: a tool that reads any file it sees (TeX's \input) would ship the
+/// machine id, hostname or user list.
+QStringList etcBinds(const QStringList &extra = {});
+
+/// `program arguments` with /usr, /var/lib/texmf and etcBinds() read-only (the
 /// rest of the system is not there: no home, no other drive, no socket),
 /// `dir` the only writable place and the working directory, HOME, a private
 /// /tmp and /proc and /dev, no network, no inherited environment (PATH and
