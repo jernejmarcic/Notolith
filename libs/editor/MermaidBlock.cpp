@@ -43,6 +43,8 @@ constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools'
 constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
 /// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
 const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
+constexpr int kKindCount = 4; ///< the arrays below hold one entry per DiagramKind
+static_assert(int(DiagramKind::Graphviz) + 1 == kKindCount, "a new DiagramKind: grow kKindCount (the pools and prune flags)");
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
 constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
 constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
@@ -520,7 +522,7 @@ void make(const std::shared_ptr<State> &state, const QString &source, const QByt
 /// hung fences of one kind still block it; per-key timeouts if that is felt.
 QThreadPool *pool(DiagramKind kind)
 {
-    static QThreadPool pools[4];
+    static QThreadPool pools[kKindCount];
     static const bool once = [] {
         for (QThreadPool &instance : pools)
             instance.setMaxThreadCount(2);
@@ -545,7 +547,7 @@ MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QStrin
         (void)QtConcurrent::run(pool(kind), [state, kind, source, config, width, ratio, deliver] {
             make(state, source, config, width, ratio, deliver);
             // Once per process and kind, after the first diagram is out, never at startup.
-            static std::atomic_flag pruned[4];
+            static std::atomic_flag pruned[kKindCount];
             if (!pruned[int(kind)].test_and_set())
                 pruneMermaidCache(diagramCacheDirectory(kind), kCacheDays, kCacheBytes);
         });
