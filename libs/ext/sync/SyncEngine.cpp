@@ -1331,7 +1331,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             const auto mine = m_journal->state(record.entityID, remote.parent);
             if (mine && mine->own && (mine->seq == 0 || mine->seq > record.seq))
                 remote.path = existing->path;
-        } else if (!(inLine && baseHasNoRow) && m_journal->sawPath(record.entityID, parentDigest, remote.path)) {
+        } else if (m_journal->sawPath(record.entityID, parentDigest, remote.path)) {
             remote.path = existing->path;
         }
     }
