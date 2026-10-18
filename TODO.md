@@ -1835,6 +1835,9 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [ ] Obsidian command ids workspace:open-in-new-window /
       workspace:move-to-new-window unverified: check against a real
       Obsidian hotkeys.json (Jernej) or a public source.
+- [ ] After lanes C + D: dragging a right sidebar tab button out of the
+      window detaches that pane (lane popdrag skips it: detachPane lands
+      in lane popside at the same time).
 - [ ] After lanes B + C: persist detached sidebars / panes (Pane::viewType
       column, file-explorer etc.), test ADetachedSidebarIsRestoredAsAFile
       ExplorerWindow; main-splitter 3-children assertion in
