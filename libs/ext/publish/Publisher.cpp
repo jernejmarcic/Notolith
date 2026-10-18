@@ -345,8 +345,8 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
 .code-tab-panel { order: 1; flex: 0 0 100%; display: none; }
 .code-tab-input:checked + .code-tab-label + .code-tab-panel { display: block; }
 .math-block { text-align: center; margin: 1em 0; overflow-x: auto; }
-.mermaid-diagram { text-align: center; margin: 1em 0; overflow-x: auto; }
-.mermaid-diagram img { max-width: 100%; height: auto; }
+.diagram { text-align: center; margin: 1em 0; overflow-x: auto; }
+.diagram img { max-width: 100%; height: auto; }
 .math-block svg, code.math-source { vertical-align: middle; }
 .embed { border: 1px solid var(--background-modifier-border); border-radius: 6px;
   padding: 8px 12px; margin: 1em 0; }

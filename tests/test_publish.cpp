@@ -316,7 +316,7 @@ TEST(PublishTest, MathsBecomesSvg)
 // The SVGs of the page's diagrams, decoded from their <img> data URIs.
 QStringList diagramImages(const QString &page)
 {
-    static const QRegularExpression image(QStringLiteral("<div class=\"mermaid-diagram\"><img alt=\"diagram\" src=\"data:image/svg\\+xml;base64,([A-Za-z0-9+/=]*)\">"));
+    static const QRegularExpression image(QStringLiteral("<div class=\"diagram\"><img alt=\"diagram\" src=\"data:image/svg\\+xml;base64,([A-Za-z0-9+/=]*)\">"));
     QStringList svgs;
     for (auto it = image.globalMatch(page); it.hasNext();)
         svgs << QString::fromUtf8(QByteArray::fromBase64(it.next().captured(1).toLatin1()));
@@ -346,6 +346,10 @@ TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
     EXPECT_EQ(diagramImages(page).size(), 1) << page.toStdString();
     EXPECT_FALSE(page.contains(QStringLiteral("onload")));
     EXPECT_FALSE(page.contains(QStringLiteral("avascript")));
+    // The class is the kind-neutral `diagram`, and the stylesheet has it.
+    const QString css = site.read(QStringLiteral("site.css"));
+    EXPECT_TRUE(css.contains(QStringLiteral(".diagram img")));
+    EXPECT_FALSE(css.contains(QStringLiteral("mermaid-diagram")));
 }
 
 // A fence the editor drew is put in from the cache; publishing never runs mmdr

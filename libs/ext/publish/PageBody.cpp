@@ -603,7 +603,7 @@ private:
         const QByteArray svg = noteAppC::diagramCachedSVG(kind, source, m_env.themeDark);
         if (!svg.contains("<svg"))
             return QString();
-        return QStringLiteral("<div class=\"mermaid-diagram\"><img alt=\"diagram\" src=\"data:image/svg+xml;base64,")
+        return QStringLiteral("<div class=\"diagram\"><img alt=\"diagram\" src=\"data:image/svg+xml;base64,")
              + QString::fromLatin1(svg.toBase64()) + QStringLiteral("\"></div>\n");
     }
 

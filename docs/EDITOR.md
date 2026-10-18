@@ -860,7 +860,7 @@ already linked for notebook output).
   already cached for that source (the theme's colours if it has them, else the
   most recently used in any colours - the diagram carries its own background, so
   a dark one is a dark card on a light page). Publish inlines it as
-  `<div class="mermaid-diagram">` with its ids prefixed per diagram; PDF export
+  `<div class="diagram">` with its ids prefixed per diagram; PDF export
   draws it as an image. A fence never drawn in the editor is its source, as a
   code block.
 - **Not drawn**: encrypted notes (the source would go into the cache), slides.
@@ -917,7 +917,7 @@ is the wrong place for it).
   graph's own attributes override them.
 - **Publish and PDF export** draw the cached SVGs of all four kinds the same
   way (a never-drawn fence stays its source); publish puts each in
-  `<div class="mermaid-diagram">` as an `<img>` with a `data:` URI, never
+  `<div class="diagram">` as an `<img>` with a `data:` URI, never
   inlined: a note decides what is in its SVG (TikZ's `\special{dvisvgm:raw}`
   passes markup straight through), and an SVG shown as an image runs no
   script and loads nothing.
