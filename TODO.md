@@ -1528,3 +1528,51 @@ any file outside /cell, or get a kernel in the wasm tier.
       /tmp/noteAppC-history-leaked from Jernej's 2026-10-16 "leaked history
       delete" decision. A full check.sh run afterwards left none: they came
       from killed runs only, no test keeps its dir.
+
+## Fable audit round 7, 2026-10-18 (round 6 merges)
+
+Clean: bwrap command, readOnlyBinds, publish img data URIs, single-instance
+socket, undo close tab, autosave max-wait, movePath, lossy write refusal,
+Latin-1 index text, syncfix retry; nothing costs at startup or per keystroke
+when off.
+
+- [ ] 1. (lane relink) BUG, data loss: `Index::updateLinksAfterRename`
+      splices at link offsets from the index, which lags a save (reindex on
+      the pool, 300 ms watcher debounce). Type at the top of B, then move A
+      within a second: B's prose is overwritten at stale offsets.
+      Plan: the DB only picks candidate files; per file re-parse the text
+      just read and take ranges/targets from that, matching by resolve()
+      as the DB pass does. Test: prepend text to B on disk without
+      reindexing, rename A, B intact and its link rewritten.
+- [ ] 2. (lane relink) BUG: a lossy (non-UTF-8) linking note makes the
+      rename's write fail and `return -1` mid-batch, leaving later notes
+      with dead links. Plan: skip a lossy note (count it, name it in the
+      warning), continue. Test: lossy + clean linker; clean rewritten,
+      lossy bytes unchanged, result >= 0.
+- [ ] 3. (lane relink) BUG vs Obsidian: `linkTargets()` drops a note name
+      that is also another note's alias, so note Foo cannot be completed
+      when Bar has alias Foo. Plan: keep both rows. Test in test_index.
+- [ ] 7. (lane relink) IMPROVEMENT: onIndexChanged/configureEditor query
+      aliases twice plus all names on the UI thread per index change.
+      Measure; if it shows, share the alias list / cache in Index.
+- [ ] 4. (lane etc) RISK, security: bwrap binds all of /etc; a shared
+      note's tikz fence can `\input{/etc/machine-id}` (or hostname,
+      passwd) and Publish ships it in the SVG. Plan: bind only what the
+      tools need (fonts, texmf, ld.so.*, alternatives, java-*, localtime,
+      passwd/nsswitch only if the JVM insists) with --ro-bind-try; flip
+      tests/test_diagrams.cpp:314 to assert /etc/machine-id unreadable;
+      every kind still renders; notebook runner too if it shares the
+      helper.
+- [ ] 8. (lane etc) Tests: wall-clock bounds at test_window.cpp:780 and
+      the qWait(200) EXPECT_FALSE at :5826 can flake under load; make them
+      load-robust without making them unable to fail.
+- [ ] 5. Heading link text: we replace `#|^[]:\` and `%%` with a space;
+      Obsidian may remove them instead. Check Obsidian's documented
+      behaviour (help site / forum; never launch Obsidian) and match it.
+- [ ] 6. NOTE: a remote delete whose trash move fails permanently stops
+      every later pull record each cycle (Status::Error). Defensible (never
+      drop a delete); later: skip after N cycles and show it in the UI.
+- [x] 9. Behaviour choice: a second launch naming another vault switches
+      the running window instead of opening a second one (Obsidian opens a
+      window per vault). Documented in docs/PLATFORMS.md; kept: one window
+      per user is what lane single was for.
