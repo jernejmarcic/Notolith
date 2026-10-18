@@ -103,6 +103,20 @@ compositor and on the file manager passing a token (the desktop file's
 that starts the real binary while Notolith is in use should set it, or the
 launch is handed to the open window.
 
+## Pop-out windows on Hyprland
+
+A pop-out (`PopoutWindow`) is a parentless top-level window owned by the main
+one, not a transient child: a parented `Qt::Window` becomes an `xdg_toplevel`
+with a parent, which Hyprland floats over it like a dialog, whereas Obsidian,
+Zed and VS Code pop-outs are independent toplevels. So a pop-out tiles like any
+new window. To float them, add a window rule: they share the main window's
+class (`io.github.jernejmarcic.Notolith`, from `setDesktopFileName`), so match
+on the title, which for a pop-out is "<tab> - Notolith" where the main window's
+is "<note>.md - <vault> - Notolith", or float the class and tile the main window
+by hand. The code never calls `move()`,
+which Wayland ignores for top-levels. Not checked on a real compositor: the
+tests run offscreen, so the first pop-out on Hyprland is worth opening by hand.
+
 ## Mobile
 
 Not started. What is already true, and what stands in the way:

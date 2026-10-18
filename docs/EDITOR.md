@@ -425,6 +425,39 @@ no system trash to use, the file goes to the vault's `.trash` and the status bar
 says so; a failed trash is never turned into a permanent delete. Sync pulls
 that remove a note keep using the vault's `.trash`.
 
+## Windows and splits
+
+Tabs sit in splits: "Split right" (`workspace:split-vertical`) and "Split down"
+(`workspace:split-horizontal`) open the same note beside the focused tab, and
+closing a split's last tab closes the split. Right-clicking a tab lists Close,
+Close others, the two splits and the two window commands below.
+
+A tab can also live in a window of its own, as in Obsidian's pop-out windows.
+"Open current tab in new window" (`workspace:open-in-new-window`) shows the
+note again in a new window; "Move current tab to new window"
+(`workspace:move-to-new-window`) takes the tab itself, with its history, caret
+and view (a canvas or a PDF comes along). Both are rebindable like any command.
+A pop-out holds tabs and splits like the main window, has no sidebars, header
+or status bar, and is titled by its current tab. Every hotkey works in it, and
+there is still one vault, one index and one set of side panes: the right
+sidebar and the status bar follow whichever tab has the focus, in whichever
+window it is. Dialogs, the settings page and the graph open in the main window.
+
+- Moving the main window's only tab out leaves an empty "New tab" behind: the
+  main window never has no tab.
+- Closing a pop-out closes its tabs like any other close: a note is saved
+  first (with `files.autosave` on; a failed save or a declined prompt keeps the
+  window open) and Ctrl+Shift+T brings the last one back in the main window.
+  A pop-out whose last tab goes closes with it.
+- Closing the main window closes every pop-out with it.
+- **Core plugins > Pop-out windows** (`plugins.popoutWindows`, Notolith's own
+  switch; Obsidian has none) turns the feature off: the two commands and the
+  menu items stop, and every tab in a pop-out returns to the main window. Off,
+  no window object, drop target or timer exists.
+
+Not yet: a pop-out is not remembered across restarts, and tabs cannot be
+dragged between windows or onto a split's edge.
+
 ## Undo close tab
 
 Ctrl+Shift+T (`workspace:undo-close-pane`, rebindable like any command) reopens
