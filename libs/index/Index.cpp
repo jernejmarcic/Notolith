@@ -1283,10 +1283,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             // that lookup.
             if (query.value(3).toBool() || movedPath(fromPath).isEmpty() || target.startsWith(QLatin1Char('/')))
                 continue;
-            // The index keeps an `<angle bracket>` target with its brackets.
-            const QString inner = target.startsWith(QLatin1Char('<')) && target.endsWith(QLatin1Char('>'))
-                                      ? target.mid(1, target.size() - 2) : target;
-            resolved = QDir::cleanPath(QFileInfo(fromPath).path() + QLatin1Char('/') + inner);
+            resolved = QDir::cleanPath(QFileInfo(fromPath).path() + QLatin1Char('/') + target);
             if (resolved.startsWith(QLatin1String("..")) || !movedPath(resolved).isEmpty()
                 || !QFileInfo(vault.absolute(resolved)).isFile())
                 continue;
@@ -1343,15 +1340,21 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             // A wikilink's targetRange is the target alone. A Markdown link's
             // covers the whole URL, subpath included, since that is one
             // contiguous node in md4qt; only the part before it is the target.
-            const qsizetype rawLength =
-                hit.wiki ? hit.targetRange.length() : hit.targetRange.length() - hit.subpath.length();
-            if (rawLength < 0 || hit.targetRange.start + rawLength > note.text.size())
+            if (hit.targetRange.length() < 0 || hit.targetRange.end > note.text.size())
                 continue; // stale offset - the file moved under us; a rebuild will catch it
 
-            const QString rawSlice = note.text.mid(hit.targetRange.start, rawLength);
-            const bool angled = !hit.wiki && rawSlice.size() >= 2 && rawSlice.startsWith(QLatin1Char('<'))
-                                && rawSlice.endsWith(QLatin1Char('>'));
-            const QString raw = angled ? rawSlice.mid(1, rawSlice.size() - 2) : rawSlice;
+            // A CommonMark `<path with spaces.md>` target: the brackets stay
+            // where they are and only what is inside them is rewritten.
+            const QString whole = note.text.mid(hit.targetRange.start, hit.targetRange.length());
+            const bool angled = !hit.wiki && whole.size() >= 2 && whole.startsWith(QLatin1Char('<'))
+                                && whole.endsWith(QLatin1Char('>'));
+            const qsizetype rawStart = hit.targetRange.start + (angled ? 1 : 0);
+            const qsizetype rawLength = (hit.wiki ? hit.targetRange.length()
+                                                  : hit.targetRange.length() - hit.subpath.length())
+                                        - (angled ? 2 : 0);
+            if (rawLength < 0)
+                continue;
+            const QString raw = note.text.mid(rawStart, rawLength);
             const QString decoded = hit.wiki ? raw : QUrl::fromPercentEncoding(raw.toUtf8());
 
             // A Markdown link spelled as a path from its note's folder stays
@@ -1381,17 +1384,15 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
                                      && (angled || !relativeTarget.contains(QRegularExpression(QStringLiteral("[ ()<>]"))));
                 QString written = literal ? relativeTarget
                                           : QString::fromUtf8(QUrl::toPercentEncoding(relativeTarget, "/"));
-                if (angled)
-                    written = QLatin1Char('<') + written + QLatin1Char('>');
-                note.text.replace(hit.targetRange.start, rawLength, written);
+                note.text.replace(rawStart, rawLength, written);
                 continue;
             }
 
             QString rebased = rebasedTarget(decoded, hit.resolved, hit.movedTo);
-            if (!hit.wiki)
+            if (!hit.wiki && !(angled && !raw.contains(QLatin1Char('%'))))
                 rebased = QString::fromUtf8(QUrl::toPercentEncoding(rebased, "/"));
 
-            note.text.replace(hit.targetRange.start, rawLength, rebased);
+            note.text.replace(rawStart, rawLength, rebased);
         }
 
         if (!Vault::write(absolutePath, note, error)) {

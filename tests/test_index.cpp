@@ -601,6 +601,37 @@ TEST_F(RenameLinksTest, PreservesAliasSubpathEmbedAndSkipsCodeFences)
                                     QStringLiteral("Home.md"), QStringLiteral("MdLink.md")}));
 }
 
+// `[x](<path with spaces.md>)` is CommonMark's spelling for a destination with
+// spaces: the brackets are not part of the target, so it is a backlink, and a
+// rename of the target rewrites what is inside them and keeps them.
+TEST_F(RenameLinksTest, AnAngleBracketMarkdownLinkIsABacklinkAndKeepsItsBracketsOnRename)
+{
+    write(QStringLiteral("Old Note.md"), "# Old Note\n\n## Part\n");
+    write(QStringLiteral("Home.md"), "[a](<Old Note.md>) and [b](<Old Note.md#Part>)\n");
+    write(QStringLiteral("Sub/Deep.md"), "[c](<../Old Note.md>)\n");
+
+    vault = Vault(dir.path());
+    Index index;
+    build(index);
+
+    QStringList sources;
+    for (const Backlink &backlink : index.backlinks(vault.absolute(QStringLiteral("Old Note.md"))))
+        sources << backlink.fromPath;
+    sources.sort();
+    EXPECT_EQ(sources, QStringList({QStringLiteral("Home.md"), QStringLiteral("Home.md"),
+                                    QStringLiteral("Sub/Deep.md")}));
+
+    QString error;
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(vault.absolute(QStringLiteral("Old Note.md")), QStringLiteral("New Note"),
+                                 &newPath, &error)) << error.toStdString();
+    EXPECT_EQ(index.updateLinksAfterRename(QStringLiteral("Old Note.md"), QStringLiteral("New Note.md"),
+                                           vault, &error), 2) << error.toStdString();
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Home.md"))),
+              QByteArray("[a](<New Note.md>) and [b](<New Note.md#Part>)\n"));
+    EXPECT_EQ(read(vault.absolute(QStringLiteral("Sub/Deep.md"))), QByteArray("[c](<../New Note.md>)\n"));
+}
+
 // A moved note's own Markdown links are paths from its folder; Obsidian
 // rewrites them so they still reach the same files. Wikilinks (found by name),
 // URLs and same-note anchors are not paths and stay as written.
