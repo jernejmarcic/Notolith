@@ -1850,22 +1850,22 @@ WINDOWS-PLAN.md; items below get filled from it.
 
 ## Fable sync audit round 10, 2026-10-18 (scratchpad SYNC-ROUND10.md)
 Lane sync10 (in this order, one function region, one lane):
-- [ ] B. HIGH: CRLF/BOM notes always "locally changed" (raw-byte hash vs
+- [x] B. HIGH: CRLF/BOM notes always "locally changed" (raw-byte hash vs
       LF syncedHash): a remote delete never applies (note resurrects), F2(1)
       never fires, and the CRLF format test passes for the wrong reason.
       One note hash definition (SyncScanner::contentHash on the read text);
       writeRemote always keeps the disk format.
-- [ ] A. HIGH: a conflict over a disk text with no state row (upgraded
+- [x] A. HIGH: a conflict over a disk text with no state row (upgraded
       journal, save between scan and pull) fast-forwards the other device's
       text away with no copy. Winner writes the remote as a copy there.
-- [ ] D. MEDIUM: conflict winner's headDigest names the loser's text, so
+- [x] D. MEDIUM: conflict winner's headDigest names the loser's text, so
       its next edit merges against the wrong ancestor (spurious conflicts).
-- [ ] C. MEDIUM: path rule's own gate breaks with a third device (C moves
+- [x] C. MEDIUM: path rule's own gate breaks with a third device (C moves
       a renamed file back) and concurrent renames never converge: pure
       renames settled by server seq, content records by sawPath.
-- [ ] E. LOW-MED: an announce whose blob upload fails is lost for good:
+- [x] E. LOW-MED: an announce whose blob upload fails is lost for good:
       reset localMtime so the scanner retries.
-- [ ] Cleanups: delete F3 fallback once B lands (redundant), delete the
+- [x] Cleanups: delete F3 fallback once B lands (redundant), delete the
       unreachable applyRemoteDelete link guard (keep its test, fix
       comment), stale AnEditBeatsADeleteInBothDirections comment, document
       F (equal-merge announce can revive a concurrently deleted note).
@@ -1874,6 +1874,15 @@ Lane parked (parallel with sync10):
       later record for the entity unparks; openBlob failures stay
       session-only. Tests AParkedBlobIsRetriedAfterARestart,
       ALaterRecordDropsAParkedBlob.
+- [ ] Fable confirm sync10 decisions: (1) pre-digest journal: an unchanged
+      note with empty baseDigest takes digest(base/) as its base (else a
+      fast-forward overwrites its own pushed text); a disjoint edit across
+      an upgrade now falls to a conflict copy. (3) in the no-row win branch
+      headDigest stays remoteDigest so the other device fast-forwards.
+      Gap: pure-rename lookup state(entity, parent) has no baseHasNoRow
+      guard (a rename on a pre-digest journal counts a state miss).
+      Residual: rename back to a former name + edit before any sync reads
+      as no rename (documented).
 After sync10 (needs C):
 - [ ] Item 17: same path created on two devices: first-to-server keeps
       the path, loser moves to "<base> (<4 hex of entityID>)" on every
