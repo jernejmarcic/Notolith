@@ -405,6 +405,19 @@ bool SyncEngine::deriveKeysFromPassword(QByteArray *salt, bool refreshSalt)
     return true;
 }
 
+// contentKey is a per-device secret that only keys this device's own change
+// detection and blob addresses (docs/SYNC.md "Content addresses"): no other
+// device needs the same bytes, so it is seeded once from the derived key
+// (hashes already on file stay valid) and then never follows the password.
+void SyncEngine::adoptContentKey()
+{
+    const QByteArray stored = m_journal->meta(QStringLiteral("contentKey"));
+    if (stored.size() == SyncCrypto::kKeyBytes)
+        m_contentKey = stored;
+    else
+        m_journal->setMeta(QStringLiteral("contentKey"), m_contentKey);
+}
+
 bool SyncEngine::ensureSession()
 {
     if (!m_client->token().isEmpty() && !m_vaultID.isEmpty())
@@ -449,6 +462,7 @@ bool SyncEngine::ensureSession()
         setStatus(Status::Error, auth.error.isEmpty() ? QStringLiteral("sign-in failed") : auth.error);
         return false;
     }
+    adoptContentKey();
     if (!m_keysFromStore) {
         // Only keys the server just accepted are worth keeping.
         storeKeys();
@@ -680,11 +694,13 @@ void SyncEngine::changePassword(const QString &newPassword)
                 return;
             const QByteArray newLoginKey = SyncCrypto::deriveSubkey(newMaster, SyncCrypto::kContextLogin);
             const QByteArray newWrapKey = SyncCrypto::deriveSubkey(newMaster, SyncCrypto::kContextWrap);
-            const QByteArray newContentKey = SyncCrypto::deriveSubkey(newMaster, SyncCrypto::kContextContent);
             SyncCrypto::wipe(newMaster);
 
             // Only the wrap changes - every itemsKey keeps its bytes, so
             // every noteKey and every already-synced record stays valid.
+            // contentKey is not derived again either: it is a per-device
+            // secret (adoptContentKey), and replacing it would make every
+            // stored keyed hash stale and re-push the whole vault.
             QList<QPair<QByteArray, QByteArray>> rewrapped;
             for (const SyncJournal::ItemsKeyRecord &key : m_journal->allItemsKeys()) {
                 const QByteArray wrap = SyncCrypto::seal(newWrapKey, key.plaintext,
@@ -698,10 +714,8 @@ void SyncEngine::changePassword(const QString &newPassword)
             m_journal->setMeta(QStringLiteral("salt"), newSalt);
             SyncCrypto::wipe(m_loginKey);
             SyncCrypto::wipe(m_wrapKey);
-            SyncCrypto::wipe(m_contentKey);
             m_loginKey = newLoginKey;
             m_wrapKey = newWrapKey;
-            m_contentKey = newContentKey;
             if (m_keysFromStore)
                 storeKeys(); // the keyring's copy is the old password's keys now
             setStatus(Status::Idle, QStringLiteral("password changed"));
