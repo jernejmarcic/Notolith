@@ -352,6 +352,8 @@ void SyncEngine::runCycle()
     loadPendingDeletes();
     retryPendingDeletes();
     const QString pullError = pullJournal(&pulled, &conflicts);
+    if (pullError.isEmpty()) // after a stalled pull the records would apply out of order
+        retryParked(&pulled, &conflicts);
 
     maintainEnrolment();
     QStringList warnings;
@@ -1026,34 +1028,41 @@ QString SyncEngine::refusedWarning() const
         .arg(m_refusedPaths.mid(0, 5).join(QStringLiteral(", ")));
 }
 
-bool SyncEngine::loadRemoteContent(const QByteArray &recordID, const QString &path, const QByteArray &blobAddress,
-                                   bool isNote, const QByteArray &noteKey, QString *text, QByteArray *raw,
-                                   QString *error)
+bool SyncEngine::loadRemoteContent(const SyncClient::JournalRecord &record, const QString &path,
+                                   const QByteArray &blobAddress, bool isNote, const QByteArray &noteKey, QString *text,
+                                   QByteArray *raw, QString *error)
 {
     if (blobAddress.isEmpty())
         return true; // inline body: *text already holds it
     const auto park = [&] {
-        m_fetchStalls.remove(recordID);
-        if (!m_unreadable.contains(path))
-            m_unreadable.append(path);
+        m_fetchStalls.remove(record.recordID);
+        m_journal->park(record, path);
+        m_parkedNow = true;
         return false; // with *error empty: dropped, the pull moves on
     };
     const SyncClient::BlobResult blob = m_client->getBlob(m_vaultID, blobAddress);
     if (!blob.ok) {
+        if (m_retryingParked)
+            return park();
         // Not dropped on the first failure (a blip must not lose an
         // attachment for good), and not allowed to hold every later record
         // forever either: kFetchStalls blocked cycles, then it is parked.
-        if (++m_fetchStalls[recordID] > kFetchStalls)
+        if (++m_fetchStalls[record.recordID] > kFetchStalls)
             return park();
         *error = QStringLiteral("attachment %1 could not be fetched; retried next sync").arg(path);
         return false;
     }
-    m_fetchStalls.remove(recordID);
+    m_fetchStalls.remove(record.recordID);
     bool blobOk = false;
     const QByteArray padded =
         SyncCrypto::openBlob(noteKey, SyncCrypto::buildAD("BL", {blobAddress}), blob.bytes, &blobOk);
-    if (!blobOk)
-        return park(); // sealed under a key this device cannot use: retrying cannot help
+    if (!blobOk) {
+        // Sealed under a key this device cannot use: retrying cannot help, so
+        // not persisted - named for the session only.
+        if (!m_unreadable.contains(path))
+            m_unreadable.append(path);
+        return false;
+    }
     const QByteArray unpadded = SyncCrypto::unpad(padded, padded.size());
     if (isNote)
         *text = QString::fromUtf8(unpadded);
@@ -1062,13 +1071,39 @@ bool SyncEngine::loadRemoteContent(const QByteArray &recordID, const QString &pa
     return true;
 }
 
+void SyncEngine::retryParked(int *pulled, int *conflicts)
+{
+    const QList<SyncJournal::ParkedRecord> parked = m_journal->parkedRecords();
+    if (parked.isEmpty())
+        return;
+    m_retryingParked = true;
+    for (const SyncJournal::ParkedRecord &row : parked) {
+        QString error; // a retry never sets one: a fetch failure re-parks
+        m_parkedNow = false;
+        applyRecord(row.record, pulled, conflicts, &error);
+        if (!m_parkedNow)
+            m_journal->unpark(row.record.seq);
+    }
+    m_retryingParked = false;
+    for (const QByteArray &entityID : std::as_const(m_toAnnounce))
+        announce(entityID);
+    m_toAnnounce.clear();
+}
+
 QString SyncEngine::unreadableWarning() const
 {
-    if (m_unreadable.isEmpty())
+    QStringList paths;
+    for (const SyncJournal::ParkedRecord &row : m_journal->parkedRecords())
+        paths << row.path;
+    for (const QString &path : m_unreadable) {
+        if (!paths.contains(path))
+            paths << path;
+    }
+    if (paths.isEmpty())
         return {};
     return QStringLiteral("%1 attachment(s) from other devices could not be read: %2")
-        .arg(m_unreadable.size())
-        .arg(m_unreadable.mid(0, 5).join(QStringLiteral(", ")));
+        .arg(paths.size())
+        .arg(paths.mid(0, 5).join(QStringLiteral(", ")));
 }
 
 bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error)
@@ -1104,6 +1139,8 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     }
     const bool isSelfEcho = record.deviceID == m_journal->deviceID();
 
+    if (!m_retryingParked)
+        m_journal->unparkEntity(record.entityID); // a parked record is moot once any later one lands, a delete included
     if (remote.op != QStringLiteral("delete")) {
         // A newer record for the entity (an edit, a rename, a re-create)
         // wins over a delete still waiting to be applied: drop it.
@@ -1214,7 +1251,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
             const bool isNote = existing->entityType == QStringLiteral("note");
             QString text = remote.body;
             QByteArray raw;
-            if (!loadRemoteContent(record.recordID, remote.path, remote.blobAddress, isNote, noteKey, &text, &raw,
+            if (!loadRemoteContent(record, remote.path, remote.blobAddress, isNote, noteKey, &text, &raw,
                                    error))
                 return error->isEmpty(); // an error: retry the record; none: parked, dropped
             SyncJournal::Entity entity = *existing;
@@ -1241,7 +1278,7 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     QString remoteText = remote.body;
     QByteArray remoteRaw;
-    if (!loadRemoteContent(record.recordID, remote.path, remote.blobAddress, remote.entityType == QStringLiteral("note"),
+    if (!loadRemoteContent(record, remote.path, remote.blobAddress, remote.entityType == QStringLiteral("note"),
                            noteKey, &remoteText, &remoteRaw, error))
         return error->isEmpty(); // an error: retry the record; none: parked, dropped
     const bool isNote = remote.entityType == QStringLiteral("note");

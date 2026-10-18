@@ -608,14 +608,20 @@ blob is gone) is handled the same way. A record for an attachment or an
 oversized note body holds the pull - the status is `Error` with "attachment
 `path` could not be fetched; retried next sync", the cursor stays before it -
 for three cycles, so a passing network failure never loses it. After the third
-the record is parked: dropped from the pull (later records apply), the path
-kept for the session, and the status is `Idle` with "N attachment(s) from
-other devices could not be read: paths". A blob that is there but cannot be
-opened (sealed under a key this device lacks) is parked at once, retrying
-cannot help. The count is in memory only, like the delete count; a restart
-starts it over and forgets what was parked, so the record is not re-pulled
-(the cursor has passed it) - the file reappears when its entity next changes
-on any device.
+the record is parked: dropped from the pull (later records apply), and the
+whole record is kept in the journal's `parked` table, so a restart does not
+forget it. The status is `Idle` with "N attachment(s) from other devices could
+not be read: paths". Every cycle, after the pull, the parked records are
+applied again, quietly: a fetch that still fails re-parks at once, with no
+stall count and no `Error`; one that works writes the file and clears the
+message. A later record for the same entity from any device (an edit, a rename,
+a delete) makes the parked one moot and removes it, so the retry never lays
+old bytes over newer ones. A blob that is there but cannot be opened (sealed
+under a key this device lacks) is dropped at once, retrying cannot help, and
+named for the session only: it is not kept, so a restart forgets the name (the
+cursor has passed the record, so the file reappears when its entity next
+changes on any device). The stall count is in memory only, like the delete
+count, and restarts at each launch.
 
 ## What the server stores and learns
 

@@ -170,9 +170,14 @@ private:
     QString unreadableWarning() const;    ///< empty when no attachment was parked
     /// Fills *text (notes) or *raw (the rest) from the record's blob; an
     /// inline body is left in *text. False with *error: retry the record next
-    /// cycle. False with *error empty: parked (m_unreadable), skip it.
-    bool loadRemoteContent(const QByteArray &recordID, const QString &path, const QByteArray &blobAddress, bool isNote,
-                           const QByteArray &noteKey, QString *text, QByteArray *raw, QString *error);
+    /// cycle. False with *error empty: parked (fetch failures, in the
+    /// journal's parked table; a blob this device cannot open, session-only
+    /// in m_unreadable), skip it.
+    bool loadRemoteContent(const SyncClient::JournalRecord &record, const QString &path, const QByteArray &blobAddress,
+                           bool isNote, const QByteArray &noteKey, QString *text, QByteArray *raw, QString *error);
+    /// Applies the parked records again, quietly: a fetch failure re-parks at
+    /// once (no stall count, no Error status).
+    void retryParked(int *pulled, int *conflicts);
     void queueLocalChange(const SyncScanner::Change &change);
     /// Queues the entity as it is on disk right now as a local change (callers
     /// insert into m_toAnnounce; pullJournal() calls this once per entity).
@@ -218,7 +223,9 @@ private:
     QList<QByteArray> m_pendingDeletes; ///< cache of the journal's pendingDeletes meta, loaded each cycle
     QHash<QByteArray, int> m_deleteFailures; ///< entityID -> cycles its remote delete has blocked the pull
     QHash<QByteArray, int> m_fetchStalls; ///< recordID -> cycles its blob has blocked the pull
-    QStringList m_unreadable; ///< paths of records parked for a blob that never came or never opened, kept for the session
+    QStringList m_unreadable; ///< paths of records whose blob this device cannot open, kept for the session (fetch failures live in the journal)
+    bool m_retryingParked = false; ///< retryParked() is applying: a fetch failure parks at once
+    bool m_parkedNow = false;      ///< loadRemoteContent() parked the record applyRecord() was just given
     QStringList m_refusedPaths; ///< paths of records dropped for leaving the vault, kept for the session so the message stays
     QSet<QByteArray> m_toAnnounce; ///< entities whose on-disk text goes out as a record when this pull finishes
     QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session

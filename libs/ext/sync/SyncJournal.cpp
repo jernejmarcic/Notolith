@@ -89,7 +89,10 @@ void SyncJournal::open(const QString &vaultRoot)
         && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS states ("
                                   "id INTEGER PRIMARY KEY AUTOINCREMENT, entityID BLOB, digest BLOB, "
                                   "keyedHash BLOB, path TEXT, text BLOB, own INTEGER, seq INTEGER DEFAULT 0)"))
-        && exec(q, QStringLiteral("CREATE INDEX IF NOT EXISTS states_entity ON states(entityID, digest)"));
+        && exec(q, QStringLiteral("CREATE INDEX IF NOT EXISTS states_entity ON states(entityID, digest)"))
+        && exec(q, QStringLiteral("CREATE TABLE IF NOT EXISTS parked ("
+                                  "seq INTEGER PRIMARY KEY, entityID BLOB, recordID BLOB, deviceID BLOB, "
+                                  "itemsKeyID BLOB, wrappedNoteKey BLOB, payload BLOB, path TEXT)"));
     if (!ok)
         m_error = q.lastError().text();
     // A journal from before records carried digests: the columns are added,
@@ -382,6 +385,59 @@ int SyncJournal::outboxSize() const
     QSqlQuery q(m_db);
     q.exec(QStringLiteral("SELECT COUNT(*) FROM outbox WHERE sent=0"));
     return q.next() ? q.value(0).toInt() : 0;
+}
+
+void SyncJournal::park(const SyncClient::JournalRecord &record, const QString &path)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR REPLACE INTO parked(seq, entityID, recordID, deviceID, itemsKeyID, "
+                             "wrappedNoteKey, payload, path) VALUES(?,?,?,?,?,?,?,?)"));
+    q.addBindValue(record.seq);
+    q.addBindValue(record.entityID);
+    q.addBindValue(record.recordID);
+    q.addBindValue(record.deviceID);
+    q.addBindValue(record.itemsKeyID);
+    q.addBindValue(record.wrappedNoteKey);
+    q.addBindValue(record.payload);
+    q.addBindValue(path);
+    q.exec();
+}
+
+QList<SyncJournal::ParkedRecord> SyncJournal::parkedRecords() const
+{
+    QList<ParkedRecord> out;
+    QSqlQuery q(m_db);
+    q.exec(QStringLiteral("SELECT seq, entityID, recordID, deviceID, itemsKeyID, wrappedNoteKey, payload, path "
+                          "FROM parked ORDER BY seq ASC"));
+    while (q.next()) {
+        ParkedRecord parked;
+        parked.record.seq = q.value(0).toLongLong();
+        parked.record.entityID = q.value(1).toByteArray();
+        parked.record.recordID = q.value(2).toByteArray();
+        parked.record.deviceID = q.value(3).toByteArray();
+        parked.record.itemsKeyID = q.value(4).toByteArray();
+        parked.record.wrappedNoteKey = q.value(5).toByteArray();
+        parked.record.payload = q.value(6).toByteArray();
+        parked.path = q.value(7).toString();
+        out.append(parked);
+    }
+    return out;
+}
+
+void SyncJournal::unpark(qint64 seq)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM parked WHERE seq=?"));
+    q.addBindValue(seq);
+    q.exec();
+}
+
+void SyncJournal::unparkEntity(const QByteArray &entityID)
+{
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("DELETE FROM parked WHERE entityID=?"));
+    q.addBindValue(entityID);
+    q.exec();
 }
 
 void SyncJournal::putItemsKey(const ItemsKeyRecord &key)

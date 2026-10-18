@@ -7,6 +7,8 @@
 #include <QSqlDatabase>
 #include <QString>
 
+#include "SyncClient.h"
+
 namespace noteAppC {
 
 /// The local half of the entity-change journal (docs/SYNC.md "The journal
@@ -145,6 +147,19 @@ public:
     QList<OutboxRecord> pendingOutbox(int limit) const;
     void markSent(const QList<QByteArray> &recordIDs);
     int outboxSize() const;
+
+    // --- parked: pulled records whose blob never came, kept whole so a
+    //     later cycle (or launch) can apply them (SyncEngine::retryParked) --
+
+    struct ParkedRecord {
+        SyncClient::JournalRecord record;
+        QString path; ///< what the record would write, to name it
+    };
+    /// Replaces a row for the same seq.
+    void park(const SyncClient::JournalRecord &record, const QString &path);
+    QList<ParkedRecord> parkedRecords() const; ///< oldest seq first
+    void unpark(qint64 seq);
+    void unparkEntity(const QByteArray &entityID);
 
     // --- itemsKeys this device currently holds in the clear ------------
 
