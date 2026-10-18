@@ -1599,7 +1599,7 @@ when off.
       per user is what lane single was for.
 
 Found 2026-10-18 (lane etc report):
-- [ ] (lane mmdr) Mermaid's mmdr runs as a plain QProcess, outside the
+- [x] (lane mmdr, a2adb38; +8.5 ms per uncached diagram on the pool, 14 ms median) Mermaid's mmdr runs as a plain QProcess, outside the
       sandbox, on every shared note's ```mermaid fence (on by default);
       every other diagram tool runs in bwrap. Plan: run mmdr through
       runSandboxed (bind its canonical path when outside /usr, e.g.
