@@ -1971,3 +1971,9 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       links internal/external/unresolved, tags, quotes, list markers, ...),
       Obsidian's CSS variable names (--h1-color, --bold-color ...) so themes
       and snippets map, reset per colour, live preview, dark/light each.
+- [ ] Note embed inside running text (demo/Embeds/Note Embeds.md "An embed
+      inside running text", `![[Target Note#Details]]` mid-paragraph) draws
+      an empty card with only a file icon; the same embed on its own line is
+      the reference. Should show the Details section as a block card, the
+      paragraph's text before and after unbroken (Jernej screenshot
+      2026-10-19).
