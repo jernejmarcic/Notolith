@@ -1281,10 +1281,15 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     // that never saw this one's text fast-forwards over it. A note whose file
     // still is what was confirmed takes the digest of base/; a changed one is
     // judged by merge or conflict below as before.
-    if (existing && baseDigest.isEmpty() && !localChanged && remote.entityType == QStringLiteral("note")) {
-        const QString base = m_journal->readBase(record.entityID);
-        if (!base.isEmpty()) {
-            baseDigest = SyncCrypto::digest(base.toUtf8());
+    if (existing && baseDigest.isEmpty() && !localChanged) {
+        if (remote.entityType == QStringLiteral("note")) {
+            const QString base = m_journal->readBase(record.entityID);
+            if (!base.isEmpty()) {
+                baseDigest = SyncCrypto::digest(base.toUtf8());
+                baseHasNoRow = true;
+            }
+        } else if (hasLocalFile) {
+            baseDigest = SyncCrypto::digest(localBytes); // an attachment has no base/: the disk is the confirmed bytes
             baseHasNoRow = true;
         }
     }

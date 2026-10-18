@@ -3765,6 +3765,45 @@ TEST_F(SyncIntegrationTest, AnUpgradedJournalsFirstConflictLosesNothing)
     }
 }
 
+TEST_F(SyncIntegrationTest, AnUpgradedJournalsFirstAttachmentConflictLosesNothing)
+{
+    statesMayMiss = true;
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("shared bytes"));
+    auto engineA = std::make_unique<SyncEngine>();
+    auto watchA = std::make_unique<Watcher>(*engineA);
+    engineA->start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA->waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("bytes from A"));
+    engineA->syncNow();
+    ASSERT_TRUE(watchA->waitForCycle());
+    watchA.reset();
+    engineA.reset();
+    const QString downgraded = downgradeJournal(vaultA.path());
+    if (downgraded.startsWith(QStringLiteral("skip")))
+        GTEST_SKIP() << downgraded.toStdString();
+    ASSERT_TRUE(downgraded.isEmpty()) << downgraded.toStdString();
+    engineA = std::make_unique<SyncEngine>();
+    watchA = std::make_unique<Watcher>(*engineA);
+    engineA->start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA->waitForCycle());
+
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("bytes from B"));
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA->syncNow();
+    ASSERT_TRUE(watchA->waitForCycle());
+    expectConverged({{engineA.get(), watchA.get()}, {&engineB, &watchB}}, {vaultA.path(), vaultB.path()});
+    for (const QString &root : {vaultA.path(), vaultB.path()}) {
+        EXPECT_EQ(filesContaining(root, "bytes from A"), 1) << snapshot(root);
+        EXPECT_EQ(filesContaining(root, "bytes from B"), 1) << snapshot(root);
+    }
+}
+
 TEST_F(SyncIntegrationTest, ANoChangeSyncOnA20000NoteVaultIsFast)
 {
     // The task's own performance bar, adapted: a vault of 20 000 notes
