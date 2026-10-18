@@ -1783,7 +1783,7 @@ Lane misc8:
       the save (scan may not have started yet) and a failed ASSERT left the
       lock thread joinable -> "terminate called". Fixed: qWaitFor +
       qScopeGuard join. Verify in main check.
-- [ ] Parked blobs are forgotten on restart (lane parked, round 10 plan; was documented): the
+- [x] Parked blobs are forgotten on restart (lane parked, round 10 plan; was documented): the
       cursor is past the record, so the attachment only reappears when its
       entity next changes; the status line about it vanishes too. Plan:
       a journal table parked(recordID, entityID, path, blobAddress,
@@ -1855,7 +1855,7 @@ Lane sync10 (in this order, one function region, one lane):
       comment), stale AnEditBeatsADeleteInBothDirections comment, document
       F (equal-merge announce can revive a concurrently deleted note).
 Lane parked (parallel with sync10):
-- [ ] Journal table parked(...whole record), retryParked after pullJournal,
+- [x] Journal table parked(...whole record), retryParked after pullJournal,
       later record for the entity unparks; openBlob failures stay
       session-only. Tests AParkedBlobIsRetriedAfterARestart,
       ALaterRecordDropsAParkedBlob.
