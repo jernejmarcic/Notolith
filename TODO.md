@@ -1796,3 +1796,13 @@ Lane misc8:
       delivered (block stuck). Now armed on the kernel's "busy" for that
       request; test with a kernelspec that sleeps 1.5 s before starting
       (mutation: arm at submit -> never delivered).
+
+## Multi windows and panes (Jernej, 2026-10-18)
+Jernej: "multi windows and multi panes. like you can tile different notes in
+your app, you can also detach the sidebar or note windows from the app, like
+in zed or vscode, so its a child window owned by main app outside it".
+Splits right/down exist already. Plan by Fable in the session scratchpad
+WINDOWS-PLAN.md; items below get filled from it.
+- [ ] Fable plan: drag-to-tile, pop-out note windows, detachable sidebars and
+      sidebar views, child windows owned by the main window (one process,
+      one index), layout persisted in workspace.json, off-switch at zero cost.
