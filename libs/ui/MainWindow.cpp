@@ -132,6 +132,7 @@
 #include "SettingsPage.h"
 #include "FootnotesPane.h"
 #include "InlineTitleEdit.h"
+#include "PopoutWindow.h"
 #include "PropertiesPane.h"
 #include "SlidesView.h"
 #include "TagsPane.h"

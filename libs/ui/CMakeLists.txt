@@ -13,6 +13,8 @@ add_library(noteAppC_ui STATIC
     PasswordDialog.h
     PublishDialog.h
     MainWindow.cpp
+    PopoutWindow.cpp
+    PopoutWindow.h
     MainWindow.h
     SingleInstance.cpp
     SingleInstance.h
