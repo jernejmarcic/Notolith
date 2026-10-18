@@ -178,7 +178,9 @@ private:
     /// Applies the parked records again, quietly: a fetch failure re-parks at
     /// once (no stall count, no Error status).
     void retryParked(int *pulled, int *conflicts);
-    void queueLocalChange(const SyncScanner::Change &change);
+    /// False when nothing was queued (a refused name, a note that cannot be
+    /// read, a blob that would not upload).
+    bool queueLocalChange(const SyncScanner::Change &change);
     /// Queues the entity as it is on disk right now as a local change (callers
     /// insert into m_toAnnounce; pullJournal() calls this once per entity).
     void announce(const QByteArray &entityID);
