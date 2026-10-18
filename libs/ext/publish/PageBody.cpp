@@ -1200,12 +1200,17 @@ private:
         if (subpath.startsWith(QLatin1String("#^"))) {
             return Slugs::blockAnchor(subpath.mid(2));
         }
-        const QString headingText = ObsidianSyntax::headingKey(subpath.mid(1).trimmed());
-        for (const Heading &h : target.metadata.headings) {
-            if (ObsidianSyntax::headingKey(h.text).compare(headingText, Qt::CaseInsensitive) == 0)
-                return Slugs::headingAnchor(h.text);
-        }
-        return {};
+        const QList<Heading> &headings = target.metadata.headings;
+        const qsizetype found = ObsidianSyntax::findHeading(headings, subpath.mid(1).trimmed());
+        if (found < 0)
+            return {};
+        // A repeated heading's page ids are base, base-2, base-3 (uniqueHeadingAnchor),
+        // so the one a nested link names is not always the first.
+        const QString base = Slugs::headingAnchor(headings.at(found).text);
+        int earlier = 0;
+        for (qsizetype i = 0; i < found; ++i)
+            earlier += Slugs::headingAnchor(headings.at(i).text) == base;
+        return earlier ? base + QLatin1Char('-') + QString::number(earlier + 1) : base;
     }
 
     QString renderLinkNode(const StyleSpan &span, const ParsedNote &note)
@@ -1296,14 +1301,7 @@ private:
     QString renderHeadingEmbed(const QString &headingText, const ParsedNote &target)
     {
         const QList<Heading> &headings = target.metadata.headings;
-        qsizetype index = -1;
-        const QString wanted = ObsidianSyntax::headingKey(headingText);
-        for (qsizetype i = 0; i < headings.size(); ++i) {
-            if (ObsidianSyntax::headingKey(headings.at(i).text).compare(wanted, Qt::CaseInsensitive) == 0) {
-                index = i;
-                break;
-            }
-        }
+        const qsizetype index = ObsidianSyntax::findHeading(headings, headingText);
         if (index < 0)
             return QStringLiteral("<span class=\"unresolved\">%1</span>").arg(escapeHtml(headingText));
         const int level = headings.at(index).level;

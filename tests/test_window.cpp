@@ -2445,6 +2445,32 @@ TEST_F(WindowTest, APagePreviewOpensTheLinkedNoteAtItsHeading)
     WAIT_TRUE(!preview->isVisible(), 2000);
 }
 
+TEST_F(WindowTest, ANestedHeadingLinkOpensTheHeadingUnderItsParent)
+{
+    write(QStringLiteral("Other.md"), "# Other\n\n## First\n\n### Detail\n\n## Second\n\n### Detail\n\ntail\n");
+    write(QStringLiteral("Linking.md"), "See [[Other#Second#Detail]].\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    emit window.editor()->linkHovered(QStringLiteral("Other#Second#Detail"), QPoint(200, 200));
+    noteAppC::PagePreview *preview = nullptr;
+    WAIT_TRUE(
+        (preview = window.findChild<noteAppC::PagePreview *>(QStringLiteral("pagePreview"))) && preview->isVisible(),
+        2000);
+    const QString shown = preview->editor()->noteText();
+    EXPECT_EQ(preview->editor()->cursorOffset(), shown.lastIndexOf(QLatin1String("### Detail")));
+    EXPECT_NE(preview->editor()->cursorOffset(), shown.indexOf(QLatin1String("### Detail")));
+
+    // Opening the link jumps to the same heading.
+    emit window.editor()->linkActivated(QStringLiteral("Other#Second#Detail"));
+    WAIT_TRUE(window.editor()->noteText().startsWith(QLatin1String("# Other")), 2000);
+    const QString opened = window.editor()->noteText();
+    WAIT_EQ(window.editor()->cursorOffset(), opened.lastIndexOf(QLatin1String("### Detail")), 2000);
+}
+
 TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
 {
     write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Part two\n\nSecond part.\n");

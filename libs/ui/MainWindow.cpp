@@ -1495,7 +1495,9 @@ void MainWindow::configureEditor(MarkdownEditor *editor)
         return {};
     };
     editor->setLinkFragmentProvider([this, noteOf](const QString &target, bool blocks) {
-        return m_index.fragmentsOf(m_index.resolve(target, noteOf()), blocks);
+        // `Note#H1#H2` asks for what lies under H2 in Note.
+        const QStringList path = target.split(QLatin1Char('#'));
+        return m_index.fragmentsOf(m_index.resolve(path.first(), noteOf()), blocks, path.mid(1));
     });
     const auto attachmentFolder = [this](const QString &note) {
         const QString folder =
@@ -3362,12 +3364,8 @@ qsizetype MainWindow::subpathOffset(const QString &text, const QString &subpath)
         }
         return -1;
     }
-    const QString linked = ObsidianSyntax::headingKey(wanted);
-    for (const Heading &heading : metadata.headings) {
-        if (ObsidianSyntax::headingKey(heading.text).compare(linked, Qt::CaseInsensitive) == 0)
-            return heading.range.start;
-    }
-    return -1;
+    const qsizetype found = ObsidianSyntax::findHeading(metadata.headings, wanted);
+    return found >= 0 ? metadata.headings.at(found).range.start : -1;
 }
 
 void MainWindow::jumpToHeading(const QString &subpath)
@@ -3375,15 +3373,13 @@ void MainWindow::jumpToHeading(const QString &subpath)
     const QString wanted = (subpath.startsWith(QLatin1Char('#')) ? subpath.mid(1) : subpath).trimmed();
     if (wanted.isEmpty())
         return;
-    const QString linked = ObsidianSyntax::headingKey(wanted);
-    const auto jump = [this, linked] {
-        for (const Heading &heading : m_active->editor->headings()) {
-            if (ObsidianSyntax::headingKey(heading.text).compare(linked, Qt::CaseInsensitive) == 0) {
-                m_active->editor->setCursorOffset(heading.range.start);
-                return true;
-            }
-        }
-        return false;
+    const auto jump = [this, wanted] {
+        const QList<Heading> &headings = m_active->editor->headings();
+        const qsizetype found = ObsidianSyntax::findHeading(headings, wanted);
+        if (found < 0)
+            return false;
+        m_active->editor->setCursorOffset(headings.at(found).range.start);
+        return true;
     };
     if (jump())
         return;

@@ -99,9 +99,11 @@ private:
 
 /// The caret's `[[` text split at its first `#`: `note` before it (empty for
 /// the note being edited), then `text` after it, or after `#^` for block ids.
+/// Further `#`s nest: `Note#H1#te` has `parents` {H1} and `text` te.
 struct LinkFragment {
     bool active = false; ///< the text has a `#`
     QString note;
+    QStringList parents;
     bool blocks = false;
     QString text;
 };
@@ -116,6 +118,12 @@ LinkFragment splitLinkFragment(const QString &typed)
     fragment.note = typed.left(hash);
     fragment.blocks = typed.mid(hash + 1).startsWith(QLatin1Char('^'));
     fragment.text = typed.mid(hash + 1 + (fragment.blocks ? 1 : 0));
+    if (!fragment.blocks) {
+        if (const qsizetype nested = fragment.text.lastIndexOf(QLatin1Char('#')); nested >= 0) {
+            fragment.parents = fragment.text.left(nested).split(QLatin1Char('#'));
+            fragment.text = fragment.text.mid(nested + 1);
+        }
+    }
     return fragment;
 }
 
@@ -343,19 +351,21 @@ void MarkdownEditor::updateSuggestions()
     // names; they are fetched once per note and kind, not per keystroke.
     const LinkFragment fragment = splitLinkFragment(*prefix);
     if (fragment.active) {
-        const QString key = (fragment.blocks ? QStringLiteral("^") : QStringLiteral("#")) + fragment.note;
+        const QString key = (fragment.blocks ? QStringLiteral("^") : QStringLiteral("#")) + fragment.note
+                            + (fragment.parents.isEmpty() ? QString() : QLatin1Char('#') + fragment.parents.join(QLatin1Char('#')));
         if (key != d->m_fragmentKey) {
             d->m_fragmentKey = key;
             QStringList candidates;
             if (!fragment.note.isEmpty()) {
+                // `Note#H1` asks for what lies under H1 (see setLinkFragmentProvider).
                 if (m_fragmentProvider)
-                    candidates = m_fragmentProvider(fragment.note, fragment.blocks);
+                    candidates = m_fragmentProvider(key.mid(1), fragment.blocks);
             } else if (fragment.blocks) {
                 for (const BlockId &block : ObsidianSyntax::scan(d->m_text, {}).blockIds)
                     candidates << block.id;
             } else {
-                for (const Heading &heading : d->m_headings)
-                    candidates << heading.text;
+                for (const qsizetype i : ObsidianSyntax::headingsUnder(d->m_headings, fragment.parents))
+                    candidates << d->m_headings.at(i).text;
             }
             // Written as the link spells them, so what is inserted resolves.
             if (!fragment.blocks) {

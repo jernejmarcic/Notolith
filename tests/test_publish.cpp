@@ -144,6 +144,20 @@ TEST(PublishTest, HeadingAndBlockAnchors)
     EXPECT_TRUE(source.contains(QStringLiteral("target.html#block-myblock")));
 }
 
+TEST(PublishTest, ANestedHeadingLinkPointsAtTheHeadingUnderItsParent)
+{
+    TestSite site({
+        {QStringLiteral("Target.md"), "# One\n\n## Detail\n\n# Two\n\n## Detail\n\n## Other\n"},
+        {QStringLiteral("Source.md"), "[[Target#One#Detail]] [[Target#Two#Detail]] [[Target#Two#Other]]\n"},
+    });
+    site.publish();
+    const QString source = site.read(QStringLiteral("source.html"));
+    ASSERT_FALSE(source.isEmpty());
+    EXPECT_TRUE(source.contains(QStringLiteral("target.html#detail\""))) << source.toStdString();
+    EXPECT_TRUE(source.contains(QStringLiteral("target.html#detail-2\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("target.html#other\"")));
+}
+
 // ---------------------------------------------------------------------------
 // Privacy: the property this whole lane exists for.
 

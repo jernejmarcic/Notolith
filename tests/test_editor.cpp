@@ -523,6 +523,35 @@ TEST(MarkdownEditorTest, LinkCompletionOffersThisNotesHeadingsAndBlockIDs)
     EXPECT_TRUE(editor->noteText().endsWith(QStringLiteral("see [[#^abc1]]")));
 }
 
+TEST(MarkdownEditorTest, LinkCompletionAfterANestedHashOffersTheSubheadings)
+{
+    // Another note: the provider is asked for what lies under the parent.
+    auto editor = editorWith(QStringLiteral("\n"));
+    editor->show();
+    editor->setLinkTargets({QStringLiteral("A")});
+    QStringList asked;
+    editor->setLinkFragmentProvider([&asked](const QString &note, bool blocks) {
+        asked << note;
+        return blocks ? QStringList()
+               : note == QLatin1String("A#Setup") ? QStringList{QStringLiteral("Deep"), QStringLiteral("Deeper")}
+                                                  : QStringList{QStringLiteral("Setup"), QStringLiteral("Usage")};
+    });
+    QTest::keyClicks(editor.get(), QStringLiteral("[[A#Setup#"));
+    EXPECT_EQ(linkPopupRows(*editor), (QStringList{QStringLiteral("Deep"), QStringLiteral("Deeper")}));
+    QTest::keyClicks(editor.get(), QStringLiteral("Deepe"));
+    acceptLinkPopup(*editor);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("[[A#Setup#Deeper]]\n"));
+    EXPECT_EQ(asked, (QStringList{QStringLiteral("A"), QStringLiteral("A#Setup")}));
+
+    // This note: answered from its own headings, under the parent only.
+    const QString note = QStringLiteral("# Alpha\n## Sub\n# Beta\n## Other\n\nsee ");
+    editor = editorWith(note);
+    editor->show();
+    editor->setCursorOffset(note.size());
+    QTest::keyClicks(editor.get(), QStringLiteral("[[#Beta#"));
+    EXPECT_EQ(linkPopupRows(*editor), QStringList{QStringLiteral("Other")});
+}
+
 TEST(MarkdownEditorTest, LinkCompletionOffersANotesBlockIDsAfterHashCaret)
 {
     auto editor = editorWith(QStringLiteral("\n"));

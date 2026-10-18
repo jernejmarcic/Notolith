@@ -18,6 +18,7 @@
 #include <QVariant>
 
 #include "Frontmatter.h"
+#include "ObsidianSyntax.h"
 #include "Parser.h"
 #include "Vault.h"
 
@@ -936,18 +937,27 @@ QList<QPair<QString, QString>> Index::aliases() const
     return found;
 }
 
-QStringList Index::fragmentsOf(const QString &path, bool blocks) const
+QStringList Index::fragmentsOf(const QString &path, bool blocks, const QStringList &parents) const
 {
     QStringList found;
+    QList<Heading> headings;
     QSqlQuery query(m_db);
     query.prepare(QString(QStringLiteral("SELECT %1 FROM %2 JOIN files ON files.id = %2.file "
                                          "WHERE files.path = ? ORDER BY start"))
-                      .arg(blocks ? QStringLiteral("block") : QStringLiteral("text"),
+                      .arg(blocks ? QStringLiteral("block") : QStringLiteral("level, text"),
                            blocks ? QStringLiteral("blocks") : QStringLiteral("headings")));
     query.addBindValue(path);
     query.exec();
-    while (query.next())
-        found << query.value(0).toString();
+    while (query.next()) {
+        if (blocks)
+            found << query.value(0).toString();
+        else
+            headings.append({query.value(0).toInt(), query.value(1).toString(), {}, {}});
+    }
+    if (!blocks) {
+        for (const qsizetype i : ObsidianSyntax::headingsUnder(headings, parents))
+            found << headings.at(i).text;
+    }
     return found;
 }
 

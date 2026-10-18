@@ -370,8 +370,11 @@ in the text, not only at its start. Four more things complete, as in Obsidian:
   or `\` is inserted with those as spaces, as Obsidian does. A link's
   heading is matched with all punctuation ignored, as in Obsidian, so
   `[[Note#Part 1: Intro!]]` opens `## Part 1: Intro?` and a link Obsidian
-  wrote with punctuation kept opens its heading too (nested
-  `[[Note#H1#H2]]` paths are not offered).
+  wrote with punctuation kept opens its heading too. A nested
+  `[[Note#H1#H2]]` names the H2 inside H1's section (H1 up to the next
+  heading of its level or higher), in the editor, a page preview and a
+  published page; after `[[Note#H1#` the popup lists the headings in that
+  section.
 - **Block ids.** `[[Note#^` and `[[#^` list the `^id` markers the same way.
   Obsidian's search over every block (`[[^^`) is not offered.
 - **Aliases.** A note's frontmatter `aliases:` appear in the name list as
