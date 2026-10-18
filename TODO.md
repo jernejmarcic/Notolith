@@ -1961,3 +1961,13 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       state, search (task-todo/task-done), Tasks/Dataview status compat,
       publish/PDF export, user-editable like callouts.ini, feature off = only
       [ ]/[x] and zero cost.
+- [ ] Settings > Appearance: colour of each formatting kind, display only
+      (Jernej 2026-10-19: "Note title, H1, H2, ..., bold, italics, underline
+      (control both the color of underline as well as text, the same with
+      strikethrough) etc. (this should be visual only, no actual formatting
+      lines for color, just how its rendered)"). Nothing written into notes.
+      Fable plan: which kinds (title, H1-H6, bold, italic, bold-italic,
+      underline text + line, strike text + line, highlight, inline code,
+      links internal/external/unresolved, tags, quotes, list markers, ...),
+      Obsidian's CSS variable names (--h1-color, --bold-color ...) so themes
+      and snippets map, reset per colour, live preview, dark/light each.
