@@ -263,6 +263,7 @@ void SyncEngine::startOnWorker(QString vaultRoot, QString serverURL, QString ema
     m_storeTried = false;
     m_keysFromStore = false;
     m_forgotten = false;
+    m_refusedPaths.clear();
     m_prompt = std::move(prompt);
     m_viaLockbox = viaLockbox;
     m_running = true;
@@ -338,7 +339,12 @@ void SyncEngine::runCycle()
     const QString pullError = pullJournal(&pulled, &conflicts);
 
     maintainEnrolment();
-    const QString warning = pendingDeleteWarning();
+    QStringList warnings;
+    for (const QString &w : {pendingDeleteWarning(), refusedWarning()}) {
+        if (!w.isEmpty())
+            warnings << w;
+    }
+    const QString warning = warnings.join(QStringLiteral("; "));
     if (!pullError.isEmpty())
         setStatus(Status::Error, pullError);
     else
@@ -910,6 +916,15 @@ QString SyncEngine::pendingDeleteWarning() const
         .arg(names.join(QStringLiteral(", ")));
 }
 
+QString SyncEngine::refusedWarning() const
+{
+    if (m_refusedPaths.isEmpty())
+        return {};
+    return QStringLiteral("%1 record(s) from other devices refused for naming a path outside the vault: %2")
+        .arg(m_refusedPaths.size())
+        .arg(m_refusedPaths.mid(0, 5).join(QStringLiteral(", ")));
+}
+
 bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulled, int *conflicts, QString *error)
 {
     const auto key = m_journal->itemsKey(record.itemsKeyID);
@@ -933,6 +948,15 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     const auto existing = m_journal->entity(record.entityID);
     const QString existingPath = existing ? m_vault.absolute(existing->path) : QString();
+    // Every path below comes from a record, so before anything touches the
+    // disk: one that leaves the vault (or whose entity's own file is now a
+    // link, or lies behind one) can never be applied here. Dropped, the way
+    // an undecryptable record is, so it cannot wedge the pull - but named.
+    if (!m_vault.isConfinedPath(remote.path, true) || (existing && !m_vault.isConfinedPath(existing->path))) {
+        if (!m_refusedPaths.contains(remote.path))
+            m_refusedPaths.append(remote.path);
+        return true;
+    }
     const bool isSelfEcho = record.deviceID == m_journal->deviceID();
 
     if (remote.op != QStringLiteral("delete")) {
@@ -1058,6 +1082,8 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     // Whether the file at `path` already holds exactly the incoming content.
     const auto holdsRemote = [&](const QString &path) {
+        if (QFileInfo(path).isSymLink())
+            return false; // a link is not the file: it must not be written through, nor count as a match
         if (remote.entityType == QStringLiteral("note")) {
             Note onDisk;
             return Vault::read(path, onDisk) && onDisk.text == remoteText;

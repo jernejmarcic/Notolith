@@ -34,6 +34,9 @@
 #include <QTemporaryDir>
 #include <QScopeGuard>
 #include <QTimer>
+#include <QUuid>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include "ServerStore.h"
 #include "SyncClient.h"
@@ -1534,6 +1537,143 @@ TEST_P(NonFileAtTheTargetKindTest, ANewNoteIsKeptAsACopyBesideIt)
 INSTANTIATE_TEST_SUITE_P(DirectoryAndLinks, NonFileAtTheTargetKindTest,
                          ::testing::Values(QStringLiteral("dir"), QStringLiteral("link"), QStringLiteral("dangling")),
                          [](const ::testing::TestParamInfo<QString> &info) { return info.param.toStdString(); });
+
+// A record is authenticated, but a device holding the vault keys can still be
+// compromised or buggy: whatever path it names, nothing outside the vault may
+// be touched. These forge records straight into the server's journal, sealed
+// with A's own items key.
+class ForgedRecordTest : public SyncIntegrationTest
+{
+protected:
+    void SetUp() override
+    {
+        SyncIntegrationTest::SetUp();
+        ASSERT_TRUE(outside.isValid());
+        writeRaw(outsideFile(), outsideBytes);
+        writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("text of Y"));
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+
+    QString outsideFile() const { return outside.path() + QStringLiteral("/secret.md"); }
+
+    /// Appends an upsert of a new note at `path` to the server's journal.
+    void forge(const QString &path, const QString &body)
+    {
+        SyncJournal journal(vaultA.path());
+        const auto itemsKey = journal.activeItemsKey();
+        ASSERT_TRUE(itemsKey.has_value());
+        const QByteArray vaultID = store->vaultsFor(store->account(email)->accountID).value(0);
+        ASSERT_FALSE(vaultID.isEmpty());
+        ServerStore::JournalRow row;
+        row.entityID = SyncCrypto::randomID();
+        row.recordID = SyncCrypto::randomID();
+        row.deviceID = SyncCrypto::randomID();
+        row.itemsKeyID = itemsKey->itemsKeyID;
+        const QByteArray noteKey = SyncCrypto::randomKey();
+        row.wrappedNoteKey =
+            SyncCrypto::seal(itemsKey->plaintext, noteKey, SyncCrypto::buildAD("IK", {row.entityID, row.itemsKeyID}));
+        const QJsonObject plain{{QStringLiteral("entityType"), QStringLiteral("note")},
+                                {QStringLiteral("path"), path},
+                                {QStringLiteral("op"), QStringLiteral("upsert")},
+                                {QStringLiteral("mtime"), 0},
+                                {QStringLiteral("body"), body}};
+        row.payload = SyncCrypto::seal(noteKey, QJsonDocument(plain).toJson(QJsonDocument::Compact),
+                                       SyncCrypto::buildAD("EN", {row.entityID, row.deviceID, row.recordID, row.itemsKeyID}));
+        ASSERT_EQ(store->appendJournal(vaultID, {row}).size(), 1);
+    }
+
+    void syncBoth(int rounds)
+    {
+        for (int round = 0; round < rounds; ++round) {
+            engineA.syncNow();
+            ASSERT_TRUE(watchA.waitForCycle());
+            engineB.syncNow();
+            ASSERT_TRUE(watchB.waitForCycle());
+        }
+    }
+
+    void expectOutsideUntouched()
+    {
+        QFile f(outsideFile());
+        ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+        EXPECT_EQ(f.readAll(), outsideBytes);
+        EXPECT_EQ(QDir(outside.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).size(), 1);
+    }
+
+    const QByteArray outsideBytes = QByteArrayLiteral("outside the vault");
+    QTemporaryDir outside;
+    SyncEngine engineA, engineB;
+    Watcher watchA{engineA}, watchB{engineB};
+};
+
+TEST_F(ForgedRecordTest, PathsOutOfTheVaultAreRefusedNamedAndLaterRecordsStillApply)
+{
+    ASSERT_TRUE(QFile::link(outside.path(), vaultB.path() + QStringLiteral("/away")));
+    // The vault sits directly in /tmp, so "../name" is /tmp/name: unique names.
+    const QString escape1 = QStringLiteral("notolith-escape-%1.md").arg(QUuid::createUuid().toString(QUuid::Id128));
+    const QString escape2 = QStringLiteral("notolith-escape-%1.md").arg(QUuid::createUuid().toString(QUuid::Id128));
+    const QString dotdot = QStringLiteral("../") + escape1;
+    const QString nested = QStringLiteral("a/../../") + escape2;
+    const QString absolute = outside.path() + QStringLiteral("/abs.md");
+    const QString viaLink = QStringLiteral("away/x.md");
+    const QString hidden = QStringLiteral(".obsidian/plugins/p/main.js");
+    const auto cleanUp = qScopeGuard([&] {
+        QFile::remove(vaultB.path() + QStringLiteral("/") + dotdot);
+        QFile::remove(vaultB.path() + QStringLiteral("/") + nested);
+    });
+    for (const QString &path : {dotdot, absolute, nested, viaLink, hidden})
+        forge(path, QStringLiteral("pwned"));
+    forge(QStringLiteral("ok.md"), QStringLiteral("fine"));
+
+    syncBoth(1);
+    for (const QString &path : {dotdot, absolute, nested, viaLink, hidden})
+        EXPECT_TRUE(watchB.lastMessage.contains(path)) << path.toStdString() << ": " << watchB.lastMessage.toStdString();
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/ok.md")), QStringLiteral("fine"));
+    EXPECT_EQ(watchB.pulled, 1);
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/") + dotdot));
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/") + nested));
+    EXPECT_FALSE(QFile::exists(vaultB.path() + QStringLiteral("/.obsidian")));
+    expectOutsideUntouched();
+
+    // Not wedged: a valid record after them, in a later cycle, applies too,
+    // and the refusals stay named.
+    forge(QStringLiteral("later.md"), QStringLiteral("still fine"));
+    syncBoth(2);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/later.md")), QStringLiteral("still fine"));
+    EXPECT_TRUE(watchB.lastMessage.contains(viaLink));
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("text of Y"));
+    expectOutsideUntouched();
+}
+
+TEST_F(ForgedRecordTest, OddSegmentsAreRefused)
+{
+    const QStringList bad{QStringLiteral("a\\b.md"), QString::fromUtf8(QByteArray("a\0b.md", 6)),
+                          QStringLiteral("x//y.md"), QStringLiteral("./z.md")};
+    for (const QString &path : bad)
+        forge(path, QStringLiteral("pwned"));
+    forge(QStringLiteral("ok.md"), QStringLiteral("fine"));
+    syncBoth(1);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/ok.md")), QStringLiteral("fine"));
+    for (const QString &path : bad)
+        EXPECT_TRUE(watchB.lastMessage.contains(path));
+    EXPECT_EQ(vaultFiles(vaultB.path()).size(), 2); // y.md and ok.md
+}
+
+TEST_F(ForgedRecordTest, AnEditToANoteReplacedByALinkNeverReachesTheTarget)
+{
+    ASSERT_TRUE(QFile::remove(vaultB.path() + QStringLiteral("/y.md")));
+    ASSERT_TRUE(QFile::link(outsideFile(), vaultB.path() + QStringLiteral("/y.md")));
+    writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("text of Y, edited on A"));
+    syncBoth(3);
+
+    expectOutsideUntouched();
+    EXPECT_TRUE(QFileInfo(vaultB.path() + QStringLiteral("/y.md")).isSymLink());
+    // Nor does the link's target leak out as the note's content.
+    EXPECT_EQ(filesContaining(vaultA.path(), outsideBytes), 0);
+}
 
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
 {

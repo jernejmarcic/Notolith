@@ -157,6 +157,7 @@ private:
     void setPendingDeletes(const QList<QByteArray> &ids);
     void retryPendingDeletes();
     QString pendingDeleteWarning() const; ///< empty when nothing is pending
+    QString refusedWarning() const;       ///< empty when no record was refused
     void queueLocalChange(const SyncScanner::Change &change);
 
     QThread m_thread;
@@ -198,6 +199,7 @@ private:
     QByteArray m_boxPublicKey;
     QList<QByteArray> m_pendingDeletes; ///< cache of the journal's pendingDeletes meta, loaded each cycle
     QHash<QByteArray, int> m_deleteFailures; ///< entityID -> cycles its remote delete has blocked the pull
+    QStringList m_refusedPaths; ///< paths of records dropped for leaving the vault, kept for the session so the message stays
     QSet<QByteArray> m_announced; ///< devices deviceAwaitingApproval already named this session
 };
 

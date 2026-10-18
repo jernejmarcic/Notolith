@@ -51,6 +51,13 @@ public:
     /// it is not a note, or when "..", an absolute path or a symlink would
     /// take it out of the vault. It need not exist, but its folder must.
     QString confinedNotePath(const QString &relativePath) const;
+    /// Whether `relativePath`, from outside this device (a sync record), names
+    /// somewhere inside the vault that a write may go to: relative, with no
+    /// empty, "." / ".." or dot-prefixed segment, no backslash or NUL, and its
+    /// nearest existing ancestor really inside the vault (a symlinked folder
+    /// out of it is not). The file itself may not be a symlink unless
+    /// `leafMayBeLink`. Nothing need exist.
+    bool isConfinedPath(const QString &relativePath, bool leafMayBeLink = false) const;
     /// Where a new attachment for `notePath` goes, by Obsidian's
     /// attachmentFolderPath: "" or "/" the vault root, "./" the note's own
     /// folder, "./sub" a folder beneath it, anything else a folder in the

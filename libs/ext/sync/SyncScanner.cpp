@@ -50,7 +50,10 @@ QList<SyncScanner::Change> SyncScanner::scan(const Vault &vault, const SyncJourn
     }
 
     QSet<QString> seen;
-    QDirIterator it(vault.root(), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    // NoSymLinks: a link to a file is a Files entry too, and its target - maybe
+    // outside the vault - would be pushed as a note's own content.
+    QDirIterator it(vault.root(), QDir::Files | QDir::NoSymLinks | QDir::NoDotAndDotDot,
+                    QDirIterator::Subdirectories);
     while (it.hasNext()) {
         const QString absolute = it.next();
         const QString relative = vault.relative(absolute);
