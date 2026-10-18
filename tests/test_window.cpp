@@ -1484,6 +1484,39 @@ TEST_F(WindowTest, RenamingWithAModifiedLinkingNoteOpenKeepsTheLinkRewrite)
     EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("See [[Renamed]].\nxy"));
 }
 
+// The index only learns of a note's new link when the save is indexed; the
+// rename must not read the links before that.
+TEST_F(WindowTest, RenamingRewritesALinkTypedAMomentAgo)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    write(QStringLiteral("Home.md"), "Nothing yet.\n");
+
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Home.md")));
+    auto *editor = window.editor();
+    ASSERT_NE(editor, nullptr);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("[[Target]]"));
+    ASSERT_TRUE(editor->isModified()) << "the rename must beat the autosave timer";
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+
+    EXPECT_EQ(readAll(path(QStringLiteral("Home.md"))), QByteArray("Nothing yet.\n[[Renamed]]"));
+}
+
 namespace {
 /// The inline title of the tab `editor` is in.
 QLineEdit *titleOf(MarkdownEditor *editor)

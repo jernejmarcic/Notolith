@@ -6189,10 +6189,10 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     // not on disk yet would be written back over it by the next autosave,
     // [[Old]] and all, so it goes first - whatever files.autosave says, a
     // rename is an explicit file operation. The watcher then shows the
-    // rewritten note in the open editor.
-    // ponytail: a link typed in the last 2 s is flushed but may not be
-    // indexed yet, so it is not rewritten; wait for the indexer if it matters.
+    // rewritten note in the open editor. The index must know that note's
+    // new links too, or a first link to the renamed note is not rewritten.
     autosave();
+    m_indexer->waitIdle(1000);
     QString newPath;
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))
         return false;
@@ -6202,7 +6202,8 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
 
 bool MainWindow::moveVaultPath(const QString &oldPath, bool isDir, const QString &targetFolder, QString *error)
 {
-    autosave(); // as for a rename: typed text goes to disk before the file moves
+    autosave(); // as for a rename: typed text goes to disk before the file moves,
+    m_indexer->waitIdle(1000); // and is indexed before the links are read
     QString newPath;
     if (!m_vault.movePath(oldPath, targetFolder, &newPath, error))
         return false;

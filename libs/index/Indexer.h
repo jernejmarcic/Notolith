@@ -40,6 +40,13 @@ public:
     void rebuild();
     void reindex(const QString &path);
     bool isRunning() const;
+    /// Brings the index up to date with what is on disk now, for at most
+    /// `milliseconds`: a change the watcher has not acted on yet is acted on
+    /// now, and the scans queued or running are waited for. Only the indexer's
+    /// own results are delivered meanwhile, no other event. Returns at once
+    /// when nothing is pending. For a caller about to read links the index
+    /// must already know, such as a rename's rewrite.
+    void waitIdle(int milliseconds);
     /// Cancels a scan in progress and waits for it, dropping what it had not
     /// yet reported: afterwards the Index can be closed or reopened.
     void stop();
@@ -112,6 +119,7 @@ private:
     QThreadPool m_pool; ///< the scan's one thread
     QFuture<void> m_scan;
     std::atomic<quint64> m_scanNumber{0};
+    bool m_active = false; ///< a scan is running, or its last batch is not applied yet
     bool m_wrote = false;  ///< this scan changed the cache: changed() is due at its end
     bool m_rescan = false; ///< the vault changed during a scan, so walk it again after
     bool m_forceRescan = false; ///< and that walk re-parses every note
