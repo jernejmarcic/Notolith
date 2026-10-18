@@ -177,6 +177,9 @@ FetchContent_Declare(md4qt
 # wants tinyxml2, which is not installed either - both are vendored and pinned.
 # tinyxml2 is two files under the MIT licence; MicroTeX is MIT too.
 set(tinyxml2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+# Static whatever BUILD_SHARED_LIBS says: install() ships only the binary, so a
+# shared vendored tinyxml2 left the installed notolith unable to start.
+set(tinyxml2_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(tinyxml2
     GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
     GIT_TAG 10.0.0
