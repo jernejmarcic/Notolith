@@ -1661,11 +1661,18 @@ Lane sync8:
 - [ ] 24. Rename + edit in one scan is seen as delete + new note (scanner
       matches renames by exact hash only): match by similarity to the
       stored base text. DISABLED_ARenameAndEditInOneScanMergesAtTheNewPath.
-- [ ] 25. (lane confine) Pulled record paths are not confined to the vault
+- [x] 25. (lane confine, a75aec7: Vault::isConfinedPath at one choke point; refused records dropped and named; scanner skips symlinks) Pulled record paths are not confined to the vault
       (`../`, absolute, under a symlinked folder; the engine never calls
       Vault::confinedNotePath) and a symlink at an entity's own path is
       written through by a plain pulled edit. Needs a device with the vault
       keys, but confine anyway: refuse such records with a status message.
+- [ ] 26. Confinement follow-ups: check-then-write, not openat(O_NOFOLLOW)
+      (a link swapped in between wins the race); retryPendingDeletes does
+      not re-check its journal path; a backslash in a Linux filename is now
+      refused on pull (the scanner pushes it). Plan: O_NOFOLLOW + openat
+      on the parent fd in Vault::write/raw writes; re-check in
+      applyRemoteDelete; refuse backslash names on push too, with a status
+      line, so both sides agree.
 - [ ] 17. A note created on two devices at one path conflicts again on each
       later edit until one side renames it (documented). Later: adopt one
       entity for identical paths after the first conflict.
