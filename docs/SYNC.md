@@ -394,7 +394,7 @@ user of line-diffing turns up, not before (YAGNI).
   the conflict copy in by hand is then just an ordinary local edit against
   that base, pushed and reconciled like any other.
 - **A different entity on the same path**: a pulled note or attachment this
-  device has no entity for, whose path already holds a file (a parked
+  device has no entity for, whose path already holds a file (or anything else) (a parked
   delete's file the person has edited since, or the same path created on two
   devices), never overwrites it. Different content is written as a conflict
   copy and the local file stays; identical content writes nothing. No entity
@@ -408,7 +408,10 @@ user of line-diffing turns up, not before (YAGNI).
   so nothing is lost and no copy is made; later edits keep landing on it, and
   the rename goes through by itself on the first record that finds the target
   free. It counts as a conflict unless the target already holds the incoming
-  content.
+  content. "Occupied" means anything at the path: a directory or a symbolic
+  link (even a dangling one) counts too, so a pulled note is never written
+  through a link to wherever it points, and a new note meeting one is kept
+  as a conflict copy beside it.
 - **A rename of a note this device edited**: the file moves to the new path
   first and the merge happens there, so the file and the entity agree. This
   device's edit has already been pushed with the old path by then, and that

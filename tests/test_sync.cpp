@@ -1430,6 +1430,111 @@ TEST_F(RenameWithALocalEditTest, DISABLED_ARenameAndEditInOneScanMergesAtTheNewP
     EXPECT_EQ(snapshot(vaultB.path()), "z.md=ALPHA|beta|gamma|DELTA");
 }
 
+// Something that is not a regular file sits at the path an incoming rename or
+// new note wants: a directory, or a link to a file outside the vault. It is
+// occupied like any other file - nothing is overwritten, nothing is written
+// through the link, and the incoming text is kept (in place, or as a copy).
+class NonFileAtTheTargetTest : public SyncIntegrationTest
+{
+protected:
+    void SetUp() override
+    {
+        SyncIntegrationTest::SetUp();
+        ASSERT_TRUE(outside.isValid());
+        writeRaw(outsideFile(), outsideBytes);
+        writeNote(vaultA.path(), QStringLiteral("y.md"), QStringLiteral("text of Y"));
+        engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+
+    QString outsideFile() const { return outside.path() + QStringLiteral("/secret.md"); }
+    QString missingFile() const { return outside.path() + QStringLiteral("/missing.md"); }
+
+    /// What B's p.md is: "dir", "link" (to a file outside the vault) or
+    /// "dangling" (a link to a file that is not there - isFile() calls it
+    /// free, and a write through it creates the file outside).
+    void blockB(const QString &kind)
+    {
+        const QString path = vaultB.path() + QStringLiteral("/p.md");
+        if (kind == QStringLiteral("dir"))
+            ASSERT_TRUE(QDir().mkpath(path));
+        else
+            ASSERT_TRUE(QFile::link(kind == QStringLiteral("link") ? outsideFile() : missingFile(), path));
+    }
+
+    void expectUntouched(const QString &kind)
+    {
+        const QFileInfo info(vaultB.path() + QStringLiteral("/p.md"));
+        if (kind == QStringLiteral("dir")) {
+            EXPECT_TRUE(info.isDir() && !info.isSymLink());
+            EXPECT_TRUE(QDir(info.filePath()).isEmpty());
+        } else {
+            EXPECT_TRUE(info.isSymLink());
+        }
+        QFile f(outsideFile());
+        ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+        EXPECT_EQ(f.readAll(), outsideBytes);
+        EXPECT_EQ(QDir(outside.path()).entryList(QDir::Files).size(), 1);
+        EXPECT_FALSE(QFileInfo::exists(missingFile()));
+    }
+
+    void syncBoth(int rounds)
+    {
+        for (int round = 0; round < rounds; ++round) {
+            engineA.syncNow();
+            ASSERT_TRUE(watchA.waitForCycle());
+            engineB.syncNow();
+            ASSERT_TRUE(watchB.waitForCycle());
+        }
+    }
+
+    const QByteArray outsideBytes = QByteArrayLiteral("outside the vault");
+    QTemporaryDir outside;
+    SyncEngine engineA, engineB;
+    Watcher watchA{engineA}, watchB{engineB};
+};
+
+class NonFileAtTheTargetKindTest : public NonFileAtTheTargetTest, public ::testing::WithParamInterface<QString>
+{
+};
+
+TEST_P(NonFileAtTheTargetKindTest, ARenameIsHeldBackAndTheNoteKeepsItsPath)
+{
+    blockB(GetParam());
+    ASSERT_TRUE(QFile::rename(vaultA.path() + QStringLiteral("/y.md"), vaultA.path() + QStringLiteral("/p.md")));
+    syncBoth(1);
+    EXPECT_EQ(watchB.conflicts, 1);
+
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("text of Y"));
+    expectUntouched(GetParam());
+    syncBoth(3);
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/y.md")), QStringLiteral("text of Y"));
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of Y"), 1);
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
+TEST_P(NonFileAtTheTargetKindTest, ANewNoteIsKeptAsACopyBesideIt)
+{
+    blockB(GetParam());
+    writeNote(vaultA.path(), QStringLiteral("p.md"), QStringLiteral("text of P"));
+    syncBoth(1);
+    EXPECT_EQ(watchB.conflicts, 1);
+
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of P"), 1);
+    syncBoth(3);
+    expectUntouched(GetParam());
+    EXPECT_EQ(filesContaining(vaultB.path(), "text of P"), 1);
+    EXPECT_EQ(watchB.pushed, 0);
+}
+
+INSTANTIATE_TEST_SUITE_P(DirectoryAndLinks, NonFileAtTheTargetKindTest,
+                         ::testing::Values(QStringLiteral("dir"), QStringLiteral("link"), QStringLiteral("dangling")),
+                         [](const ::testing::TestParamInfo<QString> &info) { return info.param.toStdString(); });
+
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
 {
     if (geteuid() == 0)
