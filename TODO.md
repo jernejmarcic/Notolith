@@ -1977,3 +1977,11 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       the reference. Should show the Details section as a block card, the
       paragraph's text before and after unbroken (Jernej screenshot
       2026-10-19).
+- [ ] PDF slides embed: a click a little off "Next >" / "< Previous" opens
+      the PDF instead (Jernej 2026-10-19: hit box should be larger around
+      Next so a slightly-off cursor does not open it by accident, like
+      Apple's keyboard). Today: 70 px rects padded 4 px
+      (PdfEmbedBlock.cpp handlePdfEmbedClick), the slide cell above opens
+      the PDF. Fix: nav row halves are the buttons, a dead band between the
+      cell and the row, and for ~1 s after a nav click the last-used button
+      also owns the cell's bottom strip (repeat clicks land).
