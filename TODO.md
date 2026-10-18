@@ -1681,7 +1681,7 @@ Lane sync8:
       ancestor is pruned. Plan (Fable): coalesce to one announce per entity
       per pull batch, or announce only when the sender cannot have the
       parent; keep convergence tests green.
-- [ ] 30. Not verified: an old journal upgraded through a real cycle (only
+- [x] 30. Not verified: an old journal upgraded through a real cycle (only
       the schema upgrade is tested); Dice 0.5 and the 64-pair cap untuned.
 - [x] 27. A password change replaces the content key, so every keyed
       localHash/syncedHash stops matching: full re-push and "local changed"
@@ -1728,8 +1728,8 @@ Lane index8:
       same incremental debounce. Cost when idle: zero. Test: write in place
       to an unopened note; the index sees the new text.
 - [ ] 21. A whole-vault scan in flight cannot be listed as rename
-      candidates (documented ceiling); merge-note calls the rewrite without
-      extra candidates.
+      candidates (documented ceiling). Merge-note part done: it autosaves
+      first and passes the saved + in-flight notes, as a rename does.
 - [x] 22. (lane watch, c8d1420: GraphView::showEvent race, 0/1500 after) WindowTest.LocalGraphFollowsTheOpenNote failed once in a full run
       and under --gtest_repeat (state leak between repeats?); investigate.
 

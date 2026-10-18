@@ -3183,6 +3183,9 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
         if (leaf->notePath == target && isModified(leaf.get()) && !saveLeaf(leaf.get(), false))
             return false;
     }
+    // As for a rename: typed [[links]] to the source go to disk first and
+    // are read from there, or the next autosave writes them back unrewritten.
+    const QStringList unindexed = unindexedNotes(autosave());
     Note from;
     Note into;
     QString error;
@@ -3211,7 +3214,7 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
     }
     // Links to the merged note lead to where its text went, as a rename's do.
     if (m_index.isOpen())
-        m_index.updateLinksAfterRename(m_vault.relative(source), m_vault.relative(target), m_vault, &error);
+        m_index.updateLinksAfterRename(m_vault.relative(source), m_vault.relative(target), m_vault, &error, unindexed);
     if (!deleteVaultPath(source, &error)) {
         QMessageBox::warning(this, tr("Merge"), tr("Merged, but %1 stays:\n%2").arg(QFileInfo(source).fileName(), error));
         return false;

@@ -2846,6 +2846,32 @@ TEST_F(WindowTest, NoteComposerMergesANoteAndItsLinksFollow)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("Bravo\n\nAlpha\n"));
 }
 
+TEST_F(WindowTest, NoteComposerMergeKeepsAnUnsavedLinkInAnotherTab)
+{
+    write(QStringLiteral("A.md"), "Alpha\n");
+    write(QStringLiteral("B.md"), "Bravo\n");
+    write(QStringLiteral("C.md"), "See [[A]]\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("C.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("[[A]]"));
+    ASSERT_TRUE(editor->isModified());
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    window.openNote(path(QStringLiteral("A.md")));
+
+    window.findChild<QAction *>(QStringLiteral("note-composer:merge-file"))->trigger();
+    auto *picker = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("mergePicker"));
+    ASSERT_NE(picker, nullptr);
+    emit picker->accepted(QStringLiteral("B.md"));
+
+    // The typed link was saved first, so the rewrite saw it too.
+    EXPECT_EQ(readAll(path(QStringLiteral("C.md"))), QByteArray("See [[B]]\n[[B]]"));
+}
+
 TEST_F(WindowTest, NoteComposerExtractsTheSelectionIntoANewNote)
 {
     write(QStringLiteral("Long.md"), "Intro\n# Part\nbody\nend\n");
