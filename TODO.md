@@ -1985,3 +1985,6 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       the PDF. Fix: nav row halves are the buttons, a dead band between the
       cell and the row, and for ~1 s after a nav click the last-used button
       also owns the cell's bottom strip (repeat clicks land).
+- [ ] Zoom inside an embedded PDF (Jernej 2026-10-19: "allow for zooming in
+      on PDFs when in embedded mode"). Fable plan; build after lane/pdfnav
+      merges (same file, PdfEmbedBlock.cpp).
