@@ -1,10 +1,12 @@
 #include <QApplication>
 #include <cstdio>
 #include <QCommandLineParser>
+#include <QFileInfo>
 #include <QIcon>
 
 #include "MainWindow.h"
 #include "PopupStyle.h"
+#include "SingleInstance.h"
 
 int main(int argc, char *argv[])
 {
@@ -41,8 +43,15 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    noteAppC::MainWindow window;
     const QStringList args = parser.positionalArguments();
+    // One Notolith per user: a launch while one runs (a note opened from the
+    // file manager) gives it the path and ends here.
+    noteAppC::SingleInstance instance(noteAppC::SingleInstance::defaultName());
+    if (instance.handOver(args.isEmpty() ? QString() : QFileInfo(args.first()).absoluteFilePath()))
+        return 0;
+
+    noteAppC::MainWindow window;
+    instance.serve(&window);
     const noteAppC::LaunchTarget target =
         args.isEmpty() ? noteAppC::LaunchTarget{} : noteAppC::resolveLaunchTarget(args.first());
 

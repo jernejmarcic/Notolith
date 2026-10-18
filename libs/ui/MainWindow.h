@@ -106,6 +106,13 @@ public:
     /// restored, if there is one.
     void openTarget(const LaunchTarget &target);
 
+    /// A second launch handed this window `argument` (a path, or empty for
+    /// "just show yourself"): opens it as the command line would - a note in
+    /// the open vault in a tab, another vault the way the vault menu does,
+    /// a loose file as a tab rather than replacing the vault - and brings
+    /// the window to the front.
+    void openFromOtherInstance(const QString &argument);
+
     /// Opens `target` only once the empty shell has been painted.
     ///
     /// A window that appears immediately and fills in reads as faster than one

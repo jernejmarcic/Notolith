@@ -14,6 +14,8 @@ add_library(noteAppC_ui STATIC
     PublishDialog.h
     MainWindow.cpp
     MainWindow.h
+    SingleInstance.cpp
+    SingleInstance.h
     RecoveryDialog.cpp
     RecoveryDialog.h
     NoteHistoryDialog.cpp

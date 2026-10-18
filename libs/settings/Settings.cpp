@@ -411,6 +411,16 @@ LaunchTarget resolveLaunchTarget(const QString &argument)
             break;
     }
 
+    // A folder opened as a vault before counts too, even without
+    // `.obsidian` - how else would a note in it have been found.
+    for (const QString &vault : Settings::load().recentVaults()) {
+        if (target.filePath.startsWith(QDir::cleanPath(vault) + QLatin1Char('/'))) {
+            target.mode = OpenMode::Vault;
+            target.vaultRoot = QDir::cleanPath(vault);
+            return target;
+        }
+    }
+
     // Anywhere else: one file, no vault, and nothing written beside it.
     target.mode = OpenMode::SingleFile;
     return target;

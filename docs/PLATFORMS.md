@@ -68,6 +68,41 @@ torpedo is a Raspberry Pi 5 running Debian, which would be the best stand-in
 for a phone's CPU, but the script is Arch-only and torpedo is a server - it
 would need its own dependency list and a decision to install build tools there.
 
+## Launching: one window per user
+
+`packaging/io.github.jernejmarcic.Notolith.desktop` registers Markdown files
+and folders, so a file manager runs `notolith %f`. Like Obsidian, only the
+first launch makes a window: it listens on `notolith.sock` in the runtime
+directory (`$XDG_RUNTIME_DIR`, owner-only), and a later launch connects, sends
+the absolute path it was given (nothing, when it was given none) with its
+`XDG_ACTIVATION_TOKEN`, waits up to a second for the answer and exits 0.
+
+A launch with no instance running pays one failed `connect()` and one lock
+file (`notolith.sock.lock`, taken before the window is built and held until
+exit): about 100 to 270 microseconds measured, `QStandardPaths` lookup
+included. The lock is what makes two launches in the same moment - a
+multi-select "Open with" - one window: the second finds it held, and keeps
+retrying the connect for up to two seconds while the first builds its window.
+A crash leaves the socket and lock files behind; the next start sees the dead
+owner and replaces both.
+
+The running window opens the path as the command line would: a note in the
+open vault replaces the current tab, as following a link does; another vault
+opens the way the vault menu opens it; a note outside the vault opens in the
+current tab beside it, the vault staying open. A folder in the recent-vaults
+list counts as a vault whether or not it holds `.obsidian` (reading the
+settings once per launch that is handed a loose file). Then the window is
+raised and `activateWindow()` is called, with the launcher's token put in the
+environment first: Qt's Wayland plugin reads `XDG_ACTIVATION_TOKEN` in
+`QWaylandXdgSurface::requestActivate()`, so the compositor can grant focus
+instead of only flagging the window. Whether it does depends on the
+compositor and on the file manager passing a token (the desktop file's
+`StartupNotify=true` asks it to); that cannot be tested without one.
+
+`NOTEAPPC_INSTANCE_SOCKET` names another socket: benchmarks and anything else
+that starts the real binary while Notolith is in use should set it, or the
+launch is handed to the open window.
+
 ## Mobile
 
 Not started. What is already true, and what stands in the way:

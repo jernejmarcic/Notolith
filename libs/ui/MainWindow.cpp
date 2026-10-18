@@ -4218,6 +4218,26 @@ void MainWindow::openWhenShown(const LaunchTarget &target)
     update(); // make sure a paint is coming even if nothing else asks for one
 }
 
+void MainWindow::openFromOtherInstance(const QString &argument)
+{
+    const LaunchTarget target = resolveLaunchTarget(argument);
+    const bool sameVault = m_openMode == OpenMode::Vault && m_vault.root() == target.vaultRoot;
+    if (!m_painted) {
+        // Still starting up: that open would be overwritten by the one
+        // queued for the first paint, so replace it instead.
+        if (target.mode != OpenMode::Empty)
+            openWhenShown(target);
+    } else if ((target.mode == OpenMode::Vault && !sameVault)
+               || (target.mode == OpenMode::SingleFile && !m_vault.isValid())) {
+        openTarget(target);
+    } else if (!target.filePath.isEmpty()) {
+        openNote(target.filePath); // a tab in the open vault, loose files included
+    }
+    setWindowState(windowState() & ~Qt::WindowMinimized); // not showNormal(): that would un-maximize
+    raise();
+    activateWindow(); // on Wayland this needs the launcher's activation token, see SingleInstance
+}
+
 void MainWindow::paintEvent(QPaintEvent *event)
 {
     QMainWindow::paintEvent(event);

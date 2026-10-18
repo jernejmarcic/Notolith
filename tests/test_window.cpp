@@ -5,6 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <future>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 #include <cstdio>
 #include <functional>
@@ -49,6 +52,7 @@
 #include <QWheelEvent>
 
 #include "WaitFor.h"
+#include "SingleInstance.h"
 #include "FileTree.h"
 #include "MarkdownEditor.h"
 #include "MetaNotesPane.h"
@@ -111,6 +115,7 @@
 using noteAppC::Index;
 using noteAppC::LaunchTarget;
 using noteAppC::MainWindow;
+using noteAppC::SingleInstance;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
 
@@ -5347,4 +5352,124 @@ TEST_F(WindowTest, TheMoveCommandOffersVisibleFoldersAndMovesTheActiveNote)
     QTest::keyClick(query, Qt::Key_Return);
     WAIT_TRUE(QFile::exists(path(QStringLiteral("Projects/Sub/Welcome.md"))), 5000);
     EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+}
+
+namespace {
+
+/// A second launch, as its own process would make it: its own SingleInstance,
+/// asked on a thread because handOver() blocks and the window under test needs
+/// this one for its event loop.
+std::future<bool> secondLaunch(const QString &name, const QString &argument, const QByteArray &token = {})
+{
+    return std::async(std::launch::async, [=] {
+        SingleInstance launch(name);
+        return launch.handOver(argument, token);
+    });
+}
+
+bool ready(std::future<bool> &result)
+{
+    return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+}
+
+} // namespace
+
+// A second launch (a note opened from the file manager) hands its path to the
+// running window instead of starting another copy. The socket is the test's
+// own, never the one a running Notolith listens on.
+TEST_F(WindowTest, ASecondLaunchOpensItsNoteInTheRunningWindow)
+{
+    const QString name = dir.filePath(QStringLiteral("instance.sock"));
+    MainWindow window;
+    window.openTarget(LaunchTarget{}); // startup over: the window has been painted
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    SingleInstance instance(name);
+    ASSERT_FALSE(instance.handOver(QString())); // nobody there: this one is first
+    instance.serve(&window);
+    ASSERT_TRUE(instance.ok());
+
+    auto handed = secondLaunch(name, path(QStringLiteral("Projects/Crlf.md")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Crlf")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(tabs->count(), 1);
+
+    // Same vault, another note: opened in the open window, the vault not reopened.
+    handed = secondLaunch(name, path(QStringLiteral("Welcome.md")));
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Welcome")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    EXPECT_EQ(tabs->count(), 1); // replaces the tab, as clicking a link does
+
+    // A note from outside the vault opens too, not the vault replaced by it.
+    QTemporaryDir elsewhere;
+    ASSERT_TRUE(elsewhere.isValid());
+    QFile loose(elsewhere.filePath(QStringLiteral("Loose.md")));
+    ASSERT_TRUE(loose.open(QIODevice::WriteOnly));
+    loose.write("# Loose\n");
+    loose.close();
+    handed = secondLaunch(name, loose.fileName());
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Loose")), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    EXPECT_FALSE(window.findChild<QWidget *>(QStringLiteral("sidebar"))->isHidden()); // still the vault
+
+    // The launcher's activation token reaches the window, where Qt's Wayland
+    // plugin picks it up for activateWindow(); focus itself needs a compositor.
+    qunsetenv("XDG_ACTIVATION_TOKEN");
+    handed = secondLaunch(name, QString(), "tok-123");
+    WAIT_EQ(qgetenv("XDG_ACTIVATION_TOKEN"), QByteArray("tok-123"), 5000);
+    WAIT_TRUE(ready(handed), 5000); // the answer needs this event loop
+    EXPECT_TRUE(handed.get());
+    qunsetenv("XDG_ACTIVATION_TOKEN");
+    EXPECT_EQ(tabTexts(tabs).value(0), QStringLiteral("Loose")); // nothing to open: left as it was
+}
+
+// Handed a path before its first paint, the window must not let the open it
+// has queued for startup (the last vault) overwrite it - and two launches in
+// the same moment, the second arriving while the first is still building its
+// window, must end up as one window, not two.
+TEST_F(WindowTest, ALaunchDuringAnotherOnesStartupIsHandedOnceItListens)
+{
+    const QString name = dir.filePath(QStringLiteral("early.sock"));
+    SingleInstance first(name);
+    ASSERT_FALSE(first.handOver(QString())); // first: holds the lock, not listening yet
+
+    auto handed = secondLaunch(name, path(QStringLiteral("Welcome.md")));
+    QTest::qWait(200); // it finds the lock held and waits rather than starting a window
+    EXPECT_FALSE(ready(handed));
+
+    MainWindow window;
+    first.serve(&window);
+    window.openWhenShown(LaunchTarget{}); // what main() queues for a bare launch
+    WAIT_TRUE(ready(handed), 5000);
+    EXPECT_TRUE(handed.get());
+    window.show();
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    WAIT_TRUE(tabTexts(tabs).contains(QStringLiteral("Welcome")), 5000);
+}
+
+TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
+{
+    const QString name = dir.filePath(QStringLiteral("stale.sock"));
+    // Bound and abandoned, as a killed process leaves it.
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::snprintf(address.sun_path, sizeof address.sun_path, "%s", name.toLocal8Bit().constData());
+    ASSERT_EQ(::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof address), 0);
+    ::close(fd);
+    ASSERT_TRUE(QFileInfo::exists(name));
+
+    MainWindow window;
+    SingleInstance instance(name);
+    ASSERT_FALSE(instance.handOver(QString())); // nothing answers on a dead socket
+    instance.serve(&window);
+    EXPECT_TRUE(instance.ok());
 }
