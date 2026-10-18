@@ -220,6 +220,32 @@ TEST_F(MermaidTest, TheSourceGoesInOnStdinAndTheToolsSVGIsCachedAsItIs)
     EXPECT_TRUE(cached.contains("#ECECFF")) << "mmdr honours the colours it is given, so the SVG is not re-coloured";
 }
 
+TEST_F(MermaidTest, WithoutBubblewrapTheToolKeepsTheSandboxsLimitsAndNoneOfTheEnvironment)
+{
+    // The plain-process fallback is what a shared note's fence reaches where bwrap is missing: it must not be
+    // a way round the limits, nor see this process's variables. The fake records what it was given.
+    qputenv("NOTEAPPC_TEST_SECRET", "hunter2");
+    const QString books = dir.filePath(QStringLiteral("seen"));
+    ask(rendererFor(fake(QStringLiteral("mmdr"), QStringLiteral("0"),
+                         QStringLiteral("{ ulimit -v; ulimit -t; export -p; } > '%1'\ncat <<'EOF'\n%2\nEOF\n")
+                             .arg(books, QLatin1String(kSVG)))),
+        QStringLiteral("graph TD\nA-->G"));
+    qunsetenv("NOTEAPPC_TEST_SECRET");
+    QFile seen(books);
+    ASSERT_TRUE(seen.open(QIODevice::ReadOnly));
+    const QStringList lines = QString::fromUtf8(seen.readAll()).split(QLatin1Char('\n'));
+    ASSERT_GE(lines.size(), 3);
+    EXPECT_EQ(lines[0], QStringLiteral("4194304")) << "RLIMIT_AS, in KiB";
+    EXPECT_EQ(lines[1], QStringLiteral("25")) << "RLIMIT_CPU";
+    QStringList names;
+    for (const QString &line : lines.mid(2))
+        if (line.startsWith(QLatin1String("export ")))
+            names << line.mid(7).section(QLatin1Char('='), 0, 0);
+    names.removeAll(QStringLiteral("PWD")); // a shell may export its own
+    names.sort();
+    EXPECT_EQ(names, (QStringList{QStringLiteral("HOME"), QStringLiteral("PATH")}));
+}
+
 TEST_F(MermaidTest, ResolvesTheToolFromTheCargoHomeBin)
 {
     // A launcher's PATH has no cargo bin: the stub is only in $CARGO_HOME/bin.

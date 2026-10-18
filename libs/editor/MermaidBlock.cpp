@@ -98,11 +98,28 @@ struct Made {
     QString error;
 };
 
+/// A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
+/// than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
+void limitChild(bool jvm)
+{
+    rlimit cpu{25, 30};
+    setrlimit(RLIMIT_CPU, &cpu);
+    rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
+    setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
+}
+
 /// mmdr as a plain process: the way it runs where there is no bubblewrap (see
-/// runMermaid).
-Made runMermaidUnsandboxed(const QString &tool, const QString &configPath, const QString &source)
+/// runMermaid). A shared note's fence reaches it, so it gets the sandbox's
+/// limits and none of this process's environment (tokens, session variables):
+/// PATH, and HOME in the temporary directory `dir`.
+Made runMermaidUnsandboxed(const QString &dir, const QString &tool, const QString &configPath, const QString &source)
 {
     QProcess process;
+    QProcessEnvironment environment;
+    environment.insert(QStringLiteral("PATH"), qEnvironmentVariable("PATH"));
+    environment.insert(QStringLiteral("HOME"), dir);
+    process.setProcessEnvironment(environment);
+    process.setChildProcessModifier([] { limitChild(false); });
     process.start(tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath});
     if (!process.waitForStarted(kRunMilliseconds))
         return {{}, QCoreApplication::translate("MermaidBlock", "could not start %1").arg(tool)};
@@ -151,13 +168,8 @@ Ran runSandboxed(const QString &dir, const QString &program, const QStringList &
         return ran;
     }
     QProcess process;
-    // A CPU ceiling in the child, and a memory one: address space, except for a JVM, which reserves far more
-    // than it uses (RLIMIT_AS breaks it); its data segment counts what it commits, with the heap flags on top.
     process.setChildProcessModifier([fd = command.filterFD, jvm] {
-        rlimit cpu{25, 30};
-        setrlimit(RLIMIT_CPU, &cpu);
-        rlimit memory{jvm ? kJVMDataBytes : kAddressSpaceBytes, jvm ? kJVMDataBytes : kAddressSpaceBytes};
-        setrlimit(jvm ? RLIMIT_DATA : RLIMIT_AS, &memory);
+        limitChild(jvm);
         sandbox::keepInChild(fd);
     });
     process.start(command.program, command.arguments);
@@ -208,7 +220,7 @@ Made runMermaid(const QString &tool, const QString &source, const QByteArray &co
         return {{}, QCoreApplication::translate("MermaidBlock", "no temporary file")};
     file.close();
     if (QStandardPaths::findExecutable(QStringLiteral("bwrap")).isEmpty())
-        return runMermaidUnsandboxed(tool, configPath, source);
+        return runMermaidUnsandboxed(dir.path(), tool, configPath, source);
     const Ran ran = runSandboxed(dir.path(), tool, {QStringLiteral("-i"), QStringLiteral("-"), QStringLiteral("-c"), configPath}, {},
                                  source.toUtf8(), false, kRunMilliseconds);
     return fromRan(ran, firstLine(QString::fromUtf8(ran.err)));
