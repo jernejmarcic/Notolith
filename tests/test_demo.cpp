@@ -34,6 +34,7 @@
 #include "Index.h"
 #include "MainWindow.h"
 #include "MarkdownEditor.h"
+#include "PopoutWindow.h"
 
 using noteAppC::Index;
 using noteAppC::MainWindow;
@@ -364,6 +365,13 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
         QApplication::processEvents();
         window.grab();
         ++ran;
+    }
+    // The detach commands took the sidebars out into windows; closing those puts
+    // them back, as a user would, for the pane check below.
+    for (QWidget *top : QApplication::topLevelWidgets()) {
+        auto *popout = qobject_cast<noteAppC::PopoutWindow *>(top);
+        if (popout && popout->kind() != noteAppC::PopoutWindow::Kind::Leaves)
+            popout->close();
     }
     // Every right-sidebar pane (search, backlinks, tags, properties, outline,
     // ...): each has a tab button, and showing the pane fills it for the note.
