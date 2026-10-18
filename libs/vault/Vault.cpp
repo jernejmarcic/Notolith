@@ -9,8 +9,14 @@
 #include <QJsonValue>
 #include <QSaveFile>
 #include <QStringDecoder>
+#include <QUuid>
 
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include <filesystem>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace noteAppC {
 
@@ -111,8 +117,8 @@ bool Vault::isConfinedPath(const QString &relativePath, bool leafMayBeLink) cons
     // The nearest ancestor that is there (a dangling link counts: its
     // canonical path is empty, so it fails below) decides where a new folder
     // or file would really land.
-    // ponytail: checked, not held open - a link swapped in between this and
-    // the write wins the race; openat(O_NOFOLLOW) would close it.
+    // Checked, not held open - a link swapped in between this and a write
+    // wins the race; writeBytesNoFollow() closes that for a sync write.
     QFileInfo dir(leaf.path());
     while (!dir.exists() && !dir.isSymLink())
         dir = QFileInfo(dir.path());
@@ -220,6 +226,106 @@ bool Vault::writeBytes(const QString &path, const QByteArray &bytes, QString *er
         return false;
     }
     return true;
+}
+
+namespace {
+// Owns a descriptor; the walk below holds one per folder.
+struct Fd {
+    int fd = -1;
+    explicit Fd(int f = -1) : fd(f) {}
+    Fd(const Fd &) = delete;
+    Fd &operator=(const Fd &) = delete;
+    ~Fd() { if (fd >= 0) ::close(fd); }
+    void reset(int f) { if (fd >= 0) ::close(fd); fd = f; }
+};
+
+QString errnoText(int err)
+{
+    return QString::fromLocal8Bit(std::strerror(err));
+}
+} // namespace
+
+bool Vault::writeBytesNoFollow(const QString &relativePath, const QByteArray &bytes, QString *error) const
+{
+    const auto fail = [error](const QString &what) {
+        if (error)
+            *error = what;
+        return false;
+    };
+    if (!isValid())
+        return fail(QStringLiteral("vault is not open"));
+    const QStringList parts = relativePath.split(QLatin1Char('/'));
+    for (const QString &part : parts) {
+        if (part.isEmpty() || part == QLatin1String(".") || part == QLatin1String("..")
+            || part.contains(QChar(0)))
+            return fail(QStringLiteral("%1 is not a path inside the vault").arg(relativePath));
+    }
+
+    // Walk from the root one folder at a time. O_NOFOLLOW on every component
+    // means a link anywhere on the way fails instead of leading out; a missing
+    // folder is made, in the descriptor we already hold.
+    Fd dir(::open(QFile::encodeName(m_root).constData(), O_PATH | O_DIRECTORY | O_CLOEXEC));
+    if (dir.fd < 0)
+        return fail(QStringLiteral("cannot open the vault: %1").arg(errnoText(errno)));
+    for (int i = 0; i < parts.size() - 1; ++i) {
+        const QByteArray name = parts.at(i).toUtf8();
+        constexpr int flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC;
+        int next = ::openat(dir.fd, name.constData(), flags);
+        if (next < 0 && errno == ENOENT) {
+            if (::mkdirat(dir.fd, name.constData(), 0755) < 0 && errno != EEXIST)
+                return fail(QStringLiteral("cannot create %1: %2").arg(parts.at(i), errnoText(errno)));
+            next = ::openat(dir.fd, name.constData(), flags); // a link raced in is refused here
+        }
+        if (next < 0) {
+            const int err = errno;
+            return fail(err == ELOOP || err == ENOTDIR
+                            ? QStringLiteral("%1 is a link or not a folder, so %2 was not written")
+                                  .arg(parts.at(i), relativePath)
+                            : QStringLiteral("cannot open %1: %2").arg(parts.at(i), errnoText(err)));
+        }
+        dir.reset(next);
+    }
+
+    // Dot-prefixed so the scanner and indexer never see it. A leaf that is a
+    // link is replaced by the rename, not followed.
+    const QByteArray temp = ".tmp-" + QUuid::createUuid().toByteArray(QUuid::Id128);
+    const QByteArray leaf = parts.last().toUtf8();
+    Fd file(::openat(dir.fd, temp.constData(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644));
+    if (file.fd < 0)
+        return fail(QStringLiteral("cannot write %1: %2").arg(relativePath, errnoText(errno)));
+    // Keep a file's own permissions, as QSaveFile does: a private 0600 note stays private.
+    struct stat old {};
+    if (::fstatat(dir.fd, leaf.constData(), &old, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(old.st_mode))
+        ::fchmod(file.fd, old.st_mode & 07777);
+    const auto cleanup = [&](int err) {
+        file.reset(-1);
+        ::unlinkat(dir.fd, temp.constData(), 0);
+        return fail(QStringLiteral("cannot write %1: %2").arg(relativePath, errnoText(err)));
+    };
+    for (qsizetype done = 0; done < bytes.size();) {
+        const ssize_t n = ::write(file.fd, bytes.constData() + done, size_t(bytes.size() - done));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0)
+            return cleanup(n < 0 ? errno : EIO);
+        done += n;
+    }
+    if (::fsync(file.fd) < 0) // as QSaveFile does: the bytes are on disk before the name moves
+        return cleanup(errno);
+    file.reset(-1);
+    if (::renameat(dir.fd, temp.constData(), dir.fd, leaf.constData()) < 0)
+        return cleanup(errno);
+    return true;
+}
+
+bool Vault::writeNoteNoFollow(const QString &relativePath, const Note &note, QString *error) const
+{
+    if (note.lossy) {
+        if (error)
+            *error = QStringLiteral("the file is not valid UTF-8, so saving would change bytes that were not edited");
+        return false;
+    }
+    return writeBytesNoFollow(relativePath, encode(note), error);
 }
 
 // --- file operations -----------------------------------------------------
