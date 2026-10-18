@@ -1666,7 +1666,7 @@ Lane sync8:
       Vault::confinedNotePath) and a symlink at an entity's own path is
       written through by a plain pulled edit. Needs a device with the vault
       keys, but confine anyway: refuse such records with a status message.
-- [ ] 28. BUG: an attachment (or oversized note) copy whose bytes are
+- [x] 28. BUG: an attachment (or oversized note) copy whose bytes are
       already in the blob store never reaches other devices: the server keeps
       the first blob per content address, sealed under the first entity's
       noteKey; the copy's record references that address with another
@@ -1762,7 +1762,7 @@ Lane misc8:
       offline) break the echo chain; take the base from the record itself.
 - [ ] F4. (lane A) BUG: renaming back to a former name is ignored.
 - [ ] Item 29 (lane A): coalesce announces per pull batch; bound k + n.
-- [ ] Item 28 + F5 (lane B blob): per-entity blob address; blob fetch
+- [x] Item 28 + F5 (lane B blob): per-entity blob address; blob fetch
       failure parks after 3 cycles with a status line, never dropped
       silently; push-side confinement (backslash names).
 - [x] Item 27 (lane C contentkey): content key kept per device in journal
