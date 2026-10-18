@@ -2093,7 +2093,7 @@ void MainWindow::showTabMenu(TabGroup *group, const QPoint &globalPos)
     if (index < 0 || index >= group->leaves.size())
         return;
     activateLeaf(group->leaves.at(index));
-    QMenu menu(this);
+    QMenu menu(group->tabs); // the popup belongs to the window the tab is in
     const auto item = [this, &menu](const char *id, const QString &text) {
         QAction *command = findChild<QAction *>(QLatin1String(id));
         if (command && command->isEnabled())
