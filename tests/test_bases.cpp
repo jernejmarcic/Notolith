@@ -13,7 +13,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QSignalSpy>
-#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QApplication>
 
@@ -1675,7 +1674,6 @@ int main(int argc, char **argv)
     QTemporaryDir configHome;
     qputenv("XDG_CONFIG_HOME", configHome.path().toUtf8());
     QApplication app(argc, argv);
-    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
     ::testing::InitGoogleTest(&argc, argv);

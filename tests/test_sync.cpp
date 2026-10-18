@@ -3467,8 +3467,8 @@ int main(int argc, char **argv)
                                     const QMutexLocker lock(&g_secretsMutex);
                                     return g_secrets.remove(key) > 0;
                                 }});
-    // Deliberately *not* QStandardPaths::setTestModeEnabled(true), unlike
-    // test_index.cpp's own main(): test mode redirects
+    // Deliberately *not* QStandardPaths::setTestModeEnabled(true) (no suite
+    // uses it any more): test mode redirects
     // QStandardPaths::writableLocation() to a fixed ~/.qttest/... - which
     // Qt itself creates directly under the real home directory, never
     // under /tmp, and never cleans up - overriding the per-test

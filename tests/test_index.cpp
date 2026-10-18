@@ -14,7 +14,6 @@
 #include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlQuery>
-#include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTest>
 #include <unistd.h>
@@ -1074,8 +1073,6 @@ TEST(FuzzyTest, SubsequenceMatchingAndRanking)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
-    // Keep the cache out of the real ~/.cache.
-    QStandardPaths::setTestModeEnabled(true);
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-test"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-test"));
     ::testing::InitGoogleTest(&argc, argv);
