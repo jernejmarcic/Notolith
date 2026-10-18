@@ -1590,7 +1590,7 @@ when off.
             space), so links Obsidian 0.16+ writes with kept punctuation
             still resolve. After lane relink merges (MainWindow
             subpathOffset/jumpToHeading, PageBody).
-- [ ] 6. NOTE: a remote delete whose trash move fails permanently stops
+- [x] 6. (lane syncwedge, 81a67f4: parked after 3 failures, persisted in journal meta, retried each cycle, newer record cancels, status Error names it) NOTE: a remote delete whose trash move fails permanently stops
       every later pull record each cycle (Status::Error). Defensible (never
       drop a delete); later: skip after N cycles and show it in the UI.
 - [x] 9. Behaviour choice: a second launch naming another vault switches
