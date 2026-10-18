@@ -1046,40 +1046,55 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
 
     if (isSelfEcho) {
         // Confirms a push this device already made - never re-derive file
-        // content from this record's payload, which may already be stale
-        // by now if an earlier record in this same pull batch triggered a
-        // merge (docs/SYNC.md's own note on why a clean merge is not
-        // itself re-pushed: this is the other half of that - the device
-        // that pushed the raw edit has to recognise its own echo as
-        // "already accounted for" rather than as new remote content).
-        // Just mark whatever is on disk right now as the synced state.
+        // content from this record's payload or from the vault file: both
+        // may be stale by now if an earlier record in this same pull batch
+        // triggered a merge. The state this device wrote is in the journal.
         if (!existing) {
             ++*pulled; // queueLocalChange always creates the entity before pushing - nothing to confirm
             return true;
         }
-        QByteArray syncedHash;
-        bool hasLocalFile = false;
-        if (existing->entityType == QStringLiteral("note")) {
-            Note onDisk;
-            hasLocalFile = Vault::read(existingPath, onDisk);
-            if (hasLocalFile) {
-                syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
-                m_journal->writeBase(record.entityID, onDisk.text);
+        if (remote.hash.isEmpty()) {
+            // A record queued before records carried a hash: the old way,
+            // mark whatever is on disk right now as the synced state.
+            QByteArray syncedHash;
+            bool hasLocalFile = false;
+            if (existing->entityType == QStringLiteral("note")) {
+                Note onDisk;
+                hasLocalFile = Vault::read(existingPath, onDisk);
+                if (hasLocalFile) {
+                    syncedHash = SyncCrypto::contentAddress(m_contentKey, onDisk.text.toUtf8());
+                    m_journal->writeBase(record.entityID, onDisk.text);
+                }
+            } else {
+                QFile f(existingPath);
+                hasLocalFile = f.open(QIODevice::ReadOnly);
+                if (hasLocalFile)
+                    syncedHash = SyncCrypto::contentAddress(m_contentKey, f.readAll());
             }
-        } else {
-            QFile f(existingPath);
-            hasLocalFile = f.open(QIODevice::ReadOnly);
-            if (hasLocalFile)
-                syncedHash = SyncCrypto::contentAddress(m_contentKey, f.readAll());
+            if (hasLocalFile) {
+                const QFileInfo info(existingPath);
+                SyncJournal::Entity entity = *existing;
+                entity.localMtime = info.lastModified().toMSecsSinceEpoch();
+                entity.localSize = info.size();
+                entity.localHash = syncedHash;
+                entity.syncedHash = syncedHash;
+                m_journal->putEntity(entity);
+            }
+            ++*pulled;
+            return true;
         }
-        if (hasLocalFile) {
-            const QFileInfo info(existingPath);
+        const auto own = m_journal->state(record.entityID, remote.hash);
+        m_journal->setStateSeq(record.entityID, remote.hash, record.seq); // even when skipped below
+        // Walks the chain orig -> T1 -> T2. A remote record applied in between
+        // moved baseDigest elsewhere, so superseded own records are skipped:
+        // their content is in the merge result that was announced.
+        if (own && remote.parent == existing->baseDigest) {
             SyncJournal::Entity entity = *existing;
-            entity.localMtime = info.lastModified().toMSecsSinceEpoch();
-            entity.localSize = info.size();
-            entity.localHash = syncedHash;
-            entity.syncedHash = syncedHash;
+            entity.baseDigest = remote.hash;
+            entity.syncedHash = own->keyedHash;
             m_journal->putEntity(entity);
+            if (existing->entityType == QStringLiteral("note"))
+                m_journal->writeBase(record.entityID, own->text);
         }
         ++*pulled;
         return true;
