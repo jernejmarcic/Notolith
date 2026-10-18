@@ -25,6 +25,7 @@
 #include <QMutex>
 #include <QDir>
 #include <QDirIterator>
+#include <QMap>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -1089,6 +1090,88 @@ TEST_F(SyncIntegrationTest, TheSamePathAndTextCreatedOnTwoDevicesMakesNoConflict
     EXPECT_EQ(watchB.conflicts, 0);
     EXPECT_EQ(QDir(vaultA.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
     EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
+}
+
+/// Every visible file under `root` with its bytes, keyed by relative path.
+static QMap<QString, QByteArray> vaultFiles(const QString &root)
+{
+    QMap<QString, QByteArray> files;
+    QDirIterator it(root, QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QFile f(it.next());
+        if (f.open(QIODevice::ReadOnly))
+            files.insert(QDir(root).relativeFilePath(f.fileName()), f.readAll());
+    }
+    return files;
+}
+
+/// How many files under `root` contain `needle`.
+static int filesContaining(const QString &root, const QByteArray &needle)
+{
+    int n = 0;
+    for (const QByteArray &bytes : vaultFiles(root))
+        n += bytes.contains(needle) ? 1 : 0;
+    return n;
+}
+
+// Two devices created the same attachment path with different bytes: both
+// versions survive, one as a conflict copy, and it settles.
+TEST_F(SyncIntegrationTest, TheSameAttachmentPathWithDifferentBytesKeepsBoth)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("bytes from A"));
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("bytes from B"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const auto read = [](const QString &path) {
+        QFile f(path);
+        return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+    };
+    EXPECT_EQ(read(vaultA.path() + QStringLiteral("/photo.png")), QByteArray("bytes from A"));
+    EXPECT_EQ(read(vaultB.path() + QStringLiteral("/photo.png")), QByteArray("bytes from B"));
+    EXPECT_EQ(filesContaining(vaultA.path(), "bytes from B"), 1);
+    EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1);
+    EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("photo (sync conflict*.png")).size(), 1);
+
+    for (int round = 0; round < 3; ++round) {
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+    }
+    EXPECT_EQ(read(vaultA.path() + QStringLiteral("/photo.png")), QByteArray("bytes from A"));
+    EXPECT_EQ(read(vaultB.path() + QStringLiteral("/photo.png")), QByteArray("bytes from B"));
+    EXPECT_EQ(filesContaining(vaultA.path(), "bytes from B"), 1);
+    EXPECT_EQ(filesContaining(vaultB.path(), "bytes from A"), 1);
+}
+
+TEST_F(SyncIntegrationTest, TheSameAttachmentPathAndBytesMakesNoConflictCopy)
+{
+    writeRaw(vaultA.path() + QStringLiteral("/photo.png"), QByteArray("same bytes"));
+    writeRaw(vaultB.path() + QStringLiteral("/photo.png"), QByteArray("same bytes"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    EXPECT_EQ(watchA.conflicts, 0);
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(vaultFiles(vaultA.path()).keys(), QStringList{QStringLiteral("photo.png")});
+    EXPECT_EQ(vaultFiles(vaultB.path()).keys(), QStringList{QStringLiteral("photo.png")});
 }
 
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
