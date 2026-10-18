@@ -393,6 +393,14 @@ user of line-diffing turns up, not before (YAGNI).
   re-flagging the same conflict every cycle until the user acts. Folding
   the conflict copy in by hand is then just an ordinary local edit against
   that base, pushed and reconciled like any other.
+- **A different entity on the same path**: a pulled note or attachment this
+  device has no entity for, whose path already holds a file (a parked
+  delete's file the person has edited since, or the same path created on two
+  devices), never overwrites it. Different content is written as a conflict
+  copy and the local file stays; identical content writes nothing. No entity
+  is made for the incoming one - two entities on a path would make the scan
+  read one of them as deleted - so a later edit to it from the other device
+  conflicts again until one side renames the note.
 
 ### Delete-vs-edit
 

@@ -1055,6 +1055,37 @@ bool SyncEngine::applyRecord(const SyncClient::JournalRecord &record, int *pulle
     QDir().mkpath(QFileInfo(targetPath).path());
     bool wroteConflict = false;
 
+    // No entity of this record's own, yet a file already sits at its path
+    // (a parked delete's file the person has since edited, or the same path
+    // created independently on two devices): the incoming text must not
+    // replace it. Different content goes to a conflict copy and the local
+    // file is left alone; the same content needs nothing written. Either way
+    // no entity is created here: another one may own the path, and two
+    // entities on one path would make the scan read one of them as deleted.
+    if (!existing && QFileInfo(targetPath).isFile()) {
+        bool same = false;
+        if (remote.entityType == QStringLiteral("note")) {
+            Note onDisk;
+            same = Vault::read(targetPath, onDisk) && onDisk.text == remoteText;
+        } else {
+            QFile f(targetPath);
+            same = f.open(QIODevice::ReadOnly) && f.readAll() == remoteRaw;
+        }
+        if (!same) {
+            const QString copy = conflictCopyPath(m_vault, remote.path, record.deviceID);
+            if (remote.entityType == QStringLiteral("note"))
+                Vault::write(copy, Note{remoteText, false, false});
+            else
+                writeRawFile(copy, remoteRaw);
+            ++*conflicts;
+            return true;
+        }
+        if (m_journal->entityForPath(remote.path)) {
+            ++*pulled;
+            return true;
+        }
+    }
+
     if (!localChanged) {
         if (existing && existing->path != remote.path && hasLocalFile)
             QFile::rename(existingPath, targetPath);

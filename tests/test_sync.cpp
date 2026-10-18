@@ -933,6 +933,119 @@ TEST_F(SyncIntegrationTest, ADeleteThatKeepsFailingStopsBlockingTheOthers)
     EXPECT_FALSE(QFile::exists(vaultA.path() + QStringLiteral("/shared.md")));
 }
 
+// A parked delete leaves the file on B; B edits it; A then creates a new note
+// at the same path. The incoming put names a different entity, so B has no
+// entity for it and used to overwrite the edit with it.
+TEST_F(SyncIntegrationTest, ANewNoteAtAParkedDeletesPathDoesNotOverwriteALocalEdit)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root ignores file permissions";
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("original"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    const QString onB = vaultB.path() + QStringLiteral("/shared.md");
+    ASSERT_TRUE(QFile::exists(onB));
+
+    QFile::remove(vaultA.path() + QStringLiteral("/shared.md"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const QString trash = vaultB.path() + QStringLiteral("/.trash");
+    ASSERT_TRUE(QDir().mkpath(trash));
+    ASSERT_TRUE(QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restoreTrash = qScopeGuard([&trash] {
+        QFile::setPermissions(trash, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    });
+    for (int cycle = 0; cycle < 4; ++cycle) { // the delete is parked after the fourth
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+    }
+    ASSERT_TRUE(watchB.lastMessage.contains(QStringLiteral("shared.md"))) << watchB.lastMessage.toStdString();
+
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("B's edit"));
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("A's new note"));
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+    engineB.syncNow();
+    ASSERT_TRUE(watchB.waitForCycle());
+
+    EXPECT_EQ(readNoteText(onB), QStringLiteral("B's edit"));
+    const auto copiesOnB = [this] {
+        return QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("shared (sync conflict*"));
+    };
+    ASSERT_EQ(copiesOnB().size(), 1);
+    EXPECT_EQ(readNoteText(vaultB.path() + QLatin1Char('/') + copiesOnB().first()), QStringLiteral("A's new note"));
+
+    // Further cycles on both sides settle: B's text stays, no endless copies.
+    int copies = 0;
+    for (int round = 0; round < 4; ++round) {
+        engineA.syncNow();
+        ASSERT_TRUE(watchA.waitForCycle());
+        engineB.syncNow();
+        ASSERT_TRUE(watchB.waitForCycle());
+        if (round == 2)
+            copies = copiesOnB().size();
+    }
+    EXPECT_EQ(readNoteText(onB), QStringLiteral("B's edit"));
+    EXPECT_EQ(copiesOnB().size(), copies);
+}
+
+// Two devices create the same path on their own: two entities, one path.
+TEST_F(SyncIntegrationTest, TheSamePathCreatedOnTwoDevicesKeepsBothTexts)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("from A"));
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("from B"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    const auto texts = [](const QString &root) {
+        QStringList all;
+        const QStringList names = QDir(root).entryList(QStringList() << QStringLiteral("*.md"));
+        for (const QString &name : names)
+            all << readNoteText(root + QLatin1Char('/') + name);
+        return all;
+    };
+    EXPECT_EQ(readNoteText(vaultA.path() + QStringLiteral("/shared.md")), QStringLiteral("from A"));
+    EXPECT_EQ(readNoteText(vaultB.path() + QStringLiteral("/shared.md")), QStringLiteral("from B"));
+    EXPECT_TRUE(texts(vaultA.path()).contains(QStringLiteral("from B")));
+    EXPECT_TRUE(texts(vaultB.path()).contains(QStringLiteral("from A")));
+}
+
+TEST_F(SyncIntegrationTest, TheSamePathAndTextCreatedOnTwoDevicesMakesNoConflictCopy)
+{
+    writeNote(vaultA.path(), QStringLiteral("shared.md"), QStringLiteral("same text"));
+    writeNote(vaultB.path(), QStringLiteral("shared.md"), QStringLiteral("same text"));
+    SyncEngine engineA;
+    Watcher watchA(engineA);
+    engineA.start(vaultA.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchA.waitForCycle());
+    SyncEngine engineB;
+    Watcher watchB(engineB);
+    engineB.start(vaultB.path(), serverURL, email, fixedPassword(password));
+    ASSERT_TRUE(watchB.waitForCycle());
+    engineA.syncNow();
+    ASSERT_TRUE(watchA.waitForCycle());
+
+    EXPECT_EQ(watchA.conflicts, 0);
+    EXPECT_EQ(watchB.conflicts, 0);
+    EXPECT_EQ(QDir(vaultA.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
+    EXPECT_EQ(QDir(vaultB.path()).entryList(QStringList() << QStringLiteral("*.md")), QStringList{QStringLiteral("shared.md")});
+}
+
 TEST_F(SyncIntegrationTest, ANewerEditFromAnotherDeviceCancelsAPendingDelete)
 {
     if (geteuid() == 0)
