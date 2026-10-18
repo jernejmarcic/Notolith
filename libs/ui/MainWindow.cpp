@@ -5796,7 +5796,7 @@ void MainWindow::armAutosave()
         m_autosaveMax.start();
 }
 
-void MainWindow::autosave()
+QStringList MainWindow::autosave()
 {
     m_autosaveMax.stop();
     QSet<QString> saved; // a note in two tabs is one document, saved once
@@ -5808,6 +5808,7 @@ void MainWindow::autosave()
         saved.insert(leaf->notePath);
         saveLeaf(leaf.get(), true);
     }
+    return QStringList(saved.cbegin(), saved.cend());
 }
 
 bool MainWindow::maybeSave()
@@ -6189,30 +6190,41 @@ bool MainWindow::renameVaultPath(const QString &oldPath, bool isDir, const QStri
     // not on disk yet would be written back over it by the next autosave,
     // [[Old]] and all, so it goes first - whatever files.autosave says, a
     // rename is an explicit file operation. The watcher then shows the
-    // rewritten note in the open editor. The index must know that note's
-    // new links too, or a first link to the renamed note is not rewritten.
-    autosave();
-    m_indexer->waitIdle(1000);
+    // rewritten note in the open editor. The index may not hold that note's
+    // new links yet, so it is named to the rewrite, which reads it from disk.
+    const QStringList unindexed = unindexedNotes(autosave());
     QString newPath;
     if (!m_vault.renamePath(oldPath, newName, &newPath, error))
         return false;
-    followPathChange(oldPath, isDir, newPath);
+    followPathChange(oldPath, isDir, newPath, unindexed);
     return true;
 }
 
 bool MainWindow::moveVaultPath(const QString &oldPath, bool isDir, const QString &targetFolder, QString *error)
 {
-    autosave(); // as for a rename: typed text goes to disk before the file moves,
-    m_indexer->waitIdle(1000); // and is indexed before the links are read
+    // As for a rename: typed text goes to disk before the file moves, and is
+    // read from there for its links.
+    const QStringList unindexed = unindexedNotes(autosave());
     QString newPath;
     if (!m_vault.movePath(oldPath, targetFolder, &newPath, error))
         return false;
     if (newPath != oldPath)
-        followPathChange(oldPath, isDir, newPath);
+        followPathChange(oldPath, isDir, newPath, unindexed);
     return true;
 }
 
-void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QString &newPath)
+QStringList MainWindow::unindexedNotes(const QStringList &saved) const
+{
+    QStringList relative;
+    for (const QString &path : saved + m_indexer->pathsInFlight()) {
+        if (m_vault.contains(path) && Vault::isNote(path))
+            relative << m_vault.relative(path);
+    }
+    return relative;
+}
+
+void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QString &newPath,
+                                  const QStringList &unindexed)
 {
     const QString oldRelative = m_vault.relative(oldPath);
     const QString newRelative = m_vault.relative(newPath);
@@ -6242,7 +6254,7 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
 
     if (m_settings.boolean(QStringLiteral("links.autoUpdate")) && m_index.isOpen()) {
         QString linkError;
-        if (m_index.updateLinksAfterRename(oldRelative, newRelative, m_vault, &linkError) < 0) {
+        if (m_index.updateLinksAfterRename(oldRelative, newRelative, m_vault, &linkError, unindexed) < 0) {
             statusBar()->showMessage(tr("Renamed, but links could not be updated: %1").arg(linkError),
                                      4000);
         } else if (!linkError.isEmpty()) {

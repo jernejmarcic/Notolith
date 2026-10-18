@@ -195,7 +195,13 @@ private slots:
     bool moveVaultPath(const QString &oldPath, bool isDir, const QString &targetFolder, QString *error);
     /// Everything that follows a file or folder to its new path once the vault
     /// has moved it: icons, plugins, history, links, tabs, the index.
-    void followPathChange(const QString &oldPath, bool isDir, const QString &newPath);
+    /// `unindexed`: notes saved or being indexed that the index may not hold yet
+    /// (vault-relative, at their old paths), whose links are read from disk too.
+    void followPathChange(const QString &oldPath, bool isDir, const QString &newPath,
+                          const QStringList &unindexed);
+    /// The notes `saved` (absolute) and those the indexer is still reading,
+    /// vault-relative: what a rename must open besides what the index lists.
+    QStringList unindexedNotes(const QStringList &saved) const;
     /// moveVaultPath for a UI caller: a refusal goes to the status bar.
     void moveToFolder(const QString &path, const QString &folder);
     /// Folder picker over the vault's visible folders, then moveToFolder().
@@ -484,7 +490,8 @@ private:
     void reportSaveError(const QString &path, const QString &error, bool quiet);
     /// Every tab with unsaved changes, a moment after typing stops - or
     /// m_autosaveMax after the first edit, however long the typing goes on.
-    void autosave();
+    /// Returns the notes it saved.
+    QStringList autosave();
     /// An edit was made: restarts the pause, starts the max wait if idle.
     void armAutosave();
     void updateTitle();

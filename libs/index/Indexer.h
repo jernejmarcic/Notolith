@@ -9,6 +9,7 @@
 #include <QHash>
 #include <QFuture>
 #include <QObject>
+#include <QSet>
 #include <QThreadPool>
 #include <QTimer>
 
@@ -39,14 +40,14 @@ public:
     /// and every note no longer there. Queued behind a scan in progress.
     void rebuild();
     void reindex(const QString &path);
+    /// A scan is running, or its last batch is not applied yet.
     bool isRunning() const;
-    /// Brings the index up to date with what is on disk now, for at most
-    /// `milliseconds`: a change the watcher has not acted on yet is acted on
-    /// now, and the scans queued or running are waited for. Only the indexer's
-    /// own results are delivered meanwhile, no other event. Returns at once
-    /// when nothing is pending. For a caller about to read links the index
-    /// must already know, such as a rename's rewrite.
-    void waitIdle(int milliseconds);
+    /// The notes (absolute paths) a reindex() has asked for that the Index does
+    /// not hold as saved yet: the running scan's, and those queued behind it.
+    /// A rename reads them from disk as candidates, so a note saved a moment ago
+    /// has its link rewritten without waiting for the scan. A whole-vault scan
+    /// in progress is not listed: its files are not known until it has walked.
+    QStringList pathsInFlight() const;
     /// Cancels a scan in progress and waits for it, dropping what it had not
     /// yet reported: afterwards the Index can be closed or reopened.
     void stop();
@@ -76,6 +77,10 @@ public:
     /// every 30 s instead of at once.
     bool pollsForChanges() const { return m_poll.isActive(); }
 
+    /// How many scans have walked the whole vault, for the tests: a save or an
+    /// outside change reads only the folders the watcher named.
+    int wholeScans() const { return m_wholeScans; }
+
 signals:
     void progress(int done, int total);
     void finished(int indexed, qint64 milliseconds);
@@ -101,16 +106,23 @@ private:
         bool last = false;
         /// A whole-vault walk's directories with their mtimes when it read them,
         /// so the watches come from the scan's own walk (rewatch() is the fallback).
+        /// `partial`: only folders found new by a walk of some changed folders,
+        /// to be added to the watches, none dropped.
         QHash<QString, qint64> directories;
+        bool partial = false;
     };
-    /// `paths` empty means the whole vault; `force` re-parses notes the cache
-    /// already holds as they are on disk.
-    void start(const QStringList &paths, bool force = false);
-    void runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
-                 const NotebookReader &notebooks, const ParseOptions &options, bool force);
+    /// `paths` and `dirs` both empty means the whole vault. Otherwise the notes
+    /// `paths`, and the entries of the folders `dirs` (a folder new to the
+    /// watcher whole): what the watcher reported. `force` re-parses notes the
+    /// cache already holds as they are on disk.
+    void start(const QStringList &paths, bool force = false, const QStringList &dirs = {});
+    void runScan(const QStringList &only, const QStringList &dirs, const QSet<QString> &watched, quint64 scan,
+                 const Vault &vault, const QString &databasePath, const NotebookReader &notebooks,
+                 const ParseOptions &options, bool force);
+    void flushChanges();
     void apply(const Batch &batch);
     void rewatch();
-    void watch(const QHash<QString, qint64> &directories);
+    void watch(const QHash<QString, qint64> &directories, bool partial);
     void addWatches(const QStringList &directories); ///< addPaths, and the poll for what it could not watch
     void onDirectoryChanged(const QString &path);
 
@@ -128,12 +140,16 @@ private:
     bool m_clearMetaNotes = false; ///< switched off during a scan: its end clears the rows
     ParseOptions m_parseOptions; ///< only the meta-note fields set
     QStringList m_pending; ///< notes changed during a scan, reindexed after it
+    QSet<QString> m_changedDirs; ///< folders the watcher reported, until the debounce hands them to a scan
+    QSet<QString> m_queuedDirs;  ///< folders handed over during a scan, read after it
+    QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
     NotebookReader m_notebookReader;
     QFileSystemWatcher m_files;
     QTimer m_debounce;
     QTimer m_poll; ///< runs only while some folder has no watch
     QElapsedTimer m_clock;
     int m_indexed = 0;
+    int m_wholeScans = 0;
 };
 
 } // namespace noteAppC

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <future>
+#include <map>
 #include <optional>
 
 #include <QCryptographicHash>
@@ -318,6 +319,7 @@ void Index::close()
     }
     m_names.clear();
     m_pathNames.clear();
+    m_nameCounts.clear();
     m_linkTargetsValid = m_aliasesValid = false;
 }
 
@@ -402,6 +404,7 @@ void Index::loadNames()
 {
     m_names.clear();
     m_pathNames.clear();
+    m_nameCounts.clear();
     m_linkTargetsValid = m_aliasesValid = false;
 
     QSqlQuery query(m_db);
@@ -412,6 +415,7 @@ void Index::loadNames()
         const QString name = query.value(1).toString();
         m_names[foldCase(name)].append(path);
         m_pathNames[path].append(name);
+        ++m_nameCounts[name];
     }
 }
 
@@ -428,6 +432,9 @@ bool Index::isCurrent(const QString &path, qint64 mtime, qint64 size) const
 void Index::forgetNames(const QString &path)
 {
     for (const QString &name : std::as_const(m_pathNames[path])) {
+        const auto counted = m_nameCounts.find(name);
+        if (counted != m_nameCounts.end() && --counted->second == 0)
+            m_nameCounts.erase(counted);
         auto it = m_names.find(foldCase(name));
         if (it != m_names.end()) {
             it->removeAll(path);
@@ -445,6 +452,7 @@ void Index::rememberNames(const QString &path, const QStringList &names)
             continue;
         m_names[foldCase(name)].append(path);
         m_pathNames[path].append(name);
+        ++m_nameCounts[name];
     }
 }
 
@@ -894,13 +902,15 @@ QStringList Index::linkTargets() const
         }
         it = isNoteName ? aliasNames.erase(it) : std::next(it);
     }
+    // From the names kept in memory, already in order, not a second pass over
+    // the table: sorting them on every name change was most of the cost.
+    // ponytail: ordered by UTF-16 unit, which differs from the table's byte
+    // order only between U+E000-U+FFFF and characters outside the BMP.
     QStringList names;
-    QSqlQuery query(m_db);
-    query.exec(QStringLiteral("SELECT DISTINCT name FROM names ORDER BY name"));
-    while (query.next()) {
-        const QString name = query.value(0).toString();
-        if (!aliasNames.contains(name))
-            names << name;
+    names.reserve(qsizetype(m_nameCounts.size()));
+    for (const auto &entry : m_nameCounts) {
+        if (!aliasNames.contains(entry.first))
+            names << entry.first;
     }
     m_linkTargetsCache = names;
     m_linkTargetsValid = true;
@@ -1262,7 +1272,7 @@ QString Index::rebasedTarget(const QString &oldTarget, const QString &oldRelativ
 }
 
 int Index::updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
-                                  const Vault &vault, QString *error)
+                                  const Vault &vault, QString *error, const QStringList &extraCandidates)
 {
     if (!m_db.isOpen()) {
         if (error)
@@ -1330,6 +1340,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     // The index lags a save, so its rows only say which notes to open; the
     // offsets to splice at come from the text read below.
     QStringList candidates;
+    QSet<QString> extra; // those only the caller named
     {
         QSqlQuery query(m_db);
         query.exec(QStringLiteral("SELECT files.path, links.target, links.wiki FROM links "
@@ -1343,6 +1354,14 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
                 candidates.append(fromPath);
             }
         }
+        // Their links are found in the text read, like the others'.
+        for (const QString &path : extraCandidates) {
+            if (!seen.contains(path)) {
+                seen.insert(path);
+                extra.insert(path);
+                candidates.append(path);
+            }
+        }
     }
 
     beginBatch();
@@ -1350,6 +1369,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     const ParseOptions options = parseOptions();
     int rewritten = 0;
     QStringList skippedLossy;
+    QStringList skippedUnreadable;
 
     const auto reindex = [&](const QString &absolutePath, const QString &text) {
         Metadata metadata = parser.parse(text, absolutePath, options);
@@ -1368,9 +1388,13 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         const QString absolutePath = vault.absolute(actualRelative);
 
         Note note;
-        if (!Vault::read(absolutePath, note, error)) {
-            endBatch();
-            return -1;
+        if (!Vault::read(absolutePath, note)) {
+            // Gone or unreadable since the index looked (the file has already
+            // moved): one note's links must not undo the rest. A note only
+            // named by the caller may simply be gone, which is no news.
+            if (!extra.contains(fromPath))
+                skippedUnreadable.append(actualRelative);
+            continue;
         }
         // Write would refuse it; leave its bytes alone and say so.
         if (note.lossy) {
@@ -1390,6 +1414,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         }
         if (hits.isEmpty())
             continue; // the links to it were removed since the index last looked
+        const QString textBefore = note.text;
 
         // Last link first, so an earlier link's offsets stay valid while a
         // later one's replacement text changes length.
@@ -1456,6 +1481,9 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             note.text.replace(rawStart, rawLength, rebased);
         }
 
+        if (note.text == textBefore)
+            continue; // a sibling link in a moved folder: still right, nothing to write
+
         if (!Vault::write(absolutePath, note, error)) {
             endBatch();
             return -1;
@@ -1476,9 +1504,15 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     }
 
     endBatch();
-    if (!skippedLossy.isEmpty() && error) {
-        *error = QStringLiteral("not UTF-8, so its links were left as they are: %1")
-                     .arg(skippedLossy.join(QStringLiteral(", ")));
+    if (error && (!skippedLossy.isEmpty() || !skippedUnreadable.isEmpty())) {
+        QStringList notes;
+        if (!skippedLossy.isEmpty())
+            notes << QStringLiteral("not UTF-8, so its links were left as they are: %1")
+                         .arg(skippedLossy.join(QStringLiteral(", ")));
+        if (!skippedUnreadable.isEmpty())
+            notes << QStringLiteral("could not be read, so its links were left as they are: %1")
+                         .arg(skippedUnreadable.join(QStringLiteral(", ")));
+        *error = notes.join(QStringLiteral("; "));
     }
     return rewritten;
 }

@@ -3,6 +3,8 @@
 #include <functional>
 #include <memory>
 
+#include <map>
+
 #include <QHash>
 #include <QList>
 #include <QPair>
@@ -197,10 +199,15 @@ public:
     /// basename when that is still unique. Only the link's bytes change.
     /// The index picks the notes to open; each one's links are found again in
     /// the text read, so a note saved since it was indexed is spliced right.
-    /// A note that is not valid UTF-8 is left untouched and named in `error`.
+    /// A note that is not valid UTF-8, or that can no longer be read (deleted
+    /// since the index looked), is skipped and named in `error`; the rest go on.
+    /// `extraCandidates` are notes (vault-relative, at their paths before the
+    /// rename) to open besides the ones the index names: those saved since it
+    /// last looked, whose links it may not hold yet.
     /// Returns the number of notes rewritten, or -1 with `error` filled.
     int updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
-                               const Vault &vault, QString *error = nullptr);
+                               const Vault &vault, QString *error = nullptr,
+                               const QStringList &extraCandidates = {});
 
     // --- Bases (libs/ext/bases) -----------------------------------------
     // One read-only block for the optional Bases module (NOTEAPPC_WITH_BASES).
@@ -274,7 +281,10 @@ private:
     QHash<QString, QStringList> m_names;
     /// vault-relative path -> the names it registered, so a remove is exact.
     QHash<QString, QStringList> m_pathNames;
-    /// linkTargets() and aliases() cost ~20 ms on a 20 000-note vault and run
+    /// every name any path registered -> how many paths did, in order, so
+    /// linkTargets() needs no sort.
+    std::map<QString, int> m_nameCounts;
+    /// linkTargets() and aliases() cost ~4 ms on a 20 000-note vault and run
     /// on every index change; dropped when a note's names change (an alias is
     /// one of them) or a note goes, so a plain edit of the text keeps them.
     mutable QStringList m_linkTargetsCache;

@@ -3,12 +3,10 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
-#include <QCoreApplication>
 #include <QFileInfo>
 #include <QFile>
 #include <QSet>
 #include <QStringDecoder>
-#include <QThread>
 #include <QtConcurrent>
 
 #include "Parser.h"
@@ -79,7 +77,7 @@ Indexer::Indexer(Index *index, QObject *parent)
     m_pool.setMaxThreadCount(1);
     m_debounce.setSingleShot(true);
     m_debounce.setInterval(300); // let a burst of writes settle
-    connect(&m_debounce, &QTimer::timeout, this, &Indexer::rebuild);
+    connect(&m_debounce, &QTimer::timeout, this, &Indexer::flushChanges);
     m_poll.setInterval(30'000);
     connect(&m_poll, &QTimer::timeout, this, &Indexer::rebuild);
     connect(&m_files, &QFileSystemWatcher::directoryChanged, this, &Indexer::onDirectoryChanged);
@@ -102,25 +100,12 @@ bool Indexer::isIgnored(const QString &relativePath)
 
 bool Indexer::isRunning() const
 {
-    return m_scan.isRunning();
+    return m_active;
 }
 
-void Indexer::waitIdle(int milliseconds)
+QStringList Indexer::pathsInFlight() const
 {
-    if (m_debounce.isActive()) {
-        m_debounce.stop();
-        rebuild();
-    }
-    QElapsedTimer waited;
-    waited.start();
-    // Only this object's queued results are delivered: a nested event loop
-    // would also run the deferred deletes and input of the caller's widgets.
-    // A scan's end may queue another (a rescan, notes changed meanwhile).
-    while (m_active && waited.elapsed() < milliseconds) {
-        QCoreApplication::sendPostedEvents(this, QEvent::MetaCall);
-        if (m_active)
-            QThread::msleep(1);
-    }
+    return m_active ? m_scanPaths + m_pending : QStringList();
 }
 
 void Indexer::stop()
@@ -132,6 +117,8 @@ void Indexer::stop()
     m_forceRescan = false;
     m_clearMetaNotes = false; // the key still says what the rows are: setVault() compares it
     m_pending.clear();
+    m_changedDirs.clear();
+    m_queuedDirs.clear();
 }
 
 void Indexer::setVault(const Vault &vault)
@@ -180,7 +167,7 @@ void Indexer::setMetaNotes(const ParseOptions &options)
     if (next.metaNotes) {
         m_clearMetaNotes = false;
         start({}, true);
-    } else if (m_scan.isRunning()) {
+    } else if (m_active) {
         m_clearMetaNotes = true; // its writer holds the database: cleared when it ends
     } else {
         clearMetaNotes();
@@ -210,33 +197,50 @@ void Indexer::reindex(const QString &path)
         start({path});
 }
 
-void Indexer::start(const QStringList &paths, bool force)
+void Indexer::start(const QStringList &paths, bool force, const QStringList &dirs)
 {
     if (!m_vault.isValid() || !m_index->isOpen())
         return;
-    if (m_scan.isRunning()) {
-        if (paths.isEmpty()) {
+    const bool whole = paths.isEmpty() && dirs.isEmpty();
+    // Not m_scan.isRunning(): the scan thread's last batch may be posted and not
+    // applied yet, and a new scan then resets what that apply still needs.
+    if (m_active) {
+        if (whole) {
             m_rescan = true;
             m_forceRescan = m_forceRescan || force;
-        } else
+        } else {
             m_pending += paths;
+            m_queuedDirs.unite(QSet<QString>(dirs.cbegin(), dirs.cend()));
+        }
         return;
     }
     m_clock.start();
     m_indexed = 0;
     m_wrote = false;
     m_scanOptions = m_parseOptions;
-    m_scanSetsKey = force && paths.isEmpty();
+    m_scanSetsKey = force && whole;
+    m_scanPaths = paths;
+    if (whole) {
+        ++m_wholeScans;
+        m_changedDirs.clear(); // this walk reads them
+        m_queuedDirs.clear();
+    }
+    QSet<QString> watched; // which folders a partial walk finds new
+    if (!dirs.isEmpty()) {
+        const QStringList watchedList = m_files.directories();
+        watched = QSet<QString>(watchedList.cbegin(), watchedList.cend());
+    }
     m_active = true;
-    m_scan = QtConcurrent::run(&m_pool, [this, paths, scan = m_scanNumber.load(), vault = m_vault,
+    m_scan = QtConcurrent::run(&m_pool, [this, paths, dirs, watched, scan = m_scanNumber.load(), vault = m_vault,
                                          database = m_index->databasePath(), notebooks = m_notebookReader,
                                          options = m_parseOptions, force] {
-        runScan(paths, scan, vault, database, notebooks, options, force);
+        runScan(paths, dirs, watched, scan, vault, database, notebooks, options, force);
     });
 }
 
-void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault, const QString &databasePath,
-                      const NotebookReader &notebooks, const ParseOptions &options, bool force)
+void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QSet<QString> &watched, quint64 scan,
+                      const Vault &vault, const QString &databasePath, const NotebookReader &notebooks,
+                      const ParseOptions &options, bool force)
 {
     // On the scan's thread: nothing here touches m_index, and what the
     // Index's thread must know goes to it in a Batch.
@@ -254,32 +258,65 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
     }
 
     QStringList notes = only;
-    if (only.isEmpty()) {
+    if (only.isEmpty() || !dirs.isEmpty()) {
+        const bool whole = dirs.isEmpty();
         QStringList attachments;
         Batch directories;
         directories.scan = scan;
-        directories.directories.insert(vault.root(), QFileInfo(vault.root()).lastModified().toMSecsSinceEpoch());
-        QDirIterator it(vault.root(), QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
-        while (it.hasNext() && !cancelled()) {
-            const QFileInfo info = it.nextFileInfo();
-            const QString path = info.filePath();
-            const QString relative = vault.relative(path);
-            if (isIgnored(relative) || vault.isIgnored(relative))
-                continue;
-            if (info.isDir()) {
-                // Its mtime as listed, before its entries are read: anything
-                // created in it later shows as a newer mtime in watch().
-                directories.directories.insert(path, info.lastModified().toMSecsSinceEpoch());
-                continue;
-            }
+        directories.partial = !whole;
+        const auto consider = [&](const QFileInfo &info, const QString &path) {
             // A notebook is a note while a reader is set: its cached row is stale in the other case too.
             const bool asNote = Vault::isNote(path)
                                 || (notebooks && info.suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0);
             if (!force && writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
-                continue;
+                return;
             (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
+        };
+        QSet<QString> walked; // a partial walk: the folders it read, vault-relative ("" for the root)
+        if (whole) {
+            directories.directories.insert(vault.root(), QFileInfo(vault.root()).lastModified().toMSecsSinceEpoch());
+            QDirIterator it(vault.root(), QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+            while (it.hasNext() && !cancelled()) {
+                const QFileInfo info = it.nextFileInfo();
+                const QString path = info.filePath();
+                const QString relative = vault.relative(path);
+                if (isIgnored(relative) || vault.isIgnored(relative))
+                    continue;
+                if (info.isDir()) {
+                    // Its mtime as listed, before its entries are read: anything
+                    // created in it later shows as a newer mtime in watch().
+                    directories.directories.insert(path, info.lastModified().toMSecsSinceEpoch());
+                    continue;
+                }
+                consider(info, path);
+            }
+        } else {
+            // Only the entries of the folders the watcher named. A folder it
+            // does not hold yet is new (or moved in): read whole, and watched.
+            QStringList todo = dirs;
+            while (!todo.isEmpty() && !cancelled()) {
+                const QString dir = todo.takeLast();
+                const QString relativeDir = dir == vault.root() ? QString() : vault.relative(dir);
+                if (relativeDir.startsWith(QLatin1String("..")) || isIgnored(relativeDir) || vault.isIgnored(relativeDir))
+                    continue;
+                walked.insert(relativeDir);
+                QDirIterator it(dir, QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+                while (it.hasNext() && !cancelled()) {
+                    const QFileInfo info = it.nextFileInfo();
+                    const QString path = info.filePath();
+                    const QString relative = vault.relative(path);
+                    if (isIgnored(relative) || vault.isIgnored(relative))
+                        continue;
+                    if (!info.isDir()) {
+                        consider(info, path);
+                    } else if (!info.isSymLink() && !watched.contains(path)) {
+                        directories.directories.insert(path, info.lastModified().toMSecsSinceEpoch());
+                        todo << path;
+                    }
+                }
+            }
         }
-        if (!cancelled())
+        if (!cancelled() && !directories.directories.isEmpty())
             post(directories);
         writer.begin();
         for (const QString &path : std::as_const(attachments)) {
@@ -287,15 +324,30 @@ void Indexer::runScan(const QStringList &only, quint64 scan, const Vault &vault,
             batch.names.append({vault.relative(path),
                                 writer.putAttachment(path, info.lastModified().toMSecsSinceEpoch(), info.size())});
         }
-        // Anything the cache holds that is no longer on disk.
+        // Anything the cache holds that is no longer on disk. After a partial
+        // walk: what was in a folder it read, or in a folder that is gone.
+        QHash<QString, bool> folderExists;
+        const auto isGone = [&](const QString &known) {
+            if (whole)
+                return !QFileInfo::exists(vault.absolute(known));
+            const qsizetype slash = known.lastIndexOf(QLatin1Char('/'));
+            const QString folder = slash < 0 ? QString() : known.left(slash);
+            if (walked.contains(folder) && !QFileInfo::exists(vault.absolute(known)))
+                return true;
+            auto it = folderExists.find(folder);
+            if (it == folderExists.end())
+                it = folderExists.insert(folder, folder.isEmpty() || QFileInfo(vault.absolute(folder)).isDir());
+            return !it.value();
+        };
         for (const QString &known : writer.allPaths()) {
-            if (!QFileInfo::exists(vault.absolute(known))) {
+            if (isGone(known)) {
                 writer.remove(vault.absolute(known));
                 batch.names.append({known, {}});
             }
         }
         writer.commit();
     }
+    notes.removeDuplicates(); // a note both named and found in its folder
     batch.total = int(notes.size());
 
     // Parsed across the pool a chunk at a time, the next chunk parsing while
@@ -336,7 +388,7 @@ void Indexer::apply(const Batch &batch)
     if (batch.scan != m_scanNumber.load())
         return; // from a scan stop() cancelled
     if (!batch.directories.isEmpty()) {
-        watch(batch.directories);
+        watch(batch.directories, batch.partial);
         return;
     }
     for (const auto &[relative, names] : batch.names)
@@ -347,7 +399,6 @@ void Indexer::apply(const Batch &batch)
         emit progress(batch.done, batch.total);
         return;
     }
-    m_scan.waitForFinished(); // it posted this as its last act
     m_active = false; // unless the end of this queues another scan, below
     if (!m_parseOptions.metaNotes && (m_clearMetaNotes || m_scanOptions.metaNotes)) {
         clearMetaNotes(); // switched off while it ran: what it or the cache held is stale
@@ -363,8 +414,8 @@ void Indexer::apply(const Batch &batch)
     emit finished(m_indexed, m_clock.elapsed());
     if (std::exchange(m_rescan, false))
         start({}, std::exchange(m_forceRescan, false));
-    else if (!m_pending.isEmpty())
-        start(std::exchange(m_pending, {}));
+    else if (!m_pending.isEmpty() || !m_queuedDirs.isEmpty())
+        start(std::exchange(m_pending, {}), false, std::exchange(m_queuedDirs, {}).values());
 }
 
 Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &notebooks, const ParseOptions &options)
@@ -433,7 +484,7 @@ void Indexer::addWatches(const QStringList &directories)
     }
 }
 
-void Indexer::watch(const QHash<QString, qint64> &directories)
+void Indexer::watch(const QHash<QString, qint64> &directories, bool partial)
 {
     // Only the difference: a save rescans the vault, and re-adding every watch
     // each time would cost what the walk saved.
@@ -441,7 +492,7 @@ void Indexer::watch(const QHash<QString, qint64> &directories)
     const QSet<QString> watched(watchedList.cbegin(), watchedList.cend());
     QStringList gone;
     for (const QString &path : watchedList) {
-        if (!directories.contains(path))
+        if (!partial && !directories.contains(path))
             gone << path;
     }
     if (!gone.isEmpty())
@@ -458,15 +509,22 @@ void Indexer::watch(const QHash<QString, qint64> &directories)
     // arrive unseen; its directory's mtime moved, so walk again.
     for (const QString &path : std::as_const(added)) {
         if (QFileInfo(path).lastModified().toMSecsSinceEpoch() != directories.value(path)) {
+            m_changedDirs.insert(path);
             m_debounce.start();
-            break;
         }
     }
 }
 
-void Indexer::onDirectoryChanged(const QString &)
+void Indexer::onDirectoryChanged(const QString &path)
 {
+    m_changedDirs.insert(path);
     m_debounce.start();
+}
+
+void Indexer::flushChanges()
+{
+    if (!m_changedDirs.isEmpty())
+        start({}, false, std::exchange(m_changedDirs, {}).values()); // behind a running scan, queued
 }
 
 } // namespace noteAppC
