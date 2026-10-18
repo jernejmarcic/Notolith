@@ -835,6 +835,11 @@ MainWindow::TabGroup *MainWindow::newGroup()
     connect(group->tabs, &QTabBar::tabMoved, this,
             [group](int from, int to) { group->leaves.move(from, to); });
     group->tabs->installEventFilter(this); // a middle click closes a tab
+    group->tabs->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(group->tabs, &QWidget::customContextMenuRequested, this, [this, group](const QPoint &pos) {
+        showTabMenu(group, group->tabs->mapToGlobal(pos));
+    });
+    group->widget->setAcceptDrops(m_popoutsOn);
 
     m_groups.push_back(std::move(owned));
     return group;
@@ -1567,6 +1572,7 @@ void MainWindow::activateLeaf(Leaf *leaf)
         const QSignalBlocker blocker(group->tabs);
         group->tabs->setCurrentIndex(index);
     }
+    retitlePopout(group);
     // The right sidebar is built after the first tab, which is activated
     // before there is one.
     if (!m_rightPanes)
@@ -1711,6 +1717,7 @@ void MainWindow::syncTabs(TabGroup *group)
         group->tabs->setCurrentIndex(active);
     m_syncingTabs = false;
     group->strip->setVisible(m_openMode != OpenMode::SingleFile);
+    retitlePopout(group);
 }
 
 void MainWindow::dropLeaf(Leaf *leaf)
@@ -1740,29 +1747,22 @@ void MainWindow::dropLeaf(Leaf *leaf)
     Leaf *next = nullptr;
     if (!group->leaves.isEmpty()) {
         next = group->leaves.at(qMin(index, int(group->leaves.size()) - 1));
-    } else {
-        // The split goes with its last tab, and a split left holding one
-        // child hands it to its own parent.
-        auto *parent = qobject_cast<QSplitter *>(group->widget->parentWidget());
-        group->widget->hide();
-        group->widget->setParent(nullptr);
-        group->widget->deleteLater();
-        while (parent && parent != m_workspace && parent->count() == 1) {
-            auto *grandparent = qobject_cast<QSplitter *>(parent->parentWidget());
-            QWidget *only = parent->widget(0);
-            grandparent->replaceWidget(grandparent->indexOf(parent), only);
-            only->show();
-            parent->deleteLater();
-            parent = grandparent;
-        }
-        std::erase_if(m_groups, [group](const auto &owned) { return owned.get() == group; });
+    } else if (collapseIfEmpty(group)) {
         group = nullptr;
     }
     std::erase_if(m_leaves, [leaf](const auto &owned) { return owned.get() == leaf; });
     if (m_active == leaf)
         m_active = nullptr;
-    if (!next)
+    if (!next) {
+        // The main window's tab, not another pop-out's, when the split went.
         next = m_leaves.front().get();
+        for (const auto &other : m_leaves) {
+            if (other->group->widget->window() == this) {
+                next = other.get();
+                break;
+            }
+        }
+    }
     activateLeaf(next);
     if (group)
         syncTabs(group);
@@ -1843,35 +1843,284 @@ void MainWindow::cycleTab(int step)
 
 void MainWindow::splitActive(Qt::Orientation orientation)
 {
-    TabGroup *from = m_active->group;
     const QString path = m_active->notePath;
-    TabGroup *group = newGroup();
-    auto *parent = qobject_cast<QSplitter *>(from->widget->parentWidget());
-    const int at = parent->indexOf(from->widget);
-    if (parent->count() == 1 || parent->orientation() == orientation) {
-        parent->setOrientation(orientation);
-        parent->insertWidget(at + 1, group->widget);
-    } else {
-        auto *split = new QSplitter(orientation);
-        split->setChildrenCollapsible(false);
-        parent->replaceWidget(at, split);
-        split->addWidget(from->widget);
-        split->addWidget(group->widget);
-        from->widget->show();
-    }
-    // Share the space evenly between the old split and the new one.
-    auto *holder = qobject_cast<QSplitter *>(group->widget->parentWidget());
-    const int index = holder->indexOf(group->widget);
-    QList<int> sizes = holder->sizes();
-    const int half = (sizes.value(index - 1) + sizes.value(index)) / 2;
-    sizes[index - 1] = half;
-    sizes[index] = half;
-    holder->setSizes(sizes);
-
+    TabGroup *group = splitBeside(m_active->group, orientation, true);
     activateLeaf(newLeaf(group));
     if (!path.isEmpty())
         openNote(path);
     m_active->editor->setFocus();
+}
+
+MainWindow::TabGroup *MainWindow::splitBeside(TabGroup *beside, Qt::Orientation orientation, bool after)
+{
+    TabGroup *group = newGroup();
+    auto *parent = qobject_cast<QSplitter *>(beside->widget->parentWidget());
+    const int at = parent->indexOf(beside->widget);
+    if (parent->count() == 1 || parent->orientation() == orientation) {
+        parent->setOrientation(orientation);
+        parent->insertWidget(after ? at + 1 : at, group->widget);
+    } else {
+        auto *split = new QSplitter(orientation);
+        split->setChildrenCollapsible(false);
+        parent->replaceWidget(at, split);
+        split->addWidget(after ? beside->widget : group->widget);
+        split->addWidget(after ? group->widget : beside->widget);
+        beside->widget->show();
+    }
+    // Share the space evenly between the old split and the new one.
+    auto *holder = qobject_cast<QSplitter *>(group->widget->parentWidget());
+    const int index = holder->indexOf(group->widget);
+    const int other = holder->indexOf(beside->widget);
+    QList<int> sizes = holder->sizes();
+    const int half = (sizes.value(other) + sizes.value(index)) / 2;
+    sizes[other] = half;
+    sizes[index] = half;
+    holder->setSizes(sizes);
+    return group;
+}
+
+// --- pop-out windows -----------------------------------------------------
+
+bool MainWindow::isRootSplit(const QSplitter *split) const
+{
+    return split == m_workspace || rootSplits().contains(const_cast<QSplitter *>(split));
+}
+
+QList<QSplitter *> MainWindow::rootSplits() const
+{
+    QList<QSplitter *> roots{m_workspace};
+    for (const auto &popout : m_popouts) {
+        if (auto *root = qobject_cast<QSplitter *>(popout->content()); root && popout->kind() == PopoutWindow::Kind::Leaves)
+            roots << root;
+    }
+    return roots;
+}
+
+bool MainWindow::isWorkspaceWindow(const QWidget *window) const
+{
+    return window == this
+        || std::any_of(m_popouts.cbegin(), m_popouts.cend(), [window](const auto &popout) { return popout.get() == window; });
+}
+
+bool MainWindow::collapseIfEmpty(TabGroup *group)
+{
+    if (!group->leaves.isEmpty())
+        return false;
+    // The split goes with its last tab, and a split left holding one child
+    // hands it to its own parent.
+    auto *parent = qobject_cast<QSplitter *>(group->widget->parentWidget());
+    group->widget->hide();
+    group->widget->setParent(nullptr);
+    group->widget->deleteLater();
+    while (parent && !isRootSplit(parent) && parent->count() == 1) {
+        auto *grandparent = qobject_cast<QSplitter *>(parent->parentWidget());
+        QWidget *only = parent->widget(0);
+        grandparent->replaceWidget(grandparent->indexOf(parent), only);
+        only->show();
+        parent->deleteLater();
+        parent = grandparent;
+    }
+    std::erase_if(m_groups, [group](const auto &owned) { return owned.get() == group; });
+    if (parent && parent->count() == 0) {
+        if (parent == m_workspace) {
+            TabGroup *fresh = newGroup();
+            m_workspace->addWidget(fresh->widget);
+            newLeaf(fresh);
+            syncTabs(fresh); // another window holds the tabs, so this empty one is drawn
+        } else {
+            deletePopout(qobject_cast<PopoutWindow *>(parent->window()));
+        }
+    }
+    return true;
+}
+
+void MainWindow::moveLeaf(Leaf *leaf, TabGroup *to, int index)
+{
+    TabGroup *from = leaf->group;
+    if (from == to)
+        return;
+    const int at = from->leaves.indexOf(leaf);
+    from->leaves.removeAt(at);
+    from->stack->removeWidget(leaf->area);
+    to->stack->addWidget(leaf->area);
+    leaf->group = to;
+    to->leaves.insert(qBound(0, index, int(to->leaves.size())), leaf);
+    syncTabs(to);
+    if (!collapseIfEmpty(from)) {
+        syncTabs(from);
+        activateLeaf(from->leaves.at(qMin(at, int(from->leaves.size()) - 1))); // what `from` shows now
+    }
+    if (m_active == leaf)
+        m_active = nullptr; // or activateLeaf() would return early, leaving `to` unaware
+    activateLeaf(leaf);
+}
+
+MainWindow::TabGroup *MainWindow::newPopout(Leaf *leaf)
+{
+    auto *root = new QSplitter(Qt::Horizontal);
+    root->setObjectName(QStringLiteral("popoutWorkspace"));
+    root->setChildrenCollapsible(false);
+    TabGroup *group = newGroup();
+    root->addWidget(group->widget);
+    auto *window = new PopoutWindow(PopoutWindow::Kind::Leaves, root);
+    m_popouts.emplace_back(window);
+    connect(window, &PopoutWindow::closing, this, &MainWindow::closePopout);
+    window->addActions(m_commands); // a hotkey works in the window it is pressed in
+    window->resize(size() * 0.6);
+    if (leaf)
+        moveLeaf(leaf, group, 0);
+    else
+        activateLeaf(newLeaf(group));
+    syncTabs(group);
+    window->show();
+    m_active->editor->setFocus();
+    return group;
+}
+
+void MainWindow::closePopout(PopoutWindow *window, bool *veto)
+{
+    if (window->kind() != PopoutWindow::Kind::Leaves)
+        return;
+    QList<Leaf *> leaves;
+    for (const auto &leaf : m_leaves) {
+        if (window->isAncestorOf(leaf->group->widget))
+            leaves << leaf.get();
+    }
+    // Everything is asked before anything closes: a cancel keeps the window whole.
+    for (Leaf *leaf : std::as_const(leaves)) {
+        activateLeaf(leaf);
+        if (!maybeLeave()) {
+            *veto = true;
+            return;
+        }
+    }
+    for (Leaf *leaf : std::as_const(leaves)) {
+        activateLeaf(leaf);
+        rememberCurrentPosition();
+        if (!leaf->notePath.isEmpty()) {
+            m_closedTabs.append({leaf->notePath, leaf->group, leaf->editor->cursorOffset(),
+                                 leaf->editor->verticalScrollBar()->value()});
+            if (m_closedTabs.size() > 20)
+                m_closedTabs.removeFirst();
+        }
+        dropLeaf(leaf); // the last one takes the window with it
+    }
+    m_active->editor->setFocus();
+}
+
+void MainWindow::deletePopout(PopoutWindow *window)
+{
+    // Tabs still in it (shutdown) leave the model first; nothing of them may call back in.
+    for (auto it = m_groups.begin(); it != m_groups.end();) {
+        if (!window->isAncestorOf((*it)->widget)) {
+            ++it;
+            continue;
+        }
+        for (Leaf *leaf : (*it)->leaves) {
+            leaf->editor->disconnect(this);
+            leaf->inlineTitle->disconnect(this);
+            std::erase_if(m_leaves, [leaf](const auto &owned) { return owned.get() == leaf; });
+        }
+        it = m_groups.erase(it);
+    }
+    if (m_active && std::none_of(m_leaves.cbegin(), m_leaves.cend(), [this](const auto &owned) { return owned.get() == m_active; }))
+        m_active = m_leaves.front().get();
+    // Not deleted on the spot: this may run inside the window's own closeEvent.
+    window->hide();
+    const auto it = std::find_if(m_popouts.begin(), m_popouts.end(), [window](const auto &owned) { return owned.get() == window; });
+    if (it != m_popouts.end()) {
+        it->release();
+        m_popouts.erase(it);
+    }
+    window->deleteLater();
+}
+
+void MainWindow::dockAll()
+{
+    TabGroup *home = nullptr;
+    for (const auto &group : m_groups) {
+        if (m_workspace->isAncestorOf(group->widget)) {
+            home = group.get();
+            break;
+        }
+    }
+    // The last tab out takes its window with it (collapseIfEmpty).
+    // Sidebar and Pane windows are docked by their own functions (sidebar lane).
+    QList<Leaf *> inPopouts;
+    for (const auto &leaf : m_leaves) {
+        if (leaf->group->widget->window() != this)
+            inPopouts << leaf.get();
+    }
+    for (Leaf *leaf : std::as_const(inPopouts))
+        moveLeaf(leaf, home, int(home->leaves.size()));
+}
+
+void MainWindow::retitlePopout(TabGroup *group)
+{
+    auto *popout = qobject_cast<PopoutWindow *>(group->widget->window());
+    if (!popout)
+        return;
+    const Leaf *current = group->leaves.value(group->tabs->currentIndex(), group->leaves.value(0));
+    if (current)
+        popout->setWindowTitle(tabTitle(current) + QStringLiteral(" - Notolith"));
+}
+
+void MainWindow::buildPopoutActions()
+{
+    const auto add = [this](const QString &id, const QString &name, auto slot) {
+        auto *action = new QAction(name, this);
+        action->setObjectName(id);
+        action->setShortcutContext(Qt::WindowShortcut);
+        connect(action, &QAction::triggered, this, slot);
+        addAction(action);
+        m_commands << action;
+    };
+    add(QStringLiteral("workspace:open-in-new-window"), tr("Open current tab in new window"), [this] {
+        const QString path = m_active->notePath;
+        newPopout();
+        if (!path.isEmpty())
+            openNote(path);
+        m_active->editor->setFocus();
+    });
+    add(QStringLiteral("workspace:move-to-new-window"), tr("Move current tab to new window"), [this] {
+        newPopout(m_active);
+    });
+}
+
+void MainWindow::showTabMenu(TabGroup *group, const QPoint &globalPos)
+{
+    const int index = group->tabs->tabAt(group->tabs->mapFromGlobal(globalPos));
+    if (index < 0 || index >= group->leaves.size())
+        return;
+    activateLeaf(group->leaves.at(index));
+    QMenu menu(this);
+    const auto item = [this, &menu](const char *id, const QString &text) {
+        QAction *command = findChild<QAction *>(QLatin1String(id));
+        if (command && command->isEnabled())
+            connect(menu.addAction(text), &QAction::triggered, command, &QAction::trigger);
+    };
+    item("workspace:close", tr("Close"));
+    item("workspace:close-others", tr("Close others"));
+    menu.addSeparator();
+    item("workspace:split-vertical", tr("Split right"));
+    item("workspace:split-horizontal", tr("Split down"));
+    menu.addSeparator();
+    item("workspace:open-in-new-window", tr("Open in new window"));
+    item("workspace:move-to-new-window", tr("Move to new window"));
+    menu.exec(globalPos);
+}
+
+void MainWindow::applyPopoutFeature()
+{
+    m_popoutsOn = featureOn("popout-windows");
+    for (const char *id : {"workspace:open-in-new-window", "workspace:move-to-new-window"}) {
+        if (QAction *action = findChild<QAction *>(QLatin1String(id)))
+            action->setEnabled(m_popoutsOn);
+    }
+    for (const auto &group : m_groups)
+        group->widget->setAcceptDrops(m_popoutsOn);
+    if (!m_popoutsOn && !m_popouts.empty())
+        dockAll();
 }
 
 bool MainWindow::maybeSaveAll()
@@ -1897,8 +2146,13 @@ bool MainWindow::maybeLeave()
 
 void MainWindow::resetWorkspace()
 {
+    // Pop-outs' tabs first: the main window's last one must not be the one left over.
     while (m_leaves.size() > 1) {
         Leaf *last = m_leaves.back().get();
+        for (const auto &leaf : m_leaves) {
+            if (leaf->group->widget->window() != this)
+                last = leaf.get();
+        }
         activateLeaf(last);
         rememberCurrentPosition();
         dropLeaf(last);
@@ -2184,6 +2438,7 @@ void MainWindow::applyFeatures()
                 action->setEnabled(m_settings.boolean(QStringLiteral("editor.metaNotes")));
         }
     }
+    applyPopoutFeature();
     // Switched off mid-recording: its Stop command just went dark, so stop
     // here rather than leave the microphone on.
     if (m_recorder && !featureOn("audio-recorder"))
@@ -2541,6 +2796,8 @@ void MainWindow::buildActions()
                                           QFileInfo(m_active->notePath).completeBaseName());
         });
 
+    buildPopoutActions();
+
     QList<SettingsPage::HotkeyCommand> rebindable;
     for (const QAction *action : std::as_const(m_commands))
         rebindable << SettingsPage::HotkeyCommand{action->objectName(), action->text(),
@@ -2584,7 +2841,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
         const bool isNavButton =
             mouseEvent->button() == Qt::BackButton || mouseEvent->button() == Qt::ForwardButton;
         auto *widget = qobject_cast<QWidget *>(watched);
-        if (isNavButton && widget && widget->window() == this) {
+        if (isNavButton && widget && isWorkspaceWindow(widget->window())) {
             if (mouseEvent->button() == Qt::BackButton)
                 goBack();
             else
@@ -3711,6 +3968,8 @@ void MainWindow::syncPlugins(bool rescan)
                 });
             });
             addAction(action);
+            for (const auto &popout : m_popouts)
+                popout->addAction(action);
             m_commands << action;
             m_pluginCommands << action;
         }
@@ -6031,6 +6290,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
                                        leaf->editor->verticalScrollBar()->value());
     }
     saveLayout();
+    // Every pop-out goes with the main window; the layout above already has them.
+    while (!m_popouts.empty())
+        deletePopout(m_popouts.back().get());
     m_settings.save();
     QSettings settings;
     settings.setValue(kGeometry, saveGeometry());
