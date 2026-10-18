@@ -1827,7 +1827,7 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [ ] Lane C (detachable sidebars): whole left/right sidebar and single
       right panes into their own window and back on close; narrow-mode,
       toggle and showRightPane guards; context menus + commands. 3 tests.
-- [ ] Lane D (drag-to-tile): tab drag with drop zones (edges split,
+- [x] Lane D (drag-to-tile, merged): tab drag with drop zones (edges split,
       center joins, tab bar inserts), overlay, drop outside -> new window,
       right tab buttons dragged out -> detached pane. 4 tests.
 - [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
@@ -1835,6 +1835,11 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [ ] Obsidian command ids workspace:open-in-new-window /
       workspace:move-to-new-window unverified: check against a real
       Obsidian hotkeys.json (Jernej) or a public source.
+- [ ] Escape-cancelled tab drag with the pointer outside every window
+      opens a pop-out (Qt reports it as a drop outside). Plan: watch
+      KeyPress Escape in the app filter while m_dragging and treat the next
+      IgnoreAction as cancel; verify by hand on Hyprland (offscreen cannot
+      start a drag). Obsidian cancels on Escape.
 - [ ] After lanes C + D: dragging a right sidebar tab button out of the
       window detaches that pane (lane popdrag skips it: detachPane lands
       in lane popside at the same time).
