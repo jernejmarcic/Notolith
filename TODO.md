@@ -2096,6 +2096,10 @@ Shared/<title>.md.
   - [x] tasks.ini loads only through MarkdownEditor: index CLI and a
         standalone Publisher see default states. Lazy-load in
         TaskStates::current().
+- [ ] Remember folds per note, like Obsidian (it keeps each file's folded
+      headings and lists across switches and restarts). Today setNoteText
+      clears them (before 2026-10-19 they landed on the wrong blocks of the
+      next note). Key by note path + heading/line text, not offset.
 - [ ] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [ ] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
