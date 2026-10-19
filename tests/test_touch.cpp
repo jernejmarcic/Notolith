@@ -221,6 +221,19 @@ TEST(TouchTest, AFingerDraggedUpTheNoteScrollsItAndSelectsNothing)
     EXPECT_TRUE(editor->selectedText().isEmpty()) << editor->selectedText().left(40).toStdString();
 }
 
+TEST(GPUaccelerationTest, AutomaticIsOnOnlyAtAFractionalScale)
+{
+    // Jernej on PADD at 1.67: raster scrolling "very very choppy", OpenGL
+    // "much much better"; shuttlepod-1 at 1 scrolls faster raster.
+    EXPECT_TRUE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.6667));
+    EXPECT_TRUE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.25));
+    EXPECT_FALSE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 1.0));
+    EXPECT_FALSE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("auto"), 2.0));
+    // What a settings file from before "auto" holds, either way round.
+    EXPECT_TRUE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("true"), 1.0));
+    EXPECT_FALSE(MarkdownEditor::GPUaccelerationWanted(QStringLiteral("false"), 1.6667));
+}
+
 TEST(TouchTest, AFingerStillScrollsOnceTheGPUViewportIsOn)
 {
     // setGPUacceleration() swaps the viewport, and the touch grab was on the

@@ -795,9 +795,13 @@ QWidget *SettingsPage::buildEditorPage()
                    "numbers or %% comments (comment text included)."));
     addSpinRow(layout, QStringLiteral("editor.tabWidth"), tr("Tab width"),
               tr("Spaces a Tab keypress inserts."), 1, 8);
-    addToggleRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
-                tr("Draw the note through OpenGL instead of the CPU. Measured slower on "
-                   "average for text, with a steadier worst case - try it on your hardware."));
+    addComboRow(layout, QStringLiteral("editor.gpuAcceleration"), tr("GPU acceleration"),
+               tr("Draw the note through OpenGL instead of the CPU. Automatic uses it on a "
+                  "screen scaled by a fraction (125%, 167%...), where the CPU has to repaint the "
+                  "whole note on every scroll step, and the CPU everywhere else, where it is faster."),
+               {{tr("Automatic"), QStringLiteral("auto")},
+                {tr("On"), QStringLiteral("true")},
+                {tr("Off"), QStringLiteral("false")}});
 
     layout->addStretch(1);
     return scrollWrap(page);

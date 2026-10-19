@@ -49,6 +49,7 @@
 #include <QtConcurrent>
 #include <QTextLine>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <span>
 
@@ -944,6 +945,13 @@ void MarkdownEditor::setTabWidth(int spaces)
 void MarkdownEditor::setUseWikilinks(bool on)
 {
     d->m_useWikilinks = on;
+}
+
+bool MarkdownEditor::GPUaccelerationWanted(const QString &setting, qreal devicePixelRatio)
+{
+    if (setting != QLatin1String("auto"))
+        return setting == QLatin1String("true");
+    return !qFuzzyCompare(devicePixelRatio, std::round(devicePixelRatio));
 }
 
 bool MarkdownEditor::GPUaccelerationAvailable()

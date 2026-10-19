@@ -98,7 +98,10 @@ const QVariantMap &defaults()
         // `#| sandbox: wasm` blocks run a WebAssembly module in place of the language's interpreter:
         // `python=/path/python.wasm;ruby=/path/ruby.wasm`. A language with no entry is refused there.
         {QStringLiteral("notebooks.wasmModules"), QString()},
-        {QStringLiteral("editor.gpuAcceleration"), false},
+        // auto, true or false. auto: OpenGL on a screen with a fractional scale (1.25, 1.67...),
+        // where raster cannot move painted pixels on a scroll and repaints the whole note each
+        // frame; raster elsewhere, which is faster there. true/false are what older files hold.
+        {QStringLiteral("editor.gpuAcceleration"), QStringLiteral("auto")},
         // Mermaid diagrams, drawn by an external tool on a thread pool. On is free until a
         // ```mermaid fence is on screen; the tool is a name looked up on PATH and in the cargo bin directories, or a path.
         {QStringLiteral("render.mermaid"), true},

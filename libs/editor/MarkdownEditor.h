@@ -263,6 +263,14 @@ public:
     /// True when this build can do it at all: Qt6::OpenGLWidgets present, and
     /// a platform that can give the window a GL context.
     static bool GPUaccelerationAvailable();
+    /// The `editor.gpuAcceleration` setting ("true", "false" or "auto") for
+    /// a screen of `devicePixelRatio`. Auto is OpenGL only at a fractional
+    /// scale: a scroll step there moves the note by a fraction of a device
+    /// pixel, which a raster backing store cannot shift (QBackingStore::scroll
+    /// refuses, and so does Qt Wayland's shm store at any fractional scale),
+    /// so raster repaints the whole viewport every frame. Measured on PADD at
+    /// 1.67 and shuttlepod-1 at 1: docs/PERFORMANCE.md, "GPU acceleration".
+    static bool GPUaccelerationWanted(const QString &setting, qreal devicePixelRatio);
 
     /// Obsidian's Export to PDF options, with its defaults.
     struct PdfOptions {

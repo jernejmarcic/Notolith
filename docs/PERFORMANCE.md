@@ -62,6 +62,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | scroll frame, 1180x760 | 0.36 ms | - |
 | scroll frame, one wheel notch, on screen (headless cage) | 0.4-0.65 ms | - |
 | scroll frame, 3440x1440 (this machine's 240 Hz panel) | 0.88 ms, worst 2.1 ms | 4.17 ms |
+| scroll by finger on PADD (RK3588S, GNOME at 1.67, OpenGL by default there), coursework note, in its own session | 60 fps: frame gap 16.6 ms median, paint 3.8 ms (2026-10-19, frame log) | 16.7 ms |
+| Settings, first open in a window (bench) | 30 ms (2026-10-19; 252 ms before) | - |
 | cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
 | peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
 
@@ -167,7 +169,24 @@ cmake --build /tmp/noteAppC-build
 QT_SCALE_FACTOR=2 /tmp/noteAppC-build/tools/bench/noteAppC-bench --viewport 2560x1440
 env -u WAYLAND_DISPLAY -u DISPLAY WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1 \
     cage -- /tmp/noteAppC-build/tools/bench/noteAppC-bench --gpu    # raster vs OpenGL, headless
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --padd              # PADD's scroll: scale 1.67, finger/wheel/page steps
+/tmp/noteAppC-build/tools/bench/noteAppC-bench --padd --note my.md --size 685x1278  # a real note, PADD's portrait editor
 ```
+
+`--padd` styles the window as the app does (PopupStyle and the theme's sheet,
+so the scrollbar costs what it costs there) and scrolls at 20 px (a finger),
+72 px (a wheel notch) and page steps. It sets `QT_SCALE_FACTOR=1.67` unless
+one is set; set 2 to see what an integer scale does to the same note.
+`--note` scrolls that file instead of the generated one, `--size` sets the
+viewport. Offscreen it measures the paint only, never the compositor.
+
+For a device's own session, where the compositor and the input are real,
+`NOTOLITH_FRAME_LOG=<file> notolith` appends one line per editor paint: gap
+since the last paint, paint time, exposed and viewport size, device pixel
+ratio, scroll steps since the last paint, the time spent handling them, and
+the wait from the first of them to the paint. A frame bound by the handler,
+the paint or the wait each needs a different fix; the 2026-10-19 PADD work
+read them in that order ([fix 33](#33-a-fractional-scale-repainted-the-whole-note-on-every-scroll-step)).
 
 `--gpu` needs a real window and a real GPU context, but never a real monitor:
 inside `cage` with the headless wlroots backend it gets a GPU renderer and one
@@ -980,6 +999,85 @@ folder watched the poll timer never starts.
 |---|---|---|
 | 20 000 notes | 41.5 ms | 36.3 ms |
 
+### 33. A fractional scale repainted the whole note on every scroll step
+
+Jernej on PADD (FydeTab Duo, RK3588S, Mali-G610, 2560x1600 at GNOME's 1.67):
+"Scrolling is slow and choppy", by finger and by mouse, "very very choppy, def
+not 30FPS". Opening notes was instant; only scrolling was slow.
+
+Fix 12 scrolls by moving the pixels already painted. At a fractional scale Qt
+cannot: a step of n logical pixels is 1.67 n device pixels, `QBackingStore::scroll`
+refuses a non-integer native delta, and Qt Wayland's shm backing store refuses
+any scroll at a fractional scale ("With fractional scaling we cannot easily
+scroll the existing pixels", qwaylandshmbackingstore.cpp, Qt 6.12). So every
+frame repainted the whole viewport, about 16.5 ms at 1533x958 on PADD's A76
+cores. Rendering at 2 (`QT_SCALE_FACTOR_ROUNDING_POLICY=Round`) brought the
+blit back (0.7 ms paints) but not the frame rate: the frames still came about
+31 ms apart, which pointed at the full-size shm upload rather than the paint.
+
+The OpenGL viewport has no shm upload. Jernej switched it on: "much much
+better", then "still doe snot feel very smooth" / "just a small delay between
+scorlling". What followed, in its frame log (coursework note, his session):
+
+| PADD, OpenGL, scale 1.67 | paint median | frame gap median / p90 | fps |
+|---|---|---|---|
+| before 4cebb61, 685x1278 viewport | 6.9 ms | 25.4 / 33 ms | 39 |
+| after 0f7e792, 905x572 viewport (the tablet turned) | 3.8 ms | 16.6 / 27.4 ms | 60 |
+
+The second row's viewport is about half the pixels, so part of its paint gain
+is the smaller window. The scroll steps themselves dropped to 0.01 ms a frame
+in the log, and Jernej: "smooth now". What changed:
+
+- `scrollContentsBy` ran `updateLayout()` on every step, and its first loop
+  walks every block of the note. Scrolling changes nothing that loop settles,
+  so a step whose reach (a screen either side) is already laid out skips it
+  and only re-places the notebook prompt. Also pinned: the prompt follows its
+  block (`APromptEndsWhenItsRunDoesAndFollowsItsBlockWhenScrolled`).
+- While the touch scroller is moving, the hover ring is not re-aimed: there is
+  no pointer resting anywhere.
+- `QScrollerProperties::DragStartDistance` 5 mm (Qt's default) to 2 mm: the
+  page stood still under the finger for 5 mm, the "small delay".
+- `Theme::firstAvailableFamily` and `hasFamily` asked `QFontDatabase::families()`,
+  which rebuilds its list, on every font lookup; the set is cached and dropped
+  on `fontDatabaseChanged`.
+
+And the default: `editor.gpuAcceleration` is now `auto`, `true` or `false`, and
+`auto` takes OpenGL exactly where raster cannot blit, a fractional device
+pixel ratio (`MarkdownEditor::GPUaccelerationWanted`). Where it can, raster is
+faster: shuttlepod-1 (Radeon 780M, scale 1, headless cage) scrolls a 72 px
+step in 0.96 ms raster against 2.37 ms OpenGL, a page in 2.24 against 3.34 ms.
+A settings file from before keeps its `true` or `false`.
+`GPUaccelerationTest.AutomaticIsOnOnlyAtAFractionalScale` pins the rule.
+
+Measured with `--padd --note` on starbase-1 the same note (eight copies) at
+685x1278 went 0.79 to 0.69 ms a 20 px step at scale 2; the device's own log
+above is the number that matters.
+
+### 34. Settings built seven pages, then restyled them, on every open
+
+Jernej on PADD: "settings need like 3 seconds to launch". The page is rebuilt
+on each show (so a theme added meanwhile is listed); the rebuild built all
+seven pages and only then set the page's style sheet, which repolished every
+row it had just made. A profile of the open: 59% building pages, 36% the
+restyle, much of both in layout: word-wrapped `QLabel` height-for-width and
+the text shaping behind it.
+
+Now the sheet is set first (and not again when it has not changed), and only
+the page on show is built; each other page is built the first time the nav
+shows it. Pages a rebuild replaces leave the widget tree at once instead of at
+their deferred deletion, which had let a lookup by name find the old row's
+widgets first.
+
+| Settings first open, fresh window (bench) | before | after |
+|---|---|---|
+| starbase-1 | 252 ms | 30 ms |
+
+Settings also did not scroll by finger ("scorlring does not work in the
+settings"): only the editor had grabbed the touch gesture. `PopupStyle::polish`
+now grabs it for every scroll area that is not inside another one (the
+settings page, the file tree, the panes), so a list or block inside a page
+leaves the drag to the page. `AFingerScrollsAnyScrollAreaButNotOneInsideAnother`.
+
 ### The graph view at 20 000 notes
 
 A step of the force layout is O(n log n) and a frame is linear in nodes and
@@ -1019,7 +1117,9 @@ which runs a settling pass per job.
 
 `0a5fefc`. `MarkdownEditor::setGPUacceleration` swaps the viewport for a
 `QOpenGLWidget`, which is the supported way to put widget painting on the GPU
-without QML. It is a setting, **off by default**, because it measured slower.
+without QML. It is a setting, off by default at an integer scale, because it
+measured slower there; at a fractional scale it is on by default since
+2026-10-19, where raster cannot blit ([fix 33](#33-a-fractional-scale-repainted-the-whole-note-on-every-scroll-step)).
 
 On screen, vsync off, 5 000-line note, three runs:
 

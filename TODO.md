@@ -2404,7 +2404,7 @@ PADD: FydeTab Duo, RK3588S (4x A76 + 4x A55), Mali-G610 panthor, DSI-1
       has steps, step ms and step->paint wait. Next by the log's bucket:
       handler, paint (try no Antialiasing on GL, then PartialUpdate + FBO
       shift), or wait (compose + frame callback; perf on PADD).
-- [ ] PADD benchmark: a bench preset for PADD's geometry (viewport, scale,
+- [x] PADD benchmark: a bench preset for PADD's geometry (viewport, scale,
       touch scroll) so a change is measured against it; numbers in
       docs/PERFORMANCE.md. `noteAppC-bench --padd` added (finger drag 20 px,
       wheel 72 px, page; 1533x958 at 1.67); PADD numbers still to take.
@@ -2412,9 +2412,13 @@ PADD: FydeTab Duo, RK3588S (4x A76 + 4x A55), Mali-G610 panthor, DSI-1
       finger, on-screen keyboard, long press, kinetic scroll feel.
 - [ ] Install the fixed build on PADD for Jernej to try (running from
       /var/tmp/notolith-build now; /usr/bin/notolith is still the old one).
-- [ ] GPU acceleration by default where raster cannot scroll (fractional
+- [x] GPU acceleration by default where raster cannot scroll (fractional
       device pixel ratio): PADD at 1.67 needs it, shuttlepod-1 at 1 is
-      faster raster (0.96 vs 2.37 ms). Ask Jernej before changing the default.
+      faster raster (0.96 vs 2.37 ms). Jernej: "sure, but it should be
+      documented". Setting is now auto/true/false, default auto;
+      docs/PERFORMANCE.md fixes 33-34, docs/EDITOR.md "Touch".
+- [ ] Auto GPU is decided when settings apply: a window moved to a screen of
+      another scale keeps its viewport until the next settings change.
 - [x] PADD: Settings takes ~3 s to open (Jernej: "settings need like 3
       seconds to launch"): built all seven pages and restyled them per open,
       252 ms on starbase-1; now the shown page only, 30 ms (0f7e792).

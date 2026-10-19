@@ -1400,7 +1400,12 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
-    editor->setGPUacceleration(m_settings.boolean(QStringLiteral("editor.gpuAcceleration")));
+    // ponytail: decided when settings are applied; a window dragged to a
+    // screen of another scale keeps its viewport until the next change.
+    const QScreen *screen = editor->screen();
+    editor->setGPUacceleration(MarkdownEditor::GPUaccelerationWanted(
+        m_settings.text(QStringLiteral("editor.gpuAcceleration")),
+        screen ? screen->devicePixelRatio() : qApp->devicePixelRatio()));
     editor->setContextActions(contextActions());
 
     // What the editor draws of the optional features: off, a block shows

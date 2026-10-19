@@ -1092,6 +1092,31 @@ commands, which are always there.
 
 Tests: `TableAutoTest.*` (`tests/test_tables.cpp`).
 
+## Touch
+
+Only where a touchscreen exists (`grabTouchScroll`, PopupStyle.cpp), so a
+desktop with a mouse keeps drag-to-select:
+
+- A finger dragged on a note scrolls it, with momentum, and selects nothing;
+  the page starts moving after 2 mm of travel (Qt's default is 5 mm, which
+  read as the page sticking). A held finger (500 ms) selects the word under
+  it, and that selection gets handles a finger drags to move its ends.
+- Every outermost scroll area does the same: the settings page, the file
+  tree, the panes. One inside another (a list in a block, a block in a note)
+  leaves the drag to the one around it, so a drag that starts on it still
+  scrolls the page.
+- The OpenGL viewport is a new widget, so turning it on grabs the gesture
+  again on that one.
+
+GPU acceleration (`editor.gpuAcceleration`, Settings, Editor) is Automatic by
+default: OpenGL on a screen with a fractional scale, where raster has to
+repaint the whole note on every scroll step, and raster elsewhere, where it is
+faster. On and Off force it; a settings file from before Automatic keeps its
+`true` or `false`. The numbers are in [PERFORMANCE.md](PERFORMANCE.md), fix 33.
+
+Tests: `tests/test_touch.cpp` (its own binary: a test touchscreen is
+registered for the whole process).
+
 ## Table handles and cell selection
 
 What Obsidian puts around a rendered table, in `libs/editor/TableHandles.cpp`.
