@@ -2309,8 +2309,11 @@ Shared/<title>.md.
       opens it.
 - [x] P5. A base cell edit went ahead when the note's typing could not be
       saved: refused instead.
-- [ ] P6. appstreamtest is vacuous until `cmake --install` writes
+- [x] P6. appstreamtest is vacuous until `cmake --install` writes
       install_manifest.txt into the build dir; then it fails on
       url-homepage-missing. Needs a homepage URL in the metainfo -
       Jernej: is there a public repo or page for Notolith? (After a staged
       install, delete /tmp/noteAppC-build/install_manifest.txt.)
+      Jernej: "No homepage yet". Done: our own appstreamtest validates the
+      metainfo in the tree every run, url-homepage-missing as info; the ECM
+      one was a stale CTestTestfile from before ECM was disabled for md4qt.

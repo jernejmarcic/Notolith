@@ -234,6 +234,16 @@ FetchContent_Declare(microtex
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(microtex)
 
+# The metainfo checked as it is in the tree, every run (ECM's appstreamtest
+# checked only what an install had listed). No homepage yet (Jernej
+# 2026-10-19), so that one warning is information.
+find_program(APPSTREAMCLI appstreamcli)
+if(APPSTREAMCLI)
+    add_test(NAME appstreamtest
+             COMMAND ${APPSTREAMCLI} validate --no-net --override=url-homepage-missing=info
+                     ${CMAKE_CURRENT_SOURCE_DIR}/packaging/io.github.jernejmarcic.Notolith.metainfo.xml)
+endif()
+
 # md4qt's own CMakeLists pulls in ECM's KDECMakeSettings, whose translation
 # helper runs `git rev-parse @{u}` / `git remote get-url origin` on this repo
 # and prints git errors on every configure. Nothing here needs ECM.
