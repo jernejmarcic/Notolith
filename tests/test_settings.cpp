@@ -404,6 +404,34 @@ TEST(Settings, NotePositionSurvivesASaveAndLoadAndEvictsPastFifty)
     EXPECT_FALSE(capped.notePosition(QStringLiteral("/vaults/mine/Note0.md")).has_value());
 }
 
+TEST(Settings, NoteFoldsSurviveASaveWhateverTheirTextHoldsAndFollowARename)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    // A fold line is note text: commas, tabs and percent signs must not split an entry.
+    const QStringList folds{QStringLiteral("00 > [!note]- Tab\there, 100% sure"),
+                            QStringLiteral("10 ```python")};
+    Settings settings = Settings::load();
+    settings.setNotePosition(QStringLiteral("/v/Dir/A.md"), 5, 6, folds);
+    settings.setNotePosition(QStringLiteral("/v/Other.md"), 1, 2);
+    ASSERT_TRUE(settings.save());
+
+    Settings reloaded = Settings::load();
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/Dir/A.md"))->folds, folds);
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/Dir/A.md"))->scroll, 6);
+    EXPECT_TRUE(reloaded.notePosition(QStringLiteral("/v/Other.md"))->folds.isEmpty());
+
+    reloaded.renameNotePosition(QStringLiteral("/v/Dir"), QStringLiteral("/v/Moved"));
+    EXPECT_FALSE(reloaded.notePosition(QStringLiteral("/v/Dir/A.md")).has_value());
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/Moved/A.md"))->folds, folds);
+    EXPECT_TRUE(reloaded.notePosition(QStringLiteral("/v/Other.md")).has_value());
+
+    reloaded.forgetNotePosition(QStringLiteral("/v/Moved"));
+    EXPECT_FALSE(reloaded.notePosition(QStringLiteral("/v/Moved/A.md")).has_value());
+    EXPECT_TRUE(reloaded.notePosition(QStringLiteral("/v/Other.md")).has_value());
+}
+
 // --- hotkeys ------------------------------------------------------------------
 
 TEST(Hotkeys, ReadsObsidiansFormat)

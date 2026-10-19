@@ -1790,6 +1790,80 @@ TEST(FoldTest, AnotherNoteInTheSameEditorStartsWithItsOwnFolds)
     EXPECT_TRUE(editor->isFoldedAt(0));
 }
 
+TEST(FoldTest, FoldStateRoundTripsToAnotherNoteAndFollowsItsLineNotItsOffset)
+{
+    const QString note = QStringLiteral("> [!warning]- Closed\n> body\n\n"
+                                        "> [!note]+ Opened\n> body\n\n"
+                                        "```python\n#| fold: true\nprint(1)\n```\n");
+    auto editor = editorWith(note);
+    const qsizetype opened = note.indexOf(QLatin1String("> [!note]+"));
+    const qsizetype code = note.indexOf(QLatin1String("print(1)"));
+    editor->toggleFoldAt(opened);  // folded by hand
+    editor->toggleFoldAt(0);       // opened by hand, though the note asked for closed
+    ASSERT_TRUE(editor->isFoldedAt(opened));
+    ASSERT_FALSE(editor->isFoldedAt(0));
+    const QStringList state = editor->foldState();
+
+    // Another note in between, then the first again with a paragraph above: the
+    // offsets all moved, the lines did not.
+    editor->setNoteText(QStringLiteral("nothing here\n"));
+    EXPECT_TRUE(editor->foldState().isEmpty());
+    const QString edited = QStringLiteral("A new first paragraph.\n\n") + note;
+    editor->setNoteText(edited);
+    editor->setFoldState(state);
+    const qsizetype shift = edited.size() - note.size();
+    EXPECT_FALSE(editor->isFoldedAt(shift)) << "the callout opened by hand stays open";
+    EXPECT_TRUE(editor->isFoldedAt(opened + shift));
+    EXPECT_TRUE(editor->isFoldedAt(code + shift)) << "the fence keeps what its note said";
+    EXPECT_EQ(editor->foldState(), state);
+}
+
+TEST(FoldTest, FoldStateEntriesWithNoMatchingBlockAreDropped)
+{
+    auto editor = editorWith(QStringLiteral("> [!note]+ Gone\n> body\n\n> [!note]+ Kept\n> body\n"));
+    editor->toggleFoldAt(0);
+    editor->toggleFoldAt(editor->noteText().indexOf(QLatin1String("> [!note]+ Kept")));
+    const QStringList state = editor->foldState();
+    ASSERT_EQ(state.size(), 2);
+
+    const QString next = QStringLiteral("> [!note]+ Kept\n> body\n\nA paragraph.\n");
+    editor->setNoteText(next);
+    editor->setFoldState(state);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_EQ(editor->foldState().size(), 1);
+}
+
+TEST(FoldTest, TwoBlocksWithTheSameLineAreToldApartByOrder)
+{
+    const QString note = QStringLiteral("> [!note]+ Same\n> a\n\n> [!note]+ Same\n> b\n");
+    auto editor = editorWith(note);
+    const qsizetype second = note.indexOf(QLatin1String("> [!note]+ Same"), 1);
+    editor->toggleFoldAt(second);
+    const QStringList state = editor->foldState();
+    editor->setNoteText(note);
+    editor->setFoldState(state);
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->isFoldedAt(second));
+}
+
+TEST(FoldTest, FoldStateGivenToABigNoteWaitsForItsParse)
+{
+    QString note = QStringLiteral("> [!warning]+ Open\n> body\n\n");
+    while (note.size() < 200 * 1024)
+        note += QStringLiteral("filler paragraph of text to make the note big\n\n");
+    auto editor = editorWith(QStringLiteral("> [!warning]+ Open\n> body\n"));
+    editor->toggleFoldAt(0);
+    const QStringList state = editor->foldState();
+    ASSERT_EQ(state.size(), 1);
+
+    editor->setNoteText(note); // parsed on the pool: no callout block yet
+    editor->setFoldState(state);
+    EXPECT_EQ(editor->foldState(), state) << "asked before the parse lands, it hands back what it was given";
+    EXPECT_TRUE(QTest::qWaitFor([&] { return editor->isFoldedAt(0); }, 5000))
+        << "folded once its block exists";
+    EXPECT_EQ(editor->foldState(), state);
+}
+
 TEST(FoldTest, ClickingTheCalloutTitleToggles)
 {
     auto editor = editorWith(QStringLiteral("> [!warning]+ Title\n> body\n"));
@@ -4633,6 +4707,22 @@ TEST(NestedCalloutTest, AMinusStartsFoldedAndOpensAgain)
     EXPECT_FALSE(editor->isFoldedAt(inner));
     EXPECT_TRUE(editor->displayText().contains(QLatin1String("Hidden body")));
     EXPECT_EQ(editor->noteText(), note) << "folding is a view, never an edit";
+}
+
+TEST(NestedCalloutTest, AFoldIsRememberedAcrossNotes)
+{
+    const QString note = QStringLiteral(
+        "> [!tip] Outer\n> Outer body.\n> > [!info]- Inner\n> > Hidden body.\n>\n> Back out.\n");
+    auto editor = editorWith(note);
+    const qsizetype inner = nestedCalloutStart(note);
+    ASSERT_GE(inner, 0);
+    editor->toggleFoldAt(inner);
+    ASSERT_FALSE(editor->isFoldedAt(inner));
+    const QStringList state = editor->foldState();
+    editor->setNoteText(note);
+    ASSERT_TRUE(editor->isFoldedAt(inner));
+    editor->setFoldState(state);
+    EXPECT_FALSE(editor->isFoldedAt(inner));
 }
 
 TEST(NestedCalloutTest, APlusStartsOpenAndFolds)

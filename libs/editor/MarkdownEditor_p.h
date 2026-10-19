@@ -898,6 +898,9 @@ struct MarkdownEditor::Private {
     /// its source asked for, so folding survives a reparse without the
     /// decorations having to carry it.
     QHash<qsizetype, bool> m_folds;
+    /// A setFoldState() that arrived before the pool parse it needs; applied
+    /// when the parse of the current text is adopted.
+    QStringList m_pendingFolds;
     mutable qreal m_blockSpacing = 0; ///< memoised, cleared with the theme
     qsizetype m_cursor = 0;
     qsizetype m_anchor = 0;

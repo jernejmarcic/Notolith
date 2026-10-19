@@ -721,6 +721,7 @@ void MarkdownEditor::setNoteText(const QString &text)
     d->m_pdfSlideIndex.clear();
     d->m_pdfNavLast.clear();
     d->m_folds.clear();
+    d->m_pendingFolds.clear();
     d->m_queryCollapsed.clear();
     d->m_queryNameSort.clear();
     // A big note is shown before it is understood: its text goes up as plain
@@ -1303,6 +1304,8 @@ void MarkdownEditor::adoptParse()
     // The buffer moved on while we were parsing: go round again.
     if (d->m_parsedVersion != d->m_textVersion)
         startParse();
+    else if (!d->m_pendingFolds.isEmpty())
+        applyFoldState(std::exchange(d->m_pendingFolds, {}));
 }
 
 void MarkdownEditor::startParse()

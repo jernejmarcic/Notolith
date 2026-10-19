@@ -6607,6 +6607,59 @@ TEST_F(WindowTest, AnIconSetFromTheTreeSurvivesRestartAndRename)
                      .contains(QStringLiteral("icons.json")));
 }
 
+TEST_F(WindowTest, FoldsAreRememberedPerNoteAcrossSwitchesRestartsAndRenames)
+{
+    PrivateConfig config;
+    write(QStringLiteral("A.md"), "intro\n\n> [!note]+ Fold me\n> body\n\n> [!warning]- Open me\n> body\n");
+    write(QStringLiteral("B.md"), "> [!note]+ Fold me\n> other note, same title\n");
+    const QString noteA = path(QStringLiteral("A.md"));
+    const auto foldAt = [](MarkdownEditor *editor, const QString &line) {
+        return editor->noteText().indexOf(line);
+    };
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(noteA);
+        MarkdownEditor *editor = window.editor();
+        const qsizetype fold = foldAt(editor, QStringLiteral("> [!note]+ Fold me"));
+        const qsizetype open = foldAt(editor, QStringLiteral("> [!warning]- Open me"));
+        editor->toggleFoldAt(fold);
+        editor->toggleFoldAt(open);
+        ASSERT_TRUE(editor->isFoldedAt(fold));
+        ASSERT_FALSE(editor->isFoldedAt(open));
+
+        window.openNote(path(QStringLiteral("B.md"))); // same pane
+        EXPECT_FALSE(window.editor()->isFoldedAt(0)) << "B has its own folds";
+        for (MarkdownEditor *other : window.findChildren<MarkdownEditor *>())
+            EXPECT_FALSE(other->noteText().startsWith(QStringLiteral("intro"))) << "A is not kept in another tab";
+        window.openNote(noteA);
+        EXPECT_TRUE(window.editor()->isFoldedAt(fold));
+        EXPECT_FALSE(window.editor()->isFoldedAt(open));
+        window.close(); // saves where every open note was left
+    }
+    {
+        MainWindow window; // a restart on the same vault
+        window.openVault(dir.path());
+        window.openNote(noteA);
+        const qsizetype fold = foldAt(window.editor(), QStringLiteral("> [!note]+ Fold me"));
+        const qsizetype open = foldAt(window.editor(), QStringLiteral("> [!warning]- Open me"));
+        EXPECT_TRUE(window.editor()->isFoldedAt(fold));
+        EXPECT_FALSE(window.editor()->isFoldedAt(open));
+
+        // Renamed while no tab holds it: the remembered state follows the file.
+        window.openNote(path(QStringLiteral("B.md")));
+        bool renamed = false;
+        QString error;
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                              Q_ARG(QString, noteA), Q_ARG(bool, false),
+                                              Q_ARG(QString, QStringLiteral("Renamed")), Q_ARG(QString *, &error)));
+        ASSERT_TRUE(renamed);
+        window.openNote(path(QStringLiteral("Renamed.md")));
+        EXPECT_TRUE(window.editor()->isFoldedAt(fold));
+        EXPECT_FALSE(window.editor()->isFoldedAt(open));
+    }
+}
+
 TEST_F(WindowTest, AnIconShowsOnTheTabAndGoesWhenTheToggleIsOff)
 {
     PrivateConfig config;

@@ -468,6 +468,23 @@ which moves with the text; a whole-text replacement (the other tab's undo)
 drops it, as the callouts may be gone.
 `CalloutTitle.cpp`; tests `CalloutTitleTest.*`.
 
+### Folds are remembered per note
+
+What was folded or opened by hand (a callout, a nested callout, a `#| fold`
+code block, the properties table) comes back when the note does, after a
+switch in the same pane and after a restart, as Obsidian keeps a file's folds.
+`MarkdownEditor::foldState()` gives one entry per foldable block - the text of
+the line it starts on, how many earlier foldable lines read the same, and
+which way it was set - so an edit above a fold, or a different offset in
+another tab, does not lose it; `setFoldState()` puts it back after
+`setNoteText()` and drops what no longer matches. A note too big to parse at
+once takes it when the parse lands. `MainWindow` keeps it with the note's
+caret and scroll in `Settings` (`state.notePositions`, `vaults.ini`, last 50
+notes, percent-encoded so a line's commas and tabs cannot split an entry):
+written on leaving the note and on closing the window, never per keystroke,
+moved with a rename or move and forgotten on delete or merge. Tests
+`FoldTest.FoldState*`, `WindowTest.FoldsAreRemembered*`.
+
 ## Embedded notes
 
 `![[Note]]`, `![[Note#Heading]]` and `![[Note#^id]]` draw the note, section or
