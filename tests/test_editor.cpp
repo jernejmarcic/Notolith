@@ -2343,7 +2343,12 @@ TEST(FoldTest, TheFoldCommandsToggleTheProperties)
 
 TEST(FoldTest, FoldAllAndUnfoldAllOnAMegabyteNoteStayUnderBudget)
 {
-    const QString note = generateNote(1024);
+    // Every section's list gets a parent with children, so fold-all pays for
+    // list folds (a hidden range and an invalidated block each) as well as
+    // for headings.
+    QString note = generateNote(1024);
+    note.replace(QLatin1String("- a list item\n- another one\n"),
+                 QLatin1String("- a list item\n  - a child\n  - another child\n- another one\n"));
     auto editor = parsedEditorWith(note);
     ASSERT_TRUE(editor) << "the parse never came back";
     editor->setCursorOffset(note.size() / 2);
@@ -2360,7 +2365,8 @@ TEST(FoldTest, FoldAllAndUnfoldAllOnAMegabyteNoteStayUnderBudget)
         }, 3, 50.0);
     };
     const double foldAll = timeOf("editor:fold-all", "editor:unfold-all");
-    ASSERT_GT(editor->foldState().size(), 1000) << "every heading and list parent is folded";
+    const qsizetype headings = note.count(QLatin1String("## Section "));
+    ASSERT_GE(editor->foldState().size(), 2 * headings) << "every heading and list parent is folded";
     QElapsedTimer clock;
     clock.start();
     const qsizetype remembered = editor->foldState().size();

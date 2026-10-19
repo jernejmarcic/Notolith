@@ -2129,8 +2129,9 @@ Shared/<title>.md.
         app.json import, perf rows (fold-all 1 MB < 50 ms), window test that a
         remembered heading fold around the remembered caret stays folded.
         Measured: fold-all 1.7 ms, unfold-all 1.3 ms on 1 MB (5,479 folds).
-- [ ] Perf: list-item folds at 1 MB are unmeasured (generateNote has no
-      nested lists); add nested lists to the bench note.
+- [x] Perf: list-item folds at 1 MB are unmeasured (generateNote has no
+      nested lists); add nested lists to the bench note. Done: 10 958 folds
+      (half list parents), fold-all 1.81 ms, unfold-all 1.52 ms.
 - [ ] Confirm Obsidian's app.json keys foldHeading / foldIndent against a
       vault that toggled them (only seen in a plugin's config proxy).
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):

@@ -53,8 +53,8 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | source-mode table Tab, 1 MB | 2.0 ms (2026-10-16) | - |
 | resize, text width kept / rewrapped, 1 MB | 0.24 / 1.36 ms (2026-10-16) | - |
 | fold a callout, 1 MB | 0.29 ms (2026-10-16) | - |
-| fold all / unfold all headings and list parents, 1 MB (5 479 folds) | 1.66 / 1.33 ms (2026-10-19) | 50 ms |
-| `foldState()` after fold all, 1 MB (5 479 folds; only asked on leaving the note) | 1.17 ms (2026-10-19) | 50 ms |
+| fold all / unfold all headings and list parents, 1 MB (10 958 folds: 5 479 headings, 5 479 list parents) | 1.81 / 1.52 ms (2026-10-19) | 50 ms |
+| `foldState()` after fold all, 1 MB (10 958 folds; only asked on leaving the note) | 2.18 ms (2026-10-19) | 50 ms |
 | keystroke on a heading with everything folded, 200 kB | 0.15 ms (2026-10-19) | 8 ms |
 | keystroke in a code block, 100 / 1 000 / 5 000 lines | 1.10 / 1.10 / 1.16 ms | 8 ms |
 | keystroke in a cell of a 50-row HTML table (2026-10-02, busy machine) | 1.33 ms | 8 ms |
