@@ -2103,7 +2103,7 @@ Shared/<title>.md.
       next note). Key by note path + heading/line text, not offset.
       Lane foldmemory: state.notePositions (caret + scroll + folds, 50 notes),
       follows renames, dropped on delete.
-- [ ] Fold headings and list items, like Obsidian (found by lane
+- [x] Fold headings and list items, like Obsidian (found by lane
       foldmemory: only callouts, `:::`, `#| fold` code and properties fold
       today). Obsidian: "Fold heading" / "Fold indent" settings, gutter arrow,
       fold all / unfold all / toggle fold commands, reading view too. Sol
@@ -2113,11 +2113,16 @@ Shared/<title>.md.
         hidden blocks skipped everywhere, arrow + ellipsis, caret/find
         reveal, undo/external-edit keep folds, per-note memory. Restore order
         swapped in MainWindow (caret, then folds) by the coordinator
-  - [ ] Lane B: editor:toggle-fold / fold-all / unfold-all / fold-more /
+  - [x] Lane B: editor:toggle-fold / fold-all / unfold-all / fold-more /
         fold-less / toggle-fold-properties (no default keys, work in
         Reading), Settings > Editor "Fold heading" / "Fold indent" (on) +
         app.json import, perf rows (fold-all 1 MB < 50 ms), window test that a
-        remembered heading fold around the remembered caret stays folded
+        remembered heading fold around the remembered caret stays folded.
+        Measured: fold-all 1.7 ms, unfold-all 1.3 ms on 1 MB (5,479 folds).
+- [ ] Perf: list-item folds at 1 MB are unmeasured (generateNote has no
+      nested lists); add nested lists to the bench note.
+- [ ] Confirm Obsidian's app.json keys foldHeading / foldIndent against a
+      vault that toggled them (only seen in a plugin's config proxy).
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
