@@ -581,6 +581,8 @@ struct MarkdownEditor::PdfPageCacheEntry {
     QPixmap image;
     bool pending = true;
     quint64 generation = 0;
+    bool zoomed = false; ///< a render beyond the cell's width, for the zoom budget
+    qint64 bytes = 0;
 };
 
 /// A `.tex` compile, cached by the file's own path and mtime - mirrors
@@ -703,6 +705,7 @@ struct MarkdownEditor::EmbedDrag {
     QPoint startPoint;
     QPoint lastPoint;
     bool moved = false;
+    bool pdf = false; ///< pans a zoomed PDF page instead of feeding a hooked embed
 };
 
 struct MarkdownEditor::Snapshot {
@@ -750,6 +753,32 @@ struct MarkdownEditor::Private {
         int direction = 0;
     };
     QHash<qsizetype, PdfNavUse> m_pdfNavLast;
+    /// A PDF embed's zoom and pan, by block start like m_pdfSlideIndex and
+    /// remapped with it by shiftRanges; empty while nothing is zoomed.
+    /// ponytail: one state per embed, so every page of a column or grid
+    /// shows the same corner; per-cell state if anyone asks.
+    struct PdfZoom {
+        qreal zoom = 1;
+        QPointF pan; ///< the visible window's top-left, in the unzoomed cell's pixels
+    };
+    QHash<qsizetype, PdfZoom> m_pdfZoom;
+    QTimer m_pdfZoomSettle; ///< the hi-res render waits for the wheel to stop
+    /// Zoomed rasters in delivery order, and what they weigh: past the
+    /// budget the oldest leave m_pdfPageCache and a page falls back to its
+    /// base raster. ponytail: FIFO over zoomed keys only, base rasters stay
+    /// unbounded as before; a QCache over the whole cache if they get a budget.
+    QList<QString> m_pdfZoomKeys;
+    qint64 m_pdfZoomBytes = 0;
+    qint64 m_pdfZoomBudget = qint64(128) << 20;
+    /// The last press on an unzoomed page: that click reveals the embed's
+    /// source, and a double click to zoom puts the caret back from here.
+    struct PdfPress {
+        QPoint point;
+        qsizetype cursor = -1;
+        qsizetype anchor = 0;
+        int scroll = 0;
+    };
+    PdfPress m_pdfPress;
     std::function<qint64()> m_pdfNavNow = [] { return QDeadlineTimer::current().deadline(); };
     QHash<QString, TexCacheEntry> m_texCache; ///< "path|mtime" -> its compile
     quint64 m_texGeneration = 0;

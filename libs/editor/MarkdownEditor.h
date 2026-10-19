@@ -715,6 +715,9 @@ public:
         int slideCount = 0;
         QRectF cellRect; ///< slides layout: the slide and the drawn Next button, viewport coordinates
         QRectF nextRect;
+        qreal zoom = 1;  ///< 1 - 4, shared by every page of the embed (PDF zoom, see EDITOR.md)
+        QPointF pan;     ///< the visible window's top-left, in the unzoomed cell's pixels
+        int renderedWidth = 0; ///< pixel width of the first page's raster, 0 while it renders
     };
     PdfEmbedInfo pdfEmbedInfoAt(qsizetype offset) const;
     /// +1 / -1: what a click on the slide layout's next/previous control
@@ -724,6 +727,9 @@ public:
     /// For tests: the clock (milliseconds) the slide controls' one-second
     /// "last button used" window reads, so a test need not sleep.
     void setPdfNavClock(std::function<qint64()> nowMs);
+    /// For tests: the zoomed rasters' memory budget (bytes) and what they hold now.
+    void setPdfZoomCacheBudget(qint64 bytes);
+    qint64 pdfZoomCacheBytes() const;
 
     /// For the tests: whether the block containing `offset` rendered as a
     /// file card (icon, name, size) - the fallback for a binary file, or any
@@ -1028,6 +1034,7 @@ protected:
     /// Selects the word around `offset`, for a double-click or a long press.
     void selectWordAt(qsizetype offset);
     void wheelEvent(QWheelEvent *event) override;
+    bool viewportEvent(QEvent *event) override; ///< a touchpad's pinch zooms a PDF page
     void focusInEvent(QFocusEvent *event) override;
     void focusOutEvent(QFocusEvent *event) override;
     void inputMethodEvent(QInputMethodEvent *event) override;
@@ -1390,6 +1397,22 @@ private:
     /// A hand where a click would step, an arrow where it is swallowed,
     /// nothing where the embed leaves the pointer to the usual rules.
     std::optional<Qt::CursorShape> pdfNavCursorAt(const QPoint &point) const;
+    /// PDF zoom (PdfEmbedBlock.cpp). The page cell under `point` (its index,
+    /// else -1), with the block's index and `point` in block-local space.
+    int pdfCellAt(const QPoint &point, qsizetype *block, QPointF *blockLocal) const;
+    /// Multiplies the zoom of the page under `point` by `factor`, keeping
+    /// the content under the pointer still; false when no page is there.
+    bool zoomPdfAt(const QPoint &point, qreal factor);
+    /// Zoom and pan inputs: each returns whether it took the event.
+    bool wheelPdfCell(QWheelEvent *event);
+    bool pressPdfCell(const QPoint &point, bool touch);
+    bool doubleClickPdfCell(const QPoint &point);
+    void panPdfEmbed(qsizetype block, const QPointF &delta);
+    bool resetPdfZoom();
+    /// The settle timer's work: the zoomed rasters the visible pages want.
+    void requestPdfZoomRenders();
+    /// Ends a block's layout so the next updateLayout() builds it again.
+    void invalidatePdfBlock(qsizetype block);
     /// Cached page count and per-page size, keyed by path and mtime - a
     /// metadata read, not a render, so this runs on the UI thread; PdfPage
     /// itself still opens the file at most once per (path, mtime) per

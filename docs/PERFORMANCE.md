@@ -1132,6 +1132,11 @@ Each of these produced a wrong number at least once in this project.
   offsets stored relative to something, which is a bigger change than the
   numbers ask for yet.
 - The Wayland buffer measurement, above.
+- PDF page rasters in an editor (`m_pdfPageCache`) are never evicted. Zooming a
+  PDF embed adds rasters up to 4x the width, so those alone are bounded (128 MB,
+  oldest out first, `PdfEmbedBlock.cpp`); a budget over the ordinary ones would
+  want a `QCache`, and a 100-page column re-rendering as it scrolls is the
+  cost to weigh. Zoom itself is a repaint of the held raster, no layout.
 - Sidebar construction is 7.4 ms of the 15.4 ms constructor, and it is on the
   path to first paint.
 - The process's first window is 36 ms to its first frame: fonts (about 5 ms,
