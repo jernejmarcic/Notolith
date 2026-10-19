@@ -2080,7 +2080,7 @@ Shared/<title>.md.
       warning failed DemoVaultTest.EveryCommandRunsWithoutWarnings.
 - [ ] Fable final check 2026-10-19 (merged batch at fb30ff6). Editor lane
       "reviewfix":
-  - [ ] Task box regex admits an astral code point: `- [😀] text` is a task
+  - [ ] Task box regex admits an astral code point: `- [<U+1F600>] text` (an emoji in the box) is a task
         and a click writes `- [x]] text` (Parser.cpp:171, :1602,
         EditingCommands.cpp:116); exclude U+10000-10FFFF from the box class.
   - [ ] PDF zoom budget leaks when setFeatures clears the raster cache
