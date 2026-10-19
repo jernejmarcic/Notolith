@@ -267,6 +267,9 @@ public:
         QPageLayout::Orientation orientation = QPageLayout::Portrait;
         qreal marginMillimetres = 25.4; ///< "Default", about an inch
         int downscalePercent = 100;
+        /// Paper is white, so the light theme unless a caller passes its own
+        /// (the person's formatting colours on top of it).
+        std::optional<Theme> theme;
     };
     /// Renders `text` in reading view, light theme, onto paper, page by page.
     /// A page breaks between blocks; only a block taller than a page is cut.
@@ -1773,6 +1776,8 @@ private:
     /// dim it the way Obsidian does. Cached per parse: the resolver reaches
     /// the index, and a note full of links is laid out on every keystroke.
     bool isUnresolvedLink(const QString &target) const;
+    /// The colour a link to `target` is drawn in: unresolved, external or internal.
+    QColor linkColourFor(const QString &target) const;
     bool resolvesToNothing(const QString &target) const;
     qsizetype blockAt(qsizetype sourceOffset) const;
     qsizetype offsetAt(const QPoint &viewportPoint) const;

@@ -6,6 +6,8 @@ add_library(noteAppC_theme STATIC
     Scheme.cpp
     Scheme.h
     CalloutStyle.cpp
+    FormatColours.cpp
+    FormatColours.h
     ConfigFile.cpp
     ConfigFile.h
     CalloutStyle.h

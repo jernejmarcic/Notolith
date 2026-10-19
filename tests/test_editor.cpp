@@ -7812,3 +7812,235 @@ TEST(BracketStyleTest, SwitchingModeInANoteWithFootnotesKeepsItsColours)
         EXPECT_EQ(colourOf(*editor, QStringLiteral("[bare]"), 2), QColor(0xff, 0, 0)) << int(mode);
     }
 }
+
+// --- formatting colours -------------------------------------------------------
+
+namespace {
+
+/// An editor on a theme with `tokens` pinned, its first block (where the
+/// caret starts, so its markers show) a throwaway: tests read the blocks after.
+std::unique_ptr<MarkdownEditor> editorOn(const QString &text, const QHash<QString, QString> &tokens)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin();
+    theme.setTokens(tokens);
+    editor->setTheme(theme);
+    editor->resize(900, 600);
+    editor->setNoteText(QStringLiteral("start\n\n") + text);
+    editor->grab(); // lays the visible blocks out
+    return editor;
+}
+
+QTextCharFormat formatOf(const MarkdownEditor &editor, const QString &needle, int into = 1)
+{
+    const qsizetype at = editor.noteText().indexOf(needle);
+    EXPECT_GE(at, 0) << needle.toStdString();
+    return editor.formatAt(at + into);
+}
+
+} // namespace
+
+TEST(FormatColoursTest, UnsetBoldLeavesNoForeground)
+{
+    // A foreground on a bold range would override the block's own colour:
+    // bold in a callout or a heading would snap to the text colour.
+    auto editor = editorOn(QStringLiteral("Some **bold** and *italic* and ~~gone~~.\n"), {});
+    for (const char *word : {"bold", "italic", "gone"})
+        EXPECT_FALSE(formatOf(*editor, QString::fromLatin1(word)).hasProperty(QTextFormat::ForegroundBrush)) << word;
+    EXPECT_GE(formatOf(*editor, QStringLiteral("bold")).fontWeight(), int(QFont::Bold));
+}
+
+TEST(FormatColoursTest, BoldItalicHeadingQuoteTokensTint)
+{
+    auto editor = editorOn(QStringLiteral("Some **bold** and *ital* and ***both***\n\n## Head two\n\n> quoted\n\n# Head one\n"),
+                           {{QStringLiteral("--bold-color"), QStringLiteral("#ff0000")},
+                            {QStringLiteral("--italic-color"), QStringLiteral("#00ff00")},
+                            {QStringLiteral("--h2-color"), QStringLiteral("#0000ff")},
+                            {QStringLiteral("--blockquote-color"), QStringLiteral("#123456")}});
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("bold")), QColor(0xff, 0, 0));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("ital")), QColor(0, 0xff, 0));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("both")), QColor(0xff, 0, 0)) << "bold italic takes the bold colour";
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("Head two")), QColor(0, 0, 0xff));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("quoted")), QColor(0x12, 0x34, 0x56));
+    EXPECT_FALSE(formatOf(*editor, QStringLiteral("Head one")).hasProperty(QTextFormat::ForegroundBrush))
+        << "h1 has no colour set";
+}
+
+TEST(FormatColoursTest, AWordInsideAColouredHeadingKeepsItsOwnColour)
+{
+    auto editor = editorOn(QStringLiteral("## Head **loud** [[Missing]]\n"),
+                           {{QStringLiteral("--h2-color"), QStringLiteral("#0000ff")},
+                            {QStringLiteral("--bold-color"), QStringLiteral("#ff0000")}});
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("Head")), QColor(0, 0, 0xff));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("loud")), QColor(0xff, 0, 0));
+}
+
+TEST(FormatColoursTest, InternalExternalAndUnresolvedLinksDiffer)
+{
+    const QHash<QString, QString> tokens{{QStringLiteral("--link-color"), QStringLiteral("#010101")},
+                                         {QStringLiteral("--link-external-color"), QStringLiteral("#020202")},
+                                         {QStringLiteral("--link-unresolved-color"), QStringLiteral("#030303")}};
+    auto editor = std::make_unique<MarkdownEditor>();
+    Theme theme = Theme::builtin();
+    theme.setTokens(tokens);
+    editor->setTheme(theme);
+    editor->resize(900, 600);
+    editor->setLinkResolver([](const QString &target) {
+        return target == QStringLiteral("Real") ? QStringLiteral("/vault/Real.md") : QString();
+    });
+    editor->setNoteText(QStringLiteral("start\n\nSee [[Real]], [x](https://a.example), [[Missing]].\n"));
+    editor->grab();
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("[[Real]]"), 3), QColor(1, 1, 1));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("[x](https"), 1), QColor(2, 2, 2));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("[[Missing]]"), 3), QColor(3, 3, 3));
+}
+
+TEST(FormatColoursTest, UnderlineLineColourIsNative)
+{
+    auto editor = editorOn(QStringLiteral("a <u>under</u> b\n"),
+                           {{QStringLiteral("--underline-decoration-color"), QStringLiteral("#ff0000")},
+                            {QStringLiteral("--underline-color"), QStringLiteral("#00ff00")}});
+    const QTextCharFormat format = formatOf(*editor, QStringLiteral("under"));
+    EXPECT_EQ(format.underlineStyle(), QTextCharFormat::SingleUnderline);
+    EXPECT_EQ(format.underlineColor(), QColor(0xff, 0, 0));
+    EXPECT_EQ(format.foreground().color(), QColor(0, 0xff, 0));
+}
+
+namespace {
+
+/// The most pixels of `colour` in one row of the editor's picture.
+int widestRun(const QImage &shot, const QColor &colour)
+{
+    int best = 0;
+    for (int y = 0; y < shot.height(); ++y) {
+        int count = 0;
+        for (int x = 0; x < shot.width(); ++x)
+            count += QColor(shot.pixel(x, y)) == colour;
+        best = qMax(best, count);
+    }
+    return best;
+}
+
+} // namespace
+
+TEST(FormatColoursTest, StrikeLineColourIsPaintedNotQts)
+{
+    const QString note = QStringLiteral("Some ~~struck words here~~ and <del>deleted too</del>\n\n- [x] done task\n");
+    auto plain = editorOn(note, {});
+    EXPECT_TRUE(formatOf(*plain, QStringLiteral("struck")).fontStrikeOut());
+    EXPECT_EQ(widestRun(plain->viewport()->grab().toImage(), QColor(0xff, 0, 0)), 0);
+
+    auto editor = editorOn(note, {{QStringLiteral("--strikethrough-decoration-color"), QStringLiteral("#ff0000")}});
+    for (const char *word : {"struck", "deleted", "done task"}) {
+        const QTextCharFormat format = formatOf(*editor, QString::fromLatin1(word));
+        EXPECT_FALSE(format.fontStrikeOut()) << word << ": Qt would draw it in the text colour";
+        EXPECT_TRUE(format.hasProperty(QTextFormat::UserProperty + 1)) << word << ": the line colour, for paintStrikeLines";
+    }
+    // "struck words here" is some 100 px of text, struck through in one line.
+    EXPECT_GE(widestRun(editor->viewport()->grab().toImage(), QColor(0xff, 0, 0)), 60);
+}
+
+TEST(FormatColoursTest, StrikeTextColourAppliesWithoutALineColour)
+{
+    auto editor = editorOn(QStringLiteral("~~gone~~\n"), {{QStringLiteral("--strikethrough-color"), QStringLiteral("#00ff00")}});
+    const QTextCharFormat format = formatOf(*editor, QStringLiteral("gone"));
+    EXPECT_EQ(format.foreground().color(), QColor(0, 0xff, 0));
+    EXPECT_TRUE(format.fontStrikeOut());
+}
+
+TEST(FormatColoursTest, TheOtherKindsReadTheirOwnTokens)
+{
+    auto editor = editorOn(QStringLiteral("a ==marked== `code` #tag [^1] <mark>m</mark>\n\n- [x] done\n\n[^1]: n\n"),
+                           {{QStringLiteral("--text-highlight-bg"), QStringLiteral("#111111")},
+                            {QStringLiteral("--text-highlight-fg"), QStringLiteral("#222222")},
+                            {QStringLiteral("--code-normal"), QStringLiteral("#333333")},
+                            {QStringLiteral("--code-background"), QStringLiteral("#444444")},
+                            {QStringLiteral("--tag-color"), QStringLiteral("#555555")},
+                            {QStringLiteral("--checklist-done-color"), QStringLiteral("#666666")}});
+    const QTextCharFormat mark = formatOf(*editor, QStringLiteral("marked"));
+    EXPECT_EQ(mark.background().color(), QColor(0x11, 0x11, 0x11));
+    EXPECT_EQ(mark.foreground().color(), QColor(0x22, 0x22, 0x22));
+    const QTextCharFormat code = formatOf(*editor, QStringLiteral("code"));
+    EXPECT_EQ(code.foreground().color(), QColor(0x33, 0x33, 0x33));
+    EXPECT_EQ(code.background().color(), QColor(0x44, 0x44, 0x44));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("#tag")), QColor(0x55, 0x55, 0x55));
+    EXPECT_EQ(formatOf(*editor, QStringLiteral("<mark>m"), 6).background().color(), QColor(0x11, 0x11, 0x11));
+    EXPECT_EQ(colourOf(*editor, QStringLiteral("done"), 1), QColor(0x66, 0x66, 0x66));
+}
+
+TEST(FormatColoursTest, RecolourKeepsHeightsScrollAndLaysOutOnlyTheScreen)
+{
+    QString note;
+    for (int i = 0; i < 1500; ++i)
+        note += QStringLiteral("Paragraph %1 with **bold** words that run on for a good while, long enough to wrap.\n\n").arg(i);
+    ASSERT_GT(note.size(), 120000);
+    auto editor = parsedEditorWith(note);
+    ASSERT_NE(editor, nullptr);
+    editor->setTheme(Theme::builtin()); // a real theme to start from, not the default-constructed one
+    editor->grab();
+    auto *bar = editor->verticalScrollBar();
+    bar->setValue(bar->maximum() / 2);
+    editor->grab();
+    // Estimates settle into measured heights as blocks around the view get laid
+    // out; a recolour from a settled state must not move anything.
+    qreal height = 0;
+    for (int round = 0; round < 20 && editor->documentHeight() != height; ++round) {
+        height = editor->documentHeight();
+        editor->setTheme(Theme::builtin());
+        editor->grab();
+    }
+    const int scroll = bar->value();
+    const quint64 before = editor->layoutCount();
+    ASSERT_GT(scroll, 1000);
+
+    Theme theme = Theme::builtin();
+    theme.setToken(QStringLiteral("--bold-color"), QStringLiteral("#ff0000"));
+    editor->setTheme(theme);
+    editor->grab();
+    EXPECT_EQ(bar->value(), scroll);
+    EXPECT_EQ(editor->documentHeight(), height);
+    EXPECT_GT(editor->layoutCount(), before) << "the blocks on screen are drawn again, in the new colour";
+    EXPECT_LT(editor->layoutCount() - before, 100u) << "not the whole note";
+    int red = 0;
+    for (int i = 600; i < 900; ++i)
+        red += colourOf(*editor, QStringLiteral("Paragraph %1 with **bold**").arg(i), 22) == QColor(0xff, 0, 0);
+    EXPECT_GE(red, 3) << "the paragraphs on screen are in the new colour";
+
+    // A size is not a colour: that still lays everything out again.
+    theme.setToken(QStringLiteral("--font-text-size"), QStringLiteral("24"));
+    editor->setTheme(theme);
+    editor->grab();
+    EXPECT_NE(editor->documentHeight(), height);
+}
+
+TEST(FormatColoursTest, NothingIsWrittenToTheNote)
+{
+    const QString note = QStringLiteral("start\n\nSome **bold** and ~~gone~~ and <u>u</u>.\n");
+    auto editor = editorWith(note);
+    Theme theme = Theme::builtin();
+    theme.setTokens({{QStringLiteral("--bold-color"), QStringLiteral("#ff0000")},
+                     {QStringLiteral("--strikethrough-decoration-color"), QStringLiteral("#00ff00")},
+                     {QStringLiteral("--underline-decoration-color"), QStringLiteral("#0000ff")}});
+    editor->setTheme(theme);
+    editor->grab();
+    EXPECT_EQ(editor->noteText(), note);
+    QTest::keyClick(editor.get(), Qt::Key_X);
+    editor->setTheme(Theme::builtin());
+    editor->grab();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("x") + note);
+}
+
+TEST(FormatColoursTest, PdfExportTakesTheCallersTheme)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    MarkdownEditor::PdfOptions options;
+    options.theme = Theme::builtin(Theme::Mode::Light);
+    options.theme->setToken(QStringLiteral("--h1-color"), QStringLiteral("#ff0000"));
+    QString error;
+    // Colours inside a PDF cannot be read back without a rasteriser; the
+    // plumbing is the editor's own formats, tested above.
+    EXPECT_TRUE(MarkdownEditor::exportPdf(dir.filePath(QStringLiteral("a.pdf")), QStringLiteral("# Red\n\n**b**\n"),
+                                          QStringLiteral("t"), {}, options, &error))
+        << qPrintable(error);
+}

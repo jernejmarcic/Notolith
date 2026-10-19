@@ -1,5 +1,7 @@
 #include "Settings.h"
 
+#include "FormatColours.h"
+
 #include <QColor>
 #include <QDir>
 #include <QFile>
@@ -127,6 +129,11 @@ const QVariantMap &defaults()
         {QStringLiteral("state.recentFiles"), QStringList()},
         {QStringLiteral("state.notePositions"), QStringList()},
     };
+    // Formatting colours: empty follows the theme (FormatColours.h).
+    for (const FormatRow &row : formatRows())
+        for (const FormatColour &colour : row.colours)
+            for (const bool dark : {true, false})
+                map.insert(formatColourKey(colour, dark), QString());
     // Core plugins: every feature on until a person or the vault says not.
     for (const Settings::Feature &feature : Settings::features())
         // Off until asked for: another program's code, and a "/" menu that

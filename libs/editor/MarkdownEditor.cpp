@@ -1,6 +1,7 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
+#include "FormatColours.h"
 #include "Frontmatter.h"
 
 #include "Icons.h"
@@ -623,11 +624,18 @@ const QList<Heading> &MarkdownEditor::headings() const
 
 void MarkdownEditor::setTheme(const Theme &theme)
 {
+    const bool recolour = d->m_theme.sameExcept(theme, formatColourTokens());
     d->m_theme = theme;
     d->m_themeSyntax = theme.syntaxStyles();
     d->m_code.setTheme(theme);
     if (d->m_findBar)
         d->m_findBar->setTheme(theme);
+    if (recolour) {
+        // Only how kinds of text are coloured: keep every height and the
+        // scroll position, and lay out again just what is on screen.
+        refreshSpelling();
+        return;
+    }
     d->m_lineHeights.clear();
     d->m_blockSpacing = 0;
     invalidateLayouts();
@@ -1202,8 +1210,10 @@ void sortDecorations(Decorations &decorations)
               });
     std::sort(decorations.syntax.begin(), decorations.syntax.end(),
               [](const Range &l, const Range &r) { return l.start < r.start; });
-    std::sort(decorations.styles.begin(), decorations.styles.end(),
-              [](const StyleSpan &l, const StyleSpan &r) { return l.range.start < r.range.start; });
+    // Stable: `***both***` is a bold and an italic range from one offset, and
+    // which colour wins depends on their order (docs/STYLING.md).
+    std::stable_sort(decorations.styles.begin(), decorations.styles.end(),
+                     [](const StyleSpan &l, const StyleSpan &r) { return l.range.start < r.range.start; });
     // The parser's (Markdown entities) and the HTML pass's, appended after.
     std::sort(decorations.substitutions.begin(), decorations.substitutions.end(),
               [](const Substitution &l, const Substitution &r) { return l.range.start < r.range.start; });
@@ -1558,11 +1568,18 @@ QColor MarkdownEditor::linkColourAt(qsizetype sourceOffset) const
     for (const StyleSpan &span : d->m_decorations.styles) {
         if (span.kind != StyleSpan::Kind::Link || !span.range.contains(sourceOffset))
             continue;
-        return d->m_theme.color(isUnresolvedLink(span.payload)
-                                 ? QStringLiteral("--link-unresolved-color")
-                                 : QStringLiteral("--text-accent"));
+        return linkColourFor(span.payload);
     }
     return {};
+}
+
+QColor MarkdownEditor::linkColourFor(const QString &target) const
+{
+    if (isUnresolvedLink(target))
+        return d->m_theme.color(QStringLiteral("--link-unresolved-color"));
+    const bool external = target.contains(QLatin1String("://")) || target.startsWith(QLatin1String("mailto:"));
+    return d->m_theme.color(external ? QStringLiteral("--link-external-color")
+                                     : QStringLiteral("--link-color"));
 }
 
 bool MarkdownEditor::isUnresolvedLink(const QString &target) const
@@ -2029,17 +2046,59 @@ void MarkdownEditor::contextMenuEvent(QContextMenuEvent *event)
         menu->exec(event->globalPos());
 }
 
+void strikeThrough(QTextCharFormat &format, const Theme &theme)
+{
+    const QColor text = theme.color(QStringLiteral("--strikethrough-color"));
+    const QColor line = theme.color(QStringLiteral("--strikethrough-decoration-color"));
+    if (text.isValid())
+        format.setForeground(text);
+    if (line.isValid())
+        format.setProperty(kStrikeLineProperty, line);
+    else
+        format.setFontStrikeOut(true);
+}
+
+void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin)
+{
+    const QFontMetricsF metrics(layout.font());
+    painter.save();
+    for (const QTextLayout::FormatRange &range : layout.formats()) {
+        const QVariant line = range.format.property(kStrikeLineProperty);
+        if (!line.isValid())
+            continue;
+        // The stroke's edges on whole pixels, like Qt's own strikeout, or the
+        // line is a blur of two rows.
+        const qreal width = qMax<qreal>(1, std::round(metrics.lineWidth()));
+        painter.setPen(QPen(line.value<QColor>(), width));
+        const int end = range.start + range.length;
+        for (QTextLine row = layout.lineForTextPosition(range.start); row.isValid() && row.textStart() < end;
+             row = layout.lineAt(row.lineNumber() + 1)) {
+            const qreal from = row.cursorToX(qMax(range.start, row.textStart()));
+            const qreal to = row.cursorToX(qMin(end, row.textStart() + row.textLength()));
+            const qreal y = std::round(origin.y() + row.y() + row.ascent() - metrics.strikeOutPos() - width / 2) + width / 2;
+            painter.drawLine(QPointF(origin.x() + from, y), QPointF(origin.x() + to, y));
+        }
+    }
+    painter.restore();
+}
+
 QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
                                                           const Range &block,
                                                           const DisplayMap &map) const
 {
     QList<QTextLayout::FormatRange> formats;
 
-    const QColor accent = d->m_theme.color(QStringLiteral("--text-accent"));
+    // Set only by a scheme or the person: unset, bold, italic, headings and
+    // quotes keep the colour of the block they sit in, so no default stands
+    // in for it (Theme.cpp). Same for strikethrough and underline.
+    const QColor boldColour = d->m_theme.color(QStringLiteral("--bold-color"));
+    const QColor italicColour = d->m_theme.color(QStringLiteral("--italic-color"));
     const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
-    const QColor codeColour = d->m_theme.color(QStringLiteral("--text-normal"));
-    const QColor codeBackground = d->m_theme.color(QStringLiteral("--background-primary-alt"));
-    const QColor highlight = d->m_theme.color(QStringLiteral("--color-yellow"));
+    const QColor codeColour = d->m_theme.color(QStringLiteral("--code-normal"));
+    const QColor codeBackground = d->m_theme.color(QStringLiteral("--code-background"));
+    const QColor highlight = d->m_theme.color(QStringLiteral("--text-highlight-bg"));
+    const QColor tagColour = d->m_theme.color(QStringLiteral("--tag-color"));
+    const QColor footnoteColour = d->m_theme.color(QStringLiteral("--footnote-color"));
     const QColor metaNote = d->m_theme.color(QStringLiteral("--meta-note-color"));
     const QColor bracket = d->m_theme.color(QStringLiteral("--bracket-color"));
 
@@ -2054,7 +2113,18 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         formats.append(range);
     };
 
-    const QColor unresolved = d->m_theme.color(QStringLiteral("--link-unresolved-color"));
+    // Under everything else: a heading's or a quote's colour is the block's,
+    // which a bold word, a link or a revealed marker inside it overrides.
+    QList<QTextLayout::FormatRange> underlay;
+    if (view.span.kind == BlockSpan::Kind::Quote) {
+        const QColor quote = d->m_theme.color(QStringLiteral("--blockquote-color"));
+        const Range shown = map.toDisplay(block);
+        if (quote.isValid() && shown.length() > 0) {
+            QTextCharFormat format;
+            format.setForeground(quote);
+            underlay.append({int(shown.start), int(shown.length()), format});
+        }
+    }
 
     // In source mode the markers stay visible, so colour them like Obsidian
     // rather than hiding them.
@@ -2073,8 +2143,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         if (!item.done)
             continue;
         QTextCharFormat strike;
-        strike.setFontStrikeOut(true);
-        strike.setForeground(d->m_theme.color(QStringLiteral("--text-muted")));
+        strikeThrough(strike, d->m_theme);
+        strike.setForeground(d->m_theme.color(QStringLiteral("--checklist-done-color")));
         add({item.marker.end, item.range.end}, strike);
     }
 
@@ -2096,12 +2166,16 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         switch (span.kind) {
         case StyleSpan::Kind::Bold:
             format.setFontWeight(QFont::Bold);
+            if (boldColour.isValid())
+                format.setForeground(boldColour);
             break;
         case StyleSpan::Kind::Italic:
             format.setFontItalic(true);
+            if (italicColour.isValid())
+                format.setForeground(italicColour);
             break;
         case StyleSpan::Kind::Strikethrough:
-            format.setFontStrikeOut(true);
+            strikeThrough(format, d->m_theme);
             break;
         case StyleSpan::Kind::InlineCode:
             format.setFont(d->m_theme.monospaceFont());
@@ -2119,15 +2193,15 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
         case StyleSpan::Kind::Link:
             // A link to a note that does not exist is dimmed, which is how a
             // typo in a link is spotted at all.
-            format.setForeground(isUnresolvedLink(span.payload) ? unresolved : accent);
+            format.setForeground(linkColourFor(span.payload));
             break;
         case StyleSpan::Kind::Tag:
-            format.setForeground(accent);
+            format.setForeground(tagColour);
             break;
         case StyleSpan::Kind::Footnote:
             // Only tints the raw source, once the caret reveals it -
             // layoutFootnotes paints the hidden case's number itself.
-            format.setForeground(accent);
+            format.setForeground(footnoteColour);
             break;
         case StyleSpan::Kind::MetaNote:
             format.setForeground(metaNote);
@@ -2137,7 +2211,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             break;
         case StyleSpan::Kind::Highlight:
             format.setBackground(highlight);
-            format.setForeground(d->m_theme.color(QStringLiteral("--color-base-00")));
+            format.setForeground(d->m_theme.color(QStringLiteral("--text-highlight-fg")));
             break;
         case StyleSpan::Kind::Math:
         case StyleSpan::Kind::Html:
@@ -2155,8 +2229,19 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             format = *html;
             break;
         }
+        case StyleSpan::Kind::Heading: {
+            // The weight and size come from the block font; only a colour set
+            // for this level is added.
+            const QColor heading = d->m_theme.color(QStringLiteral("--h%1-color").arg(span.level));
+            if (!heading.isValid())
+                continue;
+            format.setForeground(heading);
+            const Range shown = map.toDisplay(span.range);
+            if (shown.length() > 0)
+                underlay.append({int(shown.start), int(shown.length()), format});
+            continue;
+        }
         case StyleSpan::Kind::HtmlTag:
-        case StyleSpan::Kind::Heading:
         case StyleSpan::Kind::Quote:
             continue; // carried by the block font
         }
@@ -2167,7 +2252,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     // them (`<b>text</b>` -> "text", bold).
     for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
         add(source, htmlFormat);
-    return formats;
+    return underlay + formats;
 }
 
 Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) const
@@ -2556,7 +2641,7 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
     if (!view.layout || view.listTextX.empty() || d->m_mode == Mode::Source)
         return;
 
-    const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
+    const QColor muted = d->m_theme.color(QStringLiteral("--list-marker-color"));
 
     const auto markerShown = [&view](const ListItemSpan &item) {
         return std::any_of(view.revealed.cbegin(), view.revealed.cend(),
@@ -3067,8 +3152,7 @@ void MarkdownEditor::layoutAnchorSeparators(BlockView &view, QList<Range> &hidde
         }
         view.separators.push_back(
             {span.anchorHash.start, 0,
-             d->m_theme.color(isUnresolvedLink(span.payload) ? QStringLiteral("--link-unresolved-color")
-                                                           : QStringLiteral("--text-accent"))});
+             linkColourFor(span.payload)});
     }
 }
 
@@ -3277,6 +3361,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     const QColor border = d->m_theme.color(QStringLiteral("--background-modifier-border"));
     const QColor header = d->m_theme.color(QStringLiteral("--background-secondary"));
     const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
+    const bool strikeLines = d->m_theme.color(QStringLiteral("--strikethrough-decoration-color")).isValid();
 
     // A wide table is clipped to the readable column and scrolls inside it;
     // nothing spills over the note's text.
@@ -3339,6 +3424,8 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         painter.save();
         painter.setClipRect(rect.adjusted(1, 1, -1, -1), Qt::IntersectClip);
         cell.layout->draw(&painter, cellTextOrigin(view, cell) + QPointF(left, top), selected);
+        if (strikeLines)
+            paintStrikeLines(painter, *cell.layout, cellTextOrigin(view, cell) + QPointF(left, top));
         painter.restore();
     }
     if (!picked.isNull()) {
@@ -4177,6 +4264,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
     const qreal left = contentLeft();
     const QColor text = d->m_theme.color(QStringLiteral("--text-normal"));
     const QColor selectionColour = d->m_theme.color(QStringLiteral("--interactive-accent"));
+    const bool strikeLines = d->m_theme.color(QStringLiteral("--strikethrough-decoration-color")).isValid();
 
     const Range selected = selection();
     painter.setPen(text);
@@ -4344,6 +4432,8 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                     QRectF(left - 14, top, contentWidth() + 28, view.height));
             }
             view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
+            if (strikeLines)
+                paintStrikeLines(painter, *view.layout, QPointF(left + indent, top + drop));
             paintInlineMaths(painter, view, left + indent, top + drop);
             paintAnchorSeparators(painter, view, left + indent, top + drop);
             paintFootnoteMarks(painter, view, left + indent, top + drop);

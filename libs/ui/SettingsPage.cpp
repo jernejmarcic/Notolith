@@ -23,12 +23,16 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
+#include <memory>
+#include <vector>
 
 #include "HtmlRenderer.h"
 #ifdef NOTEAPPC_HAVE_PLUGINS
 #include "PluginRegistry.h"
 #endif
 #include "BulletGlyphs.h"
+#include "FormatColours.h"
 #include "Parser.h"
 #include "Hotkeys.h"
 #include "MediaPlayback.h"
@@ -420,6 +424,103 @@ void SettingsPage::addAccentRow(QVBoxLayout *into)
           sync);
 }
 
+void SettingsPage::addFormatColourRows(QVBoxLayout *into)
+{
+    auto *heading = new QLabel(tr("Formatting colours"), this);
+    heading->setObjectName(QStringLiteral("settingsRowLabel"));
+    heading->setContentsMargins(0, 24, 0, 0);
+    auto *note = new QLabel(tr("How each kind of text is drawn, for dark and light. Nothing is written "
+                               "into a note. Empty follows the theme; Reset goes back to it."),
+                            this);
+    note->setObjectName(QStringLiteral("settingsRowDescription"));
+    note->setWordWrap(true);
+    into->addWidget(heading);
+    into->addWidget(note);
+
+    // Every swatch's redraw, so "Reset all" and a row's Reset can bring them back in step.
+    const auto everySync = std::make_shared<std::vector<std::function<void()>>>();
+    QStringList everyKey;
+    for (const FormatRow &row : formatRows()) {
+        auto *control = new QWidget(this);
+        auto *controlLayout = new QHBoxLayout(control);
+        controlLayout->setContentsMargins(0, 0, 0, 0);
+        controlLayout->setSpacing(6);
+        QStringList keys;
+        auto syncs = std::make_shared<std::vector<std::function<void()>>>();
+        for (const FormatColour &colour : row.colours) {
+            if (*colour.part) {
+                auto *part = new QLabel(tr(colour.part), control);
+                part->setObjectName(QStringLiteral("settingsRowDescription"));
+                controlLayout->addWidget(part);
+            }
+            for (const bool dark : {true, false}) {
+                const QString key = formatColourKey(colour, dark);
+                keys << key;
+                auto *swatch = new QToolButton(control);
+                swatch->setObjectName(QStringLiteral("settingsColour_") + key);
+                swatch->setFixedSize(28, 28);
+                swatch->setCursor(Qt::PointingHandCursor);
+                swatch->setToolTip(dark ? tr("Dark") : tr("Light"));
+                // Unset is a dashed outline and no fill: QColorDialog cannot return "none".
+                const auto sync = [this, swatch, key] {
+                    const QColor set = Theme::parseColor(m_settings->text(key));
+                    swatch->setStyleSheet(
+                        set.isValid()
+                            ? QStringLiteral("QToolButton{background:rgba(%1,%2,%3,%4);"
+                                             "border:1px solid palette(mid);border-radius:6px;}")
+                                  .arg(set.red()).arg(set.green()).arg(set.blue()).arg(set.alpha())
+                            : QStringLiteral("QToolButton{background:transparent;"
+                                             "border:1px dashed palette(mid);border-radius:6px;}"));
+                };
+                sync();
+                syncs->push_back(sync);
+                everySync->push_back(sync);
+                const QString label = tr(row.label);
+                connect(swatch, &QToolButton::clicked, this,
+                        [this, sync, key, label, token = QString::fromLatin1(colour.token), dark] {
+                    QColor start = Theme::parseColor(m_settings->text(key));
+                    if (!start.isValid() && m_theme && m_theme->isDark() == dark)
+                        start = m_theme->color(token);
+                    if (!start.isValid())
+                        start = m_theme ? m_theme->color(QStringLiteral("--text-normal")) : QColor(Qt::white);
+                    const QColor picked = QColorDialog::getColor(start, this, label,
+                                                                 QColorDialog::ShowAlphaChannel);
+                    if (!picked.isValid())
+                        return;
+                    m_settings->setValue(
+                        key, picked.alpha() < 255
+                                 ? QStringLiteral("rgba(%1, %2, %3, %4)")
+                                       .arg(picked.red()).arg(picked.green()).arg(picked.blue())
+                                       .arg(picked.alphaF(), 0, 'f', 3)
+                                 : picked.name());
+                    sync();
+                    changed();
+                });
+                controlLayout->addWidget(swatch);
+            }
+        }
+        addRow(into, keys, tr(row.label), tr(row.description), control, [syncs] {
+            for (const auto &sync : *syncs)
+                sync();
+        });
+        everyKey += keys;
+    }
+
+    auto *resetAll = new QToolButton(this);
+    resetAll->setObjectName(QStringLiteral("settingsResetAllColours"));
+    resetAll->setText(tr("Reset all formatting colours"));
+    resetAll->setAutoRaise(true);
+    resetAll->setCursor(Qt::PointingHandCursor);
+    connect(resetAll, &QToolButton::clicked, this, [this, everyKey, everySync] {
+        for (const QString &key : everyKey)
+            m_settings->reset(key);
+        for (const auto &sync : *everySync)
+            sync();
+        changed();
+    });
+    into->addWidget(resetAll, 0, Qt::AlignLeft);
+}
+
 void SettingsPage::addSchemeRow(QVBoxLayout *into)
 {
     static const QString key = QStringLiteral("appearance.scheme");
@@ -522,6 +623,7 @@ QWidget *SettingsPage::buildAppearancePage()
                   tr("Family used for the note body."), tr("System default"));
     addLineEditRow(layout, QStringLiteral("appearance.monospaceFont"), tr("Monospace font"),
                   tr("Family used for code."), tr("System default"));
+    addFormatColourRows(layout);
 
     addToggleRow(layout, QStringLiteral("appearance.showInlineTitle"), tr("Show inline title"),
                 tr("Show the note's file name as a heading above its text."));

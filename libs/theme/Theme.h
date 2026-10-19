@@ -31,6 +31,9 @@ public:
     Mode mode() const { return m_mode; }
     /// Same tokens, pins and fonts: what applying either would draw alike.
     bool operator==(const Theme &) const = default;
+    /// Equal in everything but the tokens in `ignored` (and their pins): what
+    /// is left to compare says whether a recolour is all that changed.
+    bool sameExcept(const Theme &other, const QSet<QString> &ignored) const;
     bool isDark() const { return m_mode != Mode::Light; }
     bool isOled() const { return m_mode == Mode::Oled; }
 

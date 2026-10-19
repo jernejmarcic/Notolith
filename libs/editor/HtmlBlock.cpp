@@ -248,16 +248,20 @@ std::optional<QTextCharFormat> MarkdownEditor::htmlTagFormat(const QString &name
         format.setFontItalic(true);
     } else if (name == QLatin1String("u")) {
         format.setUnderlineStyle(QTextCharFormat::SingleUnderline);
+        if (const QColor line = d->m_theme.color(QStringLiteral("--underline-decoration-color")); line.isValid())
+            format.setUnderlineColor(line);
+        if (const QColor text = d->m_theme.color(QStringLiteral("--underline-color")); text.isValid())
+            format.setForeground(text);
     } else if (name == QLatin1String("s") || name == QLatin1String("del")
               || name == QLatin1String("strike")) {
-        format.setFontStrikeOut(true);
+        strikeThrough(format, d->m_theme);
     } else if (name == QLatin1String("kbd") || name == QLatin1String("code")) {
         format.setFont(d->m_theme.monospaceFont());
-        format.setForeground(d->m_theme.color(QStringLiteral("--text-normal")));
-        format.setBackground(d->m_theme.color(QStringLiteral("--background-primary-alt")));
+        format.setForeground(d->m_theme.color(QStringLiteral("--code-normal")));
+        format.setBackground(d->m_theme.color(QStringLiteral("--code-background")));
     } else if (name == QLatin1String("mark")) {
-        format.setBackground(d->m_theme.color(QStringLiteral("--color-yellow")));
-        format.setForeground(d->m_theme.color(QStringLiteral("--color-base-00")));
+        format.setBackground(d->m_theme.color(QStringLiteral("--text-highlight-bg")));
+        format.setForeground(d->m_theme.color(QStringLiteral("--text-highlight-fg")));
     } else if (name == QLatin1String("sup")) {
         format.setVerticalAlignment(QTextCharFormat::AlignSuperScript);
     } else if (name == QLatin1String("sub")) {

@@ -451,3 +451,34 @@ TEST(SettingsTest, ListDisplayDefaults)
     EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.bulletGlyphs")).toString(),
               QStringLiteral("-=dash,*=dot,+=diamond"));
 }
+
+TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
+{
+    // setValue drops a key that defaults() does not list, silently: the table
+    // of colours has to be what makes the keys.
+    QTemporaryDir home;
+    QStandardPaths::setTestModeEnabled(false);
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    EXPECT_TRUE(settings.text(QStringLiteral("appearance.boldColorDark")).isEmpty());
+    EXPECT_FALSE(settings.isCustomised(QStringLiteral("appearance.boldColorDark")));
+    settings.setValue(QStringLiteral("appearance.boldColorDark"), QStringLiteral("#ff0000"));
+    settings.setValue(QStringLiteral("appearance.strikethroughDecorationColorLight"), QStringLiteral("#00ff00"));
+    EXPECT_EQ(settings.text(QStringLiteral("appearance.boldColorDark")), QStringLiteral("#ff0000"));
+
+    QString error;
+    ASSERT_TRUE(settings.save(&error)) << error.toStdString();
+    const Settings again = Settings::load();
+    EXPECT_EQ(again.text(QStringLiteral("appearance.boldColorDark")), QStringLiteral("#ff0000"));
+    EXPECT_EQ(again.text(QStringLiteral("appearance.strikethroughDecorationColorLight")), QStringLiteral("#00ff00"));
+    EXPECT_TRUE(again.text(QStringLiteral("appearance.boldColorLight")).isEmpty());
+
+    QFile ini(QDir(home.path()).filePath(QStringLiteral("noteAppC/settings.ini")));
+    ASSERT_TRUE(ini.open(QIODevice::ReadOnly));
+    const QByteArray written = ini.readAll();
+    EXPECT_TRUE(written.contains("bold-color-dark")) << written.toStdString();
+    EXPECT_FALSE(written.contains("h1-color")) << "only what was set is written";
+    qputenv("XDG_CONFIG_HOME", previous);
+}

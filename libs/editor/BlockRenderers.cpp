@@ -499,8 +499,8 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
 
     painter.save();
     if (done) {
-        painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--interactive-accent")));
-        painter.setPen(QPen(d->m_theme.color(QStringLiteral("--text-on-accent")), 2, Qt::SolidLine,
+        painter.fillPath(rounded, d->m_theme.color(QStringLiteral("--checkbox-color")));
+        painter.setPen(QPen(d->m_theme.color(QStringLiteral("--checkbox-marker-color")), 2, Qt::SolidLine,
                             Qt::RoundCap, Qt::RoundJoin));
         // A tick, drawn rather than shipped as an icon so it scales with the
         // font it sits beside.
@@ -511,7 +511,7 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
         }));
     } else {
         painter.setPen(
-            QPen(d->m_theme.color(QStringLiteral("--background-modifier-border-hover")), 1.5));
+            QPen(d->m_theme.color(QStringLiteral("--checkbox-border-color")), 1.5));
         painter.drawPath(rounded);
     }
     painter.restore();

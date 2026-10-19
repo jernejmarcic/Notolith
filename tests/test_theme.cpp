@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 
 #include "CalloutStyle.h"
+#include "FormatColours.h"
 #include "LanguageStyle.h"
 #include "Scheme.h"
 #include "Theme.h"
@@ -600,4 +601,91 @@ TEST(Theme, navTokensExistInDarkAndLight)
     EXPECT_NE(dark.color(QStringLiteral("--nav-indentation-guide-color")),
               light.color(QStringLiteral("--nav-indentation-guide-color")));
     EXPECT_EQ(dark.value(QStringLiteral("--nav-item-size")).toInt(), 13);
+}
+
+TEST(Theme, formatColourDefaultsMatchTodaysColours)
+{
+    for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light, Theme::Mode::Oled}) {
+        const Theme theme = Theme::builtin(mode);
+        const auto same = [&theme](const char *token, const char *as) {
+            EXPECT_TRUE(theme.color(QLatin1String(token)).isValid()) << token;
+            EXPECT_EQ(theme.color(QLatin1String(token)), theme.color(QLatin1String(as))) << token;
+        };
+        same("--code-normal", "--text-normal");
+        same("--code-background", "--background-primary-alt");
+        same("--text-highlight-bg", "--color-yellow");
+        same("--text-highlight-fg", "--color-base-00");
+        same("--list-marker-color", "--text-muted");
+        same("--checklist-done-color", "--text-muted");
+        same("--link-color", "--text-accent");
+        same("--link-external-color", "--text-accent");
+        same("--tag-color", "--text-accent");
+        same("--footnote-color", "--text-accent");
+        same("--checkbox-color", "--interactive-accent");
+        same("--checkbox-marker-color", "--text-on-accent");
+        same("--checkbox-border-color", "--background-modifier-border-hover");
+        same("--inline-title-color", "--text-normal");
+        // These keep the colour of the block they are in: a default here
+        // would put a concrete foreground on every bold word.
+        for (const char *token : {"--bold-color", "--italic-color", "--h1-color", "--h6-color",
+                                  "--blockquote-color", "--underline-color", "--strikethrough-color",
+                                  "--underline-decoration-color", "--strikethrough-decoration-color"})
+            EXPECT_TRUE(theme.value(QLatin1String(token)).isEmpty()) << token;
+    }
+}
+
+TEST(Theme, aLinkColourFollowsTheAccentUntilSetOnItsOwn)
+{
+    Theme theme = Theme::builtin();
+    theme.setAccent(10, 80, 50);
+    EXPECT_EQ(theme.color(QStringLiteral("--link-color")), theme.color(QStringLiteral("--text-accent")));
+    theme.setToken(QStringLiteral("--link-color"), QStringLiteral("#010203"));
+    EXPECT_EQ(theme.color(QStringLiteral("--link-external-color")), QColor(1, 2, 3));
+    EXPECT_NE(theme.color(QStringLiteral("--tag-color")), QColor(1, 2, 3));
+}
+
+TEST(Theme, sameExceptSaysWhetherOnlyTheNamedTokensChanged)
+{
+    const Theme base = Theme::builtin();
+    Theme bold = base;
+    bold.setToken(QStringLiteral("--bold-color"), QStringLiteral("#ff0000"));
+    EXPECT_FALSE(base == bold);
+    EXPECT_TRUE(base.sameExcept(bold, formatColourTokens()));
+    EXPECT_TRUE(bold.sameExcept(base, formatColourTokens()));
+
+    Theme size = bold;
+    size.setToken(QStringLiteral("--font-text-size"), QStringLiteral("22"));
+    EXPECT_FALSE(bold.sameExcept(size, formatColourTokens())) << "a size is not a colour";
+    Theme text = bold;
+    text.setToken(QStringLiteral("--text-normal"), QStringLiteral("#123456"));
+    EXPECT_FALSE(bold.sameExcept(text, formatColourTokens())) << "nor is the text colour a format colour";
+    EXPECT_FALSE(base.sameExcept(Theme::builtin(Theme::Mode::Light), formatColourTokens()));
+}
+
+TEST(UserColours, darkAndLightApplySeparatelyAndOutrankAScheme)
+{
+    QTemporaryDir dir;
+    const QString scheme = writeFile(dir.filePath(QStringLiteral("s.json")),
+                                     QStringLiteral(R"({"name":"S","dark":{"--h1-color":"#333333"},"light":{"--h1-color":"#444444"}})"));
+    QHash<QString, QString> settings{{QStringLiteral("appearance.h1ColorDark"), QStringLiteral("#111111")},
+                                     {QStringLiteral("appearance.h1ColorLight"), QStringLiteral("#eeeeee")},
+                                     {QStringLiteral("appearance.boldColorDark"), QStringLiteral("not a colour")}};
+    const auto read = [&settings](const QString &key) { return settings.value(key); };
+    const auto h1 = [&](Theme::Mode mode) {
+        Theme theme = Scheme::apply(scheme, mode);
+        applyUserColours(theme, read);
+        return theme;
+    };
+    EXPECT_EQ(h1(Theme::Mode::Dark).color(QStringLiteral("--h1-color")), QColor(0x11, 0x11, 0x11));
+    EXPECT_EQ(h1(Theme::Mode::Light).color(QStringLiteral("--h1-color")), QColor(0xee, 0xee, 0xee));
+    EXPECT_EQ(h1(Theme::Mode::Oled).color(QStringLiteral("--h1-color")), QColor(0x11, 0x11, 0x11)) << "OLED is dark";
+    EXPECT_FALSE(h1(Theme::Mode::Dark).color(QStringLiteral("--bold-color")).isValid()) << "junk is not pinned";
+
+    settings.remove(QStringLiteral("appearance.h1ColorDark"));
+    EXPECT_EQ(h1(Theme::Mode::Dark).color(QStringLiteral("--h1-color")), QColor(0x33, 0x33, 0x33))
+        << "unset, the scheme's colour stands";
+    // Saved as a scheme, the colours come along.
+    settings.insert(QStringLiteral("appearance.boldColorDark"), QStringLiteral("rgba(255, 0, 0, 0.5)"));
+    EXPECT_EQ(h1(Theme::Mode::Dark).overrides().value(QStringLiteral("--bold-color")),
+              QStringLiteral("rgba(255, 0, 0, 0.5)"));
 }

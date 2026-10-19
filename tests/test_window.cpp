@@ -6824,3 +6824,50 @@ TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
     instance.serve(&window);
     EXPECT_TRUE(instance.ok());
 }
+
+TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Fmt.md"), "start\n\nSome **bold** and *ital* words.\n");
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("appearance.boldColorDark"), QStringLiteral("#ff0000"));
+    settings.setValue(QStringLiteral("appearance.italicColorDark"), QStringLiteral("#00ff00"));
+    ASSERT_TRUE(settings.save());
+
+    MainWindow window;
+    window.show(); // the settings page builds its rows when it is shown
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Fmt.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_NE(editor, nullptr);
+    const auto format = [editor](const QString &needle) {
+        editor->grab(); // lays the visible blocks out
+        return editor->formatAt(editor->noteText().indexOf(needle) + 1);
+    };
+    EXPECT_EQ(format(QStringLiteral("bold")).foreground().color(), QColor(0xff, 0, 0)) << "set in the settings file";
+
+    window.openSettings();
+    const auto swatch = [&window](const char *key) {
+        QToolButton *found = nullptr;
+        EXPECT_TRUE(QTest::qWaitFor([&] {
+            return (found = window.findChild<QToolButton *>(QStringLiteral("settingsColour_") + QLatin1String(key)));
+        }));
+        return found;
+    };
+    QToolButton *bold = swatch("appearance.boldColorDark");
+    ASSERT_NE(bold, nullptr);
+    EXPECT_NE(swatch("appearance.boldColorLight"), nullptr) << "one swatch per mode";
+    // Its row's own Reset, the button a person clicks.
+    auto *reset = bold->parentWidget()->parentWidget()->findChild<QToolButton *>(QStringLiteral("settingsResetButton"));
+    ASSERT_NE(reset, nullptr);
+    reset->click();
+    EXPECT_FALSE(format(QStringLiteral("bold")).hasProperty(QTextFormat::ForegroundBrush)) << "reset follows the theme again";
+    EXPECT_EQ(format(QStringLiteral("ital")).foreground().color(), QColor(0, 0xff, 0)) << "the other row stays";
+
+    auto *all = window.findChild<QToolButton *>(QStringLiteral("settingsResetAllColours"));
+    ASSERT_NE(all, nullptr);
+    all->click();
+    EXPECT_FALSE(format(QStringLiteral("ital")).hasProperty(QTextFormat::ForegroundBrush));
+    window.closeSettings();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("start\n\nSome **bold** and *ital* words.\n"));
+}
