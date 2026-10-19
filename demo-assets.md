@@ -37,3 +37,15 @@ were skipped in favour of this one.
 `demo/Embeds/assets/script.py`, `main.cpp`, `data.json`, `maths-only.tex`
 and `full-document.tex` are written for this vault - they are source text,
 not an image/PDF/audio/video, so nothing was copied for them.
+
+## Generated for this vault
+
+`demo/Embeds/assets/sample.epub` is not copied from a package: it is a
+two-chapter EPUB 3 written for this vault with Python's `zipfile` (the
+`mimetype` entry first and stored, `META-INF/container.xml`, an OPF with a
+`cover-image` item, a nav document, a stylesheet and two XHTML chapters), 8.4 KB.
+Its cover is `nvim-logo.png` above, reused unmodified. `demo/Code/Notebook.ipynb`
+(nbformat 4.5, written with the `nbformat` library, one stored PNG generated
+in code) and the scripts in `demo/Code/assets/` (`greetings.py`,
+`countdown.sh`, `square.c`) are hand-written text for the same reason as the
+files under "Text embeds".
