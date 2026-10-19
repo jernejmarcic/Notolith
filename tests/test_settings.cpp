@@ -466,6 +466,8 @@ TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
     EXPECT_FALSE(settings.isCustomised(QStringLiteral("appearance.boldColorDark")));
     settings.setValue(QStringLiteral("appearance.boldColorDark"), QStringLiteral("#ff0000"));
     settings.setValue(QStringLiteral("appearance.strikethroughDecorationColorLight"), QStringLiteral("#00ff00"));
+    // A translucent colour has commas in it; an INI must not read it back as a list.
+    settings.setValue(QStringLiteral("appearance.textHighlightBgDark"), QStringLiteral("rgba(255, 0, 0, 0.500)"));
     EXPECT_EQ(settings.text(QStringLiteral("appearance.boldColorDark")), QStringLiteral("#ff0000"));
 
     QString error;
@@ -474,6 +476,7 @@ TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
     EXPECT_EQ(again.text(QStringLiteral("appearance.boldColorDark")), QStringLiteral("#ff0000"));
     EXPECT_EQ(again.text(QStringLiteral("appearance.strikethroughDecorationColorLight")), QStringLiteral("#00ff00"));
     EXPECT_TRUE(again.text(QStringLiteral("appearance.boldColorLight")).isEmpty());
+    EXPECT_EQ(again.text(QStringLiteral("appearance.textHighlightBgDark")), QStringLiteral("rgba(255, 0, 0, 0.500)"));
 
     QFile ini(QDir(home.path()).filePath(QStringLiteral("noteAppC/settings.ini")));
     ASSERT_TRUE(ini.open(QIODevice::ReadOnly));
