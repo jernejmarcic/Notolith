@@ -49,6 +49,8 @@ public:
     /// scan runs or waits, the Index may not hold any note yet (a new vault):
     /// then it is every note of the vault, walked here.
     QStringList pathsInFlight() const;
+    /// A whole-vault scan runs or waits: the Index may not know every note yet.
+    bool isScanningWholeVault() const { return m_active && (m_scanWhole || m_rescan); }
     /// Cancels a scan in progress and waits for it, dropping what it had not
     /// yet reported: afterwards the Index can be closed or reopened.
     void stop();

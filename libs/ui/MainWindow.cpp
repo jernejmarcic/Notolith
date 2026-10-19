@@ -319,6 +319,7 @@ MainWindow::MainWindow(QWidget *parent)
     rows->setSpacing(0);
 
     auto *splitter = new QSplitter(Qt::Horizontal, central);
+    connect(splitter, &QSplitter::splitterMoved, this, [this] { m_layoutSave.start(); });
     splitter->setObjectName(QStringLiteral("mainSplitter"));
     splitter->addWidget(buildSidebar());
     splitter->addWidget(buildMainArea());
@@ -1250,11 +1251,20 @@ void MainWindow::followLink(const QString &target)
     const QString resolved = m_index.resolve(name, m_active->notePath);
     if (resolved.isEmpty()) {
         // Obsidian's way of making a note: click a link to one that is not there.
-        // A missing attachment (a name with another extension) is only reported.
-        static const QRegularExpression attachment(QStringLiteral(R"(\.(?!md$)[A-Za-z][A-Za-z0-9]{0,4}$)"),
-                                                   QRegularExpression::CaseInsensitiveOption);
-        if (name.contains(attachment))
+        // A missing attachment is only reported ("Node.js" is still a note's
+        // name), and so is any link while the vault is still being read: the
+        // note may be there, in another folder.
+        static const QSet<QString> attachments{
+            QStringLiteral("avif"), QStringLiteral("bmp"),  QStringLiteral("gif"),  QStringLiteral("jpeg"),
+            QStringLiteral("jpg"),  QStringLiteral("png"),  QStringLiteral("svg"),  QStringLiteral("webp"),
+            QStringLiteral("flac"), QStringLiteral("m4a"),  QStringLiteral("mp3"),  QStringLiteral("ogg"),
+            QStringLiteral("wav"),  QStringLiteral("webm"), QStringLiteral("3gp"),  QStringLiteral("mkv"),
+            QStringLiteral("mov"),  QStringLiteral("mp4"),  QStringLiteral("ogv"),  QStringLiteral("pdf"),
+            QStringLiteral("canvas"), QStringLiteral("base"), QStringLiteral("epub"), QStringLiteral("ipynb")};
+        if (attachments.contains(QFileInfo(name).suffix().toLower()))
             statusBar()->showMessage(tr("%1 is not in this vault").arg(name), 3000);
+        else if (m_indexer->isScanningWholeVault())
+            statusBar()->showMessage(tr("%1 is not found yet: the vault is still being read").arg(name), 3000);
         else
             createNoteNamed(name);
         return;
@@ -3330,7 +3340,11 @@ void MainWindow::buildActions()
     add(QStringLiteral("file-explorer:move-file"), tr("Move file to another folder"), QString(),
         [this] { chooseMoveFolder(m_active->notePath); });
     add(QStringLiteral("app:delete-file"), tr("Delete current file"), QString(),
-        [this] { deletePath(m_active->notePath); });
+        [this] {
+            if (!m_vault.isValid())
+                statusBar()->showMessage(tr("Delete works on notes in a vault"), 3000);
+            deletePath(m_active->notePath);
+        });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
@@ -3454,7 +3468,7 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 return true;
             }
         }
-        if (keyEvent->key() == Qt::Key_Delete && keyEvent->modifiers() == Qt::NoModifier
+        if (keyEvent->key() == Qt::Key_Delete && keyEvent->modifiers() == Qt::NoModifier && !keyEvent->isAutoRepeat()
             && m_tree->currentIndex().isValid()) { // while renaming, the key goes to the line edit
             deletePathAt(m_tree->currentIndex());
             return true;
@@ -3530,6 +3544,7 @@ void MainWindow::toggleSidebar()
         return;
     }
     m_sidebar->setVisible(!m_sidebar->isVisible());
+    m_layoutSave.start();
 }
 
 void MainWindow::toggleRightSidebar()
@@ -3542,6 +3557,7 @@ void MainWindow::toggleRightSidebar()
     }
     m_rightSidebar->setVisible(!m_rightSidebar->isVisible());
     QSettings().setValue(kRightSidebar, m_rightSidebar->isVisible());
+    m_layoutSave.start();
 }
 
 void MainWindow::openDrawer(QWidget *side)
@@ -7541,7 +7557,9 @@ void MainWindow::createNoteNamed(const QString &typed)
     // Obsidian's invalid characters - the ones Vault::renamePath refuses.
     static const QRegularExpression invalid(QStringLiteral(R"([\[\]#^|:\\])"));
     const qsizetype slash = name.lastIndexOf(QLatin1Char('/'));
-    const QString folder = slash < 0 ? newNoteFolder() : name.left(slash).trimmed();
+    QString folder = slash < 0 ? newNoteFolder() : QDir::cleanPath(name.left(slash).trimmed());
+    if (folder == QLatin1String("."))
+        folder.clear(); // [[./Name]]
     const QString base = name.mid(slash + 1).trimmed();
     QString error;
     QString path;

@@ -40,6 +40,7 @@ bool isHiddenName(const QString &relative)
 }
 
 const QString kHiddenNameError = QStringLiteral("a name starting with a dot would be hidden");
+const QString kOutsideError = QStringLiteral("that would be outside the vault");
 
 bool hasInvalidNameChar(const QString &name)
 {
@@ -357,7 +358,14 @@ QString Vault::createNote(const QString &folderRelative, const QString &baseName
         return {};
     }
 
-    const QString folderAbsolute = folderRelative.isEmpty() ? m_root : absolute(folderRelative);
+    // An absolute folder or one climbing with .. would land outside (a link's
+    // target can be either).
+    const QString folderAbsolute = QDir::cleanPath(folderRelative.isEmpty() ? m_root : absolute(folderRelative));
+    if (!contains(folderAbsolute) || baseName.contains(QLatin1Char('/'))) {
+        if (error)
+            *error = kOutsideError;
+        return {};
+    }
     if (!QDir().mkpath(folderAbsolute)) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(folderAbsolute);
@@ -376,7 +384,7 @@ QString Vault::createNote(const QString &folderRelative, const QString &baseName
 
     Note note;
     note.text = text;
-    if (!write(path, note, error))
+    if (!writeNoteNoFollow(relative(path), note, error)) // a symlinked file is not written through
         return {};
     return path;
 }
@@ -396,7 +404,12 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
         return {};
     }
 
-    const QString parentAbsolute = parentRelative.isEmpty() ? m_root : absolute(parentRelative);
+    const QString parentAbsolute = QDir::cleanPath(parentRelative.isEmpty() ? m_root : absolute(parentRelative));
+    if (!contains(parentAbsolute) || baseName.contains(QLatin1Char('/'))) {
+        if (error)
+            *error = kOutsideError;
+        return {};
+    }
     if (!QDir().mkpath(parentAbsolute)) {
         if (error)
             *error = QStringLiteral("cannot create %1").arg(parentAbsolute);

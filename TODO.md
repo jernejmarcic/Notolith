@@ -2232,3 +2232,22 @@ Shared/<title>.md.
       file's mtime/size first; a changed disk text is snapshotted.
 - [x] G6. Workspace (tabs, positions) is saved only on a clean exit; a crash
       loses it. Debounced saveLayout on layout changes.
+
+### Fable final check of G1-G6 (2026-10-19)
+
+- [x] F1. [[/abs/path]] link created a note outside the vault (createNote
+      took an absolute folder; Vault::write followed symlinks). Vault
+      createNote/createFolder now refuse anything outside, write no-follow.
+- [x] F2. Clicking an unresolved link during the first scan could duplicate a
+      note in another folder: only reported while Indexer::isScanningWholeVault().
+- [x] F3. Attachment check was a shape regex ("Node.js" not a note): fixed list
+      of Obsidian's attachment extensions.
+- [x] F4. Delete key auto-repeat deleted row after row: ignored.
+- [x] F5. Notebook save round trip verified: no spurious "changed on disk".
+- [x] F6. Layout also saved after sidebar toggles and main splitter drags;
+      app:delete-file says why it does nothing outside a vault; [[./Name]]
+      cleaned.
+- [x] F7. Not changing: renaming an attachment keeps its extension unless the
+      typed name ends with it (the tree shows base names only). Revisit if
+      changing an attachment's extension from the tree is ever wanted.
+      Multi-selection delete: the tree is single-selection, so nothing to do.

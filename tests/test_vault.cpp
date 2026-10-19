@@ -347,6 +347,24 @@ TEST(VaultFileOps, ANameStartingWithADotIsRefused)
     EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral(".archive"))));
 }
 
+TEST(VaultFileOps, NothingIsCreatedOutsideTheVault)
+{
+    QTemporaryDir dir, outside;
+    ASSERT_TRUE(dir.isValid() && outside.isValid());
+    Vault vault(dir.path());
+    QString error;
+    EXPECT_TRUE(vault.createNote(outside.path(), QStringLiteral("x"), &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(vault.createNote(QString(), QStringLiteral("../x"), &error).isEmpty());
+    EXPECT_TRUE(vault.createFolder(outside.path(), QStringLiteral("x"), &error).isEmpty());
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
+    // A dangling symlink where the note goes (exists() says no) is not written through.
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Sub")));
+    ASSERT_TRUE(QFile::link(outside.filePath(QStringLiteral("target.md")), dir.filePath(QStringLiteral("Sub/y.md"))));
+    EXPECT_FALSE(vault.createNote(QStringLiteral("Sub"), QStringLiteral("y"), &error).isEmpty()) << error.toStdString();
+    EXPECT_FALSE(QFileInfo::exists(outside.filePath(QStringLiteral("target.md"))));
+}
+
 TEST(VaultFileOps, RenamePathKeepsExtensionAndContent)
 {
     QTemporaryDir dir;

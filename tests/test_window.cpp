@@ -3667,11 +3667,31 @@ TEST_F(WindowTest, ClickingALinkToNoNoteCreatesIt)
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("photo.png.md"))));
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Linking.md")));
 
+    // A dotted name that is no attachment is a note's.
+    emit window.editor()->linkActivated(QStringLiteral("Node.js"));
+    EXPECT_TRUE(QFileInfo(path(QStringLiteral("Node.js.md"))).isFile());
+
+    // Nothing lands outside the vault, whatever the link says.
+    QTemporaryDir outside;
+    window.openNote(path(QStringLiteral("Linking.md")));
+    emit window.editor()->linkActivated(outside.filePath(QStringLiteral("Escape")));
+    EXPECT_TRUE(QDir(outside.path()).isEmpty());
+
     // On disk but not indexed yet: opened, not copied as "Late 1".
     write(QStringLiteral("Late.md"), "late\n");
     emit window.editor()->linkActivated(QStringLiteral("Late"));
     EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Late 1.md"))));
     EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Late.md")));
+}
+
+TEST_F(WindowTest, ALinkClickedWhileTheVaultIsReadCreatesNothing)
+{
+    write(QStringLiteral("Projects/Elsewhere.md"), "here\n");
+    MainWindow window;
+    window.openVault(dir.path()); // the scan has not reported yet: no event loop ran
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    emit window.editor()->linkActivated(QStringLiteral("Elsewhere"));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Elsewhere.md"))));
 }
 
 TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
@@ -5077,6 +5097,13 @@ TEST_F(WindowTest, ANotebookFileOpensAsANoteAndSavesBackAsANotebook)
         EXPECT_TRUE(saved.contains("\"nbformat\": 4"));
         EXPECT_TRUE(saved.contains("ZeroDivisionError")) << "the cells that were not edited keep their outputs";
         EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
+
+        // Its own last save is no outside change: the next save keeps no other version.
+        const auto before = noteAppC::Snapshots::versions(path(QStringLiteral("Analysis.ipynb"))).size();
+        QTest::keyClicks(editor, QStringLiteral("x"));
+        ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+        EXPECT_FALSE(window.statusBar()->currentMessage().contains(QStringLiteral("had changed on disk")));
+        EXPECT_LE(noteAppC::Snapshots::versions(path(QStringLiteral("Analysis.ipynb"))).size(), before + 1);
     }
 }
 
