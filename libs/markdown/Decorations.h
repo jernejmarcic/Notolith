@@ -206,6 +206,9 @@ struct CodeOptions {
     /// own tool, "on" for the language's Jupyter kernel shared by the note's
     /// blocks, or a kernelspec's name (`python3`) to pick that one.
     QString kernel;
+    /// `implicit: false` - the note's `implicit-<lang>` frontmatter code is not
+    /// added to this block when it runs.
+    bool implicit = true;
     QMap<QString, QString> extra; ///< every key with no meaning here, as written
 };
 

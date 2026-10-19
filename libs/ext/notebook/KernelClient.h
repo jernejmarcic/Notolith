@@ -48,7 +48,9 @@ public:
     /// this runs - inputRequested comes back and must be answered with
     /// replyToInput or the cell waits (an interrupt ends it). Without it the
     /// kernel raises instead of asking, as before.
-    QString execute(const QString &code, bool allowStdin = false);
+    /// `storeHistory` false: the run does not bump the execution count (the
+    /// note's implicit code, which is not a cell of its own).
+    QString execute(const QString &code, bool allowStdin = false, bool storeHistory = true);
     /// Queues a complete_request / inspect_request for `code` with the caret
     /// at `cursorPos` (Unicode code points, as the protocol counts); returns
     /// its msg_id. The answer is introspectionReplyReceived.

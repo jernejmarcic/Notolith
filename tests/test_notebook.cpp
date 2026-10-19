@@ -514,6 +514,39 @@ TEST(NotebookKernelFeatureTest, ABlocksVariablesLiveOnInItsNotesKernelOnly)
     controller.shutdownAll();
 }
 
+TEST(NotebookKernelFeatureTest, ThePreludeRunsOnceAndAgainAfterARestart)
+{
+    if (!pythonKernelAvailable())
+        GTEST_SKIP() << "no Jupyter python kernelspec installed on this machine";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    NotebookController::RunRequest request = kernelRequest(QStringLiteral("p.md"));
+    request.prelude = QStringLiteral("import math\ncounter = globals().get('counter', 0) + 1");
+
+    const NotebookRunResult a = runThrough(controller, request, QStringLiteral("print(counter)"));
+    ASSERT_TRUE(a.kernelError.isEmpty()) << a.kernelError.toStdString();
+    EXPECT_EQ(joinedText(a).trimmed(), QStringLiteral("1"));
+    EXPECT_EQ(a.executionCount, 1); // the prelude is not a cell of its own
+    const NotebookRunResult b = runThrough(controller, request, QStringLiteral("print(counter, math.pi > 3)"));
+    EXPECT_EQ(joinedText(b).trimmed(), QStringLiteral("1 True")); // sent once, not with every block
+    EXPECT_EQ(b.executionCount, 2);
+
+    controller.restartKernel(QStringLiteral("python"), QStringLiteral("p.md"));
+    const NotebookRunResult c = runThrough(controller, request, QStringLiteral("print(counter)"));
+    EXPECT_EQ(joinedText(c).trimmed(), QStringLiteral("1")); // a new kernel gets it again
+
+    // A prelude that fails is said so on the block's result, not swallowed.
+    NotebookController::RunRequest broken = kernelRequest(QStringLiteral("q.md"));
+    broken.prelude = QStringLiteral("import nosuchmodule_q");
+    const NotebookRunResult d = runThrough(controller, broken, QStringLiteral("print('still runs')"));
+    EXPECT_FALSE(d.ok);
+    ASSERT_FALSE(d.outputs.isEmpty());
+    EXPECT_EQ(d.outputs.first().kind, NotebookOutput::Kind::Error);
+    EXPECT_TRUE(d.outputs.first().ename.startsWith(QStringLiteral("implicit code:"))) << d.outputs.first().ename.toStdString();
+    EXPECT_TRUE(joinedText(d).contains(QStringLiteral("still runs")));
+    controller.shutdownAll();
+}
+
 TEST(NotebookKernelFeatureTest, RichOutputsComeBackInOrderAndInTheirRichestForm)
 {
     if (!pythonKernelAvailable())
@@ -855,6 +888,136 @@ TEST(DirectRunnerTest, BlocksWithMainStillRunAndAMainInACommentDoesNotCount)
     result = runDirect(QStringLiteral("c"), QStringLiteral("/* main( */ // int main(\nint f(void) { return 1; }\n"));
     ASSERT_TRUE(result.has_value());
     EXPECT_TRUE(textOf(*result).contains(QStringLiteral("Nothing to run"))) << textOf(*result).toStdString();
+}
+
+// --- implicit code: a note's frontmatter prelude and wrapper ---------------
+
+namespace {
+
+/// Runs `source` with the note's implicit code and waits for the answer.
+std::optional<NotebookRunResult> runImplicit(const QString &language, const QString &source, const QString &prelude,
+                                             const QString &wrapper = QString())
+{
+    DirectRunner runner;
+    std::optional<NotebookRunResult> result;
+    DirectRunner::Request request;
+    request.language = language;
+    request.source = source;
+    request.prelude = prelude;
+    request.wrapper = wrapper;
+    runner.run(request, [&result](NotebookRunResult r) { result = r; });
+    (void)QTest::qWaitFor([&] { return result.has_value(); }, 60'000);
+    return result;
+}
+
+} // namespace
+
+TEST(DirectRunnerTest, ImplicitCodeIsPrependedForACompiledLanguage)
+{
+    if (!DirectRunner::canRun(QStringLiteral("rust")) || !DirectRunner::canRun(QStringLiteral("python")))
+        GTEST_SKIP() << "rustc or python3 is not installed";
+    auto result = runImplicit(QStringLiteral("rust"),
+                              QStringLiteral("fn main() { let m: HashMap<u8, u8> = HashMap::new(); println!(\"{}\", m.len()); }\n"),
+                              QStringLiteral("use std::collections::HashMap;"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("0\n"));
+    result = runImplicit(QStringLiteral("python"), QStringLiteral("print(math.pi > 3)"), QStringLiteral("import math"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("True\n"));
+}
+
+TEST(DirectRunnerTest, AnErrorLineIsTheBlocksOwn)
+{
+    if (!DirectRunner::canRun(QStringLiteral("python")))
+        GTEST_SKIP() << "python3 is not installed";
+    auto result = runImplicit(QStringLiteral("python"), QStringLiteral("x = 1\n1/0"), QStringLiteral("import math\nimport os"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->ok);
+    // Line 2 of the block, not line 4 of the file that ran.
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral(", line 2,"))) << textOf(*result).toStdString();
+    EXPECT_FALSE(textOf(*result).contains(QStringLiteral(", line 4,"))) << textOf(*result).toStdString();
+
+    result = runImplicit(QStringLiteral("python"), QStringLiteral("pass"), QStringLiteral("import nosuchmodule_q"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->ok);
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral("implicit code, line 1"))) << textOf(*result).toStdString();
+}
+
+TEST(DirectRunnerTest, AWrapperRunsABlockWithNoMain)
+{
+    if (!DirectRunner::canRun(QStringLiteral("rust")))
+        GTEST_SKIP() << "rustc is not installed";
+    const QString wrapper = QStringLiteral("fn main() {\n{{code}}\n}");
+    auto result = runImplicit(QStringLiteral("rust"), QStringLiteral("println!(\"hi\");"), QString(), wrapper);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("hi\n"));
+    EXPECT_FALSE(textOf(*result).contains(QStringLiteral("Checked")));
+
+    // A block with a main of its own is not wrapped a second time.
+    result = runImplicit(QStringLiteral("rust"), QStringLiteral("fn main() { println!(\"once\"); }"), QString(), wrapper);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("once\n"));
+
+    // And a wrapper's own lines are not the block's: line 1 of this block is line 2 of the file.
+    result = runImplicit(QStringLiteral("rust"), QStringLiteral("let n: u8 = \"x\";"), QString(), wrapper);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->ok);
+    EXPECT_TRUE(textOf(*result).contains(QStringLiteral("cell.rs:1:"))) << textOf(*result).toStdString();
+}
+
+TEST(DirectRunnerTest, ImportsOnlyAndNoMainIsStillCheckOnly)
+{
+    if (!DirectRunner::canRun(QStringLiteral("c")))
+        GTEST_SKIP() << "gcc is not installed";
+    // size_t is only declared by the prelude: the check sees it, and still finds no main.
+    const auto result = runImplicit(QStringLiteral("c"), QStringLiteral("size_t twice(size_t x) { return 2 * x; }"),
+                                    QStringLiteral("#include <stddef.h>"));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->ok) << textOf(*result).toStdString();
+    EXPECT_EQ(textOf(*result), QStringLiteral("Checked, no errors. Nothing to run: this block has no main.\n"));
+}
+
+TEST(DirectRunnerTest, WithoutImplicitCodeTheRunnerInputIsByteIdentical)
+{
+    DirectRunner::Request request;
+    request.language = QStringLiteral("rust");
+    int offset = -1;
+    for (const QString &source : {QStringLiteral("fn main() {}"), QStringLiteral("fn main() {}\n"), QString()}) {
+        request.source = source;
+        EXPECT_EQ(DirectRunner::composed(request, &offset), source);
+        EXPECT_EQ(offset, 0);
+    }
+    request.source = QStringLiteral("let x = 1;");
+    request.prelude = QStringLiteral("use a;\nuse b;");
+    request.wrapper = QStringLiteral("fn main() {\n{{code}}\n}");
+    EXPECT_EQ(DirectRunner::composed(request, &offset), QStringLiteral("use a;\nuse b;\nfn main() {\nlet x = 1;\n}"));
+    EXPECT_EQ(offset, 3);
+
+    // The cache key: unchanged without implicit code, different with it.
+    const QString plain = notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5')"), SandboxTier::Bubblewrap);
+    EXPECT_NE(plain, notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5')"), SandboxTier::Bubblewrap,
+                                      QStringLiteral("import os")));
+    EXPECT_NE(notebookCacheKey(QStringLiteral("python"), QStringLiteral("x"), SandboxTier::Bubblewrap, QStringLiteral("a")),
+              notebookCacheKey(QStringLiteral("python"), QStringLiteral("x"), SandboxTier::Bubblewrap, QString(), QStringLiteral("a")));
+
+    if (!DirectRunner::canRun(QStringLiteral("python")))
+        GTEST_SKIP() << "python3 is not installed";
+    KernelTestDirs dirs;
+    NotebookController controller;
+    NotebookController::RunRequest run;
+    run.language = QStringLiteral("python");
+    ASSERT_TRUE(runThrough(controller, run, QStringLiteral("print('p5')")).ok);
+    EXPECT_TRUE(readNotebookCache(plain).hasRun);
+    run.prelude = QStringLiteral("import os");
+    ASSERT_TRUE(runThrough(controller, run, QStringLiteral("print('p5b')")).ok);
+    EXPECT_FALSE(readNotebookCache(notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5b')"))).hasRun);
+    EXPECT_TRUE(readNotebookCache(notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5b')"),
+                                                   SandboxTier::Bubblewrap, QStringLiteral("import os")))
+                    .hasRun);
 }
 
 TEST(DirectRunnerTest, ARunawayBlockIsStoppedAndAnUnknownLanguageSaysSo)

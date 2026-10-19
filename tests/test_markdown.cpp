@@ -1137,6 +1137,19 @@ TEST(CodeOptionTest, NotebookKeysOutputIncludeCacheTimeoutAndKernel)
     EXPECT_EQ(options.timeoutSeconds, 0);
 }
 
+TEST(CodeOptionTest, ImplicitFalseIsAnOption)
+{
+    const auto optionsOf = [](const QString &line) {
+        const Decorations decorations = decorationsOf(QStringLiteral("```python\n") + line + QStringLiteral("print(1)\n```\n"));
+        return decorations.codeOptions.isEmpty() ? CodeOptions() : decorations.codeOptions.first();
+    };
+    EXPECT_TRUE(optionsOf(QString()).implicit);
+    EXPECT_TRUE(optionsOf(QStringLiteral("#| implicit: true\n")).implicit);
+    const CodeOptions off = optionsOf(QStringLiteral("#| implicit: false\n"));
+    EXPECT_FALSE(off.implicit);
+    EXPECT_TRUE(off.extra.isEmpty()); // an option, not an unknown key
+}
+
 TEST(CodeOptionTest, SandboxWasmIsItsOwnTierNotHost)
 {
     const auto optionsOf = [](const QString &line) {

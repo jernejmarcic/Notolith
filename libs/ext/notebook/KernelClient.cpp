@@ -105,12 +105,12 @@ void KernelClient::stopClient()
     wait(2000);
 }
 
-QString KernelClient::execute(const QString &code, bool allowStdin)
+QString KernelClient::execute(const QString &code, bool allowStdin, bool storeHistory)
 {
     QJsonObject content;
     content.insert(QStringLiteral("code"), code);
     content.insert(QStringLiteral("silent"), false);
-    content.insert(QStringLiteral("store_history"), true);
+    content.insert(QStringLiteral("store_history"), storeHistory);
     content.insert(QStringLiteral("user_expressions"), QJsonObject());
     content.insert(QStringLiteral("allow_stdin"), allowStdin);
     // Blocks are independent cells: one failing must not abort the ones

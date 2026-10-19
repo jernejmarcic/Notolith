@@ -43,6 +43,11 @@ public:
     struct Request {
         QString language;
         QString source;
+        /// The note's implicit code: `prelude` goes above the block, `wrapper`
+        /// (with `{{code}}` where the block goes) is applied to a block with no
+        /// entry point of its own. Empty: the block runs as written.
+        QString prelude;
+        QString wrapper;
         SandboxTier tier = SandboxTier::Bubblewrap;
         QStringList readOnlyBinds;
         /// SandboxTier::Wasm only: the WebAssembly module that stands in for
@@ -51,6 +56,11 @@ public:
         QString wasmModule;
         int timeoutMs = 30'000;
     };
+    /// What is written to the file that runs: `request.source` itself when
+    /// there is no implicit code, else the wrapper (if the block has no entry
+    /// point) under the prelude. `blockLineOffset` gets the number of lines
+    /// above the block's first line, 0 when there is no implicit code.
+    static QString composed(const Request &request, int *blockLineOffset = nullptr);
     /// Runs it; `deliver` gets stdout as text and, when it fails, stderr as
     /// the error. Always answered, on this object's thread.
     void run(const Request &request, const Deliver &deliver);

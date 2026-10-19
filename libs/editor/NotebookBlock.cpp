@@ -258,6 +258,8 @@ MarkdownEditor::NotebookRunOptions MarkdownEditor::notebookOptionsOf(const Block
     options.cache = view.notebookCacheOn;
     options.timeoutSeconds = view.notebookTimeout;
     options.kernel = view.notebookKernel;
+    options.implicit = view.notebookImplicit;
+    options.implicitMain = view.notebookImplicitMain;
     return options;
 }
 
@@ -280,9 +282,27 @@ void MarkdownEditor::appendNotebookOutputRows(BlockView &view, const QString &la
     // requirement) - the working directory is not, since it never changes
     // what the code itself does, only what files sit beside it. The kernel
     // choice is: it changes what state the code runs against.
-    const QString key = language.trimmed().toLower() + QLatin1Char('|')
-                       + (sandboxHost ? QStringLiteral("host") : sandboxWasm ? QStringLiteral("wasm") : QStringLiteral("bwrap"))
-                       + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
+    QString key = language.trimmed().toLower() + QLatin1Char('|')
+                  + (sandboxHost ? QStringLiteral("host") : sandboxWasm ? QStringLiteral("wasm") : QStringLiteral("bwrap"))
+                  + QLatin1Char('|') + (options ? options->kernel : QString()) + QLatin1Char('|') + source;
+    // The note's own `implicit-<lang>[-main]` frontmatter, unless the block
+    // opts out. Part of the key: editing it makes the block look itself up
+    // again and its old output Outdated. ponytail: `py` is not `python`, a
+    // note using both spellings sets both keys.
+    view.notebookImplicit.clear();
+    view.notebookImplicitMain.clear();
+    if (!options || options->implicit) {
+        const QString prefix = QStringLiteral("implicit-") + language.trimmed().toLower();
+        for (const Property &property : std::as_const(d->m_properties)) {
+            const QString name = property.key.toLower();
+            if (name == prefix)
+                view.notebookImplicit = property.values.value(0);
+            else if (name == prefix + QLatin1String("-main"))
+                view.notebookImplicitMain = property.values.value(0);
+        }
+    }
+    if (!view.notebookImplicit.isEmpty() || !view.notebookImplicitMain.isEmpty())
+        key += QLatin1Char('\x1f') + view.notebookImplicit + QLatin1Char('\x1f') + view.notebookImplicitMain;
     view.notebookKey = key;
     view.notebookLanguage = language;
     view.notebookSource = source;
@@ -476,6 +496,8 @@ void MarkdownEditor::paintNotebookHostBadge(QPainter &painter, const BlockView &
         text = tr("host");
     else if (view.notebookSandboxWasm)
         text = tr("wasm");
+    if (!view.notebookImplicit.isEmpty() || !view.notebookImplicitMain.isEmpty())
+        text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + tr("+implicit");
     if (view.notebookRunning && view.notebookCount > 0)
         text += (text.isEmpty() ? QString() : QStringLiteral(" ")) + QStringLiteral("[*]");
     else if (view.notebookCount > 0)

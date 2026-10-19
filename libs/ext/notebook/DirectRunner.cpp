@@ -112,33 +112,76 @@ QString ghciScript(const QString &source)
     return chunks.join(QLatin1Char('\n')) + QLatin1Char('\n');
 }
 
+struct Check {
+    const char *tool;
+    const char *entry;
+    const char *command;
+};
+const Check checks[] = {
+    {"gcc", "\\bmain\\s*\\(", "gcc -fsyntax-only \"$1/cell.c\""},
+    {"g++", "\\bmain\\s*\\(", "g++ -std=c++20 -fsyntax-only \"$1/cell.cpp\""},
+    {"rustc", "\\bfn\\s+main\\s*\\(",
+     "rustc --crate-type=lib --emit=metadata -A dead_code -o \"$1/check\" \"$1/cell.rs\""},
+    {"java", "\\bvoid\\s+main\\s*\\(", "javac -d \"$1\" \"$1/Main.java\""},
+};
+
+/// Whether `source` has an entry point for `tool`, which makes it a program
+/// rather than a snippet. Comments are stripped first so a mention of main in
+/// one does not count. A tool this knows no entry point for (python...) says
+/// no: a script has none to find.
+bool hasEntry(const QString &tool, QString source)
+{
+    // Haskell: with a `main` it is a program, without a ghci session.
+    if (tool == QLatin1String("ghci")) {
+        static const QRegularExpression main(QStringLiteral("^main\\s*(::|=)"), QRegularExpression::MultilineOption);
+        return main.match(source).hasMatch();
+    }
+    static const QRegularExpression comments(QStringLiteral("//[^\\n]*|/\\*.*?\\*/"),
+                                             QRegularExpression::DotMatchesEverythingOption);
+    source.remove(comments);
+    for (const Check &check : checks) {
+        if (tool == QLatin1String(check.tool))
+            return QRegularExpression(QString::fromLatin1(check.entry)).match(source).hasMatch();
+    }
+    return false;
+}
+
 /// The shell script that only type-checks a block with no entry point (a
 /// snippet in a note, not a program), `$1` the block's directory and `$2` the
 /// line to print when it is fine; empty when the language has no such mode or
-/// the block has a `main`. Comments are stripped first so a mention of main
-/// in one does not count.
-QString checkScript(const QString &tool, QString source)
+/// the block has a `main`.
+QString checkScript(const QString &tool, const QString &source)
 {
-    static const QRegularExpression comments(QStringLiteral("//[^\\n]*|/\\*.*?\\*/"),
-                                             QRegularExpression::DotMatchesEverythingOption);
-    struct Check {
-        const char *tool;
-        const char *entry;
-        const char *command;
-    };
-    static const Check checks[] = {
-        {"gcc", "\\bmain\\s*\\(", "gcc -fsyntax-only \"$1/cell.c\""},
-        {"g++", "\\bmain\\s*\\(", "g++ -std=c++20 -fsyntax-only \"$1/cell.cpp\""},
-        {"rustc", "\\bfn\\s+main\\s*\\(",
-         "rustc --crate-type=lib --emit=metadata -A dead_code -o \"$1/check\" \"$1/cell.rs\""},
-        {"java", "\\bvoid\\s+main\\s*\\(", "javac -d \"$1\" \"$1/Main.java\""},
-    };
-    source.remove(comments);
     for (const Check &check : checks) {
-        if (tool == QLatin1String(check.tool) && !QRegularExpression(QString::fromLatin1(check.entry)).match(source).hasMatch())
+        if (tool == QLatin1String(check.tool) && !hasEntry(tool, source))
             return QString::fromLatin1(check.command) + QStringLiteral(" && printf '%s\\n' \"$2\"");
     }
     return {};
+}
+
+/// A compiler or interpreter names the line in the file it was given, which
+/// has the note's implicit code (and a wrapper's opening) above the block:
+/// give the block's own line instead, and say "implicit code" for a line of
+/// the prelude. Only the forms the file names appear in (`cell.c:3:5`,
+/// `Main.java:3`, `cell.py", line 3`) are touched.
+QString blockLines(const QString &text, int offset)
+{
+    static const QRegularExpression named(
+        QStringLiteral("\"?[^\\s\"]*(cell\\.[a-z]+|Main\\.java)(:|\", line )(\\d+)"));
+    QString out;
+    qsizetype from = 0;
+    for (auto it = named.globalMatch(text); it.hasNext();) {
+        const QRegularExpressionMatch match = it.next();
+        const int line = match.captured(3).toInt();
+        out += QStringView(text).mid(from, match.capturedStart() - from);
+        if (line > offset)
+            out += QStringView(text).mid(match.capturedStart(), match.capturedStart(3) - match.capturedStart())
+                   + QString::number(line - offset);
+        else
+            out += QStringLiteral("implicit code, line %1").arg(line);
+        from = match.capturedEnd();
+    }
+    return out + QStringView(text).mid(from);
 }
 
 QString withoutAnsi(QString text)
@@ -174,6 +217,7 @@ struct DirectRunner::Running {
     Deliver deliver;
     bool timedOut = false;
     bool interrupted = false;
+    int blockLineOffset = 0; ///< lines above the block in the file that ran
 };
 
 DirectRunner::DirectRunner(QObject *parent)
@@ -218,6 +262,29 @@ QString DirectRunner::wasmModuleFor(const QString &setting, const QString &langu
     return {};
 }
 
+QString DirectRunner::composed(const Request &request, int *blockLineOffset)
+{
+    if (blockLineOffset)
+        *blockLineOffset = 0;
+    if (request.prelude.isEmpty() && request.wrapper.isEmpty())
+        return request.source;
+    QString text = request.source;
+    int offset = 0;
+    // A wrapper is for a snippet: a block with its own entry point keeps it.
+    const qsizetype slot = request.wrapper.indexOf(QLatin1String("{{code}}"));
+    if (slot >= 0 && !hasEntry(toolFor(request.language), request.source)) {
+        offset = int(QStringView(request.wrapper).left(slot).count(QLatin1Char('\n')));
+        text = QString(request.wrapper).replace(QLatin1String("{{code}}"), request.source);
+    }
+    if (!request.prelude.isEmpty()) {
+        offset += int(request.prelude.count(QLatin1Char('\n'))) + 1;
+        text = request.prelude + QLatin1Char('\n') + text;
+    }
+    if (blockLineOffset)
+        *blockLineOffset = offset;
+    return text;
+}
+
 void DirectRunner::run(const Request &request, const Deliver &deliver)
 {
     const auto fail = [this, deliver](const QString &error) {
@@ -248,8 +315,12 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     if (!wasm && !canRun(request.language))
         return fail(tr("%1 is not installed, so \"%2\" blocks cannot run").arg(recipe->tool, request.language));
 
+    // The block as the tool will see it, the note's implicit code included:
+    // that is what has a `main` or not.
+    int blockLineOffset = 0;
+    const QString composedSource = composed(request, &blockLineOffset);
     // Haskell below, and these: a block with no `main` is only checked.
-    const QString checker = wasm ? QString() : checkScript(recipe->tool, request.source);
+    const QString checker = wasm ? QString() : checkScript(recipe->tool, composedSource);
     if (!checker.isEmpty() && recipe->tool == QLatin1String("java")
         && QStandardPaths::findExecutable(QStringLiteral("javac")).isEmpty())
         return fail(tr("javac is needed to check a java block with no main, and it is not installed"));
@@ -257,6 +328,7 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
     auto *running = new Running;
     running->language = request.language.trimmed().toLower();
     running->deliver = deliver;
+    running->blockLineOffset = blockLineOffset;
     running->dir = std::make_unique<QTemporaryDir>();
     if (!running->dir->isValid()) {
         delete running;
@@ -266,10 +338,9 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
 
     // Haskell with a `main` is a program; without, a ghci session.
     Recipe chosen = *recipe;
-    QString text = request.source;
+    QString text = composedSource;
     if (chosen.tool == QLatin1String("ghci") && !wasm) { // a wasm module gets the block as written
-        static const QRegularExpression main(QStringLiteral("^main\\s*(::|=)"), QRegularExpression::MultilineOption);
-        if (main.match(text).hasMatch()) {
+        if (hasEntry(chosen.tool, text)) {
             chosen.file = QStringLiteral("cell.hs");
             chosen.command = {QStringLiteral("runghc"), QStringLiteral("%f")};
         } else {
@@ -362,7 +433,9 @@ void DirectRunner::run(const Request &request, const Deliver &deliver)
         result.hasRun = true;
         result.wallMs = running->clock.elapsed();
         const QString out = withoutAnsi(QString::fromUtf8(running->process->readAllStandardOutput().left(kMaxOutput)));
-        const QString err = withoutAnsi(QString::fromUtf8(running->process->readAllStandardError().left(kMaxOutput)));
+        QString err = withoutAnsi(QString::fromUtf8(running->process->readAllStandardError().left(kMaxOutput)));
+        if (running->blockLineOffset > 0)
+            err = blockLines(err, running->blockLineOffset);
         if (!out.isEmpty())
             result.outputs.append({NotebookOutput::Kind::Text, out, {}, {}, {}, {}});
         // ghci reports a failed expression on stderr and still exits 0.

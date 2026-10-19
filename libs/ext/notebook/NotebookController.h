@@ -43,6 +43,13 @@ public:
     struct RunRequest {
         QString language;
         QString source;
+        /// The note's implicit code (frontmatter `implicit-<lang>` and
+        /// `implicit-<lang>-main`): `prelude` goes above the block, `wrapper`
+        /// (with `{{code}}`) is what a block with no entry point goes into.
+        /// Empty: the block runs exactly as written. A kernel gets the prelude
+        /// once per kernel (and again after a restart), never with each block.
+        QString prelude;
+        QString wrapper;
         SandboxTier tier = SandboxTier::Bubblewrap;
         /// Extra read-only binds for SandboxTier::Bubblewrap - a runnable
         /// `![[x.py]]` embed's own directory, so the file it names can
@@ -168,6 +175,8 @@ private:
             QString code; ///< to turn the kernel's code point offsets back into QString ones
         };
         QHash<QString, Pending> introspections; ///< by msg_id
+        QString preludeSent;                    ///< the implicit code this kernel has run
+        QList<NotebookOutput> preludeError;     ///< its failure, shown on the next block's result
     };
 
     KernelSession *ensureKernel(const RunRequest &request, QString *error);

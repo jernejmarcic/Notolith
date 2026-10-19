@@ -1057,13 +1057,16 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                                  : notebook::SandboxTier::Bubblewrap;
         // Forgetting a block's output: the sidecar entry goes, nothing runs.
         if (options.clear) {
-            notebook::removeNotebookCache(notebook::notebookCacheKey(language, source, tier));
+            notebook::removeNotebookCache(
+                notebook::notebookCacheKey(language, source, tier, options.implicit, options.implicitMain));
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
+        request.prelude = options.implicit;
+        request.wrapper = options.implicitMain;
         // `#| sandbox: host` is the note asking, and a note can come from
         // anyone: it leaves the sandbox only when the person has allowed that
         // in settings. A runnable embed's own folder is bound read-only.

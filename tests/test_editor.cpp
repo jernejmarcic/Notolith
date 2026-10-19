@@ -1582,6 +1582,26 @@ TEST(PropertiesTest, AQuotedValueIsReadOnly)
     EXPECT_EQ(editor->noteText(), note);
 }
 
+TEST(PropertiesTest, ABlockScalarIsShownReadOnlyAndKeptAsWritten)
+{
+    const QString note = QStringLiteral("---\ndone: false\nimplicit-python: |\n  import math\n  import os\n---\n\nbody\n");
+    auto editor = editorWith(note);
+    ASSERT_EQ(editor->properties().size(), 2);
+    EXPECT_EQ(editor->properties().at(1).key, QStringLiteral("implicit-python"));
+    EXPECT_EQ(editor->properties().at(1).values.value(0), QStringLiteral("import math\nimport os"));
+
+    // Clicking where the value is opens no editor and changes nothing.
+    const QPoint first = firstPropertyControlPoint(*editor);
+    const int rowHeight = int(Theme::builtin().textFont().pixelSize() * 1.5 * 1.2);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, first + QPoint(0, rowHeight));
+    EXPECT_EQ(editor->noteText(), note);
+    EXPECT_TRUE(editor->findChildren<QLineEdit *>().isEmpty());
+
+    // Toggling the sibling checkbox leaves the block scalar byte for byte.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, first);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("---\ndone: true\nimplicit-python: |\n  import math\n  import os\n---\n\nbody\n"));
+}
+
 TEST(PropertiesTest, TheTableFolds)
 {
     auto editor = editorWith(QStringLiteral("---\na: 1\nb: 2\nc: 3\n---\n\nbody\n"));
@@ -3852,14 +3872,14 @@ namespace {
 /// on the clipboard. Sweeping, rather than computing the label's rectangle,
 /// keeps the test from restating the editor's spacing - it only asserts that
 /// the label is up there and does the right thing when hit.
-bool clickLabelUntilCopied(MarkdownEditor &editor)
+bool clickLabelUntilCopied(MarkdownEditor &editor, int bottom = 110)
 {
     QGuiApplication::clipboard()->clear();
     const int viewport = editor.viewport()->width();
     const int column = qMax(120, qMin(viewport - 48, 700));
     const int left = qMax(24, (viewport - column) / 2);
     const int right = left + column + 4;
-    for (int y = 12; y < 110; y += 4) {
+    for (int y = 12; y < bottom; y += 4) {
         for (int x = right - 6; x > right - 140; x -= 6) {
             // "Copy" only shows while the pointer is over the block. (Sent
             // by hand: QTest::mouseMove needs an exposed window.)
@@ -3898,6 +3918,65 @@ TEST(CodeLabelTest, OptionLinesAreNotCopied)
         QStringLiteral("```python\n#| title: Setup\nprint(1)\n```\n\nafter\n"));
     ASSERT_TRUE(clickLabelUntilCopied(*editor)) << "no label in the header strip";
     EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("print(1)"));
+}
+
+TEST(NotebookBlockTest, ImplicitCodeTravelsWithTheRunNotWithCopy)
+{
+    const QString frontmatter = QStringLiteral("---\nimplicit-python: |\n  import math\nimplicit-python-main: |\n  def main():\n  {{code}}\n---\n\n");
+    const QString note = frontmatter + QStringLiteral("```python\nprint(math.pi)\n```\n\n"
+                                                      "```python\n#| implicit: false\nprint(2)\n```\n\n"
+                                                      "```rust\nlet x = 1;\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size());
+    FakeNotebook fake;
+    fake.ran = textRun(QStringLiteral("ok\n"));
+    editor->setNotebookRunner(fake.runner());
+    QTest::qWait(50);
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(math"))));
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("print(2)"))));
+    ASSERT_TRUE(editor->runNotebookBlockAt(note.indexOf(QStringLiteral("let x"))));
+    ASSERT_EQ(fake.runs.size(), 3);
+    EXPECT_EQ(fake.runs[0].implicit, QStringLiteral("import math"));
+    EXPECT_EQ(fake.runs[0].implicitMain, QStringLiteral("def main():\n{{code}}"));
+    EXPECT_TRUE(fake.runs[1].implicit.isEmpty()); // `#| implicit: false`
+    EXPECT_TRUE(fake.runs[1].implicitMain.isEmpty());
+    EXPECT_TRUE(fake.runs[2].implicit.isEmpty()); // another language's block gets nothing
+    EXPECT_EQ(fake.runSources[0], QStringLiteral("print(math.pi)")); // the listing is the block alone
+
+    // Copy takes the listing, not the note's implicit code.
+    auto copying = editorWith(frontmatter + QStringLiteral("```python\nprint(math.pi)\n```\n\nafter\n"));
+    ASSERT_TRUE(clickLabelUntilCopied(*copying, 220)) << "no label in the block's header";
+    EXPECT_EQ(QGuiApplication::clipboard()->text(), QStringLiteral("print(math.pi)"));
+}
+
+TEST(NotebookBlockTest, EditingTheImplicitCodeOutdatesTheOutputOfItsBlocks)
+{
+    const auto noteWith = [](const QString &prelude) {
+        return QStringLiteral("---\nimplicit-python: ") + prelude + QStringLiteral("\n---\n\n```python\nprint(1)\n```\n");
+    };
+    const QString note = noteWith(QStringLiteral("import math"));
+    auto editor = editorWith(note);
+    editor->setCursorOffset(note.size());
+    const qsizetype at = note.indexOf(QStringLiteral("print(1)"));
+    // Only a block that ran with `import math` has anything cached.
+    editor->setNotebookRunner([](const QString &, const QString &, bool forceRun,
+                                 const MarkdownEditor::NotebookRunOptions &options,
+                                 const MarkdownEditor::NotebookDeliver &deliver) {
+        const MarkdownEditor::NotebookRunResult answer =
+            !forceRun && options.implicit == QLatin1String("import math") ? textRun(QStringLiteral("1\n"), 1)
+                                                                          : MarkdownEditor::NotebookRunResult();
+        QTimer::singleShot(0, [deliver, answer] { deliver(answer); });
+    });
+    QTest::qWait(300);
+    auto info = editor->notebookInfoAt(at);
+    ASSERT_TRUE(info.hasRun);
+    EXPECT_FALSE(info.stale);
+
+    const QString edited = noteWith(QStringLiteral("import os"));
+    editor->setNoteText(edited);
+    QTest::qWait(300);
+    info = editor->notebookInfoAt(edited.indexOf(QStringLiteral("print(1)")));
+    EXPECT_TRUE(info.stale);
 }
 
 // --- folding a callout inside a callout -------------------------------------

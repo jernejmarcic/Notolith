@@ -18,11 +18,14 @@ QString notebookCacheRoot()
     return base + QStringLiteral("/noteAppC/notebook");
 }
 
-QString notebookCacheKey(const QString &language, const QString &source, SandboxTier tier)
+QString notebookCacheKey(const QString &language, const QString &source, SandboxTier tier,
+                         const QString &prelude, const QString &wrapper)
 {
     QCryptographicHash hash(QCryptographicHash::Sha256);
     hash.addData(language.trimmed().toLower().toUtf8() + '\x1f' + source.toUtf8() + '\x1f'
                 + QByteArray::number(int(tier)));
+    if (!prelude.isEmpty() || !wrapper.isEmpty())
+        hash.addData('\x1f' + prelude.toUtf8() + '\x1f' + wrapper.toUtf8());
     return QString::fromLatin1(hash.result().toHex());
 }
 

@@ -402,6 +402,8 @@ struct MarkdownEditor::BlockView {
     bool notebookShowOutput = true; ///< `#| output: false` clears it
     int notebookTimeout = 0;
     QString notebookKernel;
+    QString notebookImplicit;     ///< the note's `implicit-<lang>` code for this block, "" for none
+    QString notebookImplicitMain; ///< ... and its `-main` wrapper
     QString notebookBlockID; ///< "f2" (the third fence) or "e<path>": which block this is across edits
     bool notebookStale = false; ///< showing an earlier run of different source
     int notebookCount = 0;      ///< the kernel's execution count, 0 for none
