@@ -112,6 +112,9 @@
 #ifdef NOTEAPPC_HAVE_SYNC
 #include "SyncEngine.h"
 #endif
+#ifdef NOTEAPPC_HAVE_SHARE
+#include "ShareSession.h"
+#endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
 #include "ImageView.h"
 #endif
@@ -210,6 +213,11 @@ MainWindow::~MainWindow()
     // last saves may still be on their way to disk.
     m_indexer->stop();
     m_sync.reset(); // its thread stops and joins here
+#ifdef NOTEAPPC_HAVE_SHARE
+    qDeleteAll(m_sessions); // they point at the engine, which saves every share as it goes
+    m_sessions.clear();
+    m_share.reset();
+#endif
 #ifdef NOTEAPPC_HAVE_PLUGINS
     // Its pending requests fail through callbacks that reach this window.
     if (m_plugins)
@@ -1773,6 +1781,9 @@ void MainWindow::dropLeaf(Leaf *leaf)
         group = nullptr;
     }
     std::erase_if(m_leaves, [leaf](const auto &owned) { return owned.get() == leaf; });
+#ifdef NOTEAPPC_HAVE_SHARE
+    syncShareViews(); // the closed tab's editor no longer shows a shared note
+#endif
     if (m_active == leaf)
         m_active = nullptr;
     if (!next) {
@@ -3217,6 +3228,31 @@ void MainWindow::buildActions()
             syncSignIn();
     });
 #endif
+#ifdef NOTEAPPC_HAVE_SHARE
+    // ponytail: bare input boxes; the invitation dialog, who-has-access list and tab marker are lane U's.
+    add(QStringLiteral("share:share-note"), tr("Share: Share this note"), QString(), [this] {
+        QString error;
+        const QString code = shareNote(&error);
+        if (code.isEmpty()) {
+            statusBar()->showMessage(error, 8000);
+            return;
+        }
+        QInputDialog::getMultiLineText(this, tr("Share this note"),
+                                       tr("Send this code to the people who should edit the note with you. Each "
+                                          "device still has to be approved here."),
+                                       code);
+    });
+    add(QStringLiteral("share:join"), tr("Share: Join a shared note"), QString(), [this] {
+        bool ok = false;
+        const QString code = QInputDialog::getText(this, tr("Join a shared note"), tr("Invitation code:"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        QString error;
+        if (ok && !code.trimmed().isEmpty() && !joinShare(code.trimmed(), &error))
+            statusBar()->showMessage(error, 8000);
+    });
+    add(QStringLiteral("share:stop"), tr("Share: Stop sharing this note on this device"), QString(),
+        &MainWindow::stopSharingNote);
+#endif
 #ifdef NOTEAPPC_HAVE_PUBLISH
     add(QStringLiteral("publish:export"), tr("Publish: Export the vault as a website"), QString(),
         &MainWindow::publishSite);
@@ -3825,6 +3861,7 @@ void MainWindow::applySettings()
     updateSpelling();
     updateNoteHistory();
     updateSync();
+    updateShare();
     applyHotkeys(); // the vault may carry its own Obsidian hotkeys.json
 
     for (const auto &leaf : m_leaves) {
@@ -4895,6 +4932,9 @@ void MainWindow::clearOpenNote()
     m_active->editor->setNoteText(QString());
     m_active->editor->setEnabled(false);
     m_active->inlineTitle->setVisible(false);
+#ifdef NOTEAPPC_HAVE_SHARE
+    syncShareViews();
+#endif
     syncTabs(m_active->group);
     showNoteInPanes(QString());
 }
@@ -4978,6 +5018,7 @@ void MainWindow::closeVault()
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
     m_index.close();
     updateSync(); // stops syncing the vault just closed
+    updateShare();
     resetWorkspace();
     resetHistory();
 
@@ -5061,6 +5102,7 @@ void MainWindow::openTarget(const LaunchTarget &target)
     m_painted = true;
     syncPlugins();
     updateSync();
+    updateShare();
     watchThemeFiles();
     updateSpelling();
 }
@@ -5201,6 +5243,9 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
         m_active->editor->setFoldState(position->folds);
     if (position)
         m_active->editor->verticalScrollBar()->setValue(position->scroll);
+#ifdef NOTEAPPC_HAVE_SHARE
+    syncShareViews(); // a shared note takes its document's text here, caret and folds already in place
+#endif
     m_active->editor->setFocus();
 
     const QString title = QFileInfo(path).completeBaseName();
@@ -5687,6 +5732,220 @@ void MainWindow::syncSignIn()
 #endif
 }
 
+#ifdef NOTEAPPC_HAVE_SHARE
+void MainWindow::setShareConfigForTests(ShareEngine::Config config)
+{
+    m_shareConfig = std::move(config);
+}
+
+void MainWindow::setShareApprovalForTests(std::function<bool(const QString &, const QString &)> approve)
+{
+    m_shareApproval = std::move(approve);
+}
+#endif
+
+void MainWindow::updateShare()
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    const bool wanted = m_painted && m_openMode == OpenMode::Vault && m_vault.isValid() && featureOn("share");
+    const QString root = wanted ? m_vault.root() : QString();
+    if (root == m_shareFor && (m_share != nullptr) == wanted)
+        return;
+    qDeleteAll(m_sessions);
+    m_sessions.clear();
+    m_share.reset(); // nothing built, nothing listening, with the feature off
+    m_shareFor = root;
+    if (!wanted)
+        return;
+    m_share = std::make_unique<ShareEngine>(root, m_shareConfig);
+    connect(m_share.get(), &ShareEngine::joinRequested, this,
+            [this](const QByteArray &shareID, const QByteArray &joiner, const QString &name, const QString &safetyNumber) {
+                bool approved = false;
+                if (m_shareApproval) {
+                    approved = m_shareApproval(name, safetyNumber);
+                } else {
+                    QMessageBox ask(QMessageBox::Question, tr("Share"),
+                                    tr("%1 asks to edit a note of yours. Its code is:\n\n%2\n\n"
+                                       "Approve it only if that device shows exactly this code.")
+                                        .arg(name, safetyNumber),
+                                    QMessageBox::NoButton, this);
+                    ask.setTextFormat(Qt::PlainText); // the name comes from the other device
+                    QPushButton *approve = ask.addButton(tr("Approve"), QMessageBox::AcceptRole);
+                    ask.setDefaultButton(ask.addButton(tr("Not now"), QMessageBox::RejectRole));
+                    ask.exec();
+                    approved = ask.clickedButton() == approve;
+                }
+                if (!m_share)
+                    return;
+                if (approved)
+                    m_share->approve(shareID, joiner);
+                else
+                    m_share->refuse(shareID, joiner);
+            });
+    connect(m_share.get(), &ShareEngine::joined, this, &MainWindow::placeJoinedNote);
+    connect(m_share.get(), &ShareEngine::failed, this,
+            [this](const QByteArray &, const QString &message) { statusBar()->showMessage(message, 8000); });
+    if (m_share->hasStoredShares())
+        startShare();
+#endif
+}
+
+#ifdef NOTEAPPC_HAVE_SHARE
+bool MainWindow::startShare()
+{
+    if (!m_share)
+        return false;
+    if (!m_share->start()) {
+        statusBar()->showMessage(tr("Sharing could not start: %1").arg(m_share->error()), 8000);
+        return false;
+    }
+    for (const ShareRecord &record : m_share->shares())
+        shareSession(record.shareID);
+    syncShareViews();
+    return true;
+}
+
+ShareSession *MainWindow::shareSession(const QByteArray &shareID)
+{
+    if (ShareSession *known = m_sessions.value(shareID))
+        return known;
+    auto *session = new ShareSession(m_share.get(), shareID, this);
+    connect(session, &ShareSession::remoteApplied, this, [this] {
+        if (m_settings.boolean(QStringLiteral("files.autosave")))
+            armAutosave(); // the views changed with nobody typing: edited() was not emitted
+    });
+    m_sessions.insert(shareID, session);
+    return session;
+}
+
+ShareSession *MainWindow::sessionFor(const QString &absolutePath) const
+{
+    if (m_sessions.isEmpty() || !m_share || !m_vault.contains(absolutePath))
+        return nullptr;
+    const auto record = m_share->shareFor(m_vault.relative(absolutePath));
+    return record ? m_sessions.value(record->shareID) : nullptr;
+}
+
+void MainWindow::syncShareViews()
+{
+    if (m_sessions.isEmpty())
+        return;
+    QHash<ShareSession *, QList<Leaf *>> shown;
+    for (const auto &leaf : m_leaves) {
+        if (!leaf->view && !leaf->notePath.isEmpty()) {
+            if (ShareSession *session = sessionFor(leaf->notePath))
+                shown[session].append(leaf.get());
+        }
+    }
+    for (ShareSession *session : std::as_const(m_sessions)) {
+        QList<MarkdownEditor *> keep;
+        for (const Leaf *leaf : shown.value(session))
+            keep.append(leaf->editor);
+        session->retain(keep); // first: a tab that left must not count as showing the note
+    }
+    for (auto it = shown.cbegin(); it != shown.cend(); ++it) {
+        for (Leaf *leaf : it.value()) {
+            if (it.key()->attach(leaf->editor, leaf->note.text))
+                continue;
+            // The file changed while the note was not open here, in a way the
+            // shared text could not take in: the shared text wins, the file's
+            // version goes to file recovery.
+            const bool kept = featureOn("file-recovery") && Snapshots::record(leaf->notePath, leaf->note.text, 0);
+            statusBar()->showMessage(
+                kept ? tr("%1 changed on disk in a way that clashes with the shared text: the shared text is kept, "
+                          "the other version is in file recovery")
+                           .arg(QFileInfo(leaf->notePath).fileName())
+                     : tr("%1 changed on disk in a way that clashes with the shared text: the shared text is kept")
+                           .arg(QFileInfo(leaf->notePath).fileName()),
+                8000);
+        }
+    }
+}
+
+QString MainWindow::shareNote(QString *error)
+{
+    const auto fail = [error](const QString &message) {
+        if (error)
+            *error = message;
+        return QString();
+    };
+    if (!m_share)
+        return fail(tr("Turn on \"Share a note\" in Settings, Core plugins"));
+    Leaf *leaf = m_active;
+    if (leaf && Vault::isEncryptedNote(leaf->notePath))
+        return fail(tr("An encrypted note cannot be shared"));
+    if (!leaf || leaf->view || leaf->notePath.isEmpty() || !m_vault.contains(leaf->notePath)
+        || !Vault::isNote(leaf->notePath))
+        return fail(tr("Open a note of this vault to share it"));
+    if (leaf->note.lossy)
+        return fail(tr("This note is not valid UTF-8 and cannot be shared"));
+    // The file and the shared text start out the same: the note is saved first.
+    if (isModified(leaf) && !saveLeaf(leaf, false))
+        return fail(tr("The note could not be saved"));
+    QString why;
+    const auto created = m_share->create(m_vault.relative(leaf->notePath), QFileInfo(leaf->notePath).completeBaseName(),
+                                         leaf->editor->noteText(), &why);
+    if (!created)
+        return fail(why);
+    startShare(); // a session for it, and for any share the store gave back
+    return created->inviteCode;
+}
+
+bool MainWindow::joinShare(const QString &code, QString *error)
+{
+    if (!m_share) {
+        if (error)
+            *error = tr("Turn on \"Share a note\" in Settings, Core plugins");
+        return false;
+    }
+    if (!m_share->join(code, QString(), error))
+        return false;
+    startShare();
+    statusBar()->showMessage(tr("Asked to join: the note appears once its owner approves this device"), 8000);
+    return true;
+}
+
+void MainWindow::stopSharingNote()
+{
+    ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr;
+    if (!session)
+        return;
+    const QByteArray shareID = session->shareID();
+    m_sessions.remove(shareID);
+    delete session; // stops following the editors
+    m_share->stop(shareID);
+    statusBar()->showMessage(tr("Stopped sharing this note on this device; the others keep it"), 5000);
+}
+
+void MainWindow::placeJoinedNote(const QByteArray &shareID, const QString &title)
+{
+    if (!m_share || !m_share->doc(shareID))
+        return;
+    // The title is the owner's string: a file name of its own making, never a path.
+    const QString name = ShareSession::fileNameFor(title, shareID);
+    QString relative;
+    for (int n = 1;; ++n) {
+        relative = QStringLiteral("Shared/") + name + (n == 1 ? QString() : QStringLiteral(" (%1)").arg(n))
+                   + QStringLiteral(".md");
+        const QFileInfo taken(m_vault.absolute(relative));
+        if (!taken.exists() && !taken.isSymLink())
+            break;
+    }
+    Note note;
+    note.text = m_share->doc(shareID)->text();
+    QString error;
+    if (!m_vault.isConfinedPath(relative) || !m_vault.writeNoteNoFollow(relative, note, &error)) {
+        statusBar()->showMessage(tr("Joined, but the note could not be placed in Shared/: %1").arg(error), 10000);
+        return;
+    }
+    m_share->setPath(shareID, relative);
+    shareSession(shareID);
+    const QString path = m_vault.absolute(relative);
+    m_indexer->reindex(path);
+    openNote(path);
+}
+#endif
+
 void MainWindow::recordHistory(const QString &absolutePath, const QString &text)
 {
     if (Vault::isEncryptedNote(absolutePath))
@@ -5928,6 +6187,9 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     m_active->view = view;
     static_cast<QVBoxLayout *>(m_active->area->layout())->addWidget(view, 1);
     m_active->notePath = path;
+#ifdef NOTEAPPC_HAVE_SHARE
+    syncShareViews();
+#endif
     view->setFocus();
 
     syncTabs(m_active->group);
@@ -6482,6 +6744,10 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
     // Every other tab on this note shows this same document, so this saved
     // it too.
     showDiskNote(target->notePath, note);
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (ShareSession *session = sessionFor(target->notePath))
+        session->noteSaved(note.text); // what the file and the shared text agree on now
+#endif
     watchOpenNotes(); // a note saved for the first time
     if (!quiet) {
         statusBar()->showMessage(tr("Saved %1").arg(m_vault.isValid() ? m_vault.relative(target->notePath)
@@ -6505,18 +6771,16 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
         if (shown != note.text) {
             // Only the part that differs, so the caret and the scroll stay
             // where they are, as they do for an edit made in another tab.
-            const qsizetype most = qMin(shown.size(), note.text.size());
-            qsizetype head = 0;
-            while (head < most && shown.at(head) == note.text.at(head))
-                ++head;
-            qsizetype tail = 0;
-            while (tail < most - head && shown.at(shown.size() - 1 - tail) == note.text.at(note.text.size() - 1 - tail))
-                ++tail;
-            editor->applyExternalEdit(head, shown.size() - head - tail,
-                                      note.text.mid(head, note.text.size() - head - tail));
+            const MarkdownEditor::Hunk hunk = MarkdownEditor::hunkBetween(shown, note.text);
+            editor->applyExternalEdit(hunk.at, hunk.removed, hunk.inserted);
         }
         editor->setModified(false);
     }
+#ifdef NOTEAPPC_HAVE_SHARE
+    // The editors changed without an edited(): the shared text follows.
+    if (ShareSession *session = sessionFor(path))
+        session->adoptText(note.text);
+#endif
 }
 
 void MainWindow::watchOpenNotes()
@@ -6688,6 +6952,21 @@ void MainWindow::reloadChangedNotes()
         const Note &known = (*first)->note;
         if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom)
             continue; // this window's own save
+#ifdef NOTEAPPC_HAVE_SHARE
+        // A shared note's file is one more writer of the shared text: what it
+        // changed is made in the document, not laid over it. When that clashes
+        // with what is being typed, the branch below keeps the typing.
+        if (ShareSession *session = sessionFor(path); session && session->foldInDisk(known.text, disk.text)) {
+            for (const auto &leaf : m_leaves) {
+                if (leaf->view || leaf->notePath != path)
+                    continue;
+                leaf->note = disk;
+                if (leaf->editor->noteText() == disk.text)
+                    leaf->editor->setModified(false);
+            }
+            continue;
+        }
+#endif
         if (!isModified(first->get())) {
             showDiskNote(path, disk);
             continue;
@@ -7188,6 +7467,16 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
         m_fileIcons.save();
     m_settings.renameNotePosition(oldPath, newPath);
     notifyPlugins("note-renamed", newPath);
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (m_share) { // a shared note keeps its document under its new name
+        for (const ShareRecord &record : m_share->shares()) {
+            if (record.relativePath == oldRelative)
+                m_share->setPath(record.shareID, newRelative);
+            else if (isDir && record.relativePath.startsWith(oldRelative + QLatin1Char('/')))
+                m_share->setPath(record.shareID, newRelative + record.relativePath.mid(oldRelative.size()));
+        }
+    }
+#endif
 #ifdef NOTEAPPC_HAVE_HISTORY
     // The history follows the note: every note under a renamed folder too.
     if (m_noteHistory) {
@@ -7236,6 +7525,9 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
     for (const auto &group : m_groups)
         syncTabs(group.get());
     watchOpenNotes();
+#ifdef NOTEAPPC_HAVE_SHARE
+    syncShareViews();
+#endif
 
     // Picks up the moved path(s) under their new name and drops the old
     // ones, notes and attachments alike - simpler and just as correct as

@@ -869,10 +869,23 @@ public:
     };
     static const QList<Command> &commands();
     /// Runs the command with this id. False when there is no such command.
-    /// An edit another view of the same note made: the text follows, this
-    /// view's caret keeps its place in it, and its own undo history - which
-    /// no longer describes the text - is dropped.
+    /// An edit another view of the same note (or another person) made: the
+    /// text follows and this view's caret keeps its place in it. Undo and
+    /// redo keep working across it: each step the edit does not overlap is
+    /// carried over it, so undoing here undoes only what was typed here. The
+    /// steps it does overlap, and everything before them, are dropped, as
+    /// are all of them when the edit replaces the whole text.
     void applyExternalEdit(qsizetype at, qsizetype removed, const QString &inserted);
+    /// The one region that differs between two texts, found from both ends:
+    /// replace `removed` units of `from` at `at` with `inserted` to get `to`.
+    /// Never splits a surrogate pair. Empty (nothing removed or inserted) when
+    /// the texts are equal.
+    struct Hunk {
+        qsizetype at = 0;
+        qsizetype removed = 0;
+        QString inserted;
+    };
+    static Hunk hunkBetween(const QString &from, const QString &to);
     bool runCommand(const QString &id);
     /// Keys by command id, over the built-in ones; an empty list unbinds.
     /// Undo, redo, copy, cut, paste and select all are not commands: they

@@ -9600,3 +9600,75 @@ TEST(FormatColoursTest, PdfExportTakesTheCallersTheme)
                                           QStringLiteral("t"), {}, options, &error))
         << qPrintable(error);
 }
+
+// An edit from elsewhere (another tab, another person) moves the undo steps
+// with it instead of emptying them.
+TEST(ExternalEditTest, UndoCarriesAnEditMadeAfterTheLocalOnes)
+{
+    auto editor = editorWith(QStringLiteral("alpha\n\nbeta\n"));
+    editor->setCursorOffset(5);
+    editor->insertAtCaret(QStringLiteral("123"));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("alpha123\n\nbeta\n"));
+    editor->applyExternalEdit(editor->noteText().size(), 0, QStringLiteral("Z"));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("alpha123\n\nbeta\nZ"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("alpha\n\nbeta\nZ")) << "only the local typing is undone";
+    QTest::keyClick(editor.get(), Qt::Key_Y, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("alpha123\n\nbeta\nZ"));
+}
+
+TEST(ExternalEditTest, UndoCarriesAnEditMadeBeforeTheLocalOnes)
+{
+    auto editor = editorWith(QStringLiteral("alpha\n\nbeta\n"));
+    editor->setCursorOffset(editor->noteText().size());
+    editor->insertAtCaret(QStringLiteral("end"));
+    editor->applyExternalEdit(0, 0, QStringLiteral("top\n"));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("top\nalpha\n\nbeta\nend"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("top\nalpha\n\nbeta\n"));
+}
+
+TEST(ExternalEditTest, AnEditInsideWhatWasTypedDropsThatStepAndTheOnesBefore)
+{
+    auto editor = editorWith(QStringLiteral("one\n"));
+    editor->setCursorOffset(0);
+    editor->insertAtCaret(QStringLiteral("first "));
+    QTest::qWait(600); // a second undo step
+    editor->setCursorOffset(editor->noteText().size());
+    editor->insertAtCaret(QStringLiteral("second"));
+    ASSERT_EQ(editor->noteText(), QStringLiteral("first one\nsecond"));
+    // Inside the newest step's region: it and the older step go; nothing is garbled.
+    editor->applyExternalEdit(editor->noteText().size() - 3, 0, QStringLiteral("#"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("first one\nsec#ond")) << "no step left to undo";
+}
+
+TEST(ExternalEditTest, TheWholeTextReplacedEmptiesTheHistory)
+{
+    auto editor = editorWith(QStringLiteral("abc"));
+    editor->setCursorOffset(3);
+    editor->insertAtCaret(QStringLiteral("d"));
+    editor->applyExternalEdit(0, 4, QStringLiteral("new"));
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("new"));
+}
+
+TEST(HunkTest, TheRegionThatDiffersNeverSplitsASurrogatePair)
+{
+    // Two emoji that share their first half: U+1F600 and U+1F601.
+    const QString one = QString::fromUcs4(U"a\U0001F600b", 3);
+    const QString other = QString::fromUcs4(U"a\U0001F601b", 3);
+    ASSERT_EQ(one.size(), 4);
+    const MarkdownEditor::Hunk hunk = MarkdownEditor::hunkBetween(one, other);
+    EXPECT_EQ(hunk.at, 1);
+    EXPECT_EQ(hunk.removed, 2);
+    EXPECT_EQ(hunk.inserted, other.mid(1, 2));
+    EXPECT_EQ(MarkdownEditor::hunkBetween(one, one).removed, 0);
+    EXPECT_TRUE(MarkdownEditor::hunkBetween(one, one).inserted.isEmpty());
+    // the same for the ends: a shared second half
+    const QString low = QString::fromUcs4(U"\U0001F600", 1);
+    const QString lowOther = QString::fromUcs4(U"\U0001F200", 1);
+    const MarkdownEditor::Hunk tail = MarkdownEditor::hunkBetween(low, lowOther);
+    EXPECT_EQ(tail.at, 0);
+    EXPECT_EQ(tail.removed, 2);
+}

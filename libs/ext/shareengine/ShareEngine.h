@@ -125,6 +125,13 @@ public:
     /// `base` is the text the file on disk and the document agree on; the
     /// share's state is written now.
     void persist(const QByteArray &shareID, const QString &base);
+    /// The text the file on disk and the document last agreed on, as persist()
+    /// was given it ("" for an unknown share).
+    QString base(const QByteArray &shareID) const;
+    /// Whether the store holds a share of this vault, which start() would load;
+    /// reads the store only. Lets the window start the engine only when there
+    /// is something to resume.
+    bool hasStoredShares() const;
     /// The members the owner has listed: (device key, label).
     QList<QPair<QByteArray, QString>> members(const QByteArray &shareID) const;
 
