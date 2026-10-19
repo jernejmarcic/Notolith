@@ -70,4 +70,4 @@ cache lacks them), and pinned by the committed `libs/ext/share/yrs-ffi/Cargo.loc
 | 44 more crates it needs | as locked | MIT / Apache-2.0 and similar |
 
 45 crates, 3.5 MB of source in total. The static library is about 13 MB and
-adds about 0.5 MB to a stripped test executable.
+adds about 0.8 MB to a stripped test executable (measured against the same executable linked to a stub).

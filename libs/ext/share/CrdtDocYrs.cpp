@@ -121,8 +121,9 @@ private:
                     break;
                 QString inserted = QString::fromUtf8(p, qsizetype(bytes));
                 p += bytes;
+                const qsizetype at = pos;
                 pos += inserted.size();
-                edits.append({pos - inserted.size(), 0, std::move(inserted)});
+                edits.append({at, 0, std::move(inserted)});
             }
         }
         return edits;
