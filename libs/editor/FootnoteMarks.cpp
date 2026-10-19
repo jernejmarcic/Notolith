@@ -266,7 +266,7 @@ bool MarkdownEditor::jumpToFootnote(const QPoint &viewportPoint)
     };
     for (const BlockView &view : d->m_blocks) {
         const qreal top = view.y - scroll;
-        if (viewportPoint.y() < top || viewportPoint.y() > top + view.height)
+        if (view.foldHidden || viewportPoint.y() < top || viewportPoint.y() > top + view.height)
             continue;
 
         if (view.isFootnotesList) {

@@ -872,6 +872,17 @@ void MarkdownEditor::setIndentGuides(bool on)
     viewport()->update(); // drawn behind the text; nothing moves
 }
 
+void MarkdownEditor::setFolding(bool heading, bool indent)
+{
+    if (d->m_foldHeading == heading && d->m_foldIndent == indent)
+        return;
+    d->m_foldHeading = heading;
+    d->m_foldIndent = indent;
+    invalidateLayouts(); // a list's hidden lines are part of its layout
+    updateLayout();
+    viewport()->update();
+}
+
 void MarkdownEditor::setOutlineNumbering(bool on)
 {
     if (d->m_outlineNumbering == on)
@@ -1185,6 +1196,8 @@ QString MarkdownEditor::displayText() const
     QStringList parts;
     parts.reserve(int(d->m_blocks.size()));
     for (const BlockView &view : d->m_blocks) {
+        if (view.foldHidden)
+            continue;
         if (view.laidOut) {
             parts << view.map.text();
             continue;
@@ -1192,13 +1205,16 @@ QString MarkdownEditor::displayText() const
         const bool reveal = d->m_mode == Mode::Source
                             || (d->m_mode == Mode::LivePreview && view.active);
         if (reveal) {
-            parts << d->m_text.mid(view.span.range.start, view.span.range.length());
+            QList<Range> folded;
+            hideFoldedListItems(view, folded);
+            parts << DisplayMap::build(d->m_text, view.span.range, folded, {}).text();
             continue;
         }
         QList<Range> hidden;
         for (int i = view.firstSyntax; i < view.lastSyntax; ++i)
             hidden.append(d->m_decorations.syntax.at(i));
         hideFoldedNestedCallouts(view, hidden);
+        hideFoldedListItems(view, hidden);
         parts << DisplayMap::build(d->m_text, view.span.range, hidden, d->m_decorations.substitutions).text();
     }
     return parts.join(QString());
@@ -2691,7 +2707,12 @@ void MarkdownEditor::paintIndentGuides(QPainter &painter, const BlockView &view,
     painter.save();
     painter.setPen(QPen(guide, 1));
     const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    qsizetype hiddenUntil = 0; // under a folded item
     for (size_t i = 0; i < items.size() && i < view.listParent.size(); ++i) {
+        if (items[i].range.start < hiddenUntil)
+            continue;
+        if (foldedItem(items, i))
+            hiddenUntil = items[i].range.end;
         if (view.listParent[i] < 0)
             continue;
         const QRectF band = bandOf(view, items[i].range);
@@ -2720,7 +2741,14 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
         return std::any_of(view.revealed.cbegin(), view.revealed.cend(),
                            [&item](const Range &range) { return range.overlaps(item.marker); });
     };
-    for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    qsizetype hiddenUntil = 0; // under a folded item
+    for (size_t at = 0; at < items.size(); ++at) {
+        const ListItemSpan &item = items[at];
+        if (item.range.start < hiddenUntil)
+            continue;
+        if (foldedItem(items, at))
+            hiddenUntil = item.range.end;
         // The caret has uncovered this item's marker as text, so a drawn
         // bullet would double it.
         if (markerShown(item))
@@ -3923,6 +3951,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.revealed = perElement ? revealedSyntax(view) : QList<Range>();
     view.caretWord = view.active ? wordAtCaret() : Range{};
     QList<Range> hidden;
+    // A folded list item hides its children whatever else the block shows.
+    QList<Range> listFolds;
+    hideFoldedListItems(view, listFolds);
     // Embeds inside this block that layoutEmbed did not already render whole
     // - several sharing a paragraph, or one mixed in with running text,
     // drawn inline; see collectTextEmbeds' comment in the header.
@@ -3942,6 +3973,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
         layoutAnchorSeparators(view, hidden);
         layoutFootnotes(view, hidden);
         hideFoldedNestedCallouts(view, hidden);
+        hidden += listFolds;
         if (renderMedia && d->m_features.fileEmbeds)
             collectTextEmbeds(view, hidden, textEmbeds);
         if (notebookEchoHidden)
@@ -3951,7 +3983,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     const QList<Range> openEntities = perElement ? revealedEntities() : QList<Range>();
     const QList<Substitution> withoutOpen = openEntities.isEmpty() ? QList<Substitution>()
                                                                    : substitutionsWithout(openEntities);
-    view.map = reveal ? DisplayMap::identity(d->m_text, view.span.range)
+    view.map = reveal ? (listFolds.isEmpty() ? DisplayMap::identity(d->m_text, view.span.range)
+                                             : DisplayMap::build(d->m_text, view.span.range, listFolds, {}))
                       : DisplayMap::build(d->m_text, view.span.range, hidden,
                                           openEntities.isEmpty() ? d->m_decorations.substitutions : withoutOpen);
     for (BlockView::InlineMath &formula : view.inlineMaths)
@@ -4194,10 +4227,18 @@ void MarkdownEditor::updateLayout()
 
     const CodeFenceSpan *fenceShown = bareCaret ? fenceAroundCaret() : nullptr;
 
+    // The caret arriving in hidden text opens the folds hiding it, but only
+    // once the user has touched the note: a restored caret and folds would
+    // otherwise undo each other. A selection runs over folds without opening them.
+    if (d->m_interacted && d->m_mode != Mode::Reading && d->m_cursor == d->m_anchor)
+        openFoldsAt(d->m_cursor);
+
     // One pass over the note, which is the only part of this proportional to
     // its length: settle what each block reveals, and place it.
     d->m_movedFrom = qInf();
     qreal y = d->m_topPadding;
+    int foldLevel = 0; // the level of the folded heading whose section this is, 0 outside one
+    const BlockView *above = nullptr; // the block before this one that takes room
     for (qsizetype i = 0; i < qsizetype(d->m_blocks.size()); ++i) {
         BlockView &view = d->m_blocks[size_t(i)];
         // A tab group with the caret in it is edited as plain source: its
@@ -4235,8 +4276,17 @@ void MarkdownEditor::updateLayout()
             view.heightEstimated = false;
         }
 
-        if (i > 0)
-            y += blockGap(d->m_text, d->m_blocks[size_t(i - 1)], view);
+        // A folded heading hides every block up to the next heading of its
+        // level or higher; the blocks keep their layouts and heights.
+        if (view.span.kind == BlockSpan::Kind::Heading && view.span.level <= foldLevel)
+            foldLevel = 0;
+        view.foldHidden = foldLevel > 0;
+        if (view.foldHidden) {
+            view.y = y;
+            continue;
+        }
+        if (above)
+            y += blockGap(d->m_text, *above, view);
         if (view.y != y && d->m_movedFrom > y)
             d->m_movedFrom = y;
         view.y = y;
@@ -4248,6 +4298,9 @@ void MarkdownEditor::updateLayout()
                 d->m_movedFrom = y;
         }
         y += view.height + kBlockSpacing;
+        above = &view;
+        if (headingFolds(view))
+            foldLevel = view.span.level;
     }
     d->m_totalHeight = y + d->m_topPadding;
 
@@ -4269,14 +4322,14 @@ void MarkdownEditor::updateLayout()
         const qreal passBottom = pass == 0 ? bottom : scroll + viewport()->height();
         const auto nearTop = std::partition_point(d->m_blocks.begin(), d->m_blocks.end(),
                                                   [passTop](const BlockView &view) {
-                                                      return view.y + view.height < passTop;
+                                                      return view.bottomY() < passTop;
                                                   });
         const qsizetype from = std::distance(d->m_blocks.begin(), nearTop);
 
         qsizetype firstChanged = -1;
         const auto layOut = [this, &firstChanged](qsizetype i) {
             BlockView &view = d->m_blocks[size_t(i)];
-            if (view.laidOut)
+            if (view.laidOut || view.foldHidden)
                 return;
             const qreal before = view.height;
             layoutBlock(view);
@@ -4298,15 +4351,20 @@ void MarkdownEditor::updateLayout()
             break;
         // Only what follows a block whose height changed moves.
         d->m_movedFrom = qMin(d->m_movedFrom, d->m_blocks[size_t(firstChanged)].y);
-        qreal y = firstChanged == 0 ? d->m_topPadding
-                                    : d->m_blocks[size_t(firstChanged - 1)].y
-                                          + d->m_blocks[size_t(firstChanged - 1)].height
-                                          + kBlockSpacing;
+        // Nothing before it moved, so it stays where it is (never a hidden
+        // block: those are not laid out).
+        qreal y = d->m_blocks[size_t(firstChanged)].y;
+        const BlockView *shown = nullptr;
         for (qsizetype j = firstChanged; j < qsizetype(d->m_blocks.size()); ++j) {
             BlockView &view = d->m_blocks[size_t(j)];
-            if (j > 0)
-                y += blockGap(d->m_text, d->m_blocks[size_t(j - 1)], view);
+            if (view.foldHidden) {
+                view.y = y;
+                continue;
+            }
+            if (shown)
+                y += blockGap(d->m_text, *shown, view);
             view.y = y;
+            shown = &view;
             if (!view.laidOut && !view.heightEstimated) {
                 view.height = estimatedHeight(view);
                 view.heightEstimated = true;
@@ -4331,7 +4389,7 @@ QList<MarkdownEditor::BlockBox> MarkdownEditor::blockBoxes()
         // overlap; it is what keeps two panels apart.
         const qreal above = panelBleed(view, false);
         const qreal below = panelBleed(view, true);
-        boxes.append({isBlankBlock(d->m_text, view)
+        boxes.append({view.foldHidden || isBlankBlock(d->m_text, view)
                           ? QRectF()
                           : QRectF(0, view.y - above, contentWidth(), view.height + above + below),
                       view.span.kind, range});
@@ -4390,7 +4448,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
 
     const auto firstExposed = std::partition_point(
         d->m_blocks.cbegin(), d->m_blocks.cend(), [scroll, exposedTop](const BlockView &view) {
-            return view.y - scroll + view.height < exposedTop;
+            return view.bottomY() - scroll < exposedTop;
         });
     // A listing being edited has its panel drawn first, behind everything: it
     // reaches out over the fence lines of the paragraphs either side, which
@@ -4401,7 +4459,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         const qreal top = it->y - scroll;
         if (top > exposedBottom + 2 * lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0}))
             break;
-        if (it->editedListing && !it->tabHidden)
+        if (it->editedListing && !it->tabHidden && !it->foldHidden)
             paintEditedListingPanel(painter, *it, left, top);
     }
 
@@ -4410,7 +4468,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         const qreal top = view.y - scroll;
         if (top > exposedBottom)
             break;
-        if (view.tabHidden)
+        if (view.tabHidden || view.foldHidden)
             continue;
 
         if (view.span.kind == BlockSpan::Kind::Frontmatter && d->m_mode != Mode::Source
@@ -4559,6 +4617,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             paintAnchorSeparators(painter, view, textLeft, top + drop);
             paintFootnoteMarks(painter, view, textLeft, top + drop);
             paintListMarkers(painter, view, textLeft, top + drop);
+            paintFoldMarks(painter, view, left, top);
             if (clip)
                 painter.restore();
             paintGutter(painter, view, top + drop);
@@ -4644,6 +4703,8 @@ QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return {};
     const BlockView &view = d->m_blocks.at(size_t(index));
+    if (view.foldHidden)
+        return {}; // a caret restored inside a fold has nowhere to be drawn
     const Cell *cell = nullptr;
     for (const Cell &candidate : view.cells) {
         if (candidate.source.isValid() && candidate.source.start <= offset && offset <= candidate.source.end)
@@ -4682,8 +4743,17 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
     const qreal scroll = verticalScrollBar()->value();
     const qreal y = viewportPoint.y() + scroll;
     const qreal x = viewportPoint.x() - contentLeft();
+    if (d->m_blocks.empty())
+        return d->m_text.size();
 
+    // The last block that shows: a click below the end lands in it, not in
+    // a folded section's hidden tail.
+    const BlockView *lastShown = &d->m_blocks.back();
+    while (lastShown != d->m_blocks.data() && lastShown->foldHidden)
+        --lastShown;
     for (const BlockView &view : d->m_blocks) {
+        if (view.foldHidden)
+            continue;
         if (!view.cells.empty()) {
             if (y < view.y || y > view.y + view.height)
                 continue;
@@ -4714,7 +4784,7 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
                 return view.span.range.start;
             continue;
         }
-        const bool last = &view == &d->m_blocks.back();
+        const bool last = &view == lastShown;
         if (y > view.y + view.height + kBlockSpacing && !last)
             continue;
         if (view.folded)
@@ -4844,6 +4914,10 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
 
 void MarkdownEditor::setCursorOffset(qsizetype offset)
 {
+    // A jump (the outline, a link, a search) into a fold opens it. Reading
+    // view draws no caret to hide, and a restored note sets its folds after.
+    if (d->m_mode != Mode::Reading && openFoldsAt(qBound<qsizetype>(0, offset, d->m_text.size())))
+        updateLayout();
     moveCursor(offset, false);
 }
 
@@ -5182,11 +5256,13 @@ void MarkdownEditor::undo()
     d->m_redo.append({d->m_text, d->m_cursor});
     const Snapshot snapshot = d->m_undo.takeLast();
     const qsizetype before = d->m_text.size();
+    const QStringList folds = takeFolds();
     d->m_text = snapshot.text;
     ++d->m_textVersion;
     d->m_cursor = d->m_anchor = qBound<qsizetype>(0, snapshot.cursor, d->m_text.size());
     setModified(true);
     reparse();
+    applyFoldState(folds);
     emit textChanged();
     emit edited(0, before, d->m_text);
     viewport()->update();
@@ -5199,11 +5275,13 @@ void MarkdownEditor::redo()
     d->m_undo.append({d->m_text, d->m_cursor});
     const Snapshot snapshot = d->m_redo.takeLast();
     const qsizetype before = d->m_text.size();
+    const QStringList folds = takeFolds();
     d->m_text = snapshot.text;
     ++d->m_textVersion;
     d->m_cursor = d->m_anchor = qBound<qsizetype>(0, snapshot.cursor, d->m_text.size());
     setModified(true);
     reparse();
+    applyFoldState(folds);
     emit textChanged();
     emit edited(0, before, d->m_text);
     viewport()->update();
@@ -5226,11 +5304,13 @@ void MarkdownEditor::applyExternalEdit(qsizetype at, qsizetype removed, const QS
         // An undo or redo over there: the whole text, as undo() takes it. The
         // callouts may be gone or new, so an open title has nowhere to land.
         finishCalloutTitleEdit(false);
+        const QStringList folds = takeFolds();
         d->m_text = inserted;
         ++d->m_textVersion;
         d->m_cursor = d->m_anchor = qMin(d->m_cursor, d->m_text.size());
         setModified(true);
         reparse();
+        applyFoldState(folds);
         emit textChanged();
     } else {
         d->m_applyingExternal = true;
@@ -5641,9 +5721,16 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         return;
 
     for (const BlockView &view : d->m_blocks) {
-        if (view.listTextX.empty() || !view.laidOut)
+        if (view.listTextX.empty() || !view.laidOut || view.foldHidden)
             continue;
-        for (const ListItemSpan &item : listItemsIn(view.span.range)) {
+        const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+        qsizetype hiddenUntil = 0; // under a folded item
+        for (size_t at = 0; at < items.size(); ++at) {
+            const ListItemSpan &item = items[at];
+            if (item.range.start < hiddenUntil)
+                continue;
+            if (foldedItem(items, at))
+                hiddenUntil = item.range.end;
             if (!item.task)
                 continue;
             // A marker the caret has uncovered shows as text, with no box to click.

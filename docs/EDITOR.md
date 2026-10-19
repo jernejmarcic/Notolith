@@ -468,10 +468,62 @@ which moves with the text; a whole-text replacement (the other tab's undo)
 drops it, as the callouts may be gone.
 `CalloutTitle.cpp`; tests `CalloutTitleTest.*`.
 
+### Folding headings and lists
+
+A heading folds its section, as in Obsidian: every block after it up to (not
+including) the next heading of the same or a higher level, or the end of the
+note. A list item with children folds them; one without cannot (a continuation
+line is not a child), and a heading inside a callout or a quote does not fold.
+Both are on by default: `MarkdownEditor::setFolding(heading, indent)` is the
+switch (the Settings page and Obsidian's `foldHeading` / `foldIndent` import
+come with the commands, a later change); off, that kind has no arrow, hides
+nothing and is not remembered, and its remembered folds return when it is
+switched on again.
+
+An arrow in the margin level with the heading's, or the item's, first line
+shows under the pointer and stays while it is folded; a folded line ends in a
+small "..." box. Click the arrow or the box to toggle; a click on the line's
+own text still puts the caret there. In source mode the arrow sits left of the
+line numbers. All three modes fold, and share one fold state (`setMode()`
+keeps it).
+
+A folded heading's blocks keep their layouts and heights but take no room
+(`BlockView::foldHidden`, set in `updateLayout()`'s one pass with a single
+`foldLevel` integer, so a keystroke pays one compare per block); they are
+skipped by painting and by every hit test (`offsetAt`, `blockAtPoint`,
+`handleBlockClick`, table, footnote, callout-title and code-label lookups, the
+edit button), so opening a fold costs one pass and no relayout. A folded H2
+inside a folded H1 stays folded when the H1 opens. A folded list item hides its
+lines after the first, like a folded nested callout does: a hidden range in the
+block's `DisplayMap`, applied in source mode and to the caret's block too,
+and its children's bullets, checkboxes and guides are not drawn.
+
+Editing rules:
+
+- The caret arriving in hidden text opens the folds that hide it (a key press
+  into it, Enter at the end of a folded heading, a jump from the outline, a
+  link or a search: `setCursorOffset()`, `scrollToOffset()`, `revealOffset()`).
+  In `updateLayout()` that rule runs only once the user has touched the note
+  and not in reading view, so a restored caret and restored folds do not undo
+  each other, so a restore sets the caret first and the folds after (`MainWindow`
+  still does it the other way round until the commands change, which swaps it). A selection runs over a fold without opening it, and copy, cut and
+  delete act on the hidden source too.
+- Folding a section the caret is in moves the caret to the heading's, or the
+  item's, line first.
+- Folds follow their line: the offset-keyed state is remapped by every edit,
+  and undo, redo and a whole-text external edit carry it across by line text
+  (`takeFolds()` / `applyFoldState()`).
+
+Folded headings and list parents are remembered with the rest (below), only the
+folded ones: an open one has no entry, so folding everything on a big note costs
+one stored line per heading and parent (about 80 kB for a megabyte of notes).
+Clicks, the caret rules and the remembered state are covered by `FoldTest.*`
+(`AHeadingFoldsToTheNextHeading...` and the tests after it).
+
 ### Folds are remembered per note
 
 What was folded or opened by hand (a callout, a nested callout, a `#| fold`
-code block, the properties table) comes back when the note does, after a
+code block, the properties table, a heading, a list item) comes back when the note does, after a
 switch in the same pane and after a restart, as Obsidian keeps a file's folds.
 `MarkdownEditor::foldState()` gives one entry per foldable block - the text of
 the line it starts on, how many earlier foldable lines read the same, and
@@ -891,7 +943,8 @@ Source mode draws the text and nothing rendered: markdown syntax in its own
 colours, listings highlighted, line numbers, indent guides (a setting) and
 heading sizes (text, as in Obsidian's source mode). No code panel, header, run
 control or output, no callout panel, title bar or fold (a `[!x]-` callout shows
-its body), no properties table, tables, embeds, maths, queries or bullets. A
+its body), no properties table, tables, embeds, maths, queries or bullets.
+Headings and list parents still fold (arrow, "..." box and all). A
 renderer that forgets to ask `plainSource()` shows up as a panel in Source mode.
 
 ## Vim key bindings

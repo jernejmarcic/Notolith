@@ -282,7 +282,8 @@ bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
     const qreal y = viewportPoint.y() + verticalScrollBar()->value();
     const qreal x = viewportPoint.x() - contentLeft();
     for (const BlockView &view : d->m_blocks) {
-        if (view.cells.empty() || y < view.y || y > view.y + view.height || d->m_mode == Mode::Source)
+        if (view.cells.empty() || view.foldHidden || y < view.y || y > view.y + view.height
+            || d->m_mode == Mode::Source)
             continue;
         const TableSpan *table = tableFor(view);
         if (!table)

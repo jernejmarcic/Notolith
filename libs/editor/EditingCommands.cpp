@@ -1140,6 +1140,7 @@ void MarkdownEditor::findStep(int direction)
 
 void MarkdownEditor::scrollToOffset(qsizetype offset)
 {
+    revealOffset(offset); // a match or a jump inside a fold opens it
     const qsizetype index = blockAt(offset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;

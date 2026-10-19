@@ -47,7 +47,7 @@ bool MarkdownEditor::pressCalloutTitle(const QPoint &point)
     const qreal left = contentLeft();
     for (const BlockView &view : d->m_blocks) {
         const qreal top = view.y - scroll;
-        if (top + view.height < 0 || !view.laidOut || !view.callout)
+        if (top + view.height < 0 || !view.laidOut || !view.callout || view.foldHidden)
             continue;
         if (top > viewport()->height())
             break;

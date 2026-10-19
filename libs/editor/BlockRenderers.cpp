@@ -102,6 +102,102 @@ void MarkdownEditor::setFolded(const BlockView &view, bool folded)
     viewport()->update();
 }
 
+const ListItemSpan *MarkdownEditor::foldableItemAt(qsizetype offset) const
+{
+    const QList<ListItemSpan> &items = d->m_decorations.listItems;
+    if (!d->m_foldIndent || items.isEmpty())
+        return nullptr;
+    const qsizetype lineStart = d->m_lines.lineStart(d->m_lines.lineAt(offset));
+    const auto it = std::lower_bound(items.cbegin(), items.cend(), lineStart,
+                                     [](const ListItemSpan &item, qsizetype at) { return item.range.start < at; });
+    // Its parser range runs over its children, so a next item that starts
+    // inside it is one of them; a continuation line alone is not a fold.
+    if (it == items.cend() || it->range.start != lineStart || it + 1 == items.cend()
+        || (it + 1)->range.start >= it->range.end)
+        return nullptr;
+    return &*it;
+}
+
+bool MarkdownEditor::foldedItem(std::span<const ListItemSpan> items, size_t i) const
+{
+    return d->m_foldIndent && i + 1 < items.size() && items[i + 1].range.start < items[i].range.end
+           && d->m_folds.value(items[i].range.start, false);
+}
+
+bool MarkdownEditor::headingFolds(const BlockView &view) const
+{
+    return d->m_foldHeading && view.span.kind == BlockSpan::Kind::Heading
+           && d->m_folds.value(view.span.range.start, false);
+}
+
+Range MarkdownEditor::listFoldRange(const ListItemSpan &item) const
+{
+    const qsizetype firstEnd = d->m_text.indexOf(QLatin1Char('\n'), item.range.start);
+    if (firstEnd < 0 || firstEnd + 1 >= item.range.end)
+        return {};
+    qsizetype end = item.range.end;
+    // The children's own last newline too, or it is left behind as an empty
+    // line under the folded item (as hideFoldedNestedCallouts does).
+    if (d->m_text.at(end - 1) != QLatin1Char('\n') && end < d->m_text.size()
+        && d->m_text.at(end) == QLatin1Char('\n'))
+        ++end;
+    return {firstEnd + 1, end};
+}
+
+void MarkdownEditor::hideFoldedListItems(const BlockView &view, QList<Range> &hidden) const
+{
+    if (!d->m_foldIndent || d->m_folds.isEmpty())
+        return;
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    for (size_t i = 0; i < items.size(); ++i) {
+        if (foldedItem(items, i)) {
+            if (const Range body = listFoldRange(items[i]); body.isValid())
+                hidden.append(body);
+        }
+    }
+}
+
+bool MarkdownEditor::openFoldsAt(qsizetype offset)
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || d->m_folds.isEmpty())
+        return false;
+    bool opened = false;
+    if (d->m_foldHeading) {
+        // The headings that hold the block: walking up, each with a lower
+        // level than any seen so far is one more it sits under.
+        const BlockSpan &own = d->m_blocks[size_t(index)].span;
+        int below = own.kind == BlockSpan::Kind::Heading ? own.level : 7;
+        for (qsizetype i = index - 1; i >= 0 && below > 1; --i) {
+            const BlockSpan &span = d->m_blocks[size_t(i)].span;
+            if (span.kind != BlockSpan::Kind::Heading || span.level >= below)
+                continue;
+            below = span.level;
+            opened |= d->m_folds.remove(span.range.start) > 0;
+        }
+    }
+    if (d->m_foldIndent) {
+        const std::span<const ListItemSpan> items = listItemsIn(d->m_blocks[size_t(index)].span.range);
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (foldedItem(items, i) && listFoldRange(items[i]).contains(offset)) {
+                d->m_folds.remove(items[i].range.start);
+                opened = true;
+            }
+        }
+        if (opened)
+            invalidateBlock(index);
+    }
+    return opened;
+}
+
+void MarkdownEditor::revealOffset(qsizetype offset)
+{
+    if (openFoldsAt(offset)) {
+        updateLayout();
+        viewport()->update();
+    }
+}
+
 void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
 {
     // A nested callout is not a block, so it is looked up by its own start.
@@ -114,10 +210,50 @@ void MarkdownEditor::toggleFoldAt(qsizetype sourceOffset)
             return;
         }
     }
+    // A fold that hides the caret moves it to the fold's line first: the caret
+    // inside hidden text would open the fold again on the next layout.
+    if (const ListItemSpan *item = foldableItemAt(sourceOffset)) {
+        const qsizetype start = item->range.start;
+        const bool fold = !d->m_folds.value(start, false);
+        if (fold && listFoldRange(*item).contains(d->m_cursor))
+            setCursorOffset(start);
+        if (fold)
+            d->m_folds.insert(start, true);
+        else
+            d->m_folds.remove(start); // open is what no entry means
+        invalidateBlock(blockAt(start));
+        updateLayout();
+        viewport()->update();
+        return;
+    }
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return;
     const BlockView &view = d->m_blocks.at(size_t(index));
+    if (view.span.kind == BlockSpan::Kind::Heading) {
+        if (!d->m_foldHeading)
+            return;
+        const qsizetype start = view.span.range.start;
+        const bool fold = !d->m_folds.value(start, false);
+        if (fold) {
+            qsizetype end = index + 1;
+            while (end < qsizetype(d->m_blocks.size())
+                   && !(d->m_blocks[size_t(end)].span.kind == BlockSpan::Kind::Heading
+                        && d->m_blocks[size_t(end)].span.level <= view.span.level))
+                ++end;
+            const qsizetype caret = blockAt(d->m_cursor);
+            if (caret > index && caret < end)
+                setCursorOffset(start);
+            d->m_folds.insert(start, true);
+        } else {
+            d->m_folds.remove(start);
+        }
+        updateLayout(); // nothing is invalidated: the blocks keep their layouts
+        viewport()->update();
+        return;
+    }
+    if (view.span.kind == BlockSpan::Kind::List)
+        return; // a list item folds only when it has children (foldableItemAt)
     setFolded(view, !d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view)));
 }
 
@@ -127,10 +263,16 @@ bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
         if (callout.depth > 0 && callout.foldable && callout.range.start == sourceOffset)
             return d->m_folds.value(sourceOffset, callout.collapsed);
     }
+    if (const ListItemSpan *item = foldableItemAt(sourceOffset))
+        return d->m_folds.value(item->range.start, false);
     const qsizetype index = blockAt(sourceOffset);
     if (index < 0 || index >= qsizetype(d->m_blocks.size()))
         return false;
     const BlockView &view = d->m_blocks.at(size_t(index));
+    if (view.span.kind == BlockSpan::Kind::Heading)
+        return headingFolds(view);
+    if (view.span.kind == BlockSpan::Kind::List)
+        return false;
     return d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
 }
 
@@ -147,6 +289,19 @@ QList<std::pair<qsizetype, QString>> MarkdownEditor::foldSites() const
     }
     for (const CodeOptions &options : d->m_decorations.codeOptions)
         offsets.append(options.block.start);
+    if (d->m_foldHeading) {
+        for (const BlockView &view : d->m_blocks) {
+            if (view.span.kind == BlockSpan::Kind::Heading)
+                offsets.append(view.span.range.start);
+        }
+    }
+    if (d->m_foldIndent) {
+        const QList<ListItemSpan> &items = d->m_decorations.listItems;
+        for (qsizetype i = 0; i + 1 < items.size(); ++i) {
+            if (items.at(i + 1).range.start < items.at(i).range.end)
+                offsets.append(items.at(i).range.start);
+        }
+    }
     std::sort(offsets.begin(), offsets.end());
 
     QHash<QString, int> seen;
@@ -168,7 +323,11 @@ QStringList MarkdownEditor::foldState() const
     // was given, not the nothing the plain stand-in blocks would yield.
     if (!d->m_pendingFolds.isEmpty())
         return d->m_pendingFolds;
+    if (d->m_folds.isEmpty())
+        return {}; // not a string built per heading and list parent of a note nobody folded
     QStringList state;
+    // ponytail: a note folded all the way down stores a line per heading and
+    // list parent (about 80 kB for a megabyte of notes); cap it if that shows.
     for (const auto &[offset, key] : foldSites()) {
         const auto fold = d->m_folds.constFind(offset);
         if (fold != d->m_folds.cend())
@@ -190,8 +349,21 @@ void MarkdownEditor::setFoldState(const QStringList &state)
     applyFoldState(state);
 }
 
+QStringList MarkdownEditor::takeFolds()
+{
+    // The folds by line, for a text replaced wholesale: its offsets mean
+    // nothing in the next text, its lines still do.
+    if (!d->m_pendingFolds.isEmpty())
+        return {};
+    const QStringList state = foldState();
+    d->m_folds.clear();
+    return state;
+}
+
 void MarkdownEditor::applyFoldState(const QStringList &state)
 {
+    if (state.isEmpty())
+        return;
     QHash<QString, bool> wanted;
     for (const QString &entry : state)
         wanted.insert(entry.mid(1), entry.startsWith(QLatin1Char('1')));
@@ -224,6 +396,106 @@ QRectF MarkdownEditor::foldHandleRect(const BlockView &view, qreal left, qreal t
                   kFoldHandle, kFoldHandle);
 }
 
+QList<MarkdownEditor::FoldMark> MarkdownEditor::foldMarksOf(const BlockView &view, qreal left, qreal top) const
+{
+    QList<FoldMark> marks;
+    if (!view.layout || view.foldHidden || view.tabHidden || view.folded)
+        return marks;
+    // The margin, left of the line numbers in source mode.
+    const qreal arrowX = left - gutterWidth() - kFoldHandle - 6;
+    const qreal textLeft = left + (view.callout ? 14 : 0);
+    const qreal textTop = top + view.textTop;
+    const auto mark = [&](qsizetype site, bool folded, const QTextLine &first, const QTextLine &last) {
+        FoldMark found;
+        found.site = site;
+        found.folded = folded;
+        found.rowTop = textTop + first.y();
+        found.rowBottom = found.rowTop + first.height();
+        found.arrow = QRectF(arrowX, textTop + first.y() + (first.height() - kFoldHandle) / 2, kFoldHandle,
+                             kFoldHandle);
+        if (folded) {
+            // Obsidian's cm-foldPlaceholder: a small box ending the line.
+            const QFontMetricsF metrics(view.layout->font());
+            const qreal height = qMin(last.height(), metrics.height());
+            found.ellipsis = QRectF(textLeft + last.x() + last.naturalTextWidth() + 6,
+                                    textTop + last.y() + (last.height() - height) / 2,
+                                    metrics.horizontalAdvance(QChar(0x2026)) + 8, height);
+        }
+        marks.append(found);
+    };
+
+    if (view.span.kind == BlockSpan::Kind::Heading) {
+        if (d->m_foldHeading && view.layout->lineCount() > 0)
+            mark(view.span.range.start, headingFolds(view), view.layout->lineAt(0),
+                 view.layout->lineAt(view.layout->lineCount() - 1));
+        return marks;
+    }
+    if (!d->m_foldIndent || view.layout->lineCount() == 0
+        || (view.span.kind != BlockSpan::Kind::List && view.span.kind != BlockSpan::Kind::Quote
+            && view.span.kind != BlockSpan::Kind::Callout))
+        return marks;
+    const std::span<const ListItemSpan> items = listItemsIn(view.span.range);
+    qsizetype hiddenUntil = 0; // what a folded ancestor hides has no arrow
+    for (size_t i = 0; i + 1 < items.size(); ++i) {
+        const ListItemSpan &item = items[i];
+        if (item.range.start < hiddenUntil || items[i + 1].range.start >= item.range.end)
+            continue;
+        const bool folded = foldedItem(items, i);
+        if (folded)
+            hiddenUntil = item.range.end;
+        const QTextLine first = view.layout->lineForTextPosition(int(view.map.toDisplay(item.marker.end)));
+        if (!first.isValid())
+            continue;
+        QTextLine last = first;
+        if (folded) {
+            // Its first source line is the last of it that shows.
+            const qsizetype lineEnd = d->m_text.indexOf(QLatin1Char('\n'), item.range.start);
+            last = view.layout->lineForTextPosition(
+                int(qMin<qsizetype>(view.map.toDisplay(lineEnd), view.layout->text().size())));
+        }
+        mark(item.range.start, folded, first, last.isValid() ? last : first);
+    }
+    return marks;
+}
+
+bool MarkdownEditor::handleFoldClick(const BlockView &view, const QPoint &point, qreal left, qreal top)
+{
+    if (!d->m_foldHeading && !d->m_foldIndent)
+        return false;
+    for (const FoldMark &mark : foldMarksOf(view, left, top)) {
+        // The arrow, or the ellipsis of a folded line; the line's text still
+        // places the caret.
+        if (touchable(mark.arrow, 6).contains(point) || (mark.folded && mark.ellipsis.contains(point))) {
+            toggleFoldAt(mark.site);
+            return true;
+        }
+    }
+    return false;
+}
+
+void MarkdownEditor::paintFoldMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const
+{
+    if (!d->m_foldHeading && !d->m_foldIndent)
+        return;
+    const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
+    for (const FoldMark &mark : foldMarksOf(view, left, top)) {
+        // An open fold's arrow shows only under the pointer.
+        if (!mark.folded && mark.site != d->m_hoveredFold)
+            continue;
+        paintFoldArrow(painter, mark.arrow, mark.folded, faint);
+        if (!mark.folded)
+            continue;
+        painter.save();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(d->m_theme.color(QStringLiteral("--background-modifier-hover")));
+        painter.drawRoundedRect(mark.ellipsis, 4, 4);
+        painter.setPen(faint);
+        painter.setFont(view.layout->font());
+        painter.drawText(mark.ellipsis, Qt::AlignCenter, QString(QChar(0x2026)));
+        painter.restore();
+    }
+}
+
 void MarkdownEditor::paintFoldArrow(QPainter &painter, const QRectF &rect, bool folded,
                                     const QColor &colour) const
 {
@@ -244,8 +516,10 @@ bool MarkdownEditor::handleBlockClick(const QPoint &point)
             continue;
         if (top > viewport()->height())
             break;
-        if (!view.laidOut)
+        if (!view.laidOut || view.foldHidden)
             continue;
+        if (handleFoldClick(view, point, left, top))
+            return true;
 
         if (handleMediaClick(view, point, left, top))
             return true;
@@ -1444,7 +1718,7 @@ const MarkdownEditor::BlockView *MarkdownEditor::codeLabelAt(const QPoint &point
             continue;
         if (top > viewport()->height())
             break;
-        if (view.span.kind != BlockSpan::Kind::Code || !view.laidOut)
+        if (view.span.kind != BlockSpan::Kind::Code || !view.laidOut || view.foldHidden)
             continue;
         const CodeLabel label = codeLabelOf(view, left, top);
         if (label.visible && touchable(label.rect, 4).contains(point))
