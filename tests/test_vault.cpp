@@ -79,13 +79,22 @@ TEST(VaultRoundTrip, EmptyFile)
     EXPECT_EQ(roundTrip(QByteArray()), QByteArray());
 }
 
-// Documented ceiling: a mixed-ending file normalises to LF. Pinned so the day
-// someone fixes it, the test says so.
-TEST(VaultRoundTrip, MixedEndingsNormaliseToLf)
+TEST(VaultRoundTrip, MixedEndingsSurviveAndAnEditKeepsTheLinesAroundIt)
 {
-    const QByteArray bytes = "a\r\nb\nc\r\n";
+    const QByteArray bytes = "a\r\nb\nc\r\nd\r\n";
     EXPECT_FALSE(Vault::decode(bytes).crlf);
-    EXPECT_EQ(roundTrip(bytes), QByteArray("a\nb\nc\n"));
+    EXPECT_EQ(roundTrip(bytes), bytes);
+    const auto edited = [&](const QString &from, const QString &to) {
+        Note note = Vault::decode(bytes);
+        note.text.replace(from, to);
+        return Vault::encode(note);
+    };
+    EXPECT_EQ(edited(QStringLiteral("b"), QStringLiteral("B")), QByteArray("a\r\nB\nc\r\nd\r\n"));
+    EXPECT_EQ(edited(QStringLiteral("c"), QStringLiteral("c\nnew")), QByteArray("a\r\nb\nc\r\nnew\nd\r\n"));
+    EXPECT_EQ(edited(QStringLiteral("a\n"), QString()), QByteArray("b\nc\r\nd\r\n"));
+    EXPECT_EQ(edited(QStringLiteral("d\n"), QString()), QByteArray("a\r\nb\nc\r\n"));
+    // Text typed before the CR of a CRLF ends up before it.
+    EXPECT_EQ(edited(QStringLiteral("a"), QStringLiteral("ax")), QByteArray("ax\r\nb\nc\r\nd\r\n"));
 }
 
 TEST(VaultRoundTrip, InvalidUtf8IsFlaggedLossyAndRefusedByWrite)

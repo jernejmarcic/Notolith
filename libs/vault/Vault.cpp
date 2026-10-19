@@ -180,25 +180,55 @@ Note Vault::decode(const QByteArray &bytes)
     QString text = decoder(QByteArrayView(bytes).sliced(note.bom ? kBom.size() : 0));
     note.lossy = decoder.hasError();
 
-    // Only a uniformly CRLF file is round-tripped as CRLF.
-    // ponytail: a mixed-ending file is normalised to LF on save - the one case
-    // where a save touches bytes it did not edit. Track per-line endings if a
-    // real vault ever hits it.
+    // A uniformly CRLF file is round-tripped as CRLF; a mixed one keeps its
+    // text as read, for encode() to reuse around an edit.
     const bool hasCrlf = text.contains(QLatin1String("\r\n"));
     if (hasCrlf) {
         QString withoutCrlf = text;
         withoutCrlf.replace(QLatin1String("\r\n"), QString());
         note.crlf = !withoutCrlf.contains(QLatin1Char('\n'));
+        if (!note.crlf)
+            note.mixed = text;
         text.replace(QLatin1String("\r\n"), QLatin1String("\n")); // no match is still a scan of the note
+        if (!note.crlf)
+            note.mixedText = text;
     }
 
     note.text = text;
     return note;
 }
 
+namespace {
+/// Where LF-text offset `at` starts in `raw`: the CR of a CRLF goes with its LF.
+qsizetype rawOffset(const QString &raw, qsizetype at)
+{
+    qsizetype r = 0;
+    for (qsizetype n = 0; n < at && r < raw.size(); ++n, ++r)
+        if (raw.at(r) == QLatin1Char('\r') && r + 1 < raw.size() && raw.at(r + 1) == QLatin1Char('\n'))
+            ++r;
+    return r;
+}
+
+/// Mixed endings: the untouched head and tail as they were read, the edit between in LF.
+QString keepMixedEndings(const Note &note)
+{
+    const QString &before = note.mixedText;
+    const QString &now = note.text;
+    qsizetype head = 0;
+    while (head < before.size() && head < now.size() && before.at(head) == now.at(head))
+        ++head;
+    qsizetype tail = 0;
+    while (tail < before.size() - head && tail < now.size() - head
+           && before.at(before.size() - 1 - tail) == now.at(now.size() - 1 - tail))
+        ++tail;
+    return note.mixed.left(rawOffset(note.mixed, head)) + now.mid(head, now.size() - head - tail)
+         + note.mixed.mid(rawOffset(note.mixed, before.size() - tail));
+}
+} // namespace
+
 QByteArray Vault::encode(const Note &note)
 {
-    QString text = note.text;
+    QString text = note.mixed.isEmpty() ? note.text : keepMixedEndings(note);
     if (note.crlf)
         text.replace(QLatin1Char('\n'), QLatin1String("\r\n"));
     return note.bom ? kBom + text.toUtf8() : text.toUtf8();

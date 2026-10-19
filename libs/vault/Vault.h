@@ -18,6 +18,10 @@ struct Note {
     /// not, so writing it back would change bytes nobody edited.
     /// Vault::write() refuses a lossy note until the caller clears this.
     bool lossy = false;
+    /// A file with both CRLF and LF lines: its text as read, endings and all,
+    /// and `text` as it was then. encode() keeps those bytes for every line
+    /// before and after what was edited.
+    QString mixed, mixedText;
 };
 
 /// A vault is a directory of Markdown files, the same thing Obsidian means by
