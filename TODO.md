@@ -2033,10 +2033,19 @@ Shared/<title>.md.
         reopen), feature "share" off by default
         Also: round or refuse a local edit whose offsets split a surrogate
         pair before CrdtDoc::localEdit (vim `x` on an emoji; Fable check).
-- [ ] Lane U: ShareDialog (invite code + Copy, members with fingerprint and
+- [x] Lane U: ShareDialog (invite code + Copy, members with fingerprint and
       safety number, Revoke, new invite), join dialog, approve prompt,
       status-bar badge "Shared - N here", tab marker; replace S2's
       QInputDialog/QMessageBox placeholders. Feature switch done in S2.
+      Built directly (the agent launch was denied): libs/ui/ShareDialog.cpp
+      (ShareDialog + JoinShareDialog), share:who, badge, tab marker; approve
+      prompt kept (it already names the device and safety number). Tests:
+      TheShareDialogGivesTheCodeAndTheJoinDialogTakesIt,
+      TheOwnerRemovesADeviceFromTheDialog,
+      StoppingFromTheDialogClearsTheBadgeAndTheMarker (both engines).
+- [ ] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate failed once under
+      ctest -j4 (passes 3/3 alone): ratio budget is load-sensitive. Watch;
+      if it recurs, run the perf tests serially (RESOURCE_LOCK) or widen.
 - [x] Share: remember peers' last addresses so a share reconnects after a
       restart without mDNS (tailnet, other subnets); today only mDNS or a
       fresh dial reconnects. (Joiner keeps the invite's owner addresses in

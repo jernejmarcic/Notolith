@@ -279,14 +279,30 @@ the window owns a `ShareEngine` that is built but **not running**; it starts
 (keyring, socket) when a note is shared or joined, or at once when the store
 already holds shares of this vault.
 
-- **Commands:** `share:share-note` (saves the note, makes the share, shows the
-  invitation code), `share:join` (asks for a code), `share:stop` (forgets the
-  share on this device). Under them are `MainWindow::shareNote()`,
-  `joinShare()` and `stopSharingNote()`, which the later dialogs call. An
+- **Commands:** `share:share-note` (saves the note, makes the share and opens
+  the share dialog with the invitation code; on a note shared already it just
+  opens the dialog), `share:who` (the dialog), `share:join` (the join dialog),
+  `share:stop` (forgets the share on this device). Under them are
+  `MainWindow::shareNote()`, `joinShare()` and `stopSharingNote()`. An
   encrypted (`.mdlock`) note, a note that is not valid UTF-8 and anything but
   a note of the open vault cannot be shared. A device asking in is approved or
   refused with a box naming it and its safety number
   (`MainWindow::setShareApprovalForTests` replaces the box in tests).
+- **Share dialog** (`libs/ui/ShareDialog.cpp`, window-modal, follows the
+  engine while open): the owner sees the invitation code with Copy and New
+  invite (a new code voids the old one; an old code is never shown again).
+  Everyone sees this device's fingerprint and each member's name,
+  fingerprint, safety number (the same on both devices: read it to each
+  other) and status (here, away, this device, owner). The owner can remove a
+  device (asked first; it keeps what it has, the key rotates). Stop sharing
+  here forgets the share on this device.
+- **Join dialog:** the code is parsed as it is typed; what is wrong with it
+  (damaged, expired, another CRDT engine, a public address) shows under the
+  field and Join stays off until it parses. A refusal from the engine shows
+  the same way and the dialog stays open.
+- **Status:** the status bar shows "Shared - N here" (connected members
+  besides this device) while the active note is shared, with refused
+  messages in its tooltip; a shared note's tab carries a `⇄` after its name.
 - **The joiner's copy** is written to `Shared/<title>.md` (`Shared/<title> (2).md`
   and so on while that exists) and opened. The title is the owner's string, so
   the file name is made by `ShareSession::fileNameFor`: no `/` or `\`, no

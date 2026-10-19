@@ -138,6 +138,11 @@ public:
     bool hasStoredShares() const;
     /// The members the owner has listed: (device key, label).
     QList<QPair<QByteArray, QString>> members(const QByteArray &shareID) const;
+    /// What both devices show for each other: compared aloud, it proves the
+    /// key is the one meant. Empty before start().
+    QString safetyNumberWith(const QByteArray &device) const;
+    static QString fingerprintOf(const QByteArray &device);
+    bool isConnected(const QByteArray &device) const;
 
     struct Counters {
         int dropped = 0;       ///< messages refused: malformed, wrong sender, replayed, tampered...

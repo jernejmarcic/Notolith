@@ -179,6 +179,23 @@ QString ShareEngine::fingerprint() const
     return m_me ? m_me->fingerprint() : QString();
 }
 
+QString ShareEngine::safetyNumberWith(const QByteArray &device) const
+{
+    if (!m_me || device.size() != 32)
+        return {};
+    return QString::fromStdString(hearth::safetyNumber(m_me->link.publicKey(), toPK(device)));
+}
+
+QString ShareEngine::fingerprintOf(const QByteArray &device)
+{
+    return device.size() == 32 ? QString::fromStdString(hearth::fingerprint(toPK(device))) : QString();
+}
+
+bool ShareEngine::isConnected(const QByteArray &device) const
+{
+    return m_up.contains(device);
+}
+
 QByteArray ShareEngine::publicKey() const
 {
     return m_me ? m_me->publicKey() : QByteArray();

@@ -98,7 +98,7 @@ endif()
 
 # Sharing a note (docs/SHARE.md): the engine's header is in MainWindow.h, hence PUBLIC.
 if(TARGET noteAppC_shareengine)
-    target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h)
+    target_sources(noteAppC_ui PRIVATE ShareSession.cpp ShareSession.h ShareDialog.cpp ShareDialog.h)
     target_link_libraries(noteAppC_ui PUBLIC noteAppC_shareengine)
     target_compile_definitions(noteAppC_ui PUBLIC NOTEAPPC_HAVE_SHARE)
 endif()

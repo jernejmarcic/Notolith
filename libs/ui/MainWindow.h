@@ -489,7 +489,12 @@ private:
     void syncShareViews();
     /// A note under Shared/ for a share just joined.
     void placeJoinedNote(const QByteArray &shareID, const QString &title);
+    /// The share's dialog, window-modal; `inviteCode` when one was just made.
+    void showShareDialog(const QByteArray &shareID, const QString &inviteCode);
+    void stopShare(const QByteArray &shareID);
 #endif
+    /// The status bar's "Shared - N here" and the tabs' shared marker.
+    void updateShareStatus();
     /// Queues `text` as a new version of `absolutePath`, off the UI thread.
     void recordHistory(const QString &absolutePath, const QString &text);
     /// "Note history: Show this note's history".
@@ -855,6 +860,7 @@ void updateVimStatus();
     QTimer m_backlinkCountTimer; ///< a burst of index changes is one count
 QLabel *m_vimStatus = nullptr;
     QLabel *m_syncStatus = nullptr;
+    QLabel *m_shareStatus = nullptr; ///< "Shared - N here" while the active note is shared
     QLabel *m_recordingStatus = nullptr;
     AudioRecorder *m_recorder = nullptr; ///< made on the first recording
     /// Made when the first block runs; owns one kernel per language.

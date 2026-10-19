@@ -115,6 +115,7 @@
 #include "SyncEngine.h"
 #endif
 #ifdef NOTEAPPC_HAVE_SHARE
+#include "ShareDialog.h"
 #include "ShareSession.h"
 #endif
 #ifdef NOTEAPPC_HAVE_IMAGEVIEW
@@ -403,6 +404,10 @@ MainWindow::MainWindow(QWidget *parent)
     m_syncStatus->setObjectName(QStringLiteral("syncStatus"));
     m_syncStatus->hide();
     statusBar()->addPermanentWidget(m_syncStatus);
+    m_shareStatus = new QLabel(this);
+    m_shareStatus->setObjectName(QStringLiteral("shareStatus"));
+    m_shareStatus->hide();
+    statusBar()->addPermanentWidget(m_shareStatus);
     // Never recording unseen: the status bar says so while it does.
     m_recordingStatus = new QLabel(this);
     m_recordingStatus->setObjectName(QStringLiteral("recordingStatus"));
@@ -1634,6 +1639,7 @@ void MainWindow::activateLeaf(Leaf *leaf)
     updateTitle();
     updateWordCount();
     updateHistoryButtons();
+    updateShareStatus();
 }
 
 QString MainWindow::tabTitle(const Leaf *leaf) const
@@ -1642,8 +1648,31 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
         return QFileInfo(leaf->pendingPath).completeBaseName();
     if (leaf->notePath.isEmpty())
         return tr("New tab");
-    const QString name = QFileInfo(leaf->notePath).completeBaseName();
+    QString name = QFileInfo(leaf->notePath).completeBaseName();
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (sessionFor(leaf->notePath))
+        name += QStringLiteral(" \u21C4"); // shared: others may be editing it
+#endif
     return isModified(leaf) ? name + QLatin1String(" *") : name;
+}
+
+void MainWindow::updateShareStatus()
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    if (!m_shareStatus)
+        return; // the window is still being built
+    for (const auto &group : m_groups)
+        for (int i = 0; i < group->tabs->count() && i < group->leaves.size(); ++i)
+            group->tabs->setTabText(i, tabTitle(group->leaves.at(i)));
+    const ShareSession *session = m_active && m_share ? sessionFor(m_active->notePath) : nullptr;
+    m_shareStatus->setVisible(session != nullptr);
+    if (!session)
+        return;
+    m_shareStatus->setText(tr("Shared - %1 here").arg(m_share->peersHere(session->shareID())));
+    const ShareEngine::Counters counters = m_share->counters(session->shareID());
+    m_shareStatus->setToolTip(counters.dropped ? tr("%1 messages refused, the last: %2").arg(counters.dropped).arg(counters.lastReason)
+                                               : tr("Everyone connected sees your edits as you type"));
+#endif
 }
 
 QIcon MainWindow::tabIcon(const Leaf *leaf) const
@@ -3245,26 +3274,32 @@ void MainWindow::buildActions()
     });
 #endif
 #ifdef NOTEAPPC_HAVE_SHARE
-    // ponytail: bare input boxes; the invitation dialog, who-has-access list and tab marker are lane U's.
+    // A note shared already opens its dialog; one that is not is shared first.
     add(QStringLiteral("share:share-note"), tr("Share: Share this note"), QString(), [this] {
+        if (const ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr) {
+            showShareDialog(session->shareID(), QString());
+            return;
+        }
         QString error;
         const QString code = shareNote(&error);
-        if (code.isEmpty()) {
+        const ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr;
+        if (code.isEmpty() || !session) {
             statusBar()->showMessage(error, 8000);
             return;
         }
-        QInputDialog::getMultiLineText(this, tr("Share this note"),
-                                       tr("Send this code to the people who should edit the note with you. Each "
-                                          "device still has to be approved here."),
-                                       code);
+        showShareDialog(session->shareID(), code);
+    });
+    add(QStringLiteral("share:who"), tr("Share: Who has access to this note"), QString(), [this] {
+        if (const ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr)
+            showShareDialog(session->shareID(), QString());
+        else
+            statusBar()->showMessage(tr("This note is not shared"), 5000);
     });
     add(QStringLiteral("share:join"), tr("Share: Join a shared note"), QString(), [this] {
-        bool ok = false;
-        const QString code = QInputDialog::getText(this, tr("Join a shared note"), tr("Invitation code:"),
-                                                   QLineEdit::Normal, QString(), &ok);
-        QString error;
-        if (ok && !code.trimmed().isEmpty() && !joinShare(code.trimmed(), &error))
-            statusBar()->showMessage(error, 8000);
+        auto *dialog = new JoinShareDialog([this](const QString &code, QString *error) { return joinShare(code, error); },
+                                           this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->open();
     });
     add(QStringLiteral("share:stop"), tr("Share: Stop sharing this note on this device"), QString(),
         &MainWindow::stopSharingNote);
@@ -5813,6 +5848,7 @@ void MainWindow::updateShare()
     m_sessions.clear();
     m_share.reset(); // nothing built, nothing listening, with the feature off
     m_shareFor = root;
+    updateShareStatus();
     if (!wanted)
         return;
     m_share = std::make_unique<ShareEngine>(root, m_shareConfig);
@@ -5841,6 +5877,8 @@ void MainWindow::updateShare()
                     m_share->refuse(shareID, joiner);
             });
     connect(m_share.get(), &ShareEngine::joined, this, &MainWindow::placeJoinedNote);
+    connect(m_share.get(), &ShareEngine::peersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngine::membersChanged, this, &MainWindow::updateShareStatus);
     connect(m_share.get(), &ShareEngine::failed, this,
             [this](const QByteArray &, const QString &message) { statusBar()->showMessage(message, 8000); });
     if (m_share->hasStoredShares())
@@ -5860,6 +5898,7 @@ bool MainWindow::startShare()
     for (const ShareRecord &record : m_share->shares())
         shareSession(record.shareID);
     syncShareViews();
+    updateShareStatus();
     return true;
 }
 
@@ -5965,14 +6004,32 @@ bool MainWindow::joinShare(const QString &code, QString *error)
 
 void MainWindow::stopSharingNote()
 {
-    ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr;
-    if (!session)
+    if (const ShareSession *session = m_active ? sessionFor(m_active->notePath) : nullptr)
+        stopShare(session->shareID());
+}
+
+void MainWindow::stopShare(const QByteArray &shareID)
+{
+    ShareSession *session = m_sessions.take(shareID);
+    if (!session || !m_share)
         return;
-    const QByteArray shareID = session->shareID();
-    m_sessions.remove(shareID);
     delete session; // stops following the editors
     m_share->stop(shareID);
+    updateShareStatus();
     statusBar()->showMessage(tr("Stopped sharing this note on this device; the others keep it"), 5000);
+}
+
+void MainWindow::showShareDialog(const QByteArray &shareID, const QString &inviteCode)
+{
+    if (!m_share)
+        return;
+    auto *dialog = new ShareDialog(m_share.get(), shareID, inviteCode, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QDialog::finished, this, [this, shareID](int result) {
+        if (result == ShareDialog::StopSharing)
+            stopShare(shareID);
+    });
+    dialog->open();
 }
 
 void MainWindow::placeJoinedNote(const QByteArray &shareID, const QString &title)

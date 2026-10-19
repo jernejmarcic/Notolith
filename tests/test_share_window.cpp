@@ -15,6 +15,12 @@
 #include <QMessageBox>
 #include <QSaveFile>
 #include <QStatusBar>
+#include <QClipboard>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QTabBar>
+#include <QTreeWidget>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QTreeView>
@@ -26,6 +32,7 @@
 #include "MarkdownEditor.h"
 #include "SecretStore.h"
 #include "Settings.h"
+#include "ShareDialog.h"
 #include "ShareEngine.h"
 #include "ShareFrame.h"
 #include "ShareSession.h"
@@ -39,6 +46,8 @@ using noteAppC::MainWindow;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
 using noteAppC::CrdtDoc;
+using noteAppC::JoinShareDialog;
+using noteAppC::ShareDialog;
 using noteAppC::ShareEngine;
 using noteAppC::ShareSession;
 
@@ -627,6 +636,117 @@ TEST_P(ShareWindowTest, ARenamedSharedNoteKeepsSharing)
     ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral("hello renamed\n"); }));
     b.typeAt(0, QStringLiteral("B "));
     ASSERT_TRUE(waitFor([&] { return a.text() == QStringLiteral("B hello renamed\n"); }));
+}
+
+namespace {
+
+QLabel *shareBadge(const Side &side)
+{
+    return side.window->findChild<QLabel *>(QStringLiteral("shareStatus"));
+}
+
+bool tabMarked(const Side &side, const QString &name)
+{
+    for (const QTabBar *bar : side.window->findChildren<QTabBar *>())
+        for (int i = 0; i < bar->count(); ++i)
+            if (bar->tabText(i).startsWith(name) && bar->tabText(i).contains(QChar(0x21C4)))
+                return true;
+    return false;
+}
+
+QTreeWidgetItem *memberRow(ShareDialog *dialog, const QByteArray &key)
+{
+    auto *members = dialog->findChild<QTreeWidget *>(QStringLiteral("shareMembers"));
+    for (int i = 0; members && i < members->topLevelItemCount(); ++i)
+        if (members->topLevelItem(i)->data(0, Qt::UserRole).toByteArray() == key)
+            return members->topLevelItem(i);
+    return nullptr;
+}
+
+} // namespace
+
+TEST_P(ShareWindowTest, TheShareDialogGivesTheCodeAndTheJoinDialogTakesIt)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    a.write(QStringLiteral("Note.md"), QStringLiteral("hello\n"));
+    ASSERT_TRUE(a.window->openNote(a.path(QStringLiteral("Note.md"))));
+    a.command("share:share-note")->trigger();
+    auto *dialog = a.window->findChild<ShareDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    const QString code = dialog->inviteCode();
+    ASSERT_FALSE(code.isEmpty());
+    dialog->findChild<QPushButton *>(QStringLiteral("shareCopy"))->click();
+    EXPECT_EQ(QApplication::clipboard()->text(), code);
+    EXPECT_TRUE(tabMarked(a, QStringLiteral("Note")));
+    ASSERT_NE(shareBadge(a), nullptr);
+    EXPECT_FALSE(shareBadge(a)->isHidden());
+    EXPECT_EQ(shareBadge(a)->text(), QStringLiteral("Shared - 0 here"));
+
+    b.command("share:join")->trigger();
+    auto *join = b.window->findChild<JoinShareDialog *>();
+    ASSERT_NE(join, nullptr);
+    auto *field = join->findChild<QLineEdit *>(QStringLiteral("joinCode"));
+    auto *ok = join->findChild<QPushButton *>(QStringLiteral("joinOK"));
+    auto *error = join->findChild<QLabel *>(QStringLiteral("joinError"));
+    field->setText(QStringLiteral("not a code"));
+    EXPECT_FALSE(ok->isEnabled());
+    EXPECT_FALSE(error->isHidden()) << "what is wrong shows under the field";
+    EXPECT_FALSE(error->text().isEmpty());
+    field->setText(code);
+    EXPECT_TRUE(ok->isEnabled());
+    EXPECT_TRUE(error->isHidden());
+    ok->click();
+    ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral("hello\n"); }));
+
+    // Both devices show the same safety number for each other, and the owner's list follows.
+    const QByteArray bKey = b.engine()->publicKey();
+    ASSERT_TRUE(waitFor([&] { return memberRow(dialog, bKey) && memberRow(dialog, bKey)->text(3).startsWith(QStringLiteral("here")); }));
+    EXPECT_EQ(memberRow(dialog, bKey)->text(2), a.engine()->safetyNumberWith(bKey));
+    EXPECT_EQ(memberRow(dialog, bKey)->text(2), b.engine()->safetyNumberWith(a.engine()->publicKey()));
+    EXPECT_FALSE(memberRow(dialog, bKey)->text(2).isEmpty());
+    EXPECT_EQ(memberRow(dialog, bKey)->text(1), ShareEngine::fingerprintOf(bKey));
+    ASSERT_TRUE(waitFor([&] { return shareBadge(a)->text() == QStringLiteral("Shared - 1 here"); }));
+    EXPECT_TRUE(tabMarked(b, QStringLiteral("Note")));
+}
+
+TEST_P(ShareWindowTest, TheOwnerRemovesADeviceFromTheDialog)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
+    ASSERT_FALSE(id.isEmpty());
+    a.command("share:who")->trigger();
+    auto *dialog = a.window->findChild<ShareDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    EXPECT_TRUE(dialog->inviteCode().isEmpty()) << "an old code is not shown again";
+    const QByteArray bKey = b.engine()->publicKey();
+    ASSERT_TRUE(waitFor([&] { return memberRow(dialog, bKey) != nullptr; }));
+    auto *remove = dialog->findChild<QPushButton *>(QStringLiteral("shareRevoke"));
+    ASSERT_NE(remove, nullptr);
+    EXPECT_FALSE(remove->isEnabled()) << "nothing picked";
+    QString asked;
+    dialog->setConfirmForTests([&](const QString &name) {
+        asked = name;
+        return true;
+    });
+    dialog->findChild<QTreeWidget *>(QStringLiteral("shareMembers"))->setCurrentItem(memberRow(dialog, bKey));
+    ASSERT_TRUE(remove->isEnabled());
+    remove->click();
+    EXPECT_FALSE(asked.isEmpty());
+    ASSERT_TRUE(waitFor([&] { return a.engine()->members(id).size() == 1 && !memberRow(dialog, bKey); }));
+}
+
+TEST_P(ShareWindowTest, StoppingFromTheDialogClearsTheBadgeAndTheMarker)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    ASSERT_FALSE(share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n")).isEmpty());
+    ASSERT_TRUE(tabMarked(a, QStringLiteral("Note")));
+    a.command("share:who")->trigger();
+    auto *dialog = a.window->findChild<ShareDialog *>();
+    ASSERT_NE(dialog, nullptr);
+    dialog->findChild<QPushButton *>(QStringLiteral("shareStop"))->click();
+    EXPECT_TRUE(a.engine()->shares().isEmpty());
+    EXPECT_TRUE(shareBadge(a)->isHidden());
+    EXPECT_FALSE(tabMarked(a, QStringLiteral("Note")));
 }
 
 TEST_P(ShareWindowTest, StoppingStopsOnlyHere)
