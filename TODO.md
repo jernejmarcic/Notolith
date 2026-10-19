@@ -2227,7 +2227,7 @@ Shared/<title>.md.
       deletePath(absolutePath) split out of deletePathAt; command + key.
 - [x] G4. Dot-prefixed names accepted (rename/create note/folder) and the
       note vanishes from tree, index and links. Refuse in Vault.
-- [ ] G5. Autosave can overwrite an outside edit made inside the watcher's
+- [x] G5. Autosave can overwrite an outside edit made inside the watcher's
       debounce without a snapshot (synced vaults). saveLeaf checks the
       file's mtime/size first; a changed disk text is snapshotted.
 - [ ] G6. Workspace (tabs, positions) is saved only on a clean exit; a crash

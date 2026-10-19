@@ -5462,6 +5462,25 @@ TEST_F(WindowTest, AChangeOnDiskUnderUnsavedTypingKeepsBoth)
     EXPECT_TRUE(kept);
 }
 
+TEST_F(WindowTest, ASaveBeforeTheWatcherSpeaksKeepsTheOtherVersion)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    const QString note = path(QStringLiteral("Welcome.md"));
+    window.openNote(note);
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("mine"));
+    // No event loop between the outside write and the save: the watcher has not run.
+    overwrite(note, "# Welcome\n\nTheirs.\n");
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save")); // the same saveLeaf() an autosave runs
+    EXPECT_EQ(readAll(note), QByteArray("# Welcome\n\nBody.\nmine"));
+    bool kept = false;
+    for (const auto &version : noteAppC::Snapshots::versions(note))
+        kept = kept || noteAppC::Snapshots::read(version) == QStringLiteral("# Welcome\n\nTheirs.\n");
+    EXPECT_TRUE(kept);
+}
+
 TEST_F(WindowTest, ANoteDeletedAndRecreatedOutsideIsWatchedAgain)
 {
     MainWindow window;

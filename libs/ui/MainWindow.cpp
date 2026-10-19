@@ -6877,6 +6877,16 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
         !encrypted && featureOn("file-recovery") && m_vault.isValid() && m_vault.contains(target->notePath);
     if (snapshots && Snapshots::versions(target->notePath).isEmpty() && note.text != target->note.text)
         Snapshots::record(target->notePath, target->note.text, 0);
+    // A change from outside (a sync client) that the watcher has not reported
+    // yet - it waits for writes to settle - would be written over unseen.
+    if (snapshots) {
+        Note disk;
+        if (readNote(target->notePath, disk, nullptr) && disk.text != target->note.text && disk.text != note.text
+            && Snapshots::record(target->notePath, disk.text, 0))
+            statusBar()->showMessage(
+                tr("%1 had changed on disk: that version is in file recovery").arg(QFileInfo(target->notePath).fileName()),
+                8000);
+    }
 
     QString error;
     if (!writeNote(target->notePath, note, &error)) {
