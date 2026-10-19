@@ -5188,14 +5188,17 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_active->editor->setNoteText(others.isEmpty() ? m_active->note.text : others.constFirst()->editor->noteText());
     if (!others.isEmpty())
         m_active->editor->setModified(others.constFirst()->editor->isModified());
+    // Caret first, folds after: setCursorOffset opens the folds around the
+    // caret, which would undo a remembered fold the caret sits under.
+    const auto position = m_settings.notePosition(path);
+    if (position)
+        m_active->editor->setCursorOffset(qMin(position->cursor, qsizetype(m_active->note.text.size())));
     if (!others.isEmpty())
         m_active->editor->setFoldState(others.constFirst()->editor->foldState());
-    if (const auto position = m_settings.notePosition(path)) {
-        if (others.isEmpty())
-            m_active->editor->setFoldState(position->folds);
-        m_active->editor->setCursorOffset(qMin(position->cursor, qsizetype(m_active->note.text.size())));
+    else if (position)
+        m_active->editor->setFoldState(position->folds);
+    if (position)
         m_active->editor->verticalScrollBar()->setValue(position->scroll);
-    }
     m_active->editor->setFocus();
 
     const QString title = QFileInfo(path).completeBaseName();
