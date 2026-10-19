@@ -22,6 +22,8 @@
 #include <QScrollBar>
 #include <QTimer>
 
+#include <algorithm>
+
 namespace noteAppC {
 
 namespace {
@@ -130,6 +132,82 @@ bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
         return false;
     const BlockView &view = d->m_blocks.at(size_t(index));
     return d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
+}
+
+QList<std::pair<qsizetype, QString>> MarkdownEditor::foldSites() const
+{
+    // From the decorations, not the blocks: a block learns it folds only when
+    // it is laid out, and this may be asked of a note nobody has scrolled yet.
+    QList<qsizetype> offsets;
+    if (!d->m_properties.isEmpty() && d->m_mode != Mode::Source)
+        offsets.append(0); // the frontmatter table
+    for (const CalloutSpan &callout : d->m_decorations.callouts) {
+        if (callout.foldable)
+            offsets.append(callout.range.start);
+    }
+    for (const CodeOptions &options : d->m_decorations.codeOptions)
+        offsets.append(options.block.start);
+    std::sort(offsets.begin(), offsets.end());
+
+    QHash<QString, int> seen;
+    QList<std::pair<qsizetype, QString>> sites;
+    sites.reserve(offsets.size());
+    for (const qsizetype offset : std::as_const(offsets)) {
+        const qsizetype end = d->m_text.indexOf(QLatin1Char('\n'), offset);
+        // Capped so one absurd line cannot bloat what is stored per note.
+        const QString line = QStringView(d->m_text).mid(offset, end < 0 ? -1 : end - offset)
+                                 .trimmed().left(80).toString();
+        sites.append({offset, QString::number(seen[line]++) + QLatin1Char(' ') + line});
+    }
+    return sites;
+}
+
+QStringList MarkdownEditor::foldState() const
+{
+    // Asked before the parse the state belongs to came back: hand back what
+    // was given, not the nothing the plain stand-in blocks would yield.
+    if (!d->m_pendingFolds.isEmpty())
+        return d->m_pendingFolds;
+    QStringList state;
+    for (const auto &[offset, key] : foldSites()) {
+        const auto fold = d->m_folds.constFind(offset);
+        if (fold != d->m_folds.cend())
+            state.append(QLatin1Char(*fold ? '1' : '0') + key);
+    }
+    return state;
+}
+
+void MarkdownEditor::setFoldState(const QStringList &state)
+{
+    d->m_folds.clear();
+    d->m_pendingFolds.clear();
+    if (state.isEmpty())
+        return;
+    if (d->m_parsePending) { // a big note: its blocks are plain stand-ins until the parse lands
+        d->m_pendingFolds = state;
+        return;
+    }
+    applyFoldState(state);
+}
+
+void MarkdownEditor::applyFoldState(const QStringList &state)
+{
+    QHash<QString, bool> wanted;
+    for (const QString &entry : state)
+        wanted.insert(entry.mid(1), entry.startsWith(QLatin1Char('1')));
+    bool changed = false;
+    for (const auto &[offset, key] : foldSites()) {
+        const auto fold = wanted.constFind(key);
+        if (fold == wanted.cend())
+            continue;
+        d->m_folds.insert(offset, *fold);
+        invalidateBlock(blockAt(offset)); // a nested callout lives in its parent's layout
+        changed = true;
+    }
+    if (changed) {
+        updateLayout();
+        viewport()->update();
+    }
 }
 
 QRectF MarkdownEditor::foldHandleRect(const BlockView &view, qreal left, qreal top) const

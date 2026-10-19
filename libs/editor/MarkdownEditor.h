@@ -935,6 +935,15 @@ public:
     void toggleFoldAt(qsizetype sourceOffset);
     bool isFoldedAt(qsizetype sourceOffset) const;
 
+    /// What has been folded or opened by hand, in a form that outlives the
+    /// note's text: one entry per foldable block or nested callout, keyed by
+    /// the text of the line it starts on and how many earlier foldable lines
+    /// read the same ("<0|1><occurrence> <line>", 1 = folded). setFoldState()
+    /// puts it back on whatever blocks the current text still has; entries
+    /// with no match are dropped. Call after setNoteText(), which clears folds.
+    QStringList foldState() const;
+    void setFoldState(const QStringList &state);
+
     /// The frontmatter properties, as the last parse read them. The properties
     /// table renders from these, and the window's future property pane will.
     const QList<Property> &properties() const;
@@ -1084,6 +1093,10 @@ private:
     void reparse();
     /// Starts a parse on the thread pool; the editor never waits for it.
     void startParse();
+    /// Every block or nested callout that folds, in source order, with the key
+    /// foldState() writes for it ("<occurrence> <line>").
+    QList<std::pair<qsizetype, QString>> foldSites() const;
+    void applyFoldState(const QStringList &state);
     void adoptParse(); ///< takes the finished pool parse, once; see finishParse()
     void adoptDecorations(Decorations decorations, QList<Property> properties, QList<Heading> headings);
     void rebuildBlocks();

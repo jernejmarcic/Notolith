@@ -13,6 +13,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
+#include <QUrl>
 
 namespace noteAppC {
 
@@ -848,13 +849,17 @@ std::optional<Settings::NotePosition> Settings::notePosition(const QString &path
 {
     for (const QString &entry : value(QStringLiteral("state.notePositions")).toStringList()) {
         const QStringList fields = entry.split(kPositionField);
-        if (fields.size() == 3 && fields.at(0) == path)
-            return NotePosition{fields.at(1).toLongLong(), fields.at(2).toInt()};
+        if (fields.size() < 3 || fields.at(0) != path)
+            continue;
+        NotePosition position{fields.at(1).toLongLong(), fields.at(2).toInt(), {}};
+        for (qsizetype i = 3; i < fields.size(); ++i)
+            position.folds.append(QUrl::fromPercentEncoding(fields.at(i).toLatin1()));
+        return position;
     }
     return std::nullopt;
 }
 
-void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll)
+void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll, const QStringList &folds)
 {
     if (path.isEmpty())
         return;
@@ -864,10 +869,42 @@ void Settings::setNotePosition(const QString &path, qint64 cursor, int scroll)
         if (positions.at(i).startsWith(prefix))
             positions.removeAt(i);
     }
-    positions.prepend(prefix + QString::number(cursor) + kPositionField + QString::number(scroll));
+    QString entry = prefix + QString::number(cursor) + kPositionField + QString::number(scroll);
+    // Fold lines are note text, so they may hold the tab and comma the entry
+    // and the list are split on: each goes in percent-encoded.
+    for (const QString &fold : folds.first(qMin<qsizetype>(folds.size(), 100)))
+        entry += kPositionField + QString::fromLatin1(QUrl::toPercentEncoding(fold));
+    positions.prepend(entry);
     while (positions.size() > 50)
         positions.removeLast();
     setValue(QStringLiteral("state.notePositions"), positions);
+}
+
+void Settings::renameNotePosition(const QString &oldPath, const QString &newPath)
+{
+    QStringList positions = value(QStringLiteral("state.notePositions")).toStringList();
+    bool changed = false;
+    for (QString &entry : positions) {
+        const QString path = entry.section(kPositionField, 0, 0);
+        if (path == oldPath || path.startsWith(oldPath + QLatin1Char('/'))) {
+            entry.replace(0, oldPath.size(), newPath);
+            changed = true;
+        }
+    }
+    if (changed)
+        setValue(QStringLiteral("state.notePositions"), positions);
+}
+
+void Settings::forgetNotePosition(const QString &path)
+{
+    QStringList positions = value(QStringLiteral("state.notePositions")).toStringList();
+    const qsizetype before = positions.size();
+    positions.removeIf([&path](const QString &entry) {
+        const QString entryPath = entry.section(kPositionField, 0, 0);
+        return entryPath == path || entryPath.startsWith(path + QLatin1Char('/'));
+    });
+    if (positions.size() != before)
+        setValue(QStringLiteral("state.notePositions"), positions);
 }
 
 QStringList Settings::rememberedNotes() const

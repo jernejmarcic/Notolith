@@ -106,13 +106,19 @@ public:
     struct NotePosition {
         qint64 cursor = 0;
         int scroll = 0;
+        QStringList folds; ///< MarkdownEditor::foldState(), kept as given
     };
     /// Unset when `path` was never recorded, or has aged out of the cap.
     std::optional<NotePosition> notePosition(const QString &path) const;
     /// Remembers where `path` was left, evicting the oldest entry once more
     /// than 50 notes are tracked. Written to `vaults.ini` by save(), the same
     /// as recentVaults/recentFiles - never settings.ini, never the vault.
-    void setNotePosition(const QString &path, qint64 cursor, int scroll);
+    void setNotePosition(const QString &path, qint64 cursor, int scroll, const QStringList &folds = {});
+    /// A renamed or moved note, or every note under a renamed folder, keeps
+    /// its position and folds under the new path.
+    void renameNotePosition(const QString &oldPath, const QString &newPath);
+    /// Forgets a deleted note, or every note under a deleted folder.
+    void forgetNotePosition(const QString &path);
     /// Every note with a remembered position, most recently visited first.
     QStringList rememberedNotes() const;
 

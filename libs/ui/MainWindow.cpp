@@ -4018,6 +4018,7 @@ bool MainWindow::mergeNote(const QString &source, const QString &target)
     }
     for (Leaf *leaf : std::as_const(gone))
         dropLeaf(leaf);
+    m_settings.forgetNotePosition(source);
     m_indexer->rebuild();
     return true;
 }
@@ -5187,7 +5188,11 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_active->editor->setNoteText(others.isEmpty() ? m_active->note.text : others.constFirst()->editor->noteText());
     if (!others.isEmpty())
         m_active->editor->setModified(others.constFirst()->editor->isModified());
+    if (!others.isEmpty())
+        m_active->editor->setFoldState(others.constFirst()->editor->foldState());
     if (const auto position = m_settings.notePosition(path)) {
+        if (others.isEmpty())
+            m_active->editor->setFoldState(position->folds);
         m_active->editor->setCursorOffset(qMin(position->cursor, qsizetype(m_active->note.text.size())));
         m_active->editor->verticalScrollBar()->setValue(position->scroll);
     }
@@ -5964,7 +5969,8 @@ void MainWindow::rememberCurrentPosition()
     if (m_active->notePath.isEmpty() || m_active->view)
         return;
     m_settings.setNotePosition(m_active->notePath, m_active->editor->cursorOffset(),
-                               m_active->editor->verticalScrollBar()->value());
+                               m_active->editor->verticalScrollBar()->value(),
+                               m_active->editor->foldState());
     m_settings.save();
 }
 
@@ -6965,7 +6971,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     for (const auto &leaf : m_leaves) {
         if (!leaf->notePath.isEmpty() && !leaf->view)
             m_settings.setNotePosition(leaf->notePath, leaf->editor->cursorOffset(),
-                                       leaf->editor->verticalScrollBar()->value());
+                                       leaf->editor->verticalScrollBar()->value(),
+                                       leaf->editor->foldState());
     }
     saveLayout();
     // Every pop-out goes with the main window; the layout above already has them.
@@ -7174,6 +7181,7 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
     const QString newRelative = m_vault.relative(newPath);
     if (m_fileIcons.renamePrefix(oldRelative, newRelative))
         m_fileIcons.save();
+    m_settings.renameNotePosition(oldPath, newPath);
     notifyPlugins("note-renamed", newPath);
 #ifdef NOTEAPPC_HAVE_HISTORY
     // The history follows the note: every note under a renamed folder too.
@@ -7358,6 +7366,7 @@ void MainWindow::deletePathAt(const QModelIndex &index)
             clearOpenNote();
         }
     }
+    m_settings.forgetNotePosition(path); // after the tabs closed: closing one records its place
     m_indexer->rebuild();
     updateTitle();
     updateWordCount();
