@@ -252,6 +252,28 @@ panels that changed (not the viewport), a painted button, nothing laid out.
 
 Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
+## Slides-layout PDF embeds: forgiving Previous / Next
+
+Jernej, 2026-10-19: the box to click "Next" should be larger around it, so a
+slightly-off pointer does not open the embed by accident (like Apple's
+keyboard). Code: `PdfEmbedBlock.cpp` (`pdfNavHit`).
+
+- The row under the slide (nav strip plus the 6 px gap above it, the full width
+  of the slide) is the buttons: its left half is Previous, its right half is
+  Next, wherever the label is drawn. A half whose button is hidden (first or
+  last slide) swallows the click: no step, no caret.
+- A click within 10 px (`kPdfDeadBand`) of the slide's bottom edge is swallowed.
+- For 1000 ms (`kPdfStickyMs`) after a Previous/Next click, that button also owns
+  the bottom 25% (`kPdfStickyShare`) of the slide on its side, so quick repeats
+  keep stepping when the pointer drifts up. Afterwards a click there is an
+  ordinary click on the slide (the caret enters the block, showing its source).
+- The pointer is a hand where a click steps and an arrow in the swallowed areas.
+- A finger goes through the same path; `touchable` widens the dead band by the
+  touch slop.
+
+Tests: `PdfEmbedTest.*` in `tests/test_editor.cpp` (the clock is injected with
+`setPdfNavClock`, no sleeping).
+
 ## The context menu
 
 Right-click anywhere in a note. Obsidian's order, minus its Paragraph and

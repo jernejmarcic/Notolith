@@ -702,12 +702,17 @@ public:
         PdfEmbedArgs::Layout layout = PdfEmbedArgs::Layout::Slides;
         int slideIndex = 0;  ///< slides layout only
         int slideCount = 0;
+        QRectF cellRect; ///< slides layout: the slide and the drawn Next button, viewport coordinates
+        QRectF nextRect;
     };
     PdfEmbedInfo pdfEmbedInfoAt(qsizetype offset) const;
     /// +1 / -1: what a click on the slide layout's next/previous control
     /// does. Remembered per block for the editor's lifetime, like a query's
     /// collapsed state - never written to the note.
     void pdfSlideStep(qsizetype offset, int direction);
+    /// For tests: the clock (milliseconds) the slide controls' one-second
+    /// "last button used" window reads, so a test need not sleep.
+    void setPdfNavClock(std::function<qint64()> nowMs);
 
     /// For the tests: whether the block containing `offset` rendered as a
     /// file card (icon, name, size) - the fallback for a binary file, or any
@@ -1340,6 +1345,14 @@ private:
     /// The previous/next controls (slides layout) or nothing; a click on
     /// either steps pdfSlideIndex and relays out just this block.
     bool handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
+    /// What a point (block-local, below the header) means to a slides embed:
+    /// -1 / +1 the button it steps, 0 swallowed with no step (the dead band
+    /// along the slide's bottom edge), nothing when the embed does not claim it.
+    std::optional<int> pdfNavHit(const BlockView &view, const QPointF &local) const;
+    bool pdfNavCanStep(const BlockView &view, int direction) const;
+    /// A hand where a click would step, an arrow where it is swallowed,
+    /// nothing where the embed leaves the pointer to the usual rules.
+    std::optional<Qt::CursorShape> pdfNavCursorAt(const QPoint &point) const;
     /// Cached page count and per-page size, keyed by path and mtime - a
     /// metadata read, not a render, so this runs on the UI thread; PdfPage
     /// itself still opens the file at most once per (path, mtime) per
