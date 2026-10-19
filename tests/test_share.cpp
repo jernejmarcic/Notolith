@@ -953,6 +953,85 @@ TEST(ShareEngineTest, AChangeThatArrivesStartsAStateExchangeThatEnds)
     EXPECT_EQ(joiner.engine->counters().accepted, joinerAccepted);
 }
 
+/// A Welcome that is internally perfect when `raw` is the owner: its own member
+/// list, signed by itself, listing `joinerKeys`, a note of its own, `title`.
+QByteArray welcomeFrom(RawMember &raw, const QByteArray &shareID, int backend, const ShareIdentity &joinerKeys, const std::string &title)
+{
+    MemberListBody list;
+    list.set_share_id(ShareFrame::toS(shareID));
+    list.set_epoch(1);
+    list.set_owner(ShareFrame::toS(raw.key()));
+    list.set_backend(uint32_t(backend));
+    for (const auto &[key, boxKey] : {std::pair{raw.key(), raw.me.box.publicKey}, std::pair{joinerKeys.publicKey(), joinerKeys.box.publicKey}}) {
+        Member *m = list.add_members();
+        m->set_key(ShareFrame::toS(key));
+        m->set_box_key(ShareFrame::toS(boxKey));
+        m->set_name("x");
+    }
+    WelcomeBody body;
+    EXPECT_TRUE(body.mutable_members()->ParseFromString(ShareFrame::toS(ShareFrame::signMembers(raw.me.link, list))));
+    auto doc = CrdtDoc::create(backendEnum(backend), 5);
+    doc->localEdit(0, 0, QStringLiteral("the other note"));
+    body.set_state(ShareFrame::toS(doc->encodeState()));
+    body.set_title(title);
+    const QByteArray shareKey = SyncCrypto::randomKey();
+    const QByteArray ad = SyncCrypto::buildAD("sw", {shareID, ShareFrame::be32(1), raw.key(), joinerKeys.publicKey()});
+    Envelope envelope;
+    envelope.mutable_welcome()->set_share_id(ShareFrame::toS(shareID));
+    envelope.mutable_welcome()->set_sealed_key(ShareFrame::toS(SyncCrypto::sealToBox(joinerKeys.box.publicKey, ShareFrame::be32(1) + shareKey)));
+    envelope.mutable_welcome()->set_box(ShareFrame::toS(SyncCrypto::seal(shareKey, ShareFrame::toQ(body.SerializeAsString()), ad)));
+    return ShareFrame::toQ(envelope.SerializeAsString());
+}
+
+TEST(ShareEngineTest, AHostileOwnersTitleIsCleaned)
+{
+    // `raw` is the owner the invitation names, so its Welcome is accepted - and the
+    // title in it is its to choose, so the joiner makes it safe to show.
+    Peer joiner(QStringLiteral("b"));
+    RawMember raw(QStringLiteral("raw"));
+    const QByteArray shareID = SyncCrypto::randomID(), token = SyncCrypto::randomKey();
+    const QJsonObject invite{
+        {QStringLiteral("v"), 1},
+        {QStringLiteral("id"), QString::fromLatin1(shareID.toHex())},
+        {QStringLiteral("owner"), QString::fromLatin1(raw.key().toHex())},
+        {QStringLiteral("token"), QString::fromLatin1(token.toHex())},
+        {QStringLiteral("hosts"), QJsonArray{QStringLiteral("127.0.0.1:%1").arg(raw.node->port())}},
+        {QStringLiteral("exp"), double(QDateTime::currentSecsSinceEpoch() + 600)},
+        {QStringLiteral("backend"), ShareFrame::kBackendYrs},
+    };
+    const int backend = CrdtDoc::available(CrdtDoc::Backend::Yrs) ? ShareFrame::kBackendYrs : ShareFrame::kBackendNative;
+    QJsonObject o = invite;
+    o.insert(QStringLiteral("backend"), backend);
+    QString error;
+    ASSERT_TRUE(joiner.engine->join(QStringLiteral("notolith-share:")
+                                        + QString::fromLatin1(QJsonDocument(o).toJson(QJsonDocument::Compact)
+                                                                  .toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)),
+                                    QStringLiteral("Bob"), &error)) << error.toStdString();
+    ASSERT_TRUE(waitFor([&] { return raw.count(Envelope::kJoin) >= 1; }));
+    ASSERT_TRUE(raw.send(welcomeFrom(raw, shareID, backend, *ShareIdentity::load(QStringLiteral("b")), std::string("../x\n\x07y")),
+                         hearth::Channel::sync));
+    ASSERT_TRUE(waitFor([&] { return !joiner.joined.isEmpty(); }));
+    EXPECT_EQ(joiner.joined[0].second, QStringLiteral("../xy"));
+    EXPECT_EQ(joiner.engine->shares()[0].title, QStringLiteral("../xy"));
+    EXPECT_EQ(joiner.text(shareID), QStringLiteral("the other note"));
+}
+
+TEST(ShareEngineTest, AJoinNameFromThePeerIsCleaned)
+{
+    Peer owner(QStringLiteral("a"));
+    QString error;
+    const auto created = owner.engine->create(QStringLiteral("note.md"), QStringLiteral("T"), QStringLiteral("t"), &error);
+    ASSERT_TRUE(created);
+    RawMember raw(QStringLiteral("raw"));
+    ASSERT_TRUE(raw.connectTo(owner));
+    ASSERT_TRUE(raw.send(validJoin(raw, created->inviteCode, created->shareID, owner.engine->shares()[0].backend,
+                                   QStringLiteral(" Mal\nlory\x07 ") + QString(200, QLatin1Char('z')))));
+    ASSERT_TRUE(waitFor([&] { return owner.requests.size() == 1; }));
+    EXPECT_TRUE(owner.requests[0].name.startsWith(QStringLiteral("Mallory")));
+    EXPECT_FALSE(owner.requests[0].name.contains(QLatin1Char('\n')));
+    EXPECT_LE(owner.requests[0].name.size(), 64);
+}
+
 TEST(ShareEngineTest, AWelcomeFromAStrangerIsRejected)
 {
     Peer owner(QStringLiteral("a")), joiner(QStringLiteral("b"));
@@ -969,31 +1048,8 @@ TEST(ShareEngineTest, AWelcomeFromAStrangerIsRejected)
     RawMember raw(QStringLiteral("raw"));
     raw.node->dial("127.0.0.1", joiner.engine->port(), toPK(joiner.publicKey()));
     ASSERT_TRUE(waitFor([&] { return raw.up.load(); }));
-    const auto joinerKeys = ShareIdentity::load(QStringLiteral("b"));
-    MemberListBody list;
-    list.set_share_id(ShareFrame::toS(created->shareID));
-    list.set_epoch(1);
-    list.set_owner(ShareFrame::toS(raw.key()));
-    list.set_backend(uint32_t(backend));
-    for (const auto &[key, boxKey] : {std::pair{raw.key(), raw.me.box.publicKey}, std::pair{joinerKeys->publicKey(), joinerKeys->box.publicKey}}) {
-        Member *m = list.add_members();
-        m->set_key(ShareFrame::toS(key));
-        m->set_box_key(ShareFrame::toS(boxKey));
-        m->set_name("x");
-    }
-    WelcomeBody body;
-    ASSERT_TRUE(body.mutable_members()->ParseFromString(ShareFrame::toS(ShareFrame::signMembers(raw.me.link, list))));
-    auto doc = CrdtDoc::create(backendEnum(backend), 5);
-    doc->localEdit(0, 0, QStringLiteral("the stranger's note"));
-    body.set_state(ShareFrame::toS(doc->encodeState()));
-    body.set_title("evil");
-    const QByteArray shareKey = SyncCrypto::randomKey();
-    const QByteArray ad = SyncCrypto::buildAD("sw", {created->shareID, ShareFrame::be32(1), raw.key(), joinerKeys->publicKey()});
-    Envelope envelope;
-    envelope.mutable_welcome()->set_share_id(ShareFrame::toS(created->shareID));
-    envelope.mutable_welcome()->set_sealed_key(ShareFrame::toS(SyncCrypto::sealToBox(joinerKeys->box.publicKey, ShareFrame::be32(1) + shareKey)));
-    envelope.mutable_welcome()->set_box(ShareFrame::toS(SyncCrypto::seal(shareKey, ShareFrame::toQ(body.SerializeAsString()), ad)));
-    ASSERT_TRUE(raw.send(ShareFrame::toQ(envelope.SerializeAsString()), hearth::Channel::sync));
+    ASSERT_TRUE(raw.send(welcomeFrom(raw, created->shareID, backend, *ShareIdentity::load(QStringLiteral("b")), "evil"),
+                         hearth::Channel::sync));
     ASSERT_TRUE(waitFor([&] { return joiner.engine->counters().dropped == 1; }));
     QTest::qWait(300);
     EXPECT_EQ(joiner.engine->doc(created->shareID), nullptr);
