@@ -683,6 +683,10 @@ const QList<Settings::Feature> &Settings::features()
          QT_TRANSLATE_NOOP("Settings", "Sync this vault through a server, end-to-end encrypted: the server "
                                        "never sees note contents, file names or tags."),
          true},
+        {"share", QT_TRANSLATE_NOOP("Settings", "Share a note"),
+         QT_TRANSLATE_NOOP("Settings", "Edit one note live with other people, peer to peer, end-to-end "
+                                       "encrypted."),
+         false},
         {"slides", QT_TRANSLATE_NOOP("Settings", "Slides"),
          QT_TRANSLATE_NOOP("Settings", "Present a note full screen, one slide per part between --- rules."),
          true},

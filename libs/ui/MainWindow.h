@@ -19,6 +19,9 @@
 #include "Theme.h"
 #include "FileIcons.h"
 #include "Vault.h"
+#ifdef NOTEAPPC_HAVE_SHARE
+#include "ShareEngine.h"
+#endif
 
 class QAbstractButton;
 class QButtonGroup;
@@ -44,6 +47,7 @@ class DictClient;
 class NoteHistory;
 class PluginRegistry;
 class SyncEngine;
+class ShareSession;
 class AudioRecorder;
 namespace crypt {
 class EncryptionSession;
@@ -157,6 +161,28 @@ public:
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
     /// The autosave pause and its longest wait, in ms. For the tests.
     void setAutosaveIntervalsForTests(int pause, int maxWait);
+
+#ifdef NOTEAPPC_HAVE_SHARE
+    /// Sharing (docs/SHARE.md): null while the "Share a note" feature is off
+    /// or no vault is open. With it on, the engine exists but is not running
+    /// (no keys read, no socket) until a note is shared or joined, or the
+    /// vault already holds shares.
+    ShareEngine *shareEngine() const { return m_share.get(); }
+    /// Shares the note in the active tab; returns its invitation code, or ""
+    /// with *error. "Share: Share this note" shows the code.
+    QString shareNote(QString *error);
+    /// Joins the share an invitation code names, as this device's name; the
+    /// note appears under Shared/ when the owner approves. False with *error
+    /// for a code that cannot be used.
+    bool joinShare(const QString &code, QString *error);
+    /// Stops sharing the active note on this device; the others keep it.
+    void stopSharingNote();
+    /// For the tests: the engine's settings (ports, keyring entry, store),
+    /// read when the engine is built; and who answers the "device asks to join"
+    /// question, in place of the dialog.
+    void setShareConfigForTests(ShareEngine::Config config);
+    void setShareApprovalForTests(std::function<bool(const QString &name, const QString &safetyNumber)> approve);
+#endif
 
     /// Where a dragged tab lands over a tab group's body: the outer quarter
     /// along an edge splits there, the rest joins the group.
@@ -448,6 +474,19 @@ private:
     /// paint only. syncSignIn() asks the password, here on the UI thread.
     void updateSync();
     void syncSignIn();
+    /// Sharing: an engine for this vault while the feature is on (after the
+    /// first paint only), started when the vault holds shares already.
+    void updateShare();
+#ifdef NOTEAPPC_HAVE_SHARE
+    bool startShare();
+    ShareSession *shareSession(const QByteArray &shareID);
+    /// The session of the share that note at `absolutePath` is, or null.
+    ShareSession *sessionFor(const QString &absolutePath) const;
+    /// Makes every session follow the tabs that show its note, and only those.
+    void syncShareViews();
+    /// A note under Shared/ for a share just joined.
+    void placeJoinedNote(const QByteArray &shareID, const QString &title);
+#endif
     /// Queues `text` as a new version of `absolutePath`, off the UI thread.
     void recordHistory(const QString &absolutePath, const QString &text);
     /// "Note history: Show this note's history".
@@ -824,6 +863,13 @@ QLabel *m_vimStatus = nullptr;
     QString m_syncFor;      ///< "root\nserver\nemail" the running engine was started for
     QString m_syncPassword; ///< from syncSignIn, handed to the next engine once
     bool m_syncNeedsPassword = false; ///< the engine found no keys in the keyring and has no password
+#ifdef NOTEAPPC_HAVE_SHARE
+    std::unique_ptr<ShareEngine> m_share;
+    QString m_shareFor; ///< the vault root the engine was built for
+    ShareEngine::Config m_shareConfig;
+    QHash<QByteArray, ShareSession *> m_sessions; ///< by share id, children of the window
+    std::function<bool(const QString &, const QString &)> m_shareApproval;
+#endif
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;
     QWidget *m_rightSidebar = nullptr;

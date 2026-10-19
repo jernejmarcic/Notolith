@@ -653,6 +653,17 @@ void ShareEngine::persist(const QByteArray &shareID, const QString &base)
     saveShare(**it);
 }
 
+QString ShareEngine::base(const QByteArray &shareID) const
+{
+    const auto it = m_shares.constFind(shareID);
+    return it == m_shares.constEnd() ? QString() : (*it)->base;
+}
+
+bool ShareEngine::hasStoredShares() const
+{
+    return !m_shares.isEmpty() || !m_store.all().isEmpty();
+}
+
 ShareEngine::Counters ShareEngine::counters(const QByteArray &shareID) const
 {
     if (shareID.isEmpty())

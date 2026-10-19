@@ -1,8 +1,10 @@
 # Sharing a note (in progress)
 
 Live co-editing of one note between people, peer to peer. This page covers the
-parts that exist: the text CRDT, the link layer and the engine. Wiring it to the
-editor and the window comes in a later lane (the plan is in the project TODO).
+parts that exist: the text CRDT, the link layer, the engine and the session
+that ties a note's editors to it. The dialogs (invitation, who has access), the
+tab marker and the status badge come in a later lane (the plan is in the
+project TODO).
 
 ## CrdtDoc
 
@@ -266,3 +268,73 @@ What the engine refuses (each case is a test in `tests/test_share.cpp`):
 
 Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
 store, temporary store directories.
+
+## In the window (libs/ui/ShareSession, MainWindow)
+
+Settings, Core plugins, "Share a note" (`share`, **off by default**). With it off
+nothing exists: no engine, no keys read, no socket, no mDNS, and the `share:*`
+commands are disabled. With it on (and a vault open, after the first paint)
+the window owns a `ShareEngine` that is built but **not running**; it starts
+(keyring, socket) when a note is shared or joined, or at once when the store
+already holds shares of this vault.
+
+- **Commands:** `share:share-note` (saves the note, makes the share, shows the
+  invitation code), `share:join` (asks for a code), `share:stop` (forgets the
+  share on this device). Under them are `MainWindow::shareNote()`,
+  `joinShare()` and `stopSharingNote()`, which the later dialogs call. An
+  encrypted (`.mdlock`) note, a note that is not valid UTF-8 and anything but
+  a note of the open vault cannot be shared. A device asking in is approved or
+  refused with a box naming it and its safety number
+  (`MainWindow::setShareApprovalForTests` replaces the box in tests).
+- **The joiner's copy** is written to `Shared/<title>.md` (`Shared/<title> (2).md`
+  and so on while that exists) and opened. The title is the owner's string, so
+  the file name is made by `ShareSession::fileNameFor`: no `/` or `\`, no
+  control characters, no `..`, no leading dots, 100 characters at most (never
+  half a surrogate pair), the first 8 hex digits of the share id when nothing
+  is left; the write goes through `Vault::writeNoteNoFollow`, so a symlinked
+  `Shared/` cannot lead out of the vault.
+- **One `ShareSession` per share** the engine knows, alive while the window is,
+  whether or not a tab shows the note (closing the tab does not end it). It
+  follows the editors of every tab on the note (`MainWindow::syncShareViews`,
+  run after `openNote`, a tab closing, a rename and the like):
+  - an editor's `edited()` becomes `CrdtDoc::localEdit` plus
+    `ShareEngine::broadcast`. The other tabs of the same note get the edit
+    from the window's existing fan-out, not from the session. A whole-text
+    change (undo, redo, select-all and type) is sent as the difference to the
+    document, not as a replacement, so what others typed meanwhile survives
+    your undo. An edit that would split a surrogate pair (a one-unit Delete on
+    an emoji) is widened to the pair for the document, and the editors then
+    follow the document's text, so the two never differ;
+  - `ShareEngine::remoteEdits` is made in every editor of the note with
+    `applyExternalEdit`, which emits no `edited()`, so nothing loops. The
+    editor's undo history is carried over the edit (docs/EDITOR.md "Undo across
+    edits from elsewhere"), and the window arms its autosave: a collaborator
+    who only reads still gets the file written;
+  - a save tells the session what the file holds (`noteSaved`: the engine's
+    `persist`, which is also the base for the next fold-in). Any text the
+    editors were given without `edited()` (a restore over the note, a reload)
+    is reconciled to the document as one local edit (`adoptText`).
+- **The file is a writer too.** `ShareSession::foldInDisk(base, disk)` does a
+  three-way merge with one hunk on each side: the file's change (`base` ->
+  `disk`) is made in the document, translated past what the document gained
+  since `base`, and sent. It is used when the file changes under an open
+  note (`reloadChangedNotes`, before the "typing wins" branch) and when the
+  first tab opens the note after the application was closed (`attach`, with the
+  engine's `base()`); what the file gained while closed, say through another
+  device's file sync, folds in, then the editor takes the document's text. A
+  change that overlaps the document's own edits since `base` is left out
+  ("typing wins", file recovery keeps the other version, as for any note).
+- **Restart.** The record, the CRDT state and `base.md` are the engine's
+  persistence (above). With the feature on and shares in the store the engine
+  starts as the vault opens, and a tab opening a shared note attaches to its
+  session. Nothing dials by itself without mDNS: a joiner reconnects when the
+  owner's address answers (`ShareEngine::dial`).
+- **Cost.** A keystroke is one `localEdit`, one AEAD seal and one signature per
+  connected member, and no copy of the text; the text is fetched only when the
+  edit touches half of a surrogate pair. State is written on the engine's 2 s
+  debounce and on save, never per keystroke.
+
+Tests: `ctest -R '^share_window$'` - two `MainWindow`s on two temporary vaults,
+loopback only, mDNS off, port 0, an in-memory secret store, temporary XDG
+directories (`tests/test_share_window.cpp`); `ExternalEditTest.*` and
+`HunkTest.*` in `tests/test_editor.cpp`.

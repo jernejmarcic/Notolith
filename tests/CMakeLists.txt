@@ -236,6 +236,15 @@ if(TARGET noteAppC_shareengine)
         ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-data;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-state")
 endif()
 
+# Sharing through the window: two MainWindows on two temporary vaults, loopback only
+# (docs/SHARE.md "In the window"). The XDG directories are temporary ones, see main().
+if(TARGET noteAppC_shareengine AND TARGET noteAppC_ui)
+    add_executable(test_share_window test_share_window.cpp)
+    target_link_libraries(test_share_window PRIVATE noteAppC_ui noteAppC_shareengine Qt6::Test GTest::gtest)
+    add_test(NAME share_window COMMAND test_share_window)
+    set_tests_properties(share_window PROPERTIES TIMEOUT 600 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 if(TARGET noteAppC_crypt)
     add_executable(test_crypt test_crypt.cpp)
     target_link_libraries(test_crypt PRIVATE noteAppC_crypt Qt6::Test GTest::gtest)
