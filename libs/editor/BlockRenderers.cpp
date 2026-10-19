@@ -1223,6 +1223,14 @@ std::vector<MarkdownEditor::TabRect> MarkdownEditor::tabsOf(const BlockView &vie
     return tabs;
 }
 
+qreal MarkdownEditor::sideScrollAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
+        return 0;
+    return sideOffset(d->m_blocks[size_t(index)]);
+}
+
 QRectF MarkdownEditor::selectedTabRectAt(qsizetype offset) const
 {
     const qsizetype index = blockAt(offset);

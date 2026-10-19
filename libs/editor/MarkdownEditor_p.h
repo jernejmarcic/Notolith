@@ -189,11 +189,12 @@ struct MarkdownEditor::BlockView {
     /// Filled instead of `layout` when a table renders as a grid.
     std::vector<Cell> cells;
     int headerRows = 0;
-    /// A table keeps its columns at their natural width; when the total
-    /// exceeds the readable column the table scrolls sideways inside its
-    /// own block, exactly as it does in Obsidian.
-    qreal tableWidth = 0;
-    qreal tableScroll = 0;
+    /// A wide table's columns, or a listing's longest line, at their natural
+    /// width: when the total exceeds the readable column the block scrolls
+    /// sideways inside itself, exactly as it does in Obsidian. 0 for a block
+    /// that fits. A fence keeps one offset for all its pieces, on the first.
+    qreal sideWidth = 0;
+    qreal sideScroll = 0;
     /// Set when this block is a callout, so painting knows its colour,
     /// icon and title without looking the span up again.
     const CalloutSpan *callout = nullptr;

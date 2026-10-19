@@ -7500,6 +7500,213 @@ TEST(CodeInCalloutTest, ALongListingInsideACalloutWrapsInLivePreview)
     EXPECT_GT(heightOf(QString(400, QLatin1Char('x')) + QStringLiteral(" y")), heightOf(QStringLiteral("x y")) + 20);
 }
 
+// --- a fence scrolls sideways instead of wrapping -------------------------------
+
+namespace {
+
+/// A line with spaces, so a wrapping layout has somewhere to break: 300
+/// characters, far wider than the 900 px window at any monospace size.
+QString longLine()
+{
+    return QStringLiteral("word ").repeated(60);
+}
+
+/// A fence of `body`, then enough paragraphs for the note to scroll.
+QString fenceNote(const QString &body, const QString &options = QString())
+{
+    return QStringLiteral("```text\n") + options + body + QStringLiteral("\n```\n\n")
+           + QStringLiteral("after\n\n").repeated(80);
+}
+
+/// The start of the fence's first line, and its end.
+constexpr qsizetype kFenceBody = 8; // after "```text\n"
+
+void sendWheel(MarkdownEditor &editor, const QPoint &at, const QPoint &pixels, const QPoint &degrees,
+               Qt::KeyboardModifiers modifiers, bool *accepted = nullptr)
+{
+    QWheelEvent event(QPointF(at), QPointF(at), pixels, degrees, Qt::NoButton, modifiers,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(editor.viewport(), &event);
+    if (accepted)
+        *accepted = event.isAccepted();
+}
+
+/// The text column's right edge: the panel is 14 px wider each side.
+qreal columnRight(const MarkdownEditor &editor, qsizetype offset)
+{
+    return editor.textColumn() + editor.blockPanelAt(offset).width() - 28;
+}
+
+} // namespace
+
+TEST(CodeScrollTest, ALongLineIsOneLineNotFive)
+{
+    const auto heightOf = [](const QString &body) {
+        auto editor = editorWith(fenceNote(body));
+        editor->setCursorOffset(editor->noteText().size());
+        return editor->documentHeight();
+    };
+    EXPECT_DOUBLE_EQ(heightOf(longLine()), heightOf(QStringLiteral("x")));
+}
+
+TEST(CodeScrollTest, WrapTrueOptsBackIntoWrapping)
+{
+    const auto heightOf = [](const QString &body, const QString &options) {
+        auto editor = editorWith(fenceNote(body, options));
+        editor->setCursorOffset(editor->noteText().size());
+        return editor->documentHeight();
+    };
+    const qreal scrolling = heightOf(longLine(), QString());
+    const qreal wrapping = heightOf(longLine(), QStringLiteral("#| wrap: true\n"));
+    EXPECT_GT(wrapping, scrolling + 20);
+    // `wrap: false` is the default spelt out: it scrolls, so the header the option line adds is not the difference.
+    EXPECT_GT(wrapping, heightOf(longLine(), QStringLiteral("#| wrap: false\n")) + 20);
+}
+
+TEST(CodeScrollTest, ShiftWheelPansTheListingNotThePage)
+{
+    auto editor = editorWith(fenceNote(longLine()));
+    editor->setCursorOffset(kFenceBody);
+    const QRectF before = editor->caretRectNow();
+    const int page = editor->verticalScrollBar()->value();
+    ASSERT_DOUBLE_EQ(editor->sideScrollAt(kFenceBody), 0);
+
+    bool accepted = false;
+    sendWheel(*editor, centreOf(before), QPoint(), QPoint(0, -240), Qt::ShiftModifier, &accepted);
+
+    EXPECT_TRUE(accepted);
+    EXPECT_GT(editor->sideScrollAt(kFenceBody), 0);
+    EXPECT_LT(editor->caretRectNow().x(), before.x()) << "the caret is drawn where its character is";
+    EXPECT_EQ(editor->verticalScrollBar()->value(), page);
+}
+
+TEST(CodeScrollTest, HorizontalWheelAndTrackpadPixelsPanToo)
+{
+    auto editor = editorWith(fenceNote(longLine()));
+    editor->setCursorOffset(kFenceBody);
+    const QPoint at = centreOf(editor->caretRectNow());
+
+    sendWheel(*editor, at, QPoint(), QPoint(-240, 0), Qt::NoModifier);
+    const qreal wheel = editor->sideScrollAt(kFenceBody);
+    EXPECT_GT(wheel, 0);
+
+    sendWheel(*editor, at, QPoint(-50, 0), QPoint(), Qt::NoModifier);
+    EXPECT_GT(editor->sideScrollAt(kFenceBody), wheel);
+}
+
+TEST(CodeScrollTest, AShortListingIsNotScrollable)
+{
+    auto editor = editorWith(fenceNote(QStringLiteral("x = 1")));
+    editor->setCursorOffset(kFenceBody);
+    const QPoint at = centreOf(editor->caretRectNow());
+    const int page = editor->verticalScrollBar()->value();
+
+    sendWheel(*editor, at, QPoint(), QPoint(0, -240), Qt::ShiftModifier);
+
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(kFenceBody), 0);
+    EXPECT_GT(editor->verticalScrollBar()->value(), page) << "the wheel falls through to the page";
+}
+
+TEST(CodeScrollTest, EndKeepsTheCaretInsideThePanel)
+{
+    auto editor = editorWith(fenceNote(longLine()));
+    editor->setCursorOffset(kFenceBody);
+
+    QTest::keyClick(editor.get(), Qt::Key_End);
+    EXPECT_EQ(editor->cursorOffset(), kFenceBody + longLine().size());
+    const QRectF caret = editor->caretRectNow();
+    EXPECT_LE(caret.right(), columnRight(*editor, kFenceBody));
+    EXPECT_GE(caret.left(), editor->textColumn());
+    EXPECT_GT(editor->sideScrollAt(kFenceBody), 0);
+
+    QTest::keyClick(editor.get(), Qt::Key_Home);
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(kFenceBody), 0);
+}
+
+TEST(CodeScrollTest, TypingPastTheEdgeSurvivesTheReparse)
+{
+    auto editor = editorWith(fenceNote(longLine()));
+    editor->setCursorOffset(kFenceBody + longLine().size());
+    QTest::keyClicks(editor.get(), QStringLiteral("zz"));
+    const qreal typed = editor->sideScrollAt(kFenceBody);
+    ASSERT_GT(typed, 0);
+
+    // The reparse runs a few milliseconds after the keystroke and rebuilds
+    // every block; the offset must come through it.
+    QTest::qWait(150);
+    editor->grab();
+    EXPECT_GT(editor->sideScrollAt(kFenceBody), 0);
+    EXPECT_LE(editor->caretRectNow().right(), columnRight(*editor, kFenceBody));
+    EXPECT_GE(editor->caretRectNow().left(), editor->textColumn());
+}
+
+TEST(CodeScrollTest, ClickInTheScrolledPartLandsOnTheRightCharacter)
+{
+    auto editor = editorWith(fenceNote(longLine()));
+    const qsizetype end = kFenceBody + longLine().size();
+    editor->setCursorOffset(kFenceBody);
+    QTest::keyClick(editor.get(), Qt::Key_End);
+    ASSERT_GT(editor->sideScrollAt(kFenceBody), 0);
+
+    // The caret is at the end of the line, drawn far right of where the
+    // unscrolled text would put it: a click on it lands on that same offset.
+    const QPoint where = centreOf(editor->caretRectNow());
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, where);
+    EXPECT_EQ(editor->cursorOffset(), end);
+
+    // A drag from there to the panel's left edge selects the tail of the line.
+    const int leftEdge = editor->textColumn() + 4;
+    QTest::mousePress(editor->viewport(), Qt::LeftButton, Qt::NoModifier, where);
+    QTest::mouseMove(editor->viewport(), QPoint(leftEdge, where.y()));
+    QTest::mouseRelease(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(leftEdge, where.y()));
+    const QString picked = editor->selectedText();
+    EXPECT_FALSE(picked.isEmpty());
+    EXPECT_TRUE(longLine().endsWith(picked));
+}
+
+TEST(CodeScrollTest, PiecesShareOneOffset)
+{
+    QStringList lines;
+    for (int i = 0; i < 40; ++i)
+        lines << (i == 34 ? longLine() : QStringLiteral("line %1").arg(i));
+    auto editor = editorWith(fenceNote(lines.join(QLatin1Char('\n'))));
+    const qsizetype first = kFenceBody;
+    const qsizetype long35 = kFenceBody + lines.mid(0, 34).join(QLatin1Char('\n')).size() + 1;
+    editor->setCursorOffset(long35); // lays the second piece out and scrolls it into view
+
+    sendWheel(*editor, centreOf(editor->caretRectNow()), QPoint(), QPoint(0, -240), Qt::ShiftModifier);
+
+    EXPECT_GT(editor->sideScrollAt(long35), 0);
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(first), editor->sideScrollAt(long35));
+}
+
+TEST(CodeScrollTest, ALineNumberGutterStaysPut)
+{
+    auto editor = editorWith(fenceNote(longLine(), QStringLiteral("#| lines: true\n")));
+    editor->setCursorOffset(editor->noteText().size()); // out of the fence, which renders with its gutter
+    editor->verticalScrollBar()->setValue(0);
+    editor->grab(); // the first paint settles the viewport the geometry below is read from
+    const QRectF panel = editor->blockPanelAt(kFenceBody);
+    // Above the scroll bar, which starts at the panel's left edge and moves.
+    const QRect strip(editor->textColumn(), int(panel.top()), 24, int(panel.height()) - 14);
+    const QImage before = editor->grab().toImage().copy(strip);
+
+    sendWheel(*editor, centreOf(panel), QPoint(), QPoint(0, -490), Qt::ShiftModifier);
+    ASSERT_GT(editor->sideScrollAt(kFenceBody), 0);
+    EXPECT_TRUE(editor->grab().toImage().copy(strip) == before)
+        << "the numbers belong to the panel, not to the text that slides under them";
+}
+
+TEST(CodeScrollTest, AListingInACalloutStillWraps)
+{
+    const auto heightOf = [](const QString &line) {
+        auto editor = editorWith(QStringLiteral("> [!note] t\n> ```\n> ") + line + QStringLiteral("\n> ```\n\nafter\n"));
+        editor->setCursorOffset(editor->noteText().size());
+        return editor->documentHeight();
+    };
+    EXPECT_GT(heightOf(longLine()), heightOf(QStringLiteral("x y")) + 20);
+}
+
 // --- bare brackets, meta notes and what the counts leave out -------------------
 
 namespace {

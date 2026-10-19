@@ -793,6 +793,11 @@ public:
     /// The selected tab of the tab group holding `offset`, in viewport
     /// coordinates; null outside a group, or while the caret is in it. For the tests.
     QRectF selectedTabRectAt(qsizetype offset) const;
+    /// How far the fence holding `offset` is scrolled sideways, in pixels; 0
+    /// when none of its lines is wider than the column. For the tests.
+    qreal sideScrollAt(qsizetype offset) const;
+    /// The caret's rectangle, viewport coordinates; empty when not drawn. For the tests.
+    QRectF caretRectNow() const { return caretRect(); }
 
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
@@ -1065,8 +1070,19 @@ private:
     /// its structure is missing, so the caller falls back to plain text.
     bool layoutTable(BlockView &view);
     void paintTable(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
-    /// The table under `viewportPoint` that is wider than the column, or null.
-    BlockView *scrollableTableAt(const QPoint &viewportPoint);
+    /// The edge fades, and the bar under `window` when `withBar`, of a table
+    /// or listing `extent` wide scrolled to `scroll`; nothing if it fits.
+    /// `background` is what the fades dissolve into.
+    void paintSidewaysOverflow(QPainter &painter, const QRectF &window, qreal extent, qreal scroll,
+                               bool withBar, qreal barY, const QColor &background) const;
+    /// The table, or the fence's first piece, under `viewportPoint` that is
+    /// wider than the column, or null.
+    BlockView *sidewaysScrollableAt(const QPoint &viewportPoint);
+    /// How wide a table or a whole fence is at its natural width (0 when it
+    /// fits), and how far it is scrolled, clamped to that: a fence's pieces
+    /// share the offset its first piece holds.
+    qreal sideExtent(const BlockView &view) const;
+    qreal sideOffset(const BlockView &view) const;
     void paintCallout(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// The clickable, editable title of a top-level `> [!type]` callout, laid
     /// out from the block's `left`/`top` the way paintCallout draws it; null

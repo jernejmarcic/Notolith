@@ -341,7 +341,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
         offsets << x;
         x += used;
     }
-    view.tableWidth = x;
+    view.sideWidth = x;
 
     QFont headingFont = d->m_theme.uiFont();
     headingFont.setWeight(QFont::DemiBold);
@@ -388,8 +388,8 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
 
     view.cells = std::move(cells);
     view.headerRows = 1;
-    view.tableScroll =
-        qBound<qreal>(0, view.tableScroll, qMax<qreal>(0, view.tableWidth - contentWidth()));
+    view.sideScroll =
+        qBound<qreal>(0, view.sideScroll, qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();
     view.height = y;
     view.laidOut = true;

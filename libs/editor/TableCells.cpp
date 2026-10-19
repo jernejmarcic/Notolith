@@ -90,7 +90,7 @@ QPointF MarkdownEditor::cellTextOrigin(const BlockView &view, const Cell &cell) 
         else if (cell.alignment.testFlag(Qt::AlignHCenter))
             offset = (width - lineWidth) / 2;
     }
-    return {cell.rect.left() - view.tableScroll + kCellPadX + qMax<qreal>(0, offset),
+    return {cell.rect.left() - view.sideScroll + kCellPadX + qMax<qreal>(0, offset),
             cell.rect.top() + kCellPadY};
 }
 
@@ -190,15 +190,15 @@ void MarkdownEditor::revealCaretCell()
     const Cell *cell = caretCell(view);
     if (!cell)
         return;
-    const qreal overflow = view.tableWidth - contentWidth();
+    const qreal overflow = view.sideWidth - contentWidth();
     if (overflow <= 0)
         return;
-    qreal scroll = view.tableScroll;
+    qreal scroll = view.sideScroll;
     if (cell->rect.left() < scroll)
         scroll = cell->rect.left();
     else if (cell->rect.right() > scroll + contentWidth())
         scroll = cell->rect.right() - contentWidth();
-    view.tableScroll = qBound<qreal>(0, scroll, overflow);
+    view.sideScroll = qBound<qreal>(0, scroll, overflow);
 }
 
 void MarkdownEditor::insertTableRowAfter(const CellRef &cell, int column)
@@ -288,7 +288,7 @@ bool MarkdownEditor::fillShortRowAt(const QPoint &viewportPoint)
         if (!table)
             return false; // a base's cells, not a table's
         for (const Cell &cell : view.cells) {
-            if (!cell.source.isValid() && cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
+            if (!cell.source.isValid() && cell.rect.translated(-view.sideScroll, view.y).contains(QPointF(x, y)))
                 return fillShortRow(table - d->m_decorations.tables.constData(), cell.row);
         }
         return false;
