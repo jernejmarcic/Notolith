@@ -2016,10 +2016,11 @@ Shared/<title>.md.
 - [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
       applyExternalEdit, disk fold-in. Fable split it in two (plan in the
       session scratchpad, LANE-S-PLAN.md):
-  - [ ] S1: SecretStore with a service name, ShareIdentity, share.proto +
+  - [x] S1: SecretStore with a service name, ShareIdentity, share.proto +
         ShareFrame (AEAD + Ed25519, seq replay, 1 MiB cap), ShareStore,
         ShareEngine (invite code, join/approve, revoke + rekey, offline
-        catch-up by state vector); two engines over loopback (running)
+        catch-up by state vector, periodic + settle-time resync for the yrs
+        quirk, relay through the owner); two engines over loopback, ~30 tests
   - [ ] S2: ShareSession, undo kept across remote edits, MainWindow wiring
         (share:share-note / share:join / share:stop, approve prompt,
         Shared/<title>.md, autosave of remote edits, disk fold-in, resume on
@@ -2108,13 +2109,15 @@ Shared/<title>.md.
       fold all / unfold all / toggle fold commands, reading view too. Sol
       research, Fable plan, then a lane; foldSites() must learn the new kinds
       so per-note memory covers them.
-  - [ ] Lane A (foldheadings): fold model (heading sections, list parents),
+  - [x] Lane A (foldheadings): fold model (heading sections, list parents),
         hidden blocks skipped everywhere, arrow + ellipsis, caret/find
-        reveal, undo/external-edit keep folds, per-note memory (running)
+        reveal, undo/external-edit keep folds, per-note memory. Restore order
+        swapped in MainWindow (caret, then folds) by the coordinator
   - [ ] Lane B: editor:toggle-fold / fold-all / unfold-all / fold-more /
         fold-less / toggle-fold-properties (no default keys, work in
         Reading), Settings > Editor "Fold heading" / "Fold indent" (on) +
-        app.json import, restore order, perf rows (fold-all 1 MB < 50 ms)
+        app.json import, perf rows (fold-all 1 MB < 50 ms), window test that a
+        remembered heading fold around the remembered caret stays folded
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
