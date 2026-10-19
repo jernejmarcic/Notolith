@@ -7940,6 +7940,45 @@ TEST(FormatColoursTest, StrikeLineColourIsPaintedNotQts)
     EXPECT_GE(widestRun(editor->viewport()->grab().toImage(), QColor(0xff, 0, 0)), 60);
 }
 
+namespace {
+
+/// Pixels within `tolerance` of `colour` on every channel.
+int pixelsNear(const QImage &shot, const QColor &colour, int tolerance = 40)
+{
+    int count = 0;
+    for (int y = 0; y < shot.height(); ++y) {
+        for (int x = 0; x < shot.width(); ++x) {
+            const QColor pixel(shot.pixel(x, y));
+            count += qAbs(pixel.red() - colour.red()) <= tolerance && qAbs(pixel.green() - colour.green()) <= tolerance
+                     && qAbs(pixel.blue() - colour.blue()) <= tolerance;
+        }
+    }
+    return count;
+}
+
+} // namespace
+
+TEST(FormatColoursTest, AStruckTableCellIsPaintedToo)
+{
+    const QString table = QStringLiteral("| a | b |\n|---|---|\n| ~~struck cell here~~ | x |\n");
+    auto editor = editorOn(table, {{QStringLiteral("--strikethrough-decoration-color"), QStringLiteral("#ff0000")}});
+    EXPECT_GE(widestRun(editor->viewport()->grab().toImage(), QColor(0xff, 0, 0)), 40);
+}
+
+TEST(FormatColoursTest, ListMarkersAndCheckboxesTakeTheirColours)
+{
+    const QString list = QStringLiteral("- bullet\n- [x] ticked\n- [ ] open\n");
+    auto plain = editorOn(list, {});
+    EXPECT_EQ(pixelsNear(plain->viewport()->grab().toImage(), QColor(0xff, 0, 0)), 0);
+    auto editor = editorOn(list, {{QStringLiteral("--list-marker-color"), QStringLiteral("#ff0000")},
+                                  {QStringLiteral("--checkbox-color"), QStringLiteral("#00ff00")},
+                                  {QStringLiteral("--checkbox-border-color"), QStringLiteral("#0000ff")}});
+    const QImage shot = editor->viewport()->grab().toImage();
+    EXPECT_GT(pixelsNear(shot, QColor(0xff, 0, 0)), 0) << "the bullet";
+    EXPECT_GT(pixelsNear(shot, QColor(0, 0xff, 0)), 20) << "the ticked box's fill";
+    EXPECT_GT(pixelsNear(shot, QColor(0, 0, 0xff)), 10) << "the open box's border";
+}
+
 TEST(FormatColoursTest, StrikeTextColourAppliesWithoutALineColour)
 {
     auto editor = editorOn(QStringLiteral("~~gone~~\n"), {{QStringLiteral("--strikethrough-color"), QStringLiteral("#00ff00")}});
@@ -7971,8 +8010,12 @@ TEST(FormatColoursTest, TheOtherKindsReadTheirOwnTokens)
 TEST(FormatColoursTest, RecolourKeepsHeightsScrollAndLaysOutOnlyTheScreen)
 {
     QString note;
+    // Uneven blocks, so that estimating them all again would not land on the
+    // heights they were measured at.
     for (int i = 0; i < 1500; ++i)
-        note += QStringLiteral("Paragraph %1 with **bold** words that run on for a good while, long enough to wrap.\n\n").arg(i);
+        note += QStringLiteral("Paragraph %1 with **bold** words that run on for a good while, long enough to wrap.%2\n\n")
+                    .arg(i)
+                    .arg(QStringLiteral(" And a little more to read.").repeated(i % 7 * 2));
     ASSERT_GT(note.size(), 120000);
     auto editor = parsedEditorWith(note);
     ASSERT_NE(editor, nullptr);
@@ -7982,11 +8025,14 @@ TEST(FormatColoursTest, RecolourKeepsHeightsScrollAndLaysOutOnlyTheScreen)
     bar->setValue(bar->maximum() / 2);
     editor->grab();
     // Estimates settle into measured heights as blocks around the view get laid
-    // out; a recolour from a settled state must not move anything.
+    // out; a recolour from a settled state must not move anything. (Nudging the
+    // scroll, not the theme: a theme change is what is being tested.)
     qreal height = 0;
     for (int round = 0; round < 20 && editor->documentHeight() != height; ++round) {
         height = editor->documentHeight();
-        editor->setTheme(Theme::builtin());
+        bar->setValue(bar->value() + 400);
+        editor->grab();
+        bar->setValue(bar->value() - 400);
         editor->grab();
     }
     const int scroll = bar->value();
@@ -8006,11 +8052,12 @@ TEST(FormatColoursTest, RecolourKeepsHeightsScrollAndLaysOutOnlyTheScreen)
         red += colourOf(*editor, QStringLiteral("Paragraph %1 with **bold**").arg(i), 22) == QColor(0xff, 0, 0);
     EXPECT_GE(red, 3) << "the paragraphs on screen are in the new colour";
 
-    // A size is not a colour: that still lays everything out again.
+    // A size is not a colour: that still lays everything out again, so the
+    // whole note grows, not just the blocks on screen.
     theme.setToken(QStringLiteral("--font-text-size"), QStringLiteral("24"));
     editor->setTheme(theme);
     editor->grab();
-    EXPECT_NE(editor->documentHeight(), height);
+    EXPECT_GT(editor->documentHeight(), height * 1.2);
 }
 
 TEST(FormatColoursTest, NothingIsWrittenToTheNote)
