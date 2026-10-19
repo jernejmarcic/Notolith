@@ -1409,8 +1409,12 @@ Wave 1
             follow a rename of their target.
       - [x] The real drag gesture (lane links, 8c4506a: own mime marker,
             a foreign window's drag is refused).
-      - [>] Case-only rename not run on a real case-insensitive filesystem
-            (needs a mount; ask Jernej or skip).
+      - [x] Case-only rename not run on a real case-insensitive filesystem
+            (needs a mount; ask Jernej or skip). Run 2026-10-19 on a FAT image
+            mounted with udisksctl (no root): Linux vfat took "note.md" ->
+            "Note.md" as a rename onto itself, reported success and kept the
+            old case. Now goes through a hidden name in between.
+            NOTOLITH_CASE_INSENSITIVE_DIR runs the test; skipped without it.
 
 Wave 2
 - [x] 3. (lane single, 65c557b 9131e80) No single instance: opening a note from the file
@@ -2342,7 +2346,6 @@ decide. Items marked `[>]` above point here. Agents do not pick these up.
 - [ ] Wayland activation token: opening a note from the file manager raises
       the running window on Hyprland (cage always focuses the newest window,
       so offscreen tests cannot show it).
-- [ ] Case-only rename on a real case-insensitive filesystem (needs a mount).
 - [ ] Graph feel by eye after e49edab: settles and then stays still.
 - [ ] Later, his call: person identity across devices; a self-hosted relay.
 - [ ] Only if rebuilds hurt: move the ~355 private method declarations out

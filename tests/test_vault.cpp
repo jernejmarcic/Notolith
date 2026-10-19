@@ -396,6 +396,48 @@ TEST(VaultFileOps, RenamePathKeepsExtensionAndContent)
     EXPECT_EQ(reread.text, contents.text);
 }
 
+// Needs a case-insensitive filesystem, which a test cannot mount; point
+// NOTOLITH_CASE_INSENSITIVE_DIR at a writable directory on one (a FAT image
+// mounted with udisksctl, say). Skipped otherwise.
+TEST(VaultFileOps, ACaseOnlyRenameWorksOnACaseInsensitiveFilesystem)
+{
+    const QString root = qEnvironmentVariable("NOTOLITH_CASE_INSENSITIVE_DIR");
+    if (root.isEmpty())
+        GTEST_SKIP() << "NOTOLITH_CASE_INSENSITIVE_DIR is not set";
+    QTemporaryDir dir(root + QStringLiteral("/vault-XXXXXX"));
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QFile(dir.filePath(QStringLiteral("probe"))).open(QIODevice::WriteOnly));
+    ASSERT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral("PROBE")))) << "not case-insensitive";
+
+    Vault vault(dir.path());
+    QString error;
+    const QString note = vault.createNote(QString(), QStringLiteral("note"), &error);
+    ASSERT_FALSE(note.isEmpty()) << error.toStdString();
+    Note contents;
+    contents.text = QStringLiteral("# note\n\nBody.\n");
+    ASSERT_TRUE(Vault::write(note, contents, &error));
+
+    QString newPath;
+    ASSERT_TRUE(vault.renamePath(note, QStringLiteral("Note"), &newPath, &error)) << error.toStdString();
+    EXPECT_EQ(newPath, dir.filePath(QStringLiteral("Note.md")));
+    EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Files).contains(QStringLiteral("Note.md")))
+        << "the name on disk kept its old case";
+    Note reread;
+    ASSERT_TRUE(Vault::read(newPath, reread, &error));
+    EXPECT_EQ(reread.text, contents.text);
+
+    // A real clash is still one: another file differing only in case.
+    const QString other = vault.createNote(QString(), QStringLiteral("other"), &error);
+    ASSERT_FALSE(other.isEmpty());
+    EXPECT_FALSE(vault.renamePath(other, QStringLiteral("NOTE"), &newPath, &error));
+
+    // A folder too.
+    const QString folder = vault.createFolder(QString(), QStringLiteral("folder"), &error);
+    ASSERT_FALSE(folder.isEmpty()) << error.toStdString();
+    ASSERT_TRUE(vault.renamePath(folder, QStringLiteral("Folder"), &newPath, &error)) << error.toStdString();
+    EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Dirs | QDir::NoDotAndDotDot).contains(QStringLiteral("Folder")));
+}
+
 TEST(VaultFileOps, MoveToTrashKeepsFolderStructureAndSuffixesOnCollision)
 {
     QTemporaryDir dir;

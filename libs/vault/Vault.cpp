@@ -517,9 +517,23 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
 
     if (caseOnly) {
         // QFile::rename refuses a destination that "exists", which on such a
-        // filesystem is the file itself; rename(2) handles it.
+        // filesystem is the file itself, and Linux's vfat takes rename(2)
+        // from "note.md" to "Note.md" for a rename onto itself: success,
+        // nothing changed. Through a hidden name in between it is two real
+        // renames on every filesystem.
+        const std::string between = QDir(info.absolutePath())
+                                        .absoluteFilePath(QStringLiteral(".%1.renaming")
+                                                              .arg(QUuid::createUuid().toString(QUuid::Id128)))
+                                        .toStdString();
         std::error_code renameError;
-        std::filesystem::rename(absolutePath.toStdString(), newPath.toStdString(), renameError);
+        std::filesystem::rename(absolutePath.toStdString(), between, renameError);
+        if (!renameError) {
+            std::filesystem::rename(between, newPath.toStdString(), renameError);
+            if (renameError) {
+                std::error_code backError;
+                std::filesystem::rename(between, absolutePath.toStdString(), backError);
+            }
+        }
         if (renameError) {
             if (error)
                 *error = QString::fromStdString(renameError.message());
