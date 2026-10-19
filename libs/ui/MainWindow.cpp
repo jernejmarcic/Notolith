@@ -2329,6 +2329,10 @@ bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
         return nullptr;
     };
     switch (event->type()) {
+    case QEvent::KeyPress:
+        if (m_dragRunning && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape)
+            m_dragEscaped = true; // the drag is cancelled, not dropped: no window
+        return false;
     case QEvent::MouseButtonPress: {
         auto *mouse = static_cast<QMouseEvent *>(event);
         if (mouse->button() != Qt::LeftButton)
@@ -2468,12 +2472,45 @@ void MainWindow::startPaneDrag(QAbstractButton *tab, QWidget *pane)
         detachPane(pane);
 }
 
+bool MainWindow::dropOpensWindow(bool handled, bool inside, bool escaped)
+{
+    return !handled && !inside && !escaped;
+}
+
 bool MainWindow::dragEndedOutside(QDrag *drag)
 {
-    m_dragInside = m_dragHandled = false;
+    m_dragInside = m_dragHandled = m_dragEscaped = false;
+    m_dragRunning = true;
+    // Qt reports a drag cancelled with Escape like one let go outside every
+    // window, and its own drag (QBasicDrag) eats every key from a filter it
+    // installs inside exec(), ahead of ours. From the loop exec() starts,
+    // install ours again: that puts it in front.
+    QTimer::singleShot(0, this, [this] {
+        if (m_dragRunning)
+            watchDragKeys();
+    });
     drag->exec(Qt::MoveAction);
+    m_dragRunning = false;
     hideDropOverlay();
-    return !m_dragHandled && !m_dragInside;
+    return dropOpensWindow(m_dragHandled, m_dragInside, m_dragEscaped);
+}
+
+void MainWindow::watchDragKeys()
+{
+    qApp->installEventFilter(this); // already installed: moved to the front of the list
+}
+
+void MainWindow::watchDragForTests(bool on)
+{
+    m_dragRunning = on;
+    m_dragEscaped = false;
+    if (on)
+        watchDragKeys();
+}
+
+bool MainWindow::dragEscapedForTests() const
+{
+    return m_dragEscaped;
 }
 
 void MainWindow::showDropOverlay(TabGroup *group, DropZone zone)

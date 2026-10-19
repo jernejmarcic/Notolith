@@ -1291,6 +1291,50 @@ TEST_F(WindowTest, DraggingASidebarTabOutOfEveryWindowDetachesItsPane)
     EXPECT_FALSE(tab->isDown()) << "the platform swallowed the release; the synthetic one ended the press";
 }
 
+namespace {
+
+/// Stands in for Qt's own drag, which eats every key from an application
+/// filter it installs after ours, inside QDrag::exec().
+class KeyEater : public QObject {
+public:
+    bool eventFilter(QObject *, QEvent *event) override { return event->type() == QEvent::KeyPress; }
+};
+
+} // namespace
+
+TEST_F(WindowTest, EscapeDuringADragIsSeenAndCancelsIt)
+{
+    // The decision: a drag that no group took and that never was over a
+    // window opens one, unless Escape cancelled it. The real drag, and the
+    // pointer outside every window with an Escape, is hand-only: the
+    // offscreen platform has no drag to cancel.
+    EXPECT_TRUE(MainWindow::dropOpensWindow(false, false, false));
+    EXPECT_FALSE(MainWindow::dropOpensWindow(true, false, false)) << "a group took it";
+    EXPECT_FALSE(MainWindow::dropOpensWindow(false, true, false)) << "let go over a window";
+    EXPECT_FALSE(MainWindow::dropOpensWindow(false, false, true)) << "Escape";
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    KeyEater drag; // installed after the window's filter, so it runs first: as Qt's drag does
+    qApp->installEventFilter(&drag);
+
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_FALSE(window.dragEscapedForTests()) << "no drag is running: nothing is watched";
+
+    window.watchDragForTests(true); // what dragEndedOutside() does from inside exec()
+    QTest::keyClick(window.editor(), Qt::Key_A);
+    EXPECT_FALSE(window.dragEscapedForTests()) << "only Escape cancels";
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_TRUE(window.dragEscapedForTests()) << "ahead of the drag's own filter, which eats the key";
+
+    window.watchDragForTests(false);
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_FALSE(window.dragEscapedForTests());
+    qApp->removeEventFilter(&drag);
+}
+
 TEST_F(WindowTest, DropZoneIsPickedByEdgeQuarters)
 {
     const QRect rect(0, 0, 400, 300);

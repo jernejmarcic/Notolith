@@ -504,9 +504,10 @@ from. A drop only ever moves a tab: no tab is made or lost, and a note open
 in it keeps its place in history, caret and view. The Pop-out windows switch
 turns all of this off, drop targets included.
 
-Limits. Qt reports a drag cancelled with Escape the same way as one let go
-outside the windows, so an Escape pressed while the pointer is outside every
-window also opens the tab in a window of its own.
+Escape cancels a drag: a tab or a pane let go that
+way opens no window and stays where it was. (Qt reports an Escape-cancelled drag
+like one let go outside every window, so Notolith watches for the key itself,
+only while one of its drags runs.)
 
 A tab of the right sidebar can be dragged too: pulled off its row and let go
 outside every Notolith window, its pane opens in a window of its own, as "Detach
@@ -515,12 +516,15 @@ nothing happens. Panes are not tabs, so no split takes one. The left sidebar
 has no tabs to drag; "Detach left sidebar" takes it whole.
 
 The tests send the drag-enter and drop events themselves, because the offscreen
-platform cannot start a drag: they cover the zone arithmetic, the drop on an
+platform has no drag of its own (a started one ends at once as a drop outside
+every window, which is how the pane drag-out is tested): they cover the zone arithmetic, the drop on an
 edge, on the centre, on foreign data and with the feature off. Not covered, and
 to try by hand once on a real display: the drag itself (`QDrag::exec`, its
 pixmap), the synthetic release that ends the tab bar's own move when a drag
-leaves it, dragging between two real windows, how the overlay looks, and the
-drop outside every window (which is `newPopout`, tested under pop-out windows).
+leaves it, dragging between two real windows, how the overlay looks, the
+drop outside every window of a tab (which is `newPopout`, tested under pop-out
+windows), and Escape during a real drag (the key's path ahead of Qt's own drag
+filter is tested; that Qt delivers the key there is not).
 
 ## Undo close tab
 
