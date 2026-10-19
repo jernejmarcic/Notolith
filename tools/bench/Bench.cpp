@@ -1115,7 +1115,8 @@ Timing benchPdfViewSave(const QString &pdfPath, const QString &scratchDir, int r
 /// readback, not the drawing. So this shows the widget, drives the scrollbar,
 /// and waits for a real paint event on the viewport each time. Vsync is off,
 /// or every measurement would come back as one refresh interval.
-Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrames = 400)
+Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrames = 400,
+                           QSize size = QSize(1180, 760))
 {
     struct PaintCounter : QObject {
         int paints = 0;
@@ -1128,7 +1129,7 @@ Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrame
     } counter;
 
     auto editor = std::make_unique<MarkdownEditor>();
-    editor->resize(1180, 760);
+    editor->resize(size);
     if (gpu)
         editor->setGPUacceleration(true);
     editor->setNoteText(buildLongNote(lines));
@@ -1175,15 +1176,23 @@ Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrame
     }
     return reduce(gpu ? QStringLiteral("Scroll frame, OpenGL viewport")
                       : QStringLiteral("Scroll frame, raster viewport"),
-                  QStringLiteral("%1-line note, %2, %3 frames, on screen")
+                  QStringLiteral("%1-line note, %2x%3 @%4x, %5, %6 frames, %7")
                       .arg(lines)
+                      .arg(size.width())
+                      .arg(size.height())
+                      .arg(editor->devicePixelRatioF())
                       .arg(stepPixels > 0 ? QStringLiteral("%1 px steps").arg(stepPixels)
                                           : QStringLiteral("page steps"))
-                      .arg(int(samples.size())),
+                      .arg(int(samples.size()))
+                      .arg(QGuiApplication::platformName() == QLatin1String("offscreen")
+                               ? QStringLiteral("backing store, no compositor")
+                               : QStringLiteral("on screen")),
                   samples);
 }
 
-Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
+/// `stepPixels` 0 pages through; a finger dragging the note moves it 10-30 px
+/// a frame, most of which is already on screen.
+Timing benchScroll(int lines, QSize viewport = QSize(1180, 760), int stepPixels = 0, int maxFrames = 400)
 {
     auto editor = std::make_unique<MarkdownEditor>();
     editor->resize(viewport);
@@ -1191,7 +1200,7 @@ Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
     paintedFrame(editor.get()); // untimed warm-up frame, as above
 
     QScrollBar *bar = editor->verticalScrollBar();
-    const int page = qMax(1, bar->pageStep());
+    const int page = stepPixels > 0 ? stepPixels : qMax(1, bar->pageStep());
     const int maxValue = bar->maximum();
 
     std::vector<double> samples;
@@ -1201,7 +1210,7 @@ Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
         const int step = pass == 0 ? page : -page;
         int value = pass == 0 ? 0 : maxValue;
         bar->setValue(value);
-        while (true) {
+        for (int frames = 0; stepPixels <= 0 || frames < maxFrames; ++frames) {
             const int next = qBound(0, value + step, maxValue);
             if (next == value)
                 break;
@@ -1218,11 +1227,12 @@ Timing benchScroll(int lines, QSize viewport = QSize(1180, 760))
     // label: the same note at 4K and at 2x scale is a different measurement.
     const qreal ratio = editor->devicePixelRatioF();
     return reduce(QStringLiteral("Scroll frame time"),
-                  QStringLiteral("%1 lines, %2x%3 @%4x, %5 frames")
+                  QStringLiteral("%1 lines, %2x%3 @%4x, %5, %6 frames")
                       .arg(lines)
                       .arg(viewport.width())
                       .arg(viewport.height())
                       .arg(ratio)
+                      .arg(stepPixels > 0 ? QStringLiteral("%1 px steps").arg(stepPixels) : QStringLiteral("page steps"))
                       .arg(int(samples.size())),
                   samples);
 }
@@ -1496,6 +1506,17 @@ int main(int argc, char *argv[])
         }
         return false;
     }();
+    // --padd: the FydeTab Duo's panel, 2560x1600 at GNOME's 1.67, so a change
+    // is measured at the scale and size that tablet scrolls at.
+    const bool wantsPADD = [argc, argv] {
+        for (int i = 1; i < argc; ++i) {
+            if (qstrcmp(argv[i], "--padd") == 0)
+                return true;
+        }
+        return false;
+    }();
+    if (wantsPADD && !qEnvironmentVariableIsSet("QT_SCALE_FACTOR"))
+        qputenv("QT_SCALE_FACTOR", "1.67");
     if (!wantsGPU) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     } else {
@@ -1570,6 +1591,11 @@ int main(int argc, char *argv[])
                                                   "relayout, scroll or pdfview."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
+    QCommandLineOption paddOption(QStringLiteral("padd"),
+                                  QStringLiteral("Only the scroll rows at PADD's panel (FydeTab Duo, "
+                                                 "2560x1600 at scale 1.67): a finger drag, a wheel "
+                                                 "notch and a page, through the real repaint path."));
+    parser.addOption(paddOption);
     parser.process(app);
     const QString phase = parser.value(phaseOption);
     const auto runs = [&phase](const char *name) { return phase.isEmpty() || phase == QLatin1String(name); };
@@ -1625,6 +1651,15 @@ int main(int argc, char *argv[])
     }
 
     QList<Timing> timings;
+
+    if (parser.isSet(paddOption)) {
+        const QSize panel(1533, 958); // 2560x1600 / 1.67, the window full screen
+        timings << benchScrollOnScreen(5000, false, 20, 300, panel); // a finger dragging
+        timings << benchScrollOnScreen(5000, false, 72, 300, panel); // a wheel notch
+        timings << benchScrollOnScreen(5000, false, 0, 400, panel);  // a page
+        printTable(timings, 0, QStringLiteral("not measured in a --padd run"));
+        return 0;
+    }
 
     // --gpu measures one thing: raster against OpenGL, on screen. Everything
     // else shows windows too (cold start opens seven), and on a real display
