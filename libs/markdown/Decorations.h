@@ -256,7 +256,9 @@ struct ListItemSpan {
     /// for Word-style numbering. Empty for a bullet.
     QString outline;
     bool task = false;
-    bool done = false;
+    /// The character in a task's box: ' ', 'x', 'X', and with
+    /// ParseOptions::taskStates any other single one. Null when not a task.
+    QChar state;
     Range checkbox;    ///< the "[x]" alone, for click-to-toggle
 };
 

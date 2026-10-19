@@ -517,6 +517,78 @@ void MarkdownEditor::paintCheckBox(QPainter &painter, const QRectF &rect, bool d
     painter.restore();
 }
 
+void MarkdownEditor::paintTaskBox(QPainter &painter, const QRectF &rect, const TaskState &state,
+                                  const QFont &font) const
+{
+    if (state.ch == QLatin1Char(' ') || isDoneBox(state.ch)) {
+        paintCheckBox(painter, rect, state.ch != QLatin1Char(' '));
+        return;
+    }
+
+    QColor color = state.color.startsWith(QLatin1String("--")) ? d->m_theme.color(state.color)
+                                                              : Theme::parseColor(state.color);
+    if (!color.isValid())
+        color = d->m_theme.color(QStringLiteral("--interactive-accent"));
+    const auto at = [&rect](qreal x, qreal y) {
+        return QPointF(rect.left() + rect.width() * x, rect.top() + rect.height() * y);
+    };
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+    QPainterPath rounded;
+    rounded.addRoundedRect(rect, 3, 3);
+    if (state.glyph == TaskGlyph::Tick) {
+        painter.fillPath(rounded, color);
+        painter.setPen(QPen(d->m_theme.color(QStringLiteral("--text-on-accent")), 2, Qt::SolidLine,
+                            Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(QPolygonF({at(0.24, 0.52), at(0.44, 0.72), at(0.78, 0.30)}));
+        painter.restore();
+        return;
+    }
+    if (state.glyph == TaskGlyph::Half) {
+        painter.save();
+        painter.setClipPath(rounded);
+        painter.fillRect(QRectF(rect.left(), rect.top(), rect.width() / 2, rect.height()), color);
+        painter.restore();
+    }
+    painter.setPen(QPen(color, 1.5));
+    painter.drawPath(rounded);
+
+    painter.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    switch (state.glyph) {
+    case TaskGlyph::Line:
+        painter.drawLine(at(0.25, 0.5), at(0.75, 0.5));
+        break;
+    case TaskGlyph::Cross:
+        painter.drawLine(at(0.28, 0.28), at(0.72, 0.72));
+        painter.drawLine(at(0.28, 0.72), at(0.72, 0.28));
+        break;
+    case TaskGlyph::ArrowRight:
+    case TaskGlyph::ArrowLeft: {
+        // One drawing, mirrored for the arrow that points back.
+        const qreal flip = state.glyph == TaskGlyph::ArrowRight ? 0 : 1;
+        const auto x = [flip](qreal value) { return flip ? 1 - value : value; };
+        painter.drawLine(at(x(0.25), 0.5), at(x(0.72), 0.5));
+        painter.drawPolyline(QPolygonF({at(x(0.55), 0.32), at(x(0.75), 0.5), at(x(0.55), 0.68)}));
+        break;
+    }
+    case TaskGlyph::Star:
+        paintBulletGlyph(painter, BulletGlyph::Star, QChar(), rect.center(), color, font);
+        break;
+    case TaskGlyph::Char: {
+        QFont bold = font;
+        bold.setBold(true);
+        bold.setPixelSize(qMax(1, int(rect.height() * 0.7)));
+        painter.setFont(bold);
+        painter.drawText(rect, Qt::AlignCenter, QString(state.ch));
+        break;
+    }
+    default: // Box, Half: the border is all there is
+        break;
+    }
+    painter.restore();
+}
+
 Range MarkdownEditor::editableValueOf(const Property &property) const
 {
     switch (property.type) {

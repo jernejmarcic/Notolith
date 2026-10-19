@@ -40,7 +40,7 @@ struct BlockId {
 };
 
 struct Task {
-    bool done = false;
+    QChar state = QLatin1Char(' '); ///< what is in the box; see ListItemSpan::state
     QString text;
     Range range;
 };

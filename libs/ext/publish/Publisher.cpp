@@ -484,7 +484,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         Decorations decorations;
         bool ok = false;
     };
-    const auto parseOne = [this](const QString &relativePath) -> Parsed {
+    const auto parseOne = [this, &options](const QString &relativePath) -> Parsed {
         static thread_local noteAppC::Parser parser; // Parser: "cheap but not thread safe"
         Parsed out;
         out.relativePath = relativePath;
@@ -493,7 +493,7 @@ bool Publisher::publish(const Options &options, const ProgressCallback &progress
         if (!noteAppC::Vault::read(m_vault.absolute(relativePath), note, &readError))
             return out;
         out.text = note.text;
-        const auto result = parser.parseAll(out.text, m_vault.absolute(relativePath));
+        const auto result = parser.parseAll(out.text, m_vault.absolute(relativePath), options.parse);
         out.metadata = result.metadata;
         out.decorations = result.decorations;
         out.ok = true;

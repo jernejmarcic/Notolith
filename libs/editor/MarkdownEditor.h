@@ -28,6 +28,7 @@ class QDropEvent;
 #include "Decorations.h"
 #include "DisplayMap.h"
 #include "Parser.h"
+#include "TaskStates.h"
 #include "CalloutStyle.h"
 #include "LanguageStyle.h"
 #include "BaseResult.h"
@@ -267,6 +268,7 @@ public:
         QPageLayout::Orientation orientation = QPageLayout::Portrait;
         qreal marginMillimetres = 25.4; ///< "Default", about an inch
         int downscalePercent = 100;
+        bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
     };
     /// Renders `text` in reading view, light theme, onto paper, page by page.
     /// A page breaks between blocks; only a block taller than a page is cut.
@@ -1114,6 +1116,12 @@ private:
     qreal listTextAt(const BlockView &view, qsizetype source) const;
     QRectF checkboxRect(const BlockView &view, const ListItemSpan &item) const;
     void toggleTask(const ListItemSpan &item);
+    /// Writes `c` into the box of the list item on the line at `lineStart`, or
+    /// gives a list item that has none a box holding it.
+    void setTaskStateAtLine(qsizetype lineStart, QChar c);
+    /// One checkable action per state in the table for the list item at
+    /// `offset`, the one it holds now checked. False off a list item.
+    bool addTaskStateActions(QMenu &menu, qsizetype offset);
     const CalloutSpan *calloutFor(const BlockView &view) const;
     // --- block renderers, implemented in BlockRenderers.cpp ---------------
 
@@ -1186,6 +1194,10 @@ private:
     /// Panel and filename header for a source-file or PDF embed.
     void paintEmbedChrome(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     void paintCheckBox(QPainter &painter, const QRectF &rect, bool done) const;
+    /// A task's box: the state's glyph in its colour. `[ ]` and `[x]` are
+    /// painted by paintCheckBox, so they look as they always did.
+    void paintTaskBox(QPainter &painter, const QRectF &rect, const TaskState &state,
+                      const QFont &font) const;
     /// The disclosure triangle every foldable block carries.
     void paintFoldArrow(QPainter &painter, const QRectF &rect, bool folded,
                         const QColor &colour) const;

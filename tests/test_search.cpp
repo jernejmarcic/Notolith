@@ -269,14 +269,41 @@ TEST(SearchGrammarTest, TaskFieldsRespectDoneState)
 {
     const QString text = QStringLiteral("- [ ] call mum\n- [x] call plumber\n");
     NoteContext n = note(text);
-    n.tasks.append(NoteTask{false, Range{0, 14}});
-    n.tasks.append(NoteTask{true, Range{15, 34}});
+    n.tasks.append(NoteTask{QLatin1Char(' '), Range{0, 14}});
+    n.tasks.append(NoteTask{QLatin1Char('x'), Range{15, 34}});
 
     EXPECT_TRUE(matches(QStringLiteral("task:call"), n));
     EXPECT_TRUE(matches(QStringLiteral("task-todo:mum"), n));
     EXPECT_FALSE(matches(QStringLiteral("task-todo:plumber"), n));
     EXPECT_TRUE(matches(QStringLiteral("task-done:plumber"), n));
     EXPECT_FALSE(matches(QStringLiteral("task-done:mum"), n));
+}
+
+TEST(SearchGrammarTest, TaskFieldsFollowStatusTypes)
+{
+    // One word per state, so a field says which states it matched.
+    const QString text = QStringLiteral("- [ ] todo\n- [x] done\n- [/] going\n- [-] dropped\n- [p] aside\n");
+    NoteContext n = note(text);
+    qsizetype start = 0;
+    for (const QChar state : QStringLiteral(" x/-p")) {
+        const qsizetype end = text.indexOf(QLatin1Char('\n'), start);
+        n.tasks.append(NoteTask{state, Range{start, end}});
+        start = end + 1;
+    }
+    const auto found = [&n](const QString &field) {
+        QStringList words;
+        for (const QString &word : {QStringLiteral("todo"), QStringLiteral("done"), QStringLiteral("going"),
+                                    QStringLiteral("dropped"), QStringLiteral("aside")}) {
+            if (matches(field + word, n))
+                words << word;
+        }
+        return words.join(QLatin1Char(','));
+    };
+    EXPECT_EQ(found(QStringLiteral("task-todo:")), QStringLiteral("todo,going"));
+    EXPECT_EQ(found(QStringLiteral("task-done:")), QStringLiteral("done,dropped"));
+    EXPECT_EQ(found(QStringLiteral("task-progress:")), QStringLiteral("going"));
+    EXPECT_EQ(found(QStringLiteral("task-cancelled:")), QStringLiteral("dropped"));
+    EXPECT_EQ(found(QStringLiteral("task:")), QStringLiteral("todo,done,going,dropped,aside"));
 }
 
 // --- match-case: ignore-case: -------------------------------------------

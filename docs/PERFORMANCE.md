@@ -1175,3 +1175,40 @@ attachment, a temp file) is read with its folder, as before. A full kernel queue
 (`IN_Q_OVERFLOW`) starts a whole rescan. A folder the kernel will not watch still
 turns on the 30 s poll and the status message. Other platforms keep
 QFileSystemWatcher (folder events only).
+
+## 2026-10-19 checkbox states
+
+Any one character in a task's box is a state (docs/EDITOR.md, Checkbox states).
+What it costs, by the rules above:
+
+- **Off** (`ParseOptions::taskStates` false, the plugin switched off): one `bool`
+  branch per list item in `describeListItem` and in `parseListLine`. `taskStateOf`
+  answers `[ ]`, `[x]` and `[X]` from a two-entry scan of a function-local static
+  table, so no `tasks.ini` is read and no table lookup happens until a task with
+  another character is painted. The tasks table of the index keeps one character
+  where it kept a flag.
+- **On** (the default in the window): the same regex engine with a different class
+  (`[^\[\]\n]` for `[ xX]`), one scan of the 13-entry table per custom task per
+  layout, one per paint of its box.
+- The index schema went 6 to 7 (`tasks.state`), so the first start after the
+  upgrade is one cold index.
+
+Measured with `noteAppC-bench` (Release, offscreen) against the commit this was
+branched from, built the same way, interleaved. **Indicative only: other lanes
+were building on the machine (load average 10-15), so read the ratios.** The
+standalone-editor rows run with `ParseOptions` default (feature off); the window
+rows go through `MainWindow::parseOptions()` (feature on).
+
+| what | before | after |
+|---|---|---|
+| keystroke, 1 kB note (off) | 0.52 ms | 0.46 ms |
+| keystroke, 200 kB note (off) | 0.70 ms | 0.45 ms |
+| keystroke, 1 MB note (off) | 1.16 ms | 0.91 ms |
+| keystroke through the window, 200 kB note (on) | 0.30 ms | 0.33 ms |
+| open a 1 kB / 200 kB / 1 MB note in the window (on) | 3.0 / 3.9 / 11.9 ms | 2.5 / 3.1 / 11.2 ms |
+| cold index, 5 000 notes, bare `Indexer` | 425 ms | 413 ms |
+| `OpeningAMegabyteNoteIsImmediate`, 10 runs each, load low | 7.4 ms (200 kB 1.8) | 7.4 ms (200 kB 1.8) |
+
+No row moves outside what two runs of the same binary differ by. The same test
+failed about one run in six on the new build while the machine was loaded and
+passed ten of ten, alongside the old build, once the load fell.

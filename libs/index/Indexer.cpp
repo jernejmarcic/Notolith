@@ -15,10 +15,19 @@ namespace noteAppC {
 
 namespace {
 
+/// What a cached key says about task states: a "\ntasks" at its end (Index::parseOptions reads it too).
+const QString tasksSuffix = QStringLiteral("\ntasks");
+
+bool tasksIn(const QString &key)
+{
+    return key.endsWith(tasksSuffix);
+}
+
 /// Index::metaNotesKey() for these options.
 QString metaNotesKey(const ParseOptions &options)
 {
-    return options.metaNotes ? options.open + QLatin1Char('\n') + options.close : QString();
+    return (options.metaNotes ? options.open + QLatin1Char('\n') + options.close : QString())
+           + (options.taskStates ? tasksSuffix : QString());
 }
 
 /// One parser per worker thread: md4qt parsers are cheap but not shareable.
@@ -134,13 +143,14 @@ void Indexer::setVault(const Vault &vault)
         rewatch();
         return;
     }
-    if (m_index->metaNotesKey() == metaNotesKey(m_parseOptions)) {
+    const QString cached = m_index->metaNotesKey();
+    if (cached == metaNotesKey(m_parseOptions)) {
         rebuild();
-    } else if (!m_parseOptions.metaNotes) {
+    } else if (!m_parseOptions.metaNotes && tasksIn(cached) == m_parseOptions.taskStates) {
         clearMetaNotes();
         rebuild();
     } else {
-        start({}, true); // the cache's runs are by other delimiters, or none: every note again
+        start({}, true); // the cache's runs or tasks are by other options: every note again
     }
 }
 
@@ -156,16 +166,18 @@ void Indexer::setMetaNotes(const ParseOptions &options)
 {
     ParseOptions next;
     next.metaNotes = options.metaNotes;
+    next.taskStates = options.taskStates;
     if (next.metaNotes) {
         next.open = options.open;
         next.close = options.close;
     }
     if (metaNotesKey(next) == metaNotesKey(m_parseOptions))
         return;
+    const bool tasksChanged = next.taskStates != m_parseOptions.taskStates;
     m_parseOptions = next;
     if (!m_vault.isValid() || !m_index->isOpen())
         return;
-    if (next.metaNotes) {
+    if (next.metaNotes || tasksChanged) { // the rows' task states change with the option: every note again
         m_clearMetaNotes = false;
         start({}, true);
     } else if (m_active) {
@@ -178,8 +190,9 @@ void Indexer::setMetaNotes(const ParseOptions &options)
 void Indexer::clearMetaNotes()
 {
     m_clearMetaNotes = false;
+    const bool tasks = tasksIn(m_index->metaNotesKey()); // the rows' task states are not touched
     m_index->clearMetaNotes();
-    m_index->setMetaNotesKey({});
+    m_index->setMetaNotesKey(tasks ? tasksSuffix : QString());
 }
 
 bool Indexer::isNotebook(const QString &path) const

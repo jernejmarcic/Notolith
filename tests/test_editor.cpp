@@ -1188,6 +1188,132 @@ TEST(CheckboxTest, ClickingTheRenderedBoxToggles)
         << "clicked at " << point.x() << "," << point.y();
 }
 
+// --- checkbox states ------------------------------------------------------
+
+namespace {
+
+QAction *menuAction(const QMenu &menu, const QString &name); // below, with the other menu tests
+
+/// An editor that reads any one character in a task's box as a state.
+std::unique_ptr<MarkdownEditor> statesEditorWith(const QString &text)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    ParseOptions options = editor->parseOptions();
+    options.taskStates = true;
+    editor->setParseOptions(options);
+    editor->setNoteText(text);
+    return editor;
+}
+
+} // namespace
+
+TEST(CheckboxTest, AClickWritesTheStatesNext)
+{
+    const std::pair<const char *, const char *> cases[] = {
+        {"- [-] t\n", "- [ ] t\n"}, {"- [/] t\n", "- [x] t\n"}, {"- [ ] t\n", "- [x] t\n"},
+        {"- [~] t\n", "- [ ] t\n"}, {"- [q] t\n", "- [x] t\n"}, {"- [x] t\n", "- [ ] t\n"}};
+    for (const auto &[before, after] : cases) {
+        auto editor = statesEditorWith(QString::fromLatin1(before));
+        const qsizetype caret = editor->cursorOffset();
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, firstCheckboxPoint(*editor));
+        EXPECT_EQ(editor->noteText(), QString::fromLatin1(after)) << before;
+        EXPECT_EQ(editor->cursorOffset(), caret) << before;
+    }
+}
+
+TEST(CheckboxTest, CtrlEnterCyclesTheSameWayAndIsUnchangedWhenOff)
+{
+    auto editor = statesEditorWith(QStringLiteral("- [/] b\n"));
+    editor->setCursorOffset(6);
+    QTest::keyClick(editor.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [x] b\n"));
+    EXPECT_EQ(editor->cursorOffset(), 6);
+
+    auto cancelled = statesEditorWith(QStringLiteral("- [-] a\n"));
+    cancelled->setCursorOffset(7);
+    QTest::keyClick(cancelled.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(cancelled->noteText(), QStringLiteral("- [ ] a\n"));
+
+    // Off, `[/]` is only text, so the line is not a task: today's bytes.
+    auto off = editorWith(QStringLiteral("- [/] b\n"));
+    off->setCursorOffset(6);
+    QTest::keyClick(off.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(off->noteText(), QStringLiteral("- [ ] [/] b\n"));
+}
+
+TEST(CheckboxTest, CancelledIsStruckAndMutedInProgressIsNot)
+{
+    const QString note = QStringLiteral("- [-] aa\n- [~] bb\n- [x] cc\n- [/] dd\n- [?] ee\n");
+    auto editor = statesEditorWith(note);
+    (void)editor->grab(); // formatAt wants a laid-out block
+    const QColor muted = Theme::builtin().color(QStringLiteral("--text-muted"));
+    for (const char *text : {"aa", "bb", "cc"}) {
+        const QTextCharFormat format = editor->formatAt(note.indexOf(QLatin1String(text)));
+        EXPECT_TRUE(format.fontStrikeOut()) << text;
+        EXPECT_EQ(format.foreground().color(), muted) << text;
+    }
+    for (const char *text : {"dd", "ee"}) {
+        const QTextCharFormat format = editor->formatAt(note.indexOf(QLatin1String(text)));
+        EXPECT_FALSE(format.fontStrikeOut()) << text;
+        EXPECT_NE(format.foreground().color(), muted) << text;
+    }
+}
+
+TEST(CheckboxTest, TheContextMenuOffersEveryState)
+{
+    auto editor = statesEditorWith(QStringLiteral("- [/] a\n\npara\n"));
+    auto menu = editor->contextMenuAt(6);
+    QAction *states = menuAction(*menu, QStringLiteral("Checkbox state"));
+    ASSERT_TRUE(states);
+    const QList<TaskState> &all = TaskStates::current()->all();
+    ASSERT_EQ(states->menu()->actions().size(), all.size());
+    for (QAction *action : states->menu()->actions())
+        EXPECT_EQ(action->isChecked(), action->text().startsWith(QLatin1String("In-progress"))) << action->text().toStdString();
+    menuAction(*states->menu(), QStringLiteral("Cancelled"))->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [-] a\n\npara\n"));
+
+    // A plain bullet gets a box; a paragraph has no submenu.
+    menu.reset();
+    editor = statesEditorWith(QStringLiteral("- a\n\npara\n"));
+    menu = editor->contextMenuAt(3);
+    menuAction(*menuAction(*menu, QStringLiteral("Checkbox state"))->menu(), QStringLiteral("Dropped"))->trigger();
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [~] a\n\npara\n"));
+    menu.reset();
+    menu = editor->contextMenuAt(editor->noteText().indexOf(QLatin1String("para")) + 1);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Checkbox state")));
+
+    // Off, the menu is the one it always was.
+    menu.reset();
+    auto off = editorWith(QStringLiteral("- [ ] a\n"));
+    menu = off->contextMenuAt(6);
+    EXPECT_FALSE(menuAction(*menu, QStringLiteral("Checkbox state")));
+    menu.reset(); // before `off`, whose child it is
+}
+
+TEST(CheckboxTest, GlyphsPaintInTheirBoxes)
+{
+    const auto centreOf = [](const char *box, qreal across = 0) {
+        auto editor = statesEditorWith(QStringLiteral("- ") + QString::fromLatin1(box) + QStringLiteral(" t\n"));
+        const QImage shot = editor->viewport()->grab().toImage().convertToFormat(QImage::Format_RGB32);
+        const qreal boxSide = QFontMetricsF(Theme::builtin().textFont()).height() * 0.8;
+        const QPoint at = firstCheckboxPoint(*editor) + QPoint(int(across * boxSide), 0);
+        return std::pair<QColor, QColor>(shot.pixelColor(at), shot.pixelColor(2, 2));
+    };
+    const auto [todo, background] = centreOf("[ ]");
+    EXPECT_EQ(todo, background);
+    const auto [cross, crossBackground] = centreOf("[~]");
+    EXPECT_GT(cross.red(), cross.green() + 40);
+    EXPECT_GT(cross.red(), cross.blue() + 40);
+    const auto [line, lineBackground] = centreOf("[-]");
+    EXPECT_NE(line, lineBackground);
+    // The half box is filled on its left and open on its right.
+    const auto [left, leftBackground] = centreOf("[/]", -0.25);
+    const auto [right, rightBackground] = centreOf("[/]", 0.25);
+    EXPECT_NE(left, leftBackground);
+    EXPECT_EQ(right, rightBackground);
+}
+
 // --- moving and duplicating lines ----------------------------------------
 
 TEST(LineMoveTest, AltUpAndAltDownSwapTheLine)

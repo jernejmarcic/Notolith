@@ -6,9 +6,13 @@ tags: [demo, formatting]
 
 What to look for: nested bullets should show an indentation guide (a thin
 vertical line) down to their parent; task checkboxes should be clickable in
-both live preview and reading view; the theme's task states below need
-`callouts.ini`-independent styling support for anything past `[ ]`/`[x]` -
-if only those two render, the rest is a known gap to report.
+both live preview and reading view. With the "Checkbox states" core plugin on
+(the default), every box in the Tasks list below has its own look: a line for
+cancelled, a red X for dropped, a half-filled box for in progress, arrows, a
+star and letters; cancelled and dropped text is struck and muted; a click
+cycles a state (`[-]` goes back to `[ ]`, `[/]` goes to `[x]`) and a right-click
+on the item offers every state under "Checkbox state". The undefined `[q]`
+is still a task, drawn as its letter. Off, only `[ ]` and `[x]` are tasks.
 
 ## Bullets, nested
 
@@ -43,12 +47,25 @@ if only those two render, the rest is a known gap to report.
 - [ ] An open task
 - [x] A finished task
 - [-] Cancelled (Obsidian's task-states convention, dash)
-- [/] In progress (half-filled checkbox in themes that support it)
+- [~] Dropped (a red X)
+- [/] In progress (half-filled checkbox)
+- [>] Forwarded to later (arrow)
+- [<] Scheduled (arrow back)
 - [!] Important
 - [?] Question
+- [*] Starred
+- [I] Idea (not a task: only a search for `task:` finds it)
+- [p] A pro
+- [c] A con
+- [q] A state nothing defines: still a task, click makes it `[x]`
 - [ ] A task with **formatting** and a [[Hub]] link inside it
   - [ ] A nested open task
   - [x] A nested finished task
+  - [-] A nested cancelled task
+
+> [!todo] Tasks in a callout
+> - [/] Half way
+> - [~] Dropped
 
 ## Loose vs tight lists
 

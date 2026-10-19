@@ -183,6 +183,7 @@ from the numbers they renumber):
 | key | on a list item |
 |---|---|
 | Enter | a new item with the same marker and indent (`-`, `*`, `+`, `N.`, `N)`, a task becomes `- [ ] `, inside `> ` too). Ordered counts on and renumbers the items after it. Mid-item it splits the item. An empty item leaves in steps: out of a quote level first (`> - ` becomes `- `), then out one indent level, then the marker goes. |
+| Ctrl+Enter | a task's box goes to the state's next one (`[ ]` to `[x]` and back, `[/]` to `[x]`, `[-]` to `[ ]`; see Checkbox states); a line that is not a task becomes one |
 | Shift+Enter | a line break inside the item, the text lined up under the first line's; no new bullet |
 | Tab | indents the item from anywhere in it (a tab; four spaces in a quote, where the parser counts columns). An ordered item restarts at 1 in the sub-list, the items below close up. Refused for the first item and for an item already a level below the one above, as CommonMark and Obsidian refuse. |
 | Shift+Tab | outdents; the item continues the parent's numbering |
@@ -274,6 +275,62 @@ keyboard). Code: `PdfEmbedBlock.cpp` (`pdfNavHit`).
 Tests: `PdfEmbedTest.*` in `tests/test_editor.cpp` (the clock is injected with
 `setPdfNavClock`, no sleeping).
 
+## Checkbox states
+
+Jernej, 2026-10-19: "for tasks there should be custom stuff inside other than
+just ticking, like a line, or a straight up red X. Think about useful additions
+and add them".
+
+Obsidian reads any one character in a task's box as a task and leaves the
+look to a theme. With the **Checkbox states** core plugin on (default; Settings
+> Core plugins, id `task-states`) so does this editor, and draws them itself:
+
+| box | name | type | looks | text | click goes to |
+|---|---|---|---|---|---|
+| `[ ]` | todo | todo | the box | | `[x]` |
+| `[x]` `[X]` | done | done | filled, tick | struck, muted | `[ ]` |
+| `[/]` | in-progress | in progress | left half filled | | `[x]` |
+| `[-]` | cancelled | cancelled | a line across | struck, muted | `[ ]` |
+| `[~]` | dropped | cancelled | a red X | struck, muted | `[ ]` |
+| `[>]` | forwarded | todo | arrow right | | `[x]` |
+| `[<]` | scheduled | todo | arrow left | | `[x]` |
+| `[?]` | question | todo | a blue `?` | | `[x]` |
+| `[!]` | important | todo | an orange `!` | | `[x]` |
+| `[*]` | star | todo | a yellow star | | `[x]` |
+| `[I]` | idea | non-task | a yellow `I` | | `[x]` |
+| `[p]` | pro | non-task | a green `p` | | `[x]` |
+| `[c]` | con | non-task | a red `c` | | `[x]` |
+
+`[ ]` and `[x]` are Obsidian's own and fixed; the rest are `tasks.ini`'s to
+change (docs/STYLING.md). Any other single character, `[q]`, is still a task:
+a todo drawn as its letter in a box, which a click turns to `[x]` (Obsidian
+would call it done; the Tasks plugin's own rule is this one). `[[` and `](` are
+never a box, so `- [[Note]]` and `- [x](url)` stay text.
+
+Ways to set one: **click** the box (the table's last column; the caret does not
+move), **Ctrl+Enter** with the caret on the item (same cycle), **right-click**
+the item > Checkbox state (every state, drawn, the item's own checked; on a
+plain bullet it gives it a box), or the command "Set checkbox state..." (bind it
+in Hotkeys, find it in the palette), which opens that menu at the caret. Enter
+after any state continues with `- [ ] `. With the plugin off the command is
+Ctrl+Enter's toggle.
+
+The type decides what a search finds (docs/SEARCH.md: `task-todo:` is todo and
+in progress, `task-done:` is done and cancelled, plus `task-progress:` and
+`task-cancelled:`) and what publishing styles. The plugin also sets
+`ParseOptions::taskStates`, so with it off the parse, the editor, the menu and
+published pages are what they were: only `[ ]`, `[x]` and `[X]` are tasks, `[-]`
+is text.
+
+Published pages and PDFs follow the note: a custom box is a bordered `.task-box`
+(`data-task="-"`) holding a character in the state's colour, the text in a
+`.task-text` span struck or muted; a page with only `[ ]` and `[x]` is byte for
+byte what it was. The state is one character, so an emoji cannot be a box.
+
+Tests: `CheckboxTest.*`, `ListEnter.AfterACustomStateTheNextItemIsOpen`
+(`tests/test_editor.cpp`, `tests/test_lists.cpp`), `TaskStatesTest.*`,
+`ListTest.*Box*` (`tests/test_markdown.cpp`).
+
 ## The context menu
 
 Right-click anywhere in a note. Obsidian's order, minus its Paragraph and
@@ -286,6 +343,7 @@ when wanted):
 | | "Remove "w" from dictionary" | on a word in `~/.config/noteAppC/dictionary.txt` |
 | edit | Cut, Copy, Paste | Cut and Paste not in reading view; Cut and Copy greyed with nothing selected |
 | format | Format > Bold, Italic, Strikethrough, Highlight, Code, Math, Comment; Add link | not in reading view; with nothing selected a format applies to the word under the pointer |
+| | Checkbox state > one item per state, the item's own checked | on a list item, with Checkbox states on; on a plain bullet it gives it a box |
 | window | Look up "t", Search for "t", Search the web for "t" | each off by its switch (below) |
 | block | the table and callout items | on a table cell or a callout |
 

@@ -5,6 +5,7 @@
 
 #include <QString>
 
+#include "Parser.h"
 #include "Theme.h"
 
 namespace noteAppC {
@@ -41,6 +42,9 @@ struct Options {
     /// and so leaves the highlighter's own colours.
     std::optional<noteAppC::Theme> codeThemeDark;
     std::optional<noteAppC::Theme> codeThemeLight;
+    /// What the editor reads a note with, so a published note is the one on
+    /// screen: only taskStates changes what the page says.
+    noteAppC::ParseOptions parse;
 };
 
 /// What one publish() call did, for the caller to report.

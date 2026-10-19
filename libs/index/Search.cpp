@@ -1,4 +1,5 @@
 #include "Search.h"
+#include "TaskStates.h"
 
 #include <algorithm>
 #include <optional>
@@ -132,16 +133,20 @@ QList<Range> sectionRanges(const NoteContext &note)
     return sections;
 }
 
-/// `filter < 0`: every task. `0`: only undone. `1`: only done.
-QList<Range> taskRanges(const NoteContext &note, int filter)
+constexpr quint8 typeBit(TaskType type) { return quint8(1 << int(type)); }
+
+/// The tasks whose state is of one of the types in `types`, by the table in
+/// force: the index keeps the character, so editing tasks.ini changes the
+/// answer with no rescan.
+QList<Range> taskRanges(const NoteContext &note, quint8 types)
 {
     QList<Range> ranges;
+    if (note.tasks.isEmpty())
+        return ranges;
+    const auto states = TaskStates::current();
     for (const NoteTask &task : note.tasks) {
-        if (filter == 0 && task.done)
-            continue;
-        if (filter == 1 && !task.done)
-            continue;
-        ranges.append(task.range);
+        if (types & typeBit(states->at(task.state).type))
+            ranges.append(task.range);
     }
     return ranges;
 }
@@ -523,7 +528,7 @@ private:
 
 class ScopeNode : public SearchQueryNode {
 public:
-    enum class Kind { Line, Block, Section, Task, TaskTodo, TaskDone, Meta };
+    enum class Kind { Line, Block, Section, Task, TaskTodo, TaskDone, TaskProgress, TaskCancelled, Meta };
 
     ScopeNode(Kind kind, NodePtr child) : m_kind(kind), m_child(std::move(child)) {}
 
@@ -551,7 +556,7 @@ public:
     {
         FieldNeeds needs = m_child->fieldNeeds();
         needs.headings = needs.headings || m_kind == Kind::Section;
-        needs.tasks = needs.tasks || m_kind == Kind::Task || m_kind == Kind::TaskTodo || m_kind == Kind::TaskDone;
+        needs.tasks = needs.tasks || (m_kind >= Kind::Task && m_kind <= Kind::TaskCancelled);
         needs.metaNotes = needs.metaNotes || m_kind == Kind::Meta;
         return needs;
     }
@@ -567,11 +572,15 @@ private:
         case Kind::Section:
             return sectionRanges(note);
         case Kind::Task:
-            return taskRanges(note, -1);
+            return taskRanges(note, 0xFF);
         case Kind::TaskTodo:
-            return taskRanges(note, 0);
+            return taskRanges(note, typeBit(TaskType::Todo) | typeBit(TaskType::InProgress));
         case Kind::TaskDone:
-            return taskRanges(note, 1);
+            return taskRanges(note, typeBit(TaskType::Done) | typeBit(TaskType::Cancelled));
+        case Kind::TaskProgress:
+            return taskRanges(note, typeBit(TaskType::InProgress));
+        case Kind::TaskCancelled:
+            return taskRanges(note, typeBit(TaskType::Cancelled));
         case Kind::Meta:
             return note.metaNotes;
         }
@@ -600,7 +609,7 @@ const QSet<QString> &knownFields()
         QStringLiteral("tag"),        QStringLiteral("line"),       QStringLiteral("block"),
         QStringLiteral("section"),    QStringLiteral("task"),       QStringLiteral("task-todo"),
         QStringLiteral("task-done"),  QStringLiteral("match-case"), QStringLiteral("ignore-case"),
-        QStringLiteral("meta"),
+        QStringLiteral("meta"),       QStringLiteral("task-progress"), QStringLiteral("task-cancelled"),
     };
     return fields;
 }
@@ -787,6 +796,10 @@ private:
             return parseScopeField(ScopeNode::Kind::TaskTodo);
         if (name == QLatin1String("task-done"))
             return parseScopeField(ScopeNode::Kind::TaskDone);
+        if (name == QLatin1String("task-progress"))
+            return parseScopeField(ScopeNode::Kind::TaskProgress);
+        if (name == QLatin1String("task-cancelled"))
+            return parseScopeField(ScopeNode::Kind::TaskCancelled);
         if (name == QLatin1String("meta")) {
             if (atEnd() || peek().isSpace() || peek() == QLatin1Char(')'))
                 return std::make_shared<const ScopeNode>(ScopeNode::Kind::Meta,

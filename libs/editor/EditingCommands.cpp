@@ -13,6 +13,9 @@
 #include "Parser.h"
 #include "TableFormat.h"
 
+#include <QMenu>
+#include <QPainter>
+#include <QPixmap>
 #include <QRegularExpression>
 #include <QScrollBar>
 
@@ -83,7 +86,7 @@ struct ListLine {
     QString spacing;  ///< the whitespace after the bullet
     QString checkbox; ///< "[ ] " including its trailing space, or empty
     bool ordered = false;
-    bool done = false;
+    QChar state;           ///< what is in the checkbox; null without one
     int number = 0;
     qsizetype checkboxColumn = -1; ///< column of the "[" in the line
     qsizetype contentColumn = 0;   ///< column where the item's own text starts
@@ -101,14 +104,19 @@ struct ListLine {
     }
 };
 
-ListLine parseListLine(QStringView line)
+/// `anyState`: any one character in the box is a task's state, not just
+/// `[ ]` and `[x]` (ParseOptions::taskStates).
+ListLine parseListLine(QStringView line, bool anyState = false)
 {
     // The quote prefix is `>` with at most one space after it, so a quoted
     // item's own indentation is what comes after that one space.
     static const QRegularExpression head(QStringLiteral(
         "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
 
-    const auto match = head.matchView(line);
+    static const QRegularExpression headAny(QStringLiteral(
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([^\\[\\]\\n])\\][ \\t]+)?"));
+
+    const auto match = (anyState ? headAny : head).matchView(line);
     ListLine item;
     if (!match.hasMatch())
         return item;
@@ -121,9 +129,10 @@ ListLine parseListLine(QStringView line)
     item.checkbox = match.captured(5);
     item.ordered = item.bullet.size() > 1;
     item.number = item.ordered ? item.bullet.chopped(1).toInt() : 0;
-    item.done = match.captured(6).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
-    if (!item.checkbox.isEmpty())
+    if (!item.checkbox.isEmpty()) {
+        item.state = match.captured(6).at(0);
         item.checkboxColumn = match.capturedStart(5);
+    }
     item.contentColumn = match.capturedEnd(0);
     return item;
 }
@@ -563,7 +572,8 @@ bool MarkdownEditor::handleListEnter(bool lineBreak)
 
     const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
     const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
-    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart),
+                                         d->m_parseOptions.taskStates);
     if (!item.valid)
         return false;
     // Enter inside the marker itself is just a newline.
@@ -656,7 +666,8 @@ bool MarkdownEditor::handleListIndent(int direction)
 
     const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
     const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
-    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart),
+                                         d->m_parseOptions.taskStates);
     if (!item.valid || inCodeFenceAt(d->m_cursor))
         return false;
     if (direction < 0 && item.indent.isEmpty())
@@ -689,7 +700,7 @@ bool MarkdownEditor::handleListIndent(int direction)
 
     // The caret keeps its place in the text; one inside the marker goes to
     // where the item's text now starts.
-    const ListLine moved = parseListLine(lines.at(int(index)));
+    const ListLine moved = parseListLine(lines.at(int(index)), d->m_parseOptions.taskStates);
     const qsizetype oldColumn = d->m_cursor - lineStart;
     const qsizetype newColumn = oldColumn < item.contentColumn
                                     ? (moved.valid ? moved.contentColumn : 0)
@@ -714,7 +725,8 @@ bool MarkdownEditor::handleListBackspace()
 
     const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
     const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
-    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart));
+    const ListLine item = parseListLine(QStringView(d->m_text).mid(lineStart, lineEnd - lineStart),
+                                         d->m_parseOptions.taskStates);
     // Only at the very start of the item's text: Backspace there takes the
     // bullet (or number) off and leaves the text, as Obsidian does.
     if (!item.valid || d->m_cursor != lineStart + item.contentColumn || inCodeFenceAt(d->m_cursor))
@@ -798,7 +810,7 @@ void MarkdownEditor::toggleTaskAtCursor()
     const qsizetype lineStart = lineStartOf(d->m_text, d->m_cursor);
     const qsizetype lineEnd = lineEndOf(d->m_text, d->m_cursor);
     const QString line = d->m_text.mid(lineStart, lineEnd - lineStart);
-    const ListLine item = parseListLine(line);
+    const ListLine item = parseListLine(line, d->m_parseOptions.taskStates);
 
     const qsizetype anchor = d->m_anchor;
     const qsizetype caret = d->m_cursor;
@@ -806,9 +818,8 @@ void MarkdownEditor::toggleTaskAtCursor()
     d->m_lastEdit.invalidate();
 
     if (item.valid && item.checkboxColumn >= 0) {
-        // "[x]" and "[ ]" are the same width, so nothing after it moves.
-        applyEdit(lineStart + item.checkboxColumn, 3,
-                  item.done ? QStringLiteral("[ ]") : QStringLiteral("[x]"));
+        // A box is three characters whatever it holds, so nothing after it moves.
+        applyEdit(lineStart + item.checkboxColumn, 3, taskBox(nextTaskState(item.state)));
         setSelectionRange(anchor, caret);
         return;
     }
@@ -821,6 +832,63 @@ void MarkdownEditor::toggleTaskAtCursor()
     const qsizetype shift = inserted.size();
     setSelectionRange(anchor >= at ? anchor + shift : anchor,
                       caret >= at ? caret + shift : caret);
+}
+
+void MarkdownEditor::setTaskStateAtLine(qsizetype lineStart, QChar c)
+{
+    if (d->m_mode == Mode::Reading)
+        return;
+    const QString line = d->m_text.mid(lineStart, lineEndOf(d->m_text, lineStart) - lineStart);
+    const ListLine item = parseListLine(line, true);
+    if (!item.valid)
+        return;
+
+    const qsizetype anchor = d->m_anchor;
+    const qsizetype caret = d->m_cursor;
+    pushUndo();
+    d->m_lastEdit.invalidate();
+    if (item.checkboxColumn >= 0) {
+        applyEdit(lineStart + item.checkboxColumn, 3, taskBox(c));
+        setSelectionRange(anchor, caret);
+        return;
+    }
+    const QString inserted = taskBox(c) + QLatin1Char(' ');
+    const qsizetype at = lineStart + item.contentColumn;
+    applyEdit(at, 0, inserted);
+    setSelectionRange(anchor >= at ? anchor + inserted.size() : anchor,
+                      caret >= at ? caret + inserted.size() : caret);
+}
+
+bool MarkdownEditor::addTaskStateActions(QMenu &menu, qsizetype offset)
+{
+    const qsizetype lineStart = lineStartOf(d->m_text, offset);
+    const ListLine item = parseListLine(
+        QStringView(d->m_text).mid(lineStart, lineEndOf(d->m_text, offset) - lineStart), true);
+    if (!item.valid)
+        return false;
+
+    const qreal ratio = devicePixelRatioF();
+    const QChar held = isDoneBox(item.state) ? QLatin1Char('x') : item.state; // null: no box yet
+    for (const TaskState &state : TaskStates::current()->all()) {
+        // The box as it is drawn in the note, so the menu is a legend too.
+        QPixmap pixmap(QSize(16, 16) * ratio);
+        pixmap.setDevicePixelRatio(ratio);
+        pixmap.fill(Qt::transparent);
+        QPainter painter(&pixmap);
+        paintTaskBox(painter, QRectF(1, 1, 14, 14), state, font());
+        painter.end();
+
+        QString name = state.name;
+        name[0] = name.at(0).toUpper();
+        QAction *action = menu.addAction(QIcon(pixmap),
+                                         name.replace(QLatin1Char('&'), QStringLiteral("&&"))
+                                             + QLatin1Char('\t') + taskBox(state.ch));
+        action->setCheckable(true);
+        action->setChecked(state.ch == held);
+        connect(action, &QAction::triggered, this,
+                [this, lineStart, c = state.ch] { setTaskStateAtLine(lineStart, c); });
+    }
+    return true;
 }
 
 // --- moving and duplicating lines -----------------------------------------

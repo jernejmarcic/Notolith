@@ -122,6 +122,31 @@ TEST(PublishTest, TheSchemesCodeColoursReachThePage)
     EXPECT_TRUE(page.contains(QLatin1String("tok-")));
 }
 
+TEST(PublishTest, CustomCheckboxStatesCarryDataTaskAndAClass)
+{
+    TestSite site({{QStringLiteral("Chores.md"), "- [-] pay rent\n- [x] call mum\n- [ ] sweep\n"}});
+    const QString today = QStringLiteral("<li class=\"task-list-item done\"><input type=\"checkbox\" disabled checked> ");
+
+    Options on;
+    on.parse.taskStates = true;
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("chores.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("<li class=\"task-list-item cancelled\" data-task=\"-\">"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QLatin1String("<span class=\"task-box\" data-task=\"-\"></span> ")));
+    EXPECT_TRUE(page.contains(QLatin1String("<span class=\"task-text strike mute\">pay rent</span>")));
+    EXPECT_TRUE(page.contains(QLatin1String(".task-box[data-task=\"-\"]")));
+    EXPECT_TRUE(page.contains(today)) << "[x] is exactly what it was";
+    EXPECT_TRUE(page.contains(QLatin1String("<li class=\"task-list-item\"><input type=\"checkbox\" disabled> ")));
+
+    // Off, `[-]` is text in a plain item and the page has no box CSS.
+    site.publish();
+    const QString plain = site.read(QStringLiteral("chores.html"));
+    EXPECT_TRUE(plain.contains(QLatin1String("[-] pay rent")));
+    EXPECT_FALSE(plain.contains(QLatin1String("task-box")));
+    EXPECT_FALSE(plain.contains(QLatin1String("data-task")));
+    EXPECT_TRUE(plain.contains(today));
+}
+
 TEST(PublishTest, HeadingAndBlockAnchors)
 {
     TestSite site({

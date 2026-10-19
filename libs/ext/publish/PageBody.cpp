@@ -15,6 +15,7 @@
 #include "ObsidianSyntax.h"
 #include "HtmlRenderer.h"
 #include "Slugs.h"
+#include "TaskStates.h"
 #include "Theme.h"
 #include "Vault.h"
 
@@ -159,7 +160,7 @@ public:
 
         result.html = html;
         result.attachments = m_attachments.values();
-        result.codeStyle = codeStyleBlock();
+        result.codeStyle = codeStyleBlock() + taskStyleBlock();
         // Formulas are still placeholder tokens at this point (see
         // renderMath()) - swapped for their LaTeX source here only, so the
         // search index has something to match against instead of a raw
@@ -429,16 +430,37 @@ private:
             if (hasChild)
                 selfEnd = items.at(indices.at(cursor + 1)).range.start;
 
+            // `[ ]` and `[x]` are what they always were; any other character
+            // (ParseOptions::taskStates) is a box the page's CSS draws.
+            const bool custom = item.task && item.state != QLatin1Char(' ') && !isDoneBox(item.state);
+            const TaskState state = custom ? taskStateOf(item.state) : TaskState();
             QString cls;
-            if (item.task)
-                cls = item.done ? QStringLiteral(" class=\"task-list-item done\"")
-                                : QStringLiteral(" class=\"task-list-item\"");
+            if (custom) {
+                static const char *const words[] = {"", " in-progress", " done", " cancelled", " non-task"};
+                cls = QStringLiteral(" class=\"task-list-item%1\" data-task=\"%2\"")
+                          .arg(QLatin1String(words[int(state.type)]), escapeHtml(item.state));
+                m_taskStates.insert(item.state);
+            } else if (item.task) {
+                cls = isDoneBox(item.state) ? QStringLiteral(" class=\"task-list-item done\"")
+                                            : QStringLiteral(" class=\"task-list-item\"");
+            }
             out += QStringLiteral("<li%1%2>").arg(cls, blockAnchorAttr(item.range, note));
-            if (item.task) {
+            if (custom) {
+                out += QStringLiteral("<span class=\"task-box\" data-task=\"%1\"></span> ")
+                           .arg(escapeHtml(item.state));
+            } else if (item.task) {
                 out += QStringLiteral("<input type=\"checkbox\" disabled%1> ")
-                      .arg(item.done ? QStringLiteral(" checked") : QString());
+                      .arg(isDoneBox(item.state) ? QStringLiteral(" checked") : QString());
+            }
+            const bool treated = custom && (state.strike || state.mute);
+            if (treated) {
+                out += QStringLiteral("<span class=\"task-text%1%2\">")
+                           .arg(state.strike ? QStringLiteral(" strike") : QString(),
+                                state.mute ? QStringLiteral(" mute") : QString());
             }
             out += emitInline({item.marker.end, selfEnd}, note);
+            if (treated)
+                out += QStringLiteral("</span>");
             ++cursor;
             if (hasChild)
                 out += renderListLevel(indices, cursor, items.at(indices.at(cursor)).indent, note);
@@ -764,6 +786,55 @@ private:
             return int(existing);
         m_codeStyles.append(style);
         return int(m_codeStyles.size() - 1);
+    }
+
+    /// The CSS for the custom checkbox states the page used: a bordered box
+    /// that holds the state's glyph, in its colour. Nothing for a page with
+    /// only `[ ]` and `[x]`, which keep the browser's own checkbox.
+    QString taskStyleBlock() const
+    {
+        if (m_taskStates.isEmpty())
+            return {};
+        QList<QChar> used(m_taskStates.cbegin(), m_taskStates.cend());
+        std::sort(used.begin(), used.end());
+        const auto colour = [](const noteAppC::Theme &theme, const TaskState &state) {
+            QColor c = state.color.startsWith(QLatin1String("--")) ? theme.color(state.color)
+                                                                  : noteAppC::Theme::parseColor(state.color);
+            if (!c.isValid())
+                c = theme.color(QStringLiteral("--interactive-accent"));
+            return c.name(QColor::HexRgb);
+        };
+        const auto selector = [](QChar c) {
+            QString key = c;
+            key.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('"'), QStringLiteral("\\\""));
+            return QStringLiteral(".task-box[data-task=\"%1\"]").arg(key);
+        };
+        // A glyph is a character in the box; drawn ones (cross, half) are the nearest one.
+        static const QHash<TaskGlyph, QString> glyphs = {
+            {TaskGlyph::Tick, QStringLiteral("\\2713")},       {TaskGlyph::Half, QStringLiteral("\\25E7")},
+            {TaskGlyph::Line, QStringLiteral("\\2013")},       {TaskGlyph::Cross, QStringLiteral("\\2715")},
+            {TaskGlyph::ArrowRight, QStringLiteral("\\2192")}, {TaskGlyph::ArrowLeft, QStringLiteral("\\2190")},
+            {TaskGlyph::Star, QStringLiteral("\\2605")}};
+        QString css = QStringLiteral("<style>.task-box{display:inline-block;box-sizing:border-box;width:1.1em;"
+                                     "height:1.1em;line-height:1em;text-align:center;border:1.5px solid;"
+                                     "border-radius:3px;font-size:.85em;font-weight:600;vertical-align:text-bottom}"
+                                     ".task-text.strike{text-decoration:line-through}.task-text.mute{opacity:.6}"
+                                     ".task-list-item[data-task]{list-style:none;margin-left:-1.4em}");
+        QString light;
+        for (const QChar c : std::as_const(used)) {
+            const TaskState state = taskStateOf(c);
+            const QString glyph = glyphs.value(state.glyph);
+            const QString content = state.glyph == TaskGlyph::Char ? QStringLiteral("attr(data-task)")
+                                    : glyph.isEmpty()              ? QStringLiteral("\"\"")
+                                                                   : QStringLiteral("\"%1\"").arg(glyph);
+            css += QStringLiteral("%1{color:%2}%1::after{content:%3}")
+                       .arg(selector(c), colour(m_env.themeDark, state), content);
+            if (m_env.highlighterLight)
+                light += QStringLiteral("%1{color:%2}").arg(selector(c), colour(m_env.themeLight, state));
+        }
+        if (!light.isEmpty())
+            css += QStringLiteral("@media (prefers-color-scheme: light){%1}").arg(light);
+        return css + QStringLiteral("</style>\n");
     }
 
     QString codeStyleBlock()
@@ -1427,6 +1498,7 @@ private:
     QList<TokenStyle> m_codeStyles;
     noteAppC::SyntaxMap m_syntaxDark;  ///< empty unless the theme names token colours
     noteAppC::SyntaxMap m_syntaxLight;
+    QSet<QChar> m_taskStates;          ///< custom checkbox characters the page used
     std::set<QString> m_captures;      ///< capture names the page used, sorted for stable output
     QList<PendingFormula> m_formulas;
 };

@@ -42,6 +42,8 @@ struct Walk {
     /// The outline ("2.1") of each list item the walk is inside; empty for a
     /// bullet, which starts Word-style numbering afresh beneath it.
     QStringList itemOutlines;
+    /// ParseOptions::taskStates.
+    bool anyTaskState = false;
 
     /// A reference-style link or embed - `[text][ref]`, the collapsed
     /// `[ref][]`, or the shortcut `[ref]` - whose label was recorded during
@@ -159,19 +161,22 @@ void hideQuoteMarkers(const QString &text, const Range &range, Decorations &deco
 /// The source marker of a list item: the bullet or number, plus a task's
 /// checkbox. Live preview hides it and draws its own in the margin.
 void describeListItem(const QString &text, const Range &range, const SourceMap &map, int depth,
-                      int shownNumber, const QString &outline, Decorations &decorations)
+                      int shownNumber, const QString &outline, bool anyState, Decorations &decorations)
 {
     // A quote's or callout's ">" markers first: they are hidden on their own
     // (hideQuoteMarkers), and the list marker is what follows them.
     static const QRegularExpression head(QStringLiteral(
         "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
+    // Any one character but a bracket, so `- [[Note]]` and `- [x](url)` stay text.
+    static const QRegularExpression headAny(QStringLiteral(
+        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([^\\[\\]\\n])\\][ \\t]+)?"));
 
     // md4qt puts a list item's start at its bullet, not at the start of the
     // line, so the marker has to be read from the line itself.
     const qsizetype line = map.lineAt(range.start);
     const qsizetype lineStart = map.lineStart(line);
     const QString firstLine = text.mid(lineStart, map.lineEnd(line) - lineStart);
-    const auto match = head.match(firstLine);
+    const auto match = (anyState ? headAny : head).match(firstLine);
     if (!match.hasMatch())
         return;
 
@@ -188,9 +193,10 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
     span.shownNumber = shownNumber;
     span.outline = outline;
     span.task = !match.captured(5).isEmpty();
-    span.done = match.captured(6).compare(QLatin1String("x"), Qt::CaseInsensitive) == 0;
-    if (span.task)
+    if (span.task) {
+        span.state = match.captured(6).at(0);
         span.checkbox = {lineStart + match.capturedStart(5), lineStart + match.capturedStart(5) + 3};
+    }
 
     decorations.syntax.append(span.marker);
     decorations.listItems.append(span);
@@ -1575,17 +1581,27 @@ void walkItem(MD::Item *item, Walk &walk)
             outline = parent.isEmpty() ? QString::number(shown) : parent + QLatin1Char('.') + QString::number(shown);
         }
         ++frame.items;
+        const qsizetype itemsBefore = walk.decorations.listItems.size();
         if (walk.text)
             describeListItem(*walk.text, rangeOf(*listItem, map), map, int(walk.lists.size()) - 1, shown,
-                             outline, walk.decorations);
-        if (listItem->isTaskList()) {
+                             outline, walk.anyTaskState, walk.decorations);
+        // md4qt only knows `[ ]` and `[x]`; with task states our own span says
+        // what a box holds, and the box is still in md4qt's text for the rest.
+        const bool customBox = walk.anyTaskState && walk.decorations.listItems.size() > itemsBefore
+                               && walk.decorations.listItems.last().task;
+        if (customBox || listItem->isTaskList()) {
             Task task;
-            task.done = listItem->isChecked();
+            task.state = customBox ? walk.decorations.listItems.last().state
+                                   : QLatin1Char(listItem->isChecked() ? 'x' : ' ');
             task.range = rangeOf(*listItem, map);
             if (!listItem->items().isEmpty()
                 && listItem->items().first()->type() == MD::ItemType::Paragraph) {
                 task.text = plainText(static_cast<MD::Paragraph *>(
                     listItem->items().first().data()));
+                if (!listItem->isTaskList()) {
+                    static const QRegularExpression box(QStringLiteral("^\\[[^\\[\\]]\\][ \\t]+"));
+                    task.text.remove(box);
+                }
             }
             walk.tasks.append(task);
         }
@@ -1768,6 +1784,7 @@ Parser::Result Parser::parseAll(const QString &text, const QString &path,
     Walk walk;
     walk.map = &map;
     walk.text = &text;
+    walk.anyTaskState = options.taskStates;
     if (document) {
         for (const auto &item : document->items())
             walkItem(item.data(), walk);
