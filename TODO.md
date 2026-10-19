@@ -2365,3 +2365,25 @@ Jernej 2026-10-19, asked whether to keep going once only this list was left:
 - [-] Dropped (Jernej 2026-10-19: "Stop here"): moving the ~355 private
       method declarations out of MarkdownEditor.h. Only if he asks.
 
+
+## PADD: touch friendly, slow scrolling (Jernej 2026-10-19 night)
+
+Jernej: "Make this app touch devices friendly please, there should be a
+benchmark for PADD" / "its buggy and slow on PADD" / "like scrolling, rn on
+Lancaster on AGENTS file. Scrolling is slow and choppy" / "Opening a dir, and
+pressing on a file, and opening one is instant though" / "ALso on mous also
+chjoppy". Finger on the screen, GNOME session; SSH to padd allowed for this.
+PADD: FydeTab Duo, RK3588S (4x A76 + 4x A55), Mali-G610 panthor, DSI-1
+2560x1600 at GNOME scale 1.67 (logical ~1533x958).
+
+- [ ] Measure on PADD: scroll frame cost at its panel/scale, offscreen and
+      in headless cage (raster vs OpenGL incl. compositor buffer cost);
+      which part of the frame is the time (paint, layout, upload).
+- [ ] Fix the scroll cost found (touch and mouse both choppy: per-frame cost,
+      not the scroller).
+- [ ] PADD benchmark: a bench preset for PADD's geometry (viewport, scale,
+      touch scroll) so a change is measured against it; numbers in
+      docs/PERFORMANCE.md.
+- [ ] Touch friendly audit on PADD: hit targets, tree/tab/sidebar use by
+      finger, on-screen keyboard, long press, kinetic scroll feel.
+- [ ] Install the fixed build on PADD for Jernej to try.
