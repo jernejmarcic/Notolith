@@ -174,6 +174,10 @@ constexpr qreal kListIndent = 26;
 /// about 26 ms, 50 kB in 7 ms; this sits between them.
 constexpr qsizetype kAsyncParseThreshold = 128 * 1024;
 constexpr int kTypingBurstMs = 500;
+/// How many undo (and redo) steps an edit from elsewhere is carried over. Each
+/// one costs a scan of the whole note, so the oldest go rather than a remote
+/// keystroke costing milliseconds on a long note with a deep history.
+constexpr qsizetype kCarriedSteps = 100;
 /// A fence longer than this is split into blocks of this many lines. Laying
 /// out and highlighting 32 lines costs about a millisecond; the whole of a
 /// 5 000-line listing cost 158 ms, and it was redone on every keystroke.
@@ -5287,20 +5291,69 @@ void MarkdownEditor::redo()
     viewport()->update();
 }
 
+MarkdownEditor::Hunk MarkdownEditor::hunkBetween(const QString &from, const QString &to)
+{
+    const qsizetype most = qMin(from.size(), to.size());
+    // Halves of a pair never part: one emoji may share its first half with another.
+    const auto splits = [](const QString &text, qsizetype at) {
+        return at > 0 && at < text.size() && text.at(at - 1).isHighSurrogate() && text.at(at).isLowSurrogate();
+    };
+    qsizetype head = 0;
+    while (head < most && from.at(head) == to.at(head))
+        ++head;
+    if (splits(from, head) || splits(to, head))
+        --head;
+    qsizetype tail = 0;
+    while (tail < most - head && from.at(from.size() - 1 - tail) == to.at(to.size() - 1 - tail))
+        ++tail;
+    if (tail > 0 && (splits(from, from.size() - tail) || splits(to, to.size() - tail)))
+        --tail;
+    return {head, from.size() - head - tail, to.mid(head, to.size() - head - tail)};
+}
+
 void MarkdownEditor::applyExternalEdit(qsizetype at, qsizetype removed, const QString &inserted)
 {
     at = qBound<qsizetype>(0, at, d->m_text.size());
     removed = qBound<qsizetype>(0, removed, d->m_text.size() - at);
-    d->m_undo.clear();
-    d->m_redo.clear();
-    const auto follow = [&](qsizetype offset) {
+    const auto follow = [](qsizetype offset, qsizetype at, qsizetype removed, qsizetype inserted) {
         if (offset >= at + removed)
-            return offset + inserted.size() - removed;
-        return offset > at ? at + inserted.size() : offset;
+            return offset + inserted - removed;
+        return offset > at ? at + inserted : offset;
     };
-    const qsizetype cursor = follow(d->m_cursor);
-    const qsizetype anchor = follow(d->m_anchor);
-    if (at == 0 && removed == d->m_text.size()) {
+    // Each step is the text as it was before some local edits; those edits
+    // are one region (hunkBetween) of the text as it is now. The edit from
+    // elsewhere lands before that region or after it, and is made in the step
+    // too. Landing inside it, the step cannot say what it would have been, and
+    // nor can any step before it, which holds that region and more.
+    const auto carry = [&](QList<Snapshot> &steps) {
+        const qsizetype oldest = qMax<qsizetype>(0, steps.size() - kCarriedSteps);
+        for (qsizetype i = steps.size() - 1; i >= oldest; --i) {
+            Snapshot &step = steps[i];
+            const Hunk own = hunkBetween(step.text, d->m_text);
+            qsizetype where = at;
+            if (at + removed > own.at) {
+                if (at < own.at + own.inserted.size()) {
+                    steps.remove(0, i + 1);
+                    return;
+                }
+                where = at + own.removed - own.inserted.size();
+            }
+            step.text.replace(where, removed, inserted);
+            step.cursor = follow(step.cursor, where, removed, inserted.size());
+        }
+        steps.remove(0, oldest);
+    };
+    const bool whole = at == 0 && removed == d->m_text.size();
+    if (whole) {
+        d->m_undo.clear();
+        d->m_redo.clear();
+    } else {
+        carry(d->m_undo);
+        carry(d->m_redo);
+    }
+    const qsizetype cursor = follow(d->m_cursor, at, removed, inserted.size());
+    const qsizetype anchor = follow(d->m_anchor, at, removed, inserted.size());
+    if (whole) {
         // An undo or redo over there: the whole text, as undo() takes it. The
         // callouts may be gone or new, so an open title has nowhere to land.
         finishCalloutTitleEdit(false);

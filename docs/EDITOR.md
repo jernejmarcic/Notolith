@@ -618,6 +618,20 @@ The index (and so search) reads such a note's bad bytes as the Latin-1 letters
 they most likely were, so searching "café" finds a note saved as Latin-1; the
 file and the editor still show it as it is.
 
+## Undo across edits from elsewhere
+
+An edit another tab on the same note (or another person, see SHARE.md) makes
+reaches this editor as `applyExternalEdit`. Undo and redo keep working across
+it: the history is whole-text snapshots, and each is carried over the edit - one
+region of the snapshot differs from the text now (`MarkdownEditor::hunkBetween`,
+head and tail, never between the halves of a surrogate pair), and the outside
+edit lands before it or after it, so it is made in the snapshot too. Undoing
+here then undoes only what was typed here. An edit that lands inside that
+region drops that step and every older one (they hold the region too); one that
+replaces the whole text empties the history, as an undo in another tab does.
+Only the newest 100 steps are carried (each costs a scan of the note).
+`ExternalEditTest.*`, `HunkTest.*`.
+
 ## Deleting
 
 Settings > Files > "Deleted files" (`files.deletedFiles`, read from
