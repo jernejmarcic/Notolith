@@ -159,6 +159,29 @@ if(NOTEAPPC_WITH_SHARE_YRS AND NOT ANDROID)
     find_program(NOTEAPPC_CARGO cargo)
 endif()
 
+# Note sharing, the link layer (libs/ext/link, vendored from Hearth: identity,
+# peer-to-peer Node over libdatachannel with mDNS discovery). Needs libdatachannel,
+# avahi-client, protobuf, nlohmann_json and libsodium; if any is missing the
+# option is silently off, like spellcheck without hunspell.
+option(NOTEAPPC_WITH_SHARE "Build the peer-to-peer link layer for note sharing (libs/ext/link)" ON)
+if(NOTEAPPC_WITH_SHARE AND NOT ANDROID)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(AVAHI QUIET IMPORTED_TARGET avahi-client)
+        if(NOT TARGET PkgConfig::SODIUM)
+            pkg_check_modules(SODIUM QUIET IMPORTED_TARGET libsodium)
+        endif()
+    endif()
+    find_package(Protobuf CONFIG QUIET)
+    find_package(LibDataChannel QUIET)
+    find_package(nlohmann_json QUIET)
+endif()
+if(NOTEAPPC_WITH_SHARE AND NOT ANDROID AND TARGET PkgConfig::AVAHI AND TARGET PkgConfig::SODIUM
+        AND TARGET protobuf::libprotobuf AND TARGET LibDataChannel::LibDataChannel
+        AND TARGET nlohmann_json::nlohmann_json)
+    set(NOTEAPPC_HAVE_LINK ON)
+endif()
+
 # Optional: the syscall filter every bubblewrap sandbox gets (libs/sandbox).
 # Without it the sandboxes are bubblewrap's namespaces alone.
 find_package(PkgConfig QUIET)
@@ -299,6 +322,9 @@ if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
 endif()
 if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)
     add_subdirectory(libs/ext/share)
+endif()
+if(NOTEAPPC_HAVE_LINK)
+    add_subdirectory(libs/ext/link)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)

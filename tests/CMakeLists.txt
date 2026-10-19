@@ -206,6 +206,24 @@ if(TARGET noteAppC_share_crdt)
     add_test(NAME share_crdt COMMAND test_share_crdt)
 endif()
 
+# The vendored link layer's own tests (Hearth's, unchanged), loopback only; the
+# mDNS cases skip without avahi-daemon. XDG_STATE_HOME keeps the debug log out of
+# the real home. TIMEOUT: Node shutdown hung once in Hearth (docs/SHARE.md).
+if(TARGET noteAppC_link)
+    add_executable(test_link ${CMAKE_SOURCE_DIR}/libs/ext/link/net/test_node.cpp
+        ${CMAKE_SOURCE_DIR}/libs/ext/link/net/test_tailnet.cpp)
+    target_link_libraries(test_link PRIVATE noteAppC_link GTest::gtest GTest::gtest_main)
+    add_test(NAME link COMMAND test_link)
+    set_tests_properties(link PROPERTIES TIMEOUT 600
+        ENVIRONMENT "XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/link-state")
+    # The copy must still be a Hearth commit; skipped (77) without a checkout.
+    set(NOTEAPPC_HEARTH_DIR "$ENV{HOME}/Documents/AI/projects/hearth" CACHE PATH
+        "Hearth checkout that tools/vendor_link.sh --check compares libs/ext/link with")
+    add_test(NAME link_vendor_check
+        COMMAND sh ${CMAKE_SOURCE_DIR}/tools/vendor_link.sh --check ${NOTEAPPC_HEARTH_DIR})
+    set_tests_properties(link_vendor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+endif()
+
 if(TARGET noteAppC_crypt)
     add_executable(test_crypt test_crypt.cpp)
     target_link_libraries(test_crypt PRIVATE noteAppC_crypt Qt6::Test GTest::gtest)

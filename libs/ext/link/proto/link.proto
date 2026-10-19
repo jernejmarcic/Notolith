@@ -1,0 +1,33 @@
+// The link layer's wire format: what core/identity and net/node speak, and
+// nothing else. Hearth keeps the canonical copy; Notolith vendors it
+// (tools/link-files.txt). Same package as hearth.proto, so the two merge.
+syntax = "proto3";
+
+package hearth;
+
+// An account key is the user; each install has its own device key. sig is the
+// account's signature over "hearth-device-v1" || account || device (so a
+// credential or a gate proof can carry it in fixed size); created_ms and name
+// are labels, signed as part of a DeviceList.
+message SignedDeviceCert {
+  bytes account = 1;
+  bytes device = 2;
+  int64 created_ms = 3;
+  string name = 4;
+  bytes sig = 5;
+}
+
+// Signaling over the WebSocket, before the peer connection exists. The hello
+// carries only public_key + nonce. Offer and answer carry the full SDP, signed
+// by the sender's identity over label || peer nonce || sdp; the SDP contains
+// the DTLS fingerprint, so the encrypted channel is bound to the identity.
+message Signal {
+  bytes public_key = 1;
+  bytes nonce = 2;
+  string sdp = 3;
+  bytes sig = 4;
+  uint32 port = 5;  // offerer's listening port, for reconnects
+  // Hello, offer and answer: public_key's account, if it is not its own. The
+  // receiver refuses the link when it does not chain (accounts plan).
+  SignedDeviceCert cert = 6;
+}
