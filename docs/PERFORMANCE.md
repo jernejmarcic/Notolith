@@ -264,7 +264,7 @@ Reading it: both stay far inside the 8 ms keystroke budget, so the choice is
 not about speed. Native is 14x to 1 000x faster per edit because typing in one
 place grows one run (yrs walks the block that holds the position, hence the
 cost growing with the note) and a position jump walks a linked list of runs; its
-weak spot is the remote path, which walks every run (the 0.0166 ms grows with
+weak spot is the remote path, which walks every run (its cost grows
 with the number of runs by construction, not the note). It costs twice the memory because it holds
 UTF-16 where yrs holds UTF-8, and its updates are a few bytes larger (it
 carries a Lamport timestamp per run, and the whole delete set per diff). Both
