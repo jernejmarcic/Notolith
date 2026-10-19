@@ -252,7 +252,9 @@ panels that changed (not the viewport), a painted button, nothing laid out.
 
 Tests: `HoverEditTest.*` in `tests/test_editor.cpp`.
 
-## Slides-layout PDF embeds: forgiving Previous / Next
+## PDF embeds: slides navigation and zoom
+
+### Slides layout: forgiving Previous / Next
 
 Jernej, 2026-10-19: the box to click "Next" should be larger around it, so a
 slightly-off pointer does not open the embed by accident (like Apple's
@@ -273,6 +275,52 @@ keyboard). Code: `PdfEmbedBlock.cpp` (`pdfNavHit`).
 
 Tests: `PdfEmbedTest.*` in `tests/test_editor.cpp` (the clock is injected with
 `setPdfNavClock`, no sleeping).
+
+### Zooming a page
+
+Jernej, 2026-10-19: allow zooming in on PDFs when in embedded mode. Code:
+`PdfEmbedBlock.cpp` (`zoomPdfAt`, `wheelPdfCell`, `pressPdfCell`,
+`doubleClickPdfCell`, `requestPdfZoomRenders`).
+
+The cell is a fixed window: zooming never changes the embed's height, so the
+note does not reflow under the pointer. Zoom runs from 1x to 4x (the full PDF
+viewer's own ceiling), and every page of one embed (a column, a grid, a deck)
+shares one zoom and one pan - the same corner of every page.
+
+| input | does |
+|---|---|
+| Ctrl + wheel over a page | zooms, 1.1x a notch, the content under the pointer stays put |
+| pinch on a touchpad | the same (Wayland delivers it; X11 has no native zoom gesture) |
+| double click | 1x to 2x at the pointer, and back to 1x |
+| Ctrl+0 | back to 1x for every PDF embed in the note |
+| drag, while zoomed | pans; never moves the caret or shows the source |
+| Shift + wheel, or a horizontal wheel, while zoomed | pans (up and down, sideways), stopping at the page edge |
+| plain wheel | always scrolls the note, zoomed or not |
+
+While zoomed the pointer is an open hand over the page and a "200%" badge sits
+in its corner; a click that does not move does nothing (the `</>` button is
+the way to the source). The slide controls above come first: a press they
+claim never starts a pan. At 1x everything is as before: a click on a page
+places the caret and shows the source, so the first click of a double click does
+that for a moment and the second puts the caret and the scroll back where
+they were.
+
+The zoom and pan are kept for the life of the editor, by the embed's place in
+the note (an edit above it moves them along, as it does the slide), and never
+written to the note. They also keep from slide to slide. A `#zoom=` argument
+would be the way to write one down; today `#zoom=150` is ignored like any
+unknown key.
+
+Rendering: a zoom repaints the page already held, stretched, at once; 150 ms
+after the last step the page is rendered at the zoomed width (in 5% steps, at
+most 2600 px) and swapped in. A page scrolled into view later at that zoom is
+fetched the same way. The zoomed rasters are kept to 128 MB (oldest out first;
+a page then shows its normal raster stretched until the next fetch), and only
+the pages on screen are fetched, together within that budget. The ordinary
+page rasters are not bounded, as before.
+
+Tests: `PdfEmbedTest.*Zoom*`, `Wheel*`, `Drag*`, `DoubleClick*` in
+`tests/test_editor.cpp`.
 
 ## The context menu
 

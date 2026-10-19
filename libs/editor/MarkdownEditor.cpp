@@ -191,6 +191,9 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
         QScroller::grabGesture(viewport(), QScroller::TouchGesture);
     d->m_longPress.setSingleShot(true);
     d->m_longPress.setInterval(500);
+    d->m_pdfZoomSettle.setSingleShot(true);
+    d->m_pdfZoomSettle.setInterval(150); // after the last zoom step
+    connect(&d->m_pdfZoomSettle, &QTimer::timeout, this, &MarkdownEditor::requestPdfZoomRenders);
     d->m_tableScrollTimer.setInterval(16);
     connect(&d->m_tableScrollTimer, &QTimer::timeout, this, &MarkdownEditor::tableAutoScrollTick);
     connect(&d->m_longPress, &QTimer::timeout, this, [this] {
@@ -4818,6 +4821,19 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         d->m_selectedTabs = std::move(moved);
     }
 
+    // So are a PDF embed's slide and zoom, which an edit above must not reset.
+    const auto remap = [at, delta](auto &hash) {
+        if (delta == 0 || hash.isEmpty())
+            return;
+        std::remove_reference_t<decltype(hash)> moved;
+        for (auto it = hash.cbegin(); it != hash.cend(); ++it)
+            moved.insert(it.key() >= at ? it.key() + delta : it.key(), it.value());
+        hash = std::move(moved);
+    };
+    remap(d->m_pdfZoom);
+    remap(d->m_pdfSlideIndex);
+    remap(d->m_pdfNavLast);
+
     // Fold state is keyed by the block's start, so it has to move with it.
     if (delta != 0 && !d->m_folds.isEmpty()) {
         QHash<qsizetype, bool> moved;
@@ -5108,6 +5124,8 @@ void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &b
 
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
+    if (event->key() == Qt::Key_0 && event->modifiers() == Qt::ControlModifier && resetPdfZoom())
+        return;
     // Ctrl pressed with the pointer already resting on a link previews it,
     // as in Obsidian, without the mouse having to move.
     if (event->key() == Qt::Key_Control && viewport()->underMouse()) {
@@ -5350,6 +5368,8 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
         d->m_embedDrag.moved = false;
         return;
     }
+    if (pressPdfCell(event->pos(), touch))
+        return;
 
     const QString target = linkAt(event->pos());
     if (!target.isEmpty() && event->modifiers().testFlag(Qt::ControlModifier)) {
@@ -5497,7 +5517,7 @@ void MarkdownEditor::mouseReleaseEvent(QMouseEvent *event)
         return;
     if (d->m_embedDrag.blockIndex >= 0) {
         const qsizetype block = d->m_embedDrag.blockIndex;
-        const bool wasClick = !d->m_embedDrag.moved;
+        const bool wasClick = !d->m_embedDrag.moved && !d->m_embedDrag.pdf;
         const QPoint pos = event->pos();
         d->m_embedDrag = EmbedDrag{};
         if (wasClick && event->button() == Qt::LeftButton) {
@@ -5531,9 +5551,12 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
             d->m_embedDrag.moved = true;
         const QPoint delta = event->pos() - d->m_embedDrag.lastPoint;
         if (d->m_embedDrag.moved && !delta.isNull()) {
-            applyFileEmbedInput(d->m_embedDrag.blockIndex,
-                                {FileEmbedInputKind::Drag, embedLocalPoint(d->m_embedDrag.blockIndex, event->pos()),
-                                 delta, event->modifiers()});
+            if (d->m_embedDrag.pdf)
+                panPdfEmbed(d->m_embedDrag.blockIndex, delta);
+            else
+                applyFileEmbedInput(d->m_embedDrag.blockIndex,
+                                    {FileEmbedInputKind::Drag, embedLocalPoint(d->m_embedDrag.blockIndex, event->pos()),
+                                     delta, event->modifiers()});
             d->m_embedDrag.lastPoint = event->pos();
         }
         return;
@@ -5601,6 +5624,8 @@ void MarkdownEditor::mouseDoubleClickEvent(QMouseEvent *event)
             if (pressTableChrome(event->pos(), true))
             return;
     }
+    if (doubleClickPdfCell(event->pos()))
+        return;
     // Empty space in a hooked embed's own image opens the file itself
     // (a card there already opened on the first click's release, above); a
     // card falls through this unused, harmlessly, since it already handled
@@ -5647,6 +5672,10 @@ void MarkdownEditor::wheelEvent(QWheelEvent *event)
         }
         // Declined - no Ctrl held, most likely - so falling through below
         // scrolls the note itself; an embed must never leave the page stuck.
+    }
+    if (wheelPdfCell(event)) {
+        event->accept();
+        return;
     }
 
     BlockView *table = scrollableTableAt(pos);

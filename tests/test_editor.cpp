@@ -15,6 +15,7 @@
 #include <QListView>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QNativeGestureEvent>
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QScrollBar>
@@ -2879,6 +2880,310 @@ TEST(PdfEmbedTest, BadArgumentShowsAnErrorInsteadOfCrashing)
     ASSERT_TRUE(info.isPdfEmbed);
     EXPECT_FALSE(info.error.isEmpty());
     EXPECT_EQ(info.cellCount, 0);
+}
+
+
+// --- zooming a PDF embed -----------------------------------------------------
+
+namespace {
+
+/// One PDF embed (`#height=300` unless the note says otherwise) in an editor
+/// with the pointer events a user would send: Ctrl+wheel, shift+wheel, drags.
+struct PdfZoomFixture {
+    QTemporaryDir dir;
+    std::unique_ptr<MarkdownEditor> editor;
+    qsizetype offset = 0; ///< where the first embed starts in the note
+
+    explicit PdfZoomFixture(const QString &note = QStringLiteral("intro\n\n![[deck.pdf#height=300]]\n"),
+                            int pages = 4)
+    {
+        const QString pdf = makeTestPdf(dir.path(), pages);
+        editor = editorWith(note);
+        editor->setLinkResolver([pdf](const QString &) { return pdf; });
+        editor->setPdfNavClock([] { return qint64(100000); });
+        offset = note.indexOf(QLatin1String("![["));
+    }
+    MarkdownEditor::PdfEmbedInfo info(qsizetype at = -1) const
+    {
+        return editor->pdfEmbedInfoAt(at < 0 ? offset : at);
+    }
+    /// A point `dx`, `dy` inside the first embed's cell, viewport coordinates.
+    QPoint inCell(qreal dx, qreal dy, qsizetype at = -1) const
+    {
+        return (info(at).cellRect.topLeft() + QPointF(dx, dy)).toPoint();
+    }
+    bool wheel(const QPoint &at, int dx, int dy, Qt::KeyboardModifiers modifiers)
+    {
+        QWheelEvent event(QPointF(at), QPointF(at), QPoint(0, 0), QPoint(dx, dy), Qt::NoButton, modifiers,
+                          Qt::NoScrollPhase, false);
+        QCoreApplication::sendEvent(editor->viewport(), &event);
+        return event.isAccepted();
+    }
+    void zoom(const QPoint &at, int notches)
+    {
+        for (int i = 0; i < qAbs(notches); ++i)
+            wheel(at, 0, notches > 0 ? 120 : -120, Qt::ControlModifier);
+    }
+    /// What a real double click sends: the first click (a widget's QTest::mouseDClick sends
+    /// only the double-click event itself), then that event, then the last release.
+    void doubleClick(const QPoint &at)
+    {
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, at);
+        QTest::mouseDClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, at);
+        QTest::mouseRelease(editor->viewport(), Qt::LeftButton, Qt::NoModifier, at);
+    }
+    void move(const QPoint &to)
+    {
+        QMouseEvent event(QEvent::MouseMove, QPointF(to), editor->viewport()->mapToGlobal(QPointF(to)),
+                          Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor->viewport(), &event);
+    }
+};
+
+/// The page content under `at`, in the unzoomed cell's pixels: what a zoom
+/// anchored at `at` must leave alone.
+QPointF contentUnder(const MarkdownEditor::PdfEmbedInfo &info, const QPoint &at)
+{
+    return info.pan + (QPointF(at) - info.cellRect.topLeft()) / info.zoom;
+}
+
+QString paddedNote(const QString &embed)
+{
+    return embed + QStringLiteral("\n\n") + QStringLiteral("filler line\n\n").repeated(200);
+}
+
+} // namespace
+
+TEST(PdfEmbedTest, CtrlWheelZoomsAnchoredAtPointer)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    const MarkdownEditor::PdfEmbedInfo before = f.info();
+    ASSERT_EQ(before.zoom, 1);
+    EXPECT_TRUE(f.wheel(at, 0, 120, Qt::ControlModifier));
+    const MarkdownEditor::PdfEmbedInfo after = f.info();
+    EXPECT_NEAR(after.zoom, 1.1, 1e-6);
+    EXPECT_NEAR(contentUnder(after, at).x(), contentUnder(before, at).x(), 0.5);
+    EXPECT_NEAR(contentUnder(after, at).y(), contentUnder(before, at).y(), 0.5);
+    EXPECT_EQ(after.cellRect, before.cellRect) << "the cell is a fixed window, so the note never reflows";
+    EXPECT_EQ(after.nextRect, before.nextRect);
+}
+
+TEST(PdfEmbedTest, PlainWheelScrollsTheNoteOverAZoomedEmbed)
+{
+    PdfZoomFixture f(paddedNote(QStringLiteral("![[deck.pdf#height=300]]")));
+    const QPoint at = f.inCell(300, 150);
+    f.zoom(at, 7);
+    const MarkdownEditor::PdfEmbedInfo zoomed = f.info();
+    ASSERT_GT(zoomed.zoom, 1.5);
+    ASSERT_EQ(f.editor->verticalScrollBar()->value(), 0);
+    f.wheel(at, 0, -120, Qt::NoModifier);
+    EXPECT_GT(f.editor->verticalScrollBar()->value(), 0) << "an embed must never leave the page stuck";
+    EXPECT_EQ(f.info(f.offset).pan, zoomed.pan);
+}
+
+TEST(PdfEmbedTest, ShiftWheelPansInsideAndClampsAtTheEdge)
+{
+    PdfZoomFixture f(paddedNote(QStringLiteral("![[deck.pdf#height=300]]")));
+    const QPoint at = f.inCell(300, 150);
+    f.zoom(at, 7);
+    const qreal zoom = f.info().zoom;
+    ASSERT_GT(zoom, 1.5);
+    const qreal before = f.info().pan.y();
+    EXPECT_TRUE(f.wheel(at, 0, -120, Qt::ShiftModifier));
+    EXPECT_GT(f.info().pan.y(), before);
+    EXPECT_EQ(f.editor->verticalScrollBar()->value(), 0);
+    for (int i = 0; i < 50; ++i)
+        EXPECT_TRUE(f.wheel(at, 0, -120, Qt::ShiftModifier)) << "an edge still keeps the wheel";
+    EXPECT_NEAR(f.info().pan.y(), 300 - 300 / zoom, 1e-6);
+    EXPECT_EQ(f.editor->verticalScrollBar()->value(), 0) << "the edge does not chain to the note";
+}
+
+TEST(PdfEmbedTest, HorizontalWheelPansSideways)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    f.zoom(at, 7);
+    const qreal before = f.info().pan.x();
+    EXPECT_TRUE(f.wheel(at, 120, 0, Qt::NoModifier));
+    EXPECT_LT(f.info().pan.x(), before);
+}
+
+TEST(PdfEmbedTest, DragPansAndNeitherMovesTheCaretNorRevealsSource)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    f.zoom(at, 7);
+    const MarkdownEditor::PdfEmbedInfo zoomed = f.info();
+    const qsizetype caret = f.editor->cursorOffset();
+    QTest::mousePress(f.editor->viewport(), Qt::LeftButton, Qt::NoModifier, at);
+    f.move(at + QPoint(30, 30));
+    QTest::mouseRelease(f.editor->viewport(), Qt::LeftButton, Qt::NoModifier, at + QPoint(30, 30));
+    const MarkdownEditor::PdfEmbedInfo panned = f.info();
+    EXPECT_NEAR(panned.pan.x(), zoomed.pan.x() - 30 / zoomed.zoom, 1e-6);
+    EXPECT_NEAR(panned.pan.y(), zoomed.pan.y() - 30 / zoomed.zoom, 1e-6);
+    EXPECT_EQ(f.editor->cursorOffset(), caret);
+    EXPECT_TRUE(panned.isPdfEmbed) << "a revealed block is laid out as source";
+    EXPECT_EQ(panned.cellCount, 1);
+
+    // A click that does not move is no pan, and no way to the source either.
+    QTest::mouseClick(f.editor->viewport(), Qt::LeftButton, Qt::NoModifier, at);
+    EXPECT_TRUE(f.info().isPdfEmbed);
+    EXPECT_EQ(f.editor->cursorOffset(), caret);
+    EXPECT_EQ(f.info().pan, panned.pan);
+}
+
+TEST(PdfEmbedTest, ClickOnAnUnzoomedPageIsTheCaretAsBefore)
+{
+    PdfZoomFixture f;
+    QTest::mouseClick(f.editor->viewport(), Qt::LeftButton, Qt::NoModifier, f.inCell(300, 150));
+    EXPECT_FALSE(f.info().isPdfEmbed) << "the click revealed the source";
+    EXPECT_GE(f.editor->cursorOffset(), f.offset);
+}
+
+TEST(PdfEmbedTest, DoubleClickTogglesTwoXAndBack)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    const MarkdownEditor::PdfEmbedInfo before = f.info();
+    const qsizetype caret = f.editor->cursorOffset();
+    f.doubleClick(at);
+    MarkdownEditor::PdfEmbedInfo info = f.info();
+    ASSERT_TRUE(info.isPdfEmbed) << "the click that began the double click revealed the source; it is undone";
+    EXPECT_NEAR(info.zoom, 2, 1e-6);
+    EXPECT_NEAR(contentUnder(info, at).x(), contentUnder(before, at).x(), 0.5);
+    EXPECT_NEAR(contentUnder(info, at).y(), contentUnder(before, at).y(), 0.5);
+    EXPECT_EQ(f.editor->cursorOffset(), caret) << "zooming a page leaves the caret where it was";
+
+    f.doubleClick(at);
+    info = f.info();
+    EXPECT_EQ(info.zoom, 1);
+    EXPECT_EQ(info.pan, QPointF());
+    EXPECT_TRUE(info.isPdfEmbed);
+}
+
+TEST(PdfEmbedTest, CtrlZeroResetsEveryZoomedEmbed)
+{
+    const QString note = QStringLiteral("![[a.pdf#height=300]]\n\n![[b.pdf#height=300]]\n");
+    PdfZoomFixture f(note);
+    f.editor->resize(900, 900);
+    const qsizetype second = note.indexOf(QLatin1String("![[b"));
+    f.zoom(f.inCell(300, 100), 5);
+    f.zoom(f.inCell(300, 100, second), 5);
+    ASSERT_GT(f.info(0).zoom, 1);
+    ASSERT_GT(f.info(second).zoom, 1);
+    QTest::keyClick(f.editor.get(), Qt::Key_0, Qt::ControlModifier);
+    EXPECT_EQ(f.info(0).zoom, 1);
+    EXPECT_EQ(f.info(second).zoom, 1);
+}
+
+TEST(PdfEmbedTest, ZoomShowsTheScaledRasterAtOnceAndRerendersAfterItSettles)
+{
+    PdfZoomFixture f;
+    const int width = int(f.info().cellRect.width());
+    WAIT_TRUE(f.info().renderedWidth == width, 3000);
+    f.zoom(f.inCell(300, 150), 7);
+    const qreal zoom = f.info().zoom;
+    ASSERT_GT(zoom, 1.5);
+    EXPECT_EQ(f.info().renderedWidth, width) << "the stretched base raster covers the wait";
+    const int wanted = qMin(int(width * (qRound(zoom * 20) / 20.0)), 2600);
+    WAIT_TRUE(f.info().renderedWidth == wanted, 3000);
+}
+
+TEST(PdfEmbedTest, ZoomSurvivesAnEditAbove)
+{
+    PdfZoomFixture f;
+    f.zoom(f.inCell(300, 150), 7);
+    const qreal zoom = f.info().zoom;
+    ASSERT_GT(zoom, 1.5);
+    f.editor->setCursorOffset(0);
+    QTest::keyClicks(f.editor.get(), QStringLiteral("xy"));
+    EXPECT_EQ(f.info(f.offset + 2).zoom, zoom) << "the embed moved down two characters";
+}
+
+TEST(PdfEmbedTest, SlideStepAndEditsKeepZoomAndSlide)
+{
+    PdfZoomFixture f(QStringLiteral("intro\n\n![[deck.pdf#height=300]]\n"), 4);
+    f.zoom(f.inCell(300, 150), 7);
+    const qreal zoom = f.info().zoom;
+    f.editor->pdfSlideStep(f.offset, 1);
+    EXPECT_EQ(f.info().slideIndex, 1);
+    EXPECT_EQ(f.info().zoom, zoom) << "a deck keeps its zoom from slide to slide";
+
+    f.editor->setCursorOffset(0);
+    QTest::keyClicks(f.editor.get(), QStringLiteral("xy"));
+    // A block below an edit keeps its layout until something lays it out again: a finished render does.
+    const qsizetype movedAt = f.offset + 2;
+    f.zoom(f.inCell(300, 150, movedAt), 1);
+    WAIT_TRUE(f.info(movedAt).renderedWidth > int(f.info(movedAt).cellRect.width()), 3000);
+    const MarkdownEditor::PdfEmbedInfo moved = f.info(movedAt);
+    EXPECT_EQ(moved.slideIndex, 1) << "the slide an edit above would reset";
+    EXPECT_GT(moved.zoom, zoom);
+}
+
+TEST(PdfEmbedTest, ZoomClampsToItsRange)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    f.zoom(at, 40);
+    EXPECT_EQ(f.info().zoom, 4);
+    EXPECT_LE(f.info().pan.x(), f.info().cellRect.width() * 0.75 + 1e-6);
+    EXPECT_LE(f.info().pan.y(), 300 * 0.75 + 1e-6);
+    f.zoom(at, -40);
+    EXPECT_EQ(f.info().zoom, 1);
+    EXPECT_EQ(f.info().pan, QPointF());
+}
+
+TEST(PdfEmbedTest, ZoomedRastersStayUnderTheirBudget)
+{
+    // A short window on each page, but a raster of the whole page: they are big.
+    PdfZoomFixture f(QStringLiteral("![[deck.pdf#height=300]]\n"), 5);
+    f.editor->viewport()->grab(); // the first paint settles the width the pages are laid out at
+    const qint64 raster = qint64(2600) * qint64(2600 * 1.4143) * 4; // the largest a page gets
+    f.editor->setPdfZoomCacheBudget(raster * 3 / 2);
+    f.zoom(f.inCell(300, 150), 40);
+    for (int page = 0; page < 5; ++page) {
+        SCOPED_TRACE(page);
+        // A paint finds a short raster and asks for the zoomed one; the app paints on every delivery.
+        const int wanted = qMin(int(f.info().cellRect.width()) * 4, 2600);
+        WAIT_TRUE((f.editor->viewport()->grab(), f.info().renderedWidth == wanted), 5000);
+        EXPECT_LE(f.editor->pdfZoomCacheBytes(), raster * 3 / 2);
+        f.editor->pdfSlideStep(0, 1);
+    }
+    EXPECT_GT(f.editor->pdfZoomCacheBytes(), 0);
+}
+
+TEST(PdfEmbedTest, NativeZoomGestureZoomsAnchored)
+{
+    PdfZoomFixture f;
+    const QPoint at = f.inCell(300, 150);
+    const MarkdownEditor::PdfEmbedInfo before = f.info();
+    QNativeGestureEvent gesture(Qt::ZoomNativeGesture, QPointingDevice::primaryPointingDevice(), 2, QPointF(at),
+                                QPointF(at), f.editor->viewport()->mapToGlobal(QPointF(at)), 0.5, QPointF());
+    QCoreApplication::sendEvent(f.editor->viewport(), &gesture);
+    const MarkdownEditor::PdfEmbedInfo after = f.info();
+    EXPECT_NEAR(after.zoom, 1.5, 1e-6);
+    EXPECT_NEAR(contentUnder(after, at).x(), contentUnder(before, at).x(), 0.5);
+    EXPECT_NEAR(contentUnder(after, at).y(), contentUnder(before, at).y(), 0.5);
+}
+
+TEST(PdfEmbedTest, SlideControlsWinOverPanWhileZoomed)
+{
+    PdfNavFixture f;
+    const QRectF cell = f.info().cellRect;
+    QWheelEvent zoom(cell.center(), cell.center(), QPoint(0, 0), QPoint(0, 120 * 7), Qt::NoButton,
+                     Qt::ControlModifier, Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(f.editor->viewport(), &zoom);
+    const MarkdownEditor::PdfEmbedInfo zoomed = f.info();
+    ASSERT_GT(zoomed.zoom, 1);
+    f.clickAt(-20, 10); // Next, below the slide
+    ASSERT_EQ(f.info().slideIndex, 1);
+    f.nowMs += 500;
+    // Inside the bottom quarter, where the button just used keeps the slide for a moment.
+    f.clickAt(-20, -f.info().cellRect.height() * 0.2);
+    EXPECT_EQ(f.info().slideIndex, 2) << "the controls come before a pan";
+    EXPECT_EQ(f.info().pan, zoomed.pan);
+    EXPECT_TRUE(f.info().isPdfEmbed);
 }
 
 #endif // NOTEAPPC_EXPECT_PDF
