@@ -583,11 +583,13 @@ int MarkdownEditor::runAllNotebookBlocks()
 
 int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
 {
-    int count = 0;
+    // Offsets first: a run can open a dialog (a shared note's block asks), and
+    // a remote edit applied in its event loop replaces both lists.
+    QList<qsizetype> starts;
     for (const CodeFenceSpan &fence : std::as_const(d->m_decorations.codeFences)) {
         if (fence.content.start > offset)
             break; // in document order: nothing past the cursor's block
-        count += runNotebookBlockAt(fence.content.start) ? 1 : 0;
+        starts.append(fence.content.start);
     }
     // A runnable `![[script.py]]` is a block too, in the note's order with the
     // fences; they are run after the fences here, which only matters to a
@@ -595,8 +597,11 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
     // to a file embed anyway.
     for (const BlockView &view : d->m_blocks) {
         if (view.embedPanel && view.notebookEligible && view.span.range.start <= offset)
-            count += runNotebookBlockAt(view.span.range.start) ? 1 : 0;
+            starts.append(view.span.range.start);
     }
+    int count = 0;
+    for (const qsizetype start : std::as_const(starts))
+        count += runNotebookBlockAt(start) ? 1 : 0;
     return count;
 }
 

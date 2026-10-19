@@ -332,7 +332,8 @@ already holds shares of this vault.
   (kept in `share.json`, private ones only), so a share comes back over the
   tailnet or another subnet without mDNS. An owner never dials: its members
   come to it. An owner that moved, or came back on another port, is found by
-  mDNS or a new invite.
+  mDNS on the LAN; elsewhere the joiner stops sharing that note and joins
+  again from a new invite (the addresses are kept from the first one only).
 - **Cost.** A keystroke is one `localEdit`, one AEAD seal and one signature per
   connected member, and no copy of the text; the text is fetched only when the
   edit touches half of a surrogate pair. State is written on the engine's 2 s

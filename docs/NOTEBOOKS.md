@@ -194,7 +194,9 @@ settings.
 A note shared with other devices (docs/SHARE.md) holds code anyone in the
 share may have written. Its blocks never leave the sandbox, whatever the
 setting says, and each one asks before its first run in this app session,
-naming the share's other members. Runs stay manual, as everywhere: opening
+naming the share's other members. This holds while sharing is switched off
+or not running too (the share's record says whose text it is); stopping the
+share on this device makes it an ordinary note again. Runs stay manual, as everywhere: opening
 a note only reads cached output.
 
 `#| sandbox: wasm` runs the block as a WebAssembly module under `wasmtime`

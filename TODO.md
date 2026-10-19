@@ -2045,6 +2045,18 @@ Shared/<title>.md.
       exercised through MainWindow).
 - [ ] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.
+- [x] Fable check 2026-10-19 of 224a96c/aeac581/c806dec/7acc31f, all fixed:
+  - [x] run-all on a shared note iterated live lists across the approval
+        dialog's event loop (a remote edit replaced them): offsets snapshotted.
+  - [x] the shared-code guard keyed off a running session: with sharing off
+        or failed to start, a peer's `#| sandbox: host` ran on the host. Now
+        the share store's record decides.
+  - [x] allowHostTier leaked from a failing test: reset in TearDown.
+  - [x] SHARE.md overclaimed how a moved owner is found off-LAN.
+- [ ] Mermaid without bubblewrap runs mmdr unsandboxed (env scrubbed,
+      rlimits) - the one renderer that does not refuse, and a shared note's
+      fence reaches it as it renders. Decide: refuse for shared notes, or
+      keep (mmdr is a Rust parser, no code execution). Low.
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note

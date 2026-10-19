@@ -1,5 +1,7 @@
 #include "MainWindow.h"
 
+#include <algorithm>
+
 #include <QCryptographicHash>
 #include <QApplication>
 #include <QButtonGroup>
@@ -5767,15 +5769,17 @@ void MainWindow::setSharedRunApprovalForTests(std::function<bool(const QString &
 bool MainWindow::allowSharedRun(const MarkdownEditor *editor, const QString &language, const QString &source)
 {
     const ShareSession *session = sessionFor(notePathOf(editor));
-    if (!session || !m_share)
-        return true;
     const QByteArray key = QCryptographicHash::hash((language + QChar(0) + source).toUtf8(), QCryptographicHash::Sha256);
     if (m_sharedRunsAllowed.contains(key))
         return true;
     QStringList names;
-    for (const auto &member : m_share->members(session->shareID()))
-        if (member.first != m_share->publicKey())
-            names.append(member.second);
+    if (session && m_share) {
+        for (const auto &member : m_share->members(session->shareID()))
+            if (member.first != m_share->publicKey())
+                names.append(member.second);
+    }
+    if (names.isEmpty())
+        names.append(tr("(the share's members; sharing is not running)"));
     const QString members = names.join(QLatin1Char('\n'));
     bool allowed = false;
     if (m_sharedRunApproval) {
@@ -6498,7 +6502,19 @@ QString MainWindow::notePathOf(const MarkdownEditor *editor) const
 bool MainWindow::isSharedNote(const MarkdownEditor *editor) const
 {
 #ifdef NOTEAPPC_HAVE_SHARE
-    return sessionFor(notePathOf(editor)) != nullptr;
+    const QString path = notePathOf(editor);
+    if (sessionFor(path))
+        return true;
+    if (!m_vault.isValid() || path.isEmpty() || !m_vault.contains(path))
+        return false;
+    // Sharing not running (feature off, start failed): the store still says the
+    // text came from a share. Stopping the share here removes the record, and
+    // the note is an ordinary one again.
+    const QString relative = m_vault.relative(path);
+    const ShareStore store(m_shareConfig.storeDirectory.isEmpty() ? ShareStore::directoryFor(m_vault.root())
+                                                                   : m_shareConfig.storeDirectory);
+    const QList<ShareRecord> records = store.all();
+    return std::ranges::any_of(records, [&](const ShareRecord &record) { return record.relativePath == relative; });
 #else
     Q_UNUSED(editor);
     return false;
