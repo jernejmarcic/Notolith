@@ -3619,6 +3619,37 @@ TEST_F(WindowTest, ANestedHeadingLinkOpensTheHeadingUnderItsParent)
     WAIT_EQ(window.editor()->cursorOffset(), opened.lastIndexOf(QLatin1String("### Detail")), 2000);
 }
 
+TEST_F(WindowTest, ClickingALinkToNoNoteCreatesIt)
+{
+    write(QStringLiteral("Linking.md"), "[[Nope]] [[Projects/Deep]] [[photo.png]]\n");
+    MainWindow window;
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    window.openNote(path(QStringLiteral("Linking.md")));
+
+    emit window.editor()->linkActivated(QStringLiteral("Nope"));
+    EXPECT_TRUE(QFileInfo(path(QStringLiteral("Nope.md"))).isFile());
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Nope.md")));
+
+    // A folder in the link is made; the note opens there.
+    window.openNote(path(QStringLiteral("Linking.md")));
+    emit window.editor()->linkActivated(QStringLiteral("Projects/Deep#Heading"));
+    EXPECT_TRUE(QFileInfo(path(QStringLiteral("Projects/Deep.md"))).isFile());
+
+    // A missing attachment is not made into a note.
+    window.openNote(path(QStringLiteral("Linking.md")));
+    emit window.editor()->linkActivated(QStringLiteral("photo.png"));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("photo.png.md"))));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Linking.md")));
+
+    // On disk but not indexed yet: opened, not copied as "Late 1".
+    write(QStringLiteral("Late.md"), "late\n");
+    emit window.editor()->linkActivated(QStringLiteral("Late"));
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Late 1.md"))));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Late.md")));
+}
+
 TEST_F(WindowTest, CtrlClickingALinkToAHeadingOpensTheNoteThere)
 {
     write(QStringLiteral("Other.md"), "# Other\n\nIntro.\n\n## Part two\n\nSecond part.\n");

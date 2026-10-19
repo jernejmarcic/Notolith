@@ -1246,7 +1246,14 @@ void MainWindow::followLink(const QString &target)
     }
     const QString resolved = m_index.resolve(name, m_active->notePath);
     if (resolved.isEmpty()) {
-        statusBar()->showMessage(tr("%1 is not in this vault yet").arg(name), 3000);
+        // Obsidian's way of making a note: click a link to one that is not there.
+        // A missing attachment (a name with another extension) is only reported.
+        static const QRegularExpression attachment(QStringLiteral(R"(\.(?!md$)[A-Za-z][A-Za-z0-9]{0,4}$)"),
+                                                   QRegularExpression::CaseInsensitiveOption);
+        if (name.contains(attachment))
+            statusBar()->showMessage(tr("%1 is not in this vault").arg(name), 3000);
+        else
+            createNoteNamed(name);
         return;
     }
     if (isViewFile(resolved)) {
@@ -7517,7 +7524,12 @@ void MainWindow::createNoteNamed(const QString &typed)
     QString path;
     if (base.isEmpty() || name.contains(invalid) || folder.split(QLatin1Char('/')).contains(QLatin1String("..")))
         error = tr("a note name cannot be empty or hold # ^ [ ] | : \\ or a .. folder");
-    else
+    else if (const QString existing = m_vault.absolute((folder.isEmpty() ? QString() : folder + QLatin1Char('/')) + base + QLatin1String(".md"));
+             QFileInfo(existing).isFile()) {
+        // Not indexed yet (a scan in flight): open it, not a numbered copy.
+        openNote(existing);
+        return;
+    } else
         path = m_vault.createNote(folder, base, &error);
     if (path.isEmpty()) {
         statusBar()->showMessage(tr("Could not create the note: %1").arg(error), 5000);

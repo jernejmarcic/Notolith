@@ -2220,7 +2220,7 @@ Shared/<title>.md.
 - [x] G1. Renaming a non-.md file drops its extension (Vault::renamePath
       re-adds the suffix only for notes): cat.png -> "kitty". Keep the
       suffix unless the new name carries one. Test in test_vault.
-- [ ] G2. Clicking an unresolved [[link]] only says "not in this vault yet";
+- [x] G2. Clicking an unresolved [[link]] only says "not in this vault yet";
       Obsidian creates the note. followLink -> createNoteNamed. Test in
       test_window.
 - [ ] G3. No app:delete-file command and no Delete key in the file tree.
