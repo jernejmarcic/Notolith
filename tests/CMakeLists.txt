@@ -224,6 +224,18 @@ if(TARGET noteAppC_link)
     set_tests_properties(link_vendor_check PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
 endif()
 
+# The sharing engine (docs/SHARE.md "The engine") over loopback: engines and bare
+# link nodes in one process, in-memory secret store, mDNS off, port 0. XDG_DATA_HOME
+# and XDG_STATE_HOME keep the share store's default location and the link log out
+# of the real home.
+if(TARGET noteAppC_shareengine)
+    add_executable(test_share test_share.cpp)
+    target_link_libraries(test_share PRIVATE noteAppC_shareengine Qt6::Test GTest::gtest)
+    add_test(NAME share COMMAND test_share)
+    set_tests_properties(share PROPERTIES TIMEOUT 300
+        ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-data;XDG_STATE_HOME=${CMAKE_CURRENT_BINARY_DIR}/share-state")
+endif()
+
 if(TARGET noteAppC_crypt)
     add_executable(test_crypt test_crypt.cpp)
     target_link_libraries(test_crypt PRIVATE noteAppC_crypt Qt6::Test GTest::gtest)

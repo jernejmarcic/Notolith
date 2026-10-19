@@ -368,6 +368,12 @@ bool SyncCrypto::verifyLoginKey(const QByteArray &hash, const QByteArray &loginK
     return crypto_pwhash_str_verify(hash.constData(), loginKey.constData(), size_t(loginKey.size())) == 0;
 }
 
+bool SyncCrypto::equal(const QByteArray &a, const QByteArray &b)
+{
+    return a.size() == b.size()
+        && sodium_memcmp(a.constData(), b.constData(), size_t(a.size())) == 0;
+}
+
 void SyncCrypto::wipe(QByteArray &bytes)
 {
     if (!bytes.isEmpty())

@@ -3,6 +3,8 @@
 # server. Built only with NOTEAPPC_WITH_SYNC on and both libsodium and
 # Qt6Keychain found - see the root CMakeLists.txt.
 add_library(noteAppC_sync STATIC
+    SecretStore.h
+    SecretStore.cpp
     SyncCrypto.h
     SyncCrypto.cpp
     SyncJournal.h

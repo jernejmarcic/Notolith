@@ -1,8 +1,8 @@
 # Sharing a note (in progress)
 
 Live co-editing of one note between people, peer to peer. This page covers the
-parts that exist: the text CRDT and the link layer. The engine and the UI come
-in later lanes (the plan is in the project TODO).
+parts that exist: the text CRDT, the link layer and the engine. Wiring it to the
+editor and the window comes in a later lane (the plan is in the project TODO).
 
 ## CrdtDoc
 
@@ -201,3 +201,68 @@ Hearth's link layer, vendored. No Qt.
   into the build directory. Hearth has seen `Node.DebugLogNamesPeersByPrefixAndLeaksNoMessages`
   hang once in shutdown (23 minutes in `futex_wait`); `link` has a 10 minute ctest
   TIMEOUT so a hang fails instead of blocking.
+
+## The engine (libs/ext/shareengine)
+
+`ShareEngine` is everything about sharing except an editor and a window: it
+keeps this device's keys, invites and admits members, and moves CRDT updates
+between devices. Built when the CRDT, the link and sync are (`noteAppC_shareengine`),
+so sharing needs libsodium and Qt6Keychain, which sync needs for the same two jobs:
+sealing, and keeping a key. Nothing is built or read until `start()`: no keyring
+access, no socket, no file.
+
+- **Keys.** One keyring entry (service `noteAppC-share`, `SecretStore`, shared with
+  sync) holds an Ed25519 key (what the link authenticates, what signs frames and
+  member lists) and an X25519 key (what a share key is sealed to). A malformed
+  entry is replaced; the pair is proved once on load.
+- **Wire** (`share.proto`, every message at most 1 MiB, the link's own cap, checked
+  before parsing). `Join` (invite proof, box key, name), `Welcome` (share key sealed
+  to the joiner's box key; the member list and the note state sealed under the share
+  key), `Rekey` (new key and/or member list), `Refused`, and `Frame`: a `Payload`
+  (an update, a state vector, or a diff - the answer to a state vector) sealed under the share key, bound to (share, epoch,
+  sender, seq) and signed by the sender. `Frame`, `Welcome` and `Rekey` travel on
+  the link's ordered `sync` channel, the rest on `ctl`. A relay would see ids and
+  sizes only.
+- **Invite** `notolith-share:` + base64url JSON (share id, owner key, 32-byte token,
+  `host:port` list, expiry, CRDT backend). The joiner proves the token with a keyed
+  hash over its own link key; the owner approves each device by its safety number.
+  A new `invite()` voids the previous code; a restart voids open ones. Hosts must be
+  loopback, LAN or tailnet addresses.
+- **Members** are device keys. The owner signs the list (`MemberList`); every
+  member verifies it with the owner's key. `revoke` removes a member, mints a new
+  share key, bumps the epoch and sends each remaining member the key sealed to it:
+  the revoked device is ignored from then on and keeps what it already has.
+- **Sync.** At every connection each side sends its state vector and answers with
+  what the other lacks (so offline edits on both sides merge); a received change is
+  passed on to the other connected members, once (a second arrival changes nothing),
+  so members need not be connected to each other. `seq` counts from 1 per connection.
+  A state vector also goes to every connected member every 30 s and 3 s after the last
+  change came in (`Config::resyncMs`, `settleMs`): that repairs a lost frame and releases
+  an update the yrs backend holds pending behind an edit that has arrived since. The
+  answer is a `Diff` payload, which starts no exchange of its own, so the rounds end.
+- **Threads.** The engine and every `CrdtDoc` live on the UI thread; link callbacks
+  copy their arguments and queue onto it. A keystroke costs one `localEdit`, one AEAD
+  seal and one signature per connected member.
+- **Persistence.** `<GenericDataLocation>/noteAppC/share/<16 hex of sha256 of the vault
+  path>/<share id>/`: `share.json` (key, epoch, signed member list, path, replica id),
+  `state.bin` (the CRDT state), `base.md` (the text the file and the CRDT last agreed
+  on); files 0600, written on a 2 s debounce, by `persist()` and on destruction. The
+  key sits beside a plaintext note: this protects the wire, not the disk.
+- **Limits.** A note whose state exceeds 1 MiB cannot be shared yet (refused). The
+  engine passes the title through with control and bidi characters removed; making a
+  file name of it (`Shared/<title>.md`) is the window's job.
+
+What the engine refuses (each case is a test in `tests/test_share.cpp`):
+
+| from | check | on failure |
+|---|---|---|
+| any peer | size <= 1 MiB, then parse | dropped, counted |
+| `Frame` | known share, sender is a member and the link peer, same epoch, `seq` beyond the last, signature, AEAD, payload | dropped, counted (a wrong epoch reads "waiting for the owner") |
+| `Join` | I own the share, an open invite, proof equal (constant time), not expired, same backend, box key size | a wrong proof is dropped silently (no oracle); expired or other backend gets `Refused` |
+| `Welcome` | from the owner the invite named, key opens, box opens bound to me, list verifies with that owner and names me, state loads | dropped, `failed()` |
+| `Rekey` | from the owner, list verifies, epoch not older, key opens for the same epoch | dropped |
+| invite code | prefix, version, sizes, not expired, a backend this build has, private hosts | `join()` false with the reason |
+| strangers | never sent anything, frames from non-members dropped; the link itself is identity-authenticated, so ignoring them (not closing) is complete | counted |
+
+Tests: `ctest -R '^share$'` - loopback only, mDNS off, port 0, an in-memory secret
+store, temporary store directories.
