@@ -159,6 +159,7 @@ struct MarkdownEditor::EmbedCell {
     bool panel = false; ///< a small filename caption under a PDF thumbnail
     QString openPath;  ///< what a click opens - the resolved file, or a note target
     bool isNote = false; ///< opens through linkActivated rather than QDesktopServices
+    QString cacheKey; ///< a note's card, until its drawing lands in this m_fileEmbedCache entry
 };
 
 /// One top-level block: the unit that is laid out, cached and revealed.

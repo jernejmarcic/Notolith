@@ -1475,6 +1475,14 @@ private:
     /// upgrade to one if a transcluded note's own formatting turns out to
     /// matter enough to pay for a second parser instance per embed.
     bool layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// What a note embed shows, for a sole embed and an inline one alike:
+    /// false when the file or the `#Heading` / `#^block` is not there;
+    /// otherwise `slice` is the text, `label` its title and `image` the
+    /// formatted drawing - null while it is still being drawn (`key`, its
+    /// cache entry, then names what deliverFileEmbed will fill) or when it
+    /// stays text (`key` empty).
+    bool noteEmbedContent(const QString &path, const QString &subpath, QString &label,
+                          QString &slice, QString &key, QImage &image);
     /// The panel chrome a source-file, note or failed-`.tex` embed all share:
     /// a header strip with `label`, then `body` laid out as plain text
     /// (`monospace` picks the code font over the note font). Always

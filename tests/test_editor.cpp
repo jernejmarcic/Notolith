@@ -7397,6 +7397,50 @@ TEST(CalloutMenuTest, KnownTypesStartWithObsidiansAndAddTheIni)
     EXPECT_TRUE(types.contains(QStringLiteral("quote")));
 }
 
+TEST(NoteEmbedTest, ANoteEmbeddedInRunningTextHoldsTheSameContentAsOnOwnLine)
+{
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("Target.md"));
+    {
+        QFile file(path);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("# Overview\n\nIntro.\n\n## Details\n\nA paragraph worth linking to. ^anchor\n\n"
+                   "A second paragraph after the anchored one.\n");
+    }
+    const auto resolver = [&](const QString &) { return path; };
+    const auto drawn = [&](const QString &note, const QString &embed, QSizeF &size) {
+        auto editor = editorWith(note);
+        editor->setLinkResolver(resolver);
+        editor->setCursorOffset(editor->noteText().size()); // off the embed
+        if (embed.isEmpty())
+            QTest::qWaitFor([&] { return !editor->embedImageSizeAt(0).isEmpty(); }, 3000);
+        else
+            QTest::qWaitFor([&] { return editor->embedCellRectAt(0, 0).height() > 44; }, 3000);
+        size = embed.isEmpty() ? QSizeF(editor->embedImageSizeAt(0)) : editor->embedCellRectAt(0, 0).size();
+        return editor;
+    };
+    for (const QString &target : {QStringLiteral("Target#Details"), QStringLiteral("Target#^anchor"),
+                                  QStringLiteral("Target")}) {
+        QSizeF own;
+        QSizeF inlineSize;
+        drawn(QStringLiteral("![[%1]]\n\nafter\n").arg(target), QString(), own);
+        auto editor = drawn(QStringLiteral("here is the target ![[%1]] embedded between clauses\n").arg(target),
+                            target, inlineSize);
+        EXPECT_GT(own.height(), 20) << qPrintable(target);
+        EXPECT_EQ(inlineSize, own) << qPrintable(target) << ": the same drawing as the embed on its own line";
+        // The paragraph's words stay in place around the embed's block.
+        EXPECT_TRUE(editor->displayText().contains(QStringLiteral("here is the target")));
+        EXPECT_TRUE(editor->displayText().contains(QStringLiteral("embedded between clauses")));
+        EXPECT_GE(editor->embedCellRectAt(0, 0).top(), 0);
+    }
+
+    // Reading view lays the paragraph out the same way.
+    auto reading = editorWith(QStringLiteral("here is the target ![[Target#Details]] embedded\n"));
+    reading->setMode(MarkdownEditor::Mode::Reading);
+    reading->setLinkResolver(resolver);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return reading->embedCellRectAt(0, 0).height() > 44; }, 3000));
+}
+
 TEST(NoteEmbedTest, ANoteEmbeddedInAnEmbeddedNoteIsDrawnFormattedToo)
 {
     QTemporaryDir dir;
