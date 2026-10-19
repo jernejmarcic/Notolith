@@ -1958,7 +1958,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       run manual, show who wrote a block before its first run on this
       device, never allow `sandbox: host` for a shared note. Goes into the
       sharing plan.
-- [ ] Task states beyond [ ]/[x] (Jernej 2026-10-19: "custom stuff inside
+- [x] Task states beyond [ ]/[x] (Jernej 2026-10-19: "custom stuff inside
       other than just ticking, like a line, or a straight up red X ... think
       about useful additions"). Today Parser.cpp's list head regex only knows
       `[ xX]`, so `- [-] a` is plain text "[-] a". Obsidian treats any one
