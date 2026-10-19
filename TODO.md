@@ -2108,6 +2108,13 @@ Shared/<title>.md.
       fold all / unfold all / toggle fold commands, reading view too. Sol
       research, Fable plan, then a lane; foldSites() must learn the new kinds
       so per-note memory covers them.
+  - [ ] Lane A (foldheadings): fold model (heading sections, list parents),
+        hidden blocks skipped everywhere, arrow + ellipsis, caret/find
+        reveal, undo/external-edit keep folds, per-note memory (running)
+  - [ ] Lane B: editor:toggle-fold / fold-all / unfold-all / fold-more /
+        fold-less / toggle-fold-properties (no default keys, work in
+        Reading), Settings > Editor "Fold heading" / "Fold indent" (on) +
+        app.json import, restore order, perf rows (fold-all 1 MB < 50 ms)
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
