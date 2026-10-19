@@ -132,6 +132,41 @@ LinkFragment splitLinkFragment(const QString &typed)
 // The source's own blank lines make the vertical rhythm, exactly as the file
 // reads; only headings get extra air, the way Obsidian styles them.
 constexpr int kBlockSpacing = 0;
+
+// These take the private BlockView, so they are templates: no friend or header
+// line needed to name it.
+
+/// A blank line draws nothing.
+template<typename View>
+bool isBlankBlock(const QString &text, const View &view)
+{
+    const Range &range = view.span.range;
+    return view.span.kind == BlockSpan::Kind::Paragraph
+           && QStringView(text).mid(range.start, range.length()).trimmed().isEmpty();
+}
+
+/// How far a callout's panel reaches past the block's own box, above its first
+/// piece or below its last (see paintCallout). A fence's panel reaches as far,
+/// but into its own fence lines, which are blocks of their own.
+template<typename View>
+qreal panelBleed(const View &view, bool below)
+{
+    if (view.span.kind != BlockSpan::Kind::Callout)
+        return 0;
+    return (below ? view.piece == view.pieces - 1 || view.pieces <= 1 : view.piece == 0) ? 8 : 0;
+}
+
+/// The space between two neighbouring blocks. None, except that a callout's
+/// panel runs 8 px into it, so a block right against the callout, with no
+/// blank line between, needs that much to stay clear of the panel.
+template<typename View>
+qreal blockGap(const QString &text, const View &above, const View &below)
+{
+    if (isBlankBlock(text, above) || isBlankBlock(text, below))
+        return kBlockSpacing;
+    return kBlockSpacing + panelBleed(above, true) + panelBleed(below, false);
+}
+
 /// Width of the margin a list keeps for its bullets and checkboxes.
 constexpr qreal kListIndent = 26;
 /// Above this many characters a note is shown first and parsed on the thread
@@ -4205,6 +4240,8 @@ void MarkdownEditor::updateLayout()
             view.heightEstimated = false;
         }
 
+        if (i > 0)
+            y += blockGap(d->m_text, d->m_blocks[size_t(i - 1)], view);
         if (view.y != y && d->m_movedFrom > y)
             d->m_movedFrom = y;
         view.y = y;
@@ -4272,6 +4309,8 @@ void MarkdownEditor::updateLayout()
                                           + kBlockSpacing;
         for (qsizetype j = firstChanged; j < qsizetype(d->m_blocks.size()); ++j) {
             BlockView &view = d->m_blocks[size_t(j)];
+            if (j > 0)
+                y += blockGap(d->m_text, d->m_blocks[size_t(j - 1)], view);
             view.y = y;
             if (!view.laidOut && !view.heightEstimated) {
                 view.height = estimatedHeight(view);
@@ -4293,16 +4332,13 @@ QList<MarkdownEditor::BlockBox> MarkdownEditor::blockBoxes()
     boxes.reserve(qsizetype(d->m_blocks.size()));
     for (const BlockView &view : d->m_blocks) {
         const Range &range = view.span.range;
-        // A blank line draws nothing, so a callout panel reaching into it is
-        // not an overlap; it is what keeps two panels 8 px apart.
-        const bool blank = view.span.kind == BlockSpan::Kind::Paragraph
-                           && QStringView(d->m_text).mid(range.start, range.length()).trimmed().isEmpty();
-        // A callout's panel reaches 8 px above its first piece and below its
-        // last (see paintCallout), outside view.height.
-        const bool callout = view.span.kind == BlockSpan::Kind::Callout;
-        const qreal above = callout && view.piece == 0 ? 8 : 0;
-        const qreal below = callout && (view.piece == view.pieces - 1 || view.pieces <= 1) ? 8 : 0;
-        boxes.append({blank ? QRectF() : QRectF(0, view.y - above, contentWidth(), view.height + above + below),
+        // A blank line draws nothing, so a panel reaching into it is not an
+        // overlap; it is what keeps two panels apart.
+        const qreal above = panelBleed(view, false);
+        const qreal below = panelBleed(view, true);
+        boxes.append({isBlankBlock(d->m_text, view)
+                          ? QRectF()
+                          : QRectF(0, view.y - above, contentWidth(), view.height + above + below),
                       view.span.kind, range});
     }
     return boxes;

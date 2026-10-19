@@ -1968,6 +1968,23 @@ TEST(BlockOverlapTest, ConsecutiveQuoteCalloutsDoNotOverlap)
     EXPECT_EQ(firstBlockOverlap(*editor).toStdString(), "");
 }
 
+// A callout's panel reaches 8 px above its block, so with no blank line before
+// it, the block before - a fence's closing line, say - has to end there.
+TEST(BlockOverlapTest, AnythingRightAfterAFenceStartsClearOfIt)
+{
+    const QStringList followers{
+        QStringLiteral("> [!note]\n> body\n"),  QStringLiteral("| a | b |\n|---|---|\n| 1 | 2 |\n"),
+        QStringLiteral("> a quote\n"),           QStringLiteral("## heading\n"),
+        QStringLiteral("- item\n- item\n"),       QStringLiteral("---\n"),
+        QStringLiteral("$$\nx^2\n$$\n"),         QStringLiteral("```text\nb\n```\n"),
+        QStringLiteral("text\n"),
+    };
+    for (const QString &follower : followers) {
+        auto editor = editorWith(QStringLiteral("```text\na\n```\n") + follower + QStringLiteral("\nafter\n"));
+        EXPECT_EQ(firstBlockOverlap(*editor).toStdString(), "") << follower.toStdString();
+    }
+}
+
 // --- `#|` code block options (HANDOFF 3) ----------------------------------
 
 TEST(CodeHeaderTest, ABlockWithALanguageIsTitledByItsName)
