@@ -2215,3 +2215,20 @@ Shared/<title>.md.
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
       the line has spaces, so "instead of wrapping" (his file, his edit).
+
+## Fable gap audit 2026-10-19 (functional, verified against code)
+- [ ] G1. Renaming a non-.md file drops its extension (Vault::renamePath
+      re-adds the suffix only for notes): cat.png -> "kitty". Keep the
+      suffix unless the new name carries one. Test in test_vault.
+- [ ] G2. Clicking an unresolved [[link]] only says "not in this vault yet";
+      Obsidian creates the note. followLink -> createNoteNamed. Test in
+      test_window.
+- [ ] G3. No app:delete-file command and no Delete key in the file tree.
+      deletePath(absolutePath) split out of deletePathAt; command + key.
+- [ ] G4. Dot-prefixed names accepted (rename/create note/folder) and the
+      note vanishes from tree, index and links. Refuse in Vault.
+- [ ] G5. Autosave can overwrite an outside edit made inside the watcher's
+      debounce without a snapshot (synced vaults). saveLeaf checks the
+      file's mtime/size first; a changed disk text is snapshotted.
+- [ ] G6. Workspace (tabs, positions) is saved only on a clean exit; a crash
+      loses it. Debounced saveLayout on layout changes.
