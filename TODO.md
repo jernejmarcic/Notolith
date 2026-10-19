@@ -2123,7 +2123,9 @@ Shared/<title>.md.
       move by themselves". Cause: the index hands the graph over in hash
       order, rebuild() compared by position, so every autosave reheated a
       settled graph. setGraphData() sorts nodes and edges: 695afd7
-      (TheSameGraphInAnotherOrderLeavesTheLayoutAlone, 25 px -> 0 px).
+      (TheSameGraphInAnotherOrderLeavesTheLayoutAlone, 25 px -> 0 px). Fable
+      check: a settled view then never repainted picture-only changes, and
+      Barnes-Hut leftovers kept a big weakly linked graph stepping: e49edab.
       Feel by eye: Jernej list.
 - [x] Settings: list of file types the sidebar file tree ignores (Jernej
       2026-10-19: "there should be a list of filetypes in settings that are
@@ -2341,7 +2343,7 @@ decide. Items marked `[>]` above point here. Agents do not pick these up.
       the running window on Hyprland (cage always focuses the newest window,
       so offscreen tests cannot show it).
 - [ ] Case-only rename on a real case-insensitive filesystem (needs a mount).
-- [ ] Graph feel by eye after 695afd7: settles and then stays still.
+- [ ] Graph feel by eye after e49edab: settles and then stays still.
 - [ ] Later, his call: person identity across devices; a self-hosted relay.
 - [ ] Only if rebuilds hurt: move the ~355 private method declarations out
       of MarkdownEditor.h (Q_D-style Private methods, not mechanical).
