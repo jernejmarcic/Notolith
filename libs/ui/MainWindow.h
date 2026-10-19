@@ -258,6 +258,7 @@ private slots:
     /// Folder picker over the vault's visible folders, then moveToFolder().
     void chooseMoveFolder(const QString &path);
     void deletePathAt(const QModelIndex &index);
+    void deletePath(const QString &absolutePath);
     /// A UI-only icon for a file or folder in the tree and on its tabs: a
     /// bundled icon id or one character; empty removes it. Kept outside the
     /// vault (FileIcons).

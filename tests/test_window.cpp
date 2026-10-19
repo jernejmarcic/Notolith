@@ -2795,6 +2795,30 @@ TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTheVaultTrashAndClearsTheEditor)
     EXPECT_FALSE(editor->isEnabled());
 }
 
+TEST_F(WindowTest, TheDeleteCommandAndTheDeleteKeyRemoveAFile)
+{
+    QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
+    write(QStringLiteral(".obsidian/app.json"), R"({"trashOption": "local", "promptDelete": false})");
+    write(QStringLiteral("Other.md"), "other\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+
+    window.findChild<QAction *>(QStringLiteral("app:delete-file"))->trigger();
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Welcome.md"))));
+    EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral(".trash/Welcome.md"))));
+    EXPECT_FALSE(window.editor()->isEnabled()) << "the deleted note's tab closed";
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex other = model->index(path(QStringLiteral("Other.md")));
+    ASSERT_TRUE(other.isValid());
+    tree->setCurrentIndex(other);
+    QTest::keyClick(tree, Qt::Key_Delete);
+    EXPECT_FALSE(QFile::exists(path(QStringLiteral("Other.md"))));
+    EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral(".trash/Other.md"))));
+}
+
 namespace {
 
 /// Deletes `relative` through the tree's own path, answering the confirmation Yes.

@@ -3324,6 +3324,8 @@ void MainWindow::buildActions()
         [this] { newNoteIn(newNoteFolder()); });
     add(QStringLiteral("file-explorer:move-file"), tr("Move file to another folder"), QString(),
         [this] { chooseMoveFolder(m_active->notePath); });
+    add(QStringLiteral("app:delete-file"), tr("Delete current file"), QString(),
+        [this] { deletePath(m_active->notePath); });
     add(QStringLiteral("app:open-settings"), tr("Open settings"), QStringLiteral("Ctrl+,"),
         &MainWindow::openSettings);
     add(QStringLiteral("noteAppC:quit"), tr("Quit"), QStringLiteral("Ctrl+Q"), &MainWindow::close);
@@ -3446,6 +3448,11 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event)
                 m_tree->setExpanded(current, !m_tree->isExpanded(current));
                 return true;
             }
+        }
+        if (keyEvent->key() == Qt::Key_Delete && keyEvent->modifiers() == Qt::NoModifier
+            && m_tree->currentIndex().isValid()) { // while renaming, the key goes to the line edit
+            deletePathAt(m_tree->currentIndex());
+            return true;
         }
     }
 
@@ -7775,10 +7782,14 @@ bool MainWindow::deleteVaultPath(const QString &path, QString *error)
 
 void MainWindow::deletePathAt(const QModelIndex &index)
 {
-    if (!index.isValid() || !m_vault.isValid())
-        return;
+    if (index.isValid())
+        deletePath(m_files->filePath(index));
+}
 
-    const QString path = m_files->filePath(index);
+void MainWindow::deletePath(const QString &path)
+{
+    if (path.isEmpty() || !m_vault.isValid() || !m_vault.contains(path) || path == m_vault.root())
+        return;
     const QString name = QFileInfo(path).fileName();
 
     if (m_settings.boolean(QStringLiteral("files.confirmDelete"))) {

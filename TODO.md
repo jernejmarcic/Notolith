@@ -2223,7 +2223,7 @@ Shared/<title>.md.
 - [x] G2. Clicking an unresolved [[link]] only says "not in this vault yet";
       Obsidian creates the note. followLink -> createNoteNamed. Test in
       test_window.
-- [ ] G3. No app:delete-file command and no Delete key in the file tree.
+- [x] G3. No app:delete-file command and no Delete key in the file tree.
       deletePath(absolutePath) split out of deletePathAt; command + key.
 - [x] G4. Dot-prefixed names accepted (rename/create note/folder) and the
       note vanishes from tree, index and links. Refuse in Vault.

@@ -521,6 +521,7 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     take(out, app, "newFileLocation", QStringLiteral("files.newNoteLocation"));
     take(out, app, "newFileFolderPath", QStringLiteral("files.newNoteFolder"));
     take(out, app, "alwaysUpdateLinks", QStringLiteral("links.autoUpdate"));
+    take(out, app, "promptDelete", QStringLiteral("files.confirmDelete"));
     // Obsidian's "Deleted files": system, local or none.
     const QString trashOption = app.value(QLatin1String("trashOption")).toString();
     if (trashOption == QLatin1String("system") || trashOption == QLatin1String("local"))
