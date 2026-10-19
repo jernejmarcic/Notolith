@@ -388,7 +388,7 @@ budget, which this project has already learned once on the index.
       Jernej's** (third-party plugins at all, Lua scripts, sidebar panes).
 - [x] Many machines, Intel and AMD, multi-core target with one core as the
       floor: `docs/PLATFORMS.md`. No `-march` anywhere, no x86-only code.
-- [ ] **Run `bench-here.sh` on shuttlepod-1 and runabout.** In the brain's
+- [>] **Run `bench-here.sh` on shuttlepod-1 and runabout.** In the brain's
       session directory for this work. Jernej runs it; results sync back.
 - [x] Scroll by blitting (`QWidget::scroll`) instead of repainting the whole
       viewport: a wheel notch 1.0 -> 0.4-0.65 ms on screen (fix 12).
@@ -1409,7 +1409,7 @@ Wave 1
             follow a rename of their target.
       - [x] The real drag gesture (lane links, 8c4506a: own mime marker,
             a foreign window's drag is refused).
-      - [ ] Case-only rename not run on a real case-insensitive filesystem
+      - [>] Case-only rename not run on a real case-insensitive filesystem
             (needs a mount; ask Jernej or skip).
 
 Wave 2
@@ -1422,7 +1422,7 @@ Wave 2
       from before the window (Qt's listen() unlinks a live socket, so two
       racing launches would both serve); XDG_ACTIVATION_TOKEN handed over;
       miss costs ~0.1-0.3 ms. Follow-ups:
-      - [ ] Wayland focus with the token not seen on a real compositor.
+      - [>] Wayland focus with the token not seen on a real compositor.
       - [x] (lane fixes, a2e4cd0) A note outside the vault opened by hand-over is saved in the
             layout as `../` and its restore is untested.
       - [x] (lane fixes, a2e4cd0) A different-vault hand-over has no test of its own.
@@ -1456,7 +1456,7 @@ Wave 3
       instead of 50 (1:24.9); 13 includes dropped; bench unchanged.
       24 is the floor without splitting the editor: every editor .cpp uses
       d->. Follow-up:
-      - [ ] ~355 private method declarations still in MarkdownEditor.h, so
+      - [>] ~355 private method declarations still in MarkdownEditor.h, so
             adding a helper rebuilds all 48 TUs; moving them needs Q_D-style
             Private methods (not mechanical). Do only if rebuilds hurt.
 
@@ -1834,7 +1834,7 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [x] Lane D (drag-to-tile, merged): tab drag with drop zones (edges split,
       center joins, tab bar inserts), overlay, drop outside -> new window,
       right tab buttons dragged out -> detached pane. 4 tests.
-- [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
+- [>] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
       between windows, focus; offscreen cannot show these.
 - [x] Obsidian command ids workspace:open-in-new-window /
       workspace:move-to-new-window unverified: check against a real
@@ -2056,7 +2056,7 @@ Shared/<title>.md.
       share.json and redials them on start; owner never dials.)
 - [x] Share: run the window tests on the Native backend too (only Yrs is
       exercised through MainWindow).
-- [ ] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS
+- [>] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.
 - [x] Fable check 2026-10-19 of 224a96c/aeac581/c806dec/7acc31f, all fixed:
   - [x] run-all on a shared note iterated live lists across the approval
@@ -2094,7 +2094,7 @@ Shared/<title>.md.
 - [x] Untested: a spoofed Presence author from a non-owner member. Now
       AMemberCannotSpeakForAnother (sendPresenceForTests seam; fails with the
       guard removed).
-- [ ] Later: person identity across devices; self-hosted relay
+- [>] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
       there should be something called implicit imports, or implicit code
       ... something that is a part of every other codeblock. so that in
@@ -2111,7 +2111,7 @@ Shared/<title>.md.
       spellcheck, look up, audio recorder; partial: run languages, runnable
       file embeds, search operators, footnote pane, graph, bookmarks, page
       preview. New files only (Jernej's demo edits stay unstaged).
-- [ ] Graph view "insanely jiggly" (Jernej 2026-10-19). Suspects from a
+- [x] Graph view "insanely jiggly" (Jernej 2026-10-19). Suspects from a
       read: velocity keeps 92% per step (damping 0.92; d3 keeps 60%,
       velocityDecay 0.4) so springs ring; and anything that wakes the
       layout while idle (every index edit sets m_settled=false). Lane
@@ -2119,6 +2119,12 @@ Shared/<title>.md.
       Merged (d3 damping 0.6, degree-scaled springs, no reheat when nodes and
       links are unchanged, drags reheat to 0.3). Tick once Jernej confirms the
       feel by eye.
+      Jernej 2026-10-19: "not as jiggly as before. the nodes now girrate, and
+      move by themselves". Cause: the index hands the graph over in hash
+      order, rebuild() compared by position, so every autosave reheated a
+      settled graph. setGraphData() sorts nodes and edges: 695afd7
+      (TheSameGraphInAnotherOrderLeavesTheLayoutAlone, 25 px -> 0 px).
+      Feel by eye: Jernej list.
 - [x] Settings: list of file types the sidebar file tree ignores (Jernej
       2026-10-19: "there should be a list of filetypes in settings that are
       ignored by the sidebar"). Lane hidetypes: files.hiddenExtensions,
@@ -2129,8 +2135,9 @@ Shared/<title>.md.
       before it" in test_demo), live preview and reading view. Lane fencegap:
       the callout panel's 8 px upward bleed now gets its own gap unless a blank
       line is already there.
-- [ ] Drop the fence+callout workaround in demo/Editor/Slides.md now that the
+- [x] Drop the fence+callout workaround in demo/Editor/Slides.md now that the
       gap is fixed (Jernej's demo folder has uncommitted edits: his call).
+      Done 08eafb0 (Jernej 2026-10-19: "You fix them, keep my edits").
 - [x] Hearth tests publish real mDNS services on the LAN (Node.DiscoversOverMDNS,
       Node.ServiceTypeIsolatesApps run live when avahi-daemon is up, and now
       also run inside Notolith's ctest `link`). Tests must not touch the
@@ -2211,10 +2218,12 @@ Shared/<title>.md.
         Found: yrs 0.28 records the missing clock past a skip placeholder, so
         the pending update is never retried; documented in SHARE.md; the
         share engine exchanges state vectors periodically to release it.
-- [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
+- [x] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
-- [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
+      Done 08eafb0 (Jernej 2026-10-19: "You fix them, keep my edits").
+- [x] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
       the line has spaces, so "instead of wrapping" (his file, his edit).
+      Done by an agent at his say-so (2026-10-19), his other edits kept: 08eafb0.
 
 ## Fable gap audit 2026-10-19 (functional, verified against code)
 - [x] G1. Renaming a non-.md file drops its extension (Vault::renamePath
@@ -2317,3 +2326,23 @@ Shared/<title>.md.
       Jernej: "No homepage yet". Done: our own appstreamtest validates the
       metainfo in the tree every run, url-homepage-missing as info; the ECM
       one was a stale CTestTestfile from before ECM was disabled for md4qt.
+
+## Jernej list (hand checks and his calls; agents cannot do these)
+
+Jernej 2026-10-19 chose "Move to a 'Jernej' list" for what only he can run or
+decide. Items marked `[>]` above point here. Agents do not pick these up.
+
+- [ ] Run `bench-here.sh` on shuttlepod-1 and runabout (results sync back).
+- [ ] Share by hand on two machines (starbase-1 and shuttlepod-1): mDNS
+      discovery, join over the tailnet, pull the cable mid-typing, latency.
+- [ ] Hyprland pop-out windows: tiling/floating, real drag between windows,
+      focus; and the settings pop-out on the ultrawide.
+- [ ] Wayland activation token: opening a note from the file manager raises
+      the running window on Hyprland (cage always focuses the newest window,
+      so offscreen tests cannot show it).
+- [ ] Case-only rename on a real case-insensitive filesystem (needs a mount).
+- [ ] Graph feel by eye after 695afd7: settles and then stays still.
+- [ ] Later, his call: person identity across devices; a self-hosted relay.
+- [ ] Only if rebuilds hurt: move the ~355 private method declarations out
+      of MarkdownEditor.h (Q_D-style Private methods, not mechanical).
+
