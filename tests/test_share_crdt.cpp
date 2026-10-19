@@ -365,16 +365,16 @@ TEST_P(CrdtDocTest, TypingAtTheEndOfAMegabyteStaysUnderTheKeystrokeBudget)
     constexpr int kEdits = 10000;
     const Backend backend = GetParam();
     const double mid = perf::bestOf([&] { return endEditCost(backend, 100 * 1000, kEdits); }, 1); // load only inflates it, which loosens the ratio
-    const double big = perf::bestOf([&] { return endEditCost(backend, 1000 * 1000, kEdits); }, 3, 4.0);
+    const double big = perf::bestOf([&] { return endEditCost(backend, 1000 * 1000, kEdits); }, 3, 3.0);
     ASSERT_GT(mid, 0);
     ASSERT_GT(big, 0);
     std::printf("[ PERF     ] %d one-character edits at the end: 100 KB doc %.4f ms/edit, 1 MB doc %.4f ms/edit (%.1fx)\n",
                 kEdits, mid, big, big / mid);
     // 10x the text may cost 10x (yrs walks the block holding the position);
     // a quadratic cost would be 100x. And one keystroke stays well inside the
-    // 8 ms budget of docs/PERFORMANCE.md rule 5, at half of it.
+    // 8 ms budget of docs/PERFORMANCE.md rule 5, at under half of it.
     EXPECT_LT(big, mid * 25 + 0.01) << "cost grows faster than the document";
-    EXPECT_LT(big, 4.0);
+    EXPECT_LT(big, 3.0);
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, CrdtDocTest, ::testing::Values(Backend::Yrs, Backend::Native),
