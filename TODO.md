@@ -2342,6 +2342,8 @@ Shared/<title>.md.
 
 Jernej 2026-10-19 chose "Move to a 'Jernej' list" for what only he can run or
 decide. Items marked `[>]` above point here. Agents do not pick these up.
+Jernej 2026-10-19, asked whether to keep going once only this list was left:
+"Stop here". Agent work is done until he adds something.
 
 - [ ] Run `bench-here.sh` on shuttlepod-1 and runabout (results sync back).
 - [ ] Share by hand on two machines (starbase-1 and shuttlepod-1): mDNS
@@ -2356,6 +2358,6 @@ decide. Items marked `[>]` above point here. Agents do not pick these up.
       config if he wants the window raised, then look once.
 - [ ] Graph feel by eye after e49edab: settles and then stays still.
 - [ ] Later, his call: person identity across devices; a self-hosted relay.
-- [ ] Only if rebuilds hurt: move the ~355 private method declarations out
-      of MarkdownEditor.h (Q_D-style Private methods, not mechanical).
+- [-] Dropped (Jernej 2026-10-19: "Stop here"): moving the ~355 private
+      method declarations out of MarkdownEditor.h. Only if he asks.
 
