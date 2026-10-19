@@ -2020,3 +2020,8 @@ Shared/<title>.md.
       spellcheck, look up, audio recorder; partial: run languages, runnable
       file embeds, search operators, footnote pane, graph, bookmarks, page
       preview. New files only (Jernej's demo edits stay unstaged).
+- [ ] Graph view "insanely jiggly" (Jernej 2026-10-19). Suspects from a
+      read: velocity keeps 92% per step (damping 0.92; d3 keeps 60%,
+      velocityDecay 0.4) so springs ring; and anything that wakes the
+      layout while idle (every index edit sets m_settled=false). Lane
+      graphcalm: measure, fix, guard with tests.
