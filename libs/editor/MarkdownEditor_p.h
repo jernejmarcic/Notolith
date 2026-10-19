@@ -8,6 +8,7 @@
 
 #include <QAbstractScrollArea>
 #include <QColor>
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QFutureWatcher>
 #include <QHash>
@@ -726,6 +727,15 @@ struct MarkdownEditor::Private {
     /// A slides-layout embed's current page, by the block's own source start
     /// - like m_queryCollapsed, session-only and never written to the note.
     QHash<qsizetype, int> m_pdfSlideIndex;
+    /// The last Previous/Next click per embed, and the clock it was timed by
+    /// (replaceable for tests): for a moment the button just used keeps part
+    /// of the slide too, so quick repeats survive a drifting pointer.
+    struct PdfNavUse {
+        qint64 at = 0;
+        int direction = 0;
+    };
+    QHash<qsizetype, PdfNavUse> m_pdfNavLast;
+    std::function<qint64()> m_pdfNavNow = [] { return QDeadlineTimer::current().deadline(); };
     QHash<QString, TexCacheEntry> m_texCache; ///< "path|mtime" -> its compile
     quint64 m_texGeneration = 0;
     QHash<QString, EpubCoverEntry> m_epubCoverCache;

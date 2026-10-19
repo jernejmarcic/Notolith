@@ -24,6 +24,7 @@
 #include <QFileInfo>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScrollBar>
 #include <QUrl>
 #include <QtConcurrent>
 
@@ -403,21 +404,67 @@ void MarkdownEditor::paintPdfEmbed(QPainter &painter, const BlockView &view, qre
     }
 }
 
+namespace {
+
+constexpr qreal kPdfDeadBand = 10;      ///< a click this near the slide's bottom edge is swallowed
+constexpr qreal kPdfStickyShare = 0.25; ///< the slide's bottom share a just-used button keeps
+constexpr qint64 kPdfStickyMs = 1000;   ///< ... for this long after its click
+
+} // namespace
+
+std::optional<int> MarkdownEditor::pdfNavHit(const BlockView &view, const QPointF &local) const
+{
+    if (!view.isPdfEmbed || view.pdfArgs.layout != PdfEmbedArgs::Layout::Slides || view.pdfCells.empty())
+        return std::nullopt;
+    const QRectF cell = view.pdfCells.front().rect;
+    if (local.x() < cell.left() || local.x() > cell.right() || local.y() > view.height - view.textTop)
+        return std::nullopt;
+    // The left half of the row under the slide steps back, the right half
+    // forward. Above it is the slide: a button just used keeps its half of
+    // the bottom quarter for a moment, and a band of dead pixels guards the edge.
+    const int side = local.x() < cell.center().x() ? -1 : 1;
+    if (local.y() >= cell.bottom())
+        return side;
+    const auto last = d->m_pdfNavLast.constFind(view.span.range.start);
+    if (last != d->m_pdfNavLast.cend() && last->direction == side
+        && d->m_pdfNavNow() - last->at < kPdfStickyMs
+        && local.y() >= cell.bottom() - cell.height() * kPdfStickyShare)
+        return side;
+    const QRectF band(cell.left(), cell.bottom() - kPdfDeadBand, cell.width(), kPdfDeadBand);
+    return touchable(band).contains(local) ? std::optional<int>(0) : std::nullopt;
+}
+
+bool MarkdownEditor::pdfNavCanStep(const BlockView &view, int direction) const
+{
+    return direction < 0 ? view.pdfSlideIndex > 0 : view.pdfSlideIndex + 1 < view.pdfSlideCount;
+}
+
 bool MarkdownEditor::handlePdfEmbedClick(const BlockView &view, const QPoint &point, qreal left,
                                          qreal top)
 {
-    if (!view.isPdfEmbed || view.pdfArgs.layout != PdfEmbedArgs::Layout::Slides)
+    const std::optional<int> hit = pdfNavHit(view, QPointF(point) - QPointF(left, top + view.textTop));
+    if (!hit)
         return false;
-    const QPointF local = QPointF(point) - QPointF(left, top + view.textTop);
-    if (view.pdfPrevRect.adjusted(-4, -4, 4, 4).contains(local)) {
-        pdfSlideStep(view.span.range.start, -1);
-        return true;
+    // A hidden button's half and the dead band swallow the click, nothing more.
+    if (*hit != 0 && pdfNavCanStep(view, *hit)) {
+        const qsizetype key = view.span.range.start;
+        pdfSlideStep(key, *hit);
+        d->m_pdfNavLast.insert(key, {d->m_pdfNavNow(), *hit});
     }
-    if (view.pdfNextRect.adjusted(-4, -4, 4, 4).contains(local)) {
-        pdfSlideStep(view.span.range.start, 1);
-        return true;
-    }
-    return false;
+    return true;
+}
+
+std::optional<Qt::CursorShape> MarkdownEditor::pdfNavCursorAt(const QPoint &point) const
+{
+    const qsizetype index = blockAtPoint(point);
+    if (index < 0)
+        return std::nullopt;
+    const BlockView &view = d->m_blocks[size_t(index)];
+    const QPointF origin(contentLeft(), view.y - verticalScrollBar()->value() + view.textTop);
+    const std::optional<int> hit = pdfNavHit(view, QPointF(point) - origin);
+    if (!hit)
+        return std::nullopt;
+    return *hit != 0 && pdfNavCanStep(view, *hit) ? Qt::PointingHandCursor : Qt::ArrowCursor;
 }
 
 MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) const
@@ -436,7 +483,17 @@ MarkdownEditor::PdfEmbedInfo MarkdownEditor::pdfEmbedInfoAt(qsizetype offset) co
     info.layout = view.pdfArgs.layout;
     info.slideIndex = view.pdfSlideIndex;
     info.slideCount = view.pdfSlideCount;
+    if (!view.pdfCells.empty()) {
+        const QPointF origin(contentLeft(), view.y - verticalScrollBar()->value() + view.textTop);
+        info.cellRect = view.pdfCells.front().rect.translated(origin);
+        info.nextRect = view.pdfNextRect.translated(origin);
+    }
     return info;
+}
+
+void MarkdownEditor::setPdfNavClock(std::function<qint64()> nowMs)
+{
+    d->m_pdfNavNow = std::move(nowMs);
 }
 
 void MarkdownEditor::pdfSlideStep(qsizetype offset, int direction)

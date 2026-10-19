@@ -2731,6 +2731,126 @@ TEST(PdfEmbedTest, SlidesLayoutShowsOnePageAndStepsWithPdfSlideStep)
     EXPECT_EQ(info.slideIndex, 0);
 }
 
+namespace {
+
+/// A slides embed of a 4-page PDF in a fresh editor, with a clock the test
+/// moves by hand. `clickAt` is a real press and release on the viewport.
+struct PdfNavFixture {
+    QTemporaryDir dir;
+    std::unique_ptr<MarkdownEditor> editor;
+    qint64 nowMs = 100000;
+
+    explicit PdfNavFixture(int pages = 4)
+    {
+        const QString pdf = makeTestPdf(dir.path(), pages);
+        editor = editorWith(QStringLiteral("![[deck.pdf]]\n"));
+        editor->setLinkResolver([pdf](const QString &) { return pdf; });
+        editor->setPdfNavClock([this] { return nowMs; });
+    }
+    MarkdownEditor::PdfEmbedInfo info() const { return editor->pdfEmbedInfoAt(0); }
+    /// A click `dx` / `dy` from the slide's bottom-right corner (negative: inside).
+    void clickAt(qreal dx, qreal dy)
+    {
+        const QRectF cell = info().cellRect;
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                          QPointF(cell.right() + dx, cell.bottom() + dy).toPoint());
+    }
+    /// Whether the click that just happened reached the caret: the embed turned into its source.
+    bool openedSource() const { return !info().isPdfEmbed; }
+};
+
+} // namespace
+
+TEST(PdfEmbedTest, ClickJustAboveNextStepsInsteadOfOpeningTheSource)
+{
+    PdfNavFixture f;
+    ASSERT_EQ(f.info().cellCount, 1);
+    // The nav row starts at the slide's bottom edge, 6 px above the button's own rect.
+    EXPECT_NEAR(f.info().nextRect.top() - f.info().cellRect.bottom(), 6, 0.5);
+    f.clickAt(-20, 2);
+    EXPECT_EQ(f.info().slideIndex, 1);
+    EXPECT_FALSE(f.openedSource());
+}
+
+TEST(PdfEmbedTest, PreviousIsTheLeftHalfOfTheRow)
+{
+    PdfNavFixture f;
+    f.editor->pdfSlideStep(0, 1);
+    f.editor->pdfSlideStep(0, 1);
+    ASSERT_EQ(f.info().slideIndex, 2);
+    f.clickAt(-f.info().cellRect.width() + 200, 20); // well right of the "< Previous" label
+    EXPECT_EQ(f.info().slideIndex, 1);
+}
+
+TEST(PdfEmbedTest, ClickOnAHiddenButtonsHalfDoesNothing)
+{
+    PdfNavFixture f(2);
+    f.clickAt(-20, 10); // Next: slide 2 of 2
+    ASSERT_EQ(f.info().slideIndex, 1);
+    f.clickAt(-20, 10); // Next again, button hidden on the last slide
+    EXPECT_EQ(f.info().slideIndex, 1);
+    EXPECT_FALSE(f.openedSource());
+    f.clickAt(-f.info().cellRect.width() + 20, 10); // Previous
+    ASSERT_EQ(f.info().slideIndex, 0);
+    f.clickAt(-f.info().cellRect.width() + 20, 10); // hidden Previous on the first slide
+    EXPECT_EQ(f.info().slideIndex, 0);
+    EXPECT_FALSE(f.openedSource());
+}
+
+TEST(PdfEmbedTest, DeadBandAlongTheSlidesBottomEdgeOpensNothing)
+{
+    PdfNavFixture f;
+    f.clickAt(-20, -5);
+    EXPECT_EQ(f.info().slideIndex, 0);
+    EXPECT_FALSE(f.openedSource());
+    // Past the band the slide is an ordinary click again.
+    f.clickAt(-20, -40);
+    EXPECT_TRUE(f.openedSource());
+}
+
+TEST(PdfEmbedTest, JustUsedButtonKeepsTheSlidesBottomQuarterForOneSecond)
+{
+    PdfNavFixture f;
+    f.clickAt(-20, 10); // Next
+    ASSERT_EQ(f.info().slideIndex, 1);
+    const qreal quarterUp = -f.info().cellRect.height() * 0.2; // inside the bottom 25%
+    f.nowMs += 900;
+    f.clickAt(-20, quarterUp);
+    EXPECT_EQ(f.info().slideIndex, 2) << "the pointer drifted up, the button still owns it";
+    EXPECT_FALSE(f.openedSource());
+    // The other side of the slide was never the button's.
+    f.nowMs += 500;
+    f.clickAt(-f.info().cellRect.width() + 20, quarterUp);
+    EXPECT_TRUE(f.openedSource());
+}
+
+TEST(PdfEmbedTest, TheBottomQuarterIsOrdinaryOnceTheWindowHasPassed)
+{
+    PdfNavFixture f;
+    f.clickAt(-20, 10);
+    ASSERT_EQ(f.info().slideIndex, 1);
+    f.nowMs += 1500;
+    f.clickAt(-20, -f.info().cellRect.height() * 0.2);
+    EXPECT_TRUE(f.openedSource()) << "an ordinary click on the slide, not a third step";
+}
+
+TEST(PdfEmbedTest, TheEnlargedButtonAreasShowAPointingHand)
+{
+    PdfNavFixture f(2);
+    const auto shapeAt = [&f](qreal dx, qreal dy) {
+        const QRectF cell = f.info().cellRect;
+        const QPointF at(cell.right() + dx, cell.bottom() + dy); // QTest::mouseMove needs an exposed window
+        QMouseEvent move(QEvent::MouseMove, at, f.editor->viewport()->mapToGlobal(at), Qt::NoButton,
+                         Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(f.editor->viewport(), &move);
+        return f.editor->viewport()->cursor().shape();
+    };
+    EXPECT_EQ(shapeAt(-20, 2), Qt::PointingHandCursor) << "beside the Next label, still the button";
+    EXPECT_EQ(shapeAt(-20, -5), Qt::ArrowCursor) << "the dead band swallows the click";
+    EXPECT_EQ(shapeAt(-f.info().cellRect.width() + 20, 10), Qt::ArrowCursor)
+        << "Previous is hidden on the first slide";
+}
+
 TEST(PdfEmbedTest, GridLayoutRespectsColumns)
 {
     QTemporaryDir dir;

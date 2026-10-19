@@ -5570,6 +5570,8 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
 
     const bool clickable = !linkAt(event->pos()).isEmpty() || codeLabelAt(event->pos()) || d->m_overEditButton;
     Qt::CursorShape shape = clickable ? Qt::PointingHandCursor : Qt::IBeamCursor;
+    if (const auto nav = pdfNavCursorAt(event->pos()))
+        shape = *nav;
     switch (d->m_tableHover.part) {
     case TablePart::RowGrip:
     case TablePart::ColumnGrip:
