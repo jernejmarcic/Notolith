@@ -2004,7 +2004,7 @@ Shared/<title>.md.
 - [x] Lane H (Hearth): node.cpp off account.h, proto/link.proto, Node
       serviceType/prefix, tools/link-files.txt (hearth 3efaf4f; links with
       no Qt, standalone build proven)
-- [ ] Lane H5 (Hearth): signature domain configurable (labels were
+- [x] Lane H5 (Hearth): signature domain configurable (labels were
       hardcoded "hearth-offer" etc.), debuglog path set by the embedding app
 - [x] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
       (own 250-line yrs-ffi crate on yrs 0.28.0, not yffi: yffi aborts on bad
