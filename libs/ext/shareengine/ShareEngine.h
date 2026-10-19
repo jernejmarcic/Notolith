@@ -57,6 +57,9 @@ public:
         /// peer already has it all but one small frame.
         int resyncMs = 30000;
         int settleMs = 3000;
+        /// The engine of the shares this device creates; empty = Yrs when the
+        /// build has it, else Native. A joiner always takes the owner's.
+        std::optional<CrdtDoc::Backend> backend;
         /// Test seam: true queues the outgoing Frames of that share until
         /// releaseHeldFramesForTests().
         std::function<bool(const QByteArray &shareID)> holdFramesForTests;

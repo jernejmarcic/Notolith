@@ -26,6 +26,7 @@
 #include "SecretStore.h"
 #include "Settings.h"
 #include "ShareEngine.h"
+#include "ShareFrame.h"
 #include "ShareSession.h"
 
 // Sharing through the window (docs/SHARE.md "In the window"): two MainWindows on
@@ -36,6 +37,7 @@
 using noteAppC::MainWindow;
 using noteAppC::MarkdownEditor;
 using noteAppC::Settings;
+using noteAppC::CrdtDoc;
 using noteAppC::ShareEngine;
 using noteAppC::ShareSession;
 
@@ -74,6 +76,9 @@ void setShareFeature(bool on)
     ASSERT_TRUE(settings.save());
 }
 
+/// Set by the fixture: every share in a test runs on this engine.
+CrdtDoc::Backend backendUnderTest = CrdtDoc::Backend::Yrs;
+
 /// One person: a vault, a store, a device identity, and a window on them that
 /// can be closed and opened again.
 struct Side {
@@ -101,6 +106,7 @@ struct Side {
         config.storeDirectory = store.path();
         config.resyncMs = 300;
         config.settleMs = 100;
+        config.backend = backendUnderTest;
         config.holdFramesForTests = [this](const QByteArray &) { return hold.load(); };
         window->setShareConfigForTests(config);
         window->setShareApprovalForTests([this](const QString &, const QString &) {
@@ -159,6 +165,11 @@ QByteArray share(Side &owner, Side &joiner, const QString &name, const QString &
         ADD_FAILURE() << error.toStdString();
         return {};
     }
+    const auto invite = ShareEngine::parseInvite(code, &error);
+    if (!invite || invite->backend != (backendUnderTest == CrdtDoc::Backend::Yrs ? noteAppC::ShareFrame::kBackendYrs : noteAppC::ShareFrame::kBackendNative)) {
+        ADD_FAILURE() << "the share is not on the engine under test";
+        return {};
+    }
     if (!joiner.window->joinShare(code, &error)) {
         ADD_FAILURE() << error.toStdString();
         return {};
@@ -179,10 +190,22 @@ QByteArray share(Side &owner, Side &joiner, const QString &name, const QString &
     return id;
 }
 
-class ShareWindowTest : public ::testing::Test {
+class ShareWindowTest : public ::testing::TestWithParam<CrdtDoc::Backend> {
 protected:
-    void SetUp() override { setShareFeature(true); }
+    void SetUp() override
+    {
+        if (!CrdtDoc::available(GetParam()))
+            GTEST_SKIP() << "this build has no such CRDT engine";
+        backendUnderTest = GetParam();
+        setShareFeature(true);
+    }
 };
+
+INSTANTIATE_TEST_SUITE_P(Engines, ShareWindowTest,
+                         ::testing::Values(CrdtDoc::Backend::Yrs, CrdtDoc::Backend::Native),
+                         [](const auto &info) {
+                             return std::string(info.param == CrdtDoc::Backend::Yrs ? "Yrs" : "Native");
+                         });
 
 } // namespace
 
@@ -202,7 +225,7 @@ TEST(ShareFileName, IsNeverAPathAndNeverEmpty)
     EXPECT_EQ(ShareSession::fileNameFor(emoji, id), QString(99, u'x'));
 }
 
-TEST_F(ShareWindowTest, TypingInOneWindowAppearsInTheOther)
+TEST_P(ShareWindowTest, TypingInOneWindowAppearsInTheOther)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
@@ -216,7 +239,7 @@ TEST_F(ShareWindowTest, TypingInOneWindowAppearsInTheOther)
     EXPECT_EQ(a.text(), b.text());
 }
 
-TEST_F(ShareWindowTest, RemoteEditsReachTheDisk)
+TEST_P(ShareWindowTest, RemoteEditsReachTheDisk)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"), true);
@@ -229,7 +252,7 @@ TEST_F(ShareWindowTest, RemoteEditsReachTheDisk)
     EXPECT_FALSE(b.editor()->isModified());
 }
 
-TEST_F(ShareWindowTest, TheJoinerGetsACopyUnderShared)
+TEST_P(ShareWindowTest, TheJoinerGetsACopyUnderShared)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("first\n"), true);
@@ -256,7 +279,7 @@ TEST_F(ShareWindowTest, TheJoinerGetsACopyUnderShared)
     EXPECT_EQ(b.read(QStringLiteral("Shared/Note (2).md")), QStringLiteral("third\n"));
 }
 
-TEST_F(ShareWindowTest, UndoSurvivesARemoteEditElsewhere)
+TEST_P(ShareWindowTest, UndoSurvivesARemoteEditElsewhere)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("alpha beta\n"));
@@ -272,7 +295,7 @@ TEST_F(ShareWindowTest, UndoSurvivesARemoteEditElsewhere)
     ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral("alpha beta\nZ"); }));
 }
 
-TEST_F(ShareWindowTest, UndoOverThereIsSentAsADiffNotAWholeBufferOp)
+TEST_P(ShareWindowTest, UndoOverThereIsSentAsADiffNotAWholeBufferOp)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("alpha beta gamma\n"));
@@ -290,7 +313,7 @@ TEST_F(ShareWindowTest, UndoOverThereIsSentAsADiffNotAWholeBufferOp)
     EXPECT_EQ(a.text(), QStringLiteral("alphaZ beta gamma\n")) << "B's edit stays where it was made";
 }
 
-TEST_F(ShareWindowTest, ADiskChangeUnderASharedNoteBecomesOps)
+TEST_P(ShareWindowTest, ADiskChangeUnderASharedNoteBecomesOps)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("top\nmiddle\n"));
@@ -306,7 +329,7 @@ TEST_F(ShareWindowTest, ADiskChangeUnderASharedNoteBecomesOps)
     ASSERT_TRUE(waitFor([&] { return a.text() == both && b.text() == both; }));
 }
 
-TEST_F(ShareWindowTest, OverlappingDiskChangeKeepsWhatIsTyped)
+TEST_P(ShareWindowTest, OverlappingDiskChangeKeepsWhatIsTyped)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("alpha beta gamma\n"));
@@ -322,7 +345,7 @@ TEST_F(ShareWindowTest, OverlappingDiskChangeKeepsWhatIsTyped)
     EXPECT_EQ(b.text(), QStringLiteral("alpha be!!ta gamma\n"));
 }
 
-TEST_F(ShareWindowTest, OpeningASharedNoteInASecondTabKeepsOneDocument)
+TEST_P(ShareWindowTest, OpeningASharedNoteInASecondTabKeepsOneDocument)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
@@ -355,7 +378,7 @@ TEST_F(ShareWindowTest, OpeningASharedNoteInASecondTabKeepsOneDocument)
     ASSERT_TRUE(waitFor([&] { return first->noteText() == QStringLiteral("Bxyhello\n") && second->noteText() == first->noteText(); }));
 }
 
-TEST_F(ShareWindowTest, ClosingTheTabKeepsTheSessionAlive)
+TEST_P(ShareWindowTest, ClosingTheTabKeepsTheSessionAlive)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"), true);
@@ -372,7 +395,7 @@ TEST_F(ShareWindowTest, ClosingTheTabKeepsTheSessionAlive)
     ASSERT_TRUE(waitFor([&] { return a.read(QStringLiteral("Note.md")) == QStringLiteral("hello there\n"); }, 5000));
 }
 
-TEST_F(ShareWindowTest, AnEditMadeWhileTheAppWasClosedFoldsInOnReopen)
+TEST_P(ShareWindowTest, AnEditMadeWhileTheAppWasClosedFoldsInOnReopen)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("top\nmiddle\n"), true);
@@ -394,7 +417,7 @@ TEST_F(ShareWindowTest, AnEditMadeWhileTheAppWasClosedFoldsInOnReopen)
         << "base.md follows the save";
 }
 
-TEST_F(ShareWindowTest, ASharedVaultResumesOnReopen)
+TEST_P(ShareWindowTest, ASharedVaultResumesOnReopen)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
@@ -414,7 +437,7 @@ TEST_F(ShareWindowTest, ASharedVaultResumesOnReopen)
     ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral("A hello again\n"); }));
 }
 
-TEST_F(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
+TEST_P(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
 {
     setShareFeature(false);
     {
@@ -441,7 +464,7 @@ TEST_F(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
 }
 
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
-TEST_F(ShareWindowTest, AnEncryptedNoteCannotBeShared)
+TEST_P(ShareWindowTest, AnEncryptedNoteCannotBeShared)
 {
     Side a(QStringLiteral("a"));
     a.write(QStringLiteral("Note.md"), QStringLiteral("secret\n"));
@@ -466,7 +489,7 @@ TEST_F(ShareWindowTest, AnEncryptedNoteCannotBeShared)
 }
 #endif
 
-TEST_F(ShareWindowTest, ARenamedSharedNoteKeepsSharing)
+TEST_P(ShareWindowTest, ARenamedSharedNoteKeepsSharing)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
@@ -495,7 +518,7 @@ TEST_F(ShareWindowTest, ARenamedSharedNoteKeepsSharing)
     ASSERT_TRUE(waitFor([&] { return a.text() == QStringLiteral("B hello renamed\n"); }));
 }
 
-TEST_F(ShareWindowTest, StoppingStopsOnlyHere)
+TEST_P(ShareWindowTest, StoppingStopsOnlyHere)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));
     const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
@@ -540,7 +563,7 @@ void splitCase(const std::function<void(MarkdownEditor *)> &act, std::tuple<qsiz
 
 } // namespace
 
-TEST_F(ShareWindowTest, ADeleteOnTheFirstHalfOfAPairTakesTheWholePair)
+TEST_P(ShareWindowTest, ADeleteOnTheFirstHalfOfAPairTakesTheWholePair)
 {
     splitCase(
         [](MarkdownEditor *editor) {
@@ -550,7 +573,7 @@ TEST_F(ShareWindowTest, ADeleteOnTheFirstHalfOfAPairTakesTheWholePair)
         {1, 1, QString()}, QStringLiteral("xy\n"));
 }
 
-TEST_F(ShareWindowTest, ABackspaceOnTheSecondHalfOfAPairTakesTheWholePair)
+TEST_P(ShareWindowTest, ABackspaceOnTheSecondHalfOfAPairTakesTheWholePair)
 {
     splitCase(
         [](MarkdownEditor *editor) {
@@ -560,7 +583,7 @@ TEST_F(ShareWindowTest, ABackspaceOnTheSecondHalfOfAPairTakesTheWholePair)
         {2, 1, QString()}, QStringLiteral("xy\n"));
 }
 
-TEST_F(ShareWindowTest, TypingBetweenTheHalvesOfAPairLandsAfterThePair)
+TEST_P(ShareWindowTest, TypingBetweenTheHalvesOfAPairLandsAfterThePair)
 {
     splitCase(
         [](MarkdownEditor *editor) {
@@ -570,7 +593,7 @@ TEST_F(ShareWindowTest, TypingBetweenTheHalvesOfAPairLandsAfterThePair)
         {2, 0, QStringLiteral("Z")}, QStringLiteral("x") + QString::fromUcs4(U"\U0001F600", 1) + QStringLiteral("Zy\n"));
 }
 
-TEST_F(ShareWindowTest, AKeystrokeNeverWritesTheStore)
+TEST_P(ShareWindowTest, AKeystrokeNeverWritesTheStore)
 {
     QString big;
     for (int i = 0; i < 600; ++i)

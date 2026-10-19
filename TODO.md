@@ -2034,7 +2034,7 @@ Shared/<title>.md.
 - [ ] Share: remember peers' last addresses so a share reconnects after a
       restart without mDNS (tailnet, other subnets); today only mDNS or a
       fresh dial reconnects.
-- [ ] Share: run the window tests on the Native backend too (only Yrs is
+- [x] Share: run the window tests on the Native backend too (only Yrs is
       exercised through MainWindow).
 - [ ] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.

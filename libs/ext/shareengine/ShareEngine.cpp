@@ -46,9 +46,11 @@ std::optional<CrdtDoc::Backend> backendOf(int tag)
     return std::nullopt;
 }
 
-/// "Try both": Yrs when this build has it, else Native.
-int preferredBackend()
+/// "Try both": Yrs when this build has it, else Native, unless the config names one.
+int preferredBackend(std::optional<CrdtDoc::Backend> configured)
 {
+    if (configured)
+        return *configured == CrdtDoc::Backend::Yrs ? kBackendYrs : kBackendNative;
     return CrdtDoc::available(CrdtDoc::Backend::Yrs) ? kBackendYrs : kBackendNative;
 }
 
@@ -283,7 +285,7 @@ std::optional<ShareEngine::Created> ShareEngine::create(const QString &relativeP
         return refuse(m_error);
     if (shareFor(relativePath))
         return refuse(tr("This note is shared already."));
-    const int tag = preferredBackend();
+    const int tag = preferredBackend(m_config.backend);
     const auto backend = backendOf(tag);
     if (!backend)
         return refuse(kBackendMismatch);
