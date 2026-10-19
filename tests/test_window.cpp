@@ -6660,6 +6660,111 @@ TEST_F(WindowTest, FoldsAreRememberedPerNoteAcrossSwitchesRestartsAndRenames)
     }
 }
 
+TEST_F(WindowTest, ARememberedHeadingFoldAroundTheRememberedCaretStaysFolded)
+{
+    PrivateConfig config;
+    const QString text = "# A\n\nbody a\n\n## A1\n\nbody a1\n\n# B\n\nbody b\n";
+    write(QStringLiteral("Fold.md"), text.toUtf8());
+    write(QStringLiteral("Other.md"), "other\n");
+    const QString note = path(QStringLiteral("Fold.md"));
+    const qsizetype inside = text.indexOf(QLatin1String("body a1"));
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(note);
+        MarkdownEditor *editor = window.editor();
+        // The caret is under the fold, as a position saved by an older build
+        // or a note edited on the side leaves it; setFoldState is no click.
+        editor->setCursorOffset(inside);
+        editor->setFoldState({QStringLiteral("10 # A")});
+        ASSERT_TRUE(editor->isFoldedAt(0));
+
+        window.openNote(path(QStringLiteral("Other.md")));
+        window.openNote(note);
+        EXPECT_EQ(window.editor()->cursorOffset(), inside);
+        EXPECT_TRUE(window.editor()->isFoldedAt(0)) << "caret first, then folds: back from another note";
+        window.close();
+    }
+    MainWindow window; // a restart
+    window.openVault(dir.path());
+    window.openNote(note);
+    EXPECT_EQ(window.editor()->cursorOffset(), inside);
+    EXPECT_TRUE(window.editor()->isFoldedAt(0)) << "and after reopening the window";
+    EXPECT_FALSE(window.editor()->displayText().contains(QLatin1String("body a1")));
+    QTest::keyClick(window.editor(), Qt::Key_Right);
+    EXPECT_FALSE(window.editor()->isFoldedAt(0)) << "the first key reveals it";
+}
+
+TEST_F(WindowTest, FoldCommandsAreInThePaletteAndRebindable)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Fold.md"), "# A\n\nbody a\n\n# B\n\nbody b\n");
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+    write(QStringLiteral(".obsidian/hotkeys.json"),
+          R"({"editor:unfold-all": [{"modifiers": ["Mod", "Alt", "Shift"], "key": "U"}]})");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Fold.md")));
+    MarkdownEditor *editor = window.editor();
+
+    window.findChild<QAction *>(QStringLiteral("command-palette:open"))->trigger();
+    auto *palette = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("commandPalette"));
+    ASSERT_NE(palette, nullptr);
+    auto *query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+    auto *results = palette->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"));
+    QTest::keyClicks(query, QStringLiteral("fold"));
+    QStringList listed;
+    for (int i = 0; i < results->count(); ++i)
+        listed.append(results->item(i)->text());
+    for (const char *name : {"Toggle fold on the current line", "Fold all headings and lists",
+                             "Unfold all headings and lists", "Fold more", "Fold less", "Toggle Properties fold"})
+        EXPECT_TRUE(listed.contains(QLatin1String(name))) << name;
+
+    QTest::keyClick(query, Qt::Key_Escape);
+    window.findChild<QAction *>(QStringLiteral("command-palette:open"))->trigger();
+    query = palette->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+    QTest::keyClicks(query, QStringLiteral("fold all"));
+    QTest::keyClick(query, Qt::Key_Return);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->isFoldedAt(editor->noteText().indexOf(QLatin1String("# B")))) << "run from the palette";
+
+    // The vault's hotkeys.json binds one; the others have no key.
+    editor->setFocus();
+    QTest::keyClick(editor, Qt::Key_U, Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier);
+    EXPECT_TRUE(editor->foldState().isEmpty()) << "Ctrl+Alt+Shift+U runs editor:unfold-all";
+}
+
+TEST_F(WindowTest, TheFoldHeadingAndFoldIndentSettingsReachTheEditor)
+{
+    PrivateConfig config;
+    write(QStringLiteral("Fold.md"), "# A\n\nbody\n\n- p\n  - child-c\n");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Fold.md")));
+    const qsizetype list = window.editor()->noteText().indexOf(QLatin1String("- p"));
+    window.editor()->toggleFoldAt(0);
+    window.editor()->toggleFoldAt(list);
+    ASSERT_TRUE(window.editor()->isFoldedAt(0));
+    ASSERT_TRUE(window.editor()->isFoldedAt(list));
+
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    auto *heading = settingsToggle(window, "editor.foldHeading");
+    auto *indent = settingsToggle(window, "editor.foldIndent");
+    EXPECT_TRUE(heading->isChecked());
+    EXPECT_TRUE(indent->isChecked());
+    heading->click();
+    indent->click();
+    EXPECT_TRUE(window.editor()->displayText().contains(QLatin1String("body"))) << "no heading fold with it off";
+    EXPECT_TRUE(window.editor()->displayText().contains(QLatin1String("child-c"))) << "and no list fold";
+    heading->click();
+    indent->click();
+    EXPECT_FALSE(window.editor()->displayText().contains(QLatin1String("body"))) << "back on, the folds are back";
+    EXPECT_FALSE(window.editor()->displayText().contains(QLatin1String("child-c")));
+    window.closeSettings();
+}
+
 TEST_F(WindowTest, AnIconShowsOnTheTabAndGoesWhenTheToggleIsOff)
 {
     PrivateConfig config;

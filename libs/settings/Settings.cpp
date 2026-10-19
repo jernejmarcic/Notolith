@@ -53,6 +53,8 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.autoPairs"), true},
         {QStringLiteral("editor.vimMode"), false},
         {QStringLiteral("editor.showIndentGuides"), true},
+        {QStringLiteral("editor.foldHeading"), true}, // the arrow on a heading
+        {QStringLiteral("editor.foldIndent"), true},  // the arrow on a list item with children
         // Lists: how ordered numbers and bullets are drawn (display only; the file is CommonMark).
         {QStringLiteral("editor.listNumberStyle"), QStringLiteral("plain")}, // or "hierarchical": 1., 1.1., 1.2.
         {QStringLiteral("editor.listNumberSuffix"), QStringLiteral(".")},   // after a drawn number; empty: as written
@@ -510,6 +512,8 @@ QVariantMap Settings::fromObsidianConfig(const QString &vaultRoot)
     const QJsonObject app = readJSONobject(config.filePath(QStringLiteral("app.json")));
     take(out, app, "readableLineLength", QStringLiteral("editor.readableLineLength"));
     take(out, app, "showLineNumber", QStringLiteral("editor.lineNumbers"));
+    take(out, app, "foldHeading", QStringLiteral("editor.foldHeading"));
+    take(out, app, "foldIndent", QStringLiteral("editor.foldIndent"));
     take(out, app, "strictLineBreaks", QStringLiteral("editor.strictLineBreaks"));
     take(out, app, "spellcheck", QStringLiteral("editor.spellcheck"));
     take(out, app, "tabSize", QStringLiteral("editor.tabWidth"));

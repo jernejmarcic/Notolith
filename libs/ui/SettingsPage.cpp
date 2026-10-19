@@ -688,6 +688,10 @@ QWidget *SettingsPage::buildEditorPage()
                   tr("Opened in the browser by \"Search the web\"; %1 is the text. Empty removes the item."));
     addToggleRow(layout, QStringLiteral("editor.showIndentGuides"), tr("Indent guides"),
                 tr("Show a vertical line at each level of list indentation."));
+    addToggleRow(layout, QStringLiteral("editor.foldHeading"), tr("Fold heading"),
+                tr("Show an arrow beside a heading that folds the section under it."));
+    addToggleRow(layout, QStringLiteral("editor.foldIndent"), tr("Fold indent"),
+                tr("Show an arrow beside a list item that folds the items nested under it."));
     addToggleRow(layout, QStringLiteral("editor.alignTables"), tr("Align tables"),
                 tr("Pad a table's cells into straight columns in the file itself when you "
                    "leave a table you edited, so it reads as a table in any text editor."));

@@ -128,6 +128,29 @@ TEST(Settings, aVaultLayersItsObsidianConfigOverTheDefaults)
     EXPECT_FALSE(settings.isFromVault(QStringLiteral("editor.autoPairs")));
 }
 
+TEST(Settings, foldHeadingAndFoldIndentAreOnByDefaultAndImportFromObsidian)
+{
+    const Settings plain = Settings::load();
+    EXPECT_TRUE(plain.boolean(QStringLiteral("editor.foldHeading")));
+    EXPECT_TRUE(plain.boolean(QStringLiteral("editor.foldIndent")));
+
+    // Obsidian writes its two settings under their own names, and only when
+    // they are off; a vault that names one leaves the other alone.
+    QTemporaryDir vault;
+    writeFile(vault.filePath(QStringLiteral(".obsidian/app.json")),
+              QStringLiteral(R"({"foldHeading":false,"foldIndent":false})"));
+    const Settings off = Settings::load(vault.path());
+    EXPECT_FALSE(off.boolean(QStringLiteral("editor.foldHeading")));
+    EXPECT_FALSE(off.boolean(QStringLiteral("editor.foldIndent")));
+    EXPECT_TRUE(off.isFromVault(QStringLiteral("editor.foldHeading")));
+
+    QTemporaryDir half;
+    writeFile(half.filePath(QStringLiteral(".obsidian/app.json")), QStringLiteral(R"({"foldIndent":false})"));
+    const Settings one = Settings::load(half.path());
+    EXPECT_TRUE(one.boolean(QStringLiteral("editor.foldHeading")));
+    EXPECT_FALSE(one.boolean(QStringLiteral("editor.foldIndent")));
+}
+
 TEST(Settings, HiddenFileTypesAreAnEmptyListByDefaultAndSurviveASaveNormalised)
 {
     QTemporaryDir home;

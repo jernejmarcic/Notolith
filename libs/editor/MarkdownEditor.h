@@ -1285,6 +1285,12 @@ private:
     Range listFoldRange(const ListItemSpan &item) const;
     /// Clears the folds that hide `offset`; false when none did. No layout.
     bool openFoldsAt(qsizetype offset);
+    /// The heading and list-item folds around `offset`, innermost first, each
+    /// as the offset toggleFoldAt() takes: the list items with children that
+    /// hold it, then the heading it is on or sits under, then the ones above.
+    QList<qsizetype> enclosingFolds(qsizetype offset) const;
+    /// Runs an `editor:*fold*` command; false when `id` is not one.
+    bool foldCommand(const QString &id);
     /// A fold arrow (and, folded, its ellipsis) for each site in the block.
     QList<FoldMark> foldMarksOf(const BlockView &view, qreal left, qreal top) const;
     bool handleFoldClick(const BlockView &view, const QPoint &point, qreal left, qreal top);

@@ -5346,6 +5346,12 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:toggle-checklist-status"), tr("Toggle checkbox status"),
          {QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)}},
         {QStringLiteral("noteAppC:checkbox-state"), tr("Set checkbox state..."), {}},
+        {QStringLiteral("editor:toggle-fold"), tr("Toggle fold on the current line"), {}},
+        {QStringLiteral("editor:fold-all"), tr("Fold all headings and lists"), {}},
+        {QStringLiteral("editor:unfold-all"), tr("Unfold all headings and lists"), {}},
+        {QStringLiteral("editor:fold-more"), tr("Fold more"), {}},
+        {QStringLiteral("editor:fold-less"), tr("Fold less"), {}},
+        {QStringLiteral("editor:toggle-fold-properties"), tr("Toggle Properties fold"), {}},
         {QStringLiteral("editor:open-search"), tr("Search current file"), {QKeySequence(Qt::CTRL | Qt::Key_F)}},
         {QStringLiteral("editor:open-search-replace"), tr("Search and replace in current file"),
          {QKeySequence(Qt::CTRL | Qt::Key_H)}},
@@ -5380,6 +5386,8 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
 
 bool MarkdownEditor::runCommand(const QString &id)
 {
+    if (foldCommand(id))
+        return true; // folding is not editing: Reading view folds too
     if (d->m_mode == Mode::Reading && id != QLatin1String("editor:open-search"))
         return false; // nothing to edit; searching still works
     if (id == QLatin1String("editor:toggle-bold"))

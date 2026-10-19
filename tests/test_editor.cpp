@@ -2201,6 +2201,208 @@ TEST(FoldTest, FoldingOffPerSettingDrawsNoArrowAndFoldsNothing)
         << "the remembered list fold is back with its setting";
 }
 
+// --- the fold commands ---------------------------------------------------
+
+TEST(FoldTest, FoldCommandsFoldMoreFoldLessAndToggleAtTheCaret)
+{
+    for (const QString &id : {QStringLiteral("editor:toggle-fold"), QStringLiteral("editor:fold-all"),
+                              QStringLiteral("editor:unfold-all"), QStringLiteral("editor:fold-more"),
+                              QStringLiteral("editor:fold-less"), QStringLiteral("editor:toggle-fold-properties")}) {
+        const auto &all = MarkdownEditor::commands();
+        const auto found = std::find_if(all.cbegin(), all.cend(), [&id](const auto &c) { return c.id == id; });
+        ASSERT_NE(found, all.cend()) << id.toStdString();
+        EXPECT_TRUE(found->keys.isEmpty()) << id.toStdString() << " has no default key, as in Obsidian";
+    }
+
+    auto editor = editorWith(kSections);
+    const qsizetype inner = kSections.indexOf(QLatin1String("## A1"));
+    editor->setCursorOffset(kSections.indexOf(QLatin1String("body a1")));
+
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:fold-more")));
+    EXPECT_TRUE(editor->isFoldedAt(inner)) << "the innermost section holding the caret";
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_EQ(editor->cursorOffset(), inner) << "the caret goes to the heading it folded";
+
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:fold-more")));
+    EXPECT_TRUE(editor->isFoldedAt(0)) << "A1 is folded already, so the one above it";
+    EXPECT_EQ(editor->cursorOffset(), 0);
+
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:fold-less")));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->isFoldedAt(inner)) << "one step, the section the caret is in";
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:fold-less")));
+    EXPECT_TRUE(editor->isFoldedAt(inner)) << "A1 does not hold the caret";
+
+    // Toggle: the section the caret is in, whichever way it stands.
+    editor->setCursorOffset(kSections.indexOf(QLatin1String("body b")));
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-fold")));
+    const qsizetype second = kSections.indexOf(QLatin1String("# B"));
+    EXPECT_TRUE(editor->isFoldedAt(second));
+    EXPECT_EQ(editor->cursorOffset(), second);
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-fold")));
+    EXPECT_FALSE(editor->isFoldedAt(second));
+
+    // A leaf item folds the parent it is under.
+    const QString list = QStringLiteral("- p\n  - c\n    - g\n- q\n");
+    auto items = editorWith(list);
+    items->setCursorOffset(list.indexOf(QLatin1String("- g")));
+    ASSERT_TRUE(items->runCommand(QStringLiteral("editor:toggle-fold")));
+    EXPECT_TRUE(items->isFoldedAt(list.indexOf(QLatin1String("  - c"))));
+    EXPECT_FALSE(items->isFoldedAt(0));
+    EXPECT_EQ(items->cursorOffset(), list.indexOf(QLatin1String("  - c")));
+}
+
+TEST(FoldTest, FoldAllAndUnfoldAllCoverEveryHeadingAndParentItemAndLeaveNoState)
+{
+    const QString note = QStringLiteral("# A\n\n- p\n  - child-c\n\n## A1\n\nbody-a1\n\n# B\n\n"
+                                        "- q\n  - child-r\n- leaf\n");
+    auto editor = editorWith(note);
+    const qreal open = editor->documentHeight();
+    editor->setCursorOffset(note.indexOf(QLatin1String("child-c")));
+
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:fold-all")));
+    for (const char *site : {"# A\n", "- p", "## A1", "# B", "- q"})
+        EXPECT_TRUE(editor->isFoldedAt(note.indexOf(QLatin1String(site)))) << site;
+    EXPECT_FALSE(editor->isFoldedAt(note.indexOf(QLatin1String("- leaf")))) << "a leaf has nothing to fold";
+    EXPECT_EQ(editor->cursorOffset(), 0) << "the caret goes to the outermost fold it was in";
+    const QString shown = editor->displayText();
+    for (const char *hidden : {"child-c", "body-a1", "child-r", "leaf"})
+        EXPECT_FALSE(shown.contains(QLatin1String(hidden))) << hidden;
+    EXPECT_EQ(editor->foldState().size(), 5);
+
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:unfold-all")));
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("child-r")));
+    EXPECT_TRUE(editor->foldState().isEmpty()) << "open is no entry, not a remembered 0";
+
+    // Unfold-all on a note nothing was folded in changes nothing.
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:unfold-all")));
+    EXPECT_TRUE(editor->foldState().isEmpty());
+}
+
+TEST(FoldTest, FoldAllAndUnfoldAllLeaveACalloutsFoldAlone)
+{
+    const QString note = QStringLiteral("# A\n\n> [!note]+ Title\n> text\n");
+    auto editor = editorWith(note);
+    const qsizetype callout = note.indexOf(QLatin1String("> [!note]"));
+    editor->toggleFoldAt(callout);
+    ASSERT_TRUE(editor->isFoldedAt(callout));
+    editor->runCommand(QStringLiteral("editor:fold-all"));
+    editor->runCommand(QStringLiteral("editor:unfold-all"));
+    EXPECT_TRUE(editor->isFoldedAt(callout));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+}
+
+TEST(FoldTest, FoldCommandsWorkInReadingView)
+{
+    auto editor = editorWith(kSections);
+    editor->setCursorOffset(kSections.indexOf(QLatin1String("body a\n")));
+    editor->setMode(MarkdownEditor::Mode::Reading);
+
+    EXPECT_FALSE(editor->runCommand(QStringLiteral("editor:toggle-bold"))) << "nothing to edit there";
+    EXPECT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-fold")));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->runCommand(QStringLiteral("editor:unfold-all")));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->runCommand(QStringLiteral("editor:fold-all")));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->foldState().size() == 3);
+}
+
+TEST(FoldTest, TheFoldCommandsFollowTheFoldingSettings)
+{
+    const QString note = QStringLiteral("# A\n\nbody\n\n- p\n  - c\n");
+    auto editor = editorWith(note);
+    editor->setFolding(false, true);
+    editor->runCommand(QStringLiteral("editor:fold-all"));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->isFoldedAt(note.indexOf(QLatin1String("- p"))));
+    editor->setFolding(true, true);
+    EXPECT_FALSE(editor->isFoldedAt(0)) << "heading folding was off: nothing was written for it";
+    editor->setFolding(true, false);
+    editor->runCommand(QStringLiteral("editor:unfold-all"));
+    editor->setFolding(true, true);
+    EXPECT_TRUE(editor->isFoldedAt(note.indexOf(QLatin1String("- p")))) << "indent folding was off: untouched";
+    editor->runCommand(QStringLiteral("editor:unfold-all"));
+    EXPECT_TRUE(editor->foldState().isEmpty());
+}
+
+TEST(FoldTest, TheFoldCommandsToggleTheProperties)
+{
+    auto editor = editorWith(QStringLiteral("---\ntitle: x\n---\n\n# A\n"));
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-fold-properties")));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_FALSE(editor->isFoldedAt(editor->noteText().indexOf(QLatin1String("# A")))) << "the heading is not touched";
+    ASSERT_TRUE(editor->runCommand(QStringLiteral("editor:toggle-fold-properties")));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    // Without properties it is a command that has nothing to do, not an unknown one.
+    auto bare = editorWith(QStringLiteral("# A\n"));
+    EXPECT_TRUE(bare->runCommand(QStringLiteral("editor:toggle-fold-properties")));
+    EXPECT_FALSE(bare->isFoldedAt(0));
+}
+
+TEST(FoldTest, FoldAllAndUnfoldAllOnAMegabyteNoteStayUnderBudget)
+{
+    const QString note = generateNote(1024);
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
+    editor->setCursorOffset(note.size() / 2);
+    editor->grab(); // the first paint settles the geometry
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    const auto timeOf = [&](const char *command, const char *reset) {
+        return perf::bestOf([&] {
+            editor->runCommand(QLatin1String(reset));
+            QElapsedTimer clock;
+            clock.start();
+            editor->runCommand(QLatin1String(command));
+            return double(clock.nsecsElapsed()) / 1e6;
+        }, 3, 50.0);
+    };
+    const double foldAll = timeOf("editor:fold-all", "editor:unfold-all");
+    ASSERT_GT(editor->foldState().size(), 1000) << "every heading and list parent is folded";
+    QElapsedTimer clock;
+    clock.start();
+    const qsizetype remembered = editor->foldState().size();
+    const double state = double(clock.nsecsElapsed()) / 1e6;
+    const double unfoldAll = timeOf("editor:unfold-all", "editor:fold-all");
+    EXPECT_TRUE(editor->foldState().isEmpty());
+
+    std::printf("[ PERF     ] 1 MB note: fold-all %.2f ms, unfold-all %.2f ms, foldState() of %lld folds %.2f ms\n",
+                foldAll, unfoldAll, static_cast<long long>(remembered), state);
+    EXPECT_LT(foldAll, 50.0);
+    EXPECT_LT(unfoldAll, 50.0);
+    EXPECT_LT(state, 50.0);
+}
+
+TEST(FoldTest, KeystrokeStaysInsideTheBudgetWithEverythingFolded)
+{
+    const QString note = generateNote(200);
+    auto editor = parsedEditorWith(note);
+    ASSERT_TRUE(editor) << "the parse never came back";
+    const qsizetype heading = note.indexOf(QLatin1String("## Section 40\n"));
+    ASSERT_GE(heading, 0);
+    editor->runCommand(QStringLiteral("editor:fold-all"));
+    editor->setCursorOffset(heading + 13); // the end of the heading's own line: visible
+    editor->enterBlockAt(heading + 13);
+    ASSERT_TRUE(editor->isFoldedAt(heading));
+
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    constexpr int kKeystrokes = 20;
+    const double perKeystroke = perf::bestOf([&] {
+        QElapsedTimer clock;
+        clock.start();
+        for (int i = 0; i < kKeystrokes; ++i)
+            QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        return double(clock.nsecsElapsed()) / kKeystrokes / 1e6;
+    }, 3, 8.0);
+
+    std::printf("[ PERF     ] %.2f kB note, everything folded: %.2f ms per keystroke\n",
+                note.size() / 1024.0, perKeystroke);
+    EXPECT_LT(perKeystroke, 8.0);
+    EXPECT_TRUE(editor->isFoldedAt(heading)) << "typing on a heading line leaves its fold";
+}
+
 // --- a callout's title is edited where it is drawn -------------------------
 
 namespace {
