@@ -369,7 +369,8 @@ TEST(ShareFrameTest, ATamperedFrameIsDropped)
 
     // validly signed, sealed under another key: only the AEAD refuses it
     const Frame otherKey = frameOf(ShareFrame::seal(*me, id, 3, 5, SyncCrypto::randomKey(), ShareFrame::Kind::Update, "payload"));
-    EXPECT_FALSE(ShareFrame::open(otherKey, key, id, 3, peer, 4));
+    EXPECT_FALSE(ShareFrame::open(otherKey, key, id, 3, peer, 4, &why));
+    EXPECT_EQ(why, QStringLiteral("does not decrypt")) << "the AEAD is what refuses it, not the payload check behind it";
 
     EXPECT_FALSE(ShareFrame::open(good, key, id, 4, peer, 4, &why)); // another epoch
     EXPECT_EQ(why, QStringLiteral("wrong epoch"));

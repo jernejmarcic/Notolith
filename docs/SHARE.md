@@ -124,7 +124,7 @@ access, no socket, no file.
   before parsing). `Join` (invite proof, box key, name), `Welcome` (share key sealed
   to the joiner's box key; the member list and the note state sealed under the share
   key), `Rekey` (new key and/or member list), `Refused`, and `Frame`: a `Payload`
-  (an update or a state vector) sealed under the share key, bound to (share, epoch,
+  (an update, a state vector, or a diff - the answer to a state vector) sealed under the share key, bound to (share, epoch,
   sender, seq) and signed by the sender. `Frame`, `Welcome` and `Rekey` travel on
   the link's ordered `sync` channel, the rest on `ctl`. A relay would see ids and
   sizes only.
