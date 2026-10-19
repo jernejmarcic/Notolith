@@ -27,6 +27,9 @@ if(noteappc_have_litehtml)
     target_compile_definitions(test_editor PRIVATE NOTEAPPC_EXPECT_HTML)
 endif()
 add_test(NAME editor COMMAND test_editor)
+# Its ratio budgets (a 1 MB open against a 200 kB one, min of 7) failed once
+# under ctest -j4 when neighbours took the CPU: alone, they hold every time.
+set_tests_properties(editor PROPERTIES RUN_SERIAL TRUE)
 
 # HTML edited where it is drawn (HtmlEdit.cpp); the minimal build runs it too.
 add_executable(test_html_edit test_html_edit.cpp)

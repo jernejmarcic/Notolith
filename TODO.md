@@ -2043,9 +2043,10 @@ Shared/<title>.md.
       TheShareDialogGivesTheCodeAndTheJoinDialogTakesIt,
       TheOwnerRemovesADeviceFromTheDialog,
       StoppingFromTheDialogClearsTheBadgeAndTheMarker (both engines).
-- [ ] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate failed once under
+- [x] MarkdownEditorTest.OpeningAMegabyteNoteIsImmediate failed once under
       ctest -j4 (passes 3/3 alone): ratio budget is load-sensitive. Watch;
       if it recurs, run the perf tests serially (RESOURCE_LOCK) or widen.
+      Done: the editor test runs RUN_SERIAL in ctest.
 - [x] Share: remember peers' last addresses so a share reconnects after a
       restart without mDNS (tailnet, other subnets); today only mDNS or a
       fresh dial reconnects. (Joiner keeps the invite's owner addresses in
