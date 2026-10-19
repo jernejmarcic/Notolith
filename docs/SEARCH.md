@@ -3,7 +3,7 @@
 The search pane (Ctrl+Shift+F, `global-search:open`) takes Obsidian's query
 grammar: words (implicit AND), `"phrases"`, `OR` (capitals only), `-negation`,
 `( )`, and the fields `path:` `file:` `tag:` `line:` `block:` `section:`
-`task:` `task-todo:` `task-done:` `content:` `match-case:` `ignore-case:`,
+`task:` `task-todo:` `task-done:` `task-progress:` `task-cancelled:` `content:` `match-case:` `ignore-case:`,
 `[property:value]`, and `/regex/`, plus this app's own `meta:`. A query is parsed by `SearchQuery`
 (`libs/index/Search.cpp`), narrowed through the FTS5 table, then each candidate
 note is checked against the real text, off the UI thread. This page lists
@@ -38,6 +38,18 @@ without. A space after the colon ends the field, so `meta: date` is `meta:` AND
 nothing. Changing the delimiters re-parses the whole vault once, off the UI
 thread. A run that reads as an HTML tag, `<<like this>>` with `<` delimiters,
 is HTML and not a run; `<< like this >>` is one.
+
+## `task-todo:` and `task-done:`
+
+Obsidian counts any character but a space in a box as done. Here the box's
+state has a type (docs/EDITOR.md, Checkbox states, and `tasks.ini`), as in the
+Tasks plugin: `task-todo:` is todo and in progress (`[ ]`, `[/]`, `[>]`...),
+`task-done:` is done and cancelled (`[x]`, `[-]`, `[~]`), `task-progress:` only
+in progress, `task-cancelled:` only cancelled. A state of the non-task type
+(`[I]`, `[p]`, `[c]`) is found only by `task:`. The index keeps the character, so
+editing `tasks.ini` changes the answers at once with no rescan. With the
+"Checkbox states" core plugin off only `[ ]` and `[x]` are tasks, and
+`task-progress:` and `task-cancelled:` match nothing.
 
 ## `/regex/`
 

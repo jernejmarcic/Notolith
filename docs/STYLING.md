@@ -85,6 +85,40 @@ Callouts nest, each with its own style, and a nested one folds with `+` or `-`
 like any other. An empty `>` line is what steps back out of a nested callout:
 without it, CommonMark joins the next `>` line to the nested one's paragraph.
 
+## Task checkboxes
+
+With the "Checkbox states" core plugin on (docs/EDITOR.md lists the built-in
+states), `~/.config/noteAppC/tasks.ini` changes or adds states. One section per
+state; a section named for a built-in state (`cancelled`, `dropped`,
+`in-progress`, `forwarded`, `scheduled`, `question`, `important`, `star`, `idea`,
+`pro`, `con`) changes it, any other name adds one:
+
+```ini
+[cancelled]
+glyph = cross             ; the dash becomes a red X's shape
+
+[waiting]
+char = w                  ; exactly one character
+type = todo               ; todo | in-progress | done | cancelled | non-task
+glyph = char              ; box | tick | half | line | cross | arrow-right | arrow-left | star | char
+color = --color-purple    ; a theme token or any CSS colour
+text = mute               ; strike | mute | both | none
+next = " "                ; what a click writes; quote a space
+```
+
+Rules, so a hand-edited file cannot break a note: a section with no valid
+`char` that is not a built-in's name is ignored; `char` is one character that is
+not a space, `[`, `]`, `\`, `x` or `X`; an unknown `type`, `glyph` or `text` word
+keeps the state's value (a new state's are todo, `char` and none); an unparsable
+`color` draws in the accent; `next` that is not one character is `x`; `[todo]`
+and `[done]` are ignored (`[ ]` and `[x]` are Obsidian's own). Two sections
+claiming one character: the one whose name sorts last wins, and it takes the
+character from a built-in state. Names are lower-cased, values are not, so
+`char = I` and `char = i` are two states.
+
+The file reloads when it changes, like `callouts.ini`. The command-line tools
+(`publish_cli`, `index_cli`) parse without the option, so `[-]` is text to them.
+
 ## Code blocks
 
 A fenced block with a language has a header strip that names it: the
