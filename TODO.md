@@ -658,7 +658,7 @@ What the spec asks for:
       model): shown under the block, kept across launches.
 - [x] **Runnable code-file embeds**: `![[file.py]]` runs the file and shows its
       cached output below.
-- [ ] **Tiered sandbox**, chosen per block by trust: tier 0 host-direct
+- [x] **Tiered sandbox**, chosen per block by trust: tier 0 host-direct
       (opt-in), tier 1 bubblewrap/nsjail with seccomp and Landlock (the
       desktop default); gVisor, Firecracker and WASM tiers later (server and
       mobile).
@@ -674,7 +674,8 @@ What the spec asks for:
       Arch repos (`sudo pacman -S firecracker`), /dev/kvm is there; it also
       needs a guest kernel and rootfs image, which are downloads. gVisor
       (runsc) is not in the repos (AUR or Google's release binary only).
-      Neither was approved; only wasmtime was.
+      Neither was approved; only wasmtime was. Jernej 2026-10-19:
+      "Neither" - bwrap+seccomp and WASM are the tiers; item closed.
       **WASM tier** (Jernej 2026-10-17 installed wasmtime 49.0.2: CLI only,
       no C API, so a `wasmtime run` subprocess). Plan (lane wasm):
       - [x] `#| sandbox: wasm` parsed (Parser, Decorations `sandboxWasm`)
@@ -1335,7 +1336,7 @@ title), L (look-up), K (edited listing chrome).
             breaks it); only the scope memory cap applies.
       - [x] (lane diagrams2, d1e384a: source as escaped alt, 2000 chars) Published diagram text is not selectable or searchable (image).
       - [x] (lane fixes, ea28195: `diagram`) Publish CSS class is still `mermaid-diagram` for every kind.
-- [ ] **A central server with only a local cache, like Trilium** - Jernej:
+- [x] **A central server with only a local cache, like Trilium** - Jernej:
       "is there an API, like trillium notes so a central "server" node can
       store the data with just a local cache?" Today: no. Sync
       (docs/SYNC.md) is local-first and end-to-end encrypted: the server
@@ -1344,7 +1345,7 @@ title), L (look-up), K (edited listing chrome).
       Jernej's choice of model (answered in chat 2026-10-17): on-demand
       local cache over the existing encrypted sync, a trusted plaintext
       server with an ETAPI-style REST API, or a local REST API on each
-      device.
+      device. Jernej 2026-10-19: "Not now" - local-first E2EE sync stays.
 
 ## Fable review round 6, 2026-10-17: what TODO did not have
 
@@ -1914,10 +1915,12 @@ After sync10 (needs C):
 - [x] (written; first run pending) Installed copy goes stale as main moves: tools/install-local.sh
       (build, stage in /tmp, copy binary + desktop + icon, no MimeType
       unless asked). Ask Jernej whether Notolith should open .md files.
-- [ ] Version is 0.0.1 (CMake project + PKGBUILD), never bumped.
-- [ ] ~/Documents/AI/projects/noteAppC/build/ (2.1 GB, 2026-10-17,
+- [x] Version is 0.0.1 (CMake project + PKGBUILD), never bumped.
+      Jernej 2026-10-19: "0.1.0". CMake, PKGBUILD, metainfo release.
+- [x] ~/Documents/AI/projects/noteAppC/build/ (2.1 GB, 2026-10-17,
       gitignored) is a build dir inside Syncthing; not made by this
-      session's lanes. Ask Jernej before deleting.
+      session's lanes. Ask Jernej before deleting. Jernej 2026-10-19:
+      delete; deleted.
 
 ## Sharing a note with another person, peer to peer (Jernej, 2026-10-18)
 Jernej: "Does multi user work and how? Also for multi user, can it be done so

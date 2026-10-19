@@ -9,7 +9,7 @@
 # CMakeLists.txt), so it needs the network.
 
 pkgname=notolith
-pkgver=0.0.1
+pkgver=0.1.0
 pkgrel=1
 pkgdesc='Markdown notes and Obsidian vaults, native and fast'
 arch=('x86_64' 'aarch64')

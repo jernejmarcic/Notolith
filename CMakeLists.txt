@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(noteAppC
-    VERSION 0.0.1
+    VERSION 0.1.0
     DESCRIPTION "A Linux-native Obsidian alternative in C++"
     LANGUAGES CXX)
 
