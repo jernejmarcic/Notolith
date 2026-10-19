@@ -2011,3 +2011,12 @@ Shared/<title>.md.
       prelude (imports, a main wrapper) applied to every runnable block of
       that language in the note; error line numbers mapped back. Fable
       plan; build after lane/nomain merges (DirectRunner.cpp).
+- [ ] Demo notes for everything that has none (Jernej 2026-10-19: "Write
+      PUML, tikzjax, and any other new stuff we added text files please").
+      Haiku sweep found none for: mermaid, plantuml, tikz, graphviz, fence
+      `#|` options, run options/kernels/input()/completion/sandbox/output
+      kinds, .ipynb, encryption, publish, slides, pop-out windows, epub,
+      image annotation, meta notes, bare brackets, vim, slash commands,
+      spellcheck, look up, audio recorder; partial: run languages, runnable
+      file embeds, search operators, footnote pane, graph, bookmarks, page
+      preview. New files only (Jernej's demo edits stay unstaged).
