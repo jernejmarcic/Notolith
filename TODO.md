@@ -2062,10 +2062,14 @@ Shared/<title>.md.
         the share store's record decides.
   - [x] allowHostTier leaked from a failing test: reset in TearDown.
   - [x] SHARE.md overclaimed how a moved owner is found off-LAN.
-- [ ] Mermaid without bubblewrap runs mmdr unsandboxed (env scrubbed,
+- [x] Mermaid without bubblewrap runs mmdr unsandboxed (env scrubbed,
       rlimits) - the one renderer that does not refuse, and a shared note's
       fence reaches it as it renders. Decide: refuse for shared notes, or
       keep (mmdr is a Rust parser, no code execution). Low.
+      Decided keep: MermaidBlock.cpp's runMermaid comment already weighs a
+      shared note's fence as input - mmdr parses data like poppler and QSvg
+      do in-process, scrubbed env + rlimits, and refusing would silently
+      drop a default-on feature on systems without bwrap.
 - [x] Lane P: remote carets (optional). Presence frames (proto Presence,
       relayed with a per-author counter), ShareEngine::setCaret/carets,
       MarkdownEditor::setRemoteCarets (shift with edits, bar + name tag),
