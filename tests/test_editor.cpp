@@ -1243,6 +1243,16 @@ TEST(CheckboxTest, CtrlEnterCyclesTheSameWayAndIsUnchangedWhenOff)
     EXPECT_EQ(off->noteText(), QStringLiteral("- [ ] [/] b\n"));
 }
 
+TEST(CheckboxTest, AnAstralCodePointInTheBoxIsNotAStateSoCtrlEnterKeepsTheText)
+{
+    // Two UTF-16 units: read as a state, the box was 4 units wide and the edit 3 long.
+    const QString box = QStringLiteral("[") + QString::fromUcs4(U"\U0001F600") + QStringLiteral("]");
+    auto editor = statesEditorWith(QStringLiteral("- ") + box + QStringLiteral(" t\n"));
+    editor->setCursorOffset(2 + box.size() + 2);
+    QTest::keyClick(editor.get(), Qt::Key_Return, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [ ] ") + box + QStringLiteral(" t\n"));
+}
+
 TEST(CheckboxTest, CancelledIsStruckAndMutedInProgressIsNot)
 {
     const QString note = QStringLiteral("- [-] aa\n- [~] bb\n- [x] cc\n- [/] dd\n- [?] ee\n");
@@ -1768,6 +1778,16 @@ TEST(FoldTest, AMinusCalloutStartsFoldedAndAPlainOneNeverFolds)
     const qreal open = plain->documentHeight();
     plain->toggleFoldAt(0); // not foldable: the state is kept but changes nothing
     EXPECT_DOUBLE_EQ(plain->documentHeight(), open);
+}
+
+TEST(FoldTest, AnotherNoteInTheSameEditorStartsWithItsOwnFolds)
+{
+    const QString note = QStringLiteral("> [!warning]- Title\n> body\n");
+    auto editor = editorWith(note);
+    editor->toggleFoldAt(0);
+    ASSERT_FALSE(editor->isFoldedAt(0));
+    editor->setNoteText(note); // the next note's block at offset 0 is not the one that was opened
+    EXPECT_TRUE(editor->isFoldedAt(0));
 }
 
 TEST(FoldTest, ClickingTheCalloutTitleToggles)
@@ -3314,6 +3334,31 @@ TEST(PdfEmbedTest, ZoomedRastersStayUnderTheirBudget)
         f.editor->pdfSlideStep(0, 1);
     }
     EXPECT_GT(f.editor->pdfZoomCacheBytes(), 0);
+}
+
+TEST(PdfEmbedTest, ClearingTheRasterCacheClearsTheZoomBudgetToo)
+{
+    PdfZoomFixture f(QStringLiteral("![[deck.pdf#height=300]]\n"), 2);
+    f.editor->viewport()->grab();
+    f.zoom(f.inCell(300, 150), 40);
+    WAIT_TRUE((f.editor->viewport()->grab(), f.editor->pdfZoomCacheBytes() > 0), 5000);
+    auto features = f.editor->features();
+    features.maths = !features.maths; // any change empties the page cache
+    f.editor->setFeatures(features);
+    EXPECT_EQ(f.editor->pdfZoomCacheBytes(), 0) << "the bytes of rasters that are gone count against nothing";
+}
+
+TEST(PdfEmbedTest, AnotherNoteInTheSameEditorStartsUnzoomedOnItsFirstSlide)
+{
+    const QString note = QStringLiteral("![[deck.pdf#height=300]]\n");
+    PdfZoomFixture f(note);
+    f.zoom(f.inCell(300, 150), 7);
+    f.editor->pdfSlideStep(0, 1);
+    ASSERT_GT(f.info(0).zoom, 1);
+    ASSERT_EQ(f.info(0).slideIndex, 1);
+    f.editor->setNoteText(note);
+    EXPECT_EQ(f.info(0).zoom, 1);
+    EXPECT_EQ(f.info(0).slideIndex, 0);
 }
 
 TEST(PdfEmbedTest, NativeZoomGestureZoomsAnchored)

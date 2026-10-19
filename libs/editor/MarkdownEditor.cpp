@@ -1,7 +1,6 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
-#include "ConfigFile.h"
 #include "FormatColours.h"
 #include "Frontmatter.h"
 
@@ -306,7 +305,7 @@ void MarkdownEditor::setFeatures(const Features &features)
     // A rare, administrative call - not the keystroke path - so relaying out
     // every block rather than picking out just the ones a flag touches is
     // the simple and correct choice, not a slow one that happens to work.
-    d->m_pdfPageCache.clear();
+    d->clearPdfPages();
     d->m_texCache.clear();
     d->m_fileEmbedCache.clear();
     invalidateLayouts();
@@ -716,6 +715,14 @@ void MarkdownEditor::setNoteText(const QString &text)
     d->m_undo.clear();
     d->m_redo.clear();
     d->m_interacted = false;
+    // Per-block state keyed by source offset belongs to the note it was made
+    // in: the next note's block at that offset would inherit it.
+    d->m_pdfZoom.clear();
+    d->m_pdfSlideIndex.clear();
+    d->m_pdfNavLast.clear();
+    d->m_folds.clear();
+    d->m_queryCollapsed.clear();
+    d->m_queryNameSort.clear();
     // A big note is shown before it is understood: its text goes up as plain
     // paragraphs at once and the parse runs on the thread pool, because the
     // parse is the whole cost of opening one (142 ms of a 1 MB note's 146 ms)
@@ -828,21 +835,6 @@ void MarkdownEditor::setStrictLineBreaks(bool on)
     viewport()->update();
 }
 
-namespace {
-
-QString taskStatesPath()
-{
-    return configFilePath(QStringLiteral("tasks.ini"));
-}
-
-/// tasks.ini into the process-wide table, which search and publishing read too.
-void loadTaskStates()
-{
-    TaskStates::setCurrent(TaskStates::fromSections(readINIsections(taskStatesPath())));
-}
-
-} // namespace
-
 void MarkdownEditor::setParseOptions(const ParseOptions &options)
 {
     const auto same = [](const ParseOptions &l, const ParseOptions &r) {
@@ -857,7 +849,7 @@ void MarkdownEditor::setParseOptions(const ParseOptions &options)
         return; // every settings pass asks
     d->m_parseOptions = options;
     if (options.taskStates)
-        loadTaskStates();
+        TaskStates::reload();
     // The runs and counts come from the parse, so a change is a new parse.
     if (!d->m_text.isEmpty()) {
         // A parse in flight has the old options: let it end unadopted.
@@ -5697,7 +5689,7 @@ void MarkdownEditor::watchStyleFiles()
     // writing a new file and renaming it over the old one - most do - makes
     // inotify drop the watch on the file, and a file that does not exist yet
     // cannot be watched at all; the directory sees both happen.
-    const QStringList files = {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), taskStatesPath()};
+    const QStringList files = {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), TaskStates::path()};
     const QString directory = QFileInfo(files.first()).absolutePath();
     if (QFileInfo(directory).isDir())
         d->m_configWatcher->addPath(directory);
@@ -5714,14 +5706,14 @@ void MarkdownEditor::watchStyleFiles()
 void MarkdownEditor::reloadStyleFiles()
 {
     // Put back any watch a rename-over-save took away.
-    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), taskStatesPath()}) {
+    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), TaskStates::path()}) {
         if (QFileInfo::exists(file) && !d->m_configWatcher->files().contains(file))
             d->m_configWatcher->addPath(file);
     }
     d->m_calloutStyles = CalloutStyles::load();
     d->m_languageStyles = LanguageStyles::load();
     if (d->m_parseOptions.taskStates)
-        loadTaskStates();
+        TaskStates::reload();
     invalidateLayouts();
     updateLayout();
     viewport()->update();

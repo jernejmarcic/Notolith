@@ -2,7 +2,10 @@
 
 #include <algorithm>
 
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QTemporaryDir>
 
 #include "Decorations.h"
 #include "Frontmatter.h"
@@ -1273,6 +1276,19 @@ TEST(ListTest, AnyOneCharacterBoxIsATaskWhenAsked)
     EXPECT_EQ(parser.parse(text, QStringLiteral("/vault/Note.md"), options).tasks.size(), 3);
 }
 
+TEST(ListTest, AnAstralCodePointInTheBoxIsNotATask)
+{
+    // One code point but two UTF-16 units: a state is one QChar, so this is a plain bullet.
+    const QString text = QStringLiteral("- [") + QString::fromUcs4(U"\U0001F600") + QStringLiteral("] a\n");
+    ParseOptions options;
+    options.taskStates = true;
+    const Decorations decorations = decorationsOf(text, options);
+    ASSERT_EQ(decorations.listItems.size(), 1);
+    EXPECT_FALSE(decorations.listItems.first().task);
+    static Parser parser;
+    EXPECT_TRUE(parser.parse(text, QStringLiteral("/vault/Note.md"), options).tasks.isEmpty());
+}
+
 TEST(ListTest, CustomBoxesStayTextByDefault)
 {
     const QString text = QStringLiteral("- [-] a\n- [/] b\n");
@@ -1359,6 +1375,26 @@ TEST(TaskStatesTest, IniOverridesAndRefusesBadLines)
     EXPECT_EQ(states.at(QLatin1Char('g')).type, TaskType::Todo);
     EXPECT_EQ(states.at(QLatin1Char('x')).glyph, TaskGlyph::Tick);
     EXPECT_EQ(states.at(QLatin1Char('X')).name, QStringLiteral("done")); // X stays done
+}
+
+TEST(TaskStatesTest, CurrentReadsTasksIniOnFirstUseWithoutAnEditor)
+{
+    // A fresh process: the table is lazy and process-wide, so only a child that has not read it yet can tell.
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    QTemporaryDir config;
+    ASSERT_TRUE(config.isValid());
+    ASSERT_TRUE(QDir(config.path()).mkpath(QStringLiteral("noteAppC")));
+    QFile ini(config.filePath(QStringLiteral("noteAppC/tasks.ini")));
+    ASSERT_TRUE(ini.open(QIODevice::WriteOnly));
+    ini.write("[waiting]\nchar = w\ntype = todo\n");
+    ini.close();
+    const QByteArray home = config.path().toLocal8Bit();
+    EXPECT_EXIT(
+        {
+            setenv("XDG_CONFIG_HOME", home.constData(), 1);
+            _exit(TaskStates::current()->at(QLatin1Char('w')).name == QLatin1String("waiting") ? 0 : 1);
+        },
+        ::testing::ExitedWithCode(0), "");
 }
 
 TEST(TaskStatesTest, TheSortedLaterSectionWinsAContestedCharacter)

@@ -1,5 +1,6 @@
 #include "TaskStates.h"
 
+#include "ConfigFile.h"
 
 #include <QStringList>
 
@@ -85,8 +86,8 @@ void apply(TaskState &s, const QMap<QString, QString> &keys)
 
 std::atomic<std::shared_ptr<const TaskStates>> &slot()
 {
-    static std::atomic<std::shared_ptr<const TaskStates>> value{
-        std::make_shared<const TaskStates>(TaskStates::defaults())};
+    static std::atomic<std::shared_ptr<const TaskStates>> value{std::make_shared<const TaskStates>(
+        TaskStates::fromSections(readINIsections(TaskStates::path())))};
     return value;
 }
 
@@ -189,6 +190,16 @@ std::shared_ptr<const TaskStates> TaskStates::current()
 void TaskStates::setCurrent(TaskStates states)
 {
     slot().store(std::make_shared<const TaskStates>(std::move(states)));
+}
+
+QString TaskStates::path()
+{
+    return configFilePath(QStringLiteral("tasks.ini"));
+}
+
+void TaskStates::reload()
+{
+    setCurrent(fromSections(readINIsections(path())));
 }
 
 } // namespace noteAppC

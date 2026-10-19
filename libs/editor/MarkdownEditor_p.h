@@ -769,6 +769,14 @@ struct MarkdownEditor::Private {
     /// unbounded as before; a QCache over the whole cache if they get a budget.
     QList<QString> m_pdfZoomKeys;
     qint64 m_pdfZoomBytes = 0;
+    /// Empties the raster cache and the zoom accounting that mirrors it, together:
+    /// bytes left behind would shrink the budget for nothing.
+    void clearPdfPages()
+    {
+        m_pdfPageCache.clear();
+        m_pdfZoomKeys.clear();
+        m_pdfZoomBytes = 0;
+    }
     qint64 m_pdfZoomBudget = qint64(128) << 20;
     /// The last press on an unzoomed page: that click reveals the embed's
     /// source, and a double click to zoom puts the caret back from here.

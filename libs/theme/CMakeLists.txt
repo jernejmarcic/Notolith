@@ -8,8 +8,6 @@ add_library(noteAppC_theme STATIC
     CalloutStyle.cpp
     FormatColours.cpp
     FormatColours.h
-    ConfigFile.cpp
-    ConfigFile.h
     CalloutStyle.h
     LanguageStyle.cpp
     LanguageStyle.h
@@ -84,4 +82,5 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
 # root find_package asks for it, so nothing is requested twice here.
 
 target_include_directories(noteAppC_theme PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Network)
+# noteAppC_markdown for ConfigFile (Core only, shared with TaskStates).
+target_link_libraries(noteAppC_theme PUBLIC Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::Network noteAppC_markdown)

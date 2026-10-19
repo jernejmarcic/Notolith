@@ -353,7 +353,9 @@ look to a theme. With the **Checkbox states** core plugin on (default; Settings
 change (docs/STYLING.md). Any other single character, `[q]`, is still a task:
 a todo drawn as its letter in a box, which a click turns to `[x]` (Obsidian
 would call it done; the Tasks plugin's own rule is this one). `[[` and `](` are
-never a box, so `- [[Note]]` and `- [x](url)` stay text.
+never a box, so `- [[Note]]` and `- [x](url)` stay text, and neither is a character outside the
+Basic Multilingual Plane (an emoji): a state is one UTF-16 unit, so `- [<emoji>] text` is a plain
+bullet.
 
 Ways to set one: **click** the box (the table's last column; the caret does not
 move), **Ctrl+Enter** with the caret on the item (same cycle), **right-click**
