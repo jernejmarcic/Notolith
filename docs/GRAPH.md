@@ -43,6 +43,20 @@ global and the local graph share the file, except that the local depth
 are stored as `localIncoming` / `localOutgoing`: those two names are this app's
 own, because no real Obsidian `graph.json` was available to confirm Obsidian's.
 
+## Why it holds still
+
+The layout follows d3-force, the engine under Obsidian's graph: 60% of the
+velocity survives a step (it was 92%), a spring's strength is divided by the
+smaller of its ends' link counts and the pull is split by degree (a flat
+strength made a 40-link hub 40x too stiff), and a wake only reheats to 0.3. A
+dragged node holds an alpha target of 0.3 while held and 0 after. Measured on a
+200-node ring: 32% of node moves between steps 20 and 150 reversed direction
+before, 0.1% now, and it comes to rest in 175 steps instead of 277. An index
+update that leaves the visible nodes and links as they were (an autosave of any
+other note) no longer replaces the layout, so a settled graph stays still; a
+real change keeps survivors in place and reheats gently. How it feels live
+cannot be checked offscreen.
+
 ## Threads
 
 See the comment on `GraphView` for the contract. In short: the layout and the

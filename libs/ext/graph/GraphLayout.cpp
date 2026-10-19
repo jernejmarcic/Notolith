@@ -7,7 +7,7 @@
 
 namespace noteAppC {
 
-void ForceLayout::reset(int nodeCount, const QList<std::pair<int, int>> &edges)
+void ForceLayout::reset(int nodeCount, const QList<std::pair<int, int>> &edges, double alpha)
 {
     nodeCount = std::max(0, nodeCount);
     m_position.fill(QPointF(0, 0), nodeCount);
@@ -33,7 +33,16 @@ void ForceLayout::reset(int nodeCount, const QList<std::pair<int, int>> &edges)
     m_tree.clear();
     m_tree.reserve(nodeCount * 3 + 4);
     m_settledStreak = 0;
-    m_alpha = 1.0;
+    m_alpha = alpha;
+    m_alphaTarget = 0.0;
+
+    m_degree.fill(0, nodeCount);
+    for (const auto &edge : std::as_const(m_edges)) {
+        if (edge.first >= 0 && edge.first < nodeCount && edge.second >= 0 && edge.second < nodeCount) {
+            ++m_degree[edge.first];
+            ++m_degree[edge.second];
+        }
+    }
 }
 
 void ForceLayout::setPosition(int index, QPointF position)
@@ -233,10 +242,17 @@ double ForceLayout::step()
     for (const auto &edge : std::as_const(m_edges)) {
         const QPointF delta = m_position[edge.second] - m_position[edge.first];
         const double dist = std::max(1e-6, std::hypot(delta.x(), delta.y()));
-        const double magnitude = m_options.linkStrength * (dist - m_options.linkDistance) / dist;
-        const QPointF pull = delta * magnitude;
-        m_force[edge.first] += pull;
-        m_force[edge.second] -= pull;
+        // d3-force's link law: strength 1 / min(degree) and the pull split by
+        // degree, so the hub of a star moves less than its leaves. A flat
+        // strength made a node's springs stack with its degree: a 40-link hub
+        // was 40x too stiff, overshot every step and rang the whole graph.
+        const int fromDegree = std::max(1, m_degree[edge.first]);
+        const int toDegree = std::max(1, m_degree[edge.second]);
+        const double strength = m_options.linkStrength / std::min(fromDegree, toDegree);
+        const double bias = double(fromDegree) / (fromDegree + toDegree);
+        const QPointF pull = delta * (strength * (dist - m_options.linkDistance) / dist);
+        m_force[edge.first] += pull * (1.0 - bias);
+        m_force[edge.second] -= pull * bias;
     }
 
     // Fruchterman-Reingold's classic move: cap how far a node may travel in
@@ -283,7 +299,7 @@ double ForceLayout::step()
         totalEnergy += QPointF::dotProduct(velocity, velocity);
     }
 
-    m_alpha = std::max(kMinAlpha, m_alpha * kAlphaDecay);
+    m_alpha = std::max(kMinAlpha, m_alpha + (m_alphaTarget - m_alpha) * (1.0 - kAlphaDecay));
 
     const double meanEnergy = totalEnergy / n;
     if (meanEnergy < kSettleEnergy)

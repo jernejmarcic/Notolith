@@ -88,6 +88,42 @@ TEST(ForceLayoutTest, ConvergesAndThenReportsSettled)
                 stepsTaken, peak, last);
 }
 
+// Obsidian's graph (d3-force) eases into place; an under-damped one rings:
+// nodes overshoot their spring length and swing back and forth. Ringing shows
+// as nodes reversing direction step after step (before: 32% of moves
+// reversed between steps 20 and 150, 277 steps to rest; d3's 0.6 damping and
+// degree-scaled springs: 0.1%, 175 steps).
+TEST(ForceLayoutTest, SettlesWithoutRinging)
+{
+    ForceLayout layout;
+    const int n = 200;
+    layout.reset(n, ringGraph(n, 2));
+    QVector<QPointF> previous = layout.positions();
+    QVector<QPointF> lastMove(n);
+    long moving = 0, reversed = 0;
+    int steps = 0;
+    for (; steps < 1500 && !layout.isSettled(); ++steps) {
+        layout.step();
+        const QVector<QPointF> &now = layout.positions();
+        for (int i = 0; i < n; ++i) {
+            const QPointF move = now[i] - previous[i];
+            if (steps >= 20 && steps < 150 && std::hypot(move.x(), move.y()) > 0.05
+                && std::hypot(lastMove[i].x(), lastMove[i].y()) > 0.05) {
+                ++moving;
+                if (QPointF::dotProduct(move, lastMove[i]) < 0)
+                    ++reversed;
+            }
+            lastMove[i] = move;
+        }
+        previous = now;
+    }
+    const double fraction = moving ? double(reversed) / double(moving) : 0.0;
+    std::printf("[ PERF     ] ring: settled after %d steps, %.3f of moves 20-150 reversed\n", steps, fraction);
+    EXPECT_TRUE(layout.isSettled());
+    EXPECT_LE(steps, 200) << "slow to come to rest";
+    EXPECT_LT(fraction, 0.005) << "nodes keep swinging back and forth";
+}
+
 TEST(ForceLayoutTest, DraggingWakesASettledLayout)
 {
     ForceLayout layout;
@@ -802,6 +838,31 @@ TEST_F(GraphDataTest, FeedsGraphViewEndToEnd)
     EXPECT_FALSE(view.containsNode(QStringLiteral("Orphan.md")));
     EXPECT_TRUE(view.containsNode(QStringLiteral("Home.md")));
     EXPECT_TRUE(view.containsNode(QStringLiteral("Ideas.md")));
+}
+
+// An index update about some other note (every autosave, sync tick and file
+// watcher event fires Index::changed) must not restart a graph that is
+// sitting still: a fresh layout reheated every node and the graph boiled.
+TEST_F(GraphDataTest, AnIndexUpdateThatChangesNothingLeavesALayoutAlone)
+{
+    Index index;
+    build(index);
+    GraphView view;
+    view.resize(500, 400);
+    view.setIndex(&index);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(2500); // settled, the timer stopped
+    const int generation = view.layoutGeneration();
+    const QPointF resting = view.screenPosition(QStringLiteral("Home.md"));
+
+    for (int i = 0; i < 5; ++i) {
+        emit index.changed();
+        QTest::qWait(100); // the re-read runs on a worker
+    }
+    EXPECT_EQ(view.layoutGeneration(), generation) << "the layout was replaced and reheated";
+    EXPECT_EQ(view.screenPosition(QStringLiteral("Home.md")), resting);
 }
 
 TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
