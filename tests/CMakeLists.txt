@@ -200,6 +200,12 @@ endif()
 # installed, so the minimal environment still passes; TIMEOUT is generous
 # because a kernel process really does take on the order of a second to
 # import and become ready.
+if(TARGET noteAppC_share_crdt)
+    add_executable(test_share_crdt test_share_crdt.cpp)
+    target_link_libraries(test_share_crdt PRIVATE noteAppC_share_crdt Qt6::Core GTest::gtest GTest::gtest_main)
+    add_test(NAME share_crdt COMMAND test_share_crdt)
+endif()
+
 if(TARGET noteAppC_crypt)
     add_executable(test_crypt test_crypt.cpp)
     target_link_libraries(test_crypt PRIVATE noteAppC_crypt Qt6::Test GTest::gtest)

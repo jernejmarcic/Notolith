@@ -150,6 +150,15 @@ if(NOTEAPPC_WITH_NOTEBOOK)
     endif()
 endif()
 
+# Note sharing (docs/SHARE.md), first piece: the text CRDT, the Rust yrs
+# library behind a small C surface (libs/ext/share/yrs-ffi). Needs cargo;
+# without it the option is silently off, like spellcheck without hunspell, and
+# a native backend for the same interface is the way to build without Rust.
+option(NOTEAPPC_WITH_SHARE_YRS "Build the yrs text CRDT backend for note sharing (libs/ext/share)" ON)
+if(NOTEAPPC_WITH_SHARE_YRS AND NOT ANDROID)
+    find_program(NOTEAPPC_CARGO cargo)
+endif()
+
 # Optional: the syscall filter every bubblewrap sandbox gets (libs/sandbox).
 # Without it the sandboxes are bubblewrap's namespaces alone.
 find_package(PkgConfig QUIET)
@@ -287,6 +296,9 @@ if(NOTEAPPC_WITH_ENCRYPTION AND TARGET PkgConfig::SODIUM)
 endif()
 if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
     add_subdirectory(libs/ext/notebook)
+endif()
+if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)
+    add_subdirectory(libs/ext/share)
 endif()
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
