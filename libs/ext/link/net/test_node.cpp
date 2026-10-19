@@ -7,9 +7,11 @@
 #include <rtc/rtc.hpp>
 
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <string_view>
 #include <mutex>
 #include <thread>
 
@@ -234,6 +236,7 @@ TEST_P(Forger, RejectsBadOffer)
             const std::string nonce = GetParam() == 1 ? std::string(32, 'r') : hello.nonce();
             const Identity& signer = GetParam() == 0 ? attacker : claimed;
             Bytes input{'h', 'e', 'a', 'r', 't', 'h', '-', 'o', 'f', 'f', 'e', 'r'};
+            input.reserve(input.size() + nonce.size() + sdp.size());
             input.insert(input.end(), nonce.begin(), nonce.end());
             input.insert(input.end(), sdp.begin(), sdp.end());
             Signal offer;
@@ -260,10 +263,20 @@ TEST_P(Forger, RejectsBadOffer)
 // 2: correctly signed control.
 INSTANTIATE_TEST_SUITE_P(Node, Forger, testing::Values(0, 1, 2));
 
+// These two publish real mDNS services on the LAN, so they are opt-in: HEARTH_LIVE_MDNS=1 and a
+// running avahi-daemon. Automated runs never touch the network beyond loopback.
+constexpr const char* kLiveMDNSskip =
+    "publishes real mDNS services on the LAN; opt in with HEARTH_LIVE_MDNS=1 (needs avahi-daemon)";
+bool liveMDNS()
+{
+    const char* v = std::getenv("HEARTH_LIVE_MDNS");
+    return v && std::string_view(v) == "1" && std::system("systemctl is-active --quiet avahi-daemon") == 0;
+}
+
 TEST(Node, DiscoversOverMDNS)
 {
-    if (std::system("systemctl is-active --quiet avahi-daemon") != 0)
-        GTEST_SKIP() << "avahi-daemon not running";
+    if (!liveMDNS())
+        GTEST_SKIP() << kLiveMDNSskip;
     const auto a = Identity::generate(), b = Identity::generate();
     Node na(a, {.port = 0, .mDNS = true}), nb(b, {.port = 0, .mDNS = true});
     std::atomic<int> up = 0;
@@ -277,8 +290,8 @@ TEST(Node, DiscoversOverMDNS)
 // type) proves mDNS works here, so c staying unseen is not just a quiet network.
 TEST(Node, ServiceTypeIsolatesApps)
 {
-    if (std::system("systemctl is-active --quiet avahi-daemon") != 0)
-        GTEST_SKIP() << "avahi-daemon not running";
+    if (!liveMDNS())
+        GTEST_SKIP() << kLiveMDNSskip;
     const auto a = Identity::generate(), b = Identity::generate(), c = Identity::generate();
     Node na(a, {.port = 0, .mDNS = true, .serviceType = "_hearthtest-one._tcp", .serviceNamePrefix = "one-"});
     Node nb(b, {.port = 0, .mDNS = true, .serviceType = "_hearthtest-one._tcp", .serviceNamePrefix = "one-"});
