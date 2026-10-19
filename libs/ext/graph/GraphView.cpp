@@ -757,13 +757,6 @@ void GraphView::setCurrentNote(const QString &relativePath)
 
 void GraphView::rebuild()
 {
-    // The job owns the layout it holds: leave it that one, take a new one for
-    // the new graph, and drop whatever the old job hands back. Waiting here
-    // froze the UI for a whole job (up to 250 ms with Animate off).
-    m_layout = std::make_shared<ForceLayout>();
-    m_liveGeneration->store(++m_generation);
-    m_layoutEdits.clear(); // aimed at nodes that may no longer exist
-
     QList<GraphNode> nodes = m_rawNodes;
     QList<GraphEdge> edges = m_rawEdges;
 
@@ -871,6 +864,12 @@ void GraphView::rebuild()
         keep.insert(m_nodes[i].data.id, m_positions.value(i));
 
     QVector<int> remap(nodes.size(), -1);
+    QStringList oldIDs;
+    oldIDs.reserve(m_nodes.size());
+    for (const VisualNode &node : std::as_const(m_nodes))
+        oldIDs.append(node.data.id);
+    const QList<std::pair<int, int>> oldEdges = m_edgeIndices;
+
     m_nodes.clear();
     m_nodes.reserve(nodes.size());
     for (int i = 0; i < nodes.size(); ++i) {
@@ -898,8 +897,42 @@ void GraphView::rebuild()
         layoutEdges.append({a, b});
     }
 
+    // Same nodes, same links: an index update from an unrelated note (every
+    // autosave, sync and file-watcher tick lands here) changed nothing the
+    // layout can see. Leave it - and the running job - alone; a fresh layout
+    // would reheat the whole graph and make it jiggle while nobody touches it.
+    // Only a changed force setting still has to reach it.
+    QStringList newIDs;
+    newIDs.reserve(m_nodes.size());
+    bool anySurvivor = false;
+    for (const VisualNode &node : std::as_const(m_nodes)) {
+        newIDs.append(node.data.id);
+        anySurvivor = anySurvivor || keep.contains(node.data.id);
+    }
+    if (newIDs == oldIDs && layoutEdges == oldEdges) {
+        const ForceLayout::Options forceOptions = forceOptionsFor(m_options);
+        if (!(forceOptions == m_layout->options())) {
+            editLayout([forceOptions](ForceLayout &layout) {
+                layout.setOptions(forceOptions);
+                layout.wake();
+            });
+            ensureTimerRunning();
+        }
+        markDirty();
+        return;
+    }
+
+    // The job owns the layout it holds: leave it that one, take a new one for
+    // the new graph, and drop whatever the old job hands back. Waiting here
+    // froze the UI for a whole job (up to 250 ms with Animate off).
+    m_layout = std::make_shared<ForceLayout>();
+    m_liveGeneration->store(++m_generation);
+    m_layoutEdits.clear(); // aimed at nodes that may no longer exist
+
     m_layout->setOptions(forceOptionsFor(m_options));
-    m_layout->reset(m_nodes.size(), layoutEdges);
+    // Survivors stay put, so only a gentle reheat (d3's 0.3) lets the
+    // newcomers find a place; a graph with nothing left in common starts hot.
+    m_layout->reset(m_nodes.size(), layoutEdges, anySurvivor ? 0.3 : 1.0);
     int kept = 0;
     for (int i = 0; i < m_nodes.size(); ++i) {
         const auto it = keep.constFind(m_nodes[i].data.id);
@@ -1426,6 +1459,7 @@ void GraphView::mousePressEvent(QMouseEvent *event)
         m_dragPos = m_positions.value(hit);
         editLayout([hit](ForceLayout &layout) {
             layout.setPinned(hit, true);
+            layout.setAlphaTarget(0.3); // the rest keeps flowing around the held node
             layout.wake();
         });
         ensureTimerRunning();
@@ -1479,6 +1513,7 @@ void GraphView::mouseReleaseEvent(QMouseEvent *event)
         const int node = m_dragNode;
         editLayout([node](ForceLayout &layout) {
             layout.setPinned(node, false);
+            layout.setAlphaTarget(0.0);
             layout.wake();
         });
         ensureTimerRunning();

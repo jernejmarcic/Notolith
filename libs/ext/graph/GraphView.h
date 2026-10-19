@@ -202,6 +202,9 @@ public:
     int nodeCount() const { return m_nodes.size(); }
     int edgeCount() const { return m_edgeIndices.size(); }
     bool containsNode(const QString &id) const { return m_idToIndex.contains(id); }
+    /// Changes whenever the layout is replaced (a different graph), never for
+    /// an index update that left the nodes and links as they were.
+    int layoutGeneration() const { return m_generation; }
     /// The colour node `id` is drawn in: its colour group's, or its kind's.
     QColor nodeColor(const QString &id) const
     {

@@ -4,6 +4,7 @@
 #include <QPointF>
 #include <QVector>
 
+#include <algorithm>
 #include <utility>
 
 namespace noteAppC {
@@ -27,14 +28,17 @@ public:
         double linkDistance = 250.0;
         double centerStrength = 0.5;
         double theta = 0.85;   ///< Barnes-Hut opening angle: smaller = more exact, slower
-        double damping = 0.92;
+        double damping = 0.6; ///< d3's velocityDecay 0.4: 60% of the velocity survives a step
         double timeStep = 1.0;
+        bool operator==(const Options &) const = default;
     };
 
     /// Rebuilds for `nodeCount` bodies, scattered in a disc so two runs do
     /// not start stacked on top of each other, with `edges` as (from, to)
     /// indices into that range.
-    void reset(int nodeCount, const QList<std::pair<int, int>> &edges);
+    /// `alpha` is the starting temperature: 1 for a graph laid out from
+    /// scratch, lower when most nodes keep their place (see wake()).
+    void reset(int nodeCount, const QList<std::pair<int, int>> &edges, double alpha = 1.0);
 
     void setOptions(const Options &options) { m_options = options; }
     const Options &options() const { return m_options; }
@@ -64,11 +68,18 @@ public:
     /// m_alpha) so a drag on an otherwise-cooled graph still has real force
     /// behind it instead of the near-zero pull a fully cooled step would
     /// apply.
-    void wake()
+    /// Reheats only to d3's 0.3, never back to 1: a full reheat sends every
+    /// node flying again, which is the "jiggly graph". It never cools a
+    /// layout that is hotter already.
+    void wake(double alpha = 0.3)
     {
         m_settledStreak = 0;
-        m_alpha = 1.0;
+        m_alpha = std::max(m_alpha, alpha);
     }
+    /// The temperature alpha cools toward (d3's alphaTarget): 0.3 while a
+    /// node is held, so the rest of the graph keeps flowing around it, 0 after.
+    void setAlphaTarget(double target) { m_alphaTarget = target; }
+    double alpha() const { return m_alpha; }
 
 private:
     struct QuadNode {
@@ -105,6 +116,8 @@ private:
     // repulsion is relative to damping; the speed cap in step() is what
     // keeps the hot early steps, where alpha is still ~1, from diverging.
     double m_alpha = 1.0;
+    double m_alphaTarget = 0.0;
+    QVector<int> m_degree;
     static constexpr double kAlphaDecay = 0.977; // ~0.001 by step 300
     static constexpr double kMinAlpha = 0.001;   // never fully zero - wake() still has something to push with
 
