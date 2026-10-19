@@ -1415,6 +1415,11 @@ Wave 1
             "Note.md" as a rename onto itself, reported success and kept the
             old case. Now goes through a hidden name in between.
             NOTOLITH_CASE_INSENSITIVE_DIR runs the test; skipped without it.
+      - [x] Fable check of cd13399: a hidden in-between name would strand
+            the note out of sight if the second step and the way back both
+            failed, and broke "never create a dotfile". Now visible
+            (`<name>.renaming-<id>`, no note suffix) and named in the error;
+            renamePath also refuses paths outside the vault and the root.
 
 Wave 2
 - [x] 3. (lane single, 65c557b 9131e80) No single instance: opening a note from the file

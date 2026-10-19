@@ -436,6 +436,24 @@ TEST(VaultFileOps, ACaseOnlyRenameWorksOnACaseInsensitiveFilesystem)
     ASSERT_FALSE(folder.isEmpty()) << error.toStdString();
     ASSERT_TRUE(vault.renamePath(folder, QStringLiteral("Folder"), &newPath, &error)) << error.toStdString();
     EXPECT_TRUE(QDir(dir.path()).entryList(QDir::Dirs | QDir::NoDotAndDotDot).contains(QStringLiteral("Folder")));
+    const QStringList left = QDir(dir.path()).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+    EXPECT_TRUE(left.filter(QStringLiteral("renaming")).isEmpty()) << left.join(u' ').toStdString();
+}
+
+TEST(VaultFileOps, RenamePathStaysInsideTheVault)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkdir(QStringLiteral("vault")));
+    Vault vault(dir.filePath(QStringLiteral("vault")));
+    QFile outside(dir.filePath(QStringLiteral("outside.md")));
+    ASSERT_TRUE(outside.open(QIODevice::WriteOnly));
+    outside.close();
+    QString newPath, error;
+    EXPECT_FALSE(vault.renamePath(outside.fileName(), QStringLiteral("moved"), &newPath, &error));
+    EXPECT_TRUE(outside.exists());
+    EXPECT_FALSE(vault.renamePath(dir.filePath(QStringLiteral("vault")), QStringLiteral("other"), &newPath, &error));
+    EXPECT_TRUE(QFileInfo::exists(dir.filePath(QStringLiteral("vault"))));
 }
 
 TEST(VaultFileOps, MoveToTrashKeepsFolderStructureAndSuffixesOnCollision)

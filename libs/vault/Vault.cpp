@@ -467,6 +467,12 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
 bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
                        QString *newAbsolutePath, QString *error) const
 {
+    const QString cleaned = QDir::cleanPath(absolutePath);
+    if (!isValid() || !contains(cleaned) || cleaned == m_root) {
+        if (error)
+            *error = kOutsideError;
+        return false;
+    }
     if (newBaseName.trimmed().isEmpty()) {
         if (error)
             *error = QStringLiteral("name cannot be empty");
@@ -519,24 +525,31 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
         // QFile::rename refuses a destination that "exists", which on such a
         // filesystem is the file itself, and Linux's vfat takes rename(2)
         // from "note.md" to "Note.md" for a rename onto itself: success,
-        // nothing changed. Through a hidden name in between it is two real
-        // renames on every filesystem.
-        const std::string between = QDir(info.absolutePath())
-                                        .absoluteFilePath(QStringLiteral(".%1.renaming")
-                                                              .arg(QUuid::createUuid().toString(QUuid::Id128)))
-                                        .toStdString();
+        // nothing changed. Through a name in between it is two real renames
+        // on every filesystem. That name is visible and no note: should both
+        // the second step and the way back fail, the file is still in the
+        // tree, and the error names it.
+        const QString between = QDir(info.absolutePath())
+                                    .absoluteFilePath(newFileName + QStringLiteral(".renaming-")
+                                                      + QUuid::createUuid().toString(QUuid::Id128).left(8));
         std::error_code renameError;
-        std::filesystem::rename(absolutePath.toStdString(), between, renameError);
+        std::filesystem::rename(absolutePath.toStdString(), between.toStdString(), renameError);
+        QString stranded;
         if (!renameError) {
-            std::filesystem::rename(between, newPath.toStdString(), renameError);
+            std::filesystem::rename(between.toStdString(), newPath.toStdString(), renameError);
             if (renameError) {
                 std::error_code backError;
-                std::filesystem::rename(between, absolutePath.toStdString(), backError);
+                std::filesystem::rename(between.toStdString(), absolutePath.toStdString(), backError);
+                if (backError)
+                    stranded = between;
             }
         }
         if (renameError) {
-            if (error)
+            if (error) {
                 *error = QString::fromStdString(renameError.message());
+                if (!stranded.isEmpty())
+                    *error += QStringLiteral(" (the file is now %1)").arg(QFileInfo(stranded).fileName());
+            }
             return false;
         }
     } else {
