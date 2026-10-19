@@ -1212,6 +1212,85 @@ DropResult dropOn(QWidget *target, const QMimeData *mime, const QPoint &at, bool
 
 } // namespace
 
+TEST_F(WindowTest, ADraggedSidebarTabIsInsideAWindowAndOnlyDetachesOutsideAll)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    ASSERT_TRUE(panes && pane);
+    const std::unique_ptr<QMimeData> mime(window.paneDragMimeForTests(pane));
+    ASSERT_NE(mime, nullptr);
+    EXPECT_TRUE(mime->hasFormat(QStringLiteral("application/x-notolith-pane")));
+
+    // Over a window the pane drag is inside: accepted so the window hears it
+    // leave, no tile zone, and a drop there does nothing.
+    const DropResult over = dropOn(&window, mime.get(), window.rect().center());
+    EXPECT_TRUE(over.entered);
+    EXPECT_TRUE(over.dropped);
+    EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("dropOverlay")), nullptr);
+    EXPECT_NE(panes->indexOf(pane), -1);
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    // Over a split's body too, where a tab would tile.
+    auto *group = window.findChild<QWidget *>(QStringLiteral("tabGroup"));
+    EXPECT_TRUE(dropOn(group, mime.get(), QPoint(group->width() - 5, group->height() / 2)).dropped);
+    EXPECT_EQ(mainBars(window).size(), 1) << "a pane is not a tab: no split";
+    EXPECT_TRUE(popoutWindows().isEmpty());
+
+    // An address that is no pane, or text, is foreign.
+    QMimeData stale;
+    stale.setData(QStringLiteral("application/x-notolith-pane"), "12345");
+    EXPECT_FALSE(dropOn(&window, &stale, window.rect().center()).entered);
+    QMimeData text;
+    text.setText(QStringLiteral("x"));
+    EXPECT_FALSE(dropOn(&window, &text, window.rect().center()).entered);
+
+    // A pane already in a window of its own cannot be dragged out of the sidebar.
+    auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+    auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+    chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+    ASSERT_EQ(popoutWindows().size(), 1);
+    EXPECT_FALSE(dropOn(&window, mime.get(), window.rect().center()).entered);
+}
+
+TEST_F(WindowTest, DraggingASidebarTabOutOfEveryWindowDetachesItsPane)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+    ASSERT_TRUE(panes && pane && tab);
+    const QPoint at = tab->rect().center();
+
+    // A press and a short move does not start a drag (a click stays a click).
+    QTest::mousePress(tab, Qt::LeftButton, {}, at);
+    QTest::mouseMove(tab, at + QPoint(2, 0));
+    QTest::mouseRelease(tab, Qt::LeftButton, {}, at);
+    EXPECT_NE(panes->indexOf(pane), -1);
+    EXPECT_TRUE(popoutWindows().isEmpty());
+
+    // Pulled past the drag distance the real QDrag starts. The offscreen
+    // platform has no drag of its own, so exec() comes back at once as a drop
+    // outside every window - which is the path under test (the press, the
+    // move, the synthetic release, the detach). What a compositor does with
+    // the pixmap, the cursor and a drop over a window is hand-only; that
+    // case is the mime test above.
+    QTest::mousePress(tab, Qt::LeftButton, {}, at);
+    QTest::mouseMove(tab, at + QPoint(40, 0));
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_EQ(popouts.first()->kind(), noteAppC::PopoutWindow::Kind::Pane);
+    EXPECT_EQ(pane->window(), popouts.first());
+    EXPECT_EQ(panes->indexOf(pane), -1);
+    EXPECT_TRUE(tab->isHidden());
+    EXPECT_FALSE(tab->isDown()) << "the platform swallowed the release; the synthetic one ended the press";
+}
+
 TEST_F(WindowTest, DropZoneIsPickedByEdgeQuarters)
 {
     const QRect rect(0, 0, 400, 300);

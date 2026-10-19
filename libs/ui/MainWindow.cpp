@@ -2245,6 +2245,7 @@ void MainWindow::applyPopoutFeature()
 
 namespace {
 constexpr const char *kLeafMime = "application/x-notolith-leaf";
+constexpr const char *kPaneMime = "application/x-notolith-pane";
 }
 
 MainWindow::DropZone MainWindow::dropZoneAt(const QRect &rect, const QPoint &pos)
@@ -2278,6 +2279,32 @@ MainWindow::Leaf *MainWindow::leafFromMime(const QMimeData *mime) const
     return it == m_leaves.cend() ? nullptr : it->get();
 }
 
+// A right-sidebar pane travels the same way, as its address.
+QMimeData *MainWindow::paneMime(const QWidget *pane) const
+{
+    auto *mime = new QMimeData;
+    mime->setData(QLatin1String(kPaneMime), QByteArray::number(quintptr(pane)));
+    return mime;
+}
+
+QWidget *MainWindow::paneFromMime(const QMimeData *mime) const
+{
+    if (!mime || !mime->hasFormat(QLatin1String(kPaneMime)))
+        return nullptr;
+    const quintptr address = mime->data(QLatin1String(kPaneMime)).toULongLong();
+    for (QAbstractButton *tab : m_rightTabs->buttons()) { // only the panes in the sidebar can be dragged out of it
+        auto *pane = qobject_cast<QWidget *>(tab->property("pane").value<QObject *>());
+        if (pane && quintptr(pane) == address && m_rightPanes->indexOf(pane) >= 0)
+            return pane;
+    }
+    return nullptr;
+}
+
+QMimeData *MainWindow::paneDragMimeForTests(const QWidget *pane) const
+{
+    return paneMime(pane);
+}
+
 QMimeData *MainWindow::tabDragMimeForTests(const QTabBar *tabs, int index) const
 {
     for (const auto &group : m_groups) {
@@ -2307,19 +2334,38 @@ bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
         if (mouse->button() != Qt::LeftButton)
             return false;
         m_pressedLeaf = nullptr;
+        m_pressedPane = nullptr;
         for (const auto &group : m_groups) {
             if (watched == group->tabs) {
                 m_pressPos = mouse->position().toPoint();
                 m_pressedLeaf = group->leaves.value(group->tabs->tabAt(m_pressPos), nullptr);
             }
         }
+        for (QAbstractButton *tab : m_rightTabs->buttons()) {
+            if (watched == tab) {
+                m_pressPos = mouse->position().toPoint();
+                m_pressedPane = qobject_cast<QWidget *>(tab->property("pane").value<QObject *>());
+            }
+        }
         return false;
     }
     case QEvent::MouseButtonRelease:
         m_pressedLeaf = nullptr;
+        m_pressedPane = nullptr;
         return false;
     case QEvent::MouseMove: {
         auto *mouse = static_cast<QMouseEvent *>(event);
+        // A right-sidebar tab pulled off its row: the pane goes to a window unless it lands somewhere.
+        if (m_pressedPane && (mouse->buttons() & Qt::LeftButton)) {
+            QAbstractButton *tab = tabButtonOf(m_pressedPane);
+            if (tab && watched == tab
+                && (mouse->position().toPoint() - m_pressPos).manhattanLength() >= QApplication::startDragDistance()) {
+                QWidget *pane = std::exchange(m_pressedPane, nullptr);
+                startPaneDrag(tab, pane);
+                return true;
+            }
+            return false;
+        }
         if (!m_pressedLeaf || !(mouse->buttons() & Qt::LeftButton))
             return false;
         for (const auto &group : m_groups) {
@@ -2340,7 +2386,8 @@ bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
     case QEvent::DragMove: {
         auto *drag = static_cast<QDragMoveEvent *>(event);
         auto *widget = qobject_cast<QWidget *>(watched);
-        if (!widget || !leafFromMime(drag->mimeData()))
+        const bool pane = widget && !leafFromMime(drag->mimeData()) && paneFromMime(drag->mimeData());
+        if (!widget || (!pane && !leafFromMime(drag->mimeData())))
             return false;
         TabGroup *group = groupOf(widget);
         // A window is a target of its own only so that it hears the drag leave:
@@ -2348,6 +2395,12 @@ bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
         if (!group && !(widget->isWindow() && isWorkspaceWindow(widget)))
             return false;
         m_dragInside = true;
+        if (pane) { // nothing in a window takes a pane: inside is where it is cancelled
+            hideDropOverlay();
+            drag->setDropAction(Qt::IgnoreAction);
+            drag->accept();
+            return true;
+        }
         const QPoint pos = group ? group->widget->mapFromGlobal(widget->mapToGlobal(drag->position().toPoint())) : QPoint();
         if (!group || group->strip->geometry().contains(pos))
             hideDropOverlay();
@@ -2364,6 +2417,11 @@ bool MainWindow::popoutEventFilter(QObject *watched, QEvent *event)
     case QEvent::Drop: {
         auto *widget = qobject_cast<QWidget *>(watched);
         auto *drop = static_cast<QDropEvent *>(event);
+        if (widget && !leafFromMime(drop->mimeData()) && paneFromMime(drop->mimeData())) {
+            drop->setDropAction(Qt::IgnoreAction); // let go over a window: cancelled
+            drop->accept();
+            return true;
+        }
         TabGroup *group = widget && leafFromMime(drop->mimeData()) ? groupOf(widget) : nullptr;
         if (!group)
             return false;
@@ -2388,14 +2446,34 @@ void MainWindow::startTabDrag(TabGroup *group, Leaf *leaf, const QPoint &pos)
     const int index = group->leaves.indexOf(leaf);
     if (index >= 0)
         drag->setPixmap(group->tabs->grab(group->tabs->tabRect(index)));
+    // Taken by no group and let go outside every window: a window of its own.
+    if (dragEndedOutside(drag) && m_popoutsOn
+        && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [leaf](const auto &owned) { return owned.get() == leaf; }))
+        newPopout(leaf);
+}
+
+void MainWindow::startPaneDrag(QAbstractButton *tab, QWidget *pane)
+{
+    // The press that began the drag is swallowed by the platform; a release
+    // off the button ends it without the click.
+    QMouseEvent release(QEvent::MouseButtonRelease, QPointF(-1, -1), QPointF(tab->mapToGlobal(QPoint(-1, -1))),
+                        Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(tab, &release);
+
+    auto *drag = new QDrag(this);
+    drag->setMimeData(paneMime(pane));
+    drag->setPixmap(tab->grab());
+    const QPointer<QWidget> guard(pane);
+    if (dragEndedOutside(drag) && guard && m_popoutsOn)
+        detachPane(pane);
+}
+
+bool MainWindow::dragEndedOutside(QDrag *drag)
+{
     m_dragInside = m_dragHandled = false;
     drag->exec(Qt::MoveAction);
     hideDropOverlay();
-    // Taken by no group and let go outside every window: a window of its own.
-    // (An Escape cancels the same way, which Qt does not tell apart.)
-    if (!m_dragHandled && !m_dragInside && m_popoutsOn
-        && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [leaf](const auto &owned) { return owned.get() == leaf; }))
-        newPopout(leaf);
+    return !m_dragHandled && !m_dragInside;
 }
 
 void MainWindow::showDropOverlay(TabGroup *group, DropZone zone)

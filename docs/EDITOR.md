@@ -506,9 +506,13 @@ turns all of this off, drop targets included.
 
 Limits. Qt reports a drag cancelled with Escape the same way as one let go
 outside the windows, so an Escape pressed while the pointer is outside every
-window also opens the tab in a window of its own. Tabs in the sidebars are not
-draggable: a right-sidebar pane cannot be dragged out into a window yet (use
-"Detach pane" from its tab's context menu).
+window also opens the tab in a window of its own.
+
+A tab of the right sidebar can be dragged too: pulled off its row and let go
+outside every Notolith window, its pane opens in a window of its own, as "Detach
+pane" does; let go over any window (the sidebar, the editor, a split's edge) and
+nothing happens. Panes are not tabs, so no split takes one. The left sidebar
+has no tabs to drag; "Detach left sidebar" takes it whole.
 
 The tests send the drag-enter and drop events themselves, because the offscreen
 platform cannot start a drag: they cover the zone arithmetic, the drop on an
