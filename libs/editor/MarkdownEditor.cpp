@@ -1515,17 +1515,27 @@ void MarkdownEditor::rebuildBlocks()
     // old piece ending where it ends had, so a listing is not re-highlighted
     // from its top to show the piece on screen - and that state is still
     // valid when the old piece covered exactly the same text.
-    for (BlockView &view : blocks) {
-        if (view.pieces <= 1)
-            continue;
-        const qsizetype at = view.span.range.end - 1;
+    // A fence or table scrolled sideways keeps its offset (the first piece
+    // holds it), or typing in a wide listing would snap it back every parse.
+    const auto oldBlockAt = [this](qsizetype at) {
         auto it = std::upper_bound(d->m_blocks.cbegin(), d->m_blocks.cend(), at,
                                    [](qsizetype offset, const BlockView &old) {
                                        return offset < old.span.range.start;
                                    });
-        if (it == d->m_blocks.cbegin())
+        return it == d->m_blocks.cbegin() ? d->m_blocks.cend() : it - 1;
+    };
+    for (BlockView &view : blocks) {
+        if (view.piece == 0
+            && (view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table)) {
+            const auto old = oldBlockAt(view.span.range.start);
+            if (old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
+                view.sideScroll = old->sideScroll;
+        }
+        if (view.pieces <= 1)
             continue;
-        --it;
+        auto it = oldBlockAt(view.span.range.end - 1);
+        if (it == d->m_blocks.cend())
+            continue;
         if (it->pieces <= 1 || it->span.range.end != view.span.range.end)
             continue;
         view.codeEnd = it->codeEnd;
@@ -2904,6 +2914,7 @@ bool MarkdownEditor::layoutSourceFile(BlockView &view, const EmbedSpan &embed,
     const qreal lineHeight = lineHeightFor(codeSpan);
     view.layout->beginLayout();
     qreal height = 0;
+    qreal widest = 0;
     while (true) {
         QTextLine line = view.layout->createLine();
         if (!line.isValid())
@@ -3230,7 +3241,7 @@ bool MarkdownEditor::layoutTable(BlockView &view)
         offsets << x;
         x += used;
     }
-    view.tableWidth = x;
+    view.sideWidth = x;
 
     // Lay each cell out at its column width, then rows take the tallest cell.
     QList<qreal> rowHeights(table->rows.size(), lineHeight + 2 * padY);
@@ -3263,8 +3274,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
 
     view.cells = std::move(cells);
     view.headerRows = table->headerRows;
-    view.tableScroll = qBound<qreal>(0, view.tableScroll,
-                                     qMax<qreal>(0, view.tableWidth - contentWidth()));
+    view.sideScroll = qBound<qreal>(0, view.sideScroll,
+                                     qMax<qreal>(0, view.sideWidth - contentWidth()));
     view.layout.reset();
     view.height = y;
     view.laidOut = true;
@@ -3280,12 +3291,12 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
 
     // A wide table is clipped to the readable column and scrolls inside it;
     // nothing spills over the note's text.
-    const qreal overflow = qMax<qreal>(0, view.tableWidth - contentWidth());
+    const qreal overflow = qMax<qreal>(0, view.sideWidth - contentWidth());
     const QRectF window(left, top, contentWidth(), view.height);
     painter.save();
     if (overflow > 0)
         painter.setClipRect(window.adjusted(-1, -1, 1, 1));
-    const qreal shift = -view.tableScroll;
+    const qreal shift = -view.sideScroll;
 
     // A rectangle of selected cells (TableHandles.cpp), when it is this table's.
     QRect picked;
@@ -3352,11 +3363,19 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     }
     painter.restore();
 
+    paintSidewaysOverflow(painter, window, view.sideWidth, view.sideScroll, true, top + view.height + 2,
+                          d->m_theme.color(QStringLiteral("--background-primary")));
+}
+
+void MarkdownEditor::paintSidewaysOverflow(QPainter &painter, const QRectF &window, qreal extent,
+                                           qreal scroll, bool withBar, qreal barY,
+                                           const QColor &background) const
+{
+    const qreal overflow = extent - contentWidth();
     if (overflow <= 0)
         return;
 
-    // Edge fades say there is more table, and a thin bar says where you are.
-    const QColor background = d->m_theme.color(QStringLiteral("--background-primary"));
+    // Edge fades say there is more, and a thin bar says where you are.
     const auto fade = [&](const QRectF &rect, bool fromLeft) {
         QLinearGradient gradient(fromLeft ? rect.topLeft() : rect.topRight(),
                                  fromLeft ? rect.topRight() : rect.topLeft());
@@ -3367,17 +3386,19 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         gradient.setColorAt(1, clear);
         painter.fillRect(rect, gradient);
     };
-    if (view.tableScroll > 1)
+    if (scroll > 1)
         fade(QRectF(window.left(), window.top(), 18, window.height()), true);
-    if (view.tableScroll < overflow - 1)
+    if (scroll < overflow - 1)
         fade(QRectF(window.right() - 18, window.top(), 18, window.height()), false);
+    if (!withBar)
+        return;
 
-    const qreal fraction = contentWidth() / view.tableWidth;
+    const qreal fraction = contentWidth() / extent;
     const qreal barWidth = qMax<qreal>(28, contentWidth() * fraction);
-    const qreal barX = left + (contentWidth() - barWidth) * (view.tableScroll / overflow);
+    const qreal barX = window.right() - contentWidth() + (contentWidth() - barWidth) * (scroll / overflow);
     QColor bar = d->m_theme.color(QStringLiteral("--text-faint"));
     bar.setAlphaF(0.5f);
-    painter.fillRect(QRectF(barX, top + view.height + 2, barWidth, 3), bar);
+    painter.fillRect(QRectF(barX, barY, barWidth, 3), bar);
 }
 
 namespace {
@@ -3559,14 +3580,36 @@ void MarkdownEditor::paintEmbedChrome(QPainter &painter, const BlockView &view, 
     painter.restore();
 }
 
-MarkdownEditor::BlockView *MarkdownEditor::scrollableTableAt(const QPoint &viewportPoint)
+qreal MarkdownEditor::sideExtent(const BlockView &view) const
+{
+    // A fence's pieces share one offset, so the widest of them bounds it.
+    // ponytail: a piece not laid out yet has no width, so the extent can grow
+    // as the fence scrolls into view; the offset is clamped on every read.
+    const BlockView *piece = &firstPiece(view);
+    qreal widest = 0;
+    for (int i = 0; i < view.pieces; ++i)
+        widest = qMax(widest, piece[i].sideWidth);
+    return widest;
+}
+
+qreal MarkdownEditor::sideOffset(const BlockView &view) const
+{
+    return qBound<qreal>(0, firstPiece(view).sideScroll,
+                         qMax<qreal>(0, sideExtent(view) - contentWidth()));
+}
+
+MarkdownEditor::BlockView *MarkdownEditor::sidewaysScrollableAt(const QPoint &viewportPoint)
 {
     const qreal y = viewportPoint.y() + verticalScrollBar()->value();
     for (BlockView &view : d->m_blocks) {
-        if (view.cells.empty() || view.tableWidth <= contentWidth())
+        if (y < view.y || y > view.y + view.height + 6)
             continue;
-        if (y >= view.y && y <= view.y + view.height + 6)
+        if (view.span.kind == BlockSpan::Kind::Code) {
+            if (sideExtent(view) > contentWidth())
+                return &view - view.piece;
+        } else if (!view.cells.empty() && view.sideWidth > contentWidth()) {
             return &view;
+        }
     }
     return nullptr;
 }
@@ -3584,6 +3627,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.mediaVideo = false;
     view.imagePath.clear();
     view.cells.clear();
+    view.sideWidth = 0;
     view.callout = nullptr;
     view.options = nullptr;
     view.propertyRows.clear();
@@ -3818,10 +3862,17 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.layout->setFont(view.callout ? view.calloutStyle.bodyFont(d->m_theme) : fontFor(view.span));
 
     QTextOption option;
-    // `#| wrap: false` is Quarto asking for a listing that does not reflow;
-    // a table's source wraps by the character, not after a pipe (see above);
-    // everything else wraps inside the column.
-    option.setWrapMode(view.options && !view.options->wrap              ? QTextOption::NoWrap
+    // A fence never reflows: its longest line scrolls sideways inside the panel
+    // (Obsidian's reading view; its live preview wraps, which hides where a
+    // diff's lines end). `#| wrap: true` is Quarto's `code-overflow: wrap`,
+    // asking for the column back. Source mode keeps wrapping, there is no
+    // panel to scroll in. A listing inside a callout is not Kind::Code and
+    // wraps. A table's source wraps by the character, not after a pipe (see
+    // above); everything else wraps inside the column.
+    const CodeOptions *listing = view.span.kind == BlockSpan::Kind::Code ? codeOptionsFor(view) : nullptr;
+    const bool sideways = view.span.kind == BlockSpan::Kind::Code && d->m_mode != Mode::Source
+                          && !(listing && listing->wrap);
+    option.setWrapMode(sideways                                    ? QTextOption::NoWrap
                        : view.span.kind == BlockSpan::Kind::Table ? QTextOption::WrapAnywhere
                                                                    : QTextOption::WrapAtWordBoundaryOrAnywhere);
     view.layout->setTextOption(option);
@@ -3881,6 +3932,7 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                  : lineHeightFor(view.span);
     view.layout->beginLayout();
     qreal height = 0;
+    qreal widest = 0;
     while (true) {
         QTextLine line = view.layout->createLine();
         if (!line.isValid())
@@ -3900,9 +3952,13 @@ void MarkdownEditor::layoutBlock(BlockView &view)
                                : qMax<qreal>(0, textEmbedHeightOn(view, line) - lineHeight);
         line.setPosition(QPointF(indent, height + grow));
         height += lineHeight + grow;
+        if (sideways)
+            widest = qMax(widest, indent + line.naturalTextWidth());
     }
     view.layout->endLayout();
     view.height = qMax(height, lineHeight);
+    // The extent the offset is clamped to (sideExtent) - 0 when every line fits.
+    view.sideWidth = widest > contentWidth() ? widest + 8 : 0;
 
     // Obsidian's live preview puts one --p-spacing of air over a heading and
     // none under it; the blank line in the source is the rest of the rhythm.
@@ -4335,22 +4391,35 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
             }
             if (d->m_indentGuides && !view.listTextX.empty())
                 paintIndentGuides(painter, view, left, top + drop);
-            // A listing that asked not to wrap runs off the end of its line;
-            // the panel is where it stops, not the window.
-            const bool clip = view.options && !view.options->wrap;
+            // A listing with a line wider than the column scrolls inside its
+            // panel: the text moves and is clipped to the window, the
+            // gutter's numbers (and the margin's) stay where they are.
+            const bool clip = view.span.kind == BlockSpan::Kind::Code && sideExtent(view) > contentWidth();
+            const qreal gutter = clip ? codeGutterWidth(view) : 0;
+            const qreal textLeft = left + indent - (clip ? sideOffset(view) : 0);
             if (clip) {
                 painter.save();
-                painter.setClipRect(
-                    QRectF(left - 14, top, contentWidth() + 28, view.height));
+                painter.setClipRect(QRectF(left + gutter, top, contentWidth() - gutter, view.height));
             }
-            view.layout->draw(&painter, QPointF(left + indent, top + drop), selectionRanges);
-            paintInlineMaths(painter, view, left + indent, top + drop);
-            paintAnchorSeparators(painter, view, left + indent, top + drop);
-            paintFootnoteMarks(painter, view, left + indent, top + drop);
-            paintListMarkers(painter, view, left + indent, top + drop);
-            paintGutter(painter, view, top + drop);
+            view.layout->draw(&painter, QPointF(textLeft, top + drop), selectionRanges);
+            paintInlineMaths(painter, view, textLeft, top + drop);
+            paintAnchorSeparators(painter, view, textLeft, top + drop);
+            paintFootnoteMarks(painter, view, textLeft, top + drop);
+            paintListMarkers(painter, view, textLeft, top + drop);
             if (clip)
                 painter.restore();
+            paintGutter(painter, view, top + drop);
+            if (clip && !view.folded) {
+                const LanguageStyle style = codeStyleOf(view);
+                const qreal bottom = top + view.height - codeCaptionHeight(view);
+                paintSidewaysOverflow(painter, QRectF(left + gutter, top + view.textTop, contentWidth() - gutter,
+                                                      bottom - top - view.textTop),
+                                      sideExtent(view), sideOffset(view), view.piece == view.pieces - 1,
+                                      bottom + 3,
+                                      style.bg.isValid()
+                                          ? style.bg
+                                          : d->m_theme.color(QStringLiteral("--background-primary-alt")));
+            }
         }
     }
 }
@@ -4445,7 +4514,8 @@ QPointF MarkdownEditor::pointFor(qsizetype offset, qreal *height) const
     if (!line.isValid())
         return QPointF(contentLeft(), view.y - verticalScrollBar()->value());
 
-    const qreal x = line.cursorToX(int(display));
+    const qreal x = line.cursorToX(int(display))
+                    - (view.span.kind == BlockSpan::Kind::Code ? sideOffset(view) : 0);
     if (height)
         *height = line.height();
     return QPointF(contentLeft() + x,
@@ -4469,7 +4539,7 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
             for (const Cell &cell : view.cells) {
                 // A cell with no source - a base's, or one a short row lacks
                 // - has no character to land on; the block's start does.
-                if (!cell.source.isValid() || !cell.rect.translated(-view.tableScroll, view.y).contains(QPointF(x, y)))
+                if (!cell.source.isValid() || !cell.rect.translated(-view.sideScroll, view.y).contains(QPointF(x, y)))
                     continue;
                 const QPointF origin = cellTextOrigin(view, cell) + QPointF(0, view.y);
                 for (int i = 0; cell.layout && i < cell.layout->lineCount(); ++i) {
@@ -4502,7 +4572,8 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
             const QTextLine line = view.layout->lineAt(i);
             const bool lastLine = i == view.layout->lineCount() - 1;
             if (y <= textTop + line.y() + line.height() || (lastLine && last)) {
-                return view.map.toSource(line.xToCursor(x));
+                const qreal shift = view.span.kind == BlockSpan::Kind::Code ? sideOffset(view) : 0;
+                return view.map.toSource(line.xToCursor(x + shift));
             }
         }
         return view.span.range.end;
@@ -4577,8 +4648,27 @@ void MarkdownEditor::ensureCursorVisible()
     qreal y = view.y;
     if (view.layout) {
         const QTextLine line = view.layout->lineForTextPosition(int(display));
-        if (line.isValid())
+        if (line.isValid()) {
             y += view.textTop + line.y();
+            // A fence that scrolls sideways keeps the caret inside its window
+            // too, the way revealCaretCell does for a table's cell.
+            const qreal extent = view.span.kind == BlockSpan::Kind::Code ? sideExtent(view) : 0;
+            if (extent > contentWidth()) {
+                const qreal gutter = codeGutterWidth(view);
+                const qreal x = line.cursorToX(int(display));
+                qreal scroll = sideOffset(view);
+                if (x - gutter < scroll + 24)
+                    scroll = x - gutter - 24;
+                else if (x > scroll + contentWidth() - 24)
+                    scroll = x - contentWidth() + 24;
+                BlockView &first = d->m_blocks[size_t(index - view.piece)];
+                scroll = qBound<qreal>(0, scroll, extent - contentWidth());
+                if (!qFuzzyCompare(scroll + 1, first.sideScroll + 1)) {
+                    first.sideScroll = scroll;
+                    viewport()->update();
+                }
+            }
+        }
     }
 
     QScrollBar *bar = verticalScrollBar();
@@ -5649,10 +5739,10 @@ void MarkdownEditor::wheelEvent(QWheelEvent *event)
         // scrolls the note itself; an embed must never leave the page stuck.
     }
 
-    BlockView *table = scrollableTableAt(pos);
+    BlockView *table = sidewaysScrollableAt(pos);
     if (table) {
-        // A horizontal wheel, or shift with a vertical one, pans the table -
-        // the gesture Obsidian answers to.
+        // A horizontal wheel, or shift with a vertical one, pans the table or
+        // listing - the gesture Obsidian answers to.
         const QPoint pixels = event->pixelDelta();
         const QPoint degrees = event->angleDelta();
         qreal dx = pixels.x() != 0 ? pixels.x() : degrees.x() / 2.0;
@@ -5660,10 +5750,10 @@ void MarkdownEditor::wheelEvent(QWheelEvent *event)
             dx = pixels.y() != 0 ? pixels.y() : degrees.y() / 2.0;
 
         if (!qFuzzyIsNull(dx)) {
-            const qreal overflow = table->tableWidth - contentWidth();
-            const qreal wanted = qBound<qreal>(0, table->tableScroll - dx, overflow);
-            if (!qFuzzyCompare(wanted + 1, table->tableScroll + 1)) {
-                table->tableScroll = wanted;
+            const qreal overflow = sideExtent(*table) - contentWidth();
+            const qreal wanted = qBound<qreal>(0, sideOffset(*table) - dx, overflow);
+            if (!qFuzzyCompare(wanted + 1, table->sideScroll + 1)) {
+                table->sideScroll = wanted;
                 viewport()->update();
             }
             event->accept();

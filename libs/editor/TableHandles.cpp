@@ -92,12 +92,12 @@ const TableSpan *MarkdownEditor::chromeTable(const BlockView &view) const
 QRectF MarkdownEditor::tableViewRect(const BlockView &view) const
 {
     return QRectF(contentLeft(), view.y - verticalScrollBar()->value(),
-                  qMin<qreal>(view.tableWidth, contentWidth()), view.height);
+                  qMin<qreal>(view.sideWidth, contentWidth()), view.height);
 }
 
 QRectF MarkdownEditor::cellViewRect(const BlockView &view, const Cell &cell) const
 {
-    return cell.rect.translated(contentLeft() - view.tableScroll, view.y - verticalScrollBar()->value());
+    return cell.rect.translated(contentLeft() - view.sideScroll, view.y - verticalScrollBar()->value());
 }
 
 int MarkdownEditor::cellRowAt(const BlockView &view, const TableSpan &table, qreal y) const
@@ -117,7 +117,7 @@ int MarkdownEditor::cellRowAt(const BlockView &view, const TableSpan &table, qre
 
 int MarkdownEditor::cellColumnAt(const BlockView &view, const TableSpan &table, qreal x) const
 {
-    const qreal local = x - contentLeft() + view.tableScroll;
+    const qreal local = x - contentLeft() + view.sideScroll;
     int low = 0;
     int high = table.columns - 1;
     while (low < high) {
@@ -144,7 +144,7 @@ QRectF MarkdownEditor::columnGripRect(const BlockView &view, const TableSpan &ta
     const QRectF cell = cellViewRect(view, view.cells[size_t(column)]);
     const qreal middle = cell.center().x();
     // A column scrolled out of the table's window has no grip.
-    if (middle < contentLeft() || middle > contentLeft() + qMin<qreal>(view.tableWidth, contentWidth()))
+    if (middle < contentLeft() || middle > contentLeft() + qMin<qreal>(view.sideWidth, contentWidth()))
         return {};
     const qreal length = qBound<qreal>(12, cell.width() - 8, kGripLength);
     const QRectF grip(middle - length / 2, cell.top() - kGripThick / 2, length, kGripThick);
@@ -155,7 +155,7 @@ QRectF MarkdownEditor::addRowRect(const BlockView &view) const
 {
     const QRectF table = tableViewRect(view);
     // Below a sideways scroll bar when there is one.
-    return QRectF(table.left(), table.bottom() + (view.tableWidth > contentWidth() ? 7 : 1), table.width(), kBarThick);
+    return QRectF(table.left(), table.bottom() + (view.sideWidth > contentWidth() ? 7 : 1), table.width(), kBarThick);
 }
 
 QRectF MarkdownEditor::addColumnRect(const BlockView &view) const
@@ -375,7 +375,7 @@ bool MarkdownEditor::pressTableChrome(const QPoint &point, bool touch)
         // A click adds one, a drag adds one for each row height or column
         // width it travels; the table changes on release.
         const bool column = chrome.part == TablePart::AddColumn;
-        const qreal origin = column ? point.x() - contentLeft() + view.tableScroll
+        const qreal origin = column ? point.x() - contentLeft() + view.sideScroll
                                     : point.y() + verticalScrollBar()->value() - view.y;
         d->m_tableDrag = {chrome.part, chrome.block, -1, 0, false, point, origin};
         return true;
@@ -423,7 +423,7 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
     // The boundary nearest the pointer: before the first row or column whose
     // middle is past it, and no higher than the first body row.
     int to = column ? int(table->columns) : int(table->rows.size());
-    const qreal local = column ? point.x() - contentLeft() + view.tableScroll
+    const qreal local = column ? point.x() - contentLeft() + view.sideScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
     for (int i = column ? 0 : firstRow; i < to; ++i) {
         const Cell &cell = view.cells[column ? size_t(i) : size_t(i) * size_t(table->columns)];
@@ -444,7 +444,7 @@ bool MarkdownEditor::dragTableChrome(const QPoint &point)
 int MarkdownEditor::addBarCount(const BlockView &view, const TableSpan &table, const QPoint &point) const
 {
     const bool column = d->m_tableDrag.part == TablePart::AddColumn;
-    const qreal local = column ? point.x() - contentLeft() + view.tableScroll
+    const qreal local = column ? point.x() - contentLeft() + view.sideScroll
                                : point.y() + verticalScrollBar()->value() - view.y;
     const Cell &last = view.cells[column ? size_t(table.columns) - 1
                                          : (size_t(table.rows.size()) - 1) * size_t(table.columns)];
@@ -477,7 +477,7 @@ QPoint MarkdownEditor::tableScrollDelta(const QPoint &point, qsizetype &block) c
     const auto step = [](qreal over) { return over == 0 ? 0 : (over < 0 ? -1 : 1) * qBound(2, 2 + int(qAbs(over) / 4), 40); };
     QPoint delta;
     // A wide table pans inside its own window, which is where its cells end.
-    if (view.tableWidth > contentWidth()) {
+    if (view.sideWidth > contentWidth()) {
         const qreal left = contentLeft();
         const qreal right = left + contentWidth();
         delta.setX(step(point.x() < left ? point.x() - left : point.x() > right ? point.x() - right : 0));
@@ -512,9 +512,9 @@ void MarkdownEditor::tableAutoScrollTick()
     BlockView &view = d->m_blocks[size_t(block)];
     bool scrolled = false;
     if (delta.x() != 0) {
-        const qreal wanted = qBound<qreal>(0, view.tableScroll + delta.x(), view.tableWidth - contentWidth());
-        if (!qFuzzyCompare(wanted + 1, view.tableScroll + 1)) {
-            view.tableScroll = wanted;
+        const qreal wanted = qBound<qreal>(0, view.sideScroll + delta.x(), view.sideWidth - contentWidth());
+        if (!qFuzzyCompare(wanted + 1, view.sideScroll + 1)) {
+            view.sideScroll = wanted;
             scrolled = true;
         }
     }
@@ -698,7 +698,7 @@ bool MarkdownEditor::dragCellSelection(const QPoint &point)
     // is where it autoscrolls.
     QRectF reach = tableViewRect(view).adjusted(-2, -2, 2, 2);
     constexpr qreal kFar = 1e6;
-    if (view.tableWidth > contentWidth()) {
+    if (view.sideWidth > contentWidth()) {
         reach.setLeft(-kFar);
         reach.setRight(kFar);
     }

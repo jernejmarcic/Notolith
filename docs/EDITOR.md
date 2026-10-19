@@ -685,6 +685,28 @@ callout wraps in live preview, as Obsidian's does (a language-less listing
 there scrolls on a single unbroken token; here it is broken, which no
 reader has asked about).
 
+A fence outside a callout never wraps: its longest line scrolls sideways inside
+the panel. That is Obsidian's reading-view rule, chosen over its live-preview
+rule (CodeMirror wraps there) because a wrapped diff hides where its lines end;
+`#| wrap: true` (Quarto's `code-overflow: wrap`, whose default is `scroll`) opts a
+fence back into wrapping, and source mode wraps, having no panel to scroll in.
+Indented code is a fence for this. It reuses the wide-table mechanism:
+`BlockView::sideWidth` (the widest line, 0 while everything fits) and
+`sideScroll`, one offset per fence held by its first piece, so every piece
+moves together (`sideExtent` is the widest of them, `sideOffset` the clamped
+offset; a piece not laid out yet has no width, so the extent can grow as the
+fence scrolls into view). A horizontal wheel, Shift plus the vertical wheel
+and a trackpad's horizontal pixels pan it (`sidewaysScrollableAt`); the text is
+clipped to the window right of the `#| lines` gutter, whose numbers stay put,
+and `paintSidewaysOverflow` draws the edge fades and the 3 px bar the tables
+use. `pointFor`, `offsetAt` and `ensureCursorVisible` carry the offset, so the
+caret, a click and a drag land where the characters are and typing, End, Shift+
+arrows and vim's `$` keep the caret inside the window. The rebuild after every
+parse copies the offset to the new first piece. A fence with no overlong line
+pays nothing. Not done: dragging a selection past the right edge does not
+autoscroll (a table's `m_tableScrollTimer` does), and there is no draggable
+thumb.
+
 Every fence with a language is laid out under a header strip (`hasCodeHeader`,
 one `codeHeaderHeight` tall) that names it (`codeTitleOf`: `#| title:`, else the
 style's name; nothing in a tab group, whose tabs are the names). The copy button
