@@ -1835,15 +1835,17 @@ WINDOWS-PLAN.md; items below get filled from it.
 - [ ] Obsidian command ids workspace:open-in-new-window /
       workspace:move-to-new-window unverified: check against a real
       Obsidian hotkeys.json (Jernej) or a public source.
-- [ ] Escape-cancelled tab drag with the pointer outside every window
+- [x] Escape-cancelled tab drag with the pointer outside every window
       opens a pop-out (Qt reports it as a drop outside). Plan: watch
       KeyPress Escape in the app filter while m_dragging and treat the next
       IgnoreAction as cancel; verify by hand on Hyprland (offscreen cannot
       start a drag). Obsidian cancels on Escape.
-- [ ] After lanes C + D: dragging a right sidebar tab button out of the
+      Done (lane popfollow): filter re-installed in front of QBasicDrag's;
+      hand-verify once on Hyprland.
+- [x] After lanes C + D: dragging a right sidebar tab button out of the
       window detaches that pane (lane popdrag skips it: detachPane lands
       in lane popside at the same time).
-- [ ] After lanes B + C: persist detached sidebars / panes (Pane::viewType
+- [x] After lanes B + C: persist detached sidebars / panes (Pane::viewType
       column, file-explorer etc.), test ADetachedSidebarIsRestoredAsAFile
       ExplorerWindow. (Main-splitter 3-children assertion: done, lane C.)
 
