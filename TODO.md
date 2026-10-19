@@ -2096,10 +2096,18 @@ Shared/<title>.md.
   - [x] tasks.ini loads only through MarkdownEditor: index CLI and a
         standalone Publisher see default states. Lazy-load in
         TaskStates::current().
-- [ ] Remember folds per note, like Obsidian (it keeps each file's folded
+- [x] Remember folds per note, like Obsidian (it keeps each file's folded
       headings and lists across switches and restarts). Today setNoteText
       clears them (before 2026-10-19 they landed on the wrong blocks of the
       next note). Key by note path + heading/line text, not offset.
+      Lane foldmemory: state.notePositions (caret + scroll + folds, 50 notes),
+      follows renames, dropped on delete.
+- [ ] Fold headings and list items, like Obsidian (found by lane
+      foldmemory: only callouts, `:::`, `#| fold` code and properties fold
+      today). Obsidian: "Fold heading" / "Fold indent" settings, gutter arrow,
+      fold all / unfold all / toggle fold commands, reading view too. Sol
+      research, Fable plan, then a lane; foldSites() must learn the new kinds
+      so per-note memory covers them.
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
