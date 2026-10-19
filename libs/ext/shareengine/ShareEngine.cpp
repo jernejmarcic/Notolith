@@ -68,6 +68,17 @@ std::optional<ShareEngine::InviteInfo::Host> privateHost(const QString &text)
     return ShareEngine::InviteInfo::Host{host, quint16(port)};
 }
 
+/// A Presence whose head is this: its author closed the note.
+constexpr quint32 kCaretGone = 0xFFFFFFFFu;
+
+/// A frame of ours has a reader there: it has sent us one we could open, so
+/// it holds this epoch's key. Presence waits for that, so a member still
+/// waiting for a rekey does not count ten refused frames a second.
+bool keyedWith(const auto &share, const QByteArray &member)
+{
+    return share.lastSeq.contains(member);
+}
+
 quint64 newClientID()
 {
     return QRandomGenerator::system()->generate64() & ((quint64(1) << 53) - 1);
@@ -118,10 +129,13 @@ struct ShareEngine::Share {
         qsizetype anchor = 0, head = 0;
         quint64 counter = 0;
         qint64 at = 0; ///< ms since epoch it arrived
+        bool gone = false; ///< its author closed the note: kept for the counter
     };
     QHash<QByteArray, Seen> carets; ///< by author
     std::optional<std::pair<qsizetype, qsizetype>> myCaret;
-    quint64 caretCounter = 0;
+    // Starts at the clock, so an author that restarted is not taken for a
+    // replay by a member who only hears it through the owner (no peerDown there).
+    quint64 caretCounter = quint64(QDateTime::currentMSecsSinceEpoch());
     bool caretDue = false;
     bool dirty = false;
     bool changedSinceExchange = false; ///< a remote update arrived since the last state-vector round
@@ -899,6 +913,38 @@ void ShareEngine::setCaret(const QByteArray &shareID, qsizetype anchor, qsizetyp
         m_presence.start();
 }
 
+void ShareEngine::clearCaret(const QByteArray &shareID)
+{
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd() || !(*it)->myCaret)
+        return;
+    (*it)->myCaret.reset();
+    (*it)->caretDue = true;
+    sendCarets(false); // now: stop() may forget the share right after
+}
+
+bool ShareEngine::isHere(const QByteArray &shareID, const QByteArray &device) const
+{
+    if (m_up.contains(device))
+        return true;
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd())
+        return false;
+    const auto seen = (*it)->carets.constFind(device);
+    return seen != (*it)->carets.constEnd() && !seen->gone;
+}
+
+int ShareEngine::membersHere(const QByteArray &shareID) const
+{
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd() || !m_me)
+        return 0;
+    int n = 0;
+    for (const Share::Member &m : (*it)->members)
+        n += m.key != m_me->publicKey() && isHere(shareID, m.key);
+    return n;
+}
+
 void ShareEngine::sendCarets(bool all)
 {
     if (!m_me)
@@ -913,17 +959,18 @@ void ShareEngine::sendCarets(bool all)
             if (share.carets.size() != before)
                 emit presenceChanged(share.record.shareID);
         }
-        if (!share.myCaret || (!all && !share.caretDue))
+        // A cleared caret goes out once (as "gone"); the heartbeat repeats a shown one only.
+        if (!share.caretDue && !(all && share.myCaret))
             continue;
         share.caretDue = false;
         notolith::share::Presence presence;
         presence.set_author(toS(m_me->publicKey()));
         presence.set_counter(++share.caretCounter);
-        presence.set_anchor(quint32(qMax<qsizetype>(0, share.myCaret->first)));
-        presence.set_head(quint32(qMax<qsizetype>(0, share.myCaret->second)));
+        presence.set_anchor(share.myCaret ? quint32(qMax<qsizetype>(0, share.myCaret->first)) : kCaretGone);
+        presence.set_head(share.myCaret ? quint32(qMax<qsizetype>(0, share.myCaret->second)) : kCaretGone);
         const QByteArray bytes = toQ(presence.SerializeAsString());
         for (const Share::Member &m : std::as_const(share.members))
-            if (m.key != m_me->publicKey() && m_up.contains(m.key))
+            if (m.key != m_me->publicKey() && keyedWith(share, m.key))
                 sendFrame(share, m.key, FrameKind::Presence, bytes);
     }
 }
@@ -934,18 +981,19 @@ void ShareEngine::onPresence(Share &share, const QByteArray &from, const QByteAr
     if (!presence.ParseFromArray(bytes.constData(), int(bytes.size())))
         return drop(&share, QStringLiteral("presence does not decode"), from);
     const QByteArray author = toQ(presence.author());
-    // The author is whoever it says, among the members: carets are cosmetic,
-    // and a member can draw its own caret anywhere anyway.
-    if (author == m_me->publicKey() || !share.member(author))
+    // A member speaks for itself; only the owner, the hub members reach each
+    // other through, passes on someone else's.
+    if (author == m_me->publicKey() || !share.member(author) || (author != from && from != share.record.owner))
         return;
     Share::Seen &seen = share.carets[author];
     if (presence.counter() <= seen.counter)
         return; // a copy that came round another way, or a late one
+    const bool gone = presence.head() == kCaretGone;
     seen = {qsizetype(presence.anchor()), qsizetype(presence.head()), presence.counter(),
-            QDateTime::currentMSecsSinceEpoch()};
+            QDateTime::currentMSecsSinceEpoch(), gone};
     // Members need not be connected to each other: pass it on, once.
     for (const Share::Member &m : std::as_const(share.members))
-        if (m.key != m_me->publicKey() && m.key != from && m.key != author && m_up.contains(m.key))
+        if (m.key != m_me->publicKey() && m.key != from && m.key != author && keyedWith(share, m.key))
             sendFrame(share, m.key, FrameKind::Presence, bytes);
     emit presenceChanged(share.record.shareID);
 }
@@ -957,7 +1005,7 @@ QList<ShareEngine::Caret> ShareEngine::carets(const QByteArray &shareID) const
     if (it == m_shares.constEnd())
         return out;
     for (auto entry = (*it)->carets.constBegin(); entry != (*it)->carets.constEnd(); ++entry)
-        if (const Share::Member *m = (*it)->member(entry.key()))
+        if (const Share::Member *m = (*it)->member(entry.key()); m && !entry->gone)
             out.append({entry.key(), m->name, entry->anchor, entry->head});
     return out;
 }

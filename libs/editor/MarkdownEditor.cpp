@@ -25,6 +25,7 @@
 #include <QLinearGradient>
 #include <QWheelEvent>
 #include <QPainter>
+#include <QRegion>
 #include <QPainterPath>
 #include <QGuiApplication>
 #include <QScrollBar>
@@ -4684,8 +4685,31 @@ void MarkdownEditor::setRemoteCarets(const QList<RemoteCaret> &carets)
 {
     if (carets.isEmpty() && d->m_remoteCarets.isEmpty())
         return;
+    // Only where a caret was and is: a peer moving its caret ten times a
+    // second repaints two small boxes, not the page.
+    QRegion dirty;
+    const auto add = [&](const QList<RemoteCaret> &list) {
+        for (const RemoteCaret &caret : list)
+            dirty += remoteCaretRect(caret);
+    };
+    add(d->m_remoteCarets);
     d->m_remoteCarets = carets;
-    viewport()->update();
+    add(d->m_remoteCarets);
+    viewport()->update(dirty);
+}
+
+QRect MarkdownEditor::remoteCaretRect(const RemoteCaret &caret) const
+{
+    qreal height = 0;
+    const QPointF point = pointFor(qBound<qsizetype>(0, caret.head, d->m_text.size()), &height);
+    if (height <= 0)
+        height = QFontMetricsF(font()).height();
+    QFont small = font();
+    small.setPointSizeF(small.pointSizeF() * 0.75);
+    const QFontMetricsF metrics(small);
+    return QRectF(point.x() - 2, point.y() - metrics.height() - 1, metrics.horizontalAdvance(caret.name) + 10,
+                  height + metrics.height() + 3)
+        .toAlignedRect();
 }
 
 QList<MarkdownEditor::RemoteCaret> MarkdownEditor::remoteCarets() const

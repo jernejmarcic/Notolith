@@ -2071,6 +2071,20 @@ Shared/<title>.md.
       MarkdownEditor::setRemoteCarets (shift with edits, bar + name tag),
       ShareSession wiring. Tests RemoteCaretFollowsTheOtherEditor,
       ACaretReachesAMemberThroughTheOwner. Left: tinting a remote selection.
+- [x] Fable check of lanes U/P (2026-10-19), fixed: ghost caret after
+      closing the note (clearCaret, "gone" presence); counter restart seen as
+      replay through the owner (counter starts at the clock); run-all ran a
+      wrong block after a remote edit (stops on a text change); full-viewport
+      repaint per caret move (dirty rects) and tab relayout churn (equality
+      check); badge/dialog counted direct links only (membersHere, isHere);
+      author spoofing (only the owner relays others' carets); refused-frame
+      count inflated by presence to unkeyed peers (lastSeq gate); exec()
+      QMessageBox inside a WA_DeleteOnClose dialog (open() + finished);
+      per-process qHash hue (first key byte). Tests:
+      LeavingTheNoteTakesTheCaretAway, RunAllStopsWhenAnEditMovesTheBlocks,
+      membersHere in ACaretReachesAMemberThroughTheOwner.
+- [ ] Untested: a spoofed Presence author from a non-owner member (needs a
+      crafted frame; test_share has no seam for sealing as a member).
 - [ ] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
       there should be something called implicit imports, or implicit code

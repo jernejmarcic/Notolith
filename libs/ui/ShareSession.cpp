@@ -30,7 +30,7 @@ void ShareSession::showCarets()
     QList<MarkdownEditor::RemoteCaret> carets;
     for (const ShareEngine::Caret &caret : m_engine->carets(m_id)) {
         // One colour per device, the same on every screen that shows it.
-        const int hue = int(qHash(caret.device) % 360);
+        const int hue = caret.device.isEmpty() ? 0 : quint8(caret.device.at(0)) * 360 / 256;
         carets.append({caret.name, QColor::fromHsv(hue, 170, 230), caret.anchor, caret.head});
     }
     for (MarkdownEditor *view : std::as_const(m_views))
@@ -117,6 +117,8 @@ void ShareSession::retain(const QList<MarkdownEditor *> &keep)
         }
         m_views.removeAt(i);
     }
+    if (!hasViews())
+        m_engine->clearCaret(m_id); // nobody here looks at the note: the others stop drawing our caret
 }
 
 void ShareSession::send(const QByteArray &update)

@@ -1935,6 +1935,8 @@ private:
     /// The caret's rectangle in viewport coordinates, empty when not drawn.
     QRectF caretRect() const;
     void paintRemoteCarets(QPainter &painter) const;
+    /// What a remote caret and its name tag cover, viewport coordinates.
+    QRect remoteCaretRect(const RemoteCaret &caret) const;
     // --- touch, TouchInput.cpp -------------------------------------------
     /// `rect` grown by `mouseSlop`, or by a finger's worth when the press
     /// being handled came from a touchscreen: task boxes, fold arrows,

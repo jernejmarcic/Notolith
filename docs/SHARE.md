@@ -304,9 +304,16 @@ already holds shares of this vault.
   coloured bar with their name (one colour per device). The focused view
   sends its caret as a `Presence` frame, at most ten a second and again with
   every resync; members pass it on like an update (a counter per author
-  stops copies and loops). It moves with every edit made locally, goes when
-  its device disconnects, and is dropped after a minute without a word.
-  Nothing is stored. Another person's selection is not drawn.
+  stops copies and loops; it starts at the clock, so a restarted device is
+  not taken for a replay). A member speaks only for itself; only the owner
+  relays someone else's. Presence goes to a member only once a frame from it
+  opened (it holds this epoch's key). It moves with every edit made locally,
+  goes when its device closes the note or disconnects, and is dropped after a
+  minute without a word. Nothing is stored. Another person's selection is
+  not drawn. A member whose caret arrives through the owner counts as here
+  (badge, dialog: "here, through the owner").
+- **Run all** in a shared note stops when the text changes while a block
+  asks to run (a remote edit moved the blocks).
 - **Status:** the status bar shows "Shared - N here" (connected members
   besides this device) while the active note is shared, with refused
   messages in its tooltip; a shared note's tab carries a `⇄` after its name.

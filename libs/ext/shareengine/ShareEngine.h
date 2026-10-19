@@ -148,6 +148,12 @@ public:
     /// Sent to the others at most ten times a second, and again with every
     /// resync so it does not expire; nothing of it is stored.
     void setCaret(const QByteArray &shareID, qsizetype anchor, qsizetype head);
+    /// This device no longer shows the note: the others stop drawing its caret.
+    void clearCaret(const QByteArray &shareID);
+    /// Members besides this device that are connected, directly or (their
+    /// caret arriving) through another member.
+    int membersHere(const QByteArray &shareID) const;
+    bool isHere(const QByteArray &shareID, const QByteArray &device) const;
     struct Caret {
         QByteArray device;
         QString name;

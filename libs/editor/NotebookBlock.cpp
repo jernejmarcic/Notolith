@@ -599,9 +599,15 @@ int MarkdownEditor::runNotebookBlocksUpTo(qsizetype offset)
         if (view.embedPanel && view.notebookEligible && view.span.range.start <= offset)
             starts.append(view.span.range.start);
     }
+    // An edit meanwhile (another person's, while a block asked first) moves
+    // the blocks: the offsets no longer name them, so the rest is not run.
+    const quint64 version = d->m_textVersion;
     int count = 0;
-    for (const qsizetype start : std::as_const(starts))
+    for (const qsizetype start : std::as_const(starts)) {
+        if (d->m_textVersion != version)
+            break;
         count += runNotebookBlockAt(start) ? 1 : 0;
+    }
     return count;
 }
 

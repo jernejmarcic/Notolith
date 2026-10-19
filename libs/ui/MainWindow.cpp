@@ -1663,12 +1663,13 @@ void MainWindow::updateShareStatus()
         return; // the window is still being built
     for (const auto &group : m_groups)
         for (int i = 0; i < group->tabs->count() && i < group->leaves.size(); ++i)
-            group->tabs->setTabText(i, tabTitle(group->leaves.at(i)));
+            if (const QString title = tabTitle(group->leaves.at(i)); group->tabs->tabText(i) != title)
+                group->tabs->setTabText(i, title); // QTabBar relays out on every call
     const ShareSession *session = m_active && m_share ? sessionFor(m_active->notePath) : nullptr;
     m_shareStatus->setVisible(session != nullptr);
     if (!session)
         return;
-    m_shareStatus->setText(tr("Shared - %1 here").arg(m_share->peersHere(session->shareID())));
+    m_shareStatus->setText(tr("Shared - %1 here").arg(m_share->membersHere(session->shareID())));
     const ShareEngine::Counters counters = m_share->counters(session->shareID());
     m_shareStatus->setToolTip(counters.dropped ? tr("%1 messages refused, the last: %2").arg(counters.dropped).arg(counters.lastReason)
                                                : tr("Everyone connected sees your edits as you type"));
@@ -5879,6 +5880,7 @@ void MainWindow::updateShare()
     connect(m_share.get(), &ShareEngine::joined, this, &MainWindow::placeJoinedNote);
     connect(m_share.get(), &ShareEngine::peersChanged, this, &MainWindow::updateShareStatus);
     connect(m_share.get(), &ShareEngine::membersChanged, this, &MainWindow::updateShareStatus);
+    connect(m_share.get(), &ShareEngine::presenceChanged, this, &MainWindow::updateShareStatus); // here through the owner
     connect(m_share.get(), &ShareEngine::failed, this,
             [this](const QByteArray &, const QString &message) { statusBar()->showMessage(message, 8000); });
     if (m_share->hasStoredShares())
@@ -6013,6 +6015,7 @@ void MainWindow::stopShare(const QByteArray &shareID)
     ShareSession *session = m_sessions.take(shareID);
     if (!session || !m_share)
         return;
+    m_share->clearCaret(shareID);
     delete session; // stops following the editors
     m_share->stop(shareID);
     updateShareStatus();

@@ -98,6 +98,10 @@ ShareDialog::ShareDialog(ShareEngine *engine, QByteArray shareID, const QString 
         if (id == m_id)
             refresh();
     });
+    connect(engine, &ShareEngine::presenceChanged, this, [this](const QByteArray &id) {
+        if (id == m_id)
+            refresh();
+    });
     connect(engine, &QObject::destroyed, this, &QDialog::reject);
     refresh();
     resize(640, 420);
@@ -126,7 +130,10 @@ void ShareDialog::refresh()
             owner = record.owner;
     for (const auto &[key, name] : m_engine->members(m_id)) {
         const bool me = key == m_engine->publicKey();
-        QString status = me ? tr("this device") : m_engine->isConnected(key) ? tr("here") : tr("away");
+        QString status = me                            ? tr("this device")
+                         : m_engine->isConnected(key)    ? tr("here")
+                         : m_engine->isHere(m_id, key) ? tr("here, through the owner")
+                                                       : tr("away");
         if (key == owner)
             status += tr(", owner");
         auto *item = new QTreeWidgetItem(m_members, {name, ShareEngine::fingerprintOf(key),
@@ -144,21 +151,25 @@ void ShareDialog::revokeSelected()
         return;
     const QByteArray key = item->data(0, Qt::UserRole).toByteArray();
     const QString name = item->text(0);
-    bool sure = false;
     if (m_confirm) {
-        sure = m_confirm(name);
-    } else {
-        QMessageBox ask(QMessageBox::Warning, tr("Remove device"),
-                        tr("Remove %1 from this note? It keeps what it already has, and gets nothing new.").arg(name),
-                        QMessageBox::NoButton, this);
-        ask.setTextFormat(Qt::PlainText); // the name comes from the other device
-        QPushButton *remove = ask.addButton(tr("Remove"), QMessageBox::DestructiveRole);
-        ask.setDefaultButton(ask.addButton(QMessageBox::Cancel));
-        ask.exec();
-        sure = ask.clickedButton() == remove;
+        if (m_confirm(name) && m_engine)
+            m_engine->revoke(m_id, key);
+        return;
     }
-    if (sure && m_engine)
-        m_engine->revoke(m_id, key);
+    // Not exec(): a nested loop could see this dialog deleted under it (the
+    // engine going takes the dialog with it).
+    auto *ask = new QMessageBox(QMessageBox::Warning, tr("Remove device"),
+                                tr("Remove %1 from this note? It keeps what it already has, and gets nothing new.").arg(name),
+                                QMessageBox::NoButton, this);
+    ask->setAttribute(Qt::WA_DeleteOnClose);
+    ask->setTextFormat(Qt::PlainText); // the name comes from the other device
+    QPushButton *remove = ask->addButton(tr("Remove"), QMessageBox::DestructiveRole);
+    ask->setDefaultButton(ask->addButton(QMessageBox::Cancel));
+    connect(ask, &QMessageBox::finished, this, [this, ask, remove, key] {
+        if (ask->clickedButton() == remove && m_engine)
+            m_engine->revoke(m_id, key);
+    });
+    ask->open();
 }
 
 JoinShareDialog::JoinShareDialog(std::function<bool(const QString &, QString *)> join, QWidget *parent)

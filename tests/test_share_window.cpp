@@ -797,6 +797,45 @@ TEST_P(ShareWindowTest, ACaretReachesAMemberThroughTheOwner)
                 return true;
         return false;
     }));
+    EXPECT_EQ(b.engine()->membersHere(id), 2) << "c is here, through the owner";
+    EXPECT_TRUE(b.engine()->isHere(id, c.engine()->publicKey()));
+}
+
+TEST_P(ShareWindowTest, LeavingTheNoteTakesTheCaretAway)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    ASSERT_FALSE(share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n")).isEmpty());
+    focusEditor(b);
+    b.editor()->setCursorOffset(6);
+    ASSERT_TRUE(waitFor([&] { return a.editor()->remoteCarets().size() == 1; }));
+    b.write(QStringLiteral("Other.md"), QStringLiteral("other\n"));
+    ASSERT_TRUE(b.window->openNote(b.path(QStringLiteral("Other.md")))); // the same tab, another note
+    ASSERT_TRUE(waitFor([&] { return a.editor()->remoteCarets().isEmpty(); }))
+        << "the caret of a device that closed the note is not drawn";
+    EXPECT_EQ(a.engine()->peersHere(a.engine()->shares().value(0).shareID), 1) << "it is still connected";
+}
+
+TEST_P(ShareWindowTest, RunAllStopsWhenAnEditMovesTheBlocks)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    const QString note = QStringLiteral("```python\nprint(1)  # %1\n```\n\n```python\nprint(2)  # %1\n```\n\nend\n").arg(marker);
+    ASSERT_FALSE(share(a, b, QStringLiteral("Two.md"), note).isEmpty());
+    b.window->show();
+    b.editor()->setCursorOffset(b.editor()->noteText().size());
+    QTest::qWait(100);
+    int asked = 0;
+    b.window->setSharedRunApprovalForTests([&](const QString &) {
+        // While the first block asks, the other person types above both.
+        if (++asked == 1) {
+            a.typeAt(0, QStringLiteral("intro\n"));
+            waitFor([&] { return b.text().startsWith(QStringLiteral("intro\n")); });
+        }
+        return true;
+    });
+    b.editor()->runAllNotebookBlocks();
+    EXPECT_EQ(asked, 1) << "the second block's offset no longer names it: not run";
+    ASSERT_TRUE(waitFor([&] { return !b.editor()->notebookInfoAt(b.text().indexOf(QStringLiteral("print(1)"))).running; }, 30000));
 }
 
 TEST_P(ShareWindowTest, StoppingStopsOnlyHere)
