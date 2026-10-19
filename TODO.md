@@ -2262,7 +2262,7 @@ Shared/<title>.md.
       rows wrap their labels and a control wider than 240 px goes under its
       text so nothing scrolls sideways. Closing saves and reactivates the
       main window. Tests: settings tests rewritten for the window; demo shots.
-- [ ] S2. "Is the newest version the one I launch from the app menu?" No:
+- [x] S2. "Is the newest version the one I launch from the app menu?" No:
       ~/.local/bin/notolith was copied 00:17 today. Rebuild Release, install
       per SYS_CHANGES (cmake --install to /tmp stage, copy bin/notolith),
       record it.
