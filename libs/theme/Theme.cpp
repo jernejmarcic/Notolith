@@ -211,10 +211,30 @@ void Theme::applyDerivedTokens()
            rgba(QColor(dark ? accent1 : accent), 0.45));
     derive(QStringLiteral("--text-selection"), rgba(QColor(accent), dark ? 0.33 : 0.20));
 
+    // What each formatting colour is today, so that setting none changes
+    // nothing. Bold, italic, headings, quotes, underline and strikethrough get
+    // no default on purpose: unset, the text keeps the colour of the block it
+    // is in, which a concrete default would override.
+    derive(QStringLiteral("--inline-title-color"), m_tokens[QStringLiteral("--text-normal")]);
+    derive(QStringLiteral("--checklist-done-color"), m_tokens[QStringLiteral("--text-muted")]);
+    derive(QStringLiteral("--text-highlight-bg"), m_tokens[QStringLiteral("--color-yellow")]);
+    derive(QStringLiteral("--text-highlight-fg"), base("00"));
+    derive(QStringLiteral("--code-normal"), m_tokens[QStringLiteral("--text-normal")]);
+    derive(QStringLiteral("--code-background"), m_tokens[QStringLiteral("--background-primary-alt")]);
+    derive(QStringLiteral("--link-color"), m_tokens[QStringLiteral("--text-accent")]);
+    derive(QStringLiteral("--link-external-color"), m_tokens[QStringLiteral("--link-color")]);
+    derive(QStringLiteral("--tag-color"), m_tokens[QStringLiteral("--text-accent")]);
+    derive(QStringLiteral("--list-marker-color"), m_tokens[QStringLiteral("--text-muted")]);
+    derive(QStringLiteral("--footnote-color"), m_tokens[QStringLiteral("--text-accent")]);
+
     derive(QStringLiteral("--interactive-normal"), dark ? base("30") : base("00"));
     derive(QStringLiteral("--interactive-hover"), dark ? base("35") : base("10"));
     derive(QStringLiteral("--interactive-accent"), dark ? accent : accent1);
     derive(QStringLiteral("--interactive-accent-hover"), dark ? accent1 : accent2);
+    derive(QStringLiteral("--checkbox-color"), m_tokens[QStringLiteral("--interactive-accent")]);
+    derive(QStringLiteral("--checkbox-marker-color"), m_tokens[QStringLiteral("--text-on-accent")]);
+    derive(QStringLiteral("--checkbox-border-color"),
+           m_tokens[QStringLiteral("--background-modifier-border-hover")]);
 
     derive(QStringLiteral("--divider-color"), base("30"));
     derive(QStringLiteral("--scrollbar-thumb-bg"), overlay(dark, 0.10));
@@ -249,6 +269,20 @@ void Theme::applyDerivedTokens()
 QString Theme::value(const QString &token) const
 {
     return m_tokens.value(token);
+}
+
+bool Theme::sameExcept(const Theme &other, const QSet<QString> &ignored) const
+{
+    if (m_mode != other.m_mode || m_interfaceFont != other.m_interfaceFont
+        || m_textFont != other.m_textFont || m_monospaceFont != other.m_monospaceFont)
+        return false;
+    const auto differs = [&ignored](const Theme &from, const Theme &to) {
+        for (auto it = from.m_tokens.cbegin(); it != from.m_tokens.cend(); ++it)
+            if (!ignored.contains(it.key()) && to.m_tokens.value(it.key()) != it.value())
+                return true;
+        return false;
+    };
+    return !differs(*this, other) && !differs(other, *this);
 }
 
 SyntaxStyles Theme::syntaxStyles() const
@@ -664,7 +698,7 @@ QTabBar::tab:selected {
 }
 
 QLineEdit#inlineTitle {
-    color: %{--text-normal};
+    color: %{--inline-title-color};
     font-size: 30px;
     font-weight: 700;
     background: %{--background-primary};

@@ -147,6 +147,26 @@ TEST(PublishTest, CustomCheckboxStatesCarryDataTaskAndAClass)
     EXPECT_TRUE(plain.contains(today));
 }
 
+TEST(PublishTest, SiteCSSCarriesFormattingColoursOnlyWhereSet)
+{
+    TestSite site({{QStringLiteral("Note.md"), "# T\n\nSome **bold** text.\n"}});
+    site.publish();
+    const QString plain = site.read(QStringLiteral("site.css"));
+    EXPECT_TRUE(plain.contains(QLatin1String("strong { color: var(--bold-color, inherit)"))) << "the rule is always there";
+    EXPECT_FALSE(plain.contains(QLatin1String("--bold-color:"))) << "unset, nothing declares it, so inherit holds";
+
+    Options options;
+    options.codeThemeDark = Theme::builtin(Theme::Mode::Dark);
+    options.codeThemeDark->setToken(QStringLiteral("--bold-color"), QStringLiteral("#ff0000"));
+    options.codeThemeLight = Theme::builtin(Theme::Mode::Light);
+    options.codeThemeLight->setToken(QStringLiteral("--bold-color"), QStringLiteral("#00ff00"));
+    site.publish(options);
+    const QString css = site.read(QStringLiteral("site.css"));
+    EXPECT_TRUE(css.contains(QLatin1String("--bold-color:#ff0000"))) << css.toStdString();
+    EXPECT_TRUE(css.contains(QLatin1String("--bold-color:#00ff00"))) << "the light mode's own";
+    EXPECT_FALSE(css.contains(QLatin1String("--h1-color:")));
+}
+
 TEST(PublishTest, HeadingAndBlockAnchors)
 {
     TestSite site({

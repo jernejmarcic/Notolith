@@ -46,6 +46,17 @@
 
 namespace noteAppC {
 
+/// A format property: the colour of a strikethrough line that is not the
+/// text's. Qt draws a strikeout in the text's own colour, so such a line is
+/// left to paintStrikeLines and the format's strikeout stays off.
+inline constexpr int kStrikeLineProperty = QTextFormat::UserProperty + 1;
+
+/// Strikes `format` through: in the theme's text and line colours where set
+/// (`--strikethrough-color`, `--strikethrough-decoration-color`), else as Qt does.
+void strikeThrough(QTextCharFormat &format, const Theme &theme);
+/// Draws the lines `kStrikeLineProperty` asked for over `layout`, drawn at `origin`.
+void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin);
+
 /// Everything modal editing remembers, in the editor because a count or a
 /// register belongs to one buffer. The logic is VimEngine, in VimMode.cpp,
 /// a short-lived friend built per keystroke.

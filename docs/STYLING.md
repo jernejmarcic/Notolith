@@ -312,6 +312,78 @@ changes - edit the selected scheme and the window restyles with no restart -
 and adding or removing a file in a themes directory updates the settings
 page's list while it is open.
 
+## Formatting colours
+
+Settings > Appearance, under the fonts, has a row for each kind of text, with a
+swatch for dark and one for light: note title, headings 1 to 6, bold, italic,
+underline, strikethrough, done task text, highlight, inline code, links
+(internal, external, unresolved), tags, quote text, list markers, checkboxes
+(fill, tick, border) and footnote marks. Underline, strikethrough, highlight,
+inline code and the links have a swatch per part - text and line, text and
+background. Pick a colour and the open notes change at once; a dashed swatch is
+"follow the theme", and Reset on a row or "Reset all formatting colours" goes
+back to it. The colours are kept in the user's `settings.ini` (`[appearance]
+bold-color-dark = #ff0000`), never in a note and never in a vault: they are how
+text is drawn, not part of what was written. Black (OLED) uses the dark
+swatches.
+
+They are ordinary theme tokens, so a scheme or an Obsidian theme's CSS can set
+them too, and "precedence" is the settings first, then the scheme or CSS file,
+then the built-in colour:
+
+| Kind | Token(s) | Unset |
+|---|---|---|
+| Note title | `--inline-title-color` | the text colour |
+| Heading 1 to 6 | `--h1-color` to `--h6-color` | the text colour |
+| Bold, italic | `--bold-color`, `--italic-color` | the text colour |
+| Underline (`<u>` only) | `--underline-color`, `--underline-decoration-color` | the text colour |
+| Strikethrough (`~~`, `<s>`, `<del>`) | `--strikethrough-color`, `--strikethrough-decoration-color` | the text colour |
+| Done task text | `--checklist-done-color` | `--text-muted` |
+| Highlight (`==`, `<mark>`) | `--text-highlight-fg`, `--text-highlight-bg` | the page, on yellow |
+| Inline code (`<code>`, `<kbd>`) | `--code-normal`, `--code-background` | the text colour, on `--background-primary-alt` |
+| Links | `--link-color`, `--link-external-color`, `--link-unresolved-color` | the accent, the accent, the dimmed accent |
+| Tag | `--tag-color` | the accent |
+| Quote text | `--blockquote-color` | the text colour |
+| List markers (bullets, numbers) | `--list-marker-color` | `--text-muted` |
+| Checkbox | `--checkbox-color`, `--checkbox-marker-color`, `--checkbox-border-color` | the interactive accent, white, the border |
+| Footnote marks | `--footnote-color` | the accent |
+
+All but `--text-highlight-fg`, `--footnote-color` and the two `-decoration-`
+tokens are Obsidian's names. Obsidian has no variable for a footnote, nor for
+the text colour of a highlight, and none for the colour of an underline or a
+strikethrough line (its `<u>` and `<s>` draw in the text colour), so those four
+use the same spelling, `-decoration-color` meaning the line.
+
+- **Unset means inherit.** Bold, italic, headings, quotes, underline and
+  strikethrough have no built-in colour on purpose: a concrete colour on a bold
+  word would paint over the block around it, a bold word in a callout or a
+  heading would turn the plain text colour. They take a colour only when one
+  is set. The kinds that already had a colour (links, tags, code, ...) keep it
+  until set, so adding a swatch changes nothing about how a note looks.
+- **Nesting.** A colour set on an inner kind wins over the block's: a bold
+  word in a heading with its own colour is the bold colour, a link in a
+  heading the link's. Bold italic (`***x***`) takes the bold colour.
+- **Underline and strikethrough lines.** The line colour is separate from the
+  text colour. An underline's is native (`QTextCharFormat::setUnderlineColor`).
+  Qt draws a strikeout in the text colour only, so with a line colour set the
+  strikeout is switched off and the editor draws the line itself, over the
+  text, from the format's `kStrikeLineProperty` (`paintStrikeLines`,
+  `MarkdownEditor.cpp`). Markdown has no underline; only `<u>` is underlined.
+- **Live update.** A change that touches only these tokens lays out again the
+  blocks on screen and nothing else: heights and the scroll position stay.
+  (`QTextLayout::setFormats` throws away a layout's lines, so a colour change
+  cannot recolour an already laid out block in place.) Any other change to the
+  theme - a size, a font, the accent, the text colour - is a full relayout as
+  before.
+- **Publish and PDF.** The published site's `site.css` declares a token only
+  where a scheme or the settings set it, and styles `strong`, `em`, `del`, `u`,
+  `mark`, headings, inline code, links, tags, quotes, list markers and done
+  tasks from them, falling back to what the page did before; light and dark
+  each get their own. A PDF export draws in the light theme with the person's
+  light colours on it.
+- Not coloured: comments (`%%`), which nothing draws differently, and math,
+  which is one image in the text colour.
+
 ## The file explorer
 
 Jernej, 2026-10-17: "Improve look and feel of the sidebar please ... especially
@@ -412,8 +484,8 @@ Jernej, 2026-10-16: "the general design is fine, I just want refinements".
   cost nothing per keystroke; the backlink count is one indexed query, a
   moment after the index changes. Words and characters follow the `word-count`
   core plugin switch.
-- **The inline title** is a line edit styled as the heading: click to put a
-  caret in it. Enter or leaving it renames the note through the same path as
+- **The inline title** is a line edit styled as the heading (its colour is
+  `--inline-title-color`, see Formatting colours): click to put a caret in it. Enter or leaving it renames the note through the same path as
   the file tree (links, history, open tabs, index), Esc or a refused name puts
   the old one back, Down or Enter moves into the note. A name with a `/` or
   another character Obsidian refuses, a leading dot, nothing, or one a note

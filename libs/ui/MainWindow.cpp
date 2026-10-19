@@ -131,6 +131,7 @@
 #include "NoteHistory.h"
 #endif
 #include "NoteHistoryDialog.h"
+#include "FormatColours.h"
 #include "Scheme.h"
 #include "SettingsPage.h"
 #include "FootnotesPane.h"
@@ -3761,6 +3762,7 @@ Theme MainWindow::themeFromSettings() const
     theme.setFontOverrides(m_settings.text(QStringLiteral("appearance.interfaceFont")),
                            m_settings.text(QStringLiteral("appearance.textFont")),
                            m_settings.text(QStringLiteral("appearance.monospaceFont")));
+    applyUserColours(theme, [this](const QString &key) { return m_settings.text(key); });
     return theme;
 }
 
@@ -4197,6 +4199,8 @@ void MainWindow::exportPdf()
     QString error;
     MarkdownEditor::PdfOptions pdf = options.options();
     pdf.taskStates = featureOn("task-states");
+    pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
+    applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
                                   m_resolveLink, pdf, &error))
         statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(target).fileName()), 3000);
@@ -4639,7 +4643,13 @@ void MainWindow::publishSite()
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
     const bool taskStates = featureOn("task-states");
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, taskStates] {
+    // The formatting colours too, read here: Settings is not for the worker.
+    QHash<QString, QString> colours;
+    for (const FormatRow &row : formatRows())
+        for (const FormatColour &colour : row.colours)
+            for (const bool dark : {true, false})
+                colours.insert(formatColourKey(colour, dark), m_settings.text(formatColourKey(colour, dark)));
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, colours, taskStates] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -4654,9 +4664,10 @@ void MainWindow::publishSite()
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
         options.parse.taskStates = taskStates;
-        if (!schemePath.isEmpty()) {
-            options.codeThemeDark = Scheme::apply(schemePath, Theme::Mode::Dark);
-            options.codeThemeLight = Scheme::apply(schemePath, Theme::Mode::Light);
+        for (const Theme::Mode mode : {Theme::Mode::Dark, Theme::Mode::Light}) {
+            Theme theme = schemePath.isEmpty() ? Theme::builtin(mode) : Scheme::apply(schemePath, mode);
+            applyUserColours(theme, [&colours](const QString &key) { return colours.value(key); });
+            (mode == Theme::Mode::Dark ? options.codeThemeDark : options.codeThemeLight) = theme;
         }
         result.ok = publisher.publish(options, {}, &result.error);
         result.counts = publisher.counts();

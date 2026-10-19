@@ -52,7 +52,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     // Paper is white: the light theme, whatever the window uses.
     MarkdownEditor editor;
     editor.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    editor.setTheme(Theme::builtin(Theme::Mode::Light));
+    editor.setTheme(options.theme.value_or(Theme::builtin(Theme::Mode::Light)));
     editor.setReadableLineLength(false);
     editor.setLinkResolver(std::move(resolver));
     editor.setMode(Mode::Reading);

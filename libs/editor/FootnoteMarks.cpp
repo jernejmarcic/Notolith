@@ -101,7 +101,7 @@ void MarkdownEditor::layoutFootnotes(BlockView &view, QList<Range> &hidden)
     const auto hides = [&hidden](qsizetype at) {
         return std::any_of(hidden.cbegin(), hidden.cend(), [at](const Range &range) { return range.contains(at); });
     };
-    const QColor accent = d->m_theme.color(QStringLiteral("--text-accent"));
+    const QColor footnote = d->m_theme.color(QStringLiteral("--footnote-color"));
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
     for (int i = view.firstStyle; i < view.lastStyle; ++i) {
         const StyleSpan &span = d->m_decorations.styles.at(i);
@@ -114,7 +114,7 @@ void MarkdownEditor::layoutFootnotes(BlockView &view, QList<Range> &hidden)
             std::find_if(d->m_decorations.footnotes.cbegin(), d->m_decorations.footnotes.cend(),
                          [&span](const FootnoteSpan &footnote) { return footnote.range == span.range; });
         if (reference != d->m_decorations.footnotes.cend()) {
-            view.footnoteMarks.push_back({span.range.start, 0, QString::number(reference->number), accent, true});
+            view.footnoteMarks.push_back({span.range.start, 0, QString::number(reference->number), footnote, true});
             continue;
         }
         const auto definition =

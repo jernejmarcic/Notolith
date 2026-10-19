@@ -113,6 +113,8 @@ private:
                          bool mayBeEmpty);
     void addAccentRow(QVBoxLayout *into);
     void addSchemeRow(QVBoxLayout *into);
+    /// A swatch per mode for every kind of text in formatRows(); display only.
+    void addFormatColourRows(QVBoxLayout *into);
     void addFolderRow(QVBoxLayout *into, const QString &key, const QString &label,
                       const QString &description);
 

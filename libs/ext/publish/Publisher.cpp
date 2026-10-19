@@ -16,6 +16,7 @@
 #include <functional>
 
 #include "CodeHighlighter.h"
+#include "FormatColours.h"
 #include "Index.h"
 #include "MathRenderer.h"
 #include "PageBody.h"
@@ -275,6 +276,14 @@ QString siteStylesheet(const noteAppC::Theme &dark, const noteAppC::Theme &light
         QString out;
         for (const QString &token : tokens)
             out += token + QLatin1Char(':') + t.value(token) + QLatin1Char(';');
+        // Formatting colours only where a scheme or the person set one: the
+        // rules below fall back to what the page does without them, which
+        // `var(--x)` of a variable never declared would not.
+        const QHash<QString, QString> set = t.overrides();
+        for (const noteAppC::FormatRow &row : noteAppC::formatRows())
+            for (const noteAppC::FormatColour &colour : row.colours)
+                if (const QString token = QLatin1String(colour.token); set.contains(token))
+                    out += token + QLatin1Char(':') + t.value(token) + QLatin1Char(';');
         return out;
     };
 
@@ -315,7 +324,7 @@ table.properties td { padding: 2px 0; }
 .note-body table { border-collapse: collapse; margin: 1em 0; }
 .note-body th, .note-body td { border: 1px solid var(--background-modifier-border); padding: 6px 10px; }
 blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1em 0;
-  padding: 0.2em 1em; color: var(--text-muted); }
+  padding: 0.2em 1em; color: var(--blockquote-color, var(--text-muted)); }
 .callout { border-radius: 6px; border-left: 4px solid rgb(var(--callout-color));
   background: rgba(var(--callout-color), 0.1); margin: 1em 0; padding: 0.6em 1em; }
 @media (prefers-color-scheme: light) {
@@ -359,6 +368,29 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
 .footnote-back sup { font-size: 0.7em; }
 .tag { background: var(--background-modifier-hover); border-radius: 10px; padding: 0 8px;
   text-decoration: none; font-size: 0.85em; }
+.page-title { color: var(--inline-title-color, inherit); }
+.note-body h1 { color: var(--h1-color, inherit); }
+.note-body h2 { color: var(--h2-color, inherit); }
+.note-body h3 { color: var(--h3-color, inherit); }
+.note-body h4 { color: var(--h4-color, inherit); }
+.note-body h5 { color: var(--h5-color, inherit); }
+.note-body h6 { color: var(--h6-color, inherit); }
+.note-body strong { color: var(--bold-color, inherit); }
+.note-body em { color: var(--italic-color, inherit); }
+.note-body del { color: var(--strikethrough-color, inherit);
+  text-decoration-color: var(--strikethrough-decoration-color, currentcolor); }
+.note-body u { color: var(--underline-color, inherit);
+  text-decoration-color: var(--underline-decoration-color, currentcolor); }
+.note-body mark { background: var(--text-highlight-bg, Mark); color: var(--text-highlight-fg, MarkText); }
+.note-body :not(pre) > code { color: var(--code-normal, inherit); background: var(--code-background, transparent); }
+.note-body a { color: var(--link-color, var(--text-accent)); }
+.note-body a[href^="http"], .note-body a[href^="mailto:"] {
+  color: var(--link-external-color, var(--link-color, var(--text-accent))); }
+.note-body a.tag { color: var(--tag-color, var(--link-color, var(--text-accent))); }
+.note-body .footnote-ref a { color: var(--footnote-color, var(--link-color, var(--text-accent))); }
+.note-body li::marker { color: var(--list-marker-color, inherit); }
+.note-body .task-list-item.done { color: var(--checklist-done-color, inherit); }
+.note-body input[type=checkbox] { accent-color: var(--checkbox-color, auto); }
 .backlinks { margin-top: 40px; border-top: 1px solid var(--background-modifier-border);
   padding-top: 12px; }
 .backlinks ul { padding-left: 20px; }
