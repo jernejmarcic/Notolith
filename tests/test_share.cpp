@@ -916,6 +916,58 @@ TEST(ShareEngineTest, TitlesAndNamesFromThePeerAreSanitised)
     EXPECT_FALSE(joiner.joined[0].second.contains(QLatin1Char('\n')));
 }
 
+TEST(ShareEngineTest, AWelcomeFromAStrangerIsRejected)
+{
+    Peer owner(QStringLiteral("a")), joiner(QStringLiteral("b"));
+    QString error;
+    const auto created = owner.engine->create(QStringLiteral("note.md"), QStringLiteral("T"), QStringLiteral("the real note"), &error);
+    ASSERT_TRUE(created);
+    ASSERT_TRUE(joiner.engine->join(created->inviteCode, QStringLiteral("Bob"), &error));
+    ASSERT_TRUE(waitFor([&] { return owner.requests.size() == 1; })); // the owner has not answered
+    const int backend = owner.engine->shares()[0].backend;
+
+    // A device that holds no invitation answers with a Welcome that is internally
+    // perfect: its own member list, signed by itself, listing the joiner. Only
+    // "who may welcome me" stops it.
+    RawMember raw(QStringLiteral("raw"));
+    raw.node->dial("127.0.0.1", joiner.engine->port(), toPK(joiner.publicKey()));
+    ASSERT_TRUE(waitFor([&] { return raw.up.load(); }));
+    const auto joinerKeys = ShareIdentity::load(QStringLiteral("b"));
+    MemberListBody list;
+    list.set_share_id(ShareFrame::toS(created->shareID));
+    list.set_epoch(1);
+    list.set_owner(ShareFrame::toS(raw.key()));
+    list.set_backend(uint32_t(backend));
+    for (const auto &[key, boxKey] : {std::pair{raw.key(), raw.me.box.publicKey}, std::pair{joinerKeys->publicKey(), joinerKeys->box.publicKey}}) {
+        Member *m = list.add_members();
+        m->set_key(ShareFrame::toS(key));
+        m->set_box_key(ShareFrame::toS(boxKey));
+        m->set_name("x");
+    }
+    WelcomeBody body;
+    ASSERT_TRUE(body.mutable_members()->ParseFromString(ShareFrame::toS(ShareFrame::signMembers(raw.me.link, list))));
+    auto doc = CrdtDoc::create(backendEnum(backend), 5);
+    doc->localEdit(0, 0, QStringLiteral("the stranger's note"));
+    body.set_state(ShareFrame::toS(doc->encodeState()));
+    body.set_title("evil");
+    const QByteArray shareKey = SyncCrypto::randomKey();
+    const QByteArray ad = SyncCrypto::buildAD("sw", {created->shareID, ShareFrame::be32(1), raw.key(), joinerKeys->publicKey()});
+    Envelope envelope;
+    envelope.mutable_welcome()->set_share_id(ShareFrame::toS(created->shareID));
+    envelope.mutable_welcome()->set_sealed_key(ShareFrame::toS(SyncCrypto::sealToBox(joinerKeys->box.publicKey, ShareFrame::be32(1) + shareKey)));
+    envelope.mutable_welcome()->set_box(ShareFrame::toS(SyncCrypto::seal(shareKey, ShareFrame::toQ(body.SerializeAsString()), ad)));
+    ASSERT_TRUE(raw.send(ShareFrame::toQ(envelope.SerializeAsString()), hearth::Channel::sync));
+    ASSERT_TRUE(waitFor([&] { return joiner.engine->counters().dropped == 1; }));
+    QTest::qWait(300);
+    EXPECT_EQ(joiner.engine->doc(created->shareID), nullptr);
+    EXPECT_TRUE(joiner.joined.isEmpty());
+
+    // the join is still pending, and the real owner's answer completes it
+    owner.engine->approve(created->shareID, owner.requests[0].joiner);
+    ASSERT_TRUE(waitFor([&] { return joiner.engine->doc(created->shareID) != nullptr; }));
+    EXPECT_EQ(joiner.text(created->shareID), QStringLiteral("the real note"));
+}
+
 TEST(ShareEngineTest, ShareKeyIsNeverLoggedOrSentInClear)
 {
     Peer owner(QStringLiteral("a")), joiner(QStringLiteral("b"));
