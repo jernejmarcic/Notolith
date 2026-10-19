@@ -33,6 +33,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <tuple>
 #include <cmath>
 
 #include "Icons.h"
@@ -726,8 +727,16 @@ void GraphView::onGraphBuilt()
 void GraphView::setGraphData(const QList<GraphNode> &nodes, const QList<GraphEdge> &edges)
 {
     ++m_dataRequest; // whatever applyIndexData() has in flight is older than this
+    // One order for the same graph: the index hands it over in hash order,
+    // which shifts between updates, and rebuild() would take a reordered
+    // graph for a new one and reheat it on every autosave.
     m_rawNodes = nodes;
+    std::sort(m_rawNodes.begin(), m_rawNodes.end(),
+              [](const GraphNode &a, const GraphNode &b) { return a.id < b.id; });
     m_rawEdges = edges;
+    std::sort(m_rawEdges.begin(), m_rawEdges.end(), [](const GraphEdge &a, const GraphEdge &b) {
+        return std::tie(a.fromID, a.toID) < std::tie(b.fromID, b.toID);
+    });
     rebuild();
 }
 

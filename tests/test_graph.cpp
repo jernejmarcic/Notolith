@@ -124,6 +124,42 @@ TEST(ForceLayoutTest, SettlesWithoutRinging)
     EXPECT_LT(fraction, 0.005) << "nodes keep swinging back and forth";
 }
 
+// A vault, not a ring: a few hubs, many sparse links, orphans. Once cooled
+// it must report settled, so the view stops stepping it: left stepping at
+// the alpha floor, Barnes-Hut's leftover forces (not exactly equal and
+// opposite) turn the whole graph slowly, a few px per 300 steps.
+TEST(ForceLayoutTest, AVaultShapedGraphStopsOnceCooled)
+{
+    const int n = 300;
+    QList<std::pair<int, int>> edges;
+    quint32 seed = 7;
+    const auto next = [&seed](int below) {
+        seed = seed * 1664525u + 1013904223u;
+        return int((seed >> 8) % quint32(below));
+    };
+    for (int i = 3; i < 240; ++i) {
+        edges.append({i, next(3)});           // every linked note hangs off a hub
+        if (next(3) == 0)
+            edges.append({i, 3 + next(237)}); // and some link each other
+    }
+    // 240..299 are orphans.
+    ForceLayout layout;
+    layout.reset(n, edges);
+    int steps = 0;
+    for (; steps < 3000 && !layout.isSettled(); ++steps)
+        layout.step();
+    std::printf("[ PERF     ] vault-shaped: settled after %d steps, alpha %.4f\n", steps, layout.alpha());
+    EXPECT_TRUE(layout.isSettled());
+    EXPECT_LE(steps, 320) << "still moving after it cooled (d3 stops at alphaMin, ~300 steps)";
+
+    // Woken by a drag, it comes to rest again as quickly.
+    layout.wake();
+    steps = 0;
+    for (; steps < 3000 && !layout.isSettled(); ++steps)
+        layout.step();
+    EXPECT_LE(steps, 320);
+}
+
 TEST(ForceLayoutTest, DraggingWakesASettledLayout)
 {
     ForceLayout layout;
@@ -433,6 +469,41 @@ TEST(GraphViewTest, RebuildKeepsSurvivingNodesInPlace)
     ASSERT_EQ(view.nodeCount(), 4);
     const QPointF after = view.screenPosition(QStringLiteral("A"));
     EXPECT_LT(std::hypot(after.x() - before.x(), after.y() - before.y()), 1.0);
+}
+
+TEST(GraphViewTest, TheSameGraphInAnotherOrderLeavesTheLayoutAlone)
+{
+    // The index hands the graph over in hash order, which shifts from one
+    // update to the next. Jernej 2026-10-19: "the nodes now girrate, and move
+    // by themselves" - every autosave reheated a settled graph because the
+    // same notes came in another order and looked like a different graph.
+    QStringList ids;
+    QList<GraphEdge> edges;
+    for (int i = 0; i < 30; ++i) {
+        ids.append(QStringLiteral("N%1").arg(i));
+        if (i > 0)
+            edges.append({QStringLiteral("N%1").arg(i), QStringLiteral("N%1").arg(i % 5)});
+    }
+    GraphView view;
+    view.resize(600, 400);
+    view.setGraphData(nodesFor(ids), edges);
+    view.stepSimulation(600); // cold
+    QHash<QString, QPointF> before;
+    for (const QString &id : std::as_const(ids))
+        before.insert(id, view.screenPosition(id));
+
+    QStringList reversedIDs = ids;
+    std::reverse(reversedIDs.begin(), reversedIDs.end());
+    QList<GraphEdge> reversedEdges = edges;
+    std::reverse(reversedEdges.begin(), reversedEdges.end());
+    view.setGraphData(nodesFor(reversedIDs), reversedEdges);
+    view.stepSimulation(60);
+    double moved = 0;
+    for (const QString &id : std::as_const(ids)) {
+        const QPointF now = view.screenPosition(id);
+        moved = std::max(moved, std::hypot(now.x() - before[id].x(), now.y() - before[id].y()));
+    }
+    EXPECT_LT(moved, 1.0) << "a reordered but identical graph was reheated";
 }
 
 TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)
