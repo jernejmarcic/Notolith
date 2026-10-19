@@ -117,6 +117,52 @@ the note stays clean CommonMark anywhere else:
 | `timeout: 5` | stop after 5 s (a kernel is interrupted) |
 | `kernel: on`, `off`, `python3` | see above |
 | `sandbox: host`, `sandbox: wasm` | see below |
+| `implicit: false` | the note's implicit code is not added to this block |
+
+## Implicit code
+
+A note can carry code that every runnable block of a language gets, so no
+block repeats its imports or its `main`. It lives in the note's properties,
+one key per language, named as the fence names it (`python` and `py` are two
+keys; a note using both sets both):
+
+```yaml
+---
+implicit-python: |
+  import math
+  import os
+implicit-rust: |
+  use std::collections::HashMap;
+implicit-rust-main: |
+  fn main() {
+  {{code}}
+  }
+---
+```
+
+- `implicit-<lang>` goes above the block, on a line of its own.
+- `implicit-<lang>-main` is a template: the block goes where `{{code}}` is,
+  but only when the block has no entry point of its own (the same test as the
+  "no main" check, so a block with its own `main` is not wrapped twice). Put
+  `{{code}}` at the start of its line: only the first line of the block is
+  indented by what stands before it.
+- The text counts as part of the block for the "no main" check: imports and a
+  block with no `main` is still only checked, a wrapper makes it a program.
+- It applies only when you run a block. A reopened note runs nothing, and
+  editing the implicit code marks the output of the blocks it applies to
+  "Outdated".
+- Line numbers in an error are the block's own; an error inside the
+  implicit code says `implicit code, line N`. (A compiler's excerpt of the
+  source line still shows the number it counted.)
+- With a Jupyter kernel the prelude runs once per kernel, silently (it is
+  not an `In [n]`), and again after a restart; if it fails, the error is shown
+  on the block's result as `implicit code: ...`. A wrapper is applied to
+  every block of a kernel language. Kernel tracebacks are not remapped.
+- A block with `#| implicit: false` gets none of it. A block with the
+  implicit code shows `+implicit` beside its run control. Copy copies the
+  block alone. A runnable `![[file.py]]` embed gets the note's implicit code
+  too.
+- The properties table shows the value read-only: edit it in the source.
 
 ## What a block can show
 

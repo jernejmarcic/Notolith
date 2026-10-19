@@ -624,6 +624,12 @@ public:
         /// `#| kernel:` - "" the setting's choice, "off" the system's own
         /// tool, "on" the language's Jupyter kernel, or a kernelspec's name.
         QString kernel;
+        /// The note's `implicit-<lang>` and `implicit-<lang>-main` frontmatter
+        /// (empty: none, or `#| implicit: false`): code the runner puts above
+        /// the block, and the template the block goes into when it has no
+        /// entry point of its own.
+        QString implicit;
+        QString implicitMain;
         /// Which note's kernel: blocks that share it share variables.
         /// Left empty here; the window fills it from the note it is in.
         QString scope;

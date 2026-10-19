@@ -59,9 +59,12 @@ struct NotebookRunResult {
 /// rest, `#| sandbox: host`) so a host-tier and a bubblewrap-tier run of the
 /// same source never share a cached result - defaults to the tier-1
 /// default for the handful of existing callers that ran before tiers were
-/// a per-block choice.
+/// a per-block choice. The note's implicit code (`prelude`, `wrapper`) is part
+/// of what ran, so it is folded in too - but only when there is some: a block
+/// without it keeps the key it always had.
 QString notebookCacheKey(const QString &language, const QString &source,
-                         SandboxTier tier = SandboxTier::Bubblewrap);
+                         SandboxTier tier = SandboxTier::Bubblewrap, const QString &prelude = {},
+                         const QString &wrapper = {});
 
 /// Reads `key`'s cached result; `hasRun` is false and everything else
 /// default when there is nothing cached - never an error, since "never run"

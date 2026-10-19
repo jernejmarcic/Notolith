@@ -406,6 +406,8 @@ void applyCodeOption(CodeOptions &options, const QString &key, const QString &va
         }
     } else if (key == QLatin1String("cache")) {
         options.cache = !isFalse(unquote(value));
+    } else if (key == QLatin1String("implicit")) {
+        options.implicit = !isFalse(unquote(value));
     } else if (key == QLatin1String("timeout")) {
         options.timeoutSeconds = qBound(0, unquote(value).toInt(), 86'400);
     } else if (key == QLatin1String("kernel")) {

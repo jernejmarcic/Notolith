@@ -68,7 +68,8 @@ NotebookController::~NotebookController()
 
 void NotebookController::run(const RunRequest &request, bool forceRun, const Deliver &deliver)
 {
-    const QString cacheKey = notebookCacheKey(request.language, request.source, request.tier);
+    const QString cacheKey =
+        notebookCacheKey(request.language, request.source, request.tier, request.prelude, request.wrapper);
 
     if (!forceRun) {
         // Cache-only: never starts a kernel. Deferred one tick, like every
@@ -100,6 +101,8 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         DirectRunner::Request direct;
         direct.language = request.language;
         direct.source = request.source;
+        direct.prelude = request.prelude;
+        direct.wrapper = request.wrapper;
         direct.tier = request.tier;
         direct.readOnlyBinds = request.extraReadOnlyBinds;
         direct.wasmModule = DirectRunner::wasmModuleFor(request.wasmModules, request.language);
@@ -123,7 +126,32 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         return;
     }
 
-    const QString msgID = session->client->execute(request.source, bool(request.onInput));
+    // The note's implicit code runs in the kernel once, ahead of the block:
+    // its names stay defined, so later blocks need not repeat it.
+    if (!request.prelude.isEmpty() && request.prelude != session->preludeSent) {
+        session->preludeSent = request.prelude;
+        InFlight prelude;
+        prelude.cache = false;
+        prelude.clock.start();
+        prelude.deliver = [this, key = session->key](NotebookRunResult result) {
+            const auto kernel = m_kernels.find(key);
+            if (kernel == m_kernels.end() || result.ok || !result.kernelError.isEmpty())
+                return;
+            // Asked for again on the next run, and said so on this block's result.
+            kernel->second->preludeSent.clear();
+            for (NotebookOutput output : std::as_const(result.outputs)) {
+                if (output.kind == NotebookOutput::Kind::Error)
+                    kernel->second->preludeError.append(output);
+            }
+        };
+        // Not stored in the history: the block's execution count stays its own.
+        session->inFlight.insert(session->client->execute(request.prelude, false, false), prelude);
+    }
+    // A wrapper with no {{code}} would drop the block: it is not one.
+    const QString code = request.wrapper.contains(QLatin1String("{{code}}"))
+                             ? QString(request.wrapper).replace(QLatin1String("{{code}}"), request.source)
+                             : request.source;
+    const QString msgID = session->client->execute(code, bool(request.onInput));
     InFlight inFlight;
     inFlight.deliver = deliver;
     inFlight.onInput = request.onInput;
@@ -429,6 +457,14 @@ void NotebookController::finalizeIfDone(KernelSession *session, QHash<QString, I
         timeout.ename = QStringLiteral("Timed out");
         timeout.evalue = QStringLiteral("stopped after %1 s").arg(it->timeoutMs / 1000);
         result.outputs.append(timeout);
+        result.ok = false;
+    }
+    if (!session->preludeError.isEmpty()) {
+        // A broken import must not hide behind a block that happened not to need it.
+        QList<NotebookOutput> errors = std::exchange(session->preludeError, {});
+        for (NotebookOutput &error : errors)
+            error.ename = QStringLiteral("implicit code: ") + error.ename;
+        result.outputs = errors + result.outputs;
         result.ok = false;
     }
     if (it->cache)
