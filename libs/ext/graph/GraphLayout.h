@@ -60,7 +60,13 @@ public:
     /// True once recent steps have all reported energy under the settle
     /// threshold - a short streak rather than one step, so a single noisy
     /// step does not stop-then-restart the timer.
-    bool isSettled() const { return m_settledStreak >= kSettleStreak; }
+    /// Still, or cooled to the floor with nothing holding it warm (d3 stops
+    /// at alphaMin too): a large graph under extreme sliders can stay above
+    /// the energy threshold, and stepping on at the floor turns it slowly.
+    bool isSettled() const
+    {
+        return m_settledStreak >= kSettleStreak || (m_alphaTarget <= 0.0 && m_alpha <= kMinAlpha);
+    }
 
     /// Un-settles the layout: call when a node is dragged or the data
     /// changes, so motion resumes without a full reset() (which would also

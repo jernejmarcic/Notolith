@@ -160,6 +160,39 @@ TEST(ForceLayoutTest, AVaultShapedGraphStopsOnceCooled)
     EXPECT_LE(steps, 320);
 }
 
+TEST(ForceLayoutTest, ACooledLayoutIsSettledEvenWithLeftoverForces)
+{
+    // Barnes-Hut's forces are not exactly equal and opposite. On a large
+    // graph with weak links that leftover keeps the mean energy above the
+    // threshold for ever (measured: still 0.03 after 3000 steps), and the
+    // view stepping it on at the alpha floor turns the graph slowly. Cooled
+    // with nothing holding it warm, it is done (d3's alphaMin).
+    const int n = 2000;
+    QList<std::pair<int, int>> edges;
+    quint32 seed = 7;
+    const auto next = [&seed](int below) {
+        seed = seed * 1664525u + 1013904223u;
+        return int((seed >> 8) % quint32(below));
+    };
+    for (int i = 3; i < 1600; ++i) {
+        edges.append({i, next(3)});
+        if (next(3) == 0)
+            edges.append({i, 3 + next(1597)});
+    }
+    ForceLayout layout;
+    ForceLayout::Options options;
+    options.repelStrength = 40.0;
+    options.linkStrength = 0.1;
+    options.centerStrength = 0.0;
+    options.theta = 5.0; // a coarse tree makes the leftover large enough to show at this size
+    layout.setOptions(options);
+    layout.reset(n, edges);
+    int steps = 0;
+    for (; steps < 1000 && !layout.isSettled(); ++steps)
+        layout.step();
+    EXPECT_LE(steps, 320);
+}
+
 TEST(ForceLayoutTest, DraggingWakesASettledLayout)
 {
     ForceLayout layout;
@@ -504,6 +537,25 @@ TEST(GraphViewTest, TheSameGraphInAnotherOrderLeavesTheLayoutAlone)
         moved = std::max(moved, std::hypot(now.x() - before[id].x(), now.y() - before[id].y()));
     }
     EXPECT_LT(moved, 1.0) << "a reordered but identical graph was reheated";
+}
+
+TEST(GraphViewTest, ASettledGraphRepaintsWhenOnlyThePictureChanges)
+{
+    // Once settled the pacer stops; a change that only touches the picture
+    // (the current note's ring, a colour group) must still relaunch a frame
+    // rather than leave the cached one on screen.
+    const QStringList ids{QStringLiteral("A"), QStringLiteral("B"), QStringLiteral("C")};
+    GraphView view;
+    view.resize(500, 400);
+    view.setGraphData(nodesFor(ids), {{QStringLiteral("A"), QStringLiteral("B")},
+                                      {QStringLiteral("B"), QStringLiteral("C")}});
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    QTest::qWait(2500); // settled, the timer stopped
+    const QImage before = view.grab().toImage();
+    view.setCurrentNote(QStringLiteral("A"));
+    EXPECT_TRUE(QTest::qWaitFor([&] { return view.grab().toImage() != before; }, 2000))
+        << "the current note's ring never reached the screen";
 }
 
 TEST(GraphViewTest, ADraggedNodeFollowsThePointerWhileAWorkerStepsTheLayout)

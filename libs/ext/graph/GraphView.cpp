@@ -987,6 +987,7 @@ QImage GraphView::renderFrameNow() const
 void GraphView::markDirty()
 {
     m_frameDirty = true;
+    ensureTimerRunning(); // a settled graph stopped the pacer: the new picture needs a job
     update();
 }
 
