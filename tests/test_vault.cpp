@@ -305,6 +305,48 @@ TEST(VaultFileOps, RenamePathRefusesAnExistingName)
     EXPECT_FALSE(error.isEmpty());
 }
 
+TEST(VaultFileOps, RenamingAnyFileKeepsItsExtension)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    for (const char *name : {"cat.png", "board.canvas", "archive.tar.gz"}) {
+        QFile file(dir.filePath(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+    }
+    QString newPath, error;
+    // The tree edits the name without its extension, so "kitty" is what comes in.
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("cat.png")), QStringLiteral("kitty"), &newPath, &error))
+        << error.toStdString();
+    EXPECT_EQ(newPath, dir.filePath(QStringLiteral("kitty.png")));
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("board.canvas")), QStringLiteral("plan.canvas"), &newPath,
+                                 &error));
+    EXPECT_EQ(newPath, dir.filePath(QStringLiteral("plan.canvas"))) << "typed with its extension: not doubled";
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("archive.tar.gz")), QStringLiteral("backup.tar"), &newPath,
+                                 &error));
+    EXPECT_EQ(newPath, dir.filePath(QStringLiteral("backup.tar.gz")));
+}
+
+TEST(VaultFileOps, ANameStartingWithADotIsRefused)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    QString error, newPath;
+    const QString note = vault.createNote(QString(), QStringLiteral("Ideas"), &error);
+    ASSERT_FALSE(note.isEmpty());
+    EXPECT_FALSE(vault.renamePath(note, QStringLiteral(".Ideas"), &newPath, &error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(QFileInfo::exists(note));
+    error.clear();
+    EXPECT_TRUE(vault.createNote(QString(), QStringLiteral(".x"), &error).isEmpty());
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(vault.createNote(QStringLiteral(".archive"), QStringLiteral("x"), &error).isEmpty());
+    EXPECT_TRUE(vault.createFolder(QString(), QStringLiteral(".archive"), &error).isEmpty());
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral(".archive"))));
+}
+
 TEST(VaultFileOps, RenamePathKeepsExtensionAndContent)
 {
     QTemporaryDir dir;

@@ -28,6 +28,19 @@ const QByteArray kBom = QByteArrayLiteral("\xEF\xBB\xBF");
 // Obsidian refuses these in a file or folder name, wherever they came from.
 const QString kInvalidNameChars = QStringLiteral("#^[]|:\\/");
 
+/// A name or folder part starting with a dot is hidden: the index, the file
+/// tree and the links all skip it, so the note would seem to vanish.
+/// Obsidian refuses such names too.
+bool isHiddenName(const QString &relative)
+{
+    for (const QStringView part : QStringView(relative).split(QLatin1Char('/')))
+        if (part.startsWith(QLatin1Char('.')) && part != QLatin1String("."))
+            return true;
+    return false;
+}
+
+const QString kHiddenNameError = QStringLiteral("a name starting with a dot would be hidden");
+
 bool hasInvalidNameChar(const QString &name)
 {
     for (const QChar &c : name) {
@@ -338,6 +351,11 @@ QString Vault::createNote(const QString &folderRelative, const QString &baseName
             *error = QStringLiteral("vault is not open");
         return {};
     }
+    if (isHiddenName(folderRelative) || isHiddenName(baseName)) {
+        if (error)
+            *error = kHiddenNameError;
+        return {};
+    }
 
     const QString folderAbsolute = folderRelative.isEmpty() ? m_root : absolute(folderRelative);
     if (!QDir().mkpath(folderAbsolute)) {
@@ -369,6 +387,12 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
     if (!isValid()) {
         if (error)
             *error = QStringLiteral("vault is not open");
+        return {};
+    }
+
+    if (isHiddenName(parentRelative) || isHiddenName(baseName)) {
+        if (error)
+            *error = kHiddenNameError;
         return {};
     }
 
@@ -410,6 +434,11 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
             *error = QStringLiteral("name contains a character Obsidian does not allow: # ^ [ ] | : \\ /");
         return false;
     }
+    if (isHiddenName(newBaseName)) {
+        if (error)
+            *error = kHiddenNameError;
+        return false;
+    }
 
     const QFileInfo info(absolutePath);
     if (!info.exists()) {
@@ -418,10 +447,13 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
         return false;
     }
 
-    // A note keeps its extension; a folder has none to keep.
-    const QString newFileName = (info.isFile() && (isNote(absolutePath) || isEncryptedNote(absolutePath)))
-                                    ? newBaseName + QLatin1Char('.') + info.suffix()
-                                    : newBaseName;
+    // A file keeps its extension (the name is edited without it); a folder
+    // has none to keep. A name typed with the same extension is not doubled.
+    const QString dotSuffix = QLatin1Char('.') + info.suffix();
+    const bool keepSuffix = info.isFile() && !info.suffix().isEmpty()
+                            && ((isNote(absolutePath) || isEncryptedNote(absolutePath))
+                                || !newBaseName.endsWith(dotSuffix, Qt::CaseInsensitive));
+    const QString newFileName = keepSuffix ? newBaseName + dotSuffix : newBaseName;
     const QString newPath = QDir(info.absolutePath()).absoluteFilePath(newFileName);
 
     if (newPath == absolutePath) {
