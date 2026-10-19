@@ -1939,7 +1939,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       (Obsidian's canvas has none).
 
 ## From Jernej's screenshots, 2026-10-19
-- [ ] Long lines in a code block wrap; demo/Code/Code Blocks.md ("A very long
+- [x] Long lines in a code block wrap; demo/Code/Code Blocks.md ("A very long
       line") says they scroll sideways, and wrapping hides where a line ends.
       MarkdownEditor.cpp layout uses WrapAtWordBoundaryOrAnywhere for fences
       unless `#| wrap: false`. Fable plan: per-block horizontal scroll (or
@@ -2040,3 +2040,5 @@ Shared/<title>.md.
       before it" in test_demo), live preview and reading view. Lane fencegap.
 - [ ] Jernej: link [[Newer Features]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
+- [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
+      the line has spaces, so "instead of wrapping" (his file, his edit).
