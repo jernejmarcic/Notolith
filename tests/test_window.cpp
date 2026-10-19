@@ -5481,6 +5481,24 @@ TEST_F(WindowTest, ASaveBeforeTheWatcherSpeaksKeepsTheOtherVersion)
     EXPECT_TRUE(kept);
 }
 
+TEST_F(WindowTest, TheTabsOutliveACrash)
+{
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+        window.openNote(path(QStringLiteral("Projects/Crlf.md")));
+        QTest::qWait(1500);
+        // Gone without close(): nothing saved on the way out.
+    }
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto tabs = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(tabs.size(), 1);
+    EXPECT_EQ(tabs.first()->count(), 2);
+}
+
 TEST_F(WindowTest, ANoteDeletedAndRecreatedOutsideIsWatchedAgain)
 {
     MainWindow window;

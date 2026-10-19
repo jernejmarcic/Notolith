@@ -2230,5 +2230,5 @@ Shared/<title>.md.
 - [x] G5. Autosave can overwrite an outside edit made inside the watcher's
       debounce without a snapshot (synced vaults). saveLeaf checks the
       file's mtime/size first; a changed disk text is snapshotted.
-- [ ] G6. Workspace (tabs, positions) is saved only on a clean exit; a crash
+- [x] G6. Workspace (tabs, positions) is saved only on a clean exit; a crash
       loses it. Debounced saveLayout on layout changes.

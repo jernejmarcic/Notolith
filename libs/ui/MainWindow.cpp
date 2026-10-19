@@ -269,6 +269,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_autosaveMax.setSingleShot(true);
     m_autosaveMax.setInterval(30000); // typing without a pause still saves
     connect(&m_autosaveMax, &QTimer::timeout, this, &MainWindow::autosave);
+    m_layoutSave.setSingleShot(true);
+    m_layoutSave.setInterval(1000);
+    connect(&m_layoutSave, &QTimer::timeout, this, &MainWindow::saveLayout);
 #ifdef NOTEAPPC_HAVE_ENCRYPTION
     // Encrypted notes: nothing happens until one is opened or made.
     m_encryption = new crypt::EncryptionSession(this);
@@ -1614,6 +1617,7 @@ void MainWindow::activateLeaf(Leaf *leaf)
     if (!leaf || (leaf == m_active && leaf->pendingPath.isEmpty()))
         return;
     TabGroup *previousGroup = m_active ? m_active->group : nullptr;
+    m_layoutSave.start(); // a crash keeps the tabs too
     m_active = leaf;
     if (leaf->group != previousGroup) {
         for (const auto &group : m_groups) {
@@ -1757,6 +1761,7 @@ void MainWindow::syncTabs(TabGroup *group)
                         && group->leaves.constFirst()->notePath.isEmpty()
                         && group->leaves.constFirst()->pendingPath.isEmpty();
     const int wanted = soleEmpty ? 0 : int(group->leaves.size());
+    m_layoutSave.start();
     m_syncingTabs = true;
     while (group->tabs->count() > wanted) {
         // setTabButton() reparents the close button to the tab bar but
@@ -5606,6 +5611,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
 
 void MainWindow::saveLayout()
 {
+    m_layoutSave.stop();
     if (m_openMode == OpenMode::Vault && m_vault.isValid())
         Workspaces::saveCurrent(m_vault.root(), layoutJSON());
 }

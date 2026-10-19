@@ -898,6 +898,7 @@ QLabel *m_vimStatus = nullptr;
     QPointer<GraphView> m_graph;
     QPointer<GraphView> m_localGraph;
     QPointer<GraphView> m_graphChanged; ///< the graph whose controls were touched last
+    QTimer m_layoutSave;                ///< the workspace a second after the tabs change, so a crash keeps it
     QTimer m_graphSave;                 ///< writes them 500 ms after the last touch
     QPointer<BacklinksPane> m_backlinks;
     QPointer<TagsPane> m_tags;
