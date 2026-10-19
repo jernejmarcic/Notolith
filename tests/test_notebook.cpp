@@ -536,6 +536,11 @@ TEST(NotebookKernelFeatureTest, ThePreludeRunsOnceAndAgainAfterARestart)
     const NotebookRunResult c = runThrough(controller, request, QStringLiteral("print(counter)"));
     EXPECT_EQ(joinedText(c).trimmed(), QStringLiteral("1")); // a new kernel gets it again
 
+    // A wrapper with nowhere to put the block is ignored, not run instead of it.
+    NotebookController::RunRequest noSlot = kernelRequest(QStringLiteral("r.md"));
+    noSlot.wrapper = QStringLiteral("x = 1");
+    EXPECT_EQ(joinedText(runThrough(controller, noSlot, QStringLiteral("print('ran')"))).trimmed(), QStringLiteral("ran"));
+
     // A prelude that fails is said so on the block's result, not swallowed.
     NotebookController::RunRequest broken = kernelRequest(QStringLiteral("q.md"));
     broken.prelude = QStringLiteral("import nosuchmodule_q");

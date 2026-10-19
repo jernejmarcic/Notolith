@@ -147,8 +147,10 @@ void NotebookController::run(const RunRequest &request, bool forceRun, const Del
         // Not stored in the history: the block's execution count stays its own.
         session->inFlight.insert(session->client->execute(request.prelude, false, false), prelude);
     }
-    const QString code = request.wrapper.isEmpty() ? request.source
-                                                   : QString(request.wrapper).replace(QLatin1String("{{code}}"), request.source);
+    // A wrapper with no {{code}} would drop the block: it is not one.
+    const QString code = request.wrapper.contains(QLatin1String("{{code}}"))
+                             ? QString(request.wrapper).replace(QLatin1String("{{code}}"), request.source)
+                             : request.source;
     const QString msgID = session->client->execute(code, bool(request.onInput));
     InFlight inFlight;
     inFlight.deliver = deliver;
