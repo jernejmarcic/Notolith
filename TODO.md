@@ -2006,7 +2006,9 @@ Shared/<title>.md.
       no Qt, standalone build proven)
 - [ ] Lane H5 (Hearth): signature domain configurable (labels were
       hardcoded "hearth-offer" etc.), debuglog path set by the embedding app
-- [ ] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
+- [x] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
+      (own 250-line yrs-ffi crate on yrs 0.28.0, not yffi: yffi aborts on bad
+      input; 45 crates 3.5 MB; ~0.8 MB binary; 1.3 ms/edit at 1 MB)
 - [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
 - [ ] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
 - [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
