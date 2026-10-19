@@ -24,13 +24,13 @@ struct CrdtEdit {
 /// Backend-neutral on purpose - nothing of the engine behind it leaks past
 /// this header, and tests/test_share_crdt.cpp runs one suite over every
 /// backend. Yrs is the Rust yrs library behind a small C surface
-/// (libs/ext/share/yrs-ffi); Native is reserved for a C++ implementation of
-/// the same contract. See docs/SHARE.md.
+/// (libs/ext/share/yrs-ffi); Native is a C++ implementation of the same
+/// contract (CrdtDocNative.cpp, always built). See docs/SHARE.md.
 ///
 /// A document is single-threaded: call it from one thread (the UI thread).
-/// Updates and state vectors are opaque byte strings in the Yjs v1 encoding;
-/// two backends of the same kind interoperate, a Yrs and a Native one are
-/// not required to.
+/// Updates and state vectors are opaque byte strings: every replica of a note
+/// must use the same backend, because a Yrs update (Yjs v1 encoding) and a
+/// Native one (its own format) do not read each other.
 class CrdtDoc {
 public:
     enum class Backend { Yrs, Native };
