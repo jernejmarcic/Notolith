@@ -33,6 +33,11 @@ struct ParseOptions {
     QString excludeOpen = QStringLiteral("[");
     QString excludeClose = QStringLiteral("]");
     bool ignoreFormatting = false;
+
+    /// Any single character in a task's box makes a task - `[-]`, `[/]`,
+    /// `[?]` - with that character as its state (ListItemSpan::state, Task).
+    /// Off, only `[ ]`, `[x]` and `[X]` are tasks, as in CommonMark.
+    bool taskStates = false;
 };
 
 /// Empty when `open`/`close` can delimit meta notes, else a sentence saying

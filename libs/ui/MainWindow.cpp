@@ -1296,6 +1296,7 @@ ParseOptions MainWindow::parseOptions() const
         options.excludeClose = options.close;
     }
     options.ignoreFormatting = m_settings.boolean(QStringLiteral("editor.countIgnoreFormatting"));
+    options.taskStates = featureOn("task-states");
     return options;
 }
 
@@ -4024,8 +4025,10 @@ void MainWindow::exportPdf()
     if (target.isEmpty())
         return;
     QString error;
+    MarkdownEditor::PdfOptions pdf = options.options();
+    pdf.taskStates = featureOn("task-states");
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),
-                                  m_resolveLink, options.options(), &error))
+                                  m_resolveLink, pdf, &error))
         statusBar()->showMessage(tr("Exported %1").arg(QFileInfo(target).fileName()), 3000);
     else
         QMessageBox::warning(this, tr("Export to PDF"), error);
@@ -4465,7 +4468,8 @@ void MainWindow::publishSite()
     // The code colours come from the vault's scheme, one reading per mode
     // (a built-in scheme has none), on the worker with the rest.
     const QString schemePath = m_settings.text(QStringLiteral("appearance.scheme"));
-    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath] {
+    const bool taskStates = featureOn("task-states");
+    watcher->setFuture(QtConcurrent::run([vault = m_vault, choices, schemePath, taskStates] {
         Result result;
         Index index;
         if (!index.open(vault.root())) {
@@ -4479,6 +4483,7 @@ void MainWindow::publishSite()
         options.homeNote = choices.homeNote;
         options.siteName = choices.siteName.isEmpty() ? vault.name() : choices.siteName;
         options.theme = publish::Options::ThemeMode(choices.theme);
+        options.parse.taskStates = taskStates;
         if (!schemePath.isEmpty()) {
             options.codeThemeDark = Scheme::apply(schemePath, Theme::Mode::Dark);
             options.codeThemeLight = Scheme::apply(schemePath, Theme::Mode::Light);

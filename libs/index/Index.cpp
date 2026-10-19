@@ -28,11 +28,12 @@ namespace noteAppC {
 namespace {
 /// Bump when the schema changes, or when the parser reads a note differently
 /// (4: a `:::` fence's attributes are no longer tags; 5: links inside
-/// footnotes are read). The cache is derived
+/// footnotes are read; 7: a task keeps the character in its box, not done or
+/// not). The cache is derived
 /// from the vault, so a mismatch drops it and rebuilds rather than migrating:
 /// a wrong migration is a silently wrong index, and a rebuild costs one pass
 /// over the notes.
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 7;
 } // namespace
 
 namespace {
@@ -126,7 +127,7 @@ public:
         m_insertBlock.prepare(
             QStringLiteral("INSERT INTO blocks(file, block, start, finish) VALUES(?, ?, ?, ?)"));
         m_insertTask.prepare(
-            QStringLiteral("INSERT INTO tasks(file, done, text, start, finish) VALUES(?, ?, ?, ?, ?)"));
+            QStringLiteral("INSERT INTO tasks(file, state, text, start, finish) VALUES(?, ?, ?, ?, ?)"));
         m_insertMetaNote.prepare(
             QStringLiteral("INSERT INTO meta_notes(file, start, finish) VALUES(?, ?, ?)"));
         m_insertProperty.prepare(
@@ -168,7 +169,7 @@ public:
         for (const BlockId &block : metadata.blockIds)
             run(m_insertBlock, {fileID, block.id, block.range.start, block.range.end});
         for (const Task &task : metadata.tasks)
-            run(m_insertTask, {fileID, task.done, task.text, task.range.start, task.range.end});
+            run(m_insertTask, {fileID, QString(task.state), task.text, task.range.start, task.range.end});
         for (const Range &metaNote : metadata.metaNotes)
             run(m_insertMetaNote, {fileID, metaNote.start, metaNote.end});
         for (const Property &property : metadata.properties) {
@@ -350,7 +351,7 @@ bool Index::createSchema()
                        "block TEXT, start INTEGER, finish INTEGER)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS tasks ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
-                       "done INTEGER, text TEXT, start INTEGER, finish INTEGER)"),
+                       "state TEXT, text TEXT, start INTEGER, finish INTEGER)"),
         QStringLiteral("CREATE TABLE IF NOT EXISTS props ("
                        "file INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE, "
                        "key TEXT, type INTEGER, value TEXT)"),
@@ -524,7 +525,12 @@ QString Index::metaNotesKey() const
 ParseOptions Index::parseOptions() const
 {
     ParseOptions options;
-    const QString key = metaNotesKey();
+    QString key = metaNotesKey();
+    // Indexer's key: the meta-note delimiters, then "\ntasks" for task states.
+    const QString tasks = QStringLiteral("\ntasks");
+    options.taskStates = key.endsWith(tasks);
+    if (options.taskStates)
+        key.chop(tasks.size());
     const qsizetype split = key.indexOf(QLatin1Char('\n'));
     if (split > 0) {
         options.metaNotes = true;
@@ -1037,10 +1043,11 @@ void Index::eachMatch(const QString &databasePath, const SearchQuery &query, int
         }
         if (needs.tasks) {
             QSqlQuery taskQuery(db);
-            taskQuery.exec(QStringLiteral("SELECT file, done, start, finish FROM tasks"));
+            taskQuery.exec(QStringLiteral("SELECT file, state, start, finish FROM tasks"));
             while (taskQuery.next()) {
+                const QString state = taskQuery.value(1).toString();
                 tasksByFile[taskQuery.value(0).toLongLong()].append(
-                    NoteTask{taskQuery.value(1).toBool(),
+                    NoteTask{state.isEmpty() ? QLatin1Char(' ') : state.at(0),
                             Range{taskQuery.value(2).toLongLong(), taskQuery.value(3).toLongLong()}});
             }
         }

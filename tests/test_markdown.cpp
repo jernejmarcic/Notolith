@@ -10,6 +10,7 @@
 #include "Parser.h"
 #include "SourceMap.h"
 #include "TableFormat.h"
+#include "TaskStates.h"
 #include "Perf.h"
 
 using namespace noteAppC;
@@ -651,9 +652,9 @@ TEST(TaskTest, DoneAndTodo)
     const Metadata metadata = parse(text);
 
     ASSERT_EQ(metadata.tasks.size(), 2);
-    EXPECT_FALSE(metadata.tasks.at(0).done);
+    EXPECT_EQ(metadata.tasks.at(0).state, QLatin1Char(' '));
     EXPECT_EQ(metadata.tasks.at(0).text, QStringLiteral("open task"));
-    EXPECT_TRUE(metadata.tasks.at(1).done);
+    EXPECT_EQ(metadata.tasks.at(1).state, QLatin1Char('x'));
 }
 
 // --- decorations: what live preview hides and styles ---------------------
@@ -662,10 +663,10 @@ namespace {
 
 /// The display string live preview shows for the whole note, with no block
 /// active - the quickest way to assert what gets hidden.
-QString rendered(const QString &text)
+QString rendered(const QString &text, const ParseOptions &options = {})
 {
     static Parser parser;
-    const auto result = parser.parseAll(text, QStringLiteral("/vault/Note.md"));
+    const auto result = parser.parseAll(text, QStringLiteral("/vault/Note.md"), options);
 
     QString out;
     for (qsizetype i = 0; i < text.size(); ++i) {
@@ -687,10 +688,10 @@ bool hasStyle(const Decorations &decorations, StyleSpan::Kind kind, const QStrin
     return false;
 }
 
-Decorations decorationsOf(const QString &text)
+Decorations decorationsOf(const QString &text, const ParseOptions &options = {})
 {
     static Parser parser;
-    return parser.parseAll(text, QStringLiteral("/vault/Note.md")).decorations;
+    return parser.parseAll(text, QStringLiteral("/vault/Note.md"), options).decorations;
 }
 
 } // namespace
@@ -1214,11 +1215,11 @@ TEST(ListTest, MarkersIndentAndCheckboxes)
 
     const auto &items = decorations.listItems;
     EXPECT_TRUE(items.at(0).task);
-    EXPECT_TRUE(items.at(0).done);
+    EXPECT_EQ(items.at(0).state, QLatin1Char('x'));
     EXPECT_EQ(text.mid(items.at(0).checkbox.start, items.at(0).checkbox.length()),
               QStringLiteral("[x]"));
     EXPECT_TRUE(items.at(1).task);
-    EXPECT_FALSE(items.at(1).done);
+    EXPECT_EQ(items.at(1).state, QLatin1Char(' '));
     EXPECT_FALSE(items.at(2).task);
 
     // The marker starts at the line, not at the bullet; the level is the
@@ -1236,6 +1237,127 @@ TEST(ListTest, MarkersIndentAndCheckboxes)
     // Every marker is hidden in live preview.
     EXPECT_EQ(rendered(QStringLiteral("- [x] Todo\n- plain\n")),
               QStringLiteral("Todo\nplain\n"));
+}
+
+TEST(ListTest, AnyOneCharacterBoxIsATaskWhenAsked)
+{
+    const QString text = QStringLiteral("- [-] a\n- [/] b\n- [?] c\n- [[Note]] d\n- [-](u) e\n- [[] f\n- []] g\n");
+    ParseOptions options;
+    options.taskStates = true;
+    const Decorations decorations = decorationsOf(text, options);
+    ASSERT_EQ(decorations.listItems.size(), 7);
+    const auto &items = decorations.listItems;
+    const QString states = QStringLiteral("-/?");
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_TRUE(items.at(i).task) << i;
+        EXPECT_EQ(items.at(i).state, states.at(i)) << i;
+        EXPECT_EQ(sliceOf(text, items.at(i).checkbox), QStringLiteral("[") + states.at(i) + QLatin1Char(']'));
+    }
+    for (int i = 3; i < 7; ++i)
+        EXPECT_FALSE(items.at(i).task) << i; // a link, a wikilink, a box holding a bracket
+    EXPECT_EQ(rendered(text, options), QStringLiteral("a\nb\nc\nNote d\n- e\n[[] f\n[]] g\n"));
+    static Parser parser;
+    EXPECT_EQ(parser.parse(text, QStringLiteral("/vault/Note.md"), options).tasks.size(), 3);
+}
+
+TEST(ListTest, CustomBoxesStayTextByDefault)
+{
+    const QString text = QStringLiteral("- [-] a\n- [/] b\n");
+    const Decorations decorations = decorationsOf(text);
+    for (const ListItemSpan &item : decorations.listItems)
+        EXPECT_FALSE(item.task);
+    EXPECT_EQ(rendered(text), QStringLiteral("[-] a\n[/] b\n"));
+    EXPECT_TRUE(parse(text).tasks.isEmpty());
+}
+
+TEST(ListTest, ATaskTextDropsTheBoxItTyped)
+{
+    ParseOptions options;
+    options.taskStates = true;
+    static Parser parser;
+    const Metadata metadata =
+        parser.parse(QStringLiteral("- [-] call mum\n- [x] b\n"), QStringLiteral("/vault/Note.md"), options);
+    ASSERT_EQ(metadata.tasks.size(), 2);
+    EXPECT_EQ(metadata.tasks.at(0).text, QStringLiteral("call mum"));
+    EXPECT_EQ(metadata.tasks.at(0).state, QLatin1Char('-'));
+    EXPECT_EQ(metadata.tasks.at(1).text, QStringLiteral("b"));
+    EXPECT_EQ(metadata.tasks.at(1).state, QLatin1Char('x'));
+}
+
+TEST(TaskStatesTest, DefaultsCoverTheDemoNote)
+{
+    const TaskStates states = TaskStates::defaults();
+    const auto type = [&](char c) { return states.at(QLatin1Char(c)).type; };
+    EXPECT_EQ(type(' '), TaskType::Todo);
+    EXPECT_EQ(type('x'), TaskType::Done);
+    EXPECT_EQ(type('X'), TaskType::Done);
+    EXPECT_EQ(type('/'), TaskType::InProgress);
+    EXPECT_EQ(type('-'), TaskType::Cancelled);
+    EXPECT_EQ(type('!'), TaskType::Todo);
+    EXPECT_EQ(type('?'), TaskType::Todo);
+    EXPECT_EQ(type('~'), TaskType::Cancelled);
+    const TaskState dash = states.at(QLatin1Char('-'));
+    EXPECT_EQ(dash.glyph, TaskGlyph::Line);
+    EXPECT_TRUE(dash.strike);
+    EXPECT_TRUE(dash.mute);
+    EXPECT_EQ(states.at(QLatin1Char('~')).glyph, TaskGlyph::Cross);
+    EXPECT_EQ(states.at(QLatin1Char('/')).next, QLatin1Char('x'));
+    EXPECT_EQ(states.at(QLatin1Char('x')).next, QLatin1Char(' '));
+    const TaskState unknown = states.at(QLatin1Char('q'));
+    EXPECT_EQ(unknown.type, TaskType::Todo);
+    EXPECT_EQ(unknown.glyph, TaskGlyph::Char);
+    EXPECT_EQ(unknown.next, QLatin1Char('x'));
+    EXPECT_TRUE(unknown.name.isEmpty());
+    EXPECT_EQ(unknown.ch, QLatin1Char('q'));
+}
+
+TEST(TaskStatesTest, IniOverridesAndRefusesBadLines)
+{
+    using Section = QMap<QString, QString>;
+    QHash<QString, Section> ini;
+    ini[QStringLiteral("cancelled")] = {{QStringLiteral("glyph"), QStringLiteral("cross")}};
+    ini[QStringLiteral("waiting")] = {{QStringLiteral("char"), QStringLiteral("w")},
+                                      {QStringLiteral("type"), QStringLiteral("todo")},
+                                      {QStringLiteral("glyph"), QStringLiteral("char")},
+                                      {QStringLiteral("color"), QStringLiteral("--color-blue")},
+                                      {QStringLiteral("text"), QStringLiteral("mute")},
+                                      {QStringLiteral("next"), QStringLiteral(" ")}};
+    ini[QStringLiteral("two")] = {{QStringLiteral("char"), QStringLiteral("ab")}};
+    ini[QStringLiteral("close")] = {{QStringLiteral("char"), QStringLiteral("]")}};
+    ini[QStringLiteral("open")] = {{QStringLiteral("char"), QStringLiteral("[")}};
+    ini[QStringLiteral("nochar")] = {{QStringLiteral("type"), QStringLiteral("done")}};
+    ini[QStringLiteral("bogus")] = {{QStringLiteral("char"), QStringLiteral("g")},
+                                    {QStringLiteral("type"), QStringLiteral("nonsense")}};
+    ini[QStringLiteral("done")] = {{QStringLiteral("glyph"), QStringLiteral("line")}};
+    ini[QStringLiteral("bigx")] = {{QStringLiteral("char"), QStringLiteral("X")}};
+    const TaskStates states = TaskStates::fromSections(ini);
+
+    EXPECT_EQ(states.at(QLatin1Char('-')).glyph, TaskGlyph::Cross);
+    EXPECT_TRUE(states.at(QLatin1Char('-')).strike); // the rest of the built-in stays
+    const TaskState waiting = states.at(QLatin1Char('w'));
+    EXPECT_EQ(waiting.name, QStringLiteral("waiting"));
+    EXPECT_EQ(waiting.color, QStringLiteral("--color-blue"));
+    EXPECT_TRUE(waiting.mute);
+    EXPECT_FALSE(waiting.strike);
+    EXPECT_EQ(waiting.next, QLatin1Char(' ')); // the space survives
+    for (const char *c : {"a", "b", "]", "["})
+        EXPECT_TRUE(states.at(QLatin1Char(*c)).name.isEmpty()) << c;
+    EXPECT_EQ(states.all().size(), TaskStates::defaults().all().size() + 2); // waiting, bogus
+    EXPECT_EQ(states.at(QLatin1Char('g')).type, TaskType::Todo);
+    EXPECT_EQ(states.at(QLatin1Char('x')).glyph, TaskGlyph::Tick);
+    EXPECT_EQ(states.at(QLatin1Char('X')).name, QStringLiteral("done")); // X stays done
+}
+
+TEST(TaskStatesTest, TheSortedLaterSectionWinsAContestedCharacter)
+{
+    using Section = QMap<QString, QString>;
+    QHash<QString, Section> ini;
+    ini[QStringLiteral("alpha")] = {{QStringLiteral("char"), QStringLiteral("w")}};
+    ini[QStringLiteral("beta")] = {{QStringLiteral("char"), QStringLiteral("w")}};
+    ini[QStringLiteral("mine")] = {{QStringLiteral("char"), QStringLiteral("!")}}; // not a built-in name
+    const TaskStates states = TaskStates::fromSections(ini);
+    EXPECT_EQ(states.at(QLatin1Char('w')).name, QStringLiteral("beta"));
+    EXPECT_EQ(states.at(QLatin1Char('!')).name, QStringLiteral("mine")); // took over "important"
 }
 
 TEST(EmbedTest, SizeSpecInTheAliasSlot)

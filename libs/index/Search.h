@@ -43,7 +43,7 @@ struct NoteHeading {
     Range range; ///< the whole heading line, as Metadata::Heading stores it
 };
 struct NoteTask {
-    bool done = false;
+    QChar state = QLatin1Char(' '); ///< what is in the box: ' ', 'x', or any other character
     Range range; ///< the whole list item, as Metadata::Task stores it
 };
 struct NoteProperty {
@@ -100,7 +100,7 @@ class SearchQueryNode;
 /// A parsed Obsidian-style search query: bare words (AND by default), "quoted
 /// phrases", OR, -negation, (parentheses), /regular expressions/, and the
 /// file: path: content: tag: line:(...) block:(...) section:(...) task:
-/// task-todo: task-done: match-case: ignore-case: operators, and
+/// task-todo: task-done: task-progress: task-cancelled: match-case: ignore-case: operators, and
 /// [property] / [property:value], documented at
 /// https://obsidian.md/help/plugins/search.
 ///

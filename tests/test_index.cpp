@@ -478,6 +478,41 @@ TEST_F(IndexTest, ChangingTheMetaDelimitersReindexesEveryUnchangedNote)
     EXPECT_TRUE(index.search(QStringLiteral("meta:angled")).isEmpty());
 }
 
+TEST_F(IndexTest, TaskStatesAreIndexedOnlyWhenAsked)
+{
+    write(QStringLiteral("Chores.md"), "- [-] pay rent\n- [ ] call mum\n");
+    Index index;
+    Indexer indexer(&index);
+    QSignalSpy first(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(first.wait(20000));
+    EXPECT_TRUE(index.search(QStringLiteral("task:rent")).isEmpty()) << "[-] is only text by default";
+    EXPECT_EQ(index.search(QStringLiteral("task:mum")).size(), 1);
+
+    ParseOptions on;
+    on.taskStates = true;
+    QSignalSpy again(&indexer, &Indexer::finished);
+    indexer.setMetaNotes(on);
+    ASSERT_TRUE(again.wait(20000)) << "flipping it rescans by itself";
+    EXPECT_EQ(index.search(QStringLiteral("task-cancelled:rent")).size(), 1);
+    EXPECT_TRUE(index.search(QStringLiteral("task-todo:rent")).isEmpty());
+    EXPECT_EQ(index.search(QStringLiteral("task-done:rent")).size(), 1);
+
+    // A warm start by the other setting re-parses; by the same one does not.
+    Indexer warmOn(&index);
+    warmOn.setMetaNotes(on);
+    QSignalSpy same(&warmOn, &Indexer::finished);
+    warmOn.setVault(vault);
+    ASSERT_TRUE(same.wait(20000));
+    EXPECT_EQ(same.last().at(0).toInt(), 0) << "nothing to re-parse";
+    Indexer warmOff(&index);
+    QSignalSpy other(&warmOff, &Indexer::finished);
+    warmOff.setVault(vault);
+    ASSERT_TRUE(other.wait(20000));
+    EXPECT_GT(other.last().at(0).toInt(), 0) << "the rows were read with states";
+    EXPECT_TRUE(index.search(QStringLiteral("task:rent")).isEmpty());
+}
+
 TEST_F(IndexTest, SwitchingMetaNotesOffDropsTheRowsWithoutAScan)
 {
     write(QStringLiteral("Draft.md"), "She left early [check the date] and never came back.\n");

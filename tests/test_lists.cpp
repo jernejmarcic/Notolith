@@ -84,6 +84,22 @@ TEST(ListEnter, TaskContinuesUnchecked)
     EXPECT_EQ(enter(QStringLiteral("1. [ ] todo")).text, QStringLiteral("1. [ ] todo\n2. [ ] "));
 }
 
+TEST(ListEnter, AfterACustomStateTheNextItemIsOpen)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(900, 600);
+    ParseOptions options = editor->parseOptions();
+    options.taskStates = true;
+    editor->setParseOptions(options);
+    editor->setNoteText(QStringLiteral("- [-] a"));
+    editor->setCursorOffset(7);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("- [-] a\n- [ ] "));
+
+    // Off, `[-]` is text and the next item has no box.
+    EXPECT_EQ(enter(QStringLiteral("- [-] a")).text, QStringLiteral("- [-] a\n- "));
+}
+
 TEST(ListEnter, KeepsTheIndentation)
 {
     EXPECT_EQ(enter(QStringLiteral("- a\n\t- b")).text, QStringLiteral("- a\n\t- b\n\t- "));

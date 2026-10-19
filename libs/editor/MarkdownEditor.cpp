@@ -1,6 +1,7 @@
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
 
+#include "ConfigFile.h"
 #include "Frontmatter.h"
 
 #include "Icons.h"
@@ -781,6 +782,21 @@ void MarkdownEditor::setStrictLineBreaks(bool on)
     viewport()->update();
 }
 
+namespace {
+
+QString taskStatesPath()
+{
+    return configFilePath(QStringLiteral("tasks.ini"));
+}
+
+/// tasks.ini into the process-wide table, which search and publishing read too.
+void loadTaskStates()
+{
+    TaskStates::setCurrent(TaskStates::fromSections(readINIsections(taskStatesPath())));
+}
+
+} // namespace
+
 void MarkdownEditor::setParseOptions(const ParseOptions &options)
 {
     const auto same = [](const ParseOptions &l, const ParseOptions &r) {
@@ -789,11 +805,13 @@ void MarkdownEditor::setParseOptions(const ParseOptions &options)
                && (!l.metaNotes || (l.open == r.open && l.close == r.close))
                && l.excludeBetween == r.excludeBetween
                && (!l.excludeBetween || (l.excludeOpen == r.excludeOpen && l.excludeClose == r.excludeClose))
-               && l.ignoreFormatting == r.ignoreFormatting;
+               && l.ignoreFormatting == r.ignoreFormatting && l.taskStates == r.taskStates;
     };
     if (same(options, d->m_parseOptions))
         return; // every settings pass asks
     d->m_parseOptions = options;
+    if (options.taskStates)
+        loadTaskStates();
     // The runs and counts come from the parse, so a change is a new parse.
     if (!d->m_text.isEmpty()) {
         // A parse in flight has the old options: let it end unadopted.
@@ -1936,6 +1954,13 @@ std::unique_ptr<QMenu> MarkdownEditor::contextMenuAt(qsizetype sourceOffset, con
         }
         connect(menu->addAction(tr("Add link") + keyText(QStringLiteral("editor:insert-link"))),
                 &QAction::triggered, this, [this] { insertLink(); });
+        if (d->m_parseOptions.taskStates) {
+            auto *states = new QMenu(tr("Checkbox state"), menu.get());
+            if (addTaskStateActions(*states, sourceOffset))
+                menu->addMenu(states);
+            else
+                delete states; // not on a list item
+        }
 
         // The only way a meta note leaves the text: removed, never hidden.
         for (const Range &run : d->m_decorations.metaNotes) {
@@ -2070,12 +2095,17 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     }
 
     for (const ListItemSpan &item : listItemsIn(block)) {
-        if (!item.done)
+        if (!item.task)
             continue;
-        QTextCharFormat strike;
-        strike.setFontStrikeOut(true);
-        strike.setForeground(d->m_theme.color(QStringLiteral("--text-muted")));
-        add({item.marker.end, item.range.end}, strike);
+        const TaskState state = taskStateOf(item.state);
+        if (!state.strike && !state.mute)
+            continue;
+        QTextCharFormat struck;
+        if (state.strike)
+            struck.setFontStrikeOut(true);
+        if (state.mute)
+            struck.setForeground(d->m_theme.color(QStringLiteral("--text-muted")));
+        add({item.marker.end, item.range.end}, struck);
     }
 
     for (const NestedCallout &nested : view.nested) {
@@ -2579,8 +2609,8 @@ void MarkdownEditor::paintListMarkers(QPainter &painter, const BlockView &view, 
 
         if (item.task) {
             const qreal box = QFontMetricsF(view.layout->font()).height() * 0.8;
-            paintCheckBox(painter, QRectF(textX - box - 8, baseline + (line.height() - box) / 2, box, box),
-                          item.done);
+            paintTaskBox(painter, QRectF(textX - box - 8, baseline + (line.height() - box) / 2, box, box),
+                         taskStateOf(item.state), view.layout->font());
             continue;
         }
 
@@ -2609,14 +2639,13 @@ void MarkdownEditor::toggleTask(const ListItemSpan &item)
 {
     if (!item.task || !item.checkbox.isValid())
         return;
-    // Ticking a box must not steal the caret; "[x]" and "[ ]" are the same
-    // width, so the offsets it was on are still the right ones.
+    // Ticking a box must not steal the caret; every box is three characters
+    // wide, so the offsets it was on are still the right ones.
     const qsizetype anchor = d->m_anchor;
     const qsizetype caret = d->m_cursor;
     pushUndo();
     d->m_lastEdit.invalidate();
-    applyEdit(item.checkbox.start, item.checkbox.length(),
-              item.done ? QStringLiteral("[ ]") : QStringLiteral("[x]"));
+    applyEdit(item.checkbox.start, item.checkbox.length(), taskBox(nextTaskState(item.state)));
     setSelectionRange(anchor, caret);
 }
 
@@ -5009,6 +5038,7 @@ const QList<MarkdownEditor::Command> &MarkdownEditor::commands()
         {QStringLiteral("editor:insert-link"), tr("Insert Markdown link"), {QKeySequence(Qt::CTRL | Qt::Key_K)}},
         {QStringLiteral("editor:toggle-checklist-status"), tr("Toggle checkbox status"),
          {QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)}},
+        {QStringLiteral("noteAppC:checkbox-state"), tr("Set checkbox state..."), {}},
         {QStringLiteral("editor:open-search"), tr("Search current file"), {QKeySequence(Qt::CTRL | Qt::Key_F)}},
         {QStringLiteral("editor:open-search-replace"), tr("Search and replace in current file"),
          {QKeySequence(Qt::CTRL | Qt::Key_H)}},
@@ -5063,6 +5093,16 @@ bool MarkdownEditor::runCommand(const QString &id)
         insertLink();
     else if (id == QLatin1String("editor:toggle-checklist-status"))
         toggleTaskAtCursor();
+    else if (id == QLatin1String("noteAppC:checkbox-state")) {
+        auto *menu = new QMenu(this);
+        menu->setAttribute(Qt::WA_DeleteOnClose);
+        if (d->m_parseOptions.taskStates && addTaskStateActions(*menu, d->m_cursor))
+            menu->popup(viewport()->mapToGlobal(caretRect().bottomLeft().toPoint()));
+        else {
+            delete menu;
+            toggleTaskAtCursor();
+        }
+    }
     else if (id == QLatin1String("editor:open-search"))
         showFind(false);
     else if (id == QLatin1String("editor:open-search-replace"))
@@ -5421,7 +5461,7 @@ void MarkdownEditor::watchStyleFiles()
     // writing a new file and renaming it over the old one - most do - makes
     // inotify drop the watch on the file, and a file that does not exist yet
     // cannot be watched at all; the directory sees both happen.
-    const QStringList files = {CalloutStyles::defaultPath(), LanguageStyles::defaultPath()};
+    const QStringList files = {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), taskStatesPath()};
     const QString directory = QFileInfo(files.first()).absolutePath();
     if (QFileInfo(directory).isDir())
         d->m_configWatcher->addPath(directory);
@@ -5438,12 +5478,14 @@ void MarkdownEditor::watchStyleFiles()
 void MarkdownEditor::reloadStyleFiles()
 {
     // Put back any watch a rename-over-save took away.
-    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath()}) {
+    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), taskStatesPath()}) {
         if (QFileInfo::exists(file) && !d->m_configWatcher->files().contains(file))
             d->m_configWatcher->addPath(file);
     }
     d->m_calloutStyles = CalloutStyles::load();
     d->m_languageStyles = LanguageStyles::load();
+    if (d->m_parseOptions.taskStates)
+        loadTaskStates();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
