@@ -6229,6 +6229,108 @@ constexpr QLatin1StringView kMetaNote{"# One\n\nA [first] b.\n\n# Two\n\nplain\n
 
 } // namespace
 
+namespace {
+
+/// A vault of one file per type the hidden-types tests care about.
+struct TypesVault {
+    QTemporaryDir dir;
+    TypesVault()
+    {
+        for (const QString &name : {QStringLiteral("a.md"), QStringLiteral("b.png"), QStringLiteral("c.pdf"),
+                                    QStringLiteral("d.tar.gz"), QStringLiteral("sub/e.PNG")}) {
+            QDir(dir.path()).mkpath(QFileInfo(name).path());
+            QFile file(dir.filePath(name));
+            EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+            file.write("x\n");
+        }
+    }
+};
+
+/// The names the tree shows under `parent` (hidden rows left out), sorted: the
+/// model's own order follows the sidebar's sort and is not what is tested here.
+QStringList visibleRows(QTreeView *tree, const QModelIndex &parent)
+{
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    QStringList names;
+    for (int row = 0; row < model->rowCount(parent); ++row) {
+        if (!tree->isRowHidden(row, parent))
+            names << model->fileName(model->index(row, 0, parent));
+    }
+    names.sort();
+    return names;
+}
+
+} // namespace
+
+TEST_F(WindowTest, HiddenFileTypesLeaveTheSidebarAndComeBackWithoutReopeningTheVault)
+{
+    PrivateConfig config;
+    TypesVault vault;
+    MainWindow window;
+    window.show();
+    window.openVault(vault.dir.path());
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QStringList everything{QStringLiteral("a.md"), QStringLiteral("b.png"), QStringLiteral("c.pdf"),
+                                 QStringLiteral("d.tar.gz"), QStringLiteral("sub")}; // sorted
+    WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) == 5, 5000);
+    EXPECT_EQ(visibleRows(tree, tree->rootIndex()), everything) << "empty setting: everything shows";
+
+    // Case and a leading dot do not matter, and "tar.gz" matches the end of the name.
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    QLineEdit *edit = nullptr;
+    WAIT_TRUE((edit = window.findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_files.hiddenExtensions"))), 2000);
+    QTest::keyClicks(edit, QStringLiteral("PNG, .tar.gz"));
+    window.closeSettings();
+    EXPECT_EQ(visibleRows(tree, tree->rootIndex()),
+              (QStringList{QStringLiteral("a.md"), QStringLiteral("c.pdf"), QStringLiteral("sub")}));
+
+    // sub/ loads after the setting was made: its rows are hidden as they arrive.
+    const QModelIndex sub = model->index(vault.dir.filePath(QStringLiteral("sub")));
+    tree->expand(sub);
+    WAIT_TRUE(model->rowCount(sub) == 1, 5000);
+    EXPECT_TRUE(visibleRows(tree, sub).isEmpty()) << "sub/e.PNG";
+
+    // Cleared, they are back, live.
+    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    QTest::keyClick(edit, Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(edit, Qt::Key_Backspace);
+    window.closeSettings();
+    EXPECT_EQ(visibleRows(tree, tree->rootIndex()), everything);
+    EXPECT_EQ(visibleRows(tree, sub), QStringList{QStringLiteral("e.PNG")});
+}
+
+TEST_F(WindowTest, HiddenFileTypesAreHiddenFromTheFileListOnlyAndFromTheFirstLoad)
+{
+    PrivateConfig config;
+    {
+        Settings settings = Settings::load();
+        settings.setValue(QStringLiteral("files.hiddenExtensions"), QStringList{QStringLiteral("MD")});
+        ASSERT_TRUE(settings.save());
+    }
+    TypesVault vault;
+    MainWindow window;
+    window.show();
+    window.openVault(vault.dir.path());
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) == 5, 5000);
+    EXPECT_EQ(visibleRows(tree, tree->rootIndex()),
+              (QStringList{QStringLiteral("b.png"), QStringLiteral("c.pdf"), QStringLiteral("d.tar.gz"), QStringLiteral("sub")}));
+
+    // A hidden note still opens, revealing it in the tree quietly does nothing,
+    // and the quick switcher still lists it.
+    window.openNote(vault.dir.filePath(QStringLiteral("a.md")));
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("a.md")));
+    EXPECT_FALSE(tree->currentIndex().isValid() && model->fileName(tree->currentIndex()) == QStringLiteral("a.md"));
+    window.findChild<QAction *>(QStringLiteral("switcher:open"))->trigger();
+    auto *switcher = window.findChild<noteAppC::QuickSwitcher *>(QStringLiteral("quickSwitcher"));
+    auto *query = switcher->findChild<QLineEdit *>(QStringLiteral("quickSwitcherQuery"));
+    QTest::keyClicks(query, QStringLiteral("a.md"));
+    auto *results = switcher->findChild<QListWidget *>(QStringLiteral("quickSwitcherResults"));
+    WAIT_TRUE(results->count() == 1, 5000);
+}
+
 TEST_F(WindowTest, TheMetaNotesPaneIsAbsentWhileTheSettingIsOff)
 {
     PrivateConfig config;

@@ -128,6 +128,30 @@ TEST(Settings, aVaultLayersItsObsidianConfigOverTheDefaults)
     EXPECT_FALSE(settings.isFromVault(QStringLiteral("editor.autoPairs")));
 }
 
+TEST(Settings, HiddenFileTypesAreAnEmptyListByDefaultAndSurviveASaveNormalised)
+{
+    QTemporaryDir home;
+    QStandardPaths::setTestModeEnabled(false);
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    Settings settings = Settings::load();
+    EXPECT_TRUE(settings.value(QStringLiteral("files.hiddenExtensions")).toStringList().isEmpty());
+    EXPECT_EQ(Settings::fileTypes({QStringLiteral(" PNG, .tar.gz;*.pdf  png ,")}),
+              (QStringList{QStringLiteral("png"), QStringLiteral("tar.gz"), QStringLiteral("pdf")}));
+
+    // One entry comes back as a list, not as the bare string QSettings would give.
+    settings.setValue(QStringLiteral("files.hiddenExtensions"), QStringList{QStringLiteral("png")});
+    ASSERT_TRUE(settings.save());
+    EXPECT_EQ(Settings::load().value(QStringLiteral("files.hiddenExtensions")).toStringList(),
+              QStringList{QStringLiteral("png")});
+    settings.setValue(QStringLiteral("files.hiddenExtensions"), QStringList{QStringLiteral("png"), QStringLiteral("tar.gz")});
+    ASSERT_TRUE(settings.save());
+    EXPECT_EQ(Settings::load().value(QStringLiteral("files.hiddenExtensions")).toStringList(),
+              (QStringList{QStringLiteral("png"), QStringLiteral("tar.gz")}));
+    settings.reset(QStringLiteral("files.hiddenExtensions"));
+    EXPECT_FALSE(settings.isCustomised(QStringLiteral("files.hiddenExtensions")));
+}
+
 TEST(Settings, DeletedFilesDefaultsToTheSystemTrashAndFollowsObsidiansTrashOption)
 {
     EXPECT_EQ(Settings::load().text(QStringLiteral("files.deletedFiles")), QStringLiteral("system"));

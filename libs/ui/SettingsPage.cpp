@@ -292,17 +292,23 @@ void SettingsPage::addSpinRow(QVBoxLayout *into, const QString &key, const QStri
 void SettingsPage::addLineEditRow(QVBoxLayout *into, const QString &key, const QString &label,
                                   const QString &description, const QString &placeholder)
 {
+    // A list setting (file types) is shown as "a, b" and stored as a list.
+    const bool list = Settings::defaultValue(key).typeId() == QMetaType::QStringList;
+    const auto shown = [this, key, list] {
+        return list ? m_settings->value(key).toStringList().join(QStringLiteral(", ")) : m_settings->text(key);
+    };
     auto *edit = new QLineEdit(this);
     edit->setObjectName(QStringLiteral("settingsLineEdit_") + key);
     edit->setPlaceholderText(placeholder);
-    edit->setText(m_settings->text(key));
+    edit->setText(shown());
     edit->setMinimumWidth(160);
-    connect(edit, &QLineEdit::textEdited, this, [this, key](const QString &text) {
-        m_settings->setValue(key, text);
+    connect(edit, &QLineEdit::textEdited, this, [this, key, list](const QString &text) {
+        m_settings->setValue(key, list ? QVariant(Settings::fileTypes({text})) : QVariant(text));
         changed();
     });
-    addRow(into, {key}, label, description, edit,
-          [this, key, edit] { edit->setText(m_settings->text(key)); });
+    if (list)
+        connect(edit, &QLineEdit::editingFinished, this, [edit, shown] { edit->setText(shown()); });
+    addRow(into, {key}, label, description, edit, [edit, shown] { edit->setText(shown()); });
 }
 
 void SettingsPage::addDelimiterRow(QVBoxLayout *into, const QString &openKey, const QString &closeKey,
@@ -666,6 +672,10 @@ QWidget *SettingsPage::buildFilesPage()
                 {tr("In the folder specified below"), QStringLiteral("folder")}});
     addFolderRow(layout, QStringLiteral("files.newNoteFolder"), tr("Folder to create new notes in"),
                 tr("Used when the location above is the folder specified."));
+    addLineEditRow(layout, QStringLiteral("files.hiddenExtensions"), tr("Hidden file types"),
+                  tr("File types left out of the file list, separated by commas or spaces: png, pdf, "
+                     "tar.gz. Hidden from the file list only; search and links still find them."),
+                  tr("png, pdf, tar.gz"));
     addToggleRow(layout, QStringLiteral("encryption.unlockAtStartup"), tr("Unlock encrypted notes on startup"),
                 tr("Ask for the password when the vault opens. Off asks the first time an "
                    "encrypted note is opened. Either way it lasts until locked or the app closes."));

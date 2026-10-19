@@ -80,6 +80,11 @@ public:
     /// Writes the user layer to `~/.config/noteAppC`. Never touches a vault.
     bool save(QString *error = nullptr) const;
 
+    /// A list of file types as typed ("PNG, .tar.gz *.pdf"): split on commas,
+    /// semicolons and spaces, lower-cased, leading "*" and "." dropped,
+    /// duplicates and empties removed. What `files.hiddenExtensions` holds.
+    static QStringList fileTypes(const QStringList &raw);
+
     /// Every key, sorted, for the settings page to iterate.
     static QStringList keys();
     /// The compiled-in default, for "reset to default" and for save filtering.

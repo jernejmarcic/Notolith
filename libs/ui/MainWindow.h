@@ -482,6 +482,10 @@ private:
     /// hook. Called at startup, on any settings-page edit, and whenever the
     /// vault changes (a new Obsidian layer, a new scheme search path).
     void applySettings();
+    /// files.hiddenExtensions: hides (or shows again) the file rows of every
+    /// loaded folder. Rows that load later are handled by hideTypedRows().
+    void applyHiddenTypes();
+    void hideTypedRows(const QModelIndex &parent, int first, int last);
     Theme themeFromSettings() const;
     /// Reloads Settings for `vaultRoot` (a fresh Obsidian layer, or none),
     /// then replays whatever the running session had customised but not yet
@@ -777,6 +781,7 @@ void updateVimStatus();
     QString m_watchedThemeVaultRoot;
 
     QFileSystemModel *m_files = nullptr;
+    QStringList m_hiddenTypes; ///< files.hiddenExtensions, normalised
     QTreeView *m_tree = nullptr;
     /// Every tab and split; m_active is the focused tab, never null once the
     /// main area is built.
