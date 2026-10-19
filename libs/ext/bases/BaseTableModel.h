@@ -58,8 +58,8 @@ public:
     BaseTableModel(BaseQuery *query, Index *index, const Vault *vault, QObject *parent = nullptr);
     /// Called with a note's absolute path just before an edit is written into
     /// it: the window saves unsaved typing there first, or its next save would
-    /// write the old value back.
-    void setBeforeWrite(std::function<void(const QString &absolutePath)> beforeWrite) { m_beforeWrite = std::move(beforeWrite); }
+    /// write the old value back. False refuses the edit.
+    void setBeforeWrite(std::function<bool(const QString &absolutePath)> beforeWrite) { m_beforeWrite = std::move(beforeWrite); }
 
     /// Call after `query`'s results changed (a new view opened, a filter
     /// re-run) to make the model match.
@@ -94,7 +94,7 @@ signals:
     void noteEdited(const QString &relativePath);
 
 private:
-    std::function<void(const QString &)> m_beforeWrite;
+    std::function<bool(const QString &)> m_beforeWrite;
     QString propertyReferenceAt(int column) const;
     bool writePropertyEdit(const QString &relativePath, const QString &key,
                            const QString &newText, QString *error);

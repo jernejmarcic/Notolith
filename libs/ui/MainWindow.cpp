@@ -1901,6 +1901,12 @@ void MainWindow::dropLeaf(Leaf *leaf)
 
 void MainWindow::closeLeaf(Leaf *leaf)
 {
+    // As in Obsidian, a pinned tab does not close by accident: Ctrl+W, a middle
+    // click, :q and "Close all other tabs" all leave it.
+    if (leaf->pinned) {
+        statusBar()->showMessage(tr("This tab is pinned: unpin it to close it"), 3000);
+        return;
+    }
     activateLeaf(leaf);
     if (!maybeLeave())
         return;
@@ -3114,12 +3120,7 @@ void MainWindow::buildActions()
         &MainWindow::newTab);
     add(QStringLiteral("workspace:toggle-pin"), tr("Toggle pin"), QString(), &MainWindow::togglePin);
     add(QStringLiteral("workspace:close"), tr("Close current tab"), QStringLiteral("Ctrl+W"),
-        [this] {
-            if (m_active->pinned) // as in Obsidian: a pinned tab does not close by accident
-                statusBar()->showMessage(tr("This tab is pinned: unpin it to close it"), 3000);
-            else
-                closeLeaf(m_active);
-        });
+        [this] { closeLeaf(m_active); });
     add(QStringLiteral("workspace:undo-close-pane"), tr("Undo close tab"), QStringLiteral("Ctrl+Shift+T"),
         &MainWindow::undoCloseTab);
     add(QStringLiteral("workspace:split-vertical"), tr("Split right"), QString(),
@@ -3136,7 +3137,7 @@ void MainWindow::buildActions()
         const QList<Leaf *> others = [this] {
             QList<Leaf *> list;
             for (Leaf *leaf : m_active->group->leaves)
-                if (leaf != m_active)
+                if (leaf != m_active && !leaf->pinned)
                     list << leaf;
             return list;
         }();
@@ -4418,6 +4419,7 @@ void MainWindow::restoreSnapshot(const QString &notePath, const QString &text)
         QMessageBox::warning(this, tr("Restore"), tr("Could not write %1:\n%2").arg(notePath, error));
         return;
     }
+    note = Vault::asWritten(note);
     recordHistory(notePath, text);
     if (m_vault.isValid())
         m_indexer->reindex(notePath);
@@ -5335,8 +5337,20 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     // A pinned tab keeps its note: what would replace it opens beside it.
     // Back and forward stay in the tab.
     if (m_active->pinned && !m_active->notePath.isEmpty() && source != NavSource::History
-        && (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)))
+        && (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path))) {
+        Leaf *pinned = m_active;
         newTab();
+        Leaf *fresh = m_active;
+        if (openNote(path, source, fragment))
+            return true;
+        // Not opened (a cancelled password, an unreadable file): no blank tab left behind.
+        if (fresh->notePath.isEmpty() && fresh->pendingPath.isEmpty()
+            && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [fresh](const auto &open) { return open.get() == fresh; })) {
+            dropLeaf(fresh);
+            activateLeaf(pinned);
+        }
+        return false;
+    }
     if (isViewFile(path)) {
         if (!maybeLeave())
             return false;
@@ -6378,7 +6392,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             auto *base = new bases::BaseView(m_active->area);
             base->setIndex(&m_index);
             base->setVault(&m_vault);
-            base->setBeforeWrite([this](const QString &note) { saveTyping(note); });
+            base->setBeforeWrite([this](const QString &note) { return saveTyping(note); });
             if (!base->open(path, QString::fromUtf8(file.readAll()))) {
                 error = base->lastError();
                 delete base;
@@ -6714,6 +6728,7 @@ void MainWindow::closeEncryptedLeaves()
                                      .arg(QFileInfo(leaf->notePath).completeBaseName()));
             continue;
         }
+        leaf->pinned = false; // locking takes the plaintext away, pinned or not
         closeLeaf(leaf);
     }
 }
@@ -6779,7 +6794,7 @@ void MainWindow::encryptCurrentNote()
     QFile::remove(from);
     retarget(m_leaves, from, to);
     watchOpenNotes();
-    m_active->note = note;
+    m_active->note = Vault::asWritten(note);
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == to)
             leaf->editor->setModified(false);
@@ -6815,7 +6830,7 @@ void MainWindow::decryptCurrentNote()
     QFile::remove(from);
     retarget(m_leaves, from, to);
     watchOpenNotes();
-    m_active->note = note;
+    m_active->note = Vault::asWritten(note);
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath == to)
             leaf->editor->setModified(false);
@@ -6982,6 +6997,7 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet)
         reportSaveError(target->notePath, error, quiet);
         return false;
     }
+    note = Vault::asWritten(note);
 
     if (snapshots)
         Snapshots::record(target->notePath, note.text,
@@ -7201,7 +7217,7 @@ void MainWindow::reloadChangedNotes()
         if (!readNote(path, disk, nullptr))
             continue;
         const Note &known = (*first)->note;
-        if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom)
+        if (disk.text == known.text && disk.crlf == known.crlf && disk.bom == known.bom && disk.mixed == known.mixed)
             continue; // this window's own save
 #ifdef NOTEAPPC_HAVE_SHARE
         // A shared note's file is one more writer of the shared text: what it
@@ -7596,13 +7612,12 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         setFileIcon(path, QString());
 }
 
-void MainWindow::saveTyping(const QString &absolutePath)
+bool MainWindow::saveTyping(const QString &absolutePath)
 {
     for (const auto &leaf : m_leaves)
-        if (!leaf->view && leaf->notePath == absolutePath && isModified(leaf.get())) {
-            saveLeaf(leaf.get(), true); // every tab on the note shows this one text
-            return;
-        }
+        if (leaf->notePath == absolutePath && isModified(leaf.get()))
+            return saveLeaf(leaf.get(), true); // every tab on the note shows this one text
+    return true;
 }
 
 QString MainWindow::copyPath(const QString &absolutePath)
@@ -7623,7 +7638,7 @@ QString MainWindow::copyPath(const QString &absolutePath)
         statusBar()->showMessage(tr("Could not copy %1").arg(info.fileName()), 5000);
         return {};
     }
-    if (Vault::isNote(copy) || isViewFile(copy)) {
+    if (Vault::isNote(copy) || isViewFile(copy) || isNotebookFile(copy)) {
         m_indexer->reindex(copy);
         openNote(copy);
     }

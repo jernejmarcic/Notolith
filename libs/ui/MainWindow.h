@@ -264,7 +264,7 @@ private slots:
     /// Obsidian's "Make a copy": "Name 1.ext" beside it, opened when a note.
     QString copyPath(const QString &absolutePath);
     /// Saves unsaved typing in the note, before something else writes the file.
-    void saveTyping(const QString &absolutePath);
+    bool saveTyping(const QString &absolutePath); ///< false: it could not be saved
     /// A UI-only icon for a file or folder in the tree and on its tabs: a
     /// bundled icon id or one character; empty removes it. Kept outside the
     /// vault (FileIcons).

@@ -58,7 +58,7 @@ public:
     /// substitute for the real resolver.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
     /// See BaseTableModel::setBeforeWrite; set before open().
-    void setBeforeWrite(std::function<void(const QString &absolutePath)> beforeWrite) { m_beforeWrite = std::move(beforeWrite); }
+    void setBeforeWrite(std::function<bool(const QString &absolutePath)> beforeWrite) { m_beforeWrite = std::move(beforeWrite); }
 
     /// Parses `yamlText` (already read from `absolutePath` by the caller)
     /// and opens its first view, whose rows arrive with viewOpened(). False
@@ -133,7 +133,7 @@ private:
     Index *m_index = nullptr;
     const Vault *m_vault = nullptr;
     std::function<QString(const QString &)> m_linkResolver;
-    std::function<void(const QString &)> m_beforeWrite;
+    std::function<bool(const QString &)> m_beforeWrite;
     /// Shared with a view evaluating on the pool, whose query points into it.
     std::shared_ptr<const BaseFile> m_file;
     Opened m_shown; ///< keeps the query shown, and what it points into, alive

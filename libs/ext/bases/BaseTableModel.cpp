@@ -219,8 +219,11 @@ bool BaseTableModel::writePropertyEdit(const QString &relativePath, const QStrin
                                        const QString &newText, QString *error)
 {
     const QString absolutePath = m_vault->absolute(relativePath);
-    if (m_beforeWrite)
-        m_beforeWrite(absolutePath);
+    if (m_beforeWrite && !m_beforeWrite(absolutePath)) {
+        if (error)
+            *error = QStringLiteral("the note's unsaved edits could not be saved first");
+        return false;
+    }
     Note note;
     if (!Vault::read(absolutePath, note, error))
         return false;

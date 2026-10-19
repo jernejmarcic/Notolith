@@ -2296,3 +2296,21 @@ Shared/<title>.md.
       Not done, and why: cage shows one fullscreen view and always focuses
       the newest, so a window active there proves nothing about Hyprland's
       focus-stealing rules. Stays with Jernej (L1425).
+
+### Fable check of the afternoon batch (2026-10-19)
+
+- [x] P1. Mixed endings survived only the first save (the leaf kept the
+      original bytes): Vault::asWritten after every write that a leaf keeps
+      (save, restore, encrypt, decrypt); the reload check compares them too.
+- [x] P2. Pinned tabs closed by middle click, :q and Close all other tabs:
+      the guard is in closeLeaf; locking encrypted notes unpins first.
+- [x] P3. A failed open from a pinned tab left a blank tab: dropped again.
+- [x] P4. saveTyping skipped canvas/PDF tabs; Make a copy of a notebook now
+      opens it.
+- [x] P5. A base cell edit went ahead when the note's typing could not be
+      saved: refused instead.
+- [ ] P6. appstreamtest is vacuous until `cmake --install` writes
+      install_manifest.txt into the build dir; then it fails on
+      url-homepage-missing. Needs a homepage URL in the metainfo -
+      Jernej: is there a public repo or page for Notolith? (After a staged
+      install, delete /tmp/noteAppC-build/install_manifest.txt.)

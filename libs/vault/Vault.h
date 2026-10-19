@@ -96,6 +96,9 @@ public:
 
     /// Round-trip helper used by the tests: the exact bytes `note` would write.
     static QByteArray encode(const Note &note);
+    /// `note` as its file reads back once written: a mixed-ending note's
+    /// remembered bytes follow the save (the next one diffs against this).
+    static Note asWritten(const Note &note) { return note.mixed.isEmpty() ? note : decode(encode(note)); }
     static Note decode(const QByteArray &bytes);
 
     // --- file operations -------------------------------------------------

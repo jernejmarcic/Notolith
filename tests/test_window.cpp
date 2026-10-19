@@ -5549,10 +5549,31 @@ TEST_F(WindowTest, APinnedTabKeepsItsNote)
         EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
         EXPECT_EQ(tabs->tabText(0), QStringLiteral("Linking"));
 
-        // Ctrl+W does not close it; its pin button unpins it.
+        // Ctrl+W, a middle click and "Close all other tabs" leave it.
         tabs->setCurrentIndex(0);
         window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
         EXPECT_EQ(tabs->count(), 2);
+        QTest::mouseClick(tabs, Qt::MiddleButton, Qt::NoModifier, tabs->tabRect(0).center());
+        EXPECT_EQ(tabs->count(), 2);
+        tabs->setCurrentIndex(1);
+        window.findChild<QAction *>(QStringLiteral("workspace:close-others"))->trigger();
+        EXPECT_EQ(tabs->count(), 2);
+        tabs->setCurrentIndex(0);
+#ifdef NOTEAPPC_HAVE_ENCRYPTION
+        // An open that fails leaves no blank tab beside it.
+        write(QStringLiteral("Secret.mdlock"), "not really encrypted");
+        window.setEncryptionPromptForTests([](bool, bool) { return QString(); }); // cancelled
+        QTimer dismiss; // whatever the failure says, in a box
+        QObject::connect(&dismiss, &QTimer::timeout, [] {
+            if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget()))
+                box->reject();
+        });
+        dismiss.start(20);
+        EXPECT_FALSE(window.openNote(path(QStringLiteral("Secret.mdlock"))));
+        dismiss.stop();
+        EXPECT_EQ(tabs->count(), 2);
+        EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Linking.md")));
+#endif
         window.close(); // the layout keeps the pin
     }
     MainWindow window;
@@ -5583,6 +5604,23 @@ TEST_F(WindowTest, TheTabsOutliveACrash)
     const auto tabs = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
     ASSERT_EQ(tabs.size(), 1);
     EXPECT_EQ(tabs.first()->count(), 2);
+}
+
+TEST_F(WindowTest, MixedLineEndingsSurviveOneSaveAfterAnother)
+{
+    write(QStringLiteral("Mixed.md"), "a\r\nb\nc\r\nd\r\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Mixed.md")));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(0);
+    QTest::keyClicks(editor, QStringLiteral("X"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Mixed.md"))), QByteArray("Xa\r\nb\nc\r\nd\r\n"));
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("Y"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Mixed.md"))), QByteArray("Xa\r\nb\nc\r\nd\r\nY"));
 }
 
 TEST_F(WindowTest, ANoteDeletedAndRecreatedOutsideIsWatchedAgain)
