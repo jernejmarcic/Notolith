@@ -1996,8 +1996,11 @@ Jernej's answers 2026-10-19: CRDT "try both" (yrs via cargo approved, and a
 hand-rolled native C++ CRDT, same CrdtDoc interface, compare); member "first
 device then person. just do device for now"; collaborator copy at
 Shared/<title>.md.
-- [ ] Lane H (Hearth): node.cpp off account.h, proto/link.proto, Node
-      serviceType/prefix, tools/link-files.txt
+- [x] Lane H (Hearth): node.cpp off account.h, proto/link.proto, Node
+      serviceType/prefix, tools/link-files.txt (hearth 3efaf4f; links with
+      no Qt, standalone build proven)
+- [ ] Lane H5 (Hearth): signature domain configurable (labels were
+      hardcoded "hearth-offer" etc.), debuglog path set by the embedding app
 - [ ] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
 - [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
 - [ ] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
