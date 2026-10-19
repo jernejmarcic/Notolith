@@ -625,8 +625,9 @@ void ShareEngine::sendJoin(const PendingJoin &pending)
     sendTo(pending.owner, false, toQ(envelope.SerializeAsString()));
 }
 
-void ShareEngine::stop(const QByteArray &shareID)
+void ShareEngine::stop(const QByteArray &id)
 {
+    const QByteArray shareID = id; // the caller's may live in what is removed here
     if (m_shares.remove(shareID)) {
         m_store.remove(shareID);
         m_invites.remove(shareID);
