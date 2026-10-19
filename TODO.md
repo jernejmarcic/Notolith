@@ -2009,7 +2009,9 @@ Shared/<title>.md.
 - [x] Lane Y: CrdtDoc interface + yrs backend (cargo, Cargo.lock), test_share_crdt
       (own 250-line yrs-ffi crate on yrs 0.28.0, not yffi: yffi aborts on bad
       input; 45 crates 3.5 MB; ~0.8 MB binary; 1.3 ms/edit at 1 MB)
-- [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
+- [x] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
+      (run-length RGA + Lamport; 14x-1000x faster per edit, 2x the memory;
+      table in docs/PERFORMANCE.md)
 - [x] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
 - [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
       applyExternalEdit, disk fold-in. Fable split it in two (plan in the
@@ -2105,6 +2107,9 @@ Shared/<title>.md.
         poisons the handle forever. Compute before locking.
   - [ ] Note in Cargo.toml / SHARE.md: bumping yrs re-checks plausible() and
         the state-vector path.
+  - [ ] Yrs replica can keep an update pending after the edit it waits for
+        has arrived (shuffled delivery, delete-heavy; seed 2 of the fuzz);
+        a diffSince exchange releases it. Find whether yrs or yrs-ffi.
 - [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
