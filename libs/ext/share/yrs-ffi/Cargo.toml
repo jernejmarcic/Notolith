@@ -9,6 +9,7 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
+# Pinned: bumping yrs means re-checking plausible() and the state-vector guard (src/lib.rs).
 yrs = "=0.28.0"
 
 [profile.release]

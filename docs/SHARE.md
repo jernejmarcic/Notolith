@@ -95,19 +95,56 @@ Known limits, each marked `ponytail:` in the code:
 yffi ships no header and cannot be used as a dependency (it is built only as
 a static/dynamic library), and its text API passes NUL-terminated strings and
 unwraps: one U+0000 inside a *remote* update would abort the process. `yrs-ffi`
-is about 250 lines of Rust over yrs: UTF-8 with explicit lengths, UTF-16
+is about 300 lines of Rust over yrs: UTF-8 with explicit lengths, UTF-16
 offsets (`OffsetKind::Utf16`), and a `catch_unwind` around every entry point,
-so a hostile or corrupt update is an error code. It also refuses an update
-whose claimed client count the bytes could not hold (yrs would reserve and
-touch gigabytes before noticing).
+so a hostile or corrupt update is an error code. It also refuses an update,
+or a peer's state vector, whose claimed entry count the bytes could not hold
+(yrs would reserve and touch gigabytes before noticing: five bytes cost about
+30 ms each). **Bumping yrs means re-checking that guard** (`plausible()` in
+`lib.rs`, noted in `Cargo.toml`): it is the only thing between a size claim in
+a decoder and the allocator.
+
+Failure semantics. yrs commits a transaction when it is dropped, and an update
+that decodes can still fail to integrate halfway. After such an error (or a
+panic) `applyUpdate` reports `ok` false *and* returns the edits for the part
+that did land, so the editor stays in step with `text()`; the replica may then
+miss edits its peers have, and the caller should resync from
+`encodeState()` / `diffSince()`. `localEdit` likewise returns whatever update a
+half-done edit produced. Native keeps its stricter meaning (`ok` false changes
+nothing), which the same wording allows.
+
+Embeds. A Yjs client can put an embed or a nested type into the text; it takes
+one offset in yrs. `text()` spells each as U+FFFC, as the edit stream does, so
+the text and every offset reported for it count the same units.
 
 Known limits: editing offsets must not split a surrogate pair, and a lone
 surrogate is stored as U+FFFD (one unit); typing at the end of a 1 MB note costs
 about 1.3 ms (yrs walks the block holding the position), 0.13 ms at 100 KB.
-Also observed: after updates delivered in a shuffled order, yrs can still hold
-one pending although the edit it waited for has arrived; exchanging state
-vectors (`diffSince`) releases it (`ThreeReplicasConvergeUnderRandomDelivery`
-does that for Yrs only, comment there).
+### A yrs quirk: a pending update that is never retried
+
+Cause found in yrs 0.28.0, not in `yrs-ffi`. When an update arrives before the
+edits it depends on, yrs keeps it pending together with a "missing" clock per
+client, and retries it on a later update only if the missing clock is below
+the store's clock for that client (`TransactionMut::apply_update`, step 3).
+But a block that arrives ahead of a gap is integrated at once with a skip
+placeholder before it, which moves the store's clock (`get_clock`, the end of
+the last block) past the gap, while the missing clock is recorded from that
+same `get_clock` (`BlockPicker::switch`, `update.rs`). Concretely: client C
+types `x`, then `y` after it, then `w` at the start of the text. A replica
+that receives `w`, `y`, `x` integrates `w` (it needs nothing from C), parks
+`y` (it needs `x`, inside the gap) with missing clock 3, and when `x` arrives
+the clock is 3 and `3 < 3` is false: `y` stays pending, so the text lacks it
+and the state vector for C stops at 1 instead of 3. The next update from C
+beyond the gap, or a `diffSince` exchange with any peer that has `y`, releases
+it. Native does not have this problem.
+
+So a Yrs replica that has received everything can still lag until the peers
+exchange state vectors; the sharing layer should do that on connect and
+periodically (it needs to for offline peers anyway). `AnEditWaitingBehindALaterOneIsReleased`
+is the minimal case; `ThreeReplicasConvergeUnderRandomDelivery` and
+`AReloadedReplicaKeepsMergingLikeTheOthers` do the exchange for Yrs only. A
+yrs bump that fixes this lets those workarounds go (the minimal test then
+passes without the exchange). Not patched here: the fix belongs upstream.
 
 ## Building without cargo
 
