@@ -2080,18 +2080,20 @@ Shared/<title>.md.
 - [x] Tests drop the desktop's QT_QPA_PLATFORMTHEME/QT_STYLE_OVERRIDE
       (tests/IsolatedHome.cpp): kde theme loaded KWindowSystem, whose offscreen
       warning failed DemoVaultTest.EveryCommandRunsWithoutWarnings.
-- [ ] Fable final check 2026-10-19 (merged batch at fb30ff6). Editor lane
+- [x] Fable final check 2026-10-19 (merged batch at fb30ff6). Editor lane
       "reviewfix":
-  - [ ] Task box regex admits an astral code point: `- [<U+1F600>] text` (an emoji in the box) is a task
+  - [x] Task box regex admits an astral code point: `- [<U+1F600>] text` (an emoji in the box) is a task
         and a click writes `- [x]] text` (Parser.cpp:171, :1602,
         EditingCommands.cpp:116); exclude U+10000-10FFFF from the box class.
-  - [ ] PDF zoom budget leaks when setFeatures clears the raster cache
+  - [x] PDF zoom budget leaks when setFeatures clears the raster cache
         (m_pdfZoomKeys/m_pdfZoomBytes never reset): budget shrinks, then a
         render/evict loop while zoomed. Reset beside the cache clear.
-  - [ ] PDF zoom, slide index and nav state survive a note switch in the same
+  - [x] PDF zoom, slide index and nav state survive a note switch in the same
         leaf (keyed by block offset; setNoteText clears only undo): a new
         note opens zoomed or on the old slide. Clear them in setNoteText.
-  - [ ] tasks.ini loads only through MarkdownEditor: index CLI and a
+        Done; folds and query collapse/sort state had the same carry-over
+        and are cleared too.
+  - [x] tasks.ini loads only through MarkdownEditor: index CLI and a
         standalone Publisher see default states. Lazy-load in
         TaskStates::current().
 - [ ] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
