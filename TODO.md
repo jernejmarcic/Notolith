@@ -2100,22 +2100,25 @@ Shared/<title>.md.
       headings and lists across switches and restarts). Today setNoteText
       clears them (before 2026-10-19 they landed on the wrong blocks of the
       next note). Key by note path + heading/line text, not offset.
-- [ ] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
-  - [ ] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
+- [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
+  - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
-  - [ ] A panic or late decode error after a partial integrate commits
+  - [x] A panic or late decode error after a partial integrate commits
         silently (TransactionMut commits on Drop): C++ returns nothing, peers
         diverge. Return what the observers captured with ok=false, reset
         want_delta with a drop guard, document "resync from encodeState".
-  - [ ] text() drops foreign embeds that the delta counts as U+FFFC: offsets
+  - [x] text() drops foreign embeds that the delta counts as U+FFFC: offsets
         drift. Refuse non-string inserts (ERR_DECODE) or emit U+FFFC.
-  - [ ] Observer computes the delta while holding the Mutex: one panic
+  - [x] Observer computes the delta while holding the Mutex: one panic
         poisons the handle forever. Compute before locking.
-  - [ ] Note in Cargo.toml / SHARE.md: bumping yrs re-checks plausible() and
+  - [x] Note in Cargo.toml / SHARE.md: bumping yrs re-checks plausible() and
         the state-vector path.
-  - [ ] Yrs replica can keep an update pending after the edit it waits for
+  - [x] Yrs replica can keep an update pending after the edit it waits for
         has arrived (shuffled delivery, delete-heavy; seed 2 of the fuzz);
         a diffSince exchange releases it. Find whether yrs or yrs-ffi.
+        Found: yrs 0.28 records the missing clock past a skip placeholder, so
+        the pending update is never retried; documented in SHARE.md; the
+        share engine exchanges state vectors periodically to release it.
 - [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
