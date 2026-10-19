@@ -437,6 +437,18 @@ TEST_P(ShareWindowTest, ASharedVaultResumesOnReopen)
     ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral("A hello again\n"); }));
 }
 
+TEST_P(ShareWindowTest, AJoinerFindsTheOwnerAgainWithoutMDNS)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello\n"));
+    ASSERT_FALSE(id.isEmpty());
+    b.window.reset();
+    ASSERT_TRUE(waitFor([&] { return a.engine()->peersHere(id) == 0; }));
+    b.open(); // mDNS is off and nobody dials: only the invite's addresses bring it back
+    ASSERT_NE(b.engine(), nullptr);
+    ASSERT_TRUE(waitFor([&] { return a.engine()->peersHere(id) == 1 && b.engine()->peersHere(id) == 1; }));
+}
+
 TEST_P(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
 {
     setShareFeature(false);

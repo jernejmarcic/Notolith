@@ -2031,9 +2031,10 @@ Shared/<title>.md.
       safety number, Revoke, new invite), join dialog, approve prompt,
       status-bar badge "Shared - N here", tab marker; replace S2's
       QInputDialog/QMessageBox placeholders. Feature switch done in S2.
-- [ ] Share: remember peers' last addresses so a share reconnects after a
+- [x] Share: remember peers' last addresses so a share reconnects after a
       restart without mDNS (tailnet, other subnets); today only mDNS or a
-      fresh dial reconnects.
+      fresh dial reconnects. (Joiner keeps the invite's owner addresses in
+      share.json and redials them on start; owner never dials.)
 - [x] Share: run the window tests on the Native backend too (only Yrs is
       exercised through MainWindow).
 - [ ] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS

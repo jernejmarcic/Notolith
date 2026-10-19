@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QList>
+#include <QStringList>
 #include <QString>
 
 namespace noteAppC {
@@ -18,6 +19,7 @@ struct ShareRecord {
     QString relativePath; ///< vault-relative path of the note ("" until the window has put it somewhere)
     QString title;
     bool owned = false;   ///< this device is the owner
+    QStringList hosts;    ///< a joiner's "host:port"s of the owner, from the invite: dialled again on every start
 };
 
 /// The shares of one vault on this device, under one directory:

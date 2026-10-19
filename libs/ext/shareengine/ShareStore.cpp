@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
@@ -72,6 +73,8 @@ QList<ShareRecord> ShareStore::all() const
         r.relativePath = o.value(QLatin1String("path")).toString();
         r.title = o.value(QLatin1String("title")).toString();
         r.owned = o.value(QLatin1String("owned")).toBool();
+        for (const QJsonValue &host : o.value(QLatin1String("hosts")).toArray())
+            r.hosts.append(host.toString());
         if (o.value(QLatin1String("v")).toInt() != 1 || r.shareID.isEmpty() || r.owner.isEmpty() || r.key.isEmpty()
             || r.members.isEmpty() || r.epoch == 0 || (r.backend != 1 && r.backend != 2)
             || r.shareID.toHex() != name.toLatin1())
@@ -100,6 +103,7 @@ bool ShareStore::save(const ShareRecord &r, const QByteArray &state, const QStri
         {QStringLiteral("backend"), r.backend},
         {QStringLiteral("clientID"), QString::number(r.clientID)},
         {QStringLiteral("owned"), r.owned},
+        {QStringLiteral("hosts"), QJsonArray::fromStringList(r.hosts)},
     };
     return writeWhole(dir + QStringLiteral("/state.bin"), state)
         && writeWhole(dir + QStringLiteral("/base.md"), base.toUtf8())

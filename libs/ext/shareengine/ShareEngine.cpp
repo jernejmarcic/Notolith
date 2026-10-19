@@ -54,6 +54,20 @@ int preferredBackend(std::optional<CrdtDoc::Backend> configured)
     return CrdtDoc::available(CrdtDoc::Backend::Yrs) ? kBackendYrs : kBackendNative;
 }
 
+/// "host:port" of a private (loopback, LAN, tailnet) address. Sharing is for
+/// those: a code or a record that sends this device to a public address is
+/// refused rather than dialled.
+std::optional<ShareEngine::InviteInfo::Host> privateHost(const QString &text)
+{
+    const qsizetype colon = text.lastIndexOf(QLatin1Char(':'));
+    bool ok = false;
+    const int port = colon > 0 ? text.mid(colon + 1).toInt(&ok) : 0;
+    const QString host = text.left(colon);
+    if (!ok || port < 1 || port > 65535 || host.isEmpty() || host.size() > 255 || !hearth::isPrivateHost(host.toStdString()))
+        return std::nullopt;
+    return ShareEngine::InviteInfo::Host{host, quint16(port)};
+}
+
 quint64 newClientID()
 {
     return QRandomGenerator::system()->generate64() & ((quint64(1) << 53) - 1);
@@ -116,6 +130,7 @@ struct ShareEngine::PendingJoin {
     QByteArray shareID, owner, token;
     QString name;
     int backend = 0;
+    QStringList hosts; ///< the invite's, kept in the record
 };
 
 ShareEngine::ShareEngine(const QString &vaultRoot, QObject *parent)
@@ -228,6 +243,13 @@ bool ShareEngine::start()
         QString why;
         if (!adoptRecord(record, &why) && hearth::debugLogOn())
             hearth::debugLog("share", std::format("skipped a stored share: {}", why.toStdString()));
+        // Back to the owner where it was last invited from: mDNS finds it on the
+        // LAN, this on the tailnet and other subnets.
+        // ponytail: the invite's addresses only; a moved owner is found by mDNS or a new invite.
+        if (!record.owned && m_shares.contains(record.shareID))
+            for (const QString &text : record.hosts)
+                if (const auto host = privateHost(text))
+                    m_node->dial(host->host.toStdString(), host->port, toPK(record.owner));
     }
     return true;
 }
@@ -481,16 +503,10 @@ std::optional<ShareEngine::InviteInfo> ShareEngine::parseInvite(const QString &c
     if (hosts.isEmpty() || hosts.size() > kMaxInviteHosts)
         return refuse(tr("This invitation has no address to connect to."));
     for (const QJsonValue &value : hosts) {
-        const QString text = value.toString();
-        const qsizetype colon = text.lastIndexOf(QLatin1Char(':'));
-        bool ok = false;
-        const int port = colon > 0 ? text.mid(colon + 1).toInt(&ok) : 0;
-        const QString host = text.left(colon);
-        // Sharing is for the local network and the tailnet: a code that sends this
-        // device to a public address is refused rather than dialled.
-        if (!ok || port < 1 || port > 65535 || host.isEmpty() || host.size() > 255 || !hearth::isPrivateHost(host.toStdString()))
+        const auto host = privateHost(value.toString());
+        if (!host)
             return refuse(tr("This invitation names an address that sharing will not connect to."));
-        info.hosts.append({host, quint16(port)});
+        info.hosts.append(*host);
     }
     return info;
 }
@@ -521,6 +537,8 @@ bool ShareEngine::join(const QString &inviteCode, const QString &name, QString *
     if (pending->name.isEmpty())
         pending->name = localName();
     pending->backend = info->backend;
+    for (const InviteInfo::Host &h : info->hosts)
+        pending->hosts.append(h.host + QLatin1Char(':') + QString::number(h.port));
     m_pendingJoins.insert(info->shareID, pending);
 
     // On a LAN mDNS has usually connected the two before the code is pasted, and
@@ -934,6 +952,7 @@ void ShareEngine::onWelcome(const QByteArray &key, const Welcome &welcome)
     record.clientID = newClientID();
     record.title = ShareFrame::cleanText(QString::fromStdString(body.title()), kMaxTitleChars);
     record.owned = false;
+    record.hosts = pending.hosts;
     const auto backend = backendOf(record.backend);
     auto doc = backend ? CrdtDoc::create(*backend, record.clientID) : nullptr;
     if (!doc || !doc->loadState(toQ(body.state())))

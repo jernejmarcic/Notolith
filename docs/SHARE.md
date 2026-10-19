@@ -246,7 +246,8 @@ access, no socket, no file.
   copy their arguments and queue onto it. A keystroke costs one `localEdit`, one AEAD
   seal and one signature per connected member.
 - **Persistence.** `<GenericDataLocation>/noteAppC/share/<16 hex of sha256 of the vault
-  path>/<share id>/`: `share.json` (key, epoch, signed member list, path, replica id),
+  path>/<share id>/`: `share.json` (key, epoch, signed member list, path, replica id, and on a
+  joiner the invite's owner addresses),
   `state.bin` (the CRDT state), `base.md` (the text the file and the CRDT last agreed
   on); files 0600, written on a 2 s debounce, by `persist()` and on destruction. The
   key sits beside a plaintext note: this protects the wire, not the disk.
@@ -327,8 +328,11 @@ already holds shares of this vault.
 - **Restart.** The record, the CRDT state and `base.md` are the engine's
   persistence (above). With the feature on and shares in the store the engine
   starts as the vault opens, and a tab opening a shared note attaches to its
-  session. Nothing dials by itself without mDNS: a joiner reconnects when the
-  owner's address answers (`ShareEngine::dial`).
+  session. A joiner dials the owner again at the addresses its invite named
+  (kept in `share.json`, private ones only), so a share comes back over the
+  tailnet or another subnet without mDNS. An owner never dials: its members
+  come to it. An owner that moved, or came back on another port, is found by
+  mDNS or a new invite.
 - **Cost.** A keystroke is one `localEdit`, one AEAD seal and one signature per
   connected member, and no copy of the text; the text is fetched only when the
   edit touches half of a surrogate pair. State is written on the engine's 2 s
@@ -336,5 +340,6 @@ already holds shares of this vault.
 
 Tests: `ctest -R '^share_window$'` - two `MainWindow`s on two temporary vaults,
 loopback only, mDNS off, port 0, an in-memory secret store, temporary XDG
-directories (`tests/test_share_window.cpp`); `ExternalEditTest.*` and
+directories (`tests/test_share_window.cpp`), every case once on Yrs and once
+on Native (`ShareEngine::Config::backend`); `ExternalEditTest.*` and
 `HunkTest.*` in `tests/test_editor.cpp`.

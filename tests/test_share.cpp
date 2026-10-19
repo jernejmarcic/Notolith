@@ -444,6 +444,7 @@ TEST(ShareStoreTest, KeepsARecordPrivatelyAndSkipsABrokenOne)
     r.relativePath = QStringLiteral("Notes/a.md");
     r.title = QStringLiteral("A title");
     r.owned = true;
+    r.hosts = {QStringLiteral("192.168.1.5:47810"), QStringLiteral("fd7a:115c:a1e0::1:47810")};
     ASSERT_TRUE(store.save(r, "state bytes", QStringLiteral("base text é")));
 
     const auto all = store.all();
@@ -457,6 +458,7 @@ TEST(ShareStoreTest, KeepsARecordPrivatelyAndSkipsABrokenOne)
     EXPECT_EQ(all[0].relativePath, r.relativePath);
     EXPECT_EQ(all[0].title, r.title);
     EXPECT_TRUE(all[0].owned);
+    EXPECT_EQ(all[0].hosts, r.hosts);
     EXPECT_EQ(store.state(r.shareID), "state bytes");
     EXPECT_EQ(store.base(r.shareID), QStringLiteral("base text é"));
 
