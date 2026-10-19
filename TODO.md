@@ -1968,7 +1968,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       state, search (task-todo/task-done), Tasks/Dataview status compat,
       publish/PDF export, user-editable like callouts.ini, feature off = only
       [ ]/[x] and zero cost.
-- [ ] Settings > Appearance: colour of each formatting kind, display only
+- [x] Settings > Appearance: colour of each formatting kind, display only
       (Jernej 2026-10-19: "Note title, H1, H2, ..., bold, italics, underline
       (control both the color of underline as well as text, the same with
       strikethrough) etc. (this should be visual only, no actual formatting
@@ -1992,7 +1992,7 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       the PDF. Fix: nav row halves are the buttons, a dead band between the
       cell and the row, and for ~1 s after a nav click the last-used button
       also owns the cell's bottom strip (repeat clicks land).
-- [ ] Zoom inside an embedded PDF (Jernej 2026-10-19: "allow for zooming in
+- [x] Zoom inside an embedded PDF (Jernej 2026-10-19: "allow for zooming in
       on PDFs when in embedded mode"). Fable plan; build after lane/pdfnav
       merges (same file, PdfEmbedBlock.cpp).
 
@@ -2010,7 +2010,7 @@ Shared/<title>.md.
       (own 250-line yrs-ffi crate on yrs 0.28.0, not yffi: yffi aborts on bad
       input; 45 crates 3.5 MB; ~0.8 MB binary; 1.3 ms/edit at 1 MB)
 - [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
-- [ ] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
+- [x] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
 - [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
       applyExternalEdit, disk fold-in
 - [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
@@ -2044,10 +2044,26 @@ Shared/<title>.md.
       2026-10-19: "there should be a list of filetypes in settings that are
       ignored by the sidebar"). Lane hidetypes: files.hiddenExtensions,
       rows hidden in the tree only (search, links, quick switcher unchanged).
-- [ ] Layout bug found by the demo notes: a fenced code block followed
+- [x] Layout bug found by the demo notes: a fenced code block followed
       directly by a `> [!callout]` (no paragraph between) starts the callout
       8 px inside the fence ("block at source N starts 8 px inside the one
-      before it" in test_demo), live preview and reading view. Lane fencegap.
+      before it" in test_demo), live preview and reading view. Lane fencegap:
+      the callout panel's 8 px upward bleed now gets its own gap unless a blank
+      line is already there.
+- [ ] Drop the fence+callout workaround in demo/Editor/Slides.md now that the
+      gap is fixed (Jernej's demo folder has uncommitted edits: his call).
+- [ ] Hearth tests publish real mDNS services on the LAN (Node.DiscoversOverMDNS,
+      Node.ServiceTypeIsolatesApps run live when avahi-daemon is up, and now
+      also run inside Notolith's ctest `link`). Tests must not touch the
+      network: gate them behind an env var in Hearth, then re-vendor
+      (tools/vendor_link.sh). Also GCC 16 -Warray-bounds at test_node.cpp:237.
+- [ ] Configure prints "fatal: no upstream configured for branch 'main'" and
+      "error: No such remote 'origin'" (likely FetchContent's git update step on
+      md4qt/tinyxml2/microtex). Find the source; pin by commit or set
+      FETCHCONTENT_UPDATES_DISCONNECTED so configure never touches the network.
+- [x] Tests drop the desktop's QT_QPA_PLATFORMTHEME/QT_STYLE_OVERRIDE
+      (tests/IsolatedHome.cpp): kde theme loaded KWindowSystem, whose offscreen
+      warning failed DemoVaultTest.EveryCommandRunsWithoutWarnings.
 - [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
