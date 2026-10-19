@@ -2350,6 +2350,8 @@ Jernej 2026-10-19, asked whether to keep going once only this list was left:
       bench target builds and runs at HEAD. On each machine, once Syncthing
       has the new bundle: `sh ~/Documents/AI/sessions/2026-09-22_163000_noteappc-callouts-and-perf/bench-here.sh`
       (fetches md4qt, MicroTeX, tinyxml2 from GitHub; installs nothing).
+      shuttlepod-1 done 2026-10-19 (`bench-shuttlepod-1.*`, notes in that
+      session's NOTES.md); runabout left.
 - [ ] Share by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.
 - [ ] Hyprland pop-out windows: tiling/floating, real drag between windows,
@@ -2376,14 +2378,50 @@ chjoppy". Finger on the screen, GNOME session; SSH to padd allowed for this.
 PADD: FydeTab Duo, RK3588S (4x A76 + 4x A55), Mali-G610 panthor, DSI-1
 2560x1600 at GNOME scale 1.67 (logical ~1533x958).
 
+- [x] Finger drag selected text while it scrolled: b7b3352 (real touch
+      events test; the GPU viewport swap lost the touch grab too).
 - [ ] Measure on PADD: scroll frame cost at its panel/scale, offscreen and
       in headless cage (raster vs OpenGL incl. compositor buffer cost);
       which part of the frame is the time (paint, layout, upload).
-- [ ] Fix the scroll cost found (touch and mouse both choppy: per-frame cost,
-      not the scroller).
+      Found from Qt 6.12's source: QWaylandShmBackingStore::scroll() returns
+      false at a fractional scale ("With fractional scaling we cannot easily
+      scroll the existing pixels"), so on GNOME at 1.67 every scroll frame
+      repaints the whole viewport; integer scales move the pixels. Qt only
+      binds wp_fractional_scale when the rounding policy is PassThrough
+      (qwaylandwindow.cpp:239). Candidates, to measure on PADD in its GNOME
+      session: (a) a rounding policy, so Qt renders at 2 and mutter scales
+      down (blit back, ~1.4x the pixels, text a touch softer); (b) the
+      OpenGL viewport (no shm upload per frame). Offscreen at 1533x958:
+      20 px frame 1.50 ms at 1.67 vs 0.87 ms at 2 on starbase-1.
+- [x] Fix the scroll cost found (touch and mouse both choppy: per-frame cost,
+      not the scroller). Jernej after 0f7e792 with GPU on: "smooth now";
+      frame log 60 fps (gap median 16.6 ms, paint 3.8 ms, step 0.01 ms). Jernej turned GPU acceleration on: "much much
+      better", then "still doe snot feel very smooth" / "just a small delay
+      between scorlling". GPU at 1.67 in his session: paint 6.9 ms, gap 25 ms
+      (39 fps, p10 19, p90 33). 4cebb61: a scroll step skips the whole-note
+      layout pass when its reach is laid out, no hover work while flicking,
+      drag starts at 2 mm (Qt: 5 mm), font families cached; frame log now
+      has steps, step ms and step->paint wait. Next by the log's bucket:
+      handler, paint (try no Antialiasing on GL, then PartialUpdate + FBO
+      shift), or wait (compose + frame callback; perf on PADD).
 - [ ] PADD benchmark: a bench preset for PADD's geometry (viewport, scale,
       touch scroll) so a change is measured against it; numbers in
-      docs/PERFORMANCE.md.
+      docs/PERFORMANCE.md. `noteAppC-bench --padd` added (finger drag 20 px,
+      wheel 72 px, page; 1533x958 at 1.67); PADD numbers still to take.
 - [ ] Touch friendly audit on PADD: hit targets, tree/tab/sidebar use by
       finger, on-screen keyboard, long press, kinetic scroll feel.
-- [ ] Install the fixed build on PADD for Jernej to try.
+- [ ] Install the fixed build on PADD for Jernej to try (running from
+      /var/tmp/notolith-build now; /usr/bin/notolith is still the old one).
+- [ ] GPU acceleration by default where raster cannot scroll (fractional
+      device pixel ratio): PADD at 1.67 needs it, shuttlepod-1 at 1 is
+      faster raster (0.96 vs 2.37 ms). Ask Jernej before changing the default.
+- [x] PADD: Settings takes ~3 s to open (Jernej: "settings need like 3
+      seconds to launch"): built all seven pages and restyled them per open,
+      252 ms on starbase-1; now the shown page only, 30 ms (0f7e792).
+- [x] PADD: Settings does not scroll by finger (Jernej: "scorlring does not
+      work in the settings"): PopupStyle::polish grabs every outermost
+      scroll area (0f7e792).
+- [ ] PADD: on the coursework note (31 kB) at scale 2 the frame log shows
+      179 of 400 paints repainting the whole viewport (7.5 ms) and the app
+      at up to 96 % of a core while flicking: find why scrollContentsBy
+      falls back to a full update so often.
