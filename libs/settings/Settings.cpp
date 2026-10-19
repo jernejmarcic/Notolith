@@ -68,6 +68,10 @@ const QVariantMap &defaults()
         {QStringLiteral("editor.countIgnoreFormatting"), false},
         {QStringLiteral("editor.tabWidth"), 4},
 
+        // Canvas: Obsidian's two snapping toggles.
+        {QStringLiteral("canvas.snapToObjects"), true},
+        {QStringLiteral("canvas.snapToGrid"), false},
+
         // Files and links
         {QStringLiteral("files.attachmentFolder"), QString()},
         {QStringLiteral("files.newNoteLocation"), QStringLiteral("root")}, // root, current (the open note's folder) or folder

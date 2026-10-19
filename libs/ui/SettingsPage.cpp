@@ -773,6 +773,13 @@ QWidget *SettingsPage::buildCorePluginsPage()
                         QCoreApplication::translate("Settings", feature.description));
     }
 
+#ifdef NOTEAPPC_HAVE_CANVAS
+    addToggleRow(layout, QStringLiteral("canvas.snapToObjects"), tr("Canvas: snap to objects"),
+                 tr("Dragging or resizing a card snaps its edges and centre to other cards', with a guide line."));
+    addToggleRow(layout, QStringLiteral("canvas.snapToGrid"), tr("Canvas: snap to grid"),
+                 tr("What does not snap to a card lands on the canvas's dot grid."));
+#endif
+
 #ifdef NOTEAPPC_HAVE_SYNC
     addLineEditRow(layout, QStringLiteral("sync.serverURL"), tr("Sync server"),
                    tr("The server this vault syncs through. \"Sync: Sign in\" asks the password."),

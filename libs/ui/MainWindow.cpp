@@ -3674,6 +3674,14 @@ void MainWindow::applySettings()
 
     for (const auto &leaf : m_leaves)
         applyEditorSettings(leaf->editor);
+#ifdef NOTEAPPC_HAVE_CANVAS
+    for (const auto &leaf : m_leaves) {
+        if (auto *canvas = qobject_cast<CanvasView *>(leaf->view)) {
+            canvas->setSnapToObjects(m_settings.boolean(QStringLiteral("canvas.snapToObjects")));
+            canvas->setSnapToGrid(m_settings.boolean(QStringLiteral("canvas.snapToGrid")));
+        }
+    }
+#endif
     if (const QString mode = m_settings.text(QStringLiteral("editor.defaultMode")); mode != m_appliedDefaultMode) {
         m_appliedDefaultMode = mode;
         for (const auto &leaf : m_leaves)
@@ -5624,6 +5632,8 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     if (path.endsWith(QLatin1String(".canvas"), Qt::CaseInsensitive)) {
         auto *canvas = new CanvasView(m_active->area);
         canvas->setTheme(m_theme);
+        canvas->setSnapToObjects(m_settings.boolean(QStringLiteral("canvas.snapToObjects")));
+        canvas->setSnapToGrid(m_settings.boolean(QStringLiteral("canvas.snapToGrid")));
         canvas->setFileResolver(m_resolveLink);
         if (!canvas->load(path, &error)) {
             delete canvas;

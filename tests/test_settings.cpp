@@ -62,6 +62,13 @@ EXPECT_TRUE(settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
     EXPECT_FALSE(settings.isCustomised(QStringLiteral("appearance.theme")));
 }
 
+TEST(Settings, canvasSnapsToObjectsButNotToTheGridByDefault)
+{
+    const Settings settings = Settings::load();
+    EXPECT_TRUE(settings.boolean(QStringLiteral("canvas.snapToObjects")));
+    EXPECT_FALSE(settings.boolean(QStringLiteral("canvas.snapToGrid")));
+}
+
 TEST(Settings, whatRunsAnotherPersonsCodeIsOffUntilAskedFor)
 {
     const Settings settings;

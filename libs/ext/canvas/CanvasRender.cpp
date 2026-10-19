@@ -12,6 +12,7 @@
 #include <QImageReader>
 #include <QPainter>
 #include <QPainterPath>
+#include <QScrollBar>
 
 #include <cmath>
 
@@ -50,7 +51,6 @@ QString canvasSectionOf(const QString &text, const QString &subpath)
 }
 
 namespace {
-constexpr qreal kGridSpacingCanvas = 32.0;
 constexpr qreal kGridMinScreenSpacing = 16.0;
 }
 
@@ -296,6 +296,15 @@ void CanvasView::paintNodes(QPainter &painter) const
         const QRectF inner = screen.adjusted(2, 2, -2, -2);
         painter.setClipRect(inner);
         painter.drawPixmap(inner, pixmap, QRectF(QPointF(0, 0), pixmap.size()));
+        const QScrollBar *bar = scrollEditorShows(node) && m_scrollY > 0 ? m_scrollEditor->verticalScrollBar() : nullptr;
+        if (bar && bar->maximum() > 0) {
+            // A thin thumb at the card's edge: how far down, and how much of the note is showing.
+            const qreal total = bar->maximum() + bar->pageStep();
+            const qreal height = inner.height() * bar->pageStep() / total;
+            const qreal top = inner.top() + (inner.height() - height) * bar->value() / bar->maximum();
+            painter.fillRect(QRectF(inner.right() - 4, top, 3, height),
+                             m_theme.color(QStringLiteral("--background-modifier-border-hover")));
+        }
         painter.restore();
     }
 }
@@ -332,6 +341,18 @@ void CanvasView::paintOverlay(QPainter &painter) const
         }
     }
 
+    if (!m_drag.guides.isEmpty()) {
+        // Pixel-centred, so a one-pixel line is not smeared over two.
+        painter.setPen(QPen(m_theme.color(QStringLiteral("--interactive-accent")), 1));
+        for (const QLineF &guide : std::as_const(m_drag.guides)) {
+            const QPointF a = mapFromCanvasF(guide.p1());
+            const QPointF b = mapFromCanvasF(guide.p2());
+            const QPointF shift(guide.dx() == 0 ? std::floor(a.x()) + 0.5 - a.x() : 0,
+                                guide.dy() == 0 ? std::floor(a.y()) + 0.5 - a.y() : 0);
+            painter.drawLine(a + shift, b + shift);
+        }
+    }
+
     if (m_drag.kind == DragKind::RubberBand && m_drag.moved) {
         const QRectF band(mapFromCanvasF(m_drag.startCanvas), mapFromCanvasF(m_drag.currentCanvas));
         QColor fill = m_theme.color(QStringLiteral("--interactive-accent"));
@@ -353,21 +374,26 @@ void CanvasView::paintOverlay(QPainter &painter) const
 
 // --- node content, cached ------------------------------------------------
 
-QPixmap CanvasView::renderMarkdownContent(const QString &text, const QSize &physicalSize) const
+std::unique_ptr<MarkdownEditor> CanvasView::makeContentEditor(const QString &text, const QSize &physicalSize) const
 {
-    MarkdownEditor editor;
-    editor.setTheme(m_theme);
-    editor.setMode(MarkdownEditor::Mode::Reading);
-    editor.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    editor.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    editor.resize(physicalSize);
-    editor.setNoteText(text);
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->setTheme(m_theme);
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    editor->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    editor->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    editor->resize(physicalSize);
+    editor->setNoteText(text);
     // A large node's text parses on the thread pool, same as a note pane's;
     // take it now rather than grabbing blank text. Not a nested event loop:
     // this runs inside paintEvent, where a timer or a deferred delete (Ctrl+W)
     // firing would free the view mid-paint.
-    editor.finishParse();
-    return editor.grab();
+    editor->finishParse();
+    return editor;
+}
+
+QPixmap CanvasView::renderMarkdownContent(const QString &text, const QSize &physicalSize) const
+{
+    return makeContentEditor(text, physicalSize)->grab();
 }
 
 QPixmap CanvasView::renderImageContent(const QString &absolutePath, const QSize &physicalSize) const
@@ -430,18 +456,63 @@ QPixmap CanvasView::renderFileCard(const QString &fileName, const QSize &physica
     return canvas;
 }
 
+QString CanvasView::contentSignature(const CanvasNode &node)
+{
+    switch (node.type()) {
+    case CanvasNodeType::Text: return node.text();
+    case CanvasNodeType::File: return node.file() + QChar(0x1f) + node.subpath();
+    case CanvasNodeType::Link: return node.url();
+    default: return QString();
+    }
+}
+
+namespace {
+bool isImageFile(const QString &absolute)
+{
+    return QImageReader(absolute).canRead(); // the header only, not a decode
+}
+
+QString markdownFileSection(const QString &absolute, const QString &subpath)
+{
+    QFile file(absolute);
+    QString text;
+    if (file.open(QIODevice::ReadOnly))
+        text = QString::fromUtf8(file.readAll());
+    return canvasSectionOf(text, subpath);
+}
+}
+
+bool CanvasView::markdownTextOf(const CanvasNode &node, QString *text) const
+{
+    if (node.type() == CanvasNodeType::Text) {
+        *text = node.text();
+        return true;
+    }
+    if (node.type() != CanvasNodeType::File || !node.file().endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+        return false;
+    const QString absolute = m_fileResolver ? m_fileResolver(node.file()) : QString();
+    if (absolute.isEmpty() || isImageFile(absolute))
+        return false;
+    *text = markdownFileSection(absolute, node.subpath());
+    return true;
+}
+
 QPixmap CanvasView::contentPixmap(const CanvasNode &node) const
 {
     const QRectF r = currentRect(node);
     const QSize physical(qMax(1, qRound(r.width())) * kContentScale, qMax(1, qRound(r.height())) * kContentScale);
 
-    QString signature;
-    switch (node.type()) {
-    case CanvasNodeType::Text: signature = node.text(); break;
-    case CanvasNodeType::File: signature = node.file() + QChar(0x1f) + node.subpath(); break;
-    case CanvasNodeType::Link: signature = node.url(); break;
-    default: return QPixmap();
+    // A scrolled card is grabbed from its own editor each frame (a scroll and
+    // a paint, no parse or layout of the whole note); at scroll 0 the cache
+    // below already holds the same picture.
+    if (m_scrollY > 0 && scrollEditorShows(node) && m_scrollEditor->size() == physical) {
+        m_scrollEditor->verticalScrollBar()->setValue(qRound(m_scrollY));
+        return m_scrollEditor->grab();
     }
+
+    if (node.type() != CanvasNodeType::Text && node.type() != CanvasNodeType::File && node.type() != CanvasNodeType::Link)
+        return QPixmap();
+    const QString signature = contentSignature(node);
 
     const auto cached = m_contentCache.constFind(node.id());
     if (cached != m_contentCache.constEnd() && cached->signature == signature && cached->pixmap.size() == physical)
@@ -456,14 +527,10 @@ QPixmap CanvasView::contentPixmap(const CanvasNode &node) const
         const QString absolute = m_fileResolver ? m_fileResolver(node.file()) : QString();
         if (absolute.isEmpty()) {
             pixmap = renderFileCard(node.file(), physical, true);
-        } else if (QImageReader(absolute).canRead()) { // the header only, not a decode
+        } else if (isImageFile(absolute)) {
             pixmap = renderImageContent(absolute, physical);
         } else if (node.file().endsWith(QLatin1String(".md"), Qt::CaseInsensitive)) {
-            QFile file(absolute);
-            QString text;
-            if (file.open(QIODevice::ReadOnly))
-                text = QString::fromUtf8(file.readAll());
-            pixmap = renderMarkdownContent(canvasSectionOf(text, node.subpath()), physical);
+            pixmap = renderMarkdownContent(markdownFileSection(absolute, node.subpath()), physical);
         } else {
             pixmap = renderFileCard(QFileInfo(absolute).fileName(), physical, false);
         }
