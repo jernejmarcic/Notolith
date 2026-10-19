@@ -2052,15 +2052,18 @@ Shared/<title>.md.
       line is already there.
 - [ ] Drop the fence+callout workaround in demo/Editor/Slides.md now that the
       gap is fixed (Jernej's demo folder has uncommitted edits: his call).
-- [ ] Hearth tests publish real mDNS services on the LAN (Node.DiscoversOverMDNS,
+- [x] Hearth tests publish real mDNS services on the LAN (Node.DiscoversOverMDNS,
       Node.ServiceTypeIsolatesApps run live when avahi-daemon is up, and now
       also run inside Notolith's ctest `link`). Tests must not touch the
       network: gate them behind an env var in Hearth, then re-vendor
       (tools/vendor_link.sh). Also GCC 16 -Warray-bounds at test_node.cpp:237.
-- [ ] Configure prints "fatal: no upstream configured for branch 'main'" and
+      Done: HEARTH_LIVE_MDNS=1 opts in (hearth c244db2), re-vendored.
+- [x] Configure prints "fatal: no upstream configured for branch 'main'" and
       "error: No such remote 'origin'" (likely FetchContent's git update step on
       md4qt/tinyxml2/microtex). Find the source; pin by commit or set
       FETCHCONTENT_UPDATES_DISCONNECTED so configure never touches the network.
+      Found: md4qt loads ECM's KDECMakeSettings, which runs local git calls
+      (no network); CMAKE_DISABLE_FIND_PACKAGE_ECM around md4qt.
 - [x] Tests drop the desktop's QT_QPA_PLATFORMTHEME/QT_STYLE_OVERRIDE
       (tests/IsolatedHome.cpp): kde theme loaded KWindowSystem, whose offscreen
       warning failed DemoVaultTest.EveryCommandRunsWithoutWarnings.
