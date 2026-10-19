@@ -2133,8 +2133,11 @@ Shared/<title>.md.
 - [x] Perf: list-item folds at 1 MB are unmeasured (generateNote has no
       nested lists); add nested lists to the bench note. Done: 10 958 folds
       (half list parents), fold-all 1.81 ms, unfold-all 1.52 ms.
-- [ ] Confirm Obsidian's app.json keys foldHeading / foldIndent against a
+- [x] Confirm Obsidian's app.json keys foldHeading / foldIndent against a
       vault that toggled them (only seen in a plugin's config proxy).
+      Sol 2026-10-19: both booleans, default true (Obsidian help "Folding";
+      a public vault's .obsidian/app.json has "foldHeading": true,
+      "foldIndent": true). Settings.cpp already maps them.
 - [x] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
   - [x] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
         reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
