@@ -77,7 +77,7 @@ void MarkdownEditor::setTableHandles(bool on)
 
 const TableSpan *MarkdownEditor::chromeTable(const BlockView &view) const
 {
-    if (!d->m_tableHandles || d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden
+    if (!d->m_tableHandles || d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.foldHidden
         || view.piece != 0 || view.isBase || view.cells.empty())
         return nullptr;
     const QList<TableSpan> &tables = d->m_decorations.tables;

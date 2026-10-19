@@ -130,6 +130,9 @@ public:
     /// Selects `range` and scrolls to it: a pane row was clicked.
     void selectRange(const Range &range);
 
+    /// Settings > Editor > Fold heading / Fold indent: a heading hides its
+    /// section, a list item with children hides them. On by default.
+    void setFolding(bool heading, bool indent);
     /// A faint vertical rule at each level of list indentation.
     void setIndentGuides(bool on);
     bool indentGuides() const;
@@ -932,11 +935,19 @@ public:
     // block all fold the same way; so does the properties table. `offset` is
     // anywhere inside the block.
 
+    // A heading folds its section (up to the next heading of its level or
+    // higher) and a list item with children folds them; `offset` is anywhere
+    // on the heading's or the item's own first line.
+
     void toggleFoldAt(qsizetype sourceOffset);
     bool isFoldedAt(qsizetype sourceOffset) const;
+    /// Opens every heading and list fold hiding `offset`, as the caret
+    /// arriving there would. For a jump (find, the outline) that is not a click.
+    void revealOffset(qsizetype offset);
 
     /// What has been folded or opened by hand, in a form that outlives the
-    /// note's text: one entry per foldable block or nested callout, keyed by
+    /// note's text: one entry per foldable block, nested callout, folded
+    /// heading or folded list parent, keyed by
     /// the text of the line it starts on and how many earlier foldable lines
     /// read the same ("<0|1><occurrence> <line>", 1 = folded). setFoldState()
     /// puts it back on whatever blocks the current text still has; entries
@@ -1060,6 +1071,7 @@ private:
     struct NestedCallout;
     struct EmbedCell;
     struct BlockView;
+    struct FoldMark;
     struct CodeLabel;
     struct TabGroup;
     struct TabRect;
@@ -1200,6 +1212,7 @@ private:
     void paintCodeLabel(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     int nestingDepthAt(const BlockView &view, qsizetype source) const;
     void hideFoldedNestedCallouts(const BlockView &view, QList<Range> &hidden) const;
+    void hideFoldedListItems(const BlockView &view, QList<Range> &hidden) const;
     /// True for the kinds that show all their source when the caret is in
     /// them - tables, code, maths, callouts - as Obsidian does with its widgets.
     /// Paragraphs, headings, lists and plain quotes reveal per element instead.
@@ -1258,6 +1271,24 @@ private:
     /// Where this block's disclosure triangle is, in viewport coordinates.
     QRectF foldHandleRect(const BlockView &view, qreal left, qreal top) const;
     bool isFoldable(const BlockView &view) const;
+    /// Heading and list folds, which hide other blocks or lines rather than
+    /// collapsing their own: the item whose first line holds `offset`, null
+    /// when none or when it has no children; and whether it is folded.
+    const ListItemSpan *foldableItemAt(qsizetype offset) const;
+    bool headingFolds(const BlockView &view) const;
+    /// foldState(), with the offset-keyed folds dropped; for applyFoldState()
+    /// after the text was replaced wholesale (undo, redo, an external rewrite).
+    QStringList takeFolds();
+    /// Item `i` of a block's items has children and is folded.
+    bool foldedItem(std::span<const ListItemSpan> items, size_t i) const;
+    /// What a folded item hides: from its second line to the end of its children.
+    Range listFoldRange(const ListItemSpan &item) const;
+    /// Clears the folds that hide `offset`; false when none did. No layout.
+    bool openFoldsAt(qsizetype offset);
+    /// A fold arrow (and, folded, its ellipsis) for each site in the block.
+    QList<FoldMark> foldMarksOf(const BlockView &view, qreal left, qreal top) const;
+    bool handleFoldClick(const BlockView &view, const QPoint &point, qreal left, qreal top);
+    void paintFoldMarks(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     /// What the source itself says: `[!note]-` and `::: details` start folded.
     bool defaultFoldOf(const BlockView &view) const;
     void setFolded(const BlockView &view, bool folded);
@@ -1287,6 +1318,7 @@ private:
     /// alone (a finger's).
     void updateHover(const QPoint &point, bool tables = true);
     void clearHover();
+    void updateFoldHover(const QPoint &point, qsizetype blockFound);
     void paintEditHover(QPainter &painter) const;
     const TableSpan *chromeTable(const BlockView &view) const;
     TableChrome tableChromeAt(const QPoint &point) const;

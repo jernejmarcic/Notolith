@@ -1883,6 +1883,324 @@ TEST(FoldTest, ClickingTheCalloutTitleToggles)
     EXPECT_FALSE(editor->isFoldedAt(0));
 }
 
+// --- folding headings and list items ---------------------------------------
+
+namespace {
+
+const QString kSections = QStringLiteral("# A\n\nbody a\n\n## A1\n\nbody a1\n\n# B\n\nbody b\n");
+
+/// Where the fold arrow of the line holding offset `at` is, in viewport
+/// coordinates: the margin, level with the line. Moves the caret there.
+QPoint arrowOf(MarkdownEditor &editor, qsizetype at)
+{
+    editor.enterBlockAt(at);
+    const QRectF caret = editor.caretRectNow();
+    return QPoint(int(caret.x() + 1) - 13, int(caret.center().y()));
+}
+
+} // namespace
+
+TEST(FoldTest, AHeadingFoldsToTheNextHeadingOfItsLevelOrHigher)
+{
+    auto editor = editorWith(kSections);
+    const qreal open = editor->documentHeight();
+    ASSERT_TRUE(editor->displayText().contains(QLatin1String("body a1")));
+
+    editor->toggleFoldAt(0);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_LT(editor->documentHeight(), open);
+    const QString shown = editor->displayText();
+    EXPECT_FALSE(shown.contains(QLatin1String("body a"))) << "its body and the A1 section go";
+    EXPECT_FALSE(shown.contains(QLatin1String("A1")));
+    EXPECT_TRUE(shown.contains(QLatin1String("body b"))) << "the next heading of its level stays";
+
+    editor->toggleFoldAt(0);
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("body a1")));
+}
+
+TEST(FoldTest, ALowerHeadingFoldsOnlyItsOwnSection)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(kSections.indexOf(QLatin1String("## A1")));
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("body a\n")));
+    EXPECT_FALSE(shown.contains(QLatin1String("body a1")));
+    EXPECT_TRUE(shown.contains(QLatin1String("body b")));
+}
+
+TEST(FoldTest, AnOuterFoldHidesAnInnerFoldAndReopeningShowsItStillFolded)
+{
+    const QString note = QStringLiteral("# H1\n\n## H2\n\nbody\n\n# Next\n");
+    auto editor = editorWith(note);
+    const qsizetype inner = note.indexOf(QLatin1String("## H2"));
+    editor->toggleFoldAt(inner);
+    editor->toggleFoldAt(0);
+    ASSERT_FALSE(editor->displayText().contains(QLatin1String("H2")));
+
+    editor->toggleFoldAt(0);
+    EXPECT_TRUE(editor->isFoldedAt(inner)) << "the inner fold is still there";
+    const QString shown = editor->displayText();
+    EXPECT_TRUE(shown.contains(QLatin1String("H2")));
+    EXPECT_FALSE(shown.contains(QLatin1String("body")));
+}
+
+TEST(FoldTest, AListParentFoldsItsChildrenAndAChildlessItemCannot)
+{
+    const QString note = QStringLiteral("- parent\n  - child\n    - grandchild\n- leaf\n- other\n");
+    auto editor = editorWith(note);
+    const qreal open = editor->documentHeight();
+
+    editor->toggleFoldAt(0);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_LT(editor->documentHeight(), open);
+    const QString shown = editor->displayText();
+    EXPECT_FALSE(shown.contains(QLatin1String("child")));
+    EXPECT_TRUE(shown.contains(QLatin1String("leaf")) && shown.contains(QLatin1String("other")));
+
+    editor->toggleFoldAt(0);
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+
+    const qsizetype leaf = note.indexOf(QLatin1String("- leaf"));
+    editor->toggleFoldAt(leaf);
+    EXPECT_FALSE(editor->isFoldedAt(leaf));
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+    EXPECT_TRUE(editor->foldState().isEmpty());
+    // The grandchild alone folds too, and only what is under it.
+    editor->toggleFoldAt(note.indexOf(QLatin1String("  - child")));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("grandchild")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("child")));
+}
+
+TEST(FoldTest, AFoldedListItemStaysFoldedWithTheCaretOnItsLineAndInSourceMode)
+{
+    const QString note = QStringLiteral("- parent\n  - child\n- other\n");
+    auto editor = editorWith(note);
+    editor->toggleFoldAt(0);
+    editor->enterBlockAt(3); // the caret on the parent's own line
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("child")));
+
+    editor->setMode(MarkdownEditor::Mode::Source);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("child")));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("- other")));
+}
+
+TEST(FoldTest, TheCaretMovingIntoHiddenTextUnfolds)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(0);
+    editor->enterBlockAt(3); // the end of "# A"
+
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    EXPECT_GE(editor->cursorOffset(), kSections.indexOf(QLatin1String("# B")))
+        << "Down skips the hidden section";
+    EXPECT_TRUE(editor->isFoldedAt(0));
+
+    editor->enterBlockAt(3);
+    QTest::keyClick(editor.get(), Qt::Key_Right); // onto the first hidden line
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("body a1")));
+}
+
+TEST(FoldTest, AnOuterSectionOpensWhenTheCaretIsInsideAFoldedInnerOne)
+{
+    auto editor = editorWith(kSections);
+    const qsizetype inner = kSections.indexOf(QLatin1String("## A1"));
+    editor->toggleFoldAt(inner);
+    editor->toggleFoldAt(0);
+    editor->enterBlockAt(kSections.indexOf(QLatin1String("body a1")));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_FALSE(editor->isFoldedAt(inner)) << "the caret is inside both";
+}
+
+TEST(FoldTest, EnterAtTheEndOfAFoldedHeadingUnfoldsIt)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(0);
+    editor->enterBlockAt(3);
+    QTest::keyClick(editor.get(), Qt::Key_Return);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return !editor->isFoldedAt(0); }, 2000))
+        << "the new line is inside the section, and the caret is on it";
+    EXPECT_TRUE(editor->noteText().startsWith(QLatin1String("# A\n\n\nbody a")));
+}
+
+TEST(FoldTest, ARestoredNoteKeepsAFoldOverItsRestoredCaret)
+{
+    auto folded = editorWith(kSections);
+    folded->toggleFoldAt(0);
+    const QStringList state = folded->foldState();
+
+    auto editor = editorWith(kSections);
+    editor->setCursorOffset(kSections.indexOf(QLatin1String("body a1")));
+    editor->setFoldState(state); // caret first, then folds: the order a restore must use
+    EXPECT_TRUE(editor->isFoldedAt(0)) << "nothing has been touched yet";
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("body a1")));
+
+    QTest::keyClick(editor.get(), Qt::Key_Right);
+    EXPECT_FALSE(editor->isFoldedAt(0)) << "the first key opens it";
+}
+
+TEST(FoldTest, ClickingTheArrowOrTheEllipsisTogglesAndTheHeadingTextPlacesTheCaret)
+{
+    auto editor = editorWith(kSections);
+    const QPoint arrow = arrowOf(*editor, 0);
+    const qreal left = arrow.x() + 13;
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, arrow);
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_EQ(editor->cursorOffset(), 0) << "the arrow does not move the caret";
+
+    // The ellipsis ends the folded line.
+    editor->setCursorOffset(3);
+    const QRectF end = editor->caretRectNow();
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(int(end.x()) + 6 + 12, arrow.y()));
+    EXPECT_FALSE(editor->isFoldedAt(0));
+
+    // The text itself is for the caret, folded or not.
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, arrow);
+    ASSERT_TRUE(editor->isFoldedAt(0));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(int(left) + 12, arrow.y()));
+    EXPECT_TRUE(editor->isFoldedAt(0));
+    EXPECT_GT(editor->cursorOffset(), 0);
+}
+
+TEST(FoldTest, FoldingASectionTheCaretIsInMovesTheCaretToItsHeading)
+{
+    auto editor = editorWith(kSections);
+    editor->enterBlockAt(kSections.indexOf(QLatin1String("body a1")));
+    editor->toggleFoldAt(0);
+    EXPECT_TRUE(editor->isFoldedAt(0)) << "the caret did not reopen it";
+    EXPECT_EQ(editor->cursorOffset(), 0);
+}
+
+TEST(FoldTest, ASelectionAcrossTheEllipsisCopiesTheHiddenText)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(0);
+    const qsizetype next = kSections.indexOf(QLatin1String("# B"));
+    editor->enterBlockAt(next);
+    const int y = int(editor->caretRectNow().center().y());
+    editor->enterBlockAt(0);
+
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::ShiftModifier, QPoint(120, y));
+    EXPECT_GE(editor->cursorOffset(), next) << "the click lands on the next heading, not in the hidden blocks";
+    EXPECT_TRUE(editor->selectedText().startsWith(kSections.left(next)));
+    EXPECT_TRUE(editor->isFoldedAt(0)) << "a selection runs over a fold without opening it";
+}
+
+TEST(FoldTest, ClicksNeverLandInHiddenBlocks)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(0);
+    editor->enterBlockAt(kSections.indexOf(QLatin1String("# B")));
+    const QRectF caret = editor->caretRectNow();
+    // Every row from the heading's to the next one's resolves to one of the two.
+    for (int y = int(caret.top()) - 30; y < int(caret.bottom()); y += 3) {
+        QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(200, y));
+        const qsizetype at = editor->cursorOffset();
+        EXPECT_TRUE(at <= 3 || at >= kSections.indexOf(QLatin1String("# B"))) << "y " << y << " -> " << at;
+    }
+}
+
+TEST(FoldTest, FindRevealsAMatchInsideAFold)
+{
+    auto editor = editorWith(kSections);
+    editor->toggleFoldAt(0);
+    editor->showFind(false);
+    editor->setFindQuery(QStringLiteral("body a1"), false, false);
+    ASSERT_EQ(editor->findMatchCount(), 1);
+    editor->findStep(1);
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_TRUE(editor->displayText().contains(QLatin1String("body a1")));
+}
+
+TEST(FoldTest, UndoAndAWholeTextExternalEditKeepFoldsByLine)
+{
+    const QString note = QStringLiteral("intro\n\n# A\n\nbody a\n\n# B\n");
+    auto editor = editorWith(note);
+    const qsizetype heading = note.indexOf(QLatin1String("# A"));
+    editor->toggleFoldAt(heading);
+    editor->enterBlockAt(0);
+    QTest::keyClick(editor.get(), Qt::Key_X); // above the fold: its offset moves
+    ASSERT_TRUE(editor->isFoldedAt(heading + 1));
+
+    QTest::keyClick(editor.get(), Qt::Key_Z, Qt::ControlModifier);
+    ASSERT_EQ(editor->noteText(), note);
+    EXPECT_TRUE(editor->isFoldedAt(heading));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("body a")));
+
+    const QString rewritten = QStringLiteral("a new paragraph\n\n") + note;
+    editor->applyExternalEdit(0, note.size(), rewritten);
+    EXPECT_TRUE(editor->isFoldedAt(heading + 17));
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("body a")));
+}
+
+TEST(FoldTest, FoldStateRoundTripsHeadingsAndListItems)
+{
+    const QString note = QStringLiteral("# A\n\nbody\n\n- p\n  - c\n\n# B\n\nmore\n");
+    auto editor = editorWith(note);
+    const qsizetype list = note.indexOf(QLatin1String("- p"));
+    const qsizetype second = note.indexOf(QLatin1String("# B"));
+    editor->toggleFoldAt(0);
+    editor->toggleFoldAt(list);
+    editor->toggleFoldAt(second);
+    editor->toggleFoldAt(second); // opened again: no entry for open
+    const QStringList state = editor->foldState();
+    ASSERT_EQ(state.size(), 2);
+
+    editor->setNoteText(QStringLiteral("nothing here\n"));
+    EXPECT_TRUE(editor->foldState().isEmpty());
+    const QString edited = QStringLiteral("A new first paragraph.\n\n") + note;
+    editor->setNoteText(edited);
+    editor->setFoldState(state);
+    const qsizetype shift = edited.size() - note.size();
+    EXPECT_TRUE(editor->isFoldedAt(shift));
+    EXPECT_TRUE(editor->isFoldedAt(list + shift));
+    EXPECT_FALSE(editor->isFoldedAt(second + shift));
+    EXPECT_EQ(editor->foldState(), state);
+}
+
+TEST(FoldTest, FoldingOffPerSettingDrawsNoArrowAndFoldsNothing)
+{
+    auto editor = editorWith(QStringLiteral("# A\n\nbody\n\n- p\n  - c\n"));
+    editor->grab(); // the geometry settles on the first paint
+    const qreal open = editor->documentHeight();
+    editor->toggleFoldAt(0);
+    ASSERT_LT(editor->documentHeight(), open);
+    const QPoint arrow = arrowOf(*editor, 0);
+    const auto arrowDrawn = [&] {
+        const QImage image = editor->grab().toImage();
+        const QRgb background = image.pixel(2, arrow.y());
+        for (int y = arrow.y() - 6; y <= arrow.y() + 6; ++y) {
+            for (int x = arrow.x() - 6; x <= arrow.x() + 6; ++x) {
+                if (image.pixel(x, y) != background)
+                    return true;
+            }
+        }
+        return false;
+    };
+    ASSERT_TRUE(arrowDrawn());
+
+    editor->setFolding(false, true);
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open) << "a heading does not fold with it off";
+    EXPECT_FALSE(arrowDrawn());
+    editor->toggleFoldAt(0);
+    EXPECT_FALSE(editor->isFoldedAt(0));
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+    editor->toggleFoldAt(editor->noteText().indexOf(QLatin1String("- p"))); // lists still do
+    EXPECT_LT(editor->documentHeight(), open);
+
+    editor->setFolding(false, false);
+    EXPECT_DOUBLE_EQ(editor->documentHeight(), open);
+    editor->setFolding(true, true);
+    EXPECT_FALSE(editor->displayText().contains(QLatin1String("- c")))
+        << "the remembered list fold is back with its setting";
+}
+
 // --- a callout's title is edited where it is drawn -------------------------
 
 namespace {

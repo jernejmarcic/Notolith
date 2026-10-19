@@ -184,6 +184,16 @@ struct MarkdownEditor::NestedCallout {
     CalloutStyle style;
 };
 
+/// A fold arrow and, folded, its ellipsis, in viewport coordinates.
+struct MarkdownEditor::FoldMark {
+    qsizetype site = -1; ///< a heading block's start, or a list item's line start
+    bool folded = false;
+    QRectF arrow;
+    QRectF ellipsis; ///< empty unless folded
+    qreal rowTop = 0; ///< its first line, for hover
+    qreal rowBottom = 0;
+};
+
 struct MarkdownEditor::BlockView {
     BlockSpan span;
     DisplayMap map;
@@ -222,6 +232,12 @@ struct MarkdownEditor::BlockView {
     /// A fence in a tab group that is not the tab being shown, or the
     /// blank lines between two of them: no height, nothing painted.
     bool tabHidden = false;
+    /// Inside a folded heading's section: it keeps its layout and height, so
+    /// opening the fold costs nothing, but takes no room and is never painted
+    /// or hit.
+    bool foldHidden = false;
+    /// Where its geometry ends: a hidden block takes no room.
+    qreal bottomY() const { return foldHidden ? y : y + height; }
     /// Set on the fence a tab group is showing: it paints the strip.
     /// An index into m_tabGroups, -1 outside any group.
     int tabGroup = -1;
@@ -901,6 +917,13 @@ struct MarkdownEditor::Private {
     /// A setFoldState() that arrived before the pool parse it needs; applied
     /// when the parse of the current text is adopted.
     QStringList m_pendingFolds;
+    /// Settings > Editor: heading sections and indented lists fold.
+    bool m_foldHeading = true;
+    bool m_foldIndent = true;
+    /// The fold site (heading start, list item's line start) the pointer is
+    /// over, and the viewport rect that repaints when that changes.
+    qsizetype m_hoveredFold = -1;
+    QRect m_foldHoverRect;
     mutable qreal m_blockSpacing = 0; ///< memoised, cleared with the theme
     qsizetype m_cursor = 0;
     qsizetype m_anchor = 0;

@@ -48,7 +48,7 @@ void MarkdownEditor::setHoverEditButton(bool on)
 
 bool MarkdownEditor::hasEditButton(const BlockView &view) const
 {
-    if (d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.piece != 0)
+    if (d->m_mode != Mode::LivePreview || !view.laidOut || view.tabHidden || view.foldHidden || view.piece != 0)
         return false;
     // A table is edited where it is drawn, so its grid stays while the caret
     // is in a cell; every other block drops its widget for the source.
@@ -70,10 +70,15 @@ qsizetype MarkdownEditor::blockAtPoint(const QPoint &point) const
                                          [y](const BlockView &view) { return view.y - 8 <= y; });
     if (it == d->m_blocks.cbegin())
         return -1;
-    const BlockView &view = *(it - 1);
-    if (y > view.y + view.height + 8)
+    // A folded section's blocks take no room, so the point belongs to the
+    // last one before them that does.
+    auto shown = it - 1;
+    while (shown != d->m_blocks.cbegin() && shown->foldHidden)
+        --shown;
+    const BlockView &view = *shown;
+    if (view.foldHidden || y > view.y + view.height + 8)
         return -1;
-    return qsizetype(it - d->m_blocks.cbegin()) - 1 - view.piece;
+    return qsizetype(shown - d->m_blocks.cbegin()) - view.piece;
 }
 
 QRectF MarkdownEditor::panelRectOf(qsizetype first) const
@@ -305,8 +310,36 @@ void MarkdownEditor::updateHover(const QPoint &point, bool tables)
             viewport()->update(d->m_hoverRect);
         viewport()->setToolTip(overButton ? tr("Edit this block") : QString());
     }
+    updateFoldHover(point, found);
     if (d->m_tableHandles && tables)
         updateTableHover(point); // the grips and bars of a table (TableHandles.cpp)
+}
+
+void MarkdownEditor::updateFoldHover(const QPoint &point, qsizetype found)
+{
+    // The fold arrow of the heading, or the list item, whose line is under the
+    // pointer (the margin included: the block is found by height alone).
+    qsizetype site = -1;
+    QRect rect;
+    if ((d->m_foldHeading || d->m_foldIndent) && found >= 0) {
+        const BlockView &view = d->m_blocks[size_t(found)];
+        for (const FoldMark &mark : foldMarksOf(view, contentLeft(), view.y - verticalScrollBar()->value())) {
+            if (point.y() >= mark.rowTop && point.y() <= mark.rowBottom) {
+                site = mark.site;
+                rect = QRect(0, int(mark.rowTop), viewport()->width(), int(mark.rowBottom - mark.rowTop) + 1);
+                break;
+            }
+        }
+    }
+    if (site == d->m_hoveredFold)
+        return;
+    const QRect old = d->m_foldHoverRect;
+    d->m_hoveredFold = site;
+    d->m_foldHoverRect = rect;
+    if (!old.isNull())
+        viewport()->update(old);
+    if (!rect.isNull())
+        viewport()->update(rect);
 }
 
 void MarkdownEditor::clearHover()
@@ -316,6 +349,10 @@ void MarkdownEditor::clearHover()
     d->m_hoveredBlock = -1;
     d->m_overEditButton = false;
     d->m_hoverRect = QRect();
+    d->m_hoveredFold = -1;
+    if (!d->m_foldHoverRect.isNull())
+        viewport()->update(d->m_foldHoverRect);
+    d->m_foldHoverRect = QRect();
     viewport()->setToolTip(QString());
     if (!old.isNull())
         viewport()->update(old);
