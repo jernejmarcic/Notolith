@@ -150,10 +150,10 @@ if(NOTEAPPC_WITH_NOTEBOOK)
     endif()
 endif()
 
-# Note sharing (docs/SHARE.md), first piece: the text CRDT, the Rust yrs
-# library behind a small C surface (libs/ext/share/yrs-ffi). Needs cargo;
-# without it the option is silently off, like spellcheck without hunspell, and
-# a native backend for the same interface is the way to build without Rust.
+# Note sharing (docs/SHARE.md), first piece: the text CRDT behind one
+# interface, with a Native C++ backend (always built) and the Rust yrs library
+# behind a small C surface (libs/ext/share/yrs-ffi). Only the yrs one needs
+# cargo; without it the option is silently off, like spellcheck without hunspell.
 option(NOTEAPPC_WITH_SHARE_YRS "Build the yrs text CRDT backend for note sharing (libs/ext/share)" ON)
 if(NOTEAPPC_WITH_SHARE_YRS AND NOT ANDROID)
     find_program(NOTEAPPC_CARGO cargo)
@@ -297,9 +297,9 @@ endif()
 if(NOTEAPPC_WITH_NOTEBOOK AND TARGET PkgConfig::ZMQ)
     add_subdirectory(libs/ext/notebook)
 endif()
-if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)
-    add_subdirectory(libs/ext/share)
-endif()
+# The Native CRDT backend needs only Qt, so this is built everywhere (Android
+# too); the yrs one is added inside when NOTEAPPC_CARGO is set.
+add_subdirectory(libs/ext/share)
 add_subdirectory(libs/ui)
 add_subdirectory(apps/noteAppC)
 # The screenshot tool, the index CLI, the bench harness and the plugin host

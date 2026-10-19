@@ -1,6 +1,15 @@
-# The text CRDT behind note sharing (docs/SHARE.md). Built only with
-# NOTEAPPC_WITH_SHARE_YRS on and cargo found - see the root CMakeLists.txt.
-#
+# The text CRDT behind note sharing (docs/SHARE.md). The Native backend is
+# plain C++ on Qt6::Core and is always built; the Yrs backend is added when
+# NOTEAPPC_WITH_SHARE_YRS is on and cargo was found - see the root
+# CMakeLists.txt. Both are behind the one CrdtDoc interface.
+add_library(noteAppC_share_crdt STATIC
+    CrdtDoc.h
+    CrdtDoc.cpp
+    CrdtDocNative.cpp)
+target_include_directories(noteAppC_share_crdt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(noteAppC_share_crdt PUBLIC Qt6::Core)
+
+if(NOTEAPPC_WITH_SHARE_YRS AND NOTEAPPC_CARGO)
 # yrs-ffi is a tiny Rust crate over the yrs library (Cargo.lock pins every
 # crate); cargo builds it into the build directory, as a static library this
 # one links. Network is touched only if cargo's own cache lacks the crates.
@@ -26,9 +35,7 @@ set_target_properties(noteAppC_yrs_ffi PROPERTIES IMPORTED_LOCATION ${yrs_lib})
 target_link_libraries(noteAppC_yrs_ffi INTERFACE Threads::Threads ${CMAKE_DL_LIBS} m)
 add_dependencies(noteAppC_yrs_ffi noteAppC_yrs_ffi_build)
 
-add_library(noteAppC_share_crdt STATIC
-    CrdtDoc.h
-    CrdtDoc.cpp
-    CrdtDocYrs.cpp)
-target_include_directories(noteAppC_share_crdt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(noteAppC_share_crdt PUBLIC Qt6::Core PRIVATE noteAppC_yrs_ffi)
+target_sources(noteAppC_share_crdt PRIVATE CrdtDocYrs.cpp)
+target_compile_definitions(noteAppC_share_crdt PRIVATE NOTEAPPC_HAVE_YRS)
+target_link_libraries(noteAppC_share_crdt PRIVATE noteAppC_yrs_ffi)
+endif()
