@@ -2012,7 +2012,16 @@ Shared/<title>.md.
 - [ ] Lane R: native CrdtDoc backend on the same tests + bench vs yrs
 - [x] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
 - [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
-      applyExternalEdit, disk fold-in
+      applyExternalEdit, disk fold-in. Fable split it in two (plan in the
+      session scratchpad, LANE-S-PLAN.md):
+  - [ ] S1: SecretStore with a service name, ShareIdentity, share.proto +
+        ShareFrame (AEAD + Ed25519, seq replay, 1 MiB cap), ShareStore,
+        ShareEngine (invite code, join/approve, revoke + rekey, offline
+        catch-up by state vector); two engines over loopback (running)
+  - [ ] S2: ShareSession, undo kept across remote edits, MainWindow wiring
+        (share:share-note / share:join / share:stop, approve prompt,
+        Shared/<title>.md, autosave of remote edits, disk fold-in, resume on
+        reopen), feature "share" off by default
 - [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
