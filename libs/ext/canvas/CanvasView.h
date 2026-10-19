@@ -1,15 +1,18 @@
 #pragma once
 
 #include <QHash>
+#include <QLineF>
 #include <QPixmap>
 #include <QPointF>
 #include <QRectF>
 #include <QSet>
 #include <QString>
 #include <QUndoStack>
+#include <QVector>
 #include <QWidget>
 
 #include <functional>
+#include <memory>
 
 #include "CanvasDocument.h"
 #include "Theme.h"
@@ -107,6 +110,23 @@ public:
     QStringList selectedEdgeIDs() const { return m_selectedEdges.values(); }
     void selectNode(const QString &id, bool extend = false);
 
+    /// Obsidian's two canvas toggles. Snap to objects (on by default): while a
+    /// card is moved or resized its edges and centre jump onto another card's
+    /// within a few screen pixels, with a guide line drawn along the match.
+    /// Snap to grid (off by default): what is not snapped to a card lands on
+    /// the dot grid. Set live from the settings page.
+    void setSnapToObjects(bool on) { m_snapToObjects = on; }
+    void setSnapToGrid(bool on) { m_snapToGrid = on; }
+    bool snapToObjects() const { return m_snapToObjects; }
+    bool snapToGrid() const { return m_snapToGrid; }
+
+    /// For tests: how far the selected card's content is scrolled and the
+    /// furthest it can go, in canvas pixels (0 when no card is scrolled),
+    /// and how many times its hidden scroll editor has been built.
+    qreal cardScrollOffset() const;
+    qreal cardScrollMaximum() const;
+    quint64 cardScrollEditorBuilds() const { return m_scrollBuilds; }
+
     /// The topmost node under a viewport point, or an empty string.
     QString nodeAt(const QPoint &viewportPoint) const;
     /// The edge under a viewport point (its curve, not its bounding box), or
@@ -157,6 +177,7 @@ private:
     void paintOverlay(QPainter &painter) const;
     void paintNodeChrome(QPainter &painter, const CanvasNode &node, const QRectF &screenRect) const;
     QPixmap contentPixmap(const CanvasNode &node) const;
+    std::unique_ptr<MarkdownEditor> makeContentEditor(const QString &text, const QSize &physicalSize) const;
     QPixmap renderMarkdownContent(const QString &text, const QSize &physicalSize) const;
     QPixmap renderImageContent(const QString &absolutePath, const QSize &physicalSize) const;
     QPixmap renderLinkCard(const QString &url, const QSize &physicalSize) const;
@@ -168,6 +189,12 @@ private:
     /// faces `otherRect` - how an edge with no recorded side is routed.
     QString effectiveSide(const QString &explicitSide, const QRectF &ownerRect, const QRectF &otherRect) const;
     bool isNodeVisible(const CanvasNode &node, QRectF *screenRect) const;
+    /// What a text or note card shows, as Markdown; false for every other card.
+    bool markdownTextOf(const CanvasNode &node, QString *text) const;
+    static QString contentSignature(const CanvasNode &node);
+    /// Whether the hidden scroll editor still shows `node`: it is the one
+    /// selected card, and neither its content nor its size has changed since.
+    bool scrollEditorShows(const CanvasNode &node) const;
     /// `node`'s rect as it should be drawn/hit-tested right now: the live,
     /// not-yet-committed rect while it is being dragged, else the document's.
     QRectF currentRect(const CanvasNode &node) const;
@@ -197,6 +224,20 @@ private:
     void updateConnect(const QPoint &viewportPoint);
     void finishConnect(const QPoint &viewportPoint);
     void updateHover(const QPoint &viewportPoint);
+    struct SnapResult {
+        QPointF shift;
+        bool objectX = false, objectY = false; ///< snapped to a card, not the grid
+        qreal lineX = 0, lineY = 0;
+    };
+    void buildSnapLines();
+    /// How far to move a box whose edges are at `xs` / `ys` (the first of each
+    /// is the one the grid takes) to land on a neighbour or the grid.
+    SnapResult snapShift(const qreal *xs, int nx, const qreal *ys, int ny) const;
+    void setGuides(const QRectF &box, const SnapResult &snap);
+    /// Scrolls the selected card under `pos` by a wheel delta; false when it
+    /// has nothing to scroll, so the wheel pans instead.
+    bool scrollCardBy(const QString &id, qreal screenDeltaY);
+    void dropScrollEditor();
     static QRectF applyResize(const QRectF &start, HandleKind handle, const QPointF &canvasDelta);
     Qt::CursorShape cursorFor(HandleKind kind) const;
     void activateIfFileNode(const QString &id);
@@ -207,6 +248,9 @@ private:
     static constexpr qreal kResizeHitRadius = 6.0;
     static constexpr qreal kConnectHandleOffset = 12.0;
     static constexpr qreal kConnectHitRadius = 7.0;
+    /// How close, in screen pixels, a dragged edge has to come to snap.
+    static constexpr qreal kSnapReachPx = 6.0;
+    static constexpr qreal kGridSpacingCanvas = 32.0;
     /// Below this on-screen width or height, a node draws as a plain box
     /// instead of its content - too small to read either way, and skipping
     /// the content pixmap here is most of the saving when zoomed far out.
@@ -225,6 +269,8 @@ private:
     QPointF m_origin{0, 0};
     bool m_fitPending = false; ///< loaded, not painted yet: frame it first
     bool m_alwaysDrawContent = false;
+    bool m_snapToObjects = true;
+    bool m_snapToGrid = false;
 
     QSet<QString> m_selectedNodes;
     QSet<QString> m_selectedEdges;
@@ -246,6 +292,15 @@ private:
         QPointF liveDelta;   ///< Move: current offset from startRects, canvas space
         QRectF liveRect;     ///< Resize: the single node's current rect
         HandleKind resizeHandle = HandleKind::None;
+        QRectF startBox;     ///< Move: the union of startRects
+        /// Where other cards have an edge or centre, sorted by pos, with the
+        /// extent of that card along the line - built once per drag, only
+        /// when snapping to objects, and searched by binary search.
+        struct SnapLine {
+            qreal pos, lo, hi;
+        };
+        QVector<SnapLine> snapX, snapY;
+        QVector<QLineF> guides; ///< canvas space, drawn while a drag is snapped
         QString connectFromNode;
         QString connectFromSide;
         QString connectHoverTarget;
@@ -259,6 +314,16 @@ private:
         QString signature;
     };
     mutable QHash<QString, ContentCacheEntry> m_contentCache;
+
+    /// A selected text or note card whose content is taller than the card
+    /// scrolls under the wheel: a hidden Reading-mode editor holds the whole
+    /// note and each frame grabs the scrolled part, bypassing the cache
+    /// (which stays valid, at scroll 0, for after the card is deselected).
+    std::unique_ptr<MarkdownEditor> m_scrollEditor;
+    QString m_scrollNodeID;
+    QString m_scrollSignature;
+    qreal m_scrollY = 0; ///< physical pixels, i.e. canvas pixels x kContentScale
+    quint64 m_scrollBuilds = 0;
 };
 
 } // namespace noteAppC

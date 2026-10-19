@@ -4,6 +4,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScrollBar>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -145,6 +146,7 @@ QRectF CanvasView::viewportCanvasRect() const
 
 void CanvasView::selectAll()
 {
+    dropScrollEditor();
     m_selectedNodes.clear();
     m_selectedEdges.clear();
     for (const CanvasNode &node : m_document.nodes())
@@ -156,6 +158,7 @@ void CanvasView::clearSelection()
 {
     if (m_selectedNodes.isEmpty() && m_selectedEdges.isEmpty())
         return;
+    dropScrollEditor();
     m_selectedNodes.clear();
     m_selectedEdges.clear();
     update();
@@ -163,6 +166,7 @@ void CanvasView::clearSelection()
 
 void CanvasView::selectNode(const QString &id, bool extend)
 {
+    dropScrollEditor();
     if (!extend)
         m_selectedEdges.clear();
     if (!extend)
@@ -221,6 +225,7 @@ bool CanvasView::beginEditingText(const QString &id)
     if (m_editingNodeID == id)
         return true;
     commitEditingText();
+    dropScrollEditor();
 
     m_editingNodeID = id;
     m_textEditor = new MarkdownEditor(this);
@@ -345,6 +350,59 @@ void CanvasView::panBy(const QPointF &pixelDelta)
     update();
 }
 
+void CanvasView::dropScrollEditor()
+{
+    m_scrollEditor.reset();
+    m_scrollNodeID.clear();
+    m_scrollY = 0;
+}
+
+bool CanvasView::scrollEditorShows(const CanvasNode &node) const
+{
+    const QRectF r = node.rect();
+    return m_scrollEditor && node.id() == m_scrollNodeID && m_selectedNodes.size() == 1
+        && m_selectedNodes.contains(node.id()) && contentSignature(node) == m_scrollSignature
+        && m_scrollEditor->size() == QSize(qMax(1, qRound(r.width())), qMax(1, qRound(r.height()))) * kContentScale;
+}
+
+qreal CanvasView::cardScrollOffset() const
+{
+    const CanvasNode *node = m_document.node(m_scrollNodeID);
+    return node && scrollEditorShows(*node) ? m_scrollEditor->verticalScrollBar()->value() / qreal(kContentScale) : 0;
+}
+
+qreal CanvasView::cardScrollMaximum() const
+{
+    const CanvasNode *node = m_document.node(m_scrollNodeID);
+    return node && scrollEditorShows(*node) ? m_scrollEditor->verticalScrollBar()->maximum() / qreal(kContentScale) : 0;
+}
+
+bool CanvasView::scrollCardBy(const QString &id, qreal screenDeltaY)
+{
+    const CanvasNode *node = m_document.node(id);
+    QString text;
+    if (!node || !markdownTextOf(*node, &text))
+        return false;
+    if (!scrollEditorShows(*node)) {
+        const QRectF r = node->rect();
+        m_scrollEditor = makeContentEditor(text, QSize(qMax(1, qRound(r.width())), qMax(1, qRound(r.height()))) * kContentScale);
+        m_scrollNodeID = id;
+        m_scrollSignature = contentSignature(*node);
+        m_scrollY = 0;
+        ++m_scrollBuilds;
+        // The editor lays out what it shows when it paints: until it has, its
+        // scroll range is a guess from the note's length.
+        m_scrollEditor->grab();
+    }
+    QScrollBar *bar = m_scrollEditor->verticalScrollBar();
+    if (bar->maximum() <= 0)
+        return false; // it all fits: nothing to scroll
+    m_scrollY = qBound(0.0, m_scrollY - screenDeltaY * kContentScale / m_zoom, qreal(bar->maximum()));
+    bar->setValue(qRound(m_scrollY));
+    update();
+    return true;
+}
+
 void CanvasView::wheelEvent(QWheelEvent *event)
 {
     // Obsidian's canvas: the wheel pans, Shift turns it sideways, and Ctrl
@@ -356,6 +414,14 @@ void CanvasView::wheelEvent(QWheelEvent *event)
     } else {
         QPointF delta = event->pixelDelta().isNull() ? QPointF(event->angleDelta()) / 2.0
                                                     : QPointF(event->pixelDelta());
+        // The one selected card, when its content runs past its bottom,
+        // takes the wheel; any other card, or empty canvas, still pans.
+        const QString id = nodeAt(event->position().toPoint());
+        if (!event->modifiers().testFlag(Qt::ShiftModifier) && !id.isEmpty() && m_selectedNodes.size() == 1
+            && m_selectedNodes.contains(id) && scrollCardBy(id, delta.y())) {
+            event->accept();
+            return;
+        }
         if (event->modifiers().testFlag(Qt::ShiftModifier) && qFuzzyIsNull(delta.x()))
             delta = QPointF(delta.y(), 0);
         panBy(delta);

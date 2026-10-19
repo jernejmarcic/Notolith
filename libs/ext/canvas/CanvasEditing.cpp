@@ -11,6 +11,9 @@
 #include <QPainterPath>
 #include <QPainterPathStroker>
 
+#include <algorithm>
+#include <cmath>
+
 #include "CanvasCommands.h"
 
 namespace noteAppC {
@@ -154,6 +157,7 @@ void CanvasView::beginRubberBand(const QPoint &viewportPoint, bool extend)
     m_drag.currentCanvas = m_drag.startCanvas;
     m_drag.additive = extend;
     if (!extend) {
+        dropScrollEditor();
         m_selectedNodes.clear();
         m_selectedEdges.clear();
     }
@@ -182,6 +186,8 @@ void CanvasView::beginMove(const HitResult &hit, const QPoint &viewportPoint, Qt
 {
     const bool resizing = hit.kind != HandleKind::Move;
     if (!resizing) {
+        if ((modifiers & Qt::ShiftModifier) || !m_selectedNodes.contains(hit.nodeID))
+            dropScrollEditor();
         if (modifiers & Qt::ShiftModifier) {
             if (m_selectedNodes.contains(hit.nodeID))
                 m_selectedNodes.remove(hit.nodeID);
@@ -221,7 +227,52 @@ void CanvasView::beginMove(const HitResult &hit, const QPoint &viewportPoint, Qt
                     m_drag.startRects.insert(node.id(), node.rect());
             }
         }
+        for (const QRectF &rect : std::as_const(m_drag.startRects))
+            m_drag.startBox = m_drag.startBox.isNull() ? rect : m_drag.startBox.united(rect);
     }
+}
+
+void CanvasView::buildSnapLines()
+{
+    m_drag.snapX.reserve(m_document.nodes().size() * 3);
+    m_drag.snapY.reserve(m_document.nodes().size() * 3);
+    for (const CanvasNode &node : m_document.nodes()) {
+        if (m_drag.startRects.contains(node.id()))
+            continue;
+        const QRectF r = node.rect();
+        for (const qreal x : {r.left(), r.center().x(), r.right()})
+            m_drag.snapX.append({x, r.top(), r.bottom()});
+        for (const qreal y : {r.top(), r.center().y(), r.bottom()})
+            m_drag.snapY.append({y, r.left(), r.right()});
+    }
+    const auto byPos = [](const DragState::SnapLine &a, const DragState::SnapLine &b) { return a.pos < b.pos; };
+    std::sort(m_drag.snapX.begin(), m_drag.snapX.end(), byPos);
+    std::sort(m_drag.snapY.begin(), m_drag.snapY.end(), byPos);
+}
+
+namespace {
+/// The signed distance from one of `candidates` to the nearest of `lines`
+/// (sorted by pos) when that is within `reach`; -1 in `index` when none is.
+template <typename Lines>
+qreal nearestLine(const Lines &lines, const qreal *candidates, int count, qreal reach, qsizetype *index)
+{
+    qreal best = 0;
+    *index = -1;
+    for (int i = 0; i < count; ++i) {
+        const auto above = std::lower_bound(lines.cbegin(), lines.cend(), candidates[i],
+                                            [](const auto &l, qreal v) { return l.pos < v; });
+        for (auto it : {above, above == lines.cbegin() ? above : above - 1}) {
+            if (it == lines.cend())
+                continue;
+            const qreal d = it->pos - candidates[i];
+            if (std::abs(d) <= reach && (*index < 0 || std::abs(d) < std::abs(best))) {
+                best = d;
+                *index = it - lines.cbegin();
+            }
+        }
+    }
+    return best;
+}
 }
 
 QRectF CanvasView::applyResize(const QRectF &start, HandleKind handle, const QPointF &canvasDelta)
@@ -257,17 +308,91 @@ QRectF CanvasView::applyResize(const QRectF &start, HandleKind handle, const QPo
     return r;
 }
 
+CanvasView::SnapResult CanvasView::snapShift(const qreal *xs, int nx, const qreal *ys, int ny) const
+{
+    SnapResult result;
+    const qreal reach = kSnapReachPx / m_zoom;
+    if (m_snapToObjects) {
+        qsizetype ix, iy;
+        const qreal dx = nearestLine(m_drag.snapX, xs, nx, reach, &ix);
+        const qreal dy = nearestLine(m_drag.snapY, ys, ny, reach, &iy);
+        if (ix >= 0) {
+            result.shift.setX(dx);
+            result.objectX = true;
+            result.lineX = m_drag.snapX.at(ix).pos;
+        }
+        if (iy >= 0) {
+            result.shift.setY(dy);
+            result.objectY = true;
+            result.lineY = m_drag.snapY.at(iy).pos;
+        }
+    }
+    // A card beats the grid, axis by axis.
+    if (m_snapToGrid) {
+        if (!result.objectX && nx > 0)
+            result.shift.setX(std::round(xs[0] / kGridSpacingCanvas) * kGridSpacingCanvas - xs[0]);
+        if (!result.objectY && ny > 0)
+            result.shift.setY(std::round(ys[0] / kGridSpacingCanvas) * kGridSpacingCanvas - ys[0]);
+    }
+    return result;
+}
+
+void CanvasView::setGuides(const QRectF &box, const SnapResult &snap)
+{
+    // One line per axis, running from the dragged box out to the full extent
+    // of every card sharing that line.
+    const auto guide = [](const QVector<DragState::SnapLine> &lines, qreal pos, qreal lo, qreal hi) {
+        const auto first = std::lower_bound(lines.cbegin(), lines.cend(), pos - 0.01,
+                                            [](const DragState::SnapLine &l, qreal v) { return l.pos < v; });
+        for (auto it = first; it != lines.cend() && it->pos <= pos + 0.01; ++it) {
+            lo = std::min(lo, it->lo);
+            hi = std::max(hi, it->hi);
+        }
+        return std::pair(lo, hi);
+    };
+    m_drag.guides.clear();
+    if (snap.objectX) {
+        const auto [lo, hi] = guide(m_drag.snapX, snap.lineX, box.top(), box.bottom());
+        m_drag.guides.append(QLineF(snap.lineX, lo, snap.lineX, hi));
+    }
+    if (snap.objectY) {
+        const auto [lo, hi] = guide(m_drag.snapY, snap.lineY, box.left(), box.right());
+        m_drag.guides.append(QLineF(lo, snap.lineY, hi, snap.lineY));
+    }
+}
+
 void CanvasView::updateMoveOrResize(const QPoint &viewportPoint)
 {
     if (!m_drag.moved && QLineF(m_drag.startViewport, viewportPoint).length() < kDragThreshold)
         return;
-    m_drag.moved = true;
+    if (!m_drag.moved) {
+        m_drag.moved = true;
+        if (m_snapToObjects)
+            buildSnapLines(); // on the first real move, not on every click
+    }
     const QPointF canvasDelta = (QPointF(viewportPoint) - QPointF(m_drag.startViewport)) / m_zoom;
     if (m_drag.kind == DragKind::Move) {
-        m_drag.liveDelta = canvasDelta;
+        // The whole selection is one box: its edges and centre are what snap.
+        const QRectF box = m_drag.startBox.translated(canvasDelta);
+        const qreal xs[] = {box.left(), box.center().x(), box.right()};
+        const qreal ys[] = {box.top(), box.center().y(), box.bottom()};
+        const SnapResult snap = snapShift(xs, 3, ys, 3);
+        m_drag.liveDelta = canvasDelta + snap.shift;
+        setGuides(box.translated(snap.shift), snap);
     } else {
+        // Only the edges the handle drags snap; the centre is not one of them.
         const QRectF start = m_drag.startRects.constBegin().value();
-        m_drag.liveRect = applyResize(start, m_drag.resizeHandle, canvasDelta);
+        const QRectF dragged = applyResize(start, m_drag.resizeHandle, canvasDelta);
+        const HandleKind h = m_drag.resizeHandle;
+        const bool left = h == HandleKind::ResizeLeft || h == HandleKind::ResizeTopLeft || h == HandleKind::ResizeBottomLeft;
+        const bool right = h == HandleKind::ResizeRight || h == HandleKind::ResizeTopRight || h == HandleKind::ResizeBottomRight;
+        const bool top = h == HandleKind::ResizeTop || h == HandleKind::ResizeTopLeft || h == HandleKind::ResizeTopRight;
+        const bool bottom = h == HandleKind::ResizeBottom || h == HandleKind::ResizeBottomLeft || h == HandleKind::ResizeBottomRight;
+        const qreal xs[] = {left ? dragged.left() : dragged.right()};
+        const qreal ys[] = {top ? dragged.top() : dragged.bottom()};
+        const SnapResult snap = snapShift(xs, left || right ? 1 : 0, ys, top || bottom ? 1 : 0);
+        m_drag.liveRect = applyResize(start, h, canvasDelta + snap.shift);
+        setGuides(m_drag.liveRect, snap);
     }
     if (m_textEditor && m_drag.startRects.contains(m_editingNodeID))
         positionTextEditor();
@@ -391,6 +516,7 @@ void CanvasView::mousePressEvent(QMouseEvent *event)
             else
                 m_selectedEdges.insert(edgeID);
         } else {
+            dropScrollEditor();
             m_selectedNodes.clear();
             m_selectedEdges.clear();
             m_selectedEdges.insert(edgeID);

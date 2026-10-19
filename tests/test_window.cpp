@@ -1542,6 +1542,35 @@ TEST_F(WindowTest, DeletingANoteClosesEveryTabShowingIt)
 }
 
 #ifdef NOTEAPPC_HAVE_CANVAS
+TEST_F(WindowTest, TheSnapSwitchesReachAnOpenCanvasAsTheyAreFlipped)
+{
+    write(QStringLiteral("Board.canvas"), R"({"nodes":[],"edges":[]})");
+    MainWindow window;
+    window.show(); // the settings page builds its rows when shown
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Board.canvas"))));
+    auto *canvas = window.findChild<noteAppC::CanvasView *>();
+    ASSERT_NE(canvas, nullptr);
+    EXPECT_TRUE(canvas->snapToObjects());
+    EXPECT_FALSE(canvas->snapToGrid());
+
+    command(window, "app:open-settings")->trigger();
+    noteAppC::ToggleSwitch *objects = nullptr;
+    noteAppC::ToggleSwitch *grid = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        objects = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_canvas.snapToObjects"));
+        grid = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_canvas.snapToGrid"));
+        return objects && grid;
+    }));
+    objects->click();
+    grid->click();
+    EXPECT_FALSE(canvas->snapToObjects());
+    EXPECT_TRUE(canvas->snapToGrid());
+
+    objects->click(); // put the shared test config back
+    grid->click();
+}
+
 TEST_F(WindowTest, ACanvasOpensInATabAndSavesItsEdits)
 {
     write(QStringLiteral("Board.canvas"),

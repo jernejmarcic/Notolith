@@ -261,6 +261,8 @@ batches drifted by more than the changes being measured.
 | `EpubViewTest.RemoteFontFaceIsNeverFetched` | a remote `@font-face` source is never attempted |
 | `EpubViewTest.PagedModeNeverScrollsPastTheDocumentBounds` | paged navigation clamps to `[0, documentHeight - pageHeight]` |
 | `CanvasPerfTest.ColdFirstPaintCostTracksVisibleNodesNotTotalNodes` | a cold first paint of 1 000 nodes costs under 6x one of 60 that all fit the viewport (about 1x; a broken cull is about 16x) |
+| `CanvasPerfTest.SnapCostPerMouseMoveDoesNotGrowWithTheCanvas` | a snapped drag's cost per mouse move with 20 000 cards is under 20x that with 100 (about 1.3x; rebuilding or scanning the snap lines every move is about 500x) |
+| `CanvasPerfTest.ScrollingASelectedCardCostsAGrabNotARelayout` | a wheel tick plus repaint of a scrolled card is under 10 ms (about 0.35 ms) and the hidden scroll editor is built once, not per tick (rebuilding it per tick is caught by the build count) |
 | `MarkdownEditorTest.AResizeRewrapsOnlyWhenTheTextWidthChanges` | a resize that keeps the text width keeps every layout; one that changes it rewraps to the same heights a fresh layout gives |
 | `DisplayMapTest.BinarySearchesAgreeWithALinearWalk` | `toDisplay` and `isHidden` agree with a linear walk on 3 000 random maps |
 | `TableAutoTest.KeysInsideTheParseDebounceDoWhatTheyDoAfterIt` | source-mode Tab and Enter typed faster than the parse do what they do with a parse between keys |

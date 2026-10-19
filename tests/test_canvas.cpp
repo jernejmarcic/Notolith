@@ -18,12 +18,15 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QSignalSpy>
+#include <QScrollBar>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include "CanvasCommands.h"
 #include "CanvasDocument.h"
 #include "CanvasView.h"
+#include "MarkdownEditor.h"
 #include "Theme.h"
 #include "Perf.h"
 
@@ -42,6 +45,30 @@ void send(QWidget *target, QEvent::Type type, QPoint at, Qt::MouseButton button,
     const Qt::MouseButtons held = type == QEvent::MouseButtonRelease ? Qt::NoButton : Qt::MouseButtons(button);
     QMouseEvent event(type, QPointF(at), target->mapToGlobal(QPointF(at)), eventButton, held, modifiers);
     QCoreApplication::sendEvent(target, &event);
+}
+
+/// A press, a move and a release: the drag a user makes with the button held.
+void drag(QWidget *target, QPoint from, QPoint to, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    send(target, QEvent::MouseButtonPress, from, Qt::LeftButton, modifiers);
+    send(target, QEvent::MouseMove, to, Qt::LeftButton, modifiers);
+    send(target, QEvent::MouseButtonRelease, to, Qt::LeftButton, modifiers);
+}
+
+void wheel(QWidget *target, QPoint at, int angleDeltaY, Qt::KeyboardModifiers modifiers = Qt::NoModifier)
+{
+    QWheelEvent event(QPointF(at), QPointF(at), QPoint(0, 0), QPoint(0, angleDeltaY), Qt::NoButton, modifiers,
+                      Qt::NoScrollPhase, false);
+    QCoreApplication::sendEvent(target, &event);
+}
+
+/// Enough paragraphs to run far past a small card.
+QString longNote()
+{
+    QString text;
+    for (int i = 0; i < 300; ++i)
+        text += QStringLiteral("Paragraph %1 of a long note.\n\n").arg(i);
+    return text;
 }
 
 CanvasNode makeTextNode(const QRectF &rect, const QString &text = QString())
@@ -538,6 +565,221 @@ TEST_F(CanvasViewTest, EditingMarksTheViewModifiedAndSaveClearsIt)
     EXPECT_FALSE(view->isModified());
 }
 
+// --- snapping: align to other cards while moving or resizing -------------
+
+TEST_F(CanvasViewTest, MovingNearAnotherCardsEdgeSnapsToIt)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(200, 104, 100, 50)));
+
+    drag(view.get(), QPoint(250, 130), QPoint(250, 30)); // B's top would land at y=4, 4 px off A's
+
+    EXPECT_EQ(view->document().node(b)->rect(), QRectF(200, 0, 100, 50));
+    EXPECT_EQ(view->undoStack()->count(), 1);
+}
+
+TEST_F(CanvasViewTest, SnappingAlsoCatchesCentres)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(200, 300, 60, 50)));
+
+    drag(view.get(), QPoint(230, 325), QPoint(54, 325)); // B's centre would be 54, A's is 50
+
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().center().x(), 50.0);
+}
+
+TEST_F(CanvasViewTest, SnapReachIsInScreenPixelsNotCanvasUnits)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 0, 100, 200)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(200, 104, 100, 100)));
+    view->setZoom(0.5);
+    const QPoint grab = view->mapFromCanvas(QPointF(250, 154));
+
+    drag(view.get(), grab, grab - QPoint(0, 47)); // 94 canvas px up: 10 canvas px (5 on screen) off A's top
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().top(), 0.0);
+
+    view->undoStack()->undo();
+    drag(view.get(), grab, grab - QPoint(0, 42)); // 84 canvas px up: 20 canvas px (10 on screen) off
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().top(), 20.0);
+}
+
+TEST_F(CanvasViewTest, AMultipleSelectionSnapsAsOneBlock)
+{
+    const QString a = view->document().addNode(makeTextNode(QRectF(100, 0, 100, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(260, 0, 100, 50)));
+    view->document().addNode(makeTextNode(QRectF(500, 400, 100, 50)));  // the block's left edge lands near this
+    view->document().addNode(makeTextNode(QRectF(655, 200, 40, 50)));   // B's own left edge would land near this
+    view->selectNode(a, false);
+    view->selectNode(b, true);
+
+    drag(view.get(), QPoint(310, 25), QPoint(707, 25)); // 397 right: the block's left edge is 3 short of 500
+
+    EXPECT_DOUBLE_EQ(view->document().node(a)->rect().left(), 500.0);
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().left(), 660.0); // moved by the same 400
+    EXPECT_EQ(view->undoStack()->count(), 1);
+}
+
+TEST_F(CanvasViewTest, ResizingSnapsTheDraggedEdge)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 0, 300, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(250, 104, 150, 50)));
+    view->selectNode(b, false);
+
+    drag(view.get(), QPoint(400, 129), QPoint(297, 129)); // the right handle, 3 short of A's right edge
+
+    EXPECT_EQ(view->document().node(b)->rect(), QRectF(250, 104, 50, 50));
+}
+
+TEST_F(CanvasViewTest, SnapToGridRoundsToTheDotGrid)
+{
+    view->setSnapToGrid(true);
+    view->setSnapToObjects(false);
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+
+    drag(view.get(), QPoint(50, 25), QPoint(87, 70));
+
+    EXPECT_EQ(view->document().node(id)->rect().topLeft(), QPointF(32, 32));
+}
+
+TEST_F(CanvasViewTest, ASnapToACardBeatsTheGridWhenBothHit)
+{
+    view->setSnapToGrid(true);
+    view->document().addNode(makeTextNode(QRectF(35, 400, 100, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+
+    drag(view.get(), QPoint(50, 25), QPoint(87, 25)); // left edge at 37: 35 is a card, 32 the grid
+
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().left(), 35.0);
+}
+
+TEST_F(CanvasViewTest, WithSnappingOffACardMovesExactly)
+{
+    view->setSnapToObjects(false);
+    view->setSnapToGrid(false);
+    view->document().addNode(makeTextNode(QRectF(0, 0, 100, 50)));
+    const QString b = view->document().addNode(makeTextNode(QRectF(200, 104, 100, 50)));
+
+    drag(view.get(), QPoint(250, 130), QPoint(250, 30));
+
+    EXPECT_DOUBLE_EQ(view->document().node(b)->rect().top(), 4.0);
+}
+
+TEST_F(CanvasViewTest, GuideLinesAreDrawnWhileSnappedAndGoneAfterRelease)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 100, 100, 50)));
+    view->document().addNode(makeTextNode(QRectF(200, 204, 100, 50)));
+    const QColor accent = view->theme().color(QStringLiteral("--interactive-accent"));
+    // Along the line the two cards share, between them: nothing else is drawn there.
+    const auto guideDrawn = [&] {
+        const QImage frame = view->grab().toImage();
+        for (int x = 120; x <= 180; ++x) {
+            const QColor pixel = frame.pixelColor(x, 100);
+            if (std::abs(pixel.red() - accent.red()) < 8 && std::abs(pixel.green() - accent.green()) < 8
+                && std::abs(pixel.blue() - accent.blue()) < 8)
+                return true;
+        }
+        return false;
+    };
+    EXPECT_FALSE(guideDrawn());
+
+    send(view.get(), QEvent::MouseButtonPress, QPoint(250, 230), Qt::LeftButton);
+    send(view.get(), QEvent::MouseMove, QPoint(250, 130), Qt::LeftButton); // the top lands 4 off, then snaps
+    EXPECT_TRUE(guideDrawn());
+
+    send(view.get(), QEvent::MouseButtonRelease, QPoint(250, 130), Qt::LeftButton);
+    EXPECT_FALSE(guideDrawn());
+}
+
+// --- wheel over a selected card ------------------------------------------
+
+TEST_F(CanvasViewTest, WheelOverASelectedOverflowingCardScrollsItNotTheCanvas)
+{
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    view->selectNode(id, false);
+    const QPointF origin = view->origin();
+    const QImage before = view->grab().toImage();
+
+    wheel(view.get(), QPoint(100, 50), -240);
+
+    EXPECT_EQ(view->origin(), origin);
+    EXPECT_GT(view->cardScrollOffset(), 0.0);
+    EXPECT_NE(view->grab().toImage(), before) << "the card's content moved";
+}
+
+TEST_F(CanvasViewTest, WheelOverAnUnselectedCardPansTheCanvas)
+{
+    view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    const QPointF origin = view->origin();
+
+    wheel(view.get(), QPoint(100, 50), -240);
+
+    EXPECT_GT(view->origin().y(), origin.y());
+    EXPECT_EQ(view->cardScrollOffset(), 0.0);
+}
+
+TEST_F(CanvasViewTest, WheelOverASelectedCardThatFitsPans)
+{
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), QStringLiteral("short")));
+    view->selectNode(id, false);
+    const QPointF origin = view->origin();
+
+    wheel(view.get(), QPoint(100, 50), -240);
+
+    EXPECT_GT(view->origin().y(), origin.y());
+    EXPECT_EQ(view->cardScrollOffset(), 0.0);
+}
+
+TEST_F(CanvasViewTest, CtrlWheelOverASelectedCardStillZooms)
+{
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    view->selectNode(id, false);
+    const qreal zoom = view->zoom();
+
+    wheel(view.get(), QPoint(100, 50), 240, Qt::ControlModifier);
+
+    EXPECT_GT(view->zoom(), zoom);
+    EXPECT_EQ(view->cardScrollOffset(), 0.0);
+}
+
+TEST_F(CanvasViewTest, CardScrollIsClampedAndResetsOnReselect)
+{
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    view->selectNode(id, false);
+    const QImage top = view->grab().toImage();
+
+    for (int i = 0; i < 400; ++i) {
+        wheel(view.get(), QPoint(100, 50), -240);
+        (void)view->grab();
+    }
+    const qreal bottom = view->cardScrollMaximum();
+    ASSERT_GT(bottom, 0.0);
+    EXPECT_DOUBLE_EQ(view->cardScrollOffset(), bottom); // stops at the end of the note
+
+    wheel(view.get(), QPoint(100, 50), 240); // one tick back: moves at once, nothing was stored past the end
+    (void)view->grab();
+    EXPECT_LT(view->cardScrollOffset(), bottom);
+
+    view->clearSelection();
+    EXPECT_EQ(view->cardScrollOffset(), 0.0);
+    view->selectNode(id, false);
+    EXPECT_EQ(view->grab().toImage(), top) << "a card selected again starts from its top";
+}
+
+TEST_F(CanvasViewTest, TheInlineEditorKeepsTheWheelWhileEditing)
+{
+    const QString id = view->document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    ASSERT_TRUE(view->beginEditingText(id));
+    auto *editor = view->findChild<MarkdownEditor *>(QStringLiteral("canvasTextEditor"));
+    ASSERT_NE(editor, nullptr);
+    (void)editor->grab(); // lays it out, which sets the scroll range
+    const QPointF origin = view->origin();
+
+    wheel(editor->viewport(), QPoint(100, 50), -240);
+
+    EXPECT_GT(editor->verticalScrollBar()->value(), 0);
+    EXPECT_EQ(view->origin(), origin);
+}
+
 TEST(CanvasRenderTest, AFileCardsSubpathShowsThatSectionOnly)
 {
     const QString note = QStringLiteral("# Top\nintro\n## Plan\nstep one\n```\n# not a heading\n```\n"
@@ -740,6 +982,58 @@ TEST(CanvasPerfTest, ColdFirstPaintCostTracksVisibleNodesNotTotalNodes)
     EXPECT_LT(double(coldBig), double(coldSmall) * 6.0)
         << "cold first paint: " << coldBig / 1.0e6 << " ms for 1000 nodes vs " << coldSmall / 1.0e6
         << " ms for 60 - looks like every node's content is being built up front instead of lazily";
+}
+
+TEST(CanvasPerfTest, SnapCostPerMouseMoveDoesNotGrowWithTheCanvas)
+{
+    // Every card is a snap target, but they are sorted once per drag and each
+    // move binary-searches them: 200 times more cards must cost nowhere near
+    // 200 times more per move. Searching them all (or rebuilding the lists)
+    // on every move was checked to cost about 200x here; the log-sized
+    // search measures a few x.
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    const auto perMove = [](int cards, int columns) {
+        CanvasView view;
+        view.resize(1600, 1000);
+        buildGrid(view, cards, columns);
+        send(&view, QEvent::MouseButtonPress, QPoint(100, 60), Qt::LeftButton);
+        send(&view, QEvent::MouseMove, QPoint(110, 70), Qt::LeftButton); // the first move builds the lists
+        return perf::bestOf([&] {
+            QElapsedTimer timer;
+            timer.start();
+            for (int i = 0; i < 200; ++i)
+                send(&view, QEvent::MouseMove, QPoint(110 + i % 40, 70 + i % 30), Qt::LeftButton);
+            return timer.nsecsElapsed() / 200;
+        });
+    };
+    const qint64 small = perMove(100, 10);
+    const qint64 big = perMove(20000, 200);
+    EXPECT_LT(double(big), double(small) * 20.0)
+        << "per mouse move: " << big << " ns with 20 000 cards vs " << small << " ns with 100";
+}
+
+TEST(CanvasPerfTest, ScrollingASelectedCardCostsAGrabNotARelayout)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    CanvasView view;
+    view.resize(800, 600);
+    const QString id = view.document().addNode(makeTextNode(QRectF(0, 0, 200, 100), longNote()));
+    view.selectNode(id, false);
+    wheel(&view, QPoint(100, 50), -120); // the first tick builds the card's scroll editor
+    (void)view.grab();
+    ASSERT_EQ(view.cardScrollEditorBuilds(), 1u);
+
+    const qint64 perTick = perf::bestOf([&] {
+        QElapsedTimer timer;
+        timer.start();
+        for (int i = 0; i < 20; ++i) {
+            wheel(&view, QPoint(100, 50), -120);
+            (void)view.grab();
+        }
+        return timer.nsecsElapsed() / 20;
+    }, 3, 10.0e6);
+    EXPECT_EQ(view.cardScrollEditorBuilds(), 1u) << "later ticks reuse the editor";
+    EXPECT_LT(perTick, qint64(10) * 1000 * 1000) << "per tick: " << perTick / 1.0e6 << " ms";
 }
 
 int main(int argc, char **argv)
