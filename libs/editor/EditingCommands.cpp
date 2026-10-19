@@ -114,7 +114,7 @@ ListLine parseListLine(QStringView line, bool anyState = false)
         "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([ xX])\\][ \\t]+)?"));
 
     static const QRegularExpression headAny(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([^\\[\\]\\n])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)([ \\t]*)([-*+]|\\d{1,9}[.)])([ \\t]+)(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
 
     const auto match = (anyState ? headAny : head).matchView(line);
     ListLine item;

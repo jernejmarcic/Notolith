@@ -47,10 +47,14 @@ public:
     /// In table order, for menus.
     const QList<TaskState> &all() const { return m_states; }
 
-    /// The table in force, defaults until something sets one. Read on pool
-    /// threads (search) and swapped whole, so it is a shared pointer.
+    /// The table in force: tasks.ini over the defaults, read on first use so a
+    /// process with no editor (the index CLI, a publisher) sees it too. Read on
+    /// pool threads (search) and swapped whole, so it is a shared pointer.
     static std::shared_ptr<const TaskStates> current();
     static void setCurrent(TaskStates states);
+    /// `tasks.ini` in the config directory, and `current()` read again from it.
+    static QString path();
+    static void reload();
 
 private:
     QList<TaskState> m_states;

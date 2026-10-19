@@ -1,4 +1,6 @@
 add_library(noteAppC_markdown STATIC
+    ConfigFile.cpp
+    ConfigFile.h
     SourceMap.cpp
     SourceMap.h
     Frontmatter.cpp

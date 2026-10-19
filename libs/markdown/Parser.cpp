@@ -167,9 +167,10 @@ void describeListItem(const QString &text, const Range &range, const SourceMap &
     // (hideQuoteMarkers), and the list marker is what follows them.
     static const QRegularExpression head(QStringLiteral(
         "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([ xX])\\][ \\t]+)?"));
-    // Any one character but a bracket, so `- [[Note]]` and `- [x](url)` stay text.
+    // Any one UTF-16 unit but a bracket, so `- [[Note]]` and `- [x](url)` stay
+    // text; an astral code point is two units and cannot be a state's QChar.
     static const QRegularExpression headAny(QStringLiteral(
-        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([^\\[\\]\\n])\\][ \\t]+)?"));
+        "^((?:[ \\t]*>[ \\t]?)*)[ \\t]*(?:([-*+])|(\\d+)([.)]))[ \\t]+(\\[([^\\[\\]\\n\\x{10000}-\\x{10FFFF}])\\][ \\t]+)?"));
 
     // md4qt puts a list item's start at its bullet, not at the start of the
     // line, so the marker has to be read from the line itself.
@@ -1599,7 +1600,7 @@ void walkItem(MD::Item *item, Walk &walk)
                 task.text = plainText(static_cast<MD::Paragraph *>(
                     listItem->items().first().data()));
                 if (!listItem->isTaskList()) {
-                    static const QRegularExpression box(QStringLiteral("^\\[[^\\[\\]]\\][ \\t]+"));
+                    static const QRegularExpression box(QStringLiteral("^\\[[^\\[\\]\\x{10000}-\\x{10FFFF}]\\][ \\t]+"));
                     task.text.remove(box);
                 }
             }

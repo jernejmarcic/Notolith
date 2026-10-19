@@ -88,7 +88,8 @@ without it, CommonMark joins the next `>` line to the nested one's paragraph.
 ## Task checkboxes
 
 With the "Checkbox states" core plugin on (docs/EDITOR.md lists the built-in
-states), `~/.config/noteAppC/tasks.ini` changes or adds states. One section per
+states), `~/.config/noteAppC/tasks.ini` changes or adds states (the index command and
+publishing read it too, with no editor open). One section per
 state; a section named for a built-in state (`cancelled`, `dropped`,
 `in-progress`, `forwarded`, `scheduled`, `question`, `important`, `star`, `idea`,
 `pro`, `con`) changes it, any other name adds one:
