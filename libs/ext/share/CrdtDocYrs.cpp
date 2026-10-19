@@ -55,8 +55,8 @@ public:
             return {};
         const QByteArray utf8 = inserted.toUtf8();
         Owned update;
-        if (ncrdt_local_edit(m_h, uint32_t(at), uint32_t(removed), raw(utf8), size_t(utf8.size()), &update.buf) != 0)
-            return {};
+        // A failure halfway still hands over what changed (empty otherwise).
+        ncrdt_local_edit(m_h, uint32_t(at), uint32_t(removed), raw(utf8), size_t(utf8.size()), &update.buf);
         return update.bytes();
     }
 
@@ -66,7 +66,7 @@ public:
         const bool good = ncrdt_apply(m_h, raw(update), size_t(update.size()), &delta.buf) == 0;
         if (ok)
             *ok = good;
-        return good ? decodeDelta(delta.bytes()) : QList<CrdtEdit>();
+        return decodeDelta(delta.bytes()); // after a failure: the part of the update that did land
     }
 
     QByteArray stateVector() const override

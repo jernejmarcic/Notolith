@@ -338,6 +338,86 @@ TEST_P(CrdtDocTest, AnEditOutsideTheTextIsRefused)
     EXPECT_EQ(doc->text(), QStringLiteral("abc"));
 }
 
+TEST_P(CrdtDocTest, AHugeStateVectorClaimIsRefusedCheaply)
+{
+    auto doc = make(1);
+    doc->localEdit(0, 0, QStringLiteral("abc"));
+    const QByteArray vector = doc->stateVector();
+
+    // Five bytes that claim 2^28 entries: yrs would reserve gigabytes for
+    // them before reading the first, and the peer sending this is a stranger.
+    const QByteArray claim("\x80\x80\x80\x80\x01", 5);
+    [[maybe_unused]] QElapsedTimer clock;
+    clock.start();
+    for (int i = 0; i < 20; ++i)
+        EXPECT_TRUE(doc->diffSince(claim).isEmpty());
+#ifndef NOTEAPPC_SANITIZED_BUILD
+    EXPECT_LT(clock.elapsed(), 100) << clock.elapsed() << " ms for 20: " << "a size claim in a state vector is being believed";
+#endif
+    EXPECT_EQ(doc->text(), QStringLiteral("abc"));
+    EXPECT_EQ(doc->stateVector(), vector);
+}
+
+TEST_P(CrdtDocTest, AnUpdateThatFailsAfterLandingInPartReportsThePart)
+{
+    if (GetParam() != Backend::Yrs)
+        GTEST_SKIP() << "Yjs encoding; Native refuses whole";
+    // Client 77: "hi" typed into the text, then a block whose parent is the
+    // first block - a string, not a type - which yrs only finds out after "hi"
+    // has been integrated, and reports as an error.
+    const QByteArray update = QByteArray("\x01\x02\x4d\x00", 4) + QByteArray("\x04\x01\x04", 3) + "body"
+        + QByteArray("\x02", 1) + "hi" + QByteArray("\x04\x00\x4d\x00\x01", 5) + "x" + QByteArray("\x00", 1);
+    auto doc = make(1);
+    bool ok = true;
+    const QList<CrdtEdit> edits = doc->applyUpdate(update, &ok);
+    EXPECT_FALSE(ok);
+    EXPECT_EQ(doc->text(), QStringLiteral("hi")); // what the test stands on: part of it landed
+    // ... and the editor is told, or it would show "" over a document with "hi".
+    EXPECT_EQ(applyAll(QString(), edits), doc->text());
+}
+
+TEST_P(CrdtDocTest, AnEmbedFromAnotherYjsClientKeepsOffsetsInStep)
+{
+    if (GetParam() != Backend::Yrs)
+        GTEST_SKIP() << "Yjs encoding";
+    // Client 77 inserts an embed ({"a":1}) into the text, as Y.Text.insertEmbed
+    // does. It occupies one offset in yrs, so the text shows one U+FFFC for it.
+    const QByteArray update = QByteArray("\x01\x01\x4d\x00\x05\x01\x04", 7) + "body"
+        + QByteArray("\x07", 1) + "{\"a\":1}" + QByteArray("\x00", 1);
+    auto doc = make(1);
+    doc->localEdit(0, 0, QStringLiteral("ab"));
+    const QString mirror = applyAll(QStringLiteral("ab"), deliver(*doc, update));
+    EXPECT_EQ(mirror, doc->text());
+    EXPECT_EQ(doc->text().size(), 3);
+    EXPECT_TRUE(doc->text().contains(QChar(0xFFFC)));
+    // An edit past the embed lands where the editor thinks it does.
+    ASSERT_FALSE(doc->localEdit(3, 0, QStringLiteral("z")).isEmpty());
+    EXPECT_TRUE(doc->text().endsWith(QLatin1Char('z')));
+    EXPECT_EQ(doc->text().size(), 4);
+}
+
+TEST_P(CrdtDocTest, AnEditWaitingBehindALaterOneIsReleased)
+{
+    auto base = make(1), peer = make(3), late = make(4);
+    const QByteArray z = base->localEdit(0, 0, QStringLiteral("z"));
+    deliver(*peer, z);
+    deliver(*late, z);
+    const QByteArray first = peer->localEdit(1, 0, QStringLiteral("x"));
+    const QByteArray second = peer->localEdit(2, 0, QStringLiteral("y")); // typed after first's text
+    const QByteArray third = peer->localEdit(0, 0, QStringLiteral("w")); // needs only z, so it lands at once
+
+    // Delivered as third, second, first. yrs 0.28 then leaves `second` pending
+    // although `first` has arrived (docs/SHARE.md, "A yrs quirk").
+    deliver(*late, third);
+    deliver(*late, second);
+    deliver(*late, first);
+    if (GetParam() == Backend::Yrs)
+        catchUp(*late, *peer);
+    EXPECT_EQ(late->text(), peer->text());
+    EXPECT_EQ(late->stateVector(), peer->stateVector());
+    EXPECT_EQ(late->text(), QStringLiteral("wzxy"));
+}
+
 namespace {
 
 QString markdownBody(int chars)
@@ -466,8 +546,9 @@ TEST_P(CrdtDocTest, ThreeReplicasConvergeUnderRandomDelivery)
 
         if (GetParam() == Backend::Yrs) {
             // yrs can keep an update pending although the edit it waited for
-            // has arrived (seed 2): peers that meet exchange state vectors,
-            // and that releases it. Native must not need this.
+            // has arrived (AnEditWaitingBehindALaterOneIsReleased is the small
+            // case): peers that meet exchange state vectors, and that releases
+            // it. Native must not need this.
             for (Replica &to : replicas)
                 for (const Replica &from : replicas)
                     to.mirror = applyAll(to.mirror, deliver(*to.doc, from.doc->diffSince(to.doc->stateVector())));

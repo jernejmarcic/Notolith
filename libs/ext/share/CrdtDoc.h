@@ -59,9 +59,16 @@ public:
     /// Merge a remote update. Returns what changed in the text, each edit
     /// applied to the text the previous one left, ready to feed
     /// applyExternalEdit in order. An update that does not decode sets *ok to
-    /// false and changes nothing; an update that refers to edits not seen yet
+    /// false and returns no edits; an update that refers to edits not seen yet
     /// is kept pending (ok stays true, no edits) and takes effect when the
     /// missing ones arrive. `ok` may be null.
+    ///
+    /// *ok false normally means nothing changed, but a backend may have merged
+    /// part of an update that decoded and then failed to integrate (Yrs can).
+    /// The returned edits are then exactly that part - feed them to the editor
+    /// like any others so it stays in step with text() - and the replica may
+    /// now miss edits its peers have: resync from them (encodeState() /
+    /// diffSince()) rather than carry on.
     virtual QList<CrdtEdit> applyUpdate(const QByteArray &update, bool *ok = nullptr) = 0;
 
     /// What this replica has seen; send it to a peer to learn what it lacks.
@@ -76,7 +83,8 @@ public:
     virtual QByteArray encodeState() const = 0;
 
     /// Merge a state written by encodeState() into this document (meant for
-    /// a fresh one). False, and no change, if it does not decode.
+    /// a fresh one). False if it does not decode: no change, except as
+    /// applyUpdate() describes (drop the document then).
     virtual bool loadState(const QByteArray &state) = 0;
 };
 

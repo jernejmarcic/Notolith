@@ -110,9 +110,10 @@ pub extern "C" fn ncrdt_new(client_id: u64) -> *mut Handle {
             if !want.load(Ordering::Relaxed) {
                 return;
             }
-            let mut buf = d.lock().unwrap();
-            buf.clear();
+            // Built before the lock: a panic in here must not poison it.
+            let mut buf = Vec::new();
             encode_delta(e.delta(txn), &mut buf);
+            *d.lock().unwrap() = buf;
         });
         Box::into_raw(Box::new(Handle { doc, text, update, delta, want_delta }))
     })
@@ -137,21 +138,41 @@ pub unsafe extern "C" fn ncrdt_buf_free(ptr: *mut u8, len: usize) {
     }
 }
 
-// yrs reserves a table for the update's claimed client count before reading
-// any of them (touching the memory: a 40-byte noise update was seen to cost
-// 2 GB and half a second). Every client takes at least three bytes, so a count
-// beyond what the bytes could hold is garbage, whatever follows.
-fn plausible(update: &[u8]) -> bool {
+// yrs reserves a table for the claimed client count before reading any of
+// them (touching the memory: a 40-byte noise update was seen to cost 2 GB and
+// half a second; a 5-byte state vector the same). Every entry takes at least
+// `per` bytes (3 for a client of an update, 2 for a state vector entry), so a
+// count beyond what the bytes could hold is garbage, whatever follows. Both
+// decoders start with that count as a varint; re-check this when yrs is bumped
+// (Cargo.toml).
+fn plausible(update: &[u8], per: u64) -> bool {
     let (mut count, mut shift, mut used) = (0u64, 0, 0);
     for b in update.iter().take(5) {
         count |= u64::from(b & 0x7f) << shift;
         shift += 7;
         used += 1;
         if b & 0x80 == 0 {
-            return count <= (update.len() - used) as u64 / 3;
+            return count <= (update.len() - used) as u64 / per;
         }
     }
     false
+}
+
+// Switches the delta capture on for the length of one remote apply; off again
+// on every way out, a panic included.
+struct WantDelta<'a>(&'a AtomicBool);
+
+impl<'a> WantDelta<'a> {
+    fn on(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::Relaxed);
+        WantDelta(flag)
+    }
+}
+
+impl Drop for WantDelta<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
 }
 
 fn guarded(f: impl FnOnce() -> i32) -> i32 {
@@ -166,14 +187,29 @@ pub unsafe extern "C" fn ncrdt_text(h: *mut Handle, out: *mut Buf) -> i32 {
     guarded(|| {
         let h = &*h;
         let txn = h.doc.transact();
-        give(out, h.text.get_string(&txn).into_bytes());
+        let mut text = h.text.get_string(&txn);
+        // get_string skips embeds and nested types, which occupy one offset
+        // each: spell them as U+FFFC, exactly like encode_delta, so the text
+        // and every edit reported for it count the same units.
+        if text.encode_utf16().count() != h.text.len(&txn) as usize {
+            text.clear();
+            for chunk in h.text.diff(&txn, |_| ()) {
+                match chunk.insert {
+                    Out::Any(yrs::Any::String(s)) => text.push_str(&s),
+                    _ => text.push('\u{FFFC}'),
+                }
+            }
+        }
+        give(out, text.into_bytes());
         OK
     })
 }
 
 /// A local edit; the update to broadcast comes back in `update` (empty when
 /// the edit changed nothing). `at` and `removed` are UTF-16 units and must lie
-/// inside the text, else ERR_ARG and the document is untouched.
+/// inside the text, else ERR_ARG and the document is untouched. After
+/// ERR_PANIC the document may have changed halfway (yrs commits when the
+/// transaction unwinds); `update` then still carries what did change.
 ///
 /// # Safety
 /// `h` valid; `ins` points at `ins_len` bytes; `update` points at a Buf.
@@ -187,8 +223,9 @@ pub unsafe extern "C" fn ncrdt_local_edit(
     update: *mut Buf,
 ) -> i32 {
     empty(update);
-    guarded(|| {
-        let h = &*h;
+    let h = &*h;
+    let rc = guarded(|| {
+        h.update.lock().unwrap().clear(); // the observer also fills it for a remote apply
         let bytes = if ins_len == 0 { &[][..] } else { std::slice::from_raw_parts(ins, ins_len) };
         let Ok(s) = std::str::from_utf8(bytes) else { return ERR_ARG };
         let mut txn = match h.doc.try_transact_mut() {
@@ -199,7 +236,6 @@ pub unsafe extern "C" fn ncrdt_local_edit(
         if at > len || removed > len - at {
             return ERR_ARG;
         }
-        h.update.lock().unwrap().clear();
         if removed > 0 {
             h.text.remove_range(&mut txn, at, removed);
         }
@@ -207,42 +243,51 @@ pub unsafe extern "C" fn ncrdt_local_edit(
             h.text.insert(&mut txn, at, s);
         }
         drop(txn); // commit: fires the update observer
-        give(update, std::mem::take(&mut *h.update.lock().unwrap()));
         OK
-    })
+    });
+    let sent = std::mem::take(&mut *h.update.lock().unwrap_or_else(|p| p.into_inner()));
+    if !sent.is_empty() {
+        give(update, sent);
+    }
+    rc
 }
 
 /// Apply a remote update; the text delta it caused is returned in `delta`
-/// (format above). Anything that does not decode is ERR_DECODE and leaves the
-/// document untouched.
+/// (format above). Bytes that do not decode are ERR_DECODE and leave the
+/// document untouched. An update that decodes but fails to integrate (or
+/// panics) may have landed in part: yrs commits what was integrated, so the
+/// delta of that part is returned alongside the error code.
 ///
 /// # Safety
 /// `h` valid; `upd` points at `len` bytes; `delta` points at a Buf.
 #[no_mangle]
 pub unsafe extern "C" fn ncrdt_apply(h: *mut Handle, upd: *const u8, len: usize, delta: *mut Buf) -> i32 {
     empty(delta);
-    guarded(|| {
-        let h = &*h;
+    let h = &*h;
+    let rc = guarded(|| {
         let bytes = if len == 0 { &[][..] } else { std::slice::from_raw_parts(upd, len) };
-        if !plausible(bytes) {
+        if !plausible(bytes, 3) {
             return ERR_DECODE;
         }
         let Ok(update) = Update::decode_v1(bytes) else { return ERR_DECODE };
+        h.delta.lock().unwrap().clear();
+        let _want = WantDelta::on(&h.want_delta); // declared before txn: dropped after its commit, also when unwinding
         let mut txn = match h.doc.try_transact_mut() {
             Ok(t) => t,
             Err(_) => return ERR_ARG,
         };
-        h.delta.lock().unwrap().clear();
-        h.want_delta.store(true, Ordering::Relaxed);
         let applied = txn.apply_update(update);
         drop(txn); // commit: fires the observers
-        h.want_delta.store(false, Ordering::Relaxed);
         if applied.is_err() {
             return ERR_DECODE;
         }
-        give(delta, std::mem::take(&mut *h.delta.lock().unwrap()));
         OK
-    })
+    });
+    let changed = std::mem::take(&mut *h.delta.lock().unwrap_or_else(|p| p.into_inner()));
+    if !changed.is_empty() {
+        give(delta, changed);
+    }
+    rc
 }
 
 /// # Safety
@@ -271,7 +316,11 @@ pub unsafe extern "C" fn ncrdt_diff(h: *mut Handle, sv: *const u8, sv_len: usize
         let state = if sv_len == 0 {
             StateVector::default()
         } else {
-            match StateVector::decode_v1(std::slice::from_raw_parts(sv, sv_len)) {
+            let bytes = std::slice::from_raw_parts(sv, sv_len);
+            if !plausible(bytes, 2) {
+                return ERR_DECODE;
+            }
+            match StateVector::decode_v1(bytes) {
                 Ok(s) => s,
                 Err(_) => return ERR_DECODE,
             }
