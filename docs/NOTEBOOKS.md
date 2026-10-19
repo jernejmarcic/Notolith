@@ -191,6 +191,12 @@ those calls answer "operation not permitted". `#| sandbox: host` in
 the block asks to run as you, unsandboxed; it is refused unless allowed in
 settings.
 
+A note shared with other devices (docs/SHARE.md) holds code anyone in the
+share may have written. Its blocks never leave the sandbox, whatever the
+setting says, and each one asks before its first run in this app session,
+naming the share's other members. Runs stay manual, as everywhere: opening
+a note only reads cached output.
+
 `#| sandbox: wasm` runs the block as a WebAssembly module under `wasmtime`
 (a CLI subprocess; install it) and is stricter than the default, so no
 setting gates it. The whole `wasmtime` process runs inside the tier-1

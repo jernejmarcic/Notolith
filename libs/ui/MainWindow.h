@@ -182,6 +182,9 @@ public:
     /// question, in place of the dialog.
     void setShareConfigForTests(ShareEngine::Config config);
     void setShareApprovalForTests(std::function<bool(const QString &name, const QString &safetyNumber)> approve);
+    /// Who answers "run this block of a shared note?", in place of the dialog;
+    /// gets the members' names, one per line.
+    void setSharedRunApprovalForTests(std::function<bool(const QString &members)> approve);
 #endif
 
     /// Where a dragged tab lands over a tab group's body: the outer quarter
@@ -566,6 +569,8 @@ private:
     bool showsEncryptedNote(const MarkdownEditor *editor) const;
     /// The note an editor shows, for whose kernel its code blocks run in.
     QString notePathOf(const MarkdownEditor *editor) const;
+    /// The editor shows a note that is shared (P2P) right now.
+    bool isSharedNote(const MarkdownEditor *editor) const;
     void encryptCurrentNote();
     void decryptCurrentNote();
     void newEncryptedNote();
@@ -869,6 +874,11 @@ QLabel *m_vimStatus = nullptr;
     ShareEngine::Config m_shareConfig;
     QHash<QByteArray, ShareSession *> m_sessions; ///< by share id, children of the window
     std::function<bool(const QString &, const QString &)> m_shareApproval;
+    std::function<bool(const QString &)> m_sharedRunApproval;
+    /// sha256 of language + source of the shared-note blocks allowed to run.
+    /// ponytail: this run of the app only; persist it if asking again after a restart grates.
+    QSet<QByteArray> m_sharedRunsAllowed;
+    bool allowSharedRun(const MarkdownEditor *editor, const QString &language, const QString &source);
 #endif
     QLabel *m_vaultLabel = nullptr;
     QWidget *m_sidebar = nullptr;

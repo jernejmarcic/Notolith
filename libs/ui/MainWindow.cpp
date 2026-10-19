@@ -1068,7 +1068,9 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
                                                  3000);
                     });
         }
-        const bool host = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
+        // A shared note's block can be someone else's: it never leaves the sandbox.
+        const bool shared = isSharedNote(editor);
+        const bool host = !shared && options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"));
         // `#| sandbox: wasm` is stricter than the default, so asking for it needs no setting.
         const notebook::SandboxTier tier = host                  ? notebook::SandboxTier::Host
                                            : options.sandboxWasm ? notebook::SandboxTier::Wasm
@@ -1080,6 +1082,15 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(MarkdownEditor::NotebookRunResult());
             return;
         }
+#ifdef NOTEAPPC_HAVE_SHARE
+        if (forceRun && shared && !allowSharedRun(editor, language, source)) {
+            MarkdownEditor::NotebookRunResult refused;
+            refused.hasRun = true;
+            refused.kernelError = tr("Not run: a block of a shared note runs only once you allow it");
+            deliver(refused);
+            return;
+        }
+#endif
         notebook::NotebookController::RunRequest request;
         request.language = language;
         request.source = source;
@@ -1089,8 +1100,10 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
         // anyone: it leaves the sandbox only when the person has allowed that
         // in settings. A runnable embed's own folder is bound read-only.
         if (options.sandboxHost && !host && forceRun) {
-            statusBar()->showMessage(tr("This block asks to run outside the sandbox; it runs inside it unless "
-                                        "Settings allows that"),
+            statusBar()->showMessage(shared ? tr("This block asks to run outside the sandbox; a shared note's "
+                                                 "code always runs inside it")
+                                            : tr("This block asks to run outside the sandbox; it runs inside it unless "
+                                                 "Settings allows that"),
                                      6000);
         }
         request.tier = tier;
@@ -1138,7 +1151,8 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             return false; // a wasm block never has a kernel
         notebook::NotebookController::RunRequest request;
         request.language = language;
-        request.tier = options.sandboxHost && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
+        request.tier = options.sandboxHost && !isSharedNote(editor)
+                               && m_settings.boolean(QStringLiteral("notebooks.allowHostTier"))
                            ? notebook::SandboxTier::Host
                            : notebook::SandboxTier::Bubblewrap;
         chooseKernel(request, options, notePathOf(editor),
@@ -5742,6 +5756,46 @@ void MainWindow::setShareApprovalForTests(std::function<bool(const QString &, co
 {
     m_shareApproval = std::move(approve);
 }
+
+void MainWindow::setSharedRunApprovalForTests(std::function<bool(const QString &)> approve)
+{
+    m_sharedRunApproval = std::move(approve);
+}
+
+/// A shared note's code may be anyone's in the share: each block asks once
+/// before it first runs here, naming who could have written it.
+bool MainWindow::allowSharedRun(const MarkdownEditor *editor, const QString &language, const QString &source)
+{
+    const ShareSession *session = sessionFor(notePathOf(editor));
+    if (!session || !m_share)
+        return true;
+    const QByteArray key = QCryptographicHash::hash((language + QChar(0) + source).toUtf8(), QCryptographicHash::Sha256);
+    if (m_sharedRunsAllowed.contains(key))
+        return true;
+    QStringList names;
+    for (const auto &member : m_share->members(session->shareID()))
+        if (member.first != m_share->publicKey())
+            names.append(member.second);
+    const QString members = names.join(QLatin1Char('\n'));
+    bool allowed = false;
+    if (m_sharedRunApproval) {
+        allowed = m_sharedRunApproval(members);
+    } else {
+        QMessageBox ask(QMessageBox::Warning, tr("Run shared code"),
+                        tr("This note is shared, so this block may have been written by:\n\n%1\n\n"
+                           "It runs in the sandbox. Run it?")
+                            .arg(members),
+                        QMessageBox::NoButton, this);
+        ask.setTextFormat(Qt::PlainText); // the names come from other devices
+        QPushButton *run = ask.addButton(tr("Run"), QMessageBox::AcceptRole);
+        ask.setDefaultButton(ask.addButton(tr("Cancel"), QMessageBox::RejectRole));
+        ask.exec();
+        allowed = ask.clickedButton() == run;
+    }
+    if (allowed)
+        m_sharedRunsAllowed.insert(key);
+    return allowed;
+}
 #endif
 
 void MainWindow::updateShare()
@@ -6439,6 +6493,16 @@ QString MainWindow::notePathOf(const MarkdownEditor *editor) const
             return leaf->notePath;
     }
     return {};
+}
+
+bool MainWindow::isSharedNote(const MarkdownEditor *editor) const
+{
+#ifdef NOTEAPPC_HAVE_SHARE
+    return sessionFor(notePathOf(editor)) != nullptr;
+#else
+    Q_UNUSED(editor);
+    return false;
+#endif
 }
 
 void MainWindow::setEncryptionPromptForTests(std::function<QString(bool, bool)> prompt)

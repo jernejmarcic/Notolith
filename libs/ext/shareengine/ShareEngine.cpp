@@ -179,6 +179,11 @@ QString ShareEngine::fingerprint() const
     return m_me ? m_me->fingerprint() : QString();
 }
 
+QByteArray ShareEngine::publicKey() const
+{
+    return m_me ? m_me->publicKey() : QByteArray();
+}
+
 quint16 ShareEngine::port() const
 {
     return m_node ? m_node->port() : 0;

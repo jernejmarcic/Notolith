@@ -1954,10 +1954,13 @@ canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
       main -> check only (rustc --crate-type=lib --emit=metadata; gcc/g++
       -fsyntax-only for c/cpp; java without main: javac), output "checked,
       nothing to run (no main)" on success, compiler errors as today.
-- [ ] With note sharing (P2P), a block can come from someone else: keep the
+- [x] With note sharing (P2P), a block can come from someone else: keep the
       run manual, show who wrote a block before its first run on this
       device, never allow `sandbox: host` for a shared note. Goes into the
       sharing plan.
+      Done: host tier off for shared notes; each block asks once per app
+      session, naming the share's other members (who wrote which block is
+      not tracked by the CRDT; the allow-set is in memory only).
 - [x] Task states beyond [ ]/[x] (Jernej 2026-10-19: "custom stuff inside
       other than just ticking, like a line, or a straight up red X ... think
       about useful additions"). Today Parser.cpp's list head regex only knows

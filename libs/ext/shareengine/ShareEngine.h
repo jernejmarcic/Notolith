@@ -76,6 +76,7 @@ public:
     bool isRunning() const;
     QString error() const;
     QString fingerprint() const;
+    QByteArray publicKey() const; ///< this device's key; empty before start()
     quint16 port() const;
 
     // --- owner ---

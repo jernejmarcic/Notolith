@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QTreeView>
 #include <QFileSystemModel>
+#include <QUuid>
 #include <QtTest/QTest>
 
 #include "MainWindow.h"
@@ -447,6 +448,66 @@ TEST_P(ShareWindowTest, AJoinerFindsTheOwnerAgainWithoutMDNS)
     b.open(); // mDNS is off and nobody dials: only the invite's addresses bring it back
     ASSERT_NE(b.engine(), nullptr);
     ASSERT_TRUE(waitFor([&] { return a.engine()->peersHere(id) == 1 && b.engine()->peersHere(id) == 1; }));
+}
+
+TEST_P(ShareWindowTest, ASharedNotesBlockRunsOnlyOnceAllowed)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128); // no cached output from an earlier run
+    const QString note = QStringLiteral("```python\nprint('ran')  # %1\n```\n\nend\n").arg(marker);
+    ASSERT_FALSE(share(a, b, QStringLiteral("Code.md"), note).isEmpty());
+    int asked = 0;
+    bool allow = false;
+    QString named;
+    b.window->setSharedRunApprovalForTests([&](const QString &members) {
+        ++asked;
+        named = members;
+        return allow;
+    });
+    b.window->show(); // blocks are laid out as they are painted
+    MarkdownEditor *editor = b.editor();
+    editor->setCursorOffset(editor->noteText().size()); // off the block: it renders
+    QTest::qWait(100);
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("print"));
+    ASSERT_TRUE(editor->notebookInfoAt(block).eligible);
+
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    ASSERT_TRUE(waitFor([&] { return editor->notebookInfoAt(block).hasRun; }));
+    EXPECT_EQ(asked, 1);
+    EXPECT_FALSE(named.isEmpty()) << "the owner is named";
+    EXPECT_FALSE(editor->notebookInfoAt(block).ok);
+    EXPECT_TRUE(editor->notebookOutputTextAt(block).join(QLatin1Char(' ')).contains(QStringLiteral("Not run")));
+
+    allow = true;
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    ASSERT_TRUE(waitFor([&] { return asked == 2 && !editor->notebookInfoAt(block).running; }, 30000));
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    ASSERT_TRUE(waitFor([&] { return !editor->notebookInfoAt(block).running; }, 30000));
+    EXPECT_EQ(asked, 2) << "an allowed block does not ask again";
+}
+
+TEST_P(ShareWindowTest, ASharedNotesBlockNeverLeavesTheSandbox)
+{
+    Settings settings = Settings::load();
+    settings.setValue(QStringLiteral("notebooks.allowHostTier"), true);
+    ASSERT_TRUE(settings.save());
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QString marker = QUuid::createUuid().toString(QUuid::Id128);
+    const QString note = QStringLiteral("```python\n#| sandbox: host\nprint('ran')  # %1\n```\n\nend\n").arg(marker);
+    ASSERT_FALSE(share(a, b, QStringLiteral("Host.md"), note).isEmpty());
+    b.window->setSharedRunApprovalForTests([](const QString &) { return true; });
+    b.window->show();
+    MarkdownEditor *editor = b.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::qWait(100);
+    const qsizetype block = editor->noteText().indexOf(QStringLiteral("print"));
+    ASSERT_TRUE(editor->notebookInfoAt(block).eligible);
+    ASSERT_TRUE(editor->runNotebookBlockAt(block));
+    EXPECT_TRUE(b.window->statusBar()->currentMessage().contains(QStringLiteral("shared note")))
+        << b.window->statusBar()->currentMessage().toStdString();
+    ASSERT_TRUE(waitFor([&] { return !editor->notebookInfoAt(block).running; }, 30000));
+    settings.setValue(QStringLiteral("notebooks.allowHostTier"), false);
+    settings.save();
 }
 
 TEST_P(ShareWindowTest, NothingIsConstructedWhileTheFeatureIsOff)
