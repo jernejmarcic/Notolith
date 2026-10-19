@@ -1921,20 +1921,22 @@ X25519 lockbox call with a collaborator's public key, scoped to one note's key.
 - [x] Jernej's choices (2026-10-18): "Live co-editing"; reach: "LAN +
       tailscale, self hosted server in the future"; transport: "Share code
       with Hearth" (extract Hearth's link layer into a library both use).
-- [ ] Fable plan once chosen.
+- [x] Fable plan once chosen (scratchpad SHARE-PLAN.md; lanes below).
 
 ## Canvas alignment guides (Jernej, 2026-10-19)
 Jernej: "also for base, make it so that it has the auto lign stuff, like if 2
 squares are above eachother they shoiud get the align helpers". Read as the
 canvas (free-placed cards; Bases has no free placement). Nothing snaps today.
-- [ ] Fable plan: guides and snapping to other cards' edges/centres while
+- [x] Fable plan: guides and snapping to other cards' edges/centres while
       moving and resizing (Obsidian's "snap to objects"), snap to grid,
       toggles, zero cost when off; plus align/distribute for a selection if
       Fable judges it worth it.
-- [ ] Jernej: "clicking in a note should allow ot be scrolled in the canvas".
+- [x] Jernej: "clicking in a note should allow ot be scrolled in the canvas".
       As in Obsidian: once a card is clicked (selected/focused), the wheel
       scrolls that card's content instead of panning the canvas; an
       unselected card still pans. Same Fable plan.
+      Done (lane/canvas, c1e0ee2): docs/CANVAS.md. Align/distribute skipped
+      (Obsidian's canvas has none).
 
 ## From Jernej's screenshots, 2026-10-19
 - [ ] Long lines in a code block wrap; demo/Code/Code Blocks.md ("A very long
