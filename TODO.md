@@ -2022,6 +2022,8 @@ Shared/<title>.md.
         (share:share-note / share:join / share:stop, approve prompt,
         Shared/<title>.md, autosave of remote edits, disk fold-in, resume on
         reopen), feature "share" off by default
+        Also: round or refuse a local edit whose offsets split a surrogate
+        pair before CrdtDoc::localEdit (vim `x` on an emoji; Fable check).
 - [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
@@ -2076,6 +2078,33 @@ Shared/<title>.md.
 - [x] Tests drop the desktop's QT_QPA_PLATFORMTHEME/QT_STYLE_OVERRIDE
       (tests/IsolatedHome.cpp): kde theme loaded KWindowSystem, whose offscreen
       warning failed DemoVaultTest.EveryCommandRunsWithoutWarnings.
+- [ ] Fable final check 2026-10-19 (merged batch at fb30ff6). Editor lane
+      "reviewfix":
+  - [ ] Task box regex admits an astral code point: `- [😀] text` is a task
+        and a click writes `- [x]] text` (Parser.cpp:171, :1602,
+        EditingCommands.cpp:116); exclude U+10000-10FFFF from the box class.
+  - [ ] PDF zoom budget leaks when setFeatures clears the raster cache
+        (m_pdfZoomKeys/m_pdfZoomBytes never reset): budget shrinks, then a
+        render/evict loop while zoomed. Reset beside the cache clear.
+  - [ ] PDF zoom, slide index and nav state survive a note switch in the same
+        leaf (keyed by block offset; setNoteText clears only undo): a new
+        note opens zoomed or on the old slide. Clear them in setNoteText.
+  - [ ] tasks.ini loads only through MarkdownEditor: index CLI and a
+        standalone Publisher see default states. Lazy-load in
+        TaskStates::current().
+- [ ] Fable final check, yrs FFI hardening (after lane nativecrdt, same dir):
+  - [ ] ncrdt_diff decodes a peer's state vector unchecked: a 5-byte varint
+        reserves GBs (yrs try_reserve). Bound count by remaining bytes / 2.
+  - [ ] A panic or late decode error after a partial integrate commits
+        silently (TransactionMut commits on Drop): C++ returns nothing, peers
+        diverge. Return what the observers captured with ok=false, reset
+        want_delta with a drop guard, document "resync from encodeState".
+  - [ ] text() drops foreign embeds that the delta counts as U+FFFC: offsets
+        drift. Refuse non-string inserts (ERR_DECODE) or emit U+FFFC.
+  - [ ] Observer computes the delta while holding the Mutex: one panic
+        poisons the handle forever. Compute before locking.
+  - [ ] Note in Cargo.toml / SHARE.md: bumping yrs re-checks plausible() and
+        the state-vector path.
 - [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
