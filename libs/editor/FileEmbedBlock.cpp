@@ -18,6 +18,8 @@
 #include "Parser.h"
 #include "Vault.h"
 
+#include <algorithm>
+
 #include <QDesktopServices>
 #include <QFile>
 #include <QFileInfo>
@@ -138,7 +140,8 @@ QString MarkdownEditor::noteEmbedSlice(const QString &noteText, const QString &s
     return noteText.mid(section.start, section.length()).trimmed();
 }
 
-bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path)
+bool MarkdownEditor::noteEmbedContent(const QString &path, const QString &subpath, QString &label,
+                                      QString &slice, QString &key, QImage &image)
 {
     QFileInfo info(path);
     if (!info.isFile())
@@ -149,9 +152,8 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     QString text = QString::fromUtf8(file.readAll());
     text.replace(QLatin1String("\r\n"), QLatin1String("\n"));
 
-    QString label;
     bool ok = true;
-    const QString slice = noteEmbedSlice(text, embed.subpath, info.completeBaseName(), label, ok);
+    slice = noteEmbedSlice(text, subpath, info.completeBaseName(), label, ok);
     if (!ok)
         return false; // no such heading/block: falls back to the paragraph's plain link text
 
@@ -165,14 +167,14 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     // five levels; nothing is drawn for it, so the recursion ends here.
     const QString canonical = QFileInfo(path).canonicalFilePath();
     if (d->m_embedAncestors.contains(canonical) || d->m_embedAncestors.size() >= kMaxEmbedDepth)
-        return layoutTextPanel(view, label, slice, false);
+        return true;
 
-    const QString key = QStringLiteral("%1|%2|%3|%4|%5")
-                            .arg(path)
-                            .arg(info.lastModified().toMSecsSinceEpoch())
-                            .arg(embed.subpath)
-                            .arg(width)
-                            .arg(embedThemeTag());
+    key = QStringLiteral("%1|%2|%3|%4|%5")
+              .arg(path)
+              .arg(info.lastModified().toMSecsSinceEpoch())
+              .arg(subpath)
+              .arg(width)
+              .arg(embedThemeTag());
     auto it = d->m_fileEmbedCache.find(key);
     if (it == d->m_fileEmbedCache.end()) {
         FileEmbedCacheEntry entry;
@@ -190,8 +192,22 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
             });
         }
     }
-    view.imagePath = path; // deliverFileEmbed's way back to this block
-    if (it->pending || it->image.isNull())
+    if (!it->pending)
+        image = it->image;
+    return true;
+}
+
+bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, const QString &path)
+{
+    QString label;
+    QString slice;
+    QString key;
+    QImage image;
+    if (!noteEmbedContent(path, embed.subpath, label, slice, key, image))
+        return false;
+    if (!key.isEmpty())
+        view.imagePath = path; // deliverFileEmbed's way back to this block
+    if (image.isNull())
         return layoutTextPanel(view, label, slice, false);
 
     view.embedLabel = label;
@@ -200,7 +216,7 @@ bool MarkdownEditor::layoutNoteEmbed(BlockView &view, const EmbedSpan &embed, co
     view.cells.clear();
     view.textTop = label.isEmpty() ? 0 : codeHeaderHeight();
     hideWholeBlockText(view);
-    const QPixmap pixmap = QPixmap::fromImage(it->image);
+    const QPixmap pixmap = QPixmap::fromImage(image);
     const qreal ratio = pixmap.devicePixelRatio();
     view.image = pixmap;
     view.imageSize = QSize(qRound(pixmap.width() / ratio), qRound(pixmap.height() / ratio));
@@ -485,8 +501,10 @@ void MarkdownEditor::deliverFileEmbed(const QString &key, quint64 generation, QI
     const QString path = key.section(QLatin1Char('|'), 0, 0);
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.imagePath != path || block.isPdfEmbed || block.isFileCard
-            || !block.mediaPath.isEmpty())
+        const bool inlineCell = std::any_of(block.embedCells.begin(), block.embedCells.end(),
+                                            [&](const EmbedCell &cell) { return cell.cacheKey == key; });
+        if (!inlineCell && (block.imagePath != path || block.isPdfEmbed || block.isFileCard
+                            || !block.mediaPath.isEmpty()))
             continue;
         block.layout.reset();
         block.laidOut = false;
@@ -664,10 +682,24 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
     }
 
     if (d->m_features.fileEmbeds && Vault::isNote(path)) {
-        cell.isFileCard = true;
         cell.isNote = true;
-        cell.label = QFileInfo(path).completeBaseName();
         cell.openPath = embed.target;
+        // The content a sole note embed shows, as a block in the paragraph
+        // as in Obsidian; the card stands in for it until the drawing is
+        // ready (deliverFileEmbed lays this block out again) and when the
+        // heading or block is not there.
+        QString label;
+        QString slice;
+        QImage image;
+        noteEmbedContent(path, embed.subpath, label, slice, cell.cacheKey, image);
+        if (!image.isNull()) {
+            cell.image = QPixmap::fromImage(image);
+            const qreal ratio = cell.image.devicePixelRatio();
+            cell.rect = QRectF(0, 0, cell.image.width() / ratio, cell.image.height() / ratio);
+            return cell;
+        }
+        cell.isFileCard = true;
+        cell.label = QFileInfo(path).completeBaseName();
         cell.rect = QRectF(0, 0, maxWidth, 44);
         return cell;
     }

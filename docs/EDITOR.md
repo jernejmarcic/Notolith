@@ -352,6 +352,11 @@ same pass: up to five levels deep (Obsidian's own limit). A note already being
 drawn around it (it embeds itself, or A embeds B embeds A) and anything past
 the fifth level stays the plain text panel, which is what ends a loop.
 
+An embed in the middle of a paragraph draws the same content as a block of
+the paragraph, between the text before and after it, with no title bar; a file
+card stands in until the drawing is ready, and when the heading or block is not
+there.
+
 Titles: a whole-note embed carries the note's name over it, a heading embed
 "Note > Heading", and a `#^id` block embed none (Obsidian shows a block embed
 bare). Of links, `[[#^id]]` shows "^id" (only a leading `#` is hidden, as
