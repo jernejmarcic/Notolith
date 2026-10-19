@@ -4665,7 +4665,10 @@ struct FrameLog {
     FrameLog()
     {
         const QString path = qEnvironmentVariable("NOTOLITH_FRAME_LOG");
-        if (path.isEmpty() || !file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+        if (path.isEmpty())
+            return;
+        file.setFileName(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
             return;
         file.write("# gap_ms paint_ms exposed_wxh viewport_wxh dpr\n");
         clock.start();
