@@ -2346,6 +2346,10 @@ Jernej 2026-10-19, asked whether to keep going once only this list was left:
 "Stop here". Agent work is done until he adds something.
 
 - [ ] Run `bench-here.sh` on shuttlepod-1 and runabout (results sync back).
+      Bundle refreshed to be87415 on 2026-10-19 (it was 2026-09-23's); the
+      bench target builds and runs at HEAD. On each machine, once Syncthing
+      has the new bundle: `sh ~/Documents/AI/sessions/2026-09-22_163000_noteappc-callouts-and-perf/bench-here.sh`
+      (fetches md4qt, MicroTeX, tinyxml2 from GitHub; installs nothing).
 - [ ] Share by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.
 - [ ] Hyprland pop-out windows: tiling/floating, real drag between windows,
