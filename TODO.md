@@ -2016,7 +2016,7 @@ Shared/<title>.md.
 - [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
-- [ ] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
+- [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
       there should be something called implicit imports, or implicit code
       ... something that is a part of every other codeblock. so that in
       every codeblock you dont need imports"). Frontmatter per-language
@@ -2048,7 +2048,7 @@ Shared/<title>.md.
       directly by a `> [!callout]` (no paragraph between) starts the callout
       8 px inside the fence ("block at source N starts 8 px inside the one
       before it" in test_demo), live preview and reading view. Lane fencegap.
-- [ ] Jernej: link [[Newer Features]] from demo/Welcome.md (his file has
+- [ ] Jernej: link [[Newer Features]] and [[Implicit Code]] from demo/Welcome.md (his file has
       uncommitted edits, so not done by an agent).
 - [ ] Jernej: demo/Code/Code Blocks.md:110 says "instead of wrapping mid-token";
       the line has spaces, so "instead of wrapping" (his file, his edit).
