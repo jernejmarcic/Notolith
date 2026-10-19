@@ -2013,7 +2013,7 @@ Shared/<title>.md.
       prelude (imports, a main wrapper) applied to every runnable block of
       that language in the note; error line numbers mapped back. Fable
       plan; build after lane/nomain merges (DirectRunner.cpp).
-- [ ] Demo notes for everything that has none (Jernej 2026-10-19: "Write
+- [x] Demo notes for everything that has none (Jernej 2026-10-19: "Write
       PUML, tikzjax, and any other new stuff we added text files please").
       Haiku sweep found none for: mermaid, plantuml, tikz, graphviz, fence
       `#|` options, run options/kernels/input()/completion/sandbox/output
@@ -2034,3 +2034,9 @@ Shared/<title>.md.
       2026-10-19: "there should be a list of filetypes in settings that are
       ignored by the sidebar"). Lane hidetypes: files.hiddenExtensions,
       rows hidden in the tree only (search, links, quick switcher unchanged).
+- [ ] Layout bug found by the demo notes: a fenced code block followed
+      directly by a `> [!callout]` (no paragraph between) starts the callout
+      8 px inside the fence ("block at source N starts 8 px inside the one
+      before it" in test_demo), live preview and reading view. Lane fencegap.
+- [ ] Jernej: link [[Newer Features]] from demo/Welcome.md (his file has
+      uncommitted edits, so not done by an agent).
