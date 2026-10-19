@@ -45,9 +45,6 @@ print("slide")
 ---
 print("this line of dashes is inside the code block, not a slide break")
 ```
-
-And a callout, which also stays whole:
-
 > [!tip] A callout
 > Stays on its slide with its title and its colour.
 

@@ -107,7 +107,7 @@ labelled "zorp"
 ## A very long line
 
 ```text
-this single line intentionally has no wrapping and keeps going for a while so the block gets a horizontal scrollbar instead of wrapping mid-token, which matters because wrapping inside a code block hides where a line actually ends and makes a diff impossible to read at a glance, so noteAppC should scroll this sideways rather than reflow it
+this single line intentionally has no wrapping and keeps going for a while so the block gets a horizontal scrollbar instead of wrapping, which matters because wrapping inside a code block hides where a line actually ends and makes a diff impossible to read at a glance, so noteAppC should scroll this sideways rather than reflow it
 ```
 
 ## Indented code (four spaces, not a fence)

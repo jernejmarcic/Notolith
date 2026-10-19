@@ -38,6 +38,7 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 
 ### Code and callouts
 - [[Code Blocks]] - languages, an unknown language, a long line, indented code.
+- [[Implicit Code]] - code a note's properties add to every runnable block of its language.
 - [[Callouts]] - all 13 built-in types and aliases, folding, nesting,
   titles, a custom type, noteAppC's own inline/`:::` styling.
 
@@ -78,6 +79,10 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 
 ### History
 - [[Note History]] - what to do to see git-backed note history and recovery.
+
+### Newer features
+- [[Newer Features]] - a map of the notes for what came after this vault: diagrams,
+  code, editor features, queries and embeds.
 
 ## Config exercised by this vault
 
