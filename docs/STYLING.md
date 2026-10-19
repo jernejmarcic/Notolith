@@ -310,6 +310,17 @@ the gap on the left being lit up."
   to new; the choice is `files.sortOrder`, per vault) and Collapse all.
   QFileSystemModel has no created-time column and does not keep folders first on
   a modified-time sort, so there is no created order.
+- **Hidden file types.** Settings > Files and links > "Hidden file types"
+  (`files.hiddenExtensions`, empty by default) lists extensions the tree leaves
+  out: `png, .tar.gz` - comma or space separated, case and a leading dot do not
+  matter, and a multi-part one such as `tar.gz` matches the end of the name.
+  Folders are never hidden. It is the file list only: search, links, the quick
+  switcher, the graph and embeds still see those files, and a hidden note opened
+  from search opens normally (revealing it in the tree quietly does nothing, as
+  there is no row). Rows are hidden with `QTreeView::setRowHidden` as
+  `QFileSystemModel` loads a folder, and every loaded folder is re-walked when
+  the setting changes, so it applies live; no proxy model sits between the tree
+  and the file model, and an empty list costs nothing.
 - **Renaming** with F2 or the context menu opens an inline editor in the row
   (no extension shown). It never writes to the model: the new name goes through
   the vault, so links, history, plugins and open tabs follow, exactly as with

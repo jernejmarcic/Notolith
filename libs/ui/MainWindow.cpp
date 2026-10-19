@@ -724,6 +724,15 @@ QWidget *MainWindow::buildSidebar()
             m_tree->setRootIndex(m_files->index(m_vault.root()));
     });
 
+    // Hidden file types: QFileSystemModel loads a folder in batches on a
+    // worker thread, so a row is hidden as it arrives. Nothing to do (and
+    // nothing walked) while the setting is empty.
+    connect(m_files, &QAbstractItemModel::rowsInserted, this,
+            [this](const QModelIndex &parent, int first, int last) {
+                if (!m_hiddenTypes.isEmpty())
+                    hideTypedRows(parent, first, last);
+            });
+
     auto *layout = new QVBoxLayout(m_sidebar);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -3653,6 +3662,7 @@ void MainWindow::applySettings()
                 m_tree->sortByColumn(column, order);
         }
     }
+    applyHiddenTypes();
     const Theme theme = themeFromSettings();
     const bool restyle = !m_themeApplied || !(theme == m_theme);
     m_theme = theme;
@@ -3688,6 +3698,38 @@ void MainWindow::applySettings()
         leaf->inlineTitle->setVisible(!leaf->notePath.isEmpty() && !leaf->view
                                       && m_settings.boolean(QStringLiteral("appearance.showInlineTitle")));
     }
+}
+
+void MainWindow::hideTypedRows(const QModelIndex &parent, int first, int last)
+{
+    for (int row = first; row <= last; ++row) {
+        const QModelIndex index = m_files->index(row, 0, parent);
+        if (m_files->isDir(index)) {
+            // Only folders already loaded have rows; the rest cost nothing.
+            if (m_files->rowCount(index) > 0)
+                hideTypedRows(index, 0, m_files->rowCount(index) - 1);
+            continue;
+        }
+        const QString name = m_files->fileName(index).toLower();
+        bool hide = false;
+        for (const QString &type : m_hiddenTypes)
+            hide = hide || name.endsWith(QLatin1Char('.') + type);
+        if (hide != m_tree->isRowHidden(row, parent))
+            m_tree->setRowHidden(row, parent, hide);
+    }
+}
+
+void MainWindow::applyHiddenTypes()
+{
+    const QStringList types = Settings::fileTypes(m_settings.value(QStringLiteral("files.hiddenExtensions")).toStringList());
+    if (types == m_hiddenTypes)
+        return;
+    m_hiddenTypes = types;
+    if (!m_vault.isValid())
+        return;
+    const QModelIndex root = m_files->index(m_vault.root());
+    if (const int rows = m_files->rowCount(root); rows > 0)
+        hideTypedRows(root, 0, rows - 1);
 }
 
 DailyNotes MainWindow::dailyNotes() const
@@ -5752,6 +5794,10 @@ void MainWindow::revealInTree(const QString &path)
         });
         return;
     }
+    // A file the sidebar is told to leave out is opened without a row to land
+    // on; revealing it quietly does nothing (it runs on every note opened).
+    if (m_tree->isRowHidden(index.row(), index.parent()))
+        return;
     for (QModelIndex parent = m_files->parent(index); parent.isValid();
         parent = m_files->parent(parent))
         m_tree->expand(parent);

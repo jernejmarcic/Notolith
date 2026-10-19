@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QSet>
 #include <QTextStream>
@@ -75,6 +76,7 @@ const QVariantMap &defaults()
         {QStringLiteral("encryption.unlockAtStartup"), false}, // false: asked when an encrypted note opens
         {QStringLiteral("encryption.autoLockMinutes"), 15},
         {QStringLiteral("files.sortOrder"), QStringLiteral("nameAsc")}, // nameAsc, nameDesc, modifiedDesc, modifiedAsc
+        {QStringLiteral("files.hiddenExtensions"), QStringList()}, // file types the sidebar leaves out; search and links still see them
         {QStringLiteral("files.confirmDelete"), true},
         {QStringLiteral("files.deletedFiles"), QStringLiteral("system")}, // system trash, local (the vault's .trash) or permanent
         {QStringLiteral("files.autosave"), true}, // Obsidian's way: typed is kept
@@ -455,6 +457,21 @@ QString Settings::themesDirectory()
 QString Settings::templatesDirectory()
 {
     return QDir(configDirectory()).filePath(QStringLiteral("templates"));
+}
+
+QStringList Settings::fileTypes(const QStringList &raw)
+{
+    static const QRegularExpression separators(QStringLiteral("[,;\\s]+"));
+    static const QRegularExpression leading(QStringLiteral("^[*.]+"));
+    QStringList out;
+    for (const QString &entry : raw) {
+        for (const QString &part : entry.split(separators, Qt::SkipEmptyParts)) {
+            const QString type = QString(part).remove(leading).toLower();
+            if (!type.isEmpty() && !out.contains(type))
+                out.append(type);
+        }
+    }
+    return out;
 }
 
 QStringList Settings::keys()
