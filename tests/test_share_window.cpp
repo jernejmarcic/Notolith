@@ -749,6 +749,56 @@ TEST_P(ShareWindowTest, StoppingFromTheDialogClearsTheBadgeAndTheMarker)
     EXPECT_FALSE(tabMarked(a, QStringLiteral("Note")));
 }
 
+namespace {
+
+/// Puts the keyboard in `side`'s editor: only the focused view's caret is the person's.
+void focusEditor(Side &side)
+{
+    side.window->show();
+    side.window->activateWindow();
+    QApplication::setActiveWindow(side.window.get());
+    side.editor()->setFocus();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return side.editor()->hasFocus(); }, 2000));
+}
+
+} // namespace
+
+TEST_P(ShareWindowTest, RemoteCaretFollowsTheOtherEditor)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    ASSERT_FALSE(share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n")).isEmpty());
+    focusEditor(b);
+    b.editor()->setCursorOffset(6);
+    ASSERT_TRUE(waitFor([&] { return a.editor()->remoteCarets().size() == 1 && a.editor()->remoteCarets()[0].head == 6; }));
+    EXPECT_FALSE(a.editor()->remoteCarets()[0].name.isEmpty());
+
+    a.typeAt(0, QStringLiteral(">> ")); // an edit before it moves it with its text
+    EXPECT_EQ(a.editor()->remoteCarets()[0].head, 9);
+    ASSERT_TRUE(waitFor([&] { return b.text() == QStringLiteral(">> hello world\n"); }));
+
+    b.window.reset(); // gone: the caret goes with it
+    ASSERT_TRUE(waitFor([&] { return a.editor()->remoteCarets().isEmpty(); }));
+}
+
+TEST_P(ShareWindowTest, ACaretReachesAMemberThroughTheOwner)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b")), c(QStringLiteral("c"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    QString error;
+    ASSERT_TRUE(c.window->joinShare(a.engine()->invite(id), &error)) << error.toStdString();
+    ASSERT_TRUE(waitFor([&] { return c.engine()->doc(id) && c.text() == QStringLiteral("hello world\n"); }));
+    ASSERT_FALSE(b.engine()->isConnected(c.engine()->publicKey())) << "b and c only know the owner";
+    focusEditor(c);
+    c.editor()->setCursorOffset(4);
+    ASSERT_TRUE(waitFor([&] {
+        for (const auto &caret : b.editor()->remoteCarets())
+            if (caret.head == 4)
+                return true;
+        return false;
+    }));
+}
+
 TEST_P(ShareWindowTest, StoppingStopsOnlyHere)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b"));

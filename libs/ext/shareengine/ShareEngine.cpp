@@ -114,6 +114,15 @@ struct ShareEngine::Share {
     QHash<QByteArray, quint64> lastSeq, nextSeq; ///< per peer, per connection
     QList<Awaiting> awaiting;
     Counters counters;
+    struct Seen {
+        qsizetype anchor = 0, head = 0;
+        quint64 counter = 0;
+        qint64 at = 0; ///< ms since epoch it arrived
+    };
+    QHash<QByteArray, Seen> carets; ///< by author
+    std::optional<std::pair<qsizetype, qsizetype>> myCaret;
+    quint64 caretCounter = 0;
+    bool caretDue = false;
     bool dirty = false;
     bool changedSinceExchange = false; ///< a remote update arrived since the last state-vector round
 
@@ -148,7 +157,13 @@ ShareEngine::ShareEngine(const QString &vaultRoot, Config config, QObject *paren
     m_persist.setInterval(2000);
     connect(&m_persist, &QTimer::timeout, this, &ShareEngine::saveDirty);
     m_resync.setInterval(m_config.resyncMs);
-    connect(&m_resync, &QTimer::timeout, this, [this] { exchangeStates(false); });
+    connect(&m_resync, &QTimer::timeout, this, [this] {
+        exchangeStates(false);
+        sendCarets(true); // a heartbeat: carets older than a minute are dropped
+    });
+    m_presence.setSingleShot(true);
+    m_presence.setInterval(100);
+    connect(&m_presence, &QTimer::timeout, this, [this] { sendCarets(false); });
     m_settle.setSingleShot(true);
     m_settle.setInterval(m_config.settleMs);
     connect(&m_settle, &QTimer::timeout, this, [this] { exchangeStates(true); });
@@ -159,6 +174,7 @@ ShareEngine::~ShareEngine()
     m_persist.stop();
     m_resync.stop();
     m_settle.stop();
+    m_presence.stop();
     for (const auto &share : std::as_const(m_shares))
         saveShare(*share);
     m_node.reset(); // joins the link's threads: no callback reaches this object after it
@@ -775,7 +791,9 @@ bool ShareEngine::sendFrame(Share &share, const QByteArray &to, FrameKind kind, 
     const quint64 seq = ++share.nextSeq[to];
     const QByteArray envelope = ShareFrame::seal(*m_me, share.record.shareID, share.record.epoch, seq, share.record.key,
                                                  kind == FrameKind::StateVector ? ShareFrame::Kind::StateVector
-                                                 : kind == FrameKind::Diff ? ShareFrame::Kind::Diff : ShareFrame::Kind::Update,
+                                                 : kind == FrameKind::Diff     ? ShareFrame::Kind::Diff
+                                                 : kind == FrameKind::Presence ? ShareFrame::Kind::Presence
+                                                                               : ShareFrame::Kind::Update,
                                                  data);
     if (envelope.size() > kMaxBytes) {
         emit failed(share.record.shareID, tr("A change is too large to send."));
@@ -862,7 +880,86 @@ void ShareEngine::peerDown(const QByteArray &key)
         share.nextSeq.remove(key);
         if (share.member(key))
             emit peersChanged(share.record.shareID);
+        if (share.carets.remove(key))
+            emit presenceChanged(share.record.shareID);
     }
+}
+
+void ShareEngine::setCaret(const QByteArray &shareID, qsizetype anchor, qsizetype head)
+{
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd())
+        return;
+    Share &share = **it;
+    if (share.myCaret && share.myCaret->first == anchor && share.myCaret->second == head)
+        return;
+    share.myCaret = std::pair(anchor, head);
+    share.caretDue = true;
+    if (!m_presence.isActive())
+        m_presence.start();
+}
+
+void ShareEngine::sendCarets(bool all)
+{
+    if (!m_me)
+        return;
+    for (const auto &sharePtr : std::as_const(m_shares)) {
+        Share &share = *sharePtr;
+        if (all) {
+            // Carets nobody has refreshed for a minute: their device is gone without a word.
+            const qint64 stale = QDateTime::currentMSecsSinceEpoch() - 60000;
+            const qsizetype before = share.carets.size();
+            share.carets.removeIf([stale](const auto &entry) { return entry.value().at < stale; });
+            if (share.carets.size() != before)
+                emit presenceChanged(share.record.shareID);
+        }
+        if (!share.myCaret || (!all && !share.caretDue))
+            continue;
+        share.caretDue = false;
+        notolith::share::Presence presence;
+        presence.set_author(toS(m_me->publicKey()));
+        presence.set_counter(++share.caretCounter);
+        presence.set_anchor(quint32(qMax<qsizetype>(0, share.myCaret->first)));
+        presence.set_head(quint32(qMax<qsizetype>(0, share.myCaret->second)));
+        const QByteArray bytes = toQ(presence.SerializeAsString());
+        for (const Share::Member &m : std::as_const(share.members))
+            if (m.key != m_me->publicKey() && m_up.contains(m.key))
+                sendFrame(share, m.key, FrameKind::Presence, bytes);
+    }
+}
+
+void ShareEngine::onPresence(Share &share, const QByteArray &from, const QByteArray &bytes)
+{
+    notolith::share::Presence presence;
+    if (!presence.ParseFromArray(bytes.constData(), int(bytes.size())))
+        return drop(&share, QStringLiteral("presence does not decode"), from);
+    const QByteArray author = toQ(presence.author());
+    // The author is whoever it says, among the members: carets are cosmetic,
+    // and a member can draw its own caret anywhere anyway.
+    if (author == m_me->publicKey() || !share.member(author))
+        return;
+    Share::Seen &seen = share.carets[author];
+    if (presence.counter() <= seen.counter)
+        return; // a copy that came round another way, or a late one
+    seen = {qsizetype(presence.anchor()), qsizetype(presence.head()), presence.counter(),
+            QDateTime::currentMSecsSinceEpoch()};
+    // Members need not be connected to each other: pass it on, once.
+    for (const Share::Member &m : std::as_const(share.members))
+        if (m.key != m_me->publicKey() && m.key != from && m.key != author && m_up.contains(m.key))
+            sendFrame(share, m.key, FrameKind::Presence, bytes);
+    emit presenceChanged(share.record.shareID);
+}
+
+QList<ShareEngine::Caret> ShareEngine::carets(const QByteArray &shareID) const
+{
+    QList<Caret> out;
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd())
+        return out;
+    for (auto entry = (*it)->carets.constBegin(); entry != (*it)->carets.constEnd(); ++entry)
+        if (const Share::Member *m = (*it)->member(entry.key()))
+            out.append({entry.key(), m->name, entry->anchor, entry->head});
+    return out;
 }
 
 void ShareEngine::handleMessage(const QByteArray &key, const QByteArray &bytes)
@@ -1068,6 +1165,8 @@ void ShareEngine::onFrame(const QByteArray &key, const Frame &frame)
     share.lastSeq[key] = opened->seq;
     ++share.counters.accepted;
     ++m_counters.accepted;
+    if (opened->kind == ShareFrame::Kind::Presence)
+        return onPresence(share, key, opened->data);
     if (opened->kind == ShareFrame::Kind::StateVector) {
         const QByteArray diff = share.doc->diffSince(opened->data);
         if (!diff.isEmpty())

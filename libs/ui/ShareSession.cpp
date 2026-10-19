@@ -2,6 +2,8 @@
 
 #include <algorithm>
 
+#include <QColor>
+
 #include "MarkdownEditor.h"
 #include "ShareEngine.h"
 
@@ -17,6 +19,23 @@ ShareSession::ShareSession(ShareEngine *engine, QByteArray shareID, QObject *par
     , m_id(std::move(shareID))
 {
     connect(engine, &ShareEngine::remoteEdits, this, &ShareSession::onRemoteEdits);
+    connect(engine, &ShareEngine::presenceChanged, this, [this](const QByteArray &id) {
+        if (id == m_id)
+            showCarets();
+    });
+}
+
+void ShareSession::showCarets()
+{
+    QList<MarkdownEditor::RemoteCaret> carets;
+    for (const ShareEngine::Caret &caret : m_engine->carets(m_id)) {
+        // One colour per device, the same on every screen that shows it.
+        const int hue = int(qHash(caret.device) % 360);
+        carets.append({caret.name, QColor::fromHsv(hue, 170, 230), caret.anchor, caret.head});
+    }
+    for (MarkdownEditor *view : std::as_const(m_views))
+        if (view)
+            view->setRemoteCarets(carets);
 }
 
 QString ShareSession::text() const
@@ -72,12 +91,17 @@ bool ShareSession::attach(MarkdownEditor *view, const QString &diskText)
             [this, view](qsizetype at, qsizetype removed, const QString &inserted) {
                 onLocalEdit(view, at, removed, inserted);
             });
+    connect(view, &MarkdownEditor::cursorMoved, this, [this, view](qsizetype head) {
+        if (view->hasFocus())
+            m_engine->setCaret(m_id, view->anchorOffset(), head);
+    });
     const QString now = doc->text();
     if (view->noteText() != now) {
         const MarkdownEditor::Hunk hunk = MarkdownEditor::hunkBetween(view->noteText(), now);
         view->applyExternalEdit(hunk.at, hunk.removed, hunk.inserted);
         emit remoteApplied();
     }
+    showCarets();
     return folded;
 }
 
@@ -87,8 +111,10 @@ void ShareSession::retain(const QList<MarkdownEditor *> &keep)
         MarkdownEditor *view = m_views.at(i);
         if (view && keep.contains(view))
             continue;
-        if (view)
+        if (view) {
             disconnect(view, nullptr, this, nullptr);
+            view->setRemoteCarets({});
+        }
         m_views.removeAt(i);
     }
 }

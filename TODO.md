@@ -2066,7 +2066,11 @@ Shared/<title>.md.
       rlimits) - the one renderer that does not refuse, and a shared note's
       fence reaches it as it renders. Decide: refuse for shared notes, or
       keep (mmdr is a Rust parser, no code execution). Low.
-- [ ] Lane P: remote carets (optional)
+- [x] Lane P: remote carets (optional). Presence frames (proto Presence,
+      relayed with a per-author counter), ShareEngine::setCaret/carets,
+      MarkdownEditor::setRemoteCarets (shift with edits, bar + name tag),
+      ShareSession wiring. Tests RemoteCaretFollowsTheOtherEditor,
+      ACaretReachesAMemberThroughTheOwner. Left: tinting a remote selection.
 - [ ] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
       there should be something called implicit imports, or implicit code

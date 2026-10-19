@@ -4655,6 +4655,7 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
     paintBlocks(painter, verticalScrollBar()->value(), exposedTop, exposedBottom);
     paintEditHover(painter);
     paintTableChrome(painter);
+    paintRemoteCarets(painter);
 
     d->m_caretPainted = QRect();
     if (hasFocus() && d->m_cursorOn && d->m_mode != Mode::Reading) {
@@ -4672,6 +4673,53 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
         }
     }
     paintSelectionHandles(painter);
+}
+
+qsizetype MarkdownEditor::anchorOffset() const
+{
+    return d->m_anchor;
+}
+
+void MarkdownEditor::setRemoteCarets(const QList<RemoteCaret> &carets)
+{
+    if (carets.isEmpty() && d->m_remoteCarets.isEmpty())
+        return;
+    d->m_remoteCarets = carets;
+    viewport()->update();
+}
+
+QList<MarkdownEditor::RemoteCaret> MarkdownEditor::remoteCarets() const
+{
+    return d->m_remoteCarets;
+}
+
+// ponytail: the caret and a name tag; another person's selection is not tinted.
+void MarkdownEditor::paintRemoteCarets(QPainter &painter) const
+{
+    if (d->m_remoteCarets.isEmpty() || d->m_mode == Mode::Reading)
+        return;
+    QFont small = font();
+    small.setPointSizeF(small.pointSizeF() * 0.75);
+    const QFontMetricsF metrics(small);
+    painter.save();
+    painter.setFont(small);
+    for (const RemoteCaret &caret : d->m_remoteCarets) {
+        const qsizetype head = qBound<qsizetype>(0, caret.head, d->m_text.size());
+        qreal height = 0;
+        const QPointF point = pointFor(head, &height);
+        if (point.isNull() && head != 0)
+            continue; // folded away, or not laid out
+        if (height <= 0)
+            height = QFontMetricsF(font()).height();
+        painter.setPen(QPen(caret.color, 2));
+        painter.drawLine(point, point + QPointF(0, height));
+        const QRectF tag(point.x(), point.y() - metrics.height(), metrics.horizontalAdvance(caret.name) + 6,
+                         metrics.height());
+        painter.fillRect(tag, caret.color);
+        painter.setPen(caret.color.lightnessF() > 0.6 ? Qt::black : Qt::white);
+        painter.drawText(tag, Qt::AlignCenter, caret.name);
+    }
+    painter.restore();
 }
 
 QPointF MarkdownEditor::cursorPoint() const
@@ -5166,6 +5214,14 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
 {
     d->m_text.remove(at, removed);
     d->m_text.insert(at, inserted);
+    for (RemoteCaret &caret : d->m_remoteCarets) { // they follow their text, as vim's marks do
+        for (qsizetype *offset : {&caret.anchor, &caret.head}) {
+            if (*offset >= at + removed)
+                *offset += inserted.size() - removed;
+            else if (*offset > at)
+                *offset = at + inserted.size();
+        }
+    }
     if (d->m_vim.enabled && !d->m_vim.marks.isEmpty()) { // vim's marks follow their text
         for (qsizetype &mark : d->m_vim.marks) {
             if (mark >= at + removed)

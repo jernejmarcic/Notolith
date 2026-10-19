@@ -144,6 +144,18 @@ public:
     static QString fingerprintOf(const QByteArray &device);
     bool isConnected(const QByteArray &device) const;
 
+    /// Where this device's caret is in the share's text (UTF-16 offsets).
+    /// Sent to the others at most ten times a second, and again with every
+    /// resync so it does not expire; nothing of it is stored.
+    void setCaret(const QByteArray &shareID, qsizetype anchor, qsizetype head);
+    struct Caret {
+        QByteArray device;
+        QString name;
+        qsizetype anchor = 0, head = 0;
+    };
+    /// The other members' carets, as they last sent them.
+    QList<Caret> carets(const QByteArray &shareID) const;
+
     struct Counters {
         int dropped = 0;       ///< messages refused: malformed, wrong sender, replayed, tampered...
         int accepted = 0;      ///< frames that passed every check
@@ -181,6 +193,8 @@ signals:
     void joined(const QByteArray &shareID, const QString &title);
     void membersChanged(const QByteArray &shareID);
     void peersChanged(const QByteArray &shareID);
+    /// A member's caret moved, arrived, or went (they left, or said nothing for a minute).
+    void presenceChanged(const QByteArray &shareID);
     void failed(const QByteArray &shareID, const QString &message);
 
 private:
@@ -199,7 +213,7 @@ private:
     /// `onSyncChannel`: the channel Frames travel on, so a Rekey or a Welcome
     /// stays in order with the Frames around it; the rest goes on ctl.
     bool sendTo(const QByteArray &key, bool onSyncChannel, const QByteArray &envelope);
-    enum class FrameKind { Update, StateVector, Diff };
+    enum class FrameKind { Update, StateVector, Diff, Presence };
     bool sendFrame(Share &share, const QByteArray &to, FrameKind kind, const QByteArray &data);
     void sendJoin(const PendingJoin &join);
     void sendWelcome(Share &share, const QByteArray &joiner);
@@ -230,6 +244,9 @@ private:
     QTimer m_persist;
     QTimer m_resync;  ///< repeating
     QTimer m_settle;  ///< single shot, restarted by every change that comes in
+    QTimer m_presence; ///< single shot: this device's carets go out when it fires
+    void sendCarets(bool all);
+    void onPresence(Share &share, const QByteArray &from, const QByteArray &bytes);
 };
 
 } // namespace noteAppC

@@ -82,7 +82,18 @@ message Payload {
     bytes update = 1;
     bytes state_vector = 2;
     bytes diff = 3; // an update that answers a state vector (it starts no further exchange)
+    bytes presence = 4; // a serialized Presence
   }
+}
+
+// Where a member's caret is, in UTF-16 offsets of the text as its author had
+// it. Members pass it on like an update; `counter` rises with every one an
+// author sends, so a copy arriving twice, or late, is ignored.
+message Presence {
+  bytes author = 1;
+  uint64 counter = 2;
+  uint32 anchor = 3;
+  uint32 head = 4;
 }
 
 message Envelope {

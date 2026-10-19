@@ -824,6 +824,19 @@ public:
     /// The caret's rectangle, viewport coordinates; empty when not drawn. For the tests.
     QRectF caretRectNow() const { return caretRect(); }
 
+    /// The other end of the selection; the caret's offset when nothing is selected.
+    qsizetype anchorOffset() const;
+    /// Other people's carets in a shared note (docs/SHARE.md): a coloured bar
+    /// with their name over it. They move with every edit made here, until
+    /// the next set replaces them; nothing else reads them.
+    struct RemoteCaret {
+        QString name;
+        QColor color;
+        qsizetype anchor = 0, head = 0;
+    };
+    void setRemoteCarets(const QList<RemoteCaret> &carets);
+    QList<RemoteCaret> remoteCarets() const;
+
     /// Closes brackets and quotes as you type and wraps a selection instead of
     /// replacing it. Obsidian's `autoPairBrackets` and `autoPairMarkdown` as
     /// one switch, on by default the way Obsidian ships them.
@@ -1921,6 +1934,7 @@ private:
     QPointF pointFor(qsizetype offset, qreal *height = nullptr) const;
     /// The caret's rectangle in viewport coordinates, empty when not drawn.
     QRectF caretRect() const;
+    void paintRemoteCarets(QPainter &painter) const;
     // --- touch, TouchInput.cpp -------------------------------------------
     /// `rect` grown by `mouseSlop`, or by a finger's worth when the press
     /// being handled came from a touchscreen: task boxes, fold arrows,

@@ -95,6 +95,8 @@ QByteArray seal(const ShareIdentity &me, const QByteArray &shareID, quint32 epoc
         payload.set_update(toS(data));
     else if (kind == Kind::Diff)
         payload.set_diff(toS(data));
+    else if (kind == Kind::Presence)
+        payload.set_presence(toS(data));
     else
         payload.set_state_vector(toS(data));
     const QByteArray sender = me.publicKey();
@@ -160,6 +162,10 @@ std::optional<Opened> open(const Frame &frame, const QByteArray &shareKey, const
     case Payload::kUpdate:
         opened.kind = Kind::Update;
         opened.data = toQ(payload.update());
+        break;
+    case Payload::kPresence:
+        opened.kind = Kind::Presence;
+        opened.data = toQ(payload.presence());
         break;
     case Payload::kDiff:
         opened.kind = Kind::Diff;

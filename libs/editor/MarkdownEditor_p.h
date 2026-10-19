@@ -927,6 +927,7 @@ struct MarkdownEditor::Private {
     mutable qreal m_blockSpacing = 0; ///< memoised, cleared with the theme
     qsizetype m_cursor = 0;
     qsizetype m_anchor = 0;
+    QList<MarkdownEditor::RemoteCaret> m_remoteCarets;
     qsizetype m_activeBlock = -1;
     Range m_caretCell{-1, -1}; ///< the table cell the caret was last in, to relay out on leaving it
     bool m_alignTables = true;

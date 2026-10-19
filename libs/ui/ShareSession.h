@@ -73,6 +73,8 @@ private:
     /// Makes every view hold the document's text.
     void followDocument();
     void send(const QByteArray &update);
+    /// The other members' carets, in every view.
+    void showCarets();
 
     ShareEngine *m_engine;
     QByteArray m_id;
