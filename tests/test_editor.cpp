@@ -2317,6 +2317,8 @@ TEST(FoldTest, TheFoldCommandsFollowTheFoldingSettings)
     editor->runCommand(QStringLiteral("editor:fold-all"));
     EXPECT_FALSE(editor->isFoldedAt(0));
     EXPECT_TRUE(editor->isFoldedAt(note.indexOf(QLatin1String("- p"))));
+    editor->setFolding(true, true);
+    EXPECT_FALSE(editor->isFoldedAt(0)) << "heading folding was off: nothing was written for it";
     editor->setFolding(true, false);
     editor->runCommand(QStringLiteral("editor:unfold-all"));
     editor->setFolding(true, true);
