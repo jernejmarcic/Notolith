@@ -16,6 +16,7 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QDirIterator>
+#include <QDialog>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -264,6 +265,31 @@ QImage paintedFrame(QWidget *widget)
 }
 
 // --- the five measurements ------------------------------------------------
+
+/// Settings, opened the first time in a window: its page is built with the
+/// window, so this is the polish, layout and first paint of a new window.
+Timing benchSettingsFirstOpen(const QString &vaultPath, int runs)
+{
+    std::vector<double> samples;
+    for (int i = 0; i < runs; ++i) {
+        auto window = std::make_unique<MainWindow>();
+        window->openVault(vaultPath);
+        window->show();
+        for (int j = 0; j < 10; ++j)
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        auto *settings = window->findChild<QDialog *>(QStringLiteral("settingsWindow"));
+        if (!settings)
+            break;
+        QElapsedTimer clock;
+        clock.start();
+        window->openSettings();
+        QCoreApplication::processEvents();
+        (void)paintedFrame(settings);
+        samples.push_back(double(clock.nsecsElapsed()) / 1e6);
+        window->closeSettings();
+    }
+    return reduce(QStringLiteral("Settings first open"), QStringLiteral("fresh window"), samples);
+}
 
 /// 1. Cold start: construct MainWindow on a vault, get one real painted
 /// frame. A fresh window every run, the way a fresh process would be.
@@ -1728,6 +1754,7 @@ int main(int argc, char *argv[])
         if (phase == QLatin1String("start")) // in a full run the memory phase opened the first window
             timings << benchFirstWindow(vaultPath);
         timings << benchColdStart(vaultPath, 7);
+        timings << benchSettingsFirstOpen(vaultPath, 5);
         if (const QString note = firstNoteIn(vaultPath); !note.isEmpty())
             timings << benchPopout(vaultPath, note, 9);
         if (args.isEmpty()) // a vault given on the command line keeps its cache

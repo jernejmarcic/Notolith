@@ -8,6 +8,7 @@
 #include "MediaPlayback.h"
 #include "ObsidianSyntax.h"
 #include "PdfPage.h"
+#include "PopupStyle.h"
 #include "Vault.h"
 
 #include <QAbstractItemView>
@@ -206,27 +207,6 @@ qreal headingScale(int level)
     }
 }
 
-
-/// Touch: a drag scrolls with momentum instead of selecting, and a held
-/// finger selects a word. Only where a touchscreen exists, so a desktop
-/// with a mouse keeps its drag-to-select untouched. Again on every new
-/// viewport: the grab belongs to the widget, not the editor.
-void grabTouchScroll(QWidget *viewport)
-{
-    const QList<const QInputDevice *> devices = QInputDevice::devices();
-    if (std::none_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
-            return device->type() == QInputDevice::DeviceType::TouchScreen;
-        }))
-        return;
-    QScroller::grabGesture(viewport, QScroller::TouchGesture);
-    // Qt waits for 5 mm of travel before the page moves at all, which reads
-    // as the page sticking under the finger at the start of every drag.
-    QScroller *scroller = QScroller::scroller(viewport);
-    QScrollerProperties properties = scroller->scrollerProperties();
-    properties.setScrollMetric(QScrollerProperties::DragStartDistance, 0.002);
-    scroller->setScrollerProperties(properties);
-}
-
 } // namespace
 
 MarkdownEditor::MarkdownEditor(QWidget *parent)
@@ -246,7 +226,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     watchStyleFiles();
     setKeyBindings({}); // the built-in keys, until the window hands over its own
 
-    grabTouchScroll(viewport());
+    grabTouchScroll(viewport()); // a drag scrolls; a held finger selects a word
     d->m_longPress.setSingleShot(true);
     d->m_longPress.setInterval(500);
     d->m_pdfZoomSettle.setSingleShot(true);

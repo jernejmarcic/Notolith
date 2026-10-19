@@ -74,7 +74,10 @@ SettingsPage::SettingsPage(QWidget *parent)
     m_pages = new QStackedWidget(this);
     m_pages->setObjectName(QStringLiteral("settingsPages"));
 
-    connect(m_nav, &QListWidget::currentRowChanged, m_pages, &QStackedWidget::setCurrentIndex);
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row) {
+        ensurePage(row);
+        m_pages->setCurrentIndex(row);
+    });
 
     auto *layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -116,24 +119,57 @@ void SettingsPage::rebuild()
     while (m_pages->count() > 0) {
         QWidget *page = m_pages->widget(0);
         m_pages->removeWidget(page);
+        // Out of the tree now, not when the deletion comes round: until then
+        // a lookup by name found the old row's widgets before the new ones.
+        page->setParent(nullptr);
         page->deleteLater();
     }
+    m_built.clear();
     if (!m_settings)
         return;
 
-    m_pages->addWidget(buildAppearancePage());
-    m_pages->addWidget(buildEditorPage());
-    m_pages->addWidget(buildFilesPage());
-    m_pages->addWidget(buildCorePluginsPage());
-#ifdef NOTEAPPC_HAVE_PLUGINS
-    m_pages->addWidget(buildCommunityPluginsPage());
-#endif
-    m_pages->addWidget(buildHotkeysPage());
-    m_pages->addWidget(buildAboutPage());
-    m_nav->setCurrentRow(row < m_pages->count() ? row : 0);
-    refreshRowDecorations();
+    // The sheet first: rows made after it are styled once, as they are
+    // polished, instead of being made and then restyled.
     if (m_theme)
-        applyTheme(*m_theme); // the rows just made were not there for the last one
+        applyTheme(*m_theme);
+    for (int i = 0; i < m_nav->count(); ++i) {
+        m_pages->addWidget(new QWidget); // a stand-in until the page is shown
+        m_built.append(false);
+    }
+    const int current = row < m_pages->count() ? row : 0;
+    ensurePage(current);
+    const QSignalBlocker quiet(m_nav); // ensurePage() already did the work
+    m_nav->setCurrentRow(current);
+    m_pages->setCurrentIndex(current);
+}
+
+void SettingsPage::ensurePage(int index)
+{
+    if (index < 0 || index >= m_built.size() || m_built[index])
+        return;
+    using Builder = QWidget *(SettingsPage::*)();
+    static const QList<Builder> builders = {
+        &SettingsPage::buildAppearancePage,
+        &SettingsPage::buildEditorPage,
+        &SettingsPage::buildFilesPage,
+        &SettingsPage::buildCorePluginsPage,
+#ifdef NOTEAPPC_HAVE_PLUGINS
+        &SettingsPage::buildCommunityPluginsPage,
+#endif
+        &SettingsPage::buildHotkeysPage,
+        &SettingsPage::buildAboutPage,
+    };
+    m_built[index] = true;
+    QWidget *page = (this->*builders.value(index))();
+    QWidget *standIn = m_pages->widget(index);
+    m_pages->insertWidget(index, page);
+    m_pages->removeWidget(standIn);
+    standIn->deleteLater();
+    if (m_theme) {
+        for (ToggleSwitch *toggle : page->findChildren<ToggleSwitch *>())
+            toggle->setTheme(*m_theme);
+    }
+    refreshRowDecorations();
 }
 
 void SettingsPage::keyPressEvent(QKeyEvent *event)
@@ -375,7 +411,7 @@ void SettingsPage::addDelimiterRow(QVBoxLayout *into, const QString &openKey, co
     pause->setInterval(400);
     const auto commit = [=, this] {
         pause->stop();
-        if (!valid() || (openEdit->text() == m_settings->text(openKey) && closeEdit->text() == m_settings->text(closeKey)))
+            if (!valid() || (openEdit->text() == m_settings->text(openKey) && closeEdit->text() == m_settings->text(closeKey)))
             return;
         m_settings->setValue(openKey, openEdit->text());
         m_settings->setValue(closeKey, closeEdit->text());
@@ -1258,7 +1294,8 @@ QLabel#settingsRowError { color: %9; font-size: 12px; }
                 theme.value(QStringLiteral("--text-normal")),
                 theme.value(QStringLiteral("--interactive-accent")))
             .arg(theme.value(QStringLiteral("--text-error")));
-    setStyleSheet(sheet);
+    if (sheet != styleSheet()) // the same sheet again would restyle every row
+        setStyleSheet(sheet);
 }
 
 } // namespace noteAppC

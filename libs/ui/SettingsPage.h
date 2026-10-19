@@ -71,6 +71,10 @@ protected:
 
 private:
     void rebuild();
+    /// Builds page `index` the first time it is shown: building all seven
+    /// on open took 250 ms on a desktop and seconds on a tablet.
+    void ensurePage(int index);
+    QList<bool> m_built;
     bool m_needsRebuild = true;
     std::optional<Theme> m_theme; ///< the last applied, for rows a rebuild makes
 

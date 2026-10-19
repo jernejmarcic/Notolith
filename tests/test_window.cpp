@@ -131,6 +131,24 @@ using noteAppC::Settings;
 
 namespace {
 
+/// Settings builds a page when it is first shown: look on each in turn, the
+/// way a person clicks through the nav.
+template <typename T>
+T *settingsWidget(QWidget &window, const QString &name)
+{
+    if (T *found = window.findChild<T *>(name))
+        return found;
+    auto *nav = window.findChild<QListWidget *>(QStringLiteral("settingsNav"));
+    if (!nav)
+        return nullptr;
+    for (int row = 0; row < nav->count(); ++row) {
+        nav->setCurrentRow(row);
+        if (T *found = window.findChild<T *>(name))
+            return found;
+    }
+    return nullptr;
+}
+
 QByteArray readAll(const QString &path)
 {
     QFile file(path);
@@ -983,8 +1001,7 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
         command(window, "app:open-settings")->trigger();
         noteAppC::ToggleSwitch *toggle = nullptr;
         ASSERT_TRUE(QTest::qWaitFor([&] {
-            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
-                        QStringLiteral("settingsToggle_plugins.popoutWindows")));
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.popoutWindows")));
         }));
         toggle->click();
 
@@ -1142,7 +1159,7 @@ TEST_F(WindowTest, SwitchingAFeatureOffClosesTheWindowOfItsDetachedPane)
         command(window, "app:open-settings")->trigger();
         noteAppC::ToggleSwitch *toggle = nullptr;
         ASSERT_TRUE(QTest::qWaitFor([&] {
-            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.backlink")));
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.backlink")));
         }));
         toggle->click(); // applyFeatures() deletes the pane; its window has nothing to show
 
@@ -1453,8 +1470,7 @@ TEST_F(WindowTest, DropsIgnoreForeignMimeAndAreOffWhenTheFeatureIs)
         command(window, "app:open-settings")->trigger();
         noteAppC::ToggleSwitch *toggle = nullptr;
         ASSERT_TRUE(QTest::qWaitFor([&] {
-            return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
-                        QStringLiteral("settingsToggle_plugins.popoutWindows")));
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.popoutWindows")));
         }));
         toggle->click();
         EXPECT_FALSE(window.acceptDrops());
@@ -1681,8 +1697,8 @@ TEST_F(WindowTest, TheSnapSwitchesReachAnOpenCanvasAsTheyAreFlipped)
     noteAppC::ToggleSwitch *objects = nullptr;
     noteAppC::ToggleSwitch *grid = nullptr;
     ASSERT_TRUE(QTest::qWaitFor([&] {
-        objects = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_canvas.snapToObjects"));
-        grid = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_canvas.snapToGrid"));
+        objects = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_canvas.snapToObjects"));
+        grid = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_canvas.snapToGrid"));
         return objects && grid;
     }));
     objects->click();
@@ -3242,7 +3258,7 @@ TEST_F(WindowTest, EditingTheSelectedThemeFileRestylesLive)
     ASSERT_NE(settingsButton, nullptr);
     settingsButton->click();
 
-    auto *combo = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+    auto *combo = settingsWidget<QComboBox>(window, QStringLiteral("settingsSchemeCombo"));
     ASSERT_NE(combo, nullptr);
     const int index = combo->findData(schemePath);
     ASSERT_GE(index, 0) << "Live.json was not offered - themesDirectory() and "
@@ -3295,7 +3311,7 @@ TEST_F(WindowTest, AddingAThemeFileRefreshesTheOpenSettingsPagesList)
     ASSERT_NE(settingsButton, nullptr);
     settingsButton->click();
 
-    auto *combo = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+    auto *combo = settingsWidget<QComboBox>(window, QStringLiteral("settingsSchemeCombo"));
     ASSERT_NE(combo, nullptr);
     const int before = combo->count();
 
@@ -3313,7 +3329,7 @@ TEST_F(WindowTest, AddingAThemeFileRefreshesTheOpenSettingsPagesList)
     QComboBox *refreshed = nullptr;
     while (timer.elapsed() < 5000) {
         QCoreApplication::processEvents();
-        refreshed = window.findChild<QComboBox *>(QStringLiteral("settingsSchemeCombo"));
+        refreshed = settingsWidget<QComboBox>(window, QStringLiteral("settingsSchemeCombo"));
         if (refreshed && refreshed->count() > before)
             break;
         QTest::qWait(10);
@@ -4390,7 +4406,7 @@ TEST_F(WindowTest, AFeatureSwitchedOffIsNotBuiltAndItsCommandsStop)
     const auto toggle = [&window](const char *key) {
         noteAppC::ToggleSwitch *found = nullptr;
         EXPECT_TRUE(QTest::qWaitFor([&] {
-            return (found = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_") + QLatin1String(key)));
+            return (found = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_") + QLatin1String(key)));
         }));
         return found;
     };
@@ -4449,8 +4465,7 @@ TEST_F(WindowTest, VimModeFollowsItsSettingShowsItsModeAndSaves)
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
     noteAppC::ToggleSwitch *toggle = nullptr;
     ASSERT_TRUE(QTest::qWaitFor([&] {
-        return (toggle = window.findChild<noteAppC::ToggleSwitch *>(
-                    QStringLiteral("settingsToggle_editor.vimMode")));
+        return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_editor.vimMode")));
     }));
     toggle->click();
     EXPECT_TRUE(editor->vimMode());
@@ -4701,7 +4716,7 @@ TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
     noteAppC::ToggleSwitch *wordCount = nullptr;
     ASSERT_TRUE(QTest::qWaitFor([&] {
-        return (wordCount = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.wordCount")));
+        return (wordCount = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.wordCount")));
     }));
     wordCount->click();
     wordCount->click();
@@ -4782,7 +4797,7 @@ TEST_F(WindowTest, LookUpIsAbsentWhenTheFeatureIsOff)
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
     noteAppC::ToggleSwitch *lookup = nullptr;
     ASSERT_TRUE(QTest::qWaitFor([&] {
-        return (lookup = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_plugins.wordLookup")));
+        return (lookup = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.wordLookup")));
     }));
     lookup->click();
     const auto menu = window.editor()->contextMenuAt(1);
@@ -6414,7 +6429,7 @@ noteAppC::ToggleSwitch *settingsToggle(MainWindow &window, const char *key)
 {
     noteAppC::ToggleSwitch *found = nullptr;
     EXPECT_TRUE(QTest::qWaitFor([&] {
-        return (found = window.findChild<noteAppC::ToggleSwitch *>(QStringLiteral("settingsToggle_") + QLatin1String(key)));
+        return (found = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_") + QLatin1String(key)));
     }));
     return found;
 }
@@ -6495,7 +6510,7 @@ TEST_F(WindowTest, HiddenFileTypesLeaveTheSidebarAndComeBackWithoutReopeningTheV
     // Case and a leading dot do not matter, and "tar.gz" matches the end of the name.
     window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
     QLineEdit *edit = nullptr;
-    WAIT_TRUE((edit = window.findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_files.hiddenExtensions"))), 2000);
+    WAIT_TRUE((edit = settingsWidget<QLineEdit>(window, QStringLiteral("settingsLineEdit_files.hiddenExtensions"))), 2000);
     QTest::keyClicks(edit, QStringLiteral("PNG, .tar.gz"));
     window.closeSettings();
     EXPECT_EQ(visibleRows(tree, tree->rootIndex()),
@@ -6731,7 +6746,7 @@ TEST_F(WindowTest, ChangingTheDelimitersRefreshesThePaneAndTheCount)
     const auto type = [&window](const char *key, const QString &text) {
         QLineEdit *edit = nullptr;
         EXPECT_TRUE(QTest::qWaitFor([&] {
-            return (edit = window.findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_") + QLatin1String(key)));
+            return (edit = settingsWidget<QLineEdit>(window, QStringLiteral("settingsLineEdit_") + QLatin1String(key)));
         }));
         QTest::keyClick(edit, Qt::Key_A, Qt::ControlModifier);
         QTest::keyClicks(edit, text);
@@ -7580,7 +7595,7 @@ TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
     const auto swatch = [&window](const char *key) {
         QToolButton *found = nullptr;
         EXPECT_TRUE(QTest::qWaitFor([&] {
-            return (found = window.findChild<QToolButton *>(QStringLiteral("settingsColour_") + QLatin1String(key)));
+            return (found = settingsWidget<QToolButton>(window, QStringLiteral("settingsColour_") + QLatin1String(key)));
         }));
         return found;
     };
@@ -7594,7 +7609,7 @@ TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
     EXPECT_FALSE(format(QStringLiteral("bold")).hasProperty(QTextFormat::ForegroundBrush)) << "reset follows the theme again";
     EXPECT_EQ(format(QStringLiteral("ital")).foreground().color(), QColor(0, 0xff, 0)) << "the other row stays";
 
-    auto *all = window.findChild<QToolButton *>(QStringLiteral("settingsResetAllColours"));
+    auto *all = settingsWidget<QToolButton>(window, QStringLiteral("settingsResetAllColours"));
     ASSERT_NE(all, nullptr);
     all->click();
     EXPECT_FALSE(format(QStringLiteral("ital")).hasProperty(QTextFormat::ForegroundBrush));

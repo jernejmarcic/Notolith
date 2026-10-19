@@ -2,7 +2,12 @@
 
 #include "Icons.h"
 
+#include <algorithm>
+
 #include <QAbstractItemView>
+#include <QAbstractScrollArea>
+#include <QInputDevice>
+#include <QScroller>
 #include <QAction>
 #include <QDialog>
 #include <QEvent>
@@ -72,6 +77,22 @@ private:
 
 } // namespace
 
+void grabTouchScroll(QWidget *viewport)
+{
+    const QList<const QInputDevice *> devices = QInputDevice::devices();
+    if (std::none_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
+            return device->type() == QInputDevice::DeviceType::TouchScreen;
+        }))
+        return;
+    QScroller::grabGesture(viewport, QScroller::TouchGesture);
+    // Qt waits for 5 mm of travel before the page moves at all, which reads
+    // as the page sticking under the finger at the start of every drag.
+    QScroller *scroller = QScroller::scroller(viewport);
+    QScrollerProperties properties = scroller->scrollerProperties();
+    properties.setScrollMetric(QScrollerProperties::DragStartDistance, 0.002);
+    scroller->setScrollerProperties(properties);
+}
+
 PopupStyle::PopupStyle()
     : QProxyStyle(QStyleFactory::create(QStringLiteral("Fusion")))
 {
@@ -80,6 +101,16 @@ PopupStyle::PopupStyle()
 void PopupStyle::polish(QWidget *widget)
 {
     QProxyStyle::polish(widget);
+    // A scroll area inside another (a block in a note, a list in a dialog
+    // row) leaves the finger to the one around it: grabbed, it would take a
+    // drag that starts on it even with nothing of its own to scroll.
+    if (auto *area = qobject_cast<QAbstractScrollArea *>(widget)) {
+        QWidget *outer = area->parentWidget();
+        while (outer && !qobject_cast<QAbstractScrollArea *>(outer))
+            outer = outer->parentWidget();
+        if (!outer)
+            grabTouchScroll(area->viewport());
+    }
     if (auto *menu = qobject_cast<QMenu *>(widget); menu && !menu->findChild<QWidget *>(QStringLiteral("menuChecks"), Qt::FindDirectChildrenOnly))
         new MenuChecks(menu);
     if (!widget->isWindow())

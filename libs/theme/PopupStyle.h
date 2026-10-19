@@ -23,4 +23,10 @@ public:
     using QProxyStyle::polish;
 };
 
+/// Touch: a finger dragging `viewport` scrolls it with momentum. Only where
+/// a touchscreen exists, so a desktop with a mouse keeps drag-to-select.
+/// PopupStyle grabs it for every scroll area not inside another one; a
+/// widget that swaps its viewport grabs the new one itself.
+void grabTouchScroll(QWidget *viewport);
+
 } // namespace noteAppC

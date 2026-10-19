@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QPointingDevice>
+#include <QScrollArea>
 #include <QScrollBar>
 #include <QScroller>
 #include <QStyleHints>
@@ -15,6 +16,7 @@
 #include <memory>
 
 #include "MarkdownEditor.h"
+#include "PopupStyle.h"
 
 using noteAppC::MarkdownEditor;
 
@@ -284,11 +286,42 @@ TEST(TouchTableTest, ALongPressInACellStartsARectangleAndAPlainDragDoesNot)
     EXPECT_EQ(editor->noteText(), kGrid);
 }
 
+TEST(TouchTest, AFingerScrollsAnyScrollAreaButNotOneInsideAnother)
+{
+    // "scorlring does not work in the settings": the settings page is a
+    // QScrollArea, and only the editor had grabbed the finger.
+    QScrollArea area;
+    auto *content = new QWidget;
+    content->setMinimumSize(300, 3000);
+    auto *inner = new QScrollArea(content);
+    inner->setWidget(new QWidget);
+    area.setWidget(content);
+    area.resize(320, 400);
+    area.show();
+    EXPECT_TRUE(QScroller::hasScroller(area.viewport()));
+    EXPECT_FALSE(QScroller::hasScroller(inner->viewport())) << "the drag belongs to the page around it";
+
+    QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 30);
+    QWidget *viewport = area.viewport();
+    auto sequence = QTest::touchEvent(viewport, touchscreen);
+    QPoint at(200, 330);
+    sequence.press(0, at, viewport).commit();
+    for (int i = 0; i < 15; ++i) {
+        at.ry() -= 18;
+        QTest::qWait(16);
+        sequence.move(0, at, viewport).commit();
+    }
+    sequence.release(0, at, viewport).commit();
+    EXPECT_TRUE(QTest::qWaitFor([&] { return area.verticalScrollBar()->value() > 100; }, 2000))
+        << "scrolled to " << area.verticalScrollBar()->value();
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
     // Before any editor exists: the editor looks for a touchscreen once.
     touchscreen = QTest::createTouchDevice();
+    QApplication::setStyle(new noteAppC::PopupStyle); // as the app has it
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
