@@ -115,7 +115,21 @@ bool Indexer::isRunning() const
 
 QStringList Indexer::pathsInFlight() const
 {
-    return m_active ? m_scanPaths + m_pending : QStringList();
+    if (!m_active)
+        return {};
+    if (!m_scanWhole && !m_rescan)
+        return m_scanPaths + m_pending;
+    // ponytail: a walk on the caller's thread, only while a whole scan is in
+    // flight (opening a vault, a forced rebuild); a rename then reads every note.
+    QStringList notes;
+    QDirIterator it(m_vault.root(), QDir::Files | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        const QString path = it.next();
+        const QString relative = m_vault.relative(path);
+        if (!isIgnored(relative) && !m_vault.isIgnored(relative) && (Vault::isNote(path) || isNotebook(path)))
+            notes << path;
+    }
+    return notes;
 }
 
 void Indexer::stop()
@@ -234,6 +248,7 @@ void Indexer::start(const QStringList &paths, bool force, const QStringList &dir
     m_scanOptions = m_parseOptions;
     m_scanSetsKey = force && whole;
     m_scanPaths = paths;
+    m_scanWhole = whole;
     if (whole) {
         ++m_wholeScans;
         m_changedDirs.clear(); // this walk reads them

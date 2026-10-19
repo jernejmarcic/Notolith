@@ -1727,9 +1727,12 @@ Lane index8:
       (Linux; QFileSystemWatcher stays the fallback elsewhere), feeding the
       same incremental debounce. Cost when idle: zero. Test: write in place
       to an unopened note; the index sees the new text.
-- [ ] 21. A whole-vault scan in flight cannot be listed as rename
+- [x] 21. A whole-vault scan in flight cannot be listed as rename
       candidates (documented ceiling). Merge-note part done: it autosaves
       first and passes the saved + in-flight notes, as a rename does.
+      Done: while a whole scan runs or waits, pathsInFlight() walks the
+      vault and names every note (a rename right after opening a new vault
+      no longer misses links).
 - [x] 22. (lane watch, c8d1420: GraphView::showEvent race, 0/1500 after) WindowTest.LocalGraphFollowsTheOpenNote failed once in a full run
       and under --gtest_repeat (state leak between repeats?); investigate.
 
@@ -2016,7 +2019,7 @@ Shared/<title>.md.
       (run-length RGA + Lamport; 14x-1000x faster per edit, 2x the memory;
       table in docs/PERFORMANCE.md)
 - [x] Lane L: tools/vendor_link.sh, libs/ext/link, NOTEAPPC_WITH_SHARE
-- [ ] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
+- [x] Lane S: ShareEngine/Session/identity/store/frame, undo-preserving
       applyExternalEdit, disk fold-in. Fable split it in two (plan in the
       session scratchpad, LANE-S-PLAN.md):
   - [x] S1: SecretStore with a service name, ShareIdentity, share.proto +

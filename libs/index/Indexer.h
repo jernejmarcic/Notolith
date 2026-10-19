@@ -45,8 +45,9 @@ public:
     /// The notes (absolute paths) a reindex() has asked for that the Index does
     /// not hold as saved yet: the running scan's, and those queued behind it.
     /// A rename reads them from disk as candidates, so a note saved a moment ago
-    /// has its link rewritten without waiting for the scan. A whole-vault scan
-    /// in progress is not listed: its files are not known until it has walked.
+    /// has its link rewritten without waiting for the scan. While a whole-vault
+    /// scan runs or waits, the Index may not hold any note yet (a new vault):
+    /// then it is every note of the vault, walked here.
     QStringList pathsInFlight() const;
     /// Cancels a scan in progress and waits for it, dropping what it had not
     /// yet reported: afterwards the Index can be closed or reopened.
@@ -145,6 +146,7 @@ private:
     QSet<QString> m_changedFiles; ///< notes it saw written in place, the same
     QSet<QString> m_queuedDirs;  ///< folders handed over during a scan, read after it
     QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
+    bool m_scanWhole = false; ///< the running scan walks the whole vault
     NotebookReader m_notebookReader;
     DirWatcher m_files;
     QTimer m_debounce;

@@ -698,6 +698,26 @@ TEST_F(RenameLinksTest, TheIndexerNamesTheNotesItHasNotAppliedYet)
     EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
 }
 
+// A whole-vault scan (a vault just opened) leaves the index without most notes:
+// a rename then opens every note, so no link is missed while it runs.
+TEST_F(RenameLinksTest, AWholeVaultScanInFlightNamesEveryNote)
+{
+    write(QStringLiteral("Home.md"), "Home [[Target]]\n");
+    write(QStringLiteral("Sub/Other.md"), "Other\n");
+    write(QStringLiteral(".hidden/Skip.md"), "Skip\n");
+    write(QStringLiteral("picture.png"), "png");
+    vault = Vault(dir.path());
+    Index index;
+    Indexer indexer(&index);
+    indexer.setVault(vault); // the whole-vault scan starts here
+    QStringList inFlight = indexer.pathsInFlight();
+    inFlight.sort();
+    EXPECT_EQ(inFlight, (QStringList{vault.absolute(QStringLiteral("Home.md")),
+                                     vault.absolute(QStringLiteral("Sub/Other.md"))}));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer.isRunning(); }, 20000));
+    EXPECT_TRUE(indexer.pathsInFlight().isEmpty());
+}
+
 // A note whose links all stay right through a folder rename (wikilinks by name
 // to a sibling that moved with it) is not rewritten: no bytes touched, not counted.
 TEST_F(RenameLinksTest, AFolderRenameLeavesNotesWithSiblingLinksUntouched)
