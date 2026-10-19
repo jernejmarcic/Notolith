@@ -55,6 +55,8 @@
 #include <archive_entry.h>
 #endif
 #include "MarkdownEditor.h"
+#include "PopupStyle.h"
+#include "Theme.h"
 #include "SettingsPage.h"
 #include "TagsPane.h"
 
@@ -1115,6 +1117,18 @@ Timing benchPdfViewSave(const QString &pdfPath, const QString &scratchDir, int r
 /// readback, not the drawing. So this shows the widget, drives the scrollbar,
 /// and waits for a real paint event on the viewport each time. Vsync is off,
 /// or every measurement would come back as one refresh interval.
+/// --note: a real note to scroll instead of the generated one (Jernej's
+/// coursework on PADD scrolled worse than any generated note).
+QString gScrollNote;
+
+QString scrollNoteText(int lines)
+{
+    if (gScrollNote.isEmpty())
+        return buildLongNote(lines);
+    QFile file(gScrollNote);
+    return file.open(QIODevice::ReadOnly) ? QString::fromUtf8(file.readAll()) : buildLongNote(lines);
+}
+
 Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrames = 400,
                            QSize size = QSize(1180, 760))
 {
@@ -1132,7 +1146,7 @@ Timing benchScrollOnScreen(int lines, bool gpu, int stepPixels = 0, int maxFrame
     editor->resize(size);
     if (gpu)
         editor->setGPUacceleration(true);
-    editor->setNoteText(buildLongNote(lines));
+    editor->setNoteText(scrollNoteText(lines));
     // Meant to run inside a headless compositor (see --gpu and bench-here.sh),
     // which fullscreens every window on its one virtual output. Asking a real
     // desktop for a particular screen does not work: Hyprland put a
@@ -1196,7 +1210,7 @@ Timing benchScroll(int lines, QSize viewport = QSize(1180, 760), int stepPixels 
 {
     auto editor = std::make_unique<MarkdownEditor>();
     editor->resize(viewport);
-    editor->setNoteText(buildLongNote(lines));
+    editor->setNoteText(scrollNoteText(lines));
     paintedFrame(editor.get()); // untimed warm-up frame, as above
 
     QScrollBar *bar = editor->verticalScrollBar();
@@ -1596,7 +1610,18 @@ int main(int argc, char *argv[])
                                                  "2560x1600 at scale 1.67): a finger drag, a wheel "
                                                  "notch and a page, through the real repaint path."));
     parser.addOption(paddOption);
+    QCommandLineOption noteOption(QStringLiteral("note"),
+                                  QStringLiteral("With --padd or the scroll rows: scroll this note instead "
+                                                 "of a generated one."),
+                                  QStringLiteral("file"));
+    parser.addOption(noteOption);
+    QCommandLineOption sizeOption(QStringLiteral("size"),
+                                  QStringLiteral("With --padd: the editor's size, e.g. 685x1278 (PADD in "
+                                                 "portrait with the sidebar open)."),
+                                  QStringLiteral("WxH"));
+    parser.addOption(sizeOption);
     parser.process(app);
+    gScrollNote = parser.value(noteOption);
     const QString phase = parser.value(phaseOption);
     const auto runs = [&phase](const char *name) { return phase.isEmpty() || phase == QLatin1String(name); };
 
@@ -1653,7 +1678,13 @@ int main(int argc, char *argv[])
     QList<Timing> timings;
 
     if (parser.isSet(paddOption)) {
-        const QSize panel(1533, 958); // 2560x1600 / 1.67, the window full screen
+        // The app's style and stylesheet: its scrollbars repaint with every
+        // scroll step, and a bare Fusion one costs something else entirely.
+        QApplication::setStyle(new noteAppC::PopupStyle);
+        app.setStyleSheet(noteAppC::Theme().styleSheet());
+        QSize panel(1533, 958); // 2560x1600 / 1.67, the window full screen
+        if (const QStringList wh = parser.value(sizeOption).split(QLatin1Char('x')); wh.size() == 2)
+            panel = QSize(wh.at(0).toInt(), wh.at(1).toInt());
         timings << benchScrollOnScreen(5000, false, 20, 300, panel); // a finger dragging
         timings << benchScrollOnScreen(5000, false, 72, 300, panel); // a wheel notch
         timings << benchScrollOnScreen(5000, false, 0, 400, panel);  // a page

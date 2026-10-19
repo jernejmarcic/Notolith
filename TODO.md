@@ -2376,27 +2376,14 @@ chjoppy". Finger on the screen, GNOME session; SSH to padd allowed for this.
 PADD: FydeTab Duo, RK3588S (4x A76 + 4x A55), Mali-G610 panthor, DSI-1
 2560x1600 at GNOME scale 1.67 (logical ~1533x958).
 
-- [x] Finger drag selected text while it scrolled: b7b3352 (real touch
-      events test; the GPU viewport swap lost the touch grab too).
 - [ ] Measure on PADD: scroll frame cost at its panel/scale, offscreen and
       in headless cage (raster vs OpenGL incl. compositor buffer cost);
       which part of the frame is the time (paint, layout, upload).
-      Found from Qt 6.12's source: QWaylandShmBackingStore::scroll() returns
-      false at a fractional scale ("With fractional scaling we cannot easily
-      scroll the existing pixels"), so on GNOME at 1.67 every scroll frame
-      repaints the whole viewport; integer scales move the pixels. Qt only
-      binds wp_fractional_scale when the rounding policy is PassThrough
-      (qwaylandwindow.cpp:239). Candidates, to measure on PADD in its GNOME
-      session: (a) a rounding policy, so Qt renders at 2 and mutter scales
-      down (blit back, ~1.4x the pixels, text a touch softer); (b) the
-      OpenGL viewport (no shm upload per frame). Offscreen at 1533x958:
-      20 px frame 1.50 ms at 1.67 vs 0.87 ms at 2 on starbase-1.
 - [ ] Fix the scroll cost found (touch and mouse both choppy: per-frame cost,
       not the scroller).
 - [ ] PADD benchmark: a bench preset for PADD's geometry (viewport, scale,
       touch scroll) so a change is measured against it; numbers in
-      docs/PERFORMANCE.md. `noteAppC-bench --padd` added (finger drag 20 px,
-      wheel 72 px, page; 1533x958 at 1.67); PADD numbers still to take.
+      docs/PERFORMANCE.md.
 - [ ] Touch friendly audit on PADD: hit targets, tree/tab/sidebar use by
       finger, on-screen keyboard, long press, kinetic scroll feel.
 - [ ] Install the fixed build on PADD for Jernej to try.

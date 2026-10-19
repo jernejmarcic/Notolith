@@ -214,10 +214,17 @@ qreal headingScale(int level)
 void grabTouchScroll(QWidget *viewport)
 {
     const QList<const QInputDevice *> devices = QInputDevice::devices();
-    if (std::any_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
+    if (std::none_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
             return device->type() == QInputDevice::DeviceType::TouchScreen;
         }))
-        QScroller::grabGesture(viewport, QScroller::TouchGesture);
+        return;
+    QScroller::grabGesture(viewport, QScroller::TouchGesture);
+    // Qt waits for 5 mm of travel before the page moves at all, which reads
+    // as the page sticking under the finger at the start of every drag.
+    QScroller *scroller = QScroller::scroller(viewport);
+    QScrollerProperties properties = scroller->scrollerProperties();
+    properties.setScrollMetric(QScrollerProperties::DragStartDistance, 0.002);
+    scroller->setScrollerProperties(properties);
 }
 
 } // namespace
@@ -4414,16 +4421,104 @@ QList<MarkdownEditor::BlockBox> MarkdownEditor::blockBoxes()
     return boxes;
 }
 
+namespace {
+
+/// NOTOLITH_FRAME_LOG=<file>: one line per editor paint - the gap since the
+/// last one, how long this one took, and what it covered - to see what a
+/// device really scrolls at, in its own session, without a bench window.
+struct FrameLog {
+    QFile file;
+    QElapsedTimer clock;
+    qint64 last = -1;
+    // Scroll steps since the last paint: how many, the time spent handling
+    // them, and when the first one asked for this frame.
+    int steps = 0;
+    qint64 stepNs = 0;
+    qint64 firstStep = -1;
+    FrameLog()
+    {
+        const QString path = qEnvironmentVariable("NOTOLITH_FRAME_LOG");
+        if (path.isEmpty())
+            return;
+        file.setFileName(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+            return;
+        file.write("# gap_ms paint_ms exposed_wxh viewport_wxh dpr steps step_ms wait_ms\n");
+        clock.start();
+    }
+    void record(qint64 start, qint64 end, const QRect &exposed, const QSize &viewport, qreal dpr)
+    {
+        const double gap = last < 0 ? 0.0 : double(start - last) / 1e6;
+        last = start;
+        const double wait = firstStep < 0 ? 0.0 : double(start - firstStep) / 1e6;
+        file.write(QStringLiteral("%1 %2 %3x%4 %5x%6 %7 %8 %9 %10\n")
+                       .arg(gap, 0, 'f', 2)
+                       .arg(double(end - start) / 1e6, 0, 'f', 2)
+                       .arg(exposed.width()).arg(exposed.height())
+                       .arg(viewport.width()).arg(viewport.height())
+                       .arg(dpr)
+                       .arg(steps)
+                       .arg(double(stepNs) / 1e6, 0, 'f', 2)
+                       .arg(wait, 0, 'f', 2)
+                       .toLatin1());
+        file.flush();
+        steps = 0;
+        stepNs = 0;
+        firstStep = -1;
+    }
+};
+
+FrameLog &frameLog()
+{
+    static FrameLog log;
+    return log;
+}
+
+} // namespace
+
 void MarkdownEditor::scrollContentsBy(int dx, int dy)
 {
+    FrameLog &log = frameLog();
+    const qint64 stepStart = log.file.isOpen() ? log.clock.nsecsElapsed() : 0;
+    const auto logged = qScopeGuard([&] {
+        if (!log.file.isOpen())
+            return;
+        ++log.steps;
+        log.stepNs += log.clock.nsecsElapsed() - stepStart;
+        if (log.firstStep < 0)
+            log.firstStep = stepStart;
+    });
+
     // The property editor is a widget over the table, and would stay put
     // while the table moved away under it.
     finishPropertyEdit(true);
-    updateLayout(); // blocks scrolling into view need their real layout
+    // Blocks scrolling into reach need their real layout; the rest of what
+    // updateLayout() settles does not change with the scroll position, so a
+    // note already laid out around the new position is left alone. That pass
+    // runs over the whole note, and a finger sends a step per touch event.
+    const qreal scroll = verticalScrollBar()->value();
+    const auto reach = std::partition_point(d->m_blocks.cbegin(), d->m_blocks.cend(),
+                                            [top = scroll - viewport()->height()](const BlockView &view) {
+                                                return view.bottomY() < top;
+                                            });
+    const auto beyond = std::partition_point(reach, d->m_blocks.cend(),
+                                             [bottom = scroll + 2 * viewport()->height()](const BlockView &view) {
+                                                 return view.y <= bottom;
+                                             });
+    const bool laidOut = std::all_of(reach, beyond, [](const BlockView &view) {
+        return view.laidOut || view.foldHidden;
+    });
+    if (!laidOut)
+        updateLayout();
+    else if (d->m_notebookInput.edit)
+        positionNotebookInput(); // the prompt under a block follows it
     // The block under a stationary pointer changes as the content moves: the
-    // ring and button follow their block, so re-aim them (HoverEdit.cpp).
+    // ring and button follow their block, so re-aim them (HoverEdit.cpp). A
+    // finger flicking the page has no pointer resting anywhere.
     d->m_hoverRect.translate(dx, dy);
-    if (d->m_hoverEditButton || d->m_tableHandles || !d->m_hoverRect.isNull()) {
+    const bool flicking = QScroller::hasScroller(viewport())
+                          && QScroller::scroller(viewport())->state() != QScroller::Inactive;
+    if (!flicking && (d->m_hoverEditButton || d->m_tableHandles || !d->m_hoverRect.isNull())) {
         if (viewport()->underMouse())
             updateHover(viewport()->mapFromGlobal(QCursor::pos()));
         else
@@ -4434,7 +4529,7 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // layout just moved something that is on screen those pixels are still
     // right: move them, and paint only the strip that came in. An OpenGL
     // viewport has no backing store to move pixels in, so it repaints.
-    const bool settled = d->m_movedFrom > verticalScrollBar()->value() + viewport()->height();
+    const bool settled = laidOut || d->m_movedFrom > scroll + viewport()->height();
     const bool raster = !qobject_cast<QOpenGLWidget *>(viewport());
     if (dx == 0 && qAbs(dy) < viewport()->height() && settled && raster)
         viewport()->scroll(0, dy, viewport()->rect());
@@ -4652,49 +4747,6 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
         }
     }
 }
-
-namespace {
-
-/// NOTOLITH_FRAME_LOG=<file>: one line per editor paint - the gap since the
-/// last one, how long this one took, and what it covered - to see what a
-/// device really scrolls at, in its own session, without a bench window.
-struct FrameLog {
-    QFile file;
-    QElapsedTimer clock;
-    qint64 last = -1;
-    FrameLog()
-    {
-        const QString path = qEnvironmentVariable("NOTOLITH_FRAME_LOG");
-        if (path.isEmpty())
-            return;
-        file.setFileName(path);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
-            return;
-        file.write("# gap_ms paint_ms exposed_wxh viewport_wxh dpr\n");
-        clock.start();
-    }
-    void record(qint64 start, qint64 end, const QRect &exposed, const QSize &viewport, qreal dpr)
-    {
-        const double gap = last < 0 ? 0.0 : double(start - last) / 1e6;
-        last = start;
-        file.write(QStringLiteral("%1 %2 %3x%4 %5x%6 %7\n")
-                       .arg(gap, 0, 'f', 2)
-                       .arg(double(end - start) / 1e6, 0, 'f', 2)
-                       .arg(exposed.width()).arg(exposed.height())
-                       .arg(viewport.width()).arg(viewport.height())
-                       .arg(dpr)
-                       .toLatin1());
-        file.flush();
-    }
-};
-
-FrameLog &frameLog()
-{
-    static FrameLog log;
-    return log;
-}
-
-} // namespace
 
 void MarkdownEditor::paintEvent(QPaintEvent *event)
 {

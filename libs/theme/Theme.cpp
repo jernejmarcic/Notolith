@@ -1,6 +1,9 @@
 #include "Theme.h"
 
 #include <QFontDatabase>
+#include <QGuiApplication>
+#include <QMutex>
+#include <QSet>
 #include <QRegularExpression>
 #include <QStringList>
 
@@ -418,11 +421,40 @@ void Theme::setAccent(int hue, int saturationPercent, int lightnessPercent)
     applyDerivedTokens();
 }
 
+namespace {
+// QFontDatabase::families() rebuilds its list on every call, and uiFont() and
+// monospaceFont() ask on every paint that sets a font.
+QSet<QString> installedFamilies()
+{
+    // Workers paint too (the graph's frames): a copy, shared not deep.
+    static QMutex mutex;
+    const QMutexLocker lock(&mutex);
+    static QSet<QString> families;
+    static bool stale = true;
+    static const bool watching = [] {
+        if (auto *app = qobject_cast<QGuiApplication *>(QCoreApplication::instance()))
+            QObject::connect(app, &QGuiApplication::fontDatabaseChanged, app, [] {
+                const QMutexLocker relock(&mutex);
+                stale = true;
+            });
+        return true;
+    }();
+    Q_UNUSED(watching);
+    if (stale) {
+        families.clear();
+        for (const QString &family : QFontDatabase::families())
+            families.insert(family.toLower());
+        stale = false;
+    }
+    return families;
+}
+} // namespace
+
 QString Theme::firstAvailableFamily(const QStringList &families)
 {
-    const QStringList installed = QFontDatabase::families();
+    const QSet<QString> installed = installedFamilies();
     for (const QString &family : families) {
-        if (installed.contains(family, Qt::CaseInsensitive))
+        if (installed.contains(family.toLower()))
             return family;
     }
     return families.isEmpty() ? QString() : families.last();
@@ -431,7 +463,7 @@ QString Theme::firstAvailableFamily(const QStringList &families)
 bool Theme::hasFamily(const QString &family)
 {
     return !family.isEmpty()
-           && QFontDatabase::families().contains(family, Qt::CaseInsensitive);
+           && installedFamilies().contains(family.toLower());
 }
 
 void Theme::setFontOverrides(const QString &interfaceFamily, const QString &textFamily,
