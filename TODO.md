@@ -1832,9 +1832,12 @@ WINDOWS-PLAN.md; items below get filled from it.
       right tab buttons dragged out -> detached pane. 4 tests.
 - [ ] By hand on Hyprland (Jernej): pop-out tiling/floating, real drag
       between windows, focus; offscreen cannot show these.
-- [ ] Obsidian command ids workspace:open-in-new-window /
+- [x] Obsidian command ids workspace:open-in-new-window /
       workspace:move-to-new-window unverified: check against a real
       Obsidian hotkeys.json (Jernej) or a public source.
+      Verified 2026-10-19 (Sol: obsideck command list, a hotkeys.json gist):
+      both match ours, as do split-vertical/horizontal. Obsidian has no
+      sidebar-detach command; app:detach-*-sidebar are Notolith's own.
 - [x] Escape-cancelled tab drag with the pointer outside every window
       opens a pop-out (Qt reports it as a drop outside). Plan: watch
       KeyPress Escape in the app filter while m_dragging and treat the next
