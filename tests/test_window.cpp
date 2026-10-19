@@ -1852,6 +1852,137 @@ TEST_F(WindowTest, ObsidiansFloatingNodeIsReadAndNeverWritten)
     EXPECT_EQ(readAll(path(QStringLiteral(".obsidian/workspace.json"))), obsidian);
 }
 
+namespace {
+
+/// The `state.type` of every leaf of every window in a saved layout's `floating` node.
+QStringList floatingViewTypes(const QJsonObject &layout)
+{
+    QStringList types;
+    for (const QJsonValue &window : layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray()) {
+        for (const QJsonValue &tabs : window.toObject().value(QStringLiteral("children")).toArray()) {
+            for (const QJsonValue &leaf : tabs.toObject().value(QStringLiteral("children")).toArray())
+                types << leaf.toObject().value(QStringLiteral("state")).toObject().value(QStringLiteral("type")).toString();
+        }
+    }
+    return types;
+}
+
+/// A widget by name wherever it is: in the window, or in the pop-out that took it.
+QWidget *findAnywhere(MainWindow &window, const char *name)
+{
+    if (auto *found = window.findChild<QWidget *>(QLatin1String(name)))
+        return found;
+    for (auto *popout : popoutWindows()) {
+        if (auto *found = popout->findChild<QWidget *>(QLatin1String(name)))
+            return found;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_F(WindowTest, ADetachedSidebarIsRestoredAsAFileExplorerWindow)
+{
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        command(window, "app:detach-left-sidebar")->trigger();
+        command(window, "app:detach-right-sidebar")->trigger();
+        const auto popouts = popoutWindows();
+        ASSERT_EQ(popouts.size(), 2);
+        for (auto *popout : popouts) {
+            if (popout->findChild<QTreeView *>(QStringLiteral("fileExplorer")))
+                popout->resize(333, 444);
+        }
+        window.close();
+    }
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    QJsonObject layout = noteAppC::Workspaces::current(dir.path());
+    QStringList types = floatingViewTypes(layout);
+    types.sort();
+    EXPECT_EQ(types, (QStringList{QStringLiteral("file-explorer"), QStringLiteral("right-sidebar")}));
+    // A view type Notolith does not have is skipped, whoever wrote it.
+    QJsonArray windows = layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray();
+    windows.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("window")}, {QStringLiteral("width"), 300}, {QStringLiteral("height"), 300},
+                               {QStringLiteral("children"), QJsonArray{QJsonObject{
+                                    {QStringLiteral("type"), QStringLiteral("tabs")},
+                                    {QStringLiteral("children"), QJsonArray{QJsonObject{
+                                         {QStringLiteral("type"), QStringLiteral("leaf")},
+                                         {QStringLiteral("state"), QJsonObject{{QStringLiteral("type"), QStringLiteral("some-plugin-view")}}}}}}}}}});
+    layout.insert(QStringLiteral("floating"), QJsonObject{{QStringLiteral("children"), windows}});
+    ASSERT_TRUE(noteAppC::Workspaces::saveCurrent(dir.path(), layout));
+
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 2) << "the unknown view made no window";
+    for (auto *popout : popouts)
+        EXPECT_EQ(popout->kind(), noteAppC::PopoutWindow::Kind::Sidebar);
+    auto *sidebar = findAnywhere(window, "sidebar");
+    auto *rightSidebar = findAnywhere(window, "rightSidebar");
+    auto *splitter = window.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    ASSERT_TRUE(sidebar && rightSidebar && splitter);
+    EXPECT_EQ(splitter->count(), 1) << "only the editor is left in the main window";
+    auto *explorer = qobject_cast<noteAppC::PopoutWindow *>(sidebar->window());
+    ASSERT_NE(explorer, nullptr);
+    EXPECT_EQ(explorer->size(), QSize(333, 444));
+    EXPECT_NE(explorer->findChild<QTreeView *>(QStringLiteral("fileExplorer")), nullptr);
+    EXPECT_TRUE(explorer->isVisible());
+    EXPECT_NE(qobject_cast<noteAppC::PopoutWindow *>(rightSidebar->window()), nullptr);
+    EXPECT_NE(rightSidebar->window(), sidebar->window());
+
+    // Closing the windows docks them again, and the next save forgets them.
+    for (auto *popout : popouts)
+        popout->close();
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    EXPECT_EQ(splitter->count(), 3);
+    window.close();
+    EXPECT_FALSE(noteAppC::Workspaces::current(dir.path()).contains(QStringLiteral("floating")));
+}
+
+TEST_F(WindowTest, ADetachedPaneComesBackDetached)
+{
+    const auto tabOf = [](MainWindow &window, const char *name) {
+        return window.findChild<QToolButton *>(QLatin1String(name));
+    };
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.show();
+        ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+        auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+        for (const char *name : {"backlinksTabButton", "outlineTabButton"}) {
+            QToolButton *tab = tabOf(window, name);
+            ASSERT_NE(tab, nullptr);
+            chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+        }
+        ASSERT_EQ(popoutWindows().size(), 2);
+        window.close();
+    }
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    QStringList types = floatingViewTypes(noteAppC::Workspaces::current(dir.path()));
+    types.sort();
+    EXPECT_EQ(types, (QStringList{QStringLiteral("backlink"), QStringLiteral("outline")}));
+
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 2);
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    for (const char *name : {"backlinksPane", "outlinePane"}) {
+        auto *pane = findAnywhere(window, name);
+        ASSERT_NE(pane, nullptr) << name;
+        auto *popout = qobject_cast<noteAppC::PopoutWindow *>(pane->window());
+        ASSERT_NE(popout, nullptr) << name << " is back in the sidebar";
+        EXPECT_EQ(popout->kind(), noteAppC::PopoutWindow::Kind::Pane);
+        EXPECT_EQ(panes->indexOf(pane), -1);
+    }
+    EXPECT_TRUE(tabOf(window, "backlinksTabButton")->isHidden());
+    EXPECT_TRUE(tabOf(window, "outlineTabButton")->isHidden());
+    EXPECT_FALSE(tabOf(window, "tagsTabButton")->isHidden()) << "the panes that were not detached stay";
+    EXPECT_NE(panes->indexOf(window.findChild<QWidget *>(QStringLiteral("tagsPane"))), -1);
+}
+
 TEST_F(WindowTest, NamedLayoutsSaveAndLoad)
 {
     MainWindow window;

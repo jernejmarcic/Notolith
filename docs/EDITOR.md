@@ -480,8 +480,15 @@ Panes are not tabs here, so unlike Obsidian a sidebar view cannot be dragged
 into the main area. Closing the main window, or turning the feature off, docks
 them first.
 
-Not yet: a detached sidebar or pane is not remembered across restarts (pop-outs
-holding tabs are).
+A detached sidebar or pane is remembered like a pop-out of tabs: it is written
+in the layout's `floating` node as a window holding one tab whose view type is
+Obsidian's name for it (`file-explorer` for the left sidebar; `search`,
+`backlink`, `tag`, `file-properties`, `outgoing-link`, `outline`, `footnotes`,
+`bookmarks` and `localgraph` for the panes), and comes back detached at the next
+start or when that layout is loaded. Notolith's own views have their own names
+(`right-sidebar` for the whole right sidebar, `meta-notes`). A type Notolith does
+not know, or a pane whose plugin is off, is skipped. Loading a layout first
+puts every detached sidebar and pane back, so only the ones it names stay out.
 
 Dragging does the same without a command. Drag a tab out of its tab strip (a
 drag inside the strip still reorders), and while it is over a split a

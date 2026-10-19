@@ -2570,6 +2570,7 @@ void MainWindow::applyFeatures()
         const char *button;
         const char *icon;
         QString tooltip;
+        const char *viewType; // Obsidian's name for the view, written to workspace.json when detached
     };
     QWidget *parent = m_rightPanes;
     const Pane panes[] = {
@@ -2586,7 +2587,7 @@ void MainWindow::applyFeatures()
                      });
              return m_search.data();
          },
-         "searchTabButton", "search", tr("Search")},
+         "searchTabButton", "search", tr("Search"), "search"},
         {"backlink", m_backlinks,
          [this, parent] {
              m_backlinks = new BacklinksPane(parent);
@@ -2595,7 +2596,7 @@ void MainWindow::applyFeatures()
              connect(m_backlinks, &BacklinksPane::noteActivated, this, &MainWindow::openRelative);
              return m_backlinks.data();
          },
-         "backlinksTabButton", "link", tr("Backlinks")},
+         "backlinksTabButton", "link", tr("Backlinks"), "backlink"},
         {"tag-pane", m_tags,
          [this, parent] {
              m_tags = new TagsPane(parent);
@@ -2607,7 +2608,7 @@ void MainWindow::applyFeatures()
                      [this](const QString &tag) { openSearch(QStringLiteral("tag:#%1").arg(tag)); });
              return m_tags.data();
          },
-         "tagsTabButton", "tags", tr("Tags")},
+         "tagsTabButton", "tags", tr("Tags"), "tag"},
         {"properties", m_properties,
          [this, parent] {
              m_properties = new PropertiesPane(parent);
@@ -2617,7 +2618,7 @@ void MainWindow::applyFeatures()
                      [this](const QString &key) { openSearch(QStringLiteral("[%1]").arg(key)); });
              return m_properties.data();
          },
-         "propertiesTabButton", "clipboard-list", tr("All properties")},
+         "propertiesTabButton", "clipboard-list", tr("All properties"), "file-properties"},
         {"outgoing-link", m_outgoingLinks,
          [this, parent] {
              m_outgoingLinks = new OutgoingLinksPane(parent);
@@ -2626,7 +2627,7 @@ void MainWindow::applyFeatures()
              connect(m_outgoingLinks, &OutgoingLinksPane::noteActivated, this, &MainWindow::openRelative);
              return m_outgoingLinks.data();
          },
-         "outgoingLinksTabButton", "arrow-up-right", tr("Outgoing links")},
+         "outgoingLinksTabButton", "arrow-up-right", tr("Outgoing links"), "outgoing-link"},
         {"outline", m_outline,
          [this, parent] {
              m_outline = new OutlinePane(parent);
@@ -2636,7 +2637,7 @@ void MainWindow::applyFeatures()
              });
              return m_outline.data();
          },
-         "outlineTabButton", "list", tr("Outline")},
+         "outlineTabButton", "list", tr("Outline"), "outline"},
         // No plugin of its own: the editor.metaNotes setting is the switch.
         {nullptr, m_metaPane,
          [this, parent] {
@@ -2660,7 +2661,7 @@ void MainWindow::applyFeatures()
              });
              return m_metaPane.data();
          },
-         "metaNotesTabButton", "brackets", tr("Meta notes")},
+         "metaNotesTabButton", "brackets", tr("Meta notes"), "meta-notes"},
         {"footnotes", m_footnotes,
          [this, parent] {
              m_footnotes = new FootnotesPane(parent);
@@ -2670,7 +2671,7 @@ void MainWindow::applyFeatures()
              });
              return m_footnotes.data();
          },
-         "footnotesTabButton", "quote", tr("Footnotes")},
+         "footnotesTabButton", "quote", tr("Footnotes"), "footnotes"},
         {"bookmarks", m_bookmarks,
          [this, parent] {
              m_bookmarks = new BookmarksPane(parent);
@@ -2685,7 +2686,7 @@ void MainWindow::applyFeatures()
                      [this](const QString &query) { openSearch(query); });
              return m_bookmarks.data();
          },
-         "bookmarksTabButton", "bookmark", tr("Bookmarks")},
+         "bookmarksTabButton", "bookmark", tr("Bookmarks"), "bookmarks"},
 #ifdef NOTEAPPC_HAVE_GRAPH
         {"graph", m_localGraph,
          [this, parent] {
@@ -2701,7 +2702,7 @@ void MainWindow::applyFeatures()
              connect(m_localGraph, &GraphView::noteActivatedInNewTab, this, &MainWindow::openRelativeInNewTab);
              return m_localGraph.data();
          },
-         "localGraphTabButton", "git-fork", tr("Local graph")},
+         "localGraphTabButton", "git-fork", tr("Local graph"), "localgraph"},
 #endif
     };
 
@@ -2719,6 +2720,7 @@ void MainWindow::applyFeatures()
         }
         if (!pane.widget) {
             QWidget *widget = pane.build();
+            widget->setProperty("viewType", pane.viewType);
             m_rightPanes->addWidget(widget);
             button = rightSidebarTabButton(tabLayout->parentWidget(), QLatin1String(pane.button),
                                            QLatin1String(pane.icon), pane.tooltip, pane.tooltip, widget);
@@ -5098,13 +5100,33 @@ QJsonObject MainWindow::layoutJSON() const
     QJsonObject layout{{QStringLiteral("main"), node(m_workspace)}};
     // Obsidian's pop-outs: floating > window > the split (or tabs) it holds.
     // Only when there are some, so a layout without them is as it always was.
+    // A detached sidebar or pane is a window holding one leaf of its view type.
     QJsonArray windows;
     for (const auto &popout : m_popouts) {
-        if (popout->kind() != PopoutWindow::Kind::Leaves || !popout->content())
+        const QWidget *held = popout->content();
+        if (!held)
             continue;
+        QJsonObject content;
+        if (popout->kind() == PopoutWindow::Kind::Leaves) {
+            content = node(popout->content());
+        } else {
+            const QString viewType = held == m_sidebar        ? QStringLiteral("file-explorer")
+                                   : held == m_rightSidebar   ? QStringLiteral("right-sidebar")
+                                                              : held->property("viewType").toString();
+            if (viewType.isEmpty())
+                continue; // a pane with no view type is not remembered
+            const QJsonObject leaf{{QStringLiteral("id"), nextID()},
+                                   {QStringLiteral("type"), QStringLiteral("leaf")},
+                                   {QStringLiteral("state"), QJsonObject{{QStringLiteral("type"), viewType},
+                                                                         {QStringLiteral("state"), QJsonObject()}}}};
+            content = {{QStringLiteral("id"), nextID()},
+                       {QStringLiteral("type"), QStringLiteral("tabs")},
+                       {QStringLiteral("children"), QJsonArray{leaf}},
+                       {QStringLiteral("currentTab"), 0}};
+        }
         windows.append(QJsonObject{{QStringLiteral("id"), nextID()},
                                    {QStringLiteral("type"), QStringLiteral("window")},
-                                   {QStringLiteral("children"), QJsonArray{node(popout->content())}},
+                                   {QStringLiteral("children"), QJsonArray{content}},
                                    {QStringLiteral("direction"), QStringLiteral("vertical")},
                                    {QStringLiteral("x"), popout->x()},
                                    {QStringLiteral("y"), popout->y()},
@@ -5131,6 +5153,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
     if (main.value(QStringLiteral("type")).toString() != QLatin1String("split") || !m_vault.isValid())
         return false;
     resetWorkspace(); // one empty tab in one split, straight in m_workspace
+    dockAll();        // a sidebar or pane in a window stays only if this layout says so
     TabGroup *spareGroup = m_active->group;
     Leaf *spareLeaf = m_active;
     QHash<QString, Leaf *> byID;
@@ -5205,6 +5228,28 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
     spareGroup = nullptr;
     spareLeaf = nullptr;
     const QJsonArray windows = layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray();
+    // The sidebar or pane a view type names, in a window of `size` (the default when empty).
+    // An unknown type, or a pane its feature has switched off, names nothing.
+    const auto detachView = [this](const QString &viewType, const QSize &size) {
+        QWidget *view = viewType == QLatin1String("file-explorer")  ? m_sidebar
+                      : viewType == QLatin1String("right-sidebar")  ? m_rightSidebar
+                                                                    : nullptr;
+        if (!view && !viewType.isEmpty()) {
+            for (QAbstractButton *tab : m_rightTabs->buttons()) {
+                auto *pane = qobject_cast<QWidget *>(tab->property("pane").value<QObject *>());
+                if (pane && pane->property("viewType").toString() == viewType)
+                    view = pane;
+            }
+        }
+        if (!view)
+            return;
+        if (view == m_sidebar || view == m_rightSidebar)
+            detachSidebar(view);
+        else
+            detachPane(view);
+        if (PopoutWindow *popout = popoutHolding(view); popout && !size.isEmpty())
+            popout->resize(size);
+    };
     for (const QJsonValue &value : m_popoutsOn ? windows : QJsonArray()) {
         const QJsonObject window = value.toObject();
         const QJsonArray inside = window.value(QStringLiteral("children")).toArray();
@@ -5213,6 +5258,12 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
         if (window.value(QStringLiteral("type")).toString() != QLatin1String("window")
             || (contentType != QLatin1String("split") && contentType != QLatin1String("tabs")))
             continue;
+        // A sidebar or pane view: what it names leaves the main window again.
+        if (contentType == QLatin1String("tabs")) {
+            const QSize size(window.value(QStringLiteral("width")).toInt(), window.value(QStringLiteral("height")).toInt());
+            for (const QJsonValue &leaf : content.value(QStringLiteral("children")).toArray())
+                detachView(leaf.toObject().value(QStringLiteral("state")).toObject().value(QStringLiteral("type")).toString(), size);
+        }
         auto *root = new QSplitter(Qt::Horizontal);
         root->setObjectName(QStringLiteral("popoutWorkspace"));
         root->setChildrenCollapsible(false);
@@ -5239,9 +5290,12 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
     for (const auto &group : m_groups)
         syncTabs(group.get());
 
-    m_sidebar->setVisible(!layout.value(QStringLiteral("left")).toObject().value(QStringLiteral("collapsed")).toBool());
-    m_rightSidebar->setVisible(
-        !layout.value(QStringLiteral("right")).toObject().value(QStringLiteral("collapsed")).toBool());
+    // A sidebar in a window of its own is shown there, whatever "collapsed" says.
+    if (!popoutHolding(m_sidebar))
+        m_sidebar->setVisible(!layout.value(QStringLiteral("left")).toObject().value(QStringLiteral("collapsed")).toBool());
+    if (!popoutHolding(m_rightSidebar))
+        m_rightSidebar->setVisible(
+            !layout.value(QStringLiteral("right")).toObject().value(QStringLiteral("collapsed")).toBool());
     return true;
 }
 
