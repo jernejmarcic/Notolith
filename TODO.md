@@ -2021,13 +2021,23 @@ Shared/<title>.md.
         ShareEngine (invite code, join/approve, revoke + rekey, offline
         catch-up by state vector, periodic + settle-time resync for the yrs
         quirk, relay through the owner); two engines over loopback, ~30 tests
-  - [ ] S2: ShareSession, undo kept across remote edits, MainWindow wiring
+  - [x] S2: ShareSession, undo kept across remote edits, MainWindow wiring
         (share:share-note / share:join / share:stop, approve prompt,
         Shared/<title>.md, autosave of remote edits, disk fold-in, resume on
         reopen), feature "share" off by default
         Also: round or refuse a local edit whose offsets split a surrogate
         pair before CrdtDoc::localEdit (vim `x` on an emoji; Fable check).
-- [ ] Lane U: commands, ShareDialog, badge, approve prompt, feature switch
+- [ ] Lane U: ShareDialog (invite code + Copy, members with fingerprint and
+      safety number, Revoke, new invite), join dialog, approve prompt,
+      status-bar badge "Shared - N here", tab marker; replace S2's
+      QInputDialog/QMessageBox placeholders. Feature switch done in S2.
+- [ ] Share: remember peers' last addresses so a share reconnects after a
+      restart without mDNS (tailnet, other subnets); today only mDNS or a
+      fresh dial reconnects.
+- [ ] Share: run the window tests on the Native backend too (only Yrs is
+      exercised through MainWindow).
+- [ ] Share: by hand on two machines (starbase-1 and shuttlepod-1): mDNS
+      discovery, join over the tailnet, pull the cable mid-typing, latency.
 - [ ] Lane P: remote carets (optional)
 - [ ] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
