@@ -923,6 +923,22 @@ void ShareEngine::clearCaret(const QByteArray &shareID)
     sendCarets(false); // now: stop() may forget the share right after
 }
 
+void ShareEngine::sendPresenceForTests(const QByteArray &shareID, const QByteArray &author, quint64 counter, quint32 head)
+{
+    const auto it = m_shares.constFind(shareID);
+    if (it == m_shares.constEnd() || !m_me)
+        return;
+    notolith::share::Presence presence;
+    presence.set_author(toS(author));
+    presence.set_counter(counter);
+    presence.set_anchor(head);
+    presence.set_head(head);
+    const QByteArray bytes = toQ(presence.SerializeAsString());
+    for (const Share::Member &m : std::as_const((*it)->members))
+        if (m.key != m_me->publicKey() && keyedWith(**it, m.key))
+            sendFrame(**it, m.key, FrameKind::Presence, bytes);
+}
+
 bool ShareEngine::isHere(const QByteArray &shareID, const QByteArray &device) const
 {
     if (m_up.contains(device))

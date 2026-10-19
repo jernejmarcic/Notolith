@@ -1,5 +1,6 @@
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <tuple>
 
@@ -799,6 +800,31 @@ TEST_P(ShareWindowTest, ACaretReachesAMemberThroughTheOwner)
     }));
     EXPECT_EQ(b.engine()->membersHere(id), 2) << "c is here, through the owner";
     EXPECT_TRUE(b.engine()->isHere(id, c.engine()->publicKey()));
+}
+
+TEST_P(ShareWindowTest, AMemberCannotSpeakForAnother)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b")), c(QStringLiteral("c"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    QString error;
+    ASSERT_TRUE(c.window->joinShare(a.engine()->invite(id), &error)) << error.toStdString();
+    ASSERT_TRUE(waitFor([&] { return c.engine()->doc(id) && c.text() == QStringLiteral("hello world\n"); }));
+    const QByteArray cKey = c.engine()->publicKey();
+    // b claims c's caret, with a counter that would silence c's own for good.
+    b.engine()->sendPresenceForTests(id, cKey, std::numeric_limits<quint64>::max() - 1, 3);
+    QTest::qWait(400);
+    EXPECT_FALSE(a.engine()->isHere(id, cKey) && !a.engine()->isConnected(cKey));
+    for (const auto &caret : a.engine()->carets(id))
+        EXPECT_NE(caret.device, cKey) << "the owner takes no member's word for another";
+    focusEditor(c);
+    c.editor()->setCursorOffset(5);
+    ASSERT_TRUE(waitFor([&] {
+        for (const auto &caret : a.engine()->carets(id))
+            if (caret.device == cKey && caret.head == 5)
+                return true;
+        return false;
+    })) << "c's own caret still gets through";
 }
 
 TEST_P(ShareWindowTest, LeavingTheNoteTakesTheCaretAway)

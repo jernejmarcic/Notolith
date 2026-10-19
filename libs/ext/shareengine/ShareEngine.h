@@ -172,6 +172,8 @@ public:
     Counters counters(const QByteArray &shareID = {}) const;
 
     void releaseHeldFramesForTests();
+    /// Test seam: a Presence claiming `author`, sent as this device to every keyed member.
+    void sendPresenceForTests(const QByteArray &shareID, const QByteArray &author, quint64 counter, quint32 head);
 
     /// What an invitation code says, once checked: prefix, version, sizes,
     /// not expired, a CRDT engine this build has, hosts that parse and are

@@ -2083,8 +2083,9 @@ Shared/<title>.md.
       per-process qHash hue (first key byte). Tests:
       LeavingTheNoteTakesTheCaretAway, RunAllStopsWhenAnEditMovesTheBlocks,
       membersHere in ACaretReachesAMemberThroughTheOwner.
-- [ ] Untested: a spoofed Presence author from a non-owner member (needs a
-      crafted frame; test_share has no seam for sealing as a member).
+- [x] Untested: a spoofed Presence author from a non-owner member. Now
+      AMemberCannotSpeakForAnother (sendPresenceForTests seam; fails with the
+      guard removed).
 - [ ] Later: person identity across devices; self-hosted relay
 - [x] Implicit code per note (Jernej 2026-10-19: "in the headers of a note
       there should be something called implicit imports, or implicit code
