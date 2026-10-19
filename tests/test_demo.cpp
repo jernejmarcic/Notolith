@@ -395,11 +395,11 @@ TEST(DemoVaultTest, EveryCommandRunsWithoutWarnings)
     for (int row = 0; row < nav->count(); ++row) {
         nav->setCurrentRow(row);
         QApplication::processEvents();
-        const QImage page = window.grab().toImage();
+        const QImage page = nav->window()->grab().toImage(); // settings is a window of its own
         EXPECT_FALSE(page.isNull());
         maybeSaveShot(page, vaultPath() + QStringLiteral("/settings-") + nav->item(row)->text(), "page");
     }
-    window.findChild<QAction *>(QStringLiteral("app:open-settings"))->trigger();
+    window.closeSettings();
     // Back to a normal view for the editor's own commands.
     ASSERT_TRUE(window.openNote(root + QStringLiteral("/Welcome.md")));
     for (const MarkdownEditor::Command &command : MarkdownEditor::commands()) {

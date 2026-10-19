@@ -219,6 +219,8 @@ bool BaseTableModel::writePropertyEdit(const QString &relativePath, const QStrin
                                        const QString &newText, QString *error)
 {
     const QString absolutePath = m_vault->absolute(relativePath);
+    if (m_beforeWrite)
+        m_beforeWrite(absolutePath);
     Note note;
     if (!Vault::read(absolutePath, note, error))
         return false;
@@ -272,7 +274,7 @@ bool BaseTableModel::writePropertyEdit(const QString &relativePath, const QStrin
     }
 
     note.text.replace(target->range.start, target->range.length(), *rewritten);
-    if (!Vault::write(absolutePath, note, error))
+    if (!m_vault->writeNoteNoFollow(relativePath, note, error))
         return false;
 
     Metadata fresh = parser.parse(note.text, absolutePath, m_index->parseOptions()); // keeps its meta-note rows

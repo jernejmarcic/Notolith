@@ -1805,6 +1805,37 @@ TEST_F(WindowTest, ABaseOpensInATabAndItsRowsOpenNotes)
     EXPECT_EQ(window.editor()->noteText(), QStringLiteral("---\nstatus: open\n---\nDo it.\n"));
     EXPECT_FALSE(window.editor()->isHidden());
 }
+
+TEST_F(WindowTest, ABaseEditKeepsUnsavedTypingInTheSameNote)
+{
+    write(QStringLiteral("Task.md"), "---\nstatus: open\n---\nDo it.\n");
+    write(QStringLiteral("Tasks.base"), "filters:\n  and:\n    - status == \"open\"\nviews:\n  - type: table\n"
+                                        "    order: [file.name, status]\n");
+    MainWindow window;
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    QSignalSpy indexed(window.index(), &Index::changed);
+    window.openVault(dir.path());
+    ASSERT_TRUE(indexed.wait(5000));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Task.md"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClicks(editor, QStringLiteral("More."));
+    ASSERT_TRUE(editor->isModified());
+
+    window.findChild<QAction *>(QStringLiteral("workspace:new-tab"))->trigger();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Tasks.base"))));
+    auto *table = window.findChild<noteAppC::bases::BaseView *>()->findChild<QTableView *>();
+    WAIT_TRUE(table->model() && table->model()->rowCount() == 1, 5000);
+    ASSERT_TRUE(table->model()->setData(table->model()->index(0, 1), QStringLiteral("done"), Qt::EditRole));
+
+    const QByteArray both("---\nstatus: done\n---\nDo it.\nMore.");
+    EXPECT_EQ(readAll(path(QStringLiteral("Task.md"))), both);
+    // The note's own next save does not put the old value back.
+    QTest::qWait(600);
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Task.md"))));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    EXPECT_EQ(readAll(path(QStringLiteral("Task.md"))), both);
+}
 #endif
 
 TEST_F(WindowTest, TheLayoutComesBackWhenTheVaultIsReopenedWithBackgroundTabsDeferred)
@@ -2354,10 +2385,7 @@ TEST_F(WindowTest, SettingsPageOpensAndClosesRestoringThePreviousNote)
     window.openVault(dir.path());
     window.openNote(path(QStringLiteral("Welcome.md")));
 
-    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
-    ASSERT_NE(stack, nullptr);
-    EXPECT_EQ(stack->currentIndex(), 0);
-
+    EXPECT_FALSE(window.settingsOpen());
     auto *settingsPage = window.findChild<QWidget *>(QStringLiteral("settingsPage"));
     ASSERT_NE(settingsPage, nullptr);
     EXPECT_NE(window.findChild<QWidget *>(QStringLiteral("settingsNav")), nullptr);
@@ -2368,17 +2396,19 @@ TEST_F(WindowTest, SettingsPageOpensAndClosesRestoringThePreviousNote)
         window.findChild<QToolButton *>(QStringLiteral("headerSettingsButton"));
     ASSERT_NE(settingsButton, nullptr);
     settingsButton->click();
-    EXPECT_EQ(stack->currentIndex(), 1);
-    EXPECT_EQ(stack->currentWidget(), settingsPage);
+    EXPECT_TRUE(window.settingsOpen());
+    EXPECT_TRUE(settingsPage->isVisible());
+    // A window of its own, narrower than an ultrawide main window.
+    EXPECT_NE(settingsPage->window(), &window);
+    EXPECT_LE(settingsPage->window()->width(), 960);
 
     window.closeSettings();
-    ASSERT_EQ(stack->currentIndex(), 0);
+    ASSERT_FALSE(window.settingsOpen());
     window.openSettings();
-    EXPECT_EQ(stack->currentIndex(), 1);
-    EXPECT_EQ(stack->currentWidget(), settingsPage);
+    EXPECT_TRUE(window.settingsOpen());
 
     window.closeSettings();
-    EXPECT_EQ(stack->currentIndex(), 0);
+    EXPECT_FALSE(window.settingsOpen());
 
     // The note underneath was never touched by opening the settings page.
     auto *editor = window.findChild<MarkdownEditor *>();
@@ -2795,6 +2825,25 @@ TEST_F(WindowTest, DeletingTheOpenNoteMovesItToTheVaultTrashAndClearsTheEditor)
     EXPECT_FALSE(editor->isEnabled());
 }
 
+TEST_F(WindowTest, MakeACopyPutsANumberedCopyBesideIt)
+{
+    MainWindow window;
+    window.setAutosaveIntervalsForTests(600000, 600000);
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    window.editor()->setCursorOffset(window.editor()->noteText().size());
+    QTest::keyClicks(window.editor(), QStringLiteral("typed"));
+    QString copy;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "copyPath", Q_RETURN_ARG(QString, copy),
+                                          Q_ARG(QString, path(QStringLiteral("Welcome.md")))));
+    EXPECT_EQ(copy, path(QStringLiteral("Welcome 1.md")));
+    EXPECT_EQ(readAll(copy), QByteArray("# Welcome\n\nBody.\ntyped")) << "what was on screen";
+    EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome 1.md")));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "copyPath", Q_RETURN_ARG(QString, copy),
+                                          Q_ARG(QString, path(QStringLiteral("attachment.txt")))));
+    EXPECT_EQ(copy, path(QStringLiteral("attachment 1.txt")));
+}
+
 TEST_F(WindowTest, TheDeleteCommandAndTheDeleteKeyRemoveAFile)
 {
     QDir(dir.path()).mkpath(QStringLiteral(".obsidian"));
@@ -2893,7 +2942,7 @@ TEST_F(WindowTest, ASystemTrashThatFailsFallsBackToTheVaultTrashAndSaysSo)
     EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral(".trash/Welcome.md"))));
 }
 
-TEST_F(WindowTest, ClickingATreeRowLeavesSettingsEvenWhenTheNoteIsAlreadyOpen)
+TEST_F(WindowTest, SettingsStaysOpenBesideANoteOpenedFromTheTree)
 {
     write(QStringLiteral("Second.md"), "# Second\n");
 
@@ -2902,39 +2951,16 @@ TEST_F(WindowTest, ClickingATreeRowLeavesSettingsEvenWhenTheNoteIsAlreadyOpen)
     window.openVault(dir.path());
     ASSERT_TRUE(loaded.wait(5000));
     window.openNote(path(QStringLiteral("Welcome.md")));
-
-    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
-    ASSERT_NE(stack, nullptr);
     auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
-    ASSERT_NE(tree, nullptr);
     auto *model = qobject_cast<QFileSystemModel *>(tree->model());
-    ASSERT_NE(model, nullptr);
-
-    // Welcome.md is already open - openNote() used to return before ever
-    // switching the stack back, so clicking the open note did nothing.
-    const QModelIndex welcome = model->index(path(QStringLiteral("Welcome.md")));
-    ASSERT_TRUE(welcome.isValid());
-    window.openSettings();
-    ASSERT_EQ(stack->currentIndex(), 1);
-    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeActivated", Q_ARG(QModelIndex, welcome)));
-    EXPECT_EQ(stack->currentIndex(), 0);
-
-    // A different note also leaves settings, and opens it.
     const QModelIndex second = model->index(path(QStringLiteral("Second.md")));
     ASSERT_TRUE(second.isValid());
+
     window.openSettings();
     ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeActivated", Q_ARG(QModelIndex, second)));
-    EXPECT_EQ(stack->currentIndex(), 0);
-    auto *editor = window.findChild<MarkdownEditor *>();
-    ASSERT_NE(editor, nullptr);
-    EXPECT_EQ(editor->noteText(), QStringLiteral("# Second\n"));
-
-    // A folder never reaches openNote() at all, so it needs its own check.
-    const QModelIndex projects = model->index(path(QStringLiteral("Projects")));
-    ASSERT_TRUE(projects.isValid());
-    window.openSettings();
-    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "onTreeClicked", Q_ARG(QModelIndex, projects)));
-    EXPECT_EQ(stack->currentIndex(), 0);
+    EXPECT_EQ(window.editor()->noteText(), QStringLiteral("# Second\n"));
+    EXPECT_TRUE(window.settingsOpen()) << "a window of its own: the note opens beside it";
+    window.closeSettings();
 }
 
 TEST_F(WindowTest, ClickingAFolderTogglesItAndActivatedDoesNotToggleItAgain)
@@ -3173,17 +3199,14 @@ TEST_F(WindowTest, CtrlCommaOpensSettingsAndEscapeCloses)
     window.show();
     ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
 
-    auto *stack = window.findChild<QStackedWidget *>(QStringLiteral("mainStack"));
-    ASSERT_NE(stack, nullptr);
-    ASSERT_EQ(stack->currentIndex(), 0);
-
+    ASSERT_FALSE(window.settingsOpen());
     QTest::keyClick(&window, Qt::Key_Comma, Qt::ControlModifier);
-    EXPECT_EQ(stack->currentIndex(), 1);
+    EXPECT_TRUE(window.settingsOpen());
 
     auto *settingsPage = window.findChild<QWidget *>(QStringLiteral("settingsPage"));
     ASSERT_NE(settingsPage, nullptr);
     QTest::keyClick(settingsPage, Qt::Key_Escape);
-    EXPECT_EQ(stack->currentIndex(), 0);
+    EXPECT_FALSE(window.settingsOpen());
 }
 
 TEST_F(WindowTest, EditingTheSelectedThemeFileRestylesLive)
@@ -5506,6 +5529,42 @@ TEST_F(WindowTest, ASaveBeforeTheWatcherSpeaksKeepsTheOtherVersion)
     for (const auto &version : noteAppC::Snapshots::versions(note))
         kept = kept || noteAppC::Snapshots::read(version) == QStringLiteral("# Welcome\n\nTheirs.\n");
     EXPECT_TRUE(kept);
+}
+
+TEST_F(WindowTest, APinnedTabKeepsItsNote)
+{
+    write(QStringLiteral("Linking.md"), "[[Welcome]]\n");
+    {
+        MainWindow window;
+        QSignalSpy indexed(window.index(), &Index::changed);
+        window.openVault(dir.path());
+        ASSERT_TRUE(indexed.wait(5000));
+        window.openNote(path(QStringLiteral("Linking.md")));
+        window.findChild<QAction *>(QStringLiteral("workspace:toggle-pin"))->trigger();
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+
+        // A link from it opens beside it; the pinned tab still holds Linking.
+        emit window.editor()->linkActivated(QStringLiteral("Welcome"));
+        ASSERT_EQ(tabs->count(), 2);
+        EXPECT_TRUE(window.windowTitle().startsWith(QStringLiteral("Welcome.md")));
+        EXPECT_EQ(tabs->tabText(0), QStringLiteral("Linking"));
+
+        // Ctrl+W does not close it; its pin button unpins it.
+        tabs->setCurrentIndex(0);
+        window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+        EXPECT_EQ(tabs->count(), 2);
+        window.close(); // the layout keeps the pin
+    }
+    MainWindow window;
+    window.openVault(dir.path());
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_EQ(tabs->count(), 2);
+    auto *pin = qobject_cast<QToolButton *>(tabs->tabButton(0, QTabBar::RightSide));
+    ASSERT_NE(pin, nullptr);
+    EXPECT_EQ(pin->property("iconName").toString(), QStringLiteral("pin"));
+    pin->click();
+    EXPECT_EQ(pin->property("iconName").toString(), QStringLiteral("x"));
+    EXPECT_EQ(tabs->count(), 2) << "unpinned, not closed";
 }
 
 TEST_F(WindowTest, TheTabsOutliveACrash)

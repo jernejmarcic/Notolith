@@ -189,6 +189,7 @@ void BaseView::showOpenedView()
     m_query = m_shown.query.get();
 
     m_tableModel = new BaseTableModel(m_query, m_index, m_vault, this);
+    m_tableModel->setBeforeWrite(m_beforeWrite);
     connect(m_tableModel, &BaseTableModel::noteEdited, this, &BaseView::onCellEdited);
     m_table->setModel(m_tableModel);
     {

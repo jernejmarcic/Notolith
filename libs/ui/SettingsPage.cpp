@@ -168,9 +168,12 @@ QWidget *SettingsPage::addRow(QVBoxLayout *into, const QStringList &keys, const 
 {
     auto *row = new QWidget(this);
     row->setObjectName(QStringLiteral("settingsRow"));
-    auto *rowLayout = new QHBoxLayout(row);
+    // A wide control (several pickers) goes under its text, so the window
+    // can stay narrow; the rest sit beside it.
+    const bool stacked = control->minimumSizeHint().width() > 240;
+    auto *rowLayout = new QBoxLayout(stacked ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight, row);
     rowLayout->setContentsMargins(0, 14, 0, 14);
-    rowLayout->setSpacing(16);
+    rowLayout->setSpacing(stacked ? 8 : 16);
 
     auto *text = new QWidget(row);
     auto *textLayout = new QVBoxLayout(text);
@@ -178,6 +181,7 @@ QWidget *SettingsPage::addRow(QVBoxLayout *into, const QStringList &keys, const 
     textLayout->setSpacing(2);
     auto *labelWidget = new QLabel(label, text);
     labelWidget->setObjectName(QStringLiteral("settingsRowLabel"));
+    labelWidget->setWordWrap(true); // a long command name in Hotkeys
     textLayout->addWidget(labelWidget);
     if (!description.isEmpty()) {
         auto *descWidget = new QLabel(description, text);
@@ -211,11 +215,13 @@ QWidget *SettingsPage::addRow(QVBoxLayout *into, const QStringList &keys, const 
         changed();
     });
 
-    controlsLayout->addWidget(vaultTag);
-    controlsLayout->addWidget(reset);
+    controlsLayout->addWidget(vaultTag, 0, Qt::AlignVCenter);
+    controlsLayout->addWidget(reset, 0, Qt::AlignVCenter);
     controlsLayout->addWidget(control);
+    if (stacked)
+        controlsLayout->addStretch(1);
 
-    rowLayout->addWidget(text, 1);
+    rowLayout->addWidget(text, stacked ? 0 : 1);
     rowLayout->addWidget(controlsRow, 0);
 
     auto *container = new QWidget(this);
@@ -1082,6 +1088,7 @@ QWidget *SettingsPage::buildHotkeysPage()
         textLayout->setSpacing(2);
         auto *label = new QLabel(command.name, text);
         label->setObjectName(QStringLiteral("settingsRowLabel"));
+        label->setWordWrap(true);
         auto *id = new QLabel(description, text);
         id->setObjectName(QStringLiteral("settingsRowDescription"));
         id->setWordWrap(true);

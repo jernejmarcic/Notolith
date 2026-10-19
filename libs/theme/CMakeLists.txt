@@ -64,6 +64,7 @@ qt_add_resources(noteAppC_theme "icons" PREFIX "/" FILES
     icons/play.svg
     icons/plus.svg
     icons/quote.svg
+    icons/pin.svg
     icons/spin-up.svg
     icons/square.svg
     icons/search.svg

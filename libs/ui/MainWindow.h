@@ -23,6 +23,7 @@
 #include "ShareEngine.h"
 #endif
 
+class QDialog;
 class QAbstractButton;
 class QButtonGroup;
 class QSplitter;
@@ -146,6 +147,7 @@ public:
     void toggleSourceMode();
     void openSettings();
     void closeSettings();
+    bool settingsOpen() const;
     /// Index for the open vault, so views can query links and tags.
     Index *index() { return &m_index; }
     /// The focused tab's editor, for tools and the benchmark.
@@ -259,6 +261,10 @@ private slots:
     void chooseMoveFolder(const QString &path);
     void deletePathAt(const QModelIndex &index);
     void deletePath(const QString &absolutePath);
+    /// Obsidian's "Make a copy": "Name 1.ext" beside it, opened when a note.
+    QString copyPath(const QString &absolutePath);
+    /// Saves unsaved typing in the note, before something else writes the file.
+    void saveTyping(const QString &absolutePath);
     /// A UI-only icon for a file or folder in the tree and on its tabs: a
     /// bundled icon id or one character; empty removes it. Kept outside the
     /// vault (FileIcons).
@@ -289,6 +295,9 @@ private:
         /// Obsidian defers its background tabs: a layout of ten tabs costs
         /// one note's open at startup, not ten.
         QString pendingPath;
+        /// Opening another note here opens it in a new tab instead; the tab's
+        /// close button is a pin that unpins it.
+        bool pinned = false;
     };
     /// Tabs in one split: a tab bar over a stack of their editors.
     struct TabGroup {
@@ -492,7 +501,7 @@ private:
     void placeJoinedNote(const QByteArray &shareID, const QString &title);
     /// The share's dialog, window-modal; `inviteCode` when one was just made.
     void showShareDialog(const QByteArray &shareID, const QString &inviteCode);
-    void stopShare(const QByteArray &shareID);
+    void stopShare(QByteArray shareID);
 #endif
     /// The status bar's "Shared - N here" and the tabs' shared marker.
     void updateShareStatus();
@@ -509,6 +518,7 @@ private:
     /// the focused one, showing the same note.
     void splitActive(Qt::Orientation orientation);
     void newTab();
+    void togglePin();
     /// Ctrl+Tab and Ctrl+Shift+Tab, within the focused split.
     void cycleTab(int step);
     /// Offers to save every modified tab. False means the user cancelled.
@@ -937,6 +947,7 @@ QLabel *m_vimStatus = nullptr;
     QToolButton *m_forwardButton = nullptr;
 
     QStackedWidget *m_mainStack = nullptr; ///< index 0: notes; index 1: settings
+    QDialog *m_settingsWindow = nullptr;
     SettingsPage *m_settingsPage = nullptr;
 };
 

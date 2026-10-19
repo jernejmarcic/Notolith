@@ -2251,3 +2251,48 @@ Shared/<title>.md.
       typed name ends with it (the tree shows base names only). Revisit if
       changing an attachment's extension from the tree is ever wanted.
       Multi-selection delete: the tree is single-selection, so nothing to do.
+
+### Jernej 2026-10-19 (afternoon)
+
+- [x] S1. "for the settings scrteen make it be smaller, like it should be
+      thinner, and more like a pop out window, especially for ultrawide
+      displays". Plan: SettingsPage moves out of the main stack into its own
+      QDialog (non-modal, transient for the main window, so Hyprland floats
+      it), at most 960x760 and 90%/85% of the screen, centred on the window;
+      rows wrap their labels and a control wider than 240 px goes under its
+      text so nothing scrolls sideways. Closing saves and reactivates the
+      main window. Tests: settings tests rewritten for the window; demo shots.
+- [ ] S2. "Is the newest version the one I launch from the app menu?" No:
+      ~/.local/bin/notolith was copied 00:17 today. Rebuild Release, install
+      per SYS_CHANGES (cmake --install to /tmp stage, copy bin/notolith),
+      record it.
+- [x] S3. share_window segfaulted once under ctest -j4 (passes alone and in
+      the next full run). Reproduce with --repeat under load, get the test
+      name and a backtrace, fix.
+      Found from the systemd core dump: stopSharingNote passed
+      session->shareID() (a reference into the session) to stopShare, which
+      deletes the session and then used the id: use after free. stopShare
+      takes the id by value; ShareEngine::stop copies its own.
+
+### Fable outstanding-work audit (2026-10-19)
+
+- [x] O1. A base cell edit is lost to unsaved typing in the same note: the
+      base writes the file directly, the watcher's "typed wins" rule keeps
+      the editor's text and the next autosave writes the old property back.
+      Plan: BaseView/BaseTableModel get setBeforeWrite(callback); MainWindow
+      saves any modified leaf on that note first (as rename does). Test:
+      type in a note, edit its property in a base, both on disk.
+- [x] O2. Pinned tabs (Obsidian: "Leaves can be pinned"): a pinned tab is
+      never replaced by opening another note there; pin/unpin command and
+      tab context menu entry; kept in the workspace layout.
+- [x] O3. File tree context menu: Open in default app, Show in system
+      explorer, Make a copy.
+- [x] O4. Mixed line endings are normalised to LF on save (Vault.cpp
+      ponytail), against "never rewrite bytes that were not edited".
+      Done better than the plan: a mixed note keeps its text as read, and a
+      save writes the unedited head and tail from it; only the edit is LF.
+- [x] O5. Try closing the Wayland activation-token item (L1425) under the
+      headless cage harness: assert the window is active after the hand-over.
+      Not done, and why: cage shows one fullscreen view and always focuses
+      the newest, so a window active there proves nothing about Hyprland's
+      focus-stealing rules. Stays with Jernej (L1425).

@@ -21,6 +21,8 @@
 #include <QFileSystemModel>
 #include <QFileSystemWatcher>
 #include <QGuiApplication>
+#include <QScreen>
+#include <QWindow>
 #include <QHBoxLayout>
 #include <QImageReader>
 #include <QInputDialog>
@@ -802,7 +804,22 @@ QWidget *MainWindow::buildMainArea()
     notesLayout->setSpacing(0);
     notesLayout->addWidget(m_workspace, 1);
 
-    m_settingsPage = new SettingsPage(this);
+    // A window of its own, sized like a dialog: a page as wide as the main
+    // area stretches every row across an ultrawide screen.
+    m_settingsWindow = new QDialog(this);
+    m_settingsWindow->setObjectName(QStringLiteral("settingsWindow"));
+    m_settingsWindow->setWindowTitle(tr("Settings"));
+    auto *settingsLayout = new QVBoxLayout(m_settingsWindow);
+    settingsLayout->setContentsMargins(0, 0, 0, 0);
+    m_settingsPage = new SettingsPage(m_settingsWindow);
+    settingsLayout->addWidget(m_settingsPage);
+    connect(m_settingsWindow, &QDialog::finished, this, [this] {
+        m_settings.save();
+        if (isVisible())
+            activateWindow(); // back to the notes: their shortcuts are this window's
+        if (m_active && m_active->editor->isEnabled() && m_active->editor->isVisible())
+            m_active->editor->setFocus();
+    });
     connect(m_settingsPage, &SettingsPage::settingChanged, this, &MainWindow::applySettings);
     connect(m_settingsPage, &SettingsPage::hotkeysChanged, this, &MainWindow::applyHotkeys);
     connect(m_settingsPage, &SettingsPage::recoveryRequested, this, &MainWindow::openRecovery);
@@ -812,7 +829,6 @@ QWidget *MainWindow::buildMainArea()
     m_mainStack = new QStackedWidget(this);
     m_mainStack->setObjectName(QStringLiteral("mainStack"));
     m_mainStack->addWidget(notesPage);
-    m_mainStack->addWidget(m_settingsPage);
     return m_mainStack;
 }
 
@@ -1799,7 +1815,12 @@ void MainWindow::syncTabs(TabGroup *group)
             // Looked up at click time: tabs move.
             for (int i = 0; i < group->tabs->count(); ++i) {
                 if (group->tabs->tabButton(i, QTabBar::RightSide) == closeButton) {
-                    closeLeaf(group->leaves.at(i));
+                    Leaf *leaf = group->leaves.at(i);
+                    if (leaf->pinned) { // Obsidian: the pin unpins
+                        leaf->pinned = false;
+                        syncTabs(group);
+                    } else
+                        closeLeaf(leaf);
                     return;
                 }
             }
@@ -1807,8 +1828,16 @@ void MainWindow::syncTabs(TabGroup *group)
         group->tabs->setTabButton(index, QTabBar::RightSide, closeButton);
     }
     for (int i = 0; i < wanted; ++i) {
-        group->tabs->setTabText(i, tabTitle(group->leaves.at(i)));
-        group->tabs->setTabIcon(i, tabIcon(group->leaves.at(i)));
+        const Leaf *leaf = group->leaves.at(i);
+        group->tabs->setTabText(i, tabTitle(leaf));
+        group->tabs->setTabIcon(i, tabIcon(leaf));
+        if (auto *button = qobject_cast<QToolButton *>(group->tabs->tabButton(i, QTabBar::RightSide));
+            button && button->property("iconName").toString() != (leaf->pinned ? QLatin1String("pin") : QLatin1String("x"))) {
+            const QString icon = leaf->pinned ? QStringLiteral("pin") : QStringLiteral("x");
+            button->setProperty("iconName", icon);
+            button->setIcon(Icons::icon(icon, m_theme.color(QStringLiteral("--text-muted")), 12));
+            button->setToolTip(leaf->pinned ? tr("Unpin") : tr("Close"));
+        }
     }
     const int active = group->leaves.indexOf(m_active);
     if (active >= 0 && active < wanted)
@@ -1930,6 +1959,12 @@ void MainWindow::newTab()
     activateLeaf(newLeaf(m_active->group));
     syncTabs(m_active->group);
     m_active->editor->setFocus();
+}
+
+void MainWindow::togglePin()
+{
+    m_active->pinned = !m_active->pinned;
+    syncTabs(m_active->group);
 }
 
 void MainWindow::cycleTab(int step)
@@ -2312,6 +2347,7 @@ void MainWindow::showTabMenu(TabGroup *group, const QPoint &globalPos)
     };
     item("workspace:close", tr("Close"));
     item("workspace:close-others", tr("Close others"));
+    item("workspace:toggle-pin", group->leaves.at(index)->pinned ? tr("Unpin") : tr("Pin"));
     menu.addSeparator();
     item("workspace:split-vertical", tr("Split right"));
     item("workspace:split-horizontal", tr("Split down"));
@@ -3076,8 +3112,14 @@ void MainWindow::buildActions()
         QStringLiteral("Ctrl+Alt+R"), &MainWindow::toggleRightSidebar);
     add(QStringLiteral("workspace:new-tab"), tr("New tab"), QStringLiteral("Ctrl+T"),
         &MainWindow::newTab);
+    add(QStringLiteral("workspace:toggle-pin"), tr("Toggle pin"), QString(), &MainWindow::togglePin);
     add(QStringLiteral("workspace:close"), tr("Close current tab"), QStringLiteral("Ctrl+W"),
-        [this] { closeLeaf(m_active); });
+        [this] {
+            if (m_active->pinned) // as in Obsidian: a pinned tab does not close by accident
+                statusBar()->showMessage(tr("This tab is pinned: unpin it to close it"), 3000);
+            else
+                closeLeaf(m_active);
+        });
     add(QStringLiteral("workspace:undo-close-pane"), tr("Undo close tab"), QStringLiteral("Ctrl+Shift+T"),
         &MainWindow::undoCloseTab);
     add(QStringLiteral("workspace:split-vertical"), tr("Split right"), QString(),
@@ -3807,24 +3849,37 @@ void MainWindow::toggleSourceMode()
 
 void MainWindow::openSettings()
 {
-    m_mainStack->setCurrentIndex(1);
+    if (!m_settingsWindow->isVisible()) {
+        // A third of an ultrawide, most of a laptop; centred on this window.
+        const QRect screen = (windowHandle() && windowHandle()->screen() ? windowHandle()->screen()
+                                                                        : QGuiApplication::primaryScreen())
+                                 ->availableGeometry();
+        const QSize size(std::min(960, screen.width() * 9 / 10), std::min(760, screen.height() * 85 / 100));
+        m_settingsWindow->resize(size);
+        QRect frame(QPoint(), size);
+        frame.moveCenter(isVisible() ? geometry().center() : screen.center());
+        m_settingsWindow->move(frame.topLeft());
+    }
+    m_settingsWindow->show();
+    m_settingsWindow->raise();
+    m_settingsWindow->activateWindow();
 }
 
 void MainWindow::closeSettings()
 {
-    m_settings.save();
-    m_mainStack->setCurrentIndex(0);
-    if (m_active->editor->isEnabled())
-        m_active->editor->setFocus();
+    m_settingsWindow->done(QDialog::Accepted); // finished() saves
+}
+
+bool MainWindow::settingsOpen() const
+{
+    return m_settingsWindow->isVisible();
 }
 
 void MainWindow::leaveSettings()
 {
-    // Also leaves the graph view, the main area's other page.
-    if (m_mainStack->currentWidget() == m_settingsPage)
-        closeSettings();
-    else
-        m_mainStack->setCurrentIndex(0);
+    // The main area's other page is the graph; settings is a window of its own
+    // and stays open beside the note.
+    m_mainStack->setCurrentIndex(0);
 }
 
 void MainWindow::openRelative(const QString &relativePath)
@@ -5277,6 +5332,11 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     const QString path = QFileInfo(rawPath).absoluteFilePath();
     if (path == m_active->notePath)
         return true;
+    // A pinned tab keeps its note: what would replace it opens beside it.
+    // Back and forward stay in the tab.
+    if (m_active->pinned && !m_active->notePath.isEmpty() && source != NavSource::History
+        && (isViewFile(path) || Vault::isNote(path) || Vault::isEncryptedNote(path) || isNotebookFile(path)))
+        newTab();
     if (isViewFile(path)) {
         if (!maybeLeave())
             return false;
@@ -5414,9 +5474,12 @@ QJsonObject MainWindow::layoutJSON() const
                 activeID = id;
             if (leaf->area == group->stack->currentWidget())
                 currentTab = i;
-            tabs.append(QJsonObject{{QStringLiteral("id"), id},
-                                    {QStringLiteral("type"), QStringLiteral("leaf")},
-                                    {QStringLiteral("state"), view}});
+            QJsonObject tab{{QStringLiteral("id"), id},
+                            {QStringLiteral("type"), QStringLiteral("leaf")},
+                            {QStringLiteral("state"), view}};
+            if (leaf->pinned)
+                tab.insert(QStringLiteral("pinned"), true); // Obsidian's own key
+            tabs.append(tab);
         }
         return {{QStringLiteral("id"), nextID()},
                 {QStringLiteral("type"), QStringLiteral("tabs")},
@@ -5541,6 +5604,7 @@ bool MainWindow::restoreLayout(const QJsonObject &layout)
             for (const QJsonObject &tab : std::as_const(tabs)) {
                 Leaf *leaf = spareLeaf ? std::exchange(spareLeaf, nullptr) : newLeaf(group);
                 leaf->pendingPath = tabFile(tab);
+                leaf->pinned = tab.value(QStringLiteral("pinned")).toBool() && !leaf->pendingPath.isEmpty();
                 byID.insert(tab.value(QStringLiteral("id")).toString(), leaf);
             }
             shown << std::pair{group, node.value(QStringLiteral("currentTab")).toInt()};
@@ -6046,7 +6110,7 @@ void MainWindow::stopSharingNote()
         stopShare(session->shareID());
 }
 
-void MainWindow::stopShare(const QByteArray &shareID)
+void MainWindow::stopShare(QByteArray shareID) // a copy: a caller's may be the session's own, deleted below
 {
     ShareSession *session = m_sessions.take(shareID);
     if (!session || !m_share)
@@ -6314,6 +6378,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
             auto *base = new bases::BaseView(m_active->area);
             base->setIndex(&m_index);
             base->setVault(&m_vault);
+            base->setBeforeWrite([this](const QString &note) { saveTyping(note); });
             if (!base->open(path, QString::fromUtf8(file.readAll()))) {
                 error = base->lastError();
                 delete base;
@@ -7479,6 +7544,9 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
     QAction *renameAction = nullptr;
     QAction *moveAction = nullptr;
     QAction *deleteAction = nullptr;
+    QAction *copyAction = nullptr;
+    QAction *openOutsideAction = nullptr;
+    QAction *showAction = nullptr;
     QAction *iconAction = nullptr;
     QAction *removeIconAction = nullptr;
     const QString path = index.isValid() ? m_files->filePath(index) : QString();
@@ -7486,7 +7554,13 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         menu.addSeparator();
         renameAction = menu.addAction(tr("Rename"));
         moveAction = menu.addAction(tr("Move to..."));
+        if (!m_files->isDir(index))
+            copyAction = menu.addAction(tr("Make a copy"));
         deleteAction = menu.addAction(tr("Delete"));
+        menu.addSeparator();
+        if (!m_files->isDir(index))
+            openOutsideAction = menu.addAction(tr("Open in default app"));
+        showAction = menu.addAction(tr("Show in system explorer"));
         if (fileIconsOn()) {
             menu.addSeparator();
             iconAction = menu.addAction(tr("Change icon..."));
@@ -7508,10 +7582,52 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
         chooseMoveFolder(path);
     else if (chosen == deleteAction)
         deletePathAt(index);
+    else if (chosen == copyAction)
+        copyPath(path);
+    else if (chosen == openOutsideAction)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    else if (chosen == showAction)
+        // ponytail: opens the folder; selecting the file in it needs the
+        // FileManager1 D-Bus call, add if the folder alone is not enough.
+        QDesktopServices::openUrl(QUrl::fromLocalFile(m_files->isDir(index) ? path : QFileInfo(path).absolutePath()));
     else if (chosen == iconAction)
         chooseFileIcon(path);
     else if (chosen == removeIconAction)
         setFileIcon(path, QString());
+}
+
+void MainWindow::saveTyping(const QString &absolutePath)
+{
+    for (const auto &leaf : m_leaves)
+        if (!leaf->view && leaf->notePath == absolutePath && isModified(leaf.get())) {
+            saveLeaf(leaf.get(), true); // every tab on the note shows this one text
+            return;
+        }
+}
+
+QString MainWindow::copyPath(const QString &absolutePath)
+{
+    const QFileInfo info(absolutePath);
+    if (!m_vault.isValid() || !m_vault.contains(absolutePath) || !info.isFile())
+        return {};
+    saveTyping(absolutePath); // the copy holds what is on screen
+    const QString suffix = info.suffix().isEmpty() ? QString() : QLatin1Char('.') + info.suffix();
+    const QString base = info.completeBaseName();
+    QString copy;
+    for (int n = 1;; ++n) {
+        copy = info.dir().filePath(QStringLiteral("%1 %2%3").arg(base).arg(n).arg(suffix));
+        if (!QFileInfo::exists(copy) && !QFileInfo(copy).isSymLink())
+            break;
+    }
+    if (!QFile::copy(absolutePath, copy)) {
+        statusBar()->showMessage(tr("Could not copy %1").arg(info.fileName()), 5000);
+        return {};
+    }
+    if (Vault::isNote(copy) || isViewFile(copy)) {
+        m_indexer->reindex(copy);
+        openNote(copy);
+    }
+    return copy;
 }
 
 void MainWindow::newNoteIn(const QString &folderRelative)

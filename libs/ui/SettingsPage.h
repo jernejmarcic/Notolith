@@ -23,8 +23,8 @@ class PluginRegistry;
 
 /// The settings page: left nav (Appearance, Editor, Files and links, About)
 /// beside scrolling rows of label+description and a control, read and
-/// written straight through the `Settings` MainWindow owns. A page in the
-/// main area, not a dialog - MainWindow swaps it in and out.
+/// written straight through the `Settings` MainWindow owns. MainWindow shows
+/// it in a window of its own.
 class SettingsPage : public QWidget {
     Q_OBJECT
 
