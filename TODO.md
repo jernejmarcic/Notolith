@@ -2038,7 +2038,7 @@ Shared/<title>.md.
       Merged (d3 damping 0.6, degree-scaled springs, no reheat when nodes and
       links are unchanged, drags reheat to 0.3). Tick once Jernej confirms the
       feel by eye.
-- [ ] Settings: list of file types the sidebar file tree ignores (Jernej
+- [x] Settings: list of file types the sidebar file tree ignores (Jernej
       2026-10-19: "there should be a list of filetypes in settings that are
       ignored by the sidebar"). Lane hidetypes: files.hiddenExtensions,
       rows hidden in the tree only (search, links, quick switcher unchanged).
