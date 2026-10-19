@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QMouseEvent>
 #include <QPointingDevice>
+#include <QScrollBar>
 #include <QScroller>
 #include <QStyleHints>
 #include <QTest>
@@ -192,6 +193,43 @@ void finger(MarkdownEditor &editor, const QList<QPoint> &path, int holdMs = 0, b
 }
 
 } // namespace
+
+TEST(TouchTest, AFingerDraggedUpTheNoteScrollsItAndSelectsNothing)
+{
+    // Jernej on PADD 2026-10-19: "u should add finger scrolling rn it selects
+    // stuff". Real touch events, as the compositor sends them, not mouse
+    // events that merely name a touch screen.
+    QString text;
+    for (int i = 0; i < 200; ++i)
+        text += QStringLiteral("Line %1 of a note long enough to scroll.\n").arg(i);
+    auto editor = editorWith(text);
+    QTest::qWait(QGuiApplication::styleHints()->mouseDoubleClickInterval() + 30);
+    QWidget *viewport = editor->viewport();
+    auto sequence = QTest::touchEvent(viewport, touchscreen);
+    QPoint at(300, 330);
+    sequence.press(0, at, viewport).commit();
+    for (int i = 0; i < 15; ++i) {
+        at.ry() -= 18;
+        QTest::qWait(16);
+        sequence.move(0, at, viewport).commit();
+    }
+    sequence.release(0, at, viewport).commit();
+    EXPECT_TRUE(QTest::qWaitFor([&] { return editor->verticalScrollBar()->value() > 100; }, 2000))
+        << "scrolled to " << editor->verticalScrollBar()->value();
+    EXPECT_TRUE(editor->selectedText().isEmpty()) << editor->selectedText().left(40).toStdString();
+}
+
+TEST(TouchTest, AFingerStillScrollsOnceTheGPUViewportIsOn)
+{
+    // setGPUacceleration() swaps the viewport, and the touch grab was on the
+    // old one.
+    auto editor = editorWith(QStringLiteral("text\n"));
+    editor->setGPUacceleration(true);
+    if (!editor->GPUacceleration())
+        GTEST_SKIP() << "no OpenGL here";
+    EXPECT_TRUE(QScroller::hasScroller(editor->viewport()));
+    EXPECT_TRUE(editor->viewport()->acceptDrops());
+}
 
 TEST(TouchTableTest, AFirstTapBringsTheGripsUpAndTheNextOneIsTheirs)
 {

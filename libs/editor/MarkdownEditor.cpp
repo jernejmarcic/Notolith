@@ -203,6 +203,20 @@ qreal headingScale(int level)
     }
 }
 
+
+/// Touch: a drag scrolls with momentum instead of selecting, and a held
+/// finger selects a word. Only where a touchscreen exists, so a desktop
+/// with a mouse keeps its drag-to-select untouched. Again on every new
+/// viewport: the grab belongs to the widget, not the editor.
+void grabTouchScroll(QWidget *viewport)
+{
+    const QList<const QInputDevice *> devices = QInputDevice::devices();
+    if (std::any_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
+            return device->type() == QInputDevice::DeviceType::TouchScreen;
+        }))
+        QScroller::grabGesture(viewport, QScroller::TouchGesture);
+}
+
 } // namespace
 
 MarkdownEditor::MarkdownEditor(QWidget *parent)
@@ -222,14 +236,7 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     watchStyleFiles();
     setKeyBindings({}); // the built-in keys, until the window hands over its own
 
-    // Touch: a drag scrolls with momentum instead of selecting, and a held
-    // finger selects a word. Only where a touchscreen exists, so a desktop
-    // with a mouse keeps its drag-to-select untouched.
-    const QList<const QInputDevice *> devices = QInputDevice::devices();
-    if (std::any_of(devices.cbegin(), devices.cend(), [](const QInputDevice *device) {
-            return device->type() == QInputDevice::DeviceType::TouchScreen;
-        }))
-        QScroller::grabGesture(viewport(), QScroller::TouchGesture);
+    grabTouchScroll(viewport());
     d->m_longPress.setSingleShot(true);
     d->m_longPress.setInterval(500);
     d->m_pdfZoomSettle.setSingleShot(true);
@@ -974,6 +981,8 @@ void MarkdownEditor::setGPUacceleration(bool on)
     setViewport(on ? new QOpenGLWidget(this) : nullptr);
     viewport()->setCursor(Qt::IBeamCursor);
     viewport()->setMouseTracking(true);
+    viewport()->setAcceptDrops(true);
+    grabTouchScroll(viewport());
     viewport()->update();
 #else
     Q_UNUSED(on);
@@ -6059,6 +6068,13 @@ void MarkdownEditor::mouseMoveEvent(QMouseEvent *event)
             d->m_longPress.stop();
         }
         if (d->m_cellPress >= 0 && (!d->m_cellPressTouch || d->m_cellArmed) && dragCellSelection(event->pos()))
+            return;
+        // A finger's drag is the scroller's: Qt still sends the mouse events
+        // it synthesizes from the touch, and they selected the text the
+        // note scrolled past. Only after a long press does a finger select.
+        const bool finger =
+            event->pointingDevice() && event->pointingDevice()->type() == QInputDevice::DeviceType::TouchScreen;
+        if (finger && !d->m_touchHandles)
             return;
         moveCursor(offsetAt(event->pos()), true);
         return;
