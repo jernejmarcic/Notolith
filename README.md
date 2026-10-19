@@ -46,7 +46,9 @@ the command palette (Ctrl+P) included; `TODO.md` has what is left.
   Ctrl+G, Obsidian's filters/groups/display/forces controls), canvas (JSON
   Canvas), bases (`.base` views), each optional at build time.
 - **Themes** - dark by default, Obsidian's token names and values, custom
-  colour schemes, and an importer for any Obsidian theme in the vault.
+  colour schemes, an importer for any Obsidian theme in the vault, and
+  per-kind formatting colours in Settings (headings, bold, links, ...; display
+  only, nothing is written to a note).
 - **Touch** - momentum scrolling and long-press selection on a touchscreen;
   sidebars fold on a narrow window. An Android build is in progress.
 

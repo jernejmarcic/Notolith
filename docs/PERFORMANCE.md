@@ -639,6 +639,19 @@ and the settings page re-themes the rows it rebuilds (they had kept the
 default colours until the next restyle). Settings pass, 1 MB note open: 21.6 ms
 to 1.6 ms (bench row "Settings pass").
 
+### 19b. A formatting colour relaid the whole note
+
+A colour in Settings > Appearance > Formatting colours changes only the
+formats a block's `QTextLayout` carries, but `MarkdownEditor::setTheme` zeroed
+every block's height and estimated them all again (the 17-21 ms of item 19,
+and the scroll position with it). `Theme::sameExcept` now says when the only
+difference is one of the format-colour tokens, and `setTheme` then does what a
+spelling refresh does: drop the layouts, keep every height, lay out the blocks
+on screen. `QTextLayout::setFormats` clears a laid-out layout's lines (checked
+by measuring `lineCount()` on either side of it), so those blocks cannot be
+recoloured in place; the cost is the visible blocks only, 0.2 ms each. A size,
+a font, the accent or the text colour is still the full path.
+
 ### 20. EPUB reader: chapter rendering off the UI thread, a lazy TOC, CSS resources, paged mode
 
 Four gaps in the EPUB reader (`libs/ext/epub`), not from a profile - the
