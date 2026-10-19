@@ -1212,6 +1212,129 @@ DropResult dropOn(QWidget *target, const QMimeData *mime, const QPoint &at, bool
 
 } // namespace
 
+TEST_F(WindowTest, ADraggedSidebarTabIsInsideAWindowAndOnlyDetachesOutsideAll)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    ASSERT_TRUE(panes && pane);
+    const std::unique_ptr<QMimeData> mime(window.paneDragMimeForTests(pane));
+    ASSERT_NE(mime, nullptr);
+    EXPECT_TRUE(mime->hasFormat(QStringLiteral("application/x-notolith-pane")));
+
+    // Over a window the pane drag is inside: accepted so the window hears it
+    // leave, no tile zone, and a drop there does nothing.
+    const DropResult over = dropOn(&window, mime.get(), window.rect().center());
+    EXPECT_TRUE(over.entered);
+    EXPECT_TRUE(over.dropped);
+    EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("dropOverlay")), nullptr);
+    EXPECT_NE(panes->indexOf(pane), -1);
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    // Over a split's body too, where a tab would tile.
+    auto *group = window.findChild<QWidget *>(QStringLiteral("tabGroup"));
+    EXPECT_TRUE(dropOn(group, mime.get(), QPoint(group->width() - 5, group->height() / 2)).dropped);
+    EXPECT_EQ(mainBars(window).size(), 1) << "a pane is not a tab: no split";
+    EXPECT_TRUE(popoutWindows().isEmpty());
+
+    // An address that is no pane, or text, is foreign.
+    QMimeData stale;
+    stale.setData(QStringLiteral("application/x-notolith-pane"), "12345");
+    EXPECT_FALSE(dropOn(&window, &stale, window.rect().center()).entered);
+    QMimeData text;
+    text.setText(QStringLiteral("x"));
+    EXPECT_FALSE(dropOn(&window, &text, window.rect().center()).entered);
+
+    // A pane already in a window of its own cannot be dragged out of the sidebar.
+    auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+    auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+    chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+    ASSERT_EQ(popoutWindows().size(), 1);
+    EXPECT_FALSE(dropOn(&window, mime.get(), window.rect().center()).entered);
+}
+
+TEST_F(WindowTest, DraggingASidebarTabOutOfEveryWindowDetachesItsPane)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    auto *tab = window.findChild<QToolButton *>(QStringLiteral("backlinksTabButton"));
+    ASSERT_TRUE(panes && pane && tab);
+    const QPoint at = tab->rect().center();
+
+    // A press and a short move does not start a drag (a click stays a click).
+    QTest::mousePress(tab, Qt::LeftButton, {}, at);
+    QTest::mouseMove(tab, at + QPoint(2, 0));
+    QTest::mouseRelease(tab, Qt::LeftButton, {}, at);
+    EXPECT_NE(panes->indexOf(pane), -1);
+    EXPECT_TRUE(popoutWindows().isEmpty());
+
+    // Pulled past the drag distance the real QDrag starts. The offscreen
+    // platform has no drag of its own, so exec() comes back at once as a drop
+    // outside every window - which is the path under test (the press, the
+    // move, the synthetic release, the detach). What a compositor does with
+    // the pixmap, the cursor and a drop over a window is hand-only; that
+    // case is the mime test above.
+    QTest::mousePress(tab, Qt::LeftButton, {}, at);
+    QTest::mouseMove(tab, at + QPoint(40, 0));
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    EXPECT_EQ(popouts.first()->kind(), noteAppC::PopoutWindow::Kind::Pane);
+    EXPECT_EQ(pane->window(), popouts.first());
+    EXPECT_EQ(panes->indexOf(pane), -1);
+    EXPECT_TRUE(tab->isHidden());
+    EXPECT_FALSE(tab->isDown()) << "the platform swallowed the release; the synthetic one ended the press";
+}
+
+namespace {
+
+/// Stands in for Qt's own drag, which eats every key from an application
+/// filter it installs after ours, inside QDrag::exec().
+class KeyEater : public QObject {
+public:
+    bool eventFilter(QObject *, QEvent *event) override { return event->type() == QEvent::KeyPress; }
+};
+
+} // namespace
+
+TEST_F(WindowTest, EscapeDuringADragIsSeenAndCancelsIt)
+{
+    // The decision: a drag that no group took and that never was over a
+    // window opens one, unless Escape cancelled it. The real drag, and the
+    // pointer outside every window with an Escape, is hand-only: the
+    // offscreen platform has no drag to cancel.
+    EXPECT_TRUE(MainWindow::dropOpensWindow(false, false, false));
+    EXPECT_FALSE(MainWindow::dropOpensWindow(true, false, false)) << "a group took it";
+    EXPECT_FALSE(MainWindow::dropOpensWindow(false, true, false)) << "let go over a window";
+    EXPECT_FALSE(MainWindow::dropOpensWindow(false, false, true)) << "Escape";
+
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    KeyEater drag; // installed after the window's filter, so it runs first: as Qt's drag does
+    qApp->installEventFilter(&drag);
+
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_FALSE(window.dragEscapedForTests()) << "no drag is running: nothing is watched";
+
+    window.watchDragForTests(true); // what dragEndedOutside() does from inside exec()
+    QTest::keyClick(window.editor(), Qt::Key_A);
+    EXPECT_FALSE(window.dragEscapedForTests()) << "only Escape cancels";
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_TRUE(window.dragEscapedForTests()) << "ahead of the drag's own filter, which eats the key";
+
+    window.watchDragForTests(false);
+    QTest::keyClick(window.editor(), Qt::Key_Escape);
+    EXPECT_FALSE(window.dragEscapedForTests());
+    qApp->removeEventFilter(&drag);
+}
+
 TEST_F(WindowTest, DropZoneIsPickedByEdgeQuarters)
 {
     const QRect rect(0, 0, 400, 300);
@@ -1879,6 +2002,137 @@ TEST_F(WindowTest, ObsidiansFloatingNodeIsReadAndNeverWritten)
         window.close();
     }
     EXPECT_EQ(readAll(path(QStringLiteral(".obsidian/workspace.json"))), obsidian);
+}
+
+namespace {
+
+/// The `state.type` of every leaf of every window in a saved layout's `floating` node.
+QStringList floatingViewTypes(const QJsonObject &layout)
+{
+    QStringList types;
+    for (const QJsonValue &window : layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray()) {
+        for (const QJsonValue &tabs : window.toObject().value(QStringLiteral("children")).toArray()) {
+            for (const QJsonValue &leaf : tabs.toObject().value(QStringLiteral("children")).toArray())
+                types << leaf.toObject().value(QStringLiteral("state")).toObject().value(QStringLiteral("type")).toString();
+        }
+    }
+    return types;
+}
+
+/// A widget by name wherever it is: in the window, or in the pop-out that took it.
+QWidget *findAnywhere(MainWindow &window, const char *name)
+{
+    if (auto *found = window.findChild<QWidget *>(QLatin1String(name)))
+        return found;
+    for (auto *popout : popoutWindows()) {
+        if (auto *found = popout->findChild<QWidget *>(QLatin1String(name)))
+            return found;
+    }
+    return nullptr;
+}
+
+} // namespace
+
+TEST_F(WindowTest, ADetachedSidebarIsRestoredAsAFileExplorerWindow)
+{
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        command(window, "app:detach-left-sidebar")->trigger();
+        command(window, "app:detach-right-sidebar")->trigger();
+        const auto popouts = popoutWindows();
+        ASSERT_EQ(popouts.size(), 2);
+        for (auto *popout : popouts) {
+            if (popout->findChild<QTreeView *>(QStringLiteral("fileExplorer")))
+                popout->resize(333, 444);
+        }
+        window.close();
+    }
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    QJsonObject layout = noteAppC::Workspaces::current(dir.path());
+    QStringList types = floatingViewTypes(layout);
+    types.sort();
+    EXPECT_EQ(types, (QStringList{QStringLiteral("file-explorer"), QStringLiteral("right-sidebar")}));
+    // A view type Notolith does not have is skipped, whoever wrote it.
+    QJsonArray windows = layout.value(QStringLiteral("floating")).toObject().value(QStringLiteral("children")).toArray();
+    windows.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("window")}, {QStringLiteral("width"), 300}, {QStringLiteral("height"), 300},
+                               {QStringLiteral("children"), QJsonArray{QJsonObject{
+                                    {QStringLiteral("type"), QStringLiteral("tabs")},
+                                    {QStringLiteral("children"), QJsonArray{QJsonObject{
+                                         {QStringLiteral("type"), QStringLiteral("leaf")},
+                                         {QStringLiteral("state"), QJsonObject{{QStringLiteral("type"), QStringLiteral("some-plugin-view")}}}}}}}}}});
+    layout.insert(QStringLiteral("floating"), QJsonObject{{QStringLiteral("children"), windows}});
+    ASSERT_TRUE(noteAppC::Workspaces::saveCurrent(dir.path(), layout));
+
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 2) << "the unknown view made no window";
+    for (auto *popout : popouts)
+        EXPECT_EQ(popout->kind(), noteAppC::PopoutWindow::Kind::Sidebar);
+    auto *sidebar = findAnywhere(window, "sidebar");
+    auto *rightSidebar = findAnywhere(window, "rightSidebar");
+    auto *splitter = window.findChild<QSplitter *>(QStringLiteral("mainSplitter"));
+    ASSERT_TRUE(sidebar && rightSidebar && splitter);
+    EXPECT_EQ(splitter->count(), 1) << "only the editor is left in the main window";
+    auto *explorer = qobject_cast<noteAppC::PopoutWindow *>(sidebar->window());
+    ASSERT_NE(explorer, nullptr);
+    EXPECT_EQ(explorer->size(), QSize(333, 444));
+    EXPECT_NE(explorer->findChild<QTreeView *>(QStringLiteral("fileExplorer")), nullptr);
+    EXPECT_TRUE(explorer->isVisible());
+    EXPECT_NE(qobject_cast<noteAppC::PopoutWindow *>(rightSidebar->window()), nullptr);
+    EXPECT_NE(rightSidebar->window(), sidebar->window());
+
+    // Closing the windows docks them again, and the next save forgets them.
+    for (auto *popout : popouts)
+        popout->close();
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    EXPECT_EQ(splitter->count(), 3);
+    window.close();
+    EXPECT_FALSE(noteAppC::Workspaces::current(dir.path()).contains(QStringLiteral("floating")));
+}
+
+TEST_F(WindowTest, ADetachedPaneComesBackDetached)
+{
+    const auto tabOf = [](MainWindow &window, const char *name) {
+        return window.findChild<QToolButton *>(QLatin1String(name));
+    };
+    {
+        MainWindow window;
+        window.openVault(dir.path());
+        window.show();
+        ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+        auto *tabRow = window.findChild<QWidget *>(QStringLiteral("rightSidebarTabs"));
+        for (const char *name : {"backlinksTabButton", "outlineTabButton"}) {
+            QToolButton *tab = tabOf(window, name);
+            ASSERT_NE(tab, nullptr);
+            chooseFromContextMenu(tabRow, tab->mapTo(tabRow, tab->rect().center()), QStringLiteral("Detach pane"));
+        }
+        ASSERT_EQ(popoutWindows().size(), 2);
+        window.close();
+    }
+    EXPECT_TRUE(popoutWindows().isEmpty());
+    QStringList types = floatingViewTypes(noteAppC::Workspaces::current(dir.path()));
+    types.sort();
+    EXPECT_EQ(types, (QStringList{QStringLiteral("backlink"), QStringLiteral("outline")}));
+
+    MainWindow window;
+    window.openVault(dir.path());
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 2);
+    auto *panes = window.findChild<QStackedWidget *>(QStringLiteral("rightSidebarPanes"));
+    for (const char *name : {"backlinksPane", "outlinePane"}) {
+        auto *pane = findAnywhere(window, name);
+        ASSERT_NE(pane, nullptr) << name;
+        auto *popout = qobject_cast<noteAppC::PopoutWindow *>(pane->window());
+        ASSERT_NE(popout, nullptr) << name << " is back in the sidebar";
+        EXPECT_EQ(popout->kind(), noteAppC::PopoutWindow::Kind::Pane);
+        EXPECT_EQ(panes->indexOf(pane), -1);
+    }
+    EXPECT_TRUE(tabOf(window, "backlinksTabButton")->isHidden());
+    EXPECT_TRUE(tabOf(window, "outlineTabButton")->isHidden());
+    EXPECT_FALSE(tabOf(window, "tagsTabButton")->isHidden()) << "the panes that were not detached stay";
+    EXPECT_NE(panes->indexOf(window.findChild<QWidget *>(QStringLiteral("tagsPane"))), -1);
 }
 
 TEST_F(WindowTest, NamedLayoutsSaveAndLoad)

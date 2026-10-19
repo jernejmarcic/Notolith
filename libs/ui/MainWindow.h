@@ -25,6 +25,7 @@ class QButtonGroup;
 class QSplitter;
 class QFileSystemModel;
 class QFileSystemWatcher;
+class QDrag;
 class QDropEvent;
 class QLabel;
 class QLineEdit;
@@ -164,6 +165,15 @@ public:
     /// What dragging tab `index` of `tabs` carries. For the tests: the drag
     /// itself cannot run offscreen.
     QMimeData *tabDragMimeForTests(const QTabBar *tabs, int index) const;
+    /// The same for a right-sidebar pane's tab.
+    QMimeData *paneDragMimeForTests(const QWidget *pane) const;
+    /// Whether a drag that no window took opens one: only when it was not
+    /// dropped on a group, never over one of our windows and not cancelled with Escape.
+    static bool dropOpensWindow(bool handled, bool inside, bool escaped);
+    /// For the tests, which cannot run a drag: act as if one were running
+    /// (`on`), and whether an Escape was pressed meanwhile.
+    void watchDragForTests(bool on);
+    bool dragEscapedForTests() const;
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -369,6 +379,15 @@ private:
     /// Called first by eventFilter(); true when it consumed the event.
     bool popoutEventFilter(QObject *watched, QEvent *event);
     void startTabDrag(TabGroup *group, Leaf *leaf, const QPoint &pos);
+    /// Dragging a right-sidebar tab: let go outside every window, `pane` is detached.
+    void startPaneDrag(QAbstractButton *tab, QWidget *pane);
+    /// Runs `drag`; true when it was let go outside every window of ours
+    /// (taken by none and never over one), which is what opens a window.
+    bool dragEndedOutside(QDrag *drag);
+    void watchDragKeys();
+    /// application/x-notolith-pane carrying a pane, and the pane one carries (null when foreign, gone or detached).
+    QMimeData *paneMime(const QWidget *pane) const;
+    QWidget *paneFromMime(const QMimeData *mime) const;
     /// application/x-notolith-leaf carrying a leaf, and the leaf one carries (null when foreign or gone).
     QMimeData *leafMime(const Leaf *leaf) const;
     Leaf *leafFromMime(const QMimeData *mime) const;
@@ -379,9 +398,12 @@ private:
     bool handleGroupDrop(TabGroup *group, QDropEvent *event, const QPoint &pos);
     QPointer<QWidget> m_dropOverlay;
     Leaf *m_pressedLeaf = nullptr; ///< the tab the left button went down on, until it is released
+    QPointer<QWidget> m_pressedPane; ///< the same for a right-sidebar tab
     QPoint m_pressPos;
     bool m_dragInside = false;  ///< the drag in progress is over one of our windows
     bool m_dragHandled = false; ///< and a group took its drop
+    bool m_dragRunning = false; ///< a drag of ours is inside exec()
+    bool m_dragEscaped = false; ///< and Escape was pressed during it
     std::vector<std::unique_ptr<PopoutWindow>> m_popouts;
     bool m_popoutsOn = false; ///< the popout-windows feature, as last applied
 
