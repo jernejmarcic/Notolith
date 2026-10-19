@@ -276,6 +276,97 @@ bool MarkdownEditor::isFoldedAt(qsizetype sourceOffset) const
     return d->m_folds.value(firstPiece(view).span.range.start, defaultFoldOf(view));
 }
 
+QList<qsizetype> MarkdownEditor::enclosingFolds(qsizetype offset) const
+{
+    QList<qsizetype> sites;
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
+        return sites;
+    const BlockSpan &own = d->m_blocks[size_t(index)].span;
+    if (d->m_foldIndent) {
+        const std::span<const ListItemSpan> items = listItemsIn(own.range);
+        // In source order a nested item comes after the one holding it.
+        for (size_t i = items.size(); i-- > 0;) {
+            if (i + 1 < items.size() && items[i + 1].range.start < items[i].range.end
+                && items[i].range.start <= offset && offset < items[i].range.end)
+                sites.append(items[i].range.start);
+        }
+    }
+    if (d->m_foldHeading) {
+        int below = own.kind == BlockSpan::Kind::Heading ? own.level : 7;
+        if (below < 7)
+            sites.append(own.range.start);
+        for (qsizetype i = index - 1; i >= 0 && below > 1; --i) {
+            const BlockSpan &span = d->m_blocks[size_t(i)].span;
+            if (span.kind == BlockSpan::Kind::Heading && span.level < below) {
+                below = span.level;
+                sites.append(span.range.start);
+            }
+        }
+    }
+    return sites;
+}
+
+bool MarkdownEditor::foldCommand(const QString &id)
+{
+    if (!id.contains(QLatin1String("fold")))
+        return false;
+    if (id == QLatin1String("editor:toggle-fold-properties")) {
+        if (!d->m_blocks.empty() && d->m_blocks[0].span.kind == BlockSpan::Kind::Frontmatter
+            && isFoldable(d->m_blocks[0]))
+            toggleFoldAt(0);
+        return true;
+    }
+    if (id == QLatin1String("editor:fold-all") || id == QLatin1String("editor:unfold-all")) {
+        const bool fold = id == QLatin1String("editor:fold-all");
+        if (fold) {
+            // The caret goes to the outermost fold it is in first, or it would
+            // sit in hidden text and open it again.
+            const QList<qsizetype> around = enclosingFolds(d->m_cursor);
+            if (!around.isEmpty() && d->m_lines.lineAt(around.last()) != d->m_lines.lineAt(d->m_cursor))
+                setCursorOffset(around.last());
+        }
+        // Folding writes an entry, unfolding removes it: open is no entry, so
+        // a note unfolded again leaves nothing to remember.
+        const auto set = [this, fold](qsizetype start) {
+            const bool was = d->m_folds.value(start, false);
+            if (fold)
+                d->m_folds.insert(start, true);
+            else
+                d->m_folds.remove(start);
+            return was != fold;
+        };
+        if (d->m_foldHeading) {
+            for (const BlockView &view : d->m_blocks) {
+                if (view.span.kind == BlockSpan::Kind::Heading)
+                    set(view.span.range.start);
+            }
+        }
+        if (d->m_foldIndent) {
+            const QList<ListItemSpan> &items = d->m_decorations.listItems;
+            for (qsizetype i = 0; i + 1 < items.size(); ++i) {
+                if (items.at(i + 1).range.start < items.at(i).range.end && set(items.at(i).range.start))
+                    invalidateBlock(blockAt(items.at(i).range.start)); // its children appear or go
+            }
+        }
+        updateLayout();
+        viewport()->update();
+        return true;
+    }
+    const bool toggle = id == QLatin1String("editor:toggle-fold");
+    const bool more = id == QLatin1String("editor:fold-more");
+    if (!toggle && !more && id != QLatin1String("editor:fold-less"))
+        return false;
+    // The innermost fold there is to toggle, or to fold, or to open.
+    for (const qsizetype site : enclosingFolds(d->m_cursor)) {
+        if (toggle || isFoldedAt(site) != more) {
+            toggleFoldAt(site);
+            break;
+        }
+    }
+    return true;
+}
+
 QList<std::pair<qsizetype, QString>> MarkdownEditor::foldSites() const
 {
     // From the decorations, not the blocks: a block learns it folds only when

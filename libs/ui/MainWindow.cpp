@@ -1322,6 +1322,8 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setVimMode(m_settings.boolean(QStringLiteral("editor.vimMode")));
     editor->setStrictLineBreaks(m_settings.boolean(QStringLiteral("editor.strictLineBreaks")));
     editor->setIndentGuides(m_settings.boolean(QStringLiteral("editor.showIndentGuides")));
+    editor->setFolding(m_settings.boolean(QStringLiteral("editor.foldHeading")),
+                       m_settings.boolean(QStringLiteral("editor.foldIndent")));
     editor->setOutlineNumbering(m_settings.text(QStringLiteral("editor.listNumberStyle")) == QLatin1String("hierarchical"));
     editor->setListNumberSuffix(m_settings.text(QStringLiteral("editor.listNumberSuffix")));
     editor->setBulletGlyphs(m_settings.text(QStringLiteral("editor.bulletGlyphs")));

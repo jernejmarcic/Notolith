@@ -474,10 +474,11 @@ A heading folds its section, as in Obsidian: every block after it up to (not
 including) the next heading of the same or a higher level, or the end of the
 note. A list item with children folds them; one without cannot (a continuation
 line is not a child), and a heading inside a callout or a quote does not fold.
-Both are on by default: `MarkdownEditor::setFolding(heading, indent)` is the
-switch (the Settings page and Obsidian's `foldHeading` / `foldIndent` import
-come with the commands, a later change); off, that kind has no arrow, hides
-nothing and is not remembered, and its remembered folds return when it is
+Both are on by default. Settings > Editor > Fold heading / Fold indent
+(`editor.foldHeading`, `editor.foldIndent`, read from Obsidian's `app.json`
+keys of the same names) turn each off through `MarkdownEditor::setFolding(heading,
+indent)`: that kind then has no arrow, hides nothing, is skipped by the fold
+commands and is not remembered, and its remembered folds return when it is
 switched on again.
 
 An arrow in the margin level with the heading's, or the item's, first line
@@ -505,14 +506,37 @@ Editing rules:
   link or a search: `setCursorOffset()`, `scrollToOffset()`, `revealOffset()`).
   In `updateLayout()` that rule runs only once the user has touched the note
   and not in reading view, so a restored caret and restored folds do not undo
-  each other, so a restore sets the caret first and the folds after (`MainWindow`
-  still does it the other way round until the commands change, which swaps it). A selection runs over a fold without opening it, and copy, cut and
-  delete act on the hidden source too.
+  each other, so a restore sets the caret first and the folds after
+  (`MainWindow::openNote()`; `WindowTest.ARememberedHeadingFoldAroundTheRememberedCaretStaysFolded`).
+  A selection runs over a fold without opening it, and copy, cut and delete act
+  on the hidden source too.
 - Folding a section the caret is in moves the caret to the heading's, or the
   item's, line first.
 - Folds follow their line: the offset-keyed state is remapped by every edit,
   and undo, redo and a whole-text external edit carry it across by line text
   (`takeFolds()` / `applyFoldState()`).
+
+Commands, under Obsidian's ids and with no default key (palette, slash popup
+and Settings > Hotkeys list them like the rest, and a vault's `hotkeys.json`
+binds them). They fold headings and list items with children, work in reading
+view too, and move the caret to the line they fold it under:
+
+| id | does |
+|---|---|
+| `editor:toggle-fold` | toggles the innermost fold around the caret: the item or heading whose line it is on, else the one above it |
+| `editor:fold-more` | folds the innermost fold around the caret that is open, so repeated runs climb out one level at a time |
+| `editor:fold-less` | opens the innermost folded fold around the caret |
+| `editor:fold-all` | folds every heading and every list item with children, inner ones included; the caret goes to the outermost fold it was in |
+| `editor:unfold-all` | opens them all, and forgets them: an open fold has no entry, so nothing is left to remember |
+| `editor:toggle-fold-properties` | folds or opens the properties table |
+
+A callout's, container's or code block's own fold is not touched by fold-all
+and unfold-all. The commands are `MarkdownEditor::foldCommand()` in
+`BlockRenderers.cpp`; tests `FoldTest.Fold*Command*`,
+`WindowTest.FoldCommandsAreInThePaletteAndRebindable`. Fold-all and unfold-all
+on a megabyte note take about 1.5 ms each (one pass over the headings and the
+list items, then the layout pass; `FoldTest.FoldAllAndUnfoldAllOnAMegabyte...`,
+`docs/PERFORMANCE.md`).
 
 Folded headings and list parents are remembered with the rest (below), only the
 folded ones: an open one has no entry, so folding everything on a big note costs
