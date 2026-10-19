@@ -402,7 +402,8 @@ RandomEdit randomEdit(const QString &text, QRandomGenerator &rng)
                                        QStringLiteral("\n"), QStringLiteral("\U0001F600")};
     RandomEdit e;
     const qsizetype size = text.size();
-    e.at = rng.bounded(int(size + 1));
+    // Half the edits land in the first few characters, so replicas collide at one spot.
+    e.at = rng.bounded(2) ? rng.bounded(int(std::min<qsizetype>(size, 5) + 1)) : rng.bounded(int(size + 1));
     while (e.at < size && text[e.at].isLowSurrogate())
         ++e.at;
     if (size > e.at && rng.bounded(3) == 0) {
@@ -502,6 +503,71 @@ TEST_P(CrdtDocTest, AnUpdateReferringToUnseenEditsWaits)
     EXPECT_EQ(b->text(), a->text());
     EXPECT_EQ(b->text(), QStringLiteral("hlo world"));
     EXPECT_EQ(b->stateVector(), a->stateVector());
+
+    // Not only a gap in the sender's own edits: an edit typed after another
+    // replica's text waits for that text, though its own clock is next in line.
+    auto c = make(3), d = make(4);
+    const QByteArray base = c->localEdit(0, 0, QStringLiteral("base"));
+    deliver(*d, base);
+    const QByteArray reply = d->localEdit(4, 0, QStringLiteral(" reply"));
+    auto e = make(5);
+    EXPECT_TRUE(deliver(*e, reply).isEmpty());
+    EXPECT_EQ(e->text(), QString());
+    deliver(*e, base);
+    EXPECT_EQ(e->text(), QStringLiteral("base reply"));
+}
+
+TEST_P(CrdtDocTest, AReloadedReplicaKeepsMergingLikeTheOthers)
+{
+    QRandomGenerator rng(99);
+    std::unique_ptr<CrdtDoc> docs[3] = {make(1), make(2), make(3)};
+    QList<QByteArray> inbox[3];
+    auto deliverSome = [&](int to, bool all) {
+        std::shuffle(inbox[to].begin(), inbox[to].end(), rng);
+        const int count = all ? int(inbox[to].size()) : rng.bounded(int(inbox[to].size()) + 1);
+        for (int i = 0; i < count; ++i)
+            deliver(*docs[to], inbox[to].takeFirst());
+    };
+    // A long concurrent history in which every replica keeps typing after text
+    // the others wrote, so its runs carry timestamps that are not simply
+    // consecutive, and some of its edits were typed beside another's.
+    for (int round = 0; round < 600; ++round) {
+        const int who = rng.bounded(3);
+        const RandomEdit e = randomEdit(docs[who]->text(), rng);
+        const QByteArray update = docs[who]->localEdit(e.at, e.removed, e.inserted);
+        for (int other = 0; other < 3; ++other)
+            if (other != who && !update.isEmpty())
+                inbox[other].append(update);
+        for (int to = 0; to < 3; ++to)
+            if (rng.bounded(2))
+                deliverSome(to, false);
+    }
+    for (int to = 0; to < 3; ++to)
+        deliverSome(to, true);
+    if (GetParam() == Backend::Yrs) // see ThreeReplicasConvergeUnderRandomDelivery
+        for (auto &to : docs)
+            for (auto &from : docs)
+                catchUp(*to, *from);
+    ASSERT_EQ(docs[0]->text(), docs[1]->text());
+
+    // Restarted from the stored state, then concurrent edits with a replica
+    // that never restarted: the two must still end in one text.
+    auto reloaded = make(4);
+    ASSERT_TRUE(reloaded->loadState(docs[0]->encodeState()));
+    ASSERT_EQ(reloaded->text(), docs[1]->text());
+    CrdtDoc *pair[2] = {reloaded.get(), docs[1].get()};
+    QList<QByteArray> toward[2];
+    for (int round = 0; round < 200; ++round) {
+        const int who = rng.bounded(2);
+        const RandomEdit e = randomEdit(pair[who]->text(), rng);
+        const QByteArray update = pair[who]->localEdit(e.at, e.removed, e.inserted);
+        if (!update.isEmpty())
+            toward[1 - who].append(update);
+    }
+    for (int to = 0; to < 2; ++to)
+        for (const QByteArray &update : toward[to])
+            deliver(*pair[to], update);
+    EXPECT_EQ(pair[0]->text(), pair[1]->text());
 }
 
 TEST_P(CrdtDocTest, ConcurrentForwardTypingAtOneSpotDoesNotInterleave)
@@ -688,6 +754,18 @@ TEST_P(CrdtDocTest, SizesAndMemoryAtAMegabyte)
     }
     const double randomCost = double(clock.nsecsElapsed()) / kRandomEdits / 1e6;
 
+    // Cost of taking in one remote one-character edit at a random position,
+    // into the note as fragmented by those edits (what a collaborator costs).
+    ASSERT_TRUE(peer->loadState(a->encodeState()));
+    constexpr int kRemoteEdits = 500;
+    QList<QByteArray> remote;
+    for (int i = 0; i < kRemoteEdits; ++i)
+        remote.append(a->localEdit(rng.bounded(int(size) + 1), 0, QStringLiteral("w")));
+    clock.restart();
+    for (const QByteArray &update : remote)
+        EXPECT_FALSE(peer->applyUpdate(update).isEmpty());
+    const double remoteCost = double(clock.nsecsElapsed()) / kRemoteEdits / 1e6;
+
     // Heap for the same note built by 10 000 appends of 100 characters.
     const qsizetype heapBefore = heapInUse();
     {
@@ -699,10 +777,11 @@ TEST_P(CrdtDocTest, SizesAndMemoryAtAMegabyte)
             end += chunk.size();
         }
         const qsizetype heap = heapInUse() - heapBefore;
-        std::printf("[ BENCH    ] %-6s 1 MB: random-position edit %.4f ms (%d edits), keystroke update %lld B, "
-                    "encodeState %lld B, diff after 100 scattered edits %lld B, heap for 10 000 appends %lld KB\n",
-                    backend == Backend::Native ? "Native" : "Yrs", randomCost, kRandomEdits, qint64(keystroke),
-                    qint64(state.size()), qint64(diff), qint64(heap / 1024));
+        std::printf("[ BENCH    ] %-6s 1 MB: random-position edit %.4f ms (%d edits), remote edit applied %.4f ms (%d edits), "
+                    "keystroke update %lld B, encodeState %lld B, diff after 100 scattered edits %lld B, "
+                    "heap for 10 000 appends %lld KB\n",
+                    backend == Backend::Native ? "Native" : "Yrs", randomCost, kRandomEdits, remoteCost, kRemoteEdits,
+                    qint64(keystroke), qint64(state.size()), qint64(diff), qint64(heap / 1024));
         EXPECT_EQ(built->text().size(), end);
     }
     EXPECT_GT(keystroke, 0);

@@ -241,6 +241,36 @@ alternate run for run (three each, best median per row), each run in a fresh
 XDG tree, pinned with `taskset -c 6-11,18-23 chrt --idle 0`. Back-to-back
 batches drifted by more than the changes being measured.
 
+## Note sharing: two text CRDT backends
+
+Jernej asked to try both a Rust (yrs) and a native C++ text CRDT behind one
+interface ([SHARE.md](SHARE.md)) and compare them. One suite runs over both;
+`test_share_crdt --gtest_filter='*Megabyte*:*SizesAndMemory*'` prints these
+numbers (starbase-1, RelWithDebInfo, quiet machine, load average 0.9; three runs
+agreed to 2%). Every edit is one character into a note of generated markdown.
+
+| what | yrs | Native |
+|---|---|---|
+| type at the end, 100 KB note (10 000 edits) | 0.079 ms | 0.0001 ms |
+| type at the end, 1 MB note | 0.75 ms (1.3 ms when first recorded in SHARE.md) | 0.0001 ms |
+| edit at a random position, 1 MB note (2 000 edits) | 0.102 ms | 0.0026 ms |
+| take in one remote edit at a random position, 1 MB note fragmented by 2 100 edits (500) | 0.237 ms | 0.0166 ms |
+| bytes of the update for one keystroke | 14 | 18 |
+| `encodeState()` of the 1 MB note | 1 000 016 B | 1 000 015 B |
+| `diffSince()` after 100 scattered edits on a 1 MB note | 1 107 B | 1 404 B |
+| heap in use after building the 1 MB note from 10 000 appends of 100 characters (`mallinfo2`) | 1 026 KB | 2 052 KB |
+
+Reading it: both stay far inside the 8 ms keystroke budget, so the choice is
+not about speed. Native is 14x to 1 000x faster per edit because typing in one
+place grows one run (yrs walks the block that holds the position, hence the
+cost growing with the note) and a position jump walks a linked list of runs; its
+weak spot is the remote path, which walks every run (the 0.0166 ms grows with
+with the number of runs by construction, not the note). It costs twice the memory because it holds
+UTF-16 where yrs holds UTF-8, and its updates are a few bytes larger (it
+carries a Lamport timestamp per run, and the whole delete set per diff). Both
+count the same 1 MB for the state. Native has no garbage collection of
+tombstones; neither is tested for a history of millions of edits.
+
 ## Guards in the test suite
 
 | test | asserts |
@@ -269,6 +299,9 @@ batches drifted by more than the changes being measured.
 | `IpynbTest.StoredOutputsAreWrittenOnlyWhenLookedUpAndARunWins` | reading a notebook writes no output-cache entry; a run or a clear before the lookup wins |
 | `IndexTest.UnlinkedMentionsReadAFrontMatterLongerThanTheFirstRead` | a 40 kB front matter still yields its aliases |
 | `IndexTest.TagCountsAgreeWithNotesWithTag` | the one-query tag counts equal `notesWithTag().size()` for every tag and parent |
+| `CrdtDocTest.TypingAtTheEndOfAMegabyteStaysUnderTheKeystrokeBudget` | one character at the end of a 1 MB shared note costs under 3 ms and under 25x the cost at 100 KB, for each CRDT backend |
+| `CrdtDocTest.MalformedUpdatesWithAValidHeaderAreCheap` | 20 000 bad Native updates are rejected in under 2 s: a size claim is never believed before the bytes are counted |
+| `CrdtDocTest.AHostileDependencyChainIsLinear` | 100 000 Native runs each waiting on the next are placed in under 3 s (one pass per run would be quadratic) |
 
 Every wall-clock guard above keeps the best of three runs (`tests/Perf.h`,
 `perf::bestOf`), because a loaded machine - a parallel build, a lane-check next
