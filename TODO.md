@@ -2349,8 +2349,11 @@ decide. Items marked `[>]` above point here. Agents do not pick these up.
 - [ ] Hyprland pop-out windows: tiling/floating, real drag between windows,
       focus; and the settings pop-out on the ultrawide.
 - [ ] Wayland activation token: opening a note from the file manager raises
-      the running window on Hyprland (cage always focuses the newest window,
-      so offscreen tests cannot show it).
+      the running window on Hyprland. Checked 2026-10-19: his live Hyprland
+      has `misc:focus_on_activate = false` (hyprctl getoption), so Hyprland
+      marks the window urgent instead of focusing it, whatever the app
+      sends. His call: set `misc { focus_on_activate = true }` in his Hyprland
+      config if he wants the window raised, then look once.
 - [ ] Graph feel by eye after e49edab: settles and then stays still.
 - [ ] Later, his call: person identity across devices; a self-hosted relay.
 - [ ] Only if rebuilds hurt: move the ~355 private method declarations out
