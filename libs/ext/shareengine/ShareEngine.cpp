@@ -99,6 +99,7 @@ struct ShareEngine::Share {
     QList<Awaiting> awaiting;
     Counters counters;
     bool dirty = false;
+    bool changedSinceExchange = false; ///< a remote update arrived since the last state-vector round
 
     const Member *member(const QByteArray &key) const
     {
@@ -129,11 +130,18 @@ ShareEngine::ShareEngine(const QString &vaultRoot, Config config, QObject *paren
     m_persist.setSingleShot(true);
     m_persist.setInterval(2000);
     connect(&m_persist, &QTimer::timeout, this, &ShareEngine::saveDirty);
+    m_resync.setInterval(m_config.resyncMs);
+    connect(&m_resync, &QTimer::timeout, this, [this] { exchangeStates(false); });
+    m_settle.setSingleShot(true);
+    m_settle.setInterval(m_config.settleMs);
+    connect(&m_settle, &QTimer::timeout, this, [this] { exchangeStates(true); });
 }
 
 ShareEngine::~ShareEngine()
 {
     m_persist.stop();
+    m_resync.stop();
+    m_settle.stop();
     for (const auto &share : std::as_const(m_shares))
         saveShare(*share);
     m_node.reset(); // joins the link's threads: no callback reaches this object after it
@@ -213,6 +221,7 @@ bool ShareEngine::start()
         }
     }
 
+    m_resync.start();
     for (const ShareRecord &record : m_store.all()) {
         QString why;
         if (!adoptRecord(record, &why) && hearth::debugLogOn())
@@ -632,7 +641,7 @@ void ShareEngine::fan(Share &share, const QByteArray &update, const QByteArray &
     markDirty(share);
     for (const Share::Member &m : std::as_const(share.members))
         if (m.key != m_me->publicKey() && m.key != except && m_up.contains(m.key))
-            sendFrame(share, m.key, false, update);
+            sendFrame(share, m.key, FrameKind::Update, update);
 }
 
 void ShareEngine::persist(const QByteArray &shareID, const QString &base)
@@ -650,6 +659,19 @@ ShareEngine::Counters ShareEngine::counters(const QByteArray &shareID) const
         return m_counters;
     const auto it = m_shares.constFind(shareID);
     return it == m_shares.constEnd() ? Counters{} : (*it)->counters;
+}
+
+void ShareEngine::exchangeStates(bool onlyChanged)
+{
+    for (const auto &sharePtr : std::as_const(m_shares)) {
+        Share &share = *sharePtr;
+        if (onlyChanged && !share.changedSinceExchange)
+            continue;
+        share.changedSinceExchange = false;
+        for (const Share::Member &m : std::as_const(share.members))
+            if (m.key != m_me->publicKey() && m_up.contains(m.key))
+                sendFrame(share, m.key, FrameKind::StateVector, share.doc->stateVector());
+    }
 }
 
 void ShareEngine::saveShare(Share &share)
@@ -695,11 +717,13 @@ bool ShareEngine::sendTo(const QByteArray &key, bool onSyncChannel, const QByteA
     return m_node->send(toPK(key), onSyncChannel ? hearth::Channel::sync : hearth::Channel::ctl, bytesOf(envelope));
 }
 
-bool ShareEngine::sendFrame(Share &share, const QByteArray &to, bool stateVector, const QByteArray &data)
+bool ShareEngine::sendFrame(Share &share, const QByteArray &to, FrameKind kind, const QByteArray &data)
 {
     const quint64 seq = ++share.nextSeq[to];
     const QByteArray envelope = ShareFrame::seal(*m_me, share.record.shareID, share.record.epoch, seq, share.record.key,
-                                                 stateVector ? ShareFrame::Kind::StateVector : ShareFrame::Kind::Update, data);
+                                                 kind == FrameKind::StateVector ? ShareFrame::Kind::StateVector
+                                                 : kind == FrameKind::Diff ? ShareFrame::Kind::Diff : ShareFrame::Kind::Update,
+                                                 data);
     if (envelope.size() > kMaxBytes) {
         emit failed(share.record.shareID, tr("A change is too large to send."));
         return false;
@@ -768,7 +792,7 @@ void ShareEngine::peerUp(const QByteArray &key)
         share.lastSeq.remove(key);
         share.nextSeq.remove(key);
         // Both sides send what they have seen; each answers with what the other lacks.
-        sendFrame(share, key, true, share.doc->stateVector());
+        sendFrame(share, key, FrameKind::StateVector, share.doc->stateVector());
         // A member that missed a rotation while away gets the key again (idempotent).
         if (share.record.owned)
             sendRekey(share, key, true);
@@ -957,7 +981,7 @@ void ShareEngine::onRekey(const QByteArray &key, const Rekey &rekey)
     if (rotated)
         for (const Share::Member &m : std::as_const(share.members))
             if (m.key != m_me->publicKey() && m_up.contains(m.key))
-                sendFrame(share, m.key, true, share.doc->stateVector());
+                sendFrame(share, m.key, FrameKind::StateVector, share.doc->stateVector());
 }
 
 void ShareEngine::onRefused(const QByteArray &key, const Refused &refused)
@@ -988,10 +1012,12 @@ void ShareEngine::onFrame(const QByteArray &key, const Frame &frame)
         return;
     }
     share.lastSeq[key] = opened->seq;
+    ++share.counters.accepted;
+    ++m_counters.accepted;
     if (opened->kind == ShareFrame::Kind::StateVector) {
         const QByteArray diff = share.doc->diffSince(opened->data);
         if (!diff.isEmpty())
-            sendFrame(share, key, false, diff);
+            sendFrame(share, key, FrameKind::Diff, diff);
         return;
     }
     bool ok = false;
@@ -999,6 +1025,12 @@ void ShareEngine::onFrame(const QByteArray &key, const Frame &frame)
     if (!ok)
         return drop(&share, QStringLiteral("update does not decode"), key);
     markDirty(share);
+    // A change that is not the answer to our own state vector: its sender may have
+    // sent more that depends on it, or it waits on something not here yet; ask again.
+    if (opened->kind == ShareFrame::Kind::Update) {
+        share.changedSinceExchange = true;
+        m_settle.start();
+    }
     if (edits.isEmpty())
         return;
     // Members need not be connected to each other: pass a change on, once. A

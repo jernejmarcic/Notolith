@@ -50,6 +50,13 @@ public:
         QStringList hosts;                     ///< advertised in invites; empty = this machine's IPv4 addresses
         QString storeDirectory;                ///< empty = ShareStore::directoryFor(vaultRoot)
         int inviteDays = 7;
+        /// A state vector goes to every connected member this often, and
+        /// `settleMs` after the last change came in: what a peer lacks (a lost
+        /// frame, or a yrs update left pending behind an edit that has arrived
+        /// since - see docs/SHARE.md) is then sent. Nothing is sent when the
+        /// peer already has it all but one small frame.
+        int resyncMs = 30000;
+        int settleMs = 3000;
         /// Test seam: true queues the outgoing Frames of that share until
         /// releaseHeldFramesForTests().
         std::function<bool(const QByteArray &shareID)> holdFramesForTests;
@@ -123,6 +130,7 @@ public:
 
     struct Counters {
         int dropped = 0;       ///< messages refused: malformed, wrong sender, replayed, tampered...
+        int accepted = 0;      ///< frames that passed every check
         QString lastReason;
     };
     /// Per share; an empty id gives the engine-wide count, which also holds
@@ -175,13 +183,15 @@ private:
     /// `onSyncChannel`: the channel Frames travel on, so a Rekey or a Welcome
     /// stays in order with the Frames around it; the rest goes on ctl.
     bool sendTo(const QByteArray &key, bool onSyncChannel, const QByteArray &envelope);
-    bool sendFrame(Share &share, const QByteArray &to, bool stateVector, const QByteArray &data);
+    enum class FrameKind { Update, StateVector, Diff };
+    bool sendFrame(Share &share, const QByteArray &to, FrameKind kind, const QByteArray &data);
     void sendJoin(const PendingJoin &join);
     void sendWelcome(Share &share, const QByteArray &joiner);
     void sendRekey(Share &share, const QByteArray &to, bool withKey);
     void sendRefused(const QByteArray &to, const QByteArray &shareID, const QString &reason);
     void fan(Share &share, const QByteArray &update, const QByteArray &except);
     void resign(Share &share);
+    void exchangeStates(bool onlyChanged);
     void saveShare(Share &share);
     void saveDirty();
     void markDirty(Share &share);
@@ -202,6 +212,8 @@ private:
     QList<QPair<QByteArray, QByteArray>> m_held;
     Counters m_counters;
     QTimer m_persist;
+    QTimer m_resync;  ///< repeating
+    QTimer m_settle;  ///< single shot, restarted by every change that comes in
 };
 
 } // namespace noteAppC

@@ -141,6 +141,10 @@ access, no socket, no file.
   what the other lacks (so offline edits on both sides merge); a received change is
   passed on to the other connected members, once (a second arrival changes nothing),
   so members need not be connected to each other. `seq` counts from 1 per connection.
+  A state vector also goes to every connected member every 30 s and 3 s after the last
+  change came in (`Config::resyncMs`, `settleMs`): that repairs a lost frame and releases
+  an update the yrs backend holds pending behind an edit that has arrived since. The
+  answer is a `Diff` payload, which starts no exchange of its own, so the rounds end.
 - **Threads.** The engine and every `CrdtDoc` live on the UI thread; link callbacks
   copy their arguments and queue onto it. A keystroke costs one `localEdit`, one AEAD
   seal and one signature per connected member.

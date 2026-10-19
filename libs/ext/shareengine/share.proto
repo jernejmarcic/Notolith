@@ -81,6 +81,7 @@ message Payload {
   oneof kind {
     bytes update = 1;
     bytes state_vector = 2;
+    bytes diff = 3; // an update that answers a state vector (it starts no further exchange)
   }
 }
 

@@ -916,6 +916,43 @@ TEST(ShareEngineTest, TitlesAndNamesFromThePeerAreSanitised)
     EXPECT_FALSE(joiner.joined[0].second.contains(QLatin1Char('\n')));
 }
 
+TEST(ShareEngineTest, ALostUpdateIsRepairedByThePeriodicExchange)
+{
+    ShareEngine::Config config;
+    config.resyncMs = 300;
+    config.settleMs = 3600000;
+    Peer owner(QStringLiteral("a"), config), joiner(QStringLiteral("b"), config);
+    const QByteArray id = shareWith(owner, joiner, QStringLiteral("base"));
+    ASSERT_FALSE(id.isEmpty());
+    ASSERT_TRUE(waitFor([&] { return owner.engine->peersHere(id) == 1; }));
+    owner.engine->doc(id)->localEdit(4, 0, QStringLiteral(" lost")); // never broadcast: as if the frame had been lost
+    ASSERT_TRUE(waitFor([&] { return joiner.text(id) == QStringLiteral("base lost"); }, 5000));
+}
+
+TEST(ShareEngineTest, AChangeThatArrivesStartsAStateExchangeThatEnds)
+{
+    ShareEngine::Config config;
+    config.resyncMs = 3600000;
+    config.settleMs = 200;
+    Peer owner(QStringLiteral("a"), config), joiner(QStringLiteral("b"), config);
+    const QByteArray id = shareWith(owner, joiner, QStringLiteral("base"));
+    ASSERT_FALSE(id.isEmpty());
+    ASSERT_TRUE(waitFor([&] { return owner.engine->peersHere(id) == 1; }));
+    // The first change is lost, the second depends on it (yrs keeps such an update
+    // pending until a state-vector exchange; docs/SHARE.md): arriving, it must make
+    // the joiner ask for what it lacks.
+    owner.engine->doc(id)->localEdit(4, 0, QStringLiteral(" one"));
+    owner.type(id, 8, 0, QStringLiteral(" two"));
+    ASSERT_TRUE(waitFor([&] { return joiner.text(id) == QStringLiteral("base one two"); }, 5000));
+
+    // ...and the exchange stops there: two quiet seconds later nothing more was accepted
+    QTest::qWait(500);
+    const int ownerAccepted = owner.engine->counters().accepted, joinerAccepted = joiner.engine->counters().accepted;
+    QTest::qWait(1000);
+    EXPECT_EQ(owner.engine->counters().accepted, ownerAccepted);
+    EXPECT_EQ(joiner.engine->counters().accepted, joinerAccepted);
+}
+
 TEST(ShareEngineTest, AWelcomeFromAStrangerIsRejected)
 {
     Peer owner(QStringLiteral("a")), joiner(QStringLiteral("b"));

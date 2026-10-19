@@ -35,7 +35,7 @@ QString cleanText(const QString &text, int maxChars);
 /// does not parse.
 std::optional<notolith::share::Envelope> parseEnvelope(const QByteArray &bytes);
 
-enum class Kind { Update, StateVector };
+enum class Kind { Update, StateVector, Diff };
 struct Opened {
     quint64 seq = 0;
     Kind kind = Kind::Update;
