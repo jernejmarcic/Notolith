@@ -234,7 +234,12 @@ FetchContent_Declare(microtex
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(microtex)
 
+# md4qt's own CMakeLists pulls in ECM's KDECMakeSettings, whose translation
+# helper runs `git rev-parse @{u}` / `git remote get-url origin` on this repo
+# and prints git errors on every configure. Nothing here needs ECM.
+set(CMAKE_DISABLE_FIND_PACKAGE_ECM ON)
 FetchContent_MakeAvailable(md4qt)
+unset(CMAKE_DISABLE_FIND_PACKAGE_ECM)
 
 # In-tree the headers sit in src/, but upstream installs them as <md4qt/*.h>.
 # One symlink and the includes read the same either way.
