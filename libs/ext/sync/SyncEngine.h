@@ -10,6 +10,7 @@
 #include <QThread>
 #include <QTimer>
 
+#include "SecretStore.h"
 #include "SyncClient.h"
 #include "SyncScanner.h"
 #include "Vault.h"
@@ -103,11 +104,7 @@ public:
     /// user's real keyring, nor waits out a secret-service backend that does
     /// not answer. Process-wide; set it before any engine starts. Both
     /// functions run on engines' worker threads. `remove` may stay empty.
-    struct SecretStore {
-        std::function<bool(const QString &key, QByteArray *value)> read;
-        std::function<bool(const QString &key, const QByteArray &value)> write;
-        std::function<bool(const QString &key)> remove;
-    };
+    using SecretStore = secrets::Store;
     static void setSecretStore(SecretStore store);
 
     /// Test seam: while set, records are written the way a client from before

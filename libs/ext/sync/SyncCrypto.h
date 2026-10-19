@@ -154,6 +154,10 @@ public:
     static QByteArray hashLoginKey(const QByteArray &loginKey);
     static bool verifyLoginKey(const QByteArray &hash, const QByteArray &loginKey);
 
+    /// Constant-time equality (length first: lengths are not secret). For
+    /// comparing anything a peer proves it knows - never operator==.
+    static bool equal(const QByteArray &a, const QByteArray &b);
+
     /// sodium_memzero in place. A QByteArray's own destructor does not
     /// scrub its heap buffer, so anything key- or password-shaped is
     /// wiped explicitly once no longer needed.

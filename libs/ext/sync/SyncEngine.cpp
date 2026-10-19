@@ -5,7 +5,6 @@
 
 #include <QDateTime>
 #include <QDir>
-#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -13,8 +12,7 @@
 #include <QScopeGuard>
 #include <QTimer>
 
-#include <qt6keychain/keychain.h>
-
+#include "SecretStore.h"
 #include "SyncCrypto.h"
 #include "SyncJournal.h"
 #include "SyncMerge.h"
@@ -117,83 +115,17 @@ QString siblingPath(const QString &relativePath, const QByteArray &entityID)
     return taggedPath(relativePath, QString::fromLatin1(entityID.left(2).toHex()));
 }
 
-/// Runs a QKeychain job to completion on the calling thread's own event
-/// loop (SyncEngine's worker thread - see the class comment in
-/// SyncEngine.h) rather than wiring up finished()/error() by hand for one
-/// call site each. A watchdog timeout, matching SyncClient::callRaw()'s
-/// own 15 s one: an unresponsive secret-service D-Bus backend must not
-/// hang the sync thread forever (and, since this runs inside runCycle()'s
-/// m_inCycle window, must not hang the destructor's teardown either).
-SyncEngine::SecretStore &secretStore()
-{
-    static SyncEngine::SecretStore store;
-    return store;
-}
-
-void runKeychainJob(QKeychain::Job *job)
-{
-    QEventLoop loop;
-    QObject::connect(job, &QKeychain::Job::finished, &loop, &QEventLoop::quit);
-    // ponytail: on a genuine timeout the stack-allocated job in
-    // loadDeviceIdentity() is destroyed with its D-Bus call still
-    // in flight - a late reply is simply dropped (QKeychain does not
-    // deliver into a destroyed QObject). Upgrade to a heap-allocated,
-    // deleteLater()-based job if a backend that hangs this long in
-    // practice turns up.
-    QTimer::singleShot(15000, &loop, &QEventLoop::quit);
-    job->start();
-    loop.exec();
-}
-
 const QString kKeychainService = QStringLiteral("noteAppC-sync");
 
-bool secretRead(const QString &key, QByteArray *value)
-{
-    const SyncEngine::SecretStore &store = secretStore();
-    if (store.read && store.write)
-        return store.read(key, value);
-    QKeychain::ReadPasswordJob job(kKeychainService);
-    job.setAutoDelete(false);
-    job.setKey(key);
-    runKeychainJob(&job);
-    // An empty value is how a watchdog timeout looks (the job never
-    // finished, error() is still NoError); no secret here is ever empty.
-    if (job.error() != QKeychain::NoError || job.binaryData().isEmpty())
-        return false;
-    *value = job.binaryData();
-    return true;
-}
-
-bool secretWrite(const QString &key, const QByteArray &value)
-{
-    const SyncEngine::SecretStore &store = secretStore();
-    if (store.read && store.write)
-        return store.write(key, value);
-    QKeychain::WritePasswordJob job(kKeychainService);
-    job.setAutoDelete(false);
-    job.setKey(key);
-    job.setBinaryData(value);
-    runKeychainJob(&job);
-    return job.error() == QKeychain::NoError;
-}
-
-bool secretRemove(const QString &key)
-{
-    const SyncEngine::SecretStore &store = secretStore();
-    if (store.read && store.write)
-        return store.remove && store.remove(key);
-    QKeychain::DeletePasswordJob job(kKeychainService);
-    job.setAutoDelete(false);
-    job.setKey(key);
-    runKeychainJob(&job);
-    return job.error() == QKeychain::NoError;
-}
+bool secretRead(const QString &key, QByteArray *value) { return secrets::read(kKeychainService, key, value); }
+bool secretWrite(const QString &key, const QByteArray &value) { return secrets::write(kKeychainService, key, value); }
+bool secretRemove(const QString &key) { return secrets::remove(kKeychainService, key); }
 
 } // namespace
 
 void SyncEngine::setSecretStore(SecretStore store)
 {
-    secretStore() = std::move(store);
+    secrets::setStore(std::move(store));
 }
 
 void SyncEngine::setLegacyRecordFormatForTests(bool legacy)
