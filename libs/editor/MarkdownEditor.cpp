@@ -31,6 +31,9 @@
 #include <QScrollBar>
 #include <QScroller>
 #include <QInputDevice>
+#include <QElapsedTimer>
+#include <QFile>
+#include <QScopeGuard>
 #ifdef NOTEAPPC_HAVE_OPENGLWIDGETS
 #include <QOpenGLWidget>
 #endif
@@ -4650,8 +4653,55 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
     }
 }
 
+namespace {
+
+/// NOTOLITH_FRAME_LOG=<file>: one line per editor paint - the gap since the
+/// last one, how long this one took, and what it covered - to see what a
+/// device really scrolls at, in its own session, without a bench window.
+struct FrameLog {
+    QFile file;
+    QElapsedTimer clock;
+    qint64 last = -1;
+    FrameLog()
+    {
+        const QString path = qEnvironmentVariable("NOTOLITH_FRAME_LOG");
+        if (path.isEmpty() || !file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text))
+            return;
+        file.write("# gap_ms paint_ms exposed_wxh viewport_wxh dpr\n");
+        clock.start();
+    }
+    void record(qint64 start, qint64 end, const QRect &exposed, const QSize &viewport, qreal dpr)
+    {
+        const double gap = last < 0 ? 0.0 : double(start - last) / 1e6;
+        last = start;
+        file.write(QStringLiteral("%1 %2 %3x%4 %5x%6 %7\n")
+                       .arg(gap, 0, 'f', 2)
+                       .arg(double(end - start) / 1e6, 0, 'f', 2)
+                       .arg(exposed.width()).arg(exposed.height())
+                       .arg(viewport.width()).arg(viewport.height())
+                       .arg(dpr)
+                       .toLatin1());
+        file.flush();
+    }
+};
+
+FrameLog &frameLog()
+{
+    static FrameLog log;
+    return log;
+}
+
+} // namespace
+
 void MarkdownEditor::paintEvent(QPaintEvent *event)
 {
+    FrameLog &log = frameLog();
+    const qint64 paintStart = log.file.isOpen() ? log.clock.nsecsElapsed() : 0;
+    const auto logged = qScopeGuard([&] {
+        if (log.file.isOpen())
+            log.record(paintStart, log.clock.nsecsElapsed(), event->rect(), viewport()->size(),
+                       viewport()->devicePixelRatioF());
+    });
     QPainter painter(viewport());
     painter.setRenderHint(QPainter::Antialiasing);
     // After a scroll only the strip that came into view is exposed; blocks
