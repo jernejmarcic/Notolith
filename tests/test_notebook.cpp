@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <optional>
 #include <QStandardPaths>
 #include <QDir>
@@ -999,6 +1000,9 @@ TEST(DirectRunnerTest, WithoutImplicitCodeTheRunnerInputIsByteIdentical)
 
     // The cache key: unchanged without implicit code, different with it.
     const QString plain = notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5')"), SandboxTier::Bubblewrap);
+    // Spelled out, so that a note without implicit code keeps the keys (and the sidecar entries) it already has.
+    EXPECT_EQ(plain, QString::fromLatin1(QCryptographicHash::hash(QByteArray("python\x1fprint('p5')\x1f") + QByteArray::number(int(SandboxTier::Bubblewrap)),
+                                                                  QCryptographicHash::Sha256).toHex()));
     EXPECT_NE(plain, notebookCacheKey(QStringLiteral("python"), QStringLiteral("print('p5')"), SandboxTier::Bubblewrap,
                                       QStringLiteral("import os")));
     EXPECT_NE(notebookCacheKey(QStringLiteral("python"), QStringLiteral("x"), SandboxTier::Bubblewrap, QStringLiteral("a")),
