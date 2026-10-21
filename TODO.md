@@ -2351,7 +2351,9 @@ Jernej 2026-10-19, asked whether to keep going once only this list was left:
       has the new bundle: `sh ~/Documents/AI/sessions/2026-09-22_163000_noteappc-callouts-and-perf/bench-here.sh`
       (fetches md4qt, MicroTeX, tinyxml2 from GitHub; installs nothing).
       shuttlepod-1 done 2026-10-19 (`bench-shuttlepod-1.*`, notes in that
-      session's NOTES.md); runabout left.
+      session's NOTES.md); runabout left. Deferred indefinitely (Jernej
+      2026-10-21: "runabout will have to wait indefenetely, computer is in
+      storage").
 - [ ] Share by hand on two machines (starbase-1 and shuttlepod-1): mDNS
       discovery, join over the tailnet, pull the cable mid-typing, latency.
 - [ ] Hyprland pop-out windows: tiling/floating, real drag between windows,
