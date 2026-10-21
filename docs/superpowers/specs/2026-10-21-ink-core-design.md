@@ -168,6 +168,8 @@ paint, and a pipe cannot do that inside the 10 ms rule.
 4. **Loading.** `QPluginLoader::instance()` loads a module only on first
    use: a file of its suffix opens, one of its commands runs, or one of its
    embeds scrolls into view.
+   Indexing counts as use: a module whose manifest declares index suffixes
+   is loaded after the scan when the vault contains such files.
 
 **Gate.** The first bench must verify that the scan does not load the
 libraries.
