@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QObject>
 #include <QPair>
+#include <QRect>
 #include <QRectF>
 
 namespace noteAppC::ink {
@@ -38,6 +39,10 @@ public:
     /// would otherwise keep a dense tile from ever finishing.
     void invalidate(const QRectF &tileSpaceRect);
     void invalidateAll();
+    /// Renders in flight for cells outside `cells` (tile-space cell indices, inclusive) are cancelled if they have not
+    /// started and their result dropped if they have: the pool is first-in first-out, and a render queued for a cell the
+    /// view has left would run before the ones it is looking at (N1). The cell stays pending until the pool reaches it.
+    void keepOnly(const QRect &cells);
 
     struct Lookup {
         const QImage *image = nullptr;

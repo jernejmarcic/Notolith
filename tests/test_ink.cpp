@@ -26,6 +26,7 @@
 #include <QPlainTextEdit>
 #include <QElapsedTimer>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSemaphore>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -3471,6 +3472,49 @@ TEST(InkCanvasTest, ABudgetSmallerThanTheWorkingSetSettlesInsteadOfThrashing)
     EXPECT_EQ(jobs.load(), atSettle) << "no tile is rendered twice once they are all in";
     EXPECT_EQ(canvas.pendingTiles(), 0);
     EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(8) * 1024 * 1024) << "the setting is reported as set; the room for the visible tiles is on top";
+}
+
+// Task 18, N1: the pool is first-in first-out and a render queued for a cell the view has since left would run before
+// the ones the user is looking at. A paint now cancels the queued renders outside what it wants.
+TEST(InkCanvasTest, AFastScrollDoesNotRenderTheTilesItLeftBehind)
+{
+    struct PoolOfOne { // one worker: the first render blocks it, so the others stay queued
+        int saved = QThreadPool::globalInstance()->maxThreadCount();
+        PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(1); }
+        ~PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(saved); }
+    };
+    QSemaphore gate; // declared before the pool guard and the area: released last, destroyed after them
+    std::atomic<int> started{0};
+    PoolOfOne pool;
+    QScrollArea area;
+    area.resize(400, 300);
+    area.setFrameShape(QFrame::NoFrame);
+    auto *canvas = new InkCanvas;
+    DocumentSettings settings;
+    settings.format = {400, 4000, 96};
+    settings.extent = QRectF(0, 0, 400, 4000);
+    settings.layout = LayoutKind::Fixed;
+    canvas->document().setSettings(settings);
+    canvas->documentReplaced();
+    canvas->setTileJobHook([&] {
+        ++started;
+        gate.acquire();
+    });
+    area.setWidget(canvas);
+    area.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&area));
+    area.viewport()->grab(); // the first screen: tile rows 0 and 1 (the ring) are asked for; one is running, one queued
+    ASSERT_TRUE(QTest::qWaitFor([&] { return started.load() == 1; }, 5000));
+    area.verticalScrollBar()->setValue(area.verticalScrollBar()->maximum());
+    area.viewport()->grab(); // the last screen: the first screen's queued render is no longer wanted
+    gate.release(1000);
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            area.viewport()->grab();
+            return canvas->pendingTiles() == 0;
+        },
+        5000));
+    EXPECT_EQ(started.load(), 3) << "the one that was running, and the two cells of the last screen: the queued one was cancelled";
 }
 
 TEST(InkCanvasTest, AFinishedStrokeIsReleasedFromTheLiveImageWhenItsTilesArriveAndAtTheNextPenDown)

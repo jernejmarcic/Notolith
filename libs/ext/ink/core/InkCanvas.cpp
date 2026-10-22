@@ -1426,6 +1426,7 @@ void InkCanvas::drawTiles(QPainter &painter, const QRect &area)
     // tiles always have room (plus one), the ring only when the user's budget holds it too.
     m_tiles.setMaxBytes(std::max(m_userCacheBytes, qsizetype(count(visibleCells) + 1) * tileBytes));
     const bool ringFits = count(ringCells) * tileBytes <= m_userCacheBytes;
+    m_tiles.keepOnly(ringFits ? ringCells : visibleCells); // a fast scroll must not leave renders queued for the cells it passed (N1)
     const auto wanted = [&](const QRect &cells, bool paintedRecently) {
         for (int ty = cells.top(); ty <= cells.bottom(); ++ty)
             for (int tx = cells.left(); tx <= cells.right(); ++tx) {

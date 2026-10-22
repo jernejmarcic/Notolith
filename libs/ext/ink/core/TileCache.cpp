@@ -75,6 +75,16 @@ void TileCache::invalidateAll()
         p->stale = true;
 }
 
+void TileCache::keepOnly(const QRect &cells)
+{
+    for (auto it = m_pending.begin(); it != m_pending.end(); ++it) {
+        if (cells.contains(it.key().first, it.key().second))
+            continue;
+        it.value()->discard = true;
+        it.value()->watcher->cancel(); // not started yet: never will
+    }
+}
+
 TileCache::Lookup TileCache::find(int tx, int ty)
 {
     const auto it = m_index.constFind({tx, ty});
