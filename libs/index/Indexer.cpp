@@ -126,7 +126,7 @@ QStringList Indexer::pathsInFlight() const
     while (it.hasNext()) {
         const QString path = it.next();
         const QString relative = m_vault.relative(path);
-        if (!isIgnored(relative) && !m_vault.isIgnored(relative) && (Vault::isNote(path) || isNotebook(path)))
+        if (!isIgnored(relative) && !m_vault.isIgnored(relative) && (Vault::isNote(path) || isForeign(path)))
             notes << path;
     }
     return notes;
@@ -170,10 +170,22 @@ void Indexer::setVault(const Vault &vault)
 
 void Indexer::setNotebookReader(NotebookReader reader)
 {
-    const bool changed = bool(reader) != bool(m_notebookReader);
-    m_notebookReader = std::move(reader);
+    setForeignReader({QStringLiteral("ipynb")}, std::move(reader));
+}
+
+void Indexer::setForeignReader(const QStringList &suffixes, ForeignReader reader)
+{
+    bool changed = false;
+    for (const QString &suffix : suffixes) {
+        const QString key = suffix.toLower();
+        changed = changed || m_foreignReaders.contains(key) != bool(reader);
+        if (reader)
+            m_foreignReaders.insert(key, reader);
+        else
+            m_foreignReaders.remove(key);
+    }
     if (changed && m_vault.isValid())
-        rebuild(); // every notebook's row is of the other kind now, which the scan sees
+        rebuild(); // every such file's row is of the other kind now, which the scan sees
 }
 
 void Indexer::setMetaNotes(const ParseOptions &options)
@@ -209,9 +221,9 @@ void Indexer::clearMetaNotes()
     m_index->setMetaNotesKey(tasks ? tasksSuffix : QString());
 }
 
-bool Indexer::isNotebook(const QString &path) const
+bool Indexer::isForeign(const QString &path) const
 {
-    return m_notebookReader && QFileInfo(path).suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0;
+    return m_foreignReaders.contains(QFileInfo(path).suffix().toLower());
 }
 
 void Indexer::rebuild()
@@ -221,7 +233,7 @@ void Indexer::rebuild()
 
 void Indexer::reindex(const QString &path)
 {
-    if (m_vault.isValid() && m_vault.contains(path) && (Vault::isNote(path) || isNotebook(path)))
+    if (m_vault.isValid() && m_vault.contains(path) && (Vault::isNote(path) || isForeign(path)))
         start({path});
 }
 
@@ -262,14 +274,14 @@ void Indexer::start(const QStringList &paths, bool force, const QStringList &dir
     }
     m_active = true;
     m_scan = QtConcurrent::run(&m_pool, [this, paths, dirs, watched, scan = m_scanNumber.load(), vault = m_vault,
-                                         database = m_index->databasePath(), notebooks = m_notebookReader,
+                                         database = m_index->databasePath(), foreign = m_foreignReaders,
                                          options = m_parseOptions, force] {
-        runScan(paths, dirs, watched, scan, vault, database, notebooks, options, force);
+        runScan(paths, dirs, watched, scan, vault, database, foreign, options, force);
     });
 }
 
 void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QSet<QString> &watched, quint64 scan,
-                      const Vault &vault, const QString &databasePath, const NotebookReader &notebooks,
+                      const Vault &vault, const QString &databasePath, const QHash<QString, ForeignReader> &foreign,
                       const ParseOptions &options, bool force)
 {
     // On the scan's thread: nothing here touches m_index, and what the
@@ -295,9 +307,8 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
         directories.scan = scan;
         directories.partial = !whole;
         const auto consider = [&](const QFileInfo &info, const QString &path) {
-            // A notebook is a note while a reader is set: its cached row is stale in the other case too.
-            const bool asNote = Vault::isNote(path)
-                                || (notebooks && info.suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0);
+            // A notebook (or a .ink file) is a note while a reader is set: its cached row is stale in the other case too.
+            const bool asNote = Vault::isNote(path) || foreign.contains(info.suffix().toLower());
             if (!force && writer.isCurrent(path, info.lastModified().toMSecsSinceEpoch(), info.size(), asNote))
                 return;
             (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
@@ -383,10 +394,10 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
     // Parsed across the pool a chunk at a time, the next chunk parsing while
     // this one is written: the one writer is the slower half.
     constexpr qsizetype kChunk = 256;
-    const auto parse = [&notes, &notebooks, &options](qsizetype from) {
+    const auto parse = [&notes, &foreign, &options](qsizetype from) {
         return from < notes.size() ? QtConcurrent::mapped(notes.mid(from, kChunk),
-                                                          [notebooks, options](const QString &path) {
-                                                              return Indexer::parseFile(path, notebooks, options);
+                                                          [foreign, options](const QString &path) {
+                                                              return Indexer::parseFile(path, foreign, options);
                                                           })
                                    : QFuture<Parsed>();
     };
@@ -448,17 +459,20 @@ void Indexer::apply(const Batch &batch)
         start(std::exchange(m_pending, {}), false, std::exchange(m_queuedDirs, {}).values());
 }
 
-Indexer::Parsed Indexer::parseFile(const QString &path, const NotebookReader &notebooks, const ParseOptions &options)
+Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, ForeignReader> &foreign, const ParseOptions &options)
 {
     Parsed parsed;
     Note note;
-    if (notebooks && QFileInfo(path).suffix().compare(QLatin1String("ipynb"), Qt::CaseInsensitive) == 0) {
+    const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
+    if (reader != foreign.cend()) {
         QFile file(path);
-        if (!file.open(QIODevice::ReadOnly))
+        // A foreign file is read whole for its reader: not a multi-GB one (64 MiB, inkcore's cap for a .ink file).
+        constexpr qint64 kMaxForeignBytes = qint64(64) << 20;
+        if (!file.open(QIODevice::ReadOnly) || file.size() > kMaxForeignBytes)
             return parsed;
-        const std::optional<QString> text = notebooks(file.readAll());
+        const std::optional<QString> text = reader.value()(file.readAll());
         if (!text)
-            return parsed; // not a notebook nbformat 4 can read: not indexed
+            return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged .ink): not indexed
         note.text = *text;
     } else if (!Vault::read(path, note)) {
         return parsed;

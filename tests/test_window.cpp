@@ -8246,3 +8246,61 @@ TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
     EXPECT_EQ(shot.pixelColor(int(45 * dpr), int(75 * dpr)), QColor(0xf0, 0xe6, 0xc8)) << "also at the box's left edge";
 }
 #endif
+
+// Task 17 (R1): the index reads .ink text boxes host-side. The module is never loaded for it.
+#ifdef NOTEAPPC_HAVE_INK_MODULE
+TEST_F(WindowTest, InkTextBoxLinksShowInBacklinksWithoutLoadingTheModule)
+{
+    write(QStringLiteral("Sketch.ink"),
+          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
+          "{\"type\":\"textbox\",\"t\":1,\"layer\":\"user\",\"rect\":[10,10,300,40],\"markdown\":\"see [[Welcome]]\"}\n]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow(); // registers the ink feature (installed = on): the host reader appears with it
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    auto *pane = window.findChild<QWidget *>(QStringLiteral("backlinksPane"));
+    ASSERT_NE(pane, nullptr);
+    auto *list = pane->findChild<QTreeWidget *>();
+    ASSERT_NE(list, nullptr);
+    WAIT_TRUE(list->topLevelItemCount() == 1, 10000);
+    EXPECT_EQ(list->topLevelItem(0)->text(0), QStringLiteral("Sketch"));
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink"))) << "indexing never loads a module";
+}
+
+TEST_F(WindowTest, WithInkOffTheInkTextIsNotIndexed)
+{
+    write(QStringLiteral("Sketch.ink"),
+          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
+          "{\"type\":\"textbox\",\"t\":1,\"layer\":\"user\",\"rect\":[10,10,300,40],\"markdown\":\"see [[Welcome]]\"}\n]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    auto *list = window.findChild<QWidget *>(QStringLiteral("backlinksPane"))->findChild<QTreeWidget *>();
+    WAIT_TRUE(list->topLevelItemCount() == 1, 10000);
+    command(window, "app:open-settings")->trigger();
+    noteAppC::ToggleSwitch *toggle = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.ink"));
+        return toggle != nullptr;
+    }, 3000));
+    toggle->setChecked(false); // applyFeatures() -> updateNotebookIndex() clears the reader, the indexer rescans
+    WAIT_TRUE(list->topLevelItemCount() == 0, 10000);
+}
+
+TEST_F(WindowTest, AVaultWithoutInkFilesNeverLoadsTheInkModule)
+{
+    MainWindow window; // the fixture vault holds notes only
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    QSignalSpy indexed(window.index(), &Index::changed);
+    indexed.wait(2000); // the first scan, if it has not finished yet; an already finished one is fine
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink")));
+}
+#endif

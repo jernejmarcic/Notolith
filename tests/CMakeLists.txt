@@ -455,6 +455,12 @@ if(TARGET notolith-inkcore)
     endif()
 endif()
 
+# The host-side .ink text-box reader (R1): JSON only, no module, no inkcore.
+find_package(ZLIB REQUIRED)
+add_executable(test_inktextboxes test_inktextboxes.cpp)
+target_link_libraries(test_inktextboxes PRIVATE noteAppC_ui Qt6::Test GTest::gtest_main ZLIB::ZLIB)
+add_test(NAME inktextboxes COMMAND test_inktextboxes)
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
 # sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads

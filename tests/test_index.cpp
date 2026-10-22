@@ -340,6 +340,51 @@ TEST_F(IndexTest, TheLinkListsFollowEditsAfterBeingQueried)
     EXPECT_FALSE(index.aliases().contains({QStringLiteral("Other"), QStringLiteral("Fresh")}));
 }
 
+TEST_F(IndexTest, AForeignReaderMakesASuffixANoteAndNotebooksStillWork)
+{
+    write(QStringLiteral("Sketch.ink"), "stands in for an ink file");
+    write(QStringLiteral("Projects/Analysis.ipynb"), "{\"cells\": \"stands in for a notebook\"}");
+    Index index;
+    Indexer indexer(&index);
+    {
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        ASSERT_TRUE(done.wait(20000));
+    }
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Sketch.ink"))) << "without a reader the suffix is an attachment";
+    EXPECT_EQ(index.resolve(QStringLiteral("Sketch.ink")), QStringLiteral("Sketch.ink")) << "and it resolves as one";
+
+    QSignalSpy inkOn(&indexer, &Indexer::finished);
+    indexer.setForeignReader({QStringLiteral("ink")}, [](const QByteArray &bytes) -> std::optional<QString> {
+        return bytes.contains("stands in") ? std::optional<QString>(QStringLiteral("See [[Home]] #inked\n")) : std::nullopt;
+    });
+    ASSERT_TRUE(inkOn.wait(20000)) << "adding a reader rescans by itself";
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Sketch.ink")));
+    EXPECT_EQ(index.notesWithTag(QStringLiteral("inked")), QStringList{QStringLiteral("Sketch.ink")});
+    bool fromSketch = false;
+    for (const Backlink &link : index.backlinks(vault.absolute(QStringLiteral("Home.md"))))
+        fromSketch = fromSketch || link.fromPath == QStringLiteral("Sketch.ink");
+    EXPECT_TRUE(fromSketch);
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Projects/Analysis.ipynb"))) << "the notebook has no reader of its own here";
+
+    QSignalSpy nbOn(&indexer, &Indexer::finished);
+    indexer.setNotebookReader([](const QByteArray &) -> std::optional<QString> { return QStringLiteral("zeppelin\n"); });
+    ASSERT_TRUE(nbOn.wait(20000));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Projects/Analysis.ipynb")));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Sketch.ink"))) << "setNotebookReader leaves the ink reader alone";
+
+    QSignalSpy nbOff(&indexer, &Indexer::finished);
+    indexer.setNotebookReader(nullptr);
+    ASSERT_TRUE(nbOff.wait(20000));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Projects/Analysis.ipynb")));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Sketch.ink"))) << "and clearing the notebook reader leaves it too";
+
+    QSignalSpy inkOff(&indexer, &Indexer::finished);
+    indexer.setForeignReader({QStringLiteral("ink")}, nullptr);
+    ASSERT_TRUE(inkOff.wait(20000));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Sketch.ink")));
+}
+
 // A notebook is a note only while the indexer has a reader for it (the window
 // gives it one with the notebooks feature on): indexed by the reader's text,
 // named by its file name with the extension, and a plain file again without.

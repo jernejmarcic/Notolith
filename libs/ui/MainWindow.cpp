@@ -79,6 +79,7 @@
 #include "NotebookController.h"
 #endif
 #include "Frontmatter.h"
+#include "InkTextBoxes.h"
 #include "MomentFormat.h"
 #include "OutgoingLinksPane.h"
 #include "MetaNotesPane.h"
@@ -3128,6 +3129,11 @@ void MainWindow::updateNotebookIndex()
                                        })
                                      : Indexer::NotebookReader());
 #endif
+    // R1: a .ink file is a note whose text is its text boxes while the ink feature is on (installed and not switched
+    // off in Settings > Plugins); off, it is a plain file, exactly like a notebook with the notebooks feature off.
+    // Read host-side with QJsonDocument: indexing never loads the module.
+    m_indexer->setForeignReader({QStringLiteral("ink")},
+                                featureOn("ink") ? Indexer::ForeignReader(noteAppC::inkTextBoxes) : Indexer::ForeignReader());
 }
 
 void MainWindow::showNoteInPanes(const QString &path)

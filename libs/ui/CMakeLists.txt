@@ -7,6 +7,8 @@ add_library(noteAppC_ui STATIC
     FileTree.h
     InlineTitleEdit.cpp
     InlineTitleEdit.h
+    InkTextBoxes.cpp
+    InkTextBoxes.h
     ExportPdfDialog.h
     PublishDialog.cpp
     PasswordDialog.cpp
@@ -59,6 +61,9 @@ target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # needs it unconditionally to run Index::search() off the UI thread.
 target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Network noteAppC_vault noteAppC_theme
     noteAppC_index noteAppC_editor noteAppC_settings noteAppC_modules)
+# InkTextBoxes inflates a gzip .ink file for the index (the host reads it without loading the ink module).
+find_package(ZLIB REQUIRED)
+target_link_libraries(noteAppC_ui PRIVATE ZLIB::ZLIB)
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
 
 if(TARGET noteAppC_spell)
