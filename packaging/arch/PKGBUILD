@@ -58,14 +58,17 @@ package_notolith() {
                 'hunspell-en_us: American English spelling')
     DESTDIR="$pkgdir" cmake --install build
     # The modules belong to their own packages; the base application never links them.
+    # (usr/lib is what CMake's GNUInstallDirs gives on Arch with prefix /usr; the packages below name it the same way.)
     rm -r "$pkgdir/usr/lib/noteAppC/modules"
+    rmdir --ignore-fail-on-non-empty "$pkgdir/usr/lib/noteAppC"
 }
 
 package_notolith-ink() {
     pkgdesc='Notolith handwritten notes: the ink core library and the .ink module'
     # ink-stroke-modeler (Apache-2.0) is linked into the core library.
     license=('GPL-3.0-or-later' 'Apache-2.0')
-    depends=('notolith' 'abseil-cpp')
+    # Versioned: a module only loads in the build that made it (the ABI tag), so pacman must not mix versions.
+    depends=("notolith=$pkgver-$pkgrel" 'abseil-cpp')
     # One install unit: later .rnote, markup and recognition hooks go into this module.
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
         build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
@@ -74,6 +77,6 @@ package_notolith-ink() {
 package_notolith-hwfont() {
     pkgdesc='Notolith glyph studio: capture your handwriting letter by letter'
     # No manifest "dependencies" key: pacman enforces this one.
-    depends=('notolith-ink')
+    depends=("notolith-ink=$pkgver-$pkgrel")
     install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-hwfont.so
 }

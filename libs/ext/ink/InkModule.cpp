@@ -27,7 +27,7 @@ public:
         host.registerView({QStringLiteral("ink")}, [settings](const QString &, QWidget *parent) -> noteAppC::ModuleView * {
             return new noteAppC::ink::InkView(settings, parent);
         });
-        // The rows under Settings > Plugins > Handwritten notes.
+        // The rows under Settings > Core plugins.
         host.registerSetting({QStringLiteral("ink.drawWithMouse"), false, QObject::tr("Draw with the mouse"),
                               QObject::tr("Off, the mouse only scrolls and selects; a pen always draws."), {}, 0, 0});
         host.registerSetting({QStringLiteral("ink.rawInput"), false, QObject::tr("Raw pen input"),

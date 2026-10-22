@@ -20,6 +20,7 @@ thing about `.ink` files: how to read their text boxes for the index (see "Notes
 - Settings
 - Pen pressure
 - Performance notes
+- Not verified offscreen
 - Attribution
 - Glyph studio
 
@@ -38,8 +39,10 @@ recognition) adds its hooks to this module, not to new packages. Handwriting rec
 arrive, are an optional data download and not a module. Pacman enforces the dependency of `notolith-hwfont` on
 `notolith-ink`: a module manifest has no `dependencies` key.
 
-Install the three packages of one `makepkg` run together (`pacman -U` with all three files). That is not a
-formality: see "The ABI tag message" below.
+Install the three packages of one `makepkg` run together (`pacman -U` with all three files). The module packages
+depend on exactly the same version of their parent (`notolith=<pkgver>-<pkgrel>`, `notolith-ink=<pkgver>-<pkgrel>`),
+so pacman refuses a mismatched set; a rebuild with an unchanged `pkgrel` is not caught, which is why one run
+matters: see "The ABI tag message" below.
 
 **Abseil is a hard requirement of the ink core, and it is the system one.** CMake looks for `find_package(absl)`; if it
 is not there the ink core and both modules are simply not built, and the configure step says `Abseil not found: the ink
@@ -85,7 +88,7 @@ Every module carries an ABI tag, `<version>-<build token>-<Qt version>`, and Not
 from its own. The build token is random, made once per build directory, so two builds of one commit never share a tag.
 The refusal shows up as a line in Settings > Core plugins (and in the log):
 
-> Module ink was built for another Notolith (&lt;its tag&gt;; this one is &lt;the application's tag&gt;) and was not loaded.
+> `Module ink was built for another Notolith (<its tag>; this one is <the application's tag>) and was not loaded.`
 
 What to do: reinstall `notolith-ink` and `notolith-hwfont` from the **same build** as the `notolith` package, that is
 rebuild and install all three together. A Qt upgrade changes the tag too, so after one rebuild all three. Nothing is
@@ -99,8 +102,9 @@ found. The fix is the package, pacman normally prevents it.
 ## The `.ink` format
 
 This section is the contract that `tests/test_ink.cpp` pins; the code is `libs/ext/ink/core/InkFormat.cpp` and its
-header `InkFormat.h`. The host's own index reader (`libs/ui/InkTextBoxes.cpp`) duplicates the keys `type`, `textbox`,
-`rect` and `markdown`; if they change, they change in both.
+header `InkFormat.h`. The host's own index reader (`libs/ui/InkTextBoxes.cpp`) duplicates the keys and values `format`
+(`notolith-ink`), `version`, `items`, `type` (`textbox`) and `markdown`; if they change, they change in both. It
+does not read `rect`.
 
 **Encoding.** UTF-8 JSON, one top-level object, written by `QJsonDocument::toJson(QJsonDocument::Compact)` and nothing
 hand-rolled. Qt writes the keys sorted, so a save of an unchanged document is byte-identical. Numbers are rounded to at
@@ -138,8 +142,8 @@ Pages are not objects: one coordinate space holds everything and, in the paged l
 `patternSize` is a scalar (a square cell) or a two-number list `[width, height]`. The writer emits a scalar when the two
 are equal and the pair otherwise; the reader takes either.
 
-**Items.** Common keys: `type`, `t` (a non-negative whole number, unique in the file: it is the creation order and the
-item's identity) and `layer` (`document`, `image`, `highlighter` or `user`, default `user`). Paint order is ascending
+**Items.** Common keys: `type`, `t` (a finite number from 0 up to but not including 9e15, truncated to a whole number, unique in the file:
+it is the creation order and the item's identity; the writer only ever produces whole numbers) and `layer` (`document`, `image`, `highlighter` or `user`, default `user`). Paint order is ascending
 `(layer, t)`, as in Rnote.
 
 | `type` | keys |

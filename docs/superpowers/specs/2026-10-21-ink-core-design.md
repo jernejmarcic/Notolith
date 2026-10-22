@@ -173,7 +173,7 @@ paint, and a pipe cannot do that inside the 10 ms rule.
 
 1. **Directories.** `<libdir>/noteAppC/modules/` only. The environment
    variable `NOTEAPPC_MODULE_DIRS` replaces it (used by tests). A vault
-   switch does not rescan: the scan is per process, by design. On Android
+   switch does not rescan: the scan is once per window (the registry is a `MainWindow` member), by design. On Android
    the modules are linked in as Qt static plugins (`Q_IMPORT_PLUGIN`) and
    the registry also lists `QPluginLoader::staticPlugins()`.
 2. **When.** The scan runs on the thread pool after first paint
