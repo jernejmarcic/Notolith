@@ -44,10 +44,11 @@ public:
     QPointF toWidget(const QPointF &documentPos) const { return documentPos * m_zoom; }
     QSize sizeHint() const override;
     bool isDrawing() const { return m_drawing != Drawing::None; }
+    QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound (I4)
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,
     /// mouse drawing and the edit keys but keeps touch pan, wheel and zoom:
     /// disabling the widget would block those too.
-    void setReadOnly(bool on) { m_readOnly = on; }
+    void setReadOnly(bool on); ///< true first ends a stroke in flight (kept)
     bool isReadOnly() const { return m_readOnly; }
 
     /// R14: pressure is divided by a learned maximum per QPointingDevice::name()
@@ -75,14 +76,19 @@ protected:
     bool event(QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    void focusOutEvent(QFocusEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
+    void changeEvent(QEvent *event) override;
 
 private:
     enum class Drawing { None, Pen, Eraser };
     void pressAt(const QPointF &widgetPos, double pressure, double seconds, bool erase);
     void moveTo(const QPointF &widgetPos, double pressure, double seconds);
-    void releaseAt(const QPointF &widgetPos, double pressure, double seconds);
+    void releaseAt(const QPointF &widgetPos, double seconds);
+    void finishStroke(bool keep);
+    void prepareLiveOverlay();
     void rasteriseNewSegments();
-    void eraseAround(const QPointF &documentPos);
+    void eraseSweep(const QPointF &fromDocumentPos, const QPointF &toDocumentPos);
     void finishEdit();
     QRect widgetRect(const QRectF &documentRect) const;
     PressureNormaliser &normaliserFor(const QString &device);
@@ -96,7 +102,13 @@ private:
     bool m_drawWithMouse = false;
     Drawing m_drawing = Drawing::None;
     bool m_tabletActive = false; ///< Qt synthesises mouse events from unaccepted tablet events; we accept, this guards the rest
-    QImage m_live;               ///< the live stroke, widget px * dpr, transparent
+    QImage m_live;               ///< the live stroke, transparent: the visible part of the canvas only (m_liveRect), at the screen's pixel ratio
+    QRect m_liveRect;            ///< widget px: where m_live sits
+    QRect m_liveDirty;           ///< widget px: what the stroke painted into it, the only part cleared at the next pen-down
+    QPointF m_lastPos;           ///< the last received sample of the stroke in flight (widget px, pressure, seconds): where it ends if the release never comes
+    double m_lastPressure = 0.5;
+    double m_lastSeconds = 0;
+    QPointF m_lastErase;         ///< document px: the previous eraser sample, the other end of the swept segment
     QRectF m_lastPrediction;     ///< document px: the predicted tail as last painted; repainted when it moves and at pen-up
     bool m_erasedSomething = false;
     bool m_readOnly = false;

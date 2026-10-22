@@ -17,6 +17,8 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <QElapsedTimer>
+#include <QScrollArea>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QtTest/QTest>
@@ -1793,6 +1795,319 @@ TEST(InkCanvasTest, UndoAndRedoWaitForThePenToLiftSoNoLiveStrokeIsOrphaned)
     EXPECT_EQ(f.canvas.document().items().size(), 2u) << "the stroke in flight survived the undo attempt";
     EXPECT_TRUE(f.canvas.undo());
     EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+// --- fix round 1: interruptions, eraser sweep, release pressure, overlay size ---
+
+namespace {
+
+/// A pen down and moving, no release yet.
+void penDown(InkCanvas &canvas, QPointF a, QPointF b, qint64 ms)
+{
+    tablet(&canvas, QEvent::TabletPress, a, 0.5, ms);
+    for (int i = 1; i <= 4; ++i)
+        tablet(&canvas, QEvent::TabletMove, a + (b - a) * (i / 4.0), 0.5, ms + i * 5);
+}
+
+/// What a canvas must do after an interruption: no stroke in flight, mouse inking and undo alive.
+void expectIdleAndAlive(InkCanvas &canvas)
+{
+    EXPECT_FALSE(canvas.isDrawing());
+    const size_t before = canvas.document().items().size();
+    canvas.setDrawWithMouse(true);
+    QTest::mousePress(&canvas, Qt::LeftButton, Qt::NoModifier, QPoint(20, 250));
+    QTest::mouseMove(&canvas, QPoint(60, 250));
+    QTest::mouseRelease(&canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 250));
+    EXPECT_EQ(canvas.document().items().size(), before + 1) << "the mouse is not swallowed by a stale tablet state";
+    EXPECT_TRUE(canvas.undo());
+    EXPECT_EQ(canvas.document().items().size(), before);
+    canvas.setDrawWithMouse(false);
+}
+
+} // namespace
+
+TEST(InkCanvasTest, HidingTheCanvasMidStrokeEndsAndKeepsTheStroke)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    ASSERT_TRUE(f.canvas.isDrawing());
+    f.canvas.hide();
+    EXPECT_FALSE(f.canvas.isDrawing());
+    ASSERT_EQ(f.canvas.document().items().size(), 1u) << "what the user drew stays";
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.back().x, 120.0, 1.0) << "ended at the last received sample";
+    f.canvas.show();
+    expectIdleAndAlive(f.canvas);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, LosingFocusMidStrokeEndsAndKeepsTheStrokeButAPopupDoesNot)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    QFocusEvent popup(QEvent::FocusOut, Qt::PopupFocusReason);
+    QApplication::sendEvent(&f.canvas, &popup);
+    EXPECT_TRUE(f.canvas.isDrawing()) << "a popup taking focus is not a lost pen";
+    QFocusEvent out(QEvent::FocusOut, Qt::ActiveWindowFocusReason);
+    QApplication::sendEvent(&f.canvas, &out);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    expectIdleAndAlive(f.canvas);
+}
+
+TEST(InkCanvasTest, DisablingTheCanvasMidStrokeEndsAndKeepsTheStroke)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    f.canvas.setEnabled(false);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setEnabled(true);
+    expectIdleAndAlive(f.canvas);
+}
+
+TEST(InkCanvasTest, SettingReadOnlyMidStrokeEndsAndKeepsTheStroke)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    f.canvas.setReadOnly(true);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(120, 50), 0.5, 1030, Qt::NoButton); // the late release changes nothing
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setReadOnly(false);
+    expectIdleAndAlive(f.canvas);
+}
+
+TEST(InkCanvasTest, ReplacingTheDocumentMidStrokeCancelsAndNeverCommitsIntoTheNewOne)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    ASSERT_TRUE(f.canvas.isDrawing());
+    f.canvas.document().reset(f.canvas.document().settings(), {}, {});
+    f.canvas.documentReplaced();
+    EXPECT_FALSE(f.canvas.isDrawing());
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(140, 50), 0.5, 1030);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(140, 50), 0.5, 1035, Qt::NoButton);
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "the old stroke is dropped, not committed into the new document";
+    EXPECT_FALSE(f.canvas.document().canUndo());
+    expectIdleAndAlive(f.canvas);
+}
+
+TEST(InkCanvasTest, ZoomingMidStrokeEndsAndKeepsTheStroke)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    f.canvas.setZoom(2.0);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.back().x, 120.0, 1.0) << "in document px, at the zoom it was drawn in";
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(300, 100), 0.5, 1030); // late events of the old stroke are ignored
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(300, 100), 0.5, 1035, Qt::NoButton);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, TheMouseLeavingMidStrokeEndsAndKeepsTheStroke)
+{
+    CanvasFixture f;
+    f.canvas.setDrawWithMouse(true);
+    QTest::mousePress(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+    QTest::mouseMove(&f.canvas, QPoint(60, 40));
+    QEvent leave(QEvent::Leave);
+    QApplication::sendEvent(&f.canvas, &leave);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, AnEraserSweepOpenWhenInterruptedCommitsAsItsOwnUndoStep)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(100, 30), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(100, 60), 0.5, 2005);
+    ASSERT_TRUE(f.canvas.document().items().empty());
+    f.canvas.hide();
+    EXPECT_FALSE(f.canvas.isDrawing());
+    f.canvas.show();
+    f.canvas.setTool(InkCanvas::Tool::Pen);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(200, 150), 3000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    ASSERT_TRUE(f.canvas.undo()); // the new stroke only: the erase was its own step
+    EXPECT_TRUE(f.canvas.document().items().empty());
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "undoing the erase brings the first stroke back";
+}
+
+TEST(InkCanvasTest, ALostReleaseThenAFarAwayPressAddsNoConnectingSegment)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 20), QPointF(60, 20), 1000); // no release ever arrives
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(350, 250), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(360, 260), 0.5, 2005);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(370, 270), 0.5, 2010, Qt::NoButton);
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    const QRectF old = f.canvas.document().items()[0].stroke->bounds();
+    EXPECT_LT(old.right(), 100.0) << "the old stroke ended at its own last sample";
+    EXPECT_LT(old.bottom(), 50.0);
+    EXPECT_GT(f.canvas.document().items()[1].stroke->bounds().left(), 300.0);
+}
+
+TEST(InkCanvasTest, TheEraserCatchesAThinStrokeBetweenTwoSamplesFarApart)
+{
+    CanvasFixture f;
+    StrokeStyle thin;
+    thin.width = 1.0;
+    f.canvas.setPenStyle(thin);
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(300, 100), 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(150, 20), 0.5, 2000); // 80 px above, then 80 px below: no sample touches it
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(150, 180), 0.5, 2008, Qt::NoButton);
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "the swept segment crossed the stroke";
+}
+
+TEST(InkCanvasTest, TheEraserStillLeavesAStrokeItsSweepMissesEvenWhenTheBoxesOverlap)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(300, 100), 1000);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(150, 20), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(260, 60), 0.5, 2008, Qt::NoButton); // ends 40 px above the stroke
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, ErasingNearALongStrokeDoesNotRebuildItsOutline)
+{
+    // A 10 000-point scribble whose box covers the eraser path but which the eraser never touches:
+    // the hit test walks its points, it must not build the outline path each time.
+    CanvasFixture f;
+    auto scribble = std::make_shared<Stroke>(); // 10 000 points round the page's edge: its box is the whole canvas
+    for (int i = 0; i < 10000; ++i) {
+        const double u = 4.0 * i / 10000.0; // 0..4: four sides
+        const double side = std::floor(u), along = u - side;
+        const QPointF p = side == 0 ? QPointF(10 + 380 * along, 10) : side == 1 ? QPointF(390, 10 + 280 * along)
+                        : side == 2 ? QPointF(390 - 380 * along, 290) : QPointF(10, 290 - 280 * along);
+        const double jitter = (i % 2 ? 6.0 : -6.0) * (1 + i % 3); // a hand-drawn scribble, not a straight line: no point is skipped as a duplicate
+        scribble->points.push_back({p.x() + (side == 1 || side == 3 ? jitter : 0), p.y() + (side == 0 || side == 2 ? jitter : 0), 0.5});
+    }
+    f.canvas.document().addStroke(scribble);
+    f.canvas.document().commit();
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    // A ratio, not a wall-clock number: one eraser sample must cost a fraction of one outline build.
+    QElapsedTimer timer;
+    qint64 outlineNs = std::numeric_limits<qint64>::max();
+    for (int i = 0; i < 3; ++i) {
+        timer.restart();
+        const QPainterPath path = strokeOutline(*scribble);
+        outlineNs = std::min<qint64>(outlineNs, timer.nsecsElapsed());
+        ASSERT_FALSE(path.isEmpty());
+    }
+    constexpr int kGestures = 20; // two samples each
+    timer.restart();
+    for (int i = 0; i < kGestures; ++i) {
+        tablet(&f.canvas, QEvent::TabletPress, QPointF(150 + i, 130), 0.5, 1000 + i * 10);
+        tablet(&f.canvas, QEvent::TabletRelease, QPointF(150 + i, 170), 0.5, 1005 + i * 10, Qt::NoButton);
+    }
+    const qint64 gesturesNs = timer.nsecsElapsed();
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "never touched";
+    EXPECT_LT(gesturesNs, outlineNs * 2 * kGestures / 4)
+        << "an eraser sample cost over a quarter of an outline build: " << gesturesNs / (2 * kGestures) << " ns vs " << outlineNs;
+}
+
+TEST(InkCanvasTest, TheReleaseSampleKeepsTheLastContactPressureNotTheLiftedZero)
+{
+    CanvasFixture f;
+    f.canvas.setRawInput(true); // the points are the samples: nothing smooths a zero away
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 50), 0.5, 1000);
+    for (int i = 1; i <= 8; ++i)
+        tablet(&f.canvas, QEvent::TabletMove, QPointF(20 + 15 * i, 50), 0.5, 1000 + 5 * i);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(140, 50), 0.0, 1045, Qt::NoButton); // real pens report 0 at lift
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const auto &points = f.canvas.document().items()[0].stroke->points;
+    ASSERT_GE(points.size(), 3u);
+    EXPECT_NEAR(points.back().pressure, 0.5, 0.05) << "no pinched tail";
+    EXPECT_NEAR(points.back().pressure, points[points.size() - 2].pressure, 0.1);
+    EXPECT_EQ(f.canvas.learnedPressure(QStringLiteral("test pen")), 1.0) << "the lifted zero taught the normaliser nothing";
+}
+
+TEST(InkCanvasTest, ABarrelButtonChangeIsNotAPenDownOrUp)
+{
+    CanvasFixture f;
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    QTabletEvent barrel(QEvent::TabletPress, stylus(), QPointF(120, 50), f.canvas.mapToGlobal(QPoint(120, 50)), 0.5, 0, 0, 0, 0, 0,
+                        Qt::NoModifier, Qt::RightButton, Qt::LeftButton | Qt::RightButton);
+    barrel.setTimestamp(1030);
+    QApplication::sendEvent(&f.canvas, &barrel);
+    EXPECT_TRUE(f.canvas.isDrawing());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "the barrel press did not close the stroke";
+    QTabletEvent barrelUp(QEvent::TabletRelease, stylus(), QPointF(120, 50), f.canvas.mapToGlobal(QPoint(120, 50)), 0.5, 0, 0, 0, 0, 0,
+                          Qt::NoModifier, Qt::RightButton, Qt::LeftButton);
+    barrelUp.setTimestamp(1035);
+    QApplication::sendEvent(&f.canvas, &barrelUp);
+    EXPECT_TRUE(f.canvas.isDrawing()) << "nor did releasing it";
+}
+
+TEST(InkCanvasTest, TouchIsIgnoredWhileAPenStrokeIsInProgress)
+{
+    CanvasFixture f;
+    QSignalSpy pans(&f.canvas, &InkCanvas::panRequested);
+    penDown(f.canvas, QPointF(20, 50), QPointF(120, 50), 1000);
+    QTest::touchEvent(&f.canvas, finger()).press(0, QPoint(200, 200), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).move(0, QPoint(230, 190), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).release(0, QPoint(230, 190), &f.canvas);
+    EXPECT_EQ(pans.count(), 0) << "a palm during a stroke does not move the page";
+}
+
+TEST(InkCanvasTest, TheLiveOverlayCoversOnlyTheViewportNeverTheWholeDocument)
+{
+    QScrollArea area;
+    area.resize(400, 300);
+    auto *canvas = new InkCanvas;
+    DocumentSettings settings;
+    settings.format = {400, 300, 96};
+    settings.extent = QRectF(0, 0, 400, 100 * 300.0); // 100 pages
+    settings.layout = LayoutKind::ContinuousVertical;
+    canvas->document().setSettings(settings);
+    canvas->documentReplaced();
+    area.setWidget(canvas);
+    area.show();
+    if (!QTest::qWaitForWindowExposed(&area))
+        ADD_FAILURE() << "never exposed";
+    ASSERT_GT(canvas->height(), 25000);
+    tablet(canvas, QEvent::TabletPress, QPointF(20, 20), 0.5, 1000);
+    tablet(canvas, QEvent::TabletMove, QPointF(60, 20), 0.5, 1005);
+    const QSize overlay = canvas->liveOverlaySize();
+    EXPECT_GT(overlay.width(), 0);
+    const double dpr = canvas->devicePixelRatio();
+    EXPECT_LE(overlay.height(), area.viewport()->height() * dpr + 1) << "not a 30 000 px image";
+    EXPECT_LE(overlay.width(), area.viewport()->width() * dpr + 1);
+    tablet(canvas, QEvent::TabletRelease, QPointF(100, 20), 0.5, 1010, Qt::NoButton);
+    EXPECT_EQ(canvas->document().items().size(), 1u);
+}
+
+// The same test runs in the ink_dpr2 ctest entry with QT_SCALE_FACTOR=2 (tests/CMakeLists.txt).
+TEST(InkCanvasDprTest, PositionsAndTheLiveOverlayAreRightAtTheScreensPixelRatio)
+{
+    CanvasFixture f;
+    const double expected = qEnvironmentVariableIsSet("QT_SCALE_FACTOR") ? qEnvironmentVariable("QT_SCALE_FACTOR").toDouble() : 1.0;
+    ASSERT_NEAR(f.canvas.devicePixelRatio(), expected, 1e-9) << "the platform honours QT_SCALE_FACTOR";
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = QColor(Qt::black);
+    f.canvas.setPenStyle(style);
+    f.canvas.setRawInput(true);
+    penDown(f.canvas, QPointF(40, 60), QPointF(240, 60), 1000); // mid-stroke: the overlay is what paints it
+    const QImage frame = f.canvas.grab().toImage();
+    ASSERT_EQ(frame.size(), QSize(int(400 * expected), int(300 * expected)));
+    EXPECT_LT(qGray(frame.pixel(int(120 * expected), int(60 * expected))), 80) << "ink under the pen, in device px";
+    EXPECT_GT(qGray(frame.pixel(int(120 * expected), int(100 * expected))), 200) << "paper 40 px below";
+    EXPECT_GT(qGray(frame.pixel(int(120 * expected), int(30 * expected))), 200) << "paper 30 px above";
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(240, 60), 0.5, 1030, Qt::NoButton);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const auto &points = f.canvas.document().items()[0].stroke->points;
+    EXPECT_NEAR(points.front().x, 40.0, 0.5) << "document px, whatever the pixel ratio";
+    EXPECT_NEAR(points.front().y, 60.0, 0.5);
+    EXPECT_NEAR(points.back().x, 240.0, 0.5);
 }
 
 int main(int argc, char **argv)

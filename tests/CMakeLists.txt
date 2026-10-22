@@ -408,6 +408,9 @@ if(TARGET notolith-inkcore)
     set_target_properties(test_ink PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
     add_test(NAME ink COMMAND test_ink)
     set_tests_properties(ink PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    # The position and overlay maths again at device pixel ratio 2 (PADD): the offscreen platform honours QT_SCALE_FACTOR.
+    add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
+    set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
 endif()
 
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none

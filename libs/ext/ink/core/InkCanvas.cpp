@@ -2,9 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <map>
 #include <utility>
 
+#include <QFocusEvent>
 #include <QGestureEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -17,6 +17,56 @@
 #include "StrokeOutline.h"
 
 namespace noteAppC::ink {
+
+namespace {
+
+constexpr int kMaxOverlaySide = 8192; ///< widget px: the live overlay never grows past this, whatever the widget's size
+
+double cross(const QPointF &o, const QPointF &p, const QPointF &q)
+{
+    return (p.x() - o.x()) * (q.y() - o.y()) - (p.y() - o.y()) * (q.x() - o.x());
+}
+
+double pointToSegmentSquared(const QPointF &p, const QPointF &a, const QPointF &b)
+{
+    const QPointF ab = b - a;
+    const double len2 = ab.x() * ab.x() + ab.y() * ab.y();
+    const double t = len2 > 0 ? std::clamp(((p.x() - a.x()) * ab.x() + (p.y() - a.y()) * ab.y()) / len2, 0.0, 1.0) : 0.0;
+    const QPointF d = p - (a + ab * t);
+    return d.x() * d.x() + d.y() * d.y();
+}
+
+/// The squared distance between segments ab and cd: zero when they cross, otherwise the
+/// closest of the four endpoint-to-segment distances.
+double segmentDistanceSquared(const QPointF &a, const QPointF &b, const QPointF &c, const QPointF &d)
+{
+    if (((cross(a, b, c) > 0) != (cross(a, b, d) > 0)) && ((cross(c, d, a) > 0) != (cross(c, d, b) > 0)))
+        return 0.0;
+    return std::min({pointToSegmentSquared(a, c, d), pointToSegmentSquared(b, c, d), pointToSegmentSquared(c, a, b),
+                     pointToSegmentSquared(d, a, b)});
+}
+
+/// Does the eraser (segment a-b swept by radius `r`, document px) touch the ink of `stroke`? Walks
+/// the polyline: no outline path is built, so a 10 000-point scribble costs microseconds a sample.
+bool eraserTouches(const Stroke &stroke, const QPointF &a, const QPointF &b, double r)
+{
+    const auto &pts = stroke.points;
+    const QRectF box = QRectF(a, b).normalized().adjusted(-r, -r, r, r);
+    for (size_t i = 0; i < pts.size(); ++i) {
+        const size_t j = i + 1 < pts.size() ? i + 1 : i;
+        const QPointF p(pts[i].x, pts[i].y), q(pts[j].x, pts[j].y);
+        const double half = 0.5 * std::max(stroke.widthAt(i), stroke.widthAt(j));
+        if (std::max(p.x(), q.x()) < box.left() - half || std::min(p.x(), q.x()) > box.right() + half ||
+            std::max(p.y(), q.y()) < box.top() - half || std::min(p.y(), q.y()) > box.bottom() + half)
+            continue; // the cheap cull: far from the capsule's box
+        const double reach = r + half;
+        if (segmentDistanceSquared(a, b, p, q) <= reach * reach)
+            return true;
+    }
+    return false;
+}
+
+} // namespace
 
 InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
 {
@@ -37,6 +87,7 @@ QSize InkCanvas::sizeHint() const
 
 void InkCanvas::documentReplaced()
 {
+    finishStroke(false); // the stroke in flight belongs to the document that went away
     m_live = QImage();
     resize(sizeHint());
     updateGeometry();
@@ -48,6 +99,7 @@ void InkCanvas::setZoom(double zoom)
     zoom = std::clamp(zoom, 0.25, 8.0);
     if (qFuzzyCompare(zoom, m_zoom))
         return;
+    finishStroke(true); // in the old zoom: its samples are widget px of it
     m_zoom = zoom;
     m_live = QImage();
     resize(sizeHint());
@@ -67,6 +119,13 @@ void InkCanvas::setTool(Tool tool)
         return;
     m_tool = tool;
     emit toolChanged(m_tool);
+}
+
+void InkCanvas::setReadOnly(bool on)
+{
+    if (on)
+        finishStroke(true);
+    m_readOnly = on;
 }
 
 PressureNormaliser &InkCanvas::normaliserFor(const QString &device)
@@ -98,34 +157,37 @@ void InkCanvas::tabletEvent(QTabletEvent *event)
     if (m_readOnly)
         return;
     const double seconds = event->timestamp() / 1000.0;
-    // R14: this device's learned maximum turns raw pressure into 0..1 (PADD never exceeds 0.657).
-    const QString device = event->pointingDevice() ? event->pointingDevice()->name() : QString();
-    PressureNormaliser &normaliser = normaliserFor(device);
-    const double pressure = normaliser.normalise(event->pressure());
-    struct Persist { // after the switch: tell the owner once when learning moved the maximum
-        InkCanvas *canvas; PressureNormaliser &normaliser; const QString &device;
-        ~Persist() { if (normaliser.takeChanged()) emit canvas->learnedPressureChanged(device, normaliser.learnedMax()); }
-    } persist{this, normaliser, device};
     const QPointF pos = event->position() - kFractionalScaleOffset;
-    const bool eraseByDevice = kTrustEraserPointerType && event->pointerType() == QPointingDevice::PointerType::Eraser;
-    const bool eraseByButton = event->buttons().testFlag(kHeldEraserButton);
+    // R14: this device's learned maximum turns raw pressure into 0..1 (PADD never exceeds 0.657). Only
+    // pressed samples teach it: the release carries the lifted 0, and the stroke ends with the last real pressure.
+    const QString device = event->pointingDevice() ? event->pointingDevice()->name() : QString();
+    PressureNormaliser *normaliser = nullptr;
     switch (event->type()) {
-    case QEvent::TabletPress:
-        m_tabletActive = true;
-        pressAt(pos, pressure, seconds, eraseByDevice || eraseByButton || m_tool == Tool::Eraser);
+    case QEvent::TabletPress: {
+        if (event->button() != Qt::LeftButton) // a barrel button changing is not the tip going down
+            break;
+        normaliser = &normaliserFor(device);
+        const bool eraseByDevice = kTrustEraserPointerType && event->pointerType() == QPointingDevice::PointerType::Eraser;
+        const bool eraseByButton = event->buttons().testFlag(kHeldEraserButton);
+        pressAt(pos, normaliser->normalise(event->pressure()), seconds, eraseByDevice || eraseByButton || m_tool == Tool::Eraser);
+        m_tabletActive = true; // after pressAt: closing an old stroke there clears it
         break;
+    }
     case QEvent::TabletMove:
-        if (m_tabletActive)
-            moveTo(pos, pressure, seconds);
+        if (m_tabletActive) {
+            normaliser = &normaliserFor(device);
+            moveTo(pos, normaliser->normalise(event->pressure()), seconds);
+        }
         break;
     case QEvent::TabletRelease:
-        if (m_tabletActive)
-            releaseAt(pos, pressure, seconds);
-        m_tabletActive = false;
+        if (event->button() == Qt::LeftButton && m_tabletActive)
+            releaseAt(pos, seconds);
         break;
     default:
         break;
     }
+    if (normaliser && normaliser->takeChanged()) // learning moved the maximum: tell the owner once
+        emit learnedPressureChanged(device, normaliser->learnedMax());
 }
 
 void InkCanvas::mousePressEvent(QMouseEvent *event)
@@ -146,7 +208,7 @@ void InkCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
     if (m_drawing == Drawing::None || m_tabletActive)
         return QWidget::mouseReleaseEvent(event);
-    releaseAt(event->position(), 0.5, event->timestamp() / 1000.0);
+    releaseAt(event->position(), event->timestamp() / 1000.0);
 }
 
 bool InkCanvas::event(QEvent *event)
@@ -157,6 +219,10 @@ bool InkCanvas::event(QEvent *event)
     case QEvent::TouchEnd: {
         auto *touch = static_cast<QTouchEvent *>(event);
         touch->accept();
+        if (isDrawing()) { // a palm beside the pen must not move the page under it
+            m_touchPanning = false;
+            return true;
+        }
         const auto &points = touch->points();
         if (points.size() == 1) {
             const QPointF now = points[0].globalPosition(); // not position(): the scroll area moves this widget under the finger
@@ -171,6 +237,10 @@ bool InkCanvas::event(QEvent *event)
             m_touchPanning = false;
         return true; // touch is pan and zoom, never ink (spec section 7, Input)
     }
+    case QEvent::Leave:
+    case QEvent::TabletLeaveProximity:
+        finishStroke(true); // the pointer left: no release will come
+        return QWidget::event(event);
     case QEvent::Gesture: {
         auto *gesture = static_cast<QGestureEvent *>(event);
         if (auto *pinch = static_cast<QPinchGesture *>(gesture->gesture(Qt::PinchGesture))) {
@@ -215,73 +285,141 @@ void InkCanvas::keyPressEvent(QKeyEvent *event)
     }
 }
 
+void InkCanvas::focusOutEvent(QFocusEvent *event)
+{
+    if (event->reason() != Qt::PopupFocusReason) // a popup (a menu over the toolbar) is not a lost pen
+        finishStroke(true);
+    QWidget::focusOutEvent(event);
+}
+
+void InkCanvas::hideEvent(QHideEvent *event)
+{
+    finishStroke(true);
+    QWidget::hideEvent(event);
+}
+
+void InkCanvas::changeEvent(QEvent *event)
+{
+    if (event->type() == QEvent::EnabledChange && !isEnabled())
+        finishStroke(true);
+    QWidget::changeEvent(event);
+}
+
 // --- the stroke in flight ----------------------------------------------------
 
 void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double seconds, bool erase)
 {
     if (m_drawing != Drawing::None)
-        releaseAt(widgetPos, pressure, seconds); // a press without the release: close the old stroke first
+        finishStroke(true); // a press without the release: close the old stroke where IT ended, not at this press
     setFocus(Qt::MouseFocusReason);
+    m_lastPos = widgetPos;
+    m_lastPressure = pressure;
+    m_lastSeconds = seconds;
     if (erase) {
         m_drawing = Drawing::Eraser;
         m_erasedSomething = false;
-        eraseAround(toDocument(widgetPos));
+        m_lastErase = toDocument(widgetPos);
+        eraseSweep(m_lastErase, m_lastErase);
         return;
     }
     m_drawing = Drawing::Pen;
-    if (m_live.size() != size() * devicePixelRatio()) {
-        m_live = QImage(size() * devicePixelRatio(), QImage::Format_ARGB32_Premultiplied);
-        m_live.setDevicePixelRatio(devicePixelRatio());
-    }
-    m_live.fill(Qt::transparent);
+    prepareLiveOverlay();
     m_input.begin({toDocument(widgetPos), pressure, seconds}, m_penStyle);
     rasteriseNewSegments();
 }
 
 void InkCanvas::moveTo(const QPointF &widgetPos, double pressure, double seconds)
 {
+    m_lastPos = widgetPos;
+    m_lastPressure = pressure;
+    m_lastSeconds = seconds;
     if (m_drawing == Drawing::Eraser) {
-        eraseAround(toDocument(widgetPos));
-        return;
-    }
-    m_input.extend({toDocument(widgetPos), pressure, seconds});
-    rasteriseNewSegments();
-}
-
-void InkCanvas::releaseAt(const QPointF &widgetPos, double pressure, double seconds)
-{
-    if (m_drawing == Drawing::Eraser) {
-        eraseAround(toDocument(widgetPos));
-        m_drawing = Drawing::None;
-        if (m_erasedSomething)
-            finishEdit();
+        const QPointF now = toDocument(widgetPos);
+        eraseSweep(m_lastErase, now);
+        m_lastErase = now;
         return;
     }
     if (m_drawing != Drawing::Pen)
         return;
-    m_input.end({toDocument(widgetPos), pressure, seconds});
-    m_input.takeNewPoints();
-    std::shared_ptr<const Stroke> stroke = m_input.finish();
-    m_drawing = Drawing::None;
+    m_input.extend({toDocument(widgetPos), pressure, seconds});
+    rasteriseNewSegments();
+}
+
+void InkCanvas::releaseAt(const QPointF &widgetPos, double seconds)
+{
+    if (m_drawing == Drawing::None)
+        return;
+    m_lastPos = widgetPos; // the pressure stays the last one in contact: a real pen reports 0 at lift
+    m_lastSeconds = seconds;
+    if (m_drawing == Drawing::Eraser) {
+        const QPointF now = toDocument(widgetPos);
+        eraseSweep(m_lastErase, now);
+        m_lastErase = now;
+    }
+    finishStroke(true);
+}
+
+/// The one way a stroke ends, however it ends. keep = true ends it at the last received sample and
+/// commits what was drawn or erased (pen-up, a lost release, focus loss, hide, disable, read-only,
+/// zoom, the pointer leaving). keep = false (documentReplaced) drops the live stroke and commits
+/// nothing: the document it belonged to is gone, and the eraser's live removals went with it.
+void InkCanvas::finishStroke(bool keep)
+{
+    const Drawing mode = std::exchange(m_drawing, Drawing::None);
+    m_tabletActive = false;
     const QRectF tail = std::exchange(m_lastPrediction, QRectF()); // the tail goes with the pen: repaint where it was
-    if (stroke && !stroke->points.empty()) {
+    if (mode == Drawing::None)
+        return;
+    if (mode == Drawing::Eraser) {
+        if (std::exchange(m_erasedSomething, false) && keep)
+            finishEdit();
+        return;
+    }
+    m_input.end({toDocument(m_lastPos), m_lastPressure, m_lastSeconds});
+    m_input.takeNewPoints();
+    const std::shared_ptr<const Stroke> stroke = m_input.finish();
+    // A one-point dot is a stroke the reader accepts; only a stroke with no point at all is not committed.
+    if (keep && stroke && !stroke->points.empty()) {
         // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote (Spec 2).
         // A highlighter tool does nothing over handwriting (spec section 2), so none exists here.
         m_document.addStroke(stroke, Layer::User);
-        if (m_document.growToContain(stroke->bounds()))
-            documentReplaced();
+        const bool grew = m_document.growToContain(stroke->bounds());
         finishEdit();
+        if (grew)
+            documentReplaced(); // the page grew: resize the widget (m_drawing is None, nothing to cancel)
         update(widgetRect(stroke->bounds() | tail));
     } else {
         update();
     }
 }
 
+/// The overlay is the visible part of the canvas only (the viewport inside InkView's scroll area):
+/// a ten-page document must not cost a 140 MB image and a 140 MB clear at every pen-down.
+void InkCanvas::prepareLiveOverlay()
+{
+    QRect want = visibleRegion().boundingRect();
+    if (want.isEmpty())
+        want = rect();
+    want.setSize(want.size().boundedTo(QSize(kMaxOverlaySide, kMaxOverlaySide)));
+    const qreal dpr = devicePixelRatio();
+    if (m_live.isNull() || m_liveRect != want || m_live.devicePixelRatio() != dpr) {
+        m_liveRect = want;
+        m_live = QImage(want.size() * dpr, QImage::Format_ARGB32_Premultiplied);
+        m_live.setDevicePixelRatio(dpr);
+        m_live.fill(Qt::transparent);
+    } else if (!m_liveDirty.isEmpty()) { // only what the last stroke painted
+        QPainter painter(&m_live);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.fillRect(m_liveDirty.translated(-m_liveRect.topLeft()), Qt::transparent);
+    }
+    m_liveDirty = QRect();
+}
+
 void InkCanvas::rasteriseNewSegments()
 {
     const size_t fresh = m_input.takeNewPoints();
     const Stroke &stroke = m_input.stroke();
-    if (fresh == 0 || stroke.points.empty())
+    if (fresh == 0 || stroke.points.empty() || m_live.isNull())
         return;
     // The segments ending at the new points: from the last point of the
     // previous batch, so nothing is missed between batches.
@@ -290,11 +428,13 @@ void InkCanvas::rasteriseNewSegments()
     const QPainterPath path = strokeOutline(stroke, first, last);
     QPainter painter(&m_live);
     painter.setRenderHint(QPainter::Antialiasing);
+    painter.translate(-m_liveRect.topLeft());
     painter.scale(m_zoom, m_zoom);
     painter.setPen(Qt::NoPen);
     painter.setBrush(stroke.style.color);
     painter.drawPath(path);
     painter.end();
+    m_liveDirty |= widgetRect(path.boundingRect());
     QRectF tail; // the predicted tail's box: repainted now, and again where it was when it moves
     for (const StrokePoint &p : m_input.prediction())
         tail |= QRectF(p.x - stroke.style.width, p.y - stroke.style.width, 2 * stroke.style.width, 2 * stroke.style.width);
@@ -303,19 +443,19 @@ void InkCanvas::rasteriseNewSegments()
     update(widgetRect(dirty));
 }
 
-void InkCanvas::eraseAround(const QPointF &documentPos)
+/// The eraser is the segment a-b swept by half its width (document px): a fast pen skips no
+/// stroke between two samples. Candidates come from the spatial grid; a stroke is tested on its
+/// polyline, never by building its outline.
+void InkCanvas::eraseSweep(const QPointF &a, const QPointF &b)
 {
     const double r = m_eraserWidth * 0.5;
-    const QRectF area(documentPos.x() - r, documentPos.y() - r, 2 * r, 2 * r);
-    QPainterPath circle;
-    circle.addEllipse(area);
+    const QRectF area = QRectF(a, b).normalized().adjusted(-r, -r, r, r);
     QRectF dirty;
     for (qint64 t : m_document.itemsIntersecting(area)) {
         const Item *item = m_document.item(t);
         if (!item)
             continue;
-        const bool hit = item->type == Item::Type::Stroke ? strokeOutline(*item->stroke).intersects(circle)
-                                                          : item->bounds().intersects(area);
+        const bool hit = item->type == Item::Type::Stroke ? eraserTouches(*item->stroke, a, b, r) : item->bounds().intersects(area);
         if (!hit)
             continue;
         dirty |= item->bounds();
@@ -382,9 +522,12 @@ void InkCanvas::paintEvent(QPaintEvent *event)
         }
     }
     painter.restore();
-    if (m_drawing == Drawing::Pen && !m_live.isNull())
-        painter.drawImage(event->rect(), m_live, QRectF(QPointF(event->rect().topLeft()) * devicePixelRatio(),
-                                                        QSizeF(event->rect().size()) * devicePixelRatio()));
+    if (m_drawing == Drawing::Pen && !m_live.isNull()) {
+        const QRect target = event->rect() & m_liveRect;
+        const qreal dpr = m_live.devicePixelRatio();
+        if (!target.isEmpty())
+            painter.drawImage(target, m_live, QRectF(QPointF(target.topLeft() - m_liveRect.topLeft()) * dpr, QSizeF(target.size()) * dpr));
+    }
 }
 
 } // namespace noteAppC::ink
