@@ -50,7 +50,13 @@ invocations, run as `taskset -c 6-11,18-23 chrt --idle 0 systemd-run --user --sc
 **The machine was not quiet** (rule 6): a Wine game (`GameThread`, about 650 % CPU, all 24 cores allowed) ran for the
 whole session, CCD1 was 71-77 % idle, and under `chrt --idle` the bench yields to it. The pool-side rows (tile latency,
 zoom re-render, cold start) are therefore pessimistic and noisy; the rows nearest their gate are the cold-start
-difference (one of three runs, 1.37 ms, was over it) and the keystroke ratio. A rerun on an idle machine is owed.
+difference and the keystroke ratio. Both were re-taken after the review with more samples (`--phase inkmodules`: 61
+alternated pairs, 9 rounds of 30 keys, spread reported in the row, a guard that the "present" condition finds the
+module manifests and the "empty" one finds none) and now read 0.09 ms with quartiles of about +-0.5 ms, and a ratio
+of 1.00 over three runs (rounds 0.90-1.16). One caveat is recorded rather than removed: the ink feature registration is
+process-global (`Settings::registerFeature`), so after the first "present" window every "empty" window of the same
+process already has the feature row; "empty" means no manifests to scan, which is what the scan costs. Every row of this
+section is provisional (busy machine); a rerun on an idle machine is owed.
 
 Also measured, not gated (`--phase inkcarry`, 2026-10-22, same conditions): tile render latency for a screen of cold
 tiles 32.5 ms at 10 000 strokes and 32.7 ms at 50 000 (a frame that asks for them: 2.1 / 2.3 ms on the UI thread,
@@ -64,9 +70,9 @@ Three fixes came out of those rows, each with its test:
 
 | what | before | after |
 |---|---|---|
-| a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants, N1) |
+| a fast scroll over 50 000 strokes (20 viewport steps without waiting): time until the last screen is sharp, tile jobs that ran | 229.6 ms, 90 jobs | 70.0 ms, 28 jobs (`TileCache::keepOnly`: a paint cancels the queued renders for cells it no longer wants, N1; a cell wanted again after being cancelled gets a new job at once and the abandoned result is dropped, review I3) |
 | a clipboard payload of 62 MiB pasted | parsed on the UI thread, about 0.75 s (11.9 ms a MiB from the 7.5 and 15.2 MiB rows) | refused by its size at once; the cap is 16 MiB (`kMaxClipboardBytes`) |
-| one paint of 8 text boxes of 8 MB each (P1) | all 8 rendered and held, 64 MB | rendering stops once the pictures the paint used fill the 32 MB budget (a test: at most the budget plus one picture) |
+| one paint of 8 text boxes of 8 MB each (P1) | all 8 rendered and held, 64 MB | rendering stops once the pictures this paint rendered fill the 32 MB budget (a test: at most the budget plus one picture); pictures already cached do not count against it, and a paint that skipped boxes schedules one more, so every box gets its picture within a few paints (review I4; the memory bound is per paint, not per page) |
 
 Cold start and executable size, this branch against `main` (R8): `ENABLE_EXPORTS` makes the executables carry their
 whole dynamic symbol table so modules can resolve host classes (`.dynsym` 2.9 k symbols on `main`, 15.5 k here).
@@ -76,9 +82,14 @@ window 102.5 and 100.3 ms (-2.2 %); an earlier set with the module variable unse
 87.55 and 88.36 ms (+0.9 %). The dynamic loader itself (`LD_DEBUG=statistics`, `--help`, five runs each) reports
 17.28 million cycles on `main` and 17.27 million here, so the table costs nothing measurable at start. Size:
 `stat` 288 271 616 bytes on `main`, 292 070 216 here (+1.3 %, mostly DWARF at RelWithDebInfo); the text segment
-(`size`) 12.56 MB to 13.89 MB (+10.6 %), of which `.dynsym` and `.dynstr` are 1.09 MB. Both gates hold as the brief
-states them (cold start +5 %, size +10 % of the executable), so no visibility rework was done; the text segment is
-at the edge of the size gate and the dynamic table is the cause, if it is ever read the other way.
+(`size`) 12.56 MB to 13.89 MB (+10.6 %, +1 330 331 bytes). The `stat` figure is not the one that shows this cost: it
+is dominated by DWARF, which the export table does not touch. Stripped, the executable grows 12 725 920 to 14 053 376
+bytes (+10.4 %); `.gnu.hash` + `.dynsym` + `.dynstr` grow from 0.37 MB to 1.56 MB (+1 193 117 bytes, +9.5 % of the base
+text), and everything else in the text segment grows 137 214 bytes (+1.1 %). The gate passes as the brief words it (on
+`stat` size, +1.3 % against +10 %), and the export table alone sits just under the 10 % line when the same gate is
+read on the stripped executable or the text segment: a further 0.5 % of exported symbols would cross it. No
+visibility rework was done; if the line is ever read that way, that is the place to cut (export only what modules
+resolve).
 
 ## Where it stands
 
@@ -119,14 +130,14 @@ Median of several runs, after every fix below; a 2 000-note vault unless the row
 | Settings, first open in a window (bench) | 30 ms (2026-10-19; 252 ms before) | - |
 | cold index, 20 000 notes | 0.95 s (2026-10-01, quiet; the 1.24 s of stage 14 was the busy machine); 1.04 s on 2026-10-16 with the tag-heavy note | 5 s |
 | peak RSS, vault plus a 1 MB note | 228 MB (2026-10-16) | 250 MB (this pass) |
-| ink pen sample, 10 000-stroke page (bench) | 0.047 ms (2026-10-22; runs 0.047, 0.047, 0.047) | 1 ms |
-| ink scrolled frame, 10 000 strokes (bench) | 1.03 ms (2026-10-22; runs 1.01-1.08) | 4 ms |
-| ink scrolled frame, 50 000 strokes, ratio to 10 000 | 1.07x (2026-10-22; 1.10 / 1.03 ms; per-run ratios 1.01-1.09) | 2x |
-| ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (2026-10-22; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
-| cold start, module directory present vs empty | 0.47 ms difference (2026-10-22; runs 0.47, -0.37, 1.37, paired over 21 alternated samples each) | 1 ms |
-| window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 0.96x (2026-10-22; 0.77 / 0.81 ms, runs' ratios 0.81-1.01) | 1.10x |
-| cold start, this branch vs main (ENABLE_EXPORTS cost, R8) | +2.1 % later windows, -2.2 % the first window (2026-10-22); the loader's own time equal | +5 % |
-| `noteAppC` executable size, this branch vs main (R8) | +1.3 % file (292 070 216 vs 288 271 616 bytes); +10.6 % text segment (13.89 vs 12.56 MB) | +10 % |
+| ink pen sample, 10 000-stroke page (bench) | 0.047 ms (2026-10-22, busy machine, rerun owed; runs 0.047, 0.047, 0.047) | 1 ms |
+| ink scrolled frame, 10 000 strokes (bench) | 1.03 ms (2026-10-22, busy machine, rerun owed; runs 1.01-1.08) | 4 ms |
+| ink scrolled frame, 50 000 strokes, ratio to 10 000 | 1.07x (2026-10-22, busy machine, rerun owed; 1.10 / 1.03 ms; per-run ratios 1.01-1.09) | 2x |
+| ink zoom settle to sharp (bench), the re-render after the tiles switch | 20.8 ms (2026-10-22, busy machine, rerun owed; runs 20.7-22.2; plus kZoomSettleMs = 400 ms, 403.9 ms in all) | 100 ms |
+| cold start, module directory present vs empty | 0.09 ms paired median difference (2026-10-22, busy machine, rerun owed; three runs of 61 alternated pairs: medians 0.09, -0.03, -0.03; quartiles about -0.5 .. +0.55 each; the earlier 21-pair runs of 0.47, -0.37, 1.37 were noise of this size, which is why the count went to 61) | 1 ms |
+| window keystroke on the 1 MB note, module directory present vs empty (after the scan), ratio | 1.00x pooled (2026-10-22, busy machine, rerun owed; three runs of 9 rounds: 0.58 / 0.57 ms; the rounds' own ratios range 0.90-1.16, 0.94-1.16, 0.97-1.04) | 1.10x |
+| cold start, this branch vs main (ENABLE_EXPORTS cost, R8) | +2.1 % later windows, -2.2 % the first window (2026-10-22, busy machine, rerun owed); the loader's own time equal | +5 % |
+| `noteAppC` executable size, this branch vs main (R8) | +1.3 % file (292 070 216 vs 288 271 616 bytes, the gate); +10.4 % stripped, +10.6 % text segment, of which the dynamic tables are +9.5 % of the base text (13.89 vs 12.56 MB; just under the line on those readings) | +10 % |
 
 "Readable" is deliberate wording: above 128 kB a note is shown as plain
 paragraphs at once and styled when its parse comes back from the thread pool.

@@ -15,6 +15,7 @@
 #include <QBuffer>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QStandardPaths>
 #include <QDirIterator>
 #include <QDialog>
 #include <QElapsedTimer>
@@ -40,7 +41,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <numbers>
 #include <vector>
 
 #include <QSurfaceFormat>
@@ -499,7 +502,8 @@ QString firstNoteIn(const QString &vaultPath)
 /// shell has connected to the editor, and the application-wide event filter
 /// that catches the mouse's back and forward buttons, are all on the path a
 /// person's keystroke actually takes. The bare-editor row cannot see them.
-Timing benchWindowKeystroke(const QString &vaultPath, const QString &notePath, int runs, bool scanModules = false)
+Timing benchWindowKeystroke(const QString &vaultPath, const QString &notePath, int runs, bool scanModules = false,
+                            qsizetype *modulesFound = nullptr)
 {
     auto window = std::make_unique<MainWindow>();
     window->resize(1180, 760);
@@ -510,6 +514,8 @@ Timing benchWindowKeystroke(const QString &vaultPath, const QString &notePath, i
     if (scanModules) { // the module scan has finished before the first key: what the scan registered must not slow typing
         window->scanModulesNow();
         QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (modulesFound)
+            *modulesFound = window->modules()->modules().size();
     }
 
     MarkdownEditor *editor = window->editor();
@@ -1583,6 +1589,9 @@ void fillInkSquiggles(ink::InkCanvas &canvas, int cols, int rows, double cellWid
 
 /// Paints `surface` until the canvas has nothing in flight and a paint asked for nothing more: every tile the
 /// view wants (visible and the ring around it) is rendered and shown.
+/// Gives up after 50 rounds and counts it: a row timed across a canvas that never settled is marked invalid.
+int g_unsettledInk = 0;
+
 void settleInkTiles(ink::InkCanvas &canvas, QWidget *surface)
 {
     for (int round = 0; round < 50; ++round) {
@@ -1591,6 +1600,18 @@ void settleInkTiles(ink::InkCanvas &canvas, QWidget *surface)
         if (canvas.pendingTiles() == 0)
             return;
     }
+    ++g_unsettledInk;
+    std::fprintf(stderr, "the ink tiles did not settle in 50 rounds\n");
+}
+
+/// A row that cannot be trusted: NaN in every column (null in the JSON) and the reason in the detail, so it can
+/// neither pass a gate nor read as zero.
+Timing invalidRow(Timing t, const QString &why)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    t.meanMs = t.medianMs = t.p95Ms = t.worstMs = nan;
+    t.detail += QStringLiteral(" INVALID: ") + why;
+    return t;
 }
 
 /// 1. A pen sample: sendEvent of one move plus the processEvents that paints what it dirtied, on a 1200x800 canvas
@@ -1603,6 +1624,7 @@ Timing benchInkPenSample()
     (void)QTest::qWaitForWindowExposed(&canvas);
     PaintCounter counter(&canvas);
     settleInkTiles(canvas, &canvas);
+    const int unsettledBefore = g_unsettledInk;
     constexpr int kStrokes = 5, kSamples = 400;
     std::vector<double> samples;
     quint64 ms = 100000;
@@ -1625,9 +1647,14 @@ Timing benchInkPenSample()
         sendPen(&canvas, QEvent::TabletRelease, at(kSamples - 1), 0.4, ms);
         settleInkTiles(canvas, &canvas); // the tiles under the new stroke, untimed
     }
-    if (counter.paints < moves / 2)
-        std::fprintf(stderr, "warning: only %d paints for %d pen samples; the row may not include the paint\n", counter.paints, moves);
-    return reduce(QStringLiteral("Ink pen sample"), QStringLiteral("10 000 strokes, 200 Hz"), samples);
+    Timing row = reduce(QStringLiteral("Ink pen sample"), QStringLiteral("10 000 strokes, 200 Hz"), samples);
+    if (g_unsettledInk != unsettledBefore)
+        return invalidRow(row, QStringLiteral("the tiles did not settle"));
+    if (counter.paints < moves / 2) {
+        std::fprintf(stderr, "only %d paints for %d pen samples; the row does not include the paint\n", counter.paints, moves);
+        return invalidRow(row, QStringLiteral("%1 paints for %2 samples").arg(counter.paints).arg(moves));
+    }
+    return row;
 }
 
 /// A canvas inside a 1200x800 scroll area, as InkView holds it. `strokes` strokes at one density: a cell is 12 x 40
@@ -1664,6 +1691,7 @@ InkScrollRows benchInkScrolled(int strokes)
     ink::InkCanvas &canvas = *f.canvas;
     const QString detail = QStringLiteral("%1 strokes").arg(strokes);
     InkScrollRows rows;
+    const int unsettledBefore = g_unsettledInk;
     // Cold: an 8 MB cache holds one screen, and the positions are two screens apart, so every step needs new tiles.
     canvas.setTileCacheMB(ink::InkCanvas::kMinTileCacheMB);
     std::vector<double> cold, latency;
@@ -1703,9 +1731,17 @@ InkScrollRows benchInkScrolled(int strokes)
             askedForTiles += asked;
         }
     }
-    if (askedForTiles > 0)
-        std::fprintf(stderr, "note: %d of %zu warm frames still asked the pool for a tile (%d strokes)\n", askedForTiles, warm.size(), strokes);
-    rows.warm = reduce(QStringLiteral("Ink scrolled frame"), detail, warm);
+    // A warm frame that still asked the pool for a tile was not "every tile cached": say so in the row.
+    rows.warm = reduce(QStringLiteral("Ink scrolled frame"),
+                       askedForTiles > 0 ? detail + QStringLiteral(", %1 of %2 frames still asked for a tile").arg(askedForTiles).arg(warm.size())
+                                         : detail,
+                       warm);
+    if (g_unsettledInk != unsettledBefore) {
+        const QString why = QStringLiteral("the tiles did not settle");
+        rows.warm = invalidRow(rows.warm, why);
+        rows.coldFrame = invalidRow(rows.coldFrame, why);
+        rows.coldLatency = invalidRow(rows.coldLatency, why);
+    }
     return rows;
 }
 
@@ -1749,12 +1785,44 @@ QString inkEmptyModuleDir(const QString &under)
 
 void setModuleDirs(const QString &dirs) { qputenv("NOTEAPPC_MODULE_DIRS", dirs.toLocal8Bit()); }
 
+/// What the module scan finds with NOTEAPPC_MODULE_DIRS set to `dirs`: the "present" condition must find
+/// modules and the "empty" one none, or two rows meant to differ would be the same condition twice and pass.
+qsizetype modulesFound(const QString &dirs)
+{
+    setModuleDirs(dirs);
+    return ModuleRegistry::scan(ModuleRegistry::defaultDirectories()).size();
+}
+
+/// Stops the run when a module-dir condition is not what its name says.
+void requireModuleDirs(const QString &present, const QString &empty)
+{
+    const qsizetype withModules = modulesFound(present), withoutModules = modulesFound(empty);
+    if (withModules > 0 && withoutModules == 0)
+        return;
+    std::fprintf(stderr, "module dir conditions are wrong: present finds %lld modules, empty finds %lld\n",
+                 qint64(withModules), qint64(withoutModules));
+    std::exit(2);
+}
+
+/// "q1 .. q3" of the samples, the spread a median alone hides.
+QString interQuartile(const std::vector<double> &samples, int decimals = 2)
+{
+    return QStringLiteral("quartiles %1 .. %2")
+        .arg(percentileOf(samples, 0.25), 0, 'f', decimals)
+        .arg(percentileOf(samples, 0.75), 0, 'f', decimals);
+}
+
 /// 5. Cold start with the module directory present and with an empty one, alternated sample by sample (the
 /// order flips each round), and the median of the paired differences. The scan runs after the first paint, so a
-/// difference here is something that leaked in front of it.
+/// difference here is something that leaked in front of it. The registration of the ink feature
+/// (Settings::registerFeature) is process-global, so once the first "present" window has scanned, every later
+/// "empty" window of this process already finds the feature row: "empty" means no manifests to scan, not a
+/// process that never saw them. 61 pairs: one sample is a 45 ms cold start, so the median of the pairs has a
+/// standard error well under the 1 ms gate only at this count.
 std::vector<Timing> benchColdStartModuleDirs(const QString &vaultPath, const QString &emptyDir, int runs)
 {
     const QString present = QStringLiteral(NOTEAPPC_INK_MODULE_DIR);
+    requireModuleDirs(present, emptyDir);
     std::vector<double> with, without, difference;
     (void)benchColdStart(vaultPath, 2); // the first windows of a process pay for what a process does once
     for (int i = 0; i < runs; ++i) {
@@ -1773,26 +1841,44 @@ std::vector<Timing> benchColdStartModuleDirs(const QString &vaultPath, const QSt
     qunsetenv("NOTEAPPC_MODULE_DIRS");
     return {reduce(QStringLiteral("Cold start with module dir"), QStringLiteral("present"), with),
             reduce(QStringLiteral("Cold start without"), QStringLiteral("empty dir"), without),
-            reduce(QStringLiteral("Cold start, module dir minus empty"), QStringLiteral("paired difference"), difference)};
+            reduce(QStringLiteral("Cold start, module dir minus empty"),
+                   QStringLiteral("paired difference, %1 pairs, %2").arg(runs).arg(interQuartile(difference)), difference)};
 }
 
 /// 7. The 1 MB note's keystroke through the window with the module directory present (scan finished) and empty:
-/// three rounds each, alternated; the median of each condition's medians, and their ratio (in the ms columns).
+/// nine rounds each, alternated; the median of each condition's medians, and their ratio (in the ms columns).
+/// One round's ratio swings by 20 %, so the gate reads the pooled ratio and the detail carries the range of the
+/// rounds' own ratios. The scan registers the ink feature process-wide (see benchColdStartModuleDirs).
 std::vector<Timing> benchKeystrokeModuleDirs(const QString &vaultPath, const QString &notePath, const QString &emptyDir)
 {
     const QString present = QStringLiteral(NOTEAPPC_INK_MODULE_DIR);
-    std::vector<double> with, without;
-    for (int round = 0; round < 3; ++round) {
+    requireModuleDirs(present, emptyDir);
+    constexpr int rounds = 9;
+    std::vector<double> with, without, roundRatios;
+    for (int round = 0; round < rounds; ++round) {
         for (int k = 0; k < 2; ++k) {
             const bool withModules = (k == 0) == (round % 2 == 0);
             setModuleDirs(withModules ? present : emptyDir);
-            (withModules ? with : without).push_back(benchWindowKeystroke(vaultPath, notePath, 30, true).medianMs);
+            qsizetype found = -1;
+            (withModules ? with : without).push_back(benchWindowKeystroke(vaultPath, notePath, 30, true, &found).medianMs);
+            if (withModules != (found > 0)) {
+                std::fprintf(stderr, "the %s window found %lld modules\n", withModules ? "present" : "empty", qint64(found));
+                std::exit(2);
+            }
         }
+        roundRatios.push_back(with.back() / without.back());
     }
     qunsetenv("NOTEAPPC_MODULE_DIRS");
-    Timing ratio = reduce(QStringLiteral("Keystroke through the window, ratio"), QStringLiteral("module dir / empty (value is a ratio)"), {});
+    const double lowest = *std::min_element(roundRatios.begin(), roundRatios.end());
+    const double highest = *std::max_element(roundRatios.begin(), roundRatios.end());
+    Timing ratio = reduce(QStringLiteral("Keystroke through the window, ratio"),
+                          QStringLiteral("module dir / empty (value is a ratio), %1 rounds, rounds %2 .. %3")
+                              .arg(rounds).arg(lowest, 0, 'f', 2).arg(highest, 0, 'f', 2),
+                          {});
     ratio.runs = int(with.size());
-    ratio.meanMs = ratio.medianMs = ratio.p95Ms = ratio.worstMs = medianOf(with) / medianOf(without);
+    ratio.meanMs = ratio.medianMs = medianOf(with) / medianOf(without);
+    ratio.p95Ms = highest;
+    ratio.worstMs = highest;
     return {reduce(QStringLiteral("Keystroke through the window, 1 MB"), QStringLiteral("module dir present"), with),
             reduce(QStringLiteral("Keystroke through the window, 1 MB"), QStringLiteral("module dir empty"), without), ratio};
 }
@@ -1844,8 +1930,17 @@ std::pair<Timing, Timing> benchInkOpen(const QString &workDir, int runs)
             reduce(QStringLiteral("Ink open, 300 KB"), QStringLiteral("until isLoading() is false"), total)};
 }
 
-void runInkPhase(QList<Timing> &timings, const QString &vaultPath, const QString &bigNote, const QString &workDir)
+/// `modulesOnly`: rows 5 and 7 alone (phase `inkmodules`), for re-measuring the two noisy gates.
+void runInkPhase(QList<Timing> &timings, const QString &vaultPath, const QString &bigNote, const QString &workDir, bool modulesOnly = false)
 {
+    if (modulesOnly) {
+        const QString emptyDir = inkEmptyModuleDir(workDir);
+        for (const Timing &t : benchColdStartModuleDirs(vaultPath, emptyDir, 61))
+            timings << t;
+        for (const Timing &t : benchKeystrokeModuleDirs(vaultPath, bigNote, emptyDir))
+            timings << t;
+        return;
+    }
     timings << benchInkPenSample();
     const InkScrollRows tenK = benchInkScrolled(10000);
     const InkScrollRows fiftyK = benchInkScrolled(50000);
@@ -1857,7 +1952,7 @@ void runInkPhase(QList<Timing> &timings, const QString &vaultPath, const QString
     const auto zoom = benchInkZoomSettle(7);
     timings << zoom.first << zoom.second;
     const QString emptyDir = inkEmptyModuleDir(workDir);
-    for (const Timing &t : benchColdStartModuleDirs(vaultPath, emptyDir, 21))
+    for (const Timing &t : benchColdStartModuleDirs(vaultPath, emptyDir, 61))
         timings << t;
     const auto open = benchInkOpen(workDir, 9);
     timings << open.first << open.second;
@@ -1873,7 +1968,7 @@ QPainterPath lassoAround(const QRectF &rect, int vertices)
 {
     QPolygonF polygon;
     for (int i = 0; i < vertices; ++i) {
-        const double a = 2 * M_PI * i / vertices;
+        const double a = 2 * std::numbers::pi * i / vertices;
         polygon << QPointF(rect.center().x() + std::cos(a) * rect.width() * 0.72, rect.center().y() + std::sin(a) * rect.height() * 0.72);
     }
     QPainterPath path;
@@ -2312,6 +2407,11 @@ int main(int argc, char *argv[])
     QTemporaryDir dataHome;
     if (dataHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
         qputenv("XDG_DATA_HOME", dataHome.path().toLocal8Bit());
+    // The per-vault index lives under the cache home (libs/index/Index.cpp): without this every run adds
+    // a database directory to the real ~/.cache.
+    QTemporaryDir cacheHome;
+    if (cacheHome.isValid() && !qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG"))
+        qputenv("XDG_CACHE_HOME", cacheHome.path().toLocal8Bit());
 
     // A command-line tool talks on stderr. Without this Qt 6 sends qWarning
     // to the systemd journal whenever stderr is not a terminal - piped, run
@@ -2323,6 +2423,19 @@ int main(int argc, char *argv[])
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-bench"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-bench"));
+    // The run must never resolve a path under the real home: the three homes above are temporary, and
+    // this stops the run if one of them is not (a failed QTemporaryDir, a Qt that ignores the variable).
+    if (!qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG")) {
+        const QString realHome = QDir::homePath();
+        for (const auto location : {QStandardPaths::AppConfigLocation, QStandardPaths::AppDataLocation,
+                                    QStandardPaths::CacheLocation}) {
+            const QString path = QStandardPaths::writableLocation(location);
+            if (path.startsWith(realHome + QLatin1Char('/'))) {
+                qCritical().noquote() << "bench would write under the real home:" << path;
+                return 2;
+            }
+        }
+    }
 
     QCommandLineParser parser;
     parser.setApplicationDescription(
@@ -2363,7 +2476,7 @@ int main(int argc, char *argv[])
     // One phase alone, so `perf record` sees only it.
     QCommandLineOption phaseOption(QStringLiteral("phase"),
                                    QStringLiteral("Run one phase: memory, start, open, keystroke, save, "
-                                                  "relayout, scroll, pdfview, ink or inkcarry (reported costs of the ink tools, never in a full run)."),
+                                                  "relayout, scroll, pdfview, ink, inkmodules (ink rows 5 and 7 alone) or inkcarry (reported costs of the ink tools, never in a full run)."),
                                    QStringLiteral("name"));
     parser.addOption(phaseOption);
     QCommandLineOption paddOption(QStringLiteral("padd"),
@@ -2387,7 +2500,8 @@ int main(int argc, char *argv[])
     // A mistyped phase used to run nothing and print an empty table that looked like success.
     static const QStringList knownPhases = {QStringLiteral("memory"),    QStringLiteral("start"),  QStringLiteral("open"),
                                             QStringLiteral("keystroke"), QStringLiteral("save"),   QStringLiteral("relayout"),
-                                            QStringLiteral("scroll"),    QStringLiteral("pdfview"),   QStringLiteral("ink"),      QStringLiteral("inkcarry")};
+                                            QStringLiteral("scroll"),    QStringLiteral("pdfview"),   QStringLiteral("ink"),      QStringLiteral("inkcarry"),
+                                            QStringLiteral("inkmodules")};
     if (!phase.isEmpty() && !knownPhases.contains(phase)) {
         std::fprintf(stderr, "unknown phase \"%s\"; the phases are: %s\n", qPrintable(phase),
                      qPrintable(knownPhases.join(QStringLiteral(", "))));
@@ -2634,10 +2748,12 @@ int main(int argc, char *argv[])
     // The handwriting rows (libs/ext/ink): they open windows, so a full run reaches them last.
     if (runs("ink"))
         runInkPhase(timings, vaultPath, sizedNotes.value(1024), workDir.path());
+    if (phase == QLatin1String("inkmodules"))
+        runInkPhase(timings, vaultPath, sizedNotes.value(1024), workDir.path(), true);
     if (phase == QLatin1String("inkcarry"))
         runInkCarryPhase(timings, workDir.path());
 #else
-    if (phase == QLatin1String("ink"))
+    if (phase == QLatin1String("ink") || phase == QLatin1String("inkmodules"))
         std::fprintf(stderr, "this build has no ink core: no handwriting rows\n");
 #endif
 
