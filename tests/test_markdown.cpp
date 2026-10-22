@@ -1409,6 +1409,29 @@ TEST(TaskStatesTest, TheSortedLaterSectionWinsAContestedCharacter)
     EXPECT_EQ(states.at(QLatin1Char('!')).name, QStringLiteral("mine")); // took over "important"
 }
 
+TEST(EmbedTest, AnInlineHtmlImgIsAnEmbedWithItsOwnSize)
+{
+    const Decorations img = decorationsOf(
+        QStringLiteral("see <img src=\"docs/a%20b.png\" width=\"400px\" height='30' alt=\"x y\"> there\n"));
+    ASSERT_EQ(img.embeds.size(), 1);
+    const EmbedSpan &embed = img.embeds.first();
+    EXPECT_TRUE(embed.html);
+    EXPECT_EQ(embed.target, QStringLiteral("docs/a b.png"));
+    EXPECT_EQ(embed.alias, QStringLiteral("x y"));
+    EXPECT_EQ(embed.width, 400);
+    EXPECT_EQ(embed.height, 30);
+
+    // A Markdown image is not flagged.
+    EXPECT_FALSE(decorationsOf(QStringLiteral("![[a.png]]\n")).embeds.first().html);
+    // Malformed, or a scheme that is never an image: no embed, the text stays.
+    for (const char *bad : {"<img width=\"4\">", "<img src=\"a.png width=\"4\">", "<img src=\"\">",
+                            "<img src=\"javascript:alert(1)\">", "<img src=\"data:image/png;base64,AA\">",
+                            "<img src=\"//host/a.png\">", "<img src=a.png junk>"})
+        EXPECT_TRUE(decorationsOf(QStringLiteral("x %1 y\n").arg(QString::fromLatin1(bad))).embeds.isEmpty())
+            << bad;
+    EXPECT_EQ(decorationsOf(QStringLiteral("x <img src=\"https://h/a.png\"> y\n")).embeds.size(), 1);
+}
+
 TEST(EmbedTest, SizeSpecInTheAliasSlot)
 {
     const Decorations plain = decorationsOf(QStringLiteral("![[diagram.png]]\n"));

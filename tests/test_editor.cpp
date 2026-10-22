@@ -4227,6 +4227,192 @@ TEST(MultiEmbedTest, ATallInlineEmbedGrowsItsLineAndTheTextAfterItFollowsOnIt)
     EXPECT_GE(first.top(), 0);
 }
 
+// --- inline <img>: the Markdown image's own path, spelled in HTML ------------
+
+namespace {
+
+/// A 100x50 PNG in `dir`, and a resolver that finds it as "p.png" (anything
+/// else is unresolved, as a remote or unknown target is).
+struct HtmlImgFixture {
+    QTemporaryDir dir;
+    QString path;
+    HtmlImgFixture()
+    {
+        QImage image(100, 50, QImage::Format_RGB32);
+        image.fill(Qt::red);
+        path = dir.filePath(QStringLiteral("p.png"));
+        image.save(path);
+    }
+    std::function<QString(const QString &)> resolver()
+    {
+        return [this](const QString &target) {
+            return target == QLatin1String("p.png") ? path : QString();
+        };
+    }
+};
+
+const QString kImgTable = QStringLiteral("| a | b |\n|---|---|\n| x | %1 |\n");
+
+} // namespace
+
+TEST(HtmlImgTest, AnImgInATableCellBecomesAnImageOfTheRequestedWidth)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">")));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    // 100x50 asked to be 40 wide: the height follows at 20.
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+    EXPECT_TRUE(editor->embedCellLabelAt(0, 0).isEmpty());
+}
+
+TEST(HtmlImgTest, AnImgInATableWithAnEmptyHeaderStillRenders)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("| | |\n|---|---|\n"
+                                            "| Flashes red when hit | <img src=\"p.png\" width=\"40\"> |\n"
+                                            "| White sweep | <img src=\"p.png\" width=\"60\"> |\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 2);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+    EXPECT_EQ(editor->embedCellRectAt(0, 1).size(), QSizeF(60, 30));
+}
+
+TEST(HtmlImgTest, AMarkdownImageInATableCellRendersToo)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(kImgTable.arg(QStringLiteral("![40](p.png)")));
+    editor->setLinkResolver(fixture.resolver());
+
+    // The shared path: whatever draws the one draws the other.
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(40, 20));
+}
+
+TEST(HtmlImgTest, AnImgInsideRunningTextIsAnInlineImage)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("see <img src=\"p.png\" width=\"60\"> here\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(60, 30));
+    EXPECT_GT(editor->embedCellRectAt(0, 0).left(), 10); // after "see ", not a row under it
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("see")));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("here")));
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("src=")));
+}
+
+TEST(HtmlImgTest, AnImgInAListItemAndAQuoteIsDrawnToo)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(QStringLiteral("- item <img src=\"p.png\" width=\"20\">\n\n"
+                                            "> quoted <img src=\"p.png\" width=\"20\">\n"));
+    editor->setLinkResolver(fixture.resolver());
+
+    EXPECT_EQ(editor->embedCellCountAt(0), 1);
+    const qsizetype quote = editor->noteText().indexOf(QLatin1Char('>'));
+    EXPECT_EQ(editor->embedCellCountAt(quote), 1);
+}
+
+TEST(HtmlImgTest, OneAttributeKeepsTheAspectAndBothUseBoth)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto heightOnly = editorWith(QStringLiteral("a <img src=\"p.png\" height=\"25\"> b\n"));
+    heightOnly->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(heightOnly->embedCellCountAt(0), 1);
+    EXPECT_EQ(heightOnly->embedCellRectAt(0, 0).size(), QSizeF(50, 25));
+
+    auto both = editorWith(QStringLiteral("a <img src=\"p.png\" width=\"30px\" height=\"30\"> b\n"));
+    both->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(both->embedCellCountAt(0), 1);
+    EXPECT_EQ(both->embedCellRectAt(0, 0).size(), QSizeF(30, 30));
+
+    auto neither = editorWith(QStringLiteral("a <img src='p.png'> b\n"));
+    neither->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(neither->embedCellCountAt(0), 1);
+    EXPECT_EQ(neither->embedCellRectAt(0, 0).size(), QSizeF(100, 50));
+}
+
+TEST(HtmlImgTest, TheSourceShowsWhileTheCaretIsInsideIt)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto paragraph = editorWith(QStringLiteral("see <img src=\"p.png\" width=\"60\"> here\n"));
+    paragraph->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(paragraph->embedCellCountAt(0), 1);
+    paragraph->enterBlockAt(8);
+    EXPECT_EQ(paragraph->embedCellCountAt(0), 0);
+    EXPECT_TRUE(paragraph->displayText().contains(QStringLiteral("<img src=\"p.png\" width=\"60\">")));
+
+    const QString text = kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">"));
+    auto table = editorWith(text);
+    table->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(table->embedCellCountAt(0), 1);
+    table->enterBlockAt(text.indexOf(QStringLiteral("src=")));
+    EXPECT_EQ(table->embedCellCountAt(0), 0);
+    table->enterBlockAt(2); // the header's own cell: the other cell is an image again
+    EXPECT_EQ(table->embedCellCountAt(0), 1);
+}
+
+TEST(HtmlImgTest, AMissingFileShowsTheAltInsteadOfAnImage)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto unresolved = editorWith(QStringLiteral("x <img src=\"gone.png\" alt=\"a red flash\"> y\n"));
+    unresolved->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(unresolved->embedCellCountAt(0), 1);
+    EXPECT_EQ(unresolved->embedCellLabelAt(0, 0), QStringLiteral("a red flash"));
+
+    // A path that resolves to nothing on disk is the same placeholder.
+    auto absent = editorWith(kImgTable.arg(QStringLiteral("<img src=\"gone.png\" alt=\"a red flash\">")));
+    absent->setLinkResolver([&](const QString &) { return fixture.dir.filePath(QStringLiteral("gone.png")); });
+    ASSERT_EQ(absent->embedCellCountAt(0), 1);
+    EXPECT_EQ(absent->embedCellLabelAt(0, 0), QStringLiteral("a red flash"));
+}
+
+TEST(HtmlImgTest, AMalformedTagStaysAsText)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &tag : {QStringLiteral("<img width=\"40\">"),            // no src
+                               QStringLiteral("<img src=\"p.png width=\"40\">"), // unclosed quote
+                               QStringLiteral("<img src=\"\">")}) {             // empty src
+        auto editor = editorWith(QStringLiteral("x %1 y\n").arg(tag));
+        editor->setLinkResolver(fixture.resolver());
+        EXPECT_EQ(editor->embedCellCountAt(0), 0) << qPrintable(tag);
+        EXPECT_TRUE(editor->displayText().contains(tag)) << qPrintable(tag);
+    }
+}
+
+TEST(HtmlImgTest, AnOddSchemeRendersNothing)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &src : {QStringLiteral("javascript:alert(1)"), QStringLiteral("data:image/png;base64,AAAA"),
+                               QStringLiteral("file:///etc/passwd"), QStringLiteral("//evil.example/x.png")}) {
+        auto editor = editorWith(QStringLiteral("x <img src=\"%1\" width=\"40\"> y\n").arg(src));
+        // Even a resolver that would hand back a real file for anything.
+        editor->setLinkResolver([&](const QString &) { return fixture.path; });
+        EXPECT_EQ(editor->embedCellCountAt(0), 0) << qPrintable(src);
+    }
+}
+
+TEST(HtmlImgTest, AVoidImgDoesNotBreakAnEnclosingPair)
+{
+    auto editor = editorWith(QStringLiteral("<b>one <img src=\"p.png\"> two</b>\n"));
+    // Paired and drawn: the <b> tags are hidden, not left as source.
+    EXPECT_FALSE(editor->displayText().contains(QStringLiteral("<b>")));
+}
+
 // --- note embeds: whole, #Heading, #^block ----------------------------------
 
 TEST(NoteEmbedTest, WholeHeadingAndBlockEachExtractTheRightSlice)

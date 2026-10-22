@@ -165,6 +165,9 @@ struct EmbedSpan {
     QString alias;
     int width = 0;  ///< 0 means "as wide as it wants, capped by the column"
     int height = 0;
+    /// An inline `<img src=... width=... alt=...>` rather than `![...]`:
+    /// `target` is its `src`, `alias` its `alt`, `range` the whole tag.
+    bool html = false;
 };
 
 /// `#|` option lines at the head of a fenced code block (PLAN.md 16.2), where

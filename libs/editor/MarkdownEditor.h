@@ -756,6 +756,9 @@ public:
     /// For the tests: where that block's `cell`-th inline embed sits,
     /// block-local.
     QRectF embedCellRectAt(qsizetype offset, int cell) const;
+    /// For the tests: that cell's caption - the file name of a card, the
+    /// `alt` of an `<img>` whose file is missing. Empty for an image.
+    QString embedCellLabelAt(qsizetype offset, int cell) const;
     /// For the tests: the raw text a block containing `offset` drew through
     /// its own substituted QTextLayout - a source-file listing, a note
     /// embed's panel, a `.tex` compile's error log, a query block's message
@@ -1682,6 +1685,11 @@ private:
     qreal textEmbedHeightOn(const BlockView &view, const QTextLine &line) const;
     void placeTextEmbeds(BlockView &view, qreal lineHeight);
     EmbedCell buildEmbedCell(const EmbedSpan &embed, qreal maxWidth);
+    /// The `cell`-th inline embed of `view` - its own, then every table
+    /// cell's - and where its rect is measured from. Null past the end.
+    const EmbedCell *embedCellOf(const BlockView &view, int cell, QPointF &origin) const;
+    void paintEmbedCellList(QPainter &painter, const std::vector<EmbedCell> &cells, qreal left,
+                            qreal top) const;
     void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
                               qreal top);

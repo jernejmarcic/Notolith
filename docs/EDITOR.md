@@ -65,6 +65,39 @@ tags, text stranded in a table), and two block elements on one line
 (`<p>a</p><p>b</p>`): each block element must start its own line, because a
 block of the editor is whole lines.
 
+**Inline `<img>`** (Obsidian draws one wherever it appears): an `<img
+src="docs/hit.png" width="400">` inside a paragraph, list item, quote or
+callout, or a table cell (pipe or HTML), is drawn as the image when the caret
+is not in it. It is the same inline embed `![[p.png|400]]` and `![](p.png)`
+produce (the parser emits the same `EmbedSpan`, marked `html`, and
+`collectTextEmbeds` / `layoutTable` draw it), so resolving, the size cap,
+the image cache and the reveal are shared with them:
+
+- `src` resolves as a Markdown image's does (vault-relative, note-relative,
+  attachment folder, through the window's link resolver). Only a relative
+  path or an `http(s)` URL is an image at all, and a remote URL is the
+  resolver's call exactly as for `![](https://...)`: nothing is fetched here.
+  `javascript:`, `data:`, `file:` and `//host` sources are never drawn; the
+  tag stays as source text. A target that is not a decodable image (a PDF, a
+  note) is a missing file, not an embed of it.
+- `width` and `height` are pixels, bare or with `px` (a `%` is ignored, so
+  the image shows at its own size). One of them keeps the aspect ratio; both
+  are taken as given; the width is capped at the readable column (at 66% of
+  it, in a table cell). `alt` is shown on a small card when the file is
+  missing or unreadable (the file name when there is no `alt`).
+- The tag is source while the caret is in it, or anywhere in the block (the
+  cell, for a table), like any embed.
+- A tag with no `src`, an unclosed quote or a stray token stays source text.
+- A top-level `<img>` on a line of its own is still an HTML block drawn by
+  litehtml (above), not this path. Not done: animated GIFs (Markdown GIF
+  embeds do not animate either, both draw the first frame), `%` widths, and
+  `<img>` as a link target or in the backlink index.
+- A Markdown image, `![[p.png|40]]` or `![](p.png)`, in a table cell is drawn
+  by the same code now (it showed as source text before); a PDF, note or
+  other file embed in a cell is still text.
+
+Tests: `HtmlImgTest.*` in `tests/test_editor.cpp`.
+
 **Borders in the litehtml image** (`libs/render/HtmlRenderer.cpp`): every
 CSS 2.1 border style is drawn. A uniform `solid`, `dotted` or `dashed` border is
 one stroke round the box; any other case (sides that differ in width, colour

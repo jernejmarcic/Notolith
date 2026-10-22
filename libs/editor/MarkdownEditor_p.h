@@ -141,21 +141,6 @@ struct MarkdownEditor::PropertyRow {
     QRectF adder;           ///< the space after the chips that adds an item
 };
 
-/// One cell of a rendered table.
-struct MarkdownEditor::Cell {
-    Range source;
-    DisplayMap map;
-    std::unique_ptr<QTextLayout> layout;
-    QRectF rect;
-    Qt::Alignment alignment = Qt::AlignLeft;
-    int row = 0;
-    int column = 0;
-    int lead = 0; ///< display characters trimmed off the front of `layout`'s text
-    QColor fill;  ///< an HTML cell's background; invalid when it has none
-    QColor ink;   ///< an HTML cell's text colour; invalid when it has none
-    bool bold = false; ///< an HTML cell's font-weight
-};
-
 /// One embedded file inside a block that holds more than one embed,
 /// or mixes an embed with running text, drawn inline - see
 /// collectTextEmbeds' comment. Built by the same per-kind logic a
@@ -172,6 +157,24 @@ struct MarkdownEditor::EmbedCell {
     QString openPath;  ///< what a click opens - the resolved file, or a note target
     bool isNote = false; ///< opens through linkActivated rather than QDesktopServices
     QString cacheKey; ///< a note's card, until its drawing lands in this m_fileEmbedCache entry
+};
+
+/// One cell of a rendered table.
+struct MarkdownEditor::Cell {
+    Range source;
+    DisplayMap map;
+    std::unique_ptr<QTextLayout> layout;
+    QRectF rect;
+    Qt::Alignment alignment = Qt::AlignLeft;
+    int row = 0;
+    int column = 0;
+    int lead = 0; ///< display characters trimmed off the front of `layout`'s text
+    QColor fill;  ///< an HTML cell's background; invalid when it has none
+    QColor ink;   ///< an HTML cell's text colour; invalid when it has none
+    bool bold = false; ///< an HTML cell's font-weight
+    /// Images drawn inline in the cell's text (layoutTable), rects relative
+    /// to the cell's text origin.
+    std::vector<EmbedCell> embeds;
 };
 
 /// One top-level block: the unit that is laid out, cached and revealed.
