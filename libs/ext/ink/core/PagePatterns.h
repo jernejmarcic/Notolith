@@ -29,6 +29,10 @@ inline constexpr double kMinPeriodPx = 1.5;
 
 /// Paints the pattern of `background` over `pageRect` (document px) into a painter already scaled to the zoom, clipped to `exposed`.
 void paintPattern(QPainter &painter, const Background &background, const QRectF &pageRect, const QRectF &exposed, double zoom);
+/// The same with the pattern's origin apart from the clip: lines sit at anchor + k * period, and nothing is drawn outside
+/// `clip`. A paged layout anchors at the page's top-left (each page restarts the rhythm); a sheet layout at the document
+/// origin, so growing the sheet up or left never moves the pattern under the ink (Rnote tiles from the origin too).
+void paintPattern(QPainter &painter, const Background &background, const QRectF &clip, const QPointF &anchor, const QRectF &exposed, double zoom);
 
 /// The indices of the lines a pattern must draw: lines sit at pageRect.top() + k * period, k >= 0, inside the page,
 /// and a line is wanted when it, padded by a line's half width (kLinePad = 1.0), meets the exposed rect. Empty
@@ -40,5 +44,8 @@ struct LineRange {
     bool operator==(const LineRange &) const = default;
 };
 LineRange visibleLineRange(const QRectF &exposed, const QRectF &pageRect, double period);
+/// The general form: lines at anchorY + k * period (k may be negative), kept to those inside `clip`. With
+/// anchorY == clip.top() it is the function above.
+LineRange visibleLineRange(const QRectF &exposed, const QRectF &clip, double anchorY, double period);
 
 } // namespace noteAppC::ink

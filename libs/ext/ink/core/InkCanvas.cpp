@@ -602,7 +602,14 @@ void InkCanvas::paintEvent(QPaintEvent *event)
     // Task 11 replaces the item loop with the tile cache. In A0 the exposed rect's items are
     // painted straight from the document, over the page's pattern.
     forEachPage(painter, event->rect(), [&](const QRectF &exposed, int page) {
-        paintPattern(painter, m_document.settings().background, m_document.pageRect(page), exposed, m_zoom);
+        // Paged layouts: one pattern per page, restarting at its top-left. Fixed and the sheets: the whole extent is one
+        // sheet (Fixed has no gap, addPage grows its extent); a sheet anchors at the document origin, so growing it up or
+        // left moves no line under the ink. Task 11's tile cache must key its pattern tiles on this anchor.
+        const DocumentSettings &settings = m_document.settings();
+        const bool paged = settings.layout == LayoutKind::ContinuousVertical;
+        const QRectF sheet = paged ? m_document.pageRect(page) : settings.extent;
+        const bool sheetLayout = settings.layout == LayoutKind::SemiInfinite || settings.layout == LayoutKind::Infinite;
+        paintPattern(painter, settings.background, sheet, sheetLayout ? QPointF(0, 0) : sheet.topLeft(), exposed, m_zoom);
         for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
             if (item->type == Item::Type::Stroke)
                 paintStroke(painter, *item->stroke);

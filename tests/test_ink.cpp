@@ -2905,6 +2905,95 @@ TEST(PagePatternTest, CanvasPaintsThePatternOnEachPageAnchoredToThatPageNotTheDo
     }
 }
 
+TEST(PagePatternTest, AFixedDocumentGrownByAPagePatternsTheWholeExtent)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.layout = LayoutKind::Fixed;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 200);
+    s.background.pattern = Pattern::Lines;
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.document().addPage(); // the extent is now two pages tall; Fixed has no gap, so it is one sheet
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    ASSERT_EQ(canvas.sizeHint().height(), 400);
+    const QImage shot = canvas.grab().toImage();
+    EXPECT_TRUE(hasInk(shot, QRect(10, 31, 80, 4))) << "the first page";
+    EXPECT_TRUE(hasInk(shot, QRect(10, 319, 80, 4))) << "the lower half: a line at 320";
+    EXPECT_TRUE(hasInk(shot, QRect(10, 383, 80, 4))) << "and at 384";
+}
+
+TEST(PagePatternTest, AnInfiniteSheetKeepsItsPatternOnTheSameDocumentPositionsWhenItGrowsUpAndLeft)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.layout = LayoutKind::Infinite;
+    s.format = {400, 300, 96};
+    s.extent = QRectF(-200, -150, 400, 300);
+    s.background.pattern = Pattern::Grid;
+    s.background.patternSize = QSizeF(32, 32);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.document().commit();
+    canvas.documentReplaced();
+    const QRectF patch(50, 0, 140, 140); // document px, away from the ink
+    const auto render = [&] {
+        canvas.resize(canvas.sizeHint());
+        const QPointF origin = canvas.toWidget(patch.topLeft());
+        EXPECT_DOUBLE_EQ(origin.x(), std::round(origin.x())) << "an integral extent origin, or the AA coverage would differ";
+        EXPECT_DOUBLE_EQ(origin.y(), std::round(origin.y()));
+        return canvas.grab().toImage().copy(QRect(origin.toPoint(), patch.size().toSize()));
+    };
+    const QImage before = render();
+    ASSERT_TRUE(hasInk(before, before.rect()));
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style = {2.0, Qt::black, PressureCurve::Const};
+    stroke->points = {{-250, -220, 1}, {-240, -210, 1}}; // pokes out up and left by amounts that are no multiple of 32
+    canvas.document().addStroke(stroke);
+    ASSERT_TRUE(canvas.document().growToContain(stroke->bounds()));
+    canvas.document().commit();
+    canvas.documentReplaced();
+    const QPointF grownOrigin = canvas.document().settings().extent.topLeft();
+    EXPECT_NE(std::fmod(grownOrigin.x() + 3200, 32.0), 0.0);
+    EXPECT_NE(std::fmod(grownOrigin.y() + 3200, 32.0), 0.0);
+    QString why;
+    EXPECT_TRUE(imagesMatchIn(render(), before, before.rect(), &why)) << "after growth: " << why.toStdString();
+    ASSERT_TRUE(canvas.undo());
+    EXPECT_TRUE(imagesMatchIn(render(), before, before.rect(), &why)) << "after undo: " << why.toStdString();
+}
+
+TEST(PagePatternTest, AHexRowAnchoredPastThePageFootStillDrawsItsSidesAboveTheFoot)
+{
+    // r = 32, row period 48: rows at 0..480 fit a 520 px page, row 11 (anchor 528) does not, but its sides start at 512.
+    QImage image(300, 520, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        paintPattern(painter, backgroundOf(Pattern::HexGrid), QRectF(0, 0, 300, 520), QRectF(0, 0, 300, 520), 1.0);
+    }
+    EXPECT_TRUE(hasInk(image, QRect(54, 513, 3, 6))) << "the side at x = sqrt(3) * 32 on the last 8 px of the page";
+}
+
+TEST(PagePatternTest, DrawCallsAlsoFollowTheExposedRectOnAVeryWidePage)
+{
+    const QRectF widePage(0, 0, 100000.0, 1122.52);
+    const QRectF small(50000, 500, 100, 200);
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
+                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+        SCOPED_TRACE(patternName(pattern).toStdString());
+        EXPECT_LT(drawCalls(backgroundOf(pattern), widePage, small), 300) << "the page has 3125 columns and 12 500 dashes a line";
+    }
+}
+
+TEST(PagePatternTest, ARangeOnAPageWithANegativeOriginCountsFromThePageTop)
+{
+    const QRectF page(-500, -700, 400, 300); // lines at -700 + 32k
+    EXPECT_EQ(visibleLineRange(QRectF(-500, -600, 50, 40), page, 32.0), (LineRange{4, 4})) << "the line at -572 (-604 is 4 px above)";
+    EXPECT_EQ(visibleLineRange(QRectF(-500, -800, 50, 110), page, 32.0), (LineRange{0, 0})) << "the page's first line at -700";
+    EXPECT_TRUE(visibleLineRange(QRectF(-500, -900, 50, 100), page, 32.0).isEmpty()) << "above the page";
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");
