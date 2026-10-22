@@ -58,6 +58,38 @@ if(noteappc_have_poppler)
     set_tests_properties(pdfpage_race PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
+# The loadable-module tier (libs/modules): four fake modules from one source,
+# differing only in their configure_file'd manifest - a good one, one built
+# for another Notolith (wrong ABI tag), one needing a module that is not there,
+# and one declaring index suffixes (loaded after the scan when the vault holds
+# such files). Headers only from the host: no host static library is linked.
+function(noteappc_fake_module target id abi deps suffix indexSuffixes)
+    set(FAKE_ID ${id})
+    set(FAKE_ABI ${abi})
+    set(FAKE_DEPS "${deps}")
+    set(FAKE_SUFFIX ${suffix})
+    set(FAKE_INDEX_SUFFIXES "${indexSuffixes}")
+    configure_file(fakemodule/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/${target}/manifest.json @ONLY)
+    add_library(${target} MODULE fakemodule/FakeModule.cpp)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/${target})
+    target_compile_definitions(${target} PRIVATE FAKE_ID="${id}" FAKE_SUFFIX="${suffix}")
+    target_link_libraries(${target} PRIVATE noteAppC_modules_headers Qt6::Widgets)
+    set_target_properties(${target} PROPERTIES AUTOMOC ON PREFIX ""
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fakemodules)
+endfunction()
+noteappc_fake_module(fake_good fake "${NOTEAPPC_ABI_TAG}" "" fake "")
+noteappc_fake_module(fake_badabi fake-badabi "0.0.0-deadbeef-6.0.0" "" fake "")
+noteappc_fake_module(fake_missingdep fake-missingdep "${NOTEAPPC_ABI_TAG}" "\"nonexistent-module\"" fake "")
+noteappc_fake_module(fake_indexed fake-indexed "${NOTEAPPC_ABI_TAG}" "" fakeidx "\"fakeidx\"")
+
+add_executable(test_modules test_modules.cpp)
+target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::gtest)
+target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
+set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
+add_dependencies(test_modules fake_good fake_badabi fake_missingdep fake_indexed)
+add_test(NAME modules COMMAND test_modules)
+set_tests_properties(modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME window COMMAND test_window)
