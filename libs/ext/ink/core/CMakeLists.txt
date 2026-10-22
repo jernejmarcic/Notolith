@@ -40,6 +40,8 @@ add_library(notolith-inkcore SHARED
     InkInput.h
     InkTypes.cpp
     InkTypes.h
+    PagePatterns.cpp
+    PagePatterns.h
     SpatialGrid.cpp
     SpatialGrid.h
     StrokeOutline.cpp

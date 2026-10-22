@@ -102,7 +102,7 @@ private:
     double pageGap() const; ///< document px between pages: kPageGap in ContinuousVertical, else 0
     QRect pageWidgetRect(int index) const; ///< widget px of page `index` (ContinuousVertical)
     std::pair<int, int> visiblePages(const QRect &area) const; ///< first and last page the widget-px `area` touches
-    /// Calls draw(documentRect) once per page the widget-px `area` touches, with the painter (already in widget
+    /// Calls draw(documentRect, pageIndex) once per page the widget-px `area` touches, with the painter (already in widget
     /// px) set up so document coordinates draw in place, clipped to that page in ContinuousVertical. Ink that
     /// crosses a page break is therefore cut by the gap, not smeared over it.
     template <typename Draw>

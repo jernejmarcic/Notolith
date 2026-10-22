@@ -15,6 +15,7 @@
 #include <QTabletEvent>
 #include <QTouchEvent>
 
+#include "PagePatterns.h"
 #include "StrokeOutline.h"
 
 namespace noteAppC::ink {
@@ -163,7 +164,7 @@ void InkCanvas::forEachPage(QPainter &painter, const QRect &area, Draw draw) con
         painter.scale(m_zoom, m_zoom);
         painter.translate(-extent.x(), -extent.y() + i * gap);
         draw(QRectF(shown.x() / m_zoom + extent.x(), shown.y() / m_zoom - i * gap + extent.y(), shown.width() / m_zoom,
-                    shown.height() / m_zoom));
+                    shown.height() / m_zoom), i);
         painter.restore();
     }
 }
@@ -526,7 +527,7 @@ void InkCanvas::rasteriseNewSegments()
     painter.translate(-m_liveRect.topLeft());
     painter.setPen(Qt::NoPen);
     painter.setBrush(stroke.style.color);
-    forEachPage(painter, widgetRect(path.boundingRect()), [&](const QRectF &) { painter.drawPath(path); });
+    forEachPage(painter, widgetRect(path.boundingRect()), [&](const QRectF &, int) { painter.drawPath(path); });
     painter.end();
     m_liveDirty |= widgetRect(path.boundingRect());
     QRectF tail; // the predicted tail's box: repainted now, and again where it was when it moves
@@ -598,10 +599,10 @@ void InkCanvas::paintEvent(QPaintEvent *event)
     if (paged)
         for (int i = firstPage; i <= lastPage; ++i)
             painter.fillRect(pageWidgetRect(i) & event->rect(), background);
-    // Track S1 Task 10 paints the page pattern here; Task 11 replaces the
-    // item loop with the tile cache. In A0 the exposed rect's items are
-    // painted straight from the document.
-    forEachPage(painter, event->rect(), [&](const QRectF &exposed) {
+    // Task 11 replaces the item loop with the tile cache. In A0 the exposed rect's items are
+    // painted straight from the document, over the page's pattern.
+    forEachPage(painter, event->rect(), [&](const QRectF &exposed, int page) {
+        paintPattern(painter, m_document.settings().background, m_document.pageRect(page), exposed, m_zoom);
         for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
             if (item->type == Item::Type::Stroke)
                 paintStroke(painter, *item->stroke);

@@ -11,6 +11,8 @@
 #include <QApplication>
 #include <QDir>
 #include <QImage>
+#include <QPaintDevice>
+#include <QPaintEngine>
 #include <QPainter>
 #include <QPainterPath>
 #include <QJsonArray>
@@ -32,6 +34,7 @@
 #include "InkInput.h"
 #include "InkTestSupport.h"
 #include "InkTypes.h"
+#include "PagePatterns.h"
 #include "SpatialGrid.h"
 #include "StrokeOutline.h"
 
@@ -2612,6 +2615,294 @@ TEST(InkLayoutTest, OriginShiftFollowsEveryExtentOriginChangeIncludingUndoAndRed
     EXPECT_EQ(shifted.count(), 3) << "a zoom keeps the origin";
     penStroke(&f.canvas, QPointF(100, 100), QPointF(160, 100), 2000); // inside the sheet: nothing grows
     EXPECT_EQ(shifted.count(), 3);
+}
+
+// --- page patterns (Task 10) ---------------------------------------------------
+
+namespace {
+
+const QRectF kA4Page(0, 0, 793.701, 1122.52);
+
+Background backgroundOf(Pattern pattern)
+{
+    Background background;
+    background.pattern = pattern;
+    background.patternSize = pattern == Pattern::LinesMargin ? QSizeF(120, 32) : pattern == Pattern::Seyes ? QSizeF(64, 32) : QSizeF(32, 32);
+    return background;
+}
+
+/// The corner of an A4 page, 240x160 document px, at zoom 1 and device ratio 1, on white.
+QImage renderPattern(Pattern pattern)
+{
+    QImage image(240, 160, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    paintPattern(painter, backgroundOf(pattern), kA4Page, QRectF(0, 0, 240, 160), 1.0);
+    return image;
+}
+
+/// 32x32 px tiles over the image: a whole-image share dilutes a missing dot, a tile does not.
+std::vector<QRect> patternRegions(const QImage &image)
+{
+    std::vector<QRect> out;
+    for (int y = 0; y < image.height(); y += 32)
+        for (int x = 0; x < image.width(); x += 32)
+            out.push_back(QRect(x, y, 32, 32) & image.rect());
+    return out;
+}
+
+/// Counts what the painter hands the paint engine, so the cost tests need no clock.
+class CountingEngine : public QPaintEngine
+{
+public:
+    CountingEngine() : QPaintEngine(AllFeatures) {}
+    bool begin(QPaintDevice *) override { return true; }
+    bool end() override { return true; }
+    void updateState(const QPaintEngineState &) override {}
+    void drawPixmap(const QRectF &, const QPixmap &, const QRectF &) override { ++calls; }
+    void drawLines(const QLineF *, int count) override { calls += count; }
+    void drawLines(const QLine *, int count) override { calls += count; }
+    void drawRects(const QRectF *, int count) override { calls += count; }
+    void drawRects(const QRect *, int count) override { calls += count; }
+    void drawPoints(const QPointF *, int count) override { calls += count; }
+    void drawPoints(const QPoint *, int count) override { calls += count; }
+    void drawPath(const QPainterPath &) override { ++calls; }
+    void drawPolygon(const QPointF *, int, PolygonDrawMode) override { ++calls; }
+    void drawPolygon(const QPoint *, int, PolygonDrawMode) override { ++calls; }
+    Type type() const override { return User; }
+    int calls = 0;
+};
+
+class CountingDevice : public QPaintDevice
+{
+public:
+    QPaintEngine *paintEngine() const override { return &engine; }
+    int calls() const { return engine.calls; }
+
+protected:
+    int metric(PaintDeviceMetric metric) const override
+    {
+        switch (metric) {
+        case PdmWidth: case PdmHeight: return 4000;
+        case PdmDepth: return 32;
+        case PdmDpiX: case PdmDpiY: case PdmPhysicalDpiX: case PdmPhysicalDpiY: return 96;
+        case PdmDevicePixelRatio: return 1;
+        case PdmDevicePixelRatioScaled: return int(QPaintDevice::devicePixelRatioFScale());
+        default: return 0;
+        }
+    }
+
+private:
+    mutable CountingEngine engine;
+};
+
+int drawCalls(const Background &background, const QRectF &page, const QRectF &exposed, double zoom = 1.0)
+{
+    CountingDevice device;
+    QPainter painter(&device);
+    painter.setRenderHint(QPainter::Antialiasing);
+    paintPattern(painter, background, page, exposed, zoom);
+    painter.end();
+    return device.calls();
+}
+
+/// Exact pixel equality inside `area` (both images came from the same code, so anything else is a missing line).
+bool imagesMatchIn(const QImage &a, const QImage &b, const QRect &area, QString *why)
+{
+    for (int y = area.top(); y <= area.bottom(); ++y)
+        for (int x = area.left(); x <= area.right(); ++x)
+            if (a.pixel(x, y) != b.pixel(x, y)) {
+                *why = QStringLiteral("pixel %1,%2 differs: %3 vs %4").arg(x).arg(y).arg(a.pixel(x, y), 0, 16).arg(b.pixel(x, y), 0, 16);
+                return false;
+            }
+    return true;
+}
+
+bool hasInk(const QImage &image, const QRect &area)
+{
+    for (int y = area.top(); y <= area.bottom(); ++y)
+        for (int x = area.left(); x <= area.right(); ++x)
+            if (image.pixel(x, y) != qRgb(255, 255, 255))
+                return true;
+    return false;
+}
+
+} // namespace
+
+TEST(PagePatternTest, MatchesTheGoldenImages)
+{
+    for (const auto &[pattern, name] : {std::pair{Pattern::None, "none"}, {Pattern::Lines, "lines"}, {Pattern::Grid, "grid"},
+                                         {Pattern::Dots, "dots"}, {Pattern::LinesMargin, "linesMargin"},
+                                         {Pattern::GridMajor, "gridMajor"}, {Pattern::MusicStaff, "musicStaff"},
+                                         {Pattern::Calligraphy, "calligraphy"}, {Pattern::Seyes, "seyes"},
+                                         {Pattern::Cornell, "cornell"}, {Pattern::HexGrid, "hexGrid"}}) {
+        SCOPED_TRACE(name);
+        const QImage image = renderPattern(pattern);
+        EXPECT_EQ(image.size(), QSize(240, 160));
+        if (pattern == Pattern::None)
+            EXPECT_FALSE(hasInk(image, image.rect())) << "None paints nothing";
+        else
+            EXPECT_TRUE(hasInk(image, image.rect()));
+        checkGolden(QStringLiteral("pattern-%1.png").arg(QLatin1String(name)), image, patternRegions(image));
+    }
+}
+
+TEST(PagePatternTest, AnExposedRectPaintsExactlyWhatTheFullPageHasThere)
+{
+    // Every pattern, over regions that start mid-period: a line the range wrongly leaves out shows as a difference.
+    const QRectF regions[] = {QRectF(137.3, 93.7, 90, 70), QRectF(0, 1060, 200, 62.52), QRectF(700, 11.1, 93.7, 50), QRectF(301, 500, 40, 25)};
+    const QRectF window(0, 0, 800, 1130); // the page plus its margin, so the full render is one image
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
+                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+        QImage full(800, 1130, QImage::Format_ARGB32_Premultiplied);
+        full.fill(Qt::white);
+        {
+            QPainter painter(&full);
+            painter.setRenderHint(QPainter::Antialiasing);
+            paintPattern(painter, backgroundOf(pattern), kA4Page, window, 1.0);
+        }
+        for (const QRectF &region : regions) {
+            SCOPED_TRACE(QStringLiteral("%1 at %2,%3").arg(patternName(pattern)).arg(region.x()).arg(region.y()).toStdString());
+            QImage part(full.size(), QImage::Format_ARGB32_Premultiplied);
+            part.fill(Qt::white);
+            {
+                QPainter painter(&part);
+                painter.setRenderHint(QPainter::Antialiasing);
+                paintPattern(painter, backgroundOf(pattern), kA4Page, region, 1.0);
+            }
+            const QRect inside = region.toRect().adjusted(1, 1, -1, -1); // clip pixels on the fractional edge differ in coverage
+            QString why;
+            EXPECT_TRUE(imagesMatchIn(part, full, inside, &why)) << why.toStdString();
+        }
+    }
+}
+
+TEST(PagePatternTest, VisibleLineRangeCoversOnlyTheExposedLines)
+{
+    const QRectF page(0, 0, 793.7, 1122.52);
+    EXPECT_EQ(visibleLineRange(QRectF(0, 500, 100, 100), page, 32.0), (LineRange{16, 18})) << "lines at 512, 544 and 576";
+    EXPECT_EQ(visibleLineRange(QRectF(0, 0, 100, 40), page, 32.0), (LineRange{0, 1}));
+}
+
+TEST(PagePatternTest, VisibleLineRangeIsEmptyAbovePastAndClippedToThePage)
+{
+    const QRectF page(0, 500, 100, 100); // lines at 500, 532, 564, 596
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 0, 100, 100), page, 32.0).isEmpty()) << "exposed rect above the page";
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 800, 100, 100), page, 32.0).isEmpty()) << "exposed rect below the page";
+    EXPECT_EQ(visibleLineRange(QRectF(0, 590, 100, 400), page, 32.0), (LineRange{3, 3})) << "clipped to the page's last line";
+}
+
+TEST(PagePatternTest, VisibleLineRangeSurvivesHostileNumbers)
+{
+    const QRectF page(0, 0, 100, 100);
+    const double inf = std::numeric_limits<double>::infinity();
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 0, 10, 10), page, 0.0).isEmpty());
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 0, 10, 10), page, -3.0).isEmpty());
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 0, 10, 10), page, std::numeric_limits<double>::quiet_NaN()).isEmpty());
+    EXPECT_TRUE(visibleLineRange(QRectF(0, 1e300, 10, 10), page, 1e-3).isEmpty()) << "no int overflow on the way";
+    const LineRange all = visibleLineRange(QRectF(0, -inf, 10, inf), QRectF(0, 0, 100, 1e12), 1e6);
+    EXPECT_EQ(all.first, 0);
+    EXPECT_LE(all.last, 1000000);
+}
+
+TEST(PagePatternTest, OnlyTheExposedRectIsPainted)
+{
+    QImage image(100, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    const Background background = backgroundOf(Pattern::Lines);
+    {
+        QPainter painter(&image);
+        painter.translate(0, -500); // the exposed rect (0,500,100,100) of the page lands on the image
+        paintPattern(painter, background, kA4Page, QRectF(0, 500, 100, 100), 1.0);
+    }
+    EXPECT_TRUE(hasInk(image, image.rect())) << "lines at 512, 544 and 576";
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        paintPattern(painter, background, kA4Page, QRectF(0, 5000, 100, 100), 1.0); // far below the page
+        paintPattern(painter, background, kA4Page, QRectF(0, -5000, 100, 100), 1.0); // far above it
+    }
+    EXPECT_FALSE(hasInk(image, image.rect())) << "nothing outside the page";
+}
+
+TEST(PagePatternTest, PaintingIsClippedToTheExposedRect)
+{
+    QImage image(100, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        paintPattern(painter, backgroundOf(Pattern::Grid), kA4Page, QRectF(0, 0, 50, 50), 1.0);
+    }
+    EXPECT_TRUE(hasInk(image, QRect(0, 0, 50, 50)));
+    EXPECT_FALSE(hasInk(image, QRect(52, 0, 48, 100))) << "right of the exposed rect";
+    EXPECT_FALSE(hasInk(image, QRect(0, 52, 100, 48))) << "below the exposed rect";
+}
+
+TEST(PagePatternTest, DrawCallsFollowTheExposedRectNotThePageHeight)
+{
+    const QRectF tallPage(0, 0, 793.701, 100000.0);
+    const QRectF small(0, 50000, 200, 100);
+    for (Pattern pattern : {Pattern::Lines, Pattern::Grid, Pattern::Dots, Pattern::LinesMargin, Pattern::GridMajor, Pattern::MusicStaff,
+                            Pattern::Calligraphy, Pattern::Seyes, Pattern::Cornell, Pattern::HexGrid}) {
+        SCOPED_TRACE(patternName(pattern).toStdString());
+        EXPECT_GT(drawCalls(backgroundOf(pattern), tallPage, small), 0);
+        EXPECT_LT(drawCalls(backgroundOf(pattern), tallPage, small), 300)
+            << "about 5 rows x 8 columns, 100 dashes a row for Calligraphy; the 100 000 px page has 3125 rows";
+    }
+    // Lines: one drawLine per ruled line, 100 px at a 32 px period meets 4 of them (padded by kLinePad) at most.
+    const int lines = drawCalls(backgroundOf(Pattern::Lines), tallPage, small);
+    EXPECT_GE(lines, 3);
+    EXPECT_LE(lines, 5);
+}
+
+TEST(PagePatternTest, APatternFinerThanADevicePixelIsSkipped)
+{
+    Background fine = backgroundOf(Pattern::Grid);
+    fine.patternSize = QSizeF(0.01, 0.01); // the reader accepts 1e-3: a million lines a paint
+    EXPECT_EQ(drawCalls(fine, kA4Page, QRectF(0, 0, 1000, 1000)), 0);
+    fine.patternSize = QSizeF(32, 32);
+    EXPECT_EQ(drawCalls(fine, kA4Page, QRectF(0, 0, 1000, 1000), 0.01), 0) << "zoomed out until the lines are 0.32 px apart";
+    EXPECT_GT(drawCalls(fine, kA4Page, QRectF(0, 0, 1000, 1000), 1.0), 0);
+}
+
+TEST(PagePatternTest, CornellDrawsTheSummaryLineAtTheBottomFifth)
+{
+    QImage image(200, 100, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        Background background = backgroundOf(Pattern::Cornell);
+        background.patternSize = QSizeF(50, 1000); // no ruled line inside the page
+        paintPattern(painter, background, QRectF(0, 0, 200, 100), QRectF(0, 0, 200, 100), 1.0);
+    }
+    EXPECT_NE(image.pixel(100, 80), qRgb(255, 255, 255)) << "summary line at 100 - 0.2 * 100";
+    EXPECT_NE(image.pixel(199, 80), qRgb(255, 255, 255)) << "across the whole page";
+    EXPECT_EQ(image.pixel(100, 60), qRgb(255, 255, 255));
+    EXPECT_EQ(image.pixel(100, 95), qRgb(255, 255, 255));
+    EXPECT_NE(image.pixel(50, 40), qRgb(255, 255, 255)) << "margin line at x = patternSize.width, above the summary";
+    EXPECT_EQ(image.pixel(50, 90), qRgb(255, 255, 255)) << "the margin stops at the summary line";
+}
+
+TEST(PagePatternTest, CanvasPaintsThePatternOnEachPageAnchoredToThatPageNotTheDocument)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400); // two pages, a gap between them
+    s.background.pattern = Pattern::Lines;
+    s.background.patternSize = QSizeF(32, 32);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    const QImage shot = canvas.grab().toImage();
+    for (int page = 0; page < 2; ++page) {
+        SCOPED_TRACE(page);
+        const int top = int(canvas.toWidget(QPointF(0, 200.0 * page)).y());
+        EXPECT_TRUE(hasInk(shot, QRect(10, top + 31, 80, 4))) << "the line 32 px below this page's top";
+        EXPECT_FALSE(hasInk(shot, QRect(10, top + 8, 80, 20))) << "nothing between the first two lines: page 2 does not continue page 1's rhythm";
+    }
 }
 
 int main(int argc, char **argv)
