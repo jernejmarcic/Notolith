@@ -89,6 +89,10 @@ target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::
 target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
 add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
+if(TARGET notolith-ink) # the R2 case: the real module, copied away from its core library
+    target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
+    add_dependencies(test_modules notolith-ink)
+endif()
 # The no-load gate is its own ctest entry (M1): in a process where another test had already
 # mapped fake_good, "the scan did not load it" would prove nothing. The filter is in the
 # command, so it wins over the GTEST_FILTER the run commands pass: run each entry whole.
@@ -109,7 +113,29 @@ add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc
 # registry at the build's modules (the fake ones; Task 8 adds the real ones).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
 add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
-set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
+# The real ink module sits behind the fake ones: ${CMAKE_BINARY_DIR}/modules holds notolith-ink.so
+# and the libnotolith-inkcore.so it needs (neither exists with NOTEAPPC_WITH_INK off).
+set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT
+    "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules:${CMAKE_BINARY_DIR}/modules")
+if(TARGET notolith-ink)
+    add_dependencies(test_window notolith-ink)
+endif()
+# Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
+# tests/test_hwfont.cpp; until noteAppC_hwfont exists this block does nothing.
+# test_hwfont drives the studio view and the module through the registry, so it
+# links the host (noteAppC_ui) and the static hwfont library only: the module
+# is loaded from ${CMAKE_BINARY_DIR}/modules, never linked. IsolatedHome.cpp is
+# added to every test_* target by the loop at the end of this file.
+if(TARGET noteAppC_hwfont)
+    add_executable(test_hwfont test_hwfont.cpp)
+    target_link_libraries(test_hwfont PRIVATE noteAppC_hwfont noteAppC_ui Qt6::Test GTest::gtest)
+    set_target_properties(test_hwfont PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME hwfont COMMAND test_hwfont)
+    set_tests_properties(hwfont PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;NOTEAPPC_MODULE_DIRS=${CMAKE_BINARY_DIR}/modules")
+    if(TARGET notolith-hwfont)
+        add_dependencies(test_hwfont notolith-hwfont)
+    endif()
+endif()
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})

@@ -4,6 +4,6 @@
     "name": "Fake module (@FAKE_ID@)",
     "description": "A module built by the test suite.",
     "suffixes": ["@FAKE_SUFFIX@"],
-    "commands": [{"id": "@FAKE_ID@:hello", "title": "Fake: say hello"}, {"id": "@FAKE_ID@:where", "title": "Fake: show the current folder"}],
+    "commands": [{"id": "@FAKE_ID@:hello", "title": "Fake: say hello"}, {"id": "@FAKE_ID@:where", "title": "Fake: show the current folder"}, {"id": "@FAKE_ID@:tab", "title": "Fake: open a file-less tab"}],
     "abi": "@FAKE_ABI@"
 }

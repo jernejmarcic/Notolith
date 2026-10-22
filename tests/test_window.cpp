@@ -60,6 +60,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 
+#include "InkTestSupport.h"
 #include "WaitFor.h"
 #include "SingleInstance.h"
 #include "FileTree.h"
@@ -7821,4 +7822,275 @@ TEST_F(WindowTest, AModuleThatFailsToLoadIsReportedInSettingsWithTheLoadersMessa
     QLabel *notice = nullptr;
     WAIT_TRUE((notice = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-unresolved"))) != nullptr, 3000);
     EXPECT_TRUE(notice->text().contains(QStringLiteral("noteappcFakeMissingSymbol")));
+}
+
+// The handwritten-note module (spec section 4, Task 8): the real notolith-ink.so from
+// ${CMAKE_BINARY_DIR}/modules, found through NOTEAPPC_MODULE_DIRS.
+TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
+{
+    write(QStringLiteral("Sketch.ink"),
+          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
+          "{\"type\":\"stroke\",\"t\":1,\"layer\":\"user\",\"style\":{\"width\":2,\"color\":\"#1e1e1e\",\"pressureCurve\":\"linear\"},"
+          "\"points\":[10,10,0.5,50,50,0.5]}\n]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.modules()) << "the module registry exists after the scan";
+    ASSERT_TRUE(window.modules()->moduleForSuffix(path(QStringLiteral("Sketch.ink")))) << "notolith-ink was found in CMAKE_BINARY_DIR/modules";
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Sketch.ink"))));
+    QWidget *view = nullptr;
+    WAIT_TRUE((view = window.findChild<QWidget *>(QStringLiteral("inkView"))) != nullptr, 5000);
+    auto *moduleView = qobject_cast<noteAppC::ModuleView *>(view);
+    ASSERT_NE(moduleView, nullptr);
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("ink")));
+    auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+    ASSERT_NE(tabs, nullptr);
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Sketch"));
+    auto *canvas = view->findChild<QWidget *>(QStringLiteral("inkCanvas"));
+    ASSERT_TRUE(canvas);
+    EXPECT_GT(canvas->height(), 1000) << "an A4 page at zoom 1";
+    // Draw through the module view's canvas with a synthetic pen, then save with the window's command.
+    using inktest::tablet;
+    tablet(canvas, QEvent::TabletPress, QPointF(100, 100), 0.5, 1000);
+    tablet(canvas, QEvent::TabletMove, QPointF(150, 120), 0.5, 1005);
+    tablet(canvas, QEvent::TabletMove, QPointF(200, 140), 0.5, 1010);
+    tablet(canvas, QEvent::TabletRelease, QPointF(200, 140), 0.5, 1015, Qt::NoButton);
+    WAIT_TRUE(moduleView->isModified(), 5000);
+    EXPECT_TRUE(tabs->tabText(tabs->currentIndex()).contains(QStringLiteral("Sketch"))) << "the modified marker keeps the name";
+    command(window, "editor:save-file")->trigger();
+    WAIT_TRUE(!moduleView->isModified(), 5000);
+    QFile saved(path(QStringLiteral("Sketch.ink")));
+    ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
+    const QByteArray bytes = saved.readAll();
+    EXPECT_EQ(bytes.count("\"type\":\"stroke\""), 2) << "the old stroke and the new one";
+    EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "compact JSON, keys sorted (R4): the format key is not first";
+}
+
+TEST_F(WindowTest, WithInkOffAnInkFileIsNotAModuleFile)
+{
+    write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.modules()->moduleForSuffix(path(QStringLiteral("Sketch.ink"))));
+    command(window, "app:open-settings")->trigger(); // SettingsPage builds on showEvent
+    noteAppC::ToggleSwitch *toggle = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.ink"));
+        return toggle != nullptr;
+    }, 3000)) << "the module's feature row is in Settings > Plugins";
+    toggle->setChecked(false);
+    WAIT_TRUE(!window.settings().boolean(Settings::featureKey("ink")), 5000);
+    EXPECT_FALSE(window.modules()->moduleForSuffix(path(QStringLiteral("Sketch.ink"))));
+    command(window, "workspace:new-tab")->trigger();
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("Sketch.ink")))) << "with the feature off a .ink is not a view file";
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink"))) << "never loaded: nothing in this test used it";
+}
+
+TEST_F(WindowTest, NewHandwrittenNoteIsCreatedBesideTheActiveNoteElseInTheVaultRoot)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Sub")));
+    write(QStringLiteral("Sub/Anchor.md"), "# Anchor\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Sub/Anchor.md"))));
+    ASSERT_NE(command(window, "ink:new"), nullptr) << "the manifest's command is in the palette before the module loads";
+    command(window, "ink:new")->trigger();
+    const QString beside = path(QStringLiteral("Sub/Handwritten note.ink"));
+    WAIT_TRUE(QFileInfo::exists(beside), 5000);
+    EXPECT_FALSE(QFileInfo::exists(path(QStringLiteral("Handwritten note.ink")))) << "not the vault root while a note in Sub is active";
+    QFile created(beside);
+    ASSERT_TRUE(created.open(QIODevice::ReadOnly));
+    EXPECT_TRUE(created.readAll().contains("\"format\":\"notolith-ink\"")) << "written through writeInk";
+
+    command(window, "workspace:new-tab")->trigger(); // an empty tab: no active note
+    command(window, "ink:new")->trigger();
+    WAIT_TRUE(QFileInfo::exists(path(QStringLiteral("Handwritten note.ink"))), 5000);
+}
+
+// A file written by a newer Notolith opens read-only: the pen does nothing, the save command
+// refuses (writeInk stamps version 1 and would downgrade the file), the bytes stay as they were.
+TEST_F(WindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
+{
+    const QByteArray newer = "{\"format\":\"notolith-ink\",\"version\":2,\"document\":{},\"items\":[],\"future\":{\"keep\":true}}\n";
+    write(QStringLiteral("Future.ink"), newer);
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Future.ink"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
+    ASSERT_NE(view, nullptr);
+    auto *canvas = view->findChild<QWidget *>(QStringLiteral("inkCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    using inktest::penStroke;
+    penStroke(canvas, QPointF(100, 100), QPointF(200, 200), 1000);
+    EXPECT_FALSE(view->isModified()) << "a read-only canvas ignores the pen";
+    QString error;
+    EXPECT_FALSE(view->save(&error)) << "saving a newer file would downgrade it";
+    EXPECT_TRUE(error.contains(QStringLiteral("read-only"))) << error.toStdString();
+    QString warning;
+    QTimer watch; // the save command reports a refusal in a box: read it and close it
+    QObject::connect(&watch, &QTimer::timeout, [&warning] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            warning = box->text();
+            box->button(QMessageBox::Ok)->click();
+        }
+    });
+    watch.start(20);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_TRUE(warning.contains(QStringLiteral("read-only"))) << "the person is told: " << warning.toStdString();
+    QFile file(path(QStringLiteral("Future.ink")));
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), newer) << "the file on disk is untouched";
+}
+
+// A file that is not an ink file is refused by the view, with the reader's message, and no tab opens.
+TEST_F(WindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
+{
+    write(QStringLiteral("Broken.ink"), "{not json");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    window.scanModulesNow();
+    QString warning;
+    QTimer watch; // the open refusal is a box: read it and close it
+    QObject::connect(&watch, &QTimer::timeout, [&warning] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            warning = box->text();
+            box->button(QMessageBox::Ok)->click();
+        }
+    });
+    watch.start(20);
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("Broken.ink"))));
+    EXPECT_TRUE(warning.contains(QStringLiteral("Broken.ink could not be read"))) << "the reader's message: " << warning.toStdString();
+    EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("inkView")), nullptr);
+}
+
+// R6: a file-less module tab shows the modified mark, the save command calls its save(), and
+// closing it saves it like a note (autosave is on by default) without asking.
+TEST_F(WindowTest, AFileLessModuleTabShowsTheModifiedMarkAndIsSavedByTheSaveCommandAndOnClose)
+{
+    QTemporaryDir marks;
+    const QString saves = marks.filePath(QStringLiteral("saves"));
+    qputenv("NOTEAPPC_FAKE_TAB_SAVES", saves.toLocal8Bit());
+    auto unset = qScopeGuard([] { qunsetenv("NOTEAPPC_FAKE_TAB_SAVES"); });
+    const auto savedCount = [&saves] {
+        QFile file(saves);
+        return file.open(QIODevice::ReadOnly) ? int(file.readAll().count("saved")) : 0;
+    };
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    ASSERT_TRUE(window.settings().boolean(QStringLiteral("files.autosave"))) << "the default: closing saves instead of asking";
+    command(window, "fake:tab")->trigger();
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("fakeTab"));
+    ASSERT_NE(view, nullptr);
+    ASSERT_FALSE(mainBars(window).isEmpty());
+    QTabBar *tabs = mainBars(window).first();
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Fake tab"));
+
+    view->setProperty("modified", true);
+    emit view->modificationChanged(true);
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Fake tab *")) << "the asterisk";
+    command(window, "editor:save-file")->trigger();
+    EXPECT_EQ(savedCount(), 1) << "the save command reaches the view's save()";
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Fake tab"));
+
+    view->setProperty("modified", true);
+    emit view->modificationChanged(true);
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            box->button(QMessageBox::Cancel)->click();
+        }
+    });
+    watch.start(20);
+    command(window, "workspace:close")->trigger();
+    EXPECT_FALSE(asked) << "autosave on: leaving saves, nothing asks";
+    EXPECT_EQ(savedCount(), 2) << "closing the modified tab saved it";
+}
+
+TEST_F(WindowTest, AFileLessModuleTabAsksBeforeClosingWhenAutosaveIsOffAndSavesOnSave)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+    QTemporaryDir marks;
+    const QString saves = marks.filePath(QStringLiteral("saves"));
+    qputenv("NOTEAPPC_FAKE_TAB_SAVES", saves.toLocal8Bit());
+    auto unset = qScopeGuard([] { qunsetenv("NOTEAPPC_FAKE_TAB_SAVES"); });
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "fake:tab")->trigger();
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("fakeTab"));
+    ASSERT_NE(view, nullptr);
+    view->setProperty("modified", true);
+    emit view->modificationChanged(true);
+    QString question;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&question] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            question = box->text();
+            box->button(QMessageBox::Save)->click();
+        }
+    });
+    watch.start(20);
+    command(window, "workspace:close")->trigger();
+    EXPECT_TRUE(question.contains(QStringLiteral("Fake tab"))) << "asked, naming the tab: " << question.toStdString();
+    QFile file(saves);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll().count("saved"), 1) << "Save called the view's save()";
+}
+
+// Jernej's decision: the mouse draws only when inking with it is explicitly on (a pen always draws).
+// The row is registered by the module and reaches an already open view through applySettings.
+TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSettings)
+{
+    write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Sketch.ink"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
+    ASSERT_NE(view, nullptr);
+    auto *canvas = view->findChild<QWidget *>(QStringLiteral("inkCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    const auto drag = [canvas] {
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+        QTest::mouseMove(canvas, QPoint(150, 120));
+        QTest::mouseMove(canvas, QPoint(200, 140));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 140));
+    };
+    drag();
+    EXPECT_FALSE(view->isModified()) << "off by default: the mouse draws nothing";
+
+    command(window, "app:open-settings")->trigger();
+    noteAppC::ToggleSwitch *toggle = nullptr;
+    WAIT_TRUE((toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_ink.drawWithMouse"))) != nullptr, 3000);
+    EXPECT_FALSE(toggle->isChecked());
+    toggle->setChecked(true);
+    window.closeSettings();
+    WAIT_TRUE(canvas->isVisible(), 3000);
+    drag();
+    EXPECT_TRUE(view->isModified()) << "on: the live view took the setting without being reopened";
 }

@@ -1749,7 +1749,7 @@ QString MainWindow::tabTitle(const Leaf *leaf) const
     if (leaf->notePath.isEmpty() && !leaf->pendingPath.isEmpty())
         return QFileInfo(leaf->pendingPath).completeBaseName();
     if (leaf->notePath.isEmpty() && !leaf->viewTitle.isEmpty())
-        return leaf->viewTitle;
+        return isModified(leaf) ? leaf->viewTitle + QLatin1String(" *") : leaf->viewTitle;
     if (leaf->notePath.isEmpty())
         return tr("New tab");
     QString name = QFileInfo(leaf->notePath).completeBaseName();
@@ -2784,9 +2784,11 @@ bool MainWindow::maybeSaveAll()
 {
     QSet<QString> asked; // a note in two tabs is one document, asked about once
     for (const auto &leaf : m_leaves) {
-        if (leaf->notePath.isEmpty() || !isModified(leaf.get()) || asked.contains(leaf->notePath))
+        const bool fileLess = leaf->notePath.isEmpty() && qobject_cast<ModuleView *>(leaf->view);
+        const QString key = fileLess ? QStringLiteral("view:%1").arg(quintptr(leaf.get())) : leaf->notePath; // file-less tabs are not one document
+        if ((leaf->notePath.isEmpty() && !fileLess) || !isModified(leaf.get()) || asked.contains(key))
             continue;
-        asked.insert(leaf->notePath);
+        asked.insert(key);
         activateLeaf(leaf.get());
         if (!maybeSave())
             return false;
@@ -6528,6 +6530,13 @@ void MainWindow::showModuleTab(ModuleView *view, const QString &title)
     view->setTheme(m_theme);
     m_active->view = view;
     m_active->viewTitle = title;
+    Leaf *leaf = m_active;
+    connect(view, &ModuleView::modificationChanged, this, [this, leaf](bool) {
+        if (leaf == m_active)
+            updateTitle();
+        else
+            syncTabs(leaf->group); // the asterisk (tabTitle)
+    });
     static_cast<QVBoxLayout *>(m_active->area->layout())->addWidget(view, 1);
     view->setFocus();
     syncTabs(m_active->group);
@@ -7166,18 +7175,19 @@ void MainWindow::changeEncryptionPassword()
 
 bool MainWindow::saveLeaf(Leaf *target, bool quiet)
 {
-    if (target->notePath.isEmpty())
-        return true;
-    if (auto *module = qobject_cast<ModuleView *>(target->view)) {
+    if (auto *module = qobject_cast<ModuleView *>(target->view)) { // a file-less view too: R6
+        const QString shown = target->notePath.isEmpty() ? target->viewTitle : QFileInfo(target->notePath).fileName();
         QString error;
         if (!module->save(&error)) {
-            reportSaveError(target->notePath, error, quiet);
+            reportSaveError(shown, error, quiet);
             return false;
         }
         if (!quiet)
-            statusBar()->showMessage(tr("Saved %1").arg(QFileInfo(target->notePath).fileName()), 2000);
+            statusBar()->showMessage(tr("Saved %1").arg(shown), 2000);
         return true;
     }
+    if (target->notePath.isEmpty())
+        return true;
 #ifdef NOTEAPPC_HAVE_CANVAS
     if (auto *canvas = qobject_cast<CanvasView *>(target->view)) {
         QString error;
@@ -7562,7 +7572,9 @@ QStringList MainWindow::autosave()
 
 bool MainWindow::maybeSave()
 {
-    if (m_active->notePath.isEmpty() || !isModified(m_active))
+    // A file-less module tab (the glyph studio) has no path but keeps the save contract (R6).
+    const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
+    if ((m_active->notePath.isEmpty() && !fileLess) || !isModified(m_active))
         return true;
     // Obsidian's way: what is typed is kept, never asked about - unless the
     // file is gone and was not found, where saving would bring it back.
@@ -7573,8 +7585,8 @@ bool MainWindow::maybeSave()
     if (!lost && m_settings.boolean(QStringLiteral("files.autosave")) && saveLeaf(m_active, true))
         return true;
 
-    const QString shown =
-        m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName();
+    const QString shown = fileLess ? m_active->viewTitle
+        : (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName());
     const bool lossy = m_active->note.lossy;
     QString question =
         lost ? tr("%1 is gone from disk. Save it there again?").arg(shown) : tr("Save changes to %1?").arg(shown);

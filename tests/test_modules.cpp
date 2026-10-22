@@ -90,7 +90,7 @@ TEST(ModuleGateTest, ScanReadsManifestsWithoutLoadingTheLibrary)
     const ModuleInfo *good = byID(modules, "fake");
     ASSERT_NE(good, nullptr);
     EXPECT_EQ(good->suffixes, QStringList{QStringLiteral("fake")});
-    ASSERT_EQ(good->commands.size(), 2);
+    ASSERT_EQ(good->commands.size(), 3);
     EXPECT_EQ(good->commands.first().id, QStringLiteral("fake:hello"));
     EXPECT_EQ(good->ABItag, ModuleRegistry::ABItag());
     EXPECT_TRUE(good->problem.isEmpty()) << good->problem.toStdString();
@@ -123,7 +123,7 @@ TEST(ModuleRegistryTest, LoadsOnFirstUseAndAttachesOnce)
     EXPECT_EQ(good->id, QStringLiteral("fake"));
     EXPECT_FALSE(registry.isLoaded(good->id));
 
-    int views = 0, commands = 0, settings = 0;  // the fake registers 2 commands and 2 setting rows
+    int views = 0, commands = 0, settings = 0;  // the fake registers 3 commands and 2 setting rows
     ModuleHost host;
     host.registerView = [&](const QStringList &suffixes, ModuleHost::ViewFactory) { views += suffixes.size(); };
     host.registerCommand = [&](const QString &, const QString &, std::function<void()>) { ++commands; };
@@ -134,7 +134,7 @@ TEST(ModuleRegistryTest, LoadsOnFirstUseAndAttachesOnce)
     EXPECT_TRUE(QFile::exists(mark));
     EXPECT_TRUE(loadedObjects().contains(QFileInfo(good->path).canonicalFilePath()));
     EXPECT_EQ(views, 1);
-    EXPECT_EQ(commands, 2);
+    EXPECT_EQ(commands, 3);
     EXPECT_EQ(settings, 2);
     ASSERT_TRUE(registry.ensureLoaded(*good, host, &error)); // a second call attaches nothing again
     EXPECT_EQ(views, 1);
@@ -275,6 +275,30 @@ TEST(ModuleRegistryTest, ABItagIsVersionTokenAndQtVersion)
     EXPECT_TRUE(QRegularExpression(QStringLiteral("^[0-9a-f]{16}$")).match(parts[1]).hasMatch()) << parts[1].toStdString();
     EXPECT_EQ(parts[2], QStringLiteral(QT_VERSION_STR));
 }
+
+#ifdef NOTEAPPC_INK_MODULE_PATH
+// R2: no dependency check in the manifest. An ink module copied to where libnotolith-inkcore.so is
+// not (RUNPATH $ORIGIN is its own directory) fails to load with the loader's message, which Settings
+// shows, instead of crashing. This process never loads the core library, so nothing satisfies the
+// NEEDED entry by soname.
+TEST(ModuleRegistryTest, AnInkModuleWithoutItsCoreLibraryFailsToLoadWithTheLoadersMessage)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(QFile::copy(QStringLiteral(NOTEAPPC_INK_MODULE_PATH), tmp.filePath(QStringLiteral("notolith-ink.so"))));
+    const QList<ModuleInfo> modules = ModuleRegistry::scan({tmp.path()});
+    ASSERT_EQ(modules.size(), 1);
+    ASSERT_TRUE(modules.first().problem.isEmpty()) << modules.first().problem.toStdString();
+    EXPECT_EQ(modules.first().id, QStringLiteral("ink"));
+    ModuleRegistry registry;
+    useModules(registry, modules);
+    ModuleHost host;
+    QString error;
+    EXPECT_FALSE(registry.ensureLoaded(modules.first(), host, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("libnotolith-inkcore.so"))) << error.toStdString();
+    EXPECT_FALSE(registry.isLoaded(QStringLiteral("ink")));
+    EXPECT_EQ(registry.loadFailure(QStringLiteral("ink")), error) << "Settings shows what the registry kept";
+}
+#endif
 
 // M10: no per-user module directory.
 TEST(ModuleRegistryTest, DefaultDirectoriesAreTheOverrideOrTheLibdirAlone)

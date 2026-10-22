@@ -43,6 +43,33 @@ private:
     QLabel *m_label = nullptr;
     QString m_path;
 };
+
+/// A view with no file, shown with host.showTab (what the glyph studio is). The dynamic property
+/// "modified" is its state, so a window test drives it without a header from the module; every
+/// save() appends a line to the file named by NOTEAPPC_FAKE_TAB_SAVES, which survives the view.
+class FakeTab : public noteAppC::ModuleView {
+public:
+    explicit FakeTab(QWidget *parent) : ModuleView(parent)
+    {
+        setObjectName(QStringLiteral("fakeTab"));
+        setProperty("modified", false);
+    }
+    bool load(const QString &, QString *) override { return true; }
+    bool save(QString *) override
+    {
+        const QByteArray saves = qgetenv("NOTEAPPC_FAKE_TAB_SAVES");
+        if (!saves.isEmpty()) {
+            QFile file(QString::fromLocal8Bit(saves));
+            if (file.open(QIODevice::WriteOnly | QIODevice::Append))
+                file.write("saved\n");
+        }
+        setProperty("modified", false);
+        emit modificationChanged(false);
+        return true;
+    }
+    bool isModified() const override { return property("modified").toBool(); }
+    void setTheme(const noteAppC::Theme &) override {}
+};
 } // namespace
 
 class FakeModule : public QObject, public noteAppC::NotolithModule {
@@ -63,6 +90,9 @@ public:
                              [status] { if (status) status(QStringLiteral("hello from the fake module"), 2000); });
         host.registerCommand(QStringLiteral(FAKE_ID ":where"), QStringLiteral("Fake: show the current folder"),
                              [status, folder] { if (status && folder) status(folder(), 2000); });
+        const auto showTab = host.showTab;
+        host.registerCommand(QStringLiteral(FAKE_ID ":tab"), QStringLiteral("Fake: open a file-less tab"),
+                             [showTab] { if (showTab) showTab(new FakeTab(nullptr), QStringLiteral("Fake tab")); });
         host.registerSetting({QStringLiteral("fake.greeting"), true, QStringLiteral("Fake: greet"),
                               QStringLiteral("A toggle the fake module registered."), {}, 0, 0});
         // A decimal row (spec section 4, settings rows): a double spin box, not an integer one.
