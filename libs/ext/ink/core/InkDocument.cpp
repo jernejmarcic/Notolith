@@ -132,6 +132,18 @@ bool InkDocument::undo()
     return true;
 }
 
+bool InkDocument::discardLiveEdits()
+{
+    if (m_revision == m_committed.revision)
+        return false;
+    const bool fileHoldsTheCommit = m_savedRevision == m_committed.revision; // saved, and not edited since the commit
+    restore(m_committed);
+    m_committed.revision = m_revision;
+    if (fileHoldsTheCommit)
+        m_savedRevision = m_revision;
+    return true;
+}
+
 bool InkDocument::redo()
 {
     if (m_redo.empty())

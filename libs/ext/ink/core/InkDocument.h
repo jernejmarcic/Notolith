@@ -42,6 +42,9 @@ public:
     void commit();
     bool undo();
     bool redo();
+    /// Drops edits no commit has closed: back to the last committed snapshot, the undo and redo stacks
+    /// untouched. A no-op (false) on a clean document, unlike undo(), which then steps back in history.
+    bool discardLiveEdits();
     bool canUndo() const { return !m_undo.empty(); }
     bool canRedo() const { return !m_redo.empty(); }
 

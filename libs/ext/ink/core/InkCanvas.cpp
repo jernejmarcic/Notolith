@@ -362,7 +362,7 @@ void InkCanvas::releaseAt(const QPointF &widgetPos, double seconds)
 /// The one way a stroke ends, however it ends. keep = true ends it at the last received sample and
 /// commits what was drawn or erased (pen-up, a lost release, focus loss, hide, disable, read-only,
 /// zoom, the pointer leaving). keep = false (documentReplaced) drops the live stroke and commits
-/// nothing: the document it belonged to is gone, and the eraser's live removals went with it.
+/// nothing, and discards the eraser's uncommitted removals (InkDocument::discardLiveEdits).
 void InkCanvas::finishStroke(bool keep)
 {
     const Drawing mode = std::exchange(m_drawing, Drawing::None);
@@ -371,8 +371,12 @@ void InkCanvas::finishStroke(bool keep)
     if (mode == Drawing::None)
         return;
     if (mode == Drawing::Eraser) {
-        if (std::exchange(m_erasedSomething, false) && keep)
-            finishEdit();
+        if (std::exchange(m_erasedSomething, false)) {
+            if (keep)
+                finishEdit();
+            else
+                m_document.discardLiveEdits(); // a cancel: the removals were never a history step; a replaced (reset) document is clean, so this is a no-op there
+        }
         return;
     }
     m_input.end({toDocument(m_lastPos), m_lastPressure, m_lastSeconds});

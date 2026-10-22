@@ -179,6 +179,79 @@ TEST(InkDocumentTest, ModifiedTracksTheSavedRevisionAcrossUndo)
     EXPECT_TRUE(doc.isModified()) << "the file holds the stroke, the document does not";
 }
 
+TEST(InkDocumentTest, DiscardLiveEditsRestoresTheCommitAndLeavesTheHistoryAlone)
+{
+    InkDocument doc;
+    doc.addStroke(line(0, 0, 10, 10));
+    doc.commit();
+    doc.addStroke(line(0, 20, 10, 20));
+    doc.commit();
+    ASSERT_TRUE(doc.undo()); // one redo step in the stack
+    ASSERT_TRUE(doc.canRedo());
+    doc.addStroke(line(0, 30, 10, 30));
+    doc.commit(); // clears redo; one undo step per commit
+    doc.addStroke(line(0, 40, 10, 40)); // live: no commit closes it
+    ASSERT_EQ(doc.items().size(), 3u);
+    const qint64 first = doc.items().front().t;
+    doc.removeItem(first); // a live removal too
+    ASSERT_EQ(doc.items().size(), 2u);
+    EXPECT_TRUE(doc.discardLiveEdits());
+    ASSERT_EQ(doc.items().size(), 2u) << "the committed state: the removal is back, the live stroke is gone";
+    EXPECT_EQ(doc.items().front().t, first);
+    EXPECT_EQ(doc.itemsIntersecting(QRectF(-5, -5, 30, 60)).size(), 2u) << "the grid was rebuilt";
+    EXPECT_FALSE(doc.discardLiveEdits()) << "clean now: nothing to discard";
+    ASSERT_TRUE(doc.undo());
+    EXPECT_EQ(doc.items().size(), 1u) << "undo steps back exactly one real commit";
+    ASSERT_TRUE(doc.undo());
+    EXPECT_TRUE(doc.items().empty());
+    EXPECT_FALSE(doc.undo()) << "the stack held two steps, the discard added none";
+    ASSERT_TRUE(doc.redo());
+    ASSERT_TRUE(doc.redo());
+    EXPECT_EQ(doc.items().size(), 2u);
+    EXPECT_FALSE(doc.redo());
+}
+
+TEST(InkDocumentTest, DiscardLiveEditsKeepsARedoStackIntact)
+{
+    InkDocument doc;
+    doc.addStroke(line(0, 0, 10, 10));
+    doc.commit();
+    doc.addStroke(line(0, 20, 10, 20));
+    doc.commit();
+    ASSERT_TRUE(doc.undo());
+    doc.removeItem(doc.items().front().t); // live edit while a redo is pending
+    EXPECT_TRUE(doc.discardLiveEdits());
+    EXPECT_EQ(doc.items().size(), 1u);
+    ASSERT_TRUE(doc.canRedo());
+    ASSERT_TRUE(doc.redo());
+    EXPECT_EQ(doc.items().size(), 2u);
+}
+
+TEST(InkDocumentTest, DiscardLiveEditsOnACleanDocumentChangesNothing)
+{
+    InkDocument doc;
+    doc.addStroke(line(0, 0, 10, 10));
+    doc.commit();
+    doc.markSaved();
+    const quint64 revision = doc.revision();
+    EXPECT_FALSE(doc.discardLiveEdits());
+    EXPECT_EQ(doc.revision(), revision);
+    EXPECT_FALSE(doc.isModified());
+    EXPECT_EQ(doc.items().size(), 1u);
+}
+
+TEST(InkDocumentTest, DiscardLiveEditsBackToTheSavedCommitIsNotModified)
+{
+    InkDocument doc;
+    doc.addStroke(line(0, 0, 10, 10));
+    doc.commit();
+    doc.markSaved();
+    doc.removeItem(doc.items().front().t);
+    ASSERT_TRUE(doc.isModified());
+    EXPECT_TRUE(doc.discardLiveEdits());
+    EXPECT_FALSE(doc.isModified()) << "the file holds exactly this state";
+}
+
 TEST(InkDocumentTest, ContinuousVerticalGrowsByWholePagesAndFixedDoesNot)
 {
     InkDocument doc;
@@ -2108,6 +2181,27 @@ TEST(InkCanvasDprTest, PositionsAndTheLiveOverlayAreRightAtTheScreensPixelRatio)
     EXPECT_NEAR(points.front().x, 40.0, 0.5) << "document px, whatever the pixel ratio";
     EXPECT_NEAR(points.front().y, 60.0, 0.5);
     EXPECT_NEAR(points.back().x, 240.0, 0.5);
+}
+
+TEST(InkCanvasTest, ReplacingTheSameDocumentMidEraseBringsTheUncommittedRemovalBack)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(200, 150), 2000);
+    f.canvas.document().markSaved();
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(100, 30), 0.5, 3000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(100, 70), 0.5, 3005); // removes the first stroke, uncommitted
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.documentReplaced(); // the same document object: its live removal must not survive the cancel
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 2u) << "the erased stroke is back";
+    EXPECT_FALSE(f.canvas.document().isModified());
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(100, 70), 0.5, 3010, Qt::NoButton); // the late release changes nothing
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "Ctrl+Z undoes the last real step (the second stroke) only";
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().y, 50.0, 1.0);
 }
 
 int main(int argc, char **argv)
