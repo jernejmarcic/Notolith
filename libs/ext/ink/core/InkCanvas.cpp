@@ -1106,21 +1106,32 @@ const QPixmap *InkCanvas::textPixmap(const Item &item)
     const qint64 need = qRound64(scale * 1000);
     const QColor background = m_document.settings().background.color;
     const auto it = m_textCache.find(item.t);
+    const auto bytesOf = [](const QPixmap &pixmap) { return qsizetype(pixmap.width()) * pixmap.height() * 4; };
+    const auto use = [&](TextPixmap &entry) { // stamped once a paint, and counted against that paint's budget when it is
+        if (entry.used != m_textTick)
+            m_textPaintBytes += bytesOf(entry.pixmap);
+        entry.used = m_textTick;
+    };
     if (it != m_textCache.end() && it->second.markdown == box.markdown && it->second.size == size && it->second.background == background &&
         it->second.scaleKey >= need && it->second.scaleKey <= 2 * need) {
-        it->second.used = m_textTick;
+        use(it->second);
         return &it->second.pixmap;
     }
-    if (m_textRenderer && !isDrawing()) {
+    // The pictures a paint uses are exempt from the eviction in paintUIItems, so without this a file with many large
+    // boxes in view would hold all of them (each up to 64 MB). A paint that has used the budget draws the rest as they
+    // are (the stale picture, or a placeholder) and renders nothing more: at most one picture past the budget.
+    // ponytail: such a box stays a placeholder while the others stay in view; a smaller view or a zoom-out renders it.
+    if (m_textRenderer && !isDrawing() && m_textPaintBytes < kTextCacheBytes) {
         QPixmap pixmap = m_textRenderer(textForRender(box.markdown), QSizeF(size), scale);
         if (!pixmap.isNull()) {
             TextPixmap &entry = m_textCache[item.t];
-            entry = {box.markdown, size, need, background, std::move(pixmap), m_textTick};
+            entry = {box.markdown, size, need, background, std::move(pixmap), 0};
+            use(entry);
             return &entry.pixmap;
         }
     }
     if (it != m_textCache.end())
-        it->second.used = m_textTick;
+        use(it->second);
     return it != m_textCache.end() ? &it->second.pixmap : nullptr;
 }
 
@@ -1129,6 +1140,7 @@ const QPixmap *InkCanvas::textPixmap(const Item &item)
 void InkCanvas::paintUIItems(QPainter &painter, const QRect &area)
 {
     ++m_textTick; // the pictures this paint uses are stamped with it, and are not evicted below
+    m_textPaintBytes = 0;
     painter.save();
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     geometryOf(m_document, m_zoom).forEachPage(painter, area, [&](const QRectF &exposed, int) {

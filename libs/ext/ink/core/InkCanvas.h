@@ -297,6 +297,7 @@ private:
     };
     std::map<qint64, TextPixmap> m_textCache;
     quint64 m_textTick = 0;
+    qsizetype m_textPaintBytes = 0; ///< what the pictures the current paint has used hold: past kTextCacheBytes it renders no more boxes
     TextEditorFactory m_textEditorFactory;
     QString readTextEditor() const; ///< what the open editor holds
     double textScale(const QSizeF &logical) const; ///< device px per document px for a box of that size, at the settled zoom

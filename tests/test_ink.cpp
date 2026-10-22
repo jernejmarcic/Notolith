@@ -5359,6 +5359,34 @@ TEST(InkCanvasTest, TheTextPicturesStayWithinTheirBudgetAndTheLeastRecentlyPaint
     EXPECT_EQ(stub.calls, boxes + 1) << "the first painted was evicted";
 }
 
+// Task 18, P1: the pictures a paint uses are exempt from the eviction above, so a file with many large boxes in view
+// held every one of them (each up to 64 MB). A paint that has used the budget draws the rest as placeholders.
+TEST(InkCanvasTest, OnePaintOfManyLargeBoxesStaysNearTheTextPictureBudget)
+{
+    CanvasFixture f;
+    TextStub stub;
+    f.canvas.setTextRenderer(stub.renderer());
+    constexpr int boxes = 8; // 2000 x 1000 device px each: 8 MB, 64 MB in all
+    DocumentSettings settings = f.canvas.document().settings();
+    settings.extent = QRectF(0, 0, 2000, 1010.0 * boxes);
+    f.canvas.document().setSettings(settings);
+    for (int i = 0; i < boxes; ++i) {
+        Item box;
+        box.type = Item::Type::TextBox;
+        box.textBox = std::make_shared<TextBox>(TextBox{QRectF(0, 1010.0 * i, 2000, 1000), QStringLiteral("box %1").arg(i)});
+        f.canvas.document().addItem(box);
+    }
+    f.canvas.document().commit();
+    f.canvas.documentReplaced();
+    f.canvas.resize(2000, 1010 * boxes);
+    QImage image(2000, 1010 * boxes, QImage::Format_ARGB32_Premultiplied);
+    f.canvas.render(&image); // every box is in this one paint
+    const qsizetype oneBox = qsizetype(2000) * 1000 * 4;
+    EXPECT_LE(f.canvas.textCacheBytes(), InkCanvas::kTextCacheBytes + oneBox) << "the budget, and at most the one picture that crossed it";
+    EXPECT_LT(stub.calls, boxes) << "the boxes past the budget were not rendered in this paint";
+    EXPECT_GT(stub.calls, 0);
+}
+
 namespace {
 /// An editor that is not a QPlainTextEdit: what a host installs to edit in its own editor.
 struct LineEditFactory {
