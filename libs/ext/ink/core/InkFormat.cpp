@@ -129,6 +129,8 @@ StrokeStyle styleFromJSON(const QJsonObject &object)
     return style;
 }
 
+} // namespace
+
 bool itemFromJSON(const QJsonObject &object, Item *item, QString *error)
 {
     item->raw = object;
@@ -246,8 +248,6 @@ QJsonObject itemToJSON(const Item &item)
     }
     return object;
 }
-
-} // namespace
 
 // Above 1e12 a double has no digits left after the point (and value * 1000 would overflow past
 // 1.8e305): rounding is a no-op there, so the value goes through untouched.

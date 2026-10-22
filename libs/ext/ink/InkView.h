@@ -68,6 +68,8 @@ private:
     QAction *m_penAction;
     QAction *m_eraserAction;
     QAction *m_splitAction;   ///< checkable: erase parts of strokes (EraserMode::Split)
+    QAction *m_selectAction;     ///< the select tool (Tool::Lasso)
+    QAction *m_selectRectAction; ///< checkable: select with a rectangle instead of a lasso (SelectShape::Rect)
     QAction *m_undoAction;
     QAction *m_redoAction;
     QAction *m_readOnlyAction;

@@ -97,6 +97,7 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_TRUE(view.property("readOnly").toBool()) << "the flag a test without the class can read";
     ASSERT_EQ(status.count(), 1);
     EXPECT_TRUE(status.first().first().toString().contains(QStringLiteral("read-only")));
+    view.resize(1000, 600); // wide enough for every toolbar action: a narrower toolbar moves the label into its overflow menu
     view.show();
     auto *label = view.findChild<QLabel *>(QStringLiteral("inkReadOnlyLabel"));
     ASSERT_NE(label, nullptr);
@@ -104,6 +105,8 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
     EXPECT_FALSE(view.save(&error));
     EXPECT_EQ(readAll(path), newer);
 }
@@ -200,6 +203,8 @@ TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
     auto *notice = view.findChild<QAction *>(QStringLiteral("inkErrorAction"));
     ASSERT_NE(notice, nullptr);
     EXPECT_TRUE(notice->isVisible()) << "a persistent notice, not only an 8 s status message";
@@ -434,6 +439,33 @@ TEST(InkViewToolbarTest, TheEraseWholeOrPartsToggleIsOnTheToolbarAndOnShiftE)
     EXPECT_FALSE(toggle->isChecked()) << "the key moves the toolbar too";
     QTest::keyClick(view.canvas(), Qt::Key_E, Qt::ShiftModifier);
     EXPECT_TRUE(toggle->isChecked());
+}
+
+TEST(InkViewToolbarTest, SelectAndRectangleSelectAreOnTheToolbarAndOnTheirKeys)
+{
+    InkView view(nullptr);
+    auto *select = view.findChild<QAction *>(QStringLiteral("inkSelectAction"));
+    auto *rect = view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"));
+    ASSERT_NE(select, nullptr);
+    ASSERT_NE(rect, nullptr);
+    EXPECT_TRUE(select->isCheckable());
+    EXPECT_TRUE(rect->isCheckable());
+    select->trigger();
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso);
+    EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Lasso);
+    rect->trigger();
+    EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Rect) << "the toolbar drives the canvas";
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso);
+    QTest::keyClick(view.canvas(), Qt::Key_P);
+    EXPECT_FALSE(select->isChecked()) << "the key moves the toolbar too";
+    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_L, Qt::ShiftModifier);
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso);
+    EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Lasso);
+    EXPECT_FALSE(rect->isChecked());
+    EXPECT_TRUE(select->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_L, Qt::ShiftModifier);
+    EXPECT_TRUE(rect->isChecked());
 }
 
 int main(int argc, char **argv)

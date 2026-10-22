@@ -18,7 +18,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QClipboard>
 #include <QKeyEvent>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QElapsedTimer>
 #include <QScrollArea>
@@ -3820,6 +3822,331 @@ TEST(InkCanvasTest, TheEraserModeHasAKeyAndASignalAndReadOnlyIgnoresIt)
     f.canvas.setReadOnly(true);
     QTest::keyClick(&f.canvas, Qt::Key_E, Qt::ShiftModifier);
     EXPECT_EQ(f.canvas.eraserMode(), InkCanvas::EraserMode::Stroke);
+}
+
+
+// --- Task 13: lasso and rectangle selection -------------------------------------------------------------
+
+namespace {
+
+std::shared_ptr<const Stroke> pointsStroke(std::initializer_list<QPointF> points, double width = 4.0)
+{
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style.width = width;
+    for (const QPointF &p : points)
+        stroke->points.push_back({p.x(), p.y(), 0.5});
+    return stroke;
+}
+
+QPainterPath polygonPath(const QPolygonF &polygon)
+{
+    QPainterPath path;
+    path.addPolygon(polygon);
+    path.closeSubpath();
+    return path;
+}
+
+/// A pen drag along `path` in widget px: press at the first point, a move to each of the others, release at the last.
+void penDrag(QWidget *w, const QList<QPointF> &path, qint64 ms, Qt::MouseButtons buttons = Qt::LeftButton)
+{
+    tablet(w, QEvent::TabletPress, path.first(), 0.5, ms, buttons);
+    for (int i = 1; i < path.size(); ++i)
+        tablet(w, QEvent::TabletMove, path[i], 0.5, ms + i * 5, buttons);
+    tablet(w, QEvent::TabletRelease, path.last(), 0.5, ms + path.size() * 5, Qt::NoButton);
+}
+
+const QList<QPointF> kAroundFirstStroke = {{10, 30}, {140, 30}, {140, 120}, {10, 120}, {10, 32}};
+
+} // namespace
+
+TEST(InkToolsTest, SelectItemsByLassoPolygon)
+{
+    InkDocument doc;
+    const qint64 a = doc.addStroke(pointsStroke({{20, 20}, {40, 40}, {60, 60}}));
+    const qint64 b = doc.addStroke(pointsStroke({{200, 200}, {240, 240}}));
+    const qint64 far = doc.addStroke(pointsStroke({{10, 10}, {300, 10}})); // two points only, both outside the lasso
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(30, 70, 40, 20), QStringLiteral("hi")});
+    const qint64 text = doc.addItem(box);
+    Item unknown;
+    unknown.type = Item::Type::Unknown;
+    unknown.raw = QJsonObject{{QStringLiteral("type"), QStringLiteral("future")}, {QStringLiteral("rect"), QJsonArray{30, 70, 40, 20}}};
+    const qint64 mystery = doc.addItem(unknown);
+    const QPainterPath region = polygonPath(QPolygonF({{0, 15}, {100, 15}, {100, 100}, {0, 100}}));
+    EXPECT_EQ(selectItems(doc, region), (std::vector<qint64>{a, text})) << "document order; b is outside, far has no point inside, the unknown item is never selected";
+    EXPECT_EQ(selectItems(doc, QPainterPath()), std::vector<qint64>{});
+    QPainterPath rect; // the rectangle select hands over a rect path
+    rect.addRect(QRectF(190, 190, 70, 70));
+    EXPECT_EQ(selectItems(doc, rect), std::vector<qint64>{b});
+    (void)far;
+    (void)mystery;
+}
+
+TEST(InkToolsTest, TransformMovesAndScalesAStroke)
+{
+    Item item;
+    item.type = Item::Type::Stroke;
+    item.t = 7;
+    item.layer = Layer::Highlighter;
+    item.stroke = pointsStroke({{10, 10}, {20, 30}}, 4.0);
+    item.raw = QJsonObject{{QStringLiteral("mark"), 42}};
+    QTransform scale;
+    scale.scale(2.0, 4.0);
+    const Item scaled = transformItem(item, scale);
+    ASSERT_TRUE(scaled.stroke);
+    EXPECT_NE(scaled.stroke.get(), item.stroke.get()) << "a new payload: snapshots share the old one";
+    EXPECT_EQ(scaled.t, 7);
+    EXPECT_EQ(scaled.layer, Layer::Highlighter);
+    EXPECT_EQ(scaled.raw.value(QStringLiteral("mark")).toInt(), 42);
+    EXPECT_NEAR(scaled.stroke->points[1].x, 40.0, 1e-9);
+    EXPECT_NEAR(scaled.stroke->points[1].y, 120.0, 1e-9);
+    EXPECT_NEAR(scaled.stroke->style.width, 12.0, 1e-9) << "the mean of sx and sy (Rnote)";
+    EXPECT_DOUBLE_EQ(scaled.stroke->points[1].pressure, 0.5);
+    EXPECT_NEAR(item.stroke->points[1].x, 20.0, 1e-9) << "the original is untouched";
+    const Item moved = transformItem(item, QTransform::fromTranslate(30, -5));
+    EXPECT_NEAR(moved.stroke->points[0].x, 40.0, 1e-9);
+    EXPECT_NEAR(moved.stroke->points[0].y, 5.0, 1e-9);
+    EXPECT_NEAR(moved.stroke->style.width, 4.0, 1e-9);
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(10, 10, 20, 10), QStringLiteral("x")});
+    EXPECT_EQ(transformItem(box, scale).textBox->rect, QRectF(20, 40, 40, 40));
+    Item shape;
+    shape.type = Item::Type::Shape;
+    auto shapeData = std::make_shared<Shape>();
+    shapeData->points = {{0, 0}, {10, 10}};
+    shapeData->style.width = 2.0;
+    shape.shape = shapeData;
+    const Item shaped = transformItem(shape, scale);
+    EXPECT_EQ(shaped.shape->points[1], QPointF(20, 40));
+    EXPECT_NEAR(shaped.shape->style.width, 6.0, 1e-9);
+    Item unknown;
+    unknown.type = Item::Type::Unknown;
+    unknown.raw = QJsonObject{{QStringLiteral("type"), QStringLiteral("future")}};
+    EXPECT_EQ(transformItem(unknown, scale).raw, unknown.raw);
+}
+
+TEST(InkToolsTest, ClipboardRoundTripKeepsStyleAndRaw)
+{
+    const QByteArray file = R"({"format":"notolith-ink","version":1,"items":[
+        {"t":5,"type":"stroke","layer":"user","mark":"keep","style":{"width":3,"color":"#336699","pressureCurve":"sqrt","extra":1},"points":[1,2,0.5,3,4,0.25]},
+        {"t":9,"type":"textbox","layer":"user","rect":[10,20,30,40],"markdown":"hello"}]})";
+    InkDocument doc;
+    ASSERT_TRUE(readInk(file, doc).ok);
+    ASSERT_EQ(doc.items().size(), 2u);
+    const QByteArray bytes = itemsToClipboardJSON({&doc.items()[0], &doc.items()[1]});
+    bool ok = false;
+    const std::vector<Item> back = itemsFromClipboardJSON(bytes, &ok);
+    ASSERT_TRUE(ok);
+    ASSERT_EQ(back.size(), 2u);
+    ASSERT_EQ(back[0].type, Item::Type::Stroke);
+    EXPECT_EQ(back[0].stroke->style, doc.items()[0].stroke->style);
+    EXPECT_EQ(back[0].stroke->style.pressureCurve, PressureCurve::Sqrt);
+    EXPECT_EQ(back[0].stroke->points.size(), 2u);
+    EXPECT_NEAR(back[0].stroke->points[1].pressure, 0.25, 1e-9);
+    EXPECT_EQ(back[0].raw.value(QStringLiteral("mark")).toString(), QStringLiteral("keep"));
+    EXPECT_EQ(back[0].raw.value(QStringLiteral("style")).toObject().value(QStringLiteral("extra")).toInt(), 1) << "unknown keys inside style";
+    EXPECT_EQ(back[0].t, 5);
+    ASSERT_EQ(back[1].type, Item::Type::TextBox);
+    EXPECT_EQ(back[1].textBox->markdown, QStringLiteral("hello"));
+    EXPECT_EQ(back[1].textBox->rect, QRectF(10, 20, 30, 40));
+    for (const QByteArray &bad : {QByteArray("not json"), QByteArray("{}"), QByteArray(R"({"format":"other","items":[]})"),
+                                  QByteArray(R"({"format":"notolith-ink-clip","items":[{"type":"stroke"}]})")}) {
+        ok = true;
+        EXPECT_TRUE(itemsFromClipboardJSON(bad, &ok).empty()) << bad.toStdString();
+        EXPECT_FALSE(ok) << bad.toStdString();
+    }
+}
+
+TEST(InkCanvasTest, LassoSelectMoveAndDelete)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 6.0; return s; }());
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    penStroke(&f.canvas, QPointF(200, 200), QPointF(300, 260), 2000);
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    const qint64 tA = f.canvas.document().items()[0].t;
+    const std::vector<StrokePoint> before = f.canvas.document().items()[0].stroke->points;
+    const std::vector<StrokePoint> otherBefore = f.canvas.document().items()[1].stroke->points;
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000);
+    EXPECT_EQ(f.canvas.selection(), std::vector<qint64>{tA});
+    EXPECT_EQ(edited.count(), 0) << "selecting is not an edit";
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_TRUE(f.canvas.selectionBounds().contains(QPointF(70, 70)));
+    EXPECT_FALSE(f.canvas.isDrawing());
+    penStroke(&f.canvas, QPointF(70, 70), QPointF(100, 70), 4000); // inside the selection: a move by (30, 0)
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    const Item &moved = *f.canvas.document().item(tA);
+    ASSERT_EQ(moved.stroke->points.size(), before.size());
+    for (size_t i = 0; i < before.size(); ++i) {
+        EXPECT_NEAR(moved.stroke->points[i].x, before[i].x + 30.0, 1e-6);
+        EXPECT_NEAR(moved.stroke->points[i].y, before[i].y, 1e-6);
+    }
+    const Item &other = f.canvas.document().items()[1];
+    for (size_t i = 0; i < otherBefore.size(); ++i)
+        EXPECT_NEAR(other.stroke->points[i].x, otherBefore[i].x, 1e-9) << "the unselected stroke stays";
+    EXPECT_EQ(edited.count(), 1) << "one move, one history step";
+    EXPECT_EQ(f.canvas.selection(), std::vector<qint64>{tA}) << "the selection follows the item";
+    QTest::keyClick(&f.canvas, Qt::Key_Delete);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_TRUE(f.canvas.selection().empty());
+    EXPECT_EQ(edited.count(), 2);
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    ASSERT_TRUE(f.canvas.undo());
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    const Item *original = f.canvas.document().item(tA);
+    ASSERT_TRUE(original);
+    for (size_t i = 0; i < before.size(); ++i)
+        EXPECT_NEAR(original->stroke->points[i].x, before[i].x, 1e-9) << "back at the original place";
+}
+
+TEST(InkCanvasTest, ResizingFromACornerHandleScalesAboutTheOppositeCorner)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 6.0; return s; }());
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    const QRectF box = f.canvas.selectionBounds();
+    const double width = f.canvas.document().items()[0].stroke->style.width;
+    penStroke(&f.canvas, f.canvas.toWidget(box.bottomRight()), f.canvas.toWidget(box.bottomRight()) + QPointF(51, 31), 4000);
+    const QRectF now = f.canvas.selectionBounds();
+    // The box is the points' box grown by half the width, and the width scales too: the corner moves by a fraction of a px.
+    EXPECT_NEAR(now.left(), box.left(), 0.5) << "the opposite corner stays";
+    EXPECT_NEAR(now.top(), box.top(), 0.5);
+    EXPECT_NEAR(now.right(), box.right() + 51.0, 1.0);
+    EXPECT_NEAR(now.bottom(), box.bottom() + 31.0, 1.0);
+    EXPECT_GT(f.canvas.document().items()[0].stroke->style.width, width) << "the width scales with the box";
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->style.width, width, 1e-9) << "one step";
+}
+
+TEST(InkCanvasTest, RectangleSelectionSelectsByTheBoxAndEscapeClears)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    penStroke(&f.canvas, QPointF(200, 200), QPointF(300, 260), 2000);
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    f.canvas.setSelectShape(InkCanvas::SelectShape::Rect);
+    penDrag(&f.canvas, {{180, 180}, {320, 280}}, 3000); // two points: a box, not a path
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    EXPECT_EQ(f.canvas.selection()[0], f.canvas.document().items()[1].t);
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    EXPECT_TRUE(f.canvas.selection().empty());
+    penDrag(&f.canvas, {{5, 5}, {390, 290}}, 4000);
+    EXPECT_EQ(f.canvas.selection().size(), 2u);
+    penDrag(&f.canvas, {{350, 20}, {360, 22}}, 5000); // a drag over nothing selects nothing
+    EXPECT_TRUE(f.canvas.selection().empty());
+}
+
+TEST(InkCanvasTest, MovingASelectionRepaintsTheOldAndTheNewPlace)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 8.0; s.pressureCurve = PressureCurve::Const; return s; }());
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    QImage first = settledGrab(f.canvas);
+    ASSERT_FALSE(first.isNull());
+    EXPECT_LT(qGray(first.pixel(70, 70)), 128) << "ink on the line";
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000);
+    penStroke(&f.canvas, QPointF(70, 70), QPointF(70, 150), 4000); // down by 80
+    const QImage after = settledGrab(f.canvas);
+    EXPECT_GT(qGray(after.pixel(70, 70)), 200) << "the old place shows the page again";
+    EXPECT_LT(qGray(after.pixel(70, 150)), 128) << "the new place shows the ink";
+}
+
+TEST(InkCanvasTest, CopyPasteOffsetsAndAssignsNewT)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    const qint64 tA = f.canvas.document().items()[0].t;
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000);
+    QTest::keyClick(&f.canvas, Qt::Key_C, Qt::ControlModifier);
+    const QMimeData *mime = QApplication::clipboard()->mimeData();
+    ASSERT_TRUE(mime);
+    EXPECT_TRUE(mime->hasFormat(QString::fromLatin1(kClipboardMime)));
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    QTest::keyClick(&f.canvas, Qt::Key_V, Qt::ControlModifier);
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_EQ(edited.count(), 1) << "one paste, one history step";
+    const Item &pasted = f.canvas.document().items()[1];
+    EXPECT_GT(pasted.t, tA) << "a new t";
+    const QPointF centre = f.canvas.document().items()[1].bounds().center();
+    EXPECT_NEAR(centre.x(), 200.0 + 20.0, 1.0) << "the view centre, +20 right";
+    EXPECT_NEAR(centre.y(), 150.0 + 20.0, 1.0) << "and +20 down";
+    EXPECT_EQ(f.canvas.selection(), std::vector<qint64>{pasted.t}) << "the pasted items are selected";
+    EXPECT_EQ(pasted.stroke->points.size(), f.canvas.document().items()[0].stroke->points.size());
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, CopyPutsTheTextBoxContentsOnTheClipboardAsPlainText)
+{
+    CanvasFixture f;
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(50, 150, 100, 40), QStringLiteral("hello **there**")});
+    f.canvas.document().addItem(box);
+    f.canvas.document().commit();
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, {{40, 140}, {160, 140}, {160, 200}, {40, 200}, {40, 142}}, 1000);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    ASSERT_TRUE(f.canvas.copySelection());
+    EXPECT_EQ(QApplication::clipboard()->mimeData()->text(), QStringLiteral("hello **there**"));
+}
+
+TEST(InkCanvasTest, HeldLassoButtonSelectsWithoutChangingTheTool)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    ASSERT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen);
+    EXPECT_TRUE(f.canvas.isHeldLassoEnabled()) << "the default";
+    penDrag(&f.canvas, kAroundFirstStroke, 3000, Qt::LeftButton | kHeldLassoButton);
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "no stroke was drawn";
+    EXPECT_EQ(f.canvas.selection().size(), 1u);
+    penStroke(&f.canvas, QPointF(200, 200), QPointF(300, 260), 4000); // the next plain stroke draws and deselects
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_TRUE(f.canvas.selection().empty());
+}
+
+TEST(InkCanvasTest, WithHeldLassoDisabledTheBarrelButtonDrawsAnOrdinaryStroke)
+{
+    CanvasFixture f;
+    f.canvas.setHeldLassoEnabled(false);
+    EXPECT_FALSE(f.canvas.isHeldLassoEnabled());
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000, Qt::LeftButton | kHeldLassoButton);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_TRUE(f.canvas.selection().empty());
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen);
+}
+
+TEST(InkCanvasTest, CtrlDragWithTheMouseSelectsWithoutDrawingWithMouse)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    ASSERT_FALSE(f.canvas.drawWithMouse());
+    QTest::mousePress(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(10, 30)); // a plain drag scrolls, it never selects or draws
+    QTest::mouseMove(&f.canvas, QPoint(140, 30));
+    QTest::mouseMove(&f.canvas, QPoint(140, 120));
+    QTest::mouseRelease(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(10, 120));
+    EXPECT_TRUE(f.canvas.selection().empty());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    QTest::mousePress(&f.canvas, Qt::LeftButton, Qt::ControlModifier, QPoint(10, 30));
+    QTest::mouseMove(&f.canvas, QPoint(140, 30));
+    QTest::mouseMove(&f.canvas, QPoint(140, 120));
+    QTest::mouseMove(&f.canvas, QPoint(10, 120));
+    QTest::mouseRelease(&f.canvas, Qt::LeftButton, Qt::ControlModifier, QPoint(10, 118));
+    EXPECT_EQ(f.canvas.selection().size(), 1u);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "no stroke was added";
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen) << "any tool, none changed";
 }
 
 

@@ -3,6 +3,11 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+#include "InkFormat.h"
 #include "StrokeOutline.h"
 
 namespace noteAppC::ink {
@@ -54,6 +59,105 @@ SplitResult splitStroke(const Stroke &stroke, const QPainterPath &eraser)
         i = end;
     }
     return result;
+}
+
+std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &region)
+{
+    std::vector<qint64> out;
+    if (region.isEmpty())
+        return out;
+    for (qint64 t : doc.itemsIntersecting(region.boundingRect())) {
+        const Item *item = doc.item(t);
+        if (!item)
+            continue;
+        bool hit = false;
+        if (item->type == Item::Type::Stroke) {
+            // Rnote: any point inside.
+            hit = std::any_of(item->stroke->points.begin(), item->stroke->points.end(),
+                              [&](const StrokePoint &p) { return region.contains(QPointF(p.x, p.y)); });
+        } else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
+            hit = region.contains(item->bounds().center()); // ponytail: a real per-kind hit test comes with Tasks 14-15 (carry N5)
+        }
+        if (hit)
+            out.push_back(t);
+    }
+    std::sort(out.begin(), out.end()); // the grid's order is not the document's
+    return out;
+}
+
+// Ported from Rnote (rnote-engine/src/strokes/stroke.rs, Stroke::scale / Stroke::translate and
+// rnote-compose/src/shapes), copyright the Rnote contributors, GPL-3.0-or-later,
+// https://github.com/flxzt/rnote. Rnote scales the stroke width by the mean of the x and y scale.
+Item transformItem(const Item &item, const QTransform &transform)
+{
+    const double meanScale = 0.5 * (std::hypot(transform.m11(), transform.m12()) + std::hypot(transform.m21(), transform.m22()));
+    Item out = item;
+    switch (item.type) {
+    case Item::Type::Stroke: {
+        auto stroke = std::make_shared<Stroke>(*item.stroke);
+        for (StrokePoint &p : stroke->points) {
+            const QPointF q = transform.map(QPointF(p.x, p.y));
+            p.x = q.x();
+            p.y = q.y();
+        }
+        stroke->style.width *= meanScale;
+        out.stroke = std::move(stroke);
+        break;
+    }
+    case Item::Type::Shape: {
+        auto shape = std::make_shared<Shape>(*item.shape);
+        for (QPointF &p : shape->points)
+            p = transform.map(p);
+        shape->style.width *= meanScale;
+        out.shape = std::move(shape);
+        break;
+    }
+    case Item::Type::TextBox:
+        out.textBox = std::make_shared<TextBox>(TextBox{transform.mapRect(item.textBox->rect), item.textBox->markdown});
+        break;
+    case Item::Type::Image:
+        out.image = std::make_shared<ImageRef>(ImageRef{transform.mapRect(item.image->rect), item.image->path});
+        break;
+    case Item::Type::Group:
+    case Item::Type::Unknown:
+        break; // nothing to map: the item is kept as it was read
+    }
+    return out;
+}
+
+QByteArray itemsToClipboardJSON(const std::vector<const Item *> &items)
+{
+    QJsonArray array;
+    for (const Item *item : items)
+        array.append(itemToJSON(*item));
+    return QJsonDocument(QJsonObject{{QStringLiteral("format"), QStringLiteral("notolith-ink-clip")}, {QStringLiteral("items"), array}})
+        .toJson(QJsonDocument::Compact);
+}
+
+std::vector<Item> itemsFromClipboardJSON(const QByteArray &bytes, bool *ok)
+{
+    std::vector<Item> out;
+    const auto fail = [&] {
+        if (ok)
+            *ok = false;
+        return std::vector<Item>();
+    };
+    if (bytes.size() > kMaxInflatedBytes) // the clipboard is another program's data too
+        return fail();
+    const QJsonDocument json = QJsonDocument::fromJson(bytes);
+    if (!json.isObject() || json.object().value(QStringLiteral("format")).toString() != QLatin1String("notolith-ink-clip")
+        || !json.object().value(QStringLiteral("items")).isArray())
+        return fail();
+    for (const QJsonValue &value : json.object().value(QStringLiteral("items")).toArray()) {
+        Item item;
+        QString why;
+        if (!value.isObject() || !itemFromJSON(value.toObject(), &item, &why))
+            return fail();
+        out.push_back(std::move(item));
+    }
+    if (ok)
+        *ok = true;
+    return out;
 }
 
 } // namespace noteAppC::ink

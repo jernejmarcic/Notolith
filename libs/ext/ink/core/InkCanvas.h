@@ -1,11 +1,13 @@
 #pragma once
 
 #include <QImage>
+#include <QPolygonF>
 #include <QTimer>
 #include <QWidget>
 
 #include <functional>
 #include <map>
+#include <vector>
 
 #include "InkDocument.h"
 #include "InkInput.h"
@@ -31,6 +33,9 @@ public:
     /// stroke survives as one or two new strokes). Shapes, text and images are always taken whole.
     enum class EraserMode { Stroke, Split };
     Q_ENUM(EraserMode)
+    /// What the select tool draws: a free lasso path or a rectangle (items inside it are selected on release).
+    enum class SelectShape { Lasso, Rect };
+    Q_ENUM(SelectShape)
 
     explicit InkCanvas(QWidget *parent = nullptr);
 
@@ -48,6 +53,12 @@ public:
     void setEraserMode(EraserMode mode);
     double eraserWidth() const { return m_eraserWidth; }
     void setEraserWidth(double documentPx) { m_eraserWidth = documentPx; }
+    SelectShape selectShape() const { return m_selectShape; }
+    void setSelectShape(SelectShape shape);
+    /// Holding kHeldLassoButton on the pen in the Pen tool selects for that stroke only. The glyph studio turns it
+    /// off: a glyph cell has no selection and uses the barrel click to save.
+    bool isHeldLassoEnabled() const { return m_heldLassoEnabled; }
+    void setHeldLassoEnabled(bool on) { m_heldLassoEnabled = on; }
     bool drawWithMouse() const { return m_drawWithMouse; }
     void setDrawWithMouse(bool on) { m_drawWithMouse = on; }
     void setRawInput(bool raw) { m_input.setRawInput(raw); }
@@ -75,6 +86,15 @@ public:
     int staleTileCount() const;
     void setTileJobHook(std::function<void()> hook);
     bool liveHeld() const { return m_holdLive; } ///< the live image still stands in for the committed stroke until its tiles arrive
+    /// The selection (Tool::Lasso): the `t`s of the selected items, and the box that holds them (document px; null when
+    /// nothing is selected). Moving, resizing and deleting are one history step each; copy and paste go through the
+    /// application clipboard (InkTools.h, kClipboardMime). Each returns false when it did nothing.
+    const std::vector<qint64> &selection() const { return m_selection; }
+    QRectF selectionBounds() const { return m_selectionBounds; }
+    void clearSelection();
+    bool deleteSelection();
+    bool copySelection();
+    bool paste(); ///< at the centre of the visible canvas, +20 px right and down, as new items; they become the selection
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,
     /// mouse drawing and the edit keys but keeps touch pan, wheel and zoom:
     /// disabling the widget would block those too.
@@ -95,6 +115,8 @@ signals:
     void documentEdited();
     void toolChanged(Tool tool);
     void eraserModeChanged(EraserMode mode);
+    void selectShapeChanged(SelectShape shape);
+    void selectionChanged();
     void learnedPressureChanged(const QString &device, double max);
     void zoomChanged(double zoom);
     void panRequested(QPoint deltaWidgetPx);
@@ -115,8 +137,18 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
-    enum class Drawing { None, Pen, Eraser };
-    void pressAt(const QPointF &widgetPos, double pressure, double seconds, bool erase);
+    enum class Drawing { None, Pen, Eraser, Select, Move, Scale };
+    void pressAt(const QPointF &widgetPos, double pressure, double seconds, bool erase, bool select = false);
+    void pressSelect(const QPointF &widgetPos);
+    void finishSelect(Drawing mode, bool keep);
+    void dragSelection(const QPointF &documentPos);
+    void updateLasso(const QPointF &documentPos);
+    void setSelection(std::vector<qint64> items);
+    int handleAt(const QPointF &widgetPos) const; ///< 0..7 clockwise from the top-left, or -1
+    QRect selectionPaintRect() const;             ///< widget px: the box, its handles and a margin; null when nothing is selected
+    QRect lassoPaintRect() const;                 ///< widget px: the lasso or rectangle in flight
+    void recomputeSelectionBounds();
+    void paintSelection(QPainter &painter);
     void moveTo(const QPointF &widgetPos, double pressure, double seconds);
     void releaseAt(const QPointF &widgetPos, double seconds);
     void finishStroke(bool keep);
@@ -157,6 +189,16 @@ private:
     QPointF m_lastErase;         ///< document px: the previous eraser sample, the other end of the swept segment
     QRectF m_lastPrediction;     ///< document px: the predicted tail as last painted; repainted when it moves and at pen-up
     bool m_erasedSomething = false;
+    SelectShape m_selectShape = SelectShape::Lasso;
+    bool m_heldLassoEnabled = true;
+    std::vector<qint64> m_selection;
+    QRectF m_selectionBounds;         ///< document px
+    QPolygonF m_lasso;                ///< document px: the path of the select drag in flight (Rect: its start point and the pointer)
+    std::vector<Item> m_dragOriginals; ///< the selected items as the Move or Scale drag found them
+    QRectF m_dragBounds;              ///< document px: the selection box when the drag began
+    QPointF m_dragStart;              ///< document px
+    int m_dragHandle = -1;
+    bool m_dragMoved = false;
     bool m_readOnly = false;
     QPointF m_lastTouch;
     bool m_touchPanning = false;

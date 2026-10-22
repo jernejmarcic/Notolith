@@ -38,13 +38,25 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     auto *tools = new QActionGroup(this);
     m_penAction = tools->addAction(tr("Pen"));
     m_eraserAction = tools->addAction(tr("Eraser"));
+    m_selectAction = tools->addAction(tr("Select"));
+    m_selectAction->setObjectName(QStringLiteral("inkSelectAction"));
+    m_selectAction->setToolTip(tr("Select with a lasso, then move, resize, copy or delete (L)"));
     m_penAction->setObjectName(QStringLiteral("inkPenAction"));
     m_eraserAction->setObjectName(QStringLiteral("inkEraserAction"));
-    for (QAction *a : {m_penAction, m_eraserAction})
+    for (QAction *a : {m_penAction, m_eraserAction, m_selectAction})
         a->setCheckable(true);
     m_penAction->setChecked(true);
     connect(m_penAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Pen); });
     connect(m_eraserAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Eraser); });
+    connect(m_selectAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Lasso); });
+    m_selectRectAction = new QAction(tr("Rectangle"), this); // checked: the select tool draws a box; unchecked: a lasso
+    m_selectRectAction->setObjectName(QStringLiteral("inkSelectRectAction"));
+    m_selectRectAction->setCheckable(true);
+    m_selectRectAction->setToolTip(tr("Select with a rectangle instead of a lasso (Shift+L)"));
+    connect(m_selectRectAction, &QAction::triggered, this, [this](bool on) {
+        m_canvas->setTool(InkCanvas::Tool::Lasso); // one click is enough: the toggle also picks the select tool
+        m_canvas->setSelectShape(on ? InkCanvas::SelectShape::Rect : InkCanvas::SelectShape::Lasso);
+    });
     m_splitAction = new QAction(tr("Erase parts"), this); // checked: only the touched part of a stroke goes; unchecked: the whole stroke
     m_splitAction->setObjectName(QStringLiteral("inkEraserSplitAction"));
     m_splitAction->setCheckable(true);
@@ -56,7 +68,7 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
     connect(m_redoAction, &QAction::triggered, m_canvas, &InkCanvas::redo);
-    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction});
+    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction, m_selectAction, m_selectRectAction});
     m_toolBar->addSeparator();
     m_toolBar->addActions({m_undoAction, m_redoAction});
     auto *readOnlyLabel = new QLabel(tr("Read-only: written by a newer Notolith"));
@@ -82,8 +94,12 @@ InkView::InkView(const Settings *settings, QWidget *parent)
 
     connect(m_canvas, &InkCanvas::documentEdited, this, &InkView::onEdited);
     connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P and E (R14) move the toolbar too
-        m_penAction->setChecked(tool != InkCanvas::Tool::Eraser);
+        m_penAction->setChecked(tool != InkCanvas::Tool::Eraser && tool != InkCanvas::Tool::Lasso);
         m_eraserAction->setChecked(tool == InkCanvas::Tool::Eraser);
+        m_selectAction->setChecked(tool == InkCanvas::Tool::Lasso);
+    });
+    connect(m_canvas, &InkCanvas::selectShapeChanged, this, [this](InkCanvas::SelectShape shape) { // Shift+L moves the toolbar too
+        m_selectRectAction->setChecked(shape == InkCanvas::SelectShape::Rect);
     });
     connect(m_canvas, &InkCanvas::eraserModeChanged, this, [this](InkCanvas::EraserMode mode) { // Shift+E moves the toolbar too
         m_splitAction->setChecked(mode == InkCanvas::EraserMode::Split);
@@ -169,6 +185,8 @@ bool InkView::load(const QString &path, QString *error)
                     m_penAction->setEnabled(false);
                     m_eraserAction->setEnabled(false);
                     m_splitAction->setEnabled(false);
+                    m_selectAction->setEnabled(false);
+                    m_selectRectAction->setEnabled(false);
                     m_errorLabel->setText(parsed.result.error);
                     m_errorAction->setVisible(true);
                 } else {
@@ -208,6 +226,8 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
     m_penAction->setEnabled(!m_readOnly);
     m_eraserAction->setEnabled(!m_readOnly);
     m_splitAction->setEnabled(!m_readOnly);
+    m_selectAction->setEnabled(!m_readOnly);
+    m_selectRectAction->setEnabled(!m_readOnly);
     m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);

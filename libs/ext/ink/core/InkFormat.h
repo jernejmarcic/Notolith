@@ -40,6 +40,11 @@ bool loadInkFile(const QString &path, InkDocument &out, InkReadResult *result = 
 /// modules save through writeInk() + Vault::writeBytes (spec section 5).
 bool saveInkFile(const QString &path, const InkDocument &document, QString *error = nullptr);
 
+/// One item as a .ink file writes it (raw's unknown keys first, the model's keys over them) and back. The reader's
+/// checks apply: false and `*error` for an item the reader would refuse. The clipboard (InkTools.h) uses both.
+QJsonObject itemToJSON(const Item &item);
+bool itemFromJSON(const QJsonObject &object, Item *item, QString *error);
+
 double roundThree(double value);
 QString colorName(const QColor &color);
 QColor colorFromName(const QString &name, const QColor &fallback);
