@@ -3129,11 +3129,9 @@ void MainWindow::updateNotebookIndex()
                                        })
                                      : Indexer::NotebookReader());
 #endif
-    // R1: a .ink file is a note whose text is its text boxes while the ink feature is on (installed and not switched
-    // off in Settings > Plugins); off, it is a plain file, exactly like a notebook with the notebooks feature off.
-    // Read host-side with QJsonDocument: indexing never loads the module.
-    m_indexer->setForeignReader({QStringLiteral("ink")},
-                                featureOn("ink") ? Indexer::ForeignReader(noteAppC::inkTextBoxes) : Indexer::ForeignReader());
+    // R1: a .ink file is a note whose text is its text boxes, indexed whether or not the ink module is installed, on
+    // or off: the host reads the JSON itself (QJsonDocument), so indexing never loads the module.
+    m_indexer->setForeignReader({QStringLiteral("ink")}, noteAppC::inkTextBoxes, noteAppC::kInkIndexMaxBytes);
 }
 
 void MainWindow::showNoteInPanes(const QString &path)

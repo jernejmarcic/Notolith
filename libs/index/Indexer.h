@@ -68,9 +68,15 @@ public:
     /// The same for any file kind the host can read as text (a `.ink` file's text
     /// boxes): a reader per lower-case suffix, set for each of `suffixes`; an
     /// empty one clears them. `setNotebookReader` is this for "ipynb". Rescans
-    /// when a suffix gains or loses its reader and the vault is valid.
+    /// when a suffix gains or loses its reader and the vault is valid. A file
+    /// over `maxBytes` is never read (0: no limit, the notebook default), so a
+    /// hostile multi-GB file costs nothing.
     using ForeignReader = NotebookReader;
-    void setForeignReader(const QStringList &suffixes, ForeignReader reader);
+    struct ForeignSource {
+        ForeignReader read;
+        qint64 maxBytes = 0;
+    };
+    void setForeignReader(const QStringList &suffixes, ForeignReader reader, qint64 maxBytes = 0);
 
     /// Meta notes are indexed (for `meta:` search) only while
     /// `options.metaNotes` is on, by its `open`/`close`; the rest of `options`
@@ -103,7 +109,7 @@ private:
         QString body;
         bool ok = false;
     };
-    static Parsed parseFile(const QString &path, const QHash<QString, ForeignReader> &foreign, const ParseOptions &options);
+    static Parsed parseFile(const QString &path, const QHash<QString, ForeignSource> &foreign, const ParseOptions &options);
     bool isForeign(const QString &path) const; ///< a suffix with a reader set
     void clearMetaNotes(); ///< the rows and the key, at once
 
@@ -127,7 +133,7 @@ private:
     /// cache already holds as they are on disk.
     void start(const QStringList &paths, bool force = false, const QStringList &dirs = {});
     void runScan(const QStringList &only, const QStringList &dirs, const QSet<QString> &watched, quint64 scan,
-                 const Vault &vault, const QString &databasePath, const QHash<QString, ForeignReader> &foreign,
+                 const Vault &vault, const QString &databasePath, const QHash<QString, ForeignSource> &foreign,
                  const ParseOptions &options, bool force);
     void flushChanges();
     void apply(const Batch &batch);
@@ -156,7 +162,7 @@ private:
     QSet<QString> m_queuedDirs;  ///< folders handed over during a scan, read after it
     QStringList m_scanPaths; ///< what the running scan was asked for; empty for the whole vault
     bool m_scanWhole = false; ///< the running scan walks the whole vault
-    QHash<QString, ForeignReader> m_foreignReaders; ///< by lower-case suffix
+    QHash<QString, ForeignSource> m_foreignReaders; ///< by lower-case suffix
     DirWatcher m_files;
     QTimer m_debounce;
     QTimer m_poll; ///< runs only while some folder has no watch

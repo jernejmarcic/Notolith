@@ -67,19 +67,58 @@ TEST(InkTextBoxesTest, ItemsOfOtherShapesAreSkippedNotFatal)
     EXPECT_EQ(*text, QStringLiteral("kept"));
 }
 
-// The reader runs on every .ink file the indexer meets, so a hostile file must stay cheap and bounded.
-TEST(InkTextBoxesTest, AGzipBombIsRefusedAndHugeTextIsCapped)
-{
-    // 80 MiB of zeros inflates past the 64 MiB cap: refused, not decoded.
-    EXPECT_FALSE(noteAppC::inkTextBoxes(gzipped(QByteArray(80 << 20, '\0'))).has_value());
+// The index-side cap (16 MiB in, 16 MiB inflated); inkcore's own 64 MiB limit is for opening one file.
+constexpr qint64 kIndexCap = qint64(16) << 20;
 
-    // A text box of several MiB is read, but the note's text stops at the cap.
+// Valid .ink JSON padded with one long string, so only the size cap (not the JSON parser) can refuse it.
+QByteArray paddedFile(qint64 padBytes)
+{
+    return R"({"format":"notolith-ink","version":1,"items":[],"pad":")" + QByteArray(int(padBytes), 'a') + R"("})";
+}
+
+// The reader runs on every .ink file the indexer meets, so a hostile file must stay cheap and bounded.
+TEST(InkTextBoxesTest, AGzipBombIsRefusedAtTheInflateCap)
+{
+    const QByteArray bomb = gzipped(paddedFile(kIndexCap + (1 << 20)));
+    ASSERT_LT(bomb.size(), 1 << 20) << "a small file that inflates past the cap";
+    EXPECT_FALSE(noteAppC::inkTextBoxes(bomb).has_value());
+    EXPECT_TRUE(noteAppC::inkTextBoxes(gzipped(paddedFile(kIndexCap - (1 << 20)))).has_value()) << "just under the cap is fine";
+}
+
+TEST(InkTextBoxesTest, PlainJSONOverTheCapIsRefused)
+{
+    EXPECT_FALSE(noteAppC::inkTextBoxes(paddedFile(kIndexCap + 1)).has_value());
+    EXPECT_TRUE(noteAppC::inkTextBoxes(paddedFile(kIndexCap - (1 << 20))).has_value());
+}
+
+TEST(InkTextBoxesTest, HugeTextIsCapped)
+{
     const QByteArray big(8 << 20, 'a');
     const QByteArray file = R"({"format":"notolith-ink","version":1,"items":[{"type":"textbox","markdown":")" + big + R"("}]})";
     const auto text = noteAppC::inkTextBoxes(file);
     ASSERT_TRUE(text.has_value());
     EXPECT_LT(text->size(), big.size());
     EXPECT_GT(text->size(), 0);
+}
+
+TEST(InkTextBoxesTest, TheTextCapNeverLeavesALoneSurrogate)
+{
+    // An emoji (a surrogate pair in a QString) straddles the cap: the first half must not survive on its own.
+    const QByteArray file = R"({"format":"notolith-ink","version":1,"items":[{"type":"textbox","markdown":")"
+                            + QByteArray((1 << 20) - 1, 'a') + "\xF0\x9F\x98\x80" + R"("}]})";
+    const auto text = noteAppC::inkTextBoxes(file);
+    ASSERT_TRUE(text.has_value());
+    ASSERT_FALSE(text->isEmpty());
+    EXPECT_FALSE(text->back().isHighSurrogate());
+}
+
+// inkcore's readInk refuses these; a file that shows in search but cannot be opened would be worse than a missing one.
+TEST(InkTextBoxesTest, TrailingDataAfterGzipAndAMissingVersionAreRefused)
+{
+    EXPECT_FALSE(noteAppC::inkTextBoxes(gzipped(kFile) + "junk").has_value());
+    EXPECT_FALSE(noteAppC::inkTextBoxes(R"({"format":"notolith-ink","items":[{"type":"textbox","markdown":"x"}]})").has_value());
+    EXPECT_FALSE(noteAppC::inkTextBoxes(R"({"format":"notolith-ink","version":"1","items":[]})").has_value());
+    EXPECT_FALSE(noteAppC::inkTextBoxes(R"({"format":"notolith-ink","version":0,"items":[]})").has_value());
 }
 
 TEST(InkTextBoxesTest, DeeplyNestedJSONDoesNotCrash)

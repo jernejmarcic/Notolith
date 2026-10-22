@@ -8269,7 +8269,8 @@ TEST_F(WindowTest, InkTextBoxLinksShowInBacklinksWithoutLoadingTheModule)
     EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink"))) << "indexing never loads a module";
 }
 
-TEST_F(WindowTest, WithInkOffTheInkTextIsNotIndexed)
+// The host reader is not the module's: the text boxes stay indexed with the ink feature switched off.
+TEST_F(WindowTest, WithInkOffTheInkTextIsStillIndexed)
 {
     write(QStringLiteral("Sketch.ink"),
           "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
@@ -8288,19 +8289,8 @@ TEST_F(WindowTest, WithInkOffTheInkTextIsNotIndexed)
         toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.ink"));
         return toggle != nullptr;
     }, 3000));
-    toggle->setChecked(false); // applyFeatures() -> updateNotebookIndex() clears the reader, the indexer rescans
-    WAIT_TRUE(list->topLevelItemCount() == 0, 10000);
-}
-
-TEST_F(WindowTest, AVaultWithoutInkFilesNeverLoadsTheInkModule)
-{
-    MainWindow window; // the fixture vault holds notes only
-    window.openVault(dir.path());
-    window.show();
-    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
-    window.scanModulesNow();
-    QSignalSpy indexed(window.index(), &Index::changed);
-    indexed.wait(2000); // the first scan, if it has not finished yet; an already finished one is fine
-    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink")));
+    toggle->setChecked(false); // the module is off; the host reader is not the module's
+    QTest::qWait(500); // a rescan, if the switch caused one, finishes well inside this
+    EXPECT_EQ(list->topLevelItemCount(), 1);
 }
 #endif

@@ -173,14 +173,14 @@ void Indexer::setNotebookReader(NotebookReader reader)
     setForeignReader({QStringLiteral("ipynb")}, std::move(reader));
 }
 
-void Indexer::setForeignReader(const QStringList &suffixes, ForeignReader reader)
+void Indexer::setForeignReader(const QStringList &suffixes, ForeignReader reader, qint64 maxBytes)
 {
     bool changed = false;
     for (const QString &suffix : suffixes) {
         const QString key = suffix.toLower();
         changed = changed || m_foreignReaders.contains(key) != bool(reader);
         if (reader)
-            m_foreignReaders.insert(key, reader);
+            m_foreignReaders.insert(key, {reader, maxBytes});
         else
             m_foreignReaders.remove(key);
     }
@@ -281,7 +281,7 @@ void Indexer::start(const QStringList &paths, bool force, const QStringList &dir
 }
 
 void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QSet<QString> &watched, quint64 scan,
-                      const Vault &vault, const QString &databasePath, const QHash<QString, ForeignReader> &foreign,
+                      const Vault &vault, const QString &databasePath, const QHash<QString, ForeignSource> &foreign,
                       const ParseOptions &options, bool force)
 {
     // On the scan's thread: nothing here touches m_index, and what the
@@ -459,18 +459,17 @@ void Indexer::apply(const Batch &batch)
         start(std::exchange(m_pending, {}), false, std::exchange(m_queuedDirs, {}).values());
 }
 
-Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, ForeignReader> &foreign, const ParseOptions &options)
+Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, ForeignSource> &foreign, const ParseOptions &options)
 {
     Parsed parsed;
     Note note;
     const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
     if (reader != foreign.cend()) {
         QFile file(path);
-        // A foreign file is read whole for its reader: not a multi-GB one (64 MiB, inkcore's cap for a .ink file).
-        constexpr qint64 kMaxForeignBytes = qint64(64) << 20;
-        if (!file.open(QIODevice::ReadOnly) || file.size() > kMaxForeignBytes)
+        // A foreign file is read whole for its reader, unless the reader asked for a cap: not a multi-GB file.
+        if (!file.open(QIODevice::ReadOnly) || (reader->maxBytes > 0 && file.size() > reader->maxBytes))
             return parsed;
-        const std::optional<QString> text = reader.value()(file.readAll());
+        const std::optional<QString> text = reader->read(file.readAll());
         if (!text)
             return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged .ink): not indexed
         note.text = *text;

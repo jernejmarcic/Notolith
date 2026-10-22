@@ -71,9 +71,9 @@ QString targetName(const QString &target)
 /// with and without ".md", since a link may also spell those.
 QStringList noteNames(const QString &relative, const Metadata &metadata)
 {
-    // A notebook is not Markdown: Obsidian names such a file by its extension,
+    // A notebook (or an ink note) is not Markdown: Obsidian names such a file by its extension,
     // so `[[Analysis]]` still means Analysis.md and `[[Analysis.ipynb]]` the notebook.
-    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive))
+    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) || relative.endsWith(QLatin1String(".ink"), Qt::CaseInsensitive))
         return {QFileInfo(relative).fileName(), relative};
     QStringList names = metadata.linkNames();
     names << relative;

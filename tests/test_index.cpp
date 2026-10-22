@@ -385,6 +385,59 @@ TEST_F(IndexTest, AForeignReaderMakesASuffixANoteAndNotebooksStillWork)
     EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Sketch.ink")));
 }
 
+// An ink note is named by its full file name, as a notebook is: a handwritten Lecture.ink beside Lecture.md
+// must not take [[Lecture]] away from the Markdown note.
+TEST_F(IndexTest, AnInkNoteIsNamedByItsFileNameAndNeverShadowsAMarkdownNote)
+{
+    write(QStringLiteral("Lecture.md"), "# Lecture\n");
+    write(QStringLiteral("Lecture.ink"), "stands in for an ink file");
+    write(QStringLiteral("Link.md"), "See [[Lecture]] and [[Lecture.ink]].\n");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setForeignReader({QStringLiteral("ink")}, [](const QByteArray &) -> std::optional<QString> { return QStringLiteral("text\n"); });
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_EQ(index.resolve(QStringLiteral("Lecture")), QStringLiteral("Lecture.md"));
+    EXPECT_EQ(index.resolve(QStringLiteral("Lecture"), QStringLiteral("Link.md")), QStringLiteral("Lecture.md"));
+    EXPECT_EQ(index.resolve(QStringLiteral("Lecture.ink")), QStringLiteral("Lecture.ink"));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Lecture.ink")));
+}
+
+// A reader's maxBytes keeps a huge file from being read whole; 0 (the notebook default) is no limit.
+TEST_F(IndexTest, AForeignReaderMaxBytesSkipsBigFilesAndZeroIsUnlimited)
+{
+    for (const char *name : {"Big.ink", "Small.ink", "Big.ipynb"}) {
+        QFile file(vault.absolute(QString::fromLatin1(name)));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(QByteArray(name) == "Small.ink" ? 1000 : (2 << 20))); // sparse
+    }
+    Index index;
+    Indexer indexer(&index);
+    const Indexer::ForeignReader reader = [](const QByteArray &) -> std::optional<QString> { return QStringLiteral("text\n"); };
+    indexer.setForeignReader({QStringLiteral("ink")}, reader, 1 << 20);
+    indexer.setNotebookReader(reader);
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Big.ink"))) << "over its reader's cap: never read";
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Small.ink")));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Big.ipynb"))) << "a notebook has no cap";
+}
+
+// Suffixes are matched case-insensitively: a SKETCH.INK is read by the "ink" reader.
+TEST_F(IndexTest, AForeignReaderMatchesTheSuffixInAnyCase)
+{
+    write(QStringLiteral("SKETCH.INK"), "stands in for an ink file");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setForeignReader({QStringLiteral("INK")}, [](const QByteArray &) -> std::optional<QString> { return QStringLiteral("loud\n"); });
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_TRUE(index.allPaths().contains(QStringLiteral("SKETCH.INK")));
+}
+
 // A notebook is a note only while the indexer has a reader for it (the window
 // gives it one with the notebooks feature on): indexed by the reader's text,
 // named by its file name with the extension, and a plain file again without.
