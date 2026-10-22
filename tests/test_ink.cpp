@@ -5119,6 +5119,27 @@ TEST(InkCanvasTest, BeginEditingTextRefusesAnItemThatIsNotATextBox)
     EXPECT_FALSE(f.canvas.isEditingText());
 }
 
+// Fix round 2 (R1): a pen press inside the open editor is the editor's, not a new Text-tool press.
+TEST(InkCanvasTest, APenPressInsideTheOpenEditorLeavesItOpenAndTheBoxInPlace)
+{
+    CanvasFixture f;
+    const qint64 t = addTextBox(f.canvas, QRectF(50, 50, 200, 60), QStringLiteral("old"));
+    f.canvas.setTool(InkCanvas::Tool::Text);
+    click(f.canvas, QPoint(100, 70));
+    QPlainTextEdit *editor = textEditorOf(f.canvas);
+    ASSERT_NE(editor, nullptr);
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(120, 80), 0.5, 1000);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(120, 80), 0.5, 1010, Qt::NoButton);
+    EXPECT_EQ(textEditorOf(f.canvas), editor) << "the same editor, with what was typed in it";
+    EXPECT_EQ(f.canvas.editingTextItem(), t);
+    EXPECT_EQ(editor->toPlainText(), QStringLiteral("old!"));
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old")) << "nothing was committed";
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(300, 200), 0.5, 2000); // outside it: ends the edit as ever
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(300, 200), 0.5, 2010, Qt::NoButton);
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old!"));
+}
+
 // Fix round 1 (I4b): real key events, through the event path, while an editor is open.
 TEST(InkCanvasTest, KeysSentWhileAnEditorIsOpenReachNeitherTheToolsNorTheDocument)
 {

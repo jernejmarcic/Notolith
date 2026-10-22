@@ -665,6 +665,95 @@ TEST(InkViewTextTest, TheEditorOverABoxIsTheNoteEditorAndWhatIsTypedIsCommitted)
     EXPECT_EQ(canvas->document().items()[0].textBox->markdown, QStringLiteral("# Hello slate"));
 }
 
+namespace {
+/// The editor in use: one that was closed lingers hidden until the event loop deletes it.
+noteAppC::MarkdownEditor *liveEditor(InkCanvas *canvas)
+{
+    for (auto *edit : canvas->findChildren<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor")))
+        if (!edit->isHidden())
+            return edit;
+    return nullptr;
+}
+} // namespace
+
+// Fix round 2 (R1): the pen's tap inside the open editor belongs to the editor. Qt hands a tablet event the canvas
+// ignored to the widget under the pen as mouse events; before the fix the canvas took it, committed the box and opened a
+// new editor with the caret at the end.
+TEST(InkViewTextTest, APenTapInsideTheOpenEditorKeepsTheEditorAndPlacesTheCaret)
+{
+    const QRectF box(20, 20, 400, 100);
+    const QString text = QStringLiteral("hello world, hello pen");
+    TextSheet sheet({{box, text}});
+    InkCanvas *canvas = sheet.view.canvas();
+    canvas->setTool(InkCanvas::Tool::Text);
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    auto *edit = liveEditor(canvas);
+    ASSERT_NE(edit, nullptr);
+    const qint64 item = canvas->editingTextItem();
+    ASSERT_GT(item, 0);
+    ASSERT_EQ(edit->cursorOffset(), text.size()) << "a click opens it with the caret at the end";
+    const QRectF rect = canvas->document().item(item)->textBox->rect;
+    const QPoint inside(4, 10); // viewport coordinates: the first letters
+    const auto pen = [&](QEvent::Type type, qint64 ms) {
+        QWidget *target = edit->viewport();
+        static const QPointingDevice *device = QPointingDevice::primaryPointingDevice(); // any device: the canvas keys on the position
+        QTabletEvent event(type, device, QPointF(inside), QPointF(target->mapToGlobal(inside)), 0.5, 0, 0, 0, 0, 0, Qt::NoModifier,
+                           type == QEvent::TabletMove ? Qt::NoButton : Qt::LeftButton, type == QEvent::TabletRelease ? Qt::NoButton : Qt::LeftButton);
+        event.setTimestamp(quint64(ms));
+        QApplication::sendEvent(target, &event);
+        return event.isAccepted();
+    };
+    EXPECT_FALSE(pen(QEvent::TabletPress, 1000)) << "ignored, so that Qt sends the mouse events";
+    EXPECT_FALSE(pen(QEvent::TabletRelease, 1010));
+    // What Qt does with an ignored tablet event: the mouse press and release at the same place.
+    QTest::mouseClick(edit->viewport(), Qt::LeftButton, Qt::NoModifier, inside);
+    EXPECT_TRUE(canvas->isEditingText());
+    EXPECT_EQ(canvas->editingTextItem(), item);
+    EXPECT_EQ(liveEditor(canvas), edit) << "the same editor object, not a reopened one";
+    EXPECT_EQ(canvas->document().item(item)->textBox->rect, rect) << "the box did not move";
+    EXPECT_LT(edit->cursorOffset(), 6) << "the caret is where the pen tapped, not at the end";
+}
+
+TEST(InkViewTextTest, APenTapInAnEmptyNewBoxDoesNotMoveTheBox)
+{
+    TextSheet sheet({});
+    InkCanvas *canvas = sheet.view.canvas();
+    canvas->setTool(InkCanvas::Tool::Text);
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    auto *edit = liveEditor(canvas);
+    ASSERT_NE(edit, nullptr);
+    ASSERT_EQ(canvas->editingTextItem(), -1);
+    const QRect where = edit->geometry();
+    const QPoint inside(10, 10);
+    for (const auto type : {QEvent::TabletPress, QEvent::TabletRelease}) {
+        QTabletEvent event(type, QPointingDevice::primaryPointingDevice(), QPointF(inside), QPointF(edit->viewport()->mapToGlobal(inside)), 0.5, 0, 0, 0, 0, 0,
+                           Qt::NoModifier, Qt::LeftButton, type == QEvent::TabletRelease ? Qt::NoButton : Qt::LeftButton);
+        QApplication::sendEvent(edit->viewport(), &event);
+    }
+    EXPECT_EQ(liveEditor(canvas), edit);
+    EXPECT_EQ(edit->geometry(), where) << "the box stayed where it was started";
+}
+
+// The mouse (with drawWithMouse on) and touch must not close the editor either.
+TEST(InkViewTextTest, AMouseClickOrATouchInsideTheOpenEditorKeepsIt)
+{
+    TextSheet sheet({{QRectF(20, 20, 400, 100), QStringLiteral("hello world, hello pen")}});
+    InkCanvas *canvas = sheet.view.canvas();
+    canvas->setDrawWithMouse(true);
+    canvas->setTool(InkCanvas::Tool::Text);
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    auto *edit = liveEditor(canvas);
+    ASSERT_NE(edit, nullptr);
+    QTest::mouseClick(edit->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(4, 10));
+    EXPECT_EQ(liveEditor(canvas), edit) << "mouse";
+    EXPECT_LT(edit->cursorOffset(), 6);
+    static QPointingDevice *touch = QTest::createTouchDevice();
+    QTest::touchEvent(edit->viewport(), touch).press(0, QPoint(30, 10), edit->viewport()).commit();
+    QTest::touchEvent(edit->viewport(), touch).release(0, QPoint(30, 10), edit->viewport()).commit();
+    EXPECT_TRUE(canvas->isEditingText());
+    EXPECT_EQ(liveEditor(canvas), edit) << "touch";
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

@@ -416,6 +416,12 @@ void InkCanvas::setLearnedPressure(const QString &device, double max)
 
 void InkCanvas::tabletEvent(QTabletEvent *event)
 {
+    // The pen is in the open editor (the event came up from it): Qt sends the editor mouse events instead. Not while a press
+    // of this pen is being followed (a tap that opened the editor still has its release to come: it clears the flag).
+    if (!m_tabletActive && m_textEdit && m_textEdit->geometry().contains(event->position().toPoint())) {
+        event->ignore();
+        return;
+    }
     event->accept(); // no synthesised mouse events for this pen
     if (m_readOnly)
         return;
@@ -460,8 +466,8 @@ void InkCanvas::tabletEvent(QTabletEvent *event)
 
 void InkCanvas::mousePressEvent(QMouseEvent *event)
 {
-    if (m_readOnly || m_tabletActive || event->button() != Qt::LeftButton)
-        return QWidget::mousePressEvent(event);
+    if (m_readOnly || m_tabletActive || event->button() != Qt::LeftButton || (m_textEdit && m_textEdit->geometry().contains(event->position().toPoint())))
+        return QWidget::mousePressEvent(event); // (a press the open editor did not take is still not an edit-ender)
     // Ctrl+drag selects in any tool, drawWithMouse or not: the mouse user needs no tool switch (R14). The select tool
     // takes the mouse when it draws at all.
     const bool select = event->modifiers().testFlag(Qt::ControlModifier) || (m_drawWithMouse && m_tool == Tool::Lasso);
