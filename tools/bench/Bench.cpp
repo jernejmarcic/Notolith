@@ -1753,6 +1753,7 @@ std::pair<Timing, Timing> benchInkZoomSettle(int runs)
     ink::InkCanvas &canvas = *f.canvas;
     canvas.setTileCacheMB(ink::InkCanvas::kMinTileCacheMB);
     settleInkTiles(canvas, f.view());
+    const int unsettledBefore = g_unsettledInk;
     std::vector<double> rerender, total;
     for (int i = 0; i < runs; ++i) {
         canvas.setZoom(1.0);
@@ -1772,8 +1773,13 @@ std::pair<Timing, Timing> benchInkZoomSettle(int runs)
         total.push_back(ms);
         rerender.push_back(ms - settledMs);
     }
-    return {reduce(QStringLiteral("Ink zoom settle, re-render part"), QStringLiteral("1 -> 2, 10 000 strokes"), rerender),
-            reduce(QStringLiteral("Ink zoom settle, setZoom to sharp frame"), QStringLiteral("includes kZoomSettleMs"), total)};
+    Timing part = reduce(QStringLiteral("Ink zoom settle, re-render part"), QStringLiteral("1 -> 2, 10 000 strokes"), rerender);
+    Timing whole = reduce(QStringLiteral("Ink zoom settle, setZoom to sharp frame"), QStringLiteral("includes kZoomSettleMs"), total);
+    if (g_unsettledInk != unsettledBefore) {
+        part = invalidRow(part, QStringLiteral("the tiles did not settle"));
+        whole = invalidRow(whole, QStringLiteral("the tiles did not settle"));
+    }
+    return {part, whole};
 }
 
 QString inkEmptyModuleDir(const QString &under)
@@ -2423,15 +2429,21 @@ int main(int argc, char *argv[])
     QApplication::setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
     QCoreApplication::setOrganizationName(QStringLiteral("noteAppC-bench"));
     QCoreApplication::setApplicationName(QStringLiteral("noteAppC-bench"));
-    // The run must never resolve a path under the real home: the three homes above are temporary, and
-    // this stops the run if one of them is not (a failed QTemporaryDir, a Qt that ignores the variable).
+    // The run must write only inside the temporary homes made above: each location has to resolve inside the
+    // directory this run created for it (not merely "not under HOME", which misfires for HOME=/tmp or a TMPDIR under
+    // HOME and checks nothing when HOME is / or unset). Stops the run if a QTemporaryDir failed or Qt ignored a variable.
     if (!qEnvironmentVariableIsSet("NOTEAPPC_SHOT_KEEP_CONFIG")) {
-        const QString realHome = QDir::homePath();
-        for (const auto location : {QStandardPaths::AppConfigLocation, QStandardPaths::AppDataLocation,
-                                    QStandardPaths::CacheLocation}) {
-            const QString path = QStandardPaths::writableLocation(location);
-            if (path.startsWith(realHome + QLatin1Char('/'))) {
-                qCritical().noquote() << "bench would write under the real home:" << path;
+        const struct {
+            QStandardPaths::StandardLocation location;
+            const QTemporaryDir &home;
+        } checks[] = {{QStandardPaths::AppConfigLocation, configHome},
+                      {QStandardPaths::AppDataLocation, dataHome},
+                      {QStandardPaths::CacheLocation, cacheHome}};
+        for (const auto &check : checks) {
+            const QString path = QDir::cleanPath(QStandardPaths::writableLocation(check.location));
+            const QString home = QDir::cleanPath(check.home.path());
+            if (!check.home.isValid() || home.isEmpty() || !(path == home || path.startsWith(home + QLatin1Char('/')))) {
+                qCritical().noquote() << "bench would write outside its temporary home:" << path << "is not inside" << home;
                 return 2;
             }
         }
