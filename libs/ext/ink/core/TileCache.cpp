@@ -7,7 +7,8 @@ namespace noteAppC::ink {
 
 struct TileCache::Pending {
     QFutureWatcher<QImage> *watcher = nullptr;
-    bool discard = false; ///< invalidated or rescaled while it rendered: the result shows old content
+    bool discard = false; ///< the zoom or the cell size changed while it rendered: the result is of something else, dropped
+    bool stale = false;   ///< the content changed while it rendered: the result still holds everything before that, kept stale (I4)
     double scale = 1.0;   ///< the zoom it renders for
 };
 
@@ -17,7 +18,10 @@ TileCache::~TileCache()
 {
     for (Pending *p : std::as_const(m_pending)) {
         p->watcher->disconnect(this);
-        p->watcher->waitForFinished(); // the job may use things its owner is about to destroy
+        p->watcher->cancel(); // a job still queued is skipped: the pool is shared and first-in first-out, so waiting for the queue would freeze the UI (I3)
+    }
+    for (Pending *p : std::as_const(m_pending)) { // all cancelled first: the one that runs must not hand its thread to a queued sibling
+        p->watcher->waitForFinished(); // one that runs may use things its owner is about to destroy
         delete p->watcher;
         delete p;
     }
@@ -47,6 +51,10 @@ void TileCache::setScale(double zoom, double devicePixelRatio)
     m_zoom = zoom;
     m_dpr = devicePixelRatio;
     invalidateAll();
+    for (Pending *p : std::as_const(m_pending)) {
+        p->discard = true;
+        p->watcher->cancel(); // not started yet: never will
+    }
 }
 
 void TileCache::invalidate(const QRectF &tileSpaceRect)
@@ -56,7 +64,7 @@ void TileCache::invalidate(const QRectF &tileSpaceRect)
             e.fresh = false;
     for (auto it = m_pending.begin(); it != m_pending.end(); ++it)
         if (cell(it.key()).intersects(tileSpaceRect))
-            it.value()->discard = true;
+            it.value()->stale = true;
 }
 
 void TileCache::invalidateAll()
@@ -64,7 +72,7 @@ void TileCache::invalidateAll()
     for (Entry &e : m_lru)
         e.fresh = false;
     for (Pending *p : std::as_const(m_pending))
-        p->discard = true;
+        p->stale = true;
 }
 
 TileCache::Lookup TileCache::find(int tx, int ty)
@@ -110,7 +118,7 @@ void TileCache::finish(const Key &key)
     Pending *p = m_pending.take(key);
     if (!p)
         return;
-    if (!p->discard) {
+    if (!p->discard && !p->watcher->isCanceled()) { // the result of a cancelled job is not there to read
         QImage image = p->watcher->result();
         const auto found = m_index.find(key);
         if (found != m_index.end()) {
@@ -123,7 +131,7 @@ void TileCache::finish(const Key &key)
         Entry &e = m_lru.front();
         e.image = std::move(image);
         e.scale = p->scale;
-        e.fresh = true;
+        e.fresh = !p->stale;
         m_bytes += e.image.sizeInBytes();
     }
     p->watcher->deleteLater();

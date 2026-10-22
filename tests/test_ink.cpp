@@ -26,9 +26,11 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QThreadPool>
 #include <QtTest/QTest>
 
 #include <atomic>
+#include <thread>
 
 #include <zlib.h>
 
@@ -3117,10 +3119,33 @@ TEST(TileCacheTest, AnInvalidateEndingOnATileEdgeLeavesTheNextTileFresh)
     EXPECT_TRUE(cache.find(1, 0).fresh);
 }
 
-TEST(TileCacheTest, AResultFinishedAfterAnInvalidateIsDiscarded)
+TEST(TileCacheTest, AResultFinishedAfterAnInvalidateIsKeptButStale)
 {
-    for (const bool byScale : {false, true}) {
-        SCOPED_TRACE(byScale ? "setScale" : "invalidate");
+    // I4: the render started before the content changed again, but it holds everything before that. It is shown
+    // (blurry stand-in) and asked for again; throwing it away would starve a tile a continuous eraser sweep keeps hitting.
+    QSemaphore gate;
+    TileCache cache;
+    QSignalSpy ready(&cache, &TileCache::tileReady);
+    cache.request(0, 0, [&] {
+        gate.acquire();
+        return tileImage();
+    });
+    cache.invalidate(QRectF(0, 0, 10, 10));
+    gate.release();
+    WAIT_TRUE(ready.count() == 1, 5000);
+    EXPECT_FALSE(cache.isPending(0, 0));
+    const TileCache::Lookup hit = cache.find(0, 0);
+    EXPECT_NE(hit.image, nullptr) << "stored";
+    EXPECT_FALSE(hit.fresh) << "but stale: the canvas requests it again";
+    EXPECT_EQ(cache.staleCount(), 1);
+    EXPECT_TRUE(cache.request(0, 0, [] { return tileImage(); }));
+    WAIT_TRUE(cache.find(0, 0).fresh, 5000);
+}
+
+TEST(TileCacheTest, AResultFinishedAfterAScaleChangeIsDiscarded)
+{
+    for (const double dpr : {1.0, 2.0}) { // the zoom or the cell size changed: the render is of something else
+        SCOPED_TRACE(dpr);
         QSemaphore gate;
         TileCache cache;
         QSignalSpy ready(&cache, &TileCache::tileReady);
@@ -3128,22 +3153,19 @@ TEST(TileCacheTest, AResultFinishedAfterAnInvalidateIsDiscarded)
             gate.acquire();
             return tileImage();
         });
-        if (byScale)
-            cache.setScale(2.0, 1.0);
-        else
-            cache.invalidate(QRectF(0, 0, 10, 10));
+        cache.setScale(2.0, dpr);
         gate.release();
         WAIT_TRUE(ready.count() == 1, 5000);
         EXPECT_FALSE(cache.isPending(0, 0));
-        EXPECT_EQ(cache.find(0, 0).image, nullptr) << "the render showed the old content: never stored";
-        EXPECT_FALSE(cache.find(0, 0).fresh) << "so the canvas requests it again with the new content";
+        EXPECT_EQ(cache.find(0, 0).image, nullptr) << "never stored";
         EXPECT_EQ(cache.bytes(), 0);
         EXPECT_TRUE(cache.request(0, 0, [] { return tileImage(); }));
         WAIT_TRUE(cache.find(0, 0).fresh, 5000);
+        EXPECT_EQ(cache.find(0, 0).scale, 2.0);
     }
 }
 
-TEST(TileCacheTest, ARenderAcrossAnInvalidateLeavesTheOldImageStaleNotReplaced)
+TEST(TileCacheTest, ARenderAcrossAnInvalidateReplacesTheOldImageAndStaysStale)
 {
     TileCache cache;
     renderTile(cache, 0);
@@ -3159,10 +3181,10 @@ TEST(TileCacheTest, ARenderAcrossAnInvalidateLeavesTheOldImageStaleNotReplaced)
     cache.invalidate(QRectF(0, 0, 1, 1)); // the content changed again while it rendered
     gate.release();
     WAIT_TRUE(ready.count() == 1, 5000);
-    const TileCache::Lookup stale = cache.find(0, 0);
-    EXPECT_FALSE(stale.fresh);
-    ASSERT_NE(stale.image, nullptr);
-    EXPECT_EQ(stale.image->pixel(5, 5), qRgb(255, 255, 255)) << "the discarded render did not replace it";
+    const TileCache::Lookup hit = cache.find(0, 0);
+    EXPECT_FALSE(hit.fresh);
+    ASSERT_NE(hit.image, nullptr);
+    EXPECT_EQ(hit.image->pixel(5, 5), qRgb(0, 0, 0)) << "the newer render is what is shown meanwhile";
 }
 
 TEST(TileCacheTest, SetScaleKeepsTheImagesStaleAndSaysWhatZoomTheyHave)
@@ -3240,18 +3262,53 @@ TEST(TileCacheTest, ATileWithARenderInFlightIsNeverEvicted)
     WAIT_TRUE(ready.count() == 1, 5000);
 }
 
-TEST(TileCacheTest, TheDestructorWaitsForJobsInFlight)
+TEST(TileCacheTest, TheDestructorWaitsForAJobThatHasStarted)
 {
-    std::atomic<bool> finished{false};
+    std::atomic<bool> started{false}, finished{false};
     {
         TileCache cache;
         cache.request(0, 0, [&] {
+            started = true;
             QThread::msleep(50);
             finished = true;
             return tileImage();
         });
+        ASSERT_TRUE(QTest::qWaitFor([&] { return started.load(); }, 5000));
     }
     EXPECT_TRUE(finished.load()) << "a job in flight outlives nothing it uses";
+}
+
+TEST(TileCacheTest, TheDestructorDoesNotWaitBehindJobsThatNeverStarted)
+{
+    // I3: the pool is shared and first-in first-out; closing a tab after a fast scroll must not wait for its whole queue.
+    QThreadPool *pool = QThreadPool::globalInstance();
+    const int threads = pool->maxThreadCount();
+    pool->setMaxThreadCount(1);
+    QSemaphore gate;
+    std::atomic<bool> running{false}, queuedRan{false};
+    std::thread opener([&] { // lets the first job go once the cache is being destroyed
+        while (!running.load())
+            QThread::msleep(1);
+        QThread::msleep(100);
+        gate.release();
+    });
+    {
+        TileCache cache;
+        cache.request(0, 0, [&] {
+            running = true;
+            gate.acquire();
+            return tileImage();
+        });
+        for (int tx = 1; tx <= 5; ++tx)
+            cache.request(tx, 0, [&] {
+                queuedRan = true;
+                return tileImage();
+            });
+        ASSERT_TRUE(QTest::qWaitFor([&] { return running.load(); }, 5000));
+    }
+    opener.join();
+    pool->setMaxThreadCount(threads);
+    EXPECT_FALSE(queuedRan.load()) << "cancelled before they started: the destructor only waits for the one that runs";
 }
 
 TEST(InkCanvasTest, TheTileCacheFollowsTheSettingInMB)
@@ -3383,6 +3440,98 @@ TEST(InkCanvasTest, ErasingInvalidatesTheErasedStrokesTiles)
     EXPECT_GT(frame.pixelColor(150, 100).lightness(), 200) << "the erased ink is gone from the tile";
 }
 
+TEST(InkCanvasTest, ABudgetSmallerThanTheWorkingSetSettlesInsteadOfThrashing)
+{
+    // I1: 16 visible tiles against an 8 MB budget used to evict wanted tiles, request them again, for ever.
+    std::atomic<int> jobs{0};
+    InkCanvas canvas;
+    DocumentSettings settings;
+    settings.format = {2000, 2000, 96};
+    settings.extent = QRectF(0, 0, 2000, 2000);
+    settings.layout = LayoutKind::Fixed;
+    ASSERT_TRUE(canvas.document().setSettings(settings));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.setTileCacheMB(8);
+    canvas.setTileJobHook([&jobs] { ++jobs; });
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    settledGrab(canvas);
+    const int atSettle = jobs.load();
+    EXPECT_GE(atSettle, 16);
+    for (int i = 0; i < 10; ++i) {
+        canvas.grab();
+        QTest::qWait(20);
+    }
+    EXPECT_EQ(jobs.load(), atSettle) << "no tile is rendered twice once they are all in";
+    EXPECT_EQ(canvas.pendingTiles(), 0);
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(8) * 1024 * 1024) << "the setting is reported as set; the room for the visible tiles is on top";
+}
+
+TEST(InkCanvasTest, AFinishedStrokeIsReleasedFromTheLiveImageWhenItsTilesArriveAndAtTheNextPenDown)
+{
+    QSemaphore gate;
+    CanvasFixture f;
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = Qt::black;
+    f.canvas.setPenStyle(style);
+    f.canvas.setRawInput(true);
+    settledGrab(f.canvas);
+    f.canvas.setTileJobHook([&gate] { gate.acquire(); });
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(200, 100), 1000);
+    EXPECT_TRUE(f.canvas.liveHeld()) << "the live image bridges pen-up and the new tile";
+    gate.release(100);
+    WAIT_TRUE(!f.canvas.liveHeld(), 5000);
+    EXPECT_EQ(f.canvas.pendingTiles(), 0);
+    // A new stroke ends the hold of the one before it, whatever its tiles are doing.
+    f.canvas.setTileJobHook([&gate] { gate.acquire(); });
+    penStroke(&f.canvas, QPointF(100, 200), QPointF(200, 200), 2000);
+    ASSERT_TRUE(f.canvas.liveHeld());
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(50, 50), 0.5, 3000);
+    EXPECT_FALSE(f.canvas.liveHeld());
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(50, 50), 0.5, 3010, Qt::NoButton);
+    gate.release(100);
+    settledGrab(f.canvas);
+}
+
+TEST(InkCanvasTest, ATileDiscardedByAZoomSettleIsRequestedAgainAtTheNewZoom)
+{
+    QSemaphore gate;
+    CanvasFixture f;
+    f.canvas.setTileJobHook([&gate] { gate.acquire(); });
+    f.canvas.documentReplaced(); // everything stale: the paint requests tiles, all blocked
+    f.canvas.grab();
+    ASSERT_GT(f.canvas.pendingTiles(), 0);
+    f.canvas.setZoom(2.0);
+    WAIT_TRUE(f.canvas.tilesScale() == 2.0, 5000); // the settle rescales while they are in flight: their results are of the old zoom
+    gate.release(1000);
+    settledGrab(f.canvas);
+    EXPECT_EQ(f.canvas.staleTileCount(), 0);
+    EXPECT_EQ(f.canvas.tilesScale(), 2.0);
+}
+
+TEST(InkCanvasTest, AnEditDuringAPinchInvalidatesTheTilesUnderIt)
+{
+    InkCanvas canvas;
+    DocumentSettings settings;
+    settings.format = {2000, 2000, 96};
+    settings.extent = QRectF(0, 0, 2000, 2000);
+    settings.layout = LayoutKind::Fixed;
+    ASSERT_TRUE(canvas.document().setSettings(settings));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    settledGrab(canvas);
+    ASSERT_EQ(canvas.staleTileCount(), 0);
+    canvas.setZoom(2.0); // the pinch is pending: widget px are twice the tile space
+    ASSERT_EQ(canvas.tilesScale(), 1.0);
+    canvas.setRawInput(true);
+    penStroke(&canvas, QPointF(200, 200), QPointF(300, 240), 1000); // document (100,100)-(150,120): the top-left tile
+    EXPECT_EQ(canvas.staleTileCount(), 1) << "mapped back to the tiles' zoom, not 16 and not the wrong tile";
+}
+
 namespace {
 void expectTilesMatchADirectRender()
 {
@@ -3411,7 +3560,7 @@ void expectTilesMatchADirectRender()
         paintPattern(painter, settings.background, settings.extent, settings.extent.topLeft(), settings.extent, 1.0);
         paintStroke(painter, *stroke);
     }
-    // Not bit for bit: a tile paints under another translation, so a coverage value may round a few levels apart (4 seen at DPR 2). A seam
+    // Not bit for bit: a tile paints under another translation, so a coverage value may round a few levels apart (4 seen at DPR 2, 0 at 1 and 1.5). A seam
     // would be a missing line or a doubled edge, 50 levels and up.
     const QImage a = tiled.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     int worst = 0;
@@ -3421,7 +3570,7 @@ void expectTilesMatchADirectRender()
             worst = std::max({worst, std::abs(qRed(p) - qRed(q)), std::abs(qGreen(p) - qGreen(q)), std::abs(qBlue(p) - qBlue(q))});
         }
     EXPECT_EQ(a.size(), direct.size());
-    EXPECT_LE(worst, 8) << "tiled against direct";
+    EXPECT_LE(worst, 5) << "tiled against direct";
 }
 } // namespace
 

@@ -230,9 +230,11 @@ InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
 
 void InkCanvas::setTileCacheMB(int mb)
 {
-    m_tiles.setMaxBytes(qsizetype(std::clamp(mb, kMinTileCacheMB, kMaxTileCacheMB)) * 1024 * 1024);
+    m_userCacheBytes = qsizetype(std::clamp(mb, kMinTileCacheMB, kMaxTileCacheMB)) * 1024 * 1024;
+    m_tiles.setMaxBytes(m_userCacheBytes);
+    update(); // the next paint raises it again if the visible tiles need more room
 }
-qsizetype InkCanvas::tileCacheBytes() const { return m_tiles.maxBytes(); }
+qsizetype InkCanvas::tileCacheBytes() const { return m_userCacheBytes; }
 double InkCanvas::tilesScale() const { return m_tilesZoom; }
 int InkCanvas::pendingTiles() const { return m_tiles.pendingCount(); }
 int InkCanvas::staleTileCount() const { return m_tiles.staleCount(); }
@@ -822,14 +824,29 @@ void InkCanvas::drawTiles(QPainter &painter, const QRect &area)
     painter.restore();
     if (scaled)
         return; // the pinch may not be over: nothing is rendered for a zoom that may still change
-    // The visible part of the canvas and one tile around it: a pan finds its tiles already rendered.
+    // The visible tiles first, then one ring around them so a pan finds its tiles rendered (M1).
     const QRect visible = visibleRegion().boundingRect();
-    const QRectF want = QRectF(area | visible).adjusted(-side, -side, side, side);
-    const QRect wanted = cellsTouching(want, side, size());
-    for (int ty = wanted.top(); ty <= wanted.bottom(); ++ty)
-        for (int tx = wanted.left(); tx <= wanted.right(); ++tx)
-            if (!m_tiles.isFresh(tx, ty) && !m_tiles.isPending(tx, ty))
-                m_tiles.request(tx, ty, tileJob(tx, ty));
+    const QRectF seen = QRectF(area | visible);
+    const QRect visibleCells = cellsTouching(seen, side, size());
+    const QRect ringCells = cellsTouching(seen.adjusted(-side, -side, side, side), side, size());
+    const auto count = [](const QRect &r) { return qint64(std::max(0, r.width())) * std::max(0, r.height()); };
+    constexpr qsizetype tileBytes = qsizetype(TileCache::kTileSize) * TileCache::kTileSize * 4;
+    // A budget under what is on screen would evict wanted tiles and render them again for ever (I1): the visible
+    // tiles always have room (plus one), the ring only when the user's budget holds it too.
+    m_tiles.setMaxBytes(std::max(m_userCacheBytes, qsizetype(count(visibleCells) + 1) * tileBytes));
+    const bool ringFits = count(ringCells) * tileBytes <= m_userCacheBytes;
+    const auto wanted = [&](const QRect &cells, bool paintedRecently) {
+        for (int ty = cells.top(); ty <= cells.bottom(); ++ty)
+            for (int tx = cells.left(); tx <= cells.right(); ++tx) {
+                if (paintedRecently)
+                    m_tiles.find(tx, ty); // visible tiles are the last to go
+                if (!m_tiles.isFresh(tx, ty) && !m_tiles.isPending(tx, ty))
+                    m_tiles.request(tx, ty, tileJob(tx, ty));
+            }
+    };
+    wanted(visibleCells, true);
+    if (ringFits)
+        wanted(ringCells, false); // the visible ones are fresh or pending by now: nothing is asked twice
 }
 
 void InkCanvas::paintEvent(QPaintEvent *event)

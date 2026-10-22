@@ -61,6 +61,11 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     m_loadingAction = m_toolBar->addWidget(loadingLabel);
     m_loadingAction->setObjectName(QStringLiteral("inkLoadingAction"));
     m_loadingAction->setVisible(false);
+    m_errorLabel = new QLabel;
+    m_errorLabel->setObjectName(QStringLiteral("inkErrorLabel"));
+    m_errorAction = m_toolBar->addWidget(m_errorLabel);
+    m_errorAction->setObjectName(QStringLiteral("inkErrorAction"));
+    m_errorAction->setVisible(false);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -146,8 +151,18 @@ bool InkView::load(const QString &path, QString *error)
             m_loadWatcher = nullptr;
             m_loadingAction->setVisible(false);
             if (!parsed.result.ok) {
-                m_canvas->setReadOnly(m_readOnly); // what it was before this load
+                m_stamp = stamp; // the unreadable file is looked at once, not at every autosave (as in resolveExternalChange)
                 emit statusMessage(parsed.result.error, 8000);
+                if (m_path.isEmpty()) { // nothing was ever shown: a blank tab that takes a pen and cannot save is a trap
+                    m_loadFailed = true;
+                    m_canvas->setReadOnly(true);
+                    m_penAction->setEnabled(false);
+                    m_eraserAction->setEnabled(false);
+                    m_errorLabel->setText(parsed.result.error);
+                    m_errorAction->setVisible(true);
+                } else {
+                    m_canvas->setReadOnly(m_readOnly); // the document it had before this load
+                }
                 return;
             }
             m_canvas->document() = std::move(parsed.document);
@@ -162,6 +177,7 @@ bool InkView::load(const QString &path, QString *error)
     }
     InkReadResult result;
     if (!loadInkFile(path, m_canvas->document(), &result)) {
+        m_canvas->setReadOnly(m_readOnly || m_loadFailed); // an interrupted big load had made it read-only for its parse
         if (error) *error = result.error;
         return false;
     }
@@ -174,6 +190,8 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
 {
     m_path = path;
     m_stamp = stamp;
+    m_loadFailed = false;
+    m_errorAction->setVisible(false);
     m_readOnly = result.readOnly;
     m_canvas->setReadOnly(m_readOnly); // not setEnabled(false): a disabled widget would swallow wheel and touch pan too
     m_penAction->setEnabled(!m_readOnly);

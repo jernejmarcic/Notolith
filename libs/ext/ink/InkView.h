@@ -71,6 +71,9 @@ private:
     QAction *m_redoAction;
     QAction *m_readOnlyAction;
     QAction *m_loadingAction;
+    QAction *m_errorAction;   ///< the persistent "could not be read" notice of a tab whose first load failed
+    QLabel *m_errorLabel;
+    bool m_loadFailed = false; ///< no document was ever adopted: the tab stays read-only
     QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
     DiskStamp m_stamp; ///< the file as this view last read or wrote it

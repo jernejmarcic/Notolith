@@ -68,6 +68,7 @@ public:
     int pendingTiles() const;
     int staleTileCount() const;
     void setTileJobHook(std::function<void()> hook);
+    bool liveHeld() const { return m_holdLive; } ///< the live image still stands in for the committed stroke until its tiles arrive
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,
     /// mouse drawing and the edit keys but keeps touch pan, wheel and zoom:
     /// disabling the widget would block those too.
@@ -154,6 +155,7 @@ private:
     std::map<QString, PressureNormaliser> m_pressure; ///< by QPointingDevice::name()
     double m_pressureSeed = 1.0;
     TileCache m_tiles;
+    qsizetype m_userCacheBytes = TileCache::kDefaultMaxBytes; ///< the setting; the cache itself may hold more while the visible tiles need it
     QTimer m_zoomTimer;          ///< single shot, kZoomSettleMs after the last zoom change
     double m_tilesZoom = 1.0;    ///< the zoom the tiles are rendered for; m_zoom runs ahead of it during a pinch
     double m_ghostScale = 0;     ///< the zoom before the last settle: images rendered at it are still painted, scaled, until replaced

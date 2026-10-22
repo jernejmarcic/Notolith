@@ -20,6 +20,7 @@
 
 #include "InkTestSupport.h"
 #include "InkView.h"
+#include "WaitFor.h"
 #include "core/InkFormat.h"
 
 using namespace noteAppC::ink;
@@ -162,6 +163,103 @@ TEST_F(InkViewFileTest, OwnSavesAreNotConflicts)
     InkDocument onDisk;
     ASSERT_TRUE(readInk(readAll(path), onDisk).ok);
     EXPECT_EQ(onDisk.items().size(), 4u);
+}
+
+namespace {
+
+QByteArray bigDocument() { return documentWith(3000); } // above kOffThreadParseBytes: parsed on the pool
+
+/// Bigger than kOffThreadParseBytes and not JSON: the pool's parse fails.
+QByteArray corruptBigFile()
+{
+    return QByteArray("{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[") + QByteArray(300 * 1024, 'x');
+}
+
+void writeFile(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(file.write(bytes), bytes.size());
+}
+
+} // namespace
+
+TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
+{
+    // I2a: load() returned true before the parse failed; the tab must not be a blank, drawable, unsavable canvas.
+    writeFile(path, corruptBigFile());
+    InkView view(nullptr);
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    ASSERT_TRUE(view.isLoading());
+    WAIT_TRUE(!view.isLoading(), 5000);
+    view.show();
+    EXPECT_TRUE(view.canvas()->isReadOnly());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
+    auto *notice = view.findChild<QAction *>(QStringLiteral("inkErrorAction"));
+    ASSERT_NE(notice, nullptr);
+    EXPECT_TRUE(notice->isVisible()) << "a persistent notice, not only an 8 s status message";
+    auto *label = view.findChild<QLabel *>(QStringLiteral("inkErrorLabel"));
+    ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->text().contains(QStringLiteral("Sketch.ink"))) << label->text().toStdString();
+    ASSERT_GE(status.count(), 1);
+    penStroke(view.canvas(), QPointF(50, 50), QPointF(120, 90), 1000);
+    EXPECT_FALSE(view.isModified()) << "the pen is ignored";
+    EXPECT_FALSE(view.save(&error));
+    EXPECT_EQ(readAll(path), corruptBigFile()) << "the unreadable file is left as it was";
+}
+
+TEST_F(InkViewFileTest, AFailedReloadIsLookedAtOnceNotAtEveryAutosave)
+{
+    // I2b: the stamp of the unreadable file is taken, or every autosave sees "changed on disk" and writes another conflict file.
+    writeFile(path, bigDocument());
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    WAIT_TRUE(!view.isLoading(), 5000);
+    ASSERT_EQ(view.canvas()->document().items().size(), 3000u);
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    ASSERT_TRUE(view.isModified());
+    replaceExternally(path, corruptBigFile());
+    EXPECT_TRUE(view.save(&error)) << error.toStdString(); // writes the conflict file, starts the reload
+    WAIT_TRUE(!view.isLoading(), 5000);
+    EXPECT_EQ(conflictFiles(dir.path()).size(), 1);
+    EXPECT_TRUE(view.save(&error));
+    EXPECT_TRUE(view.save(&error));
+    EXPECT_EQ(conflictFiles(dir.path()).size(), 1) << "not one per autosave";
+}
+
+TEST_F(InkViewFileTest, ATabClosedDuringAParseIsSafe)
+{
+    writeFile(path, bigDocument());
+    for (int i = 0; i < 3; ++i) {
+        auto *view = new InkView(nullptr);
+        QString error;
+        ASSERT_TRUE(view->load(path, &error));
+        ASSERT_TRUE(view->isLoading());
+        delete view; // the parse is still running: its result goes nowhere
+    }
+    QTest::qWait(300);
+    SUCCEED();
+}
+
+TEST_F(InkViewFileTest, ASmallFileThatFailsAfterAnInterruptedBigLoadDoesNotLeaveTheCanvasReadOnly)
+{
+    // M2: the big load made the canvas read-only for its parse; a small load that fails must give the pen back.
+    const QString big = dir.filePath(QStringLiteral("Big.ink"));
+    writeFile(big, bigDocument());
+    const QString broken = dir.filePath(QStringLiteral("Broken.ink"));
+    writeFile(broken, "{not json");
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(big, &error));
+    ASSERT_TRUE(view.isLoading());
+    EXPECT_FALSE(view.load(broken, &error));
+    EXPECT_FALSE(view.isLoading());
+    EXPECT_FALSE(view.canvas()->isReadOnly());
 }
 
 namespace {

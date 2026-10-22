@@ -440,6 +440,9 @@ if(TARGET notolith-inkcore)
     # The position and overlay maths again at device pixel ratio 2 (PADD): the offscreen platform honours QT_SCALE_FACTOR.
     add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
     set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
+    # A fractional ratio: a cell is 341.33 logical px wide, still a whole 512 device px.
+    add_test(NAME ink_dpr15 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
+    set_tests_properties(ink_dpr15 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5")
     # The tab itself (InkView, the static library the module links), without dlopen: what it does about a
     # file that changes under it and about a newer file. The host's Settings, Theme, Vault and ModuleView come from noteAppC_modules.
     if(TARGET noteAppC_ink)

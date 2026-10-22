@@ -31,9 +31,11 @@ public:
     double devicePixelRatio() const { return m_dpr; }
     /// A change of zoom makes every tile stale (the image stays, and still says what zoom it was rendered at, until
     /// replaced); a change of pixel ratio changes the size of a cell, so the old images belong to no cell and go.
-    /// Either way a render in flight is discarded.
+    /// Either way a render in flight is discarded (and cancelled if it has not started).
     void setScale(double zoom, double devicePixelRatio);
-    /// Tiles touching `tileSpaceRect` become stale (a render in flight for one is discarded).
+    /// Tiles touching `tileSpaceRect` become stale. A render in flight for one is kept: when it finishes its image is
+    /// stored, still stale (it holds everything before the change; the canvas asks again) - a continuous eraser sweep
+    /// would otherwise keep a dense tile from ever finishing.
     void invalidate(const QRectF &tileSpaceRect);
     void invalidateAll();
 
@@ -48,8 +50,8 @@ public:
     Lookup find(int tx, int ty);
     bool isFresh(int tx, int ty) const;
     /// UI thread. Starts `job` on the thread pool unless this tile already has a render in flight (false then).
-    /// The result is stored when it finishes unless the tile was invalidated or the scale changed meanwhile; tileReady
-    /// is emitted either way, so the canvas paints again and asks again for a discarded one.
+    /// The result is stored when it finishes (stale if the tile was invalidated meanwhile, dropped if the scale changed);
+    /// tileReady is emitted either way, so the canvas paints again and asks again for a stale or dropped one.
     /// `job` runs on a pool thread: it must be pure data - it paints strokes and shapes from an immutable snapshot
     /// (their payloads are shared_ptr<const>), and touches no widget, no QPixmap and not the document.
     bool request(int tx, int ty, std::function<QImage()> job);
