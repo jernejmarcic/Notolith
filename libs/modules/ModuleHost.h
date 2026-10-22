@@ -34,6 +34,11 @@ public:
     /// Settings is not a QObject and has no change signal: MainWindow's
     /// settings pass calls this on every module view after a change.
     virtual void applySettings(const Settings &settings) { Q_UNUSED(settings) }
+    /// A reload is parsing: save() refuses until it lands, so closing a tab that holds unsaved edits waits for it.
+    virtual bool isLoading() const { return false; }
+    /// The window is going away (or the view is): write what the view keeps back in the host's Settings to disk. The
+    /// view's own destructor runs after the window's Settings are gone, so the host calls this first.
+    virtual void flushSettings() {}
 
 signals:
     void modificationChanged(bool modified);

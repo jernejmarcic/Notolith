@@ -506,9 +506,11 @@ void InkCanvas::mousePressEvent(QMouseEvent *event)
 void InkCanvas::mouseMoveEvent(QMouseEvent *event)
 {
     if (m_mousePanning) {
-        const QPointF now = event->globalPosition();
-        emit panRequested((now - m_lastMouse).toPoint());
-        m_lastMouse = now;
+        const QPoint step = (event->globalPosition() - m_lastMouse).toPoint();
+        if (!step.isNull()) {
+            emit panRequested(step);
+            m_lastMouse += step; // only what was scrolled is consumed: the fraction under fractional scaling is kept for the next move
+        }
         return;
     }
     if (m_drawing == Drawing::None || m_tabletActive)

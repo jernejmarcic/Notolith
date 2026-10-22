@@ -249,6 +249,10 @@ MainWindow::~MainWindow()
     // for ```query blocks run on the pool against m_index, and the history's
     // last saves may still be on their way to disk.
     m_indexer->stop();
+    // A module view keeps something for the disk (a learned pen): its own destructor runs when the child widgets go, after
+    // m_settings, which it writes through. So they write now.
+    for (auto *view : findChildren<ModuleView *>())
+        view->flushSettings();
     m_sync.reset(); // its thread stops and joins here
 #ifdef NOTEAPPC_HAVE_SHARE
     qDeleteAll(m_sessions); // they point at the engine, which saves every share as it goes
@@ -2787,13 +2791,18 @@ bool MainWindow::handleGroupDrop(TabGroup *group, QDropEvent *event, const QPoin
 bool MainWindow::maybeSaveAll()
 {
     QSet<QString> asked; // a note in two tabs is one document, asked about once
-    for (const auto &leaf : m_leaves) {
+    std::vector<Leaf *> leaves; // a copy: the wait for a reloading view runs events, and the list must not change under the loop
+    for (const auto &candidate : m_leaves)
+        leaves.push_back(candidate.get());
+    for (Leaf *leaf : leaves) {
+        if (std::none_of(m_leaves.begin(), m_leaves.end(), [leaf](const auto &open) { return open.get() == leaf; }))
+            continue; // closed while an earlier tab was being asked about
         const bool fileLess = leaf->notePath.isEmpty() && qobject_cast<ModuleView *>(leaf->view);
-        const QString key = fileLess ? QStringLiteral("view:%1").arg(quintptr(leaf.get())) : leaf->notePath; // file-less tabs are not one document
-        if ((leaf->notePath.isEmpty() && !fileLess) || !isModified(leaf.get()) || asked.contains(key))
+        const QString key = fileLess ? QStringLiteral("view:%1").arg(quintptr(leaf)) : leaf->notePath; // file-less tabs are not one document
+        if ((leaf->notePath.isEmpty() && !fileLess) || !isModified(leaf) || asked.contains(key))
             continue;
         asked.insert(key);
-        activateLeaf(leaf.get());
+        activateLeaf(leaf);
         if (!maybeSave())
             return false;
     }
@@ -7578,19 +7587,19 @@ QStringList MainWindow::autosave()
 
 void MainWindow::waitForModuleLoad(Leaf *leaf)
 {
-    const QPointer<QWidget> view = leaf->view;
-    if (!qobject_cast<ModuleView *>(view.data()) || !view->property("loading").toBool())
-        return;
+    const QPointer<ModuleView> view = qobject_cast<ModuleView *>(leaf->view);
+    if (!view || !view->isLoading() || !view->isModified())
+        return; // nothing to keep: a tab that only has a file to parse closes at once
     QEventLoop loop;
     QTimer poll; // the view says nothing when its parse lands: ask
     QElapsedTimer waited;
     waited.start();
     connect(&poll, &QTimer::timeout, &loop, [&] {
-        if (!view || !view->property("loading").toBool() || waited.elapsed() > kModuleLoadWaitMs)
+        if (!view || !view->isLoading() || waited.elapsed() > kModuleLoadWaitMs)
             loop.quit();
     });
     poll.start(10);
-    loop.exec();
+    loop.exec(QEventLoop::ExcludeUserInputEvents); // no Ctrl+W, tab click or close button can change the tabs under the caller
 }
 
 bool MainWindow::maybeSave()

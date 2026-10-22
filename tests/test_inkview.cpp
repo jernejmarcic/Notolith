@@ -10,7 +10,11 @@
 #include <QDateTime>
 #include <QComboBox>
 #include <QDir>
+#include <QClipboard>
 #include <QDoubleSpinBox>
+#include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
@@ -27,6 +31,7 @@
 #include "InkTestSupport.h"
 #include "InkView.h"
 #include "MarkdownEditor.h"
+#include "Settings.h"
 #include "WaitFor.h"
 #include "core/InkFormat.h"
 
@@ -760,14 +765,6 @@ TEST(InkViewTextTest, AMouseClickOrATouchInsideTheOpenEditorKeepsIt)
     EXPECT_EQ(liveEditor(canvas), edit) << "touch";
 }
 
-int main(int argc, char **argv)
-{
-    qputenv("QT_QPA_PLATFORM", "offscreen");
-    QApplication app(argc, argv);
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 TEST(InkViewToolbarTest, TheSelectButtonHasALassoAndARectangleKindAndTheShapeFaceShowsTheKind)
 {
     InkView view(nullptr);
@@ -872,4 +869,186 @@ TEST_F(InkViewFileTest, EveryPageChangeIsOneUndoStepAndAnExtentFollowsTheFormat)
     ASSERT_TRUE(view.canvas()->undo());
     EXPECT_EQ(doc.pageCount(), 2) << "one step per added page";
     EXPECT_EQ(format->currentData().toString(), QStringLiteral("a4")) << "the menu follows";
+}
+
+namespace {
+
+/// The settings of a bare view: the keys the module registers in the app, at their defaults, loaded from the test's own home.
+noteAppC::Settings inkSettings()
+{
+    noteAppC::Settings::registerDefaults({{QStringLiteral("ink.drawWithMouse"), false},
+                                          {QStringLiteral("ink.rawInput"), false},
+                                          {QStringLiteral("ink.defaultLayout"), QStringLiteral("continuousVertical")},
+                                          {QStringLiteral("ink.defaultPattern"), QStringLiteral("lines")},
+                                          {QStringLiteral("ink.defaultPenWidth"), 2.0},
+                                          {QStringLiteral("ink.eraserWidth"), 20},
+                                          {QStringLiteral("ink.tileCacheMB"), 64},
+                                          {QStringLiteral("ink.pressureMax"), 1.0},
+                                          {QStringLiteral("ink.pressureByDevice"), QString()},
+                                          {QStringLiteral("ink.eraserMode"), QStringLiteral("stroke")},
+                                          {QStringLiteral("ink.selectShape"), QStringLiteral("lasso")},
+                                          {QStringLiteral("ink.shapeKind"), QStringLiteral("line")}});
+    noteAppC::Settings settings = noteAppC::Settings::load();
+    settings.setValue(QStringLiteral("ink.drawWithMouse"), false);
+    settings.setValue(QStringLiteral("ink.pressureByDevice"), QString());
+    settings.setValue(QStringLiteral("ink.defaultPenWidth"), 2.0);
+    return settings;
+}
+
+QJsonObject storedPressures(const noteAppC::Settings &settings)
+{
+    return QJsonDocument::fromJson(settings.text(QStringLiteral("ink.pressureByDevice")).toUtf8()).object();
+}
+
+} // namespace
+
+// R14 on a keyboardless tablet: what Delete, Ctrl+C and Ctrl+V do for a selection has a toolbar button too.
+TEST(InkViewToolbarTest, DeleteCopyAndPasteAreOnTheToolbarForATabletWithNoKeyboard)
+{
+    QGuiApplication::clipboard()->clear();
+    InkView view(nullptr);
+    auto *del = view.findChild<QAction *>(QStringLiteral("inkDeleteAction"));
+    auto *copy = view.findChild<QAction *>(QStringLiteral("inkCopyAction"));
+    auto *paste = view.findChild<QAction *>(QStringLiteral("inkPasteAction"));
+    ASSERT_NE(del, nullptr);
+    ASSERT_NE(copy, nullptr);
+    ASSERT_NE(paste, nullptr);
+    EXPECT_TRUE(del->toolTip().contains(QStringLiteral("Delete"))) << del->toolTip().toStdString();
+    EXPECT_TRUE(copy->toolTip().contains(QStringLiteral("Ctrl+C"))) << copy->toolTip().toStdString();
+    EXPECT_TRUE(paste->toolTip().contains(QStringLiteral("Ctrl+V"))) << paste->toolTip().toStdString();
+    EXPECT_FALSE(del->isEnabled()) << "nothing selected";
+    EXPECT_FALSE(copy->isEnabled());
+    EXPECT_FALSE(paste->isEnabled()) << "nothing of ours on the clipboard";
+
+    InkCanvas *canvas = view.canvas();
+    penStroke(canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    canvas->setTool(InkCanvas::Tool::Lasso);
+    canvas->setSelectShape(InkCanvas::SelectShape::Rect);
+    penStroke(canvas, QPointF(2, 2), QPointF(200, 160), 3000);
+    ASSERT_EQ(canvas->selection().size(), 1u);
+    EXPECT_TRUE(del->isEnabled());
+    EXPECT_TRUE(copy->isEnabled());
+
+    copy->trigger();
+    WAIT_TRUE(paste->isEnabled(), 2000);
+    del->trigger();
+    EXPECT_EQ(canvas->document().items().size(), 0u) << "the selected stroke is gone";
+    EXPECT_FALSE(del->isEnabled()) << "and so is the selection";
+    ASSERT_TRUE(canvas->undo());
+    EXPECT_EQ(canvas->document().items().size(), 1u) << "one history step: undo brings it back";
+    paste->trigger();
+    EXPECT_EQ(canvas->document().items().size(), 2u) << "the copy came back beside it";
+}
+
+// Another open ink tab shows a toolbar toggle it did not make only when it is next shown (the window applies settings to
+// every view on a change, but not on a toggle the view itself saves).
+TEST(InkViewSettingsTest, AnotherInkTabPicksUpAToggleWhenItIsShown)
+{
+    noteAppC::Settings settings = inkSettings();
+    InkView first(&settings), second(&settings);
+    auto *firstToggle = first.findChild<QAction *>(QStringLiteral("inkDrawWithMouseAction"));
+    auto *secondToggle = second.findChild<QAction *>(QStringLiteral("inkDrawWithMouseAction"));
+    ASSERT_NE(firstToggle, nullptr);
+    ASSERT_NE(secondToggle, nullptr);
+    firstToggle->trigger();
+    ASSERT_TRUE(firstToggle->isChecked());
+    EXPECT_FALSE(secondToggle->isChecked()) << "not shown yet";
+    second.show();
+    EXPECT_TRUE(secondToggle->isChecked());
+    EXPECT_TRUE(second.canvas()->drawWithMouse());
+}
+
+TEST_F(InkViewFileTest, EditingThePatternSizeKeepsTheShapeOfANonSquarePattern)
+{
+    InkDocument made;
+    DocumentSettings settings = made.settings();
+    settings.background.patternSize = QSizeF(30, 60);
+    ASSERT_TRUE(made.setSettings(settings));
+    made.commit();
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(writeInk(made));
+    file.close();
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    auto *size = view.findChild<QDoubleSpinBox *>(QStringLiteral("inkPatternSizeSpin"));
+    ASSERT_NE(size, nullptr);
+    EXPECT_DOUBLE_EQ(size->value(), 30.0) << "the spin shows the width";
+    size->setValue(45);
+    EXPECT_NEAR(view.canvas()->document().settings().background.patternSize.width(), 45.0, 1e-9);
+    EXPECT_NEAR(view.canvas()->document().settings().background.patternSize.height(), 90.0, 1e-9) << "scaled, not squared";
+}
+
+// The pen-width spin keeps the focus after its arrows are used, and the tool keys P E L S T then type into it.
+TEST(InkViewToolbarTest, SteppingThePenWidthHandsTheFocusBackToTheCanvasSoTheToolKeysWork)
+{
+    InkView view(nullptr);
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    view.activateWindow();
+    auto *spin = view.findChild<QDoubleSpinBox *>(QStringLiteral("inkPenWidthSpin"));
+    ASSERT_NE(spin, nullptr);
+    spin->setFocus();
+    WAIT_TRUE(spin->hasFocus(), 2000);
+    spin->stepUp();
+    EXPECT_TRUE(view.canvas()->hasFocus()) << "the arrow click is a whole edit";
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_E);
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Eraser);
+    spin->setFocus();
+    QTest::keyClicks(spin, QStringLiteral("12"));
+    EXPECT_TRUE(spin->hasFocus()) << "typing a number is not cut short after the first digit";
+}
+
+TEST(InkViewSettingsTest, AMalformedOrOutOfRangeStoredPressureMapIsIgnoredOrClamped)
+{
+    noteAppC::Settings settings = inkSettings();
+    settings.setValue(QStringLiteral("ink.pressureByDevice"), QStringLiteral("{not json"));
+    {
+        InkView view(&settings);
+        EXPECT_DOUBLE_EQ(view.canvas()->learnedPressure(QStringLiteral("test pen")), 1.0) << "nothing applied, nothing thrown";
+        emit view.canvas()->learnedPressureChanged(QStringLiteral("test pen"), 0.8);
+        EXPECT_NEAR(storedPressures(settings).value(QStringLiteral("test pen")).toDouble(), 0.8, 1e-9) << "the next lesson replaces the garbage";
+    }
+    settings.setValue(QStringLiteral("ink.pressureByDevice"),
+                      QStringLiteral("{\"low\":-3,\"high\":1e9,\"text\":\"loud\",\"nothing\":null,\"ok\":0.6}"));
+    InkView view(&settings);
+    const double low = view.canvas()->learnedPressure(QStringLiteral("low"));
+    EXPECT_GT(low, 0.0);
+    EXPECT_LE(low, 1.0);
+    EXPECT_DOUBLE_EQ(view.canvas()->learnedPressure(QStringLiteral("high")), 1.0);
+    EXPECT_DOUBLE_EQ(view.canvas()->learnedPressure(QStringLiteral("text")), 1.0);
+    EXPECT_DOUBLE_EQ(view.canvas()->learnedPressure(QStringLiteral("nothing")), 1.0);
+    EXPECT_NEAR(view.canvas()->learnedPressure(QStringLiteral("ok")), 0.6, 1e-9);
+}
+
+TEST(InkViewSettingsTest, ADeviceNameWithQuotesAndUnicodeSurvivesTheRoundTripThroughTheFile)
+{
+    noteAppC::Settings settings = inkSettings();
+    const QString name = QString::fromUtf8("Wacom \"Pen\" \\ \xE2\x9C\x8E \xC5\xA1\xC4\x8D");
+    {
+        InkView view(&settings);
+        emit view.canvas()->learnedPressureChanged(name, 0.64);
+    }
+    const QString stored = settings.text(QStringLiteral("ink.pressureByDevice"));
+    EXPECT_FALSE(stored.contains(QLatin1Char('\n'))) << "one line in the ini";
+    ASSERT_TRUE(settings.save());
+    const noteAppC::Settings again = noteAppC::Settings::load();
+    EXPECT_EQ(again.text(QStringLiteral("ink.pressureByDevice")), stored);
+    noteAppC::Settings reread = again;
+    InkView view(&reread);
+    EXPECT_NEAR(view.canvas()->learnedPressure(name), 0.64, 1e-9);
+    emit view.canvas()->learnedPressureChanged(QStringLiteral("other pen"), 0.9);
+    const QJsonObject map = storedPressures(reread);
+    EXPECT_EQ(map.size(), 2) << "a second pen is added, the first is kept";
+    EXPECT_NEAR(map.value(name).toDouble(), 0.64, 1e-9);
+}
+
+int main(int argc, char **argv)
+{
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication app(argc, argv);
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }

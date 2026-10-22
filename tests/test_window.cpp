@@ -7877,11 +7877,27 @@ void resetInkChoices()
                                {QStringLiteral("ink.defaultPattern"), QStringLiteral("lines")},
                                {QStringLiteral("ink.defaultLayout"), QStringLiteral("continuousVertical")},
                                {QStringLiteral("ink.eraserWidth"), 20},             {QStringLiteral("ink.tileCacheMB"), 64},
-                               {QStringLiteral("ink.pressureByDevice"), QString()}};
+                               {QStringLiteral("ink.pressureByDevice"), QString()}, {QStringLiteral("ink.defaultPenWidth"), 2.0},
+                               {QStringLiteral("ink.rawInput"), false}};
     for (auto it = defaults.begin(); it != defaults.end(); ++it)
         stored.setValue(it.key(), it.value());
     stored.save();
 }
+
+/// Every ink window test starts and ends with the ink settings at their defaults, whatever ran before it (a shuffled run too).
+class InkWindowTest : public WindowTest {
+protected:
+    void SetUp() override
+    {
+        WindowTest::SetUp();
+        resetInkChoices();
+    }
+    void TearDown() override
+    {
+        resetInkChoices();
+        WindowTest::TearDown();
+    }
+};
 
 const char *kEmptyInk = "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n";
 
@@ -7904,7 +7920,7 @@ QByteArray bigInkBody(int strokes)
 } // namespace
 // The handwritten-note module (spec section 4, Task 8): the real notolith-ink.so from
 // ${CMAKE_BINARY_DIR}/modules, found through NOTEAPPC_MODULE_DIRS.
-TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
+TEST_F(InkWindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
 {
     write(QStringLiteral("Sketch.ink"),
           "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
@@ -7948,7 +7964,7 @@ TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
 
 // Task 11: a file above kOffThreadParseBytes (256 KB) is parsed on a pool thread; the tab says so meanwhile and
 // refuses to save, so a half-loaded document is never written over the file.
-TEST_F(WindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
+TEST_F(InkWindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
 {
     constexpr int kStrokes = 3000;
     write(QStringLiteral("Big.ink"), bigInkBody(kStrokes));
@@ -7963,13 +7979,13 @@ TEST_F(WindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
     ASSERT_NE(view, nullptr);
     auto *loading = view->findChild<QLabel *>(QStringLiteral("inkLoadingLabel"));
     ASSERT_NE(loading, nullptr);
-    EXPECT_TRUE(view->property("loading").toBool()) << "load() returned at once, the parse is still running";
+    EXPECT_TRUE(view->isLoading()) << "load() returned at once, the parse is still running";
     EXPECT_FALSE(loading->isHidden()) << "the view says Loading...";
     EXPECT_TRUE(loading->text().contains(QStringLiteral("Loading")));
     QString error;
     EXPECT_FALSE(view->save(&error)) << "a half-loaded document is never written over the file";
     EXPECT_TRUE(error.contains(QStringLiteral("still loading"))) << error.toStdString();
-    WAIT_TRUE(!view->property("loading").toBool(), 5000);
+    WAIT_TRUE(!view->isLoading(), 5000);
     EXPECT_TRUE(loading->isHidden());
     EXPECT_FALSE(view->isModified()) << "a load is not an edit";
     error.clear();
@@ -7979,7 +7995,7 @@ TEST_F(WindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
     EXPECT_EQ(saved.readAll().count("\"type\":\"stroke\""), kStrokes) << "every stroke came through the parse and the save";
 }
 
-TEST_F(WindowTest, WithInkOffAnInkFileIsNotAModuleFile)
+TEST_F(InkWindowTest, WithInkOffAnInkFileIsNotAModuleFile)
 {
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
     MainWindow window;
@@ -8002,7 +8018,7 @@ TEST_F(WindowTest, WithInkOffAnInkFileIsNotAModuleFile)
     EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("ink"))) << "never loaded: nothing in this test used it";
 }
 
-TEST_F(WindowTest, NewHandwrittenNoteIsCreatedBesideTheActiveNoteElseInTheVaultRoot)
+TEST_F(InkWindowTest, NewHandwrittenNoteIsCreatedBesideTheActiveNoteElseInTheVaultRoot)
 {
     ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Sub")));
     write(QStringLiteral("Sub/Anchor.md"), "# Anchor\n");
@@ -8028,7 +8044,7 @@ TEST_F(WindowTest, NewHandwrittenNoteIsCreatedBesideTheActiveNoteElseInTheVaultR
 
 // A file written by a newer Notolith opens read-only: the pen does nothing, the save command
 // refuses (writeInk stamps version 1 and would downgrade the file), the bytes stay as they were.
-TEST_F(WindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
+TEST_F(InkWindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
 {
     const QByteArray newer = "{\"format\":\"notolith-ink\",\"version\":2,\"document\":{},\"items\":[],\"future\":{\"keep\":true}}\n";
     write(QStringLiteral("Future.ink"), newer);
@@ -8068,7 +8084,7 @@ TEST_F(WindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
 }
 
 // A file that is not an ink file is refused by the view, with the reader's message, and no tab opens.
-TEST_F(WindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
+TEST_F(InkWindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
 {
     write(QStringLiteral("Broken.ink"), "{not json");
     MainWindow window;
@@ -8221,7 +8237,7 @@ TEST_F(WindowTest, QuittingAsksAboutEveryModifiedFileLessModuleTabAndSavesEach)
 #ifdef NOTEAPPC_HAVE_INK_MODULE
 // Jernej's decision: the mouse draws only when inking with it is explicitly on (a pen always draws).
 // The row is registered by the module and reaches an already open view through applySettings.
-TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSettings)
+TEST_F(InkWindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSettings)
 {
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
     MainWindow window;
@@ -8256,7 +8272,7 @@ TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSe
 
 // Task 15: a text box is drawn by the host's own note editor (InkView builds it), so what the box says is
 // rendered like a note: [[Welcome]] shows as a link, in the link colour, on the page.
-TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
+TEST_F(InkWindowTest, AnInkTextBoxRendersMarkdownLikeANote)
 {
     write(QStringLiteral("Sketch.ink"),
           "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{\"background\":{\"color\":\"#f0e6c8\",\"pattern\":\"none\"}},\"items\":[\n"
@@ -8298,9 +8314,8 @@ TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
 
 
 // R14: without pen hardware every tool is one click away, and the keys move the toolbar.
-TEST_F(WindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
+TEST_F(InkWindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     window.openVault(dir.path());
@@ -8316,13 +8331,16 @@ TEST_F(WindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
         {"inkTool_eraser", noteAppC::ink::InkCanvas::Tool::Eraser}, {"inkTool_lasso", noteAppC::ink::InkCanvas::Tool::Lasso},
         {"inkTool_shape", noteAppC::ink::InkCanvas::Tool::Shape},   {"inkTool_text", noteAppC::ink::InkCanvas::Tool::Text},
         {"inkTool_pen", noteAppC::ink::InkCanvas::Tool::Pen}};
+    const QHash<QString, QString> keyOf{{QStringLiteral("inkTool_eraser"), QStringLiteral("(E)")}, {QStringLiteral("inkTool_lasso"), QStringLiteral("(L;")},
+                                        {QStringLiteral("inkTool_shape"), QStringLiteral("(S;")},   {QStringLiteral("inkTool_text"), QStringLiteral("(T)")},
+                                        {QStringLiteral("inkTool_pen"), QStringLiteral("(P)")}};
     for (const auto &[name, tool] : tools) {
         auto *action = view->findChild<QAction *>(QString::fromLatin1(name));
         ASSERT_NE(action, nullptr) << name;
         action->trigger();
         EXPECT_EQ(canvas->tool(), tool) << name;
         EXPECT_TRUE(action->isChecked()) << name;
-        EXPECT_TRUE(action->toolTip().contains(QLatin1Char('('))) << name << ": the tooltip names the key";
+        EXPECT_TRUE(action->toolTip().contains(keyOf.value(QString::fromLatin1(name)))) << name << ": the tooltip names the key: " << action->toolTip().toStdString();
     }
     QTest::keyClick(canvas, Qt::Key_E);
     EXPECT_TRUE(view->findChild<QAction *>(QStringLiteral("inkTool_eraser"))->isChecked()) << "a key press moves the toolbar";
@@ -8330,9 +8348,8 @@ TEST_F(WindowTest, EveryInkToolIsOnTheToolbarAndTheKeysMoveIt)
 }
 
 // R14: the learned pressure maximum of a device is stored per device name and applies at once after a restart.
-TEST_F(WindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNextOpen)
+TEST_F(InkWindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNextOpen)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
     {
         MainWindow window;
@@ -8347,7 +8364,10 @@ TEST_F(WindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNextOp
         for (int i = 0; i < 25; ++i)
             inktest::penStroke(canvas, QPointF(20, 10 + 10 * i), QPointF(200, 10 + 10 * i), 1000 + i * 100, Qt::LeftButton,
                                QPointingDevice::PointerType::Pen, 0.657);
-        const Settings onDisk = Settings::load(); // the view saved it itself: the key is registered in this process once the module attached
+        // The view saves it itself, a moment after the last raise (one write for a run of samples): the key is registered in
+        // this process once the module attached.
+        WAIT_TRUE(!Settings::load().value(QStringLiteral("ink.pressureByDevice")).toString().isEmpty(), 5000);
+        const Settings onDisk = Settings::load();
         const QString stored = onDisk.value(QStringLiteral("ink.pressureByDevice")).toString();
         const QJsonObject map = QJsonDocument::fromJson(stored.toUtf8()).object();
         ASSERT_TRUE(map.contains(QStringLiteral("test pen"))) << stored.toStdString();
@@ -8368,9 +8388,8 @@ TEST_F(WindowTest, ALearnedPenPressureIsPersistedPerDeviceAndRestoredOnTheNextOp
 }
 
 // R5: the tile cache budget is the setting in MB and follows it live.
-TEST_F(WindowTest, TheInkTileCacheBudgetFollowsTheSettingInMB)
+TEST_F(InkWindowTest, TheInkTileCacheBudgetFollowsTheSettingInMB)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");
     MainWindow window;
     window.openVault(dir.path());
@@ -8392,9 +8411,8 @@ TEST_F(WindowTest, TheInkTileCacheBudgetFollowsTheSettingInMB)
     EXPECT_EQ(canvas->tileCacheBytes(), qsizetype(16) * 1024 * 1024);
 }
 
-TEST_F(WindowTest, InkToolbarChangesPenWidthAndColourForTheNextStroke)
+TEST_F(InkWindowTest, InkToolbarChangesPenWidthAndColourForTheNextStroke)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8434,9 +8452,8 @@ TEST_F(WindowTest, InkToolbarChangesPenWidthAndColourForTheNextStroke)
     EXPECT_EQ(canvas->document().items()[1].stroke->style.pressureCurve, noteAppC::ink::PressureCurve::Const);
 }
 
-TEST_F(WindowTest, InkPageMenuChangesPatternAndAddsAPage)
+TEST_F(InkWindowTest, InkPageMenuChangesPatternAndAddsAPage)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8496,9 +8513,8 @@ TEST_F(WindowTest, InkPageMenuChangesPatternAndAddsAPage)
     EXPECT_FALSE(add->isEnabled()) << "a sheet has no pages to add";
 }
 
-TEST_F(WindowTest, InkDrawWithMouseToggleFollowsTheSetting)
+TEST_F(InkWindowTest, InkDrawWithMouseToggleFollowsTheSetting)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8531,9 +8547,8 @@ TEST_F(WindowTest, InkDrawWithMouseToggleFollowsTheSetting)
     EXPECT_FALSE(canvas->drawWithMouse());
 }
 
-TEST_F(WindowTest, InkSettingsRowsAppearUnderThePluginAndChangeNewNotes)
+TEST_F(InkWindowTest, InkSettingsRowsAppearUnderThePluginAndChangeNewNotes)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8584,9 +8599,8 @@ TEST_F(WindowTest, InkSettingsRowsAppearUnderThePluginAndChangeNewNotes)
     EXPECT_DOUBLE_EQ(freshCanvas->eraserWidth(), 30.0);
 }
 
-TEST_F(WindowTest, InkAutosaveWritesAfterAStroke)
+TEST_F(InkWindowTest, InkAutosaveWritesAfterAStroke)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     window.setAutosaveIntervalsForTests(30, 300);
@@ -8602,9 +8616,8 @@ TEST_F(WindowTest, InkAutosaveWritesAfterAStroke)
     WAIT_TRUE(!view->isModified(), 5000);
 }
 
-TEST_F(WindowTest, CtrlWheelZoomsTheInkCanvas)
+TEST_F(InkWindowTest, CtrlWheelZoomsTheInkCanvas)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8634,9 +8647,8 @@ TEST_F(WindowTest, CtrlWheelZoomsTheInkCanvas)
     EXPECT_NE(zoom->currentText().indexOf(QStringLiteral("220")), -1) << "the combo shows a zoom that is not a preset: " << zoom->currentText().toStdString();
 }
 
-TEST_F(WindowTest, TheInkEraserSelectAndShapeChoicesAreRememberedAndShownOnTheToolbar)
+TEST_F(InkWindowTest, TheInkEraserSelectAndShapeChoicesAreRememberedAndShownOnTheToolbar)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     write(QStringLiteral("Second.ink"), kEmptyInk);
     MainWindow window;
@@ -8670,9 +8682,8 @@ TEST_F(WindowTest, TheInkEraserSelectAndShapeChoicesAreRememberedAndShownOnTheTo
 }
 
 // A text box still being typed is unsaved work: the tab's marker lights while typing, not at the commit.
-TEST_F(WindowTest, TypingInAnInkTextBoxLightsTheTabMarkerAtOnce)
+TEST_F(InkWindowTest, TypingInAnInkTextBoxLightsTheTabMarkerAtOnce)
 {
-    resetInkChoices();
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8698,12 +8709,12 @@ TEST_F(WindowTest, TypingInAnInkTextBoxLightsTheTabMarkerAtOnce)
 
 /// A big ink tab with a stroke of ours in it, whose file another machine's sync has replaced; the save command then keeps our
 /// stroke in a conflict file and starts the reload, which parses on the pool until the event loop runs again.
-static void aModifiedBigInkTabReloading(MainWindow &window, const QString &vault, noteAppC::ModuleView *&view)
+static void aModifiedBigInkTabReloading(MainWindow &window, const QString &vault, noteAppC::ModuleView *&view, const QWidget *other = nullptr)
 {
     noteAppC::ink::InkCanvas *canvas = nullptr;
-    openInkNote(window, vault, QStringLiteral("Big.ink"), view, canvas);
+    openInkNote(window, vault, QStringLiteral("Big.ink"), view, canvas, other);
     ASSERT_NE(canvas, nullptr);
-    WAIT_TRUE(!view->property("loading").toBool(), 5000);
+    WAIT_TRUE(!view->isLoading(), 5000);
     inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
     ASSERT_TRUE(view->isModified());
     {
@@ -8714,7 +8725,7 @@ static void aModifiedBigInkTabReloading(MainWindow &window, const QString &vault
         ASSERT_TRUE(file.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
     }
     command(window, "editor:save-file")->trigger();
-    ASSERT_TRUE(view->property("loading").toBool()) << "the reload parses on the pool";
+    ASSERT_TRUE(view->isLoading()) << "the reload parses on the pool";
     ASSERT_TRUE(view->isModified()) << "the old document is still in the canvas";
     QString error;
     EXPECT_FALSE(view->save(&error));
@@ -8722,9 +8733,8 @@ static void aModifiedBigInkTabReloading(MainWindow &window, const QString &vault
 }
 
 // M4 / R6: a reload in flight cannot be saved; closing the tab then waits for it instead of reporting a failure.
-TEST_F(WindowTest, ClosingAnInkTabWhileItsReloadIsStillParsingWaitsForTheLoadAndAsksNothing)
+TEST_F(InkWindowTest, ClosingAnInkTabWhileItsReloadIsStillParsingWaitsForTheLoadAndAsksNothing)
 {
-    resetInkChoices();
     write(QStringLiteral("Big.ink"), bigInkBody(3000));
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8744,9 +8754,8 @@ TEST_F(WindowTest, ClosingAnInkTabWhileItsReloadIsStillParsingWaitsForTheLoadAnd
     EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Big (conflict *).ink")}, QDir::Files).size(), 1) << "our stroke is kept";
 }
 
-TEST_F(WindowTest, QuittingWhileAnInkTabIsStillReloadingWaitsForTheLoadAndAsksNothing)
+TEST_F(InkWindowTest, QuittingWhileAnInkTabIsStillReloadingWaitsForTheLoadAndAsksNothing)
 {
-    resetInkChoices();
     write(QStringLiteral("Big.ink"), bigInkBody(3000));
     MainWindow window;
     noteAppC::ModuleView *view = nullptr;
@@ -8765,4 +8774,107 @@ TEST_F(WindowTest, QuittingWhileAnInkTabIsStillReloadingWaitsForTheLoadAndAsksNo
     EXPECT_FALSE(asked) << "still loading is retry-after-load, not a save failure";
     EXPECT_FALSE(window.isVisible()) << "the window closed";
 }
+// I1: a pen pressed harder than ever raises the learned maximum at every sample of the press; the view keeps it in memory and
+// writes the file once, after the pen has been still for a moment, not once per sample in the middle of a stroke.
+TEST_F(InkWindowTest, ARampOfRaisedPressuresIsSavedOnceAfterAMomentNotOnEverySample)
+{
+    write(QStringLiteral("Sketch.ink"), kEmptyInk);
+    const QString key = QStringLiteral("ink.pressureByDevice");
+    const auto onDisk = [&key] { return Settings::load().value(key).toString(); };
+    {
+        MainWindow window;
+        noteAppC::ModuleView *view = nullptr;
+        noteAppC::ink::InkCanvas *canvas = nullptr;
+        openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+        ASSERT_NE(canvas, nullptr);
+        for (int i = 0; i < 25; ++i) // calibrates on the strong samples
+            inktest::penStroke(canvas, QPointF(20, 10 + 10 * i), QPointF(200, 10 + 10 * i), 1000 + i * 100, Qt::LeftButton,
+                               QPointingDevice::PointerType::Pen, 0.5);
+        for (int i = 0; i < 40; ++i) // every stroke harder than the one before: every one raises the maximum
+            inktest::penStroke(canvas, QPointF(20, 300 + 5 * i), QPointF(200, 300 + 5 * i), 5000 + i * 100, Qt::LeftButton,
+                               QPointingDevice::PointerType::Pen, 0.52 + 0.01 * i);
+        EXPECT_TRUE(onDisk().isEmpty()) << "no write in the middle of the strokes: " << onDisk().toStdString();
+        WAIT_TRUE(!onDisk().isEmpty(), 5000);
+        const QJsonObject map = QJsonDocument::fromJson(onDisk().toUtf8()).object();
+        EXPECT_NEAR(map.value(QStringLiteral("test pen")).toDouble(), 0.91, 1e-9) << "the last raise is what the one write holds";
+        // One more raise, then the window goes before the timer fires: the closing view flushes it.
+        inktest::penStroke(canvas, QPointF(20, 600), QPointF(200, 600), 20000, Qt::LeftButton, QPointingDevice::PointerType::Pen, 0.97);
+        EXPECT_NEAR(QJsonDocument::fromJson(onDisk().toUtf8()).object().value(QStringLiteral("test pen")).toDouble(), 0.91, 1e-9)
+            << "still the older one: the new raise waits for the timer";
+    }
+    EXPECT_NEAR(QJsonDocument::fromJson(onDisk().toUtf8()).object().value(QStringLiteral("test pen")).toDouble(), 0.97, 1e-9)
+        << "flushed when the view was destroyed";
+}
+
+// I2: a tab with nothing to save closes at once, even while its file is still parsing.
+TEST_F(InkWindowTest, ClosingAnInkTabThatIsStillParsingButHasNothingToSaveDoesNotWait)
+{
+    write(QStringLiteral("Big.ink"), bigInkBody(3000));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Big.ink"), view, canvas);
+    ASSERT_NE(view, nullptr);
+    ASSERT_TRUE(view->isLoading()) << "the first parse is in flight";
+    ASSERT_FALSE(view->isModified());
+    bool eventsRan = false;
+    QTimer::singleShot(0, &window, [&eventsRan] { eventsRan = true; });
+    command(window, "workspace:close")->trigger();
+    EXPECT_FALSE(eventsRan) << "closing spun the event loop to wait for a parse it did not need";
+}
+
+// I2: quitting with two modified ink tabs, one of them reloading: both are kept, nothing is asked, and no tab goes missing from
+// under the loop (the wait takes no user input).
+TEST_F(InkWindowTest, QuittingWithTwoModifiedInkTabsOneStillReloadingKeepsBothAndAsksNothing)
+{
+    write(QStringLiteral("Sketch.ink"), kEmptyInk);
+    write(QStringLiteral("Big.ink"), bigInkBody(3000));
+    MainWindow window;
+    noteAppC::ModuleView *first = nullptr;
+    noteAppC::ink::InkCanvas *firstCanvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), first, firstCanvas);
+    ASSERT_NE(firstCanvas, nullptr);
+    inktest::penStroke(firstCanvas, QPointF(100, 100), QPointF(300, 140), 1000);
+    ASSERT_TRUE(first->isModified());
+    command(window, "workspace:new-tab")->trigger();
+    noteAppC::ModuleView *second = nullptr;
+    aModifiedBigInkTabReloading(window, dir.path(), second, first);
+    ASSERT_NE(second, nullptr);
+    ASSERT_TRUE(first->isModified()) << "the first tab still holds its unsaved stroke";
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Cancel);
+        }
+    });
+    watch.start(20);
+    window.close();
+    EXPECT_FALSE(asked);
+    EXPECT_FALSE(window.isVisible()) << "the window closed";
+    EXPECT_NE(readAll(path(QStringLiteral("Sketch.ink"))).indexOf("\"stroke\""), -1) << "the first tab's stroke reached its file";
+    EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Big (conflict *).ink")}, QDir::Files).size(), 1) << "and the second tab's is kept beside its file";
+}
+
+// M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.
+TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
+{
+    {
+        Settings stored = Settings::load();
+        stored.setValue(QStringLiteral("ink.defaultPenWidth"), 5.5);
+        ASSERT_TRUE(stored.save());
+    }
+    write(QStringLiteral("Sketch.ink"), kEmptyInk);
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    EXPECT_DOUBLE_EQ(view->findChild<QDoubleSpinBox *>(QStringLiteral("inkPenWidthSpin"))->value(), 5.5);
+    inktest::penStroke(canvas, QPointF(100, 100), QPointF(300, 100), 1000);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    EXPECT_DOUBLE_EQ(canvas->document().items()[0].stroke->style.width, 5.5);
+}
+
 #endif

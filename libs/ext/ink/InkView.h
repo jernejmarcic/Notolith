@@ -20,6 +20,8 @@ class QButtonGroup;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QShowEvent;
+class QTimer;
 class QToolBar;
 class QToolButton;
 
@@ -50,11 +52,11 @@ namespace noteAppC::ink {
 class InkView : public ModuleView {
     Q_OBJECT
     Q_PROPERTY(bool readOnly READ isReadOnly)
-    Q_PROPERTY(bool loading READ isLoading)
 public:
     /// `settings` is the host's: the view reads the ink.* keys and writes the few it owns (the choices above, ink.drawWithMouse,
     /// ink.pressureByDevice). Null (a bare test) keeps every default and writes nothing.
     explicit InkView(noteAppC::Settings *settings, QWidget *parent = nullptr);
+    ~InkView() override;
     /// The choices of the layout and pattern rows, shared with the module's Settings rows: (label, name as stored).
     static QList<QPair<QString, QVariant>> layoutChoices();
     static QList<QPair<QString, QVariant>> patternChoices();
@@ -64,11 +66,18 @@ public:
     bool isModified() const override { return m_canvas->document().isModified() || m_canvas->isTextEditDirty(); } ///< typed, not yet committed text counts: closing the tab must offer to save it
     void setTheme(const Theme &theme) override;
     void applySettings(const noteAppC::Settings &settings) override;
+    /// The learned pressures are written a moment after the last raise (kPressureSaveMs), once for a run of them; this
+    /// writes them now. The window calls it before its Settings go, the view's own destructor after a closed tab.
+    void flushSettings() override;
+    static constexpr int kPressureSaveMs = 1500;
 
     InkCanvas *canvas() const { return m_canvas; }
     QString path() const { return m_path; }
     bool isReadOnly() const { return m_readOnly; }
-    bool isLoading() const { return m_loadWatcher != nullptr; }
+    bool isLoading() const override { return m_loadWatcher != nullptr; }
+
+protected:
+    void showEvent(QShowEvent *event) override;
 
 private:
     struct DiskStamp {
@@ -85,6 +94,7 @@ private:
     void buildTools(QActionGroup *tools);
     void buildToolBar();
     void buildPageMenu();
+    void updateEditActions(); ///< Delete and Copy follow the selection, Paste the clipboard
     void setToolsEnabled(bool on); ///< a read-only or unreadable document: nothing on the toolbar edits it
     void remember(const char *key, const QString &value); ///< writes a setting this view owns, and saves it
     void applyStoredChoices(const noteAppC::Settings &settings);
@@ -116,6 +126,9 @@ private:
     QAction *m_shapeKindActions[4]; ///< line, arrow, rectangle, ellipse: checkable, exclusive
     QAction *m_textAction;         ///< inkTool_text (Tool::Text)
     QAction *m_mouseAction;        ///< checkable: Draw with mouse (ink.drawWithMouse)
+    QAction *m_deleteAction;
+    QAction *m_copyAction;
+    QAction *m_pasteAction;
     QAction *m_undoAction;
     QAction *m_redoAction;
     QAction *m_addPageAction;
@@ -142,6 +155,8 @@ private:
     QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
     DiskStamp m_stamp; ///< the file as this view last read or wrote it
+    QTimer *m_pressureSave = nullptr; ///< single shot: the learned pressures reach the disk once for a run of raises
+    bool m_toolsOn = true;
     bool m_readOnly = false;
     bool m_lastModified = false;
 };

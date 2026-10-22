@@ -6,6 +6,7 @@
 #include <QAction>
 #include <QActionGroup>
 #include <QButtonGroup>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QJsonDocument>
@@ -20,10 +22,13 @@
 #include <QtConcurrent>
 #include <QLabel>
 #include <QMenu>
+#include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
 #include <QScrollBar>
+#include <QShowEvent>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -34,6 +39,7 @@
 #include "Theme.h"
 #include "Vault.h"
 #include "core/InkFormat.h"
+#include "core/InkTools.h"
 
 namespace noteAppC::ink {
 
@@ -195,6 +201,15 @@ InkView::InkView(Settings *settings, QWidget *parent)
     });
     connect(m_canvas, &InkCanvas::zoomChanged, this, &InkView::showZoom);
     connect(m_canvas, &InkCanvas::learnedPressureChanged, this, &InkView::learnedPressure);
+    m_pressureSave = new QTimer(this);
+    m_pressureSave->setSingleShot(true);
+    m_pressureSave->setInterval(kPressureSaveMs);
+    connect(m_pressureSave, &QTimer::timeout, this, [this] {
+        if (m_settings)
+            m_settings->save();
+    });
+    connect(m_canvas, &InkCanvas::selectionChanged, this, &InkView::updateEditActions);
+    connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, &InkView::updateEditActions);
     connect(m_canvas, &InkCanvas::panRequested, this, [this](QPoint delta) {
         m_area->horizontalScrollBar()->setValue(m_area->horizontalScrollBar()->value() - delta.x());
         m_area->verticalScrollBar()->setValue(m_area->verticalScrollBar()->value() - delta.y());
@@ -220,6 +235,40 @@ InkView::InkView(Settings *settings, QWidget *parent)
     showZoom(m_canvas->zoom());
     showShapeKind(m_canvas->shapeKind());
     onEdited();
+}
+
+InkView::~InkView()
+{
+    flushSettings(); // a pen learned a moment ago is not lost to a closing tab (the window flushes first when it goes itself)
+}
+
+void InkView::flushSettings()
+{
+    if (!m_pressureSave->isActive())
+        return;
+    m_pressureSave->stop();
+    if (m_settings)
+        m_settings->save();
+}
+
+/// Another tab's toolbar toggle (draw with mouse, the eraser, select and shape choices) lands in the shared settings
+/// without telling this tab; it shows them when it is shown again.
+void InkView::showEvent(QShowEvent *event)
+{
+    ModuleView::showEvent(event);
+    if (m_settings)
+        applySettings(*m_settings);
+    updateEditActions();
+}
+
+/// Delete, Copy and Paste of a selection: enabled with a selection, and Paste with ink on the clipboard.
+void InkView::updateEditActions()
+{
+    const bool selected = m_toolsOn && !m_canvas->selection().empty();
+    m_deleteAction->setEnabled(selected);
+    m_copyAction->setEnabled(selected);
+    const QMimeData *clip = QGuiApplication::clipboard()->mimeData();
+    m_pasteAction->setEnabled(m_toolsOn && clip && clip->hasFormat(QString::fromLatin1(kClipboardMime)));
 }
 
 /// The tools: five checkable actions in one group (the keys and the toolbar move each other through InkCanvas::toolChanged),
@@ -298,6 +347,21 @@ void InkView::buildTools(QActionGroup *tools)
         }
     });
 
+    m_deleteAction = new QAction(tr("Delete"), this);
+    m_deleteAction->setObjectName(QStringLiteral("inkDeleteAction"));
+    m_deleteAction->setToolTip(tr("Delete the selection (Delete)"));
+    connect(m_deleteAction, &QAction::triggered, m_canvas, [this] { m_canvas->deleteSelection(); });
+    m_copyAction = new QAction(tr("Copy"), this);
+    m_copyAction->setObjectName(QStringLiteral("inkCopyAction"));
+    m_copyAction->setToolTip(tr("Copy the selection (Ctrl+C)"));
+    connect(m_copyAction, &QAction::triggered, m_canvas, [this] { m_canvas->copySelection(); });
+    m_pasteAction = new QAction(tr("Paste"), this);
+    m_pasteAction->setObjectName(QStringLiteral("inkPasteAction"));
+    m_pasteAction->setToolTip(tr("Paste what was copied (Ctrl+V)"));
+    connect(m_pasteAction, &QAction::triggered, m_canvas, [this] { m_canvas->paste(); });
+    for (QAction *a : {m_deleteAction, m_copyAction, m_pasteAction})
+        a->setEnabled(false);
+
     m_undoAction = new QAction(tr("Undo"), this);
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
@@ -327,7 +391,12 @@ void InkView::buildToolBar()
         style.width = width;
         m_canvas->setPenStyle(style);
     });
+    m_penWidth->setKeyboardTracking(false); // a typed number applies on Enter, so an applied change is always a finished one
     connect(m_penWidth, &QDoubleSpinBox::editingFinished, m_canvas, qOverload<>(&QWidget::setFocus)); // the keys P E L S T need the canvas
+    connect(m_penWidth, &QDoubleSpinBox::valueChanged, this, [this] { // an arrow click is a whole edit: no Enter follows it
+        if (m_penWidth->hasFocus())
+            m_canvas->setFocus();
+    });
     m_toolBar->addWidget(m_penWidth);
     m_editWidgets << m_penWidth;
 
@@ -365,7 +434,7 @@ void InkView::buildToolBar()
     m_editWidgets << m_curveCombo;
 
     m_toolBar->addSeparator();
-    m_toolBar->addActions({m_undoAction, m_redoAction});
+    m_toolBar->addActions({m_undoAction, m_redoAction, m_deleteAction, m_copyAction, m_pasteAction});
     m_toolBar->addSeparator();
 
     m_zoomCombo = new QComboBox(this);
@@ -487,7 +556,10 @@ void InkView::buildPageMenu()
         changePage([pattern](DocumentSettings &s) { s.background.pattern = pattern; });
     });
     connect(m_patternSize, &QDoubleSpinBox::valueChanged, this, [this](double px) {
-        changePage([px](DocumentSettings &s) { s.background.patternSize = QSizeF(px, px); });
+        changePage([px](DocumentSettings &s) {
+            const QSizeF old = s.background.patternSize; // the spin shows the width: scale both sides, a file's own ratio stays
+            s.background.patternSize = old.width() > 0 ? QSizeF(px, old.height() * px / old.width()) : QSizeF(px, px);
+        });
     });
 }
 
@@ -497,6 +569,8 @@ void InkView::setToolsEnabled(bool on)
         action->setEnabled(on);
     for (QWidget *widget : std::as_const(m_editWidgets))
         widget->setEnabled(on);
+    m_toolsOn = on;
+    updateEditActions();
 }
 
 void InkView::remember(const char *key, const QString &value)
@@ -514,7 +588,8 @@ void InkView::learnedPressure(const QString &device, double max)
     QJsonObject map = parsePressureMap(m_settings->text(QLatin1String(kPressureByDeviceKey))); // other views may have learned another pen
     map.insert(device, max);
     m_settings->setValue(QLatin1String(kPressureByDeviceKey), QString::fromUtf8(QJsonDocument(map).toJson(QJsonDocument::Compact)));
-    m_settings->save(); // a pen's maximum changes a handful of times: saving at once costs nothing
+    if (!m_pressureSave->isActive())
+        m_pressureSave->start(); // a press harder than ever raises it at every sample: one write for the run, not one per sample
 }
 
 void InkView::selectPenColour(int index)
