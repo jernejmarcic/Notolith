@@ -8,10 +8,13 @@ namespace noteAppC::ink {
 
 InkDocument::InkDocument() { m_committed = snapshot(); }
 
-void InkDocument::setSettings(const DocumentSettings &settings)
+bool InkDocument::setSettings(const DocumentSettings &settings)
 {
+    if (!settings.isUsable())
+        return false;
     m_settings = settings;
     touch();
+    return true;
 }
 
 std::vector<Item>::const_iterator InkDocument::find(qint64 t) const

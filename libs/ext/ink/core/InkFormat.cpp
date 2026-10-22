@@ -92,16 +92,6 @@ bool documentShapeIsValid(const QJsonObject &top, QString *why)
     return true;
 }
 
-/// Sizes the document divides by or loops over must be positive, and a pattern cell not so small
-/// that the renderer loops over it for ever (1e-300). Finiteness needs no check of its
-/// own: JSON has no NaN literal and Qt's parser refuses a number that overflows a double (1e999),
-/// so every number reaching here is finite (pinned by NonFiniteAndNonPositiveNumbersAreRefused).
-bool settingsArePositive(const DocumentSettings &s)
-{
-    return s.format.width > 0 && s.format.height > 0 && s.format.dpi > 0 && s.extent.width() > 0 && s.extent.height() > 0
-        && s.background.patternSize.width() >= 1e-3 && s.background.patternSize.height() >= 1e-3;
-}
-
 QJsonArray rectToJSON(const QRectF &rect)
 {
     return {number(rect.x()), number(rect.y()), number(rect.width()), number(rect.height())};
@@ -358,6 +348,10 @@ InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &
 {
     InkReadResult result;
     const QString name = nameForErrors.isEmpty() ? QStringLiteral("the ink file") : nameForErrors;
+    if (input.size() > maxInflatedBytes) { // plain JSON too: the parse peak is about ten times the file
+        result.error = QStringLiteral("%1 is too large to open").arg(name);
+        return result;
+    }
     QByteArray bytes = input;
     if (bytes.size() >= 2 && quint8(bytes[0]) == 0x1f && quint8(bytes[1]) == 0x8b) {
         QByteArray inflated;
@@ -395,7 +389,7 @@ InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &
         return result;
     }
     const DocumentSettings settings = settingsFromJSON(top.value(QStringLiteral("document")).toObject());
-    if (!settingsArePositive(settings)) {
+    if (!settings.isUsable()) { // sizes the document divides by or loops over (pinned by NonFiniteAndNonPositiveNumbersAreRefused)
         result.error = QStringLiteral("%1 could not be read: its page, extent or pattern size is not a usable size").arg(name);
         return result;
     }

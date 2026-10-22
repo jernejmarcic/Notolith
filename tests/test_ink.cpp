@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 
 #include <QApplication>
@@ -332,7 +333,7 @@ TEST(InkDocumentTest, GrowToContainTerminatesOnAZeroHeightPageAndOnHugeBounds)
     DocumentSettings settings;
     settings.format = {100, 0, 96};
     settings.extent = QRectF(0, 0, 100, 200);
-    doc.setSettings(settings);
+    doc.reset(settings, {}, {}); // setSettings refuses this; the loop guard is for whatever else reaches the document
     EXPECT_FALSE(doc.growToContain(QRectF(10, 390, 10, 20)));
     EXPECT_EQ(doc.pageCount(), 1);
     settings.format = {100, 200, 96};
@@ -597,7 +598,8 @@ TEST(InkFormatTest, GzipIsCappedWhenUnpackedAndRefusesLeftovers)
     const QByteArray bomb = gzipBytes(QByteArray(8 << 20, ' ')); // a few KB that inflate to 8 MiB
     EXPECT_LT(bomb.size(), 64 * 1024);
     EXPECT_FALSE(readInk(bomb, doc, QStringLiteral("bomb.ink"), 1 << 20).ok);
-    EXPECT_GT(kMaxInflatedBytes, qint64(100) << 20) << "the real cap leaves room for a heavy note";
+    EXPECT_EQ(kMaxInflatedBytes, qint64(64) << 20) << "a heavy note is about 2 MB; the parse peak is about 10x the file, so 64 MiB keeps it near 640 MB";
+    EXPECT_GT(kMaxInflatedBytes, qint64(16) << 20) << "and still leaves room for a heavy note";
     EXPECT_FALSE(readInk(gz + QByteArrayLiteral("junk"), doc, QStringLiteral("x.ink")).ok) << "bytes after the stream are not silently dropped";
     EXPECT_FALSE(readInk(gz + gz, doc, QStringLiteral("x.ink")).ok) << "a second gzip member is not silently dropped";
     EXPECT_FALSE(readInk(QByteArray("\x1f\x8b", 2), doc, QStringLiteral("x.ink")).ok);
@@ -610,6 +612,50 @@ TEST(InkFormatTest, GzipIsCappedWhenUnpackedAndRefusesLeftovers)
     huge.close();
     EXPECT_FALSE(loadInkFile(path, doc, &read));
     EXPECT_TRUE(read.error.contains(QStringLiteral("huge.ink")) && read.error.contains(QStringLiteral("too large"))) << read.error.toStdString();
+}
+
+// Task 8: the cap guards the bytes the parser sees, plain JSON included, not only what gzip inflates to
+// (readers other than loadInkFile hand readInk bytes without a size check of their own).
+TEST(InkFormatTest, PlainJSONIsCappedLikeGzip)
+{
+    const QByteArray plain = writeInk(sampleDocument());
+    InkDocument doc;
+    EXPECT_TRUE(readInk(plain, doc, QStringLiteral("big.ink"), plain.size()).ok) << "exactly the cap is fine";
+    doc = sampleDocument();
+    const InkReadResult read = readInk(plain, doc, QStringLiteral("big.ink"), plain.size() - 1);
+    EXPECT_FALSE(read.ok) << "one byte over the cap is refused before the parser sees it";
+    EXPECT_TRUE(read.error.contains(QStringLiteral("big.ink")) && read.error.contains(QStringLiteral("too large"))) << read.error.toStdString();
+    EXPECT_EQ(writeInk(doc), plain) << "a refused file leaves the document as it was";
+}
+
+TEST(InkDocumentTest, SetSettingsRefusesSizesTheReaderWouldRefuse)
+{
+    InkDocument doc;
+    const DocumentSettings good = doc.settings();
+    const quint64 revision = doc.revision();
+    DocumentSettings next = good;
+    next.format.width = 400;
+    EXPECT_TRUE(doc.setSettings(next));
+    EXPECT_NE(doc.revision(), revision);
+    EXPECT_EQ(doc.settings().format.width, 400);
+    const quint64 kept = doc.revision();
+    const auto refused = [&](const char *what, const std::function<void(DocumentSettings &)> &spoil) {
+        DocumentSettings bad = doc.settings();
+        spoil(bad);
+        EXPECT_FALSE(doc.setSettings(bad)) << what;
+        EXPECT_EQ(doc.revision(), kept) << what << ": a refused change touches nothing";
+        EXPECT_EQ(doc.settings().format.width, 400) << what;
+    };
+    refused("zero page width", [](DocumentSettings &s) { s.format.width = 0; });
+    refused("negative page height", [](DocumentSettings &s) { s.format.height = -1; });
+    refused("zero dpi", [](DocumentSettings &s) { s.format.dpi = 0; });
+    refused("empty extent width", [](DocumentSettings &s) { s.extent.setWidth(0); });
+    refused("empty extent height", [](DocumentSettings &s) { s.extent.setHeight(0); });
+    refused("pattern size below 1e-3", [](DocumentSettings &s) { s.background.patternSize = QSizeF(0.0005, 32); });
+    refused("NaN page width", [](DocumentSettings &s) { s.format.width = std::nan(""); });
+    DocumentSettings edge = doc.settings();
+    edge.background.patternSize = QSizeF(1e-3, 1e-3);
+    EXPECT_TRUE(doc.setSettings(edge)) << "1e-3 is the smallest usable pattern size";
 }
 
 TEST(InkFormatTest, TheWriterNeverWritesNullAndKeepsHugeNumbers)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include <memory>
 #include <vector>
 
@@ -114,6 +116,16 @@ struct DocumentSettings {
     LayoutKind layout = LayoutKind::ContinuousVertical;
     QRectF extent{0, 0, 793.701, 1122.52};
     QJsonObject extra; ///< the document object as read, whole: keys the model does not own (a studio sample's "glyph") and the unknown keys inside format, background and extent come back on save
+    /// Sizes a page can be drawn and a pattern tiled with: a zero or negative page, an empty extent or a
+    /// pattern under 1e-3 would loop the renderer for ever, so the reader refuses them and setSettings
+    /// does too. Non-finite numbers fail (the writer would write them as 0, which the reader refuses).
+    bool isUsable() const
+    {
+        const auto positive = [](double v) { return std::isfinite(v) && v > 0; };
+        const auto pattern = [](double v) { return std::isfinite(v) && v >= 1e-3; };
+        return positive(format.width) && positive(format.height) && positive(format.dpi) && positive(extent.width())
+            && positive(extent.height()) && pattern(background.patternSize.width()) && pattern(background.patternSize.height());
+    }
 };
 
 } // namespace noteAppC::ink

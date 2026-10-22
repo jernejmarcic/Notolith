@@ -21,7 +21,9 @@ public:
     InkDocument();
 
     const DocumentSettings &settings() const { return m_settings; }
-    void setSettings(const DocumentSettings &settings);
+    /// False, and nothing changes, for sizes the reader would refuse (DocumentSettings::isUsable): a file this
+    /// writes must read back. The settings UI (Track S1 Task 16) reports the refusal.
+    bool setSettings(const DocumentSettings &settings);
     const QJsonObject &extraTopLevel() const { return m_extraTop; }
     void setExtraTopLevel(const QJsonObject &extra)
     {
