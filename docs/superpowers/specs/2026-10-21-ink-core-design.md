@@ -75,7 +75,7 @@ them without re-asking.
 
 | Topic | Decision |
 |---|---|
-| `.ink` format | Plain JSON, written by `QJsonDocument::toJson(Compact)` with no custom emitter. The reader sniffs the gzip magic bytes (`1f 8b`) from v1, so a compressed variant can be added later without breaking existing files. |
+| `.ink` format | Plain JSON, written by `QJsonDocument::toJson(Compact)` with no custom emitter. The reader sniffs the gzip magic bytes (`1f 8b`) from v1 and inflates such a file (read is supported, in the editor and in the host's index reader); the writer always produces plain JSON. |
 | Paper | Chosen per note from Rnote's four layouts. The default is A4 pages stacked downward, with a page added as the ink grows. |
 | Typed text box | It is the real Markdown editor (canvas text-card pattern), so links, tags and formatting work in it. |
 | Search | Text boxes are indexed now. Recognised handwriting is indexed later, by Spec 6. |
@@ -326,7 +326,7 @@ and 6 and builds 1 and 6; seams 3, 4 and 5 are specified here so Specs 3 and
 | 3. Block view object | Spec 3 | `setFileEmbedView(suffixes, factory)` beside `setFileEmbedRenderer` (MarkdownEditor.h:527). The object paints into the editor's painter, takes events over its rectangle, reports a height for a width, and calls back with a changed rectangle. |
 | 4. Overlay and text geometry | Spec 4 | A painted overlay after `paintBlocks` (MarkdownEditor.cpp:4538). Three geometry calls become public: `offsetAt` (h:1938), a new `rectsForRange`, and per-character rectangles. |
 | 5. Wrap a range | Spec 4 | A public `wrapRange(Range, marker)`. It never toggles (unlike `toggleWrap`, EditingCommands.cpp:951-985), pushes one undo step and works in Reading mode. |
-| 6. Foreign-file index reader | Spec 1 | `Indexer::setForeignReader(suffix, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. The `.ink` reader is host-side: `MainWindow` registers it next to the `.ipynb` one (`updateNotebookIndex()`), parsing the JSON with `QJsonDocument` and returning the markdown of every `textbox` item. It never loads a module and `libs/ui` links no ink library; the key names are duplicated as string literals, with a comment pointing at section 5. A gzip-compressed `.ink` is not indexed until a later spec teaches the host reader to inflate. |
+| 6. Foreign-file index reader | Spec 1 | `Indexer::setForeignReader(suffix, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. The `.ink` reader is host-side: `MainWindow` registers it next to the `.ipynb` one (`updateNotebookIndex()`), parsing the JSON with `QJsonDocument` and returning the markdown of every `textbox` item. It never loads a module and `libs/ui` links no ink library; the key names are duplicated as string literals, with a comment pointing at section 5. The host reader inflates a gzip-compressed `.ink` too (zlib, one member, at most 16 MiB inflated, the same as its plain-file cap); a file over 16 MiB is not indexed. It is registered for every window whether or not the ink module is installed, loaded or switched on (it is never gated on the feature). |
 
 Seam 2 is declared in Spec 1, because the module host struct carries it, but
 it is wired only in Spec 3.
@@ -452,8 +452,8 @@ seven page styles of Jernej's Rnote fork are ported with attribution.
   `<folder>/<name>.ink` with the default layout from settings.
 - **Index.** The host-side `.ink` reader (seam 6) extracts every text box's
   Markdown, so `[[links]]` and `#tags` written in text boxes show up in
-  backlinks, the graph and search, whether or not the module is installed
-  or loaded.
+  backlinks, the graph and search, whether or not the module is installed,
+  loaded or switched on (the host registers the reader unconditionally).
 - **Save contract.** A view opened without a file (the glyph studio) still
   honours `isModified` and `save()`: the tab shows the modified mark, and
   closing or quitting asks, or autosaves, through the same path as a file
