@@ -18,7 +18,6 @@
 #include "TileCache.h"
 
 class QPainter;
-class QPlainTextEdit;
 
 namespace noteAppC::ink {
 
@@ -112,9 +111,29 @@ public:
     /// step (an unchanged text commits nothing, an emptied box is deleted, a new box with no text is never added).
     /// The box is drawn through `renderer` from its Markdown: on the UI thread in paintEvent, never in a tile job (R5),
     /// never during a pen gesture, and cached per item (setTextRenderer; InkView builds the host's MarkdownEditor).
-    /// `physicalSize` is the box's size in document px: the layout is the same at every zoom, the pixmap is scaled.
-    using TextRenderer = std::function<QPixmap(const QString &markdown, const QSizeF &physicalSize)>;
+    /// `size` is the box's size in document px: the layout is the same at every zoom. `scale` is device px per
+    /// document px: the settled zoom (rounded up to a step, so a zoom-out reuses the picture) times the pixel ratio,
+    /// kept so that neither side passes kMaxTextDevicePx. The renderer returns a pixmap of size * scale device px
+    /// whose devicePixelRatio is `scale`, so that painting it is one pixel to one pixel. It is given at most
+    /// kMaxTextRenderChars of the Markdown, cut at a line end and ended with an ellipsis; the stored text is whole.
+    /// The pictures are cached up to kTextCacheBytes, the least recently painted going first.
+    using TextRenderer = std::function<QPixmap(const QString &markdown, const QSizeF &size, qreal scale)>;
     void setTextRenderer(TextRenderer renderer);
+    static constexpr int kMaxTextRenderChars = 16384;
+    static constexpr int kMaxTextDevicePx = 4096;
+    static constexpr qsizetype kTextCacheBytes = 32 * 1024 * 1024;
+    qsizetype textCacheBytes() const; ///< what the cached pictures of text boxes hold
+    /// The editor over a box. Without a factory it is a QPlainTextEdit (inkcore links no editor); a host installs its
+    /// own: `create` makes a parentless widget holding `markdown` (caret at the end), `read` gives back what it holds,
+    /// and `setZoom` (optional) is called when the canvas zoom changes while it is open. The canvas names it
+    /// inkTextEditor, places it over the box, and ends the edit on Escape or when it loses focus (a child of it taking
+    /// the focus is not losing it).
+    struct TextEditorFactory {
+        std::function<QWidget *(const QString &markdown)> create;
+        std::function<QString(const QWidget *editor)> read;
+        std::function<void(QWidget *editor, double zoom)> setZoom;
+    };
+    void setTextEditorFactory(TextEditorFactory factory);
     void invalidateTextCache(); ///< the renderer would draw differently now (theme, fonts, page colour)
     static constexpr QSizeF kNewTextBoxSize{260, 72}; ///< document px
     static constexpr double kMaxTextBoxSide = 4096;   ///< document px: a larger box is laid out at this size and stretched
@@ -261,15 +280,21 @@ private:
     struct TextPixmap { ///< what a box was drawn from: a move keeps the picture, new text or a new size or page colour does not
         QString markdown;
         QSize size;
-        qreal dpr = 1.0;
+        qint64 scaleKey = 0; ///< the scale it was drawn at, x 1000 rounded
         QColor background;
         QPixmap pixmap;
+        quint64 used = 0;    ///< m_textTick when it was last painted
     };
     std::map<qint64, TextPixmap> m_textCache;
-    QPointer<QPlainTextEdit> m_textEdit; ///< the editor over the box in flight
+    quint64 m_textTick = 0;
+    TextEditorFactory m_textEditorFactory;
+    QString readTextEditor() const; ///< what the open editor holds
+    double textScale(const QSizeF &logical) const; ///< device px per document px for a box of that size, at the settled zoom
+    QPointer<QWidget> m_textEdit; ///< the editor over the box in flight (a QPlainTextEdit, or the factory's)
     qint64 m_textEditT = 0;
     QRectF m_textEditRect;       ///< document px: where the box is (a new box is not in the document yet)
-    QString m_textEditOriginal;  ///< the box's Markdown when the editor opened
+    QString m_textEditOriginal;  ///< what the editor held when it opened (its own reading of the box's Markdown)
+    double m_textEditZoom = 0;   ///< the zoom the editor was last told (0: not yet)
 };
 
 } // namespace noteAppC::ink

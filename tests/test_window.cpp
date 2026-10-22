@@ -8211,7 +8211,7 @@ TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSe
 TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
 {
     write(QStringLiteral("Sketch.ink"),
-          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
+          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{\"background\":{\"color\":\"#f0e6c8\",\"pattern\":\"none\"}},\"items\":[\n"
           "{\"type\":\"textbox\",\"t\":1,\"layer\":\"user\",\"rect\":[40,40,300,60],\"markdown\":\"[[Welcome]]\"}\n]}\n");
     MainWindow window;
     window.openVault(dir.path());
@@ -8241,6 +8241,8 @@ TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
     EXPECT_EQ(linkPixelsIn(QRect(0, 120, 790, 400)), 0) << "nothing link-coloured outside the box";
     const QImage shot = canvas->grab().toImage();
     const qreal dpr = shot.devicePixelRatio();
-    EXPECT_GT(shot.pixelColor(int(330 * dpr), int(60 * dpr)).lightness(), 200) << "the box is clear: the page shows through, not a dark card";
+    // A cream page: an opaque white or dark card behind the text would not be this colour.
+    EXPECT_EQ(shot.pixelColor(int(330 * dpr), int(60 * dpr)), QColor(0xf0, 0xe6, 0xc8)) << "the box is clear: the page shows through, not a card";
+    EXPECT_EQ(shot.pixelColor(int(45 * dpr), int(75 * dpr)), QColor(0xf0, 0xe6, 0xc8)) << "also at the box's left edge";
 }
 #endif

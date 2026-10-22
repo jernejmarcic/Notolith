@@ -1,5 +1,7 @@
 #include "InkView.h"
 
+#include <algorithm>
+
 #include <QAction>
 #include <QActionGroup>
 #include <QDateTime>
@@ -95,7 +97,14 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     m_textAction->setCheckable(true);
     m_textAction->setToolTip(tr("Click to write a text box, or to edit one; Markdown, like a note (T)"));
     connect(m_textAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Text); });
-    m_canvas->setTextRenderer([this](const QString &markdown, const QSizeF &size) { return renderText(markdown, size); });
+    m_canvas->setTextRenderer([this](const QString &markdown, const QSizeF &size, qreal scale) { return renderText(markdown, size, scale); });
+    m_canvas->setTextEditorFactory({[this](const QString &markdown) { return makeTextEditor(markdown); },
+                                    [](const QWidget *editor) { return static_cast<const MarkdownEditor *>(editor)->noteText(); },
+                                    [this](QWidget *editor, double zoom) {
+                                        Theme paper = paperTheme(false);
+                                        paper.setToken(QStringLiteral("--font-text-size"), QString::number(std::max(6, qRound(paper.value(QStringLiteral("--font-text-size")).toInt() * zoom))));
+                                        static_cast<MarkdownEditor *>(editor)->setTheme(paper);
+                                    }});
     m_undoAction = new QAction(tr("Undo"), this);
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
@@ -353,44 +362,63 @@ bool InkView::save(QString *error)
     return true;
 }
 
-namespace {
-// MarkdownEditor keeps this much clear at the left and right and above the first line (MarkdownEditor_p.h:
-// m_minimumSideMargin, m_topPadding). A text box is a small rect on a page, so the editor is made that much bigger and
-// the picture cropped back to the box: the text then fills it. If the editor changes them the box only gets more or less padding.
-constexpr int kEditorSideMargin = 24;
-constexpr int kEditorTopPadding = 28;
-} // namespace
-
-/// A text box is drawn by the host's note editor, as a canvas text card is (libs/ext/canvas/CanvasRender.cpp,
-/// makeContentEditor): Reading mode, no scroll bars, the Markdown parsed before the grab. The theme is the page's, not the
-/// app's: the page is paper (white by default, whatever the app theme is), so a dark app theme would put light text on it;
-/// the background is clear, so the page's ruling shows through. The app's font overrides do carry over.
-/// Runs on the UI thread only (R5): a widget grab.
-QPixmap InkView::renderText(const QString &markdown, const QSizeF &size) const
+/// The theme the text on a page is drawn in. It is the page's, not the app's: the page is paper (white by default,
+/// whatever the app theme is), so a dark app theme would put light text on it. `clear` leaves the background
+/// transparent (a picture over the page, so the ruling shows through); otherwise it is the page's colour (the editor
+/// over a box covers what is under it). The app's font overrides do carry over.
+Theme InkView::paperTheme(bool clear) const
 {
     const QColor page = m_canvas->document().settings().background.color;
     Theme paper = Theme::builtin(page.lightness() < 128 ? Theme::Mode::Dark : Theme::Mode::Light);
-    paper.setToken(QStringLiteral("--background-primary"), QStringLiteral("transparent"));
+    paper.setToken(QStringLiteral("--background-primary"), clear ? QStringLiteral("transparent") : page.name());
     if (m_hostTheme)
         paper.setFontOverrides(m_hostTheme->interfaceFontOverride(), m_hostTheme->textFontOverride(), m_hostTheme->monospaceFontOverride());
-    const QSize box = size.toSize();
+    return paper;
+}
+
+/// A text box is drawn by the host's note editor, as a canvas text card is (libs/ext/canvas/CanvasRender.cpp,
+/// makeContentEditor): Reading mode, no scroll bars, the Markdown parsed before the grab, no padding and no readable
+/// line length (a 700 px column would centre the text of a wide box). The widget is laid out at the box's size in
+/// document px and painted onto a pixmap of size * scale device px, so the text is vector-sharp at any zoom.
+/// Runs on the UI thread only (R5): a widget grab.
+QPixmap InkView::renderText(const QString &markdown, const QSizeF &size, qreal scale) const
+{
+    const QSize box(std::max(1, qRound(size.width())), std::max(1, qRound(size.height())));
     MarkdownEditor editor;
-    editor.setTheme(paper);
+    editor.setTheme(paperTheme(true));
     editor.setMode(MarkdownEditor::Mode::Reading);
     editor.setFrameShape(QFrame::NoFrame);
     // The app's style sheet paints a background under every scroll area; this one is cleared so the page shows through.
     editor.setStyleSheet(QStringLiteral("QAbstractScrollArea, QAbstractScrollArea > QWidget { background: transparent; border: none; }"));
     editor.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     editor.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    editor.resize(box.width() + 2 * kEditorSideMargin, box.height() + kEditorTopPadding);
+    editor.setViewportPadding(0, 0);
+    editor.setReadableLineLength(false);
+    editor.resize(box);
     editor.setNoteText(markdown);
     editor.finishParse(); // a long box parses on the pool otherwise: take it now rather than grabbing blank text
-    const qreal dpr = editor.devicePixelRatioF();
-    QPixmap picture((QSizeF(box) * dpr).toSize());
-    picture.setDevicePixelRatio(dpr);
+    QPixmap picture(QSize(std::max(1, qRound(box.width() * scale)), std::max(1, qRound(box.height() * scale))));
+    picture.setDevicePixelRatio(scale);
     picture.fill(Qt::transparent);
-    editor.render(&picture, QPoint(), QRegion(QRect(QPoint(kEditorSideMargin, kEditorTopPadding), box)), QWidget::DrawChildren); // not DrawWindowBackground
+    editor.render(&picture, QPoint(), QRegion(), QWidget::DrawChildren); // not DrawWindowBackground
     return picture;
+}
+
+/// The editor over a box while it is typed in: the same editor, in live preview, laid out like the picture (no padding,
+/// the page's colour behind it, a thin frame) so that the text does not move when the edit ends.
+QWidget *InkView::makeTextEditor(const QString &markdown) const
+{
+    const QColor page = m_canvas->document().settings().background.color;
+    auto *editor = new MarkdownEditor;
+    editor->setTheme(paperTheme(false));
+    editor->setMode(MarkdownEditor::Mode::LivePreview);
+    editor->setStyleSheet(QStringLiteral("QAbstractScrollArea { background: %1; border: 1px solid %2; } QAbstractScrollArea > QWidget { background: %1; border: none; }")
+                              .arg(page.name(), palette().highlight().color().name()));
+    editor->setViewportPadding(0, 0);
+    editor->setReadableLineLength(false);
+    editor->setNoteText(markdown);
+    editor->setCursorOffset(markdown.size());
+    return editor;
 }
 
 void InkView::setTheme(const Theme &theme)

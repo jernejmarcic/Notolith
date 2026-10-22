@@ -63,7 +63,9 @@ private:
     struct Parsed;
     void adopt(const QString &path, const DiskStamp &stamp, const InkReadResult &result);
     void onEdited();
-    QPixmap renderText(const QString &markdown, const QSizeF &size) const;
+    QPixmap renderText(const QString &markdown, const QSizeF &size, qreal scale) const;
+    QWidget *makeTextEditor(const QString &markdown) const;
+    Theme paperTheme(bool clear) const; ///< the page's theme for the text on it: see renderText
 
     const noteAppC::Settings *m_settings;
     QScrollArea *m_area;

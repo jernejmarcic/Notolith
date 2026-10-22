@@ -104,6 +104,9 @@ public:
     bool lineNumbers() const;
 
     void setReadableLineLength(bool on);
+    /// The clear space at the left and right of the text and above the first line, in pixels (24 and 28 unless set).
+    /// A host that draws the editor into a small rect, as an ink text box does, sets both to 0.
+    void setViewportPadding(int side, int top);
     void setContentWidth(int pixels);
 
     /// CommonMark's rule: every newline is a line break. Off, a single newline

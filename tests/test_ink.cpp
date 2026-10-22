@@ -22,6 +22,7 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QElapsedTimer>
 #include <QScrollArea>
@@ -3581,28 +3582,36 @@ void expectTilesMatchADirectRender()
 TEST(InkCanvasTest, TilesJoinWithoutASeamAndMatchADirectRender) { expectTilesMatchADirectRender(); }
 
 // Runs in the ink_dpr2 ctest entry too (QT_SCALE_FACTOR=2): a cell is 256 logical px there.
-// A text box's picture comes from a widget grab, which is at the screen's pixel ratio: the whole of it fills the box.
-TEST(InkCanvasDprTest, ATextBoxPictureAtTheScreensPixelRatioFillsItsBox)
+// A text box's picture is rendered for the settled zoom and the screen's pixel ratio (I1): a 1 px line of the box shows
+// as exactly zoom x ratio device px, hard-edged, not as an upscaled smear. Runs in ink_dpr2 and ink_dpr15 too.
+TEST(InkCanvasDprTest, ATextBoxPictureIsRenderedForTheZoomAndTheScreenAndStaysSharp)
 {
     CanvasFixture f;
-    const double ratio = f.canvas.devicePixelRatio();
-    f.canvas.setTextRenderer([ratio](const QString &, const QSizeF &size) {
-        QPixmap pixmap((size * ratio).toSize());
-        pixmap.setDevicePixelRatio(ratio);
-        pixmap.fill(QColor(220, 0, 0));
+    const double ratio = f.canvas.devicePixelRatioF();
+    qreal asked = 0;
+    f.canvas.setTextRenderer([&asked](const QString &, const QSizeF &size, qreal scale) {
+        asked = scale;
+        QPixmap pixmap((size * scale).toSize());
+        pixmap.setDevicePixelRatio(scale);
+        pixmap.fill(Qt::white);
         QPainter painter(&pixmap);
-        painter.fillRect(QRectF(size.width() / 2, 0, size.width() / 2, size.height()), QColor(0, 0, 220)); // the right half, in logical px
+        painter.fillRect(QRectF(50, 0, 1, size.height()), Qt::black); // one logical px wide, at x = 50 in the box
         return pixmap;
     });
-    f.canvas.document().addItem([] { Item box; box.type = Item::Type::TextBox; box.textBox = std::make_shared<TextBox>(TextBox{QRectF(40, 60, 200, 100), QStringLiteral("x")}); return box; }());
+    f.canvas.document().addItem([] { Item box; box.type = Item::Type::TextBox; box.textBox = std::make_shared<TextBox>(TextBox{QRectF(40, 60, 100, 80), QStringLiteral("x")}); return box; }());
     f.canvas.documentReplaced();
-    const QImage frame = settledGrab(f.canvas);
-    const auto at = [&](double x, double y) { return frame.pixelColor(int(x * ratio), int(y * ratio)); };
-    EXPECT_EQ(at(50, 70), QColor(220, 0, 0)) << "the left edge of the box";
-    EXPECT_EQ(at(130, 150), QColor(220, 0, 0)) << "just left of the middle, bottom";
-    EXPECT_EQ(at(150, 70), QColor(0, 0, 220)) << "just right of the middle";
-    EXPECT_EQ(at(230, 150), QColor(0, 0, 220)) << "the bottom-right corner area of the box";
-    EXPECT_NE(at(250, 150), QColor(0, 0, 220)) << "and nothing past it";
+    for (const double zoom : {1.0, 2.0}) {
+        f.canvas.setZoom(zoom);
+        const QImage frame = settledGrab(f.canvas);
+        EXPECT_GE(asked, zoom * ratio - 1e-6) << "zoom " << zoom;
+        const int first = qRound(90 * zoom * ratio); // document x 40 + 50
+        const int width = qRound(zoom * ratio);
+        const int y = qRound(100 * zoom * ratio);
+        EXPECT_GT(frame.pixelColor(first - 1, y).lightness(), 250) << "zoom " << zoom << ": nothing left of the line";
+        for (int i = 0; i < width; ++i)
+            EXPECT_LT(frame.pixelColor(first + i, y).lightness(), 5) << "zoom " << zoom << ": the line, device px " << i;
+        EXPECT_GT(frame.pixelColor(first + width, y).lightness(), 250) << "zoom " << zoom << ": nothing right of the line";
+    }
 }
 
 TEST(InkCanvasDprTest, TilesJoinWithoutASeamAtTheScreensPixelRatio) { expectTilesMatchADirectRender(); }
@@ -4757,18 +4766,23 @@ struct TextStub {
     std::vector<QThread *> threads;
     QSizeF lastSize;
     QString lastMarkdown;
+    qreal lastScale = 0;     ///< device px per document px the canvas asked for
+    QSize lastPixmapSize;    ///< what the stub returned, in device px
     InkCanvas::TextRenderer renderer()
     {
-        return [this](const QString &markdown, const QSizeF &size) {
+        return [this](const QString &markdown, const QSizeF &size, qreal scale) {
             ++calls;
             threads.push_back(QThread::currentThread());
             lastSize = size;
             lastMarkdown = markdown;
-            QPixmap pixmap(size.toSize());
+            lastScale = scale;
+            QPixmap pixmap((size * scale).toSize());
+            pixmap.setDevicePixelRatio(scale);
+            lastPixmapSize = pixmap.size();
             pixmap.fill(QColor(0xc0, 0xe0, 0xff));
             QPainter painter(&pixmap);
             painter.setPen(Qt::black);
-            painter.drawText(pixmap.rect(), Qt::TextWordWrap, markdown);
+            painter.drawText(QRectF(QPointF(), size), Qt::TextWordWrap, markdown.left(200));
             return pixmap;
         };
     }
@@ -4942,29 +4956,37 @@ TEST(InkCanvasTest, TextRendersThroughTheInstalledRenderer)
     EXPECT_EQ(stub.lastSize, QSizeF(200, 60)) << "the box's size in document px";
     EXPECT_EQ(shot.pixelColor(240, 100), QColor(0xc0, 0xe0, 0xff)) << "the pixmap is painted over the tiles";
     EXPECT_NE(shot.pixelColor(30, 100), QColor(0xc0, 0xe0, 0xff)) << "and only inside the box";
+    const double dpr = f.canvas.devicePixelRatioF();
+    EXPECT_GE(stub.lastScale, dpr - 1e-6) << "drawn for the screen's pixels";
     f.canvas.grab();
     f.canvas.grab();
     EXPECT_EQ(stub.calls, 1) << "cached: a second paint at the same zoom renders nothing";
     f.canvas.setZoom(2.0);
+    f.canvas.grab();
+    EXPECT_EQ(stub.calls, 1) << "mid-pinch: the old picture is stretched until the zoom settles, as the tiles are";
     settledGrab(f.canvas);
-    EXPECT_EQ(stub.calls, 1) << "the layout does not depend on the zoom: the pixmap is only scaled";
+    EXPECT_EQ(stub.calls, 2) << "settled at 2: a picture with the pixels for it, not the old one blown up (I1)";
+    EXPECT_GE(stub.lastScale, 2.0 * dpr - 1e-6);
+    EXPECT_EQ(stub.lastSize, QSizeF(200, 60)) << "the layout is still the box's size in document px";
+    EXPECT_EQ(stub.lastPixmapSize, QSize(qRound(200 * stub.lastScale), qRound(60 * stub.lastScale)));
     f.canvas.setZoom(1.0);
     settledGrab(f.canvas);
+    EXPECT_EQ(stub.calls, 2) << "zooming back out reuses the sharper picture";
     // Moving the box keeps its pixmap; changing the text or the size draws a new one.
     Item moved = *f.canvas.document().item(t);
     moved.textBox = std::make_shared<TextBox>(TextBox{QRectF(80, 90, 200, 60), QStringLiteral("hello")});
     f.canvas.document().replaceItem(t, moved);
     f.canvas.documentReplaced();
     f.canvas.grab();
-    EXPECT_EQ(stub.calls, 1) << "a move is not a re-render";
+    EXPECT_EQ(stub.calls, 2) << "a move is not a re-render";
     moved.textBox = std::make_shared<TextBox>(TextBox{QRectF(80, 90, 200, 60), QStringLiteral("changed")});
     f.canvas.document().replaceItem(t, moved);
     f.canvas.documentReplaced();
     f.canvas.grab();
-    EXPECT_EQ(stub.calls, 2);
+    EXPECT_EQ(stub.calls, 3);
     f.canvas.invalidateTextCache();
     f.canvas.grab();
-    EXPECT_EQ(stub.calls, 3) << "a theme change asks for new pixmaps";
+    EXPECT_EQ(stub.calls, 4) << "a theme change asks for new pixmaps";
 }
 
 TEST(InkCanvasTest, ANewTextBoxIsNotRenderedWhileThePenIsMoving)
@@ -5095,6 +5117,217 @@ TEST(InkCanvasTest, BeginEditingTextRefusesAnItemThatIsNotATextBox)
     EXPECT_FALSE(f.canvas.beginEditingText(stroke));
     EXPECT_FALSE(f.canvas.beginEditingText(9999));
     EXPECT_FALSE(f.canvas.isEditingText());
+}
+
+// Fix round 1 (I4b): real key events, through the event path, while an editor is open.
+TEST(InkCanvasTest, KeysSentWhileAnEditorIsOpenReachNeitherTheToolsNorTheDocument)
+{
+    CanvasFixture f;
+    f.canvas.document().addStroke(line(10, 200, 300, 220));
+    const qint64 t = addTextBox(f.canvas, QRectF(50, 50, 200, 60), QStringLiteral("old"));
+    f.canvas.setTool(InkCanvas::Tool::Text);
+    click(f.canvas, QPoint(100, 70));
+    ASSERT_TRUE(f.canvas.isEditingText());
+    QPlainTextEdit *editor = textEditorOf(f.canvas);
+    ASSERT_NE(editor, nullptr);
+    const size_t items = f.canvas.document().items().size();
+    ASSERT_EQ(items, 2u);
+    const auto keys = std::vector<std::pair<Qt::Key, Qt::KeyboardModifiers>>{
+        {Qt::Key_S, {}}, {Qt::Key_L, {}}, {Qt::Key_E, {}}, {Qt::Key_E, Qt::ShiftModifier},
+        {Qt::Key_P, {}}, {Qt::Key_Delete, {}}, {Qt::Key_Z, Qt::ControlModifier}, {Qt::Key_Y, Qt::ControlModifier}};
+    for (QWidget *target : {static_cast<QWidget *>(editor), static_cast<QWidget *>(&f.canvas)}) {
+        for (const auto &[key, modifiers] : keys) {
+            QTest::keyClick(target, key, modifiers);
+            ASSERT_TRUE(f.canvas.isEditingText()) << "key " << key;
+            ASSERT_EQ(f.canvas.tool(), InkCanvas::Tool::Text) << "key " << key << " changed the tool";
+            ASSERT_EQ(f.canvas.document().items().size(), items) << "key " << key << " changed the items";
+            ASSERT_TRUE(f.canvas.selection().empty());
+        }
+    }
+    f.canvas.commitText();
+    EXPECT_EQ(f.canvas.document().items().size(), items);
+    ASSERT_NE(f.canvas.document().item(t), nullptr) << "the box survived Delete";
+}
+
+TEST(InkCanvasTest, LosingFocusCommitsTheEditor)
+{
+    CanvasFixture f;
+    const qint64 t = addTextBox(f.canvas, QRectF(50, 50, 200, 60), QStringLiteral("old"));
+    f.canvas.document().markSaved();
+    f.canvas.setTool(InkCanvas::Tool::Text);
+    click(f.canvas, QPoint(100, 70));
+    QPlainTextEdit *editor = textEditorOf(f.canvas);
+    ASSERT_NE(editor, nullptr);
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    editor->clearFocus();
+    EXPECT_FALSE(f.canvas.isEditingText());
+    EXPECT_EQ(edited.count(), 1) << "one history step";
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old!"));
+}
+
+// A file written elsewhere can hold CRLF or a non-breaking space: the editor's own text differs from it at once, and
+// that is not an edit.
+TEST(InkCanvasTest, AnUntouchedBoxWithCRLFOrNBSPIsNotDirtyAndCommitsNothing)
+{
+    CanvasFixture f;
+    const QString markdown = QStringLiteral("a\r\nb c");
+    const qint64 t = addTextBox(f.canvas, QRectF(50, 50, 200, 60), markdown);
+    f.canvas.document().markSaved();
+    f.canvas.setTool(InkCanvas::Tool::Text);
+    click(f.canvas, QPoint(100, 70));
+    ASSERT_TRUE(f.canvas.isEditingText());
+    EXPECT_FALSE(f.canvas.isTextEditDirty());
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    f.canvas.commitText();
+    EXPECT_EQ(edited.count(), 0);
+    EXPECT_FALSE(f.canvas.document().isModified());
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, markdown);
+}
+
+// A box larger than the device limit is rendered at a lower scale, not at a size that would eat the memory (I1).
+TEST(InkCanvasTest, ABigBoxIsRenderedWithinTheDeviceSideLimit)
+{
+    CanvasFixture f;
+    TextStub stub;
+    f.canvas.setTextRenderer(stub.renderer());
+    addTextBox(f.canvas, QRectF(0, 100, 3000, 100), QStringLiteral("wide"));
+    f.canvas.setZoom(2.0);
+    settledGrab(f.canvas);
+    ASSERT_GE(stub.calls, 1);
+    EXPECT_LE(stub.lastPixmapSize.width(), 4096);
+    EXPECT_GT(stub.lastScale, 0.0);
+}
+
+// I4: the renderer is only ever given a bounded text; the stored text is whole.
+TEST(InkCanvasTest, AHostileBoxIsRenderedTruncatedAtALineEndAndStoredWhole)
+{
+    CanvasFixture f;
+    TextStub stub;
+    f.canvas.setTextRenderer(stub.renderer());
+    QString lines;
+    for (int i = 0; lines.size() < 300000; ++i)
+        lines += QStringLiteral("line %1 of a long box\n").arg(i);
+    const qint64 t = addTextBox(f.canvas, QRectF(10, 10, 200, 100), lines);
+    f.canvas.grab();
+    ASSERT_EQ(stub.calls, 1);
+    EXPECT_LE(stub.lastMarkdown.size(), InkCanvas::kMaxTextRenderChars + 8);
+    EXPECT_TRUE(stub.lastMarkdown.startsWith(QStringLiteral("line 0 of a long box\nline 1")));
+    EXPECT_TRUE(stub.lastMarkdown.contains(QChar(0x2026))) << "a visible ellipsis says the text goes on";
+    EXPECT_FALSE(stub.lastMarkdown.contains(QStringLiteral("line 900")) && stub.lastMarkdown.size() > InkCanvas::kMaxTextRenderChars + 8);
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, lines) << "the stored text is untouched";
+    // No line end to cut at: cut at the limit.
+    f.canvas.document().commit();
+    const qint64 u = addTextBox(f.canvas, QRectF(10, 150, 200, 100), QString(300000, QLatin1Char('x')));
+    f.canvas.grab();
+    EXPECT_EQ(stub.calls, 2);
+    EXPECT_LE(stub.lastMarkdown.size(), InkCanvas::kMaxTextRenderChars + 8);
+    EXPECT_EQ(f.canvas.document().item(u)->textBox->markdown.size(), 300000);
+    // A short text goes through as it is.
+    addTextBox(f.canvas, QRectF(10, 260, 200, 30), QStringLiteral("short"));
+    f.canvas.grab();
+    EXPECT_EQ(stub.lastMarkdown, QStringLiteral("short"));
+}
+
+// I4: the pictures of boxes are cached up to a byte budget, the least recently painted going first.
+TEST(InkCanvasTest, TheTextPicturesStayWithinTheirBudgetAndTheLeastRecentlyPaintedGoFirst)
+{
+    CanvasFixture f;
+    TextStub stub;
+    f.canvas.setTextRenderer(stub.renderer());
+    constexpr int boxes = 20;
+    DocumentSettings settings = f.canvas.document().settings();
+    settings.extent = QRectF(0, 0, 1000, 510.0 * boxes);
+    f.canvas.document().setSettings(settings);
+    for (int i = 0; i < boxes; ++i) {
+        Item box;
+        box.type = Item::Type::TextBox;
+        box.textBox = std::make_shared<TextBox>(TextBox{QRectF(0, 510.0 * i, 1000, 500), QStringLiteral("box %1").arg(i)});
+        f.canvas.document().addItem(box);
+    }
+    f.canvas.document().commit();
+    f.canvas.documentReplaced();
+    f.canvas.resize(1000, 510 * boxes);
+    const auto paintBox = [&](int i) {
+        QImage image(1000, 500, QImage::Format_ARGB32_Premultiplied);
+        f.canvas.render(&image, QPoint(), QRegion(QRect(0, 510 * i, 1000, 500)));
+    };
+    for (int i = 0; i < boxes; ++i) {
+        paintBox(i);
+        EXPECT_LE(f.canvas.textCacheBytes(), InkCanvas::kTextCacheBytes) << "after box " << i;
+    }
+    ASSERT_EQ(stub.calls, boxes) << "each was rendered once";
+    EXPECT_GT(f.canvas.textCacheBytes(), 0);
+    paintBox(boxes - 1);
+    EXPECT_EQ(stub.calls, boxes) << "the last painted is still cached";
+    paintBox(0);
+    EXPECT_EQ(stub.calls, boxes + 1) << "the first painted was evicted";
+}
+
+namespace {
+/// An editor that is not a QPlainTextEdit: what a host installs to edit in its own editor.
+struct LineEditFactory {
+    std::vector<double> zooms;
+    InkCanvas::TextEditorFactory factory()
+    {
+        return {[](const QString &markdown) -> QWidget * { return new QLineEdit(markdown); },
+                [](const QWidget *editor) { return static_cast<const QLineEdit *>(editor)->text(); },
+                [this](QWidget *, double zoom) { zooms.push_back(zoom); }};
+    }
+};
+QLineEdit *lineEditOf(InkCanvas &canvas)
+{
+    for (auto *edit : canvas.findChildren<QLineEdit *>(QStringLiteral("inkTextEditor")))
+        if (!edit->isHidden())
+            return edit;
+    return nullptr;
+}
+} // namespace
+
+// I3: the canvas does not know the host's editor; it is handed one.
+TEST(InkCanvasTest, AnInstalledEditorFactoryProvidesTheEditorAndItsTextIsWhatCommits)
+{
+    CanvasFixture f;
+    LineEditFactory host;
+    f.canvas.setTextEditorFactory(host.factory());
+    const qint64 t = addTextBox(f.canvas, QRectF(50, 50, 200, 60), QStringLiteral("old"));
+    f.canvas.document().markSaved();
+    f.canvas.setTool(InkCanvas::Tool::Text);
+    click(f.canvas, QPoint(100, 70));
+    QLineEdit *edit = lineEditOf(f.canvas);
+    ASSERT_NE(edit, nullptr) << "the factory's widget is the editor";
+    EXPECT_EQ(textEditorOf(f.canvas), nullptr);
+    EXPECT_EQ(edit->text(), QStringLiteral("old"));
+    EXPECT_EQ(edit->geometry().topLeft(), QPoint(50, 50)) << "over the box";
+    EXPECT_FALSE(f.canvas.isTextEditDirty());
+    f.canvas.setZoom(2.0);
+    ASSERT_FALSE(host.zooms.empty());
+    EXPECT_EQ(host.zooms.back(), 2.0) << "the host is told the zoom";
+    EXPECT_EQ(edit->geometry().topLeft(), QPoint(100, 100));
+    f.canvas.setZoom(1.0);
+    QTest::keyClicks(edit, QStringLiteral("!"));
+    EXPECT_TRUE(f.canvas.isTextEditDirty());
+    QTest::keyClick(edit, Qt::Key_Escape);
+    EXPECT_FALSE(f.canvas.isEditingText());
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old!"));
+    // A new box, ended by losing focus; an empty one never added.
+    click(f.canvas, QPoint(300, 200));
+    edit = lineEditOf(f.canvas);
+    ASSERT_NE(edit, nullptr);
+    QTest::keyClicks(edit, QStringLiteral("new"));
+    edit->clearFocus();
+    EXPECT_FALSE(f.canvas.isEditingText());
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    click(f.canvas, QPoint(10, 250));
+    ASSERT_NE(lineEditOf(f.canvas), nullptr);
+    QTest::keyClick(lineEditOf(f.canvas), Qt::Key_Escape);
+    EXPECT_EQ(f.canvas.document().items().size(), 2u) << "an empty new box is discarded";
+    // Undo while editing commits first, then undoes that step.
+    click(f.canvas, QPoint(100, 70));
+    QTest::keyClicks(lineEditOf(f.canvas), QStringLiteral("?"));
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_FALSE(f.canvas.isEditingText());
+    EXPECT_EQ(f.canvas.document().item(t)->textBox->markdown, QStringLiteral("old!"));
 }
 
 int main(int argc, char **argv)

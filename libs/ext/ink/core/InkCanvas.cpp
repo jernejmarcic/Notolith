@@ -5,6 +5,7 @@
 #include <map>
 #include <utility>
 
+#include <QApplication>
 #include <QFocusEvent>
 #include <QGestureEvent>
 #include <QKeyEvent>
@@ -801,7 +802,35 @@ void InkCanvas::rasteriseNewSegments()
 
 namespace {
 constexpr double kTextEditorFontPx = 16.0; ///< document px at zoom 1: the size the editor over a box types in
-constexpr size_t kTextCachePrune = 64;     ///< above this many pictures, the ones whose box is gone are dropped at paint
+constexpr double kTextScaleMin = 0.0625;  ///< device px per document px: the smallest step of textScaleStep
+
+/// The smallest of 2^k and 1.5 * 2^k that is at least `wanted`: a zoom between two steps is drawn at the one above,
+/// and a zoom-out down to half of it reuses the picture.
+double textScaleStep(double wanted)
+{
+    double step = kTextScaleMin;
+    while (step < wanted * (1 - 1e-9) && step < 1024) {
+        if (step * 1.5 >= wanted * (1 - 1e-9))
+            return step * 1.5;
+        step *= 2;
+    }
+    return step;
+}
+
+/// The Markdown the renderer is given: the first kMaxTextRenderChars, cut at a line end when there is one, and ended
+/// with an ellipsis so that the cut shows. The box keeps its whole text.
+QString textForRender(const QString &markdown)
+{
+    constexpr qsizetype limit = InkCanvas::kMaxTextRenderChars;
+    if (markdown.size() <= limit)
+        return markdown;
+    qsizetype cut = markdown.lastIndexOf(QLatin1Char('\n'), limit - 1);
+    if (cut < limit / 2)
+        cut = limit; // no usable line end: cut anywhere (not between the halves of a surrogate pair)
+    if (cut < markdown.size() && markdown.at(cut).isLowSurrogate())
+        --cut;
+    return markdown.left(cut) + QStringLiteral("\n\n\u2026");
+}
 } // namespace
 
 void InkCanvas::setTextRenderer(TextRenderer renderer)
@@ -814,6 +843,19 @@ void InkCanvas::invalidateTextCache()
 {
     m_textCache.clear();
     update();
+}
+
+qsizetype InkCanvas::textCacheBytes() const
+{
+    qsizetype bytes = 0;
+    for (const auto &entry : m_textCache)
+        bytes += qsizetype(entry.second.pixmap.width()) * entry.second.pixmap.height() * 4;
+    return bytes;
+}
+
+void InkCanvas::setTextEditorFactory(TextEditorFactory factory)
+{
+    m_textEditorFactory = std::move(factory);
 }
 
 bool InkCanvas::beginEditingText(qint64 t)
@@ -848,26 +890,42 @@ void InkCanvas::openTextEditor(qint64 t, const QRectF &rect, const QString &mark
 {
     commitText();
     clearSelection();
-    auto *edit = new QPlainTextEdit(this);
+    QWidget *edit = m_textEditorFactory.create ? m_textEditorFactory.create(markdown) : nullptr;
+    if (edit) {
+        edit->setParent(this);
+    } else {
+        auto *plain = new QPlainTextEdit(this);
+        plain->setPlainText(markdown);
+        plain->moveCursor(QTextCursor::End);
+        const QColor page = m_document.settings().background.color;
+        QPalette colours = plain->palette();
+        colours.setColor(QPalette::Base, page);
+        colours.setColor(QPalette::Text, page.lightness() > 128 ? QColor(0x1e, 0x1e, 0x1e) : QColor(0xe0, 0xe0, 0xe0));
+        colours.setColor(QPalette::WindowText, palette().highlight().color()); // the frame
+        plain->setPalette(colours);
+        plain->setFrameShape(QFrame::Box);
+        edit = plain;
+    }
     edit->setObjectName(QStringLiteral("inkTextEditor"));
-    edit->setPlainText(markdown);
-    edit->moveCursor(QTextCursor::End);
-    const QColor page = m_document.settings().background.color;
-    QPalette colours = edit->palette();
-    colours.setColor(QPalette::Base, page);
-    colours.setColor(QPalette::Text, page.lightness() > 128 ? QColor(0x1e, 0x1e, 0x1e) : QColor(0xe0, 0xe0, 0xe0));
-    colours.setColor(QPalette::WindowText, palette().highlight().color()); // the frame
-    edit->setPalette(colours);
-    edit->setFrameShape(QFrame::Box);
     edit->installEventFilter(this); // Escape and focus loss end the edit (eventFilter)
     m_textEdit = edit;
     m_textEditT = t;
     m_textEditRect = rect;
-    m_textEditOriginal = markdown;
+    m_textEditZoom = 0;
+    m_textEditOriginal = readTextEditor(); // what the editor makes of it (CRLF, NBSP), so that an untouched box is not an edit
     layoutTextEditor();
     edit->show();
     edit->setFocus(Qt::OtherFocusReason);
     update(widgetRect(rect)); // the box's picture is not painted while its editor is over it
+}
+
+QString InkCanvas::readTextEditor() const
+{
+    if (!m_textEdit)
+        return QString();
+    if (const auto *plain = qobject_cast<const QPlainTextEdit *>(m_textEdit.data()))
+        return plain->toPlainText();
+    return m_textEditorFactory.read ? m_textEditorFactory.read(m_textEdit) : QString();
 }
 
 void InkCanvas::layoutTextEditor()
@@ -875,17 +933,22 @@ void InkCanvas::layoutTextEditor()
     if (!m_textEdit)
         return;
     m_textEdit->setGeometry(QRectF(toWidget(m_textEditRect.topLeft()), toWidget(m_textEditRect.bottomRight())).toAlignedRect());
-    QFont font = m_textEdit->font();
-    font.setPixelSize(std::max(6, qRound(kTextEditorFontPx * m_zoom)));
-    m_textEdit->setFont(font);
+    if (qobject_cast<QPlainTextEdit *>(m_textEdit.data())) {
+        QFont font = m_textEdit->font();
+        font.setPixelSize(std::max(6, qRound(kTextEditorFontPx * m_zoom)));
+        m_textEdit->setFont(font);
+    } else if (m_textEditorFactory.setZoom && !qFuzzyCompare(m_textEditZoom, m_zoom)) {
+        m_textEditorFactory.setZoom(m_textEdit, m_zoom);
+    }
+    m_textEditZoom = m_zoom;
 }
 
 QString InkCanvas::closeTextEditor()
 {
-    QPlainTextEdit *edit = m_textEdit;
+    QWidget *edit = m_textEdit;
     if (!edit)
         return QString();
-    const QString text = edit->toPlainText();
+    const QString text = readTextEditor();
     m_textEdit = nullptr; // first: hiding it sends the focus-out that would come back here
     m_textEditT = 0;
     edit->removeEventFilter(this);
@@ -910,7 +973,7 @@ void InkCanvas::commitText()
     const bool blank = text.trimmed().isEmpty();
     if (t > 0) {
         const Item *old = m_document.item(t);
-        if (!old || old->type != Item::Type::TextBox || text == old->textBox->markdown)
+        if (!old || old->type != Item::Type::TextBox || text == m_textEditOriginal)
             return;
         if (blank) {
             m_document.removeItem(t);
@@ -938,7 +1001,7 @@ void InkCanvas::commitText()
 
 bool InkCanvas::isTextEditDirty() const
 {
-    return m_textEdit && m_textEdit->toPlainText() != m_textEditOriginal;
+    return m_textEdit && readTextEditor() != m_textEditOriginal;
 }
 
 bool InkCanvas::eventFilter(QObject *watched, QEvent *event)
@@ -948,36 +1011,53 @@ bool InkCanvas::eventFilter(QObject *watched, QEvent *event)
             commitText();
             return true;
         }
-        if (event->type() == QEvent::FocusOut && static_cast<QFocusEvent *>(event)->reason() != Qt::PopupFocusReason)
-            commitText(); // a popup (the editor's own context menu) is not a lost editor
+        if (event->type() == QEvent::FocusOut && static_cast<QFocusEvent *>(event)->reason() != Qt::PopupFocusReason) {
+            // a popup (the editor's own context menu) and a child of the editor (a host editor's inline field) are not a lost editor
+            const QWidget *now = QApplication::focusWidget();
+            if (!(now && m_textEdit->isAncestorOf(now)))
+                commitText();
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
 
+double InkCanvas::textScale(const QSizeF &logical) const
+{
+    const double wanted = textScaleStep(m_tilesZoom * devicePixelRatioF());
+    const double cap = kMaxTextDevicePx / std::max(1.0, std::max(logical.width(), logical.height()));
+    return std::max(kTextScaleMin, std::min(wanted, std::floor(cap * 1000) / 1000));
+}
+
 /// The picture of a text box. Rendered here, on the UI thread (a QPixmap and a widget grab: R5), the first time a paint
-/// needs it and whenever its text, size or page colour changed; never while a gesture is in flight (a resize drag would
-/// build an editor per sample): the stale picture, if any, is stretched into the new rect until the next quiet paint.
-/// The layout is the box's size in document px at every zoom, so the text wraps the same however far the page is zoomed
-/// (the canvas plugin does the same: its pictures do not depend on its zoom); the picture is scaled at paint.
+/// needs it and whenever its text, size, page colour or the scale it needs changed; never while a gesture is in flight
+/// (a resize drag would build an editor per sample): the stale picture, if any, is stretched into the new rect until
+/// the next quiet paint. The layout is the box's size in document px at every zoom, so the text wraps the same however
+/// far the page is zoomed; the picture has the pixels for the settled zoom (m_tilesZoom: during a pinch the picture
+/// of the old one is stretched, as the tiles are), and one drawn for up to twice the scale needed serves a zoom-out.
 const QPixmap *InkCanvas::textPixmap(const Item &item)
 {
     const TextBox &box = *item.textBox;
     const QSizeF logical = box.rect.size().boundedTo(QSizeF(kMaxTextBoxSide, kMaxTextBoxSide));
     const QSize size(std::max(1, qRound(logical.width())), std::max(1, qRound(logical.height())));
-    const qreal dpr = devicePixelRatioF();
+    const double scale = textScale(QSizeF(size));
+    const qint64 need = qRound64(scale * 1000);
     const QColor background = m_document.settings().background.color;
     const auto it = m_textCache.find(item.t);
-    if (it != m_textCache.end() && it->second.markdown == box.markdown && it->second.size == size && qFuzzyCompare(it->second.dpr, dpr) &&
-        it->second.background == background)
+    if (it != m_textCache.end() && it->second.markdown == box.markdown && it->second.size == size && it->second.background == background &&
+        it->second.scaleKey >= need && it->second.scaleKey <= 2 * need) {
+        it->second.used = m_textTick;
         return &it->second.pixmap;
+    }
     if (m_textRenderer && !isDrawing()) {
-        QPixmap pixmap = m_textRenderer(box.markdown, QSizeF(size));
+        QPixmap pixmap = m_textRenderer(textForRender(box.markdown), QSizeF(size), scale);
         if (!pixmap.isNull()) {
             TextPixmap &entry = m_textCache[item.t];
-            entry = {box.markdown, size, dpr, background, std::move(pixmap)};
+            entry = {box.markdown, size, need, background, std::move(pixmap), m_textTick};
             return &entry.pixmap;
         }
     }
+    if (it != m_textCache.end())
+        it->second.used = m_textTick;
     return it != m_textCache.end() ? &it->second.pixmap : nullptr;
 }
 
@@ -985,6 +1065,7 @@ const QPixmap *InkCanvas::textPixmap(const Item &item)
 /// for an image (no image tool yet). The box being edited is not painted: its editor covers it.
 void InkCanvas::paintUIItems(QPainter &painter, const QRect &area)
 {
+    ++m_textTick; // the pictures this paint uses are stamped with it, and are not evicted below
     painter.save();
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     geometryOf(m_document, m_zoom).forEachPage(painter, area, [&](const QRectF &exposed, int) {
@@ -1005,8 +1086,19 @@ void InkCanvas::paintUIItems(QPainter &painter, const QRect &area)
         }
     });
     painter.restore();
-    if (m_textCache.size() > kTextCachePrune)
-        std::erase_if(m_textCache, [this](const auto &entry) { return !m_document.item(entry.first); });
+    // Gone boxes first, then the least recently painted until the budget holds (what this paint used stays).
+    std::erase_if(m_textCache, [this](const auto &entry) { return !m_document.item(entry.first); });
+    qsizetype bytes = textCacheBytes();
+    while (bytes > kTextCacheBytes) {
+        auto oldest = m_textCache.end();
+        for (auto it = m_textCache.begin(); it != m_textCache.end(); ++it)
+            if (it->second.used < m_textTick && (oldest == m_textCache.end() || it->second.used < oldest->second.used))
+                oldest = it;
+        if (oldest == m_textCache.end())
+            break;
+        bytes -= qsizetype(oldest->second.pixmap.width()) * oldest->second.pixmap.height() * 4;
+        m_textCache.erase(oldest);
+    }
 }
 
 // --- shapes -----------------------------------------------------------------------------

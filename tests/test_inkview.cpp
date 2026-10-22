@@ -9,6 +9,7 @@
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
@@ -22,6 +23,7 @@
 
 #include "InkTestSupport.h"
 #include "InkView.h"
+#include "MarkdownEditor.h"
 #include "WaitFor.h"
 #include "core/InkFormat.h"
 
@@ -521,8 +523,9 @@ TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
     ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
     view.canvas()->setTool(InkCanvas::Tool::Text);
     QTest::mouseClick(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(60, 400));
-    auto *edit = view.canvas()->findChild<QPlainTextEdit *>(QStringLiteral("inkTextEditor"));
-    ASSERT_NE(edit, nullptr);
+    auto *edit = view.canvas()->findChild<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr) << "the host's note editor (I3), not a plain-text one";
+    EXPECT_EQ(view.canvas()->findChild<QPlainTextEdit *>(QStringLiteral("inkTextEditor")), nullptr);
     EXPECT_FALSE(view.isModified()) << "an editor with nothing typed is not an edit";
     QTest::keyClicks(edit, QStringLiteral("unsaved thought"));
     EXPECT_TRUE(view.isModified());
@@ -550,6 +553,116 @@ TEST(InkViewToolbarTest, TheTextToolIsOnTheToolbarAndOnItsKeyAndIsNotThePenInDis
     EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Text) << "the T key picks it without pen hardware (R14)";
     EXPECT_TRUE(text->isChecked());
     EXPECT_FALSE(pen->isChecked());
+}
+
+namespace {
+
+/// A view over a sheet of plain white paper holding text boxes, which the real renderer (the host's note editor) draws.
+struct TextSheet {
+    QTemporaryDir dir;
+    InkView view{nullptr};
+    explicit TextSheet(const std::vector<std::pair<QRectF, QString>> &boxes)
+    {
+        EXPECT_TRUE(dir.isValid());
+        InkDocument doc;
+        DocumentSettings settings;
+        settings.layout = LayoutKind::Fixed;
+        settings.format = {1000, 600, 96};
+        settings.extent = QRectF(0, 0, 1000, 600);
+        settings.background.color = Qt::white;
+        settings.background.pattern = Pattern::None;
+        EXPECT_TRUE(doc.setSettings(settings));
+        for (const auto &[rect, markdown] : boxes) {
+            Item box;
+            box.type = Item::Type::TextBox;
+            box.textBox = std::make_shared<TextBox>(TextBox{rect, markdown});
+            doc.addItem(box);
+        }
+        doc.commit();
+        const QString path = dir.filePath(QStringLiteral("Text.ink"));
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(writeInk(doc));
+        file.close();
+        QString error;
+        EXPECT_TRUE(view.load(path, &error)) << error.toStdString();
+        EXPECT_TRUE(QTest::qWaitFor([&] { return !view.isLoading(); }, 10000)) << "a big file parses on the pool";
+        view.resize(1100, 700);
+        QElapsedTimer timer;
+        timer.start();
+        view.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&view));
+        view.canvas()->grab(); // the boxes are rendered by the first paint: exposing the window or this
+        paintMs = timer.elapsed();
+    }
+    qint64 paintMs = 0; ///< showing the view and painting it once
+    QImage grab() const { return view.canvas()->grab().toImage(); }
+};
+
+/// The x of the first dark pixel (text) in the rows of `box`, relative to its left edge; -1 when there is none.
+int firstInkOffset(const QImage &shot, const QRectF &box)
+{
+    const qreal dpr = shot.devicePixelRatio();
+    for (int x = int(box.left() * dpr); x < int(box.right() * dpr); ++x)
+        for (int y = int(box.top() * dpr); y < int(box.bottom() * dpr); ++y)
+            if (shot.pixelColor(x, y).lightness() < 128)
+                return int(std::round(x / dpr - box.left()));
+    return -1;
+}
+
+} // namespace
+
+// Fix round 1 (I2): the editor's readable line length (a 700 px column, centred) must not apply to a text box.
+TEST(InkViewTextTest, AWideBoxStartsItsTextAtTheSameEdgeAsANarrowOne)
+{
+    const QRectF narrow(20, 20, 300, 80);
+    const QRectF wide(20, 150, 780, 80);
+    TextSheet sheet({{narrow, QStringLiteral("# Hello")}, {wide, QStringLiteral("# Hello")}});
+    const QImage shot = sheet.grab();
+    const int a = firstInkOffset(shot, narrow);
+    const int b = firstInkOffset(shot, wide);
+    ASSERT_GE(a, 0) << "the narrow box shows ink";
+    ASSERT_GE(b, 0) << "the wide box shows ink";
+    EXPECT_LE(a, 12);
+    EXPECT_LE(b, 12) << "the text is at the box's left edge, not centred in a 700 px column";
+    EXPECT_NEAR(a, b, 4);
+}
+
+// Fix round 1 (I4): a hostile file with a huge box must not freeze the paint.
+TEST(InkViewTextTest, ATwoMegabyteBoxRendersTruncatedAndFast)
+{
+    QString huge;
+    huge.reserve(2 * 1024 * 1024);
+    for (int line = 0; huge.size() < 2 * 1024 * 1024; ++line)
+        huge += QStringLiteral("line %1 of a very long box with some *emphasis* and a [[Link]]\n").arg(line);
+    TextSheet sheet({{QRectF(20, 20, 400, 300), huge}});
+    const QImage shot = sheet.grab();
+    EXPECT_LT(sheet.paintMs, 500) << "the render is cut at a bounded length (took " << sheet.paintMs << " ms)";
+    EXPECT_GE(firstInkOffset(shot, QRectF(20, 20, 400, 300)), 0) << "and still draws the start of the text";
+}
+
+// I3: the box is edited in the host's editor: Markdown typed into it is committed as the box's text, keys typed into it
+// are not tool keys, and its text sits where the rendered picture's does.
+TEST(InkViewTextTest, TheEditorOverABoxIsTheNoteEditorAndWhatIsTypedIsCommitted)
+{
+    const QRectF box(20, 20, 400, 100);
+    TextSheet sheet({{box, QStringLiteral("# Hello")}});
+    InkCanvas *canvas = sheet.view.canvas();
+    canvas->setTool(InkCanvas::Tool::Text);
+    const QImage before = sheet.grab();
+    ASSERT_GE(firstInkOffset(before, box), 0);
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    ASSERT_TRUE(canvas->isEditingText());
+    auto *edit = canvas->findChild<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr);
+    EXPECT_EQ(edit->noteText(), QStringLiteral("# Hello"));
+    EXPECT_EQ(edit->geometry().topLeft(), QPoint(20, 20));
+    QTest::keyClicks(edit, QStringLiteral(" slate"));
+    EXPECT_EQ(canvas->tool(), InkCanvas::Tool::Text) << "s, l and t typed into the editor are not tool keys";
+    QTest::keyClick(edit, Qt::Key_Escape);
+    EXPECT_FALSE(canvas->isEditingText());
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    EXPECT_EQ(canvas->document().items()[0].textBox->markdown, QStringLiteral("# Hello slate"));
 }
 
 int main(int argc, char **argv)
