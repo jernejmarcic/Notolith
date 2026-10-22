@@ -3,11 +3,15 @@
 // the canvas. Pure functions and widgets on the offscreen platform.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 #include <QApplication>
 #include <QDir>
+#include <QImage>
+#include <QPainter>
+#include <QPainterPath>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,6 +23,7 @@
 #include "InkFormat.h"
 #include "InkTypes.h"
 #include "SpatialGrid.h"
+#include "StrokeOutline.h"
 
 using namespace noteAppC::ink;
 
@@ -681,4 +686,202 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+// ---- Task 5: the outline composer ----
+
+namespace {
+
+std::vector<std::shared_ptr<const Stroke>> goldenStrokes()
+{
+    std::vector<std::shared_ptr<const Stroke>> out;
+    auto wave = std::make_shared<Stroke>();
+    wave->style = {6.0, QColor(0x1e, 0x1e, 0x1e), PressureCurve::Linear};
+    for (int i = 0; i <= 60; ++i) {
+        const double x = 20 + i * 4.0;
+        wave->points.push_back({x, 60 + 25 * std::sin(i / 6.0), 0.2 + 0.8 * std::abs(std::sin(i / 10.0))});
+    }
+    out.push_back(wave);
+    auto marker = std::make_shared<Stroke>();
+    marker->style = {14.0, QColor(0xff, 0xee, 0x00, 0x80), PressureCurve::Const};
+    marker->points = {{30, 130, 1.0}, {230, 135, 1.0}};
+    out.push_back(marker);
+    auto tap = std::make_shared<Stroke>();
+    tap->style = {8.0, QColor(0xc0, 0x00, 0x00), PressureCurve::Sqrt};
+    tap->points = {{250, 60, 0.7}};
+    out.push_back(tap);
+    auto zigzag = std::make_shared<Stroke>();
+    zigzag->style = {3.0, QColor(0x00, 0x50, 0xc0), PressureCurve::Pow2};
+    zigzag->points = {{20, 180, 0.9}, {60, 160, 0.3}, {100, 180, 0.9}, {140, 160, 0.3}, {180, 180, 0.9}};
+    out.push_back(zigzag);
+    return out;
+}
+
+/// Golden tolerance: a pixel differs when any channel is off by more than 8
+/// (of 255); the images match when under 0.5% of the pixels differ. That
+/// absorbs antialiasing differences between Qt builds and nothing else.
+bool imagesMatch(const QImage &a, const QImage &b, QString *why)
+{
+    if (a.size() != b.size()) {
+        *why = QStringLiteral("size %1x%2 vs %3x%4").arg(a.width()).arg(a.height()).arg(b.width()).arg(b.height());
+        return false;
+    }
+    const QImage x = a.convertToFormat(QImage::Format_ARGB32), y = b.convertToFormat(QImage::Format_ARGB32);
+    qint64 bad = 0;
+    for (int row = 0; row < x.height(); ++row) {
+        const QRgb *p = reinterpret_cast<const QRgb *>(x.constScanLine(row));
+        const QRgb *q = reinterpret_cast<const QRgb *>(y.constScanLine(row));
+        for (int col = 0; col < x.width(); ++col) {
+            const int d = std::max({std::abs(qRed(p[col]) - qRed(q[col])), std::abs(qGreen(p[col]) - qGreen(q[col])),
+                                    std::abs(qBlue(p[col]) - qBlue(q[col])), std::abs(qAlpha(p[col]) - qAlpha(q[col]))});
+            bad += d > 8;
+        }
+    }
+    const double share = double(bad) / double(qint64(x.width()) * x.height());
+    *why = QStringLiteral("%1 of pixels differ by more than 8").arg(share, 0, 'f', 4);
+    return share < 0.005;
+}
+
+void checkGolden(const QString &name, const QImage &image)
+{
+    const QString path = QStringLiteral(NOTEAPPC_INK_GOLDEN_DIR "/") + name;
+    if (qEnvironmentVariableIsSet("NOTEAPPC_UPDATE_GOLDEN")) {
+        QDir().mkpath(QStringLiteral(NOTEAPPC_INK_GOLDEN_DIR));
+        ASSERT_TRUE(image.save(path));
+        GTEST_SKIP() << "golden image written: " << path.toStdString() << " - look at it, then commit it";
+    }
+    QImage golden(path);
+    ASSERT_FALSE(golden.isNull()) << "no golden image at " << path.toStdString() << "; run once with NOTEAPPC_UPDATE_GOLDEN=1";
+    QString why;
+    EXPECT_TRUE(imagesMatch(image, golden, &why)) << name.toStdString() << ": " << why.toStdString();
+}
+
+bool pathIsFinite(const QPainterPath &path)
+{
+    for (int i = 0; i < path.elementCount(); ++i)
+        if (!std::isfinite(path.elementAt(i).x) || !std::isfinite(path.elementAt(i).y))
+            return false;
+    return true;
+}
+
+} // namespace
+
+TEST(StrokeOutlineTest, OutlineIsOnePathPerStrokeFilledOnceWithWindingFill)
+{
+    Stroke stroke;
+    stroke.style = {4.0, Qt::black, PressureCurve::Const};
+    stroke.points = {{0, 0, 1}, {10, 0, 1}, {20, 0, 1}};
+    const QPainterPath path = strokeOutline(stroke);
+    EXPECT_EQ(path.fillRule(), Qt::WindingFill);
+    EXPECT_TRUE(path.contains(QPointF(10, 0)));
+    EXPECT_TRUE(path.contains(QPointF(5, 1.5)));
+    EXPECT_FALSE(path.contains(QPointF(5, 2.5)));
+    EXPECT_TRUE(path.contains(QPointF(-1.5, 0))) << "round start cap";
+    EXPECT_TRUE(path.contains(QPointF(21.5, 0))) << "round end cap";
+    EXPECT_FALSE(path.contains(QPointF(-2.5, 0)));
+    EXPECT_NEAR(path.boundingRect().left(), -2.0, 0.05);
+    EXPECT_NEAR(path.boundingRect().right(), 22.0, 0.05);
+}
+
+TEST(StrokeOutlineTest, WidthFollowsPressureAlongTheStroke)
+{
+    Stroke stroke;
+    stroke.style = {10.0, Qt::black, PressureCurve::Linear};
+    stroke.points = {{0, 0, 0.2}, {100, 0, 1.0}};
+    const QPainterPath path = strokeOutline(stroke);
+    EXPECT_TRUE(path.contains(QPointF(0, 0.9)));
+    EXPECT_FALSE(path.contains(QPointF(0, 1.1))) << "2 px wide at the start";
+    EXPECT_TRUE(path.contains(QPointF(100, 4.9)));
+    EXPECT_FALSE(path.contains(QPointF(100, 5.1))) << "10 px wide at the end";
+}
+
+TEST(StrokeOutlineTest, ATapAndCoincidingPointsDrawADotAndNoNaN)
+{
+    Stroke tap;
+    tap.style = {8.0, Qt::black, PressureCurve::Const};
+    tap.points = {{50, 50, 1.0}};
+    QPainterPath path = strokeOutline(tap);
+    EXPECT_TRUE(path.contains(QPointF(53.5, 50)));
+    EXPECT_FALSE(path.contains(QPointF(54.5, 50)));
+    tap.points = {{50, 50, 1.0}, {50, 50, 1.0}, {50, 50, 1.0}};
+    path = strokeOutline(tap);
+    EXPECT_TRUE(path.contains(QPointF(53.5, 50))) << "every point the same: still a dot";
+    const QRectF box = path.boundingRect();
+    EXPECT_FALSE(std::isnan(box.left()) || std::isnan(box.width()));
+    EXPECT_TRUE(strokeOutline(Stroke()).isEmpty());
+    Stroke mixed;
+    mixed.style = {4.0, Qt::black, PressureCurve::Const};
+    mixed.points = {{0, 0, 1}, {0, 0, 1}, {10, 0, 1}}; // a duplicate then a real segment
+    EXPECT_TRUE(strokeOutline(mixed).contains(QPointF(5, 0)));
+}
+
+TEST(StrokeOutlineTest, HostileDataNeverGivesNaNOrHangs)
+{
+    struct Case {
+        const char *name;
+        double width;
+        PressureCurve curve;
+        std::vector<StrokePoint> points;
+    };
+    const double big = 1e12;
+    const std::vector<Case> cases = {
+        {"zero width", 0.0, PressureCurve::Const, {{0, 0, 1}, {10, 0, 1}, {20, 5, 1}}},
+        {"zero pressure", 4.0, PressureCurve::Linear, {{0, 0, 0}, {10, 0, 0}, {20, 5, 0}}},
+        {"zero pressure tap", 4.0, PressureCurve::Linear, {{3, 3, 0}}},
+        {"zero then full pressure", 4.0, PressureCurve::Linear, {{0, 0, 0}, {10, 0, 1}, {20, 0, 0}}},
+        {"huge coordinates", 4.0, PressureCurve::Const, {{-big, -big, 1}, {big, big, 1}, {big, -big, 0.3}}},
+        {"huge tap", 4.0, PressureCurve::Const, {{big, big, 1}}},
+        {"huge width", 1e300, PressureCurve::Const, {{0, 0, 1}, {big, 0, 1}}},
+        {"denormal step", 4.0, PressureCurve::Const, {{0, 0, 1}, {1e-310, 0, 1}, {1, 0, 1}}},
+        {"out of range pressure", 4.0, PressureCurve::Pow3, {{0, 0, -3}, {10, 0, 7}}},
+        {"duplicates around a turn", 4.0, PressureCurve::Const, {{0, 0, 1}, {0, 0, 1}, {5, 5, 1}, {5, 5, 1}, {0, 0, 1}}},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.name);
+        Stroke stroke;
+        stroke.style = {c.width, Qt::black, c.curve};
+        stroke.points = c.points;
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_TRUE(pathIsFinite(path));
+        EXPECT_EQ(path.fillRule(), Qt::WindingFill);
+        for (size_t first = 0; first < c.points.size(); ++first)
+            for (size_t last = first; last < c.points.size(); ++last)
+                EXPECT_TRUE(pathIsFinite(strokeOutline(stroke, first, last)));
+        // Painting must also return (the rasteriser clips to the image).
+        QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+        image.fill(Qt::white);
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        paintStroke(painter, stroke);
+    }
+    // A range that does not fit the stroke is empty, not undefined.
+    Stroke two;
+    two.points = {{0, 0, 1}, {1, 0, 1}};
+    EXPECT_TRUE(strokeOutline(two, 1, 0).isEmpty());
+    EXPECT_TRUE(strokeOutline(two, 0, 5).isEmpty());
+}
+
+TEST(StrokeOutlineTest, PartialOutlineCoversOnlyTheAskedSegments)
+{
+    Stroke stroke;
+    stroke.style = {4.0, Qt::black, PressureCurve::Const};
+    stroke.points = {{0, 0, 1}, {10, 0, 1}, {20, 0, 1}, {30, 0, 1}};
+    const QPainterPath tail = strokeOutline(stroke, 2, 3);
+    EXPECT_TRUE(tail.contains(QPointF(25, 0)));
+    EXPECT_FALSE(tail.contains(QPointF(5, 0)));
+}
+
+TEST(StrokeOutlineTest, MatchesTheGoldenImagesAtTwoZoomsAndTwoRatios)
+{
+    const auto strokes = goldenStrokes();
+    const QRectF area(0, 0, 300, 200);
+    checkGolden(QStringLiteral("outline-z1-d1.png"), renderStrokes(strokes, area, 1.0, 1.0, Qt::white));
+    checkGolden(QStringLiteral("outline-z2-d1.png"), renderStrokes(strokes, area, 2.0, 1.0, Qt::white));
+    checkGolden(QStringLiteral("outline-z1-d2.png"), renderStrokes(strokes, area, 1.0, 2.0, Qt::white));
+    checkGolden(QStringLiteral("outline-z2-d2.png"), renderStrokes(strokes, area, 2.0, 2.0, Qt::white));
+    const QImage z2 = renderStrokes(strokes, area, 2.0, 1.0, Qt::white);
+    EXPECT_EQ(z2.size(), QSize(600, 400));
+    const QImage d2 = renderStrokes(strokes, area, 1.0, 2.0, Qt::white);
+    EXPECT_EQ(d2.size(), QSize(600, 400));
+    EXPECT_DOUBLE_EQ(d2.devicePixelRatio(), 2.0);
 }

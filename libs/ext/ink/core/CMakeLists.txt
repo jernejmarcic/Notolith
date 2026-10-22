@@ -37,7 +37,9 @@ add_library(notolith-inkcore SHARED
     InkTypes.cpp
     InkTypes.h
     SpatialGrid.cpp
-    SpatialGrid.h)
+    SpatialGrid.h
+    StrokeOutline.cpp
+    StrokeOutline.h)
 set_target_properties(notolith-inkcore PROPERTIES
     AUTOMOC ON
     OUTPUT_NAME notolith-inkcore
