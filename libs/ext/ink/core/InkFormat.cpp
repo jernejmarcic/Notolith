@@ -102,11 +102,23 @@ QRectF rectFromJSON(const QJsonArray &array)
     return array.size() == 4 ? QRectF(array[0].toDouble(), array[1].toDouble(), array[2].toDouble(), array[3].toDouble()) : QRectF();
 }
 
+/// Every entry a number: a string or null in a coordinate list is refused, not read as 0.
+bool allNumbers(const QJsonArray &array)
+{
+    return std::all_of(array.begin(), array.end(), [](const QJsonValue &value) { return value.isDouble(); });
+}
+
 /// A rect that is there must be four numbers (an absent one is the empty rect).
 bool rectIsValid(const QJsonObject &object)
 {
     const QJsonValue rect = object.value(QStringLiteral("rect"));
-    return rect.isUndefined() || (rect.isArray() && rect.toArray().size() == 4);
+    return rect.isUndefined() || (rect.isArray() && rect.toArray().size() == 4 && allNumbers(rect.toArray()));
+}
+
+/// A style's width that is there must be a number (an absent one is the default).
+bool styleIsValid(const QJsonObject &object)
+{
+    return !wrongType(object.value(QStringLiteral("style")).toObject(), "width", QJsonValue::Double);
 }
 
 int minimumShapePoints(ShapeKind kind) { return kind == ShapeKind::Polygon ? 3 : 2; }
@@ -147,6 +159,10 @@ bool itemFromJSON(const QJsonObject &object, Item *item, QString *error)
             *error = QStringLiteral("stroke %1: style must be an object and points a list").arg(item->t);
             return false;
         }
+        if (!styleIsValid(object) || !allNumbers(object.value(QStringLiteral("points")).toArray())) {
+            *error = QStringLiteral("stroke %1: width and points must be numbers").arg(item->t);
+            return false;
+        }
         auto stroke = std::make_shared<Stroke>();
         stroke->style = styleFromJSON(object.value(QStringLiteral("style")).toObject());
         const QJsonArray points = object.value(QStringLiteral("points")).toArray();
@@ -169,6 +185,10 @@ bool itemFromJSON(const QJsonObject &object, Item *item, QString *error)
         }
         if (wrongType(object, "style", QJsonValue::Object) || wrongType(object, "points", QJsonValue::Array)) {
             *error = QStringLiteral("shape %1: style must be an object and points a list").arg(item->t);
+            return false;
+        }
+        if (!styleIsValid(object) || !allNumbers(object.value(QStringLiteral("points")).toArray())) {
+            *error = QStringLiteral("shape %1: width and points must be numbers").arg(item->t);
             return false;
         }
         shape->style = styleFromJSON(object.value(QStringLiteral("style")).toObject());

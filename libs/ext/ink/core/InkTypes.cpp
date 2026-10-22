@@ -88,8 +88,9 @@ QRectF Stroke::bounds() const
         x0 = std::min(x0, p.x); y0 = std::min(y0, p.y);
         x1 = std::max(x1, p.x); y1 = std::max(y1, p.y);
     }
-    const double half = style.width * 0.5;
-    return QRectF(x0 - half, y0 - half, (x1 - x0) + style.width, (y1 - y0) + style.width);
+    const double width = std::fabs(style.width); // as Shape::bounds: a pasted negative width must not invert the rect
+    const double half = width * 0.5;
+    return QRectF(x0 - half, y0 - half, (x1 - x0) + width, (y1 - y0) + width);
 }
 
 QRectF Shape::bounds() const

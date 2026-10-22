@@ -26,7 +26,7 @@ qt_standard_project_setup()
 # builds of one commit never share a tag, and a source tarball without git needs
 # no hash. Reconfiguring keeps it; a fresh build directory gets a new one.
 include(GNUInstallDirs)
-if(NOT NOTEAPPC_ABI_TOKEN)
+if(NOT DEFINED NOTEAPPC_ABI_TOKEN)
     string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef noteappc_token)
     set(NOTEAPPC_ABI_TOKEN "${noteappc_token}" CACHE INTERNAL "Per-build-directory token of the module ABI tag")
 endif()

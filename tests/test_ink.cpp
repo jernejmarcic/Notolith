@@ -114,6 +114,11 @@ TEST(InkTypesTest, StrokeBoundsIncludeHalfTheWidth)
     EXPECT_TRUE(Stroke().bounds().isNull());
 }
 
+TEST(InkTypesTest, ANegativeWidthGivesTheSameBoundsAsItsAbsoluteValue)
+{
+    EXPECT_EQ(line(10, 20, 30, 20, -4.0)->bounds(), QRectF(8, 18, 24, 4)) << "a pasted stroke must not get an inverted, unselectable rect";
+}
+
 TEST(InkTypesTest, ShapeBoundsCoverEveryPointAndAnArrowsHead)
 {
     Shape segment;
@@ -764,6 +769,10 @@ TEST(InkFormatTest, AWrongTypedContainerIsRefusedNotLoadedAsEmpty)
         {"points is an object", file("{}", "[{\"type\":\"stroke\",\"t\":1,\"points\":{\"a\":1}}]")},
         {"rect has three numbers", file("{}", "[{\"type\":\"textbox\",\"t\":1,\"rect\":[1,2,3],\"markdown\":\"x\"}]")},
         {"shape points is a string", file("{}", "[{\"type\":\"shape\",\"t\":1,\"kind\":\"line\",\"points\":\"x\"}]")},
+        {"a width is a string", file("{}", "[{\"type\":\"stroke\",\"t\":1,\"style\":{\"width\":\"3\"},\"points\":[1,2,0.5]}]")},
+        {"a stroke coordinate is a string", file("{}", "[{\"type\":\"stroke\",\"t\":1,\"points\":[\"1\",2,0.5]}]")},
+        {"a shape coordinate is null", file("{}", "[{\"type\":\"shape\",\"t\":1,\"kind\":\"line\",\"points\":[1,2,null,4]}]")},
+        {"a rect entry is a string", file("{}", "[{\"type\":\"textbox\",\"t\":1,\"rect\":[1,2,\"3\",4],\"markdown\":\"x\"}]")},
     };
     for (const auto &c : bad) {
         InkDocument doc = sampleDocument();

@@ -13,7 +13,9 @@
 /// member, capped at the same, nothing after it). Unknown keys are kept at every level.
 /// A `version` that is a number other than exactly 1 (and at least 1) opens
 /// read-only; any other version is refused, as is a wrong-typed `items`,
-/// `document` or nested container, and a shape with too few points.
+/// `document` or nested container, a shape with too few points, and a stroke or shape whose width, a coordinate or a
+/// pressure is not a number (never read as 0). The document settings (format, background, extent) are the lenient part:
+/// a wrong-typed scalar there takes its default, and a settings block that is unusable as a whole is refused.
 /// Non-finite numbers are written as 0, never as null.
 /// A text box item is `{"type":"textbox","t":<int>,"layer":"user","rect":[x,y,width,height],"markdown":"<text>"}`
 /// (document px; `rect` is four numbers or absent). The host's own reader of .ink files for indexing (Task 17)

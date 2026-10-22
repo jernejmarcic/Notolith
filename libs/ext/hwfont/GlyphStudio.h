@@ -85,7 +85,7 @@ private:
     bool m_barrelDown = false;   ///< a press with the barrel button held, until its release
     bool m_barrelMoved = false;
     QPointF m_barrelStart;
-    QString m_vaultRoot;
+    QString m_vaultRoot; ///< the vault at construction: the host closes module tabs on a vault switch, so it cannot change under an open studio
     QString m_fontName;
     Settings *m_settings;
     std::function<std::optional<QString>()> m_askFontName;
