@@ -4,7 +4,9 @@
 #include <QActionGroup>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QtConcurrent>
 #include <QLabel>
 #include <QScrollBar>
 #include <QToolBar>
@@ -16,6 +18,12 @@
 #include "core/InkFormat.h"
 
 namespace noteAppC::ink {
+
+/// What the pool hands back: the parsed document and how the parse went.
+struct InkView::Parsed {
+    InkDocument document;
+    InkReadResult result;
+};
 
 InkView::InkView(const Settings *settings, QWidget *parent)
     : ModuleView(parent), m_settings(settings), m_area(new QScrollArea(this)), m_canvas(new InkCanvas),
@@ -48,6 +56,11 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     readOnlyLabel->setObjectName(QStringLiteral("inkReadOnlyLabel"));
     m_readOnlyAction = m_toolBar->addWidget(readOnlyLabel);
     m_readOnlyAction->setVisible(false);
+    auto *loadingLabel = new QLabel(tr("Loading..."));
+    loadingLabel->setObjectName(QStringLiteral("inkLoadingLabel"));
+    m_loadingAction = m_toolBar->addWidget(loadingLabel);
+    m_loadingAction->setObjectName(QStringLiteral("inkLoadingAction"));
+    m_loadingAction->setVisible(false);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -77,6 +90,8 @@ void InkView::applySettings(const Settings &settings)
 {
     m_canvas->setDrawWithMouse(settings.value(QStringLiteral("ink.drawWithMouse")).toBool());
     m_canvas->setRawInput(settings.value(QStringLiteral("ink.rawInput")).toBool());
+    const QVariant mb = settings.value(QStringLiteral("ink.tileCacheMB")); // R5; unregistered (a bare test) keeps the default
+    m_canvas->setTileCacheMB(mb.isValid() ? mb.toInt() : TileCache::kDefaultMaxBytes / (1024 * 1024));
 }
 
 void InkView::onEdited()
@@ -105,12 +120,58 @@ InkView::DiskStamp InkView::stampOf(const QString &path)
 
 bool InkView::load(const QString &path, QString *error)
 {
+    if (m_settings)
+        applySettings(*m_settings); // R5: the tile budget is read when a file opens
+    if (m_loadWatcher) { // a parse of an older load is still running: its result is not wanted
+        m_loadWatcher->disconnect(this);
+        m_loadWatcher->deleteLater();
+        m_loadWatcher = nullptr;
+        m_loadingAction->setVisible(false);
+    }
     const DiskStamp stamp = stampOf(path); // before reading: a change during the read is seen at the next save
+    if (stamp.size > kOffThreadParseBytes && stamp.size <= kMaxInflatedBytes) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            if (error) *error = tr("%1 could not be opened: %2").arg(QFileInfo(path).fileName(), file.errorString());
+            return false;
+        }
+        const QByteArray bytes = file.readAll(); // the read is cheap, the parse is not (about ten times the file in time and memory)
+        const QString name = QFileInfo(path).fileName();
+        m_loadingAction->setVisible(true);
+        m_canvas->setReadOnly(true); // no pen on a document that is about to be replaced
+        m_loadWatcher = new QFutureWatcher<Parsed>(this);
+        connect(m_loadWatcher, &QFutureWatcherBase::finished, this, [this, path, stamp, name] {
+            Parsed parsed = m_loadWatcher->result();
+            m_loadWatcher->deleteLater();
+            m_loadWatcher = nullptr;
+            m_loadingAction->setVisible(false);
+            if (!parsed.result.ok) {
+                m_canvas->setReadOnly(m_readOnly); // what it was before this load
+                emit statusMessage(parsed.result.error, 8000);
+                return;
+            }
+            m_canvas->document() = std::move(parsed.document);
+            adopt(path, stamp, parsed.result);
+        });
+        m_loadWatcher->setFuture(QtConcurrent::run([bytes, name] {
+            Parsed parsed;
+            parsed.result = readInk(bytes, parsed.document, name);
+            return parsed;
+        }));
+        return true;
+    }
     InkReadResult result;
     if (!loadInkFile(path, m_canvas->document(), &result)) {
         if (error) *error = result.error;
         return false;
     }
+    adopt(path, stamp, result);
+    return true;
+}
+
+/// The document is in the canvas: take over what the file said about it.
+void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadResult &result)
+{
     m_path = path;
     m_stamp = stamp;
     m_readOnly = result.readOnly;
@@ -125,7 +186,6 @@ bool InkView::load(const QString &path, QString *error)
         m_canvas->documentReplaced();
     }
     onEdited(); // a reload of a modified view clears the mark: the signal goes out from here
-    return true;
 }
 
 /// "<name> (conflict yyyy-MM-dd HHmmss).ink" beside the file; the sync engine's own copies are
@@ -174,6 +234,10 @@ bool InkView::resolveExternalChange(QString *error)
 
 bool InkView::save(QString *error)
 {
+    if (m_loadWatcher) { // the canvas holds the document the load is about to replace
+        if (error) *error = tr("still loading");
+        return false;
+    }
     if (m_readOnly) {
         if (error) *error = tr("read-only: written by a newer Notolith");
         return false;

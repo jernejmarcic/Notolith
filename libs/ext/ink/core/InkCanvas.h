@@ -1,12 +1,15 @@
 #pragma once
 
 #include <QImage>
+#include <QTimer>
 #include <QWidget>
 
+#include <functional>
 #include <map>
 
 #include "InkDocument.h"
 #include "InkInput.h"
+#include "TileCache.h"
 
 class QPainter;
 
@@ -16,8 +19,9 @@ namespace noteAppC::ink {
 /// document at the zoom, living inside InkView's QScrollArea. Tablet events
 /// do not route through QAbstractScrollArea::viewportEvent, which is why the
 /// canvas is the widget and not the scroll area. Paints committed items from
-/// the document (Track S1 Task 11 adds the tile cache) and the live stroke
-/// from an overlay image that only the newest segment is rasterised into.
+/// the document through the tile cache (TileCache.h: 512 px tiles rendered on
+/// the pool, never in paintEvent) and the live stroke from an overlay image
+/// that only the newest segment is rasterised into.
 class InkCanvas : public QWidget {
     Q_OBJECT
 public:
@@ -50,6 +54,20 @@ public:
     QSize sizeHint() const override;
     bool isDrawing() const { return m_drawing != Drawing::None; }
     QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound (I4)
+
+    /// The tile cache budget in MB (the setting `ink.tileCacheMB`, R5), clamped to kMinTileCacheMB..kMaxTileCacheMB.
+    static constexpr int kMinTileCacheMB = 8;
+    static constexpr int kMaxTileCacheMB = 1024;
+    void setTileCacheMB(int mb);
+    static constexpr int kZoomSettleMs = 400; ///< the tiles follow the zoom this long after its last change; until then the current ones are scaled
+    /// Tile test hooks: the budget in bytes, the zoom the tiles were last rendered for (it follows the zoom 400 ms
+    /// after the last change), the renders in flight, the tiles that no longer show the document, and a function run
+    /// on the pool thread at the start of every tile render (a test blocks it to prove a paint never waits for one).
+    qsizetype tileCacheBytes() const;
+    double tilesScale() const;
+    int pendingTiles() const;
+    int staleTileCount() const;
+    void setTileJobHook(std::function<void()> hook);
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,
     /// mouse drawing and the edit keys but keeps touch pan, wheel and zoom:
     /// disabling the widget would block those too.
@@ -102,11 +120,13 @@ private:
     double pageGap() const; ///< document px between pages: kPageGap in ContinuousVertical, else 0
     QRect pageWidgetRect(int index) const; ///< widget px of page `index` (ContinuousVertical)
     std::pair<int, int> visiblePages(const QRect &area) const; ///< first and last page the widget-px `area` touches
-    /// Calls draw(documentRect, pageIndex) once per page the widget-px `area` touches, with the painter (already in widget
-    /// px) set up so document coordinates draw in place, clipped to that page in ContinuousVertical. Ink that
-    /// crosses a page break is therefore cut by the gap, not smeared over it.
-    template <typename Draw>
-    void forEachPage(QPainter &painter, const QRect &area, Draw draw) const;
+    /// Paints the tiles covering the widget-px `area` (and asks the pool for the ones that are missing or stale).
+    void drawTiles(QPainter &painter, const QRect &area);
+    std::function<QImage()> tileJob(int tx, int ty) const;
+    void invalidateTiles(const QRectF &documentRect);
+    void settleZoom();
+    void onTileReady(int tx, int ty);
+    bool tilesFresh(const QRect &widgetArea) const;
     PressureNormaliser &normaliserFor(const QString &device);
 
     InkDocument m_document;
@@ -133,6 +153,13 @@ private:
     bool m_touchPanning = false;
     std::map<QString, PressureNormaliser> m_pressure; ///< by QPointingDevice::name()
     double m_pressureSeed = 1.0;
+    TileCache m_tiles;
+    QTimer m_zoomTimer;          ///< single shot, kZoomSettleMs after the last zoom change
+    double m_tilesZoom = 1.0;    ///< the zoom the tiles are rendered for; m_zoom runs ahead of it during a pinch
+    double m_ghostScale = 0;     ///< the zoom before the last settle: images rendered at it are still painted, scaled, until replaced
+    std::function<void()> m_tileJobHook;
+    bool m_holdLive = false;     ///< after pen-up the live image stays until the tiles under the stroke have it too
+    QRect m_holdRect;            ///< widget px
 };
 
 } // namespace noteAppC::ink

@@ -30,6 +30,9 @@ public:
                               QObject::tr("Off, the mouse only scrolls and selects; a pen always draws."), {}, 0, 0});
         host.registerSetting({QStringLiteral("ink.rawInput"), false, QObject::tr("Raw pen input"),
                               QObject::tr("Skip the stroke modeler: every tablet sample becomes a point. For comparing."), {}, 0, 0});
+        host.registerSetting({QStringLiteral("ink.tileCacheMB"), 64, QObject::tr("Handwriting tile cache (MB)"),
+                              QObject::tr("Memory for the rendered tiles of a handwritten note; the least recently shown are dropped past it."),
+                              {}, 8, 1024, 8, 0});
         const auto currentFolder = host.currentFolder;
         const auto showStatus = host.showStatus;
         const auto openFile = host.openFile;

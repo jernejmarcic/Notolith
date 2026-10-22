@@ -22,9 +22,13 @@
 #include <QMouseEvent>
 #include <QElapsedTimer>
 #include <QScrollArea>
+#include <QSemaphore>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest/QTest>
+
+#include <atomic>
 
 #include <zlib.h>
 
@@ -37,6 +41,8 @@
 #include "PagePatterns.h"
 #include "SpatialGrid.h"
 #include "StrokeOutline.h"
+#include "TileCache.h"
+#include "WaitFor.h"
 
 using namespace noteAppC::ink;
 using namespace inktest;
@@ -49,6 +55,23 @@ std::shared_ptr<const Stroke> line(double x0, double y0, double x1, double y1, d
     stroke->style.width = width;
     stroke->points = {{x0, y0, 0.5}, {x1, y1, 0.5}};
     return stroke;
+}
+
+/// The canvas never renders in paintEvent (Task 11): a grab shows the page background until its tiles arrive from the
+/// pool. This grabs until a grab asks for nothing (every tile it painted is fresh at the current zoom, nothing is in
+/// flight: a request is only ever made during a paint, and finishes in the event loop) and returns that frame.
+/// Stale tiles outside what is painted may remain: a cache keeps them until they are evicted.
+QImage settledGrab(InkCanvas &canvas)
+{
+    const bool settled = QTest::qWaitFor(
+        [&] {
+            canvas.grab();
+            return canvas.tilesScale() == canvas.zoom() && canvas.pendingTiles() == 0;
+        },
+        5000);
+    if (!settled)
+        ADD_FAILURE() << "the tiles never settled";
+    return canvas.grab().toImage();
 }
 
 } // namespace
@@ -1704,7 +1727,7 @@ TEST(InkCanvasTest, EraseEverythingAutosaveThenUndoBringsTheStrokesBack)
     EXPECT_EQ(f.canvas.document().items().size(), 2u);
     EXPECT_EQ(f.canvas.document().itemsIntersecting(QRectF(0, 0, 400, 300)).size(), 2u) << "the spatial grid came back";
     EXPECT_TRUE(f.canvas.document().isModified()) << "the file holds the erased state";
-    const QImage frame = f.canvas.grab().toImage();
+    const QImage frame = settledGrab(f.canvas);
     EXPECT_NE(frame.pixelColor(100, 50), QColor(Qt::white)) << "the canvas repainted the strokes";
 }
 
@@ -1825,6 +1848,7 @@ TEST(InkCanvasTest, EveryToolIsReachableFromTheKeyboardAndATipAloneDrawsAndErase
 TEST(InkCanvasTest, LiveStrokeRepaintsOnlyTheNewSegment)
 {
     CanvasFixture f;
+    settledGrab(f.canvas); // a tile arriving repaints its own 512 px: not what this is about
     PaintRects paints(&f.canvas);
     tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 20), 0.5, 1000);
     tablet(&f.canvas, QEvent::TabletMove, QPointF(40, 20), 0.5, 1005);
@@ -1847,6 +1871,7 @@ TEST(InkCanvasTest, PenUpRepaintsWhereThePredictedTailWas)
     // area or it stays on screen as a ghost. (T6's PredictionExtends... test
     // pins that the tail exists for a steady line; with no tail this is vacuous.)
     CanvasFixture f;
+    settledGrab(f.canvas); // a tile arriving repaints its own 512 px, which would pass for the tail
     PaintRects paints(&f.canvas);
     tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 100), 0.5, 1000);
     for (int i = 1; i <= 8; ++i)
@@ -2219,7 +2244,7 @@ TEST(InkCanvasDprTest, PositionsAndTheLiveOverlayAreRightAtTheScreensPixelRatio)
     f.canvas.setPenStyle(style);
     f.canvas.setRawInput(true);
     penDown(f.canvas, QPointF(40, 60), QPointF(240, 60), 1000); // mid-stroke: the overlay is what paints it
-    const QImage frame = f.canvas.grab().toImage();
+    const QImage frame = settledGrab(f.canvas);
     ASSERT_EQ(frame.size(), QSize(int(400 * expected), int(300 * expected)));
     EXPECT_LT(qGray(frame.pixel(int(120 * expected), int(60 * expected))), 80) << "ink under the pen, in device px";
     EXPECT_GT(qGray(frame.pixel(int(120 * expected), int(100 * expected))), 200) << "paper 40 px below";
@@ -2378,7 +2403,7 @@ TEST(InkLayoutTest, GapPixelsBelowAPageCarryTheShadow)
     ASSERT_TRUE(canvas.document().setSettings(s));
     canvas.documentReplaced();
     canvas.resize(canvas.sizeHint());
-    const QImage shot = canvas.grab().toImage();
+    const QImage shot = settledGrab(canvas);
     const QColor window = canvas.palette().color(QPalette::Window);
     const int gapTop = 200;                              // the first page's bottom edge, widget px at zoom 1
     const int gapBottom = 200 + int(InkDocument::kPageGap) - 1;
@@ -2411,7 +2436,7 @@ TEST(InkLayoutTest, InkAcrossAPageBreakIsCutByTheGapAndLandsInDocumentCoordinate
     const Stroke &stroke = *canvas.document().items()[0].stroke;
     EXPECT_NEAR(stroke.points.front().y, 150.0, 1.0);
     EXPECT_NEAR(stroke.points.back().y, 290.0 - InkDocument::kPageGap, 1.0) << "stored without the gap";
-    const QImage shot = canvas.grab().toImage();
+    const QImage shot = settledGrab(canvas);
     const QColor window = canvas.palette().color(QPalette::Window);
     EXPECT_LT(shot.pixelColor(50, 180).lightness(), 60) << "ink on page one";
     EXPECT_LT(shot.pixelColor(50, 260).lightness(), 60) << "ink on page two";
@@ -2438,7 +2463,7 @@ TEST(InkLayoutTest, TheLiveOverlayFollowsThePageGaps)
     for (int i = 1; i <= 14; ++i)
         tablet(&canvas, QEvent::TabletMove, QPointF(50, 150 + 10 * i), 0.5, 1000 + 5 * i);
     ASSERT_TRUE(canvas.isDrawing());
-    const QImage shot = canvas.grab().toImage(); // mid-stroke: the overlay paints it
+    const QImage shot = settledGrab(canvas); // mid-stroke: the overlay paints it
     EXPECT_LT(shot.pixelColor(50, 180).lightness(), 60) << "live ink on page one";
     EXPECT_LT(shot.pixelColor(50, 235).lightness(), 60) << "live ink on page two (the smoothed stroke trails the pen)";
     EXPECT_GT(shot.pixelColor(50, 208).lightness(), 60) << "none in the gap";
@@ -2472,7 +2497,7 @@ TEST(InkLayoutTest, InkInTheNegativeQuadrantIsDrawnFoundErasedAndSaved)
     EXPECT_NEAR(stroke.points.front().x, -160.0, 1.0);
     EXPECT_NEAR(stroke.points.front().y, -110.0, 1.0);
     EXPECT_EQ(f.canvas.document().itemsIntersecting(QRectF(-100, -112, 4, 4)).size(), 1u) << "the grid finds ink at negative coordinates";
-    EXPECT_LT(f.canvas.grab().toImage().pixelColor(100, 40).lightness(), 60) << "painted where the pen was";
+    EXPECT_LT(settledGrab(f.canvas).pixelColor(100, 40).lightness(), 60) << "painted where the pen was";
 
     // The file keeps the negative extent and the negative points.
     InkDocument loaded;
@@ -2896,7 +2921,7 @@ TEST(PagePatternTest, CanvasPaintsThePatternOnEachPageAnchoredToThatPageNotTheDo
     ASSERT_TRUE(canvas.document().setSettings(s));
     canvas.documentReplaced();
     canvas.resize(canvas.sizeHint());
-    const QImage shot = canvas.grab().toImage();
+    const QImage shot = settledGrab(canvas);
     for (int page = 0; page < 2; ++page) {
         SCOPED_TRACE(page);
         const int top = int(canvas.toWidget(QPointF(0, 200.0 * page)).y());
@@ -2918,7 +2943,7 @@ TEST(PagePatternTest, AFixedDocumentGrownByAPagePatternsTheWholeExtent)
     canvas.documentReplaced();
     canvas.resize(canvas.sizeHint());
     ASSERT_EQ(canvas.sizeHint().height(), 400);
-    const QImage shot = canvas.grab().toImage();
+    const QImage shot = settledGrab(canvas);
     EXPECT_TRUE(hasInk(shot, QRect(10, 31, 80, 4))) << "the first page";
     EXPECT_TRUE(hasInk(shot, QRect(10, 319, 80, 4))) << "the lower half: a line at 320";
     EXPECT_TRUE(hasInk(shot, QRect(10, 383, 80, 4))) << "and at 384";
@@ -2942,7 +2967,7 @@ TEST(PagePatternTest, AnInfiniteSheetKeepsItsPatternOnTheSameDocumentPositionsWh
         const QPointF origin = canvas.toWidget(patch.topLeft());
         EXPECT_DOUBLE_EQ(origin.x(), std::round(origin.x())) << "an integral extent origin, or the AA coverage would differ";
         EXPECT_DOUBLE_EQ(origin.y(), std::round(origin.y()));
-        return canvas.grab().toImage().copy(QRect(origin.toPoint(), patch.size().toSize()));
+        return settledGrab(canvas).copy(QRect(origin.toPoint(), patch.size().toSize()));
     };
     const QImage before = render();
     ASSERT_TRUE(hasInk(before, before.rect()));
@@ -2993,6 +3018,439 @@ TEST(PagePatternTest, ARangeOnAPageWithANegativeOriginCountsFromThePageTop)
     EXPECT_EQ(visibleLineRange(QRectF(-500, -800, 50, 110), page, 32.0), (LineRange{0, 0})) << "the page's first line at -700";
     EXPECT_TRUE(visibleLineRange(QRectF(-500, -900, 50, 100), page, 32.0).isEmpty()) << "above the page";
 }
+
+// --- the tile cache (Task 11, R5) ------------------------------------------------------------------
+
+namespace {
+
+QImage tileImage()
+{
+    QImage image(TileCache::kTileSize, TileCache::kTileSize, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    return image;
+}
+
+constexpr qsizetype kTileBytes = qsizetype(TileCache::kTileSize) * TileCache::kTileSize * 4;
+
+/// Renders tile (tx, ty) through the cache and waits for it to be fresh.
+void renderTile(TileCache &cache, int tx, int ty = 0)
+{
+    cache.request(tx, ty, [] { return tileImage(); });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return cache.find(tx, ty).fresh; }, 5000)) << "tile " << tx << "," << ty;
+}
+
+} // namespace
+
+TEST(TileCacheTest, RendersOnceAndServesFromCache)
+{
+    QSemaphore gate;
+    std::atomic<int> jobs{0};
+    TileCache cache;
+    const auto job = [&] {
+        ++jobs;
+        gate.acquire();
+        return tileImage();
+    };
+    EXPECT_EQ(cache.find(0, 0).image, nullptr) << "nothing was rendered yet, and find never renders";
+    EXPECT_TRUE(cache.request(0, 0, job));
+    EXPECT_FALSE(cache.request(0, 0, job)) << "one render in flight per tile";
+    EXPECT_TRUE(cache.isPending(0, 0));
+    EXPECT_EQ(cache.pendingCount(), 1);
+    gate.release();
+    WAIT_TRUE(cache.find(0, 0).fresh, 5000);
+    EXPECT_EQ(jobs.load(), 1);
+    EXPECT_FALSE(cache.isPending(0, 0));
+    const TileCache::Lookup hit = cache.find(0, 0);
+    ASSERT_NE(hit.image, nullptr);
+    EXPECT_EQ(hit.image->size(), QSize(TileCache::kTileSize, TileCache::kTileSize));
+    EXPECT_EQ(jobs.load(), 1) << "a fresh tile is served without another job";
+    EXPECT_EQ(cache.count(), 1);
+    EXPECT_EQ(cache.bytes(), kTileBytes);
+}
+
+TEST(TileCacheTest, TheJobRunsOffTheUIThread)
+{
+    TileCache cache;
+    QThread *jobThread = nullptr;
+    QThread *readyThread = nullptr;
+    QObject::connect(&cache, &TileCache::tileReady, &cache, [&] { readyThread = QThread::currentThread(); });
+    QSignalSpy ready(&cache, &TileCache::tileReady);
+    cache.request(0, 0, [&] {
+        jobThread = QThread::currentThread();
+        return tileImage();
+    });
+    WAIT_TRUE(ready.count() == 1, 5000);
+    ASSERT_NE(jobThread, nullptr);
+    EXPECT_NE(jobThread, QThread::currentThread()) << "rasterising a tile on the UI thread would stall the pen";
+    EXPECT_EQ(readyThread, QThread::currentThread()) << "tileReady arrives on the thread of the cache";
+    EXPECT_EQ(ready.at(0).at(0).toInt(), 0);
+}
+
+TEST(TileCacheTest, InvalidateMarksOnlyTouchedTilesStale)
+{
+    TileCache cache;
+    for (int ty = 0; ty < 2; ++ty)
+        for (int tx = 0; tx < 2; ++tx)
+            renderTile(cache, tx, ty);
+    ASSERT_EQ(cache.count(), 4);
+    EXPECT_EQ(cache.staleCount(), 0);
+    cache.invalidate(QRectF(10, 10, 100, 100)); // inside tile 0,0
+    EXPECT_FALSE(cache.find(0, 0).fresh);
+    EXPECT_NE(cache.find(0, 0).image, nullptr) << "the stale image is still returned: the canvas paints it blurry meanwhile";
+    EXPECT_TRUE(cache.find(1, 0).fresh);
+    EXPECT_TRUE(cache.find(0, 1).fresh);
+    EXPECT_TRUE(cache.find(1, 1).fresh);
+    EXPECT_EQ(cache.staleCount(), 1);
+    cache.invalidate(QRectF(500, 500, 20, 20)); // across the corner of all four
+    EXPECT_EQ(cache.staleCount(), 4);
+    cache.invalidateAll();
+    EXPECT_EQ(cache.staleCount(), 4);
+}
+
+TEST(TileCacheTest, AnInvalidateEndingOnATileEdgeLeavesTheNextTileFresh)
+{
+    TileCache cache;
+    renderTile(cache, 0);
+    renderTile(cache, 1);
+    cache.invalidate(QRectF(0, 0, TileCache::kTileSize, 100));
+    EXPECT_FALSE(cache.find(0, 0).fresh);
+    EXPECT_TRUE(cache.find(1, 0).fresh);
+}
+
+TEST(TileCacheTest, AResultFinishedAfterAnInvalidateIsDiscarded)
+{
+    for (const bool byScale : {false, true}) {
+        SCOPED_TRACE(byScale ? "setScale" : "invalidate");
+        QSemaphore gate;
+        TileCache cache;
+        QSignalSpy ready(&cache, &TileCache::tileReady);
+        cache.request(0, 0, [&] {
+            gate.acquire();
+            return tileImage();
+        });
+        if (byScale)
+            cache.setScale(2.0, 1.0);
+        else
+            cache.invalidate(QRectF(0, 0, 10, 10));
+        gate.release();
+        WAIT_TRUE(ready.count() == 1, 5000);
+        EXPECT_FALSE(cache.isPending(0, 0));
+        EXPECT_EQ(cache.find(0, 0).image, nullptr) << "the render showed the old content: never stored";
+        EXPECT_FALSE(cache.find(0, 0).fresh) << "so the canvas requests it again with the new content";
+        EXPECT_EQ(cache.bytes(), 0);
+        EXPECT_TRUE(cache.request(0, 0, [] { return tileImage(); }));
+        WAIT_TRUE(cache.find(0, 0).fresh, 5000);
+    }
+}
+
+TEST(TileCacheTest, ARenderAcrossAnInvalidateLeavesTheOldImageStaleNotReplaced)
+{
+    TileCache cache;
+    renderTile(cache, 0);
+    QSemaphore gate;
+    QSignalSpy ready(&cache, &TileCache::tileReady);
+    cache.invalidate(QRectF(0, 0, 1, 1));
+    cache.request(0, 0, [&] {
+        gate.acquire();
+        QImage image = tileImage();
+        image.fill(Qt::black);
+        return image;
+    });
+    cache.invalidate(QRectF(0, 0, 1, 1)); // the content changed again while it rendered
+    gate.release();
+    WAIT_TRUE(ready.count() == 1, 5000);
+    const TileCache::Lookup stale = cache.find(0, 0);
+    EXPECT_FALSE(stale.fresh);
+    ASSERT_NE(stale.image, nullptr);
+    EXPECT_EQ(stale.image->pixel(5, 5), qRgb(255, 255, 255)) << "the discarded render did not replace it";
+}
+
+TEST(TileCacheTest, SetScaleKeepsTheImagesStaleAndSaysWhatZoomTheyHave)
+{
+    TileCache cache;
+    renderTile(cache, 0);
+    EXPECT_EQ(cache.find(0, 0).scale, 1.0);
+    cache.setScale(2.0, 1.0);
+    const TileCache::Lookup stale = cache.find(0, 0);
+    EXPECT_FALSE(stale.fresh);
+    ASSERT_NE(stale.image, nullptr) << "images stay until replaced";
+    EXPECT_EQ(stale.scale, 1.0) << "and know what zoom they were rendered at";
+    renderTile(cache, 0);
+    EXPECT_EQ(cache.find(0, 0).scale, 2.0);
+    cache.setScale(2.0, 1.0);
+    EXPECT_TRUE(cache.find(0, 0).fresh) << "the same scale again changes nothing";
+    cache.setScale(2.0, 2.0);
+    EXPECT_EQ(cache.count(), 0) << "a cell is another size at another pixel ratio: the old images belong to no cell";
+}
+
+TEST(TileCacheTest, EvictsLeastRecentlyPaintedPastTheByteBudget)
+{
+    const qsizetype tile = TileCache::kTileSize * TileCache::kTileSize * 4;
+    TileCache cache(3 * tile);
+    QSignalSpy ready(&cache, &TileCache::tileReady);
+    const auto render = [&](int tx) {
+        cache.request(tx, 0, [] { return QImage(TileCache::kTileSize, TileCache::kTileSize, QImage::Format_ARGB32_Premultiplied); });
+        WAIT_TRUE(cache.find(tx, 0).fresh, 5000);
+    };
+    render(1);
+    render(2);
+    render(3);
+    ASSERT_NE(cache.find(1, 0).image, nullptr); // 1 is now the most recently painted; 2 the least
+    render(4);
+    EXPECT_EQ(cache.find(2, 0).image, nullptr);
+    EXPECT_NE(cache.find(1, 0).image, nullptr);
+    EXPECT_NE(cache.find(3, 0).image, nullptr);
+    EXPECT_NE(cache.find(4, 0).image, nullptr);
+    EXPECT_LE(cache.bytes(), 3 * tile);
+}
+
+TEST(TileCacheTest, LoweringTheBudgetEvictsAtOnce)
+{
+    TileCache cache(4 * kTileBytes);
+    for (int tx = 1; tx <= 4; ++tx)
+        renderTile(cache, tx);
+    ASSERT_EQ(cache.count(), 4);
+    ASSERT_NE(cache.find(1, 0).image, nullptr); // painted again: 1 is the most recent, then 4, 3, 2
+    cache.setMaxBytes(2 * kTileBytes);
+    EXPECT_EQ(cache.count(), 2);
+    EXPECT_EQ(cache.maxBytes(), 2 * kTileBytes);
+    EXPECT_LE(cache.bytes(), 2 * kTileBytes);
+    EXPECT_NE(cache.find(1, 0).image, nullptr);
+    EXPECT_NE(cache.find(4, 0).image, nullptr);
+    EXPECT_EQ(cache.find(3, 0).image, nullptr);
+    EXPECT_EQ(cache.find(2, 0).image, nullptr);
+}
+
+TEST(TileCacheTest, ATileWithARenderInFlightIsNeverEvicted)
+{
+    TileCache cache(2 * kTileBytes);
+    renderTile(cache, 1); // the least recently painted of the lot
+    renderTile(cache, 2);
+    QSemaphore gate;
+    QSignalSpy ready(&cache, &TileCache::tileReady);
+    cache.request(1, 0, [&] { // re-rendering tile 1, whose stale image is the eviction candidate
+        gate.acquire();
+        return tileImage();
+    });
+    cache.invalidateAll();
+    cache.setMaxBytes(kTileBytes);
+    EXPECT_NE(cache.find(1, 0).image, nullptr) << "kept: its render is in flight";
+    EXPECT_EQ(cache.find(2, 0).image, nullptr) << "evicted instead, though it was painted later";
+    gate.release();
+    WAIT_TRUE(ready.count() == 1, 5000);
+}
+
+TEST(TileCacheTest, TheDestructorWaitsForJobsInFlight)
+{
+    std::atomic<bool> finished{false};
+    {
+        TileCache cache;
+        cache.request(0, 0, [&] {
+            QThread::msleep(50);
+            finished = true;
+            return tileImage();
+        });
+    }
+    EXPECT_TRUE(finished.load()) << "a job in flight outlives nothing it uses";
+}
+
+TEST(InkCanvasTest, TheTileCacheFollowsTheSettingInMB)
+{
+    InkCanvas canvas;
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(64) * 1024 * 1024) << "the default, R5";
+    canvas.setTileCacheMB(16);
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(16) * 1024 * 1024);
+    canvas.setTileCacheMB(0);
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(8) * 1024 * 1024) << "clamped to 8 MB";
+    canvas.setTileCacheMB(5000);
+    EXPECT_EQ(canvas.tileCacheBytes(), qsizetype(1024) * 1024 * 1024) << "and to 1024 MB";
+}
+
+TEST(InkCanvasTest, PaintNeverWaitsForATileRender)
+{
+    QSemaphore gate; // declared first: destroyed after the canvas, whose destructor waits for the blocked jobs
+    CanvasFixture f;
+    settledGrab(f.canvas); // the initial (empty) tiles are in
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style = {8.0, Qt::black, PressureCurve::Const};
+    stroke->points = {{100, 100, 1}, {200, 100, 1}};
+    f.canvas.document().addStroke(stroke);
+    f.canvas.document().commit();
+    f.canvas.setTileJobHook([&gate] { gate.acquire(); });
+    f.canvas.documentReplaced(); // every tile is stale: the next paint asks for them all again
+    const QImage first = f.canvas.grab().toImage(); // returns at once: the tiles are rendering, blocked
+    EXPECT_GT(f.canvas.pendingTiles(), 0);
+    EXPECT_GT(first.pixelColor(150, 100).lightness(), 200) << "the page was painted, the stroke not yet";
+    gate.release(100);
+    WAIT_TRUE(f.canvas.pendingTiles() == 0, 5000);
+    const QImage second = settledGrab(f.canvas);
+    EXPECT_LT(second.pixelColor(150, 100).lightness(), 60) << "the tile arrived with the stroke";
+}
+
+TEST(InkCanvasTest, AFinishedStrokeStaysOnScreenUntilItsTilesArrive)
+{
+    QSemaphore gate;
+    CanvasFixture f;
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = Qt::black;
+    f.canvas.setPenStyle(style);
+    settledGrab(f.canvas);
+    f.canvas.setTileJobHook([&gate] { gate.acquire(); });
+    f.canvas.setRawInput(true);
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(200, 100), 1000);
+    const QImage held = f.canvas.grab().toImage(); // pen-up, tile still rendering: the live image bridges the gap
+    EXPECT_LT(held.pixelColor(150, 100).lightness(), 60) << "no frame without the stroke between pen-up and the new tile";
+    gate.release(100);
+    const QImage after = settledGrab(f.canvas);
+    EXPECT_LT(after.pixelColor(150, 100).lightness(), 60);
+}
+
+TEST(InkCanvasTest, ZoomDuringPinchIsBlurryThenSettlesSharp)
+{
+    CanvasFixture f;
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = Qt::black;
+    f.canvas.setPenStyle(style);
+    f.canvas.setRawInput(true);
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(200, 100), 1000);
+    settledGrab(f.canvas);
+    ASSERT_EQ(f.canvas.tilesScale(), 1.0);
+    f.canvas.setZoom(2.0);
+    EXPECT_EQ(f.canvas.tilesScale(), 1.0) << "the tiles keep their zoom for 400 ms after the last change";
+    const QImage blurry = f.canvas.grab().toImage();
+    EXPECT_EQ(f.canvas.pendingTiles(), 0) << "nothing is rendered for a zoom that may still change";
+    EXPECT_LT(blurry.pixelColor(300, 200).lightness(), 100) << "the current tiles, scaled: the stroke is there at once";
+    f.canvas.setZoom(3.0); // another pinch step restarts the timer
+    EXPECT_EQ(f.canvas.tilesScale(), 1.0);
+    WAIT_TRUE(f.canvas.tilesScale() == 3.0, 5000);
+    const QImage sharp = settledGrab(f.canvas);
+    EXPECT_EQ(f.canvas.pendingTiles(), 0);
+    EXPECT_EQ(f.canvas.staleTileCount(), 0);
+    EXPECT_LT(sharp.pixelColor(450, 300).lightness(), 60);
+}
+
+TEST(InkCanvasTest, AZoomBackToTheTilesScaleChangesNothing)
+{
+    CanvasFixture f;
+    settledGrab(f.canvas);
+    f.canvas.setZoom(2.0);
+    f.canvas.setZoom(1.0);
+    EXPECT_EQ(f.canvas.tilesScale(), 1.0);
+    QTest::qWait(500);
+    EXPECT_EQ(f.canvas.tilesScale(), 1.0);
+    EXPECT_EQ(f.canvas.staleTileCount(), 0) << "the tiles were never made stale: the zoom they have is the zoom it is";
+}
+
+TEST(InkCanvasTest, EditsInvalidateOnlyTheirTiles)
+{
+    InkCanvas canvas;
+    DocumentSettings settings;
+    settings.format = {2000, 2000, 96};
+    settings.extent = QRectF(0, 0, 2000, 2000);
+    settings.layout = LayoutKind::Fixed;
+    ASSERT_TRUE(canvas.document().setSettings(settings));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    settledGrab(canvas); // 16 tiles: 2000 / 512 = 3.9 each way
+    ASSERT_EQ(canvas.staleTileCount(), 0);
+    canvas.setRawInput(true);
+    penStroke(&canvas, QPointF(50, 50), QPointF(120, 90), 1000); // inside the top-left tile
+    const int stale = canvas.staleTileCount();
+    EXPECT_GE(stale, 1);
+    EXPECT_LE(stale, 4) << "the stroke's tiles, not the 16 of the page";
+    settledGrab(canvas);
+    EXPECT_EQ(canvas.staleTileCount(), 0);
+    ASSERT_TRUE(canvas.undo());
+    EXPECT_EQ(canvas.staleTileCount(), 16) << "undo and redo invalidate everything";
+}
+
+TEST(InkCanvasTest, ErasingInvalidatesTheErasedStrokesTiles)
+{
+    CanvasFixture f;
+    f.canvas.setRawInput(true);
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(200, 100), 1000);
+    settledGrab(f.canvas);
+    ASSERT_EQ(f.canvas.staleTileCount(), 0);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(150, 90), QPointF(150, 110), 2000);
+    ASSERT_EQ(f.canvas.document().items().size(), 0u);
+    EXPECT_GE(f.canvas.staleTileCount(), 1);
+    const QImage frame = settledGrab(f.canvas);
+    EXPECT_GT(frame.pixelColor(150, 100).lightness(), 200) << "the erased ink is gone from the tile";
+}
+
+namespace {
+void expectTilesMatchADirectRender()
+{
+    InkCanvas canvas;
+    DocumentSettings settings;
+    settings.layout = LayoutKind::Fixed;
+    settings.format = {1100, 1100, 96};
+    settings.extent = QRectF(0, 0, 1100, 1100);
+    settings.background.pattern = Pattern::Grid;
+    settings.background.patternSize = QSizeF(24, 24);
+    ASSERT_TRUE(canvas.document().setSettings(settings));
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style = {6.0, QColor(0x20, 0x40, 0xc0), PressureCurve::Const};
+    stroke->points = {{40, 500, 1}, {300, 515, 1}, {600, 510, 1}, {1000, 520, 1}};
+    canvas.document().addStroke(stroke);
+    canvas.document().commit();
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    const QImage tiled = settledGrab(canvas);
+    QImage direct(tiled.size(), QImage::Format_ARGB32_Premultiplied);
+    direct.setDevicePixelRatio(tiled.devicePixelRatio());
+    direct.fill(settings.background.color);
+    {
+        QPainter painter(&direct);
+        painter.setRenderHint(QPainter::Antialiasing);
+        paintPattern(painter, settings.background, settings.extent, settings.extent.topLeft(), settings.extent, 1.0);
+        paintStroke(painter, *stroke);
+    }
+    // Not bit for bit: a tile paints under another translation, so a coverage value may round a few levels apart (4 seen at DPR 2). A seam
+    // would be a missing line or a doubled edge, 50 levels and up.
+    const QImage a = tiled.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    int worst = 0;
+    for (int y = 0; y < a.height(); ++y)
+        for (int x = 0; x < a.width(); ++x) {
+            const QRgb p = a.pixel(x, y), q = direct.pixel(x, y);
+            worst = std::max({worst, std::abs(qRed(p) - qRed(q)), std::abs(qGreen(p) - qGreen(q)), std::abs(qBlue(p) - qBlue(q))});
+        }
+    EXPECT_EQ(a.size(), direct.size());
+    EXPECT_LE(worst, 8) << "tiled against direct";
+}
+} // namespace
+
+TEST(InkCanvasTest, TilesJoinWithoutASeamAndMatchADirectRender) { expectTilesMatchADirectRender(); }
+
+// Runs in the ink_dpr2 ctest entry too (QT_SCALE_FACTOR=2): a cell is 256 logical px there.
+TEST(InkCanvasDprTest, TilesJoinWithoutASeamAtTheScreensPixelRatio) { expectTilesMatchADirectRender(); }
+
+TEST(InkCanvasTest, ThePatternOfAPagedLayoutRestartsOnEveryPageInsideTheTiles)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {300, 700, 96};
+    s.extent = QRectF(0, 0, 300, 1400); // two pages: the second starts inside the second tile row
+    s.background.pattern = Pattern::Lines;
+    s.background.patternSize = QSizeF(32, 32);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    const QImage shot = settledGrab(canvas);
+    for (int page = 0; page < 2; ++page) {
+        SCOPED_TRACE(page);
+        const int top = int(canvas.toWidget(QPointF(0, 700.0 * page)).y());
+        for (int line : {1, 9, 10, 16, 20}) // lines 32 px apart from this page's top, across the 512 px seams
+            EXPECT_TRUE(hasInk(shot, QRect(10, top + 32 * line - 1, 280, 4))) << "line " << line;
+        EXPECT_FALSE(hasInk(shot, QRect(10, top + 33 + 32 * 3 - 30, 280, 20))) << "none between the lines";
+    }
+}
+
 
 int main(int argc, char **argv)
 {

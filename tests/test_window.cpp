@@ -7885,6 +7885,52 @@ TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
     EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "written by writeInk, compact JSON (R4)";
 }
 
+// Task 11: a file above kOffThreadParseBytes (256 KB) is parsed on a pool thread; the tab says so meanwhile and
+// refuses to save, so a half-loaded document is never written over the file.
+TEST_F(WindowTest, ABigInkFileParsesOffTheUIThreadAndSavesAfter)
+{
+    constexpr int kStrokes = 3000;
+    QByteArray body = "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n";
+    for (int i = 0; i < kStrokes; ++i) {
+        const int x = 10 + (i % 60) * 12, y = 10 + (i / 60) * 20;
+        body += QByteArray("{\"type\":\"stroke\",\"t\":") + QByteArray::number(i + 1)
+            + ",\"layer\":\"user\",\"style\":{\"width\":2,\"color\":\"#1e1e1e\",\"pressureCurve\":\"linear\"},\"points\":["
+            + QByteArray::number(x) + ',' + QByteArray::number(y) + ",0.5," + QByteArray::number(x + 4) + ',' + QByteArray::number(y + 3)
+            + ",0.5," + QByteArray::number(x + 8) + ',' + QByteArray::number(y + 1) + ",0.5," + QByteArray::number(x + 11) + ','
+            + QByteArray::number(y + 6) + ",0.5," + QByteArray::number(x + 12) + ',' + QByteArray::number(y + 9) + ",0.5]}"
+            + (i + 1 < kStrokes ? ",\n" : "\n");
+    }
+    body += "]}\n";
+    write(QStringLiteral("Big.ink"), body);
+    ASSERT_GT(QFileInfo(path(QStringLiteral("Big.ink"))).size(), 256 * 1024) << "above kOffThreadParseBytes";
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Big.ink"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
+    ASSERT_NE(view, nullptr);
+    auto *loading = view->findChild<QLabel *>(QStringLiteral("inkLoadingLabel"));
+    ASSERT_NE(loading, nullptr);
+    EXPECT_TRUE(view->property("loading").toBool()) << "load() returned at once, the parse is still running";
+    auto *loadingAction = view->findChild<QAction *>(QStringLiteral("inkLoadingAction")); // the toolbar shows its widgets a layout pass later
+    ASSERT_NE(loadingAction, nullptr);
+    EXPECT_TRUE(loadingAction->isVisible()) << "the toolbar says Loading...";
+    EXPECT_TRUE(loading->text().contains(QStringLiteral("Loading")));
+    QString error;
+    EXPECT_FALSE(view->save(&error)) << "a half-loaded document is never written over the file";
+    EXPECT_TRUE(error.contains(QStringLiteral("still loading"))) << error.toStdString();
+    WAIT_TRUE(!view->property("loading").toBool(), 5000);
+    EXPECT_FALSE(loadingAction->isVisible());
+    EXPECT_FALSE(view->isModified()) << "a load is not an edit";
+    error.clear();
+    EXPECT_TRUE(view->save(&error)) << error.toStdString();
+    QFile saved(path(QStringLiteral("Big.ink")));
+    ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
+    EXPECT_EQ(saved.readAll().count("\"type\":\"stroke\""), kStrokes) << "every stroke came through the parse and the save";
+}
+
 TEST_F(WindowTest, WithInkOffAnInkFileIsNotAModuleFile)
 {
     write(QStringLiteral("Sketch.ink"), "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[]}\n");

@@ -1,9 +1,11 @@
 #pragma once
 
+#include <QFutureWatcher>
 #include <QScrollArea>
 
 #include "ModuleHost.h"
 #include "core/InkCanvas.h"
+#include "core/InkFormat.h"
 
 class QLabel;
 class QToolBar;
@@ -24,9 +26,14 @@ namespace noteAppC::ink {
 /// file: an unmodified view reloads, a modified one writes its document to a
 /// "<name> (conflict <date time>).ink" beside the file, reloads the disk
 /// version and says so.
+///
+/// A file above kOffThreadParseBytes is read on the UI thread (cheap) and parsed on the pool: load()
+/// returns true at once, the toolbar says "Loading...", the canvas ignores the pen and save() refuses
+/// ("still loading") until the parsed document is swapped in.
 class InkView : public ModuleView {
     Q_OBJECT
     Q_PROPERTY(bool readOnly READ isReadOnly)
+    Q_PROPERTY(bool loading READ isLoading)
 public:
     explicit InkView(const noteAppC::Settings *settings, QWidget *parent = nullptr);
 
@@ -39,6 +46,7 @@ public:
     InkCanvas *canvas() const { return m_canvas; }
     QString path() const { return m_path; }
     bool isReadOnly() const { return m_readOnly; }
+    bool isLoading() const { return m_loadWatcher != nullptr; }
 
 private:
     struct DiskStamp {
@@ -49,6 +57,8 @@ private:
     static DiskStamp stampOf(const QString &path);
     static QString conflictPathFor(const QString &path);
     bool resolveExternalChange(QString *error);
+    struct Parsed;
+    void adopt(const QString &path, const DiskStamp &stamp, const InkReadResult &result);
     void onEdited();
 
     const noteAppC::Settings *m_settings;
@@ -60,6 +70,8 @@ private:
     QAction *m_undoAction;
     QAction *m_redoAction;
     QAction *m_readOnlyAction;
+    QAction *m_loadingAction;
+    QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
     DiskStamp m_stamp; ///< the file as this view last read or wrote it
     bool m_readOnly = false;

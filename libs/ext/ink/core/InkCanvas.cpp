@@ -15,6 +15,8 @@
 #include <QTabletEvent>
 #include <QTouchEvent>
 
+#include <map>
+
 #include "PagePatterns.h"
 #include "StrokeOutline.h"
 
@@ -24,7 +26,7 @@ namespace {
 
 constexpr double kPageEdgeSlack = 1e-9; ///< relative: page edges are page * height, not exact for a fractional height or zoom
 constexpr int kShadowDepth = 4;       ///< widget px: the shadow under a page in ContinuousVertical
-constexpr int kMaxOverlaySide = 8192; ///< widget px: the live overlay never grows past this, whatever the widget's size
+constexpr int kMaxOverlaySide = 8192; ///< device px: the live overlay never grows past this, whatever the widget's size
 
 double cross(const QPointF &o, const QPointF &p, const QPointF &q)
 {
@@ -70,10 +72,153 @@ bool eraserTouches(const Stroke &stroke, const QPointF &a, const QPointF &b, dou
     return false;
 }
 
+/// Everything the page layout needs, by value: the canvas builds one for its own painting and hands one to every
+/// tile job, which runs on a pool thread and may not touch the document.
+struct Geometry {
+    DocumentSettings settings;
+    int pageCount = 1;
+    double zoom = 1.0;
+
+    double gap() const { return settings.layout == LayoutKind::ContinuousVertical ? InkDocument::kPageGap : 0.0; }
+    bool paged() const { return gap() > 0; }
+    QSize size() const ///< widget px; a QWidget cannot be larger than QWIDGETSIZE_MAX, the clamp also keeps the int conversion defined for a hostile extent
+    {
+        const double height = settings.extent.height() + (pageCount - 1) * gap();
+        const auto px = [this](double documentPx) { return int(std::min(std::ceil(documentPx * zoom), double(QWIDGETSIZE_MAX))); };
+        return QSize(px(settings.extent.width()), px(height));
+    }
+    QRect pageWidgetRect(int index) const
+    {
+        const double h = settings.format.height;
+        const double top = index * (h + gap());
+        const int topPx = qRound(top * zoom);
+        const int bottom = std::min(qRound((top + h) * zoom), size().height()); // the last page may be cut by the extent
+        return QRect(0, topPx, size().width(), bottom - topPx);
+    }
+    QRectF pageRect(int index) const ///< document px
+    {
+        if (settings.layout == LayoutKind::SemiInfinite || settings.layout == LayoutKind::Infinite)
+            return settings.extent;
+        return QRectF(settings.extent.x(), settings.extent.y() + index * settings.format.height, settings.format.width, settings.format.height);
+    }
+    std::pair<int, int> visiblePages(const QRect &area) const
+    {
+        const double stride = (settings.format.height + gap()) * zoom;
+        const int last = pageCount - 1;
+        if (!paged() || !(stride > 0))
+            return {0, 0};
+        return {std::clamp(int(std::floor(area.top() / stride)), 0, last), std::clamp(int(std::floor(area.bottom() / stride)), 0, last)};
+    }
+    /// What forEachPage does per page: `shown` is the part of the widget-px `area` on page `page`, `exposed` the
+    /// same in document px of that page.
+    struct Slice {
+        int page;
+        QRect shown;
+        QRectF exposed;
+    };
+    std::vector<Slice> slices(const QRect &area) const
+    {
+        std::vector<Slice> out;
+        const auto [first, last] = visiblePages(area);
+        for (int i = first; i <= last; ++i) {
+            QRect shown = area;
+            if (paged()) {
+                shown = area & pageWidgetRect(i);
+                if (shown.isEmpty())
+                    continue;
+            }
+            out.push_back({i, shown, QRectF(shown.x() / zoom + settings.extent.x(), shown.y() / zoom - i * gap() + settings.extent.y(),
+                                            shown.width() / zoom, shown.height() / zoom)});
+        }
+        return out;
+    }
+    /// Calls draw(documentRect, pageIndex) once per page the widget-px `area` touches, with the painter (already in widget
+    /// px) set up so document coordinates draw in place, clipped to that page in ContinuousVertical. Ink that
+    /// crosses a page break is therefore cut by the gap, not smeared over it.
+    template <typename Draw>
+    void forEachPage(QPainter &painter, const QRect &area, Draw draw) const
+    {
+        for (const Slice &s : slices(area)) {
+            painter.save();
+            if (paged())
+                painter.setClipRect(pageWidgetRect(s.page), Qt::IntersectClip);
+            painter.scale(zoom, zoom);
+            painter.translate(-settings.extent.x(), -settings.extent.y() + s.page * gap());
+            draw(s.exposed, s.page);
+            painter.restore();
+        }
+    }
+    /// The pattern of one page (or of the whole sheet). Paged layouts: one pattern per page, restarting at its top-left.
+    /// Fixed and the sheets: the whole extent is one sheet (Fixed has no gap, addPage grows its extent); a sheet anchors
+    /// at the document origin, so growing it up or left moves no line under the ink - and the tile seams move none either.
+    void paintPageBackground(QPainter &painter, int page, const QRectF &exposed) const
+    {
+        const bool pagedLayout = settings.layout == LayoutKind::ContinuousVertical;
+        const QRectF sheet = pagedLayout ? pageRect(page) : settings.extent;
+        const bool sheetLayout = settings.layout == LayoutKind::SemiInfinite || settings.layout == LayoutKind::Infinite;
+        paintPattern(painter, settings.background, sheet, sheetLayout ? QPointF(0, 0) : sheet.topLeft(), exposed, zoom);
+    }
+};
+
+Geometry geometryOf(const InkDocument &document, double zoom) { return {document.settings(), document.pageCount(), zoom}; }
+
+/// What a tile job paints, copied on the UI thread: shared stroke payloads and the bounds of the rest, never the document.
+struct TileItem {
+    std::shared_ptr<const Stroke> stroke; ///< null: a shape, text box or image (a placeholder until Tasks 14-15)
+    QRectF bounds;
+};
+
+struct TileSpec {
+    Geometry geometry; ///< at the zoom the tile is rendered for
+    QRectF rect;       ///< logical px of the tile space: where the tile sits in the widget at that zoom
+    double dpr = 1.0;
+    std::map<int, std::vector<TileItem>> items; ///< by page, in paint order
+};
+
+/// Runs on a pool thread: QImage + QPainter only (R5). Page background, pattern and items, transparent in the gaps of
+/// ContinuousVertical; the shadows, borders, the prediction tail and the live stroke are the canvas's own.
+QImage renderTile(const TileSpec &spec)
+{
+    QImage image(TileCache::kTileSize, TileCache::kTileSize, QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return image;
+    image.setDevicePixelRatio(spec.dpr);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.translate(-spec.rect.topLeft());
+    const Geometry &geo = spec.geometry;
+    const QRect area = spec.rect.toAlignedRect();
+    const QColor background = geo.settings.background.color;
+    if (!geo.paged()) {
+        painter.fillRect(spec.rect, background);
+    } else {
+        for (const Geometry::Slice &s : geo.slices(area))
+            painter.fillRect(geo.pageWidgetRect(s.page) & area, background);
+    }
+    geo.forEachPage(painter, area, [&](const QRectF &exposed, int page) {
+        geo.paintPageBackground(painter, page, exposed);
+        const auto it = spec.items.find(page);
+        if (it == spec.items.end())
+            return;
+        for (const TileItem &item : it->second) {
+            if (item.stroke)
+                paintStroke(painter, *item.stroke);
+            else
+                painter.fillRect(item.bounds, QColor(0, 0, 0, 12));
+        }
+    });
+    return image;
+}
+
 } // namespace
 
 InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
 {
+    m_zoomTimer.setSingleShot(true);
+    m_zoomTimer.setInterval(kZoomSettleMs);
+    connect(&m_zoomTimer, &QTimer::timeout, this, &InkCanvas::settleZoom);
+    connect(&m_tiles, &TileCache::tileReady, this, &InkCanvas::onTileReady);
     setFocusPolicy(Qt::StrongFocus);
     setTabletTracking(true); // hover events while the pen is near the tablet (spec section 7, Sources)
     setAttribute(Qt::WA_AcceptTouchEvents);
@@ -83,14 +228,17 @@ InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
     documentReplaced();
 }
 
-QSize InkCanvas::sizeHint() const
+void InkCanvas::setTileCacheMB(int mb)
 {
-    const QRectF extent = m_document.settings().extent;
-    const double height = extent.height() + (m_document.pageCount() - 1) * pageGap();
-    // A QWidget cannot be larger than QWIDGETSIZE_MAX; the clamp also keeps the int conversion defined for a hostile extent.
-    const auto px = [this](double documentPx) { return int(std::min(std::ceil(documentPx * m_zoom), double(QWIDGETSIZE_MAX))); };
-    return QSize(px(extent.width()), px(height));
+    m_tiles.setMaxBytes(qsizetype(std::clamp(mb, kMinTileCacheMB, kMaxTileCacheMB)) * 1024 * 1024);
 }
+qsizetype InkCanvas::tileCacheBytes() const { return m_tiles.maxBytes(); }
+double InkCanvas::tilesScale() const { return m_tilesZoom; }
+int InkCanvas::pendingTiles() const { return m_tiles.pendingCount(); }
+int InkCanvas::staleTileCount() const { return m_tiles.staleCount(); }
+void InkCanvas::setTileJobHook(std::function<void()> hook) { m_tileJobHook = std::move(hook); }
+
+QSize InkCanvas::sizeHint() const { return geometryOf(m_document, m_zoom).size(); }
 
 double InkCanvas::pageGap() const
 {
@@ -127,52 +275,15 @@ QPointF InkCanvas::toDocument(const QPointF &widgetPos) const
     return QPointF(widgetPos.x() / m_zoom + s.extent.x(), y + s.extent.y());
 }
 
-QRect InkCanvas::pageWidgetRect(int index) const
-{
-    const double h = m_document.settings().format.height;
-    const double top = index * (h + pageGap());
-    const int topPx = qRound(top * m_zoom);
-    const int bottom = std::min(qRound((top + h) * m_zoom), sizeHint().height()); // the last page may be cut by the extent
-    return QRect(0, topPx, sizeHint().width(), bottom - topPx);
-}
+QRect InkCanvas::pageWidgetRect(int index) const { return geometryOf(m_document, m_zoom).pageWidgetRect(index); }
 
-std::pair<int, int> InkCanvas::visiblePages(const QRect &area) const
-{
-    const double stride = (m_document.settings().format.height + pageGap()) * m_zoom;
-    const int last = m_document.pageCount() - 1;
-    if (pageGap() <= 0 || !(stride > 0))
-        return {0, 0};
-    return {std::clamp(int(std::floor(area.top() / stride)), 0, last), std::clamp(int(std::floor(area.bottom() / stride)), 0, last)};
-}
-
-template <typename Draw>
-void InkCanvas::forEachPage(QPainter &painter, const QRect &area, Draw draw) const
-{
-    const QRectF extent = m_document.settings().extent;
-    const double gap = pageGap();
-    const auto [first, last] = visiblePages(area);
-    for (int i = first; i <= last; ++i) {
-        QRect shown = area;
-        if (gap > 0) {
-            shown = area & pageWidgetRect(i);
-            if (shown.isEmpty())
-                continue;
-        }
-        painter.save();
-        if (gap > 0)
-            painter.setClipRect(pageWidgetRect(i), Qt::IntersectClip);
-        painter.scale(m_zoom, m_zoom);
-        painter.translate(-extent.x(), -extent.y() + i * gap);
-        draw(QRectF(shown.x() / m_zoom + extent.x(), shown.y() / m_zoom - i * gap + extent.y(), shown.width() / m_zoom,
-                    shown.height() / m_zoom), i);
-        painter.restore();
-    }
-}
+std::pair<int, int> InkCanvas::visiblePages(const QRect &area) const { return geometryOf(m_document, m_zoom).visiblePages(area); }
 
 void InkCanvas::documentReplaced()
 {
     finishStroke(false); // the stroke in flight belongs to the document that went away
     m_live = QImage();
+    m_tiles.invalidateAll(); // the content (or its place in the widget) changed: the images stay as the blurry stand-in
     resize(sizeHint());
     updateGeometry();
     update();
@@ -194,6 +305,7 @@ void InkCanvas::setZoom(double zoom)
     finishStroke(true); // in the old zoom: its samples are widget px of it
     m_zoom = zoom;
     m_live = QImage();
+    m_zoomTimer.start(); // the tiles are scaled until the pinch has been still for kZoomSettleMs
     resize(sizeHint());
     updateGeometry();
     update();
@@ -404,6 +516,7 @@ void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double second
     if (m_drawing != Drawing::None)
         finishStroke(true); // a press without the release: close the old stroke where IT ended, not at this press
     setFocus(Qt::MouseFocusReason);
+    m_holdLive = false;
     m_lastPos = widgetPos;
     m_lastPressure = pressure;
     m_lastSeconds = seconds;
@@ -481,6 +594,9 @@ void InkCanvas::finishStroke(bool keep)
         m_document.addStroke(stroke, Layer::User);
         const bool grew = m_document.growToContain(stroke->bounds());
         finishEdit();
+        invalidateTiles(stroke->bounds());
+        m_holdLive = !m_live.isNull(); // the stroke stays on screen from the live image until its tiles show it
+        m_holdRect = widgetRect(stroke->bounds());
         if (grew)
             documentReplaced(); // the page grew: resize the widget (m_drawing is None, nothing to cancel)
         update(widgetRect(stroke->bounds() | tail));
@@ -496,8 +612,9 @@ void InkCanvas::prepareLiveOverlay()
     QRect want = visibleRegion().boundingRect();
     if (want.isEmpty())
         want = rect();
-    want.setSize(want.size().boundedTo(QSize(kMaxOverlaySide, kMaxOverlaySide)));
-    const qreal dpr = devicePixelRatio();
+    const qreal dpr = devicePixelRatioF();
+    const int cap = std::max(1, int(kMaxOverlaySide / dpr)); // the cap is in device px: the image is dpr times its widget size
+    want.setSize(want.size().boundedTo(QSize(cap, cap)));
     if (m_live.isNull() || m_liveRect != want || m_live.devicePixelRatio() != dpr) {
         m_liveRect = want;
         m_live = QImage(want.size() * dpr, QImage::Format_ARGB32_Premultiplied);
@@ -527,7 +644,7 @@ void InkCanvas::rasteriseNewSegments()
     painter.translate(-m_liveRect.topLeft());
     painter.setPen(Qt::NoPen);
     painter.setBrush(stroke.style.color);
-    forEachPage(painter, widgetRect(path.boundingRect()), [&](const QRectF &, int) { painter.drawPath(path); });
+    geometryOf(m_document, m_zoom).forEachPage(painter, widgetRect(path.boundingRect()), [&](const QRectF &, int) { painter.drawPath(path); });
     painter.end();
     m_liveDirty |= widgetRect(path.boundingRect());
     QRectF tail; // the predicted tail's box: repainted now, and again where it was when it moves
@@ -554,6 +671,7 @@ void InkCanvas::eraseSweep(const QPointF &a, const QPointF &b)
         if (!hit)
             continue;
         dirty |= item->bounds();
+        invalidateTiles(item->bounds());
         m_document.removeItem(t);
         m_erasedSomething = true;
     }
@@ -585,7 +703,134 @@ bool InkCanvas::redo()
     return true;
 }
 
-// --- painting ------------------------------------------------------------------
+// --- painting ---------------------------------------------------------------------
+
+void InkCanvas::invalidateTiles(const QRectF &documentRect)
+{
+    const QRectF w = widgetRect(documentRect);
+    const double k = m_tilesZoom / m_zoom; // widgetRect is at the current zoom, the cache's grid at the tiles' zoom
+    m_tiles.invalidate(QRectF(w.x() * k, w.y() * k, w.width() * k, w.height() * k));
+}
+
+void InkCanvas::settleZoom()
+{
+    if (qFuzzyCompare(m_zoom, m_tilesZoom))
+        return; // pinched out and back: the tiles are right as they are
+    m_ghostScale = m_tilesZoom;
+    m_tilesZoom = m_zoom;
+    m_tiles.setScale(m_tilesZoom, devicePixelRatioF()); // every tile is stale; the old images keep standing in
+    update();
+}
+
+namespace {
+/// The cells of a grid whose cells are `side` wide (widget px) that the widget-px rect touches, within the content.
+QRect cellsTouching(const QRectF &area, double side, const QSize &content)
+{
+    const int x0 = std::max(0, int(std::floor(area.left() / side)));
+    const int y0 = std::max(0, int(std::floor(area.top() / side)));
+    const int x1 = std::min(int(std::ceil(content.width() / side)) - 1, int(std::floor((area.right() - 1e-6) / side)));
+    const int y1 = std::min(int(std::ceil(content.height() / side)) - 1, int(std::floor((area.bottom() - 1e-6) / side)));
+    return QRect(QPoint(x0, y0), QPoint(x1, y1));
+}
+} // namespace
+
+bool InkCanvas::tilesFresh(const QRect &widgetArea) const
+{
+    const double side = TileCache::kTileSize / m_tiles.devicePixelRatio() * m_zoom / m_tilesZoom;
+    const QRect cells = cellsTouching(widgetArea, side, size());
+    for (int ty = cells.top(); ty <= cells.bottom(); ++ty)
+        for (int tx = cells.left(); tx <= cells.right(); ++tx)
+            if (!m_tiles.isFresh(tx, ty))
+                return false;
+    return true;
+}
+
+void InkCanvas::onTileReady(int tx, int ty)
+{
+    const double side = TileCache::kTileSize / m_tiles.devicePixelRatio() * m_zoom / m_tilesZoom;
+    update(QRectF(tx * side, ty * side, side, side).toAlignedRect());
+    if (m_holdLive && tilesFresh(m_holdRect)) {
+        m_holdLive = false;
+        update(m_holdRect);
+    }
+}
+
+/// Everything a tile job paints, copied here on the UI thread. The job itself is pure data (R5).
+std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
+{
+    const double side = TileCache::kTileSize / m_tiles.devicePixelRatio();
+    TileSpec spec{geometryOf(m_document, m_tilesZoom), QRectF(tx * side, ty * side, side, side), m_tiles.devicePixelRatio(), {}};
+    for (const Geometry::Slice &s : spec.geometry.slices(spec.rect.toAlignedRect())) {
+        auto &items = spec.items[s.page];
+        for (const Item *item : m_document.paintOrder(s.exposed.adjusted(-4, -4, 4, 4))) {
+            if (item->type == Item::Type::Stroke)
+                items.push_back({item->stroke, item->bounds()});
+            else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image)
+                items.push_back({nullptr, item->bounds()});
+        }
+    }
+    return [spec = std::move(spec), hook = m_tileJobHook] {
+        if (hook)
+            hook();
+        return renderTile(spec);
+    };
+}
+
+/// Paints the tiles over `area` and asks the pool for the missing and stale ones; never renders (R5).
+/// A tile (tx, ty) is a cell of the grid at the tiles' zoom; during a pinch the widget is at m_zoom and the cells are
+/// drawn scaled by m_zoom / m_tilesZoom. After a settle the old images still sit in their old grid's cells (they say
+/// at what zoom they were rendered): those are painted scaled underneath until the new tiles replace them.
+void InkCanvas::drawTiles(QPainter &painter, const QRect &area)
+{
+    const double dpr = devicePixelRatioF();
+    if (!qFuzzyCompare(dpr, m_tiles.devicePixelRatio()))
+        m_tiles.setScale(m_tilesZoom, dpr); // moved to another screen: the cells change size
+    const double side = TileCache::kTileSize / dpr;
+    const double f = m_zoom / m_tilesZoom; // 1 unless a pinch is pending
+    const bool scaled = !qFuzzyCompare(f, 1.0);
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, scaled);
+    const auto target = [scaled](const QRectF &r) { return scaled ? QRectF(r.toAlignedRect()) : r; }; // scaled cells overlap by a pixel, never leave a hairline
+
+    struct Cell {
+        int tx, ty;
+        const QImage *image;
+    };
+    std::vector<Cell> cells;
+    bool needGhosts = false;
+    const QRect grid = cellsTouching(area, side * f, size());
+    for (int ty = grid.top(); ty <= grid.bottom(); ++ty)
+        for (int tx = grid.left(); tx <= grid.right(); ++tx) {
+            const TileCache::Lookup hit = m_tiles.find(tx, ty);
+            const bool own = hit.image && qFuzzyCompare(hit.scale, m_tilesZoom); // an image of an older zoom belongs to the old grid
+            cells.push_back({tx, ty, own ? hit.image : nullptr});
+            needGhosts |= !hit.fresh;
+        }
+    if (needGhosts && m_ghostScale > 0 && !qFuzzyCompare(m_ghostScale, m_tilesZoom)) {
+        const double ghostSide = side * m_zoom / m_ghostScale;
+        const QRect old = cellsTouching(area, ghostSide, size());
+        for (int ty = old.top(); ty <= old.bottom(); ++ty)
+            for (int tx = old.left(); tx <= old.right(); ++tx) {
+                const TileCache::Lookup hit = m_tiles.find(tx, ty);
+                if (hit.image && qFuzzyCompare(hit.scale, m_ghostScale))
+                    painter.drawImage(QRectF(tx * ghostSide, ty * ghostSide, ghostSide, ghostSide).toAlignedRect(), *hit.image);
+            }
+    }
+    for (const Cell &cell : cells)
+        if (cell.image)
+            painter.drawImage(target(QRectF(cell.tx * side * f, cell.ty * side * f, side * f, side * f)), *cell.image);
+    painter.restore();
+    if (scaled)
+        return; // the pinch may not be over: nothing is rendered for a zoom that may still change
+    // The visible part of the canvas and one tile around it: a pan finds its tiles already rendered.
+    const QRect visible = visibleRegion().boundingRect();
+    const QRectF want = QRectF(area | visible).adjusted(-side, -side, side, side);
+    const QRect wanted = cellsTouching(want, side, size());
+    for (int ty = wanted.top(); ty <= wanted.bottom(); ++ty)
+        for (int tx = wanted.left(); tx <= wanted.right(); ++tx)
+            if (!m_tiles.isFresh(tx, ty) && !m_tiles.isPending(tx, ty))
+                m_tiles.request(tx, ty, tileJob(tx, ty));
+}
 
 void InkCanvas::paintEvent(QPaintEvent *event)
 {
@@ -599,36 +844,21 @@ void InkCanvas::paintEvent(QPaintEvent *event)
     if (paged)
         for (int i = firstPage; i <= lastPage; ++i)
             painter.fillRect(pageWidgetRect(i) & event->rect(), background);
-    // Task 11 replaces the item loop with the tile cache. In A0 the exposed rect's items are
-    // painted straight from the document, over the page's pattern.
-    forEachPage(painter, event->rect(), [&](const QRectF &exposed, int page) {
-        // Paged layouts: one pattern per page, restarting at its top-left. Fixed and the sheets: the whole extent is one
-        // sheet (Fixed has no gap, addPage grows its extent); a sheet anchors at the document origin, so growing it up or
-        // left moves no line under the ink. Task 11's tile cache must key its pattern tiles on this anchor.
-        const DocumentSettings &settings = m_document.settings();
-        const bool paged = settings.layout == LayoutKind::ContinuousVertical;
-        const QRectF sheet = paged ? m_document.pageRect(page) : settings.extent;
-        const bool sheetLayout = settings.layout == LayoutKind::SemiInfinite || settings.layout == LayoutKind::Infinite;
-        paintPattern(painter, settings.background, sheet, sheetLayout ? QPointF(0, 0) : sheet.topLeft(), exposed, m_zoom);
-        for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
-            if (item->type == Item::Type::Stroke)
-                paintStroke(painter, *item->stroke);
-            else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image)
-                painter.fillRect(item->bounds(), QColor(0, 0, 0, 12)); // placeholder until Tasks 14-15 draw them
-        }
-        if (m_drawing == Drawing::Pen) {
-            const auto &prediction = m_input.prediction();
-            if (!prediction.empty()) {
-                Stroke tail;
-                tail.style = m_input.stroke().style;
-                tail.points.push_back(m_input.stroke().points.back());
-                tail.points.insert(tail.points.end(), prediction.begin(), prediction.end());
+    drawTiles(painter, event->rect()); // the page pattern and the committed items
+    if (m_drawing == Drawing::Pen) {
+        const auto &prediction = m_input.prediction();
+        if (!prediction.empty()) {
+            Stroke tail;
+            tail.style = m_input.stroke().style;
+            tail.points.push_back(m_input.stroke().points.back());
+            tail.points.insert(tail.points.end(), prediction.begin(), prediction.end());
+            geometryOf(m_document, m_zoom).forEachPage(painter, event->rect(), [&](const QRectF &, int) {
                 painter.setOpacity(0.6);
                 paintStroke(painter, tail);
                 painter.setOpacity(1.0);
-            }
+            });
         }
-    });
+    }
     if (paged) {
         painter.setRenderHint(QPainter::Antialiasing, false);
         const int pages = m_document.pageCount();
@@ -648,7 +878,7 @@ void InkCanvas::paintEvent(QPaintEvent *event)
         }
         painter.setRenderHint(QPainter::Antialiasing, true);
     }
-    if (m_drawing == Drawing::Pen && !m_live.isNull()) {
+    if ((m_drawing == Drawing::Pen || m_holdLive) && !m_live.isNull()) {
         const QRect target = event->rect() & m_liveRect;
         const qreal dpr = m_live.devicePixelRatio();
         if (!target.isEmpty())

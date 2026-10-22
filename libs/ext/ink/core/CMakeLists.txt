@@ -45,7 +45,9 @@ add_library(notolith-inkcore SHARED
     SpatialGrid.cpp
     SpatialGrid.h
     StrokeOutline.cpp
-    StrokeOutline.h)
+    StrokeOutline.h
+    TileCache.cpp
+    TileCache.h)
 set_target_properties(notolith-inkcore PROPERTIES
     AUTOMOC ON
     OUTPUT_NAME notolith-inkcore
