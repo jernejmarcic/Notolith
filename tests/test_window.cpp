@@ -1521,6 +1521,47 @@ TEST_F(WindowTest, ContinuousTypingIsSavedAtTheMaxWaitNotOnlyAtThePause)
     EXPECT_TRUE(savedWhileTyping) << "the max wait never saved while the typing went on";
 }
 
+// A new line, a pause (the autosave, the watcher's reload and the re-parse all
+// run in it), then typing: the text and the caret must stay on the new line.
+// The re-parse once drew the newline as a space, so the typing ran on at the
+// end of the line above.
+TEST_F(WindowTest, TypingOnANewLineAfterAPauseStaysOnThatLine)
+{
+    struct Case {
+        const char *before;
+        const char *after;
+        qsizetype enterAt; ///< where Enter is pressed
+    };
+    const Case cases[] = {
+        {"line one\n", "line one\nabc\n", 8},
+        {"line one", "line one\nabc", 8},
+        {"# Title\n\nA paragraph.\n\nTail.\n", "# Title\n\nA paragraph.\nabc\n\nTail.\n", 21},
+    };
+    for (const Case &c : cases) {
+        SCOPED_TRACE(c.before);
+        write(QStringLiteral("Typing.md"), c.before);
+        MainWindow window;
+        window.setAutosaveIntervalsForTests(50, 200);
+        window.show();
+        ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+        window.openVault(dir.path());
+        const QString note = path(QStringLiteral("Typing.md"));
+        window.openNote(note);
+        MarkdownEditor *editor = window.editor();
+        editor->setFocus();
+        editor->setCursorOffset(c.enterAt);
+        const qreal lineY = editor->caretRectNow().y();
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTest::qWait(800);
+        QTest::keyClicks(editor, QStringLiteral("abc"));
+        QTest::qWait(800);
+        EXPECT_EQ(editor->noteText(), QString::fromUtf8(c.after));
+        EXPECT_EQ(editor->cursorOffset(), c.enterAt + 4);
+        EXPECT_GT(editor->caretRectNow().y(), lineY) << "the caret is back on the line above";
+        EXPECT_EQ(readAll(note), QByteArray(c.after));
+    }
+}
+
 TEST_F(WindowTest, UndoCloseTabReopensInTheSameSplitWithTheCaret)
 {
     write(QStringLiteral("Other.md"), "other note text\n");

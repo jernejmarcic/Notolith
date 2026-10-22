@@ -898,6 +898,47 @@ TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
     EXPECT_EQ(editor->wordCount(), 3);
 }
 
+// Obsidian's "Strict line breaks" is off by default, and off means a newline in
+// a paragraph IS a line break (the setting follows CommonMark's joining only
+// when on, and only in reading view). The editor had it the other way round:
+// the debounced parse after typing marked the new line as the same paragraph
+// and drew the newline as a space, so what was typed after Enter ran on at the
+// end of the line above.
+TEST(SoftBreakTest, ATypedNewLineStaysOnItsOwnLineAfterTheReparse)
+{
+    for (const QString &start : {QStringLiteral("line one\n"), QStringLiteral("line one"),
+                                  QStringLiteral("# Title\n\npara\n")}) {
+        SCOPED_TRACE(start.toStdString());
+        auto editor = editorWith(start);
+        editor->show();
+        const qsizetype end = start.endsWith(QLatin1Char('\n')) ? start.size() - 1 : start.size();
+        editor->setCursorOffset(end);
+        const qreal firstLine = editor->caretRectNow().y();
+
+        QTest::keyClick(editor.get(), Qt::Key_Return);
+        QTest::qWait(300); // past the parse timer: the new line is in the paragraph now
+        QTest::keyClicks(editor.get(), QStringLiteral("abc"));
+        QTest::qWait(300);
+
+        EXPECT_EQ(editor->cursorOffset(), end + 4);
+        EXPECT_GT(editor->caretRectNow().y(), firstLine) << "typing ran on at the end of the line above";
+    }
+}
+
+TEST(SoftBreakTest, StrictLineBreaksJoinTheLinesOfAParagraph)
+{
+    const QString text = QStringLiteral("one\ntwo\n\nthree\n");
+    const auto threeAt = [&](bool strict) {
+        auto editor = editorWith(text);
+        editor->show();
+        editor->setStrictLineBreaks(strict);
+        editor->setCursorOffset(text.indexOf(QLatin1String("three")));
+        QTest::qWait(100);
+        return editor->caretRectNow().y();
+    };
+    EXPECT_LT(threeAt(true), threeAt(false)) << "strict: the two lines above are one, so the next paragraph sits higher";
+}
+
 TEST(CodeHighlighterTest, KnowsKateDefinitionsAndObsidianAliases)
 {
     if (!CodeHighlighter::isAvailable())
@@ -7794,6 +7835,11 @@ TEST(ScrollTest, AScrolledFrameMatchesAFreshOne)
     ASSERT_TRUE(editor);
     editor->show();
     ASSERT_TRUE(QTest::qWaitForWindowExposed(editor.get()));
+    // Where the pointer rests is not what is compared: the listing under it
+    // says "Copy", and which one that is depends on how tall the text above is.
+    QEvent leave(QEvent::Leave);
+    QCoreApplication::sendEvent(editor.get(), &leave);
+    editor->viewport()->setAttribute(Qt::WA_UnderMouse, false);
 
     QScrollBar *bar = editor->verticalScrollBar();
     for (int step = 0; step < 60; ++step) {

@@ -2569,7 +2569,9 @@ bool MarkdownEditor::softBreakAt(qsizetype source) const
 {
     // Source mode shows the file as it is written: one line of the file is one
     // line on screen, the way Obsidian's own source mode lays out.
-    if (d->m_strictLineBreaks || d->m_mode == Mode::Source)
+    // Obsidian's default (strict off) honours every newline; only the strict
+    // setting follows CommonMark and joins the lines of a paragraph.
+    if (!d->m_strictLineBreaks || d->m_mode == Mode::Source)
         return false;
     // A hard break: two spaces or a backslash before the newline.
     if (source >= 2 && d->m_text.at(source - 1) == QLatin1Char(' ')
@@ -4010,9 +4012,9 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     // character it does break on. Same length, so every display offset the
     // DisplayMap computed still points at the same glyph.
     //
-    // Which newlines actually break is CommonMark's rule, which is also
-    // Obsidian's default: a newline inside a paragraph joins the lines, one
-    // between blocks does not. Two trailing spaces still force a break.
+    // With "Strict line breaks" on, a newline inside a paragraph joins the
+    // lines (CommonMark's rule), one between blocks does not, and two trailing
+    // spaces still force a break. Off, the default, every newline breaks.
     QString shown = view.map.text();
     for (qsizetype i = 0; i < shown.size(); ++i) {
         if (shown.at(i) != QLatin1Char('\n'))
