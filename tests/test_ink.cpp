@@ -15,18 +15,25 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QtTest/QTest>
 
 #include <zlib.h>
 
+#include "InkCanvas.h"
 #include "InkDocument.h"
 #include "InkFormat.h"
 #include "InkInput.h"
+#include "InkTestSupport.h"
 #include "InkTypes.h"
 #include "SpatialGrid.h"
 #include "StrokeOutline.h"
 
 using namespace noteAppC::ink;
+using namespace inktest;
 
 namespace {
 
@@ -1454,6 +1461,338 @@ TEST(InkInputTest, AModelerFailureRestartsTheModelerAndTheStrokeStaysSmoothed)
     EXPECT_NEAR(stroke->points.back().x, 202.0, 1.0);
     for (const StrokePoint &p : stroke->points)
         EXPECT_TRUE(std::isfinite(p.x) && std::isfinite(p.y));
+}
+
+namespace {
+
+struct CanvasFixture {
+    InkCanvas canvas;
+    CanvasFixture()
+    {
+        DocumentSettings settings;
+        settings.format = {400, 300, 96};
+        settings.extent = QRectF(0, 0, 400, 300);
+        settings.layout = LayoutKind::Fixed;
+        canvas.document().setSettings(settings);
+        canvas.document().markSaved();
+        canvas.documentReplaced();
+        canvas.resize(400, 300);
+        canvas.show();
+        if (!QTest::qWaitForWindowExposed(&canvas))
+            ADD_FAILURE() << "the canvas was never exposed";
+    }
+};
+
+} // namespace
+
+TEST(InkCanvasTest, APenStrokeBecomesOneCommittedItemWithTheCurrentStyle)
+{
+    CanvasFixture f;
+    StrokeStyle style;
+    style.width = 3.0;
+    style.color = QColor(0x00, 0x50, 0xc0);
+    f.canvas.setPenStyle(style);
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    penStroke(&f.canvas, QPointF(20, 20), QPointF(120, 60), 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const Item &item = f.canvas.document().items()[0];
+    EXPECT_EQ(item.type, Item::Type::Stroke);
+    EXPECT_EQ(item.stroke->style, style);
+    EXPECT_GE(item.stroke->points.size(), 10u);
+    EXPECT_NEAR(item.stroke->points.front().x, 20.0, 1.0);
+    EXPECT_NEAR(item.stroke->points.back().x, 120.0, 1.0);
+    EXPECT_TRUE(f.canvas.document().canUndo());
+    EXPECT_TRUE(f.canvas.document().isModified());
+    EXPECT_EQ(edited.count(), 1);
+    EXPECT_FALSE(f.canvas.isDrawing());
+}
+
+TEST(InkCanvasTest, ZoomMapsWidgetToDocumentCoordinates)
+{
+    CanvasFixture f;
+    f.canvas.setZoom(2.0);
+    EXPECT_EQ(f.canvas.sizeHint(), QSize(800, 600));
+    EXPECT_EQ(f.canvas.toDocument(QPointF(100, 50)), QPointF(50, 25));
+    EXPECT_EQ(f.canvas.toWidget(QPointF(50, 25)), QPointF(100, 50));
+    f.canvas.resize(f.canvas.sizeHint());
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(300, 100), 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().x, 50.0, 1.0) << "stored in document px";
+}
+
+TEST(InkCanvasTest, TheEraserRemovesWholeStrokesItTouches)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    penStroke(&f.canvas, QPointF(20, 200), QPointF(200, 200), 2000);
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(100, 30), QPointF(100, 70), 3000); // crosses the first stroke only
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().y, 200.0, 1.0);
+    f.canvas.setTool(InkCanvas::Tool::Pen);
+    // The pen's eraser end erases while the pen tool is selected (kTrustEraserPointerType stays
+    // true: PADD has no eraser end, other pens do). The plain tip with the Eraser tool, above,
+    // is the way in that needs no hardware; this branch only keeps the test honest if the
+    // constant is ever flipped.
+    if (kTrustEraserPointerType) {
+        penStroke(&f.canvas, QPointF(100, 180), QPointF(100, 220), 4000, Qt::LeftButton, QPointingDevice::PointerType::Eraser);
+    } else {
+        f.canvas.setTool(InkCanvas::Tool::Eraser);
+        penStroke(&f.canvas, QPointF(100, 180), QPointF(100, 220), 4000);
+        f.canvas.setTool(InkCanvas::Tool::Pen);
+    }
+    EXPECT_EQ(f.canvas.document().items().size(), 0u);
+    // A held barrel button erases too.
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(200, 100), 5000);
+    penStroke(&f.canvas, QPointF(100, 80), QPointF(100, 120), 6000, Qt::LeftButton | kHeldEraserButton);
+    EXPECT_EQ(f.canvas.document().items().size(), 0u);
+}
+
+TEST(InkCanvasTest, UndoRedoFromTheKeyboard)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(200, 100), 2000);
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier);
+    QTest::keyClick(&f.canvas, Qt::Key_Y, Qt::ControlModifier);
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+}
+
+TEST(InkCanvasTest, EraseEverythingAutosaveThenUndoBringsTheStrokesBack)
+{
+    // Review Focus item 5.
+    CanvasFixture f;
+    QTemporaryDir tmp;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(200, 100), 2000);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(100, 30), QPointF(100, 120), 3000); // crosses both
+    ASSERT_EQ(f.canvas.document().items().size(), 0u);
+    ASSERT_TRUE(saveInkFile(tmp.filePath(QStringLiteral("n.ink")), f.canvas.document()));
+    f.canvas.document().markSaved(); // what InkView::save does
+    EXPECT_FALSE(f.canvas.document().isModified());
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_EQ(f.canvas.document().itemsIntersecting(QRectF(0, 0, 400, 300)).size(), 2u) << "the spatial grid came back";
+    EXPECT_TRUE(f.canvas.document().isModified()) << "the file holds the erased state";
+    const QImage frame = f.canvas.grab().toImage();
+    EXPECT_NE(frame.pixelColor(100, 50), QColor(Qt::white)) << "the canvas repainted the strokes";
+}
+
+TEST(InkCanvasTest, MouseDrawsOnlyWithDrawWithMouseOn)
+{
+    CanvasFixture f;
+    QTest::mousePress(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+    QTest::mouseMove(&f.canvas, QPoint(100, 60));
+    QTest::mouseRelease(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    EXPECT_TRUE(f.canvas.document().items().empty());
+    f.canvas.setDrawWithMouse(true);
+    QTest::mousePress(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(20, 20));
+    QTest::mouseMove(&f.canvas, QPoint(60, 40));
+    QTest::mouseMove(&f.canvas, QPoint(100, 60));
+    QTest::mouseRelease(&f.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 60));
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    for (const StrokePoint &p : f.canvas.document().items()[0].stroke->points)
+        EXPECT_DOUBLE_EQ(p.pressure, 0.5) << "a mouse has no pressure";
+}
+
+TEST(InkCanvasTest, TouchPansAndNeverDraws)
+{
+    CanvasFixture f;
+    QSignalSpy pans(&f.canvas, &InkCanvas::panRequested);
+    QTest::touchEvent(&f.canvas, finger()).press(0, QPoint(100, 100), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).move(0, QPoint(130, 90), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).release(0, QPoint(130, 90), &f.canvas);
+    EXPECT_TRUE(f.canvas.document().items().empty());
+    ASSERT_GE(pans.count(), 1);
+    EXPECT_EQ(pans.last().at(0).toPoint(), QPoint(30, -10));
+}
+
+TEST(InkCanvasTest, TouchPanFollowsTheFingerWhileTheScrollAreaMovesTheCanvas)
+{
+    // The scroll area moves the canvas under the finger. Widget-local positions
+    // would then report no movement and the pan would oscillate; global ones do not.
+    CanvasFixture f;
+    QSignalSpy pans(&f.canvas, &InkCanvas::panRequested);
+    const QPoint origin = f.canvas.mapToGlobal(QPoint(0, 0));
+    const auto local = [&](QPoint global) { return f.canvas.mapFromGlobal(global); };
+    QTest::touchEvent(&f.canvas, finger()).press(0, local(origin + QPoint(100, 100)), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).move(0, local(origin + QPoint(130, 90)), &f.canvas);
+    ASSERT_GE(pans.count(), 1);
+    EXPECT_EQ(pans.last().at(0).toPoint(), QPoint(30, -10));
+    f.canvas.move(f.canvas.pos() + QPoint(30, -10)); // what the scroll area does: the content follows the finger
+    QTest::touchEvent(&f.canvas, finger()).move(0, local(origin + QPoint(160, 80)), &f.canvas);
+    EXPECT_EQ(pans.last().at(0).toPoint(), QPoint(30, -10)) << "the finger moved 30 px on screen again";
+    QTest::touchEvent(&f.canvas, finger()).release(0, local(origin + QPoint(160, 80)), &f.canvas);
+    EXPECT_TRUE(f.canvas.document().items().empty());
+}
+
+// R14: the PADD pen never reports above 0.657. After the calibration samples the strokes reach full pressure.
+TEST(InkCanvasTest, PressureIsNormalisedByTheLearnedMaximumOfTheDevice)
+{
+    CanvasFixture f;
+    QSignalSpy learned(&f.canvas, &InkCanvas::learnedPressureChanged);
+    for (int i = 0; i < 25; ++i) // 10 samples a stroke: the 200 calibration samples are done in the 20th
+        penStroke(&f.canvas, QPointF(20, 10 + 10 * i), QPointF(200, 10 + 10 * i), 1000 + i * 100, Qt::LeftButton,
+                  QPointingDevice::PointerType::Pen, 0.657);
+    ASSERT_EQ(f.canvas.document().items().size(), 25u);
+    EXPECT_NEAR(f.canvas.document().items().front().stroke->points.front().pressure, 0.657, 0.05) << "before calibration: raw";
+    EXPECT_NEAR(f.canvas.document().items().back().stroke->points.front().pressure, 1.0, 0.05) << "after: full pressure";
+    ASSERT_GE(learned.count(), 1);
+    EXPECT_EQ(learned.last().at(0).toString(), QStringLiteral("test pen"));
+    EXPECT_NEAR(learned.last().at(1).toDouble(), 0.657, 1e-9);
+    EXPECT_NEAR(f.canvas.learnedPressure(QStringLiteral("test pen")), 0.657, 1e-9);
+    EXPECT_DOUBLE_EQ(f.canvas.learnedPressure(QStringLiteral("some other pen")), 1.0);
+}
+
+TEST(InkCanvasTest, AStoredMaximumOrTheSeedAppliesFromTheFirstStroke)
+{
+    {
+        CanvasFixture f;
+        f.canvas.setLearnedPressure(QStringLiteral("test pen"), 0.657);
+        penStroke(&f.canvas, QPointF(20, 20), QPointF(120, 20), 1000, Qt::LeftButton, QPointingDevice::PointerType::Pen, 0.3285);
+        ASSERT_EQ(f.canvas.document().items().size(), 1u);
+        EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().pressure, 0.5, 0.05);
+    }
+    CanvasFixture g; // the seed (ink.pressureMax) is for a device nothing is stored for
+    g.canvas.setPressureSeed(0.657);
+    penStroke(&g.canvas, QPointF(20, 20), QPointF(120, 20), 1000, Qt::LeftButton, QPointingDevice::PointerType::Pen, 0.3285);
+    ASSERT_EQ(g.canvas.document().items().size(), 1u);
+    EXPECT_NEAR(g.canvas.document().items()[0].stroke->points.front().pressure, 0.5, 0.05);
+    g.canvas.setDrawWithMouse(true); // a mouse has no pressure and is not scaled
+    QTest::mousePress(&g.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(20, 80));
+    QTest::mouseMove(&g.canvas, QPoint(60, 80));
+    QTest::mouseRelease(&g.canvas, Qt::LeftButton, Qt::NoModifier, QPoint(100, 80));
+    ASSERT_EQ(g.canvas.document().items().size(), 2u);
+    for (const StrokePoint &p : g.canvas.document().items()[1].stroke->points)
+        EXPECT_DOUBLE_EQ(p.pressure, 0.5);
+}
+
+// R14: PADD's pen has no eraser end and no working buttons, so nothing may need them.
+TEST(InkCanvasTest, EveryToolIsReachableFromTheKeyboardAndATipAloneDrawsAndErases)
+{
+    CanvasFixture f;
+    QSignalSpy changed(&f.canvas, &InkCanvas::toolChanged);
+    const std::pair<int, InkCanvas::Tool> keys[] = {{Qt::Key_E, InkCanvas::Tool::Eraser}, {Qt::Key_L, InkCanvas::Tool::Lasso},
+                                                    {Qt::Key_S, InkCanvas::Tool::Shape}, {Qt::Key_T, InkCanvas::Tool::Text},
+                                                    {Qt::Key_P, InkCanvas::Tool::Pen}};
+    for (const auto &[key, tool] : keys) {
+        QTest::keyClick(&f.canvas, Qt::Key(key));
+        EXPECT_EQ(f.canvas.tool(), tool);
+    }
+    EXPECT_EQ(changed.count(), 5);
+    QTest::keyClick(&f.canvas, Qt::Key_P); // already the pen
+    EXPECT_EQ(changed.count(), 5) << "no change, no signal";
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000); // the tip alone: no button, no eraser end
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    QTest::keyClick(&f.canvas, Qt::Key_E);
+    penStroke(&f.canvas, QPointF(100, 30), QPointF(100, 70), 2000);
+    EXPECT_EQ(f.canvas.document().items().size(), 0u);
+    f.canvas.setReadOnly(true);
+    QTest::keyClick(&f.canvas, Qt::Key_P);
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Eraser) << "a read-only canvas ignores the tool keys";
+}
+
+TEST(InkCanvasTest, LiveStrokeRepaintsOnlyTheNewSegment)
+{
+    CanvasFixture f;
+    PaintRects paints(&f.canvas);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 20), 0.5, 1000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(40, 20), 0.5, 1005);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(50, 20), 0.5, 1010);
+    QCoreApplication::processEvents(); // the first paints (the first is the whole canvas)
+    paints.rects.clear();
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(60, 20), 0.5, 1015);
+    QCoreApplication::processEvents();
+    EXPECT_TRUE(f.canvas.isDrawing());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "nothing is committed until pen-up";
+    ASSERT_FALSE(paints.rects.isEmpty());
+    EXPECT_LT(paints.united().width(), f.canvas.width() / 2) << "a 10 px segment never repaints the canvas";
+    EXPECT_LT(paints.united().height(), f.canvas.height() / 2);
+    // The real invariant lives in the bench (Track S1 Task 18): a 200 Hz feed costs under 1 ms per sample.
+}
+
+TEST(InkCanvasTest, PenUpRepaintsWhereThePredictedTailWas)
+{
+    // The tail is painted straight onto the widget; pen-up must repaint its
+    // area or it stays on screen as a ghost. (T6's PredictionExtends... test
+    // pins that the tail exists for a steady line; with no tail this is vacuous.)
+    CanvasFixture f;
+    PaintRects paints(&f.canvas);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 100), 0.5, 1000);
+    for (int i = 1; i <= 8; ++i)
+        tablet(&f.canvas, QEvent::TabletMove, QPointF(20 + 10 * i, 100), 0.5, 1000 + 5 * i);
+    QCoreApplication::processEvents();
+    paints.rects.clear();
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(110, 100), 0.5, 1045);
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(paints.rects.isEmpty());
+    const int tailRight = paints.united().right();
+    paints.rects.clear();
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(110, 100), 0.5, 1050, Qt::NoButton);
+    QCoreApplication::processEvents();
+    ASSERT_FALSE(paints.rects.isEmpty());
+    EXPECT_GE(paints.united().right(), tailRight) << "pen-up repaints out to where the tail was";
+}
+
+TEST(InkCanvasTest, TabletTrackingIsOnSoHoverReachesTheCanvas)
+{
+    InkCanvas canvas;
+    EXPECT_TRUE(canvas.hasTabletTracking());
+}
+
+TEST(InkCanvasTest, AReadOnlyCanvasIgnoresThePenAndTheKeysButStillPans)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setReadOnly(true);
+    EXPECT_TRUE(f.canvas.isEnabled()) << "disabling the widget would swallow wheel and touch too";
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(200, 100), 2000);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "undo is an edit";
+    EXPECT_FALSE(f.canvas.undo());
+    QSignalSpy pans(&f.canvas, &InkCanvas::panRequested);
+    QTest::touchEvent(&f.canvas, finger()).press(0, QPoint(100, 100), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).move(0, QPoint(130, 90), &f.canvas);
+    QTest::touchEvent(&f.canvas, finger()).release(0, QPoint(130, 90), &f.canvas);
+    EXPECT_GE(pans.count(), 1);
+}
+
+// R14 (ruling): a pen that reports no buttons and pointer type Pen still erases once the tool is switched from outside.
+TEST(InkCanvasTest, SwitchingTheToolWithSetToolMakesTheNextButtonlessPenStrokeErase)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000, Qt::LeftButton, QPointingDevice::PointerType::Pen);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setTool(InkCanvas::Tool::Eraser); // what the toolbar does (Task 16)
+    penStroke(&f.canvas, QPointF(100, 30), QPointF(100, 70), 2000, Qt::NoButton, QPointingDevice::PointerType::Pen);
+    EXPECT_TRUE(f.canvas.document().items().empty());
+    f.canvas.setTool(InkCanvas::Tool::Pen);
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 3000, Qt::NoButton, QPointingDevice::PointerType::Pen);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u) << "and back: the tip draws again";
+}
+
+TEST(InkCanvasTest, UndoAndRedoWaitForThePenToLiftSoNoLiveStrokeIsOrphaned)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 50), QPointF(200, 50), 1000);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(20, 100), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(60, 100), 0.5, 2005);
+    EXPECT_FALSE(f.canvas.undo());
+    QTest::keyClick(&f.canvas, Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_TRUE(f.canvas.isDrawing());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(100, 100), 0.5, 2010, Qt::NoButton);
+    EXPECT_EQ(f.canvas.document().items().size(), 2u) << "the stroke in flight survived the undo attempt";
+    EXPECT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
 }
 
 int main(int argc, char **argv)
