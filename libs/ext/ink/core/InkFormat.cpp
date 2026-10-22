@@ -1,6 +1,7 @@
 #include "InkFormat.h"
 
 #include <algorithm>
+#include <climits>
 #include <cmath>
 
 #include <zlib.h>
@@ -16,12 +17,12 @@ namespace noteAppC::ink {
 
 namespace {
 
-const QSet<QString> kDocumentKeys = {QStringLiteral("format"), QStringLiteral("background"), QStringLiteral("layout"),
-                                     QStringLiteral("extent")};
 const QSet<QString> kTopKeys = {QStringLiteral("format"), QStringLiteral("version"), QStringLiteral("document"),
                                 QStringLiteral("items")};
 
-bool inflateGzip(const QByteArray &in, QByteArray *out, QString *error)
+/// Inflates one gzip member. The output is capped (a few KB of gzip can unpack to gigabytes), and
+/// bytes after the member are an error: they would be dropped without a word otherwise.
+bool inflateGzip(const QByteArray &in, QByteArray *out, qint64 maxBytes, QString *error)
 {
     z_stream stream{};
     if (inflateInit2(&stream, 16 + MAX_WBITS) != Z_OK) {
@@ -41,21 +42,64 @@ bool inflateGzip(const QByteArray &in, QByteArray *out, QString *error)
             *error = rc == Z_BUF_ERROR ? QStringLiteral("the gzip stream ends early") : QStringLiteral("the gzip stream is damaged");
             return false;
         }
-        out->append(buffer, int(sizeof buffer - stream.avail_out));
+        const qint64 produced = qint64(sizeof buffer - stream.avail_out);
+        if (out->size() + produced > maxBytes) {
+            inflateEnd(&stream);
+            *error = QStringLiteral("it is too large when unpacked");
+            return false;
+        }
+        out->append(buffer, int(produced));
     }
+    const bool leftover = stream.avail_in != 0;
     inflateEnd(&stream);
+    if (leftover) {
+        *error = QStringLiteral("there is data after the gzip stream");
+        return false;
+    }
     return true;
 }
 
-QJsonValue number(double value) { return QJsonValue(roundThree(value)); }
+/// Qt writes a non-finite number as null, which reads back as 0 or the default: write 0 instead,
+/// so a document built in code (a NaN from a bad calculation) never produces a null in the file.
+QJsonValue number(double value)
+{
+    const double rounded = roundThree(value);
+    return QJsonValue(std::isfinite(rounded) ? rounded : 0.0);
+}
 
-/// Sizes the document divides by or loops over must be positive. Finiteness needs no check of its
+/// A key that is present must hold the type the format gives it. Reading a wrong-typed `items` as
+/// absent would load an empty note that the next save writes over the real one.
+bool wrongType(const QJsonObject &object, const char *key, QJsonValue::Type type)
+{
+    const QJsonValue value = object.value(QLatin1StringView(key));
+    return !value.isUndefined() && value.type() != type;
+}
+
+/// Containers of the top level and of `document`; items check their own below.
+bool documentShapeIsValid(const QJsonObject &top, QString *why)
+{
+    if (wrongType(top, "items", QJsonValue::Array) || wrongType(top, "document", QJsonValue::Object)) {
+        *why = QStringLiteral("items must be a list and document an object");
+        return false;
+    }
+    const QJsonObject document = top.value(QStringLiteral("document")).toObject();
+    for (const char *key : {"format", "background", "extent"}) {
+        if (wrongType(document, key, QJsonValue::Object)) {
+            *why = QStringLiteral("document.%1 must be an object").arg(QLatin1StringView(key));
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Sizes the document divides by or loops over must be positive, and a pattern cell not so small
+/// that the renderer loops over it for ever (1e-300). Finiteness needs no check of its
 /// own: JSON has no NaN literal and Qt's parser refuses a number that overflows a double (1e999),
 /// so every number reaching here is finite (pinned by NonFiniteAndNonPositiveNumbersAreRefused).
 bool settingsArePositive(const DocumentSettings &s)
 {
     return s.format.width > 0 && s.format.height > 0 && s.format.dpi > 0 && s.extent.width() > 0 && s.extent.height() > 0
-        && s.background.patternSize.width() > 0 && s.background.patternSize.height() > 0;
+        && s.background.patternSize.width() >= 1e-3 && s.background.patternSize.height() >= 1e-3;
 }
 
 QJsonArray rectToJSON(const QRectF &rect)
@@ -68,11 +112,22 @@ QRectF rectFromJSON(const QJsonArray &array)
     return array.size() == 4 ? QRectF(array[0].toDouble(), array[1].toDouble(), array[2].toDouble(), array[3].toDouble()) : QRectF();
 }
 
-QJsonObject styleToJSON(const StrokeStyle &style)
+/// A rect that is there must be four numbers (an absent one is the empty rect).
+bool rectIsValid(const QJsonObject &object)
 {
-    return {{QStringLiteral("width"), number(style.width)},
-            {QStringLiteral("color"), colorName(style.color)},
-            {QStringLiteral("pressureCurve"), pressureCurveName(style.pressureCurve)}};
+    const QJsonValue rect = object.value(QStringLiteral("rect"));
+    return rect.isUndefined() || (rect.isArray() && rect.toArray().size() == 4);
+}
+
+int minimumShapePoints(ShapeKind kind) { return kind == ShapeKind::Polygon ? 3 : 2; }
+
+/// `object` is the style as read: its unknown keys are kept, the three the model owns are overwritten.
+QJsonObject styleToJSON(const StrokeStyle &style, QJsonObject object)
+{
+    object.insert(QStringLiteral("width"), number(style.width));
+    object.insert(QStringLiteral("color"), colorName(style.color));
+    object.insert(QStringLiteral("pressureCurve"), pressureCurveName(style.pressureCurve));
+    return object;
 }
 
 StrokeStyle styleFromJSON(const QJsonObject &object)
@@ -96,6 +151,10 @@ bool itemFromJSON(const QJsonObject &object, Item *item, QString *error)
     item->layer = layerFromName(object.value(QStringLiteral("layer")).toString(QStringLiteral("user")));
     const QString type = object.value(QStringLiteral("type")).toString();
     if (type == QLatin1String("stroke")) {
+        if (wrongType(object, "style", QJsonValue::Object) || wrongType(object, "points", QJsonValue::Array)) {
+            *error = QStringLiteral("stroke %1: style must be an object and points a list").arg(item->t);
+            return false;
+        }
         auto stroke = std::make_shared<Stroke>();
         stroke->style = styleFromJSON(object.value(QStringLiteral("style")).toObject());
         const QJsonArray points = object.value(QStringLiteral("points")).toArray();
@@ -116,12 +175,23 @@ bool itemFromJSON(const QJsonObject &object, Item *item, QString *error)
             item->type = Item::Type::Unknown; // a shape kind this version does not draw: kept, not drawn
             return true;
         }
+        if (wrongType(object, "style", QJsonValue::Object) || wrongType(object, "points", QJsonValue::Array)) {
+            *error = QStringLiteral("shape %1: style must be an object and points a list").arg(item->t);
+            return false;
+        }
         shape->style = styleFromJSON(object.value(QStringLiteral("style")).toObject());
         const QJsonArray points = object.value(QStringLiteral("points")).toArray();
+        if (points.size() % 2 != 0 || points.size() / 2 < minimumShapePoints(shape->kind)) {
+            *error = QStringLiteral("shape %1: too few points (or an odd coordinate) for a %2").arg(item->t).arg(shapeKindName(shape->kind));
+            return false;
+        }
         for (qsizetype i = 0; i + 1 < points.size(); i += 2)
             shape->points.emplace_back(points[i].toDouble(), points[i + 1].toDouble());
         item->type = Item::Type::Shape;
         item->shape = std::move(shape);
+    } else if ((type == QLatin1String("textbox") || type == QLatin1String("image")) && !rectIsValid(object)) {
+        *error = QStringLiteral("%1 %2: rect must be four numbers").arg(type).arg(item->t);
+        return false;
     } else if (type == QLatin1String("textbox")) {
         item->type = Item::Type::TextBox;
         item->textBox = std::make_shared<TextBox>(TextBox{rectFromJSON(object.value(QStringLiteral("rect")).toArray()),
@@ -148,7 +218,7 @@ QJsonObject itemToJSON(const Item &item)
     switch (item.type) {
     case Item::Type::Stroke: {
         object.insert(QStringLiteral("type"), QStringLiteral("stroke"));
-        object.insert(QStringLiteral("style"), styleToJSON(item.stroke->style));
+        object.insert(QStringLiteral("style"), styleToJSON(item.stroke->style, item.raw.value(QStringLiteral("style")).toObject()));
         QJsonArray points;
         for (const StrokePoint &p : item.stroke->points) {
             points.append(number(p.x));
@@ -161,7 +231,7 @@ QJsonObject itemToJSON(const Item &item)
     case Item::Type::Shape: {
         object.insert(QStringLiteral("type"), QStringLiteral("shape"));
         object.insert(QStringLiteral("kind"), shapeKindName(item.shape->kind));
-        object.insert(QStringLiteral("style"), styleToJSON(item.shape->style));
+        object.insert(QStringLiteral("style"), styleToJSON(item.shape->style, item.raw.value(QStringLiteral("style")).toObject()));
         QJsonArray points;
         for (const QPointF &p : item.shape->points) {
             points.append(number(p.x()));
@@ -189,7 +259,14 @@ QJsonObject itemToJSON(const Item &item)
 
 } // namespace
 
-double roundThree(double value) { return std::round(value * 1000.0) / 1000.0; }
+// Above 1e12 a double has no digits left after the point (and value * 1000 would overflow past
+// 1.8e305): rounding is a no-op there, so the value goes through untouched.
+double roundThree(double value)
+{
+    if (!std::isfinite(value) || std::fabs(value) > 1e12)
+        return value;
+    return std::round(value * 1000.0) / 1000.0;
+}
 
 // "#rrggbb", or "#rrggbbaa" when translucent (CSS order; QColor's own
 // HexArgb form is "#aarrggbb", so both directions are spelled out here).
@@ -215,24 +292,32 @@ QColor colorFromName(const QString &name, const QColor &fallback)
     return QColor::isValidColorName(name) ? QColor::fromString(name) : fallback;
 }
 
+// `extra` is the document object as read, so the nested objects' unknown keys come back too
+// (spec section 5): each is seeded from it and the keys the model owns are written over.
 QJsonObject settingsToJSON(const DocumentSettings &s)
 {
     QJsonObject object = s.extra;
-    object.insert(QStringLiteral("format"), QJsonObject{{QStringLiteral("width"), number(s.format.width)},
-                                                        {QStringLiteral("height"), number(s.format.height)},
-                                                        {QStringLiteral("dpi"), number(s.format.dpi)}});
+    QJsonObject format = s.extra.value(QStringLiteral("format")).toObject();
+    format.insert(QStringLiteral("width"), number(s.format.width));
+    format.insert(QStringLiteral("height"), number(s.format.height));
+    format.insert(QStringLiteral("dpi"), number(s.format.dpi));
+    object.insert(QStringLiteral("format"), format);
     const QJsonValue patternSize = s.background.patternSize.width() == s.background.patternSize.height()
         ? QJsonValue(number(s.background.patternSize.width()))
         : QJsonValue(QJsonArray{number(s.background.patternSize.width()), number(s.background.patternSize.height())});
-    object.insert(QStringLiteral("background"), QJsonObject{{QStringLiteral("color"), colorName(s.background.color)},
-                                                            {QStringLiteral("pattern"), patternName(s.background.pattern)},
-                                                            {QStringLiteral("patternSize"), patternSize},
-                                                            {QStringLiteral("patternColor"), colorName(s.background.patternColor)}});
+    QJsonObject background = s.extra.value(QStringLiteral("background")).toObject();
+    background.insert(QStringLiteral("color"), colorName(s.background.color));
+    background.insert(QStringLiteral("pattern"), patternName(s.background.pattern));
+    background.insert(QStringLiteral("patternSize"), patternSize);
+    background.insert(QStringLiteral("patternColor"), colorName(s.background.patternColor));
+    object.insert(QStringLiteral("background"), background);
     object.insert(QStringLiteral("layout"), layoutName(s.layout));
-    object.insert(QStringLiteral("extent"), QJsonObject{{QStringLiteral("x"), number(s.extent.x())},
-                                                        {QStringLiteral("y"), number(s.extent.y())},
-                                                        {QStringLiteral("width"), number(s.extent.width())},
-                                                        {QStringLiteral("height"), number(s.extent.height())}});
+    QJsonObject extent = s.extra.value(QStringLiteral("extent")).toObject();
+    extent.insert(QStringLiteral("x"), number(s.extent.x()));
+    extent.insert(QStringLiteral("y"), number(s.extent.y()));
+    extent.insert(QStringLiteral("width"), number(s.extent.width()));
+    extent.insert(QStringLiteral("height"), number(s.extent.height()));
+    object.insert(QStringLiteral("extent"), extent);
     return object;
 }
 
@@ -260,13 +345,16 @@ DocumentSettings settingsFromJSON(const QJsonObject &object)
                           extent.value(QStringLiteral("height")).toDouble(s.format.height));
     else
         s.extent = QRectF(0, 0, s.format.width, s.format.height);
-    for (auto it = object.begin(); it != object.end(); ++it)
-        if (!kDocumentKeys.contains(it.key()))
-            s.extra.insert(it.key(), it.value());
+    s.extra = object;
     return s;
 }
 
 InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &nameForErrors)
+{
+    return readInk(input, out, nameForErrors, kMaxInflatedBytes);
+}
+
+InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &nameForErrors, qint64 maxInflatedBytes)
 {
     InkReadResult result;
     const QString name = nameForErrors.isEmpty() ? QStringLiteral("the ink file") : nameForErrors;
@@ -274,7 +362,7 @@ InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &
     if (bytes.size() >= 2 && quint8(bytes[0]) == 0x1f && quint8(bytes[1]) == 0x8b) {
         QByteArray inflated;
         QString why;
-        if (!inflateGzip(bytes, &inflated, &why)) {
+        if (!inflateGzip(bytes, &inflated, maxInflatedBytes, &why)) {
             result.error = QStringLiteral("%1 could not be read: %2").arg(name, why);
             return result;
         }
@@ -291,21 +379,34 @@ InkReadResult readInk(const QByteArray &input, InkDocument &out, const QString &
         result.error = QStringLiteral("%1 is not a Notolith ink file").arg(name);
         return result;
     }
-    result.version = top.value(QStringLiteral("version")).toInt(0);
-    if (result.version < 1) {
-        result.error = QStringLiteral("%1 has no version").arg(name);
+    // Exactly 1 is the one version this code writes. Any other number from 1 up (2, 1.5, 3e9) is a
+    // newer file and opens read-only, reported as the next whole version (capped); anything that is
+    // not a number, or is below 1, is refused.
+    const QJsonValue versionValue = top.value(QStringLiteral("version"));
+    if (!versionValue.isDouble() || !(versionValue.toDouble() >= 1)) {
+        result.error = QStringLiteral("%1 has no valid version").arg(name);
         return result;
     }
-    result.readOnly = result.version > 1;
+    result.version = int(std::min(std::ceil(versionValue.toDouble()), double(INT_MAX)));
+    result.readOnly = versionValue.toDouble() != 1;
+    QString shapeProblem;
+    if (!documentShapeIsValid(top, &shapeProblem)) {
+        result.error = QStringLiteral("%1 could not be read: %2").arg(name, shapeProblem);
+        return result;
+    }
     const DocumentSettings settings = settingsFromJSON(top.value(QStringLiteral("document")).toObject());
     if (!settingsArePositive(settings)) {
-        result.error = QStringLiteral("%1 could not be read: its page, extent or pattern size is not positive").arg(name);
+        result.error = QStringLiteral("%1 could not be read: its page, extent or pattern size is not a usable size").arg(name);
         return result;
     }
     std::vector<Item> items;
     for (const QJsonValue &value : top.value(QStringLiteral("items")).toArray()) {
         Item item;
         QString why;
+        if (!value.isObject()) {
+            result.error = QStringLiteral("%1 could not be read: an item is not an object").arg(name);
+            return result;
+        }
         if (!itemFromJSON(value.toObject(), &item, &why)) {
             result.error = QStringLiteral("%1 could not be read: %2").arg(name, why);
             return result;
@@ -352,6 +453,11 @@ bool loadInkFile(const QString &path, InkDocument &out, InkReadResult *result)
     if (!file.open(QIODevice::ReadOnly)) {
         r = InkReadResult{};
         r.error = QStringLiteral("%1 could not be opened: %2").arg(QFileInfo(path).fileName(), file.errorString());
+        return false;
+    }
+    if (file.size() > kMaxInflatedBytes) { // before readAll(): a multi-GB file must not be loaded to be refused
+        r = InkReadResult{};
+        r.error = QStringLiteral("%1 is too large to open").arg(QFileInfo(path).fileName());
         return false;
     }
     r = readInk(file.readAll(), out, QFileInfo(path).fileName());

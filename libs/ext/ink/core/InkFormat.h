@@ -9,8 +9,13 @@
 /// The .ink format, version 1 (spec section 5): UTF-8 JSON written compact by
 /// QJsonDocument (no custom emitter), numbers with three decimals, unknown keys
 /// and item types kept and written back.
-/// A reader seeing the gzip magic (1f 8b) inflates first; a version above
-/// 1 opens read-only. Documented for users in docs/INK.md.
+/// A reader seeing the gzip magic (1f 8b) inflates first (one member, capped at
+/// kMaxInflatedBytes, nothing after it). Unknown keys are kept at every level.
+/// A `version` that is a number other than exactly 1 (and at least 1) opens
+/// read-only; any other version is refused, as is a wrong-typed `items`,
+/// `document` or nested container, and a shape with too few points.
+/// Non-finite numbers are written as 0, never as null.
+/// Documented for users in docs/INK.md.
 namespace noteAppC::ink {
 
 struct InkReadResult {
@@ -23,7 +28,11 @@ struct InkReadResult {
 /// Files above this parse off the UI thread (InkView, Track S1 Task 11).
 constexpr qint64 kOffThreadParseBytes = 256 * 1024;
 
+/// The most a file may unpack to (and the most a file on disk may be): a heavy note is about 2 MB.
+constexpr qint64 kMaxInflatedBytes = qint64(256) << 20;
+
 InkReadResult readInk(const QByteArray &bytes, InkDocument &out, const QString &nameForErrors = QString());
+InkReadResult readInk(const QByteArray &bytes, InkDocument &out, const QString &nameForErrors, qint64 maxInflatedBytes);
 QByteArray writeInk(const InkDocument &document);
 bool loadInkFile(const QString &path, InkDocument &out, InkReadResult *result = nullptr);
 /// Temporary file and rename: for tests and tools without a Vault. The

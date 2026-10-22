@@ -113,7 +113,7 @@ struct DocumentSettings {
     Background background;
     LayoutKind layout = LayoutKind::ContinuousVertical;
     QRectF extent{0, 0, 793.701, 1122.52};
-    QJsonObject extra; ///< document keys the model does not own (a studio sample's "glyph")
+    QJsonObject extra; ///< the document object as read, whole: keys the model does not own (a studio sample's "glyph") and the unknown keys inside format, background and extent come back on save
 };
 
 } // namespace noteAppC::ink

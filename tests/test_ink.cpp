@@ -439,11 +439,11 @@ TEST(InkFormatTest, AVersionTwoFileOpensReadOnly)
 TEST(InkFormatTest, TruncatedAndForeignFilesAreRefusedWithTheName)
 {
     const QByteArray plain = writeInk(sampleDocument());
-    InkDocument doc;
+    InkDocument doc = sampleDocument(); // populated, so "untouched" means something
     InkReadResult read = readInk(plain.left(plain.size() / 2), doc, QStringLiteral("Lecture 3.ink"));
     EXPECT_FALSE(read.ok);
     EXPECT_TRUE(read.error.contains(QStringLiteral("Lecture 3.ink")));
-    EXPECT_TRUE(doc.items().empty()) << "a failed read leaves the document untouched";
+    EXPECT_EQ(writeInk(doc), plain) << "a failed read leaves the document untouched";
     const QByteArray gz = gzipBytes(plain);
     read = readInk(gz.left(gz.size() - 12), doc, QStringLiteral("x.ink"));
     EXPECT_FALSE(read.ok) << "a truncated gzip stream is an error, not a shorter note";
@@ -451,6 +451,7 @@ TEST(InkFormatTest, TruncatedAndForeignFilesAreRefusedWithTheName)
     EXPECT_FALSE(read.ok);
     read = readInk(QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"stroke\",\"t\":1,\"points\":[1,2]}]}"), doc);
     EXPECT_FALSE(read.ok) << "points must be x,y,pressure triples";
+    EXPECT_EQ(writeInk(doc), plain) << "none of the refused reads touched the document";
 }
 
 TEST(InkFormatTest, NonFiniteAndNonPositiveNumbersAreRefused)
@@ -475,6 +476,7 @@ TEST(InkFormatTest, NonFiniteAndNonPositiveNumbersAreRefused)
         {"zero dpi", file("{\"format\":{\"width\":100,\"height\":100,\"dpi\":0}}")},
         {"zero extent height", file("{\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":0}}")},
         {"zero pattern size", file("{\"background\":{\"patternSize\":0}}")},
+        {"tiny pattern size", file("{\"background\":{\"patternSize\":1e-300}}")},
         {"infinite stroke point", file("{}", "{\"type\":\"stroke\",\"t\":1,\"points\":[1,1e999,0.5]}")},
         {"infinite stroke width", file("{}", "{\"type\":\"stroke\",\"t\":1,\"style\":{\"width\":1e999},\"points\":[1,2,0.5]}")},
         {"infinite text box", file("{}", "{\"type\":\"textbox\",\"t\":1,\"rect\":[0,0,1e999,10],\"markdown\":\"x\"}")},
@@ -492,6 +494,170 @@ TEST(InkFormatTest, NonFiniteAndNonPositiveNumbersAreRefused)
     EXPECT_TRUE(readInk(file("{\"format\":{\"width\":100,\"height\":100,\"dpi\":96},\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100}}"), doc).ok)
         << "the same shape with sane numbers loads";
 }
+
+TEST(InkFormatTest, GzipIsCappedWhenUnpackedAndRefusesLeftovers)
+{
+    const QByteArray plain = writeInk(sampleDocument());
+    const QByteArray gz = gzipBytes(plain);
+    InkDocument doc;
+    EXPECT_TRUE(readInk(gz, doc, QStringLiteral("big.ink"), plain.size()).ok) << "exactly the cap is fine";
+    doc = sampleDocument();
+    InkReadResult read = readInk(gz, doc, QStringLiteral("big.ink"), plain.size() - 1);
+    EXPECT_FALSE(read.ok) << "one byte over the cap is refused";
+    EXPECT_TRUE(read.error.contains(QStringLiteral("big.ink")) && read.error.contains(QStringLiteral("too large"))) << read.error.toStdString();
+    EXPECT_EQ(writeInk(doc), plain);
+    const QByteArray bomb = gzipBytes(QByteArray(8 << 20, ' ')); // a few KB that inflate to 8 MiB
+    EXPECT_LT(bomb.size(), 64 * 1024);
+    EXPECT_FALSE(readInk(bomb, doc, QStringLiteral("bomb.ink"), 1 << 20).ok);
+    EXPECT_GT(kMaxInflatedBytes, qint64(100) << 20) << "the real cap leaves room for a heavy note";
+    EXPECT_FALSE(readInk(gz + QByteArrayLiteral("junk"), doc, QStringLiteral("x.ink")).ok) << "bytes after the stream are not silently dropped";
+    EXPECT_FALSE(readInk(gz + gz, doc, QStringLiteral("x.ink")).ok) << "a second gzip member is not silently dropped";
+    EXPECT_FALSE(readInk(QByteArray("\x1f\x8b", 2), doc, QStringLiteral("x.ink")).ok);
+
+    QTemporaryDir tmp;
+    const QString path = tmp.filePath(QStringLiteral("huge.ink"));
+    QFile huge(path);
+    ASSERT_TRUE(huge.open(QIODevice::WriteOnly));
+    ASSERT_TRUE(huge.resize(kMaxInflatedBytes + 1)) << "a sparse file: no disk or memory used";
+    huge.close();
+    EXPECT_FALSE(loadInkFile(path, doc, &read));
+    EXPECT_TRUE(read.error.contains(QStringLiteral("huge.ink")) && read.error.contains(QStringLiteral("too large"))) << read.error.toStdString();
+}
+
+TEST(InkFormatTest, TheWriterNeverWritesNullAndKeepsHugeNumbers)
+{
+    EXPECT_DOUBLE_EQ(roundThree(1e306), 1e306) << "value * 1000 would overflow";
+    EXPECT_TRUE(std::isnan(roundThree(std::nan(""))));
+    constexpr double inf = std::numeric_limits<double>::infinity();
+    InkDocument doc;
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style.width = 1e306;
+    stroke->points = {{std::nan(""), inf, 0.5}, {1e306, -1e306, 0.5}};
+    doc.addStroke(stroke);
+    doc.commit();
+    const QByteArray bytes = writeInk(doc);
+    EXPECT_FALSE(bytes.contains("null")) << bytes.toStdString();
+    InkDocument again;
+    const InkReadResult read = readInk(bytes, again);
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    const auto &read0 = again.items()[0].stroke;
+    EXPECT_DOUBLE_EQ(read0->style.width, 1e306);
+    EXPECT_EQ(read0->points[0].x, 0.0) << "a non-finite number is written as 0";
+    EXPECT_EQ(read0->points[0].y, 0.0);
+    EXPECT_DOUBLE_EQ(read0->points[1].x, 1e306);
+    EXPECT_DOUBLE_EQ(read0->points[1].y, -1e306);
+}
+
+TEST(InkFormatTest, UnknownKeysSurviveAtEveryLevel)
+{
+    const QByteArray original = QByteArrayLiteral(
+        "{\"format\":\"notolith-ink\",\"version\":1,\"top\":1,\"document\":{\"doc\":2,\"format\":{\"width\":100,\"height\":200,\"dpi\":96,\"fmt\":3},"
+        "\"background\":{\"color\":\"#ffffff\",\"pattern\":\"grid\",\"patternSize\":32,\"patternColor\":\"#c0c8d0\",\"bg\":4},"
+        "\"layout\":\"fixed\",\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":200,\"ext\":5}},\"items\":["
+        "{\"type\":\"stroke\",\"t\":1,\"item\":6,\"style\":{\"width\":2,\"color\":\"#000000\",\"pressureCurve\":\"linear\",\"sty\":7},\"points\":[1,2,0.5]},"
+        "{\"type\":\"shape\",\"t\":2,\"kind\":\"line\",\"style\":{\"width\":2,\"color\":\"#000000\",\"pressureCurve\":\"linear\",\"sty2\":8},\"points\":[1,2,3,4]}]}");
+    InkDocument doc;
+    ASSERT_TRUE(readInk(original, doc).ok);
+    const QJsonObject top = QJsonDocument::fromJson(writeInk(doc)).object();
+    const QJsonObject document = top.value(QStringLiteral("document")).toObject();
+    const QJsonArray items = top.value(QStringLiteral("items")).toArray();
+    EXPECT_EQ(top.value(QStringLiteral("top")).toInt(), 1);
+    EXPECT_EQ(document.value(QStringLiteral("doc")).toInt(), 2);
+    EXPECT_EQ(document.value(QStringLiteral("format")).toObject().value(QStringLiteral("fmt")).toInt(), 3);
+    EXPECT_EQ(document.value(QStringLiteral("background")).toObject().value(QStringLiteral("bg")).toInt(), 4);
+    EXPECT_EQ(document.value(QStringLiteral("extent")).toObject().value(QStringLiteral("ext")).toInt(), 5);
+    EXPECT_EQ(items[0].toObject().value(QStringLiteral("item")).toInt(), 6);
+    EXPECT_EQ(items[0].toObject().value(QStringLiteral("style")).toObject().value(QStringLiteral("sty")).toInt(), 7);
+    EXPECT_EQ(items[1].toObject().value(QStringLiteral("style")).toObject().value(QStringLiteral("sty2")).toInt(), 8);
+    EXPECT_EQ(document.value(QStringLiteral("format")).toObject().value(QStringLiteral("width")).toInt(), 100)
+        << "the owned keys are still written from the model";
+}
+
+TEST(InkFormatTest, AWrongTypedContainerIsRefusedNotLoadedAsEmpty)
+{
+    const auto file = [](const char *document, const char *items) {
+        return QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"document\":") + document + QByteArrayLiteral(",\"items\":")
+            + items + QByteArrayLiteral("}");
+    };
+    const QByteArray stroke = QByteArrayLiteral("{\"type\":\"stroke\",\"t\":1,\"points\":[1,2,0.5]");
+    const struct {
+        const char *what;
+        QByteArray bytes;
+    } bad[] = {
+        {"items is an object", file("{}", "{\"a\":1}")},
+        {"items is a string", file("{}", "\"x\"")},
+        {"an item is a string", file("{}", "[\"x\"]")},
+        {"document is an array", file("[]", "[]")},
+        {"format is a string", file("{\"format\":\"a4\"}", "[]")},
+        {"background is an array", file("{\"background\":[1]}", "[]")},
+        {"extent is a number", file("{\"extent\":5}", "[]")},
+        {"style is a string", file("{}", "[" + stroke + ",\"style\":\"bold\"}]")},
+        {"points is an object", file("{}", "[{\"type\":\"stroke\",\"t\":1,\"points\":{\"a\":1}}]")},
+        {"rect has three numbers", file("{}", "[{\"type\":\"textbox\",\"t\":1,\"rect\":[1,2,3],\"markdown\":\"x\"}]")},
+        {"shape points is a string", file("{}", "[{\"type\":\"shape\",\"t\":1,\"kind\":\"line\",\"points\":\"x\"}]")},
+    };
+    for (const auto &c : bad) {
+        InkDocument doc = sampleDocument();
+        const QByteArray before = writeInk(doc);
+        const InkReadResult read = readInk(c.bytes, doc, QStringLiteral("bad.ink"));
+        EXPECT_FALSE(read.ok) << c.what;
+        EXPECT_TRUE(read.error.contains(QStringLiteral("bad.ink"))) << c.what;
+        EXPECT_EQ(writeInk(doc), before) << c.what;
+    }
+}
+
+TEST(InkFormatTest, OnlyAnExactVersionOneIsWritable)
+{
+    const auto file = [](const char *version) {
+        return QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":") + version + QByteArrayLiteral(",\"items\":[]}");
+    };
+    const struct {
+        const char *version;
+        bool ok;
+        bool readOnly;
+        int reported;
+    } cases[] = {
+        {"1", true, false, 1},      {"2", true, true, 2},         {"3000000000", true, true, std::numeric_limits<int>::max()},
+        {"1.5", true, true, 2},     {"\"2\"", false, false, 0},   {"0", false, false, 0},
+        {"-1", false, false, 0},    {"0.5", false, false, 0},     {"true", false, false, 0},
+        {"null", false, false, 0},  {"[1]", false, false, 0},
+    };
+    for (const auto &c : cases) {
+        InkDocument doc;
+        const InkReadResult read = readInk(file(c.version), doc, QStringLiteral("v.ink"));
+        EXPECT_EQ(read.ok, c.ok) << c.version;
+        EXPECT_EQ(read.readOnly, c.readOnly) << c.version;
+        EXPECT_EQ(read.version, c.reported) << c.version;
+        if (!c.ok) {
+            EXPECT_TRUE(read.error.contains(QStringLiteral("v.ink")) && read.error.contains(QStringLiteral("version"))) << c.version << ": " << read.error.toStdString();
+        }
+    }
+    InkDocument doc;
+    EXPECT_FALSE(readInk(QByteArrayLiteral("{\"format\":\"notolith-ink\",\"items\":[]}"), doc).ok) << "no version at all";
+}
+
+TEST(InkFormatTest, ShapesWithTooFewPointsAreRefused)
+{
+    const auto shape = [](const char *kind, const char *points) {
+        return QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"shape\",\"t\":1,\"kind\":\"") + kind
+            + QByteArrayLiteral("\",\"points\":[") + points + QByteArrayLiteral("]}]}");
+    };
+    const struct {
+        const char *kind;
+        const char *points;
+        bool ok;
+    } cases[] = {
+        {"line", "1,2,3,4", true},   {"line", "1,2", false},        {"line", "", false},         {"arrow", "1,2", false},
+        {"rect", "", false},         {"rect", "1,2", false},        {"rect", "1,2,3,4", true},   {"ellipse", "1,2", false},
+        {"line", "1,2,3,4,5", false}, {"polyline", "1,2", false},   {"polygon", "1,2,3,4", false}, {"polygon", "1,2,3,4,5,6", true},
+    };
+    for (const auto &c : cases) {
+        InkDocument doc;
+        const InkReadResult read = readInk(shape(c.kind, c.points), doc, QStringLiteral("s.ink"));
+        EXPECT_EQ(read.ok, c.ok) << c.kind << " [" << c.points << "] " << read.error.toStdString();
+    }
+}
+
 
 TEST(InkFormatTest, SavesAndLoadsThroughAnAtomicReplace)
 {
