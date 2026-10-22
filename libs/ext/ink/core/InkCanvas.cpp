@@ -108,6 +108,8 @@ QPointF handlePoint(const QRectF &box, int h)
     return QPointF(x[h], y[h]);
 }
 
+bool finiteRect(const QRectF &r) { return std::isfinite(r.x()) && std::isfinite(r.y()) && std::isfinite(r.width()) && std::isfinite(r.height()); }
+
 bool handleShown(const QRectF &box, int h) { return h % 2 == 0 || (box.width() >= kEdgeHandleMinBox && box.height() >= kEdgeHandleMinBox); }
 
 /// Everything the page layout needs, by value: the canvas builds one for its own painting and hands one to every
@@ -553,8 +555,11 @@ void InkCanvas::keyPressEvent(QKeyEvent *event)
         paste();
     } else if (event->key() == Qt::Key_Delete && event->modifiers() == Qt::NoModifier) {
         deleteSelection();
-    } else if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && !m_selection.empty()) {
-        clearSelection();
+    } else if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && (isSelectGesture() || !m_selection.empty())) {
+        if (isSelectGesture())
+            finishStroke(false); // the first Escape cancels the drag in flight and keeps the selection, the next one clears it
+        else
+            clearSelection();
     } else if (event->key() == Qt::Key_L && event->modifiers() == Qt::ShiftModifier) {
         setTool(Tool::Lasso); // R14: lasso or rectangle without a toolbar or a pen button
         setSelectShape(m_selectShape == SelectShape::Rect ? SelectShape::Lasso : SelectShape::Rect);
@@ -793,7 +798,12 @@ void InkCanvas::setSelection(std::vector<qint64> items)
     emit selectionChanged();
 }
 
-void InkCanvas::clearSelection() { setSelection({}); }
+void InkCanvas::clearSelection()
+{
+    if (isSelectGesture())
+        finishStroke(false); // a drag in flight is cancelled first: its items go back where they were
+    setSelection({});
+}
 
 int InkCanvas::handleAt(const QPointF &widgetPos) const
 {
@@ -822,6 +832,7 @@ void InkCanvas::pressSelect(const QPointF &widgetPos)
     const QPointF at = toDocument(widgetPos);
     m_dragStart = at;
     m_dragMoved = false;
+    m_dragTransform = QTransform();
     const int handle = handleAt(widgetPos);
     const double slack = 4.0 / m_zoom; // a thin stroke's box is a hair: grab a few px around it
     const bool inside = !m_selection.empty() && m_selectionBounds.adjusted(-slack, -slack, slack, slack).contains(at);
@@ -874,8 +885,9 @@ void InkCanvas::dragSelection(const QPointF &documentPos)
         transform.scale(sx, sy);
         transform.translate(-anchor.x(), -anchor.y());
     }
-    if (transform.isIdentity() && !m_dragMoved)
-        return;
+    if (transform == m_dragTransform)
+        return; // the pointer did not move since the last sample (a release at the same place)
+    m_dragTransform = transform;
     const QRectF oldBounds = m_selectionBounds;
     const QRect oldPaint = selectionPaintRect();
     // ponytail: every sample re-maps the whole selection from its originals; a selection of tens of thousands of points
@@ -913,8 +925,14 @@ void InkCanvas::finishSelect(Drawing mode, bool keep)
     m_dragOriginals.clear();
     if (!moved)
         return;
-    if (!keep) {
-        m_document.discardLiveEdits(); // the caller (documentReplaced) redraws everything
+    if (!keep || m_dragTransform.isIdentity()) { // a cancel, or a drag that came back to its start: no history step
+        const QRectF dragged = m_selectionBounds;
+        const QRect draggedPaint = selectionPaintRect();
+        m_document.discardLiveEdits();
+        recomputeSelectionBounds();
+        invalidateTiles(dragged); // the ink was shown there; it goes back where it was
+        invalidateTiles(m_selectionBounds);
+        update(draggedPaint | selectionPaintRect());
         return;
     }
     const bool grew = m_document.growToContain(m_selectionBounds);
@@ -975,7 +993,14 @@ bool InkCanvas::paste()
         return false;
     bool ok = false;
     std::vector<Item> items = itemsFromClipboardJSON(mime->data(QString::fromLatin1(kClipboardMime)), &ok);
-    std::erase_if(items, [](const Item &item) { return item.type == Item::Type::Group || item.type == Item::Type::Unknown; });
+    // Another program may have put this on the clipboard: nothing that cannot be drawn is pasted (the reader is as open
+    // to these, carry N1, but a paste is where they would arrive by accident).
+    std::erase_if(items, [](const Item &item) {
+        if (item.type == Item::Type::Group || item.type == Item::Type::Unknown || (item.type == Item::Type::Stroke && item.stroke->points.empty()))
+            return true;
+        const QRectF b = item.bounds();
+        return b.isNull() || !finiteRect(b);
+    });
     if (!ok || items.empty())
         return false;
     QRectF box;
@@ -986,18 +1011,23 @@ bool InkCanvas::paste()
         view = rect();
     const QPointF target = toDocument(view.center()) + QPointF(20, 20);
     const QTransform shift = QTransform::fromTranslate(target.x() - box.center().x(), target.y() - box.center().y());
-    std::vector<qint64> added;
+    std::vector<Item> moved;
     QRectF placed;
     for (const Item &item : items) {
-        Item moved = transformItem(item, shift);
-        placed |= moved.bounds();
-        added.push_back(m_document.addItem(std::move(moved))); // a new t at the end of the list
+        moved.push_back(transformItem(item, shift));
+        placed |= moved.back().bounds();
     }
+    if (!finiteRect(placed)) // a box so far out that the shift overflowed
+        return false;
+    std::vector<qint64> added;
+    for (Item &item : moved)
+        added.push_back(m_document.addItem(std::move(item))); // a new t at the end of the list
     const bool grew = m_document.growToContain(placed);
     finishEdit();
     invalidateTiles(placed);
     if (grew)
         documentReplaced();
+    setTool(Tool::Lasso); // the selection belongs to the select tool: from the pen it would be gone at the next touch
     setSelection(std::move(added));
     update(widgetRect(placed));
     return true;

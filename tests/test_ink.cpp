@@ -4047,18 +4047,31 @@ TEST(InkCanvasTest, RectangleSelectionSelectsByTheBoxAndEscapeClears)
 
 TEST(InkCanvasTest, MovingASelectionRepaintsTheOldAndTheNewPlace)
 {
+    // 1200 px wide: the stroke starts in the first 512 px tile and is moved into the second, so dropping the invalidation of
+    // the old bounds or of the new bounds each fails on its own.
     CanvasFixture f;
+    DocumentSettings wide = f.canvas.document().settings();
+    wide.format = {1200, 300, 96};
+    wide.extent = QRectF(0, 0, 1200, 300);
+    ASSERT_TRUE(f.canvas.document().setSettings(wide));
+    f.canvas.documentReplaced();
+    f.canvas.resize(1200, 300);
     f.canvas.setPenStyle([] { StrokeStyle s; s.width = 8.0; s.pressureCurve = PressureCurve::Const; return s; }());
-    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
-    QImage first = settledGrab(f.canvas);
+    penStroke(&f.canvas, QPointF(400, 40), QPointF(500, 100), 1000);
+    const QImage first = settledGrab(f.canvas);
     ASSERT_FALSE(first.isNull());
-    EXPECT_LT(qGray(first.pixel(70, 70)), 128) << "ink on the line";
+    EXPECT_LT(qGray(first.pixel(450, 70)), 128) << "ink on the line";
+    EXPECT_GT(qGray(first.pixel(650, 70)), 200);
     f.canvas.setTool(InkCanvas::Tool::Lasso);
-    penDrag(&f.canvas, kAroundFirstStroke, 3000);
-    penStroke(&f.canvas, QPointF(70, 70), QPointF(70, 150), 4000); // down by 80
+    penDrag(&f.canvas, {{380, 30}, {520, 30}, {520, 120}, {380, 120}, {380, 32}}, 3000);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    // One jump, so the old and the new bounds are far apart (the samples of a slow drag overlap and cover for each other).
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(450, 70), 0.5, 4000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(650, 70), 0.5, 4005); // right by 200, into the next tile
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(650, 70), 0.5, 4010, Qt::NoButton);
     const QImage after = settledGrab(f.canvas);
-    EXPECT_GT(qGray(after.pixel(70, 70)), 200) << "the old place shows the page again";
-    EXPECT_LT(qGray(after.pixel(70, 150)), 128) << "the new place shows the ink";
+    EXPECT_GT(qGray(after.pixel(450, 70)), 200) << "the old place shows the page again";
+    EXPECT_LT(qGray(after.pixel(650, 70)), 128) << "the new place shows the ink";
 }
 
 TEST(InkCanvasTest, CopyPasteOffsetsAndAssignsNewT)
@@ -4149,6 +4162,194 @@ TEST(InkCanvasTest, CtrlDragWithTheMouseSelectsWithoutDrawingWithMouse)
     EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen) << "any tool, none changed";
 }
 
+
+namespace {
+
+/// A selected stroke A (20,40)-(120,100) on the select tool, ready to be dragged from inside its box.
+struct SelectedStrokeFixture : CanvasFixture {
+    qint64 tA = 0;
+    std::vector<StrokePoint> original;
+    SelectedStrokeFixture()
+    {
+        canvas.setPenStyle([] { StrokeStyle s; s.width = 8.0; s.pressureCurve = PressureCurve::Const; return s; }());
+        penStroke(&canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+        tA = canvas.document().items()[0].t;
+        original = canvas.document().items()[0].stroke->points;
+        canvas.setTool(InkCanvas::Tool::Lasso);
+        penDrag(&canvas, kAroundFirstStroke, 3000);
+    }
+    /// Pen down inside the selection and two moves to the right: a Move drag in flight.
+    void startDragging()
+    {
+        tablet(&canvas, QEvent::TabletPress, QPointF(70, 70), 0.5, 4000);
+        tablet(&canvas, QEvent::TabletMove, QPointF(90, 70), 0.5, 4005);
+        tablet(&canvas, QEvent::TabletMove, QPointF(110, 70), 0.5, 4010);
+    }
+    void expectBackAtTheOriginalPlace()
+    {
+        const Item *item = canvas.document().item(tA);
+        ASSERT_TRUE(item);
+        ASSERT_EQ(item->stroke->points.size(), original.size());
+        for (size_t i = 0; i < original.size(); ++i)
+            EXPECT_NEAR(item->stroke->points[i].x, original[i].x, 1e-9);
+    }
+};
+
+} // namespace
+
+TEST(InkToolsTest, ASegmentThatCrossesTheRegionSelectsAStrokeWithNoPointInside)
+{
+    InkDocument doc;
+    const qint64 crossing = doc.addStroke(pointsStroke({{0, 50}, {300, 50}}));
+    doc.addStroke(pointsStroke({{0, 200}, {300, 200}}));                       // passes below the box
+    const qint64 diagonal = doc.addStroke(pointsStroke({{90, 0}, {110, 100}, {150, 0}})); // a vertex outside, segments through the box
+    QPainterPath rect;
+    rect.addRect(QRectF(100, 20, 60, 60));
+    EXPECT_EQ(selectItems(doc, rect), (std::vector<qint64>{crossing, diagonal}));
+    const QPainterPath lasso = polygonPath(QPolygonF({{100, 20}, {160, 20}, {130, 80}})); // a triangle: the horizontal line cuts it
+    EXPECT_EQ(selectItems(doc, lasso), (std::vector<qint64>{crossing, diagonal})) << "the line below the box is out in both";
+}
+
+TEST(InkCanvasTest, EscapeMidDragCancelsTheMoveWithNoUndoStep)
+{
+    SelectedStrokeFixture f;
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    const QImage before = settledGrab(f.canvas);
+    EXPECT_LT(qGray(before.pixel(70, 70)), 128);
+    f.startDragging();
+    ASSERT_TRUE(f.canvas.isDrawing());
+    EXPECT_NEAR(f.canvas.document().item(f.tA)->stroke->points[0].x, f.original[0].x + 40.0, 1e-6) << "the drag is live";
+    settledGrab(f.canvas); // a paint between the samples
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    f.expectBackAtTheOriginalPlace();
+    EXPECT_EQ(f.canvas.selection(), std::vector<qint64>{f.tA}) << "Escape cancelled the drag; the selection stays";
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(150, 70), 0.5, 4015); // the pen keeps moving: nothing follows it
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(150, 70), 0.5, 4020, Qt::NoButton);
+    f.expectBackAtTheOriginalPlace();
+    EXPECT_EQ(edited.count(), 0);
+    const QImage after = settledGrab(f.canvas);
+    EXPECT_LT(qGray(after.pixel(70, 70)), 128) << "the ink is shown at its own place again";
+    EXPECT_GT(qGray(after.pixel(110, 70)), 200) << "and not at the cancelled drag's place";
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "no step for the move: undo takes the stroke itself back";
+    EXPECT_TRUE(f.canvas.selection().empty());
+}
+
+TEST(InkCanvasTest, ASecondEscapeThenClearsTheSelection)
+{
+    SelectedStrokeFixture f;
+    f.startDragging();
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    EXPECT_TRUE(f.canvas.selection().empty());
+}
+
+TEST(InkCanvasTest, AToolKeyMidDragCancelsTheMoveToo)
+{
+    SelectedStrokeFixture f;
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    settledGrab(f.canvas);
+    f.startDragging();
+    QTest::keyClick(&f.canvas, Qt::Key_E);
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Eraser);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_TRUE(f.canvas.selection().empty());
+    f.expectBackAtTheOriginalPlace();
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(150, 70), 0.5, 4015);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(150, 70), 0.5, 4020, Qt::NoButton);
+    f.expectBackAtTheOriginalPlace();
+    EXPECT_EQ(edited.count(), 0);
+    const QImage after = settledGrab(f.canvas);
+    EXPECT_LT(qGray(after.pixel(70, 70)), 128);
+    EXPECT_GT(qGray(after.pixel(110, 70)), 200);
+}
+
+TEST(InkCanvasTest, ADragThatReturnsToItsStartCommitsNoUndoStep)
+{
+    SelectedStrokeFixture f;
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(70, 70), 0.5, 4000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(120, 90), 0.5, 4005);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(70, 70), 0.5, 4010);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(70, 70), 0.5, 4015, Qt::NoButton);
+    f.expectBackAtTheOriginalPlace();
+    EXPECT_EQ(edited.count(), 0);
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "no step for the round trip";
+}
+
+TEST(InkCanvasTest, PasteRefusesHostileAndEmptyItemsAndAForeignClipboard)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    const auto setClipboard = [](const QByteArray &json, const char *format = kClipboardMime) {
+        auto *mime = new QMimeData;
+        mime->setData(QString::fromLatin1(format), json);
+        QApplication::clipboard()->setMimeData(mime);
+    };
+    const auto clip = [](const QByteArray &items) { return QByteArray(R"({"format":"notolith-ink-clip","items":[)") + items + "]}"; };
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    // Bounds that are not finite (a box 2e308 wide), a stroke with no point, a textbox with a non-finite rect.
+    for (const QByteArray &bad : {clip(R"({"t":1,"type":"stroke","points":[-1e308,0,0.5,1e308,0,0.5]})"),
+                                  clip(R"({"t":1,"type":"stroke","points":[]})"),
+                                  clip(R"({"t":1,"type":"textbox","rect":[0,0,1e999,10],"markdown":"x"})"),
+                                  clip(R"({"t":1,"type":"future"})"), clip("")}) {
+        setClipboard(bad);
+        EXPECT_FALSE(f.canvas.paste()) << bad.toStdString();
+        EXPECT_EQ(f.canvas.document().items().size(), 1u) << bad.toStdString();
+    }
+    setClipboard(QByteArray("some text"), "text/plain");
+    EXPECT_FALSE(f.canvas.paste()) << "a foreign clipboard";
+    EXPECT_EQ(edited.count(), 0);
+    setClipboard(clip(R"({"t":1,"type":"stroke","points":[]},{"t":2,"type":"stroke","points":[10,10,0.5,40,40,0.5]})"));
+    EXPECT_TRUE(f.canvas.paste()) << "the good item is pasted, the empty one dropped";
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_EQ(f.canvas.selection().size(), 1u);
+    for (const StrokePoint &p : f.canvas.document().items()[1].stroke->points)
+        EXPECT_TRUE(std::isfinite(p.x) && std::isfinite(p.y));
+}
+
+TEST(InkCanvasTest, PasteFromThePenToolSwitchesToTheSelectToolSoTheSelectionStaysReachable)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000, Qt::LeftButton | kHeldLassoButton); // the pen tool stays
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    ASSERT_TRUE(f.canvas.copySelection());
+    ASSERT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen);
+    ASSERT_TRUE(f.canvas.paste());
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Lasso);
+    EXPECT_EQ(f.canvas.selection().size(), 1u) << "switching the tool did not drop the pasted selection";
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+}
+
+
+TEST(InkCanvasTest, ADragInterruptedByHidingTheCanvasCommitsOneStepAtTheLastSample)
+{
+    SelectedStrokeFixture f;
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    f.startDragging(); // the pen is at x = 110: 40 px right of where it went down
+    f.canvas.hide();
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(edited.count(), 1);
+    EXPECT_NEAR(f.canvas.document().item(f.tA)->stroke->points[0].x, f.original[0].x + 40.0, 1e-6);
+    ASSERT_TRUE(f.canvas.undo());
+    f.expectBackAtTheOriginalPlace();
+}
+
+TEST(InkCanvasTest, AnEdgeHandleResizesOneAxisOnly)
+{
+    SelectedStrokeFixture f;
+    const QRectF box = f.canvas.selectionBounds();
+    const QPointF handle = f.canvas.toWidget(QPointF(box.right(), box.center().y())); // the right edge's middle
+    penStroke(&f.canvas, handle, handle + QPointF(40, 0), 4000);
+    const QRectF now = f.canvas.selectionBounds();
+    EXPECT_NEAR(now.left(), box.left(), 2.0);
+    EXPECT_GT(now.width(), box.width() + 30.0);
+    EXPECT_NEAR(now.height(), box.height(), 2.0) << "only x was stretched (the width grows a little with it)";
+}
 
 int main(int argc, char **argv)
 {

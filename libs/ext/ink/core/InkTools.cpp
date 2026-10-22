@@ -4,8 +4,10 @@
 #include <cmath>
 
 #include <QJsonArray>
+#include <QLineF>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPolygonF>
 
 #include "InkFormat.h"
 #include "StrokeOutline.h"
@@ -66,6 +68,7 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
     std::vector<qint64> out;
     if (region.isEmpty())
         return out;
+    std::vector<QLineF> edges; ///< the region's outline, built when the first stroke needs it
     for (qint64 t : doc.itemsIntersecting(region.boundingRect())) {
         const Item *item = doc.item(t);
         if (!item)
@@ -73,8 +76,28 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
         bool hit = false;
         if (item->type == Item::Type::Stroke) {
             // Rnote: any point inside.
-            hit = std::any_of(item->stroke->points.begin(), item->stroke->points.end(),
-                              [&](const StrokePoint &p) { return region.contains(QPointF(p.x, p.y)); });
+            const auto &pts = item->stroke->points;
+            hit = std::any_of(pts.begin(), pts.end(), [&](const StrokePoint &p) { return region.contains(QPointF(p.x, p.y)); });
+            // And a segment that crosses the region with no point inside it (a sparse stroke through a box): the brief's
+            // "outline intersects", on the centreline. ponytail: a segment is tested against every edge of the region
+            // (one edge list per call, a box cull per segment); a huge sparse stroke under a huge lasso is the ceiling.
+            if (!hit && pts.size() >= 2) {
+                if (edges.empty())
+                    for (const QPolygonF &polygon : region.toFillPolygons())
+                        for (qsizetype i = 0; i < polygon.size(); ++i)
+                            edges.push_back(QLineF(polygon[i], polygon[(i + 1) % polygon.size()]));
+                const QRectF box = region.boundingRect();
+                for (size_t i = 0; i + 1 < pts.size() && !hit; ++i) {
+                    const QLineF segment(pts[i].x, pts[i].y, pts[i + 1].x, pts[i + 1].y);
+                    // by hand: QRectF::intersects is false for a flat rect, which a horizontal segment's box is
+                    if (std::max(segment.x1(), segment.x2()) < box.left() || std::min(segment.x1(), segment.x2()) > box.right() ||
+                        std::max(segment.y1(), segment.y2()) < box.top() || std::min(segment.y1(), segment.y2()) > box.bottom())
+                        continue;
+                    hit = std::any_of(edges.begin(), edges.end(), [&](const QLineF &edge) {
+                        return segment.intersects(edge, nullptr) == QLineF::BoundedIntersection;
+                    });
+                }
+            }
         } else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
             hit = region.contains(item->bounds().center()); // ponytail: a real per-kind hit test comes with Tasks 14-15 (carry N5)
         }

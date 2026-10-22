@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QPolygonF>
+#include <QTransform>
 #include <QTimer>
 #include <QWidget>
 
@@ -70,6 +71,7 @@ public:
     QPointF toWidget(const QPointF &documentPos) const;
     QSize sizeHint() const override;
     bool isDrawing() const { return m_drawing != Drawing::None; }
+    bool isSelectGesture() const { return m_drawing == Drawing::Select || m_drawing == Drawing::Move || m_drawing == Drawing::Scale; }
     QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound (I4)
 
     /// The tile cache budget in MB (the setting `ink.tileCacheMB`, R5), clamped to kMinTileCacheMB..kMaxTileCacheMB.
@@ -198,6 +200,7 @@ private:
     QRectF m_dragBounds;              ///< document px: the selection box when the drag began
     QPointF m_dragStart;              ///< document px
     int m_dragHandle = -1;
+    QTransform m_dragTransform;       ///< the mapping the items currently have relative to m_dragOriginals (identity: not moved)
     bool m_dragMoved = false;
     bool m_readOnly = false;
     QPointF m_lastTouch;
