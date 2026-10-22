@@ -66,14 +66,6 @@ private:
     QColor m_color{128, 128, 128, 160};
 };
 
-GlyphStudio::~GlyphStudio()
-{
-    // As InkView: what ~QWidget's hide and focus-out make the canvas do must not reach this half-destroyed studio.
-    m_canvas->removeEventFilter(this);
-    m_canvas->disconnect(this);
-    m_canvas->discardTextEdit();
-}
-
 GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *parent)
     : ModuleView(parent), m_store(vaultRootOf(host), fontName), m_metrics(GlyphStore::defaultMetrics()),
       m_set(defaultGlyphSet(settingOr(host, "hwfont.samplesPerLetter", 3), settingOr(host, "hwfont.samplesPerPunctuation", 1))),
@@ -156,6 +148,14 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
         showError(tr("No vault is open: the samples have nowhere to go."));
     else if (!m_store.isValid())
         showError(tr("\"%1\" is not a usable font name; choose another in Settings (hwfont.fontName).").arg(fontName));
+}
+
+GlyphStudio::~GlyphStudio()
+{
+    // As InkView: what ~QWidget's hide and focus-out make the canvas do must not reach this half-destroyed studio.
+    m_canvas->removeEventFilter(this);
+    m_canvas->disconnect(this);
+    m_canvas->discardTextEdit();
 }
 
 /// The first glyph to ask for is the first letter that needs samples: a font is written from "a".

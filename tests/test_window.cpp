@@ -8681,7 +8681,6 @@ TEST_F(InkWindowTest, TheInkEraserSelectAndShapeChoicesAreRememberedAndShownOnTh
     EXPECT_EQ(second->findChild<QAction *>(QStringLiteral("inkTool_shape"))->text(), QStringLiteral("Arrow"));
 }
 
-// A text box still being typed is unsaved work: the tab's marker lights while typing, not at the commit.
 // Task 18: "Don't save" on a tab whose text box is open with typed text and the focus deletes the view; the editor's
 // focus-out during that teardown used to commit the box into the half-destroyed view (SIGSEGV). The file stays as it was.
 TEST_F(InkWindowTest, ClosingAnInkTabWithATypedTextBoxAndDontSaveIsSafeAndLeavesTheFileAlone)
@@ -8723,6 +8722,45 @@ TEST_F(InkWindowTest, ClosingAnInkTabWithATypedTextBoxAndDontSaveIsSafeAndLeaves
     EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))), before) << "Don't save wrote nothing";
 }
 
+// Review minor 10: "Save" on the same tab writes what was typed (the open box is committed first), and the tab closes.
+TEST_F(InkWindowTest, ClosingAnInkTabWithATypedTextBoxAndSaveWritesTheTypedText)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+    write(QStringLiteral("Sketch.ink"), kEmptyInk);
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    QApplication::setActiveWindow(&window);
+    view->findChild<QAction *>(QStringLiteral("inkTool_text"))->trigger();
+    QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(60, 300));
+    auto *edit = canvas->findChild<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr);
+    edit->setFocus();
+    QTest::keyClicks(edit, QStringLiteral("typed then saved"));
+    ASSERT_TRUE(view->isModified());
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Save);
+        }
+    });
+    watch.start(20);
+    command(window, "workspace:close")->trigger();
+    EXPECT_TRUE(asked) << "autosave off: the tab asked";
+    QTest::qWait(50);
+    EXPECT_TRUE(readAll(path(QStringLiteral("Sketch.ink"))).contains("typed then saved")) << "the typed box is in the file";
+}
+
 // The same teardown when the whole window goes (quit after "Don't save", or a test's end) with the box open and focused.
 TEST_F(InkWindowTest, DeletingTheWindowWithATypedTextBoxOpenIsSafeAndLeavesTheFileAlone)
 {
@@ -8746,6 +8784,7 @@ TEST_F(InkWindowTest, DeletingTheWindowWithATypedTextBoxOpenIsSafeAndLeavesTheFi
     EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))), before);
 }
 
+// A text box still being typed is unsaved work: the tab's marker lights while typing, not at the commit.
 TEST_F(InkWindowTest, TypingInAnInkTextBoxLightsTheTabMarkerAtOnce)
 {
     write(QStringLiteral("Sketch.ink"), kEmptyInk);
