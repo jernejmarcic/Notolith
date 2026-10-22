@@ -35,6 +35,7 @@
 #include <QtTest/QTest>
 
 #include <atomic>
+#include <set>
 #include <thread>
 
 #include <zlib.h>
@@ -3047,7 +3048,34 @@ void renderTile(TileCache &cache, int tx, int ty = 0)
     ASSERT_TRUE(QTest::qWaitFor([&] { return cache.find(tx, ty).fresh; }, 5000)) << "tile " << tx << "," << ty;
 }
 
+/// One pool worker: the first render blocks it, so the ones after it stay queued.
+struct PoolOfOne {
+    int saved = QThreadPool::globalInstance()->maxThreadCount();
+    PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(1); }
+    ~PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(saved); }
+};
+
 } // namespace
+
+// Review I3: keepOnly cancels the renders queued for cells the view left; a cell that is wanted again must not wait for the
+// pool to drain the queue ahead of its cancelled job before it is asked for anew.
+TEST(TileCacheTest, ACellWantedAgainAfterKeepOnlyIsRequestedAtOnceNotAfterTheQueue)
+{
+    QSemaphore gate; // declared first: destroyed after the cache, whose destructor waits for the blocked job
+    PoolOfOne pool;
+    std::atomic<int> ranFirst{0}, ranSecond{0};
+    TileCache cache;
+    ASSERT_TRUE(cache.request(0, 0, [&] { gate.acquire(); return tileImage(); })); // running, blocked
+    ASSERT_TRUE(cache.request(1, 0, [&] { ++ranFirst; return tileImage(); }));       // queued behind it
+    cache.keepOnly(QRect(5, 5, 1, 1));                                                // the view left both
+    EXPECT_FALSE(cache.isPending(1, 0)) << "a cancelled render is not a render in flight";
+    EXPECT_TRUE(cache.request(1, 0, [&] { ++ranSecond; return tileImage(); })) << "wanted again: asked for at once";
+    gate.release(100);
+    WAIT_TRUE(cache.find(1, 0).fresh, 5000);
+    EXPECT_EQ(ranFirst.load(), 0) << "the cancelled job never ran";
+    EXPECT_EQ(ranSecond.load(), 1);
+    EXPECT_EQ(cache.find(0, 0).image, nullptr) << "the render of the cell left behind was dropped";
+}
 
 TEST(TileCacheTest, RendersOnceAndServesFromCache)
 {
@@ -3478,11 +3506,6 @@ TEST(InkCanvasTest, ABudgetSmallerThanTheWorkingSetSettlesInsteadOfThrashing)
 // the ones the user is looking at. A paint now cancels the queued renders outside what it wants.
 TEST(InkCanvasTest, AFastScrollDoesNotRenderTheTilesItLeftBehind)
 {
-    struct PoolOfOne { // one worker: the first render blocks it, so the others stay queued
-        int saved = QThreadPool::globalInstance()->maxThreadCount();
-        PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(1); }
-        ~PoolOfOne() { QThreadPool::globalInstance()->setMaxThreadCount(saved); }
-    };
     QSemaphore gate; // declared before the pool guard and the area: released last, destroyed after them
     std::atomic<int> started{0};
     PoolOfOne pool;
@@ -4207,6 +4230,46 @@ TEST(InkCanvasTest, CopyPutsTheTextBoxContentsOnTheClipboardAsPlainText)
     ASSERT_EQ(f.canvas.selection().size(), 1u);
     ASSERT_TRUE(f.canvas.copySelection());
     EXPECT_EQ(QApplication::clipboard()->mimeData()->text(), QStringLiteral("hello **there**"));
+}
+
+// Review I6: paste refuses what is over kMaxClipboardBytes, so copy must not put it there: the clipboard keeps what it
+// held and the owner is told why. The 17 MiB is one text box (the JSON is its markdown plus a little).
+TEST(InkCanvasTest, CopyOverTheClipboardCapRefusesLeavesTheClipboardAloneAndSaysWhy)
+{
+    CanvasFixture f;
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(50, 150, 100, 40), QString(int(kMaxClipboardBytes) + 1024, QLatin1Char('a'))});
+    f.canvas.document().addItem(box);
+    f.canvas.document().commit();
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, {{40, 140}, {160, 140}, {160, 200}, {40, 200}, {40, 142}}, 1000);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    auto *before = new QMimeData;
+    before->setText(QStringLiteral("what the clipboard held"));
+    QApplication::clipboard()->setMimeData(before);
+    QSignalSpy notices(&f.canvas, &InkCanvas::notice);
+    EXPECT_FALSE(f.canvas.copySelection());
+    EXPECT_TRUE(QApplication::clipboard()->mimeData()->text() == QStringLiteral("what the clipboard held")) << "the clipboard kept its text";
+    EXPECT_FALSE(QApplication::clipboard()->mimeData()->hasFormat(QString::fromLatin1(kClipboardMime)));
+    ASSERT_EQ(notices.count(), 1);
+    EXPECT_TRUE(notices.first().first().toString().contains(QStringLiteral("too large"))) << notices.first().first().toString().toStdString();
+}
+
+TEST(InkCanvasTest, PasteOverTheClipboardCapSaysWhyAndChangesNothing)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    QByteArray payload = R"({"format":"notolith-ink-clip","items":[{"t":1,"type":"stroke","points":[10,10,0.5,40,40,0.5]}]})";
+    payload.resize(kMaxClipboardBytes + 1, ' ');
+    auto *mime = new QMimeData;
+    mime->setData(QString::fromLatin1(kClipboardMime), payload);
+    QApplication::clipboard()->setMimeData(mime);
+    QSignalSpy notices(&f.canvas, &InkCanvas::notice);
+    EXPECT_FALSE(f.canvas.paste());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    ASSERT_EQ(notices.count(), 1);
+    EXPECT_TRUE(notices.first().first().toString().contains(QStringLiteral("too much"))) << notices.first().first().toString().toStdString();
 }
 
 TEST(InkCanvasTest, HeldLassoButtonSelectsWithoutChangingTheTool)
@@ -5385,6 +5448,47 @@ TEST(InkCanvasTest, OnePaintOfManyLargeBoxesStaysNearTheTextPictureBudget)
     EXPECT_LE(f.canvas.textCacheBytes(), InkCanvas::kTextCacheBytes + oneBox) << "the budget, and at most the one picture that crossed it";
     EXPECT_LT(stub.calls, boxes) << "the boxes past the budget were not rendered in this paint";
     EXPECT_GT(stub.calls, 0);
+}
+
+// Review I4: the budget is spent by what a paint renders, not by what it reuses, so the boxes past it are rendered by the
+// next paints (the canvas asks for them with a queued update): 30 ordinary boxes at zoom 4 (1.3 MB each, 39 MB in all,
+// over the 32 MB budget) all get a picture within a few paints, the last ones in paint order included. The canvas is not
+// shown: a real paint would evict the boxes out of view, which is right but not what this counts.
+TEST(InkCanvasTest, BoxesPastTheBudgetOfOnePaintGetTheirPicturesInTheNextPaints)
+{
+    InkCanvas canvas;
+    TextStub stub;
+    std::set<QString> rendered;
+    canvas.setTextRenderer([&](const QString &markdown, const QSizeF &size, qreal scale) {
+        rendered.insert(markdown);
+        return stub.renderer()(markdown, size, scale);
+    });
+    constexpr int boxes = 30;
+    DocumentSettings settings;
+    settings.format = {400, 110.0 * boxes, 96};
+    settings.extent = QRectF(0, 0, 400, 110.0 * boxes);
+    settings.layout = LayoutKind::Fixed;
+    canvas.document().setSettings(settings);
+    for (int i = 0; i < boxes; ++i) {
+        Item box;
+        box.type = Item::Type::TextBox;
+        box.textBox = std::make_shared<TextBox>(TextBox{QRectF(10, 110.0 * i, 200, 100), QStringLiteral("box %1").arg(i)});
+        canvas.document().addItem(box);
+    }
+    canvas.document().commit();
+    canvas.documentReplaced();
+    canvas.setZoom(4.0);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return canvas.tilesScale() == 4.0; }, 5000));
+    canvas.resize(canvas.sizeHint());
+    QImage image(canvas.size(), QImage::Format_ARGB32_Premultiplied);
+    canvas.render(&image);
+    EXPECT_LT(rendered.size(), size_t(boxes)) << "one paint stops at the budget";
+    int paints = 1;
+    for (; paints < 6 && rendered.size() < size_t(boxes); ++paints)
+        canvas.render(&image);
+    EXPECT_EQ(rendered.size(), size_t(boxes)) << "every box got its picture";
+    EXPECT_LE(paints, 3) << "within a few paints";
+    EXPECT_EQ(stub.calls, boxes) << "none was rendered twice";
 }
 
 namespace {

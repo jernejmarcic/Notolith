@@ -5,6 +5,7 @@
 
 #include <QHash>
 #include <QImage>
+#include <QFutureWatcher>
 #include <QObject>
 #include <QPair>
 #include <QRect>
@@ -60,7 +61,13 @@ public:
     /// `job` runs on a pool thread: it must be pure data - it paints strokes and shapes from an immutable snapshot
     /// (their payloads are shared_ptr<const>), and touches no widget, no QPixmap and not the document.
     bool request(int tx, int ty, std::function<QImage()> job);
-    bool isPending(int tx, int ty) const { return m_pending.contains({tx, ty}); }
+    /// A render in flight whose result will be used. One that keepOnly or a change of scale cancelled does not count: it
+    /// only occupies its place in the queue until the pool reaches it, and request() starts a new one at once.
+    bool isPending(int tx, int ty) const
+    {
+        const auto it = m_pending.constFind({tx, ty});
+        return it != m_pending.cend() && !(*it)->discard;
+    }
     int pendingCount() const { return int(m_pending.size()); }
     qsizetype bytes() const { return m_bytes; }
     int count() const { return int(m_lru.size()); }
@@ -77,7 +84,13 @@ private:
         double scale = 1.0;
         bool fresh = false;
     };
-    struct Pending;
+    struct Pending {
+        QFutureWatcher<QImage> *watcher = nullptr;
+        bool discard = false; ///< the zoom or the cell size changed, or the cell left the wanted set: the result is dropped
+        bool stale = false;   ///< the content changed while it rendered: the result still holds everything before that, kept stale (I4)
+        double scale = 1.0;   ///< the zoom it renders for
+    };
+    void retire(Pending *pending); ///< a discarded render a new request replaces: it finishes on its own and stores nothing
     QRectF cell(const Key &key) const;
     void finish(const Key &key);
     void evict();
@@ -89,6 +102,7 @@ private:
     std::list<Entry> m_lru; ///< front: the most recently painted
     QHash<Key, std::list<Entry>::iterator> m_index;
     QHash<Key, Pending *> m_pending;
+    std::list<Pending *> m_retired; ///< discarded renders replaced by a new request, still running or queued
 };
 
 } // namespace noteAppC::ink

@@ -176,6 +176,7 @@ InkView::InkView(Settings *settings, QWidget *parent)
     layout->addWidget(m_area, 1);
 
     connect(m_canvas, &InkCanvas::documentEdited, this, &InkView::onEdited);
+    connect(m_canvas, &InkCanvas::notice, this, [this](const QString &message) { emit statusMessage(message, 6000); });
     connect(m_canvas, &InkCanvas::textEditChanged, this, &InkView::onEdited); // typing lights the modified mark, not only the commit
     connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P E L S T (R14) move the toolbar too
         m_penAction->setChecked(tool == InkCanvas::Tool::Pen);

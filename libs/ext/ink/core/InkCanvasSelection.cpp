@@ -255,8 +255,13 @@ bool InkCanvas::copySelection()
         if (item->type == Item::Type::TextBox)
             text << item->textBox->markdown;
     }
+    const QByteArray payload = itemsToClipboardJSON(items);
+    if (payload.size() > kMaxClipboardBytes) { // paste() would refuse it: do not replace the clipboard with it
+        emit notice(tr("The selection is too large to copy (over %1 MiB)").arg(kMaxClipboardBytes >> 20));
+        return false;
+    }
     auto *mime = new QMimeData;
-    mime->setData(QString::fromLatin1(kClipboardMime), itemsToClipboardJSON(items));
+    mime->setData(QString::fromLatin1(kClipboardMime), payload);
     if (!text.isEmpty())
         mime->setText(text.join(QLatin1Char('\n')));
     QApplication::clipboard()->setMimeData(mime); // the clipboard owns it
@@ -271,7 +276,14 @@ bool InkCanvas::paste()
     if (!mime || !mime->hasFormat(QString::fromLatin1(kClipboardMime)))
         return false;
     bool ok = false;
-    std::vector<Item> items = itemsFromClipboardJSON(mime->data(QString::fromLatin1(kClipboardMime)), &ok);
+    // data() pulls the whole payload from the program that owns the clipboard before the size can be looked at;
+    // QMimeData has no cheaper size query, so the cap bounds the parse, not the transfer.
+    const QByteArray payload = mime->data(QString::fromLatin1(kClipboardMime));
+    if (payload.size() > kMaxClipboardBytes) {
+        emit notice(tr("The clipboard holds too much ink to paste (over %1 MiB)").arg(kMaxClipboardBytes >> 20));
+        return false;
+    }
+    std::vector<Item> items = itemsFromClipboardJSON(payload, &ok);
     // Another program may have put this on the clipboard: nothing that cannot be drawn is pasted (the reader is as open
     // to these, carry N1, but a paste is where they would arrive by accident).
     std::erase_if(items, [](const Item &item) {

@@ -5,26 +5,32 @@
 
 namespace noteAppC::ink {
 
-struct TileCache::Pending {
-    QFutureWatcher<QImage> *watcher = nullptr;
-    bool discard = false; ///< the zoom or the cell size changed while it rendered: the result is of something else, dropped
-    bool stale = false;   ///< the content changed while it rendered: the result still holds everything before that, kept stale (I4)
-    double scale = 1.0;   ///< the zoom it renders for
-};
-
 TileCache::TileCache(qsizetype maxBytes, QObject *parent) : QObject(parent), m_maxBytes(maxBytes) {}
 
 TileCache::~TileCache()
 {
-    for (Pending *p : std::as_const(m_pending)) {
+    QList<Pending *> all = m_pending.values();
+    all.append(QList<Pending *>(m_retired.begin(), m_retired.end()));
+    for (Pending *p : std::as_const(all)) {
         p->watcher->disconnect(this);
         p->watcher->cancel(); // a job still queued is skipped: the pool is shared and first-in first-out, so waiting for the queue would freeze the UI (I3)
     }
-    for (Pending *p : std::as_const(m_pending)) { // all cancelled first: the one that runs must not hand its thread to a queued sibling
+    for (Pending *p : std::as_const(all)) { // all cancelled first: the one that runs must not hand its thread to a queued sibling
         p->watcher->waitForFinished(); // one that runs may use things its owner is about to destroy
         delete p->watcher;
         delete p;
     }
+}
+
+void TileCache::retire(Pending *p)
+{
+    p->watcher->disconnect(this); // no longer this cell's render: nothing to store, nothing to announce
+    m_retired.push_back(p);
+    connect(p->watcher, &QFutureWatcherBase::finished, this, [this, p] {
+        m_retired.remove(p);
+        p->watcher->deleteLater();
+        delete p;
+    });
 }
 
 QRectF TileCache::cell(const Key &key) const
@@ -112,8 +118,12 @@ int TileCache::staleCount() const
 bool TileCache::request(int tx, int ty, std::function<QImage()> job)
 {
     const Key key{tx, ty};
-    if (m_pending.contains(key))
-        return false;
+    if (const auto found = m_pending.find(key); found != m_pending.end()) {
+        if (!(*found)->discard)
+            return false;
+        retire(*found); // a cancelled render still queued (or running) for a cell that is wanted again: ask anew, at once, not after the queue ahead of it
+        m_pending.erase(found);
+    }
     auto *p = new Pending;
     p->scale = m_zoom;
     p->watcher = new QFutureWatcher<QImage>(this);

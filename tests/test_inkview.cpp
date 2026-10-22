@@ -34,6 +34,7 @@
 #include "Settings.h"
 #include "WaitFor.h"
 #include "core/InkFormat.h"
+#include "core/InkTools.h"
 
 using namespace noteAppC::ink;
 using namespace inktest;
@@ -943,6 +944,26 @@ QJsonObject storedPressures(const noteAppC::Settings &settings)
 }
 
 } // namespace
+
+// Review I6: the canvas's reason for refusing a copy reaches the status bar, not only a signal nobody listens to.
+TEST(InkViewToolbarTest, ACopyThatIsTooLargeIsExplainedInTheStatusBar)
+{
+    InkView view(nullptr);
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(50, 150, 100, 40), QString(int(kMaxClipboardBytes) + 1024, QLatin1Char('a'))});
+    InkCanvas *canvas = view.canvas();
+    canvas->document().addItem(box);
+    canvas->document().commit();
+    canvas->setTool(InkCanvas::Tool::Lasso);
+    canvas->setSelectShape(InkCanvas::SelectShape::Rect);
+    penStroke(canvas, QPointF(40, 140), QPointF(200, 200), 3000);
+    ASSERT_EQ(canvas->selection().size(), 1u);
+    view.findChild<QAction *>(QStringLiteral("inkCopyAction"))->trigger();
+    ASSERT_EQ(status.count(), 1);
+    EXPECT_TRUE(status.first().first().toString().contains(QStringLiteral("too large"))) << status.first().first().toString().toStdString();
+}
 
 // R14 on a keyboardless tablet: what Delete, Ctrl+C and Ctrl+V do for a selection has a toolbar button too.
 TEST(InkViewToolbarTest, DeleteCopyAndPasteAreOnTheToolbarForATabletWithNoKeyboard)

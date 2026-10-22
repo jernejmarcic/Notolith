@@ -177,6 +177,8 @@ signals:
     /// asks isTextEditDirty() again (its "modified" mark follows the typing, not only the commit).
     void textEditChanged();
     void zoomChanged(double zoom);
+    /// A short line for the owner's status bar: why an action did nothing (a copy or paste over the clipboard cap).
+    void notice(const QString &message);
     void panRequested(QPoint deltaWidgetPx);
     /// The extent grew left or up (Infinite): the content moved this far (widget px) right and down inside the
     /// widget. The scroll area's owner adds it to the scroll position so the view stays on the same ink.
@@ -301,7 +303,8 @@ private:
     };
     std::map<qint64, TextPixmap> m_textCache;
     quint64 m_textTick = 0;
-    qsizetype m_textPaintBytes = 0; ///< what the pictures the current paint has used hold: past kTextCacheBytes it renders no more boxes
+    qsizetype m_textPaintBytes = 0; ///< what the pictures the current paint has rendered hold: past kTextCacheBytes it renders no more
+    bool m_textSkipped = false;     ///< the current paint left a box unrendered for the budget: it asks for one more paint
     TextEditorFactory m_textEditorFactory;
     QString readTextEditor() const; ///< what the open editor holds
     double textScale(const QSizeF &logical) const; ///< device px per document px for a box of that size, at the settled zoom
