@@ -638,7 +638,9 @@ private:
     void rebuildHotkeyCommands(); ///< the tail of the command builder: the `rebindable` list, setCommands() and applyHotkeys()
     void startModuleScan();       ///< on the thread pool, after first paint
     void onModulesScanned();      ///< registers features, commands and rows; does nothing when no module is installed
-    void loadIndexModules();      ///< loads a module whose indexSuffixes the vault's index holds (indexing counts as use)
+    /// ModuleRegistry::ensureLoaded, then - once, after a fresh attach - the stored values of the
+    /// keys the module registered and a refresh of the Settings page (its rows, or its load failure).
+    bool loadModule(const ModuleInfo &module, QString *error);
     QList<QPair<QString, QString>> moduleProblems() const; ///< (id, notice) of every module that cannot load
     QAction *addModuleCommand(const QString &id, const QString &title);
     bool openModuleView(const QString &path, QString *error, QWidget **view);

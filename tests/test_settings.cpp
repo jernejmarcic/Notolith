@@ -561,7 +561,7 @@ TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
-TEST(SettingsTest, RegisteredDefaultsAndFeaturesAreLiveAndSaved)
+TEST(SettingsModuleTest, RegisteredDefaultsAndFeaturesAreLiveAndSaved)
 {
     Settings::registerDefaults({{QStringLiteral("fake.greeting"), true}});
     Settings::registerFeature(QStringLiteral("fake"), QStringLiteral("Fake module"), QStringLiteral("A test module."));
@@ -583,9 +583,10 @@ TEST(SettingsTest, RegisteredDefaultsAndFeaturesAreLiveAndSaved)
     for (const Settings::Feature &feature : Settings::features())
         count += QByteArray(feature.id) == "fake";
     EXPECT_EQ(count, 1);
+    QFile::remove(Settings::configFile()); // it saved fake.greeting = false into the isolated config
 }
 
-TEST(SettingsTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
+TEST(SettingsModuleTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
 {
     // The window loads Settings before the module scan registers a module's
     // keys; without adoptStored() a saved switch or setting is dropped on restart.

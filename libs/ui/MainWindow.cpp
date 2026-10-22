@@ -177,13 +177,34 @@ QString mediaKindOf(const QString &path)
     return video.contains(suffix) ? QStringLiteral("video") : QString();
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
-/// such a module a problem notice and never loads it).
+/// such a module a problem notice and never loads it). Per kind, under the same
+/// compile-time option as isViewFile, so a build without EPUB or PDF does not
+/// forbid a module those suffixes.
 bool isBuiltInSuffix(const QString &suffix)
 {
-    static const QStringList own = {QStringLiteral("md"),     QStringLiteral("mdlock"), QStringLiteral("epub"),
-                                    QStringLiteral("canvas"), QStringLiteral("base"),   QStringLiteral("pdf"),
-                                    QStringLiteral("ipynb")};
-    return own.contains(suffix) || !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
+    if (suffix == QLatin1String("md") || suffix == QLatin1String("mdlock"))
+        return true;
+#ifdef NOTEAPPC_HAVE_EPUB
+    if (suffix == QLatin1String("epub"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_CANVAS
+    if (suffix == QLatin1String("canvas"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_BASES
+    if (suffix == QLatin1String("base"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_PDFVIEW
+    if (suffix == QLatin1String("pdf"))
+        return true;
+#endif
+#ifdef NOTEAPPC_HAVE_NOTEBOOK
+    if (suffix == QLatin1String("ipynb"))
+        return true;
+#endif
+    return !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
 }
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
@@ -322,17 +343,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_moduleHost.theme = &m_theme;
     m_moduleHost.vault = &m_vault;
     m_moduleHost.registerView = [this](const QStringList &suffixes, ModuleHost::ViewFactory factory) {
-        for (const QString &suffix : suffixes)
-            m_moduleViews.insert(suffix.toLower(), factory);
+        for (const QString &suffix : suffixes) {
+            if (!m_moduleViews.contains(suffix.toLower())) // first claim wins, as in ModuleRegistry::scan
+                m_moduleViews.insert(suffix.toLower(), factory);
+        }
     };
     m_moduleHost.registerCommand = [this](const QString &id, const QString &, std::function<void()> run) {
         m_moduleCommands.insert(id, std::move(run)); // the QAction exists since the scan; this is what it runs
     };
     m_moduleHost.registerSetting = [this](const ModuleHost::SettingRow &row) {
         Settings::registerDefaults({{row.key, row.defaultValue}});
-        m_settings.adoptStored(); // load() ran before this key existed: pick up what was saved for it
-        m_moduleSettingRows << row;
-        m_settingsPage->setModules(m_moduleSettingRows, moduleProblems());
+        m_moduleSettingRows << row; // loadModule() adopts the stored values and refreshes the page once, after attach()
     };
     m_moduleHost.registerIndexReader = nullptr;   // seam 6: S1 Task 17
     m_moduleHost.registerTabletHandler = nullptr; // seam 2: Spec 3
@@ -481,7 +502,6 @@ MainWindow::MainWindow(QWidget *parent)
         // No onIndexChanged() here: Index::changed has already fired, from
         // open() for a vault that was up to date and from the batch for one
         // that was not. Both ran it, 210 ms apiece on 20 000 notes.
-        loadIndexModules(); // the first index pass lands after the scan: now the vault's files are known
     });
     connect(m_indexer, &Indexer::watchesFailed, this, [this](int folders) {
         statusBar()->showMessage(tr("%n folder(s) cannot be watched (fs.inotify.max_user_watches?): changes made "
@@ -5309,6 +5329,9 @@ void MainWindow::openTarget(const LaunchTarget &target)
     updateSpelling();
 }
 
+// The scan runs once per process, after the first paint. Opening another vault does not rescan:
+// modules are installed with the app, not with a vault (spec section 4, "When"), so the set found
+// here serves every vault this window opens.
 void MainWindow::startModuleScan()
 {
     if (m_modulesScanned || m_modulesScanStarted)
@@ -5359,27 +5382,17 @@ void MainWindow::onModulesScanned()
         rebuildHotkeyCommands();
     if (featureRegistered)
         applyFeatures(); // greys a disabled module's commands by their id prefix, as for every feature
-    loadIndexModules();
 }
 
-void MainWindow::loadIndexModules()
+bool MainWindow::loadModule(const ModuleInfo &module, QString *error)
 {
-    if (!m_modulesScanned || !m_vault.isValid())
-        return;
-    for (const ModuleInfo &module : m_modules->modules()) {
-        if (module.indexSuffixes.isEmpty() || !module.problem.isEmpty() || !m_modules->isEnabled(module)
-            || m_modules->isLoaded(module.id) || !m_index.hasFileWithSuffix(module.indexSuffixes))
-            continue;
-        // Indexing counts as use: load it (UI thread, queued behind whatever is painting) so its index
-        // reader registers and the indexer re-reads those files. A vault without such files pays nothing.
-        QTimer::singleShot(0, this, [this, id = module.id] {
-            for (const ModuleInfo &candidate : m_modules->modules()) {
-                QString error;
-                if (candidate.id == id && !m_modules->ensureLoaded(candidate, m_moduleHost, &error))
-                    qWarning("%s", qPrintable(error));
-            }
-        });
-    }
+    if (m_modules->isLoaded(module.id))
+        return true; // attached already: nothing new to pick up
+    const bool ok = m_modules->ensureLoaded(module, m_moduleHost, error);
+    if (ok)
+        m_settings.adoptStored(); // the module's keys exist now; load() ran before them (once, not per row)
+    m_settingsPage->setModules(m_moduleSettingRows, moduleProblems()); // its rows, or its load failure
+    return ok;
 }
 
 QAction *MainWindow::addModuleCommand(const QString &id, const QString &title)
@@ -5389,11 +5402,11 @@ QAction *MainWindow::addModuleCommand(const QString &id, const QString &title)
     action->setData(QString());
     action->setShortcutContext(Qt::WindowShortcut);
     connect(action, &QAction::triggered, this, [this, id] {
-        const ModuleInfo *module = m_modules->moduleForCommand(id);
+        const std::optional<ModuleInfo> module = m_modules->moduleForCommand(id);
         if (!module)
             return;
         QString error;
-        if (!m_modules->ensureLoaded(*module, m_moduleHost, &error)) {
+        if (!loadModule(*module, &error)) {
             statusBar()->showMessage(error, 5000);
             return;
         }
@@ -5401,6 +5414,8 @@ QAction *MainWindow::addModuleCommand(const QString &id, const QString &title)
             run();
     });
     addAction(action);
+    for (const auto &popout : m_popouts)
+        popout->addAction(action); // a window opened before the scan gets the command too, as for plugin commands
     m_commands << action;
     return action;
 }
@@ -5408,9 +5423,11 @@ QAction *MainWindow::addModuleCommand(const QString &id, const QString &title)
 QList<QPair<QString, QString>> MainWindow::moduleProblems() const
 {
     QList<QPair<QString, QString>> problems;
-    for (const ModuleInfo &module : m_modules->modules())
-        if (!module.problem.isEmpty())
-            problems.append({module.id, module.problem});
+    for (const ModuleInfo &module : m_modules->modules()) {
+        const QString notice = module.problem.isEmpty() ? m_modules->loadFailure(module.id) : module.problem;
+        if (!notice.isEmpty())
+            problems.append({module.id, notice});
+    }
     return problems;
 }
 
@@ -6459,15 +6476,15 @@ bool MainWindow::isViewFile(const QString &path) const
     const QString media = mediaKindOf(path);
     if (media == QLatin1String("image") || (!media.isEmpty() && featureOn("media-embeds")))
         return true;
-    return m_modules && m_modules->moduleForSuffix(path) != nullptr; // after every built-in kind, never before
+    return m_modules && m_modules->moduleForSuffix(path).has_value(); // after every built-in kind, never before
 }
 
 bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **view)
 {
-    const ModuleInfo *module = m_modules ? m_modules->moduleForSuffix(path) : nullptr;
+    const std::optional<ModuleInfo> module = m_modules ? m_modules->moduleForSuffix(path) : std::nullopt;
     if (!module)
         return false;
-    if (!m_modules->ensureLoaded(*module, m_moduleHost, error))
+    if (!loadModule(*module, error))
         return false;
     const ModuleHost::ViewFactory factory = m_moduleViews.value(QFileInfo(path).suffix().toLower());
     if (!factory) {

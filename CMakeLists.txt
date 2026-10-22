@@ -22,16 +22,15 @@ find_package(Qt6 6.5 QUIET COMPONENTS Test)
 qt_standard_project_setup()
 
 # The ABI tag every loadable module carries (spec section 4): same build only.
-# The git hash is read at configure time; a commit without a reconfigure
-# leaves app and modules on the same stale hash, which is still consistent.
+# The token is random, made once per build directory and kept in the cache: two
+# builds of one commit never share a tag, and a source tarball without git needs
+# no hash. Reconfiguring keeps it; a fresh build directory gets a new one.
 include(GNUInstallDirs)
-execute_process(COMMAND git -C ${CMAKE_SOURCE_DIR} rev-parse --short=12 HEAD
-    OUTPUT_VARIABLE NOTEAPPC_GIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE
-    RESULT_VARIABLE noteappc_git_result ERROR_QUIET)
-if(NOT noteappc_git_result EQUAL 0)
-    set(NOTEAPPC_GIT_HASH "nogit")
+if(NOT NOTEAPPC_ABI_TOKEN)
+    string(RANDOM LENGTH 16 ALPHABET 0123456789abcdef noteappc_token)
+    set(NOTEAPPC_ABI_TOKEN "${noteappc_token}" CACHE INTERNAL "Per-build-directory token of the module ABI tag")
 endif()
-set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_GIT_HASH}-${Qt6_VERSION}")
+set(NOTEAPPC_ABI_TAG "${PROJECT_VERSION}-${NOTEAPPC_ABI_TOKEN}-${Qt6_VERSION}")
 
 # Neither dependency is in the Android Qt kit, so both can be turned off for a
 # mobile/cross build; NOTEAPPC_WITH_PDF also covers dropping poppler-qt6 when

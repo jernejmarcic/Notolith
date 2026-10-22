@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 
 #include <QHash>
 #include <QList>
@@ -23,8 +24,6 @@ struct ModuleInfo {
     QString path; ///< absolute path of the .so
     QString ABItag;
     QStringList suffixes;      ///< lower-case, no dot
-    QStringList indexSuffixes; ///< lower-case, no dot: the module is loaded after the scan when the vault holds such files, so its index reader registers
-    QStringList dependencies;  ///< module ids
     struct Command {
         QString id;
         QString title;
@@ -44,10 +43,9 @@ public:
     explicit ModuleRegistry(QObject *parent = nullptr);
     ~ModuleRegistry() override;
 
-    /// PROJECT_VERSION "-" git hash "-" QT_VERSION_STR: same build only.
+    /// PROJECT_VERSION "-" a random per-build-directory token "-" Qt6_VERSION: same build only.
     static QString ABItag();
-    /// NOTEAPPC_MODULE_DIRS (':'-separated) when set - the tests and the
-    /// bench - else $XDG_DATA_HOME/noteAppC/modules then <libdir>/noteAppC/modules.
+    /// NOTEAPPC_MODULE_DIRS (':'-separated) when set - the tests and the bench - else <libdir>/noteAppC/modules alone.
     static QStringList defaultDirectories();
     using SuffixPredicate = std::function<bool(const QString &suffix)>;
     /// Reads every *.so's manifest with QPluginLoader::metaData(), which does
@@ -63,9 +61,14 @@ public:
     void setEnabledCheck(std::function<bool(const QString &featureID)> check);
     bool isEnabled(const ModuleInfo &module) const;
 
-    /// Enabled, loadable modules only: a disabled module owns nothing.
-    const ModuleInfo *moduleForSuffix(const QString &path) const;
-    const ModuleInfo *moduleForCommand(const QString &commandID) const;
+    /// Enabled, loadable modules only: a disabled module owns nothing. A copy, not a
+    /// pointer into the registry's list.
+    std::optional<ModuleInfo> moduleForSuffix(const QString &path) const;
+    std::optional<ModuleInfo> moduleForCommand(const QString &commandID) const;
+
+    /// What ensureLoaded last said about a module that failed to load (the loader's
+    /// message, or "not a Notolith module"); empty when it has not failed.
+    QString loadFailure(const QString &id) const { return m_failed.value(id); }
 
     /// QPluginLoader::instance() then attach(host), once per module id. False
     /// with `error` (the manifest's problem, or the loader's message) when it
@@ -76,6 +79,7 @@ public:
 private:
     QList<ModuleInfo> m_modules;
     QHash<QString, QPluginLoader *> m_loaded;
+    QHash<QString, QString> m_failed;
     std::function<bool(const QString &)> m_enabled;
 };
 

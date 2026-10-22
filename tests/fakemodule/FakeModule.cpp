@@ -9,6 +9,13 @@
 #include "ModuleHost.h"
 #include "NotolithModule.h"
 
+#ifdef FAKE_UNRESOLVED
+// Defined nowhere. A module built with FAKE_UNRESOLVED therefore cannot be opened
+// with QLibrary::ResolveAllSymbolsHint (RTLD_NOW): dlopen fails with this name in
+// the message, which is what a module whose libnotolith-inkcore.so is absent gets.
+extern "C" void noteappcFakeMissingSymbol();
+#endif
+
 namespace {
 const bool marked = [] {
     const QByteArray mark = qgetenv("NOTEAPPC_FAKE_MODULE_MARK");
@@ -45,6 +52,9 @@ class FakeModule : public QObject, public noteAppC::NotolithModule {
 public:
     void attach(noteAppC::ModuleHost &host) override
     {
+#ifdef FAKE_UNRESOLVED
+        noteappcFakeMissingSymbol();
+#endif
         host.registerView({QStringLiteral(FAKE_SUFFIX)},
                           [](const QString &, QWidget *parent) -> noteAppC::ModuleView * { return new FakeView(parent); });
         const auto status = host.showStatus;

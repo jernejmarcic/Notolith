@@ -7666,8 +7666,6 @@ TEST_F(WindowTest, AModuleCommandLoadsTheModuleOnFirstUse)
     hello->trigger();
     EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
     EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("hello from the fake module"));
-    // A module's settings row is saved like any other.
-    EXPECT_TRUE(window.settings().boolean(QStringLiteral("fake.greeting")));
 }
 
 TEST_F(WindowTest, ModulesWithAProblemAreListedInSettingsAndNeverLoaded)
@@ -7683,12 +7681,16 @@ TEST_F(WindowTest, ModulesWithAProblemAreListedInSettingsAndNeverLoaded)
         return notice != nullptr;
     }, 3000));
     EXPECT_TRUE(notice->text().contains(QStringLiteral("another Notolith")));
-    auto *missing = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-missingdep"));
-    ASSERT_NE(missing, nullptr);
-    EXPECT_TRUE(missing->text().contains(QStringLiteral("nonexistent-module")));
+    auto *twin = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-twin"));
+    ASSERT_NE(twin, nullptr);
+    EXPECT_TRUE(twin->text().contains(QStringLiteral("already claims")));
+    auto *noID = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake_noid"));
+    ASSERT_NE(noID, nullptr);
+    EXPECT_TRUE(noID->text().contains(QStringLiteral("manifest has no id")));
     EXPECT_EQ(settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.fakeBadabi")), nullptr)
         << "a module that cannot load gets a notice, never a switch";
     EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-badabi")));
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-twin")));
 }
 
 TEST_F(WindowTest, AModuleSettingRowWithDecimalsIsADoubleSpinBox)
@@ -7726,22 +7728,96 @@ TEST_F(WindowTest, AModuleAsksTheWindowForTheCurrentFolder)
         << "no note: the vault root";
 }
 
-TEST_F(WindowTest, AModuleWithIndexSuffixesLoadsOnlyWhenTheVaultHoldsSuchFiles)
+// R1: indexing never counts as use. A vault file with a module's suffix leaves the module
+// unloaded until the file is opened. (No fixed wait: the index pass is awaited, then the
+// absence is asserted.)
+TEST_F(WindowTest, AVaultFileOfAModuleSuffixDoesNotLoadTheModuleUntilItIsOpened)
 {
-    {
-        MainWindow window; // the vault has no .fakeidx file
-        window.show();
-        window.openVault(dir.path());
-        window.scanModulesNow();
-        WAIT_TRUE(window.index()->attachmentCount() >= 1, 5000); // attachment.txt: the first index pass has landed
-        QTest::qWait(100);
-        EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-indexed"))) << "nothing to index: nothing loaded";
-    }
-    write(QStringLiteral("notes.fakeidx"), "anything");
+    write(QStringLiteral("notes.fake"), "anything");
     MainWindow window;
     window.show();
     window.openVault(dir.path());
     window.scanModulesNow();
-    WAIT_TRUE(window.modules()->isLoaded(QStringLiteral("fake-indexed")), 5000);
-    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake"))) << "a module without index suffixes still waits for first use";
+    WAIT_TRUE(window.index()->attachmentCount() >= 1, 5000); // the first index pass has landed
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake")));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("notes.fake"))));
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
+}
+
+// M4: a command the scan adds reaches a pop-out window that already exists. The main window
+// is not shown, so no first paint starts the automatic scan before the explicit one.
+TEST_F(WindowTest, AModuleCommandAppearsInAnAlreadyOpenPopoutWindow)
+{
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Welcome.md")));
+    command(window, "workspace:open-in-new-window")->trigger();
+    const auto popouts = popoutWindows();
+    ASSERT_EQ(popouts.size(), 1);
+    ASSERT_EQ(command(window, "fake:hello"), nullptr) << "the scan has not run yet";
+    window.scanModulesNow();
+    QAction *hello = command(window, "fake:hello");
+    ASSERT_NE(hello, nullptr);
+    EXPECT_TRUE(popouts.first()->actions().contains(hello));
+}
+
+// M5: a stored value of a module's setting key is adopted once the module has loaded (the
+// file was read when the window was made, before the key existed). This is a guard: the
+// behaviour already held; Task 2b only reduces the adoptStored calls from one per row to one.
+TEST_F(WindowTest, AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
+{
+    const QString configPath = noteAppC::Settings::configFile();
+    auto cleanup = qScopeGuard([configPath] { QFile::remove(configPath); }); // declared first: destroyed after the window
+    QDir().mkpath(QFileInfo(configPath).absolutePath());
+    QFile config(configPath);
+    ASSERT_TRUE(config.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    config.write("[fake]\nwidth = 7.5\n");
+    config.close();
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "fake:hello")->trigger();
+    EXPECT_DOUBLE_EQ(window.settings().value(QStringLiteral("fake.width")).toDouble(), 7.5);
+}
+
+// M1: a module's setting row is saved like any other: change it in the page, close the
+// window, read the file back.
+TEST_F(WindowTest, AModuleSettingChangedInSettingsIsSavedWhenTheWindowCloses)
+{
+    const QString configPath = noteAppC::Settings::configFile();
+    auto cleanup = qScopeGuard([configPath] { QFile::remove(configPath); });
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.scanModulesNow();
+        command(window, "fake:hello")->trigger(); // loading the module registers its rows
+        command(window, "app:open-settings")->trigger();
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        WAIT_TRUE((toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_fake.greeting"))) != nullptr, 3000);
+        ASSERT_TRUE(toggle->isChecked());
+        toggle->setChecked(false);
+        window.close();
+    }
+    EXPECT_FALSE(noteAppC::Settings::load().boolean(QStringLiteral("fake.greeting")));
+}
+
+// R2: no dependency check; a library that cannot resolve a symbol fails to load and the
+// loader's message is what Settings shows.
+TEST_F(WindowTest, AModuleThatFailsToLoadIsReportedInSettingsWithTheLoadersMessage)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    QAction *hello = command(window, "fake-unresolved:hello");
+    ASSERT_NE(hello, nullptr);
+    hello->trigger();
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-unresolved")));
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("noteappcFakeMissingSymbol")));
+    command(window, "app:open-settings")->trigger();
+    QLabel *notice = nullptr;
+    WAIT_TRUE((notice = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-unresolved"))) != nullptr, 3000);
+    EXPECT_TRUE(notice->text().contains(QStringLiteral("noteappcFakeMissingSymbol")));
 }

@@ -142,6 +142,7 @@ public:
     /// the module is discovered (after first paint, on the UI thread). Live:
     /// every Settings reads them from then on, and save() persists them.
     /// Registering a key or a feature twice is a no-op.
+    /// The tables behind registerDefaults() and registerFeature() (defaults(), features()) are mutated on the UI thread only: register from there, never from a worker.
     static void registerDefaults(const QVariantMap &defaults);
     static void registerFeature(const QString &id, const QString &name, const QString &description);
     /// Load() ran before the keys of a module existed, so their stored lines

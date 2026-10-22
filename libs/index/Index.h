@@ -118,8 +118,6 @@ public:
     /// the search grammar lands, so a stale row would otherwise go unnoticed.
     int contentRowCount() const;
     int attachmentCount() const;
-    /// True when the index holds any file - note or attachment - ending in one of `suffixes` (lower-case, no dot).
-    bool hasFileWithSuffix(const QStringList &suffixes) const;
     QStringList allPaths() const;
     QStringList allTags() const;
     /// Every property key in the vault, with the type it was first seen

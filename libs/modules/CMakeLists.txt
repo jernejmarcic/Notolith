@@ -11,6 +11,7 @@ add_library(noteAppC_modules_headers INTERFACE)
 target_include_directories(noteAppC_modules_headers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(noteAppC_modules_headers INTERFACE Qt6::Widgets)
 
+configure_file(ModuleABI.h.in ${CMAKE_BINARY_DIR}/generated/ModuleABI.h @ONLY)
 add_library(noteAppC_modules STATIC
     ModuleHost.h
     ModuleRegistry.cpp
@@ -18,7 +19,6 @@ add_library(noteAppC_modules STATIC
     NotolithModule.h)
 set_target_properties(noteAppC_modules PROPERTIES AUTOMOC ON)
 target_link_libraries(noteAppC_modules PUBLIC noteAppC_modules_headers noteAppC_settings noteAppC_theme noteAppC_vault)
+target_include_directories(noteAppC_modules PRIVATE ${CMAKE_BINARY_DIR}/generated)
 target_compile_definitions(noteAppC_modules PRIVATE
-    NOTEAPPC_VERSION="${PROJECT_VERSION}"
-    NOTEAPPC_GIT_HASH="${NOTEAPPC_GIT_HASH}"
     NOTEAPPC_MODULE_LIBDIR="${CMAKE_INSTALL_FULL_LIBDIR}/noteAppC/modules")

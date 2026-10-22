@@ -58,37 +58,43 @@ if(noteappc_have_poppler)
     set_tests_properties(pdfpage_race PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
-# The loadable-module tier (libs/modules): four fake modules from one source,
-# differing only in their configure_file'd manifest - a good one, one built
-# for another Notolith (wrong ABI tag), one needing a module that is not there,
-# and one declaring index suffixes (loaded after the scan when the vault holds
-# such files). Headers only from the host: no host static library is linked.
-function(noteappc_fake_module target id abi deps suffix indexSuffixes)
-    set(FAKE_ID ${id})
-    set(FAKE_ABI ${abi})
-    set(FAKE_DEPS "${deps}")
-    set(FAKE_SUFFIX ${suffix})
-    set(FAKE_INDEX_SUFFIXES "${indexSuffixes}")
+# The loadable-module tier (libs/modules): fake modules built from one or two
+# sources, differing in their configure_file'd manifest and a compile flag - a
+# good one, one built for another Notolith (wrong ABI tag), a twin claiming the
+# same suffix, one whose manifest has no id, a Qt plugin that is not a Notolith
+# module, and one whose library cannot resolve a symbol. Headers only from the
+# host: no host static library is linked.
+function(noteappc_fake_module target id abi suffix source)
+    set(FAKE_ID "${id}")
+    set(FAKE_ABI "${abi}")
+    set(FAKE_SUFFIX "${suffix}")
     configure_file(fakemodule/manifest.json.in ${CMAKE_CURRENT_BINARY_DIR}/${target}/manifest.json @ONLY)
-    add_library(${target} MODULE fakemodule/FakeModule.cpp)
+    add_library(${target} MODULE fakemodule/${source})
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/${target})
-    target_compile_definitions(${target} PRIVATE FAKE_ID="${id}" FAKE_SUFFIX="${suffix}")
+    target_compile_definitions(${target} PRIVATE FAKE_ID="${id}" FAKE_SUFFIX="${suffix}" ${ARGN})
     target_link_libraries(${target} PRIVATE noteAppC_modules_headers Qt6::Widgets)
     set_target_properties(${target} PROPERTIES AUTOMOC ON PREFIX ""
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fakemodules)
 endfunction()
-noteappc_fake_module(fake_good fake "${NOTEAPPC_ABI_TAG}" "" fake "")
-noteappc_fake_module(fake_badabi fake-badabi "0.0.0-deadbeef-6.0.0" "" fake "")
-noteappc_fake_module(fake_missingdep fake-missingdep "${NOTEAPPC_ABI_TAG}" "\"nonexistent-module\"" fake "")
-noteappc_fake_module(fake_indexed fake-indexed "${NOTEAPPC_ABI_TAG}" "" fakeidx "\"fakeidx\"")
+noteappc_fake_module(fake_good fake "${NOTEAPPC_ABI_TAG}" fake FakeModule.cpp)
+noteappc_fake_module(fake_badabi fake-badabi "0.0.0-deadbeef-6.0.0" fake FakeModule.cpp)
+noteappc_fake_module(fake_twin fake-twin "${NOTEAPPC_ABI_TAG}" fake FakeModule.cpp)
+noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
+noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
+noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
+set(NOTEAPPC_FAKE_MODULE_TARGETS fake_good fake_badabi fake_twin fake_noid fake_notmodule fake_unresolved)
 
 add_executable(test_modules test_modules.cpp)
 target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::gtest)
 target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
-add_dependencies(test_modules fake_good fake_badabi fake_missingdep fake_indexed)
-add_test(NAME modules COMMAND test_modules)
-set_tests_properties(modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
+# The no-load gate is its own ctest entry (M1): in a process where another test had already
+# mapped fake_good, "the scan did not load it" would prove nothing. The filter is in the
+# command, so it wins over the GTEST_FILTER the run commands pass: run each entry whole.
+add_test(NAME modules_gate COMMAND test_modules --gtest_filter=ModuleGateTest.*)
+add_test(NAME modules COMMAND test_modules --gtest_filter=-ModuleGateTest.*)
+set_tests_properties(modules_gate modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
@@ -96,7 +102,7 @@ add_test(NAME window COMMAND test_window)
 # Modules load into the test's process: export the host symbols, and point the
 # registry at the build's modules (the fake ones; Task 8 adds the real ones).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
-add_dependencies(test_window fake_good fake_badabi fake_missingdep fake_indexed)
+add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
 set_property(TEST window APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
@@ -318,7 +324,10 @@ endif()
 
 add_executable(test_settings test_settings.cpp)
 target_link_libraries(test_settings PRIVATE noteAppC_settings GTest::gtest GTest::gtest_main)
-add_test(NAME settings COMMAND test_settings)
+# The two SettingsModuleTest cases register keys and a feature in Settings' process-wide
+# tables (M1): alone in their process they cannot leak into another test. Run each entry whole.
+add_test(NAME settings COMMAND test_settings --gtest_filter=-SettingsModuleTest.*)
+add_test(NAME settings_modules COMMAND test_settings --gtest_filter=SettingsModuleTest.*)
 
 add_executable(test_plugins test_plugins.cpp)
 target_link_libraries(test_plugins PRIVATE noteAppC_vault noteAppC_ui Qt6::Test GTest::gtest)
@@ -384,7 +393,8 @@ add_executable(test_lists test_lists.cpp)
 target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME lists COMMAND test_lists)
 
-# No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC.
+# No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
+# sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
 # settings.ini, so without this a test's result depended on how the person
 # running it had set up their own copy of the app - Settings.defaultsAreCompiledIn
@@ -393,10 +403,18 @@ add_test(NAME lists COMMAND test_lists)
 # test above this block: a test added below it runs against the real home.
 get_property(noteappc_tests DIRECTORY PROPERTY TESTS)
 foreach(test IN LISTS noteappc_tests)
+    get_property(noteappc_test_environment TEST ${test} PROPERTY ENVIRONMENT)
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
         "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
         "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
         "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
+    # M8: what is installed on the machine never reaches a test. A test that wants modules
+    # (window: the fake ones) has set NOTEAPPC_MODULE_DIRS above this block; every other
+    # gets a directory that does not exist, so a scan finds nothing.
+    if(NOT noteappc_test_environment MATCHES "NOTEAPPC_MODULE_DIRS=")
+        set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
+            "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/modules")
+    endif()
 endforeach()
 
 # The same homes for a test binary run by hand (IsolatedHome.cpp runs before main).
