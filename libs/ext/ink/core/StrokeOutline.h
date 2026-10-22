@@ -31,6 +31,8 @@ QPainterPath strokeOutline(const Stroke &stroke);
 /// the live stroke rasterises per tablet event.
 QPainterPath strokeOutline(const Stroke &stroke, size_t firstPoint, size_t lastPoint);
 void paintStroke(QPainter &painter, const Stroke &stroke);
+/// The shape's ink (shapePath, InkTools.h) filled once in the style's colour.
+void paintShape(QPainter &painter, const Shape &shape);
 /// `documentRect` of the document at `zoom`, into an image of
 /// `documentRect.size() * zoom * devicePixelRatio` physical pixels.
 QImage renderStrokes(const std::vector<std::shared_ptr<const Stroke>> &strokes, const QRectF &documentRect, double zoom,

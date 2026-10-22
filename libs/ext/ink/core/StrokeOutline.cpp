@@ -5,6 +5,8 @@
 
 #include <QPainter>
 
+#include "InkTools.h"
+
 namespace noteAppC::ink {
 
 namespace {
@@ -91,6 +93,13 @@ void paintStroke(QPainter &painter, const Stroke &stroke)
     painter.setPen(Qt::NoPen);
     painter.setBrush(stroke.style.color);
     painter.drawPath(strokeOutline(stroke));
+}
+
+void paintShape(QPainter &painter, const Shape &shape)
+{
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(shape.style.color);
+    painter.drawPath(shapePath(shape));
 }
 
 QImage renderStrokes(const std::vector<std::shared_ptr<const Stroke>> &strokes, const QRectF &documentRect, double zoom,

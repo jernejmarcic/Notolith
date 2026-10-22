@@ -8,8 +8,10 @@
 #include <QFileInfo>
 #include <QtConcurrent>
 #include <QLabel>
+#include <QMenu>
 #include <QScrollBar>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include "Settings.h"
@@ -64,11 +66,36 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     connect(m_splitAction, &QAction::triggered, this, [this](bool on) {
         m_canvas->setEraserMode(on ? InkCanvas::EraserMode::Split : InkCanvas::EraserMode::Stroke);
     });
+    m_shapeAction = tools->addAction(tr("Shape")); // a tool like the others, with a menu of its four kinds
+    m_shapeAction->setObjectName(QStringLiteral("inkShapeAction"));
+    m_shapeAction->setCheckable(true);
+    m_shapeAction->setToolTip(tr("Draw a line, arrow, rectangle or ellipse by dragging (S; Shift+S for the next kind)"));
+    connect(m_shapeAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Shape); });
+    auto *shapeMenu = new QMenu(this);
+    auto *shapeKinds = new QActionGroup(this);
+    const struct { const char *name, *label; ShapeKind kind; } kinds[] = {
+        {"inkShapeLineAction", QT_TR_NOOP("Line"), ShapeKind::Line}, {"inkShapeArrowAction", QT_TR_NOOP("Arrow"), ShapeKind::Arrow},
+        {"inkShapeRectAction", QT_TR_NOOP("Rectangle"), ShapeKind::Rect}, {"inkShapeEllipseAction", QT_TR_NOOP("Ellipse"), ShapeKind::Ellipse}};
+    for (size_t i = 0; i < std::size(kinds); ++i) {
+        QAction *a = shapeKinds->addAction(tr(kinds[i].label));
+        a->setObjectName(QLatin1String(kinds[i].name));
+        a->setCheckable(true);
+        a->setChecked(kinds[i].kind == m_canvas->shapeKind());
+        connect(a, &QAction::triggered, this, [this, kind = kinds[i].kind] {
+            m_canvas->setShapeKind(kind);
+            m_canvas->setTool(InkCanvas::Tool::Shape); // one click is enough: choosing a kind also picks the tool
+        });
+        shapeMenu->addAction(a);
+        m_shapeKindActions[i] = a;
+    }
+    m_shapeAction->setMenu(shapeMenu);
     m_undoAction = new QAction(tr("Undo"), this);
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
     connect(m_redoAction, &QAction::triggered, m_canvas, &InkCanvas::redo);
-    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction, m_selectAction, m_selectRectAction});
+    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction, m_selectAction, m_selectRectAction, m_shapeAction});
+    if (auto *button = qobject_cast<QToolButton *>(m_toolBar->widgetForAction(m_shapeAction)))
+        button->setPopupMode(QToolButton::MenuButtonPopup); // the face picks the tool, the arrow opens the kinds
     m_toolBar->addSeparator();
     m_toolBar->addActions({m_undoAction, m_redoAction});
     auto *readOnlyLabel = new QLabel(tr("Read-only: written by a newer Notolith"));
@@ -94,9 +121,15 @@ InkView::InkView(const Settings *settings, QWidget *parent)
 
     connect(m_canvas, &InkCanvas::documentEdited, this, &InkView::onEdited);
     connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P and E (R14) move the toolbar too
-        m_penAction->setChecked(tool != InkCanvas::Tool::Eraser && tool != InkCanvas::Tool::Lasso);
+        m_penAction->setChecked(tool == InkCanvas::Tool::Pen || tool == InkCanvas::Tool::Text); // Text draws like the pen until Task 15
         m_eraserAction->setChecked(tool == InkCanvas::Tool::Eraser);
         m_selectAction->setChecked(tool == InkCanvas::Tool::Lasso);
+        m_shapeAction->setChecked(tool == InkCanvas::Tool::Shape);
+    });
+    connect(m_canvas, &InkCanvas::shapeKindChanged, this, [this](ShapeKind kind) { // Shift+S moves the menu too
+        const ShapeKind order[] = {ShapeKind::Line, ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse};
+        for (size_t i = 0; i < std::size(order); ++i)
+            m_shapeKindActions[i]->setChecked(order[i] == kind);
     });
     connect(m_canvas, &InkCanvas::selectShapeChanged, this, [this](InkCanvas::SelectShape shape) { // Shift+L moves the toolbar too
         m_selectRectAction->setChecked(shape == InkCanvas::SelectShape::Rect);
@@ -187,6 +220,7 @@ bool InkView::load(const QString &path, QString *error)
                     m_splitAction->setEnabled(false);
                     m_selectAction->setEnabled(false);
                     m_selectRectAction->setEnabled(false);
+                    m_shapeAction->setEnabled(false);
                     m_errorLabel->setText(parsed.result.error);
                     m_errorAction->setVisible(true);
                 } else {
@@ -228,6 +262,7 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
     m_splitAction->setEnabled(!m_readOnly);
     m_selectAction->setEnabled(!m_readOnly);
     m_selectRectAction->setEnabled(!m_readOnly);
+    m_shapeAction->setEnabled(!m_readOnly);
     m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);

@@ -2,11 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 #include <QJsonArray>
 #include <QLineF>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainterPathStroker>
 #include <QPolygonF>
 
 #include "InkFormat.h"
@@ -98,14 +100,77 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
                     });
                 }
             }
-        } else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
-            hit = region.contains(item->bounds().center()); // ponytail: a real per-kind hit test comes with Tasks 14-15 (carry N5)
+        } else if (item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
+            hit = region.contains(item->bounds().center()); // ponytail: a real per-kind hit test comes with Task 15 (carry N5)
+        } else if (item->type == Item::Type::Shape) {
+            // Its ink: a lasso inside a rectangle that touches no edge selects nothing. ponytail: one stroker run per
+            // candidate shape (those whose box meets the region's box), a large drawing of shapes under one lasso is the ceiling.
+            hit = shapePath(*item->shape).intersects(region);
         }
         if (hit)
             out.push_back(t);
     }
     std::sort(out.begin(), out.end()); // the grid's order is not the document's
     return out;
+}
+
+/// The arrow's head: two barbs, each this angle (radians) off the line, running back from the tip.
+constexpr double kArrowHeadHalfAngle = std::numbers::pi / 6.0;
+
+QPainterPath shapePath(const Shape &shape)
+{
+    const std::vector<QPointF> &pts = shape.points;
+    const double width = std::fabs(shape.style.width); // as a stroke: a negative width counts as its absolute value
+    if (pts.size() < 2 || !(width > 0.0))             // NaN fails the comparison too
+        return QPainterPath();
+    for (const QPointF &p : pts)
+        if (!std::isfinite(p.x()) || !std::isfinite(p.y()))
+            return QPainterPath();
+    const double w = std::min(width, kMaxOutlineWidth);
+    QPainterPath centre;
+    switch (shape.kind) {
+    case ShapeKind::Line:
+    case ShapeKind::Arrow: {
+        centre.moveTo(pts[0]);
+        centre.lineTo(pts[1]);
+        const QPointF d = pts[1] - pts[0];
+        const double length = std::hypot(d.x(), d.y());
+        if (shape.kind == ShapeKind::Arrow && length > 0.0) { // an open head: barb, tip, barb
+            const QPointF back = -d / length * (kArrowHeadLengthInWidths * w);
+            const auto turned = [&back](double angle) {
+                return QPointF(back.x() * std::cos(angle) - back.y() * std::sin(angle), back.x() * std::sin(angle) + back.y() * std::cos(angle));
+            };
+            centre.moveTo(pts[1] + turned(kArrowHeadHalfAngle));
+            centre.lineTo(pts[1]);
+            centre.lineTo(pts[1] + turned(-kArrowHeadHalfAngle));
+        }
+        break;
+    }
+    case ShapeKind::Rect:
+        centre.addRect(QRectF(pts[0], pts[1]).normalized());
+        break;
+    case ShapeKind::Ellipse:
+        centre.addEllipse(QRectF(pts[0], pts[1]).normalized());
+        break;
+    case ShapeKind::Polyline:
+    case ShapeKind::Polygon:
+        centre.moveTo(pts[0]);
+        for (size_t i = 1; i < pts.size(); ++i)
+            centre.lineTo(pts[i]);
+        if (shape.kind == ShapeKind::Polygon)
+            centre.closeSubpath();
+        break;
+    }
+    QPainterPathStroker stroker;
+    stroker.setWidth(w);
+    stroker.setCapStyle(Qt::RoundCap);
+    stroker.setJoinStyle(Qt::RoundJoin);
+    QPainterPath outline = stroker.createStroke(centre);
+    outline.setFillRule(Qt::WindingFill);
+    for (int i = 0; i < outline.elementCount(); ++i) // a path that holds a non-finite element would garble the fill
+        if (!std::isfinite(outline.elementAt(i).x) || !std::isfinite(outline.elementAt(i).y))
+            return QPainterPath();
+    return outline;
 }
 
 // Ported from Rnote (rnote-engine/src/strokes/stroke.rs, Stroke::scale / Stroke::translate and

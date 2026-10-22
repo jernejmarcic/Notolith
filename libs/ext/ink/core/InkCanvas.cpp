@@ -9,6 +9,7 @@
 #include <QGestureEvent>
 #include <QKeyEvent>
 #include <QLinearGradient>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -183,7 +184,8 @@ Geometry geometryOf(const InkDocument &document, double zoom) { return {document
 
 /// What a tile job paints, copied on the UI thread: shared stroke payloads and the bounds of the rest, never the document.
 struct TileItem {
-    std::shared_ptr<const Stroke> stroke; ///< null: a shape, text box or image (a placeholder until Tasks 14-15)
+    std::shared_ptr<const Stroke> stroke; ///< both null: a text box or image (a placeholder until Task 15)
+    std::shared_ptr<const Shape> shape;   ///< pure data like a stroke: painted in the job (R5: geometry only)
     QRectF bounds;
 };
 
@@ -223,6 +225,8 @@ QImage renderTile(const TileSpec &spec)
         for (const TileItem &item : it->second) {
             if (item.stroke)
                 paintStroke(painter, *item.stroke);
+            else if (item.shape)
+                paintShape(painter, *item.shape);
             else
                 painter.fillRect(item.bounds, QColor(0, 0, 0, 12));
         }
@@ -305,6 +309,7 @@ void InkCanvas::documentReplaced()
     finishStroke(false); // the stroke in flight belongs to the document that went away
     setSelection({});    // its items are gone (an undo, a load) or must be picked again
     m_live = QImage();
+    m_holdShape.reset();
     m_tiles.invalidateAll(); // the content (or its place in the widget) changed: the images stay as the blurry stand-in
     resize(sizeHint());
     updateGeometry();
@@ -347,6 +352,14 @@ void InkCanvas::setEraserMode(EraserMode mode)
     emit eraserModeChanged(m_eraserMode);
 }
 
+void InkCanvas::setShapeKind(ShapeKind kind)
+{
+    if (kind == m_shapeKind || kind == ShapeKind::Polyline || kind == ShapeKind::Polygon) // no tool draws the last two
+        return;
+    m_shapeKind = kind;
+    emit shapeKindChanged(m_shapeKind);
+}
+
 void InkCanvas::setSelectShape(SelectShape shape)
 {
     if (shape == m_selectShape)
@@ -358,6 +371,8 @@ void InkCanvas::setTool(Tool tool)
 {
     if (tool == m_tool)
         return;
+    if (m_drawing == Drawing::Shape)
+        finishStroke(false); // a shape drag belongs to the Shape tool
     m_tool = tool;
     clearSelection(); // the selection belongs to the select tool
     emit toolChanged(m_tool);
@@ -534,14 +549,20 @@ void InkCanvas::keyPressEvent(QKeyEvent *event)
         paste();
     } else if (event->key() == Qt::Key_Delete && event->modifiers() == Qt::NoModifier) {
         deleteSelection();
-    } else if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier && (isSelectGesture() || !m_selection.empty())) {
-        if (isSelectGesture())
+    } else if (event->key() == Qt::Key_Escape && event->modifiers() == Qt::NoModifier &&
+               (isSelectGesture() || m_drawing == Drawing::Shape || !m_selection.empty())) {
+        if (isSelectGesture() || m_drawing == Drawing::Shape)
             finishStroke(false); // the first Escape cancels the drag in flight and keeps the selection, the next one clears it
         else
             clearSelection();
     } else if (event->key() == Qt::Key_L && event->modifiers() == Qt::ShiftModifier) {
         setTool(Tool::Lasso); // R14: lasso or rectangle without a toolbar or a pen button
         setSelectShape(m_selectShape == SelectShape::Rect ? SelectShape::Lasso : SelectShape::Rect);
+    } else if (event->key() == Qt::Key_S && event->modifiers() == Qt::ShiftModifier) {
+        setTool(Tool::Shape); // R14: line, arrow, rectangle, ellipse without a toolbar or a pen button
+        static constexpr ShapeKind kinds[] = {ShapeKind::Line, ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse};
+        const auto at = std::find(std::begin(kinds), std::end(kinds), m_shapeKind);
+        setShapeKind(kinds[(at - std::begin(kinds) + 1) % std::size(kinds)]);
     } else if (event->key() == Qt::Key_E && event->modifiers() == Qt::ShiftModifier) {
         setTool(Tool::Eraser); // R14: the whole/parts switch without a toolbar or a pen button
         setEraserMode(m_eraserMode == EraserMode::Split ? EraserMode::Stroke : EraserMode::Split);
@@ -580,6 +601,7 @@ void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double second
         finishStroke(true); // a press without the release: close the old stroke where IT ended, not at this press
     setFocus(Qt::MouseFocusReason);
     m_holdLive = false;
+    m_holdShape.reset();
     m_lastPos = widgetPos;
     m_lastPressure = pressure;
     m_lastSeconds = seconds;
@@ -593,6 +615,12 @@ void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double second
         m_erasedSomething = false;
         m_lastErase = toDocument(widgetPos);
         eraseSweep(m_lastErase, m_lastErase);
+        return;
+    }
+    if (m_tool == Tool::Shape) {
+        const QPointF at = toDocument(widgetPos);
+        m_drawing = Drawing::Shape;
+        m_shapeDraft = Shape{m_shapeKind, m_penStyle, {at, at}};
         return;
     }
     m_drawing = Drawing::Pen;
@@ -614,6 +642,10 @@ void InkCanvas::moveTo(const QPointF &widgetPos, double pressure, double seconds
     }
     if (m_drawing == Drawing::Select) {
         updateLasso(toDocument(widgetPos));
+        return;
+    }
+    if (m_drawing == Drawing::Shape) {
+        updateShape(toDocument(widgetPos));
         return;
     }
     if (m_drawing == Drawing::Move || m_drawing == Drawing::Scale) {
@@ -638,6 +670,8 @@ void InkCanvas::releaseAt(const QPointF &widgetPos, double seconds)
         m_lastErase = now;
     } else if (m_drawing == Drawing::Select) {
         updateLasso(toDocument(widgetPos));
+    } else if (m_drawing == Drawing::Shape) {
+        updateShape(toDocument(widgetPos));
     } else if (m_drawing == Drawing::Move || m_drawing == Drawing::Scale) {
         dragSelection(toDocument(widgetPos));
     }
@@ -657,6 +691,10 @@ void InkCanvas::finishStroke(bool keep)
         return;
     if (mode == Drawing::Select || mode == Drawing::Move || mode == Drawing::Scale) {
         finishSelect(mode, keep);
+        return;
+    }
+    if (mode == Drawing::Shape) {
+        finishShape(keep);
         return;
     }
     if (mode == Drawing::Eraser) {
@@ -739,6 +777,46 @@ void InkCanvas::rasteriseNewSegments()
     update(widgetRect(dirty));
 }
 
+// --- shapes -----------------------------------------------------------------------------
+
+QRect InkCanvas::shapePaintRect() const { return widgetRect(m_shapeDraft.bounds()); }
+
+void InkCanvas::updateShape(const QPointF &documentPos)
+{
+    const QRect old = shapePaintRect();
+    m_shapeDraft.points[1] = documentPos;
+    update(old | shapePaintRect());
+}
+
+/// The drag ends: keep = true commits the shape as one history step (a tap, which is no shape, commits nothing),
+/// keep = false drops it. The shape stays painted over the tiles until the ones under it show it (m_holdShape).
+void InkCanvas::finishShape(bool keep)
+{
+    const QRect paint = shapePaintRect();
+    auto shape = std::make_shared<Shape>(std::exchange(m_shapeDraft, Shape{}));
+    if (keep && shape->points.size() == 2 && QLineF(toWidget(shape->points[0]), toWidget(shape->points[1])).length() >= kMinShapeDragPx &&
+        !shapePath(*shape).isEmpty()) {
+        Item item;
+        item.type = Item::Type::Shape;
+        item.layer = Layer::User;
+        item.shape = shape;
+        m_document.addItem(std::move(item));
+        const bool grew = m_document.growToContain(shape->bounds());
+        finishEdit();
+        invalidateTiles(shape->bounds());
+        if (grew)
+            documentReplaced(); // the page grew: resize the widget (m_drawing is None, nothing to cancel)
+        m_holdShape = shape;
+        m_holdRect = widgetRect(shape->bounds());
+    }
+    update(paint | m_holdRect);
+}
+
+void InkCanvas::paintShapeOver(QPainter &painter, const Shape &shape)
+{
+    geometryOf(m_document, m_zoom).forEachPage(painter, widgetRect(shape.bounds()), [&](const QRectF &, int) { paintShape(painter, shape); });
+}
+
 /// The eraser is the segment a-b swept by half its width (document px): a fast pen skips no
 /// stroke between two samples. Candidates come from the spatial grid; a stroke is tested on its
 /// polyline, never by building its outline.
@@ -747,18 +825,27 @@ void InkCanvas::eraseSweep(const QPointF &a, const QPointF &b)
     const double r = m_eraserWidth * 0.5;
     const QRectF area = QRectF(a, b).normalized().adjusted(-r, -r, r, r);
     QRectF dirty;
-    QPainterPath eraser; // built on the first stroke that needs it, Split mode only
+    QPainterPath eraser; // built on the first item that needs it: a shape, or a stroke in Split mode
+    const auto capsule = [&]() -> const QPainterPath & {
+        if (eraser.isEmpty())
+            eraser = eraserCapsule(a, b, r);
+        return eraser;
+    };
     for (qint64 t : m_document.itemsIntersecting(area)) {
         const Item *item = m_document.item(t);
         if (!item)
             continue;
         const bool isStroke = item->type == Item::Type::Stroke;
-        if (isStroke ? !eraserTouches(*item->stroke, a, b, r) : !item->bounds().intersects(area))
+        if (isStroke) {
+            if (!eraserTouches(*item->stroke, a, b, r))
+                continue;
+        } else if (!item->bounds().intersects(area)) {
             continue;
+        } else if (item->type == Item::Type::Shape && !shapePath(*item->shape).intersects(capsule())) {
+            continue; // the ink only: the hollow inside a rectangle is not the rectangle. A hit shape goes whole in either mode (Split cuts strokes only)
+        }
         if (isStroke && m_eraserMode == EraserMode::Split) {
-            if (eraser.isEmpty())
-                eraser = eraserCapsule(a, b, r);
-            const SplitResult split = splitStroke(*item->stroke, eraser);
+            const SplitResult split = splitStroke(*item->stroke, capsule());
             if (!split.hit)
                 continue; // the polyline test is a little generous: the outline did not meet the eraser
             const QRectF oldBounds = item->bounds();
@@ -858,8 +945,9 @@ void InkCanvas::onTileReady(int tx, int ty)
 {
     const double side = TileCache::kTileSize / m_tiles.devicePixelRatio() * m_zoom / m_tilesZoom;
     update(QRectF(tx * side, ty * side, side, side).toAlignedRect());
-    if (m_holdLive && tilesFresh(m_holdRect)) {
+    if ((m_holdLive || m_holdShape) && tilesFresh(m_holdRect)) {
         m_holdLive = false;
+        m_holdShape.reset();
         update(m_holdRect);
     }
 }
@@ -873,9 +961,11 @@ std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
         auto &items = spec.items[s.page];
         for (const Item *item : m_document.paintOrder(s.exposed.adjusted(-4, -4, 4, 4))) {
             if (item->type == Item::Type::Stroke)
-                items.push_back({item->stroke, item->bounds()});
-            else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image)
-                items.push_back({nullptr, item->bounds()});
+                items.push_back({item->stroke, nullptr, item->bounds()});
+            else if (item->type == Item::Type::Shape)
+                items.push_back({nullptr, item->shape, item->bounds()});
+            else if (item->type == Item::Type::TextBox || item->type == Item::Type::Image)
+                items.push_back({nullptr, nullptr, item->bounds()});
         }
     }
     return [spec = std::move(spec), hook = m_tileJobHook] {
@@ -1002,6 +1092,10 @@ void InkCanvas::paintEvent(QPaintEvent *event)
         }
         painter.setRenderHint(QPainter::Antialiasing, true);
     }
+    if (m_drawing == Drawing::Shape)
+        paintShapeOver(painter, m_shapeDraft);
+    else if (m_holdShape)
+        paintShapeOver(painter, *m_holdShape);
     paintSelection(painter);
     if ((m_drawing == Drawing::Pen || m_holdLive) && !m_live.isNull()) {
         const QRect target = event->rect() & m_liveRect;

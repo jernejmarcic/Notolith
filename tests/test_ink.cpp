@@ -4383,6 +4383,344 @@ TEST(InkCanvasTest, AnEdgeHandleResizesOneAxisOnly)
     EXPECT_NEAR(now.height(), box.height(), 2.0) << "only x was stretched (the width grows a little with it)";
 }
 
+// --- Task 14: shapes ----------------------------------------------------------------------------------------
+
+namespace {
+
+Shape makeShape(ShapeKind kind, std::vector<QPointF> points, double width = 4.0)
+{
+    Shape shape;
+    shape.kind = kind;
+    shape.style.width = width;
+    shape.points = std::move(points);
+    return shape;
+}
+
+qint64 addShape(InkDocument &doc, const Shape &shape)
+{
+    Item item;
+    item.type = Item::Type::Shape;
+    item.shape = std::make_shared<Shape>(shape);
+    return doc.addItem(item);
+}
+
+} // namespace
+
+TEST(InkToolsTest, ShapePathsHaveTheRightTopology)
+{
+    // A line: the segment grown by half the width, round caps.
+    const Shape lineShape = makeShape(ShapeKind::Line, {{10, 20}, {110, 20}}, 6.0);
+    const QPainterPath line = shapePath(lineShape);
+    const QRectF box = line.boundingRect();
+    const QRectF padded = lineShape.bounds();
+    EXPECT_NEAR(box.left(), padded.left(), 0.3);
+    EXPECT_NEAR(box.right(), padded.right(), 0.3);
+    EXPECT_NEAR(box.top(), padded.top(), 0.3);
+    EXPECT_NEAR(box.bottom(), padded.bottom(), 0.3);
+    EXPECT_TRUE(line.contains(QPointF(60, 20)));
+    EXPECT_TRUE(line.contains(QPointF(60, 22.5)));
+    EXPECT_FALSE(line.contains(QPointF(60, 24))) << "half the width is 3";
+    EXPECT_TRUE(line.contains(QPointF(8, 20))) << "a round cap reaches 3 px past the end";
+    EXPECT_FALSE(line.contains(QPointF(6.5, 20)));
+
+    // A rectangle: its outline, never its inside; the corners are round.
+    const QPainterPath rect = shapePath(makeShape(ShapeKind::Rect, {{20, 20}, {120, 80}}));
+    EXPECT_TRUE(rect.contains(QPointF(70, 21.5))) << "an edge point";
+    EXPECT_TRUE(rect.contains(QPointF(120, 50)));
+    EXPECT_FALSE(rect.contains(QPointF(70, 50))) << "not the centre: no fill in v1";
+    EXPECT_FALSE(rect.contains(QPointF(70, 23.5)));
+    EXPECT_FALSE(rect.contains(QPointF(121.6, 81.6))) << "a round join, not a mitre";
+    const QPainterPath flipped = shapePath(makeShape(ShapeKind::Rect, {{120, 80}, {20, 20}}));
+    EXPECT_TRUE(flipped.contains(QPointF(70, 21.5))) << "the corners may come in any order";
+    EXPECT_FALSE(flipped.contains(QPointF(70, 50)));
+
+    // An ellipse: likewise.
+    const QPainterPath ellipse = shapePath(makeShape(ShapeKind::Ellipse, {{20, 20}, {120, 80}}));
+    EXPECT_TRUE(ellipse.contains(QPointF(20, 50)));
+    EXPECT_TRUE(ellipse.contains(QPointF(70, 20)));
+    EXPECT_TRUE(ellipse.contains(QPointF(70, 80)));
+    EXPECT_FALSE(ellipse.contains(QPointF(70, 50)));
+    EXPECT_FALSE(ellipse.contains(QPointF(22, 22)));
+
+    // An imported polygon is closed, a polyline is not.
+    const std::vector<QPointF> triangle = {{0, 0}, {100, 0}, {50, 80}};
+    const QPainterPath polygon = shapePath(makeShape(ShapeKind::Polygon, triangle));
+    const QPainterPath polyline = shapePath(makeShape(ShapeKind::Polyline, triangle));
+    EXPECT_TRUE(polygon.contains(QPointF(25, 40))) << "the closing edge from the last point back to the first";
+    EXPECT_FALSE(polyline.contains(QPointF(25, 40)));
+    EXPECT_TRUE(polyline.contains(QPointF(75, 40)));
+    EXPECT_TRUE(polygon.contains(QPointF(75, 40)));
+    EXPECT_FALSE(polygon.contains(QPointF(50, 25))) << "the inside is not inked";
+
+    // An arrow is its line plus an open head at the end, inside the padding Shape::bounds promises.
+    const Shape arrowShape = makeShape(ShapeKind::Arrow, {{10, 20}, {110, 20}});
+    const QPainterPath arrow = shapePath(arrowShape);
+    const QPainterPath plain = shapePath(makeShape(ShapeKind::Line, {{10, 20}, {110, 20}}));
+    const QPointF barb(104.8, 17.0); // half way along the upper barb (30 degrees back from the tip, 3 widths long)
+    EXPECT_TRUE(arrow.contains(barb));
+    EXPECT_FALSE(plain.contains(barb));
+    EXPECT_TRUE(arrow.contains(QPointF(104.8, 23.0))) << "and the lower one";
+    EXPECT_TRUE(arrow.contains(QPointF(108, 20))) << "where the shaft and both barbs overlap, the ink does not cancel out";
+    EXPECT_TRUE(arrowShape.bounds().adjusted(-0.01, -0.01, 0.01, 0.01).contains(arrow.boundingRect()));
+    EXPECT_GT(arrow.boundingRect().height(), plain.boundingRect().height() + 6.0);
+}
+
+TEST(InkToolsTest, AShapeWithNoInkHasAnEmptyPath)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Line, {{1, 1}})).isEmpty()) << "one point";
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Rect, {})).isEmpty());
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Line, {{0, 0}, {nan, 5}})).isEmpty());
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Polygon, {{0, 0}, {10, 0}, {5, std::numeric_limits<double>::infinity()}})).isEmpty());
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Ellipse, {{0, 0}, {10, 10}}, 0.0)).isEmpty()) << "no width, no ink";
+    EXPECT_TRUE(shapePath(makeShape(ShapeKind::Ellipse, {{0, 0}, {10, 10}}, nan)).isEmpty());
+    const QPainterPath huge = shapePath(makeShape(ShapeKind::Line, {{0, 0}, {10, 0}}, std::numeric_limits<double>::infinity()));
+    EXPECT_TRUE(huge.isEmpty() || pathIsFinite(huge)) << "an infinite width is clamped, never an overflow";
+    EXPECT_FALSE(shapePath(makeShape(ShapeKind::Line, {{0, 0}, {10, 0}}, -4.0)).isEmpty()) << "a negative width counts as its absolute value (strokes do)";
+}
+
+TEST(InkToolsTest, ARegionSelectsAShapeByItsOutlineNotByTheCentreOfItsBounds)
+{
+    InkDocument doc;
+    const qint64 rect = addShape(doc, makeShape(ShapeKind::Rect, {{20, 20}, {220, 120}}));
+    QPainterPath inside;
+    inside.addRect(QRectF(100, 60, 40, 20)); // holds the centre of the bounds (120, 70), touches no ink
+    EXPECT_TRUE(selectItems(doc, inside).empty()) << "the hollow inside of a rectangle is not the rectangle";
+    QPainterPath crossing;
+    crossing.addRect(QRectF(100, 10, 40, 20)); // over the top edge, nowhere near the centre
+    EXPECT_EQ(selectItems(doc, crossing), std::vector<qint64>{rect});
+    QPainterPath around;
+    around.addRect(QRectF(0, 0, 300, 200));
+    EXPECT_EQ(selectItems(doc, around), std::vector<qint64>{rect}) << "enclosing it selects it";
+    QPainterPath elsewhere;
+    elsewhere.addRect(QRectF(300, 0, 40, 40));
+    EXPECT_TRUE(selectItems(doc, elsewhere).empty());
+    EXPECT_EQ(selectItems(doc, polygonPath(QPolygonF({{10, 100}, {40, 100}, {25, 140}}))), std::vector<qint64>{rect}) << "a lasso over the left edge";
+}
+
+TEST(StrokeOutlineTest, ShapesMatchTheGoldenImage)
+{
+    const std::vector<Shape> shapes = {
+        makeShape(ShapeKind::Line, {{20, 30}, {130, 60}}, 6.0),
+        [] { Shape s = makeShape(ShapeKind::Arrow, {{160, 40}, {280, 40}}, 4.0); s.style.color = QColor(0xc0, 0x00, 0x00); return s; }(),
+        [] { Shape s = makeShape(ShapeKind::Rect, {{20, 90}, {130, 180}}, 3.0); s.style.color = QColor(0x00, 0x50, 0xc0); return s; }(),
+        [] { Shape s = makeShape(ShapeKind::Ellipse, {{160, 90}, {280, 180}}, 8.0); s.style.color = QColor(0x00, 0xa0, 0x40, 0x80); return s; }(),
+    };
+    QImage image(300, 200, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::white);
+    std::vector<QRect> regions;
+    {
+        QPainter painter(&image);
+        painter.setRenderHint(QPainter::Antialiasing);
+        for (const Shape &shape : shapes) {
+            paintShape(painter, shape);
+            regions.push_back(shape.bounds().adjusted(-2, -2, 2, 2).toAlignedRect());
+        }
+    }
+    checkGolden(QStringLiteral("shapes-z1-d1.png"), image, regions);
+}
+
+TEST(InkCanvasTest, DragDrawsARectAndEscapeCancelsTheDrag)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 3.0; s.color = QColor(0x20, 0x40, 0x80); return s; }());
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    f.canvas.setShapeKind(ShapeKind::Rect);
+    ASSERT_EQ(f.canvas.shapeKind(), ShapeKind::Rect);
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    penDrag(&f.canvas, {{50, 60}, {150, 100}, {200, 140}}, 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const Item &item = f.canvas.document().items()[0];
+    ASSERT_EQ(item.type, Item::Type::Shape);
+    EXPECT_EQ(item.shape->kind, ShapeKind::Rect);
+    EXPECT_EQ(item.layer, Layer::User);
+    ASSERT_EQ(item.shape->points.size(), 2u);
+    EXPECT_NEAR(item.shape->points[0].x(), 50.0, 1e-6);
+    EXPECT_NEAR(item.shape->points[0].y(), 60.0, 1e-6);
+    EXPECT_NEAR(item.shape->points[1].x(), 200.0, 1e-6) << "the last sample, not the middle one";
+    EXPECT_NEAR(item.shape->points[1].y(), 140.0, 1e-6);
+    EXPECT_DOUBLE_EQ(item.shape->style.width, 3.0);
+    EXPECT_EQ(item.shape->style.color, QColor(0x20, 0x40, 0x80));
+    EXPECT_FALSE(f.canvas.isDrawing());
+    EXPECT_EQ(edited.count(), 1) << "one drag, one history step";
+    // A second drag, cancelled by Escape, adds nothing.
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(60, 200), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(120, 250), 0.5, 2005);
+    EXPECT_TRUE(f.canvas.isDrawing());
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(300, 280), 0.5, 2010);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(300, 280), 0.5, 2015, Qt::NoButton);
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    EXPECT_EQ(edited.count(), 1);
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "no step for the cancelled drag: undo takes the rectangle itself back";
+}
+
+TEST(InkCanvasTest, EveryShapeKindDrawsAndPolylineAndPolygonAreRefused)
+{
+    CanvasFixture f;
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    int y = 30;
+    for (const ShapeKind kind : {ShapeKind::Line, ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse}) {
+        f.canvas.setShapeKind(kind);
+        EXPECT_EQ(f.canvas.shapeKind(), kind);
+        penDrag(&f.canvas, {{40, double(y)}, {160, double(y + 20)}}, 1000 + y);
+        y += 50;
+    }
+    ASSERT_EQ(f.canvas.document().items().size(), 4u);
+    const ShapeKind kinds[] = {ShapeKind::Line, ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse};
+    for (size_t i = 0; i < 4; ++i) {
+        ASSERT_EQ(f.canvas.document().items()[i].type, Item::Type::Shape);
+        EXPECT_EQ(f.canvas.document().items()[i].shape->kind, kinds[i]);
+        EXPECT_EQ(f.canvas.document().items()[i].shape->points.size(), 2u);
+    }
+    QSignalSpy changed(&f.canvas, &InkCanvas::shapeKindChanged);
+    f.canvas.setShapeKind(ShapeKind::Polygon);
+    f.canvas.setShapeKind(ShapeKind::Polyline);
+    EXPECT_EQ(f.canvas.shapeKind(), ShapeKind::Ellipse) << "no tool draws these";
+    f.canvas.setShapeKind(ShapeKind::Ellipse);
+    EXPECT_EQ(changed.count(), 0) << "no change, no signal";
+    f.canvas.setShapeKind(ShapeKind::Line);
+    EXPECT_EQ(changed.count(), 1);
+}
+
+TEST(InkCanvasTest, AClickWithoutADragCommitsNoShape)
+{
+    CanvasFixture f;
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    penDrag(&f.canvas, {{100, 100}, {100, 100}}, 1000);
+    penDrag(&f.canvas, {{100, 100}, {101, 100}}, 2000);
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "a shape needs a drag of a few px";
+    EXPECT_FALSE(f.canvas.document().isModified());
+    f.canvas.setShapeKind(ShapeKind::Rect);
+    penDrag(&f.canvas, {{100, 100}, {100, 150}}, 3000); // a box with no width: a vertical drag is still a drag
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+}
+
+TEST(InkCanvasTest, TheShapeIsPreviewedWhileTheDragIsInFlightAndPaintedByTheTilesAfterwards)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 6.0; s.color = Qt::black; return s; }());
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    f.canvas.setShapeKind(ShapeKind::Rect);
+    settledGrab(f.canvas);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(50, 60), 0.5, 1000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(250, 200), 0.5, 1005);
+    const QImage mid = f.canvas.grab().toImage();
+    EXPECT_LT(qGray(mid.pixel(150, 60)), 100) << "the top edge, from the preview";
+    EXPECT_LT(qGray(mid.pixel(250, 130)), 100) << "the right edge";
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "nothing is committed until the release";
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(150, 120), 0.5, 1010); // shrinks: the old edges must go
+    const QImage shrunk = f.canvas.grab().toImage();
+    EXPECT_GT(qGray(shrunk.pixel(250, 130)), 150) << "the preview moved with the pointer";
+    EXPECT_LT(qGray(shrunk.pixel(100, 120)), 100) << "the new bottom edge";
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(250, 200), 0.5, 1015);
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(250, 200), 0.5, 1020, Qt::NoButton);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const QImage done = settledGrab(f.canvas);
+    EXPECT_LT(qGray(done.pixel(150, 60)), 100) << "the tiles paint the committed rectangle (not a grey placeholder)";
+    EXPECT_LT(qGray(done.pixel(50, 130)), 100);
+    EXPECT_LT(qGray(done.pixel(150, 200)), 100);
+    EXPECT_GT(qGray(done.pixel(150, 130)), 180) << "and its inside stays empty";
+    f.canvas.setShapeKind(ShapeKind::Ellipse);
+    penDrag(&f.canvas, {{280, 60}, {380, 200}}, 2000);
+    const QImage two = settledGrab(f.canvas);
+    EXPECT_LT(qGray(two.pixel(281, 130)), 100) << "the ellipse's left extreme";
+    EXPECT_GT(qGray(two.pixel(284, 64)), 180) << "and not its box corner";
+}
+
+TEST(InkCanvasTest, ACommittedShapeStaysOnScreenUntilItsTilesArrive)
+{
+    CanvasFixture f;
+    f.canvas.setPenStyle([] { StrokeStyle s; s.width = 6.0; s.color = Qt::black; return s; }());
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    f.canvas.setShapeKind(ShapeKind::Line);
+    settledGrab(f.canvas);
+    penDrag(&f.canvas, {{50, 100}, {250, 100}}, 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    ASSERT_GT(f.canvas.staleTileCount(), 0) << "the tile under the line has not been rendered again yet";
+    EXPECT_LT(qGray(f.canvas.grab().toImage().pixel(150, 100)), 100) << "no frame without the line between the preview and the tile";
+    EXPECT_LT(qGray(settledGrab(f.canvas).pixel(150, 100)), 100);
+    f.canvas.undo();
+    EXPECT_GT(qGray(settledGrab(f.canvas).pixel(150, 100)), 150) << "an undo takes the shape away";
+}
+
+TEST(InkCanvasTest, AToolChangeOrAReadOnlyCanvasCancelsOrIgnoresTheShapeDrag)
+{
+    CanvasFixture f;
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(60, 60), 0.5, 1000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(160, 160), 0.5, 1005);
+    ASSERT_TRUE(f.canvas.isDrawing());
+    QTest::keyClick(&f.canvas, Qt::Key_P);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    tablet(&f.canvas, QEvent::TabletRelease, QPointF(160, 160), 0.5, 1010, Qt::NoButton);
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "the tool change cancelled the drag";
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    f.canvas.setReadOnly(true);
+    penDrag(&f.canvas, {{60, 60}, {160, 160}}, 2000);
+    EXPECT_TRUE(f.canvas.document().items().empty());
+}
+
+TEST(InkCanvasTest, ShiftSCyclesTheShapeKindAndPicksTheShapeTool)
+{
+    CanvasFixture f;
+    QSignalSpy changed(&f.canvas, &InkCanvas::shapeKindChanged);
+    ASSERT_EQ(f.canvas.shapeKind(), ShapeKind::Line);
+    const ShapeKind order[] = {ShapeKind::Arrow, ShapeKind::Rect, ShapeKind::Ellipse, ShapeKind::Line};
+    for (const ShapeKind kind : order) {
+        QTest::keyClick(&f.canvas, Qt::Key_S, Qt::ShiftModifier);
+        EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Shape);
+        EXPECT_EQ(f.canvas.shapeKind(), kind);
+    }
+    EXPECT_EQ(changed.count(), 4);
+    f.canvas.setReadOnly(true);
+    QTest::keyClick(&f.canvas, Qt::Key_S, Qt::ShiftModifier);
+    EXPECT_EQ(f.canvas.shapeKind(), ShapeKind::Line) << "a read-only canvas ignores it";
+}
+
+TEST(InkCanvasTest, TheEraserTakesAShapeOnlyWhereItsOutlineIs)
+{
+    for (const auto mode : {InkCanvas::EraserMode::Stroke, InkCanvas::EraserMode::Split}) {
+        SCOPED_TRACE(int(mode));
+        CanvasFixture f;
+        addShape(f.canvas.document(), makeShape(ShapeKind::Rect, {{50, 50}, {350, 250}}));
+        addShape(f.canvas.document(), makeShape(ShapeKind::Line, {{20, 150}, {380, 150}}, 6.0));
+        f.canvas.document().commit();
+        f.canvas.setEraserMode(mode);
+        f.canvas.setTool(InkCanvas::Tool::Eraser);
+        penStroke(&f.canvas, QPointF(100, 100), QPointF(100, 130), 1000); // inside the rectangle, clear of its edges and the line
+        EXPECT_EQ(f.canvas.document().items().size(), 2u) << "the hollow inside is not the rectangle";
+        penStroke(&f.canvas, QPointF(100, 175), QPointF(100, 215), 2000); // below the line, inside the box: still nothing
+        EXPECT_EQ(f.canvas.document().items().size(), 2u);
+        penStroke(&f.canvas, QPointF(200, 30), QPointF(200, 70), 3000); // over the top edge
+        ASSERT_EQ(f.canvas.document().items().size(), 1u);
+        EXPECT_EQ(f.canvas.document().items()[0].shape->kind, ShapeKind::Line);
+        penStroke(&f.canvas, QPointF(300, 120), QPointF(300, 180), 4000); // across the line
+        EXPECT_TRUE(f.canvas.document().items().empty()) << "taken whole, in the split mode too";
+    }
+}
+
+TEST(InkCanvasTest, ASelectedShapeMovesWithItsPoints)
+{
+    CanvasFixture f;
+    f.canvas.setTool(InkCanvas::Tool::Shape);
+    f.canvas.setShapeKind(ShapeKind::Rect);
+    penDrag(&f.canvas, {{50, 60}, {150, 140}}, 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    f.canvas.setTool(InkCanvas::Tool::Lasso);
+    penDrag(&f.canvas, {{30, 40}, {170, 40}, {170, 160}, {30, 160}, {30, 42}}, 2000);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(140, 130), 3000); // inside the box: a move by (40, 30)
+    ASSERT_EQ(f.canvas.document().items()[0].type, Item::Type::Shape);
+    const Shape &moved = *f.canvas.document().items()[0].shape;
+    EXPECT_NEAR(moved.points[0].x(), 90.0, 1e-6);
+    EXPECT_NEAR(moved.points[0].y(), 90.0, 1e-6);
+    EXPECT_NEAR(moved.points[1].x(), 190.0, 1e-6);
+    EXPECT_EQ(f.canvas.selection().size(), 1u);
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

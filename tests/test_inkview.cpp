@@ -11,6 +11,7 @@
 #include <QDir>
 #include <QFile>
 #include <QLabel>
+#include <QMenu>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -107,6 +108,7 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkShapeAction"))->isEnabled());
     EXPECT_FALSE(view.save(&error));
     EXPECT_EQ(readAll(path), newer);
 }
@@ -466,6 +468,44 @@ TEST(InkViewToolbarTest, SelectAndRectangleSelectAreOnTheToolbarAndOnTheirKeys)
     EXPECT_TRUE(select->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_L, Qt::ShiftModifier);
     EXPECT_TRUE(rect->isChecked());
+}
+
+TEST(InkViewToolbarTest, TheShapeToolIsOnTheToolbarWithAMenuOfFourKindsAndOnItsKeys)
+{
+    InkView view(nullptr);
+    auto *shape = view.findChild<QAction *>(QStringLiteral("inkShapeAction"));
+    ASSERT_NE(shape, nullptr);
+    EXPECT_TRUE(shape->isCheckable());
+    QAction *kinds[4] = {};
+    const char *names[4] = {"inkShapeLineAction", "inkShapeArrowAction", "inkShapeRectAction", "inkShapeEllipseAction"};
+    for (int i = 0; i < 4; ++i) {
+        kinds[i] = view.findChild<QAction *>(QLatin1String(names[i]));
+        ASSERT_NE(kinds[i], nullptr) << names[i];
+        EXPECT_TRUE(kinds[i]->isCheckable());
+    }
+    ASSERT_NE(shape->menu(), nullptr);
+    EXPECT_EQ(shape->menu()->actions().size(), 4);
+    EXPECT_TRUE(kinds[0]->isChecked()) << "a line to begin with";
+    EXPECT_FALSE(shape->isChecked());
+    shape->trigger();
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Shape);
+    EXPECT_TRUE(shape->isChecked());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked()) << "not the pen in disguise";
+    view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->trigger();
+    EXPECT_FALSE(shape->isChecked());
+    kinds[3]->trigger();
+    EXPECT_EQ(view.canvas()->shapeKind(), ShapeKind::Ellipse) << "the menu drives the canvas";
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Shape) << "and one click is enough: it also picks the tool";
+    EXPECT_TRUE(shape->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_S, Qt::ShiftModifier);
+    EXPECT_EQ(view.canvas()->shapeKind(), ShapeKind::Line);
+    EXPECT_TRUE(kinds[0]->isChecked()) << "the key moves the menu too";
+    EXPECT_FALSE(kinds[3]->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_P);
+    EXPECT_FALSE(shape->isChecked());
+    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_S);
+    EXPECT_TRUE(shape->isChecked()) << "S picks the tool, whatever the kind";
 }
 
 int main(int argc, char **argv)

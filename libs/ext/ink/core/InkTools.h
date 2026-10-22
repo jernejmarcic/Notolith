@@ -22,8 +22,9 @@ struct SplitResult {
 /// consecutive untouched segments (two points or more) survives as a new stroke.
 SplitResult splitStroke(const Stroke &stroke, const QPainterPath &eraser);
 
-/// The lasso and rectangle select. A stroke is selected when any of its points lies inside `region` (Rnote); a shape,
-/// text box or image when the centre of its bounds does (a real hit test per kind comes with Tasks 14-15, carry N5).
+/// The lasso and rectangle select. A stroke is selected when any of its points lies inside `region` (Rnote) or a segment
+/// crosses it; a shape when its ink (shapePath) meets `region`; a text box or image when the centre of its bounds lies
+/// inside (a real hit test comes with Task 15, carry N5).
 /// Group and unknown items are never selected: nothing can move them. Returns the `t`s in document order.
 std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &region);
 
@@ -31,6 +32,12 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
 /// a shape's points, a text box's or image's rect (the box of the mapped rect). A stroke's or shape's width scales by the
 /// mean of the transform's x and y scale (Rnote); t, layer and raw stay. A group or unknown item comes back unchanged.
 Item transformItem(const Item &item, const QTransform &transform);
+
+/// A shape's ink as one filled outline (the stroke of its centreline at `style.width`, round caps and joins): Line and
+/// Arrow a segment (an Arrow adds an open head of kArrowHeadLengthInWidths widths at the end), Rect and Ellipse the
+/// outline of the box of their two corners (never filled), Polyline an open and Polygon a closed run of the points.
+/// Empty for a shape that has no ink: too few points, a non-finite point or no width. Paint it and hit-test with it.
+QPainterPath shapePath(const Shape &shape);
 
 /// The clipboard format (MIME kClipboardMime): `{"format":"notolith-ink-clip","items":[...]}`, each item written
 /// exactly as in a .ink file, so style and unknown keys survive a copy and paste.

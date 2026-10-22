@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <map>
+#include <memory>
 #include <vector>
 
 #include "InkDocument.h"
@@ -60,6 +61,11 @@ public:
     /// off: a glyph cell has no selection and uses the barrel click to save.
     bool isHeldLassoEnabled() const { return m_heldLassoEnabled; }
     void setHeldLassoEnabled(bool on) { m_heldLassoEnabled = on; }
+    /// What the Shape tool draws: Line, Arrow, Rect or Ellipse (a Polyline or Polygon is refused: no tool draws them).
+    ShapeKind shapeKind() const { return m_shapeKind; }
+    void setShapeKind(ShapeKind kind);
+    /// A drag of less than this many widget px commits no shape: a tap is not a line.
+    static constexpr double kMinShapeDragPx = 3.0;
     bool drawWithMouse() const { return m_drawWithMouse; }
     void setDrawWithMouse(bool on) { m_drawWithMouse = on; }
     void setRawInput(bool raw) { m_input.setRawInput(raw); }
@@ -119,6 +125,7 @@ signals:
     void eraserModeChanged(EraserMode mode);
     void selectShapeChanged(SelectShape shape);
     void selectionChanged();
+    void shapeKindChanged(ShapeKind kind);
     void learnedPressureChanged(const QString &device, double max);
     void zoomChanged(double zoom);
     void panRequested(QPoint deltaWidgetPx);
@@ -139,8 +146,12 @@ protected:
     void changeEvent(QEvent *event) override;
 
 private:
-    enum class Drawing { None, Pen, Eraser, Select, Move, Scale };
+    enum class Drawing { None, Pen, Eraser, Select, Move, Scale, Shape };
     void pressAt(const QPointF &widgetPos, double pressure, double seconds, bool erase, bool select = false);
+    void updateShape(const QPointF &documentPos);
+    void finishShape(bool keep);
+    QRect shapePaintRect() const; ///< widget px: the shape in flight
+    void paintShapeOver(QPainter &painter, const Shape &shape); ///< the shape in flight, or the one held until its tiles arrive
     void pressSelect(const QPointF &widgetPos);
     void finishSelect(Drawing mode, bool keep);
     void dragSelection(const QPointF &documentPos);
@@ -191,6 +202,8 @@ private:
     QPointF m_lastErase;         ///< document px: the previous eraser sample, the other end of the swept segment
     QRectF m_lastPrediction;     ///< document px: the predicted tail as last painted; repainted when it moves and at pen-up
     bool m_erasedSomething = false;
+    ShapeKind m_shapeKind = ShapeKind::Line;
+    Shape m_shapeDraft;          ///< the shape being dragged out: two points, the pen style
     SelectShape m_selectShape = SelectShape::Lasso;
     bool m_heldLassoEnabled = true;
     std::vector<qint64> m_selection;
@@ -214,6 +227,7 @@ private:
     double m_ghostScale = 0;     ///< the zoom before the last settle: images rendered at it are still painted, scaled, until replaced
     std::function<void()> m_tileJobHook;
     bool m_holdLive = false;     ///< after pen-up the live image stays until the tiles under the stroke have it too
+    std::shared_ptr<const Shape> m_holdShape; ///< a committed shape stays painted over the tiles until the ones under it have it too
     QRect m_holdRect;            ///< widget px
 };
 
