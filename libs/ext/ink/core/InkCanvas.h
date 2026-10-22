@@ -8,6 +8,8 @@
 #include "InkDocument.h"
 #include "InkInput.h"
 
+class QPainter;
+
 namespace noteAppC::ink {
 
 /// The drawing surface (spec section 7, Canvas): a plain QWidget sized to the
@@ -40,8 +42,11 @@ public:
     void setDrawWithMouse(bool on) { m_drawWithMouse = on; }
     void setRawInput(bool raw) { m_input.setRawInput(raw); }
 
-    QPointF toDocument(const QPointF &widgetPos) const { return widgetPos / m_zoom; }
-    QPointF toWidget(const QPointF &documentPos) const { return documentPos * m_zoom; }
+    /// Widget px <-> document px. The widget starts at the extent's top-left (an Infinite extent may sit at
+    /// negative document coordinates), and in ContinuousVertical every page after the first is pushed down
+    /// by kPageGap: a widget point in a gap maps to the bottom edge of the page above.
+    QPointF toDocument(const QPointF &widgetPos) const;
+    QPointF toWidget(const QPointF &documentPos) const;
     QSize sizeHint() const override;
     bool isDrawing() const { return m_drawing != Drawing::None; }
     QSize liveOverlaySize() const { return m_live.size(); } ///< device px; a test hook for the overlay bound (I4)
@@ -67,6 +72,9 @@ signals:
     void learnedPressureChanged(const QString &device, double max);
     void zoomChanged(double zoom);
     void panRequested(QPoint deltaWidgetPx);
+    /// The extent grew left or up (Infinite): the content moved this far (widget px) right and down inside the
+    /// widget. The scroll area's owner adds it to the scroll position so the view stays on the same ink.
+    void originShifted(QPoint deltaWidgetPx);
 
 protected:
     void tabletEvent(QTabletEvent *event) override;
@@ -91,6 +99,14 @@ private:
     void eraseSweep(const QPointF &fromDocumentPos, const QPointF &toDocumentPos);
     void finishEdit();
     QRect widgetRect(const QRectF &documentRect) const;
+    double pageGap() const; ///< document px between pages: kPageGap in ContinuousVertical, else 0
+    QRect pageWidgetRect(int index) const; ///< widget px of page `index` (ContinuousVertical)
+    std::pair<int, int> visiblePages(const QRect &area) const; ///< first and last page the widget-px `area` touches
+    /// Calls draw(documentRect) once per page the widget-px `area` touches, with the painter (already in widget
+    /// px) set up so document coordinates draw in place, clipped to that page in ContinuousVertical. Ink that
+    /// crosses a page break is therefore cut by the gap, not smeared over it.
+    template <typename Draw>
+    void forEachPage(QPainter &painter, const QRect &area, Draw draw) const;
     PressureNormaliser &normaliserFor(const QString &device);
 
     InkDocument m_document;

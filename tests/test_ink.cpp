@@ -2250,6 +2250,280 @@ TEST(InkCanvasTest, ReplacingTheSameDocumentMidEraseBringsTheUncommittedRemovalB
     EXPECT_NEAR(f.canvas.document().items()[0].stroke->points.front().y, 50.0, 1.0);
 }
 
+// --- Task 9: page layouts -------------------------------------------------------
+
+namespace {
+
+/// An Infinite canvas whose extent starts left of and above the origin: widget (0, 0) is document (-200, -150).
+struct InfiniteFixture {
+    InkCanvas canvas;
+    InfiniteFixture()
+    {
+        DocumentSettings settings;
+        settings.format = {400, 300, 96};
+        settings.layout = LayoutKind::Infinite;
+        settings.extent = QRectF(-200, -150, 400, 300);
+        canvas.document().setSettings(settings);
+        canvas.document().markSaved();
+        canvas.documentReplaced();
+        canvas.resize(canvas.sizeHint());
+        canvas.show();
+        if (!QTest::qWaitForWindowExposed(&canvas))
+            ADD_FAILURE() << "the canvas was never exposed";
+    }
+};
+
+} // namespace
+
+TEST(InkLayoutTest, SemiInfiniteGrowsRightAndDownOnly)
+{
+    InkDocument doc;
+    DocumentSettings s;
+    s.layout = LayoutKind::SemiInfinite;
+    s.format = {100, 100, 96};
+    s.extent = QRectF(0, 0, 100, 100);
+    ASSERT_TRUE(doc.setSettings(s));
+    EXPECT_TRUE(doc.growToContain(QRectF(150, 20, 10, 10)));
+    EXPECT_GE(doc.settings().extent.right(), 160 + 100) << "a page width of margin past the ink";
+    EXPECT_EQ(doc.settings().extent.left(), 0);
+    EXPECT_EQ(doc.settings().extent.bottom(), 100) << "ink inside the height does not grow it";
+    EXPECT_FALSE(doc.growToContain(QRectF(-50, -50, 10, 10))) << "never left or up";
+    EXPECT_EQ(doc.settings().extent.left(), 0);
+    EXPECT_EQ(doc.settings().extent.top(), 0);
+    EXPECT_TRUE(doc.growToContain(QRectF(20, 150, 10, 10)));
+    EXPECT_GE(doc.settings().extent.bottom(), 160 + 100) << "a page height of margin below the ink";
+    EXPECT_EQ(doc.pageCount(), 1);
+}
+
+TEST(InkLayoutTest, InfiniteGrowsEveryWay)
+{
+    InkDocument doc;
+    DocumentSettings s;
+    s.layout = LayoutKind::Infinite;
+    s.format = {100, 100, 96};
+    s.extent = QRectF(0, 0, 100, 100);
+    ASSERT_TRUE(doc.setSettings(s));
+    EXPECT_TRUE(doc.growToContain(QRectF(-50, -50, 10, 10)));
+    EXPECT_LE(doc.settings().extent.left(), -150);
+    EXPECT_LE(doc.settings().extent.top(), -150);
+    EXPECT_EQ(doc.settings().extent.right(), 100) << "ink inside the right and bottom edges does not grow them";
+    EXPECT_EQ(doc.settings().extent.bottom(), 100);
+    EXPECT_TRUE(doc.growToContain(QRectF(250, 300, 10, 10)));
+    EXPECT_GE(doc.settings().extent.right(), 260 + 100);
+    EXPECT_GE(doc.settings().extent.bottom(), 310 + 100);
+    EXPECT_FALSE(doc.growToContain(QRectF(0, 0, 10, 10))) << "ink already inside changes nothing";
+    EXPECT_EQ(doc.pageCount(), 1) << "one sheet however far it grows";
+    EXPECT_EQ(doc.pageRect(0), doc.settings().extent);
+    EXPECT_TRUE(doc.settings().isUsable());
+}
+
+TEST(InkLayoutTest, TheInfiniteLayoutsRefuseHostileBoundsAndTheSameCapAsPages)
+{
+    for (LayoutKind layout : {LayoutKind::SemiInfinite, LayoutKind::Infinite}) {
+        InkDocument doc;
+        DocumentSettings s;
+        s.layout = layout;
+        s.format = {100, 100, 96};
+        s.extent = QRectF(0, 0, 100, 100);
+        ASSERT_TRUE(doc.setSettings(s));
+        const double inf = std::numeric_limits<double>::infinity();
+        EXPECT_FALSE(doc.growToContain(QRectF(0, 0, inf, 10)));
+        EXPECT_FALSE(doc.growToContain(QRectF(0, 0, 10, inf)));
+        EXPECT_FALSE(doc.growToContain(QRectF(1e15, 0, 1, 1))) << "past kMaxPages sheets wide";
+        EXPECT_FALSE(doc.growToContain(QRectF(0, 1e15, 1, 1)));
+        EXPECT_FALSE(doc.growToContain(QRectF(0, 0, 0, 0))) << "an empty rect";
+        EXPECT_EQ(doc.settings().extent, QRectF(0, 0, 100, 100));
+        EXPECT_TRUE(doc.growToContain(QRectF(0, 1e6, 1, 1))) << "a million px is 10 000 sheets: inside the cap";
+    }
+    InkDocument doc;
+    DocumentSettings s;
+    s.layout = LayoutKind::Infinite;
+    s.format = {100, 100, 96};
+    s.extent = QRectF(0, 0, 100, 100);
+    ASSERT_TRUE(doc.setSettings(s));
+    EXPECT_FALSE(doc.growToContain(QRectF(-1e15, -1e15, 1, 1)));
+    EXPECT_EQ(doc.settings().extent, QRectF(0, 0, 100, 100));
+}
+
+TEST(InkLayoutTest, CanvasAccountsForPageGapsInContinuousVertical)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400); // two pages
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    EXPECT_EQ(canvas.sizeHint(), QSize(100, 400 + int(InkDocument::kPageGap)));
+    EXPECT_EQ(canvas.toWidget(QPointF(10, 210)), QPointF(10, 210 + InkDocument::kPageGap));
+    EXPECT_EQ(canvas.toDocument(QPointF(10, 210 + InkDocument::kPageGap)), QPointF(10, 210));
+    EXPECT_EQ(canvas.toDocument(QPointF(10, 205)), QPointF(10, 200)) << "in the gap: the page above's bottom edge";
+    EXPECT_EQ(canvas.toDocument(QPointF(10, 199)), QPointF(10, 199));
+    EXPECT_EQ(canvas.toDocument(QPointF(10, 216)), QPointF(10, 200)) << "the top edge of page two";
+    canvas.setZoom(2.0);
+    EXPECT_EQ(canvas.sizeHint(), QSize(200, 2 * (400 + int(InkDocument::kPageGap))));
+    EXPECT_EQ(canvas.toWidget(QPointF(10, 210)), QPointF(20, 2 * (210 + InkDocument::kPageGap)));
+    EXPECT_EQ(canvas.toDocument(QPointF(20, 2 * (210 + InkDocument::kPageGap))), QPointF(10, 210));
+}
+
+TEST(InkLayoutTest, GapPixelsBelowAPageCarryTheShadow)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    const QImage shot = canvas.grab().toImage();
+    const QColor window = canvas.palette().color(QPalette::Window);
+    const int gapTop = 200;                              // the first page's bottom edge, widget px at zoom 1
+    const int gapBottom = 200 + int(InkDocument::kPageGap) - 1;
+    EXPECT_EQ(shot.pixelColor(50, gapBottom), window) << "the far side of the gap is the plain window colour";
+    EXPECT_LT(shot.pixelColor(50, gapTop + 1).lightness(), window.lightness()) << "the shadow darkens the gap just under the page";
+    EXPECT_LE(shot.pixelColor(50, gapTop + 1).lightness(), shot.pixelColor(50, gapTop + 3).lightness())
+        << "and fades with distance";
+    EXPECT_EQ(shot.pixelColor(50, 100), s.background.color) << "the page itself is the background colour";
+    EXPECT_EQ(shot.pixelColor(50, 300 + int(InkDocument::kPageGap)), s.background.color) << "so is the second page";
+    EXPECT_EQ(shot.pixelColor(0, 100).rgb(), canvas.palette().color(QPalette::Mid).rgb()) << "with a 1 px border";
+}
+
+TEST(InkLayoutTest, InkAcrossAPageBreakIsCutByTheGapAndLandsInDocumentCoordinates)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    StrokeStyle style;
+    style.width = 6.0;
+    style.color = QColor(0, 0, 0);
+    canvas.setPenStyle(style);
+    penStroke(&canvas, QPointF(50, 150), QPointF(50, 290), 1000); // widget px: page one, the gap, page two
+    ASSERT_EQ(canvas.document().items().size(), 1u);
+    const Stroke &stroke = *canvas.document().items()[0].stroke;
+    EXPECT_NEAR(stroke.points.front().y, 150.0, 1.0);
+    EXPECT_NEAR(stroke.points.back().y, 290.0 - InkDocument::kPageGap, 1.0) << "stored without the gap";
+    const QImage shot = canvas.grab().toImage();
+    const QColor window = canvas.palette().color(QPalette::Window);
+    EXPECT_LT(shot.pixelColor(50, 180).lightness(), 60) << "ink on page one";
+    EXPECT_LT(shot.pixelColor(50, 260).lightness(), 60) << "ink on page two";
+    EXPECT_GE(shot.pixelColor(50, 208).lightness(), window.lightness() - 40) << "the gap is not inked over";
+    EXPECT_EQ(shot.pixelColor(50, 200 + int(InkDocument::kPageGap) - 1), window);
+}
+
+TEST(InkLayoutTest, TheLiveOverlayFollowsThePageGaps)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    StrokeStyle style;
+    style.width = 6.0;
+    style.color = QColor(0, 0, 0);
+    canvas.setPenStyle(style);
+    tablet(&canvas, QEvent::TabletPress, QPointF(50, 150), 0.5, 1000);
+    for (int i = 1; i <= 14; ++i)
+        tablet(&canvas, QEvent::TabletMove, QPointF(50, 150 + 10 * i), 0.5, 1000 + 5 * i);
+    ASSERT_TRUE(canvas.isDrawing());
+    const QImage shot = canvas.grab().toImage(); // mid-stroke: the overlay paints it
+    EXPECT_LT(shot.pixelColor(50, 180).lightness(), 60) << "live ink on page one";
+    EXPECT_LT(shot.pixelColor(50, 235).lightness(), 60) << "live ink on page two (the smoothed stroke trails the pen)";
+    EXPECT_GT(shot.pixelColor(50, 208).lightness(), 60) << "none in the gap";
+    tablet(&canvas, QEvent::TabletRelease, QPointF(50, 290), 0.5, 1100, Qt::NoButton);
+}
+
+TEST(InkLayoutTest, TheInfiniteCanvasMapsANegativeExtentOrigin)
+{
+    InfiniteFixture f;
+    EXPECT_EQ(f.canvas.sizeHint(), QSize(400, 300)) << "no gaps outside continuous vertical";
+    EXPECT_EQ(f.canvas.toWidget(QPointF(-200, -150)), QPointF(0, 0));
+    EXPECT_EQ(f.canvas.toWidget(QPointF(0, 0)), QPointF(200, 150));
+    EXPECT_EQ(f.canvas.toDocument(QPointF(0, 0)), QPointF(-200, -150));
+    EXPECT_EQ(f.canvas.toDocument(QPointF(250, 200)), QPointF(50, 50));
+    f.canvas.setZoom(2.0);
+    EXPECT_EQ(f.canvas.sizeHint(), QSize(800, 600));
+    EXPECT_EQ(f.canvas.toWidget(QPointF(-100, -50)), QPointF(200, 200));
+    EXPECT_EQ(f.canvas.toDocument(QPointF(200, 200)), QPointF(-100, -50));
+}
+
+TEST(InkLayoutTest, InkInTheNegativeQuadrantIsDrawnFoundErasedAndSaved)
+{
+    InfiniteFixture f;
+    StrokeStyle style;
+    style.width = 4.0;
+    style.color = QColor(0, 0, 0);
+    f.canvas.setPenStyle(style);
+    penStroke(&f.canvas, QPointF(40, 40), QPointF(160, 40), 1000); // document (-160, -110) to (-40, -110)
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const Stroke &stroke = *f.canvas.document().items()[0].stroke;
+    EXPECT_NEAR(stroke.points.front().x, -160.0, 1.0);
+    EXPECT_NEAR(stroke.points.front().y, -110.0, 1.0);
+    EXPECT_EQ(f.canvas.document().itemsIntersecting(QRectF(-100, -112, 4, 4)).size(), 1u) << "the grid finds ink at negative coordinates";
+    EXPECT_LT(f.canvas.grab().toImage().pixelColor(100, 40).lightness(), 60) << "painted where the pen was";
+
+    // The file keeps the negative extent and the negative points.
+    InkDocument loaded;
+    const InkReadResult read = readInk(writeInk(f.canvas.document()), loaded);
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    EXPECT_EQ(loaded.settings().extent, f.canvas.document().settings().extent);
+    EXPECT_EQ(loaded.settings().layout, LayoutKind::Infinite);
+    ASSERT_EQ(loaded.items().size(), 1u);
+    EXPECT_NEAR(loaded.items()[0].stroke->points.front().x, stroke.points.front().x, 0.001);
+    EXPECT_EQ(loaded.itemsIntersecting(QRectF(-100, -112, 4, 4)).size(), 1u);
+
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(100, 20), QPointF(100, 60), 2000);
+    EXPECT_EQ(f.canvas.document().items().size(), 0u) << "the eraser reaches ink at negative coordinates";
+}
+
+TEST(InkLayoutTest, AFileWithANegativeExtentRoundTripsAndStaysUsable)
+{
+    InkDocument doc;
+    DocumentSettings s;
+    s.layout = LayoutKind::Infinite;
+    s.format = {400, 300, 96};
+    s.extent = QRectF(-1234.5, -678.25, 3000, 2000);
+    ASSERT_TRUE(doc.setSettings(s));
+    doc.addStroke(line(-1000, -600, -900, -500));
+    doc.commit();
+    InkDocument back;
+    const InkReadResult read = readInk(writeInk(doc), back);
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    EXPECT_EQ(back.settings().extent, s.extent);
+    EXPECT_EQ(back.settings().layout, LayoutKind::Infinite);
+    EXPECT_EQ(back.pageCount(), 1);
+}
+
+TEST(InkLayoutTest, GrowingLeftOrUpTellsTheOwnerHowFarTheContentMoved)
+{
+    InfiniteFixture f;
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = QColor(0, 0, 0);
+    f.canvas.setPenStyle(style);
+    QSignalSpy shifted(&f.canvas, &InkCanvas::originShifted);
+    const QRectF before = f.canvas.document().settings().extent;
+    penStroke(&f.canvas, QPointF(2, 100), QPointF(60, 100), 1000); // the ink pokes out past the left edge
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const QRectF after = f.canvas.document().settings().extent;
+    EXPECT_LT(after.left(), before.left());
+    EXPECT_EQ(after.top(), before.top()) << "only the left grew";
+    ASSERT_EQ(shifted.count(), 1);
+    EXPECT_EQ(shifted.first().first().toPoint(), QPoint(int(std::lround(before.left() - after.left())), 0));
+    EXPECT_EQ(f.canvas.size(), f.canvas.sizeHint()) << "the widget grew with the extent";
+    EXPECT_EQ(f.canvas.toWidget(QPointF(before.left(), before.top())).x(), before.left() - after.left())
+        << "old content sits further right by exactly that";
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

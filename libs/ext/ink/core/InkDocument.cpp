@@ -175,8 +175,14 @@ void InkDocument::reindex()
         m_grid.insert(item.t, item.bounds());
 }
 
+namespace {
+bool isSheetLayout(LayoutKind layout) { return layout == LayoutKind::SemiInfinite || layout == LayoutKind::Infinite; }
+} // namespace
+
 int InkDocument::pageCount() const
 {
+    if (isSheetLayout(m_settings.layout))
+        return 1; // one sheet, however far it has grown
     const double h = m_settings.format.height;
     if (!(h > 0))
         return 1;
@@ -185,16 +191,46 @@ int InkDocument::pageCount() const
 
 QRectF InkDocument::pageRect(int index) const
 {
+    if (isSheetLayout(m_settings.layout))
+        return m_settings.extent;
     return QRectF(m_settings.extent.x(), m_settings.extent.y() + index * m_settings.format.height,
                   m_settings.format.width, m_settings.format.height);
 }
 
 bool InkDocument::growToContain(const QRectF &bounds)
 {
+    const double w = m_settings.format.width;
     const double h = m_settings.format.height;
-    // Fixed never grows; SemiInfinite and Infinite come with Track S1 Task 9. A page without height
-    // cannot be grown by whole pages (pageCount() reads it as one page, so growth does too), and a
-    // bottom that is not finite or would take more than kMaxPages is refused: file data cannot make this loop.
+    if (isSheetLayout(m_settings.layout)) {
+        // One sheet that grows when ink pokes out of it: to the ink plus a page of room, so the pen can keep
+        // going. SemiInfinite never grows left or up; Infinite does. Hostile numbers are refused like in the
+        // paged layout: nothing non-finite, and no side more than kMaxPages pages long.
+        const QRectF e = m_settings.extent;
+        if (!bounds.isValid() || !(w > 0) || !(h > 0) || !std::isfinite(bounds.left()) || !std::isfinite(bounds.top())
+            || !std::isfinite(bounds.right()) || !std::isfinite(bounds.bottom()))
+            return false;
+        double left = e.left(), top = e.top(), right = e.right(), bottom = e.bottom();
+        if (bounds.right() > right)
+            right = bounds.right() + w;
+        if (bounds.bottom() > bottom)
+            bottom = bounds.bottom() + h;
+        if (m_settings.layout == LayoutKind::Infinite) {
+            if (bounds.left() < left)
+                left = bounds.left() - w;
+            if (bounds.top() < top)
+                top = bounds.top() - h;
+        }
+        if (left == e.left() && top == e.top() && right == e.right() && bottom == e.bottom())
+            return false;
+        if (!(right - left <= kMaxPages * w) || !(bottom - top <= kMaxPages * h))
+            return false;
+        m_settings.extent = QRectF(QPointF(left, top), QPointF(right, bottom));
+        touch();
+        return true;
+    }
+    // Fixed never grows. A page without height cannot be grown by whole pages (pageCount() reads it as one
+    // page, so growth does too), and a bottom that is not finite or would take more than kMaxPages is
+    // refused: file data cannot make this loop.
     if (m_settings.layout != LayoutKind::ContinuousVertical || !bounds.isValid() || !(h > 0) || !std::isfinite(bounds.bottom()))
         return false;
     if (!(bounds.bottom() > m_settings.extent.bottom()))

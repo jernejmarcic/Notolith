@@ -16,6 +16,7 @@ namespace noteAppC::ink {
 class InkDocument {
 public:
     static constexpr int kHistoryCap = 100;
+    static constexpr double kPageGap = 16.0; ///< ContinuousVertical: widget-space gap between pages (scaled by the zoom, never part of document coordinates)
     static constexpr int kMaxPages = 100000; ///< growToContain refuses past this; pageCount() clamps to it
 
     InkDocument();

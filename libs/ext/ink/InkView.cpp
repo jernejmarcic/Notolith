@@ -64,6 +64,10 @@ InkView::InkView(const Settings *settings, QWidget *parent)
         m_area->horizontalScrollBar()->setValue(m_area->horizontalScrollBar()->value() - delta.x());
         m_area->verticalScrollBar()->setValue(m_area->verticalScrollBar()->value() - delta.y());
     });
+    connect(m_canvas, &InkCanvas::originShifted, this, [this](QPoint delta) { // the Infinite sheet grew left or up: stay on the same ink
+        m_area->horizontalScrollBar()->setValue(m_area->horizontalScrollBar()->value() + delta.x());
+        m_area->verticalScrollBar()->setValue(m_area->verticalScrollBar()->value() + delta.y());
+    });
     if (m_settings)
         applySettings(*m_settings); // the window calls applySettings() again after every change
     onEdited();

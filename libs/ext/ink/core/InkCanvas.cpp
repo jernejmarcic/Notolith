@@ -7,6 +7,7 @@
 #include <QFocusEvent>
 #include <QGestureEvent>
 #include <QKeyEvent>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -20,6 +21,7 @@ namespace noteAppC::ink {
 
 namespace {
 
+constexpr int kShadowDepth = 4;       ///< widget px: the shadow under a page in ContinuousVertical
 constexpr int kMaxOverlaySide = 8192; ///< widget px: the live overlay never grows past this, whatever the widget's size
 
 double cross(const QPointF &o, const QPointF &p, const QPointF &q)
@@ -82,7 +84,80 @@ InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
 QSize InkCanvas::sizeHint() const
 {
     const QRectF extent = m_document.settings().extent;
-    return QSize(int(std::ceil(extent.width() * m_zoom)), int(std::ceil(extent.height() * m_zoom)));
+    const double height = extent.height() + (m_document.pageCount() - 1) * pageGap();
+    // A QWidget cannot be larger than QWIDGETSIZE_MAX; the clamp also keeps the int conversion defined for a hostile extent.
+    const auto px = [this](double documentPx) { return int(std::min(std::ceil(documentPx * m_zoom), double(QWIDGETSIZE_MAX))); };
+    return QSize(px(extent.width()), px(height));
+}
+
+double InkCanvas::pageGap() const
+{
+    return m_document.settings().layout == LayoutKind::ContinuousVertical ? InkDocument::kPageGap : 0.0;
+}
+
+QPointF InkCanvas::toWidget(const QPointF &documentPos) const
+{
+    const DocumentSettings &s = m_document.settings();
+    const double y = documentPos.y() - s.extent.y();
+    const double gap = pageGap();
+    const double pagesAbove = gap > 0 && s.format.height > 0 ? std::floor(y / s.format.height) : 0.0;
+    return QPointF((documentPos.x() - s.extent.x()) * m_zoom, (y + pagesAbove * gap) * m_zoom);
+}
+
+QPointF InkCanvas::toDocument(const QPointF &widgetPos) const
+{
+    const DocumentSettings &s = m_document.settings();
+    double y = widgetPos.y() / m_zoom;
+    const double gap = pageGap();
+    const double h = s.format.height;
+    if (gap > 0 && h > 0) {
+        const double stride = h + gap;
+        const double page = std::floor(y / stride);
+        y = page * h + std::clamp(y - page * stride, 0.0, h); // inside a gap: the page above's bottom edge
+    }
+    return QPointF(widgetPos.x() / m_zoom + s.extent.x(), y + s.extent.y());
+}
+
+QRect InkCanvas::pageWidgetRect(int index) const
+{
+    const double h = m_document.settings().format.height;
+    const double top = index * (h + pageGap());
+    const int topPx = qRound(top * m_zoom);
+    const int bottom = std::min(qRound((top + h) * m_zoom), sizeHint().height()); // the last page may be cut by the extent
+    return QRect(0, topPx, sizeHint().width(), bottom - topPx);
+}
+
+std::pair<int, int> InkCanvas::visiblePages(const QRect &area) const
+{
+    const double stride = (m_document.settings().format.height + pageGap()) * m_zoom;
+    const int last = m_document.pageCount() - 1;
+    if (pageGap() <= 0 || !(stride > 0))
+        return {0, 0};
+    return {std::clamp(int(std::floor(area.top() / stride)), 0, last), std::clamp(int(std::floor(area.bottom() / stride)), 0, last)};
+}
+
+template <typename Draw>
+void InkCanvas::forEachPage(QPainter &painter, const QRect &area, Draw draw) const
+{
+    const QRectF extent = m_document.settings().extent;
+    const double gap = pageGap();
+    const auto [first, last] = visiblePages(area);
+    for (int i = first; i <= last; ++i) {
+        QRect shown = area;
+        if (gap > 0) {
+            shown = area & pageWidgetRect(i);
+            if (shown.isEmpty())
+                continue;
+        }
+        painter.save();
+        if (gap > 0)
+            painter.setClipRect(pageWidgetRect(i), Qt::IntersectClip);
+        painter.scale(m_zoom, m_zoom);
+        painter.translate(-extent.x(), -extent.y() + i * gap);
+        draw(QRectF(shown.x() / m_zoom + extent.x(), shown.y() / m_zoom - i * gap + extent.y(), shown.width() / m_zoom,
+                    shown.height() / m_zoom));
+        painter.restore();
+    }
 }
 
 void InkCanvas::documentReplaced()
@@ -110,7 +185,7 @@ void InkCanvas::setZoom(double zoom)
 
 QRect InkCanvas::widgetRect(const QRectF &documentRect) const
 {
-    return QRectF(documentRect.topLeft() * m_zoom, documentRect.size() * m_zoom).toAlignedRect().adjusted(-2, -2, 2, 2);
+    return QRectF(toWidget(documentRect.topLeft()), toWidget(documentRect.bottomRight())).toAlignedRect().adjusted(-2, -2, 2, 2);
 }
 
 void InkCanvas::setTool(Tool tool)
@@ -387,10 +462,16 @@ void InkCanvas::finishStroke(bool keep)
         // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote (Spec 2).
         // A highlighter tool does nothing over handwriting (spec section 2), so none exists here.
         m_document.addStroke(stroke, Layer::User);
+        const QPointF originBefore = m_document.settings().extent.topLeft();
         const bool grew = m_document.growToContain(stroke->bounds());
         finishEdit();
-        if (grew)
+        if (grew) {
             documentReplaced(); // the page grew: resize the widget (m_drawing is None, nothing to cancel)
+            // An Infinite extent that grew left or up moved every item right and down inside the widget.
+            const QPointF moved = (originBefore - m_document.settings().extent.topLeft()) * m_zoom;
+            if (!moved.isNull())
+                emit originShifted(QPoint(qRound(moved.x()), qRound(moved.y())));
+        }
         update(widgetRect(stroke->bounds() | tail));
     } else {
         update();
@@ -433,10 +514,9 @@ void InkCanvas::rasteriseNewSegments()
     QPainter painter(&m_live);
     painter.setRenderHint(QPainter::Antialiasing);
     painter.translate(-m_liveRect.topLeft());
-    painter.scale(m_zoom, m_zoom);
     painter.setPen(Qt::NoPen);
     painter.setBrush(stroke.style.color);
-    painter.drawPath(path);
+    forEachPage(painter, widgetRect(path.boundingRect()), [&](const QRectF &) { painter.drawPath(path); });
     painter.end();
     m_liveDirty |= widgetRect(path.boundingRect());
     QRectF tail; // the predicted tail's box: repainted now, and again where it was when it moves
@@ -500,32 +580,56 @@ void InkCanvas::paintEvent(QPaintEvent *event)
 {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.fillRect(event->rect(), m_document.settings().background.color);
+    const QColor background = m_document.settings().background.color;
+    const bool paged = pageGap() > 0;
+    // ContinuousVertical: the window colour shows in the gaps between pages. The other layouts are one sheet.
+    painter.fillRect(event->rect(), paged ? palette().color(QPalette::Window) : background);
+    const auto [firstPage, lastPage] = visiblePages(event->rect());
+    if (paged)
+        for (int i = firstPage; i <= lastPage; ++i)
+            painter.fillRect(pageWidgetRect(i) & event->rect(), background);
     // Track S1 Task 10 paints the page pattern here; Task 11 replaces the
     // item loop with the tile cache. In A0 the exposed rect's items are
     // painted straight from the document.
-    painter.save();
-    painter.scale(m_zoom, m_zoom);
-    const QRectF exposed(QPointF(event->rect().topLeft()) / m_zoom, QSizeF(event->rect().size()) / m_zoom);
-    for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
-        if (item->type == Item::Type::Stroke)
-            paintStroke(painter, *item->stroke);
-        else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image)
-            painter.fillRect(item->bounds(), QColor(0, 0, 0, 12)); // placeholder until Tasks 14-15 draw them
-    }
-    if (m_drawing == Drawing::Pen) {
-        const auto &prediction = m_input.prediction();
-        if (!prediction.empty()) {
-            Stroke tail;
-            tail.style = m_input.stroke().style;
-            tail.points.push_back(m_input.stroke().points.back());
-            tail.points.insert(tail.points.end(), prediction.begin(), prediction.end());
-            painter.setOpacity(0.6);
-            paintStroke(painter, tail);
-            painter.setOpacity(1.0);
+    forEachPage(painter, event->rect(), [&](const QRectF &exposed) {
+        for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
+            if (item->type == Item::Type::Stroke)
+                paintStroke(painter, *item->stroke);
+            else if (item->type == Item::Type::Shape || item->type == Item::Type::TextBox || item->type == Item::Type::Image)
+                painter.fillRect(item->bounds(), QColor(0, 0, 0, 12)); // placeholder until Tasks 14-15 draw them
         }
+        if (m_drawing == Drawing::Pen) {
+            const auto &prediction = m_input.prediction();
+            if (!prediction.empty()) {
+                Stroke tail;
+                tail.style = m_input.stroke().style;
+                tail.points.push_back(m_input.stroke().points.back());
+                tail.points.insert(tail.points.end(), prediction.begin(), prediction.end());
+                painter.setOpacity(0.6);
+                paintStroke(painter, tail);
+                painter.setOpacity(1.0);
+            }
+        }
+    });
+    if (paged) {
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        const int pages = m_document.pageCount();
+        for (int i = firstPage; i <= lastPage; ++i) {
+            const QRect page = pageWidgetRect(i);
+            painter.setPen(palette().color(QPalette::Mid));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(page.adjusted(0, 0, -1, -1));
+            if (i + 1 < pages) { // the shadow falls into the gap below the page, fading over 4 px
+                const int gapTop = page.bottom() + 1;
+                const int depth = std::min(kShadowDepth, pageWidgetRect(i + 1).top() - gapTop);
+                QLinearGradient shadow(0, gapTop, 0, gapTop + kShadowDepth);
+                shadow.setColorAt(0, QColor(0, 0, 0, 40));
+                shadow.setColorAt(1, QColor(0, 0, 0, 0));
+                painter.fillRect(QRect(page.left(), gapTop, page.width(), depth) & event->rect(), shadow);
+            }
+        }
+        painter.setRenderHint(QPainter::Antialiasing, true);
     }
-    painter.restore();
     if (m_drawing == Drawing::Pen && !m_live.isNull()) {
         const QRect target = event->rect() & m_liveRect;
         const qreal dpr = m_live.devicePixelRatio();
