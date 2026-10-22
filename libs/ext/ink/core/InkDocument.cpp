@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace noteAppC::ink {
 
@@ -13,10 +14,15 @@ void InkDocument::setSettings(const DocumentSettings &settings)
     touch();
 }
 
-std::vector<Item>::iterator InkDocument::find(qint64 t)
+std::vector<Item>::const_iterator InkDocument::find(qint64 t) const
 {
     auto it = std::lower_bound(m_items.begin(), m_items.end(), t, [](const Item &item, qint64 value) { return item.t < value; });
     return it != m_items.end() && it->t == t ? it : m_items.end();
+}
+
+std::vector<Item>::iterator InkDocument::find(qint64 t)
+{
+    return m_items.begin() + (std::as_const(*this).find(t) - m_items.cbegin());
 }
 
 qint64 InkDocument::addStroke(std::shared_ptr<const Stroke> stroke, Layer layer)
@@ -63,7 +69,7 @@ bool InkDocument::replaceItem(qint64 t, Item item)
 
 const Item *InkDocument::item(qint64 t) const
 {
-    auto it = const_cast<InkDocument *>(this)->find(t);
+    auto it = find(t);
     return it == m_items.end() ? nullptr : &*it;
 }
 
@@ -99,7 +105,7 @@ void InkDocument::commit()
 {
     if (m_revision == m_committed.revision)
         return;
-    m_undo.push_back(m_committed);
+    m_undo.push_back(std::move(m_committed));
     while (int(m_undo.size()) > kHistoryCap)
         m_undo.pop_front();
     m_redo.clear();
@@ -108,12 +114,21 @@ void InkDocument::commit()
 
 bool InkDocument::undo()
 {
+    if (m_revision != m_committed.revision) {
+        // Live edits no commit has closed (a page grown, a stroke being drawn): undo returns to the
+        // last commit and stops there. The dirty state is discarded, not pushed to redo: it was never
+        // a history step (spec section 7: commit is the only snapshot point).
+        restore(m_committed);
+        m_committed.revision = m_revision;
+        return true;
+    }
     if (m_undo.empty())
         return false;
-    m_redo.push_back(m_committed);
+    m_redo.push_back(std::move(m_committed));
     restore(m_undo.back());
+    m_committed = std::move(m_undo.back());
+    m_committed.revision = m_revision;
     m_undo.pop_back();
-    m_committed = snapshot();
     return true;
 }
 
@@ -121,10 +136,11 @@ bool InkDocument::redo()
 {
     if (m_redo.empty())
         return false;
-    m_undo.push_back(m_committed);
+    m_undo.push_back(std::move(m_committed));
     restore(m_redo.back());
+    m_committed = std::move(m_redo.back());
+    m_committed.revision = m_revision;
     m_redo.pop_back();
-    m_committed = snapshot();
     return true;
 }
 
@@ -132,7 +148,7 @@ void InkDocument::restore(const Snapshot &snapshot)
 {
     m_items = snapshot.items;
     m_settings = snapshot.settings;
-    m_nextT = snapshot.nextT;
+    m_nextT = std::max(m_nextT, snapshot.nextT); // t is never reused, not even after an undo
     reindex();
     touch(); // a new revision: the document differs from whatever was saved last
 }
@@ -147,7 +163,9 @@ void InkDocument::reindex()
 int InkDocument::pageCount() const
 {
     const double h = m_settings.format.height;
-    return h > 0 ? std::max(1, int(std::ceil(m_settings.extent.height() / h - 1e-9))) : 1;
+    if (!(h > 0))
+        return 1;
+    return int(std::clamp(std::ceil(m_settings.extent.height() / h - 1e-9), 1.0, double(kMaxPages)));
 }
 
 QRectF InkDocument::pageRect(int index) const
@@ -158,16 +176,20 @@ QRectF InkDocument::pageRect(int index) const
 
 bool InkDocument::growToContain(const QRectF &bounds)
 {
-    if (m_settings.layout != LayoutKind::ContinuousVertical || !bounds.isValid())
-        return false; // Fixed never grows; SemiInfinite and Infinite come with Track S1 Task 9
-    bool grew = false;
-    while (bounds.bottom() > m_settings.extent.bottom()) {
-        m_settings.extent.setHeight(m_settings.extent.height() + m_settings.format.height);
-        grew = true;
-    }
-    if (grew)
-        touch();
-    return grew;
+    const double h = m_settings.format.height;
+    // Fixed never grows; SemiInfinite and Infinite come with Track S1 Task 9. A page without height
+    // cannot be grown by whole pages (pageCount() reads it as one page, so growth does too), and a
+    // bottom that is not finite or would take more than kMaxPages is refused: file data cannot make this loop.
+    if (m_settings.layout != LayoutKind::ContinuousVertical || !bounds.isValid() || !(h > 0) || !std::isfinite(bounds.bottom()))
+        return false;
+    if (!(bounds.bottom() > m_settings.extent.bottom()))
+        return false;
+    const double pages = std::ceil((bounds.bottom() - m_settings.extent.y()) / h - 1e-9);
+    if (!(pages <= kMaxPages))
+        return false;
+    m_settings.extent.setHeight(std::max(m_settings.extent.height(), pages * h));
+    touch();
+    return true;
 }
 
 void InkDocument::addPage()

@@ -16,13 +16,18 @@ namespace noteAppC::ink {
 class InkDocument {
 public:
     static constexpr int kHistoryCap = 100;
+    static constexpr int kMaxPages = 100000; ///< growToContain refuses past this; pageCount() clamps to it
 
     InkDocument();
 
     const DocumentSettings &settings() const { return m_settings; }
     void setSettings(const DocumentSettings &settings);
     const QJsonObject &extraTopLevel() const { return m_extraTop; }
-    void setExtraTopLevel(const QJsonObject &extra) { m_extraTop = extra; }
+    void setExtraTopLevel(const QJsonObject &extra)
+    {
+        m_extraTop = extra;
+        touch();
+    }
 
     const std::vector<Item> &items() const { return m_items; }
     qint64 addStroke(std::shared_ptr<const Stroke> stroke, Layer layer = Layer::User);
@@ -62,6 +67,7 @@ private:
     Snapshot snapshot() const { return {m_items, m_settings, m_nextT, m_revision}; }
     void restore(const Snapshot &snapshot);
     void reindex();
+    std::vector<Item>::const_iterator find(qint64 t) const;
     std::vector<Item>::iterator find(qint64 t);
     void touch() { ++m_revision; }
 

@@ -41,7 +41,12 @@ set_target_properties(notolith-inkcore PROPERTIES
     OUTPUT_NAME notolith-inkcore
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/modules
     INSTALL_RPATH "$ORIGIN"
-    BUILD_RPATH_USE_ORIGIN ON)
+    BUILD_WITH_INSTALL_RPATH ON)
+# Not BUILD_RPATH_USE_ORIGIN, and not CMake's computed build RPATH: with the shared Abseil
+# (whose libraries carry RUNPATH $ORIGIN) both come out as a RUNPATH of empty entries
+# ("-Wl,-rpath,:::::::"), and an empty entry means "the current directory": a planted
+# libz.so.1 would load. $ORIGIN is the library's own directory, in the build tree
+# (modules/) and installed alike, which is where the modules that link it sit.
 target_include_directories(notolith-inkcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(notolith-inkcore
     PUBLIC Qt6::Widgets Qt6::Concurrent
