@@ -67,7 +67,9 @@ TEST(GlyphSetTest, DirectoryNamesRoundTrip)
     EXPECT_EQ(out, U'č');
     ASSERT_TRUE(codepointFromDirectoryName(QStringLiteral("01f600"), &out));
     EXPECT_EQ(out, char32_t(0x1F600));
-    for (const char *bad : {"", "61", "010D", "00061", "zzzz", "0061 ", "..", "110000", "-061"})
+    for (const char *good : {"d7ff", "e000", "10ffff"})
+        EXPECT_TRUE(codepointFromDirectoryName(QString::fromLatin1(good), &out)) << good;
+    for (const char *bad : {"", "61", "010D", "00061", "zzzz", "0061 ", "..", "110000", "-061", "d800", "dabc", "dfff", "0d800", "ffffff"})
         EXPECT_FALSE(codepointFromDirectoryName(QString::fromLatin1(bad), &out)) << bad;
 }
 
@@ -140,7 +142,13 @@ TEST(GlyphStoreTest, RefusesFontNamesThatCouldLeaveHandwriting)
 {
     for (const QString &name : {QString(), QStringLiteral("a/b"), QStringLiteral("a\\b"), QStringLiteral(".."), QStringLiteral("a..b"),
                                 QStringLiteral(".hidden"), QStringLiteral("."), QStringLiteral("../x"), QStringLiteral("bad\nname"),
-                                QStringLiteral("tab\there"), QString(QChar(0)) + QStringLiteral("x"), QStringLiteral("/etc")}) {
+                                QStringLiteral("tab\there"), QString(QChar(0)) + QStringLiteral("x"), QStringLiteral("/etc"),
+                                QStringLiteral("hand "), QStringLiteral("hand."), QStringLiteral("a#b"), QStringLiteral("a^b"),
+                                QStringLiteral("a[b"), QStringLiteral("a]b"), QStringLiteral("a|b"), QStringLiteral("a:b"),
+                                QStringLiteral("CON"), QStringLiteral("con"), QStringLiteral("Nul"), QStringLiteral("PRN"),
+                                QStringLiteral("aux"), QStringLiteral("COM1"), QStringLiteral("com9"), QStringLiteral("LPT1"),
+                                QStringLiteral("lpt9"), QStringLiteral("aux.txt"), QStringLiteral(" con "),
+                                QString(QChar(0xD800)), QStringLiteral("a") + QChar(0xDC00), QString(QChar(0xD800)) + QStringLiteral("x")}) {
         EXPECT_FALSE(GlyphStore::isValidFontName(name)) << qPrintable(name.toHtmlEscaped());
         QTemporaryDir vault;
         ASSERT_TRUE(vault.isValid());
@@ -165,6 +173,68 @@ TEST(GlyphStoreTest, DoesNotWriteThroughASymlinkedFolder)
     QString error;
     EXPECT_FALSE(store.saveSample(U'a', sampleWithOneStroke(), GlyphStore::defaultMetrics(), &error));
     EXPECT_TRUE(QDir(outside.path()).isEmpty()) << "nothing was written outside the vault";
+}
+
+TEST(GlyphStoreTest, RefusesCodepointsThatHaveNoDirectoryName)
+{
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    GlyphStore store(vault.path(), QStringLiteral("Test"));
+    for (const char32_t c : {char32_t(0xD800), char32_t(0xDBFF), char32_t(0xDFFF), char32_t(0x110000), char32_t(0x80000000)}) {
+        QString error;
+        EXPECT_FALSE(store.saveSample(c, sampleWithOneStroke(), GlyphStore::defaultMetrics(), &error)) << uint32_t(c);
+        EXPECT_FALSE(error.isEmpty());
+        EXPECT_EQ(store.sampleCount(c), 0);
+        EXPECT_TRUE(store.nextSamplePath(c).isEmpty());
+    }
+    EXPECT_TRUE(QDir(vault.path()).isEmpty()) << "no orphan folder was made";
+    QString error;
+    EXPECT_TRUE(store.saveSample(0x10FFFF, sampleWithOneStroke(), GlyphStore::defaultMetrics(), &error)) << qPrintable(error);
+}
+
+TEST(GlyphStoreTest, NumberingFillsGapsAndIgnoresJunk)
+{
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    GlyphStore store(vault.path(), QStringLiteral("Test"));
+    const QString dir = vault.path() + QStringLiteral("/Handwriting/Test/0061");
+    ASSERT_TRUE(QDir().mkpath(dir));
+    const auto touch = [&](const QString &name) {
+        QFile file(dir + QLatin1Char('/') + name);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("x");
+    };
+    for (const char *junk : {"x.ink", "1.ink.bak", "01.ink", "0.ink", "-1.ink", "12345678901234.ink", ".5.ink", "notes.txt"})
+        touch(QString::fromLatin1(junk));
+    ASSERT_TRUE(QDir().mkpath(dir + QStringLiteral("/3.ink"))); // a folder is not a sample
+    ASSERT_TRUE(QDir().mkpath(vault.path() + QStringLiteral("/Handwriting/Test/zzzz")));
+    ASSERT_TRUE(QDir().mkpath(vault.path() + QStringLiteral("/Handwriting/Test/d800")));
+    EXPECT_EQ(store.sampleCount(U'a'), 0);
+    EXPECT_EQ(store.nextSamplePath(U'a'), dir + QStringLiteral("/1.ink"));
+    touch(QStringLiteral("1.ink"));
+    touch(QStringLiteral("4.ink"));
+    EXPECT_EQ(store.sampleCount(U'a'), 2);
+    EXPECT_EQ(store.nextSamplePath(U'a'), dir + QStringLiteral("/2.ink")) << "the gap is filled first";
+    const auto progress = store.progress({{U'a', 3}, {U'b', 1}});
+    ASSERT_EQ(progress.size(), 2u);
+    EXPECT_EQ(progress[0].first.codepoint, U'a'); // needs more, by code point
+    EXPECT_EQ(progress[0].second, 2);
+    EXPECT_EQ(progress[1].second, 0);
+}
+
+TEST(GlyphStoreTest, SaveNeverReplacesAnExistingSample)
+{
+    QTemporaryDir vault;
+    ASSERT_TRUE(vault.isValid());
+    GlyphStore store(vault.path(), QStringLiteral("Test"));
+    const QString dir = vault.path() + QStringLiteral("/Handwriting/Test/0061");
+    ASSERT_TRUE(QDir().mkpath(dir + QStringLiteral("/1.ink"))); // taken by something nextSamplePath's listing does not show
+    QString error;
+    ASSERT_TRUE(store.saveSample(U'a', sampleWithOneStroke(), GlyphStore::defaultMetrics(), &error)) << qPrintable(error);
+    EXPECT_TRUE(QFileInfo(dir + QStringLiteral("/1.ink")).isDir()) << "the name that was taken is left alone";
+    EXPECT_TRUE(QFileInfo(dir + QStringLiteral("/2.ink")).isFile());
+    const QStringList left = QDir(dir).entryList(QDir::AllEntries | QDir::Hidden | QDir::NoDotAndDotDot);
+    EXPECT_EQ(left.size(), 2) << qPrintable(left.join(QLatin1Char(',')));
 }
 
 TEST(GlyphStoreTest, ProgressPutsNeedsMoreFirst)

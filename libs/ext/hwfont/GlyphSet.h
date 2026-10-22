@@ -17,6 +17,10 @@ struct GlyphTarget {
 /// Ascending by code point.
 std::vector<GlyphTarget> defaultGlyphSet(int perLetter, int perPunctuation);
 
+/// A Unicode scalar value: at most U+10FFFF and not a surrogate. The one rule for the directory names
+/// read back and for the code points written, so no folder is made that the reader would refuse.
+bool isValidCodepoint(char32_t codepoint);
+
 /// "0061": four lower-case hex digits, six when the code point needs them.
 QString glyphDirectoryName(char32_t codepoint);
 /// The inverse; false for anything glyphDirectoryName would not have written.

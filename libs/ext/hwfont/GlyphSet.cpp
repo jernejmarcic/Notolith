@@ -7,7 +7,6 @@ namespace noteAppC::hwfont {
 namespace {
 constexpr char32_t kLatin1Punctuation[] = {0xA1, 0xA7, 0xAB, 0xB6, 0xB7, 0xBB, 0xBF}; // inverted !, section, guillemets, pilcrow, middle dot, inverted ?
 constexpr char32_t kSlovene[] = {0x10D, 0x161, 0x17E, 0x10C, 0x160, 0x17D};          // c s z and C S Z with caron
-constexpr char32_t kMaxCodepoint = 0x10FFFF;
 
 bool isASCIIletter(char32_t c) { return (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z'); }
 } // namespace
@@ -27,6 +26,11 @@ std::vector<GlyphTarget> defaultGlyphSet(int perLetter, int perPunctuation)
     return set;
 }
 
+bool isValidCodepoint(char32_t codepoint)
+{
+    return codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF);
+}
+
 QString glyphDirectoryName(char32_t codepoint)
 {
     return QStringLiteral("%1").arg(uint(codepoint), codepoint > 0xFFFF ? 6 : 4, 16, QLatin1Char('0'));
@@ -38,7 +42,7 @@ bool codepointFromDirectoryName(const QString &name, char32_t *out)
         return false;
     bool ok = false;
     const uint value = name.toUInt(&ok, 16);
-    if (!ok || value > kMaxCodepoint || glyphDirectoryName(value) != name) // canonical only: lower case, no sign, no padding
+    if (!ok || !isValidCodepoint(value) || glyphDirectoryName(value) != name) // canonical only: lower case, no sign, no padding
         return false;
     if (out)
         *out = value;
