@@ -138,6 +138,17 @@ public:
     /// reads back.
     static QString featureKey(const char *id);
 
+    /// A loadable module's own defaults and feature switch, registered when
+    /// the module is discovered (after first paint, on the UI thread). Live:
+    /// every Settings reads them from then on, and save() persists them.
+    /// Registering a key or a feature twice is a no-op.
+    static void registerDefaults(const QVariantMap &defaults);
+    static void registerFeature(const QString &id, const QString &name, const QString &description);
+    /// Load() ran before the keys of a module existed, so their stored lines
+    /// were skipped. This re-reads settings.ini and vaults.ini for the keys
+    /// registered since; a key this object already holds keeps its value.
+    void adoptStored();
+
     /// Reads Obsidian's own `app.json`, `appearance.json` and
     /// `core-plugins.json` from a vault and maps them onto noteAppC's keys. Public so the tests can check the
     /// mapping without a whole vault on disk.

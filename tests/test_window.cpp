@@ -33,6 +33,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QInputDialog>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QPointer>
 #include <QScopeGuard>
@@ -111,6 +112,8 @@
 #include "OutlinePane.h"
 #include "BookmarksPane.h"
 #include "BacklinksPane.h"
+#include "ModuleHost.h"
+#include "ModuleRegistry.h"
 #include "ToggleSwitch.h"
 #include "QuickSwitcher.h"
 #include "Snapshots.h"
@@ -7615,4 +7618,130 @@ TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)
     EXPECT_FALSE(format(QStringLiteral("ital")).hasProperty(QTextFormat::ForegroundBrush));
     window.closeSettings();
     EXPECT_EQ(editor->noteText(), QStringLiteral("start\n\nSome **bold** and *ital* words.\n"));
+}
+
+// Loadable modules through the window (spec sections 4 and 6, seam 1): the
+// fake module from tests/fakemodule, found in NOTEAPPC_MODULE_DIRS.
+TEST_F(WindowTest, AModuleFileOpensInTheModuleViewOnlyWhileItsFeatureIsOn)
+{
+    write(QStringLiteral("sketch.fake"), "anything");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    ASSERT_FALSE(window.modules()->modules().isEmpty()) << "NOTEAPPC_MODULE_DIRS does not point at the fake modules";
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake"))) << "a scan must not load";
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("sketch.fake"))));
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
+    QWidget *view = window.findChild<QWidget *>(QStringLiteral("fakeView"));
+    ASSERT_NE(view, nullptr);
+    EXPECT_TRUE(QTest::qWaitFor([&] { return view->isVisible(); }, 3000)); // a widget added to a shown layout is shown from the event loop
+    EXPECT_NE(qobject_cast<noteAppC::ModuleView *>(view), nullptr) << "one ModuleView metaobject across the boundary";
+
+    // The feature row exists because the module is installed, and is on.
+    command(window, "app:open-settings")->trigger();
+    noteAppC::ToggleSwitch *toggle = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.fake"));
+        return toggle != nullptr;
+    }, 3000));
+    EXPECT_TRUE(toggle->isChecked());
+    toggle->setChecked(false);
+    // Off: the suffix is unregistered, the command greyed, the library stays loaded.
+    command(window, "workspace:new-tab")->trigger();
+    EXPECT_FALSE(window.openNote(path(QStringLiteral("sketch.fake"))));
+    EXPECT_FALSE(command(window, "fake:hello")->isEnabled());
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
+}
+
+TEST_F(WindowTest, AModuleCommandLoadsTheModuleOnFirstUse)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    QAction *hello = command(window, "fake:hello");
+    ASSERT_NE(hello, nullptr);
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake")));
+    hello->trigger();
+    EXPECT_TRUE(window.modules()->isLoaded(QStringLiteral("fake")));
+    EXPECT_EQ(window.statusBar()->currentMessage(), QStringLiteral("hello from the fake module"));
+    // A module's settings row is saved like any other.
+    EXPECT_TRUE(window.settings().boolean(QStringLiteral("fake.greeting")));
+}
+
+TEST_F(WindowTest, ModulesWithAProblemAreListedInSettingsAndNeverLoaded)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "app:open-settings")->trigger();
+    QLabel *notice = nullptr;
+    ASSERT_TRUE(QTest::qWaitFor([&] {
+        notice = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-badabi")); // built when its page is shown
+        return notice != nullptr;
+    }, 3000));
+    EXPECT_TRUE(notice->text().contains(QStringLiteral("another Notolith")));
+    auto *missing = settingsWidget<QLabel>(window, QStringLiteral("moduleProblem_fake-missingdep"));
+    ASSERT_NE(missing, nullptr);
+    EXPECT_TRUE(missing->text().contains(QStringLiteral("nonexistent-module")));
+    EXPECT_EQ(settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.fakeBadabi")), nullptr)
+        << "a module that cannot load gets a notice, never a switch";
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-badabi")));
+}
+
+TEST_F(WindowTest, AModuleSettingRowWithDecimalsIsADoubleSpinBox)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "fake:hello")->trigger(); // loading the module registers its rows
+    command(window, "app:open-settings")->trigger();
+    QDoubleSpinBox *spin = nullptr;
+    WAIT_TRUE((spin = settingsWidget<QDoubleSpinBox>(window, QStringLiteral("settingsSpin_fake.width"))) != nullptr, 3000);
+    EXPECT_EQ(spin->decimals(), 1);
+    EXPECT_DOUBLE_EQ(spin->singleStep(), 0.5);
+    EXPECT_DOUBLE_EQ(spin->minimum(), 0.5);
+    EXPECT_DOUBLE_EQ(spin->maximum(), 40.0);
+    EXPECT_DOUBLE_EQ(spin->value(), 2.0);
+    spin->setValue(6.5);
+    EXPECT_DOUBLE_EQ(window.settings().value(QStringLiteral("fake.width")).toDouble(), 6.5);
+}
+
+TEST_F(WindowTest, AModuleAsksTheWindowForTheCurrentFolder)
+{
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Projects/Crlf.md"))));
+    command(window, "fake:where")->trigger();
+    EXPECT_EQ(QFileInfo(window.statusBar()->currentMessage()).canonicalFilePath(),
+              QFileInfo(path(QStringLiteral("Projects"))).canonicalFilePath());
+    command(window, "workspace:new-tab")->trigger(); // no note in the active tab
+    command(window, "fake:where")->trigger();
+    EXPECT_EQ(QFileInfo(window.statusBar()->currentMessage()).canonicalFilePath(), QFileInfo(dir.path()).canonicalFilePath())
+        << "no note: the vault root";
+}
+
+TEST_F(WindowTest, AModuleWithIndexSuffixesLoadsOnlyWhenTheVaultHoldsSuchFiles)
+{
+    {
+        MainWindow window; // the vault has no .fakeidx file
+        window.show();
+        window.openVault(dir.path());
+        window.scanModulesNow();
+        WAIT_TRUE(window.index()->attachmentCount() >= 1, 5000); // attachment.txt: the first index pass has landed
+        QTest::qWait(100);
+        EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake-indexed"))) << "nothing to index: nothing loaded";
+    }
+    write(QStringLiteral("notes.fakeidx"), "anything");
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    WAIT_TRUE(window.modules()->isLoaded(QStringLiteral("fake-indexed")), 5000);
+    EXPECT_FALSE(window.modules()->isLoaded(QStringLiteral("fake"))) << "a module without index suffixes still waits for first use";
 }

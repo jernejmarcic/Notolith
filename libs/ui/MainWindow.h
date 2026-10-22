@@ -15,6 +15,8 @@
 #include "Index.h"
 #include "Indexer.h"
 #include "MarkdownEditor.h"
+#include "ModuleHost.h"
+#include "ModuleRegistry.h"
 #include "Settings.h"
 #include "Theme.h"
 #include "FileIcons.h"
@@ -152,6 +154,13 @@ public:
     Index *index() { return &m_index; }
     /// The focused tab's editor, for tools and the benchmark.
     MarkdownEditor *editor() { return m_active->editor; }
+    /// The loadable-module registry: scanned after first paint, or now by
+    /// scanModulesNow() (tests, the bench).
+    ModuleRegistry *modules() const { return m_modules; }
+    void scanModulesNow();
+    const Settings &settings() const { return m_settings; }
+    /// A command's QAction by id (the objectName every command carries); null when there is none.
+    QAction *command(const QString &id) const;
     /// Alt+Left, the header's back button, and the mouse's back side button.
     void goBack();
     /// Alt+Right, the header's forward button, and the mouse's forward side
@@ -289,6 +298,7 @@ private:
         TabGroup *group = nullptr;
         /// A canvas or a base shown in place of the editor, or null.
         QWidget *view = nullptr;
+        QString viewTitle; ///< a module view with no file (the glyph studio): what the tab shows
         /// What Ctrl+E goes back to from reading view.
         MarkdownEditor::Mode editingMode = MarkdownEditor::Mode::LivePreview;
         /// A restored tab's file, loaded the first time the tab is shown, as
@@ -625,6 +635,14 @@ private:
     /// Obsidian one over the built-in keys, for the window's commands and the
     /// editor's alike.
     void applyHotkeys();
+    void rebuildHotkeyCommands(); ///< the tail of the command builder: the `rebindable` list, setCommands() and applyHotkeys()
+    void startModuleScan();       ///< on the thread pool, after first paint
+    void onModulesScanned();      ///< registers features, commands and rows; does nothing when no module is installed
+    void loadIndexModules();      ///< loads a module whose indexSuffixes the vault's index holds (indexing counts as use)
+    QList<QPair<QString, QString>> moduleProblems() const; ///< (id, notice) of every module that cannot load
+    QAction *addModuleCommand(const QString &id, const QString &title);
+    bool openModuleView(const QString &path, QString *error, QWidget **view);
+    void showModuleTab(ModuleView *view, const QString &title);
     /// Spelling for the editor, from the spellcheck module when it is compiled
     /// in: the dictionaries load on the thread pool once the window has been
     /// painted, and the editor gets them when they are ready. A no-op in a
@@ -804,6 +822,13 @@ void updateVimStatus();
     /// The window's commands, each an action named by its command id and
     /// carrying its built-in keys as data.
     QList<QAction *> m_commands;
+    ModuleRegistry *m_modules = nullptr;
+    ModuleHost m_moduleHost;
+    QHash<QString, ModuleHost::ViewFactory> m_moduleViews; ///< by lower-case suffix
+    QHash<QString, std::function<void()>> m_moduleCommands;
+    QList<ModuleHost::SettingRow> m_moduleSettingRows;
+    bool m_modulesScanned = false;
+    bool m_modulesScanStarted = false;
 
     std::shared_ptr<SpellChecker> m_spell;
     /// Every history call runs on this one thread, in order: libgit2's

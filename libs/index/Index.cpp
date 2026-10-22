@@ -675,6 +675,20 @@ int Index::attachmentCount() const
     return query.next() ? query.value(0).toInt() : 0;
 }
 
+bool Index::hasFileWithSuffix(const QStringList &suffixes) const
+{
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT 1 FROM files WHERE path LIKE ? ESCAPE '\\' LIMIT 1")); // LIKE is case-insensitive for ASCII
+    for (const QString &suffix : suffixes) {
+        QString escaped = suffix;
+        escaped.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('%'), QStringLiteral("\\%")).replace(QLatin1Char('_'), QStringLiteral("\\_"));
+        query.bindValue(0, QStringLiteral("%.") + escaped);
+        if (query.exec() && query.next())
+            return true;
+    }
+    return false;
+}
+
 QStringList Index::allPaths() const
 {
     QStringList paths;

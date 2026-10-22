@@ -4,6 +4,7 @@
 # noteAppC_index_cli targets it already builds the same way.
 qt_add_executable(noteAppC-bench Bench.cpp)
 target_link_libraries(noteAppC-bench PRIVATE noteAppC_ui Qt6::Test)
+set_target_properties(noteAppC-bench PROPERTIES ENABLE_EXPORTS ON) # modules resolve host symbols here
 
 # EPUB open/scroll rows, only when the module is built (see the root
 # CMakeLists.txt) - the same guarded-link shape tests/CMakeLists.txt uses.

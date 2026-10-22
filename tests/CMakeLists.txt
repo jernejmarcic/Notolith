@@ -93,6 +93,11 @@ set_tests_properties(modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 add_test(NAME window COMMAND test_window)
+# Modules load into the test's process: export the host symbols, and point the
+# registry at the build's modules (the fake ones; Task 8 adds the real ones).
+set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
+add_dependencies(test_window fake_good fake_badabi fake_missingdep fake_indexed)
+set_property(TEST window APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})
@@ -139,7 +144,7 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteA
 endforeach()
 add_test(NAME demo COMMAND test_demo)
 set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-set_tests_properties(window PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_property(TEST window APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The DICT client talks to a QTcpServer on loopback, never to a real server.
 add_executable(test_lookup test_lookup.cpp)

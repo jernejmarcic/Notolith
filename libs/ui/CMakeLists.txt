@@ -58,7 +58,7 @@ target_include_directories(noteAppC_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Qt6::Concurrent used to arrive only with the optional spell module; SearchPane
 # needs it unconditionally to run Index::search() off the UI thread.
 target_link_libraries(noteAppC_ui PUBLIC Qt6::Widgets Qt6::Concurrent Qt6::Network noteAppC_vault noteAppC_theme
-    noteAppC_index noteAppC_editor noteAppC_settings)
+    noteAppC_index noteAppC_editor noteAppC_settings noteAppC_modules)
 target_compile_definitions(noteAppC_ui PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
 
 if(TARGET noteAppC_spell)

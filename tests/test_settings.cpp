@@ -560,3 +560,45 @@ TEST(Settings, formattingColoursRoundTripAndDefaultToTheTheme)
     EXPECT_FALSE(written.contains("h1-color")) << "only what was set is written";
     qputenv("XDG_CONFIG_HOME", previous);
 }
+
+TEST(SettingsTest, RegisteredDefaultsAndFeaturesAreLiveAndSaved)
+{
+    Settings::registerDefaults({{QStringLiteral("fake.greeting"), true}});
+    Settings::registerFeature(QStringLiteral("fake"), QStringLiteral("Fake module"), QStringLiteral("A test module."));
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("fake.greeting")), QVariant(true));
+    EXPECT_EQ(Settings::defaultValue(Settings::featureKey("fake")), QVariant(true));
+    bool listed = false;
+    for (const Settings::Feature &feature : Settings::features())
+        listed = listed || QByteArray(feature.id) == "fake";
+    EXPECT_TRUE(listed);
+    Settings settings = Settings::load();
+    EXPECT_TRUE(settings.boolean(QStringLiteral("fake.greeting"))); // the registered default applies
+    settings.setValue(QStringLiteral("fake.greeting"), false);
+    QString error;
+    ASSERT_TRUE(settings.save(&error)) << error.toStdString();
+    EXPECT_FALSE(Settings::load().boolean(QStringLiteral("fake.greeting")));
+    // Registering again changes nothing: a second scan is not a second row.
+    Settings::registerFeature(QStringLiteral("fake"), QStringLiteral("Fake module"), QStringLiteral("A test module."));
+    int count = 0;
+    for (const Settings::Feature &feature : Settings::features())
+        count += QByteArray(feature.id) == "fake";
+    EXPECT_EQ(count, 1);
+}
+
+TEST(SettingsTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
+{
+    // The window loads Settings before the module scan registers a module's
+    // keys; without adoptStored() a saved switch or setting is dropped on restart.
+    writeFile(Settings::configFile(), QStringLiteral("[late]\ngreeting = false\nwidth = 3.5\n"));
+    Settings settings = Settings::load(); // neither key exists yet: the stored lines are not read
+    Settings::registerDefaults({{QStringLiteral("late.greeting"), true}, {QStringLiteral("late.width"), 2.0}});
+    EXPECT_TRUE(settings.boolean(QStringLiteral("late.greeting"))) << "still the default until adopted";
+    settings.adoptStored();
+    EXPECT_FALSE(settings.boolean(QStringLiteral("late.greeting")));
+    EXPECT_EQ(settings.value(QStringLiteral("late.width")).typeId(), QMetaType::Double);
+    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("late.width")).toDouble(), 3.5);
+    settings.setValue(QStringLiteral("late.greeting"), true);
+    settings.adoptStored();
+    EXPECT_TRUE(settings.boolean(QStringLiteral("late.greeting"))) << "an in-memory choice is not overwritten";
+    QFile::remove(Settings::configFile());
+}
