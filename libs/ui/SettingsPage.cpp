@@ -715,7 +715,7 @@ QWidget *SettingsPage::buildEditorPage()
                    "See docs/EDITOR.md."));
     addToggleRow(layout, QStringLiteral("editor.strictLineBreaks"), tr("Strict line breaks"),
                 tr("Join the lines of a paragraph into one, the way CommonMark does. Off, every newline is a "
-                   "line break. The paragraph being edited always keeps its lines."));
+                   "line break."));
 #ifdef NOTEAPPC_HAVE_SPELLCHECK
     // Only in a build with the spellcheck module: without it there is nothing
     // behind the switch, and a switch that does nothing is worse than none.
