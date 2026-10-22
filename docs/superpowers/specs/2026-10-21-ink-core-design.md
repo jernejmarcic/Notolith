@@ -1,7 +1,9 @@
 # Ink core and loadable modules: design (Spec 1 and 1b)
 
-Date: 2026-10-21. Status: approved in conversation section by section; this
-document awaits Jernej's review before the implementation plan is written.
+Date: 2026-10-21. Status: approved. Jernej approved the design in
+conversation, section by section, on 2026-10-21; the review rulings of
+2026-10-22 (R1-R15, in `sessions/2026-10-21_handwritten-notes/REVIEW-ASSESSMENT.md`)
+and the PADD pen spike results are folded in below.
 
 Notolith gets handwriting: pen input, whole handwritten notes, sketch sections
 inside Markdown notes, pen markup over Markdown text, PDF, images and EPUB,
@@ -62,7 +64,8 @@ them without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). |
+| Pen | Draws. The eraser end erases. The lower barrel button is a held eraser and the upper one a held lasso (Rnote's defaults). These are a bonus, not the way in: PADD's pen has no eraser end and no working buttons (spike, 2026-10-22), so every tool (pen, eraser, lasso, shapes, text, and the highlighter when it arrives) is reachable from the toolbar and by a keyboard shortcut with no pen hardware at all. |
+| Pressure | Normalised per device by a learned maximum (setting `ink.pressureMax`, default 1.0, stored per device name): PADD's pen never reports above 0.657, so raw pressure would make every line thin. |
 | Touch | Scrolls and pinch-zooms. It never draws. |
 | Mouse | Draws only while mouse inking is explicitly on. Otherwise it behaves as it does now, inside ink areas too. |
 | Smoothing | ink-stroke-modeler is a required dependency of the ink module, and smoothing is on by default. Raw input is a setting at most. |
@@ -72,7 +75,7 @@ them without re-asking.
 
 | Topic | Decision |
 |---|---|
-| `.ink` format | Plain JSON, one stroke per line. The reader sniffs the gzip magic bytes (`1f 8b`) from v1, so a compressed variant can be added later without breaking existing files. |
+| `.ink` format | Plain JSON, written by `QJsonDocument::toJson(Compact)` with no custom emitter. The reader sniffs the gzip magic bytes (`1f 8b`) from v1, so a compressed variant can be added later without breaking existing files. |
 | Paper | Chosen per note from Rnote's four layouts. The default is A4 pages stacked downward, with a page added as the ink grows. |
 | Typed text box | It is the real Markdown editor (canvas text-card pattern), so links, tags and formatting work in it. |
 | Search | Text boxes are indexed now. Recognised handwriting is indexed later, by Spec 6. |
@@ -94,8 +97,8 @@ them without re-asking.
 
 | Topic | Decision |
 |---|---|
-| Recognition | Local only. The engine is PP-OCRv6, with Tesseract as the fallback. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. Nothing is created without confirmation. |
-| Font | Studio samples feed a style model (SDT first, DeepVecFont v2 as the fallback) that produces several variants per glyph. Jernej approves every glyph by eye. fontTools in the Python training worker builds the TTF, and `calt` cycles the variants. |
+| Recognition | Local only, and confirm before creating a link: nothing is created from recognised handwriting without a confirmation. The engine is chosen in Spec 6 by a benchmark on Jernej's own samples; PP-OCRv6 is a candidate and Tesseract the fallback, neither is a decision. Results are stored inside the `.ink` file. Hand-written `[[link]]`, `#tag`, headings and checkboxes are detected. The model weights are an optional data download, not a module. |
+| Font | Version 1 (Spec 7) is captured studio samples: several variants per letter, cycled with an OpenType `calt` feature, built with fontTools. A style model (SDT, DeepVecFont v2) is added only if Jernej judges v1 not hand-written enough. Jernej approves every glyph by eye. This default was taken overnight on 2026-10-22 because he did not answer; he may overrule it. |
 | Glyph samples | Stored in the vault under `Handwriting/<font>/`, so Syncthing brings them to starbase-1 for training. |
 
 ### Delivery
@@ -106,19 +109,22 @@ them without re-asking.
 
 ## 3. Blocks and install units
 
-Each block lives under `libs/ext/<name>`, has its own CMake option and its
-own runtime feature id, and ships as its own package. Only Spec 1 and 1b
-blocks are built by this spec; the rest of the table fixes names so the
-seams fit them.
+Each block lives under `libs/ext/<name>` and has its own CMake option and
+its own runtime feature id. There are two install units (packages) in this
+spec: `notolith-ink` (the ink core library plus the ink module, and later
+the rnote, markup and recognition hooks) and `notolith-hwfont` (the font
+module, which depends on `notolith-ink` for the core library). Only Spec 1
+and 1b blocks are built by this spec; the rest of the table fixes names so
+the seams fit them.
 
 | Block | Directory | Install unit | CMake option | Feature id | Spec |
 |---|---|---|---|---|---|
-| ink core library | libs/ext/ink/core | `libnotolith-inkcore.so` | `NOTEAPPC_WITH_INK` | - | 1 |
+| ink core library | libs/ext/ink/core | `libnotolith-inkcore.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | - | 1 |
 | ink module (handwritten-note tab, later sketch sections) | libs/ext/ink | `notolith-ink.so`, package notolith-ink | `NOTEAPPC_WITH_INK` | `ink` | 1, 3 |
-| rnote | libs/ext/rnote | `notolith-ink-rnote.so` | `NOTEAPPC_WITH_RNOTE` | shares `ink` | 2 |
-| markup | libs/ext/inkmarkup | `notolith-ink-markup.so` | `NOTEAPPC_WITH_INK_MARKUP` | `ink-markup` | 4 |
-| recognition | libs/ext/hwr + tools/hwr_worker | `notolith-hwr.so` + worker | `NOTEAPPC_WITH_HWR` | `handwriting-recognition` | 6 |
-| handwriting font | libs/ext/hwfont + tools/hwfont_worker | `notolith-hwfont.so` + worker | `NOTEAPPC_WITH_HWFONT` | `handwriting-font` | 1b, 7 |
+| rnote | libs/ext/rnote | `notolith-ink-rnote.so`, package notolith-ink | `NOTEAPPC_WITH_RNOTE` | shares `ink` | 2 |
+| markup | libs/ext/inkmarkup | `notolith-ink-markup.so`, package notolith-ink | `NOTEAPPC_WITH_INK_MARKUP` | `ink-markup` | 4 |
+| recognition | libs/ext/hwr + tools/hwr_worker | `notolith-hwr.so` + worker, package notolith-ink | `NOTEAPPC_WITH_HWR` | `handwriting-recognition` | 6 |
+| handwriting font | libs/ext/hwfont + tools/hwfont_worker | `notolith-hwfont.so` + worker, package notolith-hwfont | `NOTEAPPC_WITH_HWFONT` | `handwriting-font` | 1b, 7 |
 
 Dependencies:
 - **One direction only.** Modules link `libnotolith-inkcore.so`. Nothing in
@@ -126,8 +132,15 @@ Dependencies:
 - **Finding the core library.** Modules use RPATH `$ORIGIN`.
 - **pdfview, imageview and epub** reach ink at runtime through the module
   host, never by linking. The base binary must load without the package.
-- **Missing dependency.** A module whose dependency is absent is reported
-  in Settings and not loaded.
+- **Package dependencies belong to the package manager.** `notolith-hwfont`
+  depends on `notolith-ink`. The manifest has no dependency list and the
+  registry has no dependency check. A module whose core library is missing
+  fails to load with the loader's own error string
+  (`QLibrary::ResolveAllSymbolsHint` makes the failure immediate), and
+  Settings reports that string.
+- **Abseil is required.** The core library needs the system Abseil
+  (`find_package(absl)`). When it is absent the ink core is not built: the
+  option is turned off with a configure message.
 
 ## 4. Loadable first-party modules
 
@@ -152,24 +165,33 @@ paint, and a pipe cannot do that inside the 10 ms rule.
   - feature id;
   - file suffixes;
   - command ids and titles;
-  - dependencies;
   - an ABI tag.
 - Discovery reads it with `QPluginLoader::metaData()`, which does not load
   the library.
 
 ### Discovery and loading
 
-1. **Directories.** `$XDG_DATA_HOME/noteAppC/modules/` first, then
-   `<libdir>/noteAppC/modules/`.
+1. **Directories.** `<libdir>/noteAppC/modules/` only. The environment
+   variable `NOTEAPPC_MODULE_DIRS` replaces it (used by tests). A vault
+   switch does not rescan: the scan is per process, by design. On Android
+   the modules are linked in as Qt static plugins (`Q_IMPORT_PLUGIN`) and
+   the registry also lists `QPluginLoader::staticPlugins()`.
 2. **When.** The scan runs on the thread pool after first paint
    (PERFORMANCE.md rule 5). It costs a directory listing plus one metadata
    read per module.
 3. **What it registers.** The suffixes and commands from each manifest.
 4. **Loading.** `QPluginLoader::instance()` loads a module only on first
    use: a file of its suffix opens, one of its commands runs, or one of its
-   embeds scrolls into view.
-   Indexing counts as use: a module whose manifest declares index suffixes
-   is loaded after the scan when the vault contains such files.
+   embeds scrolls into view. Nothing else counts as use. In particular
+   indexing never loads a module: `.ink` files are indexed by a host-side
+   reader (seam 6) that parses the JSON itself.
+5. **Suffix claims.** A built-in kind owns its suffixes. Among modules, the
+   first one to claim a suffix wins; a later claimant is refused with a
+   problem string, in the registry and in `registerView` alike.
+6. **Problems.** A manifest with no id, a library that is not a Notolith
+   module, an ABI mismatch, a suffix claim refused and a load failure each
+   produce a one-line problem, listed in Settings. Nothing is dropped
+   silently.
 
 **Gate.** The first bench must verify that the scan does not load the
 libraries.
@@ -177,9 +199,13 @@ libraries.
 ### ABI and settings
 
 - **ABI tag**: same build only, formed as
-  `PROJECT_VERSION + "-" + git hash + "-" + QT_VERSION_STR`. A mismatch is
-  refused with a notice naming the module. A stable C ABI stays Tier 2's
-  job.
+  `PROJECT_VERSION + "-" + a random token + "-" + Qt6_VERSION`. The token is
+  generated once per CMake build directory (`string(RANDOM)`, cached as
+  `NOTEAPPC_ABI_TOKEN`), so two builds of the same commit in different
+  directories never mix, and a git hash (absent in a tarball build) is not
+  needed. One configured header feeds both `ModuleRegistry` and the CMake
+  module manifests. A mismatch is refused with a notice naming the module.
+  A stable C ABI stays Tier 2's job.
 - **Settings.**
   - Feature rows for module features exist only when the module is
     installed (the pattern at SettingsPage.cpp:900-931).
@@ -192,21 +218,33 @@ libraries.
 - no ink symbols;
 - the directory scan finds nothing;
 - every seam is a null `std::function` or an empty map;
-- the editor pays one pointer check per block paint and one per viewport
-  event.
+- the editor pays one registry lookup per file open and per wikilink
+  resolution, and nothing per paint or per viewport event (the per-paint
+  pointer checks belong to seams 2 and 3, which Spec 3 builds).
 
 **Follow-up, out of scope:** canvas, bases, pdfview, imageview, epub, graph
 and publish could move to the same mechanism and shrink the base binary.
 That is a separate decision.
 
-**Packaging.** The Arch PKGBUILD grows split packages (`notolith`,
-`notolith-ink`, `notolith-hwfont`). The plain CMake install puts modules in
-`<libdir>/noteAppC/modules/`.
+**Packaging.** The Arch PKGBUILD grows split packages: `notolith`,
+`notolith-ink` (core library and ink module) and `notolith-hwfont`, which
+depends on `notolith-ink`. The plain CMake install puts modules in
+`<libdir>/noteAppC/modules/`. A module object is shared by every window of
+a process and `attach()` runs once per registry, so a real module is
+stateless or keeps its state per host.
+
+**Executable cost.** Modules need host symbols, so the base binary links with
+`ENABLE_EXPORTS`. Task 18 of the plan measures cold start and executable size
+against `main`. If cold start regresses by more than 5 % or size by more than
+10 %, the fix is `-fvisibility=hidden` plus an export macro on the host
+classes modules use. Measure first; nothing changes before that.
 
 ## 5. The `.ink` format, version 1
 
-UTF-8 JSON, one top-level object. Each stroke goes on its own line, so git
-history and sync produce deltas the size of one stroke.
+UTF-8 JSON, one top-level object, written compact by
+`QJsonDocument::toJson(Compact)` with no hand-rolled emitter. Key order is
+Qt's (sorted), so a re-save of an unchanged document is byte-identical. The
+example below is shown spaced out for reading.
 
 ### Envelope
 
@@ -227,7 +265,8 @@ history and sync produce deltas the size of one stroke.
 
 - **Units**: CSS px at 96 dpi, identical to Rnote, so coordinates pass
   through `.rnote` untouched. A4 is 793.701 x 1122.52.
-- **Precision**: numbers are written with two decimals.
+- **Precision**: numbers are written with three decimals (rounded before
+  the document is handed to `QJsonDocument`).
 - **Pages**: pages are not objects. One coordinate space holds everything,
   and page `n` covers `y` from `n * height` to `(n + 1) * height`.
 - **Layouts**: `fixed`, `continuousVertical` (the default),
@@ -265,8 +304,8 @@ embed fragment `#s1`. Version 1 readers keep them by pass-through.
   - The parser is `QJsonDocument`, already linked.
   - Parsing happens off the UI thread when the file is over 256 KB.
 
-**Size**: about 15 bytes per point. A heavy note of 100 000 points is about
-1.5 MB.
+**Size**: about 18 bytes per point. A heavy note of 100 000 points is about
+1.8 MB.
 
 The format is documented for users in `docs/INK.md`, written as part of this
 spec's implementation.
@@ -276,8 +315,9 @@ spec's implementation.
 These are generic and carry no ink types. The glue passes `std::function`
 objects and small abstract interfaces, as `setSpelling` does
 (MarkdownEditor.h:220-228). Spec 1 builds seams 1, 2 and 6, which the
-handwritten-note tab and the module host need. Seams 3, 4 and 5 are
-specified here so Specs 3 and 4 fit, and are built in those specs.
+handwritten-note tab and the module host need. This spec declares seams 1, 2
+and 6 and builds 1 and 6; seams 3, 4 and 5 are specified here so Specs 3 and
+4 fit, and are built in those specs.
 
 | Seam | Built in | What it does |
 |---|---|---|
@@ -286,7 +326,7 @@ specified here so Specs 3 and 4 fit, and are built in those specs.
 | 3. Block view object | Spec 3 | `setFileEmbedView(suffixes, factory)` beside `setFileEmbedRenderer` (MarkdownEditor.h:527). The object paints into the editor's painter, takes events over its rectangle, reports a height for a width, and calls back with a changed rectangle. |
 | 4. Overlay and text geometry | Spec 4 | A painted overlay after `paintBlocks` (MarkdownEditor.cpp:4538). Three geometry calls become public: `offsetAt` (h:1938), a new `rectsForRange`, and per-character rectangles. |
 | 5. Wrap a range | Spec 4 | A public `wrapRange(Range, marker)`. It never toggles (unlike `toggleWrap`, EditingCommands.cpp:951-985), pushes one undo step and works in Reading mode. |
-| 6. Foreign-file index reader | Spec 1 | `Indexer::setForeignReader(suffixes, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. |
+| 6. Foreign-file index reader | Spec 1 | `Indexer::setForeignReader(suffix, reader)`, modelled on `setNotebookReader` (Indexer.h:66). It returns body text, links and tags for `.ink`, which feed search, backlinks, the graph and the quick switcher. The `.ink` reader is host-side: `MainWindow` registers it next to the `.ipynb` one (`updateNotebookIndex()`), parsing the JSON with `QJsonDocument` and returning the markdown of every `textbox` item. It never loads a module and `libs/ui` links no ink library; the key names are duplicated as string literals, with a comment pointing at section 5. A gzip-compressed `.ink` is not indexed until a later spec teaches the host reader to inflate. |
 
 Seam 2 is declared in Spec 1, because the module host struct carries it, but
 it is wired only in Spec 3.
@@ -309,7 +349,18 @@ events carrying position, pressure, timestamp, pointer type and buttons.
   - **Pen**: `QTabletEvent` accepted on the canvas widget, with
     `setTabletTracking(true)` for hover. Pointer type `Eraser` erases. The
     middle button (BTN_STYLUS) is a held eraser and the right button
-    (BTN_STYLUS2) a held lasso.
+    (BTN_STYLUS2) a held lasso. These are defaults and a bonus: the PADD
+    pen reports a tip only, no eraser end and no working buttons, so every
+    tool is also reachable from the toolbar and by keyboard shortcut.
+  - **Rate and timestamps**: the pen reports at 120 Hz in contact
+    (`kInputRateHz = 120`). Equal timestamps are coalesced and backwards
+    ones skipped; the PADD spike saw 128 equal pairs and no backwards ones.
+    The fractional-scale offset stays `{0, 0}` (device pixel ratio 2 showed
+    none).
+  - **Pressure**: raw pressure is divided by a per-device learned maximum
+    (setting `ink.pressureMax`, default 1.0, stored per device name) and
+    capped at 1. The maximum is learned from the largest pressure seen; the
+    PADD pen tops out at 0.657 with a median of 0.21.
   - **Touch**: `QTouchEvent` with `WA_AcceptTouchEvents`, used for pan and
     pinch only.
   - **Mouse**: strokes at pressure 0.5, only while the "Draw with mouse"
@@ -323,8 +374,8 @@ events carrying position, pressure, timestamp, pointer type and buttons.
 
 - **Library**: ink-stroke-modeler, pinned to a commit with FetchContent and
   linked as its `InkStrokeModeler::stroke_modeler` target. Abseil comes from
-  the system `find_package(absl)`, with a pinned FetchContent fallback for
-  Android and other systems without it. Apache-2.0 is GPL-3.0 compatible.
+  the system `find_package(absl)` and is required: without it the ink core is
+  not built. There is no bundled copy. Apache-2.0 is GPL-3.0 compatible.
 - **Parameters**: Rnote's overrides of `ModelerParams::suggested()`, in the
   app's units (px, seconds).
 - **Prediction**: the predicted tail at the stroke end is drawn transiently
@@ -340,9 +391,13 @@ events carrying position, pressure, timestamp, pointer type and buttons.
 This is Rnote's `compose_lines_variable_width`, ported with attribution.
 
 **Tile cache.** Finished ink is cached in 512 px `QImage` tiles:
-- tiles are rasterised on the thread pool;
+- stroke tiles are rasterised on the thread pool (`QImage` with `QPainter`
+  is thread-safe); text boxes, and anything that uses `QWidget::grab` or
+  `QTextDocument` with widget fonts, render on the UI thread;
 - the cache key is zoom bucket, device pixel ratio and tile revision;
-- a finished, erased or moved item invalidates only the tiles it touches.
+- a finished, erased or moved item invalidates only the tiles it touches;
+- the cache has a byte budget (setting `ink.tileCacheMB`, default 64) and
+  evicts the least recently painted tiles first.
 
 **Live stroke.** Only its newest segment is rasterised, into an overlay
 image, and `update(segmentRect)` repaints just that segment.
@@ -395,8 +450,14 @@ seven page styles of Jernej's Rnote fork are ported with attribution.
   - `fixed` adds pages only through "Add page".
 - **New notes.** The command "New handwritten note" creates
   `<folder>/<name>.ink` with the default layout from settings.
-- **Index.** Seam 6 extracts every text box's Markdown, so `[[links]]` and
-  `#tags` written in text boxes show up in backlinks, the graph and search.
+- **Index.** The host-side `.ink` reader (seam 6) extracts every text box's
+  Markdown, so `[[links]]` and `#tags` written in text boxes show up in
+  backlinks, the graph and search, whether or not the module is installed
+  or loaded.
+- **Save contract.** A view opened without a file (the glyph studio) still
+  honours `isModified` and `save()`: the tab shows the modified mark, and
+  closing or quitting asks, or autosaves, through the same path as a file
+  tab.
 
 ## 9. Spec 1b: glyph studio (hwfont module shell)
 
@@ -443,7 +504,20 @@ A0 contains:
 
 A0 leaves out layouts, the tile cache, lasso, shapes and text boxes.
 
-## 11. Pen spike (before implementation)
+## 11. Pen spike (done 2026-10-22)
+
+**Results on PADD** (himax-stylus, GNOME/mutter), from the session NOTES.md:
+- tip only: no eraser end is reported;
+- the barrel buttons do not work;
+- 120 Hz while in contact;
+- pressure maximum 0.657, median 0.21;
+- 128 pairs of equal timestamps, none backwards;
+- device pixel ratio 2 showed no position offset.
+
+These fixed `kInputRateHz = 120`, the learned pressure maximum, the rule that
+every tool is reachable without pen buttons, coalescing of equal timestamps,
+and `kFractionalScaleOffset = {0, 0}`. shuttlepod-1 (Wacom) was not run and is
+a follow-up check on the same tool.
 
 `tools/inkspike`, about 150 lines.
 - **What it is.** A Qt window that logs, per tablet event, the device type,
@@ -487,9 +561,17 @@ The house rules apply:
 ### Module tests (`tests/test_modules.cpp`)
 
 - A fake module built by the test is discovered without being loaded.
-- It is loaded on first open of its suffix.
+- It is loaded on first open of its suffix. The gate test that proves the
+  scan does not load the library runs as its own ctest entry, so no other
+  test can have mapped the fake first.
 - A mismatched ABI tag is refused.
-- A module whose dependency is missing is reported and not loaded.
+- A second module claiming an already claimed suffix is refused.
+- A manifest with no id, and a library that is not a Notolith module, are
+  each reported with a problem string.
+- A module whose core library cannot be resolved fails to load, and the
+  loader's error string is reported.
+- Every test runs with `NOTEAPPC_MODULE_DIRS` pointing at an empty directory
+  unless it sets its own.
 - A build with `NOTEAPPC_WITH_INK=OFF` passes the whole existing suite.
 
 ### Window tests
@@ -529,10 +611,14 @@ Out of scope everywhere:
 
 Out of Spec 1, built in later specs:
 - `.rnote` (Spec 2);
-- sketch sections, seams 2 and 3 (Spec 3);
-- markup over text, seams 4 and 5 (Spec 4);
+- sketch sections, seams 2 and 3 (Spec 3). Spec 3 must also hide the
+  `Sketches/` companion files from the file tree, the quick switcher and
+  search, and rewrite the embed lines when a note is renamed;
+- markup over text, seams 4 and 5 (Spec 4). Spec 4 must test a mid-word `==`
+  in the parser and against Obsidian's behaviour;
 - moving PDF, image and EPUB onto the ink core (Spec 5);
-- recognition (Spec 6);
+- recognition (Spec 6), whose engine is chosen there by a benchmark on
+  Jernej's own samples;
 - font training and build (Spec 7).
 
 Generating letter variants for the font is not stroke synthesis in the
@@ -547,8 +633,9 @@ sense cut above. It stays, in Spec 7.
   before code depends on it. The test matrix is GNOME on PADD and Hyprland
   on shuttlepod-1.
 - **ink-stroke-modeler pins Abseil 20250512.** The system has
-  20260817. If the system Abseil does not build it, the FetchContent pin is
-  used for desktop too.
+  20260817. System Abseil is required; if it does not build the modeler, the
+  ink core stays off until the modeler pin is moved. There is no bundled
+  Abseil.
 - **SDT's coverage of Latin letters and `čšž` is unverified.** This does not
-  affect this spec. Spec 7 tests it on real studio samples before
-  committing to it.
+  affect this spec, and font v1 does not use SDT. Spec 7 tests it on real
+  studio samples only if Jernej judges v1 not hand-written enough.
