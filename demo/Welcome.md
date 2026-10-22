@@ -80,6 +80,10 @@ styling via `callouts.ini`/`codeblocks.ini`, documented in
 ### History
 - [[Note History]] - what to do to see git-backed note history and recovery.
 
+### Every feature
+- [[Feature Tour]] - every supported feature, each linked to the note that
+  shows it and says how to try it.
+
 ### Newer features
 - [[Newer Features]] - a map of the notes for what came after this vault: diagrams,
   code, editor features, queries and embeds.
