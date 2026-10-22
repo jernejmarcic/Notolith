@@ -7768,6 +7768,11 @@ TEST_F(WindowTest, AModuleCommandAppearsInAnAlreadyOpenPopoutWindow)
 // fake.width, so the stored value would be read at load() and adoptStored() would not be needed.
 TEST_F(WindowTest, AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
 {
+    // Its own ctest entry (window_modules_adopt sets this): it needs fake.width unregistered when the window is
+    // made, which an earlier test in the same process spoils. The `window` entry skips it, so that entry
+    // carries no gtest filter of its own and GTEST_FILTER can focus it.
+    if (!qEnvironmentVariableIsSet("NOTEAPPC_WINDOW_ADOPT_ENTRY"))
+        GTEST_SKIP() << "run by the window_modules_adopt entry";
     const QString configPath = noteAppC::Settings::configFile();
     auto cleanup = qScopeGuard([configPath] { QFile::remove(configPath); }); // declared first: destroyed after the window
     QDir().mkpath(QFileInfo(configPath).absolutePath());
@@ -7824,6 +7829,17 @@ TEST_F(WindowTest, AModuleThatFailsToLoadIsReportedInSettingsWithTheLoadersMessa
     EXPECT_TRUE(notice->text().contains(QStringLiteral("noteappcFakeMissingSymbol")));
 }
 
+// Answers a modal box with `answer`, or closes it when it has no such button (a different box than
+// the one the test expects): the test then fails on its text assertion, not on a null deref that
+// would kill the whole window process.
+static void closeBoxWith(QMessageBox *box, QMessageBox::StandardButton answer)
+{
+    if (QAbstractButton *button = box->button(answer))
+        button->click();
+    else
+        box->close();
+}
+
 #ifdef NOTEAPPC_HAVE_INK_MODULE // set when the build has notolith-ink; with NOTEAPPC_WITH_INK=OFF these tests do not exist
 // The handwritten-note module (spec section 4, Task 8): the real notolith-ink.so from
 // ${CMAKE_BINARY_DIR}/modules, found through NOTEAPPC_MODULE_DIRS.
@@ -7866,7 +7882,7 @@ TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
     ASSERT_TRUE(saved.open(QIODevice::ReadOnly));
     const QByteArray bytes = saved.readAll();
     EXPECT_EQ(bytes.count("\"type\":\"stroke\""), 2) << "the old stroke and the new one";
-    EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "compact JSON, keys sorted (R4): the format key is not first";
+    EXPECT_TRUE(bytes.contains("\"format\":\"notolith-ink\"")) << "written by writeInk, compact JSON (R4)";
 }
 
 TEST_F(WindowTest, WithInkOffAnInkFileIsNotAModuleFile)
@@ -7930,6 +7946,9 @@ TEST_F(WindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
     ASSERT_TRUE(window.openNote(path(QStringLiteral("Future.ink"))));
     auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
     ASSERT_NE(view, nullptr);
+    EXPECT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("read-only")))
+        << "the open says so: " << window.statusBar()->currentMessage().toStdString();
+    EXPECT_TRUE(view->property("readOnly").toBool());
     auto *canvas = view->findChild<QWidget *>(QStringLiteral("inkCanvas"));
     ASSERT_NE(canvas, nullptr);
     using inktest::penStroke;
@@ -7943,7 +7962,7 @@ TEST_F(WindowTest, ANewerInkFileOpensReadOnlyAndIsNeverWrittenBack)
     QObject::connect(&watch, &QTimer::timeout, [&warning] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             warning = box->text();
-            box->button(QMessageBox::Ok)->click();
+            closeBoxWith(box, QMessageBox::Ok);
         }
     });
     watch.start(20);
@@ -7967,7 +7986,7 @@ TEST_F(WindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
     QObject::connect(&watch, &QTimer::timeout, [&warning] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             warning = box->text();
-            box->button(QMessageBox::Ok)->click();
+            closeBoxWith(box, QMessageBox::Ok);
         }
     });
     watch.start(20);
@@ -8015,7 +8034,7 @@ TEST_F(WindowTest, AFileLessModuleTabShowsTheModifiedMarkAndIsSavedByTheSaveComm
     QObject::connect(&watch, &QTimer::timeout, [&asked] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             asked = true;
-            box->button(QMessageBox::Cancel)->click();
+            closeBoxWith(box, QMessageBox::Cancel);
         }
     });
     watch.start(20);
@@ -8051,7 +8070,7 @@ TEST_F(WindowTest, AFileLessModuleTabAsksBeforeClosingWhenAutosaveIsOffAndSavesO
     QObject::connect(&watch, &QTimer::timeout, [&question] {
         if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
             question = box->text();
-            box->button(QMessageBox::Save)->click();
+            closeBoxWith(box, QMessageBox::Save);
         }
     });
     watch.start(20);
@@ -8060,6 +8079,49 @@ TEST_F(WindowTest, AFileLessModuleTabAsksBeforeClosingWhenAutosaveIsOffAndSavesO
     QFile file(saves);
     ASSERT_TRUE(file.open(QIODevice::ReadOnly));
     EXPECT_EQ(file.readAll().count("saved"), 1) << "Save called the view's save()";
+}
+
+// R6, quit: two modified file-less tabs are two documents (maybeSaveAll keys them apart): quitting asks
+// about each, and Save reaches each view's save().
+TEST_F(WindowTest, QuittingAsksAboutEveryModifiedFileLessModuleTabAndSavesEach)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+    QTemporaryDir marks;
+    const QString saves = marks.filePath(QStringLiteral("saves"));
+    qputenv("NOTEAPPC_FAKE_TAB_SAVES", saves.toLocal8Bit());
+    auto unset = qScopeGuard([] { qunsetenv("NOTEAPPC_FAKE_TAB_SAVES"); });
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "fake:tab")->trigger();
+    command(window, "fake:tab")->trigger();
+    const auto views = window.findChildren<noteAppC::ModuleView *>(QStringLiteral("fakeTab"));
+    ASSERT_EQ(views.size(), 2);
+    for (noteAppC::ModuleView *view : views) {
+        view->setProperty("modified", true);
+        emit view->modificationChanged(true);
+    }
+    int questions = 0;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&questions] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            ++questions;
+            closeBoxWith(box, QMessageBox::Save);
+        }
+    });
+    watch.start(20);
+    window.close();
+    EXPECT_EQ(questions, 2) << "one question per tab, not one for both";
+    QFile file(saves);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll().count("saved"), 2) << "Save called each view's save()";
 }
 
 #ifdef NOTEAPPC_HAVE_INK_MODULE

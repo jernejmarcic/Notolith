@@ -104,11 +104,13 @@ add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
 # AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads is its own entry: it needs fake.width
 # unregistered when the window is made, and an earlier test in the same process registers it,
-# after which the stored value is read without adoptStored(). The filters are in the commands:
-# run each entry whole.
+# after which the stored value is read without adoptStored(). The test skips itself unless this
+# entry's environment says so, which leaves the `window` entry without a filter of its own:
+# GTEST_FILTER focuses it. This entry's filter is in its command: run it whole.
 set(noteappc_window_adopt WindowTest.AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
-add_test(NAME window COMMAND test_window --gtest_filter=-${noteappc_window_adopt})
+add_test(NAME window COMMAND test_window)
 add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
+set_tests_properties(window_modules_adopt PROPERTIES ENVIRONMENT "NOTEAPPC_WINDOW_ADOPT_ENTRY=1")
 # Modules load into the test's process: export the host symbols, and point the
 # registry at the build's modules (the fake ones; Task 8 adds the real ones).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
@@ -438,6 +440,15 @@ if(TARGET notolith-inkcore)
     # The position and overlay maths again at device pixel ratio 2 (PADD): the offscreen platform honours QT_SCALE_FACTOR.
     add_test(NAME ink_dpr2 COMMAND test_ink --gtest_filter=InkCanvasDprTest.*)
     set_tests_properties(ink_dpr2 PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=2")
+    # The tab itself (InkView, the static library the module links), without dlopen: what it does about a
+    # file that changes under it and about a newer file. The host's Settings, Theme, Vault and ModuleView come from noteAppC_modules.
+    if(TARGET noteAppC_ink)
+        add_executable(test_inkview test_inkview.cpp)
+        target_link_libraries(test_inkview PRIVATE noteAppC_ink noteAppC_modules Qt6::Test GTest::gtest)
+        set_target_properties(test_inkview PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+        add_test(NAME inkview COMMAND test_inkview)
+        set_tests_properties(inkview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
 endif()
 
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none

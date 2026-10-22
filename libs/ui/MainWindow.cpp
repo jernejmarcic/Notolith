@@ -1923,6 +1923,8 @@ void MainWindow::dropLeaf(Leaf *leaf)
     // the Leaf pointer.
     leaf->editor->disconnect(this);
     leaf->inlineTitle->disconnect(this);
+    if (leaf->view)
+        leaf->view->disconnect(this); // a module view's modificationChanged lambda holds the Leaf pointer
 #ifdef NOTEAPPC_HAVE_CANVAS
     // Its own canvas embeds' view state goes with it too - "until the note
     // is closed" means this, not whenever Qt gets around to deleting the
@@ -6497,10 +6499,8 @@ bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **v
     if (!moduleView)
         return false;
     moduleView->setTheme(m_theme);
-    if (!moduleView->load(path, error)) {
-        delete moduleView;
-        return false;
-    }
+    // Connected before load(): what a view says while it loads (a newer file opened read-only) is shown.
+    // A view whose load fails is deleted below, which drops these connections.
     Leaf *leaf = m_active;
     connect(moduleView, &ModuleView::modificationChanged, this, [this, leaf](bool modified) {
         if (leaf == m_active)
@@ -6513,6 +6513,10 @@ bool MainWindow::openModuleView(const QString &path, QString *error, QWidget **v
     connect(moduleView, &ModuleView::noteActivated, this, &MainWindow::openRelative);
     connect(moduleView, &ModuleView::statusMessage, this,
             [this](const QString &text, int timeout) { statusBar()->showMessage(text, timeout); });
+    if (!moduleView->load(path, error)) {
+        delete moduleView;
+        return false;
+    }
     *view = moduleView;
     return true;
 }

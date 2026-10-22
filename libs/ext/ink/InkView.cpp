@@ -2,7 +2,10 @@
 
 #include <QAction>
 #include <QActionGroup>
+#include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
+#include <QLabel>
 #include <QScrollBar>
 #include <QToolBar>
 #include <QVBoxLayout>
@@ -27,6 +30,8 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     auto *tools = new QActionGroup(this);
     m_penAction = tools->addAction(tr("Pen"));
     m_eraserAction = tools->addAction(tr("Eraser"));
+    m_penAction->setObjectName(QStringLiteral("inkPenAction"));
+    m_eraserAction->setObjectName(QStringLiteral("inkEraserAction"));
     for (QAction *a : {m_penAction, m_eraserAction})
         a->setCheckable(true);
     m_penAction->setChecked(true);
@@ -39,6 +44,10 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     m_toolBar->addActions({m_penAction, m_eraserAction});
     m_toolBar->addSeparator();
     m_toolBar->addActions({m_undoAction, m_redoAction});
+    auto *readOnlyLabel = new QLabel(tr("Read-only: written by a newer Notolith"));
+    readOnlyLabel->setObjectName(QStringLiteral("inkReadOnlyLabel"));
+    m_readOnlyAction = m_toolBar->addWidget(readOnlyLabel);
+    m_readOnlyAction->setVisible(false);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -77,21 +86,75 @@ void InkView::onEdited()
     }
 }
 
+InkView::DiskStamp InkView::stampOf(const QString &path)
+{
+    const QFileInfo info(path); // a new object: stats the file now
+    return info.exists() ? DiskStamp{info.size(), info.lastModified().toMSecsSinceEpoch()} : DiskStamp{};
+}
+
 bool InkView::load(const QString &path, QString *error)
 {
+    const DiskStamp stamp = stampOf(path); // before reading: a change during the read is seen at the next save
     InkReadResult result;
     if (!loadInkFile(path, m_canvas->document(), &result)) {
         if (error) *error = result.error;
         return false;
     }
     m_path = path;
+    m_stamp = stamp;
     m_readOnly = result.readOnly;
     m_canvas->setReadOnly(m_readOnly); // not setEnabled(false): a disabled widget would swallow wheel and touch pan too
+    m_penAction->setEnabled(!m_readOnly);
+    m_eraserAction->setEnabled(!m_readOnly);
+    m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);
     m_canvas->documentReplaced();
-    m_lastModified = false;
-    onEdited();
+    onEdited(); // a reload of a modified view clears the mark: the signal goes out from here
+    return true;
+}
+
+/// "<name> (conflict yyyy-MM-dd HHmmss).ink" beside the file; the sync engine's own copies are
+/// "(sync conflict, <device>, <stamp>)" but a module has no device ID. A second one in the same
+/// second gets a counter.
+QString InkView::conflictPathFor(const QString &path)
+{
+    const QFileInfo info(path);
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
+    const QDir dir = info.dir();
+    QString candidate = QStringLiteral("%1 (conflict %2).ink").arg(info.completeBaseName(), stamp);
+    for (int n = 2; dir.exists(candidate); ++n)
+        candidate = QStringLiteral("%1 (conflict %2 %3).ink").arg(info.completeBaseName(), stamp).arg(n);
+    return dir.filePath(candidate);
+}
+
+/// The file changed since this view read or wrote it (another machine's sync, another tab): never
+/// overwrite it. Nothing local to lose: show the disk version. Local edits: keep them in a conflict
+/// file, then show the disk version.
+bool InkView::resolveExternalChange(QString *error)
+{
+    const QString name = QFileInfo(m_path).fileName();
+    QString conflict;
+    if (isModified()) {
+        conflict = conflictPathFor(m_path);
+        if (!Vault::writeBytes(conflict, writeInk(m_canvas->document()), error))
+            return false; // the edits stay in the view; the disk file is untouched
+    }
+    const DiskStamp now = stampOf(m_path);
+    QString why;
+    if (!load(m_path, &why)) {
+        m_stamp = now; // the unreadable file is looked at once, not at every autosave
+        if (error)
+            *error = conflict.isEmpty() ? tr("%1 changed on disk and cannot be read: %2").arg(name, why)
+                                        : tr("%1 changed on disk and cannot be read (%2); your edits are in %3")
+                                              .arg(name, why, QFileInfo(conflict).fileName());
+        return false;
+    }
+    emit statusMessage(conflict.isEmpty()
+                           ? tr("%1 changed on disk: reloaded").arg(name)
+                           : tr("%1 changed on disk while you were editing it: your version is in %2")
+                                 .arg(name, QFileInfo(conflict).fileName()),
+                       8000);
     return true;
 }
 
@@ -105,9 +168,12 @@ bool InkView::save(QString *error)
         if (error) *error = tr("no file");
         return false;
     }
+    if (const DiskStamp now = stampOf(m_path); now.size >= 0 && now != m_stamp)
+        return resolveExternalChange(error);
     // The vault's atomic replace (spec section 5): writeInk() builds the bytes, the host writes them.
     if (!Vault::writeBytes(m_path, writeInk(m_canvas->document()), error))
         return false;
+    m_stamp = stampOf(m_path);
     m_canvas->document().markSaved();
     onEdited();
     return true;
