@@ -4406,6 +4406,107 @@ TEST(HtmlImgTest, AnOddSchemeRendersNothing)
     }
 }
 
+TEST(HtmlImgTest, ATallImageGrowsItsRowAndSitsInsideItsCell)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto plain = editorWith(kImgTable.arg(QStringLiteral("x")));
+    plain->setLinkResolver(fixture.resolver());
+    auto withImage = editorWith(kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"300\">")));
+    withImage->setLinkResolver(fixture.resolver());
+
+    // 100x50 at 300 wide is 150 tall: the row grows by about that much.
+    EXPECT_GT(withImage->documentHeight(), plain->documentHeight() + 100);
+    const QRectF cell = withImage->tableCellRect(0, 1, 1);
+    ASSERT_FALSE(cell.isEmpty());
+    EXPECT_GT(cell.height(), 150);
+    EXPECT_GE(cell.width(), 300); // the column is as wide as the image wants
+
+    // Block-local to viewport: cell (0, 0) starts at the block's origin.
+    const QRectF origin = withImage->tableCellRect(0, 0, 0);
+    const QRectF image = withImage->embedCellRectAt(0, 0).translated(origin.topLeft());
+    EXPECT_EQ(image.size(), QSizeF(300, 150));
+    EXPECT_TRUE(cell.contains(image)) << "image and cell rects disagree";
+}
+
+TEST(HtmlImgTest, AClickOnTheImageInACellPutsTheCaretInThatCell)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    const QString text = kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\">"));
+    auto editor = editorWith(text);
+    editor->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(editor->embedCellCountAt(0), 1);
+
+    const QRectF origin = editor->tableCellRect(0, 0, 0);
+    const QPoint inside = (editor->embedCellRectAt(0, 0).translated(origin.topLeft())).center().toPoint();
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, inside);
+
+    const qsizetype tag = text.indexOf(QStringLiteral("<img"));
+    EXPECT_GE(editor->cursorOffset(), tag);
+    EXPECT_LE(editor->cursorOffset(), text.indexOf(QLatin1Char('>'), tag) + 1);
+    EXPECT_EQ(editor->embedCellCountAt(0), 0) << "the cell shows its source now";
+}
+
+TEST(HtmlImgTest, TwoImagesInOneCellBothDrawAndStayInIt)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = editorWith(
+        kImgTable.arg(QStringLiteral("<img src=\"p.png\" width=\"40\"> <img src=\"p.png\" width=\"60\">")));
+    editor->setLinkResolver(fixture.resolver());
+
+    ASSERT_EQ(editor->embedCellCountAt(0), 2);
+    const QRectF origin = editor->tableCellRect(0, 0, 0);
+    const QRectF cell = editor->tableCellRect(0, 1, 1);
+    const QRectF first = editor->embedCellRectAt(0, 0).translated(origin.topLeft());
+    const QRectF second = editor->embedCellRectAt(0, 1).translated(origin.topLeft());
+    EXPECT_EQ(first.size(), QSizeF(40, 20));
+    EXPECT_EQ(second.size(), QSizeF(60, 30));
+    EXPECT_TRUE(cell.contains(first));
+    EXPECT_TRUE(cell.contains(second));
+    EXPECT_GE(second.left(), first.right()); // side by side, not on top of each other
+}
+
+TEST(HtmlImgTest, BothSizesAreCappedKeepingTheGivenRatio)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    for (const QString &source : {QStringLiteral("a <img src=\"p.png\" width=\"1\" height=\"99999\"> b\n"),
+                                  QStringLiteral("a ![[p.png|1x99999]] b\n")}) {
+        auto editor = editorWith(source);
+        editor->setLinkResolver(fixture.resolver());
+        ASSERT_EQ(editor->embedCellCountAt(0), 1) << qPrintable(source);
+        const QSizeF size = editor->embedCellRectAt(0, 0).size();
+        EXPECT_LE(size.height(), 4096) << qPrintable(source);
+        EXPECT_NEAR(size.width() / size.height(), 1.0 / 99999, 1e-6) << qPrintable(source);
+    }
+}
+
+TEST(HtmlImgTest, ATagOnItsOwnAcrossTwoLinesIsStillAnImgNotATranscludedFile)
+{
+    HtmlImgFixture fixture;
+    ASSERT_TRUE(fixture.dir.isValid());
+    // Not an HTML block (the tag is incomplete on its first line), so the
+    // paragraph is the one tag: the sole-embed path's case.
+    auto sized = editorWith(QStringLiteral("<img src=\"p.png\"\n     height=\"25\">\n"));
+    sized->setLinkResolver(fixture.resolver());
+    ASSERT_EQ(sized->embedCellCountAt(0), 1);
+    EXPECT_EQ(sized->embedCellRectAt(0, 0).size(), QSizeF(50, 25)); // aspect kept, not 100x25
+
+    const QString pdf = fixture.dir.filePath(QStringLiteral("doc.pdf"));
+    {
+        QFile file(pdf);
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("%PDF-1.4\n");
+    }
+    auto document = editorWith(QStringLiteral("<img src=\"doc.pdf\"\n     alt=\"a doc\">\n"));
+    document->setLinkResolver([&](const QString &) { return pdf; });
+    ASSERT_EQ(document->embedCellCountAt(0), 1);
+    EXPECT_EQ(document->embedCellLabelAt(0, 0), QStringLiteral("a doc"));
+    EXPECT_TRUE(document->embedCellRectAt(0, 0).height() <= 44) << "a small card, not a PDF page";
+}
+
 TEST(HtmlImgTest, AVoidImgDoesNotBreakAnEnclosingPair)
 {
     auto editor = editorWith(QStringLiteral("<b>one <img src=\"p.png\"> two</b>\n"));

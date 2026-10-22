@@ -2908,7 +2908,9 @@ const TableSpan *MarkdownEditor::tableFor(const BlockView &view) const
 const EmbedSpan *MarkdownEditor::soleEmbedOf(const BlockView &view) const
 {
     for (const EmbedSpan &embed : d->m_decorations.embeds) {
-        if (!embed.range.overlaps(view.span.range))
+        // An <img> is always an inline cell (buildEmbedCell): it never
+        // transcludes a note or a PDF the way a whole-block `![[x]]` does.
+        if (embed.html || !embed.range.overlaps(view.span.range))
             continue;
         // Only when the embed is the whole block; an image in the middle of a
         // sentence stays inline until Phase 3 finishes inline objects.
@@ -3016,10 +3018,9 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
     }
 
     // Obsidian caps an image at the readable column and honours |WxH.
-    int width = embed.width > 0 ? embed.width : pixmap.width();
-    width = qMin(width, contentWidth());
-    int height = embed.height > 0 ? embed.height
-                                  : int(qreal(width) * pixmap.height() / pixmap.width());
+    const QSizeF size = embedImageSize(embed, pixmap.size(), contentWidth());
+    const int width = qMax(1, qRound(size.width()));
+    const int height = qMax(1, qRound(size.height()));
 
     view.image = pixmap;
     view.imageSize = QSize(width, height);
@@ -3349,6 +3350,18 @@ bool MarkdownEditor::layoutTable(BlockView &view)
     const qreal available = contentWidth();
     const qreal columnCap = qMax(minimum * 4, available * 0.66);
     static const QByteArrayList imageFormats = QImageReader::supportedImageFormats();
+    // The embeds a cell can draw, by where they start, so each cell finds its
+    // own with a binary search instead of walking the note's every embed. An
+    // <img> or an image file; a PDF, a note or a file card stays text in a cell.
+    std::vector<const EmbedSpan *> tableEmbeds;
+    if (d->m_features.fileEmbeds) {
+        for (const EmbedSpan &embed : d->m_decorations.embeds) {
+            if (embed.html || imageFormats.contains(QFileInfo(embed.target).suffix().toLower().toUtf8()))
+                tableEmbeds.push_back(&embed);
+        }
+        std::sort(tableEmbeds.begin(), tableEmbeds.end(),
+                  [](const EmbedSpan *a, const EmbedSpan *b) { return a->range.start < b->range.start; });
+    }
 
     // Natural widths first, so the columns can be sized from their content
     // the way Obsidian does, then scaled down together if they do not fit.
@@ -3385,14 +3398,15 @@ bool MarkdownEditor::layoutTable(BlockView &view)
             // does in a paragraph: its first character stays as a transparent
             // carrier the image's width is reserved on, the rest is hidden.
             // The cell holding the caret shows the source instead.
-            // ponytail: walks every embed of the note per cell, which is fine
-            // until a note has thousands; index by range then.
-            for (const EmbedSpan &embed : d->m_decorations.embeds) {
-                if (editing || !d->m_features.fileEmbeds || embed.range.start < cell.source.start
-                    || embed.range.end > cell.source.end)
+            for (auto it = editing ? tableEmbeds.end()
+                                   : std::lower_bound(tableEmbeds.begin(), tableEmbeds.end(), cell.source.start,
+                                                      [](const EmbedSpan *embed, qsizetype start) {
+                                                          return embed->range.start < start;
+                                                      });
+                 it != tableEmbeds.end() && (*it)->range.start < cell.source.end; ++it) {
+                const EmbedSpan &embed = **it;
+                if (embed.range.end > cell.source.end)
                     continue;
-                if (!embed.html && !imageFormats.contains(QFileInfo(embed.target).suffix().toLower().toUtf8()))
-                    continue; // a PDF, a note, a file card: a cell shows those as text
                 EmbedCell built = buildEmbedCell(embed, columnCap - 2 * padX);
                 if (built.image.isNull() && !(built.isFileCard && embed.html))
                     continue; // an unresolved Markdown image stays its source

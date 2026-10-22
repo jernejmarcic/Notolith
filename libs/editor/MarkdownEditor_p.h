@@ -57,6 +57,31 @@ void strikeThrough(QTextCharFormat &format, const Theme &theme);
 /// Draws the lines `kStrikeLineProperty` asked for over `layout`, drawn at `origin`.
 void paintStrikeLines(QPainter &painter, const QTextLayout &layout, const QPointF &origin);
 
+/// The tallest an explicit `height` / `|WxH` may draw an image, in px.
+inline constexpr qreal kMaxEmbedHeight = 4096;
+
+/// The size an image embed draws at, given its natural size and the width
+/// available: one of `width` / `height` keeps the aspect ratio, both are taken
+/// as given, and the result is scaled down together - the ratio kept - to fit
+/// `maxWidth` and, when a height was asked for, `kMaxEmbedHeight`. Shared by a
+/// sole image block (layoutImage) and every inline cell (buildEmbedCell).
+inline QSizeF embedImageSize(const EmbedSpan &embed, const QSize &natural, qreal maxWidth)
+{
+    qreal width = embed.width > 0 ? embed.width : natural.width();
+    qreal height = width * natural.height() / qMax(1, natural.width());
+    if (embed.height > 0) {
+        height = embed.height;
+        if (embed.width <= 0)
+            width = height * natural.width() / qMax(1, natural.height());
+    }
+    qreal scale = 1;
+    if (width > maxWidth)
+        scale = maxWidth / width;
+    if (embed.height > 0 && height * scale > kMaxEmbedHeight)
+        scale = kMaxEmbedHeight / height;
+    return {width * scale, height * scale};
+}
+
 /// Everything modal editing remembers, in the editor because a count or a
 /// register belongs to one buffer. The logic is VimEngine, in VimMode.cpp,
 /// a short-lived friend built per keystroke.

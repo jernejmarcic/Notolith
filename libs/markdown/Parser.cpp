@@ -148,7 +148,7 @@ EmbedSpan embedOf(const Link &link)
 /// path or an http(s) URL: a `javascript:`, `data:` or `file:` source, or a
 /// protocol-relative `//host`, is never an embed (a remote URL is still the
 /// resolver's call, exactly as for a Markdown image).
-void htmlImageEmbed(const QString &text, const Range &range, Decorations &decorations)
+void HTMLimageEmbed(const QString &text, const Range &range, Decorations &decorations)
 {
     const QString tag = text.mid(range.start, range.length());
     static const QRegularExpression open(QStringLiteral("^<img\\b(.*?)/?>$"),
@@ -1529,7 +1529,7 @@ void walkItem(MD::Item *item, Walk &walk)
                 walk.decorations.blocks.append({BlockSpan::Kind::Html, range, 0});
                 htmlHeadings(*walk.text, range, walk.headings);
             } else if (walk.text) {
-                htmlImageEmbed(*walk.text, range, walk.decorations);
+                HTMLimageEmbed(*walk.text, range, walk.decorations);
             }
         }
         break;

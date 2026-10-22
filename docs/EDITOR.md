@@ -67,7 +67,7 @@ block of the editor is whole lines.
 
 **Inline `<img>`** (Obsidian draws one wherever it appears): an `<img
 src="docs/hit.png" width="400">` inside a paragraph, list item, quote or
-callout, or a table cell (pipe or HTML), is drawn as the image when the caret
+callout, or a pipe-table cell, is drawn as the image when the caret
 is not in it. It is the same inline embed `![[p.png|400]]` and `![](p.png)`
 produce (the parser emits the same `EmbedSpan`, marked `html`, and
 `collectTextEmbeds` / `layoutTable` draw it), so resolving, the size cap,
@@ -82,14 +82,17 @@ the image cache and the reveal are shared with them:
   note) is a missing file, not an embed of it.
 - `width` and `height` are pixels, bare or with `px` (a `%` is ignored, so
   the image shows at its own size). One of them keeps the aspect ratio; both
-  are taken as given; the width is capped at the readable column (at 66% of
+  are taken as given and, with the width capped, scaled down together (a
+  height is also capped at 4096 px, ratio kept, as for `|WxH`); the width is capped at the readable column (at 66% of
   it, in a table cell). `alt` is shown on a small card when the file is
   missing or unreadable (the file name when there is no `alt`).
 - The tag is source while the caret is in it, or anywhere in the block (the
   cell, for a table), like any embed.
 - A tag with no `src`, an unclosed quote or a stray token stays source text.
 - A top-level `<img>` on a line of its own is still an HTML block drawn by
-  litehtml (above), not this path. Not done: animated GIFs (Markdown GIF
+  litehtml (above), not this path, while the same tag after `- ` in a list or
+  `> ` in a quote takes this one; an `<img>` inside an HTML `<table>` also stays
+  with litehtml (the table is an HTML block). Not done: animated GIFs (Markdown GIF
   embeds do not animate either, both draw the first frame), `%` widths, and
   `<img>` as a link target or in the backlink index.
 - A Markdown image, `![[p.png|40]]` or `![](p.png)`, in a table cell is drawn

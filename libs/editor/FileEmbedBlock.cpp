@@ -653,19 +653,10 @@ MarkdownEditor::EmbedCell MarkdownEditor::buildEmbedCell(const EmbedSpan &embed,
             // for a small thumbnail should get one here too, not the row's
             // whole share just because it is sharing a line with another
             // embed.
-            // One of the two sizes keeps the aspect, both are taken as given
-            // (`|300x200`, `width= height=`), and the row's share caps it.
-            qreal width = embed.width > 0 ? embed.width : pixmap.width();
-            qreal height = width * pixmap.height() / qMax(1, pixmap.width());
-            if (embed.height > 0) {
-                height = embed.height;
-                if (embed.width <= 0)
-                    width = height * pixmap.width() / qMax(1, pixmap.height());
-            }
-            if (width > maxWidth) {
-                height *= maxWidth / width;
-                width = maxWidth;
-            }
+            // |width and `width=` apply to a cell in a row too, capped by its share.
+            const QSizeF size = embedImageSize(embed, pixmap.size(), maxWidth);
+            const qreal width = size.width();
+            const qreal height = size.height();
             cell.image = pixmap;
             cell.rect = QRectF(0, 0, width, height);
             cell.openPath = path;
