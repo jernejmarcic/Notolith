@@ -253,6 +253,9 @@ MainWindow::~MainWindow()
     // m_settings, which it writes through. So they write now.
     for (auto *view : findChildren<ModuleView *>())
         view->flushSettings();
+    for (const auto &popout : m_popouts) // top-levels of their own, destroyed after m_settings too
+        for (auto *view : popout->findChildren<ModuleView *>())
+            view->flushSettings();
     m_sync.reset(); // its thread stops and joins here
 #ifdef NOTEAPPC_HAVE_SHARE
     qDeleteAll(m_sessions); // they point at the engine, which saves every share as it goes

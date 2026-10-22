@@ -8877,4 +8877,33 @@ TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
     EXPECT_DOUBLE_EQ(canvas->document().items()[0].stroke->style.width, 5.5);
 }
 
+// F1: a popout is a top-level of its own, not a child of the window: its ink view still holds a pen learned a moment ago when the
+// window goes, and the window must flush it before its Settings are destroyed.
+TEST_F(InkWindowTest, APenLearnedInAPopoutIsSavedWhenTheWindowGoesWithItsPopoutStillOpen)
+{
+    write(QStringLiteral("Sketch.ink"), kEmptyInk);
+    const QString key = QStringLiteral("ink.pressureByDevice");
+    {
+        MainWindow window;
+        noteAppC::ModuleView *view = nullptr;
+        noteAppC::ink::InkCanvas *canvas = nullptr;
+        openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+        ASSERT_NE(canvas, nullptr);
+        command(window, "workspace:move-to-new-window")->trigger();
+        const auto popouts = popoutWindows();
+        ASSERT_EQ(popouts.size(), 1);
+        auto *inPopout = popouts.first()->findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
+        ASSERT_NE(inPopout, nullptr) << "the ink tab moved into the popout";
+        ASSERT_EQ(window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView")), nullptr) << "and is no child of the window";
+        canvas = inPopout->findChild<noteAppC::ink::InkCanvas *>(QStringLiteral("inkCanvas"));
+        ASSERT_NE(canvas, nullptr);
+        for (int i = 0; i < 25; ++i)
+            inktest::penStroke(canvas, QPointF(20, 10 + 10 * i), QPointF(200, 10 + 10 * i), 1000 + i * 100, Qt::LeftButton,
+                               QPointingDevice::PointerType::Pen, 0.657);
+        ASSERT_TRUE(Settings::load().value(key).toString().isEmpty()) << "the timer has not fired: the value waits in memory";
+    } // the window goes, the popout is never closed
+    const QJsonObject map = QJsonDocument::fromJson(Settings::load().value(key).toString().toUtf8()).object();
+    EXPECT_NEAR(map.value(QStringLiteral("test pen")).toDouble(), 0.657, 1e-9) << "flushed from the popout's view too";
+}
+
 #endif
