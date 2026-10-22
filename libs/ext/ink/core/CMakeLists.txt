@@ -32,6 +32,7 @@ FetchContent_MakeAvailable(ink_stroke_modeler)
 add_library(notolith-inkcore SHARED
     InkCanvas.cpp
     InkCanvas.h
+    InkCanvasSelection.cpp
     InkDocument.cpp
     InkDocument.h
     InkFormat.cpp
