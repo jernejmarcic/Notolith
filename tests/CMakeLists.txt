@@ -119,6 +119,7 @@ set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT
     "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules:${CMAKE_BINARY_DIR}/modules")
 if(TARGET notolith-ink)
     add_dependencies(test_window notolith-ink)
+    target_compile_definitions(test_window PRIVATE NOTEAPPC_HAVE_INK_MODULE) # the ink tests in test_window.cpp
 endif()
 # Track S1b's glyph studio (libs/ext/hwfont): S1b creates the directory and
 # tests/test_hwfont.cpp; until noteAppC_hwfont exists this block does nothing.

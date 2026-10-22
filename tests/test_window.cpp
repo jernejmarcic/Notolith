@@ -7824,6 +7824,7 @@ TEST_F(WindowTest, AModuleThatFailsToLoadIsReportedInSettingsWithTheLoadersMessa
     EXPECT_TRUE(notice->text().contains(QStringLiteral("noteappcFakeMissingSymbol")));
 }
 
+#ifdef NOTEAPPC_HAVE_INK_MODULE // set when the build has notolith-ink; with NOTEAPPC_WITH_INK=OFF these tests do not exist
 // The handwritten-note module (spec section 4, Task 8): the real notolith-ink.so from
 // ${CMAKE_BINARY_DIR}/modules, found through NOTEAPPC_MODULE_DIRS.
 TEST_F(WindowTest, AnInkFileOpensInTheInkViewAndSavesThroughTheWindow)
@@ -7974,6 +7975,7 @@ TEST_F(WindowTest, AnInkFileThatCannotBeReadIsReportedAndNoViewOpens)
     EXPECT_TRUE(warning.contains(QStringLiteral("Broken.ink could not be read"))) << "the reader's message: " << warning.toStdString();
     EXPECT_EQ(window.findChild<QWidget *>(QStringLiteral("inkView")), nullptr);
 }
+#endif
 
 // R6: a file-less module tab shows the modified mark, the save command calls its save(), and
 // closing it saves it like a note (autosave is on by default) without asking.
@@ -8060,6 +8062,7 @@ TEST_F(WindowTest, AFileLessModuleTabAsksBeforeClosingWhenAutosaveIsOffAndSavesO
     EXPECT_EQ(file.readAll().count("saved"), 1) << "Save called the view's save()";
 }
 
+#ifdef NOTEAPPC_HAVE_INK_MODULE
 // Jernej's decision: the mouse draws only when inking with it is explicitly on (a pen always draws).
 // The row is registered by the module and reaches an already open view through applySettings.
 TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSettings)
@@ -8094,3 +8097,4 @@ TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSe
     drag();
     EXPECT_TRUE(view->isModified()) << "on: the live view took the setting without being reopened";
 }
+#endif
