@@ -25,3 +25,12 @@ if(TARGET noteAppC_pdfview)
     target_link_libraries(noteAppC-bench PRIVATE noteAppC_pdfview)
     target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_PDFVIEW)
 endif()
+
+# The handwriting rows (phase `ink`): only with the ink core built, the same
+# guarded-link shape as the EPUB and PDF rows above. noteAppC_ink is the static
+# InkView library the index tests link too (it carries notolith-inkcore).
+if(TARGET noteAppC_ink)
+    target_link_libraries(noteAppC-bench PRIVATE noteAppC_ink)
+    target_compile_definitions(noteAppC-bench PRIVATE NOTEAPPC_HAVE_INK
+        NOTEAPPC_INK_MODULE_DIR="${CMAKE_BINARY_DIR}/modules")
+endif()
