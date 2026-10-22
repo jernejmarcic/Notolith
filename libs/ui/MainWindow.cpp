@@ -40,6 +40,8 @@
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPointer>
+#include <QEventLoop>
+#include <QElapsedTimer>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QPushButton>
@@ -7574,8 +7576,26 @@ QStringList MainWindow::autosave()
     return QStringList(saved.cbegin(), saved.cend());
 }
 
+void MainWindow::waitForModuleLoad(Leaf *leaf)
+{
+    const QPointer<QWidget> view = leaf->view;
+    if (!qobject_cast<ModuleView *>(view.data()) || !view->property("loading").toBool())
+        return;
+    QEventLoop loop;
+    QTimer poll; // the view says nothing when its parse lands: ask
+    QElapsedTimer waited;
+    waited.start();
+    connect(&poll, &QTimer::timeout, &loop, [&] {
+        if (!view || !view->property("loading").toBool() || waited.elapsed() > kModuleLoadWaitMs)
+            loop.quit();
+    });
+    poll.start(10);
+    loop.exec();
+}
+
 bool MainWindow::maybeSave()
 {
+    waitForModuleLoad(m_active); // a reload in flight is not a failed save: let it land, then see what is left to keep
     // A file-less module tab (the glyph studio) has no path but keeps the save contract (R6).
     const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
     if ((m_active->notePath.isEmpty() && !fileLess) || !isModified(m_active))

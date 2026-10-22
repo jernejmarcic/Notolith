@@ -8,13 +8,16 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QComboBox>
 #include <QDir>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QSignalSpy>
+#include <QToolBar>
 #include <QTemporaryDir>
 
 #include <QScrollArea>
@@ -101,18 +104,22 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_TRUE(view.property("readOnly").toBool()) << "the flag a test without the class can read";
     ASSERT_EQ(status.count(), 1);
     EXPECT_TRUE(status.first().first().toString().contains(QStringLiteral("read-only")));
-    view.resize(1000, 600); // wide enough for every toolbar action: a narrower toolbar moves the label into its overflow menu
+    view.resize(320, 500); // narrower than the toolbar: the notice is a banner above the canvas, never in the toolbar's overflow menu
     view.show();
     auto *label = view.findChild<QLabel *>(QStringLiteral("inkReadOnlyLabel"));
     ASSERT_NE(label, nullptr);
     EXPECT_FALSE(label->isHidden()) << "a persistent indicator, not only a status message";
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
+    auto *toolBar = view.findChild<QToolBar *>();
+    ASSERT_NE(toolBar, nullptr);
+    EXPECT_FALSE(toolBar->isAncestorOf(label)) << "outside the toolbar";
+    EXPECT_TRUE(label->isVisible()) << "on screen at any width";
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_pen"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_eraser"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_lasso"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkShapeAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTextAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_shape"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_text"))->isEnabled());
     EXPECT_FALSE(view.save(&error));
     EXPECT_EQ(readAll(path), newer);
 }
@@ -206,16 +213,15 @@ TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
     WAIT_TRUE(!view.isLoading(), 5000);
     view.show();
     EXPECT_TRUE(view.canvas()->isReadOnly());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_pen"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_eraser"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_lasso"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
-    auto *notice = view.findChild<QAction *>(QStringLiteral("inkErrorAction"));
-    ASSERT_NE(notice, nullptr);
-    EXPECT_TRUE(notice->isVisible()) << "a persistent notice, not only an 8 s status message";
     auto *label = view.findChild<QLabel *>(QStringLiteral("inkErrorLabel"));
     ASSERT_NE(label, nullptr);
+    EXPECT_TRUE(label->isVisible()) << "a persistent notice, not only an 8 s status message";
+    EXPECT_FALSE(view.findChild<QToolBar *>()->isAncestorOf(label)) << "outside the toolbar, so it cannot fall into its overflow menu";
     EXPECT_TRUE(label->text().contains(QStringLiteral("Sketch.ink"))) << label->text().toStdString();
     ASSERT_GE(status.count(), 1);
     penStroke(view.canvas(), QPointF(50, 50), QPointF(120, 90), 1000);
@@ -450,7 +456,7 @@ TEST(InkViewToolbarTest, TheEraseWholeOrPartsToggleIsOnTheToolbarAndOnShiftE)
 TEST(InkViewToolbarTest, SelectAndRectangleSelectAreOnTheToolbarAndOnTheirKeys)
 {
     InkView view(nullptr);
-    auto *select = view.findChild<QAction *>(QStringLiteral("inkSelectAction"));
+    auto *select = view.findChild<QAction *>(QStringLiteral("inkTool_lasso"));
     auto *rect = view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"));
     ASSERT_NE(select, nullptr);
     ASSERT_NE(rect, nullptr);
@@ -464,7 +470,7 @@ TEST(InkViewToolbarTest, SelectAndRectangleSelectAreOnTheToolbarAndOnTheirKeys)
     EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso);
     QTest::keyClick(view.canvas(), Qt::Key_P);
     EXPECT_FALSE(select->isChecked()) << "the key moves the toolbar too";
-    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked());
+    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkTool_pen"))->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_L, Qt::ShiftModifier);
     EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso);
     EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Lasso);
@@ -477,7 +483,7 @@ TEST(InkViewToolbarTest, SelectAndRectangleSelectAreOnTheToolbarAndOnTheirKeys)
 TEST(InkViewToolbarTest, TheShapeToolIsOnTheToolbarWithAMenuOfFourKindsAndOnItsKeys)
 {
     InkView view(nullptr);
-    auto *shape = view.findChild<QAction *>(QStringLiteral("inkShapeAction"));
+    auto *shape = view.findChild<QAction *>(QStringLiteral("inkTool_shape"));
     ASSERT_NE(shape, nullptr);
     EXPECT_TRUE(shape->isCheckable());
     QAction *kinds[4] = {};
@@ -494,8 +500,8 @@ TEST(InkViewToolbarTest, TheShapeToolIsOnTheToolbarWithAMenuOfFourKindsAndOnItsK
     shape->trigger();
     EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Shape);
     EXPECT_TRUE(shape->isChecked());
-    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked()) << "not the pen in disguise";
-    view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->trigger();
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTool_pen"))->isChecked()) << "not the pen in disguise";
+    view.findChild<QAction *>(QStringLiteral("inkTool_eraser"))->trigger();
     EXPECT_FALSE(shape->isChecked());
     kinds[3]->trigger();
     EXPECT_EQ(view.canvas()->shapeKind(), ShapeKind::Ellipse) << "the menu drives the canvas";
@@ -507,7 +513,7 @@ TEST(InkViewToolbarTest, TheShapeToolIsOnTheToolbarWithAMenuOfFourKindsAndOnItsK
     EXPECT_FALSE(kinds[3]->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_P);
     EXPECT_FALSE(shape->isChecked());
-    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked());
+    EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkTool_pen"))->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_S);
     EXPECT_TRUE(shape->isChecked()) << "S picks the tool, whatever the kind";
 }
@@ -537,8 +543,8 @@ TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
 TEST(InkViewToolbarTest, TheTextToolIsOnTheToolbarAndOnItsKeyAndIsNotThePenInDisguise)
 {
     InkView view(nullptr);
-    auto *text = view.findChild<QAction *>(QStringLiteral("inkTextAction"));
-    auto *pen = view.findChild<QAction *>(QStringLiteral("inkPenAction"));
+    auto *text = view.findChild<QAction *>(QStringLiteral("inkTool_text"));
+    auto *pen = view.findChild<QAction *>(QStringLiteral("inkTool_pen"));
     ASSERT_NE(text, nullptr);
     EXPECT_TRUE(text->isCheckable());
     EXPECT_FALSE(text->isChecked());
@@ -760,4 +766,110 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
+}
+
+TEST(InkViewToolbarTest, TheSelectButtonHasALassoAndARectangleKindAndTheShapeFaceShowsTheKind)
+{
+    InkView view(nullptr);
+    auto *select = view.findChild<QAction *>(QStringLiteral("inkTool_lasso"));
+    auto *lasso = view.findChild<QAction *>(QStringLiteral("inkSelectLassoAction"));
+    auto *rect = view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"));
+    ASSERT_NE(select, nullptr);
+    ASSERT_NE(lasso, nullptr);
+    ASSERT_NE(rect, nullptr);
+    ASSERT_NE(select->menu(), nullptr);
+    EXPECT_EQ(select->menu()->actions().size(), 2);
+    EXPECT_TRUE(lasso->isChecked());
+    rect->trigger();
+    EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Rect);
+    EXPECT_FALSE(lasso->isChecked());
+    lasso->trigger();
+    EXPECT_EQ(view.canvas()->selectShape(), InkCanvas::SelectShape::Lasso);
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Lasso) << "one click is enough";
+
+    auto *shape = view.findChild<QAction *>(QStringLiteral("inkTool_shape"));
+    ASSERT_NE(shape, nullptr);
+    EXPECT_EQ(shape->text(), QStringLiteral("Line")) << "the face shows the kind";
+    view.findChild<QAction *>(QStringLiteral("inkShapeEllipseAction"))->trigger();
+    EXPECT_EQ(shape->text(), QStringLiteral("Ellipse"));
+    QTest::keyClick(view.canvas(), Qt::Key_S, Qt::ShiftModifier);
+    EXPECT_EQ(shape->text(), QStringLiteral("Line"));
+    QTest::keyClick(view.canvas(), Qt::Key_S, Qt::ShiftModifier);
+    EXPECT_EQ(view.canvas()->shapeKind(), ShapeKind::Arrow) << "from Line the next kind, not Line again";
+    EXPECT_EQ(shape->text(), QStringLiteral("Arrow"));
+}
+
+TEST_F(InkViewFileTest, ALeftDragWithTheMouseScrollsTheAreaUnlessDrawWithMouseIsOn)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    view.resize(500, 300);
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    auto *area = view.findChild<QScrollArea *>();
+    ASSERT_NE(area, nullptr);
+    EXPECT_EQ(view.canvas()->cursor().shape(), Qt::OpenHandCursor) << "the mouse cannot draw: a hand";
+    ASSERT_GT(area->verticalScrollBar()->maximum(), 100) << "an A4 page in a 300 px view";
+    const int before = view.canvas()->document().items().size();
+    QTest::mousePress(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(100, 200));
+    EXPECT_EQ(view.canvas()->cursor().shape(), Qt::ClosedHandCursor) << "while it is held";
+    QTest::mouseMove(view.canvas(), QPoint(100, 150));
+    QTest::mouseRelease(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(100, 150));
+    EXPECT_EQ(area->verticalScrollBar()->value(), 50) << "the page follows the pointer";
+    EXPECT_EQ(view.canvas()->cursor().shape(), Qt::OpenHandCursor);
+    EXPECT_EQ(view.canvas()->document().items().size(), size_t(before)) << "nothing was drawn";
+    EXPECT_FALSE(view.isModified());
+    view.canvas()->setDrawWithMouse(true);
+    EXPECT_EQ(view.canvas()->cursor().shape(), Qt::CrossCursor);
+    area->verticalScrollBar()->setValue(0);
+    QTest::mousePress(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(100, 100));
+    QTest::mouseMove(view.canvas(), QPoint(160, 130));
+    QTest::mouseRelease(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(160, 130));
+    EXPECT_EQ(area->verticalScrollBar()->value(), 0) << "drawing, not scrolling";
+    EXPECT_TRUE(view.isModified());
+}
+
+TEST_F(InkViewFileTest, APageSettingTheFileCouldNotBeReadBackWithIsRefusedAndNothingChanges)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    auto *width = view.findChild<QDoubleSpinBox *>(QStringLiteral("inkPageWidthSpin"));
+    ASSERT_NE(width, nullptr);
+    const DocumentSettings before = view.canvas()->document().settings();
+    const double shown = width->value();
+    width->setRange(-100, 3000); // the spin's own range keeps a person from this; the document refuses it all the same
+    width->setValue(-5);
+    EXPECT_EQ(view.canvas()->document().settings().format.width, before.format.width) << "setSettings said no: nothing changed";
+    EXPECT_FALSE(view.canvas()->document().canUndo()) << "and no history step was made";
+    EXPECT_FALSE(view.isModified());
+    EXPECT_EQ(width->value(), shown) << "the menu shows the page as it is";
+    ASSERT_EQ(status.count(), 1);
+    EXPECT_TRUE(status.first().first().toString().contains(QStringLiteral("cannot be used")));
+}
+
+TEST_F(InkViewFileTest, EveryPageChangeIsOneUndoStepAndAnExtentFollowsTheFormat)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    InkDocument &doc = view.canvas()->document();
+    auto *add = view.findChild<QAction *>(QStringLiteral("inkAddPageAction"));
+    ASSERT_NE(add, nullptr);
+    add->trigger();
+    add->trigger();
+    ASSERT_EQ(doc.pageCount(), 3);
+    auto *format = view.findChild<QComboBox *>(QStringLiteral("inkPageFormatCombo"));
+    ASSERT_NE(format, nullptr);
+    format->setCurrentIndex(format->findData(QStringLiteral("letter")));
+    EXPECT_EQ(doc.pageCount(), 3) << "the pages stay three, at the new size";
+    EXPECT_NEAR(doc.settings().extent.height(), 3 * doc.settings().format.height, 1e-6);
+    ASSERT_TRUE(view.canvas()->undo());
+    EXPECT_EQ(doc.pageCount(), 3) << "one step took the format back";
+    EXPECT_NEAR(doc.settings().format.width, 793.701, 1e-6);
+    ASSERT_TRUE(view.canvas()->undo());
+    EXPECT_EQ(doc.pageCount(), 2) << "one step per added page";
+    EXPECT_EQ(format->currentData().toString(), QStringLiteral("a4")) << "the menu follows";
 }

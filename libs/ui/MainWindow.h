@@ -645,6 +645,11 @@ private:
     QAction *addModuleCommand(const QString &id, const QString &title);
     bool openModuleView(const QString &path, QString *error, QWidget **view);
     void showModuleTab(ModuleView *view, const QString &title);
+    /// A module view that is still parsing a reload (its "loading" property) holds the document the load is about to
+    /// replace, and its save() refuses until then. Closing or quitting waits for the load (an event loop, at most
+    /// kModuleLoadWaitMs) and then judges what is modified: "still loading" is retry-after-load, not a failed save.
+    void waitForModuleLoad(Leaf *leaf);
+    static constexpr int kModuleLoadWaitMs = 15000;
     /// Spelling for the editor, from the spellcheck module when it is compiled
     /// in: the dictionaries load on the thread pool once the window has been
     /// painted, and the editor gets them when they are ready. A no-op in a
