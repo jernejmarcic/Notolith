@@ -1,0 +1,103 @@
+#pragma once
+
+#include <memory>
+#include <vector>
+
+#include <QPointF>
+#include <Qt>
+
+#include "InkTypes.h"
+
+namespace noteAppC::ink {
+
+// Spike results (tools/inkspike on PADD, 2026-10-22; the measured values are in
+// the session's NOTES.md). Change only from a new measurement, never the names
+// or shapes. PADD's pen has a tip only and its buttons do not work, so the held
+// buttons are a bonus: every tool is also on the toolbar and on a key (Task 7).
+inline constexpr Qt::MouseButton kHeldEraserButton = Qt::MiddleButton; ///< BTN_STYLUS
+inline constexpr Qt::MouseButton kHeldLassoButton = Qt::RightButton;   ///< BTN_STYLUS2
+inline constexpr bool kTrustEraserPointerType = true;                  ///< no eraser end seen on PADD; harmless where one exists
+inline constexpr double kInputRateHz = 120.0;                          ///< PADD in contact; feeds only the modeler's min_output_rate
+inline constexpr QPointF kFractionalScaleOffset{0.0, 0.0};             ///< device pixel ratio 2 showed no offset; subtracted from tablet widget positions by InkCanvas
+
+struct InkSample {
+    QPointF position; ///< document px
+    double pressure = 0.5; ///< 0..1; anything else is clamped, a negative "unknown" becomes 0.5
+    double timeSeconds = 0; ///< QInputEvent::timestamp() / 1000.0
+};
+
+/// R14 (the PADD spike: pressure never exceeds 0.657, median 0.21). Divides raw
+/// pressure by a per-device learned maximum, so a pen that tops out low still
+/// draws full-width lines. The canvas keeps one per device name (Task 7).
+/// - Starts at 1.0: no change.
+/// - After kCalibrationSamples samples above kStrongFraction of the current
+///   maximum it takes the peak seen as the maximum. That can LOWER it from the
+///   1.0 default, which is the point.
+/// - From then on it only rises, when a harder press exceeds it.
+/// - Unknown pressure (negative, NaN) passes through; InkInput makes it 0.5.
+class PressureNormaliser {
+public:
+    static constexpr int kCalibrationSamples = 200;
+    static constexpr double kStrongFraction = 0.3;
+    static constexpr double kMinimumMax = 0.1; ///< a broken device reporting ~0 must not scale everything up to 1
+
+    double normalise(double raw); ///< min(1, raw / learnedMax()); learns as a side effect
+    double learnedMax() const { return m_learnedMax; }
+    /// A stored value (setting ink.pressureByDevice, Task 16). Below 1.0 it counts as
+    /// already calibrated; it is not reported by takeChanged().
+    void setLearnedMax(double max);
+    bool takeChanged(); ///< true once after learning changed the maximum: the canvas persists it
+
+private:
+    double m_learnedMax = 1.0;
+    double m_peak = 0.0;
+    int m_strongSamples = 0;
+    bool m_calibrated = false;
+    bool m_changed = false;
+};
+
+/// One stroke's samples through ink-stroke-modeler (spec section 7, Input):
+/// wobble smoothing, the spring position model and a predicted tail, with
+/// Rnote's parameters. Raw mode passes samples straight through.
+class InkInput {
+public:
+    InkInput();
+    ~InkInput();
+    InkInput(const InkInput &) = delete;
+    InkInput &operator=(const InkInput &) = delete;
+
+    void setRawInput(bool raw) { m_raw = raw; }
+    void begin(const InkSample &sample, const StrokeStyle &style);
+    void extend(const InkSample &sample);
+    void end(const InkSample &sample);
+    bool active() const { return m_active; }
+
+    const Stroke &stroke() const { return m_stroke; }
+    const std::vector<StrokePoint> &prediction() const { return m_prediction; }
+    size_t newPointsSinceLastTake() const { return m_newPoints; }
+    size_t takeNewPoints();
+    std::shared_ptr<const Stroke> finish(); ///< nullptr while active, or when there is no stroke (a pen-down that was not a number)
+    int droppedSamples() const { return m_dropped; } ///< strictly backwards or non-finite samples skipped
+
+private:
+    struct Modeler; // hides the ink_stroke_modeler headers from the canvas
+    void feed(const InkSample &sample, int eventType);
+    void flushPending();
+    static bool usable(const InkSample &sample);
+    void appendPoint(const QPointF &position, double pressure);
+    static double cleanPressure(double pressure);
+
+    std::unique_ptr<Modeler> m_modeler;
+    Stroke m_stroke;
+    std::vector<StrokePoint> m_prediction;
+    size_t m_newPoints = 0;
+    int m_dropped = 0;
+    double m_lastTime = -1;   ///< the newest accepted sample's time, fed or pending
+    InkSample m_last;         ///< the newest accepted sample: a pen-up that is not a number ends the stroke here
+    InkSample m_pending;      ///< the newest move, held until the next sample shows it was not replaced
+    bool m_hasPending = false;
+    bool m_active = false;
+    bool m_raw = false;
+};
+
+} // namespace noteAppC::ink

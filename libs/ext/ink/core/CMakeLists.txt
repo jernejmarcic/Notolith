@@ -34,6 +34,8 @@ add_library(notolith-inkcore SHARED
     InkDocument.h
     InkFormat.cpp
     InkFormat.h
+    InkInput.cpp
+    InkInput.h
     InkTypes.cpp
     InkTypes.h
     SpatialGrid.cpp
@@ -55,4 +57,7 @@ target_include_directories(notolith-inkcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(notolith-inkcore
     PUBLIC Qt6::Widgets Qt6::Concurrent
     PRIVATE InkStrokeModeler::stroke_modeler ZLIB::ZLIB)
+# The modeler sets its include root directory-wide, not on its target, so name it here:
+# its headers are included as <ink_stroke_modeler/...>.
+target_include_directories(notolith-inkcore PRIVATE ${ink_stroke_modeler_SOURCE_DIR})
 install(TARGETS notolith-inkcore LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
