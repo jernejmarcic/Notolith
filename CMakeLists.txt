@@ -102,6 +102,14 @@ option(NOTEAPPC_WITH_PDFVIEW "Open and annotate PDFs in a tab (poppler-qt6)" ON)
 # draw on and note, the marks kept in a sidecar note beside it. Qt Widgets
 # only - no new dependency - so it has no tool to look for, just this switch.
 option(NOTEAPPC_WITH_IMAGEVIEW "Highlight, draw on and annotate images, in a sidecar note" ON)
+# Handwriting (docs/INK.md, spec docs/superpowers/specs/2026-10-21-ink-core-design.md):
+# the ink core as a shared library and the handwritten-note tab as a loadable
+# module (libs/ext/ink), the glyph studio as another (libs/ext/hwfont). Off,
+# nothing ink is built and the app has no ink symbol; on, the modules are
+# separate install units the base binary never links (spec section 3).
+# ink-stroke-modeler is fetched and pinned in libs/ext/ink/core/CMakeLists.txt.
+option(NOTEAPPC_WITH_INK "Build the ink core and the handwritten-note module (libs/ext/ink)" ON)
+option(NOTEAPPC_WITH_HWFONT "Build the handwriting-font glyph studio module (libs/ext/hwfont)" ON)
 # Tier 2 (docs/PLUGINS.md): runtime plugins, each loaded inside its own
 # `noteAppC-plugin-host` process (tools/plugin_host), never in the app. No
 # external dependency at this level - only Qt, libdl and bubblewrap when
@@ -334,6 +342,21 @@ if(NOTEAPPC_WITH_PDFVIEW AND noteappc_have_poppler)
 endif()
 if(NOTEAPPC_WITH_IMAGEVIEW)
     add_subdirectory(libs/ext/imageview)
+endif()
+if(NOTEAPPC_WITH_INK AND NOT ANDROID)
+    # System Abseil is required (R3): there is no bundled copy. Without it the ink
+    # core and the note module are not built, and the rest of the app is unchanged.
+    find_package(absl QUIET)
+    if(absl_FOUND)
+        add_subdirectory(libs/ext/ink)
+    else()
+        message(STATUS "Abseil not found: the ink core and the handwritten-note module are not built (install abseil-cpp)")
+        set(NOTEAPPC_WITH_INK OFF)
+    endif()
+endif()
+# Track S1b creates this directory after milestone A0; until then there is nothing to add.
+if(NOTEAPPC_WITH_HWFONT AND TARGET notolith-inkcore AND IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/libs/ext/hwfont)
+    add_subdirectory(libs/ext/hwfont)
 endif()
 if(NOTEAPPC_WITH_PLUGINS)
     add_subdirectory(libs/ext/plugins)

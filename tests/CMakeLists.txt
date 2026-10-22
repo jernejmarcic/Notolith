@@ -399,6 +399,17 @@ add_executable(test_lists test_lists.cpp)
 target_link_libraries(test_lists PRIVATE noteAppC_editor noteAppC_render Qt6::Test GTest::gtest)
 add_test(NAME lists COMMAND test_lists)
 
+# The ink core (libs/ext/ink/core): model, format, outline, input, canvas.
+if(TARGET notolith-inkcore)
+    add_executable(test_ink test_ink.cpp)
+    find_package(ZLIB REQUIRED) # the gzip helper in the format tests (imported targets are directory-scoped)
+    target_link_libraries(test_ink PRIVATE notolith-inkcore Qt6::Test GTest::gtest ZLIB::ZLIB)
+    target_compile_definitions(test_ink PRIVATE NOTEAPPC_INK_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/fixtures/ink/golden")
+    set_target_properties(test_ink PROPERTIES ENABLE_EXPORTS ON BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME ink COMMAND test_ink)
+    set_tests_properties(ink PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
 # sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads
