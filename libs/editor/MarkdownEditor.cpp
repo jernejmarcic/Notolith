@@ -292,6 +292,7 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
 {
     m_resolver = std::move(resolver);
     d->m_images.clear();
+    clearGifs();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -707,6 +708,7 @@ void MarkdownEditor::setMode(Mode mode)
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
+    clearGifs();
     if (d->m_media)
         d->m_media->stop();
     d->m_text = text;
@@ -4549,6 +4551,7 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // The property editor is a widget over the table, and would stay put
     // while the table moved away under it.
     finishPropertyEdit(true);
+    pruneGifs(); // a GIF that scrolled out of view stops here, not a frame later
     // Blocks scrolling into reach need their real layout; the rest of what
     // updateLayout() settles does not change with the scroll position, so a
     // note already laid out around the new position is left alone. That pass
@@ -4746,7 +4749,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                 view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
             const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
                                 view.imageSize.height());
-            painter.drawPixmap(target.toRect(), view.image);
+            painter.drawPixmap(target.toRect(), gifFrame(painter, view.imagePath, target, view.image));
             continue;
         }
         if (view.isBase && !view.cells.empty()) {
@@ -5155,6 +5158,13 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
     // Also called for the viewport's own resize (a scrollbar showing).
     relayoutIfWidthChanged();
     positionFindBar();
+    pruneGifs();
+}
+
+void MarkdownEditor::hideEvent(QHideEvent *event)
+{
+    clearGifs(); // nothing plays in a hidden editor; the next paint starts what is on screen again
+    QAbstractScrollArea::hideEvent(event);
 }
 
 // --- cursor ---------------------------------------------------------------

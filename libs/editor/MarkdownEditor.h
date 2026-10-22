@@ -756,6 +756,10 @@ public:
     /// For the tests: where that block's `cell`-th inline embed sits,
     /// block-local.
     QRectF embedCellRectAt(qsizetype offset, int cell) const;
+    /// For the tests: how many GIF movies are playing now (0 for a note with
+    /// no animated GIF on screen), and the frame `path`'s is on (-1 if none).
+    int gifMovieCount() const;
+    int gifFrameOf(const QString &path) const;
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1076,6 +1080,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void scrollContentsBy(int dx, int dy) override;
     void resizeEvent(QResizeEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     // Paste and drop: a dropped file or image lands where the pointer is,
@@ -1690,6 +1695,17 @@ private:
     const EmbedCell *embedCellOf(const BlockView &view, int cell, QPointF &origin) const;
     void paintEmbedCellList(QPainter &painter, const std::vector<EmbedCell> &cells, qreal left,
                             qreal top) const;
+    /// Animated GIFs (GifPlayer.cpp). A GIF embed that is drawn, in the
+    /// viewport, with a movie slot free, is played by a QMovie; anything else
+    /// - off screen, past the cap, one frame, the editor hidden - is its first
+    /// frame, exactly as before. `gifFrame` is what the painters draw in place
+    /// of `still`; the rest ends movies whose embed left the viewport.
+    QPixmap gifFrame(const QPainter &painter, const QString &path, const QRectF &target,
+                     const QPixmap &still) const;
+    QList<QRect> gifRectsInView(const QString &path) const;
+    void gifFrameChanged(const QString &path);
+    void pruneGifs();
+    void clearGifs();
     void paintEmbedCells(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
     bool handleEmbedCellClick(const BlockView &view, const QPoint &point, qreal left,
                               qreal top);

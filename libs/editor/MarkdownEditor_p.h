@@ -15,6 +15,7 @@
 #include <QIcon>
 #include <QImage>
 #include <QKeySequence>
+#include <QMovie>
 #include <QPageLayout>
 #include <QPageSize>
 #include <QPair>
@@ -915,6 +916,10 @@ struct MarkdownEditor::Private {
     AttachmentSaver m_attachmentSaver;
     FileImporter m_fileImporter;
     mutable QHash<QString, QPixmap> m_images;
+/// Playing GIF movies by file, and whether a file has more than one frame
+/// (GifPlayer.cpp). Both stay empty for a note with no animated GIF.
+mutable QHash<QString, std::shared_ptr<QMovie>> m_gifs;
+mutable QHash<QString, bool> m_gifAnimated;
     Mode m_mode = Mode::LivePreview;
     QHash<QString, QueryCacheEntry> m_queryCache; ///< query text -> its last search
     quint64 m_queryGeneration = 0;

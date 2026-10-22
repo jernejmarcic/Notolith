@@ -18,6 +18,7 @@
 #include <QNativeGestureEvent>
 #include <QRegularExpression>
 #include <QSignalSpy>
+#include <QImageReader>
 #include <QScrollBar>
 #include <QScreen>
 #include <QTimer>
@@ -4512,6 +4513,154 @@ TEST(HtmlImgTest, AVoidImgDoesNotBreakAnEnclosingPair)
     auto editor = editorWith(QStringLiteral("<b>one <img src=\"p.png\"> two</b>\n"));
     // Paired and drawn: the <b> tags are hidden, not left as source.
     EXPECT_FALSE(editor->displayText().contains(QStringLiteral("<b>")));
+}
+
+// --- animated GIFs ------------------------------------------------------------
+
+namespace {
+
+// 8x8, three frames (red, green, blue), 20 ms each, looping; and the same
+// picture as a one-frame GIF. Qt has no GIF writer, so they are bytes.
+const unsigned char kAnimatedGif[] = {0x47,0x49,0x46,0x38,0x39,0x61,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x21,0xff,0x0b,0x4e,0x45,0x54,0x53,0x43,0x41,0x50,0x45,0x32,0x2e,0x30,0x03,0x01,0x00,0x00,0x00,0x21,0xf9,0x04,0x04,0x02,0x00,0x00,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x21,0xf9,0x04,0x05,0x02,0x00,0x01,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x3b};
+const unsigned char kStillGif[] = {0x47,0x49,0x46,0x38,0x37,0x61,0x08,0x00,0x08,0x00,0x81,0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x2c,0x00,0x00,0x00,0x00,0x08,0x00,0x08,0x00,0x00,0x08,0x0f,0x00,0x01,0x08,0x1c,0x48,0xb0,0xa0,0xc1,0x83,0x08,0x13,0x2a,0x4c,0x18,0x10,0x00,0x3b};
+
+/// A directory of GIF files: g0.gif ... g(count-1).gif, animated or still.
+struct GifFixture {
+    QTemporaryDir dir;
+    QString path(int index) const { return dir.filePath(QStringLiteral("g%1.gif").arg(index)); }
+    GifFixture(int count, bool animated)
+    {
+        for (int i = 0; i < count; ++i) {
+            QFile file(path(i));
+            if (file.open(QIODevice::WriteOnly))
+                file.write(animated ? QByteArray(reinterpret_cast<const char *>(kAnimatedGif), sizeof kAnimatedGif)
+                                    : QByteArray(reinterpret_cast<const char *>(kStillGif), sizeof kStillGif));
+        }
+    }
+    std::function<QString(const QString &)> resolver()
+    {
+        return [this](const QString &target) {
+            return target.endsWith(QLatin1String(".gif")) ? dir.filePath(target) : QString();
+        };
+    }
+};
+
+/// A shown editor, painted once so what is on screen has started.
+std::unique_ptr<MarkdownEditor> shownEditorWith(const QString &text, GifFixture &fixture)
+{
+    auto editor = std::make_unique<MarkdownEditor>();
+    editor->resize(600, 300);
+    editor->setLinkResolver(fixture.resolver());
+    editor->setNoteText(text);
+    editor->show();
+    QTest::qWaitForWindowExposed(editor.get());
+    editor->viewport()->repaint();
+    return editor;
+}
+
+} // namespace
+
+TEST(GifTest, AnAnimatedGifPlaysWhileItIsOnScreen)
+{
+    GifFixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    ASSERT_EQ(QImageReader(fixture.path(0)).imageCount(), 3) << "the fixture is a three-frame GIF";
+    for (const QString &text : {QStringLiteral("![[g0.gif]]\n"),                       // alone in a block
+                                QStringLiteral("see ![](g0.gif) here\n"),              // inline in text
+                                QStringLiteral("a <img src=\"g0.gif\" width=\"40\"> b\n"),
+                                QStringLiteral("| a | b |\n|---|---|\n| x | <img src=\"g0.gif\"> |\n")}) {
+        auto editor = shownEditorWith(text, fixture);
+        EXPECT_EQ(editor->gifMovieCount(), 1) << qPrintable(text);
+        // Frames move on by themselves, and each one repaints (the viewport is
+        // asked to update its rect, which the event loop turns into a paint).
+        const bool advanced = QTest::qWaitFor([&] { return editor->gifFrameOf(fixture.path(0)) >= 1; }, 3000);
+        EXPECT_TRUE(advanced) << qPrintable(text);
+    }
+}
+
+TEST(GifTest, AStillGifAndAPngNeverStartAMovie)
+{
+    GifFixture still(1, false);
+    ASSERT_TRUE(still.dir.isValid());
+    ASSERT_EQ(QImageReader(still.path(0)).imageCount(), 1);
+    auto editor = shownEditorWith(QStringLiteral("![[g0.gif]] and ![[g0.gif]]\n"), still);
+    EXPECT_EQ(editor->gifMovieCount(), 0);
+
+    HtmlImgFixture png;
+    ASSERT_TRUE(png.dir.isValid());
+    auto plain = std::make_unique<MarkdownEditor>();
+    plain->resize(600, 300);
+    plain->setLinkResolver(png.resolver());
+    plain->setNoteText(QStringLiteral("![[p.png]] <img src=\"p.png\">\n"));
+    plain->show();
+    QTest::qWaitForWindowExposed(plain.get());
+    plain->viewport()->repaint();
+    EXPECT_EQ(plain->gifMovieCount(), 0);
+}
+
+TEST(GifTest, TheSameFileTwiceIsOneMovie)
+{
+    GifFixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = shownEditorWith(QStringLiteral("a ![[g0.gif]] b ![[g0.gif]] c\n"), fixture);
+    EXPECT_EQ(editor->gifMovieCount(), 1);
+}
+
+TEST(GifTest, AMovieEndsWhenItScrollsOutHidesOrTheNoteCloses)
+{
+    GifFixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QString text = QStringLiteral("![[g0.gif]]\n\n");
+    for (int i = 0; i < 80; ++i)
+        text += QStringLiteral("filler paragraph %1\n\n").arg(i);
+    auto editor = shownEditorWith(text, fixture);
+    ASSERT_EQ(editor->gifMovieCount(), 1);
+
+    editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+    EXPECT_EQ(editor->gifMovieCount(), 0) << "scrolled out of the viewport";
+    QTest::qWait(100);
+    editor->viewport()->repaint();
+    EXPECT_EQ(editor->gifMovieCount(), 0) << "and a later paint does not bring it back";
+
+    editor->verticalScrollBar()->setValue(0);
+    editor->viewport()->repaint();
+    EXPECT_EQ(editor->gifMovieCount(), 1) << "scrolled back in";
+    editor->hide();
+    EXPECT_EQ(editor->gifMovieCount(), 0) << "hidden";
+
+    editor->show();
+    ASSERT_TRUE(QTest::qWaitFor(
+        [&] {
+            editor->viewport()->update();
+            return editor->gifMovieCount() == 1;
+        },
+        3000))
+        << "shown again: the next paint starts it";
+    editor->setNoteText(QStringLiteral("another note\n"));
+    EXPECT_EQ(editor->gifMovieCount(), 0) << "the note closed";
+}
+
+TEST(GifTest, NoMoreThanEightMoviesPlayAtOnce)
+{
+    GifFixture fixture(12, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    QString text;
+    for (int i = 0; i < 12; ++i)
+        text += QStringLiteral("![[g%1.gif]] ").arg(i);
+    auto editor = shownEditorWith(text + QStringLiteral("\n"), fixture);
+    EXPECT_EQ(editor->gifMovieCount(), 8);
+}
+
+TEST(GifTest, AGifThatIsNotPaintedToTheViewportDoesNotPlay)
+{
+    GifFixture fixture(1, true);
+    ASSERT_TRUE(fixture.dir.isValid());
+    auto editor = std::make_unique<MarkdownEditor>(); // never shown
+    editor->resize(600, 300);
+    editor->setLinkResolver(fixture.resolver());
+    editor->setNoteText(QStringLiteral("![[g0.gif]]\n"));
+    editor->grab(); // a render to a pixmap, as an export or a screenshot does
+    EXPECT_EQ(editor->gifMovieCount(), 0);
 }
 
 // --- note embeds: whole, #Heading, #^block ----------------------------------
