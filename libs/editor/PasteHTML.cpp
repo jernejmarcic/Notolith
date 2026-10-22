@@ -31,7 +31,6 @@ namespace noteAppC {
 
 namespace {
 
-constexpr auto kDotAll = QRegularExpression::DotMatchesEverythingOption;
 constexpr auto kNoCase = QRegularExpression::CaseInsensitiveOption;
 constexpr qsizetype kMaxDepth = 128;
 
@@ -278,6 +277,14 @@ qsizetype longestRun(const QString &text, QChar ch)
     return longest;
 }
 
+/// A document that never loads anything: a stylesheet @import or an image the
+/// page names is not read from disk, whatever the page says.
+class NoLoadDocument : public QTextDocument
+{
+protected:
+    QVariant loadResource(int, const QUrl &) override { return {}; }
+};
+
 /// The fence for `code`: longer than any backtick run inside it.
 QString fenced(const QString &code, const QString &language)
 {
@@ -313,7 +320,7 @@ QString HTMLtoMarkdown(const QString &html, const QString &plain)
     src.replace(nbsp, QStringLiteral(" "));
     src.replace(QChar(0x00A0), QLatin1Char(' '));
     static const QRegularExpression dataImage(
-        QStringLiteral("<img\\b[^>]*\\bsrc\\s*=\\s*(?:\"\\s*data:[^\"]*\"|'\\s*data:[^']*')[^>]*>"), kNoCase);
+        QStringLiteral("<img\\b[^>]*\\bsrc\\s*=\\s*(?:\"\\s*(?:data|file|cid):[^\"]*\"|'\\s*(?:data|file|cid):[^']*')[^>]*>"), kNoCase);
     src.remove(dataImage);
 
     // <pre> out of Qt's hands: each becomes a one-word paragraph, put back as a fence below.
@@ -337,7 +344,7 @@ QString HTMLtoMarkdown(const QString &html, const QString &plain)
     src.replace(codeOpening, QString(codeOpen));
     src.replace(codeClosing, QString(codeClose));
 
-    QTextDocument doc;
+    NoLoadDocument doc;
     doc.setUndoRedoEnabled(false);
     doc.setHtml(src);
     QString md = doc.toMarkdown(QTextDocument::MarkdownDialectGitHub);
@@ -348,6 +355,9 @@ QString HTMLtoMarkdown(const QString &html, const QString &plain)
     md = unwrapped(md);
 
     // Code spans: the text between the markers, unescaped, in backticks long enough to hold it.
+    // Kept apart as placeholders until the tidying below is done, which must not touch a `**`
+    // inside code; the placeholder is plain letters, as the fences' are.
+    QStringList spans;
     QString tidied;
     qsizetype from = 0;
     for (qsizetype open = md.indexOf(codeOpen); open >= 0; open = md.indexOf(codeOpen, from)) {
@@ -363,10 +373,15 @@ QString HTMLtoMarkdown(const QString &html, const QString &plain)
             continue;
         const QString ticks(longestRun(code, QLatin1Char('`')) + 1, QLatin1Char('`'));
         const bool pad = code.startsWith(QLatin1Char('`')) || code.endsWith(QLatin1Char('`'));
-        tidied += ticks + (pad ? QStringLiteral(" ") : QString()) + code + (pad ? QStringLiteral(" ") : QString()) + ticks;
+        spans << ticks + (pad ? QStringLiteral(" ") : QString()) + code + (pad ? QStringLiteral(" ") : QString()) + ticks;
+        tidied += QStringLiteral("NOTOLITHSPAN%1X").arg(spans.size() - 1);
     }
     md = tidied + md.mid(from);
     md.remove(codeClose);
+    // Qt writes "1.  first"; one space is how a note is written.
+    static const QRegularExpression listMarker(QStringLiteral("^([ \\t]*)(\\d+\\.|[-*+])[ \\t]{2,}"),
+                                               QRegularExpression::MultilineOption);
+    md.replace(listMarker, QStringLiteral("\\1\\2 "));
     static const QRegularExpression loneStar(QStringLiteral("(?<=^|\\s)\\\\\\*(?=\\s|$)"),
                                              QRegularExpression::MultilineOption);
     md.replace(loneStar, QStringLiteral("*"));
@@ -386,6 +401,16 @@ QString HTMLtoMarkdown(const QString &html, const QString &plain)
     md = md.trimmed();
     if (md.isEmpty())
         return {};
+    static const QRegularExpression spanToken(QStringLiteral("NOTOLITHSPAN(\\d+)X"));
+    QString withSpans;
+    from = 0;
+    for (auto it = spanToken.globalMatch(md); it.hasNext();) {
+        const QRegularExpressionMatch m = it.next();
+        const qsizetype i = m.captured(1).toLongLong();
+        withSpans += md.mid(from, m.capturedStart() - from) + (i < spans.size() ? spans.at(i) : m.captured(0));
+        from = m.capturedEnd();
+    }
+    md = withSpans + md.mid(from);
 
     // Text that only sits in markup (a terminal's span, a div per line) is the plain text, untouched.
     if (codes.isEmpty() && !plain.trimmed().isEmpty() && unescaped(md).simplified() == plain.simplified())

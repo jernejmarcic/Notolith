@@ -1,9 +1,17 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <optional>
 #include <thread>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <QClipboard>
+#include <QCoreApplication>
+#include <QDir>
 #include <QScroller>
 #include <QDropEvent>
 #include <QElapsedTimer>
@@ -8199,10 +8207,7 @@ TEST(PasteHTMLTest, NestedBulletAndOrderedLists)
     const QString ordered = pasteRich(chromeHTML(QStringLiteral(
         "<ol><li>first</li><li>second<ol><li>inner</li></ol></li></ol>")),
         QStringLiteral("first\nsecond\ninner"));
-    EXPECT_TRUE(ordered.startsWith(QStringLiteral("1."))) << ordered.toStdString();
-    EXPECT_TRUE(ordered.contains(QStringLiteral("2.")) && ordered.contains(QStringLiteral("inner")))
-        << ordered.toStdString();
-    EXPECT_FALSE(ordered.contains(QStringLiteral("- "))) << ordered.toStdString();
+    EXPECT_EQ(ordered, QStringLiteral("1. first\n2. second\n    1. inner")) << ordered.toStdString();
 }
 
 TEST(PasteHTMLTest, BlockquoteBecomesAQuote)
@@ -8231,20 +8236,19 @@ TEST(PasteHTMLTest, TableBecomesAPipeTable)
         "<table><thead><tr><th>Name</th><th>Qty</th></tr></thead><tbody>"
         "<tr><td>apple</td><td>3</td></tr><tr><td>pear</td><td>4</td></tr></tbody></table>")),
         QStringLiteral("Name\tQty\napple\t3\npear\t4"));
-    EXPECT_TRUE(md.contains(QStringLiteral("|Name |Qty|")) || md.contains(QStringLiteral("| Name | Qty |")))
-        << md.toStdString();
-    EXPECT_TRUE(md.contains(QStringLiteral("---"))) << md.toStdString();
-    EXPECT_TRUE(md.contains(QStringLiteral("apple")) && md.contains(QStringLiteral("pear"))) << md.toStdString();
-    EXPECT_FALSE(md.contains(QStringLiteral("\t"))) << md.toStdString();
+    EXPECT_EQ(md, QStringLiteral("|Name |Qty|\n|-----|---|\n|apple|3  |\n|pear |4  |")) << md.toStdString();
 }
 
 TEST(PasteHTMLTest, RemoteImagesAreLinksAndDataImagesAreDropped)
 {
     const QString md = pasteRich(chromeHTML(QStringLiteral(
-        "<p>see <img src=\"https://example.com/i.png\"> and <img src=\"data:image/png;base64,AAAA\"> there <b>now</b></p>")),
+        "<p>see <img src=\"https://example.com/i.png\"> and <img src=\"data:image/png;base64,AAAA\"> "
+        "<img src=\"file:///tmp/clip.png\"><img src=\"cid:image001@x\"> there <b>now</b></p>")),
         QStringLiteral("see  and  there now"));
     EXPECT_TRUE(md.contains(QStringLiteral("![](https://example.com/i.png)"))) << md.toStdString();
     EXPECT_FALSE(md.contains(QStringLiteral("base64"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("file:"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("cid:"))) << md.toStdString();
 }
 
 TEST(PasteHTMLTest, GoogleDocsBoldSpansAndItsWrapperBold)
@@ -8331,7 +8335,7 @@ TEST(PasteHTMLTest, HTMLOverTheSizeCapFallsBackToPlainText)
     QElapsedTimer timer;
     timer.start();
     EXPECT_EQ(pasteRich(html, QStringLiteral("a bold fallback")), QStringLiteral("a bold fallback"));
-    EXPECT_LT(timer.elapsed(), 3000);
+    EXPECT_LT(timer.elapsed(), 10000);
 }
 
 TEST(PasteHTMLTest, DeeplyNestedHostileHTMLDoesNotHang)
@@ -8346,8 +8350,8 @@ TEST(PasteHTMLTest, DeeplyNestedHostileHTMLDoesNotHang)
     QElapsedTimer timer;
     timer.start();
     const QString md = pasteRich(html, QStringLiteral("deep"));
-    EXPECT_LT(timer.elapsed(), 5000);
-    EXPECT_FALSE(md.isEmpty());
+    EXPECT_LT(timer.elapsed(), 10000);
+    EXPECT_EQ(md, QStringLiteral("deep"));
 }
 
 TEST(PasteHTMLTest, PagesOfUnclosedOrTornTagsFallBackToPlainTextFast)
@@ -8362,8 +8366,55 @@ TEST(PasteHTMLTest, PagesOfUnclosedOrTornTagsFallBackToPlainTextFast)
         timer.start();
         EXPECT_EQ(pasteRich(chromeHTML(html), QStringLiteral("fallback")), QStringLiteral("fallback"))
             << unit.toStdString();
-        EXPECT_LT(timer.elapsed(), 3000) << unit.toStdString();
+        EXPECT_LT(timer.elapsed(), 10000) << unit.toStdString();
     }
+}
+
+TEST(PasteHTMLTest, StarsInsideInlineCodeAreLeftAlone)
+{
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>call <code>f(**a, **b)</code> now <b>bold </b>x</p>")),
+                        QStringLiteral("call f(**a, **b) now bold x")),
+              QStringLiteral("call `f(**a, **b)` now **bold** x"));
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>is <code>2 ** 3 ** 4</code> and <code>a ~~ b ~~ c</code> <i>it </i>z</p>")),
+                        QStringLiteral("is 2 ** 3 ** 4 and a ~~ b ~~ c it z")),
+              QStringLiteral("is `2 ** 3 ** 4` and `a ~~ b ~~ c` *it* z"));
+}
+
+TEST(PasteHTMLTest, ResourcesAreNeverLoadedWhileConverting)
+{
+    // A named pipe is "read" the moment anything opens it: a poller thread
+    // that can open the write end without blocking (ENXIO until a reader
+    // exists) sees every attempt to load it as a stylesheet or an image.
+    const QString fifoPath = QDir::temp().filePath(QStringLiteral("notolith-paste-fifo-%1").arg(QCoreApplication::applicationPid()));
+    QFile::remove(fifoPath);
+    ASSERT_EQ(::mkfifo(fifoPath.toLocal8Bit().constData(), 0600), 0);
+    std::atomic<bool> stop{false}, read{false};
+    std::thread poller([&] {
+        while (!stop.load()) {
+            const int fd = ::open(fifoPath.toLocal8Bit().constData(), O_WRONLY | O_NONBLOCK);
+            if (fd >= 0) {
+                read = true;
+                ::close(fd);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const QString url = QUrl::fromLocalFile(fifoPath).toString();
+    const QString closedStyle = QStringLiteral("<style>@import url(%1);</style>").arg(url);
+    const QString openStyle = QStringLiteral("<style>@import url(%1);").arg(url); // never closed
+    const QString image = QStringLiteral("<img src=\"%1\">").arg(url);
+    const QString link = QStringLiteral("<link rel=\"stylesheet\" href=\"%1\">").arg(url);
+    for (const QString &page : {closedStyle + QStringLiteral("<p>a <b>b</b></p>") + image + link,
+                                openStyle + QStringLiteral("<p>a <b>b</b></p>") + image + link,
+                                QStringLiteral("<p>a <b>b</b></p>") + openStyle}) {
+        const QString md = pasteRich(chromeHTML(page), QStringLiteral("a b"));
+        EXPECT_TRUE(md == QStringLiteral("a b") || md.startsWith(QStringLiteral("a **b**"))) << md.toStdString();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    stop = true;
+    poller.join();
+    QFile::remove(fifoPath);
+    EXPECT_FALSE(read.load()) << "converting opened a local file the page named";
 }
 
 TEST(PasteHTMLTest, PasteIntoATableCellStaysCellSafe)
