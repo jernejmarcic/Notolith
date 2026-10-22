@@ -81,6 +81,13 @@ void InkView::applySettings(const Settings &settings)
 
 void InkView::onEdited()
 {
+    // A page layout is a column of pages centred in the view; a sheet starts at the left edge, so growing it
+    // left or up can be followed by scrolling (a centred widget that gets wider moves by half the growth).
+    const auto layout = m_canvas->document().settings().layout;
+    const bool sheet = layout == LayoutKind::SemiInfinite || layout == LayoutKind::Infinite;
+    const Qt::Alignment want = (sheet ? Qt::AlignLeft : Qt::AlignHCenter) | Qt::AlignTop;
+    if (m_area->alignment() != want)
+        m_area->setAlignment(want);
     m_undoAction->setEnabled(m_canvas->document().canUndo() && !m_readOnly);
     m_redoAction->setEnabled(m_canvas->document().canRedo() && !m_readOnly);
     const bool modified = isModified();
@@ -113,7 +120,10 @@ bool InkView::load(const QString &path, QString *error)
     m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);
-    m_canvas->documentReplaced();
+    {
+        const QSignalBlocker noCompensation(m_canvas); // a different document is not a shift of the old one: no scrolling to compensate
+        m_canvas->documentReplaced();
+    }
     onEdited(); // a reload of a modified view clears the mark: the signal goes out from here
     return true;
 }

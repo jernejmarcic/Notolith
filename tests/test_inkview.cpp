@@ -3,6 +3,9 @@
 // state. The window-level behaviour of the same view is in test_window.cpp.
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
+
 #include <QApplication>
 #include <QDateTime>
 #include <QDir>
@@ -11,10 +14,16 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QtTest/QTest>
+
+#include "InkTestSupport.h"
 #include "InkView.h"
 #include "core/InkFormat.h"
 
 using namespace noteAppC::ink;
+using namespace inktest;
 
 namespace {
 
@@ -153,6 +162,161 @@ TEST_F(InkViewFileTest, OwnSavesAreNotConflicts)
     InkDocument onDisk;
     ASSERT_TRUE(readInk(readAll(path), onDisk).ok);
     EXPECT_EQ(onDisk.items().size(), 4u);
+}
+
+namespace {
+
+/// A view over an .ink file with the given layout and extent, shown in a 400x300 window.
+struct SheetView {
+    QTemporaryDir dir;
+    InkView view{nullptr};
+    QScrollArea *area = nullptr;
+    SheetView(LayoutKind layout, const QRectF &extent, double zoom = 1.0)
+    {
+        EXPECT_TRUE(dir.isValid());
+        InkDocument doc;
+        DocumentSettings s;
+        s.layout = layout;
+        s.format = {400, 300, 96};
+        s.extent = extent;
+        EXPECT_TRUE(doc.setSettings(s));
+        doc.commit();
+        const QString path = dir.filePath(QStringLiteral("Sheet.ink"));
+        QFile file(path);
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write(writeInk(doc));
+        file.close();
+        QString error;
+        EXPECT_TRUE(view.load(path, &error)) << error.toStdString();
+        view.canvas()->setZoom(zoom);
+        view.resize(400, 300);
+        view.show();
+        EXPECT_TRUE(QTest::qWaitForWindowExposed(&view));
+        area = view.findChild<QScrollArea *>();
+        EXPECT_NE(area, nullptr);
+        StrokeStyle style;
+        style.width = 8.0;
+        style.color = QColor(0, 0, 0);
+        view.canvas()->setPenStyle(style);
+    }
+    /// Where document point `p` is in the view's own coordinates (what the user sees), not rounded.
+    QPointF onScreen(const QPointF &p) const
+    {
+        return QPointF(view.canvas()->mapTo(&view, QPoint(0, 0))) + view.canvas()->toWidget(p);
+    }
+    QScrollBar *h() const { return area->horizontalScrollBar(); }
+    QScrollBar *v() const { return area->verticalScrollBar(); }
+};
+
+void expectNear(const QPointF &a, const QPointF &b, double tolerance, const char *what)
+{
+    EXPECT_NEAR(a.x(), b.x(), tolerance) << what;
+    EXPECT_NEAR(a.y(), b.y(), tolerance) << what;
+}
+
+} // namespace
+
+TEST(InkViewLayoutTest, APageLayoutStaysCentredAndASheetLayoutIsLeftAligned)
+{
+    SheetView paged(LayoutKind::ContinuousVertical, QRectF(0, 0, 400, 300));
+    EXPECT_TRUE(paged.area->alignment() & Qt::AlignHCenter);
+    SheetView infinite(LayoutKind::Infinite, QRectF(0, 0, 2000, 2000));
+    EXPECT_TRUE(infinite.area->alignment() & Qt::AlignLeft);
+    EXPECT_FALSE(infinite.area->alignment() & Qt::AlignHCenter);
+    SheetView semi(LayoutKind::SemiInfinite, QRectF(0, 0, 2000, 2000));
+    EXPECT_TRUE(semi.area->alignment() & Qt::AlignLeft);
+}
+
+TEST(InkViewLayoutTest, GrowingLeftOnALargeSheetKeepsTheSameInkInPlaceThroughUndoAndRedo)
+{
+    for (double zoom : {1.0, 1.5}) {
+        SheetView f(LayoutKind::Infinite, QRectF(0, 0, 2000, 2000), zoom);
+        InkCanvas *canvas = f.view.canvas();
+        ASSERT_GT(f.v()->maximum(), 250);
+        f.v()->setValue(250);
+        ASSERT_EQ(f.h()->value(), 0);
+        const QPointF probe(40, 280); // visible: the view shows document y 250/zoom and below
+        const QPointF before = f.onScreen(probe);
+        const double tolerance = zoom == 1.0 ? 1e-9 : 1.0;
+        penStroke(canvas, QPointF(2, 330), QPointF(80, 330), 1000); // pokes out past the left edge only
+        ASSERT_EQ(canvas->document().items().size(), 1u);
+        const int shift = f.h()->value();
+        EXPECT_GT(shift, 0) << "the view scrolled right by the growth";
+        EXPECT_NEAR(shift, -canvas->document().settings().extent.left() * zoom, 1.0) << "by exactly how far the content moved";
+        EXPECT_EQ(f.v()->value(), 250) << "no vertical shift: the top did not grow";
+        expectNear(f.onScreen(probe), before, tolerance, "same ink after the growth");
+        ASSERT_TRUE(canvas->undo());
+        EXPECT_EQ(f.h()->value(), 0);
+        expectNear(f.onScreen(probe), before, tolerance, "same ink after undo");
+        ASSERT_TRUE(canvas->redo());
+        EXPECT_EQ(f.h()->value(), shift);
+        expectNear(f.onScreen(probe), before, tolerance, "same ink after redo");
+    }
+}
+
+TEST(InkViewLayoutTest, GrowingUpOnALargeSheetKeepsTheSameInkInPlaceThroughUndoAndRedo)
+{
+    SheetView f(LayoutKind::Infinite, QRectF(0, 0, 2000, 2000));
+    InkCanvas *canvas = f.view.canvas();
+    f.h()->setValue(250);
+    ASSERT_EQ(f.v()->value(), 0);
+    const QPointF probe(280, 40);
+    const QPointF before = f.onScreen(probe);
+    penStroke(canvas, QPointF(330, 2), QPointF(330, 80), 1000);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    const int shift = f.v()->value();
+    EXPECT_GT(shift, 0);
+    EXPECT_EQ(f.h()->value(), 250);
+    expectNear(f.onScreen(probe), before, 1e-9, "same ink after the growth");
+    ASSERT_TRUE(canvas->undo());
+    EXPECT_EQ(f.v()->value(), 0);
+    expectNear(f.onScreen(probe), before, 1e-9, "same ink after undo");
+    ASSERT_TRUE(canvas->redo());
+    EXPECT_EQ(f.v()->value(), shift);
+    expectNear(f.onScreen(probe), before, 1e-9, "same ink after redo");
+}
+
+TEST(InkViewLayoutTest, ASheetSmallerThanTheViewportShiftsByWhatTheScrollRangeCannotTake)
+{
+    // 200 px wide in a 400 px viewport: left-aligned, no scroll range. The growth makes it wider than the
+    // viewport, but the range is only widget - viewport, so part of the shift stays on screen. Pinned, not hidden.
+    SheetView f(LayoutKind::Infinite, QRectF(0, 0, 200, 150));
+    InkCanvas *canvas = f.view.canvas();
+    ASSERT_EQ(f.h()->maximum(), 0);
+    const QPointF probe(40, 100);
+    const QPointF before = f.onScreen(probe);
+    penStroke(canvas, QPointF(2, 100), QPointF(80, 100), 1000);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    const int shift = int(std::lround(-canvas->document().settings().extent.left()));
+    EXPECT_EQ(f.h()->value(), f.h()->maximum()) << "scrolled as far as it can";
+    EXPECT_EQ(f.h()->value(), std::min(shift, canvas->width() - f.area->viewport()->width()));
+    const QPointF after = f.onScreen(probe);
+    EXPECT_NEAR(after.x() - before.x(), shift - f.h()->value(), 1e-9) << "the ink moves by the part of the shift the range lacks";
+    EXPECT_NEAR(after.x() - before.x(), f.area->viewport()->width() - 200, 1.5) << "which is the empty space that was to its right";
+    EXPECT_EQ(after.y(), before.y());
+    EXPECT_EQ(f.v()->value(), 0);
+}
+
+TEST(InkViewLayoutTest, LoadingAnotherDocumentDoesNotScrollToCompensate)
+{
+    SheetView f(LayoutKind::Infinite, QRectF(0, 0, 2000, 2000));
+    f.v()->setValue(300);
+    InkDocument other;
+    DocumentSettings s;
+    s.layout = LayoutKind::Infinite;
+    s.format = {400, 300, 96};
+    s.extent = QRectF(-1500, -1500, 3000, 3000);
+    ASSERT_TRUE(other.setSettings(s));
+    other.commit();
+    const QString path = f.dir.filePath(QStringLiteral("Other.ink"));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write(writeInk(other));
+    file.close();
+    QString error;
+    ASSERT_TRUE(f.view.load(path, &error));
+    EXPECT_EQ(f.v()->value(), 300) << "a different file is not a shift of the old one";
+    EXPECT_EQ(f.h()->value(), 0);
 }
 
 int main(int argc, char **argv)

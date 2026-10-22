@@ -2264,6 +2264,7 @@ struct InfiniteFixture {
         settings.layout = LayoutKind::Infinite;
         settings.extent = QRectF(-200, -150, 400, 300);
         canvas.document().setSettings(settings);
+        canvas.document().commit(); // the sheet is the base of the history: an undo goes back to it, not to a default page
         canvas.document().markSaved();
         canvas.documentReplaced();
         canvas.resize(canvas.sizeHint());
@@ -2522,6 +2523,95 @@ TEST(InkLayoutTest, GrowingLeftOrUpTellsTheOwnerHowFarTheContentMoved)
     EXPECT_EQ(f.canvas.size(), f.canvas.sizeHint()) << "the widget grew with the extent";
     EXPECT_EQ(f.canvas.toWidget(QPointF(before.left(), before.top())).x(), before.left() - after.left())
         << "old content sits further right by exactly that";
+}
+
+TEST(InkLayoutTest, TheLastPagesBottomEdgeHasNoGapBelowIt)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {100, 200, 96};
+    s.extent = QRectF(0, 0, 100, 400);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    EXPECT_EQ(canvas.toWidget(QPointF(10, 400)).y(), canvas.sizeHint().height()) << "the bottom of the last page is the bottom of the widget";
+    EXPECT_EQ(canvas.toWidget(QPointF(10, 200)).y(), 200 + InkDocument::kPageGap) << "a boundary between two pages is the top of the lower one";
+    EXPECT_GT(canvas.toWidget(QPointF(10, 400.5)).y(), canvas.sizeHint().height()) << "past the extent the pattern continues, so growth lines up";
+}
+
+TEST(InkLayoutTest, ThreePagesAtANonZeroOriginAndFractionalZoomMapBothWaysAndAccumulateGaps)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    const double h = 297.64; // not an integer: page edges are not exact in floating point
+    s.format = {200, h, 96};
+    s.extent = QRectF(30, -70, 200, 3 * h);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.setZoom(1.37);
+    canvas.documentReplaced();
+    EXPECT_EQ(canvas.sizeHint(), QSize(int(std::ceil(200 * 1.37)), int(std::ceil((3 * h + 2 * InkDocument::kPageGap) * 1.37))));
+    for (int page = 0; page < 3; ++page) {
+        for (double fraction : {0.0, 0.01, 0.3, 0.5, 0.99}) {
+            const QPointF p(30 + 150 * fraction, -70 + page * h + fraction * h);
+            const QPointF w = canvas.toWidget(p);
+            EXPECT_NEAR(w.y(), (fraction * h + page * (h + InkDocument::kPageGap)) * 1.37, 1e-6) << "page " << page << " keeps " << page << " gaps above it";
+            EXPECT_NEAR(w.x(), 150 * fraction * 1.37, 1e-9);
+            const QPointF back = canvas.toDocument(w);
+            EXPECT_NEAR(back.x(), p.x(), 1e-9);
+            EXPECT_NEAR(back.y(), p.y(), 1e-9) << "page " << page << " fraction " << fraction;
+        }
+    }
+    // The widget never maps into a gap from a document point, and a gap point lands on the bottom edge above.
+    const QPointF inGap = canvas.toDocument(QPointF(10, (h + 5) * 1.37));
+    EXPECT_NEAR(inGap.y(), -70 + h, 1e-9);
+    const QPointF inSecondGap = canvas.toDocument(QPointF(10, (2 * h + InkDocument::kPageGap + 5) * 1.37));
+    EXPECT_NEAR(inSecondGap.y(), -70 + 2 * h, 1e-9);
+}
+
+TEST(InkLayoutTest, TheEraserSweepsAcrossAGapInDocumentSpace)
+{
+    InkCanvas canvas;
+    DocumentSettings s;
+    s.format = {200, 200, 96};
+    s.extent = QRectF(0, 0, 200, 400);
+    ASSERT_TRUE(canvas.document().setSettings(s));
+    canvas.documentReplaced();
+    canvas.resize(canvas.sizeHint());
+    canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&canvas));
+    penStroke(&canvas, QPointF(20, 170), QPointF(180, 170), 1000);               // page one
+    penStroke(&canvas, QPointF(20, 240), QPointF(180, 240), 2000);               // page two (document y 224)
+    penStroke(&canvas, QPointF(20, 380), QPointF(180, 380), 3000);               // page two, further down: out of the way
+    ASSERT_EQ(canvas.document().items().size(), 3u);
+    canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&canvas, QPointF(100, 150), QPointF(100, 250), 4000); // widget px: from page one through the gap into page two
+    ASSERT_EQ(canvas.document().items().size(), 1u) << "both strokes under the drag are gone, the far one stays";
+    EXPECT_NEAR(canvas.document().items()[0].stroke->points.front().y, 380.0 - InkDocument::kPageGap, 1.0);
+}
+
+TEST(InkLayoutTest, OriginShiftFollowsEveryExtentOriginChangeIncludingUndoAndRedoButNotZoom)
+{
+    InfiniteFixture f;
+    StrokeStyle style;
+    style.width = 8.0;
+    style.color = QColor(0, 0, 0);
+    f.canvas.setPenStyle(style);
+    QSignalSpy shifted(&f.canvas, &InkCanvas::originShifted);
+    penStroke(&f.canvas, QPointF(2, 3), QPointF(60, 50), 1000); // pokes out past the left and the top edge
+    ASSERT_EQ(shifted.count(), 1);
+    const QPoint grown = shifted.last().first().toPoint();
+    EXPECT_GT(grown.x(), 0);
+    EXPECT_GT(grown.y(), 0);
+    ASSERT_TRUE(f.canvas.undo());
+    ASSERT_EQ(shifted.count(), 2);
+    EXPECT_EQ(shifted.last().first().toPoint(), -grown) << "the origin went back: the content moves back";
+    ASSERT_TRUE(f.canvas.redo());
+    ASSERT_EQ(shifted.count(), 3);
+    EXPECT_EQ(shifted.last().first().toPoint(), grown);
+    f.canvas.setZoom(2.0);
+    f.canvas.setZoom(0.5);
+    EXPECT_EQ(shifted.count(), 3) << "a zoom keeps the origin";
+    penStroke(&f.canvas, QPointF(100, 100), QPointF(160, 100), 2000); // inside the sheet: nothing grows
+    EXPECT_EQ(shifted.count(), 3);
 }
 
 int main(int argc, char **argv)

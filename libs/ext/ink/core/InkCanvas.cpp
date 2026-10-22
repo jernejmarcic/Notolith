@@ -21,6 +21,7 @@ namespace noteAppC::ink {
 
 namespace {
 
+constexpr double kPageEdgeSlack = 1e-9; ///< relative: page edges are page * height, not exact for a fractional height or zoom
 constexpr int kShadowDepth = 4;       ///< widget px: the shadow under a page in ContinuousVertical
 constexpr int kMaxOverlaySide = 8192; ///< widget px: the live overlay never grows past this, whatever the widget's size
 
@@ -100,7 +101,14 @@ QPointF InkCanvas::toWidget(const QPointF &documentPos) const
     const DocumentSettings &s = m_document.settings();
     const double y = documentPos.y() - s.extent.y();
     const double gap = pageGap();
-    const double pagesAbove = gap > 0 && s.format.height > 0 ? std::floor(y / s.format.height) : 0.0;
+    double pagesAbove = 0.0;
+    if (gap > 0 && s.format.height > 0) {
+        const double h = s.format.height;
+        pagesAbove = std::floor(y / h + kPageEdgeSlack); // slack: a page edge computed as page * h is a hair under it
+        const int pages = m_document.pageCount();
+        if (y <= pages * h * (1 + kPageEdgeSlack))
+            pagesAbove = std::min(pagesAbove, double(pages - 1)); // the last page's bottom edge belongs to it: no gap there
+    }
     return QPointF((documentPos.x() - s.extent.x()) * m_zoom, (y + pagesAbove * gap) * m_zoom);
 }
 
@@ -112,7 +120,7 @@ QPointF InkCanvas::toDocument(const QPointF &widgetPos) const
     const double h = s.format.height;
     if (gap > 0 && h > 0) {
         const double stride = h + gap;
-        const double page = std::floor(y / stride);
+        const double page = std::floor(y / stride + kPageEdgeSlack);
         y = page * h + std::clamp(y - page * stride, 0.0, h); // inside a gap: the page above's bottom edge
     }
     return QPointF(widgetPos.x() / m_zoom + s.extent.x(), y + s.extent.y());
@@ -167,6 +175,14 @@ void InkCanvas::documentReplaced()
     resize(sizeHint());
     updateGeometry();
     update();
+    // An extent that now starts further left or up (an Infinite sheet grew that way, or an undo took the
+    // growth back) moved every item inside the widget; the owner scrolls by the same amount to keep the
+    // view on the same ink. A zoom keeps the origin and never gets here.
+    const QPointF origin = m_document.settings().extent.topLeft();
+    const QPointF moved = (m_origin - origin) * m_zoom;
+    m_origin = origin;
+    if (!moved.isNull())
+        emit originShifted(QPoint(qRound(moved.x()), qRound(moved.y())));
 }
 
 void InkCanvas::setZoom(double zoom)
@@ -462,16 +478,10 @@ void InkCanvas::finishStroke(bool keep)
         // Pen strokes are always Layer::User; Layer::Highlighter is only read from .rnote (Spec 2).
         // A highlighter tool does nothing over handwriting (spec section 2), so none exists here.
         m_document.addStroke(stroke, Layer::User);
-        const QPointF originBefore = m_document.settings().extent.topLeft();
         const bool grew = m_document.growToContain(stroke->bounds());
         finishEdit();
-        if (grew) {
+        if (grew)
             documentReplaced(); // the page grew: resize the widget (m_drawing is None, nothing to cancel)
-            // An Infinite extent that grew left or up moved every item right and down inside the widget.
-            const QPointF moved = (originBefore - m_document.settings().extent.topLeft()) * m_zoom;
-            if (!moved.isNull())
-                emit originShifted(QPoint(qRound(moved.x()), qRound(moved.y())));
-        }
         update(widgetRect(stroke->bounds() | tail));
     } else {
         update();

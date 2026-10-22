@@ -115,6 +115,7 @@ private:
     StrokeStyle m_penStyle;
     double m_eraserWidth = 20.0;
     double m_zoom = 1.0;
+    QPointF m_origin;            ///< document px: the extent's top-left as documentReplaced() last saw it
     bool m_drawWithMouse = false;
     Drawing m_drawing = Drawing::None;
     bool m_tabletActive = false; ///< Qt synthesises mouse events from unaccepted tablet events; we accept, this guards the rest
