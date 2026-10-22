@@ -124,6 +124,10 @@ public:
     static constexpr int kMaxTextRenderChars = 16384;
     static constexpr int kMaxTextDevicePx = 4096;
     static constexpr qsizetype kTextCacheBytes = 32 * 1024 * 1024;
+    /// A hard ceiling on all cached pictures together: what a paint uses is exempt from the eviction above, so without
+    /// it a view of many large boxes would end up holding every one of them. Past it a box keeps its stale picture or
+    /// the placeholder (and asks for no further paint).
+    static constexpr qsizetype kTextCacheCeilingBytes = 4 * kTextCacheBytes;
     qsizetype textCacheBytes() const; ///< what the cached pictures of text boxes hold
     /// The editor over a box. Without a factory it is a QPlainTextEdit (inkcore links no editor); a host installs its
     /// own: `create` makes a parentless widget holding `markdown` (caret at the end), `read` gives back what it holds,
@@ -304,6 +308,7 @@ private:
     std::map<qint64, TextPixmap> m_textCache;
     quint64 m_textTick = 0;
     qsizetype m_textPaintBytes = 0; ///< what the pictures the current paint has rendered hold: past kTextCacheBytes it renders no more
+    qsizetype m_textHeldBytes = 0;  ///< what every cached picture holds, kept while the paint runs (textCacheBytes() is a scan)
     bool m_textSkipped = false;     ///< the current paint left a box unrendered for the budget: it asks for one more paint
     TextEditorFactory m_textEditorFactory;
     QString readTextEditor() const; ///< what the open editor holds

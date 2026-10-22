@@ -5491,6 +5491,75 @@ TEST(InkCanvasTest, BoxesPastTheBudgetOfOnePaintGetTheirPicturesInTheNextPaints)
     EXPECT_EQ(stub.calls, boxes) << "none was rendered twice";
 }
 
+// Review N1: what a paint uses is exempt from the eviction, so the 32 MB budget limits the work of a paint, not what a
+// view holds: 100 large boxes on top of each other would end up as 100 pictures. The hard ceiling (4 x the budget)
+// bounds it, and a box over it keeps what it has and asks for no further paint, so the follow-ups stop.
+TEST(InkCanvasTest, ManyLargeBoxesInViewNeverHoldMoreThanTheCeilingAndTheFollowUpPaintsStop)
+{
+    CanvasFixture f;
+    TextStub stub;
+    f.canvas.setTextRenderer(stub.renderer());
+    constexpr int boxes = 100; // 2000 x 1000 device px each: 8 MB, all in the same place
+    DocumentSettings settings = f.canvas.document().settings();
+    settings.extent = QRectF(0, 0, 2000, 1000);
+    f.canvas.document().setSettings(settings);
+    for (int i = 0; i < boxes; ++i) {
+        Item box;
+        box.type = Item::Type::TextBox;
+        box.textBox = std::make_shared<TextBox>(TextBox{QRectF(0, 0, 2000, 1000), QStringLiteral("box %1").arg(i)});
+        f.canvas.document().addItem(box);
+    }
+    f.canvas.document().commit();
+    f.canvas.documentReplaced();
+    f.canvas.resize(2000, 1000);
+    f.canvas.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&f.canvas));
+    const qsizetype oneBox = qsizetype(2000) * 1000 * 4;
+    QImage image(2000, 1000, QImage::Format_ARGB32_Premultiplied);
+    for (int paint = 0; paint < 12; ++paint) {
+        f.canvas.render(&image);
+        QCoreApplication::processEvents();
+        EXPECT_LE(f.canvas.textCacheBytes(), InkCanvas::kTextCacheCeilingBytes + oneBox) << "paint " << paint;
+    }
+    PaintRects paints(&f.canvas);
+    QTest::qWait(300);
+    EXPECT_TRUE(paints.rects.isEmpty()) << "no follow-up paint is still being asked for: " << paints.rects.size();
+    EXPECT_GT(f.canvas.textCacheBytes(), InkCanvas::kTextCacheBytes) << "the ceiling, not the budget, held it";
+}
+
+// Review minor 1: the follow-up update() itself, through the real event loop: a shown canvas, no render() by hand. 8
+// boxes of 8 MB (64 MB) on top of each other are over the 32 MB budget of one paint. Everything else that paints (the
+// show, the tiles) is over before the renderer is installed, and installing it asks for exactly one paint: whatever
+// brings the other boxes after that is the canvas's own follow-up.
+TEST(InkCanvasTest, BoxesPastTheBudgetGetTheirPicturesFromTheEventLoopWithoutAnyHandMadePaint)
+{
+    CanvasFixture f;
+    constexpr int boxes = 8;
+    DocumentSettings settings = f.canvas.document().settings();
+    settings.extent = QRectF(0, 0, 2000, 1000);
+    f.canvas.document().setSettings(settings);
+    for (int i = 0; i < boxes; ++i) {
+        Item box;
+        box.type = Item::Type::TextBox;
+        box.textBox = std::make_shared<TextBox>(TextBox{QRectF(0, 0, 2000, 1000), QStringLiteral("box %1").arg(i)});
+        f.canvas.document().addItem(box);
+    }
+    f.canvas.document().commit();
+    f.canvas.documentReplaced();
+    f.canvas.resize(2000, 1000);
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&f.canvas));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return f.canvas.pendingTiles() == 0; }, 5000));
+    QTest::qWait(300);
+    TextStub stub;
+    std::set<QString> rendered;
+    f.canvas.setTextRenderer([&](const QString &markdown, const QSizeF &size, qreal scale) {
+        rendered.insert(markdown);
+        return stub.renderer()(markdown, size, scale);
+    });
+    EXPECT_TRUE(QTest::qWaitFor([&] { return rendered.size() == size_t(boxes); }, 5000)) << rendered.size() << " of " << boxes;
+    EXPECT_EQ(stub.calls, boxes) << "none was rendered twice";
+}
+
 namespace {
 /// An editor that is not a QPlainTextEdit: what a host installs to edit in its own editor.
 struct LineEditFactory {

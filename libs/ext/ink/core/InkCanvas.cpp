@@ -1123,13 +1123,17 @@ const QPixmap *InkCanvas::textPixmap(const Item &item)
     // pictures it rendered do. The boxes it did not get to are drawn as they are (the stale picture, or a placeholder)
     // and paintUIItems asks for one more paint, which carries on with them: every box gets its picture within a few
     // paints, and no box is starved by the ones before it in paint order.
-    if (m_textRenderer && !isDrawing()) {
+    // Over the ceiling the box is left as it is and nothing is asked for: the follow-up paint would hit the same wall.
+    const auto bytesOf = [](const QPixmap &pixmap) { return qsizetype(pixmap.width()) * pixmap.height() * 4; };
+    const qsizetype ownBytes = it != m_textCache.end() ? bytesOf(it->second.pixmap) : 0;
+    if (m_textRenderer && !isDrawing() && m_textHeldBytes - ownBytes < kTextCacheCeilingBytes) {
         if (m_textPaintBytes >= kTextCacheBytes) {
             m_textSkipped = true;
         } else {
             QPixmap pixmap = m_textRenderer(textForRender(box.markdown), QSizeF(size), scale);
             if (!pixmap.isNull()) {
-                m_textPaintBytes += qsizetype(pixmap.width()) * pixmap.height() * 4;
+                m_textPaintBytes += bytesOf(pixmap);
+                m_textHeldBytes += bytesOf(pixmap) - ownBytes;
                 TextPixmap &entry = m_textCache[item.t];
                 entry = {box.markdown, size, need, background, std::move(pixmap), m_textTick};
                 return &entry.pixmap;
@@ -1148,6 +1152,7 @@ void InkCanvas::paintUIItems(QPainter &painter, const QRect &area)
     ++m_textTick; // the pictures this paint uses are stamped with it, and are not evicted below
     m_textPaintBytes = 0;
     m_textSkipped = false;
+    m_textHeldBytes = textCacheBytes();
     painter.save();
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
     geometryOf(m_document, m_zoom).forEachPage(painter, area, [&](const QRectF &exposed, int) {
