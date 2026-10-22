@@ -168,6 +168,23 @@ void Indexer::setVault(const Vault &vault)
     }
 }
 
+namespace {
+
+/// A foreign file's text through its reader: nullopt when there is none for the suffix, the file cannot be read,
+/// it is over the reader's cap (never read whole: not a multi-GB file) or the reader refuses it.
+std::optional<QString> readForeign(const QString &path, const QHash<QString, Indexer::ForeignSource> &foreign)
+{
+    const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
+    if (reader == foreign.cend())
+        return std::nullopt;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || (reader->maxBytes > 0 && file.size() > reader->maxBytes))
+        return std::nullopt;
+    return reader->read(file.readAll());
+}
+
+} // namespace
+
 void Indexer::setNotebookReader(NotebookReader reader)
 {
     setForeignReader({QStringLiteral("ipynb")}, std::move(reader));
@@ -184,6 +201,10 @@ void Indexer::setForeignReader(const QStringList &suffixes, ForeignReader reader
         else
             m_foreignReaders.remove(key);
     }
+    // The index reads such a file by the same readers after it rewrote the links inside (a rename).
+    const QHash<QString, ForeignSource> readers = m_foreignReaders;
+    m_index->setForeignFiles([readers](const QString &path) { return readers.contains(QFileInfo(path).suffix().toLower()); },
+                             [readers](const QString &path) { return readForeign(path, readers); });
     if (changed && m_vault.isValid())
         rebuild(); // every such file's row is of the other kind now, which the scan sees
 }
@@ -407,8 +428,15 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
         next = parse(from + kChunk);
         writer.begin();
         for (const Parsed &parsed : current.results()) {
-            if (!parsed.ok)
+            if (!parsed.ok) {
+                // A foreign file its reader refuses now (it grew past the cap, was cut mid-write) is not indexed: its
+                // row from an earlier scan would show text the file no longer has.
+                if (foreign.contains(QFileInfo(parsed.metadata.path).suffix().toLower())) {
+                    writer.remove(parsed.metadata.path);
+                    batch.names.append({vault.relative(parsed.metadata.path), {}});
+                }
                 continue;
+            }
             batch.names.append({vault.relative(parsed.metadata.path), writer.put(parsed.metadata, parsed.body)});
             ++batch.done;
         }
@@ -462,16 +490,12 @@ void Indexer::apply(const Batch &batch)
 Indexer::Parsed Indexer::parseFile(const QString &path, const QHash<QString, ForeignSource> &foreign, const ParseOptions &options)
 {
     Parsed parsed;
+    parsed.metadata.path = path; // also when it fails: the scan drops a foreign file's old row
     Note note;
-    const auto reader = foreign.constFind(QFileInfo(path).suffix().toLower());
-    if (reader != foreign.cend()) {
-        QFile file(path);
-        // A foreign file is read whole for its reader, unless the reader asked for a cap: not a multi-GB file.
-        if (!file.open(QIODevice::ReadOnly) || (reader->maxBytes > 0 && file.size() > reader->maxBytes))
-            return parsed;
-        const std::optional<QString> text = reader->read(file.readAll());
+    if (foreign.contains(QFileInfo(path).suffix().toLower())) {
+        const std::optional<QString> text = readForeign(path, foreign);
         if (!text)
-            return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged .ink): not indexed
+            return parsed; // not a file its reader can read (a notebook nbformat 4 cannot, a damaged or too big .ink): not indexed
         note.text = *text;
     } else if (!Vault::read(path, note)) {
         return parsed;

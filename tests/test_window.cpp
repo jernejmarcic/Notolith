@@ -8290,7 +8290,9 @@ TEST_F(WindowTest, WithInkOffTheInkTextIsStillIndexed)
         return toggle != nullptr;
     }, 3000));
     toggle->setChecked(false); // the module is off; the host reader is not the module's
-    QTest::qWait(500); // a rescan, if the switch caused one, finishes well inside this
+    auto *indexer = window.findChild<noteAppC::Indexer *>();
+    ASSERT_NE(indexer, nullptr);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer->isRunning(); }, 10000)) << "a rescan, if the switch caused one, has ended";
     EXPECT_EQ(list->topLevelItemCount(), 1);
 }
 #endif

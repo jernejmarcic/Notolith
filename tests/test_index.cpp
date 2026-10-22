@@ -425,6 +425,55 @@ TEST_F(IndexTest, AForeignReaderMaxBytesSkipsBigFilesAndZeroIsUnlimited)
     EXPECT_TRUE(index.allPaths().contains(QStringLiteral("Big.ipynb"))) << "a notebook has no cap";
 }
 
+// A file that grows past its reader's cap leaves the index: its old row would otherwise show text the file no longer has.
+TEST_F(IndexTest, AFileThatGrowsPastItsReadersCapLosesItsRow)
+{
+    write(QStringLiteral("Grow.ink"), "small");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setForeignReader({QStringLiteral("ink")},
+                             [](const QByteArray &) -> std::optional<QString> { return QStringLiteral("grown\n"); }, 1 << 20);
+    {
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        ASSERT_TRUE(done.wait(20000));
+    }
+    ASSERT_TRUE(index.allPaths().contains(QStringLiteral("Grow.ink")));
+    {
+        QFile file(vault.absolute(QStringLiteral("Grow.ink")));
+        ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+        ASSERT_TRUE(file.resize(2 << 20));
+    }
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.rebuild();
+    ASSERT_TRUE(done.wait(20000));
+    EXPECT_FALSE(index.allPaths().contains(QStringLiteral("Grow.ink")));
+    EXPECT_TRUE(index.search(QStringLiteral("grown")).isEmpty());
+}
+
+// A rename rewrites links inside a notebook's JSON; the notebook stays indexed by its reader's text, not by the JSON.
+TEST_F(IndexTest, RenamingANoteLinkedFromANotebookKeepsTheNotebookIndexedByItsReader)
+{
+    write(QStringLiteral("Nb.ipynb"), "{\"cells\": \"see [[Home]] zeppelinjson\"}");
+    Index index;
+    Indexer indexer(&index);
+    indexer.setNotebookReader([](const QByteArray &bytes) -> std::optional<QString> {
+        return bytes.contains("[[Home]]") ? std::optional<QString>(QStringLiteral("see [[Home]] zeppelin\n"))
+                                          : std::optional<QString>(QStringLiteral("see [[Start]] zeppelin\n"));
+    });
+    QSignalSpy done(&indexer, &Indexer::finished);
+    indexer.setVault(vault);
+    ASSERT_TRUE(done.wait(20000));
+    ASSERT_TRUE(QFile::rename(vault.absolute(QStringLiteral("Home.md")), vault.absolute(QStringLiteral("Start.md"))));
+    QString error;
+    ASSERT_GE(index.updateLinksAfterRename(QStringLiteral("Home.md"), QStringLiteral("Start.md"), vault, &error), 0);
+    QFile file(vault.absolute(QStringLiteral("Nb.ipynb")));
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    EXPECT_EQ(file.readAll(), QByteArray("{\"cells\": \"see [[Start]] zeppelinjson\"}"));
+    EXPECT_FALSE(index.search(QStringLiteral("zeppelin")).isEmpty()) << "still its reader's text";
+    EXPECT_TRUE(index.search(QStringLiteral("zeppelinjson")).isEmpty()) << "not the JSON";
+}
+
 // Suffixes are matched case-insensitively: a SKETCH.INK is read by the "ink" reader.
 TEST_F(IndexTest, AForeignReaderMatchesTheSuffixInAnyCase)
 {
