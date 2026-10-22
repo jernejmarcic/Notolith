@@ -10,7 +10,7 @@ add_library(noteAppC_editor STATIC
     EditingCommands.cpp
     CodeBlockHook.cpp
     FileEmbedBlock.cpp
-    GifPlayer.cpp
+    GIFplayer.cpp
     FindBar.cpp
     FindBar.h
     FootnoteMarks.cpp

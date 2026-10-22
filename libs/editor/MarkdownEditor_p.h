@@ -916,10 +916,22 @@ struct MarkdownEditor::Private {
     AttachmentSaver m_attachmentSaver;
     FileImporter m_fileImporter;
     mutable QHash<QString, QPixmap> m_images;
-/// Playing GIF movies by file, and whether a file has more than one frame
-/// (GifPlayer.cpp). Both stay empty for a note with no animated GIF.
-mutable QHash<QString, std::shared_ptr<QMovie>> m_gifs;
-mutable QHash<QString, bool> m_gifAnimated;
+    /// What is known of a GIF file, valid while its mtime is (GIFplayer.cpp).
+    struct GIFinfo {
+        bool known = false;
+        qint64 mtime = 0;
+        bool animated = false; ///< more than one frame
+        bool broken = false;   ///< a movie of it failed: shown as its first frame from now on
+        QPixmap ended;         ///< the last frame of a GIF that played out, which it keeps showing
+    };
+    /// Playing GIF movies by file, and what is known of each GIF file seen. Both
+    /// stay empty for a note with no animated GIF.
+    mutable QHash<QString, std::shared_ptr<QMovie>> m_GIFs;
+    mutable QHash<QString, GIFinfo> m_GIFinfo;
+    /// The rect of the paint event being drawn, viewport coordinates; null
+    /// outside one (an export paints everything).
+    QRectF m_exposed;
+    mutable int m_tableCellsPainted = 0; ///< cells the last paintTable drew, for the tests
     Mode m_mode = Mode::LivePreview;
     QHash<QString, QueryCacheEntry> m_queryCache; ///< query text -> its last search
     quint64 m_queryGeneration = 0;

@@ -102,11 +102,14 @@ Tests: `HtmlImgTest.*` in `tests/test_editor.cpp`.
 
 **Animated GIFs** play, as in Obsidian: `![[x.gif]]`, `![](x.gif)` and
 `<img src="x.gif">`, alone in a block, inline in text, in a list or quote, or in
-a pipe-table cell (`libs/editor/GifPlayer.cpp`, one `QMovie` per file).
+a pipe-table cell (`libs/editor/GIFplayer.cpp`, one `QMovie` per file).
 
 - A movie runs only for a GIF with more than one frame that is drawn inside the
-  viewport of a shown editor. A one-frame GIF, a GIF past the cap, and one that
-  is off screen show their first frame, as every other image does.
+  viewport of a shown editor, to the screen. A one-frame GIF, a GIF past the
+  cap, one that is off screen, and any render through another paint engine (a
+  PDF, a printer, a `QPicture`) show the first frame, as every other image does.
+  (A `grab()` of a shown editor is a raster paint of the same widget and shows
+  the frame on screen.)
 - At most 8 movies play at once; the ninth GIF on screen stays on its first
   frame. The same file embedded twice is one movie.
 - A movie ends when its embed scrolls out of the viewport (on the scroll itself),
@@ -114,15 +117,21 @@ a pipe-table cell (`libs/editor/GifPlayer.cpp`, one `QMovie` per file).
   when the note is replaced or the link resolver changes, and when an edit
   removes the embed (at its next frame). It starts again from the first frame
   when it is shown again.
-- Each frame repaints only the embed's own rectangle.
+- A GIF that plays once (no loop extension) stops on its last frame and frees
+  its slot; a file that fails mid-way stays on its first frame. Neither is
+  restarted by the next paint, until the note or the resolver changes.
+- What is known of a file (more than one frame or not) is kept per file and
+  `mtime`: one scan, not one per paint, and a replaced file is looked at again.
+- Each frame repaints only the embed's own rectangle, and `paintTable` draws
+  only the cells inside the rectangle being repainted, so a GIF in a 500-row
+  table repaints its own row.
 - A note with no animated GIF on screen constructs no `QMovie`, no timer and no
-  connection. A render to a pixmap or a PDF never starts one (only painting to
-  the editor's viewport does).
+  connection.
 - A GIF in an HTML block (top-level `<img>` line, litehtml) is still one frame.
   Frames are not cached beyond what `QMovie` keeps, so a huge GIF costs its
   decode while it plays; the cap bounds that at 8.
 
-Tests: `GifTest.*` in `tests/test_editor.cpp` (the fixtures are tiny GIFs held
+Tests: `GIFtest.*` in `tests/test_editor.cpp` (the fixtures are tiny GIFs held
 as bytes in the test, since Qt has no GIF writer).
 
 **Borders in the litehtml image** (`libs/render/HtmlRenderer.cpp`): every

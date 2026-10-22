@@ -292,7 +292,7 @@ void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> res
 {
     m_resolver = std::move(resolver);
     d->m_images.clear();
-    clearGifs();
+    clearGIFs();
     invalidateLayouts();
     updateLayout();
     viewport()->update();
@@ -708,7 +708,7 @@ void MarkdownEditor::setMode(Mode mode)
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
-    clearGifs();
+    clearGIFs();
     if (d->m_media)
         d->m_media->stop();
     d->m_text = text;
@@ -3352,15 +3352,15 @@ bool MarkdownEditor::layoutTable(BlockView &view)
     const qreal available = contentWidth();
     const qreal columnCap = qMax(minimum * 4, available * 0.66);
     static const QByteArrayList imageFormats = QImageReader::supportedImageFormats();
-    // The embeds a cell can draw, by where they start, so each cell finds its
-    // own with a binary search instead of walking the note's every embed. An
-    // <img> or an image file; a PDF, a note or a file card stays text in a cell.
+    // Every embed by where it starts, so each cell finds its own with a binary
+    // search instead of walking the note's every embed. Which of them a cell
+    // draws (an <img> or an image file; a PDF, a note or a file card stays
+    // text) is decided per embed that lands in a cell, not per embed of the note.
     std::vector<const EmbedSpan *> tableEmbeds;
     if (d->m_features.fileEmbeds) {
-        for (const EmbedSpan &embed : d->m_decorations.embeds) {
-            if (embed.html || imageFormats.contains(QFileInfo(embed.target).suffix().toLower().toUtf8()))
-                tableEmbeds.push_back(&embed);
-        }
+        tableEmbeds.reserve(size_t(d->m_decorations.embeds.size()));
+        for (const EmbedSpan &embed : d->m_decorations.embeds)
+            tableEmbeds.push_back(&embed);
         std::sort(tableEmbeds.begin(), tableEmbeds.end(),
                   [](const EmbedSpan *a, const EmbedSpan *b) { return a->range.start < b->range.start; });
     }
@@ -3408,6 +3408,8 @@ bool MarkdownEditor::layoutTable(BlockView &view)
                  it != tableEmbeds.end() && (*it)->range.start < cell.source.end; ++it) {
                 const EmbedSpan &embed = **it;
                 if (embed.range.end > cell.source.end)
+                    continue;
+                if (!embed.html && !imageFormats.contains(QFileInfo(embed.target).suffix().toLower().toUtf8()))
                     continue;
                 EmbedCell built = buildEmbedCell(embed, columnCap - 2 * padX);
                 if (built.image.isNull() && !(built.isFileCard && embed.html))
@@ -3559,10 +3561,18 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
     QColor pickedFill = d->m_theme.color(QStringLiteral("--interactive-accent"));
     pickedFill.setAlphaF(0.22f);
 
+    // Only the cells inside the rectangle being repainted: a GIF frame in one
+    // cell repaints that cell's rect, not every cell of a long table. Null
+    // outside a paint event (an export paints the whole table).
+    const QRectF exposed = d->m_exposed;
+    int painted = 0;
     for (const Cell &cell : view.cells) {
         const QRectF rect = cell.rect.translated(left + shift, top);
         if (rect.right() < window.left() - 2 || rect.left() > window.right() + 2)
             continue;
+        if (!exposed.isNull() && (rect.bottom() < exposed.top() - 2 || rect.top() > exposed.bottom() + 2))
+            continue;
+        ++painted;
         if (cell.row < view.headerRows)
             painter.fillRect(rect, header);
         if (cell.fill.isValid())
@@ -3612,6 +3622,7 @@ void MarkdownEditor::paintTable(QPainter &painter, const BlockView &view, qreal 
         }
         painter.restore();
     }
+    d->m_tableCellsPainted = painted;
     if (!picked.isNull()) {
         const auto cellAt = [&](int row, int column) {
             return view.cells[size_t(row) * size_t(tableFor(view)->columns) + size_t(column)].rect;
@@ -4551,7 +4562,7 @@ void MarkdownEditor::scrollContentsBy(int dx, int dy)
     // The property editor is a widget over the table, and would stay put
     // while the table moved away under it.
     finishPropertyEdit(true);
-    pruneGifs(); // a GIF that scrolled out of view stops here, not a frame later
+    pruneGIFs(); // a GIF that scrolled out of view stops here, not a frame later
     // Blocks scrolling into reach need their real layout; the rest of what
     // updateLayout() settles does not change with the scroll position, so a
     // note already laid out around the new position is left alone. That pass
@@ -4749,7 +4760,7 @@ void MarkdownEditor::paintBlocks(QPainter &painter, qreal scroll, qreal exposedT
                 view.imageCentred ? left + (contentWidth() - view.imageSize.width()) / 2.0 : left;
             const QRectF target(imageX, top + view.textTop, view.imageSize.width(),
                                 view.imageSize.height());
-            painter.drawPixmap(target.toRect(), gifFrame(painter, view.imagePath, target, view.image));
+            painter.drawPixmap(target.toRect(), GIFframe(painter, view.imagePath, target, view.image));
             continue;
         }
         if (view.isBase && !view.cells.empty()) {
@@ -4819,6 +4830,8 @@ void MarkdownEditor::paintEvent(QPaintEvent *event)
     });
     QPainter painter(viewport());
     painter.setRenderHint(QPainter::Antialiasing);
+    d->m_exposed = QRectF(event->rect());
+    const auto leftPaint = qScopeGuard([this] { d->m_exposed = QRectF(); });
     // After a scroll only the strip that came into view is exposed; blocks
     // outside it are skipped rather than drawn and clipped away. The margin
     // covers what a block paints past its own edges, like a code panel's.
@@ -5158,12 +5171,12 @@ void MarkdownEditor::resizeEvent(QResizeEvent *event)
     // Also called for the viewport's own resize (a scrollbar showing).
     relayoutIfWidthChanged();
     positionFindBar();
-    pruneGifs();
+    pruneGIFs();
 }
 
 void MarkdownEditor::hideEvent(QHideEvent *event)
 {
-    clearGifs(); // nothing plays in a hidden editor; the next paint starts what is on screen again
+    clearGIFs(); // nothing plays in a hidden editor; the next paint starts what is on screen again
     QAbstractScrollArea::hideEvent(event);
 }
 

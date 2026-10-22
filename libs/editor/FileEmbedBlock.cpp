@@ -836,7 +836,7 @@ void MarkdownEditor::paintEmbedCellList(QPainter &painter, const std::vector<Emb
         // A GIF cell plays; the rest (and a GIF with no slot) is the one pixmap.
         painter.drawPixmap(rect.toRect(), cell.panel || cell.isNote
                                               ? cell.image
-                                              : gifFrame(painter, cell.openPath, rect, cell.image));
+                                              : GIFframe(painter, cell.openPath, rect, cell.image));
         if (cell.panel && !cell.label.isEmpty()) {
             painter.save();
             QFont small = d->m_theme.uiFont();
