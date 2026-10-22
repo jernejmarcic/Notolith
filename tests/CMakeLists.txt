@@ -459,6 +459,20 @@ if(TARGET notolith-inkcore)
     endif()
 endif()
 
+# The host-side .ink text-box reader (R1): JSON only, no module, no inkcore.
+find_package(ZLIB REQUIRED)
+add_executable(test_inktextboxes test_inktextboxes.cpp)
+target_link_libraries(test_inktextboxes PRIVATE noteAppC_ui Qt6::Test GTest::gtest_main ZLIB::ZLIB)
+add_test(NAME inktextboxes COMMAND test_inktextboxes)
+
+# An .ink note in the index after a rename (the host reader plus inkcore, to prove the file still opens).
+if(TARGET notolith-inkcore)
+    add_executable(test_inkindex test_inkindex.cpp)
+    target_link_libraries(test_inkindex PRIVATE noteAppC_ui noteAppC_index noteAppC_vault notolith-inkcore Qt6::Test GTest::gtest)
+    set_target_properties(test_inkindex PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
+    add_test(NAME inkindex COMMAND test_inkindex)
+endif()
+
 # No test reads or writes the real ~/.config/noteAppC or ~/.cache/noteAppC, and none
 # sees the modules installed on the machine (NOTEAPPC_MODULE_DIRS, below).
 # MarkdownEditor loads callouts.ini in its constructor and Settings reads

@@ -9,6 +9,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSqlError>
@@ -71,9 +73,9 @@ QString targetName(const QString &target)
 /// with and without ".md", since a link may also spell those.
 QStringList noteNames(const QString &relative, const Metadata &metadata)
 {
-    // A notebook is not Markdown: Obsidian names such a file by its extension,
+    // A notebook (or an ink note) is not Markdown: Obsidian names such a file by its extension,
     // so `[[Analysis]]` still means Analysis.md and `[[Analysis.ipynb]]` the notebook.
-    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive))
+    if (relative.endsWith(QLatin1String(".ipynb"), Qt::CaseInsensitive) || relative.endsWith(QLatin1String(".ink"), Qt::CaseInsensitive))
         return {QFileInfo(relative).fileName(), relative};
     QStringList names = metadata.linkNames();
     names << relative;
@@ -1278,6 +1280,13 @@ QString Index::rebasedTarget(const QString &oldTarget, const QString &oldRelativ
     return rebased;
 }
 
+void Index::setForeignFiles(std::function<bool(const QString &)> handles,
+                            std::function<std::optional<QString>(const QString &)> text)
+{
+    m_foreignHandles = std::move(handles);
+    m_foreignText = std::move(text);
+}
+
 int Index::updateLinksAfterRename(const QString &oldRelative, const QString &newRelative,
                                   const Vault &vault, QString *error, const QStringList &extraCandidates)
 {
@@ -1386,6 +1395,22 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         metadata.hash = QCryptographicHash::hash(text.toUtf8(), QCryptographicHash::Sha1);
         put(metadata, text);
     };
+    // A file the host reads through a reader (a notebook, an .ink note) is indexed by that text, never by the
+    // JSON the link rewrite spliced into; one the reader can no longer read leaves the index, as in a scan.
+    const auto isForeign = [&](const QString &absolutePath) { return m_foreignHandles && m_foreignHandles(absolutePath); };
+    const auto reindexFile = [&](const QString &absolutePath, const QString &markdown) {
+        if (!isForeign(absolutePath))
+            return reindex(absolutePath, markdown);
+        if (const std::optional<QString> text = m_foreignText(absolutePath))
+            reindex(absolutePath, *text);
+        else
+            remove(absolutePath);
+    };
+    // ponytail: every foreign file today is JSON (.ipynb, .ink); a reader for another format needs its own escape.
+    const auto jsonEscaped = [](const QString &text) {
+        const QByteArray array = QJsonDocument(QJsonArray{text}).toJson(QJsonDocument::Compact); // ["..."]
+        return QString::fromUtf8(array.mid(2, array.size() - 4));
+    };
 
     for (const QString &fromPath : std::as_const(candidates)) {
         // The renamed note (or every note under the renamed folder) has
@@ -1393,6 +1418,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
         // note is still where the index found it.
         const QString actualRelative = movedPath(fromPath).isEmpty() ? fromPath : movedPath(fromPath);
         const QString absolutePath = vault.absolute(actualRelative);
+        const bool foreign = isForeign(absolutePath);
 
         Note note;
         if (!Vault::read(absolutePath, note)) {
@@ -1477,7 +1503,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
                                      && (angled || !relativeTarget.contains(QRegularExpression(QStringLiteral("[ ()<>]"))));
                 QString written = literal ? relativeTarget
                                           : QString::fromUtf8(QUrl::toPercentEncoding(relativeTarget, "/"));
-                note.text.replace(rawStart, rawLength, written);
+                note.text.replace(rawStart, rawLength, foreign ? jsonEscaped(written) : written);
                 continue;
             }
 
@@ -1485,7 +1511,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             if (!hit.wiki && !(angled && !raw.contains(QLatin1Char('%'))))
                 rebased = QString::fromUtf8(QUrl::toPercentEncoding(rebased, "/"));
 
-            note.text.replace(rawStart, rawLength, rebased);
+            note.text.replace(rawStart, rawLength, foreign ? jsonEscaped(rebased) : rebased);
         }
 
         if (note.text == textBefore)
@@ -1496,7 +1522,7 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
             return -1;
         }
 
-        reindex(absolutePath, note.text);
+        reindexFile(absolutePath, note.text);
         ++rewritten;
     }
 
@@ -1506,8 +1532,8 @@ int Index::updateLinksAfterRename(const QString &oldRelative, const QString &new
     if (oldRelative != newRelative) {
         remove(vault.absolute(oldRelative));
         Note note;
-        if (Vault::read(vault.absolute(newRelative), note))
-            reindex(vault.absolute(newRelative), note.text);
+        if (isForeign(vault.absolute(newRelative)) || Vault::read(vault.absolute(newRelative), note))
+            reindexFile(vault.absolute(newRelative), note.text);
     }
 
     endBatch();
