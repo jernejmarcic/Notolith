@@ -82,11 +82,7 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
     setFocusProxy(m_canvas);          // the host's setFocus() on the tab lands on the cell, where the keys are
     m_canvas->installEventFilter(this);
     // F22: a glyph cell has no selection, so the held barrel button must not turn a stroke into a lasso.
-    // The setter lands with Track S1 (Task 13); until then the event filter alone keeps the button away.
-    [](auto *canvas) {
-        if constexpr (requires { canvas->setHeldLassoEnabled(false); })
-            canvas->setHeldLassoEnabled(false);
-    }(m_canvas);
+    m_canvas->setHeldLassoEnabled(false);
     m_guides = new Guides(m_metrics, m_canvas);
     connect(m_canvas, &ink::InkCanvas::documentEdited, this, &GlyphStudio::onEdited);
 
