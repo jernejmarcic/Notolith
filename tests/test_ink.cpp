@@ -3993,6 +3993,22 @@ TEST(InkToolsTest, ClipboardRoundTripKeepsStyleAndRaw)
     }
 }
 
+// Task 18 (carry): paste() parses the clipboard on the UI thread, about 12 ms a MiB, and a payload may be another
+// program's. 64 MiB took about 0.8 s; the cap is 16 MiB (a heavy note is about 2 MB), checked before any parse.
+TEST(InkToolsTest, AClipboardPayloadOverSixteenMiBIsRefusedBeforeItIsParsed)
+{
+    const qsizetype cap = qsizetype(16) << 20;
+    QByteArray payload = R"({"format":"notolith-ink-clip","items":[]})";
+    payload.resize(cap, ' '); // valid JSON padded with blanks: accepted when it fits
+    bool ok = false;
+    EXPECT_TRUE(itemsFromClipboardJSON(payload, &ok).empty());
+    EXPECT_TRUE(ok) << "exactly 16 MiB still fits";
+    payload.append(' ');
+    ok = true;
+    EXPECT_TRUE(itemsFromClipboardJSON(payload, &ok).empty());
+    EXPECT_FALSE(ok) << "one byte over is refused";
+}
+
 TEST(InkCanvasTest, LassoSelectMoveAndDelete)
 {
     CanvasFixture f;

@@ -233,7 +233,7 @@ std::vector<Item> itemsFromClipboardJSON(const QByteArray &bytes, bool *ok)
             *ok = false;
         return std::vector<Item>();
     };
-    if (bytes.size() > kMaxInflatedBytes) // the clipboard is another program's data too
+    if (bytes.size() > kMaxClipboardBytes) // the clipboard is another program's data too, and this runs on the UI thread
         return fail();
     const QJsonDocument json = QJsonDocument::fromJson(bytes);
     if (!json.isObject() || json.object().value(QStringLiteral("format")).toString() != QLatin1String("notolith-ink-clip")

@@ -42,6 +42,9 @@ QPainterPath shapePath(const Shape &shape);
 /// The clipboard format (MIME kClipboardMime): `{"format":"notolith-ink-clip","items":[...]}`, each item written
 /// exactly as in a .ink file, so style and unknown keys survive a copy and paste.
 inline constexpr const char *kClipboardMime = "application/x-notolith-ink+json";
+/// The most a clipboard payload may hold (another program's data too; paste() parses it on the UI thread, about 12 ms
+/// a MiB). A heavy note is about 2 MB, so 16 MiB is a selection of the whole of several of them.
+inline constexpr qsizetype kMaxClipboardBytes = qsizetype(16) << 20;
 QByteArray itemsToClipboardJSON(const std::vector<const Item *> &items);
 /// The items in `bytes` (their `t` is the source document's: the caller gives them new ones); `*ok` false, and nothing
 /// returned, for anything that is not this format or holds an item the .ink reader would refuse.
