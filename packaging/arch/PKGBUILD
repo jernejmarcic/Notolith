@@ -5,26 +5,25 @@
 #   cd packaging/arch
 #   BUILDDIR=/tmp/noteAppC-makepkg PKGDEST=/tmp makepkg -f
 #
+# One build, three packages (docs/INK.md): notolith (the application),
+# notolith-ink (the handwriting core library and module) and notolith-hwfont
+# (the glyph studio module). Install all three of one run together: a module
+# is only loaded by the build that made it (the ABI tag).
+#
 # The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the root
-# CMakeLists.txt), so it needs the network.
+# CMakeLists.txt) and ink-stroke-modeler (pinned in libs/ext/ink/core/CMakeLists.txt),
+# so it needs the network. source=() cannot pin the modeler without a tarball;
+# a later change can vendor it.
 
-pkgname=notolith
+pkgbase=notolith
+pkgname=('notolith' 'notolith-ink' 'notolith-hwfont')
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Markdown notes and Obsidian vaults, native and fast'
 arch=('x86_64' 'aarch64')
 license=('GPL-3.0-or-later')
-# The package was called noteappc before the app was named Notolith.
-conflicts=('noteappc')
-replaces=('noteappc')
-# bubblewrap is a hard dependency: without it code blocks, TeX and plugins
-# would fall back to running unsandboxed.
-depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'
-         'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'curl' 'libsodium'
-         'qtkeychain-qt6' 'zeromq' 'libseccomp' 'bubblewrap')
-makedepends=('cmake' 'ninja' 'git' 'gtest')
-optdepends=('hunspell-en_gb: British English spelling'
-            'hunspell-en_us: American English spelling')
+# abseil-cpp is the system Abseil that the ink core requires (docs/INK.md): without it the ink
+# packages would silently not be built.
+makedepends=('cmake' 'ninja' 'git' 'gtest' 'abseil-cpp')
 
 build() {
     # A distribution's makepkg.conf may target the build machine's own CPU
@@ -45,6 +44,36 @@ check() {
     QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure
 }
 
-package() {
+package_notolith() {
+    pkgdesc='Markdown notes and Obsidian vaults, native and fast'
+    # The package was called noteappc before the app was named Notolith.
+    conflicts=('noteappc')
+    replaces=('noteappc')
+    # bubblewrap is a hard dependency: without it code blocks, TeX and plugins
+    # would fall back to running unsandboxed.
+    depends=('qt6-base' 'qt6-svg' 'qt6-multimedia' 'yaml-cpp' 'hunspell' 'poppler-qt6'
+             'syntax-highlighting' 'litehtml' 'libgit2' 'libarchive' 'curl' 'libsodium'
+             'qtkeychain-qt6' 'zeromq' 'libseccomp' 'bubblewrap')
+    optdepends=('hunspell-en_gb: British English spelling'
+                'hunspell-en_us: American English spelling')
     DESTDIR="$pkgdir" cmake --install build
+    # The modules belong to their own packages; the base application never links them.
+    rm -r "$pkgdir/usr/lib/noteAppC/modules"
+}
+
+package_notolith-ink() {
+    pkgdesc='Notolith handwritten notes: the ink core library and the .ink module'
+    # ink-stroke-modeler (Apache-2.0) is linked into the core library.
+    license=('GPL-3.0-or-later' 'Apache-2.0')
+    depends=('notolith' 'abseil-cpp')
+    # One install unit: later .rnote, markup and recognition hooks go into this module.
+    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" \
+        build/modules/libnotolith-inkcore.so build/modules/notolith-ink.so
+}
+
+package_notolith-hwfont() {
+    pkgdesc='Notolith glyph studio: capture your handwriting letter by letter'
+    # No manifest "dependencies" key: pacman enforces this one.
+    depends=('notolith-ink')
+    install -Dm755 -t "$pkgdir/usr/lib/noteAppC/modules" build/modules/notolith-hwfont.so
 }
