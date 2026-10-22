@@ -8,11 +8,13 @@
 /// drop does nothing and a dropped file's path is inserted as text, so a
 /// vault-less editor (a loose file, a test) is unaffected.
 ///
-/// Pasted HTML is left as plain text: Obsidian converts it to Markdown, and
-/// that conversion is not built.
+/// Pasted rich text (text/html) is converted to Markdown (PasteHTML.cpp), as
+/// Obsidian does, except inside a fenced block; Ctrl+Shift+V pastes the plain
+/// text. Text copied from the editor itself carries no HTML, so it goes in as is.
 
 #include "MarkdownEditor.h"
 #include "MarkdownEditor_p.h"
+#include "PasteHTML.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -74,7 +76,11 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
     if (!mime)
         return;
 
-    if (const QByteArray bytes = imageBytes(mime); !bytes.isEmpty()) {
+    // Rich text with text beside it (a spreadsheet, a page) is pasted as text even when
+    // the source also offers a picture of it; an image alone (Chrome's "copy image",
+    // an <img> in the HTML and no text) is still an attachment.
+    const bool richText = mime->hasHtml() && !mime->text().trimmed().isEmpty();
+    if (const QByteArray bytes = richText ? QByteArray() : imageBytes(mime); !bytes.isEmpty()) {
         if (d->m_attachmentSaver) {
             const QString link = d->m_attachmentSaver(pastedImageName(), bytes);
             if (!link.isEmpty())
@@ -107,7 +113,14 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
     // TSV a spreadsheet takes; a note wants the table.
     if (mime->hasFormat(QStringLiteral("text/markdown")))
         insertText(cellSafe(QString::fromUtf8(mime->data(QStringLiteral("text/markdown")))));
-    else if (mime->hasText())
+    else if (mime->hasHtml() && !inCodeFenceAt(cursorOffset())) {
+        const QString plain = mime->hasText() ? mime->text() : QString();
+        const QString md = HTMLtoMarkdown(mime->html(), plain);
+        if (!md.isNull())
+            insertText(cellSafe(md));
+        else if (!plain.isEmpty())
+            insertText(cellSafe(plain));
+    } else if (mime->hasText())
         insertText(cellSafe(mime->text()));
 }
 

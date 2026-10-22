@@ -102,6 +102,13 @@ on this machine (docs/PERFORMANCE.md), which stays available as an option.
         note is saved per `files.attachmentFolder` (Obsidian's "/", "./",
         "./sub", "folder" forms) as "Pasted image YYYYMMDDHHmmss.png", and
         `![[...]]` inserted. Built since (libs/editor/PasteDrop.cpp, MainWindow attachment saver).
+  - [x] Rich-text paste (Jernej 2026-10-21: "when you copy paste text in obsidian
+        the formating is kep, here its not"): text/html on the clipboard is pasted
+        as Markdown (libs/editor/PasteHTML.cpp: QTextDocument toMarkdown plus
+        patches for pre, Word lists, wraps, escapes, code spans). Plain text in
+        markup, HTML over 2 MB or nested over 128 deep, and a paste inside a
+        fence stay plain; Ctrl+Shift+V is plain. Gaps: italic inside a heading
+        is lost (Qt), several literal `*` in formatted text can still pair up.
 - [x] **Tables aligned in the source** (Jernej 2026-09-23: "Tables should be
       auto aligned to look good, even in plain markdown, by adding spaces and
       other table characters"). `formatTable` (libs/markdown/TableFormat):

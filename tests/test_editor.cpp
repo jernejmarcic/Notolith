@@ -8138,6 +8138,288 @@ TEST(PasteDropTest, PasteIntoATableCellStaysSafe)
         << editor->noteText().toStdString();
 }
 
+// --- pasted rich text becomes Markdown (PasteHTML.cpp) -----------------------
+
+namespace {
+
+/// Puts `html` (when not null) and `plain` on the clipboard, pastes with
+/// Ctrl+V (Ctrl+Shift+V when `plain`) into `editor`, and returns the note.
+void putOnClipboard(const QString &html, const QString &plain)
+{
+    auto *mime = new QMimeData;
+    if (!html.isNull())
+        mime->setHtml(html);
+    mime->setText(plain);
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
+QString pasteRich(const QString &html, const QString &plain, bool shift = false)
+{
+    auto editor = editorWith(QString());
+    putOnClipboard(html, plain);
+    QTest::keyClick(editor.get(), Qt::Key_V,
+                    shift ? Qt::ControlModifier | Qt::ShiftModifier : Qt::ControlModifier);
+    return editor->noteText();
+}
+
+/// What Chrome puts on the clipboard around a selection.
+QString chromeHTML(const QString &fragment)
+{
+    return QStringLiteral("<html><body><!--StartFragment-->") + fragment
+         + QStringLiteral("<!--EndFragment--></body></html>");
+}
+
+} // namespace
+
+TEST(PasteHTMLTest, InlineFormattingBecomesMarkdown)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p style=\"color:rgb(0,0,0);\">Some <strong>bold</strong>, <em>italic</em>, <del>gone</del> and "
+        "<code>inline code</code> with a <a href=\"https://example.com/a_b\">link_text</a>.</p>")),
+        QStringLiteral("Some bold, italic, gone and inline code with a link_text."));
+    EXPECT_EQ(md, QStringLiteral("Some **bold**, *italic*, ~~gone~~ and `inline code` with a "
+                                 "[link_text](https://example.com/a_b)."))
+        << md.toStdString();
+}
+
+TEST(PasteHTMLTest, HeadingsKeepTheirLevel)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral("<h2>Title here</h2><h4>Deeper <em>one</em></h4>")),
+                                 QStringLiteral("Title here\nDeeper one"));
+    EXPECT_EQ(md, QStringLiteral("## Title here\n\n#### Deeper one"));
+}
+
+TEST(PasteHTMLTest, NestedBulletAndOrderedLists)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<ul><li>one</li><li>two<ul><li>nested a</li><li>nested b</li></ul></li></ul>")),
+        QStringLiteral("one\ntwo\nnested a\nnested b"));
+    EXPECT_EQ(md, QStringLiteral("- one\n- two\n  - nested a\n  - nested b"));
+
+    const QString ordered = pasteRich(chromeHTML(QStringLiteral(
+        "<ol><li>first</li><li>second<ol><li>inner</li></ol></li></ol>")),
+        QStringLiteral("first\nsecond\ninner"));
+    EXPECT_TRUE(ordered.startsWith(QStringLiteral("1."))) << ordered.toStdString();
+    EXPECT_TRUE(ordered.contains(QStringLiteral("2.")) && ordered.contains(QStringLiteral("inner")))
+        << ordered.toStdString();
+    EXPECT_FALSE(ordered.contains(QStringLiteral("- "))) << ordered.toStdString();
+}
+
+TEST(PasteHTMLTest, BlockquoteBecomesAQuote)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral("<blockquote>quoted text</blockquote>")),
+                                 QStringLiteral("quoted text"));
+    EXPECT_EQ(md, QStringLiteral("> quoted text"));
+}
+
+TEST(PasteHTMLTest, PreBecomesAFencedBlockKeepingEveryLine)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<pre>line1\n  line2\n    line3</pre><p>after <b>it</b></p>")),
+        QStringLiteral("line1\n  line2\n    line3\nafter it"));
+    EXPECT_EQ(md, QStringLiteral("```\nline1\n  line2\n    line3\n```\n\nafter **it**"));
+
+    const QString lang = pasteRich(chromeHTML(QStringLiteral(
+        "<pre><code class=\"language-js\">const a = 1;\nconst b = \"x\" &amp;&amp; y;</code></pre>")),
+        QStringLiteral("const a = 1;\nconst b = \"x\" && y;"));
+    EXPECT_EQ(lang, QStringLiteral("```js\nconst a = 1;\nconst b = \"x\" && y;\n```"));
+}
+
+TEST(PasteHTMLTest, TableBecomesAPipeTable)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<table><thead><tr><th>Name</th><th>Qty</th></tr></thead><tbody>"
+        "<tr><td>apple</td><td>3</td></tr><tr><td>pear</td><td>4</td></tr></tbody></table>")),
+        QStringLiteral("Name\tQty\napple\t3\npear\t4"));
+    EXPECT_TRUE(md.contains(QStringLiteral("|Name |Qty|")) || md.contains(QStringLiteral("| Name | Qty |")))
+        << md.toStdString();
+    EXPECT_TRUE(md.contains(QStringLiteral("---"))) << md.toStdString();
+    EXPECT_TRUE(md.contains(QStringLiteral("apple")) && md.contains(QStringLiteral("pear"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("\t"))) << md.toStdString();
+}
+
+TEST(PasteHTMLTest, RemoteImagesAreLinksAndDataImagesAreDropped)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p>see <img src=\"https://example.com/i.png\"> and <img src=\"data:image/png;base64,AAAA\"> there <b>now</b></p>")),
+        QStringLiteral("see  and  there now"));
+    EXPECT_TRUE(md.contains(QStringLiteral("![](https://example.com/i.png)"))) << md.toStdString();
+    EXPECT_FALSE(md.contains(QStringLiteral("base64"))) << md.toStdString();
+}
+
+TEST(PasteHTMLTest, GoogleDocsBoldSpansAndItsWrapperBold)
+{
+    // Docs wraps everything in <b style="font-weight:normal"> and bolds with a 700 span.
+    const QString html = QStringLiteral(
+        "<meta charset='utf-8'><b style=\"font-weight:normal;\" id=\"docs-internal-guid-1\">"
+        "<p dir=\"ltr\" style=\"line-height:1.38;margin-top:0pt;\"><span style=\"font-size:11pt;font-weight:700;"
+        "white-space:pre-wrap;\">Bold words</span><span style=\"font-weight:400;\"> and </span>"
+        "<span style=\"font-style:italic;\">italic words</span></p></b>");
+    EXPECT_EQ(pasteRich(html, QStringLiteral("Bold words and italic words")),
+              QStringLiteral("**Bold words** and *italic words*"));
+}
+
+TEST(PasteHTMLTest, WordNonBreakingSpacesBecomeSpacesAndBulletParagraphsBecomeAList)
+{
+    const QString html = QStringLiteral(
+        "<html xmlns:o=\"urn:schemas-microsoft-com:office:office\"><head><meta name=Generator content=\"Microsoft Word 15\">"
+        "<style><!-- p.MsoNormal{margin:0cm;} --></style></head><body lang=EN-GB><!--StartFragment-->"
+        "<h1><span style='mso-ascii-font-family:Calibri'>Heading</span></h1>"
+        "<p class=MsoNormal>Plain&nbsp;para with <b>bold</b>&nbsp;and <i>it</i>.<o:p></o:p></p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level1 lfo1'>"
+        "<![if !supportLists]><span>&middot;&nbsp;&nbsp;</span><![endif]>bullet one</p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level2 lfo1'>"
+        "<![if !supportLists]><span>o&nbsp;&nbsp;</span><![endif]>sub bullet</p>"
+        "<p class=MsoListParagraph style='text-indent:-18.0pt;mso-list:l0 level1 lfo1'>"
+        "<![if !supportLists]><span>&middot;&nbsp;&nbsp;</span><![endif]>bullet two</p>"
+        "<!--EndFragment--></body></html>");
+    const QString md = pasteRich(html, QStringLiteral("Heading\nPlain para with bold and it.\nbullet one\nsub bullet\nbullet two"));
+    EXPECT_EQ(md, QStringLiteral("# Heading\n\nPlain para with **bold** and *it*.\n\n"
+                                 "- bullet one\n  - sub bullet\n- bullet two"));
+    EXPECT_FALSE(md.contains(QChar(0x00A0)));
+}
+
+TEST(PasteHTMLTest, TextJustWrappedInASpanIsExactlyThePlainText)
+{
+    // A terminal or plain editor: a styled span around text full of Markdown
+    // punctuation. Nothing may be escaped, reflowed or code-spanned.
+    const QString plain = QStringLiteral("use *this* and_that [x] # not heading 1. also <tag>\n  indented line\n\nlast - one");
+    const QString html = chromeHTML(QStringLiteral(
+        "<span style=\"color: rgb(204, 204, 204); font-family: Menlo, monospace; white-space: pre;\">"
+        "use *this* and_that [x] # not heading 1. also &lt;tag&gt;\n  indented line\n\nlast - one</span>"));
+    EXPECT_EQ(pasteRich(html, plain), plain);
+
+    const QString divs = QStringLiteral("<div style=\"font-family: monospace;\">$ ls -la<br>total 8<br>foo_bar *</div>");
+    EXPECT_EQ(pasteRich(divs, QStringLiteral("$ ls -la\ntotal 8\nfoo_bar *")), QStringLiteral("$ ls -la\ntotal 8\nfoo_bar *"));
+}
+
+TEST(PasteHTMLTest, StrayEscapesAndBlankLinesAreTidied)
+{
+    const QString md = pasteRich(chromeHTML(QStringLiteral(
+        "<p><b>Ref</b> [1] and 5 * 6</p><div><br></div><div><br></div><div><br></div><p>end&nbsp;</p>")),
+        QStringLiteral("Ref [1] and 5 * 6\nend"));
+    EXPECT_EQ(md, QStringLiteral("**Ref** [1] and 5 * 6\n\nend"));
+}
+
+TEST(PasteHTMLTest, WhitespaceInsideEmphasisMovesOut)
+{
+    EXPECT_EQ(pasteRich(chromeHTML(QStringLiteral("<p>a <b>bold&nbsp;</b>tail</p>")), QStringLiteral("a bold tail")),
+              QStringLiteral("a **bold** tail"));
+}
+
+TEST(PasteHTMLTest, PasteInsideAFencedBlockIsPlain)
+{
+    const QString note = QStringLiteral("```\ncode\n```\n");
+    auto editor = editorWith(note);
+    editor->setCursorOffset(8); // after "code"
+    putOnClipboard(chromeHTML(QStringLiteral("<p>some <b>bold</b> text</p>")), QStringLiteral("some bold text"));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("```\ncodesome bold text\n```\n"));
+}
+
+TEST(PasteHTMLTest, CtrlShiftVPastesPlainText)
+{
+    const QString html = chromeHTML(QStringLiteral("<p>some <b>bold</b> text</p>"));
+    EXPECT_EQ(pasteRich(html, QStringLiteral("some bold text"), true), QStringLiteral("some bold text"));
+    EXPECT_EQ(pasteRich(html, QStringLiteral("some bold text")), QStringLiteral("some **bold** text"));
+}
+
+TEST(PasteHTMLTest, HTMLOverTheSizeCapFallsBackToPlainText)
+{
+    const QString filler(2 * 1024 * 1024 + 16, QLatin1Char('x'));
+    const QString html = chromeHTML(QStringLiteral("<p>a <b>bold</b> ") + filler + QStringLiteral("</p>"));
+    QElapsedTimer timer;
+    timer.start();
+    EXPECT_EQ(pasteRich(html, QStringLiteral("a bold fallback")), QStringLiteral("a bold fallback"));
+    EXPECT_LT(timer.elapsed(), 3000);
+}
+
+TEST(PasteHTMLTest, DeeplyNestedHostileHTMLDoesNotHang)
+{
+    QString html = chromeHTML(QString());
+    QString nest;
+    for (int i = 0; i < 50000; ++i)
+        nest += QStringLiteral("<b><i>");
+    nest += QStringLiteral("deep");
+    html = chromeHTML(nest);
+    ASSERT_LT(html.size(), 2 * 1024 * 1024);
+    QElapsedTimer timer;
+    timer.start();
+    const QString md = pasteRich(html, QStringLiteral("deep"));
+    EXPECT_LT(timer.elapsed(), 5000);
+    EXPECT_FALSE(md.isEmpty());
+}
+
+TEST(PasteHTMLTest, PagesOfUnclosedOrTornTagsFallBackToPlainTextFast)
+{
+    // Each of these made a lazy regex or QTextDocument scan to the end once per tag.
+    for (const QString &unit : {QStringLiteral("<pre>"), QStringLiteral("<style>"), QStringLiteral("<pre"),
+                                QStringLiteral("<p class=\"mso-list:l0 level1\">"), QStringLiteral("<table><tr><td>")}) {
+        QString html;
+        while (html.size() < 600 * 1024)
+            html += unit;
+        QElapsedTimer timer;
+        timer.start();
+        EXPECT_EQ(pasteRich(chromeHTML(html), QStringLiteral("fallback")), QStringLiteral("fallback"))
+            << unit.toStdString();
+        EXPECT_LT(timer.elapsed(), 3000) << unit.toStdString();
+    }
+}
+
+TEST(PasteHTMLTest, PasteIntoATableCellStaysCellSafe)
+{
+    auto editor = editorWith(kTableNote);
+    editor->show();
+    const qsizetype apple = kTableNote.indexOf(QStringLiteral("apple"));
+    ASSERT_FALSE(clickInto(*editor, {apple, apple + 5}).isNull());
+    editor->setCursorOffset(apple + 5);
+    putOnClipboard(chromeHTML(QStringLiteral("<p><b>a|b</b><br>c</p>")), QStringLiteral("a|b\nc"));
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("| apple**a\\|b**")))
+        << editor->noteText().toStdString();
+    EXPECT_TRUE(editor->noteText().contains(QStringLiteral("\n| pear |"))) << editor->noteText().toStdString();
+}
+
+TEST(PasteHTMLTest, MarkdownCopiedFromTheEditorPastesAsItIs)
+{
+    auto editor = editorWith(QStringLiteral("**b** and *i* and 1. x_y_z [x]"));
+    QTest::keyClick(editor.get(), Qt::Key_A, Qt::ControlModifier);
+    QTest::keyClick(editor.get(), Qt::Key_C, Qt::ControlModifier);
+    editor->setCursorOffset(editor->noteText().size());
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(editor->noteText(), QStringLiteral("**b** and *i* and 1. x_y_z [x]**b** and *i* and 1. x_y_z [x]"));
+
+    // A copied table-cell rectangle carries text/markdown beside rich text: the Markdown wins.
+    auto *mime = new QMimeData;
+    mime->setHtml(chromeHTML(QStringLiteral("<p><b>html</b></p>")));
+    mime->setText(QStringLiteral("html"));
+    mime->setData(QStringLiteral("text/markdown"), "| md |");
+    QGuiApplication::clipboard()->setMimeData(mime);
+    auto other = editorWith(QString());
+    QTest::keyClick(other.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_EQ(other->noteText(), QStringLiteral("| md |"));
+}
+
+TEST(PasteHTMLTest, AnImageAloneStillGoesToTheAttachmentSaver)
+{
+    // Chrome's "copy image": an <img> in HTML beside the bitmap, no text.
+    auto editor = editorWith(QString());
+    QImage image(2, 2, QImage::Format_RGB32);
+    image.fill(Qt::green);
+    auto *mime = new QMimeData;
+    mime->setHtml(QStringLiteral("<img src=\"https://example.com/i.png\">"));
+    mime->setImageData(image);
+    QGuiApplication::clipboard()->setMimeData(mime);
+    bool saved = false;
+    editor->setAttachmentSaver([&](const QString &name, const QByteArray &) {
+        saved = true;
+        return QStringLiteral("![[") + name + QStringLiteral("]]");
+    });
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+    EXPECT_TRUE(saved);
+    EXPECT_TRUE(editor->noteText().startsWith(QStringLiteral("![[Pasted image "))) << editor->noteText().toStdString();
+}
+
 TEST(TableCellTest, AShortRowGetsItsMissingCellsWhenReached)
 {
     const QString note = QStringLiteral("| a | b | c |\n|---|---|---|\n| 1 |\n\nafter\n");

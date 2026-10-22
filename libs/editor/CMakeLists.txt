@@ -26,6 +26,8 @@ add_library(noteAppC_editor STATIC
     NotebookInput.cpp
     NotebookEmbed.cpp
     PasteDrop.cpp
+    PasteHTML.cpp
+    PasteHTML.h
     TableCells.cpp
     TableHandles.cpp
     TouchInput.cpp
