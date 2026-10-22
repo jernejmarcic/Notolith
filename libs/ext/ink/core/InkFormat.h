@@ -17,7 +17,7 @@
 /// Non-finite numbers are written as 0, never as null.
 /// A text box item is `{"type":"textbox","t":<int>,"layer":"user","rect":[x,y,width,height],"markdown":"<text>"}`
 /// (document px; `rect` is four numbers or absent). The host's own reader of .ink files for indexing (Task 17)
-/// duplicates the keys "type", "textbox", "rect" and "markdown" as string literals: change them here and there together.
+/// duplicates the keys "format", "version", "items", "type", "textbox" and "markdown" as string literals (it ignores "rect"): change them here and there together.
 /// Documented for users in docs/INK.md.
 namespace noteAppC::ink {
 
