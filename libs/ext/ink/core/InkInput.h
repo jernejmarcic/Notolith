@@ -20,6 +20,12 @@ inline constexpr bool kTrustEraserPointerType = true;                  ///< no e
 inline constexpr double kInputRateHz = 120.0;                          ///< PADD in contact; feeds only the modeler's min_output_rate
 inline constexpr QPointF kFractionalScaleOffset{0.0, 0.0};             ///< device pixel ratio 2 showed no offset; subtracted from tablet widget positions by InkCanvas
 
+/// The longest gap between two samples the modeler is shown, in seconds. It refuses a gap that needs
+/// more than max_outputs_per_call (200) outputs at min_output_rate (120): about 1.67 s. A pen resting
+/// still on the page needs no interpolation for the idle time, so InkInput cuts the excess out of the
+/// clock it feeds the modeler (the stroke keeps no times; the real ones only order the samples).
+inline constexpr double kMaxModelerGapS = 1.0;
+
 struct InkSample {
     QPointF position; ///< document px
     double pressure = 0.5; ///< 0..1; anything else is clamped, a negative "unknown" becomes 0.5
@@ -77,12 +83,16 @@ public:
     size_t newPointsSinceLastTake() const { return m_newPoints; }
     size_t takeNewPoints();
     std::shared_ptr<const Stroke> finish(); ///< nullptr while active, or when there is no stroke (a pen-down that was not a number)
-    int droppedSamples() const { return m_dropped; } ///< strictly backwards or non-finite samples skipped
+    int droppedSamples() const { return m_dropped; } ///< strictly backwards or non-finite samples skipped (a duplicate of the pen-down instant too)
+    /// Times the modeler refused a sample and was restarted from it (or, on a pen-up, the raw point
+    /// kept); a prediction that failed. Zero in normal use: the tests watch it.
+    int modelerFailures() const { return m_failures; }
 
 private:
     struct Modeler; // hides the ink_stroke_modeler headers from the canvas
     void feed(const InkSample &sample, int eventType);
     void flushPending();
+    void restartModeler(const InkSample &sample, double modelTime);
     static bool usable(const InkSample &sample);
     void appendPoint(const QPointF &position, double pressure);
     static double cleanPressure(double pressure);
@@ -96,6 +106,10 @@ private:
     InkSample m_last;         ///< the newest accepted sample: a pen-up that is not a number ends the stroke here
     InkSample m_pending;      ///< the newest move, held until the next sample shows it was not replaced
     bool m_hasPending = false;
+    double m_timeOffset = 0;    ///< seconds of idle time cut out of the clock the modeler sees (kMaxModelerGapS)
+    double m_lastModelTime = 0; ///< the modeler's clock at the last sample fed to it
+    int m_failures = 0;
+    bool m_degraded = false;    ///< the modeler could not be (re)started: the rest of this stroke is raw
     bool m_active = false;
     bool m_raw = false;
 };

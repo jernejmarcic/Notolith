@@ -1364,6 +1364,98 @@ TEST(InkInputTest, ACalibratedPaddPenReachesFullPressureThroughTheModeler)
 }
 
 
+// Fix round 1, Important 1: the modeler refuses an input gap of about 1.67 s (max_outputs_per_call
+// 200 at 120 outputs/s) and used to stay failing for the rest of the stroke. A pen resting still
+// on the page for any time must not end the smoothing.
+TEST(InkInputTest, SmoothingContinuesAfterAPauseInContact)
+{
+    for (const double pause : {1.7, 3.0, 60.0}) {
+        SCOPED_TRACE(pause);
+        InkInput input;
+        const double dt = 1.0 / kInputRateHz;
+        double t = 0;
+        input.begin({QPointF(0, 50), 0.5, t}, StrokeStyle{});
+        for (int i = 1; i <= 100; ++i) {
+            t += dt + (i == 50 ? pause : 0.0);
+            input.extend({QPointF(2.0 * i, 50), 0.5, t});
+        }
+        EXPECT_EQ(input.droppedSamples(), 0) << "no sample falls through unsmoothed";
+        ASSERT_FALSE(input.prediction().empty()) << "the tail is fresh, not left over from before the pause";
+        EXPECT_GT(input.prediction().back().x, 195.0);
+        const size_t beforeEnd = input.stroke().points.size();
+        input.end({QPointF(202, 50), 0.5, t + dt});
+        EXPECT_EQ(input.droppedSamples(), 0);
+        const auto stroke = input.finish();
+        ASSERT_TRUE(stroke);
+        EXPECT_GT(stroke->points.size(), beforeEnd);
+        EXPECT_NEAR(stroke->points.back().x, 202.0, 1.0);
+        for (size_t i = 1; i < stroke->points.size(); ++i) {
+            EXPECT_TRUE(std::isfinite(stroke->points[i].x));
+            EXPECT_GE(stroke->points[i].x, stroke->points[i - 1].x - 0.1) << "the spring settles at the pause, at most a hair back";
+            EXPECT_LT(stroke->points[i].x - stroke->points[i - 1].x, 8.0) << "no jump across the pause at point " << i;
+        }
+    }
+}
+
+// Fix round 1, Important 2: a stray or stored out-of-range number must not ruin a device for good.
+TEST(PressureNormaliserTest, OutOfRangeAndNonFiniteSamplesNeverPoisonTheLearnedMaximum)
+{
+    const double inf = std::numeric_limits<double>::infinity();
+    PressureNormaliser normaliser;
+    normaliser.normalise(2.0);
+    normaliser.normalise(inf);
+    normaliser.normalise(-inf);
+    for (int i = 0; i < PressureNormaliser::kCalibrationSamples; ++i)
+        normaliser.normalise(0.657);
+    EXPECT_NEAR(normaliser.learnedMax(), 0.657, 1e-9) << "the 2.0 and the inf were clamped or ignored";
+    EXPECT_NEAR(normaliser.normalise(0.657), 1.0, 1e-9);
+    EXPECT_TRUE(std::isfinite(normaliser.learnedMax()));
+}
+
+TEST(PressureNormaliserTest, ABadStoredMaximumIsClampedOrRejectedAndTheDeviceStillCalibrates)
+{
+    const double bad[] = {1e9, std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN(), -3.0};
+    for (const double stored : bad) {
+        SCOPED_TRACE(stored);
+        PressureNormaliser normaliser;
+        normaliser.setLearnedMax(stored);
+        EXPECT_TRUE(std::isfinite(normaliser.learnedMax()));
+        EXPECT_GE(normaliser.learnedMax(), PressureNormaliser::kMinimumMax);
+        EXPECT_LE(normaliser.learnedMax(), 1.0);
+        EXPECT_FALSE(normaliser.takeChanged());
+        for (int i = 0; i < PressureNormaliser::kCalibrationSamples + 5; ++i)
+            normaliser.normalise(0.657);
+        EXPECT_NEAR(normaliser.normalise(0.657), 1.0, 1e-6);
+    }
+}
+
+// Fix round 1, Important 1 (second half): whatever the modeler refuses - here a coordinate so large the
+// spring state overflows - it is restarted from that sample, never left failing for the rest of the stroke.
+TEST(InkInputTest, AModelerFailureRestartsTheModelerAndTheStrokeStaysSmoothed)
+{
+    InkInput input;
+    const double dt = 1.0 / kInputRateHz;
+    input.begin({QPointF(0, 50), 0.5, 0.0}, StrokeStyle{});
+    for (int i = 1; i <= 60; ++i)
+        input.extend({QPointF(i == 30 ? 3.0e38 : 2.0 * i, 50), 0.5, i * dt});
+    EXPECT_GE(input.modelerFailures(), 1) << "the enormous coordinate was refused";
+    EXPECT_EQ(input.droppedSamples(), 0);
+    ASSERT_FALSE(input.prediction().empty()) << "a fresh tail after the restart";
+    for (const StrokePoint &p : input.prediction())
+        EXPECT_TRUE(std::isfinite(p.x) && std::isfinite(p.y));
+    const int failuresAfter = input.modelerFailures();
+    for (int i = 61; i <= 100; ++i)
+        input.extend({QPointF(2.0 * i, 50), 0.5, i * dt});
+    input.end({QPointF(202, 50), 0.5, 101 * dt});
+    EXPECT_EQ(input.modelerFailures(), failuresAfter) << "once restarted it takes samples again";
+    const auto stroke = input.finish();
+    ASSERT_TRUE(stroke);
+    EXPECT_GT(stroke->points.size(), 130u) << "smoothed output is denser than one point per sample";
+    EXPECT_NEAR(stroke->points.back().x, 202.0, 1.0);
+    for (const StrokePoint &p : stroke->points)
+        EXPECT_TRUE(std::isfinite(p.x) && std::isfinite(p.y));
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

@@ -18,6 +18,11 @@ struct InkInput::Modeler {
 
 namespace {
 
+constexpr double kModelerMinOutputRate = std::max(120.0, kInputRateHz);
+constexpr int kModelerMaxOutputsPerCall = 200;
+// The modeler refuses ceil(gap * rate) > max outputs; the cap on the gap must stay under it.
+static_assert(kMaxModelerGapS * kModelerMinOutputRate + 1 < kModelerMaxOutputsPerCall);
+
 // Rnote's parameters (rnote-engine/src/pens/pensconfig/brushconfig.rs and
 // rnote-study.md section 1.4), in seconds and document px. The wobble
 // timeout is Rnote's 0.04 s preset, not derived from kInputRateHz (which only
@@ -32,10 +37,10 @@ namespace {
     params.wobble_smoother_params.timeout = ::ink::stroke_model::Duration(0.04);
     params.wobble_smoother_params.speed_floor = 1.31;
     params.wobble_smoother_params.speed_ceiling = 1.44;
-    params.sampling_params.min_output_rate = std::max(120.0, kInputRateHz);
+    params.sampling_params.min_output_rate = kModelerMinOutputRate;
     params.sampling_params.end_of_stroke_stopping_distance = 0.01;
     params.sampling_params.end_of_stroke_max_iterations = 20;
-    params.sampling_params.max_outputs_per_call = 200;
+    params.sampling_params.max_outputs_per_call = kModelerMaxOutputsPerCall;
     params.stylus_state_modeler_params.use_stroke_normal_projection = true;
     params.prediction_params = ::ink::stroke_model::StrokeEndPredictorParams{};
     return params;
@@ -45,10 +50,12 @@ namespace {
 
 double PressureNormaliser::normalise(double raw)
 {
-    if (std::isnan(raw) || raw < 0.0)
-        return raw; // unknown: left for InkInput::cleanPressure
+    if (!std::isfinite(raw) || raw < 0.0)
+        return raw; // unknown or broken: never learned from, left for InkInput::cleanPressure
+    if (raw > 1.0)
+        return 1.0; // Qt pressure is 0..1: a stray 2.0 is a bad sample, not a harder press, and teaches nothing
     m_peak = std::max(m_peak, raw);
-    if (raw > kStrongFraction * m_learnedMax)
+    if (!m_calibrated && raw > kStrongFraction * m_learnedMax)
         ++m_strongSamples;
     if (!m_calibrated && m_strongSamples >= kCalibrationSamples) {
         m_learnedMax = std::max(kMinimumMax, m_peak);
@@ -63,7 +70,10 @@ double PressureNormaliser::normalise(double raw)
 
 void PressureNormaliser::setLearnedMax(double max)
 {
-    m_learnedMax = std::max(kMinimumMax, max);
+    if (!std::isfinite(max))
+        return; // a corrupt stored value: keep what we have
+    max = std::clamp(max, kMinimumMax, 1.0);
+    m_learnedMax = max;
     m_calibrated = max < 1.0; // 1.0 is the default, not a learned value: such a device still calibrates
     m_peak = m_calibrated ? m_learnedMax : 0.0;
     m_strongSamples = 0;
@@ -110,25 +120,29 @@ void InkInput::begin(const InkSample &sample, const StrokeStyle &style)
     m_dropped = 0;
     m_lastTime = -1;
     m_hasPending = false;
+    m_timeOffset = 0;
+    m_lastModelTime = 0;
+    m_failures = 0;
+    m_degraded = false;
     if (!usable(sample)) {
         ++m_dropped;
         return; // nothing started: finish() has no stroke to hand out
     }
     m_active = true;
     m_last = sample;
-    if (!m_raw) {
-        // Reset returns a status only for bad params; ours are constants.
-        (void)m_modeler->modeler.Reset(rnoteParams());
-    }
+    if (!m_raw && !m_modeler->modeler.Reset(rnoteParams()).ok())
+        m_degraded = true; // the params are constants, so this is unreachable; a stroke of raw points beats none
     feed(sample, 0);
 }
 
-// A move is held back until the next sample arrives (one event, about 5 ms at
-// 200 Hz, covered by the predicted tail): a sample that shares its
+// A move is held back until the next sample arrives (one event, about 8 ms at
+// 120 Hz): a sample that shares its
 // predecessor's timestamp - a compositor batching events - must replace it,
 // and the modeler cannot take a sample back. A strictly backwards timestamp is
 // skipped: the modeler rejects time going backwards.
-// ponytail: one event of latency on every move; feed at once and drop the newer duplicate if the bench says 5 ms matters.
+// The held sample is in neither the stroke nor the predicted tail (the tail is anchored on the
+// last fed one), so the pen is one event ahead of the ink.
+// ponytail: one event of latency on every move; the modeler's Save()/Restore() would feed at once and refeed on a replacement, if the bench says 8 ms matters.
 void InkInput::extend(const InkSample &sample)
 {
     if (!m_active)
@@ -185,41 +199,78 @@ void InkInput::flushPending()
 
 void InkInput::feed(const InkSample &sample, int eventType)
 {
-    if (m_raw) {
+    if (m_raw || m_degraded) {
         appendPoint(sample.position, sample.pressure);
         m_lastTime = sample.timeSeconds;
         return;
+    }
+    // The modeler's clock: idle time beyond kMaxModelerGapS is cut out (see its comment).
+    double modelTime = sample.timeSeconds - m_timeOffset;
+    if (eventType != 0 && modelTime - m_lastModelTime > kMaxModelerGapS) {
+        m_timeOffset += modelTime - m_lastModelTime - kMaxModelerGapS;
+        modelTime = m_lastModelTime + kMaxModelerGapS;
     }
     ::ink::stroke_model::Input input;
     input.event_type = eventType == 0 ? ::ink::stroke_model::Input::EventType::kDown
                      : eventType == 1 ? ::ink::stroke_model::Input::EventType::kMove
                                       : ::ink::stroke_model::Input::EventType::kUp;
     input.position = {float(sample.position.x()), float(sample.position.y())};
-    input.time = ::ink::stroke_model::Time(sample.timeSeconds);
+    input.time = ::ink::stroke_model::Time(modelTime);
     input.pressure = float(cleanPressure(sample.pressure));
     m_modeler->results.clear();
     const absl::Status status = m_modeler->modeler.Update(input, m_modeler->results);
+    m_lastTime = sample.timeSeconds;
+    m_lastModelTime = modelTime;
+    m_prediction.clear();
     if (!status.ok()) {
-        // A duplicate kDown, or a sample the modeler cannot place: keep the raw
-        // point so the stroke never silently loses ink.
-        appendPoint(sample.position, sample.pressure);
-        ++m_dropped;
-        m_lastTime = sample.timeSeconds;
+        // A sample the modeler cannot place (non-finite state from an enormous coordinate, say). It
+        // has half-applied the sample and would refuse every later one, so start it afresh from
+        // here; the stroke keeps this sample as a raw point and carries on smoothed.
+        ++m_failures;
+        if (eventType == 1)
+            restartModeler(sample, modelTime);
+        else {
+            appendPoint(sample.position, sample.pressure);
+            if (eventType == 0)
+                m_degraded = true;
+        }
         return;
     }
     for (const ::ink::stroke_model::Result &r : m_modeler->results)
         if (std::isfinite(r.position.x) && std::isfinite(r.position.y))
             appendPoint(QPointF(r.position.x, r.position.y), r.pressure);
     if (eventType == 0 && m_stroke.points.empty())
-        appendPoint(sample.position, sample.pressure); // the modeler emits the down point only with the first move
-    m_lastTime = sample.timeSeconds;
-    m_prediction.clear();
+        appendPoint(sample.position, sample.pressure); // a down the modeler answered with nothing usable
     if (eventType != 2) {
         m_modeler->results.clear();
-        if (m_modeler->modeler.Predict(m_modeler->results).ok())
-            for (const ::ink::stroke_model::Result &r : m_modeler->results)
+        if (!m_modeler->modeler.Predict(m_modeler->results).ok()) {
+            ++m_failures;
+            return;
+        }
+        for (const ::ink::stroke_model::Result &r : m_modeler->results)
+            if (std::isfinite(r.position.x) && std::isfinite(r.position.y))
                 m_prediction.push_back({double(r.position.x), double(r.position.y), cleanPressure(r.pressure)});
     }
+}
+
+void InkInput::restartModeler(const InkSample &sample, double modelTime)
+{
+    appendPoint(sample.position, sample.pressure);
+    m_modeler->results.clear();
+    ::ink::stroke_model::Input down;
+    down.event_type = ::ink::stroke_model::Input::EventType::kDown;
+    down.position = {float(sample.position.x()), float(sample.position.y())};
+    down.time = ::ink::stroke_model::Time(modelTime);
+    down.pressure = float(cleanPressure(sample.pressure));
+    if (!m_modeler->modeler.Reset(rnoteParams()).ok() || !m_modeler->modeler.Update(down, m_modeler->results).ok()) {
+        m_degraded = true; // cannot restart: the rest of this stroke is raw rather than lost
+        return;
+    }
+    m_modeler->results.clear();
+    if (m_modeler->modeler.Predict(m_modeler->results).ok())
+        for (const ::ink::stroke_model::Result &r : m_modeler->results)
+            if (std::isfinite(r.position.x) && std::isfinite(r.position.y))
+                m_prediction.push_back({double(r.position.x), double(r.position.y), cleanPressure(r.pressure)});
 }
 
 size_t InkInput::takeNewPoints()
