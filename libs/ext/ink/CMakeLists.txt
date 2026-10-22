@@ -11,7 +11,12 @@ set_target_properties(noteAppC_ink PROPERTIES AUTOMOC ON POSITION_INDEPENDENT_CO
 target_include_directories(noteAppC_ink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     $<TARGET_PROPERTY:noteAppC_settings,INTERFACE_INCLUDE_DIRECTORIES>
     $<TARGET_PROPERTY:noteAppC_theme,INTERFACE_INCLUDE_DIRECTORIES>
-    $<TARGET_PROPERTY:noteAppC_vault,INTERFACE_INCLUDE_DIRECTORIES>)
+    $<TARGET_PROPERTY:noteAppC_vault,INTERFACE_INCLUDE_DIRECTORIES>
+    # InkView draws a text box with the host's MarkdownEditor (headers only: the editor's symbols
+    # come from the executable like the others', never from a second copy in the module).
+    $<TARGET_PROPERTY:noteAppC_editor,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:noteAppC_markdown,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:noteAppC_render,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(noteAppC_ink PUBLIC notolith-inkcore noteAppC_modules_headers Qt6::Widgets)
 
 # The module itself: only this target is a Qt plugin. Host symbols (Settings,

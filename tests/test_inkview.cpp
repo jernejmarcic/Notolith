@@ -12,6 +12,7 @@
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -109,6 +110,7 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkSelectRectAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkShapeAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkTextAction"))->isEnabled());
     EXPECT_FALSE(view.save(&error));
     EXPECT_EQ(readAll(path), newer);
 }
@@ -506,6 +508,48 @@ TEST(InkViewToolbarTest, TheShapeToolIsOnTheToolbarWithAMenuOfFourKindsAndOnItsK
     EXPECT_TRUE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isChecked());
     QTest::keyClick(view.canvas(), Qt::Key_S);
     EXPECT_TRUE(shape->isChecked()) << "S picks the tool, whatever the kind";
+}
+
+// Closing a tab asks isModified(), then save(): text still being typed is neither committed nor in the document yet.
+TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error)) << error.toStdString();
+    view.resize(800, 600);
+    view.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&view));
+    view.canvas()->setTool(InkCanvas::Tool::Text);
+    QTest::mouseClick(view.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(60, 400));
+    auto *edit = view.canvas()->findChild<QPlainTextEdit *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr);
+    EXPECT_FALSE(view.isModified()) << "an editor with nothing typed is not an edit";
+    QTest::keyClicks(edit, QStringLiteral("unsaved thought"));
+    EXPECT_TRUE(view.isModified());
+    ASSERT_TRUE(view.save(&error)) << error.toStdString();
+    EXPECT_FALSE(view.isModified());
+    EXPECT_TRUE(readAll(path).contains("unsaved thought")) << "save() committed the box first";
+}
+
+TEST(InkViewToolbarTest, TheTextToolIsOnTheToolbarAndOnItsKeyAndIsNotThePenInDisguise)
+{
+    InkView view(nullptr);
+    auto *text = view.findChild<QAction *>(QStringLiteral("inkTextAction"));
+    auto *pen = view.findChild<QAction *>(QStringLiteral("inkPenAction"));
+    ASSERT_NE(text, nullptr);
+    EXPECT_TRUE(text->isCheckable());
+    EXPECT_FALSE(text->isChecked());
+    text->trigger();
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Text);
+    EXPECT_TRUE(text->isChecked());
+    EXPECT_FALSE(pen->isChecked()) << "Text no longer draws like the pen, nor shows it checked";
+    QTest::keyClick(view.canvas(), Qt::Key_P);
+    EXPECT_TRUE(pen->isChecked());
+    EXPECT_FALSE(text->isChecked());
+    QTest::keyClick(view.canvas(), Qt::Key_T);
+    EXPECT_EQ(view.canvas()->tool(), InkCanvas::Tool::Text) << "the T key picks it without pen hardware (R14)";
+    EXPECT_TRUE(text->isChecked());
+    EXPECT_FALSE(pen->isChecked());
 }
 
 int main(int argc, char **argv)

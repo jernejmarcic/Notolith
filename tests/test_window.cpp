@@ -8205,4 +8205,42 @@ TEST_F(WindowTest, TheMouseDrawsInAnInkTabOnlyAfterDrawWithMouseIsSwitchedOnInSe
     drag();
     EXPECT_TRUE(view->isModified()) << "on: the live view took the setting without being reopened";
 }
+
+// Task 15: a text box is drawn by the host's own note editor (InkView builds it), so what the box says is
+// rendered like a note: [[Welcome]] shows as a link, in the link colour, on the page.
+TEST_F(WindowTest, AnInkTextBoxRendersMarkdownLikeANote)
+{
+    write(QStringLiteral("Sketch.ink"),
+          "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{},\"items\":[\n"
+          "{\"type\":\"textbox\",\"t\":1,\"layer\":\"user\",\"rect\":[40,40,300,60],\"markdown\":\"[[Welcome]]\"}\n]}\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(&window));
+    window.scanModulesNow();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Sketch.ink"))));
+    auto *view = window.findChild<noteAppC::ModuleView *>(QStringLiteral("inkView"));
+    ASSERT_NE(view, nullptr);
+    auto *canvas = view->findChild<QWidget *>(QStringLiteral("inkCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    // The page is white paper whatever the app's theme is, so the box is drawn in the light scheme (InkView::renderText).
+    const QColor link = noteAppC::Theme::builtin(noteAppC::Theme::Mode::Light).color(QStringLiteral("--link-color"));
+    const auto linkPixelsIn = [&](const QRect &area) {
+        const QImage shot = canvas->grab().toImage();
+        const qreal dpr = shot.devicePixelRatio();
+        int found = 0;
+        for (int y = int(area.top() * dpr); y < int(area.bottom() * dpr); ++y)
+            for (int x = int(area.left() * dpr); x < int(area.right() * dpr); ++x) {
+                const QColor c = shot.pixelColor(x, y);
+                if (qAbs(c.red() - link.red()) + qAbs(c.green() - link.green()) + qAbs(c.blue() - link.blue()) < 40)
+                    ++found;
+            }
+        return found;
+    };
+    WAIT_TRUE(linkPixelsIn(QRect(40, 40, 300, 60)) > 10, 5000);
+    EXPECT_EQ(linkPixelsIn(QRect(0, 120, 790, 400)), 0) << "nothing link-coloured outside the box";
+    const QImage shot = canvas->grab().toImage();
+    const qreal dpr = shot.devicePixelRatio();
+    EXPECT_GT(shot.pixelColor(int(330 * dpr), int(60 * dpr)).lightness(), 200) << "the box is clear: the page shows through, not a dark card";
+}
 #endif

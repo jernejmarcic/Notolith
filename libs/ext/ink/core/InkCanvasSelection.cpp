@@ -215,6 +215,7 @@ void InkCanvas::finishSelect(Drawing mode, bool keep)
     }
     const bool grew = m_document.growToContain(m_selectionBounds);
     finishEdit();
+    update(selectionPaintRect()); // a text box that was resized is drawn again now that the drag is over (never during it)
     if (grew) { // the page grew: the widget is resized, and the selection survives it
         const std::vector<qint64> keepSelection = m_selection;
         documentReplaced();

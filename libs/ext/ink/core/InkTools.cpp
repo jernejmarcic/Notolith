@@ -101,7 +101,10 @@ std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &regi
                 }
             }
         } else if (item->type == Item::Type::TextBox || item->type == Item::Type::Image) {
-            hit = region.contains(item->bounds().center()); // ponytail: a real per-kind hit test comes with Task 15 (carry N5)
+            // The box itself (carry N5): the region holds its centre, or crosses its edge. A region wholly inside the box
+            // (ink drawn over a text box) takes the ink and not the box.
+            const QRectF box = item->bounds();
+            hit = region.contains(box.center()) || (region.intersects(box) && !box.contains(region.boundingRect()));
         } else if (item->type == Item::Type::Shape) {
             // Its ink: a lasso inside a rectangle that touches no edge selects nothing. ponytail: one stroker run per
             // candidate shape (those whose box meets the region's box), a large drawing of shapes under one lasso is the ceiling.
@@ -200,7 +203,7 @@ Item transformItem(const Item &item, const QTransform &transform)
         out.shape = std::move(shape);
         break;
     }
-    case Item::Type::TextBox:
+    case Item::Type::TextBox: // the box is mapped, the text is not scaled: a resized box reflows its Markdown at the same type size
         out.textBox = std::make_shared<TextBox>(TextBox{transform.mapRect(item.textBox->rect), item.textBox->markdown});
         break;
     case Item::Type::Image:

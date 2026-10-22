@@ -14,6 +14,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "MarkdownEditor.h"
 #include "Settings.h"
 #include "Theme.h"
 #include "Vault.h"
@@ -89,11 +90,17 @@ InkView::InkView(const Settings *settings, QWidget *parent)
         m_shapeKindActions[i] = a;
     }
     m_shapeAction->setMenu(shapeMenu);
+    m_textAction = tools->addAction(tr("Text"));
+    m_textAction->setObjectName(QStringLiteral("inkTextAction"));
+    m_textAction->setCheckable(true);
+    m_textAction->setToolTip(tr("Click to write a text box, or to edit one; Markdown, like a note (T)"));
+    connect(m_textAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Text); });
+    m_canvas->setTextRenderer([this](const QString &markdown, const QSizeF &size) { return renderText(markdown, size); });
     m_undoAction = new QAction(tr("Undo"), this);
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
     connect(m_redoAction, &QAction::triggered, m_canvas, &InkCanvas::redo);
-    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction, m_selectAction, m_selectRectAction, m_shapeAction});
+    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction, m_selectAction, m_selectRectAction, m_shapeAction, m_textAction});
     if (auto *button = qobject_cast<QToolButton *>(m_toolBar->widgetForAction(m_shapeAction)))
         button->setPopupMode(QToolButton::MenuButtonPopup); // the face picks the tool, the arrow opens the kinds
     m_toolBar->addSeparator();
@@ -121,7 +128,8 @@ InkView::InkView(const Settings *settings, QWidget *parent)
 
     connect(m_canvas, &InkCanvas::documentEdited, this, &InkView::onEdited);
     connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P and E (R14) move the toolbar too
-        m_penAction->setChecked(tool == InkCanvas::Tool::Pen || tool == InkCanvas::Tool::Text); // Text draws like the pen until Task 15
+        m_penAction->setChecked(tool == InkCanvas::Tool::Pen);
+        m_textAction->setChecked(tool == InkCanvas::Tool::Text);
         m_eraserAction->setChecked(tool == InkCanvas::Tool::Eraser);
         m_selectAction->setChecked(tool == InkCanvas::Tool::Lasso);
         m_shapeAction->setChecked(tool == InkCanvas::Tool::Shape);
@@ -221,6 +229,7 @@ bool InkView::load(const QString &path, QString *error)
                     m_selectAction->setEnabled(false);
                     m_selectRectAction->setEnabled(false);
                     m_shapeAction->setEnabled(false);
+                    m_textAction->setEnabled(false);
                     m_errorLabel->setText(parsed.result.error);
                     m_errorAction->setVisible(true);
                 } else {
@@ -263,6 +272,7 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
     m_selectAction->setEnabled(!m_readOnly);
     m_selectRectAction->setEnabled(!m_readOnly);
     m_shapeAction->setEnabled(!m_readOnly);
+    m_textAction->setEnabled(!m_readOnly);
     m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);
@@ -331,6 +341,7 @@ bool InkView::save(QString *error)
         if (error) *error = tr("no file");
         return false;
     }
+    m_canvas->commitText(); // a box still being typed is part of what is saved
     if (const DiskStamp now = stampOf(m_path); now.size >= 0 && now != m_stamp)
         return resolveExternalChange(error);
     // The vault's atomic replace (spec section 5): writeInk() builds the bytes, the host writes them.
@@ -342,8 +353,50 @@ bool InkView::save(QString *error)
     return true;
 }
 
+namespace {
+// MarkdownEditor keeps this much clear at the left and right and above the first line (MarkdownEditor_p.h:
+// m_minimumSideMargin, m_topPadding). A text box is a small rect on a page, so the editor is made that much bigger and
+// the picture cropped back to the box: the text then fills it. If the editor changes them the box only gets more or less padding.
+constexpr int kEditorSideMargin = 24;
+constexpr int kEditorTopPadding = 28;
+} // namespace
+
+/// A text box is drawn by the host's note editor, as a canvas text card is (libs/ext/canvas/CanvasRender.cpp,
+/// makeContentEditor): Reading mode, no scroll bars, the Markdown parsed before the grab. The theme is the page's, not the
+/// app's: the page is paper (white by default, whatever the app theme is), so a dark app theme would put light text on it;
+/// the background is clear, so the page's ruling shows through. The app's font overrides do carry over.
+/// Runs on the UI thread only (R5): a widget grab.
+QPixmap InkView::renderText(const QString &markdown, const QSizeF &size) const
+{
+    const QColor page = m_canvas->document().settings().background.color;
+    Theme paper = Theme::builtin(page.lightness() < 128 ? Theme::Mode::Dark : Theme::Mode::Light);
+    paper.setToken(QStringLiteral("--background-primary"), QStringLiteral("transparent"));
+    if (m_hostTheme)
+        paper.setFontOverrides(m_hostTheme->interfaceFontOverride(), m_hostTheme->textFontOverride(), m_hostTheme->monospaceFontOverride());
+    const QSize box = size.toSize();
+    MarkdownEditor editor;
+    editor.setTheme(paper);
+    editor.setMode(MarkdownEditor::Mode::Reading);
+    editor.setFrameShape(QFrame::NoFrame);
+    // The app's style sheet paints a background under every scroll area; this one is cleared so the page shows through.
+    editor.setStyleSheet(QStringLiteral("QAbstractScrollArea, QAbstractScrollArea > QWidget { background: transparent; border: none; }"));
+    editor.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    editor.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    editor.resize(box.width() + 2 * kEditorSideMargin, box.height() + kEditorTopPadding);
+    editor.setNoteText(markdown);
+    editor.finishParse(); // a long box parses on the pool otherwise: take it now rather than grabbing blank text
+    const qreal dpr = editor.devicePixelRatioF();
+    QPixmap picture((QSizeF(box) * dpr).toSize());
+    picture.setDevicePixelRatio(dpr);
+    picture.fill(Qt::transparent);
+    editor.render(&picture, QPoint(), QRegion(QRect(QPoint(kEditorSideMargin, kEditorTopPadding), box)), QWidget::DrawChildren); // not DrawWindowBackground
+    return picture;
+}
+
 void InkView::setTheme(const Theme &theme)
 {
+    m_hostTheme = theme;
+    m_canvas->invalidateTextCache(); // the fonts may have changed
     QPalette palette = m_area->viewport()->palette();
     palette.setColor(QPalette::Window, theme.color(QStringLiteral("--background-secondary")));
     m_area->viewport()->setPalette(palette);

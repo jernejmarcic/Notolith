@@ -105,7 +105,8 @@ QRectF Shape::bounds() const
     }
     // An arrow's open head reaches kArrowHeadLengthInWidths widths back from the tip, sideways too:
     // pad that far so the spatial grid and every invalidation see the whole head.
-    const double pad = style.width * 0.5 + (kind == ShapeKind::Arrow ? style.width * kArrowHeadLengthInWidths : 0.0);
+    const double width = std::fabs(style.width); // as shapePath: a negative width counts as its absolute value
+    const double pad = width * 0.5 + (kind == ShapeKind::Arrow ? width * kArrowHeadLengthInWidths : 0.0);
     return QRectF(QPointF(x0 - pad, y0 - pad), QPointF(x1 + pad, y1 + pad));
 }
 

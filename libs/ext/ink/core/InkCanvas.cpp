@@ -14,6 +14,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPinchGesture>
+#include <QPlainTextEdit>
 #include <QTabletEvent>
 #include <QTouchEvent>
 
@@ -184,9 +185,8 @@ Geometry geometryOf(const InkDocument &document, double zoom) { return {document
 
 /// What a tile job paints, copied on the UI thread: shared stroke payloads and the bounds of the rest, never the document.
 struct TileItem {
-    std::shared_ptr<const Stroke> stroke; ///< both null: a text box or image (a placeholder until Task 15)
-    std::shared_ptr<const Shape> shape;   ///< pure data like a stroke: painted in the job (R5: geometry only)
-    QRectF bounds;
+    std::shared_ptr<const Stroke> stroke; ///< exactly one of the two: both are pure data, painted in the job (R5: geometry only)
+    std::shared_ptr<const Shape> shape;   ///< text boxes and images are not here: they need the GUI thread (paintUIItems)
 };
 
 struct TileSpec {
@@ -225,10 +225,8 @@ QImage renderTile(const TileSpec &spec)
         for (const TileItem &item : it->second) {
             if (item.stroke)
                 paintStroke(painter, *item.stroke);
-            else if (item.shape)
-                paintShape(painter, *item.shape);
             else
-                painter.fillRect(item.bounds, QColor(0, 0, 0, 12));
+                paintShape(painter, *item.shape);
         }
     });
     return image;
@@ -307,6 +305,8 @@ std::pair<int, int> InkCanvas::visiblePages(const QRect &area) const { return ge
 void InkCanvas::documentReplaced()
 {
     finishStroke(false); // the stroke in flight belongs to the document that went away
+    closeTextEditor();   // so does an open box: undo and the owner's reload end it first (commitText), nothing here may write into the new document
+    std::erase_if(m_textCache, [this](const auto &entry) { return !m_document.item(entry.first); }); // a moved box keeps its picture
     setSelection({});    // its items are gone (an undo, a load) or must be picked again
     m_live = QImage();
     m_holdShape.reset();
@@ -332,6 +332,7 @@ void InkCanvas::setZoom(double zoom)
     finishStroke(true); // in the old zoom: its samples are widget px of it
     m_zoom = zoom;
     m_live = QImage();
+    layoutTextEditor();
     m_zoomTimer.start(); // the tiles are scaled until the pinch has been still for kZoomSettleMs
     resize(sizeHint());
     updateGeometry();
@@ -371,17 +372,21 @@ void InkCanvas::setTool(Tool tool)
 {
     if (tool == m_tool)
         return;
+    commitText();
     if (m_drawing == Drawing::Shape)
         finishStroke(false); // a shape drag belongs to the Shape tool
     m_tool = tool;
+    setCursor(tool == Tool::Text ? Qt::IBeamCursor : Qt::CrossCursor);
     clearSelection(); // the selection belongs to the select tool
     emit toolChanged(m_tool);
 }
 
 void InkCanvas::setReadOnly(bool on)
 {
-    if (on)
+    if (on) {
         finishStroke(true);
+        commitText(); // while the canvas still takes edits: what was typed is kept
+    }
     m_readOnly = on;
 }
 
@@ -440,8 +445,10 @@ void InkCanvas::tabletEvent(QTabletEvent *event)
         }
         break;
     case QEvent::TabletRelease:
-        if (event->button() == Qt::LeftButton && m_tabletActive)
+        if (event->button() == Qt::LeftButton && m_tabletActive) {
             releaseAt(pos, seconds);
+            m_tabletActive = false; // a press that began no gesture (the Text tool) has no release to clear it
+        }
         break;
     default:
         break;
@@ -457,7 +464,7 @@ void InkCanvas::mousePressEvent(QMouseEvent *event)
     // Ctrl+drag selects in any tool, drawWithMouse or not: the mouse user needs no tool switch (R14). The select tool
     // takes the mouse when it draws at all.
     const bool select = event->modifiers().testFlag(Qt::ControlModifier) || (m_drawWithMouse && m_tool == Tool::Lasso);
-    if (!m_drawWithMouse && !select)
+    if (!m_drawWithMouse && !select && m_tool != Tool::Text) // a click is no drawing: the Text tool takes it from a mouse too
         return QWidget::mousePressEvent(event);
     pressAt(event->position(), 0.5, event->timestamp() / 1000.0, m_tool == Tool::Eraser, select);
 }
@@ -537,6 +544,13 @@ bool toolForKey(int key, InkCanvas::Tool *tool)
 void InkCanvas::keyPressEvent(QKeyEvent *event)
 {
     InkCanvas::Tool keyTool = InkCanvas::Tool::Pen;
+    if (m_textEdit) { // keys the editor ignored (Escape, Ctrl+Y, F-keys) must not reach the tool and edit shortcuts below
+        if (event->key() == Qt::Key_Escape)
+            commitText();
+        else
+            QWidget::keyPressEvent(event);
+        return;
+    }
     if (m_readOnly) {
         QWidget::keyPressEvent(event);
     } else if (event->matches(QKeySequence::Undo)) {
@@ -583,6 +597,7 @@ void InkCanvas::focusOutEvent(QFocusEvent *event)
 void InkCanvas::hideEvent(QHideEvent *event)
 {
     finishStroke(true);
+    commitText();
     QWidget::hideEvent(event);
 }
 
@@ -599,6 +614,7 @@ void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double second
 {
     if (m_drawing != Drawing::None)
         finishStroke(true); // a press without the release: close the old stroke where IT ended, not at this press
+    commitText();         // a press anywhere but in the editor ends the box
     setFocus(Qt::MouseFocusReason);
     m_holdLive = false;
     m_holdShape.reset();
@@ -615,6 +631,10 @@ void InkCanvas::pressAt(const QPointF &widgetPos, double pressure, double second
         m_erasedSomething = false;
         m_lastErase = toDocument(widgetPos);
         eraseSweep(m_lastErase, m_lastErase);
+        return;
+    }
+    if (m_tool == Tool::Text) { // a click, not a gesture: nothing is in flight
+        pressText(toDocument(widgetPos));
         return;
     }
     if (m_tool == Tool::Shape) {
@@ -777,6 +797,218 @@ void InkCanvas::rasteriseNewSegments()
     update(widgetRect(dirty));
 }
 
+// --- text boxes ---------------------------------------------------------------------------
+
+namespace {
+constexpr double kTextEditorFontPx = 16.0; ///< document px at zoom 1: the size the editor over a box types in
+constexpr size_t kTextCachePrune = 64;     ///< above this many pictures, the ones whose box is gone are dropped at paint
+} // namespace
+
+void InkCanvas::setTextRenderer(TextRenderer renderer)
+{
+    m_textRenderer = std::move(renderer);
+    invalidateTextCache();
+}
+
+void InkCanvas::invalidateTextCache()
+{
+    m_textCache.clear();
+    update();
+}
+
+bool InkCanvas::beginEditingText(qint64 t)
+{
+    const Item *item = m_document.item(t);
+    if (m_readOnly || !item || item->type != Item::Type::TextBox)
+        return false;
+    openTextEditor(t, item->textBox->rect, item->textBox->markdown);
+    return true;
+}
+
+/// A press with the Text tool: the newest box under the pointer is edited, otherwise a new one starts at the pointer.
+void InkCanvas::pressText(const QPointF &at)
+{
+    qint64 hit = 0;
+    for (qint64 t : m_document.itemsIntersecting(QRectF(at, QSizeF(0, 0)).adjusted(-1, -1, 1, 1))) {
+        const Item *item = m_document.item(t);
+        if (item && item->type == Item::Type::TextBox && item->textBox->rect.contains(at))
+            hit = std::max(hit, t); // the highest t paints last: it is the one on top
+    }
+    if (hit) {
+        beginEditingText(hit);
+        return;
+    }
+    QRectF rect(at, kNewTextBoxSize);
+    const QRectF page = m_document.settings().extent; // a box starting near the right edge slides left rather than hang off the page
+    rect.moveLeft(std::clamp(rect.left(), page.left(), std::max(page.left(), page.right() - rect.width())));
+    openTextEditor(-1, rect, QString());
+}
+
+void InkCanvas::openTextEditor(qint64 t, const QRectF &rect, const QString &markdown)
+{
+    commitText();
+    clearSelection();
+    auto *edit = new QPlainTextEdit(this);
+    edit->setObjectName(QStringLiteral("inkTextEditor"));
+    edit->setPlainText(markdown);
+    edit->moveCursor(QTextCursor::End);
+    const QColor page = m_document.settings().background.color;
+    QPalette colours = edit->palette();
+    colours.setColor(QPalette::Base, page);
+    colours.setColor(QPalette::Text, page.lightness() > 128 ? QColor(0x1e, 0x1e, 0x1e) : QColor(0xe0, 0xe0, 0xe0));
+    colours.setColor(QPalette::WindowText, palette().highlight().color()); // the frame
+    edit->setPalette(colours);
+    edit->setFrameShape(QFrame::Box);
+    edit->installEventFilter(this); // Escape and focus loss end the edit (eventFilter)
+    m_textEdit = edit;
+    m_textEditT = t;
+    m_textEditRect = rect;
+    m_textEditOriginal = markdown;
+    layoutTextEditor();
+    edit->show();
+    edit->setFocus(Qt::OtherFocusReason);
+    update(widgetRect(rect)); // the box's picture is not painted while its editor is over it
+}
+
+void InkCanvas::layoutTextEditor()
+{
+    if (!m_textEdit)
+        return;
+    m_textEdit->setGeometry(QRectF(toWidget(m_textEditRect.topLeft()), toWidget(m_textEditRect.bottomRight())).toAlignedRect());
+    QFont font = m_textEdit->font();
+    font.setPixelSize(std::max(6, qRound(kTextEditorFontPx * m_zoom)));
+    m_textEdit->setFont(font);
+}
+
+QString InkCanvas::closeTextEditor()
+{
+    QPlainTextEdit *edit = m_textEdit;
+    if (!edit)
+        return QString();
+    const QString text = edit->toPlainText();
+    m_textEdit = nullptr; // first: hiding it sends the focus-out that would come back here
+    m_textEditT = 0;
+    edit->removeEventFilter(this);
+    const bool focused = edit->hasFocus();
+    edit->hide();
+    edit->deleteLater(); // never delete it directly: this runs from its own event filter
+    if (focused)
+        setFocus(Qt::OtherFocusReason);
+    return text;
+}
+
+/// Ends the edit and commits it as one history step (Escape, a press elsewhere, a tool change, undo, hiding,
+/// read-only): a new box with no text is never added, an unchanged box commits nothing, a box emptied of text goes.
+void InkCanvas::commitText()
+{
+    if (!m_textEdit)
+        return;
+    const qint64 t = m_textEditT;
+    const QRectF rect = std::exchange(m_textEditRect, QRectF());
+    const QString text = closeTextEditor();
+    update(widgetRect(rect));
+    const bool blank = text.trimmed().isEmpty();
+    if (t > 0) {
+        const Item *old = m_document.item(t);
+        if (!old || old->type != Item::Type::TextBox || text == old->textBox->markdown)
+            return;
+        if (blank) {
+            m_document.removeItem(t);
+        } else {
+            Item changed = *old;
+            changed.textBox = std::make_shared<TextBox>(TextBox{old->textBox->rect, text});
+            m_document.replaceItem(t, std::move(changed));
+        }
+        finishEdit();
+        return;
+    }
+    if (blank || m_readOnly)
+        return;
+    Item item;
+    item.type = Item::Type::TextBox;
+    item.layer = Layer::User;
+    item.textBox = std::make_shared<TextBox>(TextBox{rect, text});
+    m_document.addItem(std::move(item));
+    const bool grew = m_document.growToContain(rect);
+    finishEdit();
+    if (grew)
+        documentReplaced(); // the page grew: resize the widget (nothing is in flight)
+    update(widgetRect(rect));
+}
+
+bool InkCanvas::isTextEditDirty() const
+{
+    return m_textEdit && m_textEdit->toPlainText() != m_textEditOriginal;
+}
+
+bool InkCanvas::eventFilter(QObject *watched, QEvent *event)
+{
+    if (m_textEdit && watched == m_textEdit) {
+        if (event->type() == QEvent::KeyPress && static_cast<QKeyEvent *>(event)->key() == Qt::Key_Escape) {
+            commitText();
+            return true;
+        }
+        if (event->type() == QEvent::FocusOut && static_cast<QFocusEvent *>(event)->reason() != Qt::PopupFocusReason)
+            commitText(); // a popup (the editor's own context menu) is not a lost editor
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+/// The picture of a text box. Rendered here, on the UI thread (a QPixmap and a widget grab: R5), the first time a paint
+/// needs it and whenever its text, size or page colour changed; never while a gesture is in flight (a resize drag would
+/// build an editor per sample): the stale picture, if any, is stretched into the new rect until the next quiet paint.
+/// The layout is the box's size in document px at every zoom, so the text wraps the same however far the page is zoomed
+/// (the canvas plugin does the same: its pictures do not depend on its zoom); the picture is scaled at paint.
+const QPixmap *InkCanvas::textPixmap(const Item &item)
+{
+    const TextBox &box = *item.textBox;
+    const QSizeF logical = box.rect.size().boundedTo(QSizeF(kMaxTextBoxSide, kMaxTextBoxSide));
+    const QSize size(std::max(1, qRound(logical.width())), std::max(1, qRound(logical.height())));
+    const qreal dpr = devicePixelRatioF();
+    const QColor background = m_document.settings().background.color;
+    const auto it = m_textCache.find(item.t);
+    if (it != m_textCache.end() && it->second.markdown == box.markdown && it->second.size == size && qFuzzyCompare(it->second.dpr, dpr) &&
+        it->second.background == background)
+        return &it->second.pixmap;
+    if (m_textRenderer && !isDrawing()) {
+        QPixmap pixmap = m_textRenderer(box.markdown, QSizeF(size));
+        if (!pixmap.isNull()) {
+            TextPixmap &entry = m_textCache[item.t];
+            entry = {box.markdown, size, dpr, background, std::move(pixmap)};
+            return &entry.pixmap;
+        }
+    }
+    return it != m_textCache.end() ? &it->second.pixmap : nullptr;
+}
+
+/// What is not tile content: text boxes (over the tiles, so over every stroke whatever their z-order) and a placeholder
+/// for an image (no image tool yet). The box being edited is not painted: its editor covers it.
+void InkCanvas::paintUIItems(QPainter &painter, const QRect &area)
+{
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
+    geometryOf(m_document, m_zoom).forEachPage(painter, area, [&](const QRectF &exposed, int) {
+        for (const Item *item : m_document.paintOrder(exposed.adjusted(-4, -4, 4, 4))) {
+            if (item->type == Item::Type::Image) {
+                painter.fillRect(item->bounds(), QColor(0, 0, 0, 12));
+                continue;
+            }
+            if (item->type != Item::Type::TextBox || item->t == m_textEditT)
+                continue;
+            const QRectF &rect = item->textBox->rect;
+            if (!(rect.width() > 0 && rect.height() > 0) || !std::isfinite(rect.x()) || !std::isfinite(rect.y()))
+                continue;
+            if (const QPixmap *picture = textPixmap(*item))
+                painter.drawPixmap(rect, *picture, QRectF(QPointF(), QSizeF(picture->size())));
+            else
+                painter.fillRect(rect, QColor(0, 0, 0, 12)); // no renderer (or it failed): the box is at least visible
+        }
+    });
+    painter.restore();
+    if (m_textCache.size() > kTextCachePrune)
+        std::erase_if(m_textCache, [this](const auto &entry) { return !m_document.item(entry.first); });
+}
+
 // --- shapes -----------------------------------------------------------------------------
 
 QRect InkCanvas::shapePaintRect() const { return widgetRect(m_shapeDraft.bounds()); }
@@ -843,6 +1075,8 @@ void InkCanvas::eraseSweep(const QPointF &a, const QPointF &b)
             continue;
         } else if (item->type == Item::Type::Shape && !shapePath(*item->shape).intersects(capsule())) {
             continue; // the ink only: the hollow inside a rectangle is not the rectangle. A hit shape goes whole in either mode (Split cuts strokes only)
+        } else if ((item->type == Item::Type::TextBox || item->type == Item::Type::Image) && !capsule().intersects(item->bounds())) {
+            continue; // the box itself, not the box of the swept capsule: a pass beside its corner leaves it
         }
         if (isStroke && m_eraserMode == EraserMode::Split) {
             const SplitResult split = splitStroke(*item->stroke, capsule());
@@ -883,7 +1117,10 @@ void InkCanvas::finishEdit()
 
 bool InkCanvas::undo()
 {
-    if (m_readOnly || isDrawing() || !m_document.undo())
+    if (m_readOnly || isDrawing())
+        return false;
+    commitText(); // the open box is one more step: undo takes that back
+    if (!m_document.undo())
         return false;
     documentReplaced();
     emit documentEdited();
@@ -892,7 +1129,10 @@ bool InkCanvas::undo()
 
 bool InkCanvas::redo()
 {
-    if (m_readOnly || isDrawing() || !m_document.redo())
+    if (m_readOnly || isDrawing())
+        return false;
+    commitText();
+    if (!m_document.redo())
         return false;
     documentReplaced();
     emit documentEdited();
@@ -961,11 +1201,10 @@ std::function<QImage()> InkCanvas::tileJob(int tx, int ty) const
         auto &items = spec.items[s.page];
         for (const Item *item : m_document.paintOrder(s.exposed.adjusted(-4, -4, 4, 4))) {
             if (item->type == Item::Type::Stroke)
-                items.push_back({item->stroke, nullptr, item->bounds()});
+                items.push_back({item->stroke, nullptr});
             else if (item->type == Item::Type::Shape)
-                items.push_back({nullptr, item->shape, item->bounds()});
-            else if (item->type == Item::Type::TextBox || item->type == Item::Type::Image)
-                items.push_back({nullptr, nullptr, item->bounds()});
+                items.push_back({nullptr, item->shape});
+            // a text box or an image is painted over the tiles by the canvas itself, on the UI thread (R5)
         }
     }
     return [spec = std::move(spec), hook = m_tileJobHook] {
@@ -1058,7 +1297,8 @@ void InkCanvas::paintEvent(QPaintEvent *event)
     if (paged)
         for (int i = firstPage; i <= lastPage; ++i)
             painter.fillRect(pageWidgetRect(i) & event->rect(), background);
-    drawTiles(painter, event->rect()); // the page pattern and the committed items
+    drawTiles(painter, event->rect()); // the page pattern and the committed strokes and shapes
+    paintUIItems(painter, event->rect()); // text boxes and image placeholders: not tile content (R5)
     if (m_drawing == Drawing::Pen) {
         const auto &prediction = m_input.prediction();
         if (!prediction.empty()) {

@@ -23,13 +23,13 @@ struct SplitResult {
 SplitResult splitStroke(const Stroke &stroke, const QPainterPath &eraser);
 
 /// The lasso and rectangle select. A stroke is selected when any of its points lies inside `region` (Rnote) or a segment
-/// crosses it; a shape when its ink (shapePath) meets `region`; a text box or image when the centre of its bounds lies
-/// inside (a real hit test comes with Task 15, carry N5).
+/// crosses it; a shape when its ink (shapePath) meets `region`; a text box or image when `region` holds the centre of
+/// its rect or crosses its edge (a region wholly inside the rect selects what is drawn there, not the box).
 /// Group and unknown items are never selected: nothing can move them. Returns the `t`s in document order.
 std::vector<qint64> selectItems(const InkDocument &doc, const QPainterPath &region);
 
 /// `item` mapped through `transform`, as new payloads (the document's snapshots share the old ones): a stroke's points,
-/// a shape's points, a text box's or image's rect (the box of the mapped rect). A stroke's or shape's width scales by the
+/// a shape's points, a text box's or image's rect (the box of the mapped rect; a text box's text is not scaled, it reflows). A stroke's or shape's width scales by the
 /// mean of the transform's x and y scale (Rnote); t, layer and raw stay. A group or unknown item comes back unchanged.
 Item transformItem(const Item &item, const QTransform &transform);
 

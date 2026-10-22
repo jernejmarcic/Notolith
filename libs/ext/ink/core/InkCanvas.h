@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QImage>
+#include <QPixmap>
+#include <QPointer>
 #include <QPolygonF>
 #include <QTransform>
 #include <QTimer>
@@ -16,6 +18,7 @@
 #include "TileCache.h"
 
 class QPainter;
+class QPlainTextEdit;
 
 namespace noteAppC::ink {
 
@@ -103,6 +106,24 @@ public:
     bool deleteSelection();
     bool copySelection();
     bool paste(); ///< at the centre of the visible canvas, +20 px right and down, as new items; they become the selection
+    /// Text boxes (Tool::Text; spec section 7: no double-click needed with a pen). A press with the Text tool edits the
+    /// box under it, or starts a new one there; the editor is a plain-text child (objectName inkTextEditor) over the
+    /// box. Escape, a press elsewhere, a tool change, undo, hiding and losing focus end it and commit it as one history
+    /// step (an unchanged text commits nothing, an emptied box is deleted, a new box with no text is never added).
+    /// The box is drawn through `renderer` from its Markdown: on the UI thread in paintEvent, never in a tile job (R5),
+    /// never during a pen gesture, and cached per item (setTextRenderer; InkView builds the host's MarkdownEditor).
+    /// `physicalSize` is the box's size in document px: the layout is the same at every zoom, the pixmap is scaled.
+    using TextRenderer = std::function<QPixmap(const QString &markdown, const QSizeF &physicalSize)>;
+    void setTextRenderer(TextRenderer renderer);
+    void invalidateTextCache(); ///< the renderer would draw differently now (theme, fonts, page colour)
+    static constexpr QSizeF kNewTextBoxSize{260, 72}; ///< document px
+    static constexpr double kMaxTextBoxSide = 4096;   ///< document px: a larger box is laid out at this size and stretched
+    bool beginEditingText(qint64 t); ///< false for a read-only canvas or an item that is not a text box
+    bool isEditingText() const { return !m_textEdit.isNull(); }
+    qint64 editingTextItem() const { return m_textEditT; } ///< 0: none; -1: a new box not yet in the document
+    void commitText();
+    bool isTextEditDirty() const; ///< the open editor holds text that is not the box's yet (the owner counts it as unsaved and commits it before a save)
+
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,
     /// mouse drawing and the edit keys but keeps touch pan, wheel and zoom:
     /// disabling the widget would block those too.
@@ -144,6 +165,7 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
     void hideEvent(QHideEvent *event) override;
     void changeEvent(QEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     enum class Drawing { None, Pen, Eraser, Select, Move, Scale, Shape };
@@ -152,6 +174,12 @@ private:
     void finishShape(bool keep);
     QRect shapePaintRect() const; ///< widget px: the shape in flight
     void paintShapeOver(QPainter &painter, const Shape &shape); ///< the shape in flight, or the one held until its tiles arrive
+    void pressText(const QPointF &documentPos);
+    void openTextEditor(qint64 t, const QRectF &rect, const QString &markdown);
+    QString closeTextEditor(); ///< tears the editor down, committing nothing; returns what it held
+    void layoutTextEditor();
+    const QPixmap *textPixmap(const Item &item); ///< the cached picture of a text box, rendered now if it is missing and the pen is idle
+    void paintUIItems(QPainter &painter, const QRect &area); ///< text boxes and the image placeholder: UI thread, over the tiles (R5)
     void pressSelect(const QPointF &widgetPos);
     void finishSelect(Drawing mode, bool keep);
     void dragSelection(const QPointF &documentPos);
@@ -229,6 +257,19 @@ private:
     bool m_holdLive = false;     ///< after pen-up the live image stays until the tiles under the stroke have it too
     std::shared_ptr<const Shape> m_holdShape; ///< a committed shape stays painted over the tiles until the ones under it have it too
     QRect m_holdRect;            ///< widget px
+    TextRenderer m_textRenderer;
+    struct TextPixmap { ///< what a box was drawn from: a move keeps the picture, new text or a new size or page colour does not
+        QString markdown;
+        QSize size;
+        qreal dpr = 1.0;
+        QColor background;
+        QPixmap pixmap;
+    };
+    std::map<qint64, TextPixmap> m_textCache;
+    QPointer<QPlainTextEdit> m_textEdit; ///< the editor over the box in flight
+    qint64 m_textEditT = 0;
+    QRectF m_textEditRect;       ///< document px: where the box is (a new box is not in the document yet)
+    QString m_textEditOriginal;  ///< the box's Markdown when the editor opened
 };
 
 } // namespace noteAppC::ink

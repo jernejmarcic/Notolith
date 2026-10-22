@@ -447,7 +447,8 @@ if(TARGET notolith-inkcore)
     # file that changes under it and about a newer file. The host's Settings, Theme, Vault and ModuleView come from noteAppC_modules.
     if(TARGET noteAppC_ink)
         add_executable(test_inkview test_inkview.cpp)
-        target_link_libraries(test_inkview PRIVATE noteAppC_ink noteAppC_modules Qt6::Test GTest::gtest)
+        # noteAppC_editor: InkView draws a text box with MarkdownEditor, which the module takes from the host.
+        target_link_libraries(test_inkview PRIVATE noteAppC_ink noteAppC_modules noteAppC_editor Qt6::Test GTest::gtest)
         set_target_properties(test_inkview PROPERTIES BUILD_RPATH "${CMAKE_BINARY_DIR}/modules")
         add_test(NAME inkview COMMAND test_inkview)
         set_tests_properties(inkview PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

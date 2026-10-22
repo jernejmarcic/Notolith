@@ -1,9 +1,12 @@
 #pragma once
 
+#include <optional>
+
 #include <QFutureWatcher>
 #include <QScrollArea>
 
 #include "ModuleHost.h"
+#include "Theme.h"
 #include "core/InkCanvas.h"
 #include "core/InkFormat.h"
 
@@ -13,7 +16,7 @@ class QToolBar;
 namespace noteAppC::ink {
 
 /// The handwritten-note tab: a scroll area over the canvas and a small
-/// toolbar (pen, eraser, erase-parts toggle, undo, redo; Track S1 Task 16 grows it to every tool:
+/// toolbar (pen, eraser, erase-parts toggle, select, shape, text, undo, redo; Track S1 Task 16 grows it:
 /// R14, PADD's pen has no eraser end and no working buttons). Load and
 /// save go through InkFormat; a file whose version is above 1 opens
 /// read-only, says so in the status bar and in the toolbar (the "readOnly"
@@ -39,7 +42,7 @@ public:
 
     bool load(const QString &path, QString *error) override;
     bool save(QString *error) override;
-    bool isModified() const override { return m_canvas->document().isModified(); }
+    bool isModified() const override { return m_canvas->document().isModified() || m_canvas->isTextEditDirty(); } ///< typed, not yet committed text counts: closing the tab must offer to save it
     void setTheme(const Theme &theme) override;
     void applySettings(const noteAppC::Settings &settings) override;
 
@@ -60,6 +63,7 @@ private:
     struct Parsed;
     void adopt(const QString &path, const DiskStamp &stamp, const InkReadResult &result);
     void onEdited();
+    QPixmap renderText(const QString &markdown, const QSizeF &size) const;
 
     const noteAppC::Settings *m_settings;
     QScrollArea *m_area;
@@ -72,12 +76,14 @@ private:
     QAction *m_selectRectAction; ///< checkable: select with a rectangle instead of a lasso (SelectShape::Rect)
     QAction *m_shapeAction;      ///< the shape tool (Tool::Shape); its menu holds the four kinds
     QAction *m_shapeKindActions[4]; ///< line, arrow, rectangle, ellipse: checkable, exclusive
+    QAction *m_textAction;       ///< the text tool (Tool::Text)
     QAction *m_undoAction;
     QAction *m_redoAction;
     QAction *m_readOnlyAction;
     QAction *m_loadingAction;
     QAction *m_errorAction;   ///< the persistent "could not be read" notice of a tab whose first load failed
     QLabel *m_errorLabel;
+    std::optional<Theme> m_hostTheme; ///< the app's theme: only its font overrides reach the text boxes (renderText)
     bool m_loadFailed = false; ///< no document was ever adopted: the tab stays read-only
     QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
