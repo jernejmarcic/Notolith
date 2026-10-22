@@ -172,6 +172,91 @@ TEST_F(InkViewFileTest, AnExternalChangeWithLocalEditsKeepsBothVersions)
     EXPECT_TRUE(status.last().first().toString().contains(conflicts.first())) << status.last().first().toString().toStdString();
 }
 
+TEST_F(InkViewFileTest, ReloadFromDiskShowsAnExternalChangeWithoutASave)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    const QByteArray theirs = documentWith(3);
+    replaceExternally(path, theirs);
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk();
+    EXPECT_EQ(view.canvas()->document().items().size(), 3u);
+    EXPECT_FALSE(view.isModified());
+    EXPECT_EQ(readAll(path), theirs);
+    EXPECT_TRUE(conflictFiles(dir.path()).isEmpty());
+    ASSERT_GE(status.count(), 1);
+    EXPECT_TRUE(status.last().first().toString().contains(QStringLiteral("reloaded")));
+}
+
+TEST_F(InkViewFileTest, ReloadFromDiskIgnoresTheViewsOwnSaveAndAMissingFile)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    ASSERT_TRUE(view.save(&error)) << error.toStdString();
+    view.canvas()->document().addStroke(line(10, 300, 90, 340));
+    view.canvas()->document().commit();
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk(); // the watcher reports the view's own write too: nothing to do
+    EXPECT_EQ(view.canvas()->document().items().size(), 3u) << "the unsaved stroke is still there";
+    EXPECT_TRUE(view.isModified());
+    EXPECT_EQ(status.count(), 0);
+    ASSERT_TRUE(QFile::remove(path));
+    view.reloadFromDisk(); // gone for now: the next save writes it back
+    EXPECT_TRUE(view.isModified());
+    EXPECT_EQ(status.count(), 0);
+}
+
+TEST_F(InkViewFileTest, ReloadFromDiskKeepsLocalEditsAndSaysSo)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    const QByteArray theirs = documentWith(3);
+    replaceExternally(path, theirs);
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk();
+    EXPECT_EQ(view.canvas()->document().items().size(), 2u) << "the tab keeps its own document";
+    EXPECT_TRUE(view.isModified());
+    EXPECT_EQ(readAll(path), theirs);
+    EXPECT_TRUE(conflictFiles(dir.path()).isEmpty()) << "nothing is written until the next save";
+    ASSERT_EQ(status.count(), 1);
+    EXPECT_TRUE(status.last().first().toString().contains(QStringLiteral("your edits are kept")));
+}
+
+// Review M-3: a disk version the view could not read is somebody's bytes (a half-synced file, a newer tool's output): the
+// save that follows puts them beside the file before it writes the view's document.
+TEST_F(InkViewFileTest, AnUnreadableDiskVersionIsKeptBesideTheFileBeforeTheNextSaveWritesOverIt)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    const QByteArray theirs = QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"stroke\",\"t\":");
+    replaceExternally(path, theirs);
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk();
+    ASSERT_GE(status.count(), 1) << "the reader says why it could not show the file";
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    ASSERT_TRUE(view.save(&error)) << error.toStdString();
+    const QStringList kept = QDir(dir.path()).entryList({QStringLiteral("* (unreadable *).ink")}, QDir::Files);
+    ASSERT_EQ(kept.size(), 1);
+    EXPECT_EQ(readAll(dir.filePath(kept.first())), theirs) << "their bytes, untouched";
+    InkDocument onDisk;
+    ASSERT_TRUE(readInk(readAll(path), onDisk).ok) << "the file is the view's document again";
+    EXPECT_EQ(onDisk.items().size(), 2u);
+    // Once the file reads again nothing more is kept.
+    view.canvas()->document().addStroke(line(5, 5, 9, 9));
+    view.canvas()->document().commit();
+    ASSERT_TRUE(view.save(&error)) << error.toStdString();
+    EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("* (unreadable *).ink")}, QDir::Files).size(), 1);
+}
+
 TEST_F(InkViewFileTest, OwnSavesAreNotConflicts)
 {
     InkView view(nullptr);

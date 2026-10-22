@@ -41,7 +41,9 @@ namespace noteAppC::ink {
 ///
 /// The vault is synced between machines, so the file can change under an open
 /// tab. The view remembers the file's size and modification time at load and
-/// after each own save; a save that finds them changed never overwrites the
+/// after each own save. The host's file watcher calls reloadFromDisk() when the
+/// file changes: an unmodified view reloads at once, a modified one keeps its
+/// edits and says so. A save that finds them changed never overwrites the
 /// file: an unmodified view reloads, a modified one writes its document to a
 /// "<name> (conflict <date time>).ink" beside the file, reloads the disk
 /// version and says so.
@@ -75,6 +77,7 @@ public:
     QString path() const { return m_path; }
     bool isReadOnly() const { return m_readOnly; }
     bool isLoading() const override { return m_loadWatcher != nullptr; }
+    void reloadFromDisk() override;
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -86,7 +89,7 @@ private:
         bool operator==(const DiskStamp &) const = default;
     };
     static DiskStamp stampOf(const QString &path);
-    static QString conflictPathFor(const QString &path);
+    static QString conflictPathFor(const QString &path, const QString &word = QStringLiteral("conflict"));
     bool resolveExternalChange(QString *error);
     struct Parsed;
     void adopt(const QString &path, const DiskStamp &stamp, const InkReadResult &result);
@@ -155,6 +158,7 @@ private:
     QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
     DiskStamp m_stamp; ///< the file as this view last read or wrote it
+bool m_diskUnreadable = false; ///< the last look at the file failed to parse it: save() keeps its bytes before writing over them
     QTimer *m_pressureSave = nullptr; ///< single shot: the learned pressures reach the disk once for a run of raises
     bool m_toolsOn = true;
     bool m_readOnly = false;

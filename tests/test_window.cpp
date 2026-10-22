@@ -117,6 +117,7 @@
 #include "ModuleRegistry.h"
 #ifdef NOTEAPPC_HAVE_INK_MODULE
 #include "InkCanvas.h"
+#include "InkFormat.h"
 #endif
 #include "ToggleSwitch.h"
 #include "QuickSwitcher.h"
@@ -8958,6 +8959,129 @@ TEST_F(InkWindowTest, QuittingWithTwoModifiedInkTabsOneStillReloadingKeepsBothAn
     EXPECT_FALSE(window.isVisible()) << "the window closed";
     EXPECT_NE(readAll(path(QStringLiteral("Sketch.ink"))).indexOf("\"stroke\""), -1) << "the first tab's stroke reached its file";
     EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Big (conflict *).ink")}, QDir::Files).size(), 1) << "and the second tab's is kept beside its file";
+}
+
+/// What another machine's sync does to an open ink note: the file is replaced, its modification time moved on.
+static void replaceInkOutsideTheApp(const QString &file, const QByteArray &bytes)
+{
+    QFile out(file);
+    ASSERT_TRUE(out.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    ASSERT_EQ(out.write(bytes), bytes.size());
+    ASSERT_TRUE(out.setFileTime(QDateTime::currentDateTime().addSecs(5), QFileDevice::FileModificationTime));
+}
+
+static QByteArray inkWithStrokes(int strokes)
+{
+    noteAppC::ink::InkDocument doc;
+    for (int i = 0; i < strokes; ++i) {
+        auto stroke = std::make_shared<noteAppC::ink::Stroke>();
+        stroke->style.width = 2.0;
+        stroke->points = {{10.0 + i, 10, 0.5}, {50.0 + i, 50, 0.5}};
+        doc.addStroke(stroke);
+    }
+    doc.commit();
+    return noteAppC::ink::writeInk(doc);
+}
+
+// I-1: an open ink tab with nothing unsaved follows the file like an open note does, with no save in between.
+TEST_F(InkWindowTest, AnUnmodifiedInkTabFollowsAChangeMadeOutsideTheAppWithoutASave)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    const QByteArray theirs = inkWithStrokes(3);
+    replaceInkOutsideTheApp(path(QStringLiteral("Sketch.ink")), theirs);
+    WAIT_TRUE(canvas->document().items().size() == 3u, 5000);
+    EXPECT_FALSE(view->isModified());
+    EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))), theirs) << "their file is untouched";
+    // The first stroke afterwards lands on the new document and is kept in the file, not forked into a conflict.
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    command(window, "editor:save-file")->trigger();
+    WAIT_TRUE(!view->isModified(), 5000);
+    EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Sketch (conflict *).ink")}, QDir::Files).size(), 0);
+    EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))).count("\"type\":\"stroke\""), 4);
+}
+
+// I-1: a tab with unsaved edits keeps them when the file changes underneath (as an open note does); the disk version is
+// neither lost nor written over: the next save still keeps both.
+TEST_F(InkWindowTest, AModifiedInkTabKeepsItsEditsWhenTheFileChangesOutsideTheApp)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    Settings off = Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    const QByteArray theirs = inkWithStrokes(3);
+    replaceInkOutsideTheApp(path(QStringLiteral("Sketch.ink")), theirs);
+    WAIT_TRUE(window.statusBar()->currentMessage().contains(QStringLiteral("changed on disk")), 5000);
+    EXPECT_TRUE(view->isModified()) << "the edits are kept";
+    EXPECT_EQ(canvas->document().items().size(), 2u) << "the tab still shows the old stroke and the new one";
+    EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))), theirs);
+    command(window, "editor:save-file")->trigger();
+    EXPECT_EQ(readAll(path(QStringLiteral("Sketch.ink"))), theirs) << "their file is never overwritten";
+    const QStringList conflicts = QDir(dir.path()).entryList({QStringLiteral("Sketch (conflict *).ink")}, QDir::Files);
+    ASSERT_EQ(conflicts.size(), 1) << "our version is kept beside it";
+    EXPECT_EQ(readAll(path(conflicts.first())).count("\"type\":\"stroke\""), 2);
+}
+
+// I-1: the link rewrite of a rename changes an ink note on disk the way a sync does; its open tab shows the rewrite.
+TEST_F(InkWindowTest, RenamingANoteReloadsAnOpenUnmodifiedInkTabThatLinkedToIt)
+{
+    write(QStringLiteral("Target.md"), "# Target\n");
+    {
+        noteAppC::ink::InkDocument doc;
+        noteAppC::ink::Item item;
+        item.type = noteAppC::ink::Item::Type::TextBox;
+        item.textBox = std::make_shared<noteAppC::ink::TextBox>(
+            noteAppC::ink::TextBox{QRectF(10, 10, 300, 40), QStringLiteral("see [[Target]]")});
+        doc.addItem(item);
+        write(QStringLiteral("Sketch.ink"), noteAppC::ink::writeInk(doc));
+    }
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    ASSERT_EQ(canvas->document().items().size(), 1u);
+    // The host reads the ink text boxes itself: the index knows the link once the vault is indexed.
+    WAIT_TRUE(window.index()->outgoingLinks(QStringLiteral("Sketch.ink")).size() == 1, 10000);
+
+    auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+    ASSERT_NE(tree, nullptr);
+    auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+    const QModelIndex index = model->index(path(QStringLiteral("Target.md")));
+    ASSERT_TRUE(index.isValid());
+    QTimer::singleShot(0, &window, [] {
+        if (auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+            dialog->setTextValue(QStringLiteral("Renamed"));
+            dialog->accept();
+        }
+    });
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renamePathAt", Q_ARG(QModelIndex, index)));
+    ASSERT_NE(readAll(path(QStringLiteral("Sketch.ink"))).indexOf("[[Renamed]]"), -1) << "the rename rewrote the ink note on disk";
+    auto shown = [&] {
+        for (const noteAppC::ink::Item &item : canvas->document().items())
+            if (item.textBox)
+                return item.textBox->markdown;
+        return QString();
+    };
+    WAIT_TRUE(shown().contains(QStringLiteral("[[Renamed]]")), 5000);
+    EXPECT_FALSE(view->isModified());
+    EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Sketch (conflict *).ink")}, QDir::Files).size(), 0);
 }
 
 // M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.

@@ -36,6 +36,10 @@ public:
     virtual void applySettings(const Settings &settings) { Q_UNUSED(settings) }
     /// A reload is parsing: save() refuses until it lands, so closing a tab that holds unsaved edits waits for it.
     virtual bool isLoading() const { return false; }
+    /// The file behind the view may have changed on disk (the host's watcher saw it, or a rename rewrote the links in it).
+    /// A view with nothing unsaved shows what is on disk now; one with unsaved edits keeps them and decides at its next save.
+    /// The view tells its own writes from outside ones (it knows what it wrote); the host calls this for either.
+    virtual void reloadFromDisk() {}
     /// The window is going away (or the view is): write what the view keeps back in the host's Settings to disk. The
     /// view's own destructor runs after the window's Settings are gone, so the host calls this first.
     virtual void flushSettings() {}

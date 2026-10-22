@@ -793,6 +793,7 @@ bool InkView::load(const QString &path, QString *error)
             m_loadingLabel->setVisible(false);
             if (!parsed.result.ok) {
                 m_stamp = stamp; // the unreadable file is looked at once, not at every autosave (as in resolveExternalChange)
+                m_diskUnreadable = true; // save() keeps these bytes beside the file before it writes over them
                 emit statusMessage(parsed.result.error, 8000);
                 if (m_path.isEmpty()) { // nothing was ever shown: a blank tab that takes a pen and cannot save is a trap
                     m_loadFailed = true;
@@ -830,6 +831,7 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
 {
     m_path = path;
     m_stamp = stamp;
+    m_diskUnreadable = false;
     m_loadFailed = false;
     m_errorLabel->setVisible(false);
     m_readOnly = result.readOnly;
@@ -848,14 +850,14 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
 /// "<name> (conflict yyyy-MM-dd HHmmss).ink" beside the file; the sync engine's own copies are
 /// "(sync conflict, <device>, <stamp>)" but a module has no device ID. A second one in the same
 /// second gets a counter.
-QString InkView::conflictPathFor(const QString &path)
+QString InkView::conflictPathFor(const QString &path, const QString &word)
 {
     const QFileInfo info(path);
     const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HHmmss"));
     const QDir dir = info.dir();
-    QString candidate = QStringLiteral("%1 (conflict %2).ink").arg(info.completeBaseName(), stamp);
+    QString candidate = QStringLiteral("%1 (%2 %3).ink").arg(info.completeBaseName(), word, stamp);
     for (int n = 2; dir.exists(candidate); ++n)
-        candidate = QStringLiteral("%1 (conflict %2 %3).ink").arg(info.completeBaseName(), stamp).arg(n);
+        candidate = QStringLiteral("%1 (%2 %3 %4).ink").arg(info.completeBaseName(), word, stamp).arg(n);
     return dir.filePath(candidate);
 }
 
@@ -875,6 +877,7 @@ bool InkView::resolveExternalChange(QString *error)
     QString why;
     if (!load(m_path, &why)) {
         m_stamp = now; // the unreadable file is looked at once, not at every autosave
+        m_diskUnreadable = true;
         if (error)
             *error = conflict.isEmpty() ? tr("%1 changed on disk and cannot be read: %2").arg(name, why)
                                         : tr("%1 changed on disk and cannot be read (%2); your edits are in %3")
@@ -887,6 +890,26 @@ bool InkView::resolveExternalChange(QString *error)
                                  .arg(name, QFileInfo(conflict).fileName()),
                        8000);
     return true;
+}
+
+/// The host's watcher saw the file change, or a rename rewrote the links in it (the same rules as an open note). The
+/// view's own save moves m_stamp with it, so it is told apart here without reading the file. Unmodified: show the disk
+/// version. Modified: keep the edits and say so; save() keeps both versions when it finds the file changed.
+void InkView::reloadFromDisk()
+{
+    if (m_path.isEmpty() || m_loadWatcher) // nothing loaded; a load in flight reads the file anyway
+        return;
+    const DiskStamp now = stampOf(m_path);
+    if (now.size < 0 || now == m_stamp) // gone for now (the next save writes it back), or this view's own write
+        return;
+    if (isModified()) {
+        emit statusMessage(tr("%1 changed on disk while you were editing it: your edits are kept, saving keeps both versions")
+                               .arg(QFileInfo(m_path).fileName()), 8000);
+        return;
+    }
+    QString error;
+    if (!resolveExternalChange(&error))
+        emit statusMessage(error, 8000);
 }
 
 bool InkView::save(QString *error)
@@ -906,6 +929,15 @@ bool InkView::save(QString *error)
     m_canvas->commitText(); // a box still being typed is part of what is saved
     if (const DiskStamp now = stampOf(m_path); now.size >= 0 && now != m_stamp)
         return resolveExternalChange(error);
+    if (m_diskUnreadable) { // a disk version this view could not read is someone else's bytes: keep them, then replace them
+        const QString kept = conflictPathFor(m_path, QStringLiteral("unreadable"));
+        if (!QFile::copy(m_path, kept)) {
+            if (error) *error = tr("%1 on disk cannot be read and could not be copied aside to %2").arg(QFileInfo(m_path).fileName(), QFileInfo(kept).fileName());
+            return false;
+        }
+        emit statusMessage(tr("%1 on disk could not be read: its bytes are in %2").arg(QFileInfo(m_path).fileName(), QFileInfo(kept).fileName()), 8000);
+        m_diskUnreadable = false;
+    }
     // The vault's atomic replace (spec section 5): writeInk() builds the bytes, the host writes them.
     if (!Vault::writeBytes(m_path, writeInk(m_canvas->document()), error))
         return false;

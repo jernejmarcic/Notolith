@@ -6704,6 +6704,7 @@ bool MainWindow::openView(const QString &path, NavSource source, const QString &
     view->setFocus();
 
     syncTabs(m_active->group);
+    watchOpenNotes(); // a module's view follows its file
     showNoteInPanes(path);
     if (m_outline)
         m_outline->clear();
@@ -7347,7 +7348,9 @@ void MainWindow::watchOpenNotes()
     QStringList wanted;
     QStringList wantedFolders;
     for (const auto &leaf : m_leaves) {
-        if (leaf->view || leaf->notePath.isEmpty() || wanted.contains(leaf->notePath))
+        // A module's view follows its file like a note does (ModuleView::reloadFromDisk); the other views do not.
+        if ((leaf->view && !qobject_cast<ModuleView *>(leaf->view)) || leaf->notePath.isEmpty()
+            || wanted.contains(leaf->notePath))
             continue;
         wanted << leaf->notePath;
         const QString folder = QFileInfo(leaf->notePath).absolutePath();
@@ -7490,6 +7493,15 @@ void MainWindow::reloadChangedNotes()
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
     followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
+        bool moduleFile = false;
+        for (const auto &leaf : m_leaves) {
+            if (auto *module = leaf->notePath == path ? qobject_cast<ModuleView *>(leaf->view) : nullptr) {
+                module->reloadFromDisk();
+                moduleFile = true;
+            }
+        }
+        if (moduleFile)
+            continue;
         const auto first = std::find_if(m_leaves.cbegin(), m_leaves.cend(), [&path](const auto &leaf) {
             return !leaf->view && leaf->notePath == path;
         });
