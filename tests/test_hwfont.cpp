@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #include <QApplication>
 #include <QDir>
@@ -446,6 +447,55 @@ TEST_F(GlyphStudioTest, TheBarrelClickSavesAndNeverDraws)
     EXPECT_EQ(studio.canvas()->document().items().size(), 2u) << "the pen draws again afterwards";
 }
 
+
+// Fix round 1: the cell is a drawing surface, so it draws with the mouse whatever ink.drawWithMouse says.
+TEST_F(GlyphStudioTest, TheCellDrawsWithTheMouseWhateverTheInkSettingSays)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    ASSERT_FALSE(studio.isModified());
+    QTest::mousePress(studio.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(100, 120));
+    for (int i = 1; i <= 8; ++i)
+        QTest::mouseMove(studio.canvas(), QPoint(100 + i * 15, 120 + i * 18));
+    QTest::mouseRelease(studio.canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(220, 264));
+    EXPECT_EQ(studio.canvas()->document().items().size(), 1u);
+    EXPECT_TRUE(studio.isModified());
+}
+
+
+// Fix round 1: a first-time user starts another font from the studio (SettingRow has no free-text kind).
+TEST_F(GlyphStudioTest, NewFontSwitchesTheStudioAndRefusesAnUnsafeName)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    auto *button = studio.findChild<QPushButton *>(QStringLiteral("glyphNewFontButton"));
+    ASSERT_NE(button, nullptr);
+    auto *message = studio.findChild<QLabel *>(QStringLiteral("glyphError"));
+    ASSERT_NE(message, nullptr);
+
+    std::optional<QString> answer;
+    studio.setFontNameProvider([&answer] { return answer; });
+    button->click();
+    EXPECT_EQ(studio.fontName(), QStringLiteral("Test")) << "cancelled";
+
+    answer = QStringLiteral("../bad");
+    button->click();
+    EXPECT_EQ(studio.fontName(), QStringLiteral("Test")) << "refused";
+    EXPECT_TRUE(message->text().contains(QStringLiteral("../bad"))) << message->text().toStdString();
+
+    answer = QStringLiteral("Second font");
+    button->click();
+    EXPECT_EQ(studio.fontName(), QStringLiteral("Second font"));
+    EXPECT_TRUE(message->text().isEmpty()) << "the refusal is gone";
+    stroke(studio);
+    QTest::keyClick(studio.canvas(), Qt::Key_Return);
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061"), 1, QStringLiteral("Second font"))));
+    EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0061"))));
+    ASSERT_NE(rowFor(studio, U'a'), nullptr);
+    EXPECT_EQ(rowFor(studio, U'a')->text(), QStringLiteral("a 1/3"));
+    EXPECT_EQ(rowFor(studio, U'z')->text(), QStringLiteral("z 0/3")) << "the list follows the new font";
+}
+
 // R6: the studio is a file-less tab; the host saves it through save().
 TEST_F(GlyphStudioTest, AnUnsavedCellIsModifiedAndSaveWritesIt)
 {
@@ -528,6 +578,59 @@ TEST_F(HwfontWindowTest, TheCommandOpensTheStudioTabAndSavesIntoTheVault)
     EXPECT_TRUE(QFile::exists(firstSample()));
     ASSERT_NE(mainTabs(window), nullptr);
     EXPECT_EQ(mainTabs(window)->tabText(mainTabs(window)->currentIndex()), QStringLiteral("Glyph studio"));
+}
+
+
+// Fix round 1: the keys reach the cell without a click on it: the tab shown by the host takes the focus,
+// and a button click (the buttons never take focus) leaves it there.
+TEST_F(HwfontWindowTest, TheShownStudioHasTheKeysAndKeepsThemAfterAButtonClick)
+{
+    noteAppC::MainWindow window;
+    window.show();
+    ASSERT_TRUE(QTest::qWaitForWindowActive(&window));
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "handwriting-font:studio")->trigger();
+    WAIT_TRUE(window.findChild<QWidget *>(QStringLiteral("glyphStudio")), 5000);
+    auto *canvas = window.findChild<noteAppC::ink::InkCanvas *>(QStringLiteral("glyphCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    WAIT_TRUE(QApplication::focusWidget() == canvas, 2000);
+
+    inktest::penStroke(canvas, {100, 120}, {220, 270}, 1000);
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    EXPECT_TRUE(QFile::exists(firstSample())) << "Enter saved without a click on the cell";
+
+    auto *skip = window.findChild<QPushButton *>(QStringLiteral("glyphSkipButton"));
+    ASSERT_NE(skip, nullptr);
+    QTest::mouseClick(skip, Qt::LeftButton);
+    EXPECT_TRUE(QApplication::focusWidget() == canvas) << "a button click leaves the keys with the cell";
+    inktest::penStroke(canvas, {100, 120}, {220, 270}, 2000);
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral("Handwriting/My handwriting/0063/1.ink")))) << "Skip moved from b to c, and Enter saved c";
+}
+
+
+TEST_F(HwfontWindowTest, NewFontWritesTheSettingAndSavesIntoTheNewFolder)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    noteAppC::MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "handwriting-font:studio")->trigger();
+    WAIT_TRUE(window.findChild<QWidget *>(QStringLiteral("glyphStudio")), 5000);
+    auto *studio = window.findChild<noteAppC::hwfont::GlyphStudio *>(QStringLiteral("glyphStudio"));
+    ASSERT_NE(studio, nullptr);
+    studio->setFontNameProvider([] { return std::optional<QString>(QStringLiteral("Second font")); });
+    window.findChild<QPushButton *>(QStringLiteral("glyphNewFontButton"))->click();
+    EXPECT_EQ(window.settings().text(QStringLiteral("hwfont.fontName")), QStringLiteral("Second font"));
+    EXPECT_EQ(noteAppC::Settings::load().text(QStringLiteral("hwfont.fontName")), QStringLiteral("Second font")) << "saved to disk";
+    inktest::penStroke(studio->canvas(), {100, 120}, {220, 270}, 1000);
+    studio->saveCurrentAndAdvance();
+    EXPECT_TRUE(QFile::exists(dir.filePath(QStringLiteral("Handwriting/Second font/0061/1.ink"))));
 }
 
 // R6 and its carry item: the tab and the window title both show the mark; closing saves the cell.

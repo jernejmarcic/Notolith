@@ -1,6 +1,8 @@
 #pragma once
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <vector>
 
 #include <QColor>
@@ -40,9 +42,18 @@ public:
     void retarget(char32_t codepoint); ///< a click in the glyph list: the cell is kept
     void skipToNext();            ///< PageDown, the Skip button: on to the next glyph that needs samples
     ink::InkCanvas *canvas() const { return m_canvas; }
+    QString fontName() const { return m_fontName; }
+
+    /// "New font...": what asks for the name. Unset, a QInputDialog; a test sets one so no modal box opens.
+    /// nullopt is a cancelled question.
+    void setFontNameProvider(std::function<std::optional<QString>()> provider) { m_askFontName = std::move(provider); }
+    /// The New font button: asks for a name, refuses an unsafe one (shown in the error label), else switches the
+    /// studio to that font (the cell is kept) and stores it as hwfont.fontName.
+    void startNewFont();
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private:
     class Guides;
@@ -51,6 +62,7 @@ private:
     void refreshList();
     void showTarget();
     void showError(const QString &text);
+    void chooseStartTarget();
     void onEdited();
     char32_t nextNeedingMore(char32_t after) const;
     bool needsMore(char32_t codepoint) const;
@@ -72,6 +84,10 @@ private:
     bool m_barrelDown = false;   ///< a press with the barrel button held, until its release
     bool m_barrelMoved = false;
     QPointF m_barrelStart;
+    QString m_vaultRoot;
+    QString m_fontName;
+    Settings *m_settings;
+    std::function<std::optional<QString>()> m_askFontName;
 };
 
 } // namespace noteAppC::hwfont

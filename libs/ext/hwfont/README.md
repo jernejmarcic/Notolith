@@ -12,6 +12,8 @@ and never loads the `notolith-ink` module itself.
   sample and moves to the next glyph that wants more, Backspace discards the cell, Ctrl+Z undoes a
   stroke, Ctrl+Shift+Z or Ctrl+Y redoes it, Page Down skips to the next glyph. The pen's barrel
   button (a click, not a drag) saves too, when the pen has one. Escape does nothing.
+- "New font..." asks for a name (refused when it could leave `Handwriting/`), switches the studio to it and stores it as `hwfont.fontName`.
+- The cell draws with the mouse as well as the pen, whatever `ink.drawWithMouse` says; the keys work as soon as the tab is shown.
 - Click a row of the list on the right to write that glyph. "a 1/3" is one of three samples.
 - Settings: `hwfont.fontName` (a choice among the folders already in `Handwriting/`, default
   "My handwriting"; a new font is a new folder), `hwfont.samplesPerLetter` (3),

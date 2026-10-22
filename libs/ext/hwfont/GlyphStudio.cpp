@@ -3,8 +3,10 @@
 #include <cmath>
 
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPainter>
 #include <QPushButton>
@@ -68,13 +70,16 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
     : ModuleView(parent), m_store(vaultRootOf(host), fontName), m_metrics(GlyphStore::defaultMetrics()),
       m_set(defaultGlyphSet(settingOr(host, "hwfont.samplesPerLetter", 3), settingOr(host, "hwfont.samplesPerPunctuation", 1))),
       m_canvas(new ink::InkCanvas), m_glyphLabel(new QLabel), m_countLabel(new QLabel), m_errorLabel(new QLabel),
-      m_list(new QListWidget), m_doneColor(128, 128, 128)
+      m_list(new QListWidget), m_doneColor(128, 128, 128), m_vaultRoot(vaultRootOf(host)), m_fontName(fontName),
+      m_settings(host.settings)
 {
     setObjectName(QStringLiteral("glyphStudio"));
     m_canvas->setObjectName(QStringLiteral("glyphCanvas"));
     m_canvas->document().reset(GlyphStore::samplePage(), {}, {});
     m_canvas->documentReplaced();
     m_canvas->setFixedSize(m_canvas->sizeHint());
+    m_canvas->setDrawWithMouse(true); // a drawing surface: ink.drawWithMouse is for the notes, not for the cell
+    setFocusProxy(m_canvas);          // the host's setFocus() on the tab lands on the cell, where the keys are
     m_canvas->installEventFilter(this);
     // F22: a glyph cell has no selection, so the held barrel button must not turn a stroke into a lasso.
     // The setter lands with Track S1 (Task 13); until then the event filter alone keeps the button away.
@@ -101,6 +106,7 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
         button->setToolTip(tip);
         button->setFocusPolicy(Qt::NoFocus); // the canvas keeps the keys: Enter, Backspace, Ctrl+Z
         connect(button, &QPushButton::clicked, this, slot);
+        connect(button, &QPushButton::clicked, m_canvas, qOverload<>(&QWidget::setFocus)); // the keys stay with the cell
         return button;
     };
     auto *buttons = new QHBoxLayout;
@@ -114,6 +120,8 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
                                  [this] { m_canvas->redo(); }));
     buttons->addWidget(addButton("glyphSkipButton", tr("Skip"), tr("Next glyph without saving (Page Down)"),
                                  [this] { skipToNext(); }));
+    buttons->addWidget(addButton("glyphNewFontButton", tr("New font..."), tr("Start another handwriting font"),
+                                 [this] { startNewFont(); }));
     buttons->addStretch(1);
 
     auto *header = new QHBoxLayout;
@@ -139,15 +147,55 @@ GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *par
     m_canvas->setFocus();
 
     refreshList();
-    // The first glyph to ask for is the first letter that needs samples: a font is written from "a".
-    m_target = nextNeedingMore(U'a' - 1);
-    if (m_target == 0 && !m_set.empty())
-        m_target = m_set.front().codepoint;
-    showTarget();
+    chooseStartTarget();
     if (vaultRootOf(host).isEmpty())
         showError(tr("No vault is open: the samples have nowhere to go."));
     else if (!m_store.isValid())
         showError(tr("\"%1\" is not a usable font name; choose another in Settings (hwfont.fontName).").arg(fontName));
+}
+
+/// The first glyph to ask for is the first letter that needs samples: a font is written from "a".
+void GlyphStudio::chooseStartTarget()
+{
+    m_target = nextNeedingMore(U'a' - 1);
+    if (m_target == 0 && !m_set.empty())
+        m_target = m_set.front().codepoint;
+    showTarget();
+}
+
+void GlyphStudio::startNewFont()
+{
+    std::optional<QString> asked;
+    if (m_askFontName) {
+        asked = m_askFontName();
+    } else {
+        bool ok = false;
+        const QString text = QInputDialog::getText(this, tr("New font"), tr("Name of the new font"), QLineEdit::Normal, QString(), &ok);
+        if (ok)
+            asked = text;
+    }
+    if (!asked)
+        return; // cancelled
+    if (m_vaultRoot.isEmpty()) {
+        showError(tr("No vault is open: the samples have nowhere to go."));
+        return;
+    }
+    const QString name = asked->trimmed();
+    if (!GlyphStore::isValidFontName(name)) {
+        showError(tr("\"%1\" is not a usable font name: use letters, digits and spaces, no slashes, no \"..\", not starting with a dot.").arg(*asked));
+        return;
+    }
+    m_fontName = name;
+    m_store = GlyphStore(m_vaultRoot, name);
+    if (m_settings) {
+        m_settings->setValue(QStringLiteral("hwfont.fontName"), name);
+        if (!m_settings->save())
+            emit statusMessage(tr("Could not store the font name in the settings"), 6000);
+    }
+    showError(QString());
+    refreshList();
+    chooseStartTarget();
+    emit statusMessage(tr("Writing the font \"%1\"").arg(name), kStatusMs);
 }
 
 bool GlyphStudio::needsMore(char32_t codepoint) const
@@ -326,6 +374,12 @@ bool GlyphStudio::handleBarrel(QTabletEvent *event)
     default:
         return false;
     }
+}
+
+void GlyphStudio::showEvent(QShowEvent *event)
+{
+    ModuleView::showEvent(event);
+    m_canvas->setFocus();
 }
 
 bool GlyphStudio::eventFilter(QObject *watched, QEvent *event)
