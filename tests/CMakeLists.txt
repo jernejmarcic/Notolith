@@ -98,12 +98,18 @@ set_tests_properties(modules_gate modules PROPERTIES ENVIRONMENT "QT_QPA_PLATFOR
 
 add_executable(test_window test_window.cpp)
 target_link_libraries(test_window PRIVATE noteAppC_ui Qt6::Test GTest::gtest)
-add_test(NAME window COMMAND test_window)
+# AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads is its own entry: it needs fake.width
+# unregistered when the window is made, and an earlier test in the same process registers it,
+# after which the stored value is read without adoptStored(). The filters are in the commands:
+# run each entry whole.
+set(noteappc_window_adopt WindowTest.AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
+add_test(NAME window COMMAND test_window --gtest_filter=-${noteappc_window_adopt})
+add_test(NAME window_modules_adopt COMMAND test_window --gtest_filter=${noteappc_window_adopt})
 # Modules load into the test's process: export the host symbols, and point the
 # registry at the build's modules (the fake ones; Task 8 adds the real ones).
 set_target_properties(test_window PROPERTIES ENABLE_EXPORTS ON)
 add_dependencies(test_window ${NOTEAPPC_FAKE_MODULE_TARGETS})
-set_property(TEST window APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
+set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "NOTEAPPC_MODULE_DIRS=${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 target_compile_definitions(test_window PRIVATE NOTEAPPC_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/fixtures")
 foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteAppC_imageview)
     if(TARGET ${module})
@@ -150,7 +156,7 @@ foreach(module noteAppC_graph noteAppC_canvas noteAppC_bases noteAppC_epub noteA
 endforeach()
 add_test(NAME demo COMMAND test_demo)
 set_tests_properties(demo PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
-set_property(TEST window APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_property(TEST window window_modules_adopt APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 # The DICT client talks to a QTcpServer on loopback, never to a real server.
 add_executable(test_lookup test_lookup.cpp)

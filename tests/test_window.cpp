@@ -7762,8 +7762,9 @@ TEST_F(WindowTest, AModuleCommandAppearsInAnAlreadyOpenPopoutWindow)
 }
 
 // M5: a stored value of a module's setting key is adopted once the module has loaded (the
-// file was read when the window was made, before the key existed). This is a guard: the
-// behaviour already held; Task 2b only reduces the adoptStored calls from one per row to one.
+// file was read when the window was made, before the key existed). Its own ctest entry
+// (`window_modules_adopt`): in the full `window` process an earlier test has already registered
+// fake.width, so the stored value would be read at load() and adoptStored() would not be needed.
 TEST_F(WindowTest, AStoredValueOfAModuleSettingIsAdoptedWhenTheModuleLoads)
 {
     const QString configPath = noteAppC::Settings::configFile();

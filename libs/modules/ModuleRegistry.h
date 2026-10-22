@@ -30,7 +30,7 @@ struct ModuleInfo {
     };
     QList<Command> commands;
     /// Empty when the module can be loaded; otherwise the notice Settings
-    /// shows ("built for another Notolith", "needs module X").
+    /// shows ("built for another Notolith", "claims a suffix another module owns").
     QString problem;
 };
 
