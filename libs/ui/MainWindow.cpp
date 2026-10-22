@@ -7619,7 +7619,9 @@ void MainWindow::onModificationChanged(bool)
 
 void MainWindow::updateTitle()
 {
-    const bool modified = !m_active->notePath.isEmpty() && isModified(m_active);
+    // A file-less module tab (the glyph studio, R6) shows the mark too: the host saves it like a note.
+    const bool fileLess = m_active->notePath.isEmpty() && qobject_cast<ModuleView *>(m_active->view);
+    const bool modified = (!m_active->notePath.isEmpty() || fileLess) && isModified(m_active);
     QString title;
     if (!m_active->notePath.isEmpty()) {
         title = (m_vault.isValid() ? m_vault.relative(m_active->notePath) : QFileInfo(m_active->notePath).fileName())
