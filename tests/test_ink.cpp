@@ -7,8 +7,16 @@
 #include <limits>
 
 #include <QApplication>
+#include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
+
+#include <zlib.h>
 
 #include "InkDocument.h"
+#include "InkFormat.h"
 #include "InkTypes.h"
 #include "SpatialGrid.h"
 
@@ -281,6 +289,224 @@ TEST(InkDocumentTest, TIsNeverReusedAfterAnUndo)
     doc.commit();
     ASSERT_TRUE(doc.undo());
     EXPECT_GT(doc.addStroke(line(0, 0, 1, 1)), a);
+}
+
+namespace {
+
+/// A gzip member: zlib's own framing (windowBits 16 + MAX_WBITS), no hand-rolled CRC.
+QByteArray gzipBytes(const QByteArray &plain)
+{
+    z_stream stream{};
+    deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+    QByteArray out(int(deflateBound(&stream, uLong(plain.size()))), Qt::Uninitialized);
+    stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(plain.constData()));
+    stream.avail_in = uInt(plain.size());
+    stream.next_out = reinterpret_cast<Bytef *>(out.data());
+    stream.avail_out = uInt(out.size());
+    deflate(&stream, Z_FINISH);
+    out.resize(int(stream.total_out));
+    deflateEnd(&stream);
+    return out;
+}
+
+InkDocument sampleDocument()
+{
+    InkDocument doc;
+    auto stroke = std::make_shared<Stroke>();
+    stroke->style = {2.0, QColor(0x1e, 0x1e, 0x1e), PressureCurve::Linear};
+    stroke->points = {{12.5, 40.25, 0.43}, {13.0, 41.5, 0.51}, {13.337, 42.001, 0.6}};
+    doc.addStroke(stroke);
+    Item box;
+    box.type = Item::Type::TextBox;
+    box.textBox = std::make_shared<TextBox>(TextBox{QRectF(100, 200, 400, 60), QStringLiteral("See [[Lecture 3]] #exam")});
+    doc.addItem(std::move(box));
+    doc.commit();
+    return doc;
+}
+
+} // namespace
+
+TEST(InkFormatTest, WritesCompactJSONWithThreeDecimals)
+{
+    const QByteArray bytes = writeInk(sampleDocument());
+    const QJsonDocument json = QJsonDocument::fromJson(bytes);
+    ASSERT_TRUE(json.isObject()) << "the whole thing is valid JSON";
+    EXPECT_EQ(bytes, json.toJson(QJsonDocument::Compact)) << "the writer is QJsonDocument's compact form and nothing else";
+    EXPECT_FALSE(bytes.contains('\n')) << "compact: no line breaks";
+    const QJsonObject top = json.object();
+    EXPECT_EQ(top.value(QStringLiteral("format")).toString(), QStringLiteral("notolith-ink"));
+    EXPECT_EQ(top.value(QStringLiteral("version")).toInt(), 1);
+    const QJsonArray items = top.value(QStringLiteral("items")).toArray();
+    ASSERT_EQ(items.size(), 2);
+    const QJsonObject stroke = items[0].toObject();
+    EXPECT_EQ(stroke.value(QStringLiteral("type")).toString(), QStringLiteral("stroke"));
+    EXPECT_EQ(stroke.value(QStringLiteral("t")).toInt(), 1);
+    EXPECT_EQ(stroke.value(QStringLiteral("layer")).toString(), QStringLiteral("user"));
+    const QJsonArray points = stroke.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(points.size(), 9);
+    EXPECT_DOUBLE_EQ(points[6].toDouble(), 13.337) << "three decimals survive";
+    EXPECT_DOUBLE_EQ(points[7].toDouble(), 42.001);
+    EXPECT_TRUE(bytes.contains("13.337,42.001,0.6")) << bytes.toStdString();
+    EXPECT_TRUE(bytes.contains("\"rect\":[100,200,400,60]"));
+    const QJsonObject box = items[1].toObject();
+    EXPECT_EQ(box.value(QStringLiteral("type")).toString(), QStringLiteral("textbox"));
+    EXPECT_EQ(box.value(QStringLiteral("markdown")).toString(), QStringLiteral("See [[Lecture 3]] #exam"));
+}
+
+TEST(InkFormatTest, NumbersAreRoundedToThreeDecimals)
+{
+    EXPECT_DOUBLE_EQ(roundThree(1.23456), 1.235);
+    EXPECT_DOUBLE_EQ(roundThree(2.0004), 2.0);
+    EXPECT_DOUBLE_EQ(roundThree(-0.0004), 0.0);
+    InkDocument doc;
+    auto stroke = std::make_shared<Stroke>();
+    stroke->points = {{1.23456, 2.00049, 0.123456}, {3.0, 4.0, 0.5}};
+    doc.addStroke(stroke);
+    doc.commit();
+    EXPECT_TRUE(writeInk(doc).contains("[1.235,2,0.123,3,4,0.5]")) << writeInk(doc).toStdString();
+}
+
+TEST(InkFormatTest, RoundTripsAndKeepsUnknownKeysAndItemTypes)
+{
+    const QByteArray original = QByteArrayLiteral(
+        "{\"format\":\"notolith-ink\",\"version\":1,\"document\":{\"format\":{\"width\":100,\"height\":200,\"dpi\":96},"
+        "\"background\":{\"color\":\"#ffffff\",\"pattern\":\"cornell\",\"patternSize\":[120,32],\"patternColor\":\"#c0c8d0\"},"
+        "\"layout\":\"fixed\",\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":400},"
+        "\"glyph\":{\"codepoint\":97,\"baseline\":150}},\"futureKey\":true,\"items\":[\n"
+        "{\"type\":\"stroke\",\"t\":1,\"layer\":\"highlighter\",\"style\":{\"width\":12,\"color\":\"#ffee0080\",\"pressureCurve\":\"const\"},"
+        "\"points\":[1,2,0.5,3,4,0.5],\"mood\":\"happy\"},\n"
+        "{\"type\":\"section\",\"id\":\"s1\",\"t\":2,\"items\":[1]},\n"
+        "{\"type\":\"shape\",\"t\":3,\"layer\":\"user\",\"kind\":\"rect\",\"style\":{\"width\":2,\"color\":\"#000000\",\"pressureCurve\":\"linear\"},\"points\":[10,10,50,30]}\n"
+        "]}\n");
+    InkDocument doc;
+    const InkReadResult read = readInk(original, doc);
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    EXPECT_FALSE(read.readOnly);
+    EXPECT_EQ(read.version, 1);
+    ASSERT_EQ(doc.items().size(), 3u);
+    EXPECT_EQ(doc.items()[0].layer, Layer::Highlighter);
+    EXPECT_EQ(doc.items()[0].stroke->style.pressureCurve, PressureCurve::Const);
+    EXPECT_EQ(doc.items()[0].stroke->style.color, QColor(0xff, 0xee, 0x00, 0x80));
+    EXPECT_EQ(doc.items()[1].type, Item::Type::Unknown);
+    EXPECT_EQ(doc.items()[2].shape->kind, ShapeKind::Rect);
+    EXPECT_EQ(doc.settings().layout, LayoutKind::Fixed);
+    EXPECT_EQ(doc.settings().background.pattern, Pattern::Cornell);
+    EXPECT_EQ(doc.settings().background.patternSize, QSizeF(120, 32));
+    EXPECT_EQ(doc.pageCount(), 2);
+    EXPECT_EQ(doc.settings().extra.value(QStringLiteral("glyph")).toObject().value(QStringLiteral("codepoint")).toInt(), 97);
+    EXPECT_TRUE(doc.extraTopLevel().value(QStringLiteral("futureKey")).toBool());
+
+    const QByteArray written = writeInk(doc);
+    const QJsonObject writtenTop = QJsonDocument::fromJson(written).object();
+    const QJsonArray writtenItems = writtenTop.value(QStringLiteral("items")).toArray();
+    ASSERT_EQ(writtenItems.size(), 3);
+    EXPECT_EQ(writtenItems[0].toObject().value(QStringLiteral("mood")).toString(), QStringLiteral("happy"));
+    EXPECT_EQ(writtenItems[1].toObject(),
+              QJsonDocument::fromJson(QByteArrayLiteral("{\"type\":\"section\",\"id\":\"s1\",\"t\":2,\"items\":[1]}")).object())
+        << "an unknown item is written back as it was read: no key added, none changed";
+    const QJsonObject writtenDocument = writtenTop.value(QStringLiteral("document")).toObject();
+    EXPECT_EQ(writtenDocument.value(QStringLiteral("glyph")).toObject().value(QStringLiteral("codepoint")).toInt(), 97);
+    EXPECT_TRUE(writtenTop.value(QStringLiteral("futureKey")).toBool());
+    EXPECT_EQ(writtenDocument.value(QStringLiteral("background")).toObject().value(QStringLiteral("patternSize")).toArray(),
+              (QJsonArray{120, 32}));
+    InkDocument again;
+    ASSERT_TRUE(readInk(written, again).ok);
+    EXPECT_EQ(writeInk(again), written) << "a second round trip is byte-stable";
+}
+
+TEST(InkFormatTest, ReadsAGzipWrappedFile)
+{
+    const QByteArray plain = writeInk(sampleDocument());
+    InkDocument doc;
+    const InkReadResult read = readInk(gzipBytes(plain), doc);
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    EXPECT_EQ(doc.items().size(), 2u);
+    EXPECT_EQ(writeInk(doc), plain) << "saved back as plain JSON: gzip is a reader feature in v1";
+}
+
+TEST(InkFormatTest, AVersionTwoFileOpensReadOnly)
+{
+    QByteArray bytes = writeInk(sampleDocument());
+    bytes.replace("\"version\":1", "\"version\":2");
+    InkDocument doc;
+    const InkReadResult read = readInk(bytes, doc);
+    EXPECT_TRUE(read.ok);
+    EXPECT_TRUE(read.readOnly);
+    EXPECT_EQ(read.version, 2);
+    EXPECT_EQ(doc.items().size(), 2u) << "read as far as v1 understands";
+}
+
+TEST(InkFormatTest, TruncatedAndForeignFilesAreRefusedWithTheName)
+{
+    const QByteArray plain = writeInk(sampleDocument());
+    InkDocument doc;
+    InkReadResult read = readInk(plain.left(plain.size() / 2), doc, QStringLiteral("Lecture 3.ink"));
+    EXPECT_FALSE(read.ok);
+    EXPECT_TRUE(read.error.contains(QStringLiteral("Lecture 3.ink")));
+    EXPECT_TRUE(doc.items().empty()) << "a failed read leaves the document untouched";
+    const QByteArray gz = gzipBytes(plain);
+    read = readInk(gz.left(gz.size() - 12), doc, QStringLiteral("x.ink"));
+    EXPECT_FALSE(read.ok) << "a truncated gzip stream is an error, not a shorter note";
+    read = readInk(QByteArrayLiteral("{\"format\":\"something-else\",\"version\":1,\"items\":[]}"), doc);
+    EXPECT_FALSE(read.ok);
+    read = readInk(QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"stroke\",\"t\":1,\"points\":[1,2]}]}"), doc);
+    EXPECT_FALSE(read.ok) << "points must be x,y,pressure triples";
+}
+
+TEST(InkFormatTest, NonFiniteAndNonPositiveNumbersAreRefused)
+{
+    // JSON has no NaN literal; 1e999 is how a file gets an infinity toward the loader, and Qt's parser
+    // refuses it (observed: the 1e999 cases pass with no finiteness check of our own). This test pins
+    // that, because InkDocument::pageCount() is undefined behaviour on a NaN extent.
+    const auto file = [](const char *document, const char *items = "") {
+        return QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"document\":") + document + QByteArrayLiteral(",\"items\":[")
+            + items + QByteArrayLiteral("]}");
+    };
+    const struct {
+        const char *what;
+        QByteArray bytes;
+    } bad[] = {
+        {"infinite page height", file("{\"format\":{\"width\":100,\"height\":1e999,\"dpi\":96}}")},
+        {"infinite extent height", file("{\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":1e999}}")},
+        {"negative infinite extent", file("{\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":-1e999}}")},
+        {"zero page height", file("{\"format\":{\"width\":100,\"height\":0,\"dpi\":96}}")},
+        {"negative page height", file("{\"format\":{\"width\":100,\"height\":-5,\"dpi\":96}}")},
+        {"zero page width", file("{\"format\":{\"width\":0,\"height\":100,\"dpi\":96}}")},
+        {"zero dpi", file("{\"format\":{\"width\":100,\"height\":100,\"dpi\":0}}")},
+        {"zero extent height", file("{\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":0}}")},
+        {"zero pattern size", file("{\"background\":{\"patternSize\":0}}")},
+        {"infinite stroke point", file("{}", "{\"type\":\"stroke\",\"t\":1,\"points\":[1,1e999,0.5]}")},
+        {"infinite stroke width", file("{}", "{\"type\":\"stroke\",\"t\":1,\"style\":{\"width\":1e999},\"points\":[1,2,0.5]}")},
+        {"infinite text box", file("{}", "{\"type\":\"textbox\",\"t\":1,\"rect\":[0,0,1e999,10],\"markdown\":\"x\"}")},
+        {"absurd t", file("{}", "{\"type\":\"stroke\",\"t\":1e300,\"points\":[1,2,0.5]}")},
+        {"repeated t", file("{}", "{\"type\":\"stroke\",\"t\":1,\"points\":[1,2,0.5]},{\"type\":\"stroke\",\"t\":1,\"points\":[3,4,0.5]}")},
+    };
+    for (const auto &c : bad) {
+        InkDocument doc = sampleDocument();
+        const InkReadResult read = readInk(c.bytes, doc, QStringLiteral("bad.ink"));
+        EXPECT_FALSE(read.ok) << c.what;
+        EXPECT_TRUE(read.error.contains(QStringLiteral("bad.ink"))) << c.what << ": " << read.error.toStdString();
+        EXPECT_EQ(doc.items().size(), 2u) << c.what << ": a refused file leaves the document as it was";
+    }
+    InkDocument doc;
+    EXPECT_TRUE(readInk(file("{\"format\":{\"width\":100,\"height\":100,\"dpi\":96},\"extent\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100}}"), doc).ok)
+        << "the same shape with sane numbers loads";
+}
+
+TEST(InkFormatTest, SavesAndLoadsThroughAnAtomicReplace)
+{
+    QTemporaryDir tmp;
+    const QString path = tmp.filePath(QStringLiteral("note.ink"));
+    QString error;
+    ASSERT_TRUE(saveInkFile(path, sampleDocument(), &error)) << error.toStdString();
+    InkDocument doc;
+    InkReadResult read;
+    ASSERT_TRUE(loadInkFile(path, doc, &read)) << read.error.toStdString();
+    EXPECT_EQ(doc.items().size(), 2u);
+    EXPECT_FALSE(doc.isModified());
+    EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files | QDir::Hidden).size() == 1) << "no temp file left behind";
+    EXPECT_FALSE(loadInkFile(tmp.filePath(QStringLiteral("missing.ink")), doc, &read));
+    EXPECT_TRUE(read.error.contains(QStringLiteral("missing.ink")));
 }
 
 int main(int argc, char **argv)

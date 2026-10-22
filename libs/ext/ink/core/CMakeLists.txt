@@ -32,6 +32,8 @@ FetchContent_MakeAvailable(ink_stroke_modeler)
 add_library(notolith-inkcore SHARED
     InkDocument.cpp
     InkDocument.h
+    InkFormat.cpp
+    InkFormat.h
     InkTypes.cpp
     InkTypes.h
     SpatialGrid.cpp
