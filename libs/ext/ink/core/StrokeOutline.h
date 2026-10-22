@@ -13,6 +13,10 @@ class QPainter;
 
 namespace noteAppC::ink {
 
+/// The widest ink a segment draws, in document px; a larger (or infinite) width
+/// is clamped to it, so a hostile file cannot make a stroke vanish or overflow.
+inline constexpr double kMaxOutlineWidth = 1e6;
+
 /// One QPainterPath per stroke, filled once with Qt::WindingFill, so overlaps
 /// never darken a translucent colour (spec section 7, Rendering). Rnote's
 /// per-segment closed subpaths (a quad at `width * curve(pressure)` with cubic

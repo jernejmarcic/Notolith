@@ -680,14 +680,6 @@ TEST(InkFormatTest, SavesAndLoadsThroughAnAtomicReplace)
     EXPECT_TRUE(read.error.contains(QStringLiteral("missing.ink")));
 }
 
-int main(int argc, char **argv)
-{
-    qputenv("QT_QPA_PLATFORM", "offscreen");
-    QApplication app(argc, argv);
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
-
 // ---- Task 5: the outline composer ----
 
 namespace {
@@ -702,10 +694,16 @@ std::vector<std::shared_ptr<const Stroke>> goldenStrokes()
         wave->points.push_back({x, 60 + 25 * std::sin(i / 6.0), 0.2 + 0.8 * std::abs(std::sin(i / 10.0))});
     }
     out.push_back(wave);
+    // Crosses the wave: the overlap must stay one flat translucent yellow.
     auto marker = std::make_shared<Stroke>();
     marker->style = {14.0, QColor(0xff, 0xee, 0x00, 0x80), PressureCurve::Const};
-    marker->points = {{30, 130, 1.0}, {230, 135, 1.0}};
+    marker->points = {{30, 105, 1.0}, {230, 45, 1.0}};
     out.push_back(marker);
+    // Crosses itself in an X: the middle must not be darker than the arms.
+    auto cross = std::make_shared<Stroke>();
+    cross->style = {12.0, QColor(0x00, 0xa0, 0x40, 0x80), PressureCurve::Const};
+    cross->points = {{200, 120, 1.0}, {280, 170, 1.0}, {280, 120, 1.0}, {200, 170, 1.0}};
+    out.push_back(cross);
     auto tap = std::make_shared<Stroke>();
     tap->style = {8.0, QColor(0xc0, 0x00, 0x00), PressureCurve::Sqrt};
     tap->points = {{250, 60, 0.7}};
@@ -717,32 +715,63 @@ std::vector<std::shared_ptr<const Stroke>> goldenStrokes()
     return out;
 }
 
-/// Golden tolerance: a pixel differs when any channel is off by more than 8
-/// (of 255); the images match when under 0.5% of the pixels differ. That
-/// absorbs antialiasing differences between Qt builds and nothing else.
-bool imagesMatch(const QImage &a, const QImage &b, QString *why)
+/// Golden tolerance. A pixel "differs" when any channel is off by more than 8
+/// (of 255), "strongly" when off by more than 64. The whole image matches when
+/// under 0.5% of its pixels differ; that absorbs antialiasing drift between Qt
+/// builds. A whole-image share dilutes small features, so every stroke's
+/// padded box is checked on its own: there under 0.5% may differ and at most 2
+/// pixels strongly (AA drift moves edge pixels by a fraction of the coverage,
+/// a lost dot or cap moves tens of pixels by 100+).
+constexpr double kGoldenMaxShare = 0.005;
+constexpr int kGoldenMaxStrongPixelsPerRegion = 2;
+
+bool regionMatches(const QImage &x, const QImage &y, const QRect &region, bool wholeImage, QString *why)
+{
+    const QRect r = region.intersected(x.rect());
+    qint64 bad = 0, strong = 0;
+    for (int row = r.top(); row <= r.bottom(); ++row) {
+        const QRgb *p = reinterpret_cast<const QRgb *>(x.constScanLine(row));
+        const QRgb *q = reinterpret_cast<const QRgb *>(y.constScanLine(row));
+        for (int col = r.left(); col <= r.right(); ++col) {
+            const int d = std::max({std::abs(qRed(p[col]) - qRed(q[col])), std::abs(qGreen(p[col]) - qGreen(q[col])),
+                                    std::abs(qBlue(p[col]) - qBlue(q[col])), std::abs(qAlpha(p[col]) - qAlpha(q[col]))});
+            bad += d > 8;
+            strong += d > 64;
+        }
+    }
+    const double share = r.isEmpty() ? 0.0 : double(bad) / (double(r.width()) * r.height());
+    *why = QStringLiteral("region %1,%2 %3x%4: %5 of pixels differ by more than 8, %6 by more than 64")
+               .arg(r.x()).arg(r.y()).arg(r.width()).arg(r.height()).arg(share, 0, 'f', 4).arg(strong);
+    return share < kGoldenMaxShare && (wholeImage || strong <= kGoldenMaxStrongPixelsPerRegion);
+}
+
+/// One padded box per stroke, in physical pixels of an image rendered at `scale`.
+std::vector<QRect> strokeRegions(const std::vector<std::shared_ptr<const Stroke>> &strokes, const QRectF &area, double scale)
+{
+    std::vector<QRect> out;
+    for (const auto &stroke : strokes) {
+        const QRectF box = stroke->bounds().adjusted(-2, -2, 2, 2).translated(-area.topLeft());
+        out.push_back(QRectF(box.x() * scale, box.y() * scale, box.width() * scale, box.height() * scale).toAlignedRect());
+    }
+    return out;
+}
+
+bool imagesMatch(const QImage &a, const QImage &b, const std::vector<QRect> &regions, QString *why)
 {
     if (a.size() != b.size()) {
         *why = QStringLiteral("size %1x%2 vs %3x%4").arg(a.width()).arg(a.height()).arg(b.width()).arg(b.height());
         return false;
     }
     const QImage x = a.convertToFormat(QImage::Format_ARGB32), y = b.convertToFormat(QImage::Format_ARGB32);
-    qint64 bad = 0;
-    for (int row = 0; row < x.height(); ++row) {
-        const QRgb *p = reinterpret_cast<const QRgb *>(x.constScanLine(row));
-        const QRgb *q = reinterpret_cast<const QRgb *>(y.constScanLine(row));
-        for (int col = 0; col < x.width(); ++col) {
-            const int d = std::max({std::abs(qRed(p[col]) - qRed(q[col])), std::abs(qGreen(p[col]) - qGreen(q[col])),
-                                    std::abs(qBlue(p[col]) - qBlue(q[col])), std::abs(qAlpha(p[col]) - qAlpha(q[col]))});
-            bad += d > 8;
-        }
-    }
-    const double share = double(bad) / double(qint64(x.width()) * x.height());
-    *why = QStringLiteral("%1 of pixels differ by more than 8").arg(share, 0, 'f', 4);
-    return share < 0.005;
+    if (!regionMatches(x, y, x.rect(), true, why))
+        return false;
+    for (const QRect &region : regions)
+        if (!regionMatches(x, y, region, false, why))
+            return false;
+    return true;
 }
 
-void checkGolden(const QString &name, const QImage &image)
+void checkGolden(const QString &name, const QImage &image, const std::vector<QRect> &regions)
 {
     const QString path = QStringLiteral(NOTEAPPC_INK_GOLDEN_DIR "/") + name;
     if (qEnvironmentVariableIsSet("NOTEAPPC_UPDATE_GOLDEN")) {
@@ -753,7 +782,7 @@ void checkGolden(const QString &name, const QImage &image)
     QImage golden(path);
     ASSERT_FALSE(golden.isNull()) << "no golden image at " << path.toStdString() << "; run once with NOTEAPPC_UPDATE_GOLDEN=1";
     QString why;
-    EXPECT_TRUE(imagesMatch(image, golden, &why)) << name.toStdString() << ": " << why.toStdString();
+    EXPECT_TRUE(imagesMatch(image, golden, regions, &why)) << name.toStdString() << ": " << why.toStdString();
 }
 
 bool pathIsFinite(const QPainterPath &path)
@@ -861,6 +890,99 @@ TEST(StrokeOutlineTest, HostileDataNeverGivesNaNOrHangs)
     EXPECT_TRUE(strokeOutline(two, 0, 5).isEmpty());
 }
 
+TEST(StrokeOutlineTest, NonFiniteInputDropsOnlyTheBadSegment)
+{
+    const double inf = std::numeric_limits<double>::infinity();
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    // The bad segment goes; every good one still draws; nothing stray, nothing non-finite.
+    const auto boundsWithin = [](const QPainterPath &p, double l, double t, double r, double b) {
+        const QRectF box = p.boundingRect();
+        return pathIsFinite(p) && box.left() >= l && box.top() >= t && box.right() <= r && box.bottom() <= b;
+    };
+    {
+        SCOPED_TRACE("NaN pressure mid-stroke: width falls back to the base width");
+        Stroke stroke;
+        stroke.style = {4.0, Qt::black, PressureCurve::Linear};
+        stroke.points = {{0, 0, 1}, {10, 0, nan}, {20, 0, 1}};
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_TRUE(path.contains(QPointF(5, 0)));
+        EXPECT_TRUE(path.contains(QPointF(15, 0)));
+        EXPECT_TRUE(path.contains(QPointF(10, 1.9))) << "base width 4 at the NaN point";
+        EXPECT_TRUE(boundsWithin(path, -2.05, -2.05, 22.05, 2.05)) << "no stray line to the start";
+    }
+    {
+        SCOPED_TRACE("inf coordinate in the middle");
+        Stroke stroke;
+        stroke.style = {4.0, Qt::black, PressureCurve::Const};
+        stroke.points = {{0, 0, 1}, {10, 0, 1}, {inf, 0, 1}, {30, 0, 1}, {40, 0, 1}};
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_TRUE(path.contains(QPointF(5, 0)));
+        EXPECT_TRUE(path.contains(QPointF(35, 0)));
+        EXPECT_FALSE(path.contains(QPointF(20, 0))) << "the segments touching the bad point are dropped";
+        EXPECT_TRUE(boundsWithin(path, -2.05, -2.05, 42.05, 2.05));
+    }
+    {
+        SCOPED_TRACE("NaN first point");
+        Stroke stroke;
+        stroke.style = {4.0, Qt::black, PressureCurve::Const};
+        stroke.points = {{nan, 0, 1}, {10, 0, 1}, {20, 0, 1}};
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_TRUE(path.contains(QPointF(15, 0)));
+        EXPECT_TRUE(boundsWithin(path, 7.95, -2.05, 22.05, 2.05));
+    }
+    {
+        SCOPED_TRACE("negative width is its absolute value");
+        Stroke stroke;
+        stroke.style = {-4.0, Qt::black, PressureCurve::Const};
+        stroke.points = {{0, 0, 1}, {10, 0, 1}, {20, 0, 1}};
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_TRUE(path.contains(QPointF(5, 1.5)));
+        EXPECT_FALSE(path.contains(QPointF(5, 2.5)));
+        EXPECT_TRUE(path.contains(QPointF(-1.5, 0))) << "round caps, as for width 4";
+        EXPECT_TRUE(boundsWithin(path, -2.05, -2.05, 22.05, 2.05));
+    }
+    {
+        SCOPED_TRACE("1e303 width is clamped, not dropped");
+        Stroke stroke;
+        stroke.style = {1e303, Qt::black, PressureCurve::Const};
+        stroke.points = {{0, 0, 1}, {10, 0, 1}, {20, 0, 1}};
+        const QPainterPath path = strokeOutline(stroke);
+        EXPECT_FALSE(path.isEmpty());
+        EXPECT_TRUE(pathIsFinite(path));
+        EXPECT_TRUE(path.contains(QPointF(5, 0.49 * kMaxOutlineWidth)));
+        EXPECT_FALSE(path.contains(QPointF(5, 0.51 * kMaxOutlineWidth)));
+    }
+    {
+        SCOPED_TRACE("infinite width");
+        Stroke stroke;
+        stroke.style = {inf, Qt::black, PressureCurve::Const};
+        stroke.points = {{0, 0, 1}, {10, 0, 1}};
+        EXPECT_TRUE(pathIsFinite(strokeOutline(stroke)));
+    }
+}
+
+TEST(StrokeOutlineTest, ASharpReversalHasNoSpikeAndNoGap)
+{
+    Stroke stroke;
+    stroke.style = {10.0, Qt::black, PressureCurve::Const};
+    stroke.points = {{0, 0, 1}, {50, 0, 1}, {0, 1, 1}};
+    const QPainterPath path = strokeOutline(stroke);
+    const QRectF box = path.boundingRect();
+    EXPECT_LE(box.right(), 55.05) << "no miter spike past the round cap at the turn";
+    EXPECT_GE(box.left(), -5.05);
+    EXPECT_GE(box.top(), -5.05);
+    EXPECT_LE(box.bottom(), 6.05);
+    EXPECT_TRUE(path.contains(QPointF(52, 0))) << "the turn is capped round";
+    EXPECT_TRUE(path.contains(QPointF(25, 0.5)));
+    EXPECT_TRUE(path.contains(QPointF(50, 4.5)));
+    EXPECT_TRUE(path.contains(QPointF(50, -4.5)));
+    stroke.points = {{0, 0, 1}, {50, 0, 1}, {0, 0, 1}}; // exactly back on itself
+    const QPainterPath back = strokeOutline(stroke);
+    EXPECT_TRUE(pathIsFinite(back));
+    EXPECT_NEAR(back.boundingRect().right(), 55.0, 0.05);
+    EXPECT_TRUE(back.contains(QPointF(25, 0)));
+}
+
 TEST(StrokeOutlineTest, PartialOutlineCoversOnlyTheAskedSegments)
 {
     Stroke stroke;
@@ -871,17 +993,26 @@ TEST(StrokeOutlineTest, PartialOutlineCoversOnlyTheAskedSegments)
     EXPECT_FALSE(tail.contains(QPointF(5, 0)));
 }
 
-TEST(StrokeOutlineTest, MatchesTheGoldenImagesAtTwoZoomsAndTwoRatios)
+TEST(StrokeOutlineTest, MatchesTheGoldenImagesAtTwoZoomsAndThreeRatios)
 {
     const auto strokes = goldenStrokes();
     const QRectF area(0, 0, 300, 200);
-    checkGolden(QStringLiteral("outline-z1-d1.png"), renderStrokes(strokes, area, 1.0, 1.0, Qt::white));
-    checkGolden(QStringLiteral("outline-z2-d1.png"), renderStrokes(strokes, area, 2.0, 1.0, Qt::white));
-    checkGolden(QStringLiteral("outline-z1-d2.png"), renderStrokes(strokes, area, 1.0, 2.0, Qt::white));
-    checkGolden(QStringLiteral("outline-z2-d2.png"), renderStrokes(strokes, area, 2.0, 2.0, Qt::white));
-    const QImage z2 = renderStrokes(strokes, area, 2.0, 1.0, Qt::white);
-    EXPECT_EQ(z2.size(), QSize(600, 400));
-    const QImage d2 = renderStrokes(strokes, area, 1.0, 2.0, Qt::white);
-    EXPECT_EQ(d2.size(), QSize(600, 400));
-    EXPECT_DOUBLE_EQ(d2.devicePixelRatio(), 2.0);
+    // zoom 1 / ratio 1; zoom 2; a fractional ratio (1.5, 450x300 exactly); zoom 2 at ratio 2.
+    const struct { const char *name; double zoom, dpr; } cases[] = {
+        {"outline-z1-d1.png", 1.0, 1.0}, {"outline-z2-d1.png", 2.0, 1.0}, {"outline-z1-d1p5.png", 1.0, 1.5}, {"outline-z2-d2.png", 2.0, 2.0}};
+    for (const auto &c : cases) {
+        SCOPED_TRACE(c.name);
+        const QImage image = renderStrokes(strokes, area, c.zoom, c.dpr, Qt::white);
+        EXPECT_EQ(image.size(), QSize(int(300 * c.zoom * c.dpr), int(200 * c.zoom * c.dpr)));
+        EXPECT_DOUBLE_EQ(image.devicePixelRatio(), c.dpr);
+        checkGolden(QString::fromLatin1(c.name), image, strokeRegions(strokes, area, c.zoom * c.dpr));
+    }
+}
+
+int main(int argc, char **argv)
+{
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QApplication app(argc, argv);
+    ::testing::InitGoogleTest(&argc, argv);
+    return RUN_ALL_TESTS();
 }
