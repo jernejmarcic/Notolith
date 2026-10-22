@@ -27,6 +27,10 @@ class InkCanvas : public QWidget {
 public:
     enum class Tool { Pen, Eraser, Lasso, Shape, Text };
     Q_ENUM(Tool)
+    /// What the eraser takes: the whole stroke it touches, or only the segments it touches (the rest of the
+    /// stroke survives as one or two new strokes). Shapes, text and images are always taken whole.
+    enum class EraserMode { Stroke, Split };
+    Q_ENUM(EraserMode)
 
     explicit InkCanvas(QWidget *parent = nullptr);
 
@@ -40,6 +44,8 @@ public:
     void setTool(Tool tool);
     StrokeStyle penStyle() const { return m_penStyle; }
     void setPenStyle(const StrokeStyle &style) { m_penStyle = style; }
+    EraserMode eraserMode() const { return m_eraserMode; }
+    void setEraserMode(EraserMode mode);
     double eraserWidth() const { return m_eraserWidth; }
     void setEraserWidth(double documentPx) { m_eraserWidth = documentPx; }
     bool drawWithMouse() const { return m_drawWithMouse; }
@@ -88,6 +94,7 @@ public slots:
 signals:
     void documentEdited();
     void toolChanged(Tool tool);
+    void eraserModeChanged(EraserMode mode);
     void learnedPressureChanged(const QString &device, double max);
     void zoomChanged(double zoom);
     void panRequested(QPoint deltaWidgetPx);
@@ -135,6 +142,7 @@ private:
     Tool m_tool = Tool::Pen;
     StrokeStyle m_penStyle;
     double m_eraserWidth = 20.0;
+    EraserMode m_eraserMode = EraserMode::Stroke;
     double m_zoom = 1.0;
     QPointF m_origin;            ///< document px: the extent's top-left as documentReplaced() last saw it
     bool m_drawWithMouse = false;

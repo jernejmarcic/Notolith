@@ -17,6 +17,7 @@
 
 #include <map>
 
+#include "InkTools.h"
 #include "PagePatterns.h"
 #include "StrokeOutline.h"
 
@@ -70,6 +71,25 @@ bool eraserTouches(const Stroke &stroke, const QPointF &a, const QPointF &b, dou
             return true;
     }
     return false;
+}
+
+/// The eraser as a path: the segment a-b swept by radius `r` (a circle when a == b), filled once.
+QPainterPath eraserCapsule(const QPointF &a, const QPointF &b, double r)
+{
+    QPainterPath path;
+    path.setFillRule(Qt::WindingFill);
+    path.addEllipse(a, r, r);
+    if (a != b) {
+        path.addEllipse(b, r, r);
+        const QPointF d = b - a;
+        const double length = std::hypot(d.x(), d.y());
+        if (length > 0.0) {
+            const QPointF side(-d.y() / length * r, d.x() / length * r);
+            path.addPolygon(QPolygonF({a + side, b + side, b - side, a - side}));
+            path.closeSubpath();
+        }
+    }
+    return path;
 }
 
 /// Everything the page layout needs, by value: the canvas builds one for its own painting and hands one to every
@@ -319,6 +339,14 @@ QRect InkCanvas::widgetRect(const QRectF &documentRect) const
     return QRectF(toWidget(documentRect.topLeft()), toWidget(documentRect.bottomRight())).toAlignedRect().adjusted(-2, -2, 2, 2);
 }
 
+void InkCanvas::setEraserMode(EraserMode mode)
+{
+    if (mode == m_eraserMode)
+        return;
+    m_eraserMode = mode;
+    emit eraserModeChanged(m_eraserMode);
+}
+
 void InkCanvas::setTool(Tool tool)
 {
     if (tool == m_tool)
@@ -484,6 +512,9 @@ void InkCanvas::keyPressEvent(QKeyEvent *event)
         undo();
     } else if (event->matches(QKeySequence::Redo) || (event->key() == Qt::Key_Y && event->modifiers() == Qt::ControlModifier)) {
         redo();
+    } else if (event->key() == Qt::Key_E && event->modifiers() == Qt::ShiftModifier) {
+        setTool(Tool::Eraser); // R14: the whole/parts switch without a toolbar or a pen button
+        setEraserMode(m_eraserMode == EraserMode::Split ? EraserMode::Stroke : EraserMode::Split);
     } else if (event->modifiers() == Qt::NoModifier && toolForKey(event->key(), &keyTool)) {
         setTool(keyTool); // R14: every tool without pen hardware (PADD's pen has no eraser end and dead buttons)
     } else {
@@ -665,13 +696,38 @@ void InkCanvas::eraseSweep(const QPointF &a, const QPointF &b)
     const double r = m_eraserWidth * 0.5;
     const QRectF area = QRectF(a, b).normalized().adjusted(-r, -r, r, r);
     QRectF dirty;
+    QPainterPath eraser; // built on the first stroke that needs it, Split mode only
     for (qint64 t : m_document.itemsIntersecting(area)) {
         const Item *item = m_document.item(t);
         if (!item)
             continue;
-        const bool hit = item->type == Item::Type::Stroke ? eraserTouches(*item->stroke, a, b, r) : item->bounds().intersects(area);
-        if (!hit)
+        const bool isStroke = item->type == Item::Type::Stroke;
+        if (isStroke ? !eraserTouches(*item->stroke, a, b, r) : !item->bounds().intersects(area))
             continue;
+        if (isStroke && m_eraserMode == EraserMode::Split) {
+            if (eraser.isEmpty())
+                eraser = eraserCapsule(a, b, r);
+            const SplitResult split = splitStroke(*item->stroke, eraser);
+            if (!split.hit)
+                continue; // the polyline test is a little generous: the outline did not meet the eraser
+            const QRectF oldBounds = item->bounds();
+            const Item original = *item; // replaceItem and addItem invalidate `item`
+            dirty |= oldBounds;
+            invalidateTiles(oldBounds); // the pieces lie inside the old bounds
+            if (split.pieces.empty()) {
+                m_document.removeItem(t);
+            } else {
+                Item piece = original;
+                piece.stroke = split.pieces.front();
+                m_document.replaceItem(t, piece); // the first piece keeps t: a small undo diff
+                for (size_t i = 1; i < split.pieces.size(); ++i) {
+                    piece.stroke = split.pieces[i];
+                    m_document.addItem(piece);
+                }
+            }
+            m_erasedSomething = true;
+            continue;
+        }
         dirty |= item->bounds();
         invalidateTiles(item->bounds());
         m_document.removeItem(t);

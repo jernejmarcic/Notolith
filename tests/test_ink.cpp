@@ -38,6 +38,7 @@
 #include "InkDocument.h"
 #include "InkFormat.h"
 #include "InkInput.h"
+#include "InkTools.h"
 #include "InkTestSupport.h"
 #include "InkTypes.h"
 #include "PagePatterns.h"
@@ -3598,6 +3599,227 @@ TEST(InkCanvasTest, ThePatternOfAPagedLayoutRestartsOnEveryPageInsideTheTiles)
             EXPECT_TRUE(hasInk(shot, QRect(10, top + 32 * line - 1, 280, 4))) << "line " << line;
         EXPECT_FALSE(hasInk(shot, QRect(10, top + 33 + 32 * 3 - 30, 280, 20))) << "none between the lines";
     }
+}
+
+
+namespace {
+
+/// Ten points 10 px apart along y = 0 (x = 0, 10 ... 90), width 2 at pressure 0.5: segments are 0.5 px either side.
+Stroke tenPointLine()
+{
+    Stroke stroke;
+    stroke.style.width = 2.0;
+    stroke.style.color = QColor(0x20, 0x40, 0x80);
+    for (int i = 0; i < 10; ++i)
+        stroke.points.push_back({10.0 * i, 0.0, 0.5});
+    return stroke;
+}
+
+QPainterPath circleAt(double x, double y, double r)
+{
+    QPainterPath path;
+    path.addEllipse(QPointF(x, y), r, r);
+    return path;
+}
+
+} // namespace
+
+TEST(InkToolsTest, SplitCutsTheMiddleAndKeepsBothEnds)
+{
+    const Stroke stroke = tenPointLine();
+    const SplitResult result = splitStroke(stroke, circleAt(45, 0, 7)); // over points 4 and 5
+    ASSERT_TRUE(result.hit);
+    ASSERT_EQ(result.pieces.size(), 2u);
+    ASSERT_EQ(result.pieces[0]->points.size(), 4u);
+    ASSERT_EQ(result.pieces[1]->points.size(), 4u);
+    EXPECT_EQ(result.pieces[0]->points.front().x, 0.0);
+    EXPECT_EQ(result.pieces[0]->points.back().x, 30.0);
+    EXPECT_EQ(result.pieces[1]->points.front().x, 60.0);
+    EXPECT_EQ(result.pieces[1]->points.back().x, 90.0);
+    for (const auto &piece : result.pieces) {
+        EXPECT_EQ(piece->style, stroke.style);
+        EXPECT_EQ(piece->points.front().pressure, 0.5);
+    }
+}
+
+TEST(InkToolsTest, SplitAtTheEndTrimsInPlace)
+{
+    const SplitResult result = splitStroke(tenPointLine(), circleAt(90, 0, 3)); // over point 9
+    ASSERT_TRUE(result.hit);
+    ASSERT_EQ(result.pieces.size(), 1u);
+    ASSERT_EQ(result.pieces[0]->points.size(), 9u);
+    EXPECT_EQ(result.pieces[0]->points.front().x, 0.0);
+    EXPECT_EQ(result.pieces[0]->points.back().x, 80.0);
+}
+
+TEST(InkToolsTest, SplitOfATwoPointStrokeRemovesIt)
+{
+    const auto two = line(0, 0, 20, 0);
+    const SplitResult result = splitStroke(*two, circleAt(10, 0, 3));
+    EXPECT_TRUE(result.hit);
+    EXPECT_TRUE(result.pieces.empty());
+    Stroke dot;
+    dot.points = {{5, 5, 0.5}};
+    const SplitResult tap = splitStroke(dot, circleAt(5, 5, 3));
+    EXPECT_TRUE(tap.hit) << "a tap is one dot: taken whole";
+    EXPECT_TRUE(tap.pieces.empty());
+}
+
+TEST(InkToolsTest, SplitMissingReturnsNoHit)
+{
+    const SplitResult result = splitStroke(tenPointLine(), circleAt(45, 40, 7));
+    EXPECT_FALSE(result.hit);
+    EXPECT_TRUE(result.pieces.empty());
+    EXPECT_FALSE(splitStroke(Stroke{}, circleAt(0, 0, 5)).hit) << "no points, nothing to cut";
+}
+
+TEST(InkToolsTest, SplitDropsAnEdgeSegmentThatLeavesOnePoint)
+{
+    // Points 0 and 1 survive on the left (one segment = a two-point stroke), the hit is at 2..3.
+    const SplitResult result = splitStroke(tenPointLine(), circleAt(25, 0, 7));
+    ASSERT_TRUE(result.hit);
+    ASSERT_EQ(result.pieces.size(), 2u);
+    EXPECT_EQ(result.pieces[0]->points.size(), 2u);
+    EXPECT_EQ(result.pieces[0]->points.back().x, 10.0);
+    EXPECT_EQ(result.pieces[1]->points.front().x, 40.0);
+    EXPECT_EQ(result.pieces[1]->points.back().x, 90.0);
+}
+
+TEST(InkToolsTest, SplitSeesAnEraserInsideAWideStroke)
+{
+    Stroke stroke = tenPointLine();
+    stroke.style.width = 40.0; // the stroke is 20 px wide on each side: the eraser circle sits wholly inside it
+    stroke.points.resize(3);
+    const SplitResult result = splitStroke(stroke, circleAt(10, 0, 2));
+    EXPECT_TRUE(result.hit);
+}
+
+TEST(InkToolsTest, SplitSurvivesHostileCoordinates)
+{
+    Stroke stroke = tenPointLine();
+    stroke.points[5].x = std::numeric_limits<double>::quiet_NaN();
+    stroke.points[6].y = std::numeric_limits<double>::infinity();
+    const SplitResult result = splitStroke(stroke, circleAt(15, 0, 3)); // returns, whatever it decides
+    EXPECT_TRUE(result.hit);
+    for (const auto &piece : result.pieces)
+        EXPECT_GE(piece->points.size(), 2u);
+}
+
+TEST(InkCanvasTest, SplitEraserLeavesTwoStrokesAndUndoRestoresOne)
+{
+    CanvasFixture f;
+    f.canvas.setRawInput(true);
+    f.canvas.setEraserMode(InkCanvas::EraserMode::Split);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(380, 150), 1000);
+    ASSERT_EQ(f.canvas.document().items().size(), 1u);
+    const qint64 originalT = f.canvas.document().items()[0].t;
+    const StrokeStyle style = f.canvas.document().items()[0].stroke->style;
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(200, 120), QPointF(200, 180), 2000);
+    const auto &items = f.canvas.document().items();
+    ASSERT_EQ(items.size(), 2u);
+    EXPECT_EQ(items[0].t, originalT) << "the first piece keeps the item, so the undo diff is small";
+    EXPECT_GT(items[1].t, originalT);
+    EXPECT_EQ(items[0].layer, items[1].layer);
+    EXPECT_EQ(items[0].stroke->style, style);
+    EXPECT_EQ(items[1].stroke->style, style);
+    EXPECT_LT(items[0].stroke->points.back().x, 200.0);
+    EXPECT_GT(items[1].stroke->points.front().x, 200.0);
+    EXPECT_GT(items[1].stroke->points.front().x - items[0].stroke->points.back().x, 8.0) << "a gap the eraser's width cut";
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_EQ(f.canvas.document().items().size(), 1u);
+    ASSERT_TRUE(f.canvas.redo());
+    EXPECT_EQ(f.canvas.document().items().size(), 2u);
+}
+
+TEST(InkCanvasTest, TheSplitEraserShowsTheGapAndTheEndsAfterTheTilesSettle)
+{
+    CanvasFixture f;
+    f.canvas.setRawInput(true);
+    StrokeStyle style;
+    style.width = 6.0;
+    f.canvas.setPenStyle(style);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(380, 150), 1000);
+    settledGrab(f.canvas);
+    ASSERT_EQ(f.canvas.staleTileCount(), 0);
+    f.canvas.setEraserMode(InkCanvas::EraserMode::Split);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(200, 120), QPointF(200, 180), 2000);
+    ASSERT_EQ(f.canvas.document().items().size(), 2u);
+    EXPECT_GE(f.canvas.staleTileCount(), 1);
+    const QImage frame = settledGrab(f.canvas);
+    EXPECT_LT(frame.pixelColor(100, 150).lightness(), 100) << "the left end is still ink";
+    EXPECT_LT(frame.pixelColor(300, 150).lightness(), 100) << "the right end is still ink";
+    EXPECT_GT(frame.pixelColor(200, 150).lightness(), 200) << "the cut is gone from the tile";
+}
+
+TEST(InkCanvasTest, TheWholeStrokeModeStaysTheDefaultAndTakesTheWholeStroke)
+{
+    CanvasFixture f;
+    EXPECT_EQ(f.canvas.eraserMode(), InkCanvas::EraserMode::Stroke);
+    f.canvas.setRawInput(true);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(380, 150), 1000);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(200, 120), QPointF(200, 180), 2000);
+    EXPECT_TRUE(f.canvas.document().items().empty());
+}
+
+TEST(InkCanvasTest, ACancelledSplitEraseRestoresEveryStrokeExactly)
+{
+    CanvasFixture f;
+    f.canvas.setRawInput(true);
+    penStroke(&f.canvas, QPointF(20, 150), QPointF(380, 150), 1000);
+    penStroke(&f.canvas, QPointF(20, 100), QPointF(380, 100), 1500);
+    const std::vector<Item> before = f.canvas.document().items();
+    ASSERT_EQ(before.size(), 2u);
+    f.canvas.setEraserMode(InkCanvas::EraserMode::Split);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    tablet(&f.canvas, QEvent::TabletPress, QPointF(200, 80), 0.5, 2000);
+    tablet(&f.canvas, QEvent::TabletMove, QPointF(200, 180), 0.5, 2005); // cuts both
+    ASSERT_EQ(f.canvas.document().items().size(), 4u);
+    f.canvas.documentReplaced(); // what a reload or a document swap does mid-erase: cancel
+    EXPECT_FALSE(f.canvas.isDrawing());
+    const auto &after = f.canvas.document().items();
+    ASSERT_EQ(after.size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
+        EXPECT_EQ(after[i].t, before[i].t);
+        EXPECT_EQ(after[i].stroke, before[i].stroke) << "the very same stroke, not a copy";
+    }
+    EXPECT_EQ(f.canvas.document().itemsIntersecting(QRectF(190, 140, 20, 20)).size(), 1u) << "the grid knows the whole stroke again";
+}
+
+TEST(InkCanvasTest, TheSplitEraserTakesShapesWhole)
+{
+    CanvasFixture f;
+    auto shape = std::make_shared<Shape>();
+    shape->kind = ShapeKind::Line;
+    shape->points = {QPointF(20, 150), QPointF(380, 150)};
+    Item item;
+    item.type = Item::Type::Shape;
+    item.shape = shape;
+    f.canvas.document().addItem(item);
+    f.canvas.document().commit();
+    f.canvas.setEraserMode(InkCanvas::EraserMode::Split);
+    f.canvas.setTool(InkCanvas::Tool::Eraser);
+    penStroke(&f.canvas, QPointF(200, 120), QPointF(200, 180), 2000);
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "split applies to strokes only";
+}
+
+TEST(InkCanvasTest, TheEraserModeHasAKeyAndASignalAndReadOnlyIgnoresIt)
+{
+    CanvasFixture f;
+    QSignalSpy changed(&f.canvas, &InkCanvas::eraserModeChanged);
+    QTest::keyClick(&f.canvas, Qt::Key_E, Qt::ShiftModifier);
+    EXPECT_EQ(f.canvas.eraserMode(), InkCanvas::EraserMode::Split);
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Eraser) << "the key also picks the eraser";
+    QTest::keyClick(&f.canvas, Qt::Key_E, Qt::ShiftModifier);
+    EXPECT_EQ(f.canvas.eraserMode(), InkCanvas::EraserMode::Stroke);
+    EXPECT_EQ(changed.count(), 2);
+    f.canvas.setEraserMode(InkCanvas::EraserMode::Stroke);
+    EXPECT_EQ(changed.count(), 2) << "no change, no signal";
+    f.canvas.setReadOnly(true);
+    QTest::keyClick(&f.canvas, Qt::Key_E, Qt::ShiftModifier);
+    EXPECT_EQ(f.canvas.eraserMode(), InkCanvas::EraserMode::Stroke);
 }
 
 

@@ -103,6 +103,7 @@ TEST_F(InkViewFileTest, ANewerFileIsReadOnlyFlaggedAnnouncedAndNeverWritten)
     EXPECT_FALSE(label->isHidden()) << "a persistent indicator, not only a status message";
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
     EXPECT_FALSE(view.save(&error));
     EXPECT_EQ(readAll(path), newer);
 }
@@ -198,6 +199,7 @@ TEST_F(InkViewFileTest, ACorruptBigFileLeavesAReadOnlyTabWithAPersistentError)
     EXPECT_TRUE(view.canvas()->isReadOnly());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkPenAction"))->isEnabled());
     EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserAction"))->isEnabled());
+    EXPECT_FALSE(view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"))->isEnabled());
     auto *notice = view.findChild<QAction *>(QStringLiteral("inkErrorAction"));
     ASSERT_NE(notice, nullptr);
     EXPECT_TRUE(notice->isVisible()) << "a persistent notice, not only an 8 s status message";
@@ -415,6 +417,23 @@ TEST(InkViewLayoutTest, LoadingAnotherDocumentDoesNotScrollToCompensate)
     ASSERT_TRUE(f.view.load(path, &error));
     EXPECT_EQ(f.v()->value(), 300) << "a different file is not a shift of the old one";
     EXPECT_EQ(f.h()->value(), 0);
+}
+
+TEST(InkViewToolbarTest, TheEraseWholeOrPartsToggleIsOnTheToolbarAndOnShiftE)
+{
+    InkView view(nullptr);
+    auto *toggle = view.findChild<QAction *>(QStringLiteral("inkEraserSplitAction"));
+    ASSERT_NE(toggle, nullptr);
+    EXPECT_TRUE(toggle->isCheckable());
+    EXPECT_FALSE(toggle->isChecked());
+    EXPECT_EQ(view.canvas()->eraserMode(), InkCanvas::EraserMode::Stroke);
+    toggle->trigger();
+    EXPECT_EQ(view.canvas()->eraserMode(), InkCanvas::EraserMode::Split) << "the toolbar drives the canvas";
+    QTest::keyClick(view.canvas(), Qt::Key_E, Qt::ShiftModifier);
+    EXPECT_EQ(view.canvas()->eraserMode(), InkCanvas::EraserMode::Stroke);
+    EXPECT_FALSE(toggle->isChecked()) << "the key moves the toolbar too";
+    QTest::keyClick(view.canvas(), Qt::Key_E, Qt::ShiftModifier);
+    EXPECT_TRUE(toggle->isChecked());
 }
 
 int main(int argc, char **argv)

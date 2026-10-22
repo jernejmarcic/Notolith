@@ -13,7 +13,7 @@ class QToolBar;
 namespace noteAppC::ink {
 
 /// The handwritten-note tab: a scroll area over the canvas and a small
-/// toolbar (pen, eraser, undo, redo; Track S1 Task 16 grows it to every tool:
+/// toolbar (pen, eraser, erase-parts toggle, undo, redo; Track S1 Task 16 grows it to every tool:
 /// R14, PADD's pen has no eraser end and no working buttons). Load and
 /// save go through InkFormat; a file whose version is above 1 opens
 /// read-only, says so in the status bar and in the toolbar (the "readOnly"
@@ -67,6 +67,7 @@ private:
     QToolBar *m_toolBar;
     QAction *m_penAction;
     QAction *m_eraserAction;
+    QAction *m_splitAction;   ///< checkable: erase parts of strokes (EraserMode::Split)
     QAction *m_undoAction;
     QAction *m_redoAction;
     QAction *m_readOnlyAction;

@@ -45,11 +45,18 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     m_penAction->setChecked(true);
     connect(m_penAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Pen); });
     connect(m_eraserAction, &QAction::triggered, this, [this] { m_canvas->setTool(InkCanvas::Tool::Eraser); });
+    m_splitAction = new QAction(tr("Erase parts"), this); // checked: only the touched part of a stroke goes; unchecked: the whole stroke
+    m_splitAction->setObjectName(QStringLiteral("inkEraserSplitAction"));
+    m_splitAction->setCheckable(true);
+    m_splitAction->setToolTip(tr("Erase parts of strokes instead of whole strokes (Shift+E)"));
+    connect(m_splitAction, &QAction::triggered, this, [this](bool on) {
+        m_canvas->setEraserMode(on ? InkCanvas::EraserMode::Split : InkCanvas::EraserMode::Stroke);
+    });
     m_undoAction = new QAction(tr("Undo"), this);
     m_redoAction = new QAction(tr("Redo"), this);
     connect(m_undoAction, &QAction::triggered, m_canvas, &InkCanvas::undo);
     connect(m_redoAction, &QAction::triggered, m_canvas, &InkCanvas::redo);
-    m_toolBar->addActions({m_penAction, m_eraserAction});
+    m_toolBar->addActions({m_penAction, m_eraserAction, m_splitAction});
     m_toolBar->addSeparator();
     m_toolBar->addActions({m_undoAction, m_redoAction});
     auto *readOnlyLabel = new QLabel(tr("Read-only: written by a newer Notolith"));
@@ -77,6 +84,9 @@ InkView::InkView(const Settings *settings, QWidget *parent)
     connect(m_canvas, &InkCanvas::toolChanged, this, [this](InkCanvas::Tool tool) { // the keys P and E (R14) move the toolbar too
         m_penAction->setChecked(tool != InkCanvas::Tool::Eraser);
         m_eraserAction->setChecked(tool == InkCanvas::Tool::Eraser);
+    });
+    connect(m_canvas, &InkCanvas::eraserModeChanged, this, [this](InkCanvas::EraserMode mode) { // Shift+E moves the toolbar too
+        m_splitAction->setChecked(mode == InkCanvas::EraserMode::Split);
     });
     connect(m_canvas, &InkCanvas::panRequested, this, [this](QPoint delta) {
         m_area->horizontalScrollBar()->setValue(m_area->horizontalScrollBar()->value() - delta.x());
@@ -158,6 +168,7 @@ bool InkView::load(const QString &path, QString *error)
                     m_canvas->setReadOnly(true);
                     m_penAction->setEnabled(false);
                     m_eraserAction->setEnabled(false);
+                    m_splitAction->setEnabled(false);
                     m_errorLabel->setText(parsed.result.error);
                     m_errorAction->setVisible(true);
                 } else {
@@ -196,6 +207,7 @@ void InkView::adopt(const QString &path, const DiskStamp &stamp, const InkReadRe
     m_canvas->setReadOnly(m_readOnly); // not setEnabled(false): a disabled widget would swallow wheel and touch pan too
     m_penAction->setEnabled(!m_readOnly);
     m_eraserAction->setEnabled(!m_readOnly);
+    m_splitAction->setEnabled(!m_readOnly);
     m_readOnlyAction->setVisible(m_readOnly);
     if (m_readOnly)
         emit statusMessage(tr("%1 was written by a newer Notolith; opened read-only").arg(QFileInfo(path).fileName()), 6000);

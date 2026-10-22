@@ -38,6 +38,8 @@ add_library(notolith-inkcore SHARED
     InkFormat.h
     InkInput.cpp
     InkInput.h
+    InkTools.cpp
+    InkTools.h
     InkTypes.cpp
     InkTypes.h
     PagePatterns.cpp
