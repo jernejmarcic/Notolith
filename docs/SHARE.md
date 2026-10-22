@@ -307,7 +307,9 @@ already holds shares of this vault.
   stops copies and loops; it starts at the clock, so a restarted device is
   not taken for a replay). A member speaks only for itself; only the owner
   relays someone else's. Presence goes to a member only once a frame from it
-  opened (it holds this epoch's key). It moves with every edit made locally,
+  opened (it holds this epoch's key). It moves with every edit made locally
+  (typing, undo, and an edit from another member that moves the text under it
+  each send the new offset, as well as a plain cursor move),
   goes when its device closes the note or disconnects, and is dropped after a
   minute without a word. Nothing is stored. Another person's selection is
   not drawn. A member whose caret arrives through the owner counts as here

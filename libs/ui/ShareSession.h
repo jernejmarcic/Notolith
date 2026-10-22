@@ -75,6 +75,7 @@ private:
     void send(const QByteArray &update);
     /// The other members' carets, in every view.
     void showCarets();
+    void sendCaret(MarkdownEditor *view);
 
     ShareEngine *m_engine;
     QByteArray m_id;

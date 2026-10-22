@@ -25,6 +25,12 @@ ShareSession::ShareSession(ShareEngine *engine, QByteArray shareID, QObject *par
     });
 }
 
+void ShareSession::sendCaret(MarkdownEditor *view)
+{
+    if (view->hasFocus())
+        m_engine->setCaret(m_id, view->anchorOffset(), view->cursorOffset());
+}
+
 void ShareSession::showCarets()
 {
     QList<MarkdownEditor::RemoteCaret> carets;
@@ -90,11 +96,9 @@ bool ShareSession::attach(MarkdownEditor *view, const QString &diskText)
     connect(view, &MarkdownEditor::edited, this,
             [this, view](qsizetype at, qsizetype removed, const QString &inserted) {
                 onLocalEdit(view, at, removed, inserted);
+                sendCaret(view); // typing moves the caret without a cursorMoved
             });
-    connect(view, &MarkdownEditor::cursorMoved, this, [this, view](qsizetype head) {
-        if (view->hasFocus())
-            m_engine->setCaret(m_id, view->anchorOffset(), head);
-    });
+    connect(view, &MarkdownEditor::cursorMoved, this, [this, view] { sendCaret(view); });
     const QString now = doc->text();
     if (view->noteText() != now) {
         const MarkdownEditor::Hunk hunk = MarkdownEditor::hunkBetween(view->noteText(), now);
@@ -129,8 +133,10 @@ void ShareSession::send(const QByteArray &update)
 void ShareSession::applyToViews(qsizetype at, qsizetype removed, const QString &inserted)
 {
     for (const QPointer<MarkdownEditor> &view : std::as_const(m_views)) {
-        if (view)
+        if (view) {
             view->applyExternalEdit(at, removed, inserted);
+            sendCaret(view); // the text moved under it: the others hold the offset from before
+        }
     }
 }
 
@@ -142,6 +148,7 @@ void ShareSession::followDocument()
             continue;
         const MarkdownEditor::Hunk hunk = MarkdownEditor::hunkBetween(view->noteText(), now);
         view->applyExternalEdit(hunk.at, hunk.removed, hunk.inserted);
+        sendCaret(view);
     }
 }
 

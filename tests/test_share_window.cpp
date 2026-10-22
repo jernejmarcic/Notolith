@@ -781,6 +781,43 @@ TEST_P(ShareWindowTest, RemoteCaretFollowsTheOtherEditor)
     ASSERT_TRUE(waitFor([&] { return a.editor()->remoteCarets().isEmpty(); }));
 }
 
+namespace {
+
+/// The head of the one caret `side`'s engine holds for the share, or -1.
+qsizetype heldCaret(const Side &side, const QByteArray &id)
+{
+    const auto carets = side.engine()->carets(id);
+    return carets.size() == 1 ? carets[0].head : -1;
+}
+
+} // namespace
+
+TEST_P(ShareWindowTest, ACaretIsSentWhenTheOwnerTypes)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    focusEditor(b);
+    b.editor()->setCursorOffset(6);
+    ASSERT_TRUE(waitFor([&] { return heldCaret(a, id) == 6; }));
+    b.editor()->insertAtCaret(QStringLiteral("Okay so")); // typing is no cursor move, yet the caret moved
+    ASSERT_TRUE(waitFor([&] { return heldCaret(a, id) == 13; })) << "the held caret stays where it was before the typing";
+    EXPECT_EQ(a.editor()->remoteCarets()[0].head, 13);
+}
+
+TEST_P(ShareWindowTest, ACaretIsSentWhenTheTextMovesUnderIt)
+{
+    Side a(QStringLiteral("a")), b(QStringLiteral("b"));
+    const QByteArray id = share(a, b, QStringLiteral("Note.md"), QStringLiteral("hello world\n"));
+    ASSERT_FALSE(id.isEmpty());
+    focusEditor(b);
+    b.editor()->setCursorOffset(6);
+    ASSERT_TRUE(waitFor([&] { return heldCaret(a, id) == 6; }));
+    a.typeAt(0, QStringLiteral(">> ")); // b's caret moves with its text, and its heartbeat must say so
+    ASSERT_TRUE(waitFor([&] { return b.editor()->cursorOffset() == 9; }));
+    ASSERT_TRUE(waitFor([&] { return heldCaret(a, id) == 9; })) << "the held caret keeps b's offset from before the edit";
+}
+
 TEST_P(ShareWindowTest, ACaretReachesAMemberThroughTheOwner)
 {
     Side a(QStringLiteral("a")), b(QStringLiteral("b")), c(QStringLiteral("c"));
