@@ -1,0 +1,9 @@
+{
+    "id": "hwfont",
+    "feature": "handwriting-font",
+    "name": "Handwriting font studio",
+    "description": "Write each letter a few times with a pen and keep the samples under Handwriting/<font>/ in the vault. A loadable module; off, Notolith never loads it. Needs the notolith-ink package.",
+    "suffixes": [],
+    "commands": [{"id": "handwriting-font:studio", "title": "Open glyph studio"}],
+    "abi": "@NOTEAPPC_ABI_TAG@"
+}

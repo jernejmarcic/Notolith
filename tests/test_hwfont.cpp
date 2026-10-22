@@ -10,12 +10,29 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
+#include <QLabel>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QTabBar>
 #include <QTemporaryDir>
+#include <QTimer>
 
 #include "GlyphSet.h"
 #include "GlyphStore.h"
+#include "GlyphStudio.h"
+#include "InkCanvas.h"
 #include "InkDocument.h"
 #include "InkFormat.h"
+#include "InkInput.h"
+#include "InkTestSupport.h"
+#include "MainWindow.h"
+#include "ModuleHost.h"
+#include "Settings.h"
+#include "Vault.h"
+#include "WaitFor.h"
 
 using namespace noteAppC::hwfont;
 using noteAppC::ink::InkDocument;
@@ -260,6 +277,299 @@ TEST(GlyphStoreTest, ProgressPutsNeedsMoreFirst)
     EXPECT_EQ(progress[2].first.codepoint, U'!');
     EXPECT_EQ(progress[3].first.codepoint, U'a');
     EXPECT_EQ(progress[3].second, 3);
+}
+
+// --- the studio view -----------------------------------------------------------
+
+namespace {
+
+class GlyphStudioTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        ASSERT_TRUE(dir.isValid());
+        vault = std::make_unique<noteAppC::Vault>(dir.path());
+        host.vault = vault.get();
+    }
+
+    QString sampleFile(const QString &hex, int n = 1, const QString &font = QStringLiteral("Test")) const
+    {
+        return dir.filePath(QStringLiteral("Handwriting/%1/%2/%3.ink").arg(font, hex).arg(n));
+    }
+
+    /// One pen stroke across the cell; `ms` keeps successive strokes in time order.
+    static void stroke(noteAppC::hwfont::GlyphStudio &studio, qint64 ms = 1000)
+    {
+        inktest::penStroke(studio.canvas(), {100, 120}, {220, 270}, ms);
+    }
+
+    static QListWidgetItem *rowFor(noteAppC::hwfont::GlyphStudio &studio, char32_t codepoint)
+    {
+        auto *list = studio.findChild<QListWidget *>(QStringLiteral("glyphList"));
+        if (!list)
+            return nullptr;
+        for (int i = 0; i < list->count(); ++i) {
+            if (list->item(i)->data(Qt::UserRole).toUInt() == codepoint)
+                return list->item(i);
+        }
+        return nullptr;
+    }
+
+    QTemporaryDir dir;
+    std::unique_ptr<noteAppC::Vault> vault;
+    noteAppC::ModuleHost host;
+};
+
+} // namespace
+
+TEST_F(GlyphStudioTest, SaveAdvancesAndWritesTheFile)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    ASSERT_EQ(studio.currentTarget(), U'a') << "a handwriting font starts at the letters";
+    QSignalSpy status(&studio, &noteAppC::ModuleView::statusMessage);
+    stroke(studio);
+    ASSERT_EQ(studio.canvas()->document().items().size(), 1u);
+
+    studio.saveCurrentAndAdvance();
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061"))));
+    EXPECT_EQ(studio.currentTarget(), U'b');
+    EXPECT_TRUE(studio.canvas()->document().items().empty());
+    ASSERT_NE(rowFor(studio, U'a'), nullptr);
+    EXPECT_EQ(rowFor(studio, U'a')->text(), QStringLiteral("a 1/3"));
+    ASSERT_FALSE(status.isEmpty());
+    EXPECT_EQ(status.last().at(0).toString(), QStringLiteral("Saved a 1/3"));
+}
+
+TEST_F(GlyphStudioTest, RetargetFromTheListAndDiscard)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    auto *list = studio.findChild<QListWidget *>(QStringLiteral("glyphList"));
+    ASSERT_NE(list, nullptr);
+    QListWidgetItem *row = rowFor(studio, U'b');
+    ASSERT_NE(row, nullptr);
+    list->scrollToItem(row);
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(row).center());
+    EXPECT_EQ(studio.currentTarget(), U'b');
+
+    stroke(studio);
+    ASSERT_EQ(studio.canvas()->document().items().size(), 1u);
+    QTest::keyClick(studio.canvas(), Qt::Key_Backspace);
+    EXPECT_TRUE(studio.canvas()->document().items().empty());
+    EXPECT_FALSE(studio.isModified());
+    EXPECT_FALSE(QDir(dir.filePath(QStringLiteral("Handwriting"))).exists()) << "a discarded cell writes nothing";
+    EXPECT_EQ(studio.currentTarget(), U'b') << "discarding stays on the letter";
+}
+
+TEST_F(GlyphStudioTest, EnterSavesBackspaceDiscardsAndCtrlZUndoesAStroke)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    studio.canvas()->setFocus();
+    stroke(studio);
+    QTest::keyClick(studio.canvas(), Qt::Key_Return);
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061"))));
+    EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0061"), 2)));
+    EXPECT_EQ(studio.currentTarget(), U'b');
+
+    stroke(studio, 2000);
+    stroke(studio, 3000);
+    const auto &doc = studio.canvas()->document();
+    ASSERT_EQ(doc.items().size(), 2u);
+    QTest::keyClick(studio.canvas(), Qt::Key_Z, Qt::ControlModifier);
+    EXPECT_EQ(doc.items().size(), 1u);
+    QTest::keyClick(studio.canvas(), Qt::Key_Z, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(doc.items().size(), 2u);
+    QTest::keyClick(studio.canvas(), Qt::Key_Z, Qt::ControlModifier);
+    QTest::keyClick(studio.canvas(), Qt::Key_Y, Qt::ControlModifier);
+    EXPECT_EQ(doc.items().size(), 2u);
+    QTest::keyClick(studio.canvas(), Qt::Key_Escape);
+    EXPECT_EQ(doc.items().size(), 2u) << "Escape does nothing";
+    QTest::keyClick(studio.canvas(), Qt::Key_Backspace);
+    EXPECT_TRUE(doc.items().empty());
+    EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062"))));
+}
+
+// R14: PADD's pen is tip-only, so every action is on a button too.
+TEST_F(GlyphStudioTest, TheButtonsDoWhatTheKeysDo)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    const auto button = [&studio](const char *name) {
+        auto *b = studio.findChild<QPushButton *>(QLatin1String(name));
+        EXPECT_NE(b, nullptr) << name;
+        return b;
+    };
+    stroke(studio, 1000);
+    stroke(studio, 2000);
+    button("glyphUndoButton")->click();
+    EXPECT_EQ(studio.canvas()->document().items().size(), 1u);
+    button("glyphRedoButton")->click();
+    EXPECT_EQ(studio.canvas()->document().items().size(), 2u);
+    button("glyphDiscardButton")->click();
+    EXPECT_TRUE(studio.canvas()->document().items().empty());
+    stroke(studio, 3000);
+    button("glyphSaveButton")->click();
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061"))));
+    EXPECT_EQ(studio.currentTarget(), U'b');
+    button("glyphSkipButton")->click();
+    EXPECT_EQ(studio.currentTarget(), U'c') << "moving on without saving";
+    EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062"))));
+}
+
+TEST_F(GlyphStudioTest, TheBarrelClickSavesAndNeverDraws)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    stroke(studio);
+    ASSERT_EQ(studio.canvas()->document().items().size(), 1u);
+    const QPointF p(150, 150);
+    inktest::tablet(studio.canvas(), QEvent::TabletPress, p, 0.5, 5000, noteAppC::ink::kHeldLassoButton);
+    inktest::tablet(studio.canvas(), QEvent::TabletRelease, p, 0.0, 5040, Qt::NoButton);
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061")))) << "the click saved the cell";
+    EXPECT_EQ(studio.currentTarget(), U'b');
+    EXPECT_TRUE(studio.canvas()->document().items().empty()) << "and drew nothing";
+
+    // Held and dragged more than 4 px: not a click, not a stroke, not a selection.
+    stroke(studio, 6000);
+    ASSERT_EQ(studio.canvas()->document().items().size(), 1u);
+    inktest::tablet(studio.canvas(), QEvent::TabletPress, {100, 100}, 0.5, 7000, noteAppC::ink::kHeldLassoButton);
+    for (int i = 1; i <= 8; ++i)
+        inktest::tablet(studio.canvas(), QEvent::TabletMove, QPointF(100 + i * 15, 100 + i * 10), 0.5, 7000 + i * 5,
+                        noteAppC::ink::kHeldLassoButton);
+    inktest::tablet(studio.canvas(), QEvent::TabletRelease, {220, 180}, 0.0, 7050, Qt::NoButton);
+    EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062")))) << "a drag is not a click";
+    EXPECT_EQ(studio.canvas()->document().items().size(), 1u) << "no new stroke, nothing erased";
+    EXPECT_FALSE(studio.canvas()->isDrawing());
+    stroke(studio, 8000);
+    EXPECT_EQ(studio.canvas()->document().items().size(), 2u) << "the pen draws again afterwards";
+}
+
+// R6: the studio is a file-less tab; the host saves it through save().
+TEST_F(GlyphStudioTest, AnUnsavedCellIsModifiedAndSaveWritesIt)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));
+    studio.show();
+    QSignalSpy changed(&studio, &noteAppC::ModuleView::modificationChanged);
+    EXPECT_FALSE(studio.isModified());
+    QString error;
+    EXPECT_TRUE(studio.save(&error)) << error.toStdString();
+    EXPECT_FALSE(QDir(dir.filePath(QStringLiteral("Handwriting"))).exists()) << "an empty cell writes nothing";
+    EXPECT_EQ(studio.currentTarget(), U'a');
+
+    stroke(studio);
+    EXPECT_TRUE(studio.isModified());
+    ASSERT_FALSE(changed.isEmpty());
+    EXPECT_EQ(changed.last().at(0).toBool(), true);
+    EXPECT_TRUE(studio.save(&error)) << error.toStdString();
+    EXPECT_TRUE(QFile::exists(sampleFile(QStringLiteral("0061"))));
+    EXPECT_FALSE(studio.isModified());
+    EXPECT_EQ(changed.last().at(0).toBool(), false);
+}
+
+TEST_F(GlyphStudioTest, AnUnsafeFontNameIsShownAndNothingIsWritten)
+{
+    noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("../escape"));
+    studio.show();
+    auto *message = studio.findChild<QLabel *>(QStringLiteral("glyphError"));
+    ASSERT_NE(message, nullptr);
+    EXPECT_FALSE(message->text().isEmpty());
+    EXPECT_TRUE(message->text().contains(QStringLiteral("../escape")));
+    stroke(studio);
+    QString error;
+    EXPECT_FALSE(studio.save(&error));
+    EXPECT_FALSE(error.isEmpty());
+    EXPECT_TRUE(studio.isModified()) << "the stroke is kept";
+    EXPECT_FALSE(QDir(dir.filePath(QStringLiteral("Handwriting"))).exists());
+}
+
+// --- the module, through the real window ----------------------------------------------
+
+namespace {
+
+class HwfontWindowTest : public ::testing::Test {
+protected:
+    void SetUp() override { ASSERT_TRUE(dir.isValid()); }
+    static QAction *command(noteAppC::MainWindow &window, const char *id) { return window.command(QLatin1String(id)); }
+    static QTabBar *mainTabs(noteAppC::MainWindow &window)
+    {
+        const auto bars = window.findChildren<QTabBar *>(QStringLiteral("noteTabs"));
+        return bars.isEmpty() ? nullptr : bars.first();
+    }
+    QString firstSample() const { return dir.filePath(QStringLiteral("Handwriting/My handwriting/0061/1.ink")); }
+    QTemporaryDir dir;
+};
+
+void closeBoxWith(QMessageBox *box, QMessageBox::StandardButton answer)
+{
+    if (QAbstractButton *button = box->button(answer))
+        button->click();
+    else
+        box->close();
+}
+
+} // namespace
+
+TEST_F(HwfontWindowTest, TheCommandOpensTheStudioTabAndSavesIntoTheVault)
+{
+    noteAppC::MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    ASSERT_NE(command(window, "handwriting-font:studio"), nullptr);
+    ASSERT_TRUE(window.modules()->moduleForCommand(QStringLiteral("handwriting-font:studio")).has_value());
+    command(window, "handwriting-font:studio")->trigger();
+    WAIT_TRUE(window.findChild<QWidget *>(QStringLiteral("glyphStudio")), 5000);
+    auto *canvas = window.findChild<noteAppC::ink::InkCanvas *>(QStringLiteral("glyphCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    inktest::penStroke(canvas, {100, 120}, {220, 270}, 1000);
+    QTest::keyClick(canvas, Qt::Key_Return);
+    EXPECT_TRUE(QFile::exists(firstSample()));
+    ASSERT_NE(mainTabs(window), nullptr);
+    EXPECT_EQ(mainTabs(window)->tabText(mainTabs(window)->currentIndex()), QStringLiteral("Glyph studio"));
+}
+
+// R6 and its carry item: the tab and the window title both show the mark; closing saves the cell.
+TEST_F(HwfontWindowTest, TheStudioTabShowsTheModifiedMarkAndCloseSavesTheCell)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    auto restore = qScopeGuard([&previous] { qputenv("XDG_CONFIG_HOME", previous); });
+    noteAppC::Settings off = noteAppC::Settings::load();
+    off.setValue(QStringLiteral("files.autosave"), false);
+    ASSERT_TRUE(off.save());
+
+    noteAppC::MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    window.scanModulesNow();
+    command(window, "handwriting-font:studio")->trigger();
+    WAIT_TRUE(window.findChild<QWidget *>(QStringLiteral("glyphStudio")), 5000);
+    auto *canvas = window.findChild<noteAppC::ink::InkCanvas *>(QStringLiteral("glyphCanvas"));
+    ASSERT_NE(canvas, nullptr);
+    QTabBar *tabs = mainTabs(window);
+    ASSERT_NE(tabs, nullptr);
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Glyph studio"));
+    EXPECT_FALSE(window.windowTitle().startsWith(QLatin1Char('*')));
+
+    inktest::penStroke(canvas, {100, 120}, {220, 270}, 1000);
+    EXPECT_EQ(tabs->tabText(tabs->currentIndex()), QStringLiteral("Glyph studio *"));
+    EXPECT_TRUE(window.windowTitle().startsWith(QLatin1Char('*'))) << window.windowTitle().toStdString();
+
+    QString question;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&question] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            question = box->text();
+            closeBoxWith(box, QMessageBox::Save);
+        }
+    });
+    watch.start(20);
+    command(window, "workspace:close")->trigger();
+    EXPECT_TRUE(question.contains(QStringLiteral("Glyph studio"))) << question.toStdString();
+    EXPECT_TRUE(QFile::exists(firstSample())) << "Save reached the studio's save()";
 }
 
 int main(int argc, char **argv)
