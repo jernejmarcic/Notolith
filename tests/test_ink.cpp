@@ -4280,6 +4280,38 @@ TEST(InkCanvasTest, ADragThatReturnsToItsStartCommitsNoUndoStep)
     EXPECT_TRUE(f.canvas.document().items().empty()) << "no step for the round trip";
 }
 
+TEST(InkCanvasTest, CancellingAScaleDragRestoresPointsPressureAndWidthExactly)
+{
+    SelectedStrokeFixture f;
+    QSignalSpy edited(&f.canvas, &InkCanvas::documentEdited);
+    const double width = f.canvas.document().item(f.tA)->stroke->style.width;
+    const QRectF box = f.canvas.selectionBounds();
+    const QPointF corner = f.canvas.toWidget(box.bottomRight());
+    tablet(&f.canvas, QEvent::TabletPress, corner, 0.5, 4000);
+    tablet(&f.canvas, QEvent::TabletMove, corner + QPointF(30, 20), 0.5, 4005);
+    tablet(&f.canvas, QEvent::TabletMove, corner + QPointF(61, 43), 0.5, 4010);
+    ASSERT_TRUE(f.canvas.isSelectGesture());
+    const Item *scaled = f.canvas.document().item(f.tA);
+    ASSERT_TRUE(scaled);
+    EXPECT_GT(scaled->stroke->style.width, width) << "the scale is live";
+    EXPECT_NE(scaled->stroke->points.back().x, f.original.back().x);
+    QTest::keyClick(&f.canvas, Qt::Key_Escape);
+    EXPECT_FALSE(f.canvas.isDrawing());
+    const Item *item = f.canvas.document().item(f.tA);
+    ASSERT_TRUE(item);
+    ASSERT_EQ(item->stroke->points.size(), f.original.size());
+    for (size_t i = 0; i < f.original.size(); ++i) { // exactly: the snapshot's own payload comes back, nothing is mapped back
+        EXPECT_EQ(item->stroke->points[i].x, f.original[i].x) << i;
+        EXPECT_EQ(item->stroke->points[i].y, f.original[i].y) << i;
+        EXPECT_EQ(item->stroke->points[i].pressure, f.original[i].pressure) << i;
+    }
+    EXPECT_EQ(item->stroke->style.width, width);
+    EXPECT_EQ(edited.count(), 0);
+    EXPECT_EQ(f.canvas.selectionBounds(), box) << "the selection box goes back too";
+    ASSERT_TRUE(f.canvas.undo());
+    EXPECT_TRUE(f.canvas.document().items().empty()) << "no step for the scale";
+}
+
 TEST(InkCanvasTest, PasteRefusesHostileAndEmptyItemsAndAForeignClipboard)
 {
     CanvasFixture f;
