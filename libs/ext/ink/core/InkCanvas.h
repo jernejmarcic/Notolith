@@ -69,7 +69,9 @@ public:
     /// A drag of less than this many widget px commits no shape: a tap is not a line.
     static constexpr double kMinShapeDragPx = 3.0;
     bool drawWithMouse() const { return m_drawWithMouse; }
-    void setDrawWithMouse(bool on) { m_drawWithMouse = on; }
+    /// With it off, a left drag of the mouse scrolls the owner's scroll area (panRequested; a hand cursor) and Ctrl+drag
+    /// still selects: the mouse is for moving around, the pen is for ink. With it on the mouse draws like the pen.
+    void setDrawWithMouse(bool on);
     void setRawInput(bool raw) { m_input.setRawInput(raw); }
 
     /// Widget px <-> document px. The widget starts at the extent's top-left (an Infinite extent may sit at
@@ -167,6 +169,9 @@ signals:
     void selectionChanged();
     void shapeKindChanged(ShapeKind kind);
     void learnedPressureChanged(const QString &device, double max);
+    /// What the open text editor holds may now differ from the box (typing), or the editor just closed: the owner
+    /// asks isTextEditDirty() again (its "modified" mark follows the typing, not only the commit).
+    void textEditChanged();
     void zoomChanged(double zoom);
     void panRequested(QPoint deltaWidgetPx);
     /// The extent grew left or up (Infinite): the content moved this far (widget px) right and down inside the
@@ -178,6 +183,8 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    /// Ctrl+wheel zooms by 10 % a step (through the settle timer); the plain wheel is left to the scroll area.
+    void wheelEvent(QWheelEvent *event) override;
     bool event(QEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
@@ -204,6 +211,7 @@ private:
     void dragSelection(const QPointF &documentPos);
     void updateLasso(const QPointF &documentPos);
     void setSelection(std::vector<qint64> items);
+    void updateCursor();
     int handleAt(const QPointF &widgetPos) const; ///< 0..7 clockwise from the top-left, or -1
     QRect selectionPaintRect() const;             ///< widget px: the box, its handles and a margin; null when nothing is selected
     QRect lassoPaintRect() const;                 ///< widget px: the lasso or rectangle in flight
@@ -238,6 +246,8 @@ private:
     double m_zoom = 1.0;
     QPointF m_origin;            ///< document px: the extent's top-left as documentReplaced() last saw it
     bool m_drawWithMouse = false;
+    bool m_mousePanning = false; ///< a left drag of the mouse that scrolls (drawWithMouse off); m_lastMouse is its previous global position
+    QPointF m_lastMouse;
     Drawing m_drawing = Drawing::None;
     bool m_tabletActive = false; ///< Qt synthesises mouse events from unaccepted tablet events; we accept, this guards the rest
     QImage m_live;               ///< the live stroke, transparent: the visible part of the canvas only (m_liveRect), at the screen's pixel ratio

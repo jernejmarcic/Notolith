@@ -4164,6 +4164,20 @@ TEST(InkCanvasTest, HeldLassoButtonSelectsWithoutChangingTheTool)
     EXPECT_TRUE(f.canvas.selection().empty());
 }
 
+TEST(InkCanvasTest, SwitchingToTheLassoToolKeepsASelectionMadeWithTheHeldButton)
+{
+    CanvasFixture f;
+    penStroke(&f.canvas, QPointF(20, 40), QPointF(120, 100), 1000);
+    penDrag(&f.canvas, kAroundFirstStroke, 3000, Qt::LeftButton | kHeldLassoButton);
+    ASSERT_EQ(f.canvas.tool(), InkCanvas::Tool::Pen);
+    ASSERT_EQ(f.canvas.selection().size(), 1u);
+    QTest::keyClick(&f.canvas, Qt::Key_L);
+    EXPECT_EQ(f.canvas.tool(), InkCanvas::Tool::Lasso);
+    EXPECT_EQ(f.canvas.selection().size(), 1u) << "the key that opens the select tool does not throw away what it was about to show";
+    QTest::keyClick(&f.canvas, Qt::Key_E);
+    EXPECT_TRUE(f.canvas.selection().empty()) << "any other tool still drops it";
+}
+
 TEST(InkCanvasTest, WithHeldLassoDisabledTheBarrelButtonDrawsAnOrdinaryStroke)
 {
     CanvasFixture f;

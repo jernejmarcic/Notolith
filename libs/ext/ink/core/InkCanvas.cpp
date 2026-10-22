@@ -16,8 +16,10 @@
 #include <QPaintEvent>
 #include <QPinchGesture>
 #include <QPlainTextEdit>
+#include <QScopeGuard>
 #include <QTabletEvent>
 #include <QTouchEvent>
+#include <QWheelEvent>
 
 #include "InkTools.h"
 #include "PagePatterns.h"
@@ -246,8 +248,25 @@ InkCanvas::InkCanvas(QWidget *parent) : QWidget(parent)
     setAttribute(Qt::WA_AcceptTouchEvents);
     setAttribute(Qt::WA_OpaquePaintEvent);
     grabGesture(Qt::PinchGesture);
-    setCursor(Qt::CrossCursor);
+    updateCursor();
     documentReplaced();
+}
+
+void InkCanvas::setDrawWithMouse(bool on)
+{
+    m_drawWithMouse = on;
+    updateCursor();
+}
+
+/// The Text tool takes the mouse; otherwise a mouse that cannot draw shows a hand (it scrolls), and the one that can, a cross.
+void InkCanvas::updateCursor()
+{
+    if (m_tool == Tool::Text)
+        setCursor(Qt::IBeamCursor);
+    else if (m_mousePanning)
+        setCursor(Qt::ClosedHandCursor);
+    else
+        setCursor(m_drawWithMouse ? Qt::CrossCursor : Qt::OpenHandCursor);
 }
 
 void InkCanvas::setTileCacheMB(int mb)
@@ -377,8 +396,9 @@ void InkCanvas::setTool(Tool tool)
     if (m_drawing == Drawing::Shape)
         finishStroke(false); // a shape drag belongs to the Shape tool
     m_tool = tool;
-    setCursor(tool == Tool::Text ? Qt::IBeamCursor : Qt::CrossCursor);
-    clearSelection(); // the selection belongs to the select tool
+    updateCursor();
+    if (tool != Tool::Lasso)
+        clearSelection(); // the selection belongs to the select tool: one made with the held button stays for it
     emit toolChanged(m_tool);
 }
 
@@ -466,18 +486,31 @@ void InkCanvas::tabletEvent(QTabletEvent *event)
 
 void InkCanvas::mousePressEvent(QMouseEvent *event)
 {
-    if (m_readOnly || m_tabletActive || event->button() != Qt::LeftButton || (m_textEdit && m_textEdit->geometry().contains(event->position().toPoint())))
+    if (m_tabletActive || event->button() != Qt::LeftButton || (m_textEdit && m_textEdit->geometry().contains(event->position().toPoint())))
         return QWidget::mousePressEvent(event); // (a press the open editor did not take is still not an edit-ender)
     // Ctrl+drag selects in any tool, drawWithMouse or not: the mouse user needs no tool switch (R14). The select tool
-    // takes the mouse when it draws at all.
+    // takes the mouse when it draws at all. The Text tool takes a click from a mouse too.
     const bool select = event->modifiers().testFlag(Qt::ControlModifier) || (m_drawWithMouse && m_tool == Tool::Lasso);
-    if (!m_drawWithMouse && !select && m_tool != Tool::Text) // a click is no drawing: the Text tool takes it from a mouse too
-        return QWidget::mousePressEvent(event);
+    if (m_readOnly || (!m_drawWithMouse && !select && m_tool != Tool::Text)) { // a drag is no drawing: it scrolls
+        commitText();
+        setFocus(Qt::MouseFocusReason);
+        m_mousePanning = true;
+        m_lastMouse = event->globalPosition(); // not position(): the scroll area moves this widget under the pointer
+        updateCursor();
+        event->accept();
+        return;
+    }
     pressAt(event->position(), 0.5, event->timestamp() / 1000.0, m_tool == Tool::Eraser, select);
 }
 
 void InkCanvas::mouseMoveEvent(QMouseEvent *event)
 {
+    if (m_mousePanning) {
+        const QPointF now = event->globalPosition();
+        emit panRequested((now - m_lastMouse).toPoint());
+        m_lastMouse = now;
+        return;
+    }
     if (m_drawing == Drawing::None || m_tabletActive)
         return QWidget::mouseMoveEvent(event);
     moveTo(event->position(), 0.5, event->timestamp() / 1000.0);
@@ -485,9 +518,24 @@ void InkCanvas::mouseMoveEvent(QMouseEvent *event)
 
 void InkCanvas::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (m_mousePanning) {
+        m_mousePanning = false;
+        updateCursor();
+        return;
+    }
     if (m_drawing == Drawing::None || m_tabletActive)
         return QWidget::mouseReleaseEvent(event);
     releaseAt(event->position(), event->timestamp() / 1000.0);
+}
+
+void InkCanvas::wheelEvent(QWheelEvent *event)
+{
+    if (!event->modifiers().testFlag(Qt::ControlModifier))
+        return QWidget::wheelEvent(event); // ignored: the scroll area scrolls
+    const double steps = event->angleDelta().y() / 120.0;
+    if (steps != 0)
+        setZoom(m_zoom * std::pow(1.1, steps));
+    event->accept();
 }
 
 bool InkCanvas::event(QEvent *event)
@@ -603,6 +651,8 @@ void InkCanvas::focusOutEvent(QFocusEvent *event)
 
 void InkCanvas::hideEvent(QHideEvent *event)
 {
+    m_mousePanning = false;
+    updateCursor();
     finishStroke(true);
     commitText();
     QWidget::hideEvent(event);
@@ -914,6 +964,8 @@ void InkCanvas::openTextEditor(qint64 t, const QRectF &rect, const QString &mark
     }
     edit->setObjectName(QStringLiteral("inkTextEditor"));
     edit->installEventFilter(this); // Escape and focus loss end the edit (eventFilter)
+    if (edit->metaObject()->indexOfSignal("textChanged()") >= 0) // a QPlainTextEdit and the host's MarkdownEditor both have it
+        connect(edit, SIGNAL(textChanged()), this, SIGNAL(textEditChanged()));
     m_textEdit = edit;
     m_textEditT = t;
     m_textEditRect = rect;
@@ -972,6 +1024,9 @@ void InkCanvas::commitText()
 {
     if (!m_textEdit)
         return;
+    // The editor is gone: text it held no longer counts as unsaved. Said only when it did hold some (a clean editor closing while its
+    // owner is being destroyed has nobody to tell).
+    const auto closed = qScopeGuard([this, dirty = isTextEditDirty()] { if (dirty) emit textEditChanged(); });
     const qint64 t = m_textEditT;
     const QRectF rect = std::exchange(m_textEditRect, QRectF());
     const QString text = closeTextEditor();
