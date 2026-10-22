@@ -65,7 +65,8 @@ one.
   themselves (RPATH `$ORIGIN`).
 - **`NOTEAPPC_MODULE_DIRS`.** When this environment variable is set (colon-separated directories), it replaces that
   directory. The tests and the benchmark use it; it is also the way to try a build tree: point it at `<build>/modules`.
-  A vault switch does not rescan; the scan is once per process.
+  A vault switch does not rescan: each window scans once, after its first paint (a module library is loaded once
+  per process, by whichever window uses it first).
 - **Switches.** Settings > Core plugins has one switch per installed module: "Handwritten notes" (`plugins.ink`) and
   "Handwriting font studio" (`plugins.handwritingFont`), both on by default because installing the package is the
   opt-in. With "Handwritten notes" off, `.ink` files are not openable in Notolith (they are attachments), and the
@@ -376,6 +377,38 @@ The full account, with the numbers, is in `docs/PERFORMANCE.md` under "Handwriti
   and `--phase inkcarry`, taken 2026-10-22) was measured on a loaded machine, with a Wine game running and CCD1 about 75
   percent idle, so the pool-side rows are pessimistic and noisy. They are provisional until a rerun on an idle machine,
   which is owed; the rows say so themselves.
+
+## Not verified offscreen
+
+Everything above was tested with the offscreen platform, which cannot show a popup, a cursor, a real pen or a real
+window width. These are the checks left for a person with the hardware (the FydeTab and its pen, and shuttlepod-1's
+Wacom for the buttons):
+
+- **Barrel buttons and the eraser end.** The defaults are Rnote's. The spike pen's buttons were broken and it has no
+  eraser end, so held erase, held select and the glyph studio's barrel click have only been exercised with synthetic
+  events.
+- **Pen proximity and pressure tail.** What happens when the pen leaves proximity mid-stroke
+  (`TabletLeaveProximity`), and the pressure tail at pen-up, have not been seen on the device. A fractional display
+  scale (the spike ran at scale 2) is also untested; `kFractionalScaleOffset` is 0, 0.
+- **A pen tap in an open text box** should place the caret (the window system turns the ignored tablet event into a
+  mouse click; a lost pen release makes a tap behave as it did before that fix).
+- **Text box editor against the rendered box.** The editor has a 1 px frame, so the text shifts about 1 px when editing
+  starts or ends, and its text size differs from the picture by up to about 5 percent at zoom 2 (the editor uses whole
+  pixel font sizes). `Escape` with the slash or wikilink popup open should close the popup, not commit the box.
+- **Toolbar.** The Shape and Select buttons: the face picks the tool, the arrow opens the menu of kinds (Line, Arrow,
+  Rectangle, Ellipse; Lasso, Rectangle). At the real window width the extension arrow shows the overflow, and the
+  Page button and the zoom box stay reachable; after using the width box or a combo, the `P` `E` `L` `S` `T` keys work
+  again (focus returns to the drawing surface).
+- **Page menu.** The Format, Layout and Pattern combos open their own popup over the menu; the menu stays up and the
+  change lands. Typing a width in millimetres and pressing `Enter`.
+- **Cursors.** The hand cursor over the page while the mouse cannot draw (the pen's hover shows it too), and the closed
+  hand while dragging.
+- **Dark pages.** On a dark page colour the pen swatches switch to light ink.
+- **Zoom.** `Ctrl`+wheel is not anchored at the pointer: look where the view lands.
+
+Known limits (not bugs to hunt): zoom and the pen colour are not remembered between sessions; with the Text tool and no box
+open, pasting plain text does nothing; the text boxes use the built-in Light or Dark theme by page lightness, so a customised application theme's colours
+do not reach them (font overrides do); a toolbar toggle reaches other open ink tabs when they are next shown.
 
 ## Attribution
 
