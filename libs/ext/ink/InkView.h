@@ -72,6 +72,7 @@ public:
     /// writes them now. The window calls it before its Settings go, the view's own destructor after a closed tab.
     void flushSettings() override;
     static constexpr int kPressureSaveMs = 1500;
+    static constexpr int kReloadRetryMs = 300; ///< reloadFromDisk() looks again this long after it found a stroke in flight
 
     InkCanvas *canvas() const { return m_canvas; }
     QString path() const { return m_path; }
@@ -159,7 +160,8 @@ private:
     QFutureWatcher<Parsed> *m_loadWatcher = nullptr; ///< a file above kOffThreadParseBytes is parsing on the pool
     QString m_path;
     DiskStamp m_stamp; ///< the file as this view last read or wrote it
-bool m_diskUnreadable = false; ///< the last look at the file failed to parse it: save() keeps its bytes before writing over them
+    QString m_pathAfterLoad; ///< setFilePath() during a parse: the path the document lands under
+    bool m_diskUnreadable = false; ///< the last look at the file failed to parse it: save() keeps its bytes before writing over them
     QTimer *m_pressureSave = nullptr; ///< single shot: the learned pressures reach the disk once for a run of raises
     bool m_toolsOn = true;
     bool m_readOnly = false;

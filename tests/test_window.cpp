@@ -9093,8 +9093,19 @@ static void expectAnInkTabSavesAt(MainWindow &window, noteAppC::ModuleView *view
     ASSERT_FALSE(QFile::exists(oldPath));
     inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
     ASSERT_TRUE(view->isModified());
+    // A save that cannot write opens a modal "Could not save" box: closed here, so a regression fails by assertion.
+    bool asked = false;
+    QTimer watch;
+    QObject::connect(&watch, &QTimer::timeout, [&asked] {
+        if (auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+            asked = true;
+            closeBoxWith(box, QMessageBox::Ok);
+        }
+    });
+    watch.start(20);
     command(window, "editor:save-file")->trigger();
-    WAIT_TRUE(!view->isModified(), 5000);
+    EXPECT_FALSE(asked) << "the save did not report an error";
+    EXPECT_TRUE(!view->isModified());
     EXPECT_FALSE(QFile::exists(oldPath)) << "no file is recreated at the old path";
     EXPECT_EQ(readAll(newPath).count("\"type\":\"stroke\""), 2) << "the stroke is in the file at the new path";
     int conflicts = 0;

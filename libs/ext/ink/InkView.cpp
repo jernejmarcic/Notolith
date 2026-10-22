@@ -791,6 +791,7 @@ bool InkView::load(const QString &path, QString *error)
             m_loadWatcher->deleteLater();
             m_loadWatcher = nullptr;
             m_loadingLabel->setVisible(false);
+            const QString landedAt = m_pathAfterLoad.isEmpty() ? path : std::exchange(m_pathAfterLoad, QString());
             if (!parsed.result.ok) {
                 m_stamp = stamp; // the unreadable file is looked at once, not at every autosave (as in resolveExternalChange)
                 m_diskUnreadable = true; // save() keeps these bytes beside the file before it writes over them
@@ -803,11 +804,12 @@ bool InkView::load(const QString &path, QString *error)
                     m_errorLabel->setVisible(true);
                 } else {
                     m_canvas->setReadOnly(m_readOnly); // the document it had before this load
+                    m_path = landedAt;
                 }
                 return;
             }
             m_canvas->document() = std::move(parsed.document);
-            adopt(path, stamp, parsed.result);
+            adopt(landedAt, stamp, parsed.result);
         });
         m_loadWatcher->setFuture(QtConcurrent::run([bytes, name] {
             Parsed parsed;
@@ -899,6 +901,10 @@ void InkView::reloadFromDisk()
 {
     if (m_path.isEmpty() || m_loadWatcher) // nothing loaded; a load in flight reads the file anyway
         return;
+    if (m_canvas->isDrawing()) { // a stroke in flight would be dropped by the reload: look again once the pen is up
+        QTimer::singleShot(kReloadRetryMs, this, &InkView::reloadFromDisk);
+        return;
+    }
     const DiskStamp now = stampOf(m_path);
     if (now.size < 0 || now == m_stamp) // gone for now (the next save writes it back), or this view's own write
         return;
@@ -916,7 +922,11 @@ void InkView::reloadFromDisk()
 /// made in it afterwards is an ordinary change on disk.
 void InkView::setFilePath(const QString &path)
 {
-    if (path == m_path || m_path.isEmpty()) // nothing loaded yet: load() takes its path
+    if (m_loadWatcher) { // the parse in flight lands under the path it started with: the move is applied then
+        m_pathAfterLoad = path;
+        return;
+    }
+    if (path == m_path || m_path.isEmpty()) // nothing loaded: load() takes its path
         return;
     m_path = path;
     reloadFromDisk();
@@ -939,6 +949,8 @@ bool InkView::save(QString *error)
     m_canvas->commitText(); // a box still being typed is part of what is saved
     if (const DiskStamp now = stampOf(m_path); now.size >= 0 && now != m_stamp)
         return resolveExternalChange(error);
+    if (m_diskUnreadable && !QFileInfo::exists(m_path)) // the unreadable file is gone since: nothing to keep
+        m_diskUnreadable = false;
     if (m_diskUnreadable) { // a disk version this view could not read is someone else's bytes: keep them, then replace them
         const QString kept = conflictPathFor(m_path, QStringLiteral("unreadable"));
         if (!QFile::copy(m_path, kept)) {

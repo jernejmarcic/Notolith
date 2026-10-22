@@ -324,7 +324,7 @@ The glyph studio's keys are `hwfont.fontName`, `hwfont.samplesPerLetter` and `hw
 A saved note is written through the vault's atomic writer; autosave follows the application's `files.autosave` setting,
 as for a Markdown note. If the file changes on disk while it is open (another device's sync, a rename rewriting a link in it),
 a tab with nothing unsaved reloads it at once, as a note does; a tab with unsaved edits keeps them, and its next save
-keeps your version in a side file and shows the disk's. A file that cannot be parsed does not open; the reader's message says why.
+keeps your version in a side file and shows the disk's. If the file on disk cannot be read, the next save first copies its bytes to "<name> (unreadable <date time>).ink" beside it, then writes your document. A file that cannot be parsed does not open; the reader's message says why.
 
 ## Pen pressure
 

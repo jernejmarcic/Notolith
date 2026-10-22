@@ -257,6 +257,76 @@ TEST_F(InkViewFileTest, AnUnreadableDiskVersionIsKeptBesideTheFileBeforeTheNextS
     EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("* (unreadable *).ink")}, QDir::Files).size(), 1);
 }
 
+// Re-review: the unreadable file is then gone: there is nothing to keep, and the tab must still save.
+TEST_F(InkViewFileTest, AnUnreadableDiskVersionThatIsThenDeletedDoesNotStopTheTabFromSaving)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    replaceExternally(path, QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"stroke\",\"t\":"));
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk();
+    ASSERT_GE(status.count(), 1);
+    ASSERT_TRUE(QFile::remove(path));
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    EXPECT_TRUE(view.save(&error)) << error.toStdString();
+    InkDocument onDisk;
+    ASSERT_TRUE(readInk(readAll(path), onDisk).ok);
+    EXPECT_EQ(onDisk.items().size(), 2u);
+    EXPECT_TRUE(QDir(dir.path()).entryList({QStringLiteral("* (unreadable *).ink")}, QDir::Files).isEmpty()) << "nothing to keep";
+    EXPECT_TRUE(view.save(&error)) << "and the flag is gone";
+}
+
+// M-3's other branch: the bytes cannot be put aside, so the file is not written over.
+TEST_F(InkViewFileTest, TheSaveIsRefusedWhenTheUnreadableBytesCannotBePutAside)
+{
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    const QByteArray theirs = QByteArrayLiteral("{\"format\":\"notolith-ink\",\"version\":1,\"items\":[{\"type\":\"stroke\",\"t\":");
+    replaceExternally(path, theirs);
+    view.reloadFromDisk();
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    ASSERT_TRUE(QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner)); // no new file can be made here
+    const bool saved = view.save(&error);
+    QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    EXPECT_FALSE(saved);
+    EXPECT_TRUE(error.contains(QStringLiteral("copied aside"))) << error.toStdString();
+    EXPECT_EQ(readAll(path), theirs) << "their bytes are untouched";
+    EXPECT_TRUE(view.isModified()) << "the edit is still in the tab";
+    EXPECT_TRUE(view.save(&error)) << "with the folder writable again the save goes through: " << error.toStdString();
+    EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("* (unreadable *).ink")}, QDir::Files).size(), 1);
+}
+
+// Re-review: a sync landing while the pen is down must not eat the stroke being drawn.
+TEST_F(InkViewFileTest, ReloadFromDiskWaitsForAStrokeInFlightAndKeepsIt)
+{
+    InkView view(nullptr);
+    view.resize(600, 800);
+    view.show();
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    InkCanvas *canvas = view.canvas();
+    tablet(canvas, QEvent::TabletPress, QPointF(100, 100), 0.5, 1000);
+    tablet(canvas, QEvent::TabletMove, QPointF(150, 120), 0.5, 1005);
+    tablet(canvas, QEvent::TabletMove, QPointF(200, 140), 0.5, 1010);
+    ASSERT_TRUE(canvas->isDrawing());
+    replaceExternally(path, documentWith(3));
+    QSignalSpy status(&view, &noteAppC::ModuleView::statusMessage);
+    view.reloadFromDisk();
+    EXPECT_TRUE(canvas->isDrawing()) << "the stroke is still in flight";
+    EXPECT_EQ(canvas->document().items().size(), 1u) << "nothing replaced yet";
+    tablet(canvas, QEvent::TabletRelease, QPointF(200, 140), 0.5, 1015, Qt::NoButton);
+    EXPECT_EQ(canvas->document().items().size(), 2u) << "the stroke was committed, not dropped";
+    // The deferred check runs once the pen is up: the tab is modified now, so it keeps its edits and says so.
+    WAIT_TRUE(status.count() >= 1, 5000);
+    EXPECT_EQ(canvas->document().items().size(), 2u);
+    EXPECT_TRUE(view.isModified());
+    EXPECT_TRUE(status.last().first().toString().contains(QStringLiteral("your edits are kept")));
+}
+
 TEST_F(InkViewFileTest, OwnSavesAreNotConflicts)
 {
     InkView view(nullptr);
@@ -340,6 +410,28 @@ TEST_F(InkViewFileTest, AFailedReloadIsLookedAtOnceNotAtEveryAutosave)
     EXPECT_TRUE(view.save(&error));
     EXPECT_TRUE(view.save(&error));
     EXPECT_EQ(conflictFiles(dir.path()).size(), 1) << "not one per autosave";
+}
+
+// Re-review: the file is renamed while the first parse is still running: the view ends up on the new path.
+TEST_F(InkViewFileTest, AFileRenamedDuringItsLoadIsTheNewPathWhenTheLoadLands)
+{
+    writeFile(path, bigDocument());
+    const QString moved = dir.filePath(QStringLiteral("Renamed.ink"));
+    InkView view(nullptr);
+    QString error;
+    ASSERT_TRUE(view.load(path, &error));
+    ASSERT_TRUE(view.isLoading());
+    ASSERT_TRUE(QFile::rename(path, moved));
+    view.setFilePath(moved);
+    WAIT_TRUE(!view.isLoading(), 5000);
+    EXPECT_EQ(view.path(), moved);
+    view.canvas()->document().addStroke(line(100, 100, 200, 200));
+    view.canvas()->document().commit();
+    EXPECT_TRUE(view.save(&error)) << error.toStdString();
+    EXPECT_FALSE(QFile::exists(path)) << "nothing is written back at the old path";
+    InkDocument onDisk;
+    ASSERT_TRUE(readInk(readAll(moved), onDisk).ok);
+    EXPECT_EQ(onDisk.items().size(), 3001u);
 }
 
 TEST_F(InkViewFileTest, ATabClosedDuringAParseIsSafe)
