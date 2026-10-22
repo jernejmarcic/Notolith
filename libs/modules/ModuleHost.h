@@ -40,6 +40,10 @@ public:
     /// A view with nothing unsaved shows what is on disk now; one with unsaved edits keeps them and decides at its next save.
     /// The view tells its own writes from outside ones (it knows what it wrote); the host calls this for either.
     virtual void reloadFromDisk() {}
+    /// The file was renamed or moved (it, or a folder above it): the view saves to `path` from now on. The host has already
+    /// updated its own record of the tab. A rename keeps size and modification time; if the host rewrote links in the
+    /// file as well, the view takes that like any change on disk.
+    virtual void setFilePath(const QString &path) { Q_UNUSED(path) }
     /// The window is going away (or the view is): write what the view keeps back in the host's Settings to disk. The
     /// view's own destructor runs after the window's Settings are gone, so the host calls this first.
     virtual void flushSettings() {}

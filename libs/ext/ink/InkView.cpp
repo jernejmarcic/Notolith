@@ -912,6 +912,16 @@ void InkView::reloadFromDisk()
         emit statusMessage(error, 8000);
 }
 
+/// A rename or move keeps the file's size and modification time, so m_stamp stays valid for it; a link rewrite the host
+/// made in it afterwards is an ordinary change on disk.
+void InkView::setFilePath(const QString &path)
+{
+    if (path == m_path || m_path.isEmpty()) // nothing loaded yet: load() takes its path
+        return;
+    m_path = path;
+    reloadFromDisk();
+}
+
 bool InkView::save(QString *error)
 {
     if (m_loadWatcher) { // the canvas holds the document the load is about to replace

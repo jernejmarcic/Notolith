@@ -9084,6 +9084,78 @@ TEST_F(InkWindowTest, RenamingANoteReloadsAnOpenUnmodifiedInkTabThatLinkedToIt)
     EXPECT_EQ(QDir(dir.path()).entryList({QStringLiteral("Sketch (conflict *).ink")}, QDir::Files).size(), 0);
 }
 
+/// An open ink tab whose file was renamed or moved (it, or a folder above it) draws and saves into the file at its new
+/// path: nothing is written back at the old one, and nothing is forked into a conflict file.
+static void expectAnInkTabSavesAt(MainWindow &window, noteAppC::ModuleView *view, noteAppC::ink::InkCanvas *canvas,
+                                  const QString &vault, const QString &oldPath, const QString &newPath)
+{
+    ASSERT_TRUE(QFile::exists(newPath)) << "the rename itself happened";
+    ASSERT_FALSE(QFile::exists(oldPath));
+    inktest::penStroke(canvas, QPointF(100, 600), QPointF(300, 640), 1000);
+    ASSERT_TRUE(view->isModified());
+    command(window, "editor:save-file")->trigger();
+    WAIT_TRUE(!view->isModified(), 5000);
+    EXPECT_FALSE(QFile::exists(oldPath)) << "no file is recreated at the old path";
+    EXPECT_EQ(readAll(newPath).count("\"type\":\"stroke\""), 2) << "the stroke is in the file at the new path";
+    int conflicts = 0;
+    QDirIterator all(vault, {QStringLiteral("*(conflict*")}, QDir::Files, QDirIterator::Subdirectories);
+    while (all.hasNext()) {
+        all.next();
+        ++conflicts;
+    }
+    EXPECT_EQ(conflicts, 0);
+}
+
+TEST_F(InkWindowTest, AnOpenInkTabSavesToTheNewPathAfterItsFileIsRenamed)
+{
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    bool renamed = false;
+    QString error;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                          Q_ARG(QString, path(QStringLiteral("Sketch.ink"))), Q_ARG(bool, false),
+                                          Q_ARG(QString, QStringLiteral("Renamed")), Q_ARG(QString *, &error)));
+    ASSERT_TRUE(renamed) << error.toStdString();
+    expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Renamed.ink")));
+}
+
+TEST_F(InkWindowTest, AnOpenInkTabSavesToTheNewPathAfterItsFolderIsRenamed)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes/Deep")));
+    write(QStringLiteral("Notes/Deep/Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Notes/Deep/Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    bool renamed = false;
+    QString error;
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "renameVaultPath", Q_RETURN_ARG(bool, renamed),
+                                          Q_ARG(QString, path(QStringLiteral("Notes"))), Q_ARG(bool, true),
+                                          Q_ARG(QString, QStringLiteral("Archive")), Q_ARG(QString *, &error)));
+    ASSERT_TRUE(renamed) << error.toStdString();
+    expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Notes/Deep/Sketch.ink")),
+                          path(QStringLiteral("Archive/Deep/Sketch.ink")));
+}
+
+TEST_F(InkWindowTest, AnOpenInkTabSavesToTheNewPathAfterItsFileIsMovedToAnotherFolder)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    write(QStringLiteral("Sketch.ink"), inkWithStrokes(1));
+    MainWindow window;
+    noteAppC::ModuleView *view = nullptr;
+    noteAppC::ink::InkCanvas *canvas = nullptr;
+    openInkNote(window, dir.path(), QStringLiteral("Sketch.ink"), view, canvas);
+    ASSERT_NE(canvas, nullptr);
+    QString error;
+    ASSERT_TRUE(moveVault(window, path(QStringLiteral("Sketch.ink")), false, path(QStringLiteral("Dest")), &error)) << error.toStdString();
+    expectAnInkTabSavesAt(window, view, canvas, dir.path(), path(QStringLiteral("Sketch.ink")), path(QStringLiteral("Dest/Sketch.ink")));
+}
+
 // M5: a pen width in the settings is the width of the first stroke, not only the default that equals the canvas'.
 TEST_F(InkWindowTest, TheDefaultPenWidthSettingIsTheWidthOfTheFirstStroke)
 {

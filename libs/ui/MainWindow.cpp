@@ -8165,11 +8165,16 @@ void MainWindow::followPathChange(const QString &oldPath, bool isDir, const QStr
     for (const auto &leaf : m_leaves) {
         if (leaf->notePath.isEmpty())
             continue;
+        const QString before = leaf->notePath;
         if (leaf->notePath == oldPath) {
             leaf->notePath = newPath;
             leaf->inlineTitle->setText(QFileInfo(newPath).completeBaseName());
         } else if (isDir && leaf->notePath.startsWith(oldPath + QLatin1Char('/'))) {
             leaf->notePath.replace(0, oldPath.size(), newPath);
+        }
+        if (leaf->notePath != before) { // a module's view keeps its own path: it must save to the new one
+            if (auto *module = qobject_cast<ModuleView *>(leaf->view))
+                module->setFilePath(leaf->notePath);
         }
     }
     for (const auto &group : m_groups)

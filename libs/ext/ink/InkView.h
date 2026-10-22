@@ -78,6 +78,7 @@ public:
     bool isReadOnly() const { return m_readOnly; }
     bool isLoading() const override { return m_loadWatcher != nullptr; }
     void reloadFromDisk() override;
+    void setFilePath(const QString &path) override;
 
 protected:
     void showEvent(QShowEvent *event) override;
