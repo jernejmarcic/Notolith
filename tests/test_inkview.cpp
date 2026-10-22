@@ -545,6 +545,48 @@ TEST_F(InkViewFileTest, TextStillBeingTypedCountsAsUnsavedAndIsSavedWithTheTab)
     EXPECT_TRUE(readAll(path).contains("unsaved thought")) << "save() committed the box first";
 }
 
+// Task 18: closing a tab with "Don't save" deletes the view while a box is open with typed text and the focus. The
+// editor's focus-out (sent from ~QWidget, after ~InkView has run) used to commit the box and call back into the
+// half-destroyed view: SIGSEGV. A teardown ends the edit without a word, and writes nothing.
+TEST_F(InkViewFileTest, DeletingTheViewWithATypedFocusedTextBoxOpenIsSafeAndWritesNothing)
+{
+    const QByteArray before = readAll(path);
+    auto *view = new InkView(nullptr);
+    QString error;
+    ASSERT_TRUE(view->load(path, &error)) << error.toStdString();
+    view->resize(800, 600);
+    view->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(view));
+    QApplication::setActiveWindow(view);
+    view->canvas()->setTool(InkCanvas::Tool::Text);
+    QTest::mouseClick(view->canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(60, 400));
+    auto *edit = view->canvas()->findChild<noteAppC::MarkdownEditor *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr);
+    edit->setFocus();
+    QTest::keyClicks(edit, QStringLiteral("never saved"));
+    ASSERT_TRUE(view->isModified());
+    delete view; // "Don't save"
+    QTest::qWait(50);
+    EXPECT_EQ(readAll(path), before) << "nothing was written";
+}
+
+// The same teardown with the pen still down: hiding finishes the stroke, which says documentEdited to the dying view.
+TEST_F(InkViewFileTest, DeletingTheViewMidStrokeIsSafe)
+{
+    auto *view = new InkView(nullptr);
+    QString error;
+    ASSERT_TRUE(view->load(path, &error)) << error.toStdString();
+    view->resize(800, 600);
+    view->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(view));
+    tablet(view->canvas(), QEvent::TabletPress, QPointF(100, 100), 0.5, 1000);
+    tablet(view->canvas(), QEvent::TabletMove, QPointF(160, 120), 0.5, 1005);
+    ASSERT_TRUE(view->canvas()->isDrawing());
+    delete view;
+    QTest::qWait(50);
+    SUCCEED();
+}
+
 TEST(InkViewToolbarTest, TheTextToolIsOnTheToolbarAndOnItsKeyAndIsNotThePenInDisguise)
 {
     InkView view(nullptr);

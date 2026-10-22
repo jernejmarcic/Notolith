@@ -1020,6 +1020,12 @@ QString InkCanvas::closeTextEditor()
     return text;
 }
 
+void InkCanvas::discardTextEdit()
+{
+    m_textEditRect = QRectF();
+    closeTextEditor();
+}
+
 /// Ends the edit and commits it as one history step (Escape, a press elsewhere, a tool change, undo, hiding,
 /// read-only): a new box with no text is never added, an unchanged box commits nothing, a box emptied of text goes.
 void InkCanvas::commitText()

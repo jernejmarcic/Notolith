@@ -419,6 +419,38 @@ TEST_F(GlyphStudioTest, TheButtonsDoWhatTheKeysDo)
     EXPECT_FALSE(QFile::exists(sampleFile(QStringLiteral("0062"))));
 }
 
+// Task 18: the teardown crash of InkView (a focus-out or a hide from ~QWidget finishing a stroke or committing a box
+// into the half-destroyed owner) applies to the studio, which hosts an InkCanvas the same way.
+TEST_F(GlyphStudioTest, DeletingTheStudioMidStrokeIsSafe)
+{
+    auto *studio = new noteAppC::hwfont::GlyphStudio(host, QStringLiteral("Test"));
+    studio->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(studio));
+    inktest::tablet(studio->canvas(), QEvent::TabletPress, {100, 100}, 0.5, 1000);
+    inktest::tablet(studio->canvas(), QEvent::TabletMove, {140, 120}, 0.5, 1005);
+    ASSERT_TRUE(studio->canvas()->isDrawing());
+    delete studio;
+    QTest::qWait(50);
+    SUCCEED();
+}
+
+TEST_F(GlyphStudioTest, DeletingTheStudioWithATypedTextBoxOpenIsSafe)
+{
+    auto *studio = new noteAppC::hwfont::GlyphStudio(host, QStringLiteral("Test"));
+    studio->show();
+    ASSERT_TRUE(QTest::qWaitForWindowExposed(studio));
+    QApplication::setActiveWindow(studio);
+    studio->canvas()->setTool(noteAppC::ink::InkCanvas::Tool::Text);
+    QTest::mouseClick(studio->canvas(), Qt::LeftButton, Qt::NoModifier, QPoint(60, 60));
+    auto *edit = studio->canvas()->findChild<QWidget *>(QStringLiteral("inkTextEditor"));
+    ASSERT_NE(edit, nullptr);
+    edit->setFocus();
+    QTest::keyClicks(edit, QStringLiteral("typed"));
+    delete studio;
+    QTest::qWait(50);
+    SUCCEED();
+}
+
 TEST_F(GlyphStudioTest, TheBarrelClickSavesAndNeverDraws)
 {
     noteAppC::hwfont::GlyphStudio studio(host, QStringLiteral("Test"));

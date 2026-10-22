@@ -239,6 +239,10 @@ InkView::InkView(Settings *settings, QWidget *parent)
 
 InkView::~InkView()
 {
+    // ~QWidget hides the canvas and takes the focus from an open editor after this body has run and these members are
+    // gone: a stroke finished or a box committed by that would call onEdited() and friends on a half-destroyed view.
+    m_canvas->disconnect(this);
+    m_canvas->discardTextEdit();
     flushSettings(); // a pen learned a moment ago is not lost to a closing tab (the window flushes first when it goes itself)
 }
 

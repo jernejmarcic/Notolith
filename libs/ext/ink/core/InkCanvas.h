@@ -143,6 +143,10 @@ public:
     bool isEditingText() const { return !m_textEdit.isNull(); }
     qint64 editingTextItem() const { return m_textEditT; } ///< 0: none; -1: a new box not yet in the document
     void commitText();
+    /// The owner is being destroyed: closes the editor without committing the box or saying anything. A destruction
+    /// hides the canvas and takes the focus from the editor while the owner's members are already gone, and the commit
+    /// that follows would call back into it. The typed text is dropped: a teardown is a "Don't save".
+    void discardTextEdit();
     bool isTextEditDirty() const; ///< the open editor holds text that is not the box's yet (the owner counts it as unsaved and commits it before a save)
 
     /// A read-only canvas (a file written by a newer Notolith) ignores the pen,

@@ -66,6 +66,14 @@ private:
     QColor m_color{128, 128, 128, 160};
 };
 
+GlyphStudio::~GlyphStudio()
+{
+    // As InkView: what ~QWidget's hide and focus-out make the canvas do must not reach this half-destroyed studio.
+    m_canvas->removeEventFilter(this);
+    m_canvas->disconnect(this);
+    m_canvas->discardTextEdit();
+}
+
 GlyphStudio::GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *parent)
     : ModuleView(parent), m_store(vaultRootOf(host), fontName), m_metrics(GlyphStore::defaultMetrics()),
       m_set(defaultGlyphSet(settingOr(host, "hwfont.samplesPerLetter", 3), settingOr(host, "hwfont.samplesPerPunctuation", 1))),

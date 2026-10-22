@@ -28,6 +28,7 @@ class GlyphStudio : public ModuleView {
     Q_OBJECT
 public:
     GlyphStudio(ModuleHost &host, const QString &fontName, QWidget *parent = nullptr);
+    ~GlyphStudio() override;
 
     bool load(const QString &, QString *) override { return true; } ///< not file-backed: opened by the command
     /// R6: writes the current cell as saveCurrentAndAdvance does, without moving on; an empty cell is nothing to write.

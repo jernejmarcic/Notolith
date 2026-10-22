@@ -2089,7 +2089,6 @@ Timing benchInkTextKeystroke(const QString &dir, int runs)
         (void)paintedFrame(view.get());
         samples.push_back(double(clock.nsecsElapsed()) / 1e6);
     }
-    canvas->commitText(); // closing the view with a modified box still open crashes in onEdited: see the report
     return reduce(QStringLiteral("Ink text box keystroke"), QStringLiteral("%1 characters").arg(text.size()), samples);
 }
 
