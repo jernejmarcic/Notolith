@@ -62,6 +62,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
     if (options.codeStyler) {
         for (const auto &kind : parseHighlightKinds(options.codeHighlights))
             parse.highlightKinds.append(kind.first);
+        editor.setCodeHighlights(options.codeHighlights);
     }
     editor.setParseOptions(parse);
     // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the

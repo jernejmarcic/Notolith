@@ -773,6 +773,11 @@ QWidget *SettingsPage::buildEditorPage()
                 tr("Let codeblocks.ini, a fence's attributes and the theme set a code block's "
                    "background, text, border and token colours. Off draws every block in the "
                    "theme's plain code colours."));
+    addLineEditRow(layout, QStringLiteral("editor.codeHighlights"), tr("Named highlights"),
+                   tr("The names a code block's first line may use to colour lines, \"info:2 warn:4-6\", "
+                      "each with a theme colour (blue, red, orange, yellow, green, cyan, purple, pink) or a "
+                      "hex code, comma separated. Part of Advanced code blocks."),
+                   QStringLiteral("info=blue, warn=orange, error=red"));
     addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
                 tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "
                    "1.2.1.), counted from the items they sit in. The note's text is unchanged."),

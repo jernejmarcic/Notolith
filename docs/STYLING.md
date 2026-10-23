@@ -306,6 +306,20 @@ in Obsidian without the plugin, and the parse never looks for them.
 | `unwrap`, `unwrap:true`, `unwrap:false`, `wrap` | long lines scroll sideways (the default here) or wrap |
 | `ignore` | the block keeps its panel and colours and loses the header strip |
 | `ref:[[Note]]`, `reference:[[Note\|alias]]` | with no `title:`, the link's text is the title |
+| `info:2 warn:4-6 error:'boom'` | named highlights, below |
+
+**Named highlights.** A name is an alternative `hl`: it takes the same items
+(numbers, ranges, words, quoted text, `/regex/`) and tints its lines in a colour
+of its own, so `cpp info:2 warn:4-6 error:8` marks three kinds of line. The
+names and colours are Settings > Editor > "Named highlights", a comma list of
+`name=colour`: a theme colour (`blue`, `red`, `orange`, `yellow`, `green`,
+`cyan`, `purple`, `pink`, each following the theme and so light and dark) or a
+hex code (`#E5A100`, or `#E5A10040` with its own alpha). The default is
+`info=blue, warn=orange, error=red, add=green, del=red`; the plugin has no
+defaults of its own, these are the README's three plus the two a diff wants.
+A word that is not in the list is not a parameter. A published page colours the
+five default names (`hl-info` ... `hl-del` in `site.css`); other names are
+classes a stylesheet of your own can colour.
 
 With no language, leave a space after the fence (``` ` ``` fold title:x ```):
 the first word is then a parameter. Without the space it is the language, as
@@ -318,7 +332,8 @@ noteAppC wrote first; `#| highlight:` also reads text and `/regex/` items while
 the plugin is on.
 
 **Differences from the plugin.** `unwrap:inactive` unwraps and does not wrap
-while the mouse is held down. `ref:` shows the link's text but the title is not
+while the mouse is held down. The highlights do not cover the line numbers, and
+there is no gradient. `ref:` shows the link's text but the title is not
 clickable. `{r title, hl=5}` (R Markdown) is not read: its first word is
 `{r`, which CommonMark takes as the language. The plugin's settings
 (themes, icons, language borders, excluded languages) are not read; the theme

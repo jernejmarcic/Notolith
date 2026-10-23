@@ -191,6 +191,11 @@ public:
     /// codeblocks.ini, a fence's own attributes and the theme. On by default;
     /// off draws every block as if none of it were configured.
     void setComplexCodeBlocks(bool on);
+    /// The alternative highlights `info:2 warn:4-6` may name, as the
+    /// `editor.codeHighlights` setting spells them (`info=blue, warn=#E5A100`).
+    /// Only painting reads this: the names the parser accepts are
+    /// ParseOptions::highlightKinds.
+    void setCodeHighlights(const QString &spec);
     bool complexCodeBlocks() const;
     bool outlineNumbering() const;
     /// What an ordered number ends in as drawn: "." (the default), ":", ")" or
@@ -1279,6 +1284,9 @@ private:
     /// The same for a listing nested in a callout or quote, which has the
     /// language and nothing else to go on.
     LanguageStyle styleOfLanguage(const QString &language) const;
+    /// A named highlight's row colour, with the alpha a highlighted row gets;
+    /// invalid for a name the setting does not have.
+    QColor codeHighlightColour(const QString &kind) const;
     /// Token colours for a block styled `style`: its own `syntax.*` over the
     /// theme's. False (and `*out` untouched) when nothing is configured or the
     /// setting is off, which is when the highlighter must get no map at all.

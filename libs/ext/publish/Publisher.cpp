@@ -343,6 +343,10 @@ blockquote { border-left: 3px solid var(--background-modifier-border); margin: 1
 .code-block.numbered .line::before { content: attr(data-line); display: inline-block;
   width: 2.5em; color: var(--text-faint); user-select: none; }
 .code-block .line.hl { background: var(--background-modifier-hover); }
+.code-block .line.hl-info { background: rgba(76, 141, 255, 0.18); }
+.code-block .line.hl-warn { background: rgba(229, 161, 0, 0.2); }
+.code-block .line.hl-error, .code-block .line.hl-del { background: rgba(229, 72, 77, 0.18); }
+.code-block .line.hl-add { background: rgba(46, 160, 67, 0.2); }
 .code-tabs { display: flex; flex-wrap: wrap; margin: 1em 0; position: relative; }
 .code-tabs .code-block { margin: 0; }
 .code-tab-input { position: absolute; opacity: 0; width: 1px; height: 1px; }

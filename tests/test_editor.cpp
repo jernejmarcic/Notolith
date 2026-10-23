@@ -3735,7 +3735,8 @@ std::unique_ptr<MarkdownEditor> stylerEditorWith(const QString &text, bool on = 
     editor->resize(900, 600);
     ParseOptions options;
     options.codeStyler = on;
-    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error")};
+    options.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn"), QStringLiteral("error"),
+                              QStringLiteral("custom")};
     editor->setParseOptions(options);
     editor->setNoteText(text);
     return editor;
@@ -3787,6 +3788,85 @@ TEST(CodeStylerEditorTest, OffTheFenceLineIsOnlyALanguageAndAttributes)
     editor->setParseOptions(on);
     EXPECT_EQ(editor->codeTitleAt(inside), QStringLiteral("x"));
     EXPECT_TRUE(editor->isFoldedAt(inside));
+}
+
+namespace {
+
+/// The mean colour change between two grabs of the same note, over the pixels
+/// that changed, as {red, green, blue}.
+std::array<double, 3> meanChange(const QImage &before, const QImage &after, int *changed = nullptr)
+{
+    std::array<double, 3> sum{0, 0, 0};
+    int count = 0;
+    for (int y = 0; y < qMin(before.height(), after.height()); ++y) {
+        for (int x = 0; x < qMin(before.width(), after.width()); ++x) {
+            const QColor a = before.pixelColor(x, y);
+            const QColor b = after.pixelColor(x, y);
+            if (a == b)
+                continue;
+            sum[0] += b.red() - a.red();
+            sum[1] += b.green() - a.green();
+            sum[2] += b.blue() - a.blue();
+            ++count;
+        }
+    }
+    if (changed)
+        *changed = count;
+    for (double &channel : sum)
+        channel = count ? channel / count : 0;
+    return sum;
+}
+
+QImage grabbed(MarkdownEditor &editor)
+{
+    return editor.grab().toImage().convertToFormat(QImage::Format_RGB32);
+}
+
+} // namespace
+
+TEST(CodeStylerEditorTest, NamedHighlightsTintTheirLinesWithTheirOwnColour)
+{
+    const QString body = QStringLiteral("one\ntwo\nthree\nfour\n```\n");
+    const auto paint = [&](const QString &info) {
+        auto editor = stylerEditorWith(QStringLiteral("```text ") + info + QStringLiteral("\n") + body);
+        editor->setCodeHighlights(QStringLiteral("info=blue, error=red, custom=#00FF00"));
+        return grabbed(*editor);
+    };
+    const QImage none = paint(QString());
+    int infoPixels = 0;
+    const auto info = meanChange(none, paint(QStringLiteral("info:2")), &infoPixels);
+    int errorPixels = 0;
+    const auto error = meanChange(none, paint(QStringLiteral("error:2")), &errorPixels);
+    const auto custom = meanChange(none, paint(QStringLiteral("custom:2")));
+    EXPECT_GT(infoPixels, 500) << "a whole row of the panel changes";
+    EXPECT_NEAR(infoPixels, errorPixels, 200) << "the same row, a different colour";
+    EXPECT_GT(info[2], info[0]) << "info is blue";
+    EXPECT_GT(error[0], error[2]) << "error is red";
+    EXPECT_GT(custom[1], custom[0]) << "a hex colour is taken as written";
+    EXPECT_GT(custom[1], custom[2]);
+}
+
+TEST(CodeStylerEditorTest, AnUnknownNameAndAnOffPluginPaintNothing)
+{
+    const QString note = QStringLiteral("```text info:2\none\ntwo\n```\n");
+    auto named = stylerEditorWith(note);
+    named->setCodeHighlights(QStringLiteral("info=blue"));
+    auto unknown = stylerEditorWith(note);
+    unknown->setCodeHighlights(QStringLiteral("error=red")); // `info` is no name the setting has
+    auto without = stylerEditorWith(QStringLiteral("```text info\none\ntwo\n```\n"));
+    without->setCodeHighlights(QStringLiteral("error=red"));
+    int changed = 0;
+    meanChange(grabbed(*without), grabbed(*named), &changed);
+    EXPECT_GT(changed, 500) << "control: the named one does paint";
+    meanChange(grabbed(*without), grabbed(*unknown), &changed);
+    EXPECT_EQ(changed, 0);
+
+    // Off, `info:2` is plain text on the fence line and nothing is tinted.
+    auto off = stylerEditorWith(note, false);
+    off->setCodeHighlights(QStringLiteral("info=blue"));
+    auto offPlain = stylerEditorWith(QStringLiteral("```text\none\ntwo\n```\n"), false);
+    meanChange(grabbed(*offPlain), grabbed(*off), &changed);
+    EXPECT_EQ(changed, 0);
 }
 
 // Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and

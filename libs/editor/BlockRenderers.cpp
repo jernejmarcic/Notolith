@@ -1593,6 +1593,35 @@ LanguageStyle MarkdownEditor::styleOfFence(const CodeFenceSpan &fence) const
     return style;
 }
 
+void MarkdownEditor::setCodeHighlights(const QString &spec)
+{
+    const auto kinds = parseHighlightKinds(spec);
+    if (kinds == d->m_codeHighlights)
+        return;
+    d->m_codeHighlights = kinds;
+    viewport()->update(); // only painting reads them: no row moves
+}
+
+QColor MarkdownEditor::codeHighlightColour(const QString &kind) const
+{
+    for (const auto &entry : std::as_const(d->m_codeHighlights)) {
+        if (entry.first != kind)
+            continue;
+        // A theme colour's name (`blue` is --color-blue), or a hex code with
+        // an alpha of its own; a name no theme has falls back to the plain
+        // highlight, so a typo in the setting still marks the row.
+        const bool hex = entry.second.startsWith(QLatin1Char('#'));
+        QColor colour = hex ? CalloutStyle::parseColor(entry.second)
+                            : d->m_theme.color(QStringLiteral("--color-") + entry.second.toLower());
+        if (!colour.isValid())
+            colour = findHighlightColor();
+        if (!hex || colour.alpha() == 255)
+            colour.setAlphaF(d->m_theme.isDark() ? 0.16f : 0.24f);
+        return colour;
+    }
+    return {};
+}
+
 LanguageStyle MarkdownEditor::styleOfLanguage(const QString &language) const
 {
     LanguageStyle style = d->m_languageStyles.resolve(language);
@@ -2086,6 +2115,16 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
     tint.setAlphaF(d->m_theme.isDark() ? 0.13f : 0.22f);
     const QColor faint = d->m_theme.color(QStringLiteral("--text-faint"));
 
+    // Code Styler's named highlights, in the order the setting lists them so a
+    // line two names share is tinted the same way every time; a name the
+    // setting no longer has paints nothing.
+    QList<std::pair<const QList<int> *, QColor>> named;
+    for (const auto &kind : std::as_const(d->m_codeHighlights)) {
+        const auto lines = view.options->highlights.constFind(kind.first);
+        if (lines != view.options->highlights.cend() && !lines->isEmpty())
+            named.append({&lines.value(), codeHighlightColour(kind.first)});
+    }
+
     const qreal textTop = top + view.textTop;
     const qreal gutter = codeGutterWidth(view);
     painter.setFont(fontFor(view.span));
@@ -2105,6 +2144,12 @@ void MarkdownEditor::paintCodeRows(QPainter &painter, const BlockView &view, qre
             painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(),
                                     line.height()),
                              tint);
+        }
+        for (const auto &[lines, colour] : std::as_const(named)) {
+            if (lines->contains(sourceLine + 1)) {
+                painter.fillRect(QRectF(panel.left(), textTop + line.y(), panel.width(), line.height()),
+                                 colour);
+            }
         }
         if (gutter > 0 && (i == 0 || !wrapped)) {
             painter.setPen(faint);

@@ -1341,6 +1341,31 @@ TEST(CodeStylerTest, ParametersOnTheFenceLineAreHiddenAndKeepTheListing)
     EXPECT_EQ(tabby.codeFences.at(1).tabGroup, -1);
 }
 
+TEST(CodeStylerTest, NamedHighlightsTakeTheSameItemsAsHl)
+{
+    const CodeOptions options = fenceOptionsOf(
+        QStringLiteral("cpp info:2 warn:4-5 error:'boom' hl:1"),
+        QStringLiteral("a\nb\nc\nd\ne\nboom here\n"));
+    EXPECT_EQ(options.highlight, QList<int>({1}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("info")), QList<int>({2}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("warn")), QList<int>({4, 5}));
+    EXPECT_EQ(options.highlights.value(QStringLiteral("error")), QList<int>({6}));
+
+    // A word that is not one of the configured names is no highlight.
+    const Decorations decorations = decorationsOf(QStringLiteral("```cpp nope:2\na\nb\n```\n"), codeStylerOn());
+    EXPECT_TRUE(decorations.codeOptions.isEmpty());
+}
+
+TEST(CodeStylerTest, TheHighlightNamesComeFromASettingString)
+{
+    const auto kinds = parseHighlightKinds(QStringLiteral("info=blue, WARN=#E5A100 ,title=red, bad name=x, info=green, add"));
+    ASSERT_EQ(kinds.size(), 3); // `title` is a parameter, "bad name" is two words, the second `info` is ignored
+    EXPECT_EQ(kinds.at(0), (std::pair<QString, QString>(QStringLiteral("info"), QStringLiteral("blue"))));
+    EXPECT_EQ(kinds.at(1), (std::pair<QString, QString>(QStringLiteral("warn"), QStringLiteral("#E5A100"))));
+    EXPECT_EQ(kinds.at(2).first, QStringLiteral("add")); // no colour: the editor picks one
+    EXPECT_TRUE(parseHighlightKinds(QString()).isEmpty());
+}
+
 TEST(CodeStylerTest, ThePropertyTurnsTheNoteOff)
 {
     QString note = QStringLiteral("---\ncode-styler-ignore: true\n---\n```cpp title:x\nint a;\n```\n");

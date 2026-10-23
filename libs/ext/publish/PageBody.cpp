@@ -700,9 +700,17 @@ private:
         QString code;
         for (qsizetype i = 0; i < highlightedSplit.size(); ++i) {
             const int lineNo = firstLine + int(i);
-            const bool hl = highlighted.contains(lineNo);
+            QString classes = highlighted.contains(lineNo) ? QStringLiteral(" hl") : QString();
+            // Code Styler's named highlights: `info:2` is class `hl-info`, which the
+            // stylesheet colours (the kind is a word, as the settings parse it).
+            if (options) {
+                for (auto kind = options->highlights.cbegin(); kind != options->highlights.cend(); ++kind) {
+                    if (kind.value().contains(int(i) + 1))
+                        classes += QStringLiteral(" hl hl-") + kind.key();
+                }
+            }
             code += QStringLiteral("<span class=\"line%1\"%2>%3</span>\n")
-                       .arg(hl ? QStringLiteral(" hl") : QString(),
+                       .arg(classes,
                            numbered ? QStringLiteral(" data-line=\"%1\"").arg(lineNo) : QString(),
                            highlightedSplit.at(i));
         }

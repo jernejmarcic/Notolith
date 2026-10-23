@@ -147,6 +147,26 @@ TEST(PublishTest, CustomCheckboxStatesCarryDataTaskAndAClass)
     EXPECT_TRUE(plain.contains(today));
 }
 
+TEST(PublishTest, CodeStylerParametersTitleNumberAndColourTheLines)
+{
+    TestSite site({{QStringLiteral("Code.md"), "```cpp title:\"main.cpp\" ln:5 info:2 warn:'int c'\nint a;\nint b;\nint c;\n```\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    on.parse.highlightKinds = {QStringLiteral("info"), QStringLiteral("warn")};
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("code.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("<div class=\"code-header\">main.cpp</div>"))) << page.toStdString();
+    EXPECT_TRUE(page.contains(QLatin1String("code-block numbered")));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl hl-info\"")));
+    EXPECT_TRUE(page.contains(QLatin1String("class=\"line hl hl-warn\"")));
+    EXPECT_TRUE(site.read(QStringLiteral("site.css")).contains(QLatin1String(".hl-info")));
+
+    site.publish(); // off: the line is the language and attributes it always was
+    const QString plain = site.read(QStringLiteral("code.html"));
+    EXPECT_FALSE(plain.contains(QLatin1String("code-header")));
+    EXPECT_FALSE(plain.contains(QLatin1String("class=\"line hl")));
+}
+
 TEST(PublishTest, SiteCSSCarriesFormattingColoursOnlyWhereSet)
 {
     TestSite site({{QStringLiteral("Note.md"), "# T\n\nSome **bold** text.\n"}});

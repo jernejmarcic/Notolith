@@ -935,6 +935,8 @@ struct MarkdownEditor::Private {
     CalloutStyles m_calloutStyles = CalloutStyles::load();
     LanguageStyles m_languageStyles = LanguageStyles::load();
     bool m_complexCodeBlocks = true;
+    /// editor.codeHighlights, parsed: the named highlights and their colours as written.
+    QList<std::pair<QString, QString>> m_codeHighlights;
     quint64 m_layoutCount = 0;
     quint64 m_rebuiltViews = 0;
     SyntaxStyles m_themeSyntax; ///< m_theme's `syntax` layer, rebuilt in setTheme
