@@ -7981,7 +7981,7 @@ QList<QStringList> grid(std::initializer_list<std::initializer_list<const char *
 
 } // namespace
 
-TEST(CSVEmbedTest, LaysOutAsATableWithItsHeaderAndCellTexts)
+TEST(CSVembedTest, LaysOutAsATableWithItsHeaderAndCellTexts)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -7998,7 +7998,7 @@ TEST(CSVEmbedTest, LaysOutAsATableWithItsHeaderAndCellTexts)
     EXPECT_GT(editor->documentHeight(), 3 * QFontMetricsF(editor->font()).height());
 }
 
-TEST(CSVEmbedTest, ATableCellKeepsALineBreakAsALineSeparator)
+TEST(CSVembedTest, ATableCellKeepsALineBreakAsALineSeparator)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8008,7 +8008,7 @@ TEST(CSVEmbedTest, ATableCellKeepsALineBreakAsALineSeparator)
     EXPECT_EQ(editor->tableCellTextsAt(0).at(1).at(0), QStringLiteral("one") + QChar(QChar::LineSeparator) + QStringLiteral("two"));
 }
 
-TEST(CSVEmbedTest, SemicolonCSVAndTSVAndBOM)
+TEST(CSVembedTest, SemicolonCSVAndTSVAndBOM)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8023,7 +8023,7 @@ TEST(CSVEmbedTest, SemicolonCSVAndTSVAndBOM)
     }
 }
 
-TEST(CSVEmbedTest, RaggedRowsArePaddedToTheWidestRow)
+TEST(CSVembedTest, RaggedRowsArePaddedToTheWidestRow)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8031,7 +8031,7 @@ TEST(CSVEmbedTest, RaggedRowsArePaddedToTheWidestRow)
     EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b", "c", ""}, {"1", "", "", ""}, {"1", "2", "3", "4"}}));
 }
 
-TEST(CSVEmbedTest, ALongFileShowsTheFirstRowsAndAFooter)
+TEST(CSVembedTest, ALongFileShowsTheFirstRowsAndAFooter)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8045,7 +8045,7 @@ TEST(CSVEmbedTest, ALongFileShowsTheFirstRowsAndAFooter)
     EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("200")), -1) << rows.last().at(0).toStdString();
 }
 
-TEST(CSVEmbedTest, AWideFileShowsFewerRowsSoLayoutStaysCheap)
+TEST(CSVembedTest, AWideFileShowsFewerRowsSoLayoutStaysCheap)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8060,7 +8060,7 @@ TEST(CSVEmbedTest, AWideFileShowsFewerRowsSoLayoutStaysCheap)
     EXPECT_EQ(rows.last().at(0), QStringLiteral("and 563 more rows"));
 }
 
-TEST(CSVEmbedTest, AHeaderOnlyFileIsATableOfOneRow)
+TEST(CSVembedTest, AHeaderOnlyFileIsATableOfOneRow)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8068,7 +8068,7 @@ TEST(CSVEmbedTest, AHeaderOnlyFileIsATableOfOneRow)
     EXPECT_EQ(editor->tableCellTextsAt(0), grid({{"a", "b"}}));
 }
 
-TEST(CSVEmbedTest, AnEmptyFileSaysSo)
+TEST(CSVembedTest, AnEmptyFileSaysSo)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8078,7 +8078,7 @@ TEST(CSVEmbedTest, AnEmptyFileSaysSo)
     EXPECT_TRUE(editor->tableCellTextsAt(0).isEmpty());
 }
 
-TEST(CSVEmbedTest, AMissingFileFallsBackToTheLinkLikeAnyOtherBrokenEmbed)
+TEST(CSVembedTest, AMissingFileFallsBackToTheLinkLikeAnyOtherBrokenEmbed)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8088,7 +8088,7 @@ TEST(CSVEmbedTest, AMissingFileFallsBackToTheLinkLikeAnyOtherBrokenEmbed)
     EXPECT_TRUE(editor->displayText().contains(QStringLiteral("gone.csv")));
 }
 
-TEST(CSVEmbedTest, AnUnreadableFileShowsAnError)
+TEST(CSVembedTest, AnUnreadableFileShowsAnError)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8103,7 +8103,7 @@ TEST(CSVEmbedTest, AnUnreadableFileShowsAnError)
     QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
-TEST(CSVEmbedTest, AChangedFileIsReadAgain)
+TEST(CSVembedTest, AChangedFileIsReadAgain)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8123,7 +8123,7 @@ TEST(CSVEmbedTest, AChangedFileIsReadAgain)
     EXPECT_EQ(editor->tableCellTextsAt(0).at(2), (QStringList{QStringLiteral("3"), QStringLiteral("4")}));
 }
 
-TEST(CSVEmbedTest, ABaseRefreshDoesNotRelayOutACSVTable)
+TEST(CSVembedTest, ABaseRefreshDoesNotRelayOutACSVTable)
 {
     // refreshBases() fires on every index change - every note save in the
     // vault - and relays out each isBase block; a CSV table is not a base's.
@@ -8140,7 +8140,7 @@ TEST(CSVEmbedTest, ABaseRefreshDoesNotRelayOutACSVTable)
     EXPECT_FALSE(editor->tableCellTextsAt(0).isEmpty());
 }
 
-TEST(CSVEmbedTest, AFileRewrittenWhileTheNoteIsOpenIsReadAgainWithNothingElseHappening)
+TEST(CSVembedTest, AFileRewrittenWhileTheNoteIsOpenIsReadAgainWithNothingElseHappening)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8169,7 +8169,7 @@ TEST(CSVEmbedTest, AFileRewrittenWhileTheNoteIsOpenIsReadAgainWithNothingElseHap
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 4; }, 5000));
 }
 
-TEST(CSVEmbedTest, TheOldTableStaysUpUntilTheNewOneLands)
+TEST(CSVembedTest, TheOldTableStaysUpUntilTheNewOneLands)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8188,7 +8188,7 @@ TEST(CSVEmbedTest, TheOldTableStaysUpUntilTheNewOneLands)
     ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
 }
 
-TEST(CSVEmbedTest, ThousandsOfColumnsAreCutAndSaidSo)
+TEST(CSVembedTest, ThousandsOfColumnsAreCutAndSaidSo)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8206,7 +8206,7 @@ TEST(CSVEmbedTest, ThousandsOfColumnsAreCutAndSaidSo)
     EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("more columns")), -1);
 }
 
-TEST(CSVEmbedTest, AHugeCellIsCutAtAThousandCharacters)
+TEST(CSVembedTest, AHugeCellIsCutAtAThousandCharacters)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8219,7 +8219,7 @@ TEST(CSVEmbedTest, AHugeCellIsCutAtAThousandCharacters)
     EXPECT_EQ(rows.at(1).at(1), QStringLiteral("y"));
 }
 
-TEST(CSVEmbedTest, AFileOverTheReadLimitSaysSoInsteadOfBeingEmpty)
+TEST(CSVembedTest, AFileOverTheReadLimitSaysSoInsteadOfBeingEmpty)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8230,7 +8230,7 @@ TEST(CSVEmbedTest, AFileOverTheReadLimitSaysSoInsteadOfBeingEmpty)
     EXPECT_NE(rows.last().at(0).indexOf(QStringLiteral("32 MB")), -1) << rows.last().at(0).toStdString();
 }
 
-TEST(CSVEmbedTest, OtherTextEncodingsAreReadAsText)
+TEST(CSVembedTest, OtherTextEncodingsAreReadAsText)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8247,7 +8247,7 @@ TEST(CSVEmbedTest, OtherTextEncodingsAreReadAsText)
     }
 }
 
-TEST(CSVEmbedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
+TEST(CSVembedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
 {
     SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
     QTemporaryDir dir;
@@ -8274,81 +8274,56 @@ TEST(CSVEmbedTest, ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds)
     }
 }
 
-TEST(CSVEmbedTest, AFileThatAppearsLaterIsPickedUp)
+TEST(CSVembedTest, ADeletedFileIsForgottenAndItsBlockLaidOutAgain)
 {
-    QTemporaryDir dir;
-    ASSERT_TRUE(dir.isValid());
-    const QString path = dir.filePath(QStringLiteral("later.csv"));
-    auto editor = CSVeditorWith(path, false);
-    QTest::qWait(50);
-    ASSERT_TRUE(editor->displayText().contains(QStringLiteral("later.csv"))) << "not there yet: the link";
-
-    writeTextFile(dir, QStringLiteral("later.csv"), "a,b\n1,2\n"); // a script writes it; nothing else happens
-    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
-}
-
-TEST(CSVEmbedTest, ADeletedFileComesBackWhenItIsRestoredLater)
-{
+    // the app's resolver answers {} for a file that is gone (so the block becomes the plain link,
+    // and a restored file is found again by Index::changed - see the window tests); what the
+    // watcher owes is dropping the read, which would otherwise count as "changed" at every event
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
     const QString path = writeTextFile(dir, QStringLiteral("gone.csv"), "a,b\n1,2\n");
     auto editor = CSVeditorWith(path);
-    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
-
+    ASSERT_EQ(editor->CSVcacheSize(), 1);
     ASSERT_TRUE(QFile::remove(path));
-    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("gone.csv")); }, 5000))
-        << "deleted: the link again";
-    QTest::qWait(600); // well past the debounce: restored from the trash, say
-
-    writeTextFile(dir, QStringLiteral("gone.csv"), "a,b\n1,2\n3,4\n");
-    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->CSVcacheSize() == 0; }, 5000));
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("gone.csv")));
 }
 
-TEST(CSVEmbedTest, ADeletedAndRecreatedFolderComesBack)
+TEST(CSVembedTest, AReadErrorIsRetriedWhenTheFileBecomesReadable)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
-    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub/deeper")));
-    const QString path = writeTextFile(dir, QStringLiteral("sub/deeper/x.csv"), "a,b\n1,2\n");
-    auto editor = CSVeditorWith(path);
-    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+    const QString path = writeTextFile(dir, QStringLiteral("locked.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked.csv")); }, 5000));
 
-    ASSERT_TRUE(QDir(dir.filePath(QStringLiteral("sub"))).removeRecursively());
-    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("x.csv")); }, 5000));
-    QTest::qWait(600);
-
-    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("sub/deeper")));
-    QTest::qWait(300);
-    writeTextFile(dir, QStringLiteral("sub/deeper/x.csv"), "a,b\n5,6\n");
-    const QStringList wanted{QStringLiteral("5"), QStringLiteral("6")};
-    ASSERT_TRUE(QTest::qWaitFor(
-        [&] { return editor->tableCellTextsAt(0).size() == 2 && editor->tableCellTextsAt(0).at(1) == wanted; }, 5000));
-}
-
-TEST(CSVEmbedTest, ARestoredFileWithTheSameMtimeAndSizeComesBack)
-{
-    // a move out of the trash, cp -p, Syncthing restoring an unchanged file
-    QTemporaryDir dir;
-    ASSERT_TRUE(dir.isValid());
-    const QString path = writeTextFile(dir, QStringLiteral("same.csv"), "a,b\n1,2\n");
-    auto editor = CSVeditorWith(path);
-    ASSERT_FALSE(editor->tableCellTextsAt(0).isEmpty());
+    // a chmod changes neither mtime nor size, only ctime: the watcher's attribute event is all there is
     const QDateTime mtime = QFileInfo(path).lastModified();
-
-    ASSERT_TRUE(QFile::remove(path));
-    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("same.csv")); }, 5000));
-    EXPECT_EQ(editor->CSVcacheSize(), 0) << "a deleted file's read is not kept";
-    QTest::qWait(400);
-
-    writeTextFile(dir, QStringLiteral("same.csv"), "a,b\n1,2\n");
-    QFile file(path);
-    ASSERT_TRUE(file.open(QIODevice::ReadWrite));
-    ASSERT_TRUE(file.setFileTime(mtime, QFileDevice::FileModificationTime));
-    file.close();
-    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    ASSERT_TRUE(QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    ASSERT_EQ(QFileInfo(path).lastModified(), mtime);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
 }
 
-TEST(CSVEmbedTest, AFileAppendedToContinuouslyStillRefreshes)
+TEST(CSVembedTest, AReadErrorIsRetriedAtTheNextLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("locked2.csv"), "a,b\n1,2\n");
+    QFile::setPermissions(path, QFileDevice::Permissions());
+    if (QFile(path).open(QIODevice::ReadOnly))
+        GTEST_SKIP() << "this user can read a mode 000 file";
+    auto editor = CSVeditorWith(path, false);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->panelTextAt(0).contains(QStringLiteral("locked2.csv")); }, 5000));
+    QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    // the next layout of the block - here the note set again - asks again, whatever the watcher did
+    editor->setNoteText(QStringLiteral("![[locked2.csv]]\n\nafter\n"));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+}
+
+TEST(CSVembedTest, AFileAppendedToContinuouslyStillRefreshes)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8369,7 +8344,7 @@ TEST(CSVEmbedTest, AFileAppendedToContinuouslyStillRefreshes)
     EXPECT_TRUE(refreshedWhileWriting) << "within 3 s of constant writing";
 }
 
-TEST(CSVEmbedTest, AWorkerThatThrowsLeavesANoticeNotLoadingForever)
+TEST(CSVembedTest, AWorkerThatThrowsLeavesANoticeNotLoadingForever)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8382,7 +8357,7 @@ TEST(CSVEmbedTest, AWorkerThatThrowsLeavesANoticeNotLoadingForever)
     EXPECT_TRUE(noticed) << editor->panelTextAt(0).toStdString();
 }
 
-TEST(CSVEmbedTest, TurningTheFeatureOffForgetsTheFiles)
+TEST(CSVembedTest, TurningTheFeatureOffForgetsTheFiles)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -8394,7 +8369,7 @@ TEST(CSVEmbedTest, TurningTheFeatureOffForgetsTheFiles)
     EXPECT_EQ(editor->CSVcacheSize(), 0);
 }
 
-TEST(CSVEmbedTest, TwoEmbedsOfOneFileBothLand)
+TEST(CSVembedTest, TwoEmbedsOfOneFileBothLand)
 {
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());
@@ -10395,6 +10370,31 @@ TEST(CodeScrollTest, HorizontalWheelAndTrackpadPixelsPanToo)
 
     sendWheel(*editor, at, QPoint(-50, 0), QPoint(), Qt::NoModifier);
     EXPECT_GT(editor->sideScrollAt(kFenceBody), wheel);
+}
+
+TEST(CSVembedTest, ASidewaysScrollSurvivesTheReparse)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QByteArray bytes;
+    for (int row = 0; row < 3; ++row)
+        for (int column = 0; column < 30; ++column)
+            bytes += "a fairly long cell " + QByteArray::number(row * column) + (column < 29 ? "," : "\n");
+    const QString path = writeTextFile(dir, QStringLiteral("wide.csv"), bytes);
+    const QString note = QStringLiteral("![[wide.csv]]\n\nend");
+    auto editor = editorWith(note);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->tableCellTextsAt(0).isEmpty(); }, 5000));
+    editor->setCursorOffset(note.size());
+
+    sendWheel(*editor, centreOf(editor->blockPanelAt(0)), QPoint(), QPoint(0, -240), Qt::ShiftModifier);
+    const qreal scrolled = editor->sideScrollAt(0);
+    ASSERT_GT(scrolled, 0);
+
+    QTest::keyClicks(editor.get(), QStringLiteral("zz")); // a reparse rebuilds every block a moment later
+    QTest::qWait(400);
+    ASSERT_TRUE(editor->noteText().endsWith(QStringLiteral("endzz")));
+    EXPECT_DOUBLE_EQ(editor->sideScrollAt(0), scrolled);
 }
 
 TEST(CodeScrollTest, AShortListingIsNotScrollable)

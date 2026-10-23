@@ -1620,7 +1620,7 @@ void MarkdownEditor::rebuildBlocks()
     // old piece ending where it ends had, so a listing is not re-highlighted
     // from its top to show the piece on screen - and that state is still
     // valid when the old piece covered exactly the same text.
-    // A fence or table scrolled sideways keeps its offset (the first piece
+    // A fence, table or CSV embed scrolled sideways keeps its offset (the first piece
     // holds it), or typing in a wide listing would snap it back every parse.
     const auto oldBlockAt = [this](qsizetype at) {
         auto it = std::upper_bound(d->m_blocks.cbegin(), d->m_blocks.cend(), at,
@@ -1630,10 +1630,12 @@ void MarkdownEditor::rebuildBlocks()
         return it == d->m_blocks.cbegin() ? d->m_blocks.cend() : it - 1;
     };
     for (BlockView &view : blocks) {
-        if (view.piece == 0
-            && (view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table)) {
+        if (view.piece == 0) {
             const auto old = oldBlockAt(view.span.range.start);
-            if (old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
+            // a CSV embed is a paragraph by kind: what it was laid out as (isBase) says it is a table
+            const bool scrolls = view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table
+                                 || (old != d->m_blocks.cend() && old->isBase && !old->CSVpath.isEmpty());
+            if (scrolls && old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
                 view.sideScroll = old->sideScroll;
         }
         if (view.pieces <= 1)
@@ -2974,6 +2976,11 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
         return false;
 
     const QString suffix = QFileInfo(path).suffix().toLower();
+    // Before the image formats below are asked for: listing them loads every
+    // image plugin, which a note of tables has no use for.
+    if (d->m_features.fileEmbeds && d->m_features.CSVembeds
+        && (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")))
+        return layoutCSVembed(view, path);
     static const QByteArrayList images = QImageReader::supportedImageFormats();
 
     // Some installs register a PDF-reading QImageIOHandler (a thumbnailer
@@ -3000,8 +3007,6 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
 
     if (Vault::isNote(path))
         return layoutNoteEmbed(view, *embed, path);
-    if (d->m_features.CSVembeds && (suffix == QLatin1String("csv") || suffix == QLatin1String("tsv")))
-        return layoutCSVembed(view, path);
     // A .base is the ```base block's own table, fed the file: its rows open
     // their notes, as they do in Obsidian's embedded base.
     if (d->m_features.baseBlocks && suffix == QLatin1String("base")) {

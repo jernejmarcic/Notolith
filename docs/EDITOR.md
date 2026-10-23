@@ -660,7 +660,7 @@ link shows "Note > Heading".
 `![[data.csv]]` and `![[data.tsv]]` draw the file as a table, laid out and
 painted by the same code as a base's table (`layoutDataTable` in
 `BaseBlock.cpp`: header row first, the theme's table colours, columns sized to
-their content, a wide table scrolling sideways) - `CSVEmbed.cpp`. The first
+their content, a wide table scrolling sideways) - `CSVembed.cpp`. The first
 line is the header. The parser (`CSVparser.cpp`) is RFC 4180: quoted fields,
 `""` for a quote, delimiters and line breaks inside quotes, LF, CRLF or CR
 between records, a UTF-8 byte order mark ignored; a short row is padded with
@@ -675,28 +675,33 @@ but never more than 1500 cells (a 64-column file shows 23 rows), with "and N
 more rows" and "N more columns not shown" in a footer that spans the table;
 at most 64 columns, the rest a final "+N columns" header cell; cells cut at
 1000 characters with an ellipsis (both applied in the parser, before anything
-is stored - a 1 MB line of commas costs a few kilobytes); and the first 32 MB
-of the file. The 1500-cell budget is what a full relayout (every width change
+is stored: a 1 MB line of commas keeps under 256 KB, uncapped 67 MB, as
+`CSVparserTest` measures with glibc `mallinfo2`); and the first 32 MB of the
+file. The 1500-cell budget is what a full relayout (every width change
 repeats one) fits in 10 ms: measured best-of-7, 3.5 ms for 2 columns, about 6
 ms for 8 and 64, on an idle-priority core of the dev machine
-(`CSVEmbedTest.ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds`
+(`CSVembedTest.ARelayoutOfTheWorstCappedTableTakesUnderTenMilliseconds`
 prints them); the upgrade is laying out only the rows near the viewport.
 
 Bytes are decoded by byte order mark (UTF-8, UTF-16, UTF-32), else as UTF-8,
-and when that is not valid UTF-8 as Windows-1250 for a Central European locale
-(Excel's "CSV" in Slovenia) or Windows-1252 elsewhere.
+and when the bytes are not UTF-8 (invalid, and holding no well-formed multibyte
+sequence: a UTF-8 file with one stray bad byte stays UTF-8) as Windows-1250 for
+a Central European locale (Excel's "CSV" in Slovenia) or Windows-1252
+elsewhere.
 
 The result is cached by path. The editor watches the cached files and their
 folders (a `QFileSystemWatcher` made with the first CSV embed): a file
 rewritten by another program, in place or by rename, is read again after
 200 ms and only its blocks are relaid out, the old table staying up until the
 new one lands. A file that is not there falls back to the plain link, as any
-embed; one that cannot be read says so in the error colour; an empty one says
-"Empty file".
+embed, and comes back when it does; one that cannot be read says so in the
+error colour and is read again at the next change event or layout, never
+cached as the answer; an empty one says "Empty file". A table scrolled
+sideways keeps its place through a reparse and a reread.
 
 Core plugin `csv-embeds` (Settings > Core plugins, "CSV embeds") turns it off:
 the file is then the plain source listing it was before. Tests
-`CSVparserTest.*`, `CSVEmbedTest.*`, `FeaturesTest.CSVembedsToggle`; the demo
+`CSVparserTest.*`, `CSVembedTest.*`, `FeaturesTest.CSVembedsToggle`; the demo
 vault's `Embeds/CSV Embeds.md` shows one of each kind.
 
 ## `[[` link completion

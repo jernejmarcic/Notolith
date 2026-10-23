@@ -16,7 +16,9 @@
 /// before, holds the cached paths and their folders: a change (debounced)
 /// stats them and relays out only the blocks whose file moved, so a file
 /// rewritten by another program shows with nothing else happening. The
-/// generation counter drops a read that a newer one has superseded.
+/// generation counter drops a read that a newer one has superseded. A failed
+/// read is shown but never kept as the answer: the next watcher event or layout
+/// reads again.
 ///
 /// Bounded three ways, so a hostile or merely large file can neither stall
 /// layout nor fill memory: rows and cells shown (kCSVmaxRows, kCSVmaxCells -
@@ -119,23 +121,20 @@ MarkdownEditor::CSVcacheEntry MarkdownEditor::readCSVfile(const QString &path, b
 
 bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
 {
-    // Even a file that is not there is watched for, and its block is found by
-    // path: it may be written later, or deleted and restored.
-    view.CSVpath = path;
-    d->m_CSVpaths.insert(path);
-    watchCSV(path);
-
     const QFileInfo info(path);
-    if (!info.isFile()) {
-        // Gone: its read goes too, or a restore with the same mtime and size
-        // (a move out of the trash, cp -p) would look like nothing happened.
-        d->m_CSVcache.remove(path);
-        return false;
-    }
+    if (!info.isFile())
+        return false; // the resolver only answers with files that exist; this is a race with a delete
+    view.CSVpath = path;
+    watchCSV(path);
 
     const qint64 mtime = info.lastModified().toMSecsSinceEpoch();
     const qint64 size = info.size();
     auto it = d->m_CSVcache.find(path);
+    // A read that failed is never kept as the answer: any layout but the one
+    // that shows its error asks again (the file may be readable now - a
+    // chmod changes neither mtime nor size).
+    if (it != d->m_CSVcache.end() && !it->table.error.isEmpty() && d->m_CSVdelivering != path)
+        it->mtime = -1;
     if (it == d->m_CSVcache.end() || it->mtime != mtime || it->size != size) {
         // A re-read keeps the entry's old table: it stays on screen until
         // the new one lands (a fresh entry has none, and shows "Loading...").
@@ -187,10 +186,11 @@ bool MarkdownEditor::layoutCSVembed(BlockView &view, const QString &path)
     hideWholeBlockText(view);
 
     const QColor muted = d->m_theme.color(QStringLiteral("--text-muted"));
-    if (it->pending && it->table.headers.isEmpty())
-        return layoutPlainMessage(view, tr("Loading…"), muted);
+    // the error first: a failed read being asked again keeps showing it, not "Loading..."
     if (!it->table.error.isEmpty())
         return layoutPlainMessage(view, it->table.error, d->m_theme.color(QStringLiteral("--text-error")));
+    if (it->pending && it->table.headers.isEmpty())
+        return layoutPlainMessage(view, tr("Loading…"), muted);
     if (it->table.headers.isEmpty())
         return layoutPlainMessage(view, tr("Empty file"), muted);
 
@@ -216,14 +216,16 @@ void MarkdownEditor::deliverCSV(const QString &path, quint64 generation, CSVcach
     const auto latest = it->latest;
     *it = std::move(result);
     it->latest = latest;
+    d->m_CSVdelivering = path;
     relayCSVblocks(path);
+    d->m_CSVdelivering.clear();
 }
 
 void MarkdownEditor::relayCSVblocks(const QString &path)
 {
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (block.CSVpath != path)
+        if (!block.isBase || block.CSVpath != path) // the flag is in the hot half of the struct
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -255,19 +257,10 @@ void MarkdownEditor::watchCSV(const QString &path)
     }
     // The file, and its folder: a program that saves by writing a new file
     // and renaming it over the old one makes inotify drop the file's watch.
-    // A folder that is gone is watched through its nearest ancestor that is
-    // not, which sees it come back (and is replaced by the folder itself the
-    // next time this runs).
-    QString folder = QFileInfo(path).absolutePath();
-    while (!QFileInfo(folder).isDir()) {
-        const QString parent = QFileInfo(folder).absolutePath();
-        if (parent == folder)
-            break;
-        folder = parent;
-    }
-    if (QFileInfo(folder).isDir() && !d->m_CSVwatcher->directories().contains(folder))
+    const QString folder = QFileInfo(path).absolutePath();
+    if (!d->m_CSVwatcher->directories().contains(folder))
         d->m_CSVwatcher->addPath(folder);
-    if (QFileInfo::exists(path) && !d->m_CSVwatcher->files().contains(path))
+    if (!d->m_CSVwatcher->files().contains(path))
         d->m_CSVwatcher->addPath(path);
 }
 
@@ -284,26 +277,54 @@ void MarkdownEditor::CSVfileEvent()
 void MarkdownEditor::refreshCSVfiles()
 {
     d->m_CSVpendingSince.invalidate();
-    for (const QString &path : std::as_const(d->m_CSVpaths)) {
-        watchCSV(path); // put back what a rename-over-save, or a folder that went and came back, took away
+    const QStringList paths = d->m_CSVcache.keys();
+    for (const QString &path : paths) {
         const QFileInfo info(path);
         const auto cached = d->m_CSVcache.constFind(path);
+        if (!info.isFile()) {
+            // Gone: its read goes too, or a restore with the same mtime and
+            // size (a move out of the trash, cp -p) would look like nothing
+            // happened. The block lays out again as whatever the resolver
+            // now makes of the link.
+            d->m_CSVcache.remove(path);
+            d->m_CSVgone.insert(path);
+            relayCSVblocks(path);
+            continue;
+        }
+        watchCSV(path); // put back what a rename-over-save took away
         // A read already under way for this very mtime and size has its own
-        // relayout coming; a file with no entry that is there now (or one
-        // that went) and one that has moved on from its entry need one.
-        const bool changed = cached == d->m_CSVcache.constEnd()
-                                 ? info.isFile()
-                                 : info.lastModified().toMSecsSinceEpoch() != cached->mtime
-                                       || info.size() != cached->size;
-        if (changed)
+        // relayout coming; one that has moved on from its entry, or failed
+        // (see layoutCSVembed), needs one.
+        if (info.lastModified().toMSecsSinceEpoch() != cached->mtime || info.size() != cached->size
+            || !cached->table.error.isEmpty())
             relayCSVblocks(path);
     }
+    // A file that went and is back: the index watches notes, not attachments,
+    // so it says nothing, and the blocks that fell back to the plain link do
+    // not know. Lay out the embeds the resolver now sends to it.
+    QSet<QString> back;
+    for (auto it = d->m_CSVgone.begin(); it != d->m_CSVgone.end();) {
+        if (QFileInfo(*it).isFile()) {
+            back.insert(*it);
+            it = d->m_CSVgone.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (back.isEmpty() || !m_resolver)
+        return;
+    for (const EmbedSpan &embed : std::as_const(d->m_decorations.embeds)) {
+        if (!embed.html && back.contains(m_resolver(embed.target)))
+            invalidateBlock(blockAt(embed.range.start));
+    }
+    updateLayout();
+    viewport()->update();
 }
 
 void MarkdownEditor::dropCSVcache()
 {
     d->m_CSVcache.clear();
-    d->m_CSVpaths.clear();
+    d->m_CSVgone.clear();
     if (d->m_CSVwatcher) {
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->files());
         d->m_CSVwatcher->removePaths(d->m_CSVwatcher->directories());

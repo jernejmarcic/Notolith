@@ -424,7 +424,7 @@ struct MarkdownEditor::BlockView {
         QString path;
     };
     std::vector<BaseRow> baseRows;
-    /// The file a CSV/TSV embed shows (CSVEmbed.cpp), empty for any other
+    /// The file a CSV/TSV embed shows (CSVembed.cpp), empty for any other
     /// block: what deliverCSV matches a block back on. Such a block is also
     /// isBase, which only means "painted as a data table".
     QString CSVpath;
@@ -708,7 +708,7 @@ struct MarkdownEditor::BaseCacheEntry {
 };
 
 /// A CSV/TSV file as the last read left it - one per path, replaced when the
-/// file's mtime or size changes (CSVEmbed.cpp). `table` holds at most the
+/// file's mtime or size changes (CSVembed.cpp). `table` holds at most the
 /// header and kCSVmaxRows rows.
 struct MarkdownEditor::CSVcacheEntry {
     qint64 mtime = 0;
@@ -897,7 +897,8 @@ struct MarkdownEditor::Private {
     QFileSystemWatcher *m_CSVwatcher = nullptr; ///< made with the first CSV embed
     QTimer *m_CSVrefresh = nullptr;
     QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
-    QSet<QString> m_CSVpaths; ///< every path a block asked about, there or not: what refreshCSVfiles looks at
+    QSet<QString> m_CSVgone; ///< cached files that were deleted: refreshCSVfiles looks for them coming back
+    QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

@@ -4734,7 +4734,7 @@ TEST_F(WindowTest, TheCorePluginsSwitchesReachTheEditor)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
-TEST_F(WindowTest, ACSVEmbedFollowsItsFileWhenAnotherProgramRewritesIt)
+TEST_F(WindowTest, ACSVembedFollowsItsFileWhenAnotherProgramRewritesIt)
 {
     write(QStringLiteral("data.csv"), "a,b\n1,2\n");
     write(QStringLiteral("Table.md"), "![[data.csv]]\n");

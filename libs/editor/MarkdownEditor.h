@@ -1808,7 +1808,7 @@ private:
     /// rows after the header; a non-empty `moreText` is the footer line under
     /// a table cut short. A base's table and a CSV embed's both come here.
     bool layoutDataTable(BlockView &view, const BaseTableData &data, int maxRows, const QString &moreText);
-    // --- CSV and TSV embeds, implemented in CSVEmbed.cpp ---------------------
+    // --- CSV and TSV embeds, implemented in CSVembed.cpp ---------------------
 
     /// `![[data.csv]]` / `![[data.tsv]]`: the file as a table, through
     /// layoutDataTable. Read and parsed on a worker thread, "Loading..." until
