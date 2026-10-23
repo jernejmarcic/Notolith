@@ -47,6 +47,7 @@ class QTreeView;
 namespace noteAppC {
 
 class SpellChecker;
+class SingleInstance;
 class DictClient;
 class NoteHistory;
 class PluginRegistry;
@@ -107,6 +108,8 @@ public:
     void setLookupFunction(LookupFunction lookup) { m_lookupFunction = std::move(lookup); }
 
     void openVault(const QString &path);
+    /// Drops the open vault: back to the empty-window state, chrome intact.
+    void closeVault();
     /// Returns false when `path` was not opened - not a note, unsaved changes
     /// declined, or (only tolerated for NavSource::History, where the entry
     /// is simply skipped rather than erroring) deleted or renamed since it was
@@ -133,6 +136,12 @@ public:
     /// vault before there is something on screen. Call it instead of
     /// openTarget() at startup, after show().
     void openWhenShown(const LaunchTarget &target);
+
+    /// The instance that serves this window to other launches (main() owns it).
+    /// With one set, the socket the window serves follows its vault: opening
+    /// another vault moves it, opening one that another Notolith process has
+    /// hands the vault to that process and leaves this window as it is.
+    void setSingleInstance(SingleInstance *instance) { m_instance = instance; }
 
     const Theme &theme() const { return m_theme; }
     void setThemeMode(Theme::Mode mode);
@@ -750,8 +759,6 @@ void updateVimStatus();
     void openRelative(const QString &relativePath);
     void openRelativeInNewTab(const QString &relativePath); ///< the graph's node menu
     void openSingleFile(const QString &path);
-    /// Drops the open vault: back to the empty-window state, chrome intact.
-    void closeVault();
     /// Resets the editor, tab and both panes to "nothing open", without
     /// touching the vault itself. Shared by vault switching, the tab's close
     /// button, and deleting the open note.
@@ -824,6 +831,7 @@ void updateVimStatus();
     Indexer *m_indexer = nullptr;
     /// What openWhenShown() is waiting to open, cleared by the first paint.
     std::optional<LaunchTarget> m_pendingOpen;
+    SingleInstance *m_instance = nullptr;
 
     /// Live reload for the selected colour scheme and the directories it can
     /// be picked from; owned because MainWindow is what applies the theme.

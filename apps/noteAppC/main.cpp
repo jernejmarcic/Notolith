@@ -98,10 +98,11 @@ bool answeredWithoutGUI(int argc, char *argv[])
         std::printf("Notolith %s\n", NOTEAPPC_VERSION);
         return true;
     }
-    // One Notolith per user: a launch while one runs (a note opened from the
-    // file manager) gives it the path and ends here.
-    noteAppC::SingleInstance instance(noteAppC::SingleInstance::defaultName());
-    return instance.handOver(handOverArgument(options.parser.positionalArguments()));
+    // One Notolith per vault: a launch while one has that vault open (a note
+    // opened from the file manager) gives it the path and ends here.
+    const QString argument = handOverArgument(options.parser.positionalArguments());
+    noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
+    return instance.handOver(argument);
 }
 
 } // namespace
@@ -150,13 +151,15 @@ int main(int argc, char *argv[])
     Options options;
     options.parser.process(app);
     const QStringList args = options.parser.positionalArguments();
-    noteAppC::SingleInstance instance(noteAppC::SingleInstance::defaultName());
-    if (instance.handOver(handOverArgument(args)))
+    const QString argument = handOverArgument(args);
+    noteAppC::SingleInstance instance(noteAppC::SingleInstance::launchFor(argument));
+    if (instance.handOver(argument))
         return 0;
 
     noteAppC::MainWindow window;
     startLog("window");
     instance.serve(&window);
+    window.setSingleInstance(&instance); // its vault, when it changes, moves the name it serves
     const noteAppC::LaunchTarget target =
         args.isEmpty() ? noteAppC::LaunchTarget{} : noteAppC::resolveLaunchTarget(args.first());
 
