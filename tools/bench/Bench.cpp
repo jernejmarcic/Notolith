@@ -1575,6 +1575,18 @@ qint64 benchMemory(const QString &vaultPath, const QString &largeNotePath)
     window->show();
     QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
     paintedFrame(window.get());
+    // A note over 128 kB is shown as a placeholder and parsed on the thread
+    // pool; its decorations, source map and block views are the biggest
+    // allocation of the open and land about half a second later (wordCount
+    // is -1 until then). Read before that, the row missed them (about 116 MB
+    // at 20 000 notes).
+    QElapsedTimer wait;
+    wait.start();
+    while (window->editor()->wordCount() < 0 && wait.elapsed() < 15000)
+        QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents, 10);
+    if (window->editor()->wordCount() < 0)
+        std::fprintf(stderr, "the parse of the memory note never landed; the row is understated\n");
+    paintedFrame(window.get());
     return peakRSSKilobytes();
 }
 
