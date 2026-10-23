@@ -16,6 +16,7 @@
 #include <functional>
 #include <map>
 
+#include <sys/wait.h>
 #include <QDialogButtonBox>
 #include <QAbstractButton>
 #include <QApplication>
@@ -36,6 +37,9 @@
 #include <QInputDialog>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QLocalServer>
+#include <QLocalSocket>
+#include <QLockFile>
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSqlDatabase>
@@ -167,6 +171,27 @@ QByteArray readAll(const QString &path)
     return file.readAll();
 }
 
+/// A private settings directory for a test that flips switches, put back after.
+struct PrivateConfig {
+    QTemporaryDir dir;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
+    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
+/// A settings directory as every real user has one: it exists and holds what the app remembers.
+/// The big-note scroll tests run against it - they were exact only while the directory did not
+/// exist yet, because the editor re-laid the note out whenever anything was saved into it.
+/// Write it into a PrivateConfig of the test's own (put back after) and call this through
+/// ASSERT_NO_FATAL_FAILURE, so a failed write fails the test instead of running it without.
+void useAConfigDirectory()
+{
+    ASSERT_TRUE(QDir().mkpath(Settings::configDirectory()));
+    QFile remembered(Settings::indexFile());
+    ASSERT_TRUE(remembered.open(QIODevice::WriteOnly));
+    ASSERT_GT(remembered.write("[state]\nrecent-vaults = /nowhere\n"), 0);
+}
+
 /// A vault with one LF note, one CRLF note and one non-note file.
 class WindowTest : public ::testing::Test {
 protected:
@@ -250,6 +275,8 @@ int topLine(MarkdownEditor *editor)
 // remembered scroll pixel alone means different text in the two.
 TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 {
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -273,6 +300,8 @@ TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 
 TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
 {
+    PrivateConfig config; // a used one of its own, the suite's shared one left as it was
+    ASSERT_NO_FATAL_FAILURE(useAConfigDirectory());
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -6742,14 +6771,6 @@ TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
 
 namespace {
 
-/// A private settings directory for a test that flips switches, put back after.
-struct PrivateConfig {
-    QTemporaryDir dir;
-    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
-    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
-    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
-};
-
 noteAppC::ToggleSwitch *settingsToggle(MainWindow &window, const char *key)
 {
     noteAppC::ToggleSwitch *found = nullptr;
@@ -7894,6 +7915,422 @@ TEST_F(WindowTest, ASocketFileLeftByACrashDoesNotStopTheServer)
     ASSERT_FALSE(instance.handOver(QString())); // nothing answers on a dead socket
     instance.serve(&window);
     EXPECT_TRUE(instance.ok());
+}
+
+namespace {
+
+/// What a vault's own process is to the others: its lock and its listening socket, and the lines
+/// it was handed. Stands in for "a Notolith that has that vault open" where the test does not
+/// need a whole window behind it.
+struct FakeInstance {
+    QLockFile lock;
+    QLocalServer server;
+    QStringList lines;
+    bool up = false;
+
+    /// Holds the lock; listens at once unless `listening` is false (a process still starting).
+    explicit FakeInstance(const QString &name, bool listening = true)
+        : lock(name + QStringLiteral(".lock"))
+        , m_name(name)
+    {
+        lock.setStaleLockTime(0);
+        up = lock.tryLock(0);
+        QObject::connect(&server, &QLocalServer::newConnection, &server, [this] {
+            while (QLocalSocket *socket = server.nextPendingConnection()) {
+                QObject::connect(socket, &QLocalSocket::readyRead, socket, [this, socket] {
+                    if (!socket->canReadLine())
+                        return;
+                    lines << QString::fromUtf8(socket->readLine()).trimmed();
+                    socket->write("ok\n");
+                    socket->disconnectFromServer();
+                });
+            }
+        });
+        if (listening)
+            listen();
+    }
+
+    void listen()
+    {
+        QLocalServer::removeServer(m_name);
+        up = up && server.listen(m_name);
+    }
+
+    QString m_name;
+};
+
+/// One Notolith process per vault: the socket names live under a directory of the test's own
+/// (NOTEAPPC_INSTANCE_SOCKET), the settings under a private config, and each launch is asked on
+/// a thread as its own process would ask it.
+class InstanceTest : public WindowTest {
+protected:
+    void SetUp() override
+    {
+        WindowTest::SetUp();
+        ASSERT_TRUE(sockets.isValid());
+        ASSERT_TRUE(other.isValid());
+        ASSERT_TRUE(loose.isValid());
+        // Real vaults, so a note in one is known for it whatever the settings remember.
+        ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral(".obsidian")));
+        ASSERT_TRUE(QDir(other.path()).mkpath(QStringLiteral(".obsidian")));
+        wasSet = qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET");
+        previous = qgetenv("NOTEAPPC_INSTANCE_SOCKET");
+        qputenv("NOTEAPPC_INSTANCE_SOCKET", sockets.filePath(QStringLiteral("n")).toUtf8());
+        QFile note(other.filePath(QStringLiteral("Other.md")));
+        ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+        note.write("# Other\n");
+        note.close();
+        QFile stray(loose.filePath(QStringLiteral("Loose.md")));
+        ASSERT_TRUE(stray.open(QIODevice::WriteOnly));
+        stray.write("# Loose\n");
+        stray.close();
+    }
+
+    void TearDown() override
+    {
+        if (wasSet)
+            qputenv("NOTEAPPC_INSTANCE_SOCKET", previous);
+        else
+            qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    }
+
+    void lastUsed(const QStringList &vaults)
+    {
+        Settings settings = Settings::load();
+        settings.setValue(QStringLiteral("state.recentVaults"), vaults);
+        ASSERT_TRUE(settings.save());
+    }
+
+    /// A launch as main() makes it: null when a running instance took the argument, else the
+    /// instance this process would be, holding its lock.
+    static std::future<std::unique_ptr<SingleInstance>> launch(const QString &argument)
+    {
+        return std::async(std::launch::async, [argument] {
+            auto instance = std::make_unique<SingleInstance>(SingleInstance::launchFor(argument));
+            if (instance->handOver(argument))
+                return std::unique_ptr<SingleInstance>();
+            instance->moveToThread(qApp->thread()); // it serves a window of the main thread
+            return instance;
+        });
+    }
+
+    /// Waits for a launch to finish: its answer needs this thread's event loop.
+    static std::unique_ptr<SingleInstance> finished(std::future<std::unique_ptr<SingleInstance>> &result)
+    {
+        EXPECT_TRUE(QTest::qWaitFor([&] { return result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }, 5000));
+        return result.get();
+    }
+
+    /// `window` as the first launch of `argument` would have made it: serving, then opening.
+    std::unique_ptr<SingleInstance> serving(MainWindow &window, const QString &argument)
+    {
+        auto instance = std::make_unique<SingleInstance>(SingleInstance::launchFor(argument));
+        EXPECT_FALSE(instance->handOver(argument));
+        instance->serve(&window);
+        window.setSingleInstance(instance.get());
+        window.openTarget(noteAppC::resolveLaunchTarget(argument));
+        return instance;
+    }
+
+    static QStringList tabsOf(MainWindow &window)
+    {
+        auto *tabs = window.findChild<QTabBar *>(QStringLiteral("noteTabs"));
+        return tabs ? tabTexts(tabs) : QStringList();
+    }
+
+    static QString explorerRoot(MainWindow &window)
+    {
+        auto *tree = window.findChild<QTreeView *>(QStringLiteral("fileExplorer"));
+        return qobject_cast<QFileSystemModel *>(tree->model())->filePath(tree->rootIndex());
+    }
+
+    PrivateConfig config;
+    QTemporaryDir sockets, other, loose;
+    QByteArray previous;
+    bool wasSet = false;
+};
+
+} // namespace
+
+// The socket of a vault is named by the vault, not by the way it was spelled, under the
+// directory (prefix) NOTEAPPC_INSTANCE_SOCKET gives - or the runtime directory without it.
+TEST_F(InstanceTest, AVaultsSocketNameFollowsTheVaultAndTheOverride)
+{
+    const QString prefix = sockets.filePath(QStringLiteral("n"));
+    const QString name = SingleInstance::nameForVault(dir.path());
+    EXPECT_TRUE(name.startsWith(prefix + QLatin1Char('-'))) << name.toStdString();
+    EXPECT_TRUE(name.endsWith(QStringLiteral(".sock")));
+    EXPECT_LT(name.toUtf8().size(), 100) << "a unix socket path is 108 bytes at most";
+    EXPECT_EQ(SingleInstance::nameForVault(dir.path() + QStringLiteral("/")), name);
+    EXPECT_EQ(SingleInstance::nameForVault(dir.path() + QStringLiteral("/Projects/..")), name);
+    EXPECT_NE(SingleInstance::nameForVault(other.path()), name);
+    EXPECT_NE(SingleInstance::nameForVault(QString()), name) << "no vault has a name of its own too";
+
+    // The same folder through a symbolic link is the same vault.
+    const QString link = sockets.filePath(QStringLiteral("link"));
+    ASSERT_TRUE(QFile::link(dir.path(), link));
+    EXPECT_EQ(SingleInstance::nameForVault(link), name);
+
+    qunsetenv("NOTEAPPC_INSTANCE_SOCKET");
+    const QString runtime = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    EXPECT_TRUE(SingleInstance::nameForVault(dir.path()).startsWith(runtime + QStringLiteral("/notolith-")));
+}
+
+// Two vaults, two processes, each serving its own: a launch goes to the one that has its vault.
+TEST_F(InstanceTest, TwoVaultsAreTwoServingInstances)
+{
+    lastUsed({});
+    MainWindow first, second;
+    auto firstServing = serving(first, dir.path());
+    auto secondServing = serving(second, other.path());
+    ASSERT_TRUE(firstServing->ok());
+    ASSERT_TRUE(secondServing->ok());
+    EXPECT_NE(firstServing->name(), secondServing->name());
+
+    auto handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "the vault is open in the second window";
+    EXPECT_TRUE(tabsOf(second).contains(QStringLiteral("Other")));
+    EXPECT_FALSE(tabsOf(first).contains(QStringLiteral("Other")));
+
+    handed = launch(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(finished(handed), nullptr);
+    WAIT_TRUE(tabsOf(first).contains(QStringLiteral("Welcome")), 5000);
+    EXPECT_FALSE(tabsOf(second).contains(QStringLiteral("Welcome")));
+    EXPECT_EQ(explorerRoot(first), dir.path());
+    EXPECT_EQ(explorerRoot(second), other.path());
+
+    // A vault nobody has open starts a process of its own.
+    QTemporaryDir third;
+    ASSERT_TRUE(third.isValid());
+    handed = launch(third.path());
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr);
+    EXPECT_EQ(starting->name(), SingleInstance::nameForVault(third.path()));
+}
+
+// With nothing named, the vault the app would reopen decides: its instance when it runs.
+TEST_F(InstanceTest, ABareLaunchGoesToTheInstanceOfTheLastUsedVault)
+{
+    lastUsed({dir.path(), other.path()});
+    {
+        auto handed = launch(QString());
+        auto starting = finished(handed);
+        ASSERT_NE(starting, nullptr) << "nothing runs: this one starts";
+        EXPECT_EQ(starting->name(), SingleInstance::nameForVault(dir.path())) << "and it will open that vault";
+    }
+    MainWindow elsewhere;
+    auto elsewhereServing = serving(elsewhere, other.path());
+    lastUsed({dir.path(), other.path()}); // what the window just opened may have saved
+    {
+        auto handed = launch(QString());
+        EXPECT_NE(finished(handed), nullptr) << "another vault running is not the last-used one";
+    }
+    MainWindow last;
+    auto lastServing = serving(last, dir.path());
+    auto handed = launch(QString());
+    EXPECT_EQ(finished(handed), nullptr);
+}
+
+// No vault to reopen: such launches share one no-vault instance, started when none runs.
+TEST_F(InstanceTest, ALaunchWithNoVaultToReopenSharesTheNoVaultInstance)
+{
+    lastUsed({});
+    auto handed = launch(QString());
+    auto empty = finished(handed);
+    ASSERT_NE(empty, nullptr);
+    EXPECT_EQ(empty->name(), SingleInstance::nameForVault(QString()));
+    MainWindow window;
+    empty->serve(&window);
+    ASSERT_TRUE(empty->ok());
+
+    handed = launch(QString());
+    EXPECT_EQ(finished(handed), nullptr) << "a second bare launch goes to the first";
+    handed = launch(loose.filePath(QStringLiteral("Loose.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "so does a loose file: nobody has a vault open";
+}
+
+// A note outside every vault is not tied to one: the last-used vault's instance takes it when it
+// runs, else the no-vault instance does, else a process starts for it.
+TEST_F(InstanceTest, ALooseFileGoesToTheLastUsedVaultsInstanceElseToANoVaultOne)
+{
+    lastUsed({dir.path()});
+    const QString note = loose.filePath(QStringLiteral("Loose.md"));
+    {
+        auto handed = launch(note);
+        auto starting = finished(handed);
+        ASSERT_NE(starting, nullptr);
+        EXPECT_EQ(starting->name(), SingleInstance::nameForVault(QString())) << "no vault of it, so the no-vault name";
+    }
+    MainWindow vault;
+    auto vaultServing = serving(vault, dir.path());
+    auto handed = launch(note);
+    EXPECT_EQ(finished(handed), nullptr);
+    WAIT_TRUE(tabsOf(vault).contains(QStringLiteral("Loose")), 5000);
+}
+
+// A window that opens another vault stops serving the one it left and serves the new one.
+TEST_F(InstanceTest, SwitchingVaultMovesTheServedName)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString before = serv->name();
+    window.openVault(other.path());
+    EXPECT_EQ(serv->name(), SingleInstance::nameForVault(other.path()));
+    EXPECT_NE(serv->name(), before);
+    ASSERT_TRUE(serv->ok());
+
+    auto handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "the new vault is served here";
+    WAIT_TRUE(tabsOf(window).contains(QStringLiteral("Other")), 5000);
+
+    handed = launch(path(QStringLiteral("Welcome.md")));
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr) << "the old vault is nobody's: a launch for it starts its own";
+    EXPECT_EQ(starting->name(), before);
+
+    // Closing the vault leaves the window with no vault: the other name is let go too.
+    starting.reset();
+    window.closeVault();
+    EXPECT_EQ(serv->name(), SingleInstance::nameForVault(QString()));
+    handed = launch(other.filePath(QStringLiteral("Other.md")));
+    EXPECT_NE(finished(handed), nullptr);
+}
+
+// Asked to open a vault another process has, a window hands that process the vault, focuses it
+// and stays what it was.
+TEST_F(InstanceTest, SwitchingToAVaultOpenElsewhereHandsOverAndKeepsTheWindow)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString mine = serv->name();
+    FakeInstance owner(SingleInstance::nameForVault(other.path()));
+    ASSERT_TRUE(owner.up);
+
+    window.openVault(other.path());
+    WAIT_TRUE(!owner.lines.isEmpty(), 5000);
+    EXPECT_TRUE(owner.lines.first().endsWith(other.path())) << owner.lines.first().toStdString();
+    EXPECT_EQ(explorerRoot(window), dir.path()) << "this window is as it was";
+    EXPECT_EQ(serv->name(), mine);
+
+    auto handed = launch(path(QStringLiteral("Welcome.md")));
+    EXPECT_EQ(finished(handed), nullptr) << "and it still serves its own vault";
+    WAIT_TRUE(tabsOf(window).contains(QStringLiteral("Welcome")), 5000);
+}
+
+// A vault chosen from a window that already has the other process's lock but is not yet
+// listening (it is starting) waits for it as a launch would, instead of opening the vault twice.
+TEST_F(InstanceTest, SwitchingToAVaultThatIsStartingElsewhereWaitsForIt)
+{
+    lastUsed({});
+    MainWindow window;
+    auto serv = serving(window, dir.path());
+    const QString target = SingleInstance::nameForVault(other.path());
+    FakeInstance starting(target, false);
+    ASSERT_TRUE(starting.up);
+
+    auto result = std::async(std::launch::async, [&] { return serv->moveTo(target, other.path()); });
+    QTest::qWait(200);
+    EXPECT_EQ(result.wait_for(std::chrono::milliseconds(0)), std::future_status::timeout);
+    starting.listen();
+    ASSERT_TRUE(starting.up);
+    WAIT_TRUE(result.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready, 5000);
+    EXPECT_FALSE(result.get()) << "handed over, so the move is refused";
+    EXPECT_FALSE(starting.lines.isEmpty());
+}
+
+// Launches in the same moment for one vault end in one process: one takes the lock, the rest
+// wait for it to listen and hand their argument over.
+TEST_F(InstanceTest, LaunchesOfOneVaultInTheSameMomentEndInOneProcess)
+{
+    lastUsed({});
+    std::vector<std::future<std::unique_ptr<SingleInstance>>> launches;
+    for (int i = 0; i < 4; ++i)
+        launches.push_back(launch(dir.path()));
+    QElapsedTimer waited;
+    waited.start();
+    QTest::qWait(300);
+    int done = 0;
+    std::unique_ptr<SingleInstance> owner;
+    for (auto &each : launches) {
+        if (each.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            ++done;
+            owner = each.get();
+        }
+    }
+    if (waited.elapsed() >= 1500)
+        GTEST_SKIP() << "the machine was too busy to tell who was still waiting (" << waited.elapsed() << " ms)";
+    EXPECT_EQ(done, 1) << "exactly one takes the lock; the others wait for it to listen";
+    ASSERT_NE(owner, nullptr);
+
+    MainWindow window;
+    owner->serve(&window);
+    window.setSingleInstance(owner.get());
+    window.openTarget(noteAppC::resolveLaunchTarget(dir.path()));
+    int handed = 0;
+    for (auto &each : launches) {
+        if (!each.valid())
+            continue;
+        if (!finished(each))
+            ++handed;
+    }
+    EXPECT_EQ(handed, 3);
+}
+
+// A bare launch reopens "the vault last used", which another process reads from the settings
+// file: so a vault is remembered when it is opened, not only when a note is next switched.
+TEST_F(InstanceTest, AnOpenedVaultIsRememberedAtOnce)
+{
+    lastUsed({});
+    MainWindow window;
+    window.openVault(other.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), other.path());
+    window.openVault(dir.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), dir.path());
+}
+
+// A lock whose owner died is not a reason to wait: the next launch takes it.
+TEST_F(InstanceTest, ALockLeftByADeadProcessIsTakenOver)
+{
+    lastUsed({});
+    const pid_t child = ::fork();
+    ASSERT_GE(child, 0);
+    if (child == 0)
+        ::_exit(0);
+    int status = 0;
+    ASSERT_EQ(::waitpid(child, &status, 0), child);
+
+    const QString name = SingleInstance::nameForVault(dir.path());
+    QFile stale(name + QStringLiteral(".lock"));
+    ASSERT_TRUE(stale.open(QIODevice::WriteOnly));
+    stale.write(QByteArray::number(qint64(child)) + "\nnoteAppC\n" + QSysInfo::machineHostName().toUtf8() + "\n");
+    stale.close();
+
+    QElapsedTimer waited;
+    waited.start();
+    auto handed = launch(dir.path());
+    auto starting = finished(handed);
+    ASSERT_NE(starting, nullptr);
+    EXPECT_LT(waited.elapsed(), 1500) << "no waiting for an owner that is gone";
+}
+
+// No test process reaches the sockets of a Notolith someone is using: IsolatedHome.cpp (and the
+// CMake environment) put the runtime directory and the name prefix under the test's own, and no
+// test leaves them pointing back at the real ones - InstanceTest included, which sets its own
+// and puts the isolated one back.
+TEST(InstanceIsolation, EveryTestProcessNamesItsSocketsUnderItsOwnRuntimeDirectory)
+{
+    const QString runtime = qEnvironmentVariable("XDG_RUNTIME_DIR");
+    ASSERT_FALSE(runtime.isEmpty());
+    EXPECT_NE(runtime, QStringLiteral("/run/user/%1").arg(::getuid())) << "the real runtime directory";
+    ASSERT_TRUE(qEnvironmentVariableIsSet("NOTEAPPC_INSTANCE_SOCKET"));
+    EXPECT_TRUE(qEnvironmentVariable("NOTEAPPC_INSTANCE_SOCKET").startsWith(runtime));
+    for (const QString &name : {QString(), QStringLiteral("/tmp")}) {
+        EXPECT_FALSE(SingleInstance::nameForVault(name).startsWith(QStringLiteral("/run/user/")))
+            << SingleInstance::nameForVault(name).toStdString();
+        EXPECT_TRUE(SingleInstance::nameForVault(name).startsWith(runtime));
+    }
 }
 
 TEST_F(WindowTest, FormattingColourRowsResetAndRecolourTheEditor)

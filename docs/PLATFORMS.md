@@ -68,23 +68,49 @@ torpedo is a Raspberry Pi 5 running Debian, which would be the best stand-in
 for a phone's CPU, but the script is Arch-only and torpedo is a server - it
 would need its own dependency list and a decision to install build tools there.
 
-## Launching: one window per user
+## Launching: one process per vault
 
 `packaging/io.github.jernejmarcic.Notolith.desktop` registers Markdown files
-and folders, so a file manager runs `notolith %f`. Like Obsidian, only the
-first launch makes a window: it listens on `notolith.sock` in the runtime
-directory (`$XDG_RUNTIME_DIR`, owner-only), and a later launch connects, sends
-the absolute path it was given (nothing, when it was given none) with its
-`XDG_ACTIVATION_TOKEN`, waits up to a second for the answer and exits 0.
+and folders, so a file manager runs `notolith %f`. Like Obsidian, a vault is
+open in one window only, but two vaults are two windows - two processes, each
+with its own indexer, autosaver and sync engine. The first launch for a vault
+makes its window and listens on a socket named after the vault in the runtime
+directory (`$XDG_RUNTIME_DIR`, owner-only): `notolith-<16 hex digits>.sock`,
+the digits being a SHA-256 of the vault's canonical path, so the same vault
+spelled with a trailing slash, `..` or a symbolic link has the same name. A
+later launch for that vault connects, sends the absolute path it was given
+(nothing, when it was given none) with its `XDG_ACTIVATION_TOKEN`, waits up
+to a second for the answer and exits 0. A launch for a vault nobody has open
+starts a process of its own.
 
-A launch with no instance running pays one failed `connect()` and one lock
-file (`notolith.sock.lock`, taken before the window is built and held until
-exit): about 100 to 270 microseconds measured, `QStandardPaths` lookup
-included. The lock is what makes two launches in the same moment - a
-multi-select "Open with" - one window: the second finds it held, and keeps
-retrying the connect for up to two seconds while the first builds its window.
-A crash leaves the socket and lock files behind; the next start sees the dead
-owner and replaces both.
+Which vault a launch is for is worked out the way the window will open it
+(`SingleInstance::launchFor`): a folder, or a note inside a vault
+(`resolveLaunchTarget`), is that vault; with no argument it is the vault the app
+would reopen, the most recent in the settings that is still there. Two
+cases have no vault of their own:
+
+- A note outside every vault goes to the instance of the last-used vault when
+  that runs, and opens beside what it has, as one window always did; else to
+  the process that has no vault; else a process starts, opens the file alone,
+  and serves the no-vault name (`notolith-none.sock`).
+- A bare launch with no vault to reopen goes to the no-vault process, or
+  starts one with an empty window.
+
+A window that opens another vault (open folder, recent vaults, a note
+handed to it from another vault) stops serving the name of the one it left and
+serves the new one. When the new vault is already open in another process,
+that process is handed the vault and raises itself, and this window stays as it
+was. Closing the vault (or opening a loose file) hands the vault's name back and
+takes the no-vault name when it is free.
+
+A launch with no instance running pays one failed `connect()`, one lock file
+(`notolith-<id>.sock.lock`, taken before the window is built and held until
+exit) and, for a launch that names no vault, one read of the settings (done twice before the window: the cheap pass and the full one, about 20 microseconds each). The
+lock is what makes two launches in the same moment - a multi-select "Open
+with" - one window: the second finds it held, and keeps retrying the connect
+for up to two seconds while the first builds its window. A crash leaves the
+socket and lock files behind; the next start sees the dead owner and replaces
+both.
 
 The running window opens the path as the command line would: a note in the
 open vault replaces the current tab, as following a link does; another vault
@@ -99,9 +125,40 @@ instead of only flagging the window. Whether it does depends on the
 compositor and on the file manager passing a token (the desktop file's
 `StartupNotify=true` asks it to); that cannot be tested without one.
 
-`NOTEAPPC_INSTANCE_SOCKET` names another socket: benchmarks and anything else
-that starts the real binary while Notolith is in use should set it, or the
-launch is handed to the open window.
+`NOTEAPPC_INSTANCE_SOCKET` replaces `$XDG_RUNTIME_DIR/notolith` as the start of
+every socket name: it is a prefix, not one socket. `/tmp/run/bench` makes
+`/tmp/run/bench-<id>.sock` for a vault and `/tmp/run/bench-none.sock` for the
+no-vault process (its directory must exist; keep the whole path under 100
+bytes). Benchmarks and anything else that starts the real binary while
+Notolith is in use should set it, or the launch is handed to the open window of
+the same vault. Nothing in the repository's tests or benchmark scripts starts the
+binary, so none sets it; the window tests set it to a directory of their own.
+
+### What two processes share
+
+Per user, not per vault, and what was done about it:
+
+- `settings.ini` and `vaults.ini` (recent vaults and files, remembered note
+  positions): each process holds what it loaded, so `Settings::save()` writes
+  what the object changed since it loaded on top of what the files hold now,
+  under `~/.config/noteAppC/.save.lock` (200 ms wait at most). Another window's change to another
+  setting, a vault it opened, a note it positioned survive; a reset or a forgotten
+  position stays; a setting both changed takes the later save. A setting changed
+  in one window shows in another only after that other loads or saves.
+- Window geometry, sidebar state, plugin switches, EPUB positions
+  (`QSettings`): Qt merges per key under its own file lock. The geometry key is
+  one per user, so the last window closed decides where the next opens.
+- Sharing (`docs/SHARE.md`): a device's link is online once. A peer keeps one
+  connection per identity and every process would publish the same mDNS name,
+  so the share engine takes a lock per identity key (`link-<id>.lock` in the
+  share directory) and the second process says "Sharing is already running in
+  another Notolith window" in the status bar instead of starting a second
+  link. Stored shares, the vault's index, note history and sync journal are
+  per vault digest and need nothing.
+- Content-addressed caches (TeX, Mermaid, notebook outputs, EPUB images): the
+  same key holds the same bytes, so two processes writing it do no harm; a
+  reader can in principle meet a half-copied TeX PDF.
+- Crash recovery snapshots and PDF recovery are per note path.
 
 ## Pop-out windows on Hyprland
 

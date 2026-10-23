@@ -6727,6 +6727,34 @@ TEST(StyleFilesTest, EditingCalloutsIniRestylesWithoutARestart)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+// The config directory is also where the settings are saved, on every note switch: only the
+// style files' own change may re-lay the note out (a relayout in the middle of restoring a
+// scroll position put the text two lines off).
+TEST(StyleFilesTest, SavingOtherFilesInTheConfigDirectoryDoesNotLayTheNoteOutAgain)
+{
+    QTemporaryDir home;
+    ASSERT_TRUE(home.isValid());
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+    ASSERT_TRUE(QDir(home.path()).mkpath(QStringLiteral("noteAppC")));
+    const QString ini = QDir(home.path()).filePath(QStringLiteral("noteAppC/callouts.ini"));
+    writeAtomically(ini, "[note]\nbar = #FF0000ff\n");
+
+    auto editor = editorWith(QStringLiteral("> [!note] Title\n> Body.\n"));
+    QTest::qWait(100);
+    const quint64 before = editor->layoutCount();
+
+    for (const char *other : {"noteAppC/settings.ini", "noteAppC/vaults.ini", "noteAppC/.save.lock"})
+        writeAtomically(QDir(home.path()).filePath(QString::fromLatin1(other)), "[state]\nrecent-vaults = /x\n");
+    QFile::remove(QDir(home.path()).filePath(QStringLiteral("noteAppC/.save.lock")));
+    QTest::qWait(400);
+    EXPECT_EQ(editor->layoutCount(), before) << "a settings save laid the note out again";
+
+    writeAtomically(ini, "[note]\nbar = #0000FFff\n");
+    EXPECT_TRUE(QTest::qWaitFor([&] { return editor->layoutCount() > before; }, 3000)) << "the style file's own change still does";
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
 // --- the code block label -------------------------------------------------
 
 namespace {

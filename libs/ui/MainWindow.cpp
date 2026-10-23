@@ -71,6 +71,7 @@
 #include "FileTree.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "SingleInstance.h"
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
@@ -5222,6 +5223,13 @@ void MainWindow::clearOpenNote()
 
 void MainWindow::openVault(const QString &path)
 {
+    // A vault another Notolith process has open is that process's: asked before anything here is
+    // saved or closed, since a handed-over vault leaves this window as it is.
+    const QString served = SingleInstance::nameForVault(path);
+    if (m_instance && m_instance->name() != served && QFileInfo(path).isDir()
+        && m_instance->deliverTo(served, QFileInfo(path).absoluteFilePath()))
+        return;
+
     if (!maybeSaveAll())
         return;
 
@@ -5230,6 +5238,9 @@ void MainWindow::openVault(const QString &path)
         QMessageBox::warning(this, tr("Open vault"), tr("%1 is not a directory.").arg(path));
         return;
     }
+    // Lost the race for the name (the other process was still starting): it has the vault now.
+    if (m_instance && !m_instance->moveTo(served, vault.root()))
+        return;
 
     saveLayout(); // the vault being left
     if (m_graphSave.isActive()) {
@@ -5250,6 +5261,7 @@ void MainWindow::openVault(const QString &path)
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
+    m_settings.save(); // at once: another process's bare launch reopens the vault most recently opened
     // Before the scan, by this vault's settings: its notebooks and meta notes
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();
@@ -5294,6 +5306,8 @@ void MainWindow::closeVault()
 #endif
 
     saveLayout();
+    if (m_instance)
+        m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::Empty;
     m_vault = Vault();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache
@@ -5322,6 +5336,8 @@ void MainWindow::openSingleFile(const QString &path)
         return;
 
     saveLayout();
+    if (m_instance)
+        m_instance->moveTo(SingleInstance::nameForVault(QString()));
     m_openMode = OpenMode::SingleFile;
     m_vault = Vault();
     m_indexer->setVault(Vault()); // its scan stopped first: it writes to the cache

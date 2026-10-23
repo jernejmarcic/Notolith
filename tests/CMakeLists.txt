@@ -593,7 +593,9 @@ foreach(test IN LISTS noteappc_tests)
     set_property(TEST ${test} APPEND PROPERTY ENVIRONMENT
         "XDG_CONFIG_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/config"
         "XDG_CACHE_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/cache"
-        "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data")
+        "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/data"
+        "XDG_RUNTIME_DIR=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/run"
+        "NOTEAPPC_INSTANCE_SOCKET=${CMAKE_CURRENT_BINARY_DIR}/isolated-home/run/n")
     # M8: what is installed on the machine never reaches a test. A test that wants modules
     # (window: the fake ones) has set NOTEAPPC_MODULE_DIRS above this block; every other
     # gets a directory that does not exist, so a scan finds nothing.
@@ -603,7 +605,8 @@ foreach(test IN LISTS noteappc_tests)
     endif()
 endforeach()
 
-# The same homes for a test binary run by hand (IsolatedHome.cpp runs before main).
+# The same homes for a test binary run by hand (IsolatedHome.cpp runs before main). It also gives each
+# process a runtime directory of its own for the single-instance sockets, so none can reach a running Notolith.
 get_property(noteappc_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(target IN LISTS noteappc_targets)
     if(target MATCHES "^test_")

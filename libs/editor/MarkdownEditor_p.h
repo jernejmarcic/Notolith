@@ -939,6 +939,7 @@ struct MarkdownEditor::Private {
     quint64 m_rebuiltViews = 0;
     SyntaxStyles m_themeSyntax; ///< m_theme's `syntax` layer, rebuilt in setTheme
     QFileSystemWatcher *m_configWatcher = nullptr;
+    QString m_styleFilesSeen; ///< which style files existed, and their size and time, when last read
     Parser m_parser;
     CodeHighlighter m_code;
     /// Plays audio and video embeds; made on first use, one file at a time.
