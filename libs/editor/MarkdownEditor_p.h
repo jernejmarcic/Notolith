@@ -522,6 +522,11 @@ struct MarkdownEditor::BlockView {
         QRectF rect; ///< block-local
     };
     std::vector<NotebookOutputCell> notebookOutputs;
+    /// What appendPreview drew under this block's source (PreviewBelow.cpp):
+    /// the formula or diagram, or the line saying why there is none.
+    QPixmap previewImage;
+    QString previewHint;
+    QRectF previewRect; ///< block-local
     /// Text runs from inline HTML (`<b>`, `<kbd>`, `<span style=...>`...)
     /// resolved to a QTextCharFormat by layoutInlineHtml - added to
     /// formatsIn's output the way spellcheck underlines are. Source
@@ -893,6 +898,22 @@ struct MarkdownEditor::Private {
     QHash<QString, CodeBlockRenderer> m_codeBlockRenderers; ///< lowercase language -> renderer
     QHash<QString, CodeBlockCacheEntry> m_codeBlockCache; ///< "language|width|theme|source" -> result
     quint64 m_codeBlockGeneration = 0;
+    /// PreviewBelow.cpp: the last formula drawn under its source, so typing in
+    /// it renders once per change and no image is kept per keystroke.
+    struct PreviewMath {
+        QString key;
+        QPixmap image;
+        QString error;
+    } m_previewMath;
+    /// The diagram last drawn under a fence's source, shown while the next one
+    /// is made, and the key of what the fence says now against the key the
+    /// pause in typing has let through.
+    QPixmap m_previewStale;
+    qsizetype m_previewStaleBlock = -1;
+    QString m_previewWanted;
+    QString m_previewAllowed;
+    QTimer m_previewTimer;
+    bool m_previewTimerReady = false;
     NotebookRunner m_notebookRunner;
     NotebookRunnable m_notebookRunnable;
     NotebookInputState m_notebookInput;
