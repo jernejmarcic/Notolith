@@ -464,6 +464,22 @@ QString Vault::createFolder(const QString &parentRelative, const QString &baseNa
     return path;
 }
 
+namespace {
+/// An image's annotations sidecar (ImageAnnotations::sidecarPath: "<file name> annotations.md" beside it) goes with
+/// the file it belongs to. Best effort, and never over a sidecar already at the new name.
+void moveAnnotationSidecar(const QString &oldPath, const QString &newPath)
+{
+    const auto sidecar = [](const QString &path) {
+        const QFileInfo info(path);
+        return info.absolutePath() + QLatin1Char('/') + info.fileName() + QStringLiteral(" annotations.md");
+    };
+    const QString from = sidecar(oldPath);
+    const QString to = sidecar(newPath);
+    if (QFileInfo(newPath).isFile() && QFileInfo(from).isFile() && !QFileInfo::exists(to))
+        QFile::rename(from, to);
+}
+} // namespace
+
 bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
                        QString *newAbsolutePath, QString *error) const
 {
@@ -560,6 +576,7 @@ bool Vault::renamePath(const QString &absolutePath, const QString &newBaseName,
             return false;
         }
     }
+    moveAnnotationSidecar(absolutePath, newPath);
     if (newAbsolutePath)
         *newAbsolutePath = newPath;
     return true;
@@ -606,6 +623,7 @@ bool Vault::movePath(const QString &absolutePath, const QString &targetFolder,
     QFile file(source);
     if (!file.rename(newPath))
         return refuse(file.errorString());
+    moveAnnotationSidecar(source, newPath);
     if (newAbsolutePath)
         *newAbsolutePath = newPath;
     return true;

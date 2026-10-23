@@ -966,3 +966,71 @@ TEST_F(SnapshotsTest, TwoCopiesInTheSameMillisecondDoNotReplaceEachOther)
     EXPECT_EQ(noteAppC::Snapshots::read(versions.at(1)), QStringLiteral("first"));
     EXPECT_GT(versions.at(0).time, versions.at(1).time);
 }
+
+// An image's annotations live in "<image file name> annotations.md" beside it (ImageAnnotations::sidecarPath): the
+// file operations take it along, so a renamed or moved image does not lose its marks.
+namespace {
+void writeFile(const QString &path, const QByteArray &bytes)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << path.toStdString();
+    ASSERT_EQ(file.write(bytes), bytes.size());
+}
+} // namespace
+
+TEST(VaultFileOps, RenamingAnImageTakesItsAnnotationsSidecarAlong)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    writeFile(dir.filePath(QStringLiteral("pic.png")), "png");
+    writeFile(dir.filePath(QStringLiteral("pic.png annotations.md")), "marks");
+    QString renamed, error;
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("pic.png")), QStringLiteral("photo"), &renamed, &error))
+        << error.toStdString();
+    EXPECT_EQ(renamed, dir.filePath(QStringLiteral("photo.png")));
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("photo.png annotations.md"))), QByteArray("marks"));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral("pic.png annotations.md"))));
+}
+
+TEST(VaultFileOps, RenamingAnImageNeverOverwritesASidecarAlreadyAtTheNewName)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Vault vault(dir.path());
+    writeFile(dir.filePath(QStringLiteral("pic.png")), "png");
+    writeFile(dir.filePath(QStringLiteral("pic.png annotations.md")), "marks of pic");
+    writeFile(dir.filePath(QStringLiteral("photo.png annotations.md")), "someone else's");
+    QString renamed, error;
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("pic.png")), QStringLiteral("photo"), &renamed, &error));
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("photo.png annotations.md"))), QByteArray("someone else's"));
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("pic.png annotations.md"))), QByteArray("marks of pic"));
+}
+
+TEST(VaultFileOps, MovingAnImageTakesItsAnnotationsSidecarAlong)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Dest")));
+    Vault vault(dir.path());
+    writeFile(dir.filePath(QStringLiteral("pic.png")), "png");
+    writeFile(dir.filePath(QStringLiteral("pic.png annotations.md")), "marks");
+    QString moved, error;
+    ASSERT_TRUE(vault.movePath(dir.filePath(QStringLiteral("pic.png")), dir.filePath(QStringLiteral("Dest")), &moved, &error))
+        << error.toStdString();
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("Dest/pic.png annotations.md"))), QByteArray("marks"));
+    EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral("pic.png annotations.md"))));
+}
+
+TEST(VaultFileOps, RenamingAFolderKeepsEachSidecarBesideItsImage)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Notes")));
+    Vault vault(dir.path());
+    writeFile(dir.filePath(QStringLiteral("Notes/pic.png")), "png");
+    writeFile(dir.filePath(QStringLiteral("Notes/pic.png annotations.md")), "marks");
+    QString renamed, error;
+    ASSERT_TRUE(vault.renamePath(dir.filePath(QStringLiteral("Notes")), QStringLiteral("Archive"), &renamed, &error));
+    EXPECT_EQ(readAll(dir.filePath(QStringLiteral("Archive/pic.png annotations.md"))), QByteArray("marks"));
+}
