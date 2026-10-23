@@ -472,7 +472,9 @@ void Index::setNames(const QString &relative, const QStringList &names)
 void Index::beginBatch()
 {
     if (!m_inBatch && m_db.isOpen()) {
-        m_db.transaction();
+        // IMMEDIATE: the write lock is taken here, waiting if another connection holds it. A plain BEGIN that reads
+        // and then writes fails at once ("database is locked") if another connection committed in between.
+        QSqlQuery(m_db).exec(QStringLiteral("BEGIN IMMEDIATE"));
         m_inBatch = true;
     }
 }
@@ -562,17 +564,28 @@ void Index::remove(const QString &path)
     m_linkTargetsValid = m_aliasesValid = false;
 }
 
+namespace {
+
 /// Deleting a note's `files` row cascades into every child table by `file`;
 /// unindexed, each cascade scanned the whole table, on every save and in a
 /// re-index of a vault whose notes all changed. The Writer's job, not
 /// createSchema()'s: that runs on the UI thread at every open, and building
 /// these on an already-populated cache is a one-time pass that belongs here.
-static void createChildIndexes(const QSqlDatabase &db)
+/// A failure is logged and leaves the cache slow, not wrong: the next scan tries again.
+bool createChildIndexes(const QSqlDatabase &db)
 {
+    bool all = true;
     QSqlQuery query(db);
-    for (const char *table : {"headings", "links", "tags", "blocks", "tasks", "props", "meta_notes", "names"})
-        query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS %1_file ON %1(file)").arg(QLatin1String(table)));
+    for (const char *table : {"headings", "links", "tags", "blocks", "tasks", "props", "meta_notes", "names"}) {
+        if (!query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS %1_file ON %1(file)").arg(QLatin1String(table)))) {
+            qWarning("index: cannot create %s_file: %s", table, qPrintable(query.lastError().text()));
+            all = false;
+        }
+    }
+    return all;
 }
+
+} // namespace
 
 struct Index::Writer::Private {
     QString connection;

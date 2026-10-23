@@ -1888,8 +1888,9 @@ TEST_F(WatchedVaultTest, AnInAppSaveCausesNoWholeWalkAndNoSecondChange)
 
 namespace {
 /// The eight per-file child tables of the schema: each is deleted by `file` when a note is re-put.
-const QStringList kChildTables = {QStringLiteral("headings"), QStringLiteral("links"),  QStringLiteral("tags"),
-                                  QStringLiteral("blocks"),   QStringLiteral("tasks"),  QStringLiteral("props"),
+const QStringList kChildTables = {QStringLiteral("headings"),   QStringLiteral("links"),
+                                  QStringLiteral("tags"),       QStringLiteral("blocks"),
+                                  QStringLiteral("tasks"),      QStringLiteral("props"),
                                   QStringLiteral("meta_notes"), QStringLiteral("names")};
 
 /// Names of the indexes the cache file holds, read on a connection of its own.
@@ -1909,6 +1910,20 @@ QStringList indexNamesIn(const QString &cache)
     QSqlDatabase::removeDatabase(QStringLiteral("index-names"));
     return names;
 }
+
+bool hasAllChildIndexes(const QString &cache)
+{
+    const QStringList names = indexNamesIn(cache);
+    return std::all_of(kChildTables.cbegin(), kChildTables.cend(),
+                       [&](const QString &table) { return names.contains(table + QStringLiteral("_file")); });
+}
+
+QStringList capturedWarnings;
+void captureWarnings(QtMsgType type, const QMessageLogContext &, const QString &message)
+{
+    if (type == QtWarningMsg || type == QtCriticalMsg)
+        capturedWarnings << message;
+}
 } // namespace
 
 // Deleting a note's row cascades into eight child tables. Without an index on
@@ -1921,13 +1936,7 @@ TEST_F(IndexTest, ACacheWrittenBeforeTheChildIndexesGainsThemAndKeepsItsRows)
         Index first;
         build(first);
     }
-    // A from-scratch build has them too by the time finished() lands: the UI thread writes to the cache after that.
-    const auto hasAll = [&] {
-        const QStringList names = indexNamesIn(cache);
-        return std::all_of(kChildTables.cbegin(), kChildTables.cend(),
-                           [&](const QString &table) { return names.contains(table + QStringLiteral("_file")); });
-    };
-    ASSERT_TRUE(hasAll());
+    ASSERT_TRUE(hasAllChildIndexes(cache)) << "a from-scratch build ends with them";
     // The cache as an older build left it: same schema version, no child indexes.
     {
         QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("old-cache"));
@@ -2034,4 +2043,58 @@ TEST_F(IndexTest, GraphLinksResolveAsResolveDoesFromTheLinkingNote)
         }
     }
     EXPECT_TRUE(sawFolderPreference);
+}
+
+// The scan thread makes a from-scratch build's indexes before it reports the scan done: afterwards the UI thread
+// writes to the cache, and DDL still in flight on the scan thread could fail that write. Read at the moment
+// finished() lands, on a connection of its own, so the Writer destructor's fallback cannot hide a late finish().
+TEST_F(IndexTest, TheChildIndexesExistWhenFinishedLandsAndMakingThemWarnsOfNothing)
+{
+    const QString cache = Index::cachePathFor(dir.path());
+    // Enough rows that making the indexes takes longer than the UI thread needs to notice the scan is done.
+    QDir(dir.path()).mkpath(QStringLiteral("bulk"));
+    for (int i = 0; i < 3000; ++i) {
+        write(QStringLiteral("bulk/N%1.md").arg(i),
+              QStringLiteral("# N%1\n\n#t%2 [[N%3]] [[N%4]] [[Home]]\n\n- [ ] a task\n").arg(i).arg(i % 50).arg((i + 1) % 3000).arg((i * 7) % 3000).toUtf8());
+    }
+    capturedWarnings.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureWarnings);
+    bool atFinished = false;
+    {
+        Index index;
+        Indexer indexer(&index);
+        QObject::connect(&indexer, &Indexer::finished, &indexer, [&] { atFinished = hasAllChildIndexes(cache); });
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        ASSERT_TRUE(done.wait(20000));
+    }
+    qInstallMessageHandler(previous);
+    EXPECT_TRUE(atFinished);
+    EXPECT_TRUE(capturedWarnings.isEmpty()) << qPrintable(capturedWarnings.join(QLatin1Char('\n')));
+}
+
+// A UI batch that reads and then writes must not lose the write because another connection committed in
+// between (SQLite answers such an upgrade "database is locked" at once, without waiting): the batch takes the
+// write lock when it begins. The other connection does not wait here, so it is the one that is refused.
+TEST_F(IndexTest, ABatchKeepsItsWriteWhenAnotherConnectionWantsToWriteFirst)
+{
+    Index index;
+    build(index);
+    const int before = index.noteCount();
+    ASSERT_GT(before, 0);
+
+    index.beginBatch();
+    (void)index.noteCount(); // the batch has read: it holds a snapshot
+    {
+        QSqlDatabase other = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("other-writer"));
+        other.setDatabaseName(Index::cachePathFor(dir.path()));
+        other.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=0"));
+        ASSERT_TRUE(other.open());
+        QSqlQuery query(other);
+        query.exec(QStringLiteral("INSERT OR REPLACE INTO state(key, value) VALUES('other', '1')")); // refused or not
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("other-writer"));
+    index.remove(vault.absolute(QStringLiteral("Home.md")));
+    index.endBatch();
+    EXPECT_EQ(index.noteCount(), before - 1) << "the batch's own write went through";
 }

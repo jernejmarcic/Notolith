@@ -334,7 +334,7 @@ void Indexer::runScan(const QStringList &only, const QStringList &dirs, const QS
                 return;
             (asNote ? notes : attachments) << path; // attachments so ![[image.png]] resolves
         };
-        if (whole)
+        if (whole && !force)
             writer.loadCurrent(); // every file is checked: one query, not one per file
         QSet<QString> walked; // a partial walk: the folders it read, vault-relative ("" for the root)
         if (whole) {
