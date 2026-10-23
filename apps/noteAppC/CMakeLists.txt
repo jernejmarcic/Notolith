@@ -16,6 +16,13 @@ if(NOT ANDROID)
     # (linuxdeploy) writes its own RPATH.
     set_target_properties(noteAppC PROPERTIES INSTALL_RPATH "" BUILD_WITH_INSTALL_RPATH ON)
 endif()
+# libzmq (the notebook's, behind gnutls and p11-kit) is loaded on first use:
+# zmq_lazy.cpp defines the functions the notebook calls and, ahead of libzmq on
+# the link line, leaves it out of NEEDED under --as-needed (root CMakeLists.txt).
+if(TARGET noteAppC_notebook AND TARGET PkgConfig::ZMQ AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_sources(noteAppC PRIVATE zmq_lazy.cpp)
+    target_link_libraries(noteAppC PRIVATE PkgConfig::ZMQ)
+endif()
 # The product name; the target keeps the code name every build script uses.
 if(NOT ANDROID)
     set_target_properties(noteAppC PROPERTIES OUTPUT_NAME notolith)

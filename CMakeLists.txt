@@ -210,6 +210,15 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# Link only the libraries a binary refers to. CMake hands every executable the
+# whole of a dependency's link interface (protobuf's lists 79 Abseil libraries,
+# Qt's lists libraries its own code does not touch), and each one named is a
+# library the loader maps and relocates before main(): 27 Abseil libraries nobody
+# calls were 13 ms of every start.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_link_options(-Wl,--as-needed)
+endif()
+
 # md4qt is not packaged on Arch; pin the KDE repository by commit.
 # 5.x dropped the text-plugin hook the plan assumed, so Obsidian's own syntax
 # is a post-pass over the tree instead (libs/markdown/ObsidianSyntax).
