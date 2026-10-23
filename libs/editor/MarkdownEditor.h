@@ -2079,6 +2079,17 @@ private:
     /// text - cellSafe()'d either way. Inserts at the caret.
     void insertMimeData(const QMimeData *mime);
     void removeSelectionOrChar(int direction);
+    /// Where a word key takes a caret at `from`, grouped as CodeMirror 6 does
+    /// (Obsidian's editor): grapheme clusters sorted into space, word
+    /// characters (letters, digits, `_`, CJK) and the rest. `deleting` is
+    /// Ctrl+Backspace/Delete: at a line's edge the line break itself, a single
+    /// space skipped, never past the line. Otherwise Ctrl+Left/Right: every
+    /// space and line break skipped, then one group. In a drawn table cell never
+    /// past the cell; never inside an entity drawn as one character.
+    qsizetype wordTarget(qsizetype from, int direction, bool deleting) const;
+    /// Ctrl+Backspace (-1) and Ctrl+Delete (1): the selection if there is one,
+    /// else up to wordTarget().
+    void removeWord(int direction);
     void moveCursor(qsizetype offset, bool keepAnchor);
     void moveVertically(int lines, bool keepAnchor);
     Range selection() const;

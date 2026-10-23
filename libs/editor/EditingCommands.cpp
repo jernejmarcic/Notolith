@@ -18,6 +18,7 @@
 #include <QPixmap>
 #include <QRegularExpression>
 #include <QScrollBar>
+#include <QTextBoundaryFinder>
 
 #include <algorithm>
 
@@ -332,6 +333,143 @@ bool MarkdownEditor::handleAutoPair(QChar typed)
     applyEdit(at, 0, QString(typed) + close);
     setSelectionRange(at + 1, at + 1);
     return true;
+}
+
+namespace {
+
+/// CodeMirror 6's default categoriser (@codemirror/state, makeCategorizer),
+/// which is what Obsidian's word keys group by: a cluster of only whitespace is
+/// Space, one holding a letter, digit or underscore is Word, the rest Other.
+enum class Group { Space, Word, Other };
+
+Group groupOf(QStringView cluster)
+{
+    bool space = true;
+    for (qsizetype i = 0; i < cluster.size(); ++i) {
+        char32_t c = cluster.at(i).unicode();
+        if (QChar::isHighSurrogate(c) && i + 1 < cluster.size() && cluster.at(i + 1).isLowSurrogate())
+            c = QChar::surrogateToUcs4(c, cluster.at(++i).unicode());
+        if (QChar::isLetterOrNumber(c) || c == U'_')
+            return Group::Word;
+        if (!QChar::isSpace(c))
+            space = false;
+    }
+    return space ? Group::Space : Group::Other;
+}
+
+/// The grapheme clusters of the line holding `at`, stepped either way. The
+/// finder reads the note's own characters; building it is linear in the line
+/// (measured 5 ms for a 1 MiB line, 0.005 ms for 1 KiB).
+struct LineClusters {
+    LineClusters(const QString &text, qsizetype at)
+        : start(lineStartOf(text, at)), end(lineEndOf(text, at)),
+          finder(QTextBoundaryFinder::Grapheme, text.constData() + start, int(end - start))
+    {
+    }
+    /// The edge of the cluster after (direction 1) or before (-1) `pos`.
+    qsizetype step(qsizetype pos, int direction)
+    {
+        finder.setPosition(int(pos - start));
+        const qsizetype edge = direction < 0 ? finder.toPreviousBoundary() : finder.toNextBoundary();
+        return edge < 0 ? pos : start + edge;
+    }
+    qsizetype start;
+    qsizetype end;
+    QTextBoundaryFinder finder;
+};
+
+} // namespace
+
+qsizetype MarkdownEditor::wordTarget(qsizetype from, int direction, bool deleting) const
+{
+    const QString &text = d->m_text;
+    const QStringView all(text);
+    LineClusters line(text, from);
+    qsizetype pos = from;
+    bool haveGroup = false;
+    Group group = Group::Space;
+
+    if (deleting) {
+        // CodeMirror's deleteByGroup. A single space at the caret is skipped
+        // and the group behind it goes too; two or more are a group of their
+        // own. At a line's edge the caret's own line break is the step.
+        for (;;) {
+            if (pos == (direction < 0 ? line.start : line.end)) {
+                if (pos == from && (direction < 0 ? from > 0 : from < text.size()))
+                    pos += direction;
+                break;
+            }
+            const qsizetype next = line.step(pos, direction);
+            if (next == pos)
+                break;
+            const QStringView cluster = all.mid(qMin(pos, next), qAbs(next - pos));
+            const Group nextGroup = groupOf(cluster);
+            if (haveGroup && nextGroup != group)
+                break;
+            if (cluster != QLatin1String(" ") || pos != from) {
+                group = nextGroup;
+                haveGroup = true;
+            }
+            pos = next;
+        }
+    } else {
+        // CodeMirror's byGroup: all spaces, line breaks included, are skipped,
+        // then the group behind them is taken.
+        for (;;) {
+            qsizetype next;
+            QStringView cluster;
+            const bool crossing = pos == (direction < 0 ? line.start : line.end);
+            if (crossing) {
+                if (direction < 0 ? pos == 0 : pos == text.size())
+                    break;
+                next = pos + direction;
+                cluster = all.mid(qMin(pos, next), 1); // the "\n"
+            } else {
+                next = line.step(pos, direction);
+                if (next == pos)
+                    break;
+                cluster = all.mid(qMin(pos, next), qAbs(next - pos));
+            }
+            const Group nextGroup = groupOf(cluster);
+            if (!haveGroup) {
+                group = nextGroup;
+                haveGroup = true;
+            } else {
+                if (group == Group::Space)
+                    group = nextGroup;
+                if (group != nextGroup)
+                    break;
+            }
+            pos = next;
+            if (crossing)
+                line = LineClusters(text, pos);
+        }
+    }
+    qsizetype target = pos;
+
+    // A drawn table's cell is its own field: the word step stops at its edge,
+    // and the caller crosses it the way a plain arrow does.
+    if (d->m_anchor == d->m_cursor) {
+        const CellRef cell = tableCellAt(from);
+        if (cell.valid() && cell.row >= 0 && tableRenderedAt(from))
+            target = qBound(cell.range.start, target, cell.range.end);
+    }
+    return stepOverSubstitution(target, direction);
+}
+
+void MarkdownEditor::removeWord(int direction)
+{
+    if (d->m_mode == Mode::Reading)
+        return;
+    if (selection().length() > 0) {
+        removeSelectionOrChar(direction);
+        return;
+    }
+    const qsizetype target = wordTarget(d->m_cursor, direction, true);
+    if (target == d->m_cursor)
+        return;
+    pushUndo();
+    applyEdit(qMin(target, d->m_cursor), qAbs(target - d->m_cursor), QString());
 }
 
 bool MarkdownEditor::deleteAutoPair()

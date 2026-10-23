@@ -6297,6 +6297,45 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         return;
     if (handleTableKey(event))
         return;
+    // Word steps (Ctrl+Backspace/Delete/Left/Right, and with Shift); the
+    // platform's binding lookup only runs for these keys. Vim's normal and
+    // visual modes own their keys; insert mode is plain typing.
+    const int wordKey = event->key();
+    const bool wordKeyCandidate = (wordKey == Qt::Key_Backspace || wordKey == Qt::Key_Delete
+                                   || wordKey == Qt::Key_Left || wordKey == Qt::Key_Right)
+                                  && (event->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+    if (wordKeyCandidate && (!d->m_vim.enabled || d->m_vim.mode == VimState::Mode::Insert)) {
+        const bool deleteBack = event->matches(QKeySequence::DeleteStartOfWord);
+        if (deleteBack || event->matches(QKeySequence::DeleteEndOfWord)) {
+            // Between "(" and ")" or right after a list marker it is Backspace.
+            if (!deleteBack || (!deleteAutoPair() && !handleListBackspace()))
+                removeWord(deleteBack ? -1 : 1);
+            if (deleteBack) {
+                updateSuggestions();
+                updateSlashSuggestions();
+            }
+            return;
+        }
+        const bool previous = event->matches(QKeySequence::MoveToPreviousWord)
+                              || event->matches(QKeySequence::SelectPreviousWord);
+        if (previous || event->matches(QKeySequence::MoveToNextWord)
+            || event->matches(QKeySequence::SelectNextWord)) {
+            const int direction = previous ? -1 : 1;
+            const bool extend = event->matches(QKeySequence::SelectPreviousWord)
+                                || event->matches(QKeySequence::SelectNextWord);
+            const Range selected = selection();
+            if (!extend && selected.length() > 0) { // collapses to its edge, as in CodeMirror
+                moveCursor(direction < 0 ? selected.start : selected.end, false);
+                return;
+            }
+            qsizetype target = wordTarget(d->m_cursor, direction, false);
+            if (target == d->m_cursor) // a cell's edge: out of it as the plain arrow goes
+                target = stepOverSubstitution(qBound<qsizetype>(0, d->m_cursor + direction, d->m_text.size()),
+                                              direction);
+            moveCursor(extend ? target : snapToTableCell(target, d->m_cursor), extend);
+            return;
+        }
+    }
     switch (event->key()) {
     // In a drawn table the arrows cross from one cell into the next.
     // An entity is one character on screen, so one step for the caret.
