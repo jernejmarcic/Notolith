@@ -47,6 +47,15 @@
 
 namespace noteAppC {
 
+/// While it lives, an edit is the reader's own (a key, a pick, a drop): it keeps
+/// the value it found, so one inside another does not end the outer one's.
+struct TypingScope {
+    bool &flag;
+    bool was;
+    explicit TypingScope(bool &f) : flag(f), was(f) { flag = true; }
+    ~TypingScope() { flag = was; }
+};
+
 /// A format property: the colour of a strikethrough line that is not the
 /// text's. Qt draws a strikeout in the text's own colour, so such a line is
 /// left to paintStrikeLines and the format's strikeout stays off.
@@ -1065,7 +1074,7 @@ struct MarkdownEditor::Private {
     bool m_parsePending = false; ///< a pool parse is out and not yet adopted
     qint64 m_lastParseNs = 0;    ///< the last parse's cost: whether a newline may be parsed on the spot
     int m_parses = 0;
-    bool m_typing = false;       ///< inside a key or input-method event: the edit is the reader's own
+    bool m_typing = false;       ///< inside a key, an input-method event, a pick or a drop: the edit is the reader's own
     bool m_cursorOn = true;
     QTimer m_blink;
 };

@@ -1332,11 +1332,13 @@ void MarkdownEditor::reparse()
     if (d->m_features.HTMLblocks)
         expandEditableHTML(result.decorations, d->m_text);
     sortDecorations(result.decorations);
+    // The parse alone, as the pool job times it: the layout that follows is not
+    // what the next newline's budget is about.
+    d->m_lastParseNs = clock.nsecsElapsed();
     d->m_parsedVersion = d->m_textVersion;
     setWordCount(result.metadata.wordCount);
     adoptDecorations(std::move(result.decorations), std::move(result.metadata.properties),
                      std::move(result.metadata.headings));
-    d->m_lastParseNs = clock.nsecsElapsed();
     if (dropped && !d->m_pendingFolds.isEmpty()) // parked for the parse that was dropped
         applyFoldState(std::exchange(d->m_pendingFolds, {}));
 }
@@ -2037,6 +2039,7 @@ void MarkdownEditor::cutSelection()
 
 void MarkdownEditor::pasteClipboard(bool plain)
 {
+    const TypingScope typed(d->m_typing);
     // Plain text only with Shift, as Obsidian does; otherwise an
     // image on the clipboard is saved as an attachment (PasteDrop.cpp).
     if (plain)
@@ -5152,6 +5155,9 @@ qsizetype MarkdownEditor::offsetAt(const QPoint &viewportPoint) const
     const qreal x = viewportPoint.x() - contentLeft();
     if (d->m_blocks.empty())
         return d->m_text.size();
+    // The empty line after the note's final newline: no block holds it.
+    if (belowLastBlock(d->m_text.size()) && y >= d->m_blocks.back().y + d->m_blocks.back().height)
+        return d->m_text.size();
 
     // The last block that shows: a click below the end lands in it, not in
     // a folded section's hidden tail.
@@ -5592,6 +5598,10 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
 {
     const bool breaksLines = inserted.contains(QLatin1Char('\n'))
                              || QStringView(d->m_text).mid(at, removed).contains(QLatin1Char('\n'));
+    // A letter typed on the empty line after a table or a callout that ends the
+    // note: that block would take it in as a part of itself until the parse.
+    const bool onTheTail = removed == 0 && !inserted.isEmpty() && at == d->m_text.size() && belowLastBlock(at)
+                           && (d->m_blocks.back().span.kind == BlockSpan::Kind::Table || d->m_blocks.back().callout);
     d->m_text.remove(at, removed);
     d->m_text.insert(at, inserted);
     for (RemoteCaret &caret : d->m_remoteCarets) { // they follow their text, as vim's marks do
@@ -5654,7 +5664,7 @@ void MarkdownEditor::applyEdit(qsizetype at, qsizetype removed, const QString &i
     // ponytail: past the budget the debounced pool parse and the jump stay -
     // softened for headings in layoutBlock; a parse of the edited block alone
     // would remove it.
-    const bool parsedNow = breaksLines && d->m_typing && !d->m_applyingExternal && !d->m_formattingTables
+    const bool parsedNow = (breaksLines || onTheTail) && d->m_typing && !d->m_applyingExternal && !d->m_formattingTables
                            && !d->m_parsePending && d->m_lastParseNs < kSyncParseBudgetNs;
     if (parsedNow)
         reparse();
@@ -5970,8 +5980,7 @@ void MarkdownEditor::setKeyBindings(const QHash<QString, QList<QKeySequence>> &b
 
 void MarkdownEditor::keyPressEvent(QKeyEvent *event)
 {
-    d->m_typing = true; // applyEdit: this edit is the reader's own
-    const auto typed = qScopeGuard([this] { d->m_typing = false; });
+    const TypingScope typed(d->m_typing); // applyEdit: this edit is the reader's own
     if (event->key() == Qt::Key_0 && event->modifiers() == Qt::ControlModifier && resetPdfZoom())
         return;
     // Ctrl pressed with the pointer already resting on a link previews it,
@@ -6109,10 +6118,18 @@ void MarkdownEditor::keyPressEvent(QKeyEvent *event)
         moveVertically(1, shift);
         return;
     case Qt::Key_Home:
+        if (event->modifiers() & Qt::ControlModifier) { // the start of the note
+            moveCursor(0, shift);
+            return;
+        }
         moveCursor(d->m_text.lastIndexOf(QLatin1Char('\n'), qMax<qsizetype>(0, d->m_cursor - 1)) + 1,
                    shift);
         return;
     case Qt::Key_End: {
+        if (event->modifiers() & Qt::ControlModifier) { // the end of the note: the empty line after a final newline too
+            moveCursor(d->m_text.size(), shift);
+            return;
+        }
         const qsizetype next = d->m_text.indexOf(QLatin1Char('\n'), d->m_cursor);
         moveCursor(next < 0 ? d->m_text.size() : next, shift);
         return;
@@ -6591,8 +6608,7 @@ void MarkdownEditor::focusOutEvent(QFocusEvent *event)
 
 void MarkdownEditor::inputMethodEvent(QInputMethodEvent *event)
 {
-    d->m_typing = true;
-    const auto typed = qScopeGuard([this] { d->m_typing = false; });
+    const TypingScope typed(d->m_typing); // applyEdit: this edit is the reader's own
     // Vim's normal and visual modes take keys as commands: composed text
     // would be typed into the note without an insert.
     if (d->m_vim.enabled && d->m_vim.mode != VimState::Mode::Insert) {

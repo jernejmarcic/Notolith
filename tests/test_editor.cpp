@@ -17,6 +17,8 @@
 #include <QElapsedTimer>
 #include <QGuiApplication>
 #include <QImage>
+#include <QAbstractItemView>
+#include <QCompleter>
 #include <QMimeData>
 #include <QRandomGenerator>
 #include <QLineEdit>
@@ -1342,6 +1344,160 @@ TEST(EnterJitterTest, ALetterInALongNoteDoesNotMoveTheViewWhenTheParseLands)
         QTest::qWait(300); // the parse lands
         EXPECT_NEAR(editor->caretRectNow().y(), caret, 0.5) << "the caret moved when the parse landed";
         EXPECT_EQ(diffRows(withoutCaret(*editor), typed).toStdString(), "") << "the text moved when the parse landed";
+    }
+}
+
+// The adaptive budget times the parse and nothing else, on both paths: a
+// synchronous Enter once also timed the layout after it, so the next Enter in a
+// note of 20-30 kB was debounced, and the one after parsed again at once.
+TEST(EnterJitterTest, EveryEnterInANoteOfMiddlingSizeIsParsedOnTheSpot)
+{
+    for (int kilobytes : {20, 24}) { // ponytail: 28 kB parses in 4.2 ms on this loaded box, over the budget on purpose
+        SCOPED_TRACE(kilobytes);
+        const QString note = generateNote(kilobytes);
+        auto editor = editorWith(note);
+        editor->show();
+        QTest::qWait(300);
+        editor->setCursorOffset(note.indexOf(QStringLiteral("Section 20")) + 5);
+        for (int i = 0; i < 10; ++i) {
+            const int before = editor->parseCountForTest();
+            QTest::keyClick(editor.get(), Qt::Key_Return);
+            EXPECT_EQ(editor->parseCountForTest(), before + 1) << "Enter number " << i << " waited for the debounce";
+        }
+    }
+}
+
+// The empty line after the note's final newline is a line like any other: it can
+// be reached from the line above, by a click, by End and Ctrl+End, and a
+// selection to the end takes it.
+TEST(EnterJitterTest, TheLineAfterTheFinalNewlineCanBeReached)
+{
+    const QString note = QStringLiteral("alpha\n\nbeta\n\ngamma\n");
+    auto editor = editorWith(note);
+    editor->show();
+    QTest::qWait(300);
+    const qsizetype end = note.size();
+    const qsizetype inGamma = note.indexOf(QStringLiteral("gamma")) + 2;
+
+    editor->setCursorOffset(inGamma);
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Down from the last line";
+    const QRectF tail = editor->caretRectNow();
+    QTest::keyClick(editor.get(), Qt::Key_Down);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Down on the last line stays";
+    QTest::keyClick(editor.get(), Qt::Key_Up);
+    EXPECT_GE(editor->cursorOffset(), note.indexOf(QStringLiteral("gamma"))) << "Up from the tail";
+    EXPECT_LT(editor->cursorOffset(), end);
+
+    editor->setCursorOffset(0);
+    const QPoint onTail(editor->textColumn() + 40, int(tail.center().y()));
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, onTail);
+    EXPECT_EQ(editor->cursorOffset(), end) << "a click on the tail line";
+    editor->setCursorOffset(0);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, onTail + QPoint(0, 40));
+    EXPECT_EQ(editor->cursorOffset(), end) << "a click under it";
+    editor->setCursorOffset(0);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(tail.y()) - 20));
+    EXPECT_LT(editor->cursorOffset(), end) << "a click on the last text line is still on it";
+
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_End, Qt::ControlModifier);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Ctrl+End";
+    EXPECT_NEAR(editor->caretRectNow().y(), tail.y(), 0.5);
+    QTest::keyClick(editor.get(), Qt::Key_End);
+    EXPECT_EQ(editor->cursorOffset(), end) << "End on the tail line stays on it";
+
+    editor->setCursorOffset(inGamma);
+    QTest::keyClick(editor.get(), Qt::Key_Down, Qt::ShiftModifier);
+    EXPECT_EQ(editor->cursorOffset(), end) << "Shift+Down";
+    EXPECT_EQ(editor->selectedText(), note.mid(inGamma));
+    editor->setCursorOffset(0);
+    QTest::keyClick(editor.get(), Qt::Key_End, Qt::ControlModifier | Qt::ShiftModifier);
+    EXPECT_EQ(editor->selectedText(), note) << "Ctrl+Shift+End takes the whole note";
+
+    // Down in a last paragraph of several lines goes line by line first.
+    const QString several = QStringLiteral("intro\n\none\ntwo\nthree\n");
+    auto other = editorWith(several);
+    other->show();
+    QTest::qWait(300);
+    other->setCursorOffset(several.indexOf(QStringLiteral("one")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.indexOf(QStringLiteral("two")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.indexOf(QStringLiteral("three")) + 1);
+    QTest::keyClick(other.get(), Qt::Key_Down);
+    EXPECT_EQ(other->cursorOffset(), several.size());
+}
+
+// A table or a callout last in the note: the first letter on the empty line
+// after it is drawn where it will be once the parse has landed.
+TEST(EnterJitterTest, TheFirstLetterAfterATrailingTableOrCalloutIsDrawnWhereItStays)
+{
+    const QList<std::pair<const char *, QString>> notes = {
+        {"table", QStringLiteral("para\n\n| a | b |\n|---|---|\n| 1 | 2 |\n")},
+        {"callout", QStringLiteral("para\n\n> [!note] Title\n> body\n")},
+    };
+    for (const auto &[name, note] : notes) {
+        SCOPED_TRACE(name);
+        auto editor = editorWith(note);
+        editor->show();
+        editor->setCursorOffset(note.size());
+        QTest::qWait(300);
+        const int parsesBefore = editor->parseCountForTest();
+        QTest::keyClicks(editor.get(), QStringLiteral("x"));
+        EXPECT_EQ(editor->parseCountForTest(), parsesBefore + 1) << "the letter was drawn from the stale blocks";
+        const QImage typed = withoutCaret(*editor);
+        const qreal caret = editor->caretRectNow().y();
+        QTest::qWait(300);
+        EXPECT_NEAR(editor->caretRectNow().y(), caret, 0.5) << "the caret moved when the parse landed";
+        EXPECT_EQ(diffRows(withoutCaret(*editor), typed).toStdString(), "") << "the text moved when the parse landed";
+    }
+}
+
+// An insert that is the reader's own action in the focused editor - a slash
+// command picked with the mouse, a drop - is parsed on the spot like a key.
+TEST(EnterJitterTest, ASlashCommandAndADropAreTheReadersOwnEdit)
+{
+    const QString note = QStringLiteral("# Title\n\nparagraph one\n\n- a\n- b\n\nparagraph two\n");
+    {
+        const QString slashNote = QStringLiteral("# Title\n\nparagraph one\n\nsee \n\n- a\n- b\n\nparagraph two\n");
+        auto editor = editorWith(slashNote);
+        editor->show();
+        MarkdownEditor *raw = editor.get();
+        raw->setSlashCommands([] { return testSlashCommands(); },
+                              [raw](const QString &) { raw->insertAtCaret(QStringLiteral("one\n\n- two\n")); });
+        raw->setCursorOffset(slashNote.indexOf(QStringLiteral("see ")) + 4);
+        QTest::keyClicks(raw, QStringLiteral("/bol"));
+        ASSERT_TRUE(raw->slashPopupVisible());
+        QCompleter *slash = nullptr;
+        for (QCompleter *completer : raw->findChildren<QCompleter *>()) {
+            if (completer->popup()->objectName() == QLatin1String("slashCommandPopup"))
+                slash = completer;
+        }
+        ASSERT_NE(slash, nullptr);
+        const int before = raw->parseCountForTest();
+        emit slash->activated(raw->slashSuggestions().constFirst());
+        EXPECT_GT(raw->noteText().indexOf(QStringLiteral("- two")), 0);
+        EXPECT_EQ(raw->parseCountForTest(), before + 1) << "a picked slash command waited for the debounce";
+    }
+    {
+        auto editor = editorWith(note);
+        editor->show();
+        QTest::qWait(300);
+        QMimeData mime;
+        mime.setText(QStringLiteral("dropped\n\n- item\n"));
+        const qsizetype at = note.indexOf(QStringLiteral("paragraph two"));
+        editor->setCursorOffset(at);
+        const QPoint point(300, 100);
+        const int before = editor->parseCountForTest();
+        QDragEnterEvent enter(point, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor->viewport(), &enter);
+        ASSERT_TRUE(enter.isAccepted());
+        QDropEvent drop(QPointF(point), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(editor->viewport(), &drop);
+        ASSERT_TRUE(drop.isAccepted());
+        EXPECT_EQ(editor->parseCountForTest(), before + 1) << "a drop waited for the debounce";
     }
 }
 
