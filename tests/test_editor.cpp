@@ -25,6 +25,7 @@
 #include <QMouseEvent>
 #include <QNativeGestureEvent>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QImageReader>
 #include <QPicture>
@@ -934,8 +935,8 @@ TEST(MarkdownEditorTest, FinishParseAdoptsABigNotesParseWithoutRunningTheEventLo
     EXPECT_TRUE(counted.isEmpty());
 }
 
-// While a big note's parse is out its text is shown as chunks of 64 lines
-// lines, not a view per paragraph (1.8 kB each: 75 MB for a megabyte). These
+// While a big note's parse is out its text is shown as chunks of 64 lines,
+// not a view per paragraph (1.8 kB each: 75 MB for a megabyte). These
 // pin that the chunks look and behave as the paragraphs did: the caret, a
 // click, a scroll position and a find land on the same lines, before the
 // parse lands and after it.
@@ -1151,6 +1152,7 @@ TEST(PlaceholderTest, TheBigParseLandedHookFiresOncePerBigNoteAndNeverForASmallO
 {
     int fired = 0;
     MarkdownEditor::setBigParseLandedHook([&fired] { ++fired; });
+    const auto reset = qScopeGuard([] { MarkdownEditor::setBigParseLandedHook({}); });
     {
         auto small = placeholderEditorWith(QStringLiteral("# Small\n\nA note.\n"));
         QTest::qWait(100);
@@ -1174,7 +1176,146 @@ TEST(PlaceholderTest, TheBigParseLandedHookFiresOncePerBigNoteAndNeverForASmallO
     editor->setNoteText(note + QStringLiteral("more\n"));
     ASSERT_TRUE(waitForParse(*editor));
     EXPECT_EQ(fired, 2);
-    MarkdownEditor::setBigParseLandedHook({});
+}
+
+// What a remembered place is made of: the text at the top, not a pixel. In the chunks it is
+// placed exactly (the chunk, then the line inside it), and the landing keeps it.
+TEST(PlaceholderTest, ARememberedTopOffsetIsPlacedExactlyInAChunkAndKeptByTheLanding)
+{
+    const QString note = plainBigNote();
+    const auto lineOf = [&note](qsizetype offset) { return int(note.left(offset).count(QLatin1Char('\n'))); };
+    for (const QString &marker : {QStringLiteral("Paragraph 01500 second line"), QStringLiteral("Paragraph 00031 third line"),
+                                  QStringLiteral("Paragraph 02300 first line")}) {
+        SCOPED_TRACE(marker.toStdString());
+        auto editor = placeholderEditorWith(note);
+        editor->show();
+        ASSERT_LT(editor->wordCount(), 0);
+        const qsizetype wanted = note.indexOf(marker);
+        editor->restoreScroll(wanted, 0);
+        EXPECT_NEAR(lineOf(editor->topOffset()), lineOf(wanted), 1.0) << "placed in the chunk";
+        ASSERT_LT(editor->wordCount(), 0);
+        ASSERT_TRUE(waitForParse(*editor));
+        EXPECT_NEAR(lineOf(editor->topOffset()), lineOf(wanted), 1.0) << "after the landing";
+    }
+    auto editor = placeholderEditorWith(note);
+    editor->restoreScroll(-1, 5000);
+    EXPECT_EQ(editor->verticalScrollBar()->value(), 5000) << "an entry from before offsets is a pixel";
+    editor->restoreScroll(0, 0);
+    EXPECT_EQ(editor->verticalScrollBar()->value(), 0);
+}
+
+/// Waits until `fired` reaches `count`, 10 s at most.
+bool waitForFired(const int &fired, int count)
+{
+    for (int waited = 0; fired < count && waited < 10000; waited += 10)
+        QTest::qWait(10);
+    return fired >= count;
+}
+
+// Opened before the first one's parse has landed, a second big note has its own landing, and
+// that one gets the trim. The first's result is adopted onto it first (the editor does that
+// today); the text at the top of the viewport stays put through both.
+TEST(PlaceholderTest, ASecondBigNoteBeforeTheFirstLandsGetsItsOwnTrimAndAnchor)
+{
+    int fired = 0;
+    MarkdownEditor::setBigParseLandedHook([&fired] { ++fired; });
+    const auto reset = qScopeGuard([] { MarkdownEditor::setBigParseLandedHook({}); });
+    const QString first = plainBigNote();
+    const QString second = plainBigNote(2600);
+    auto editor = placeholderEditorWith(first);
+    editor->show();
+    editor->setNoteText(second);
+    ASSERT_LT(editor->wordCount(), 0);
+    editor->verticalScrollBar()->setValue(60000);
+    const QPoint topLeft(editor->textColumn() + 4, 3);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, topLeft);
+    const qsizetype before = editor->cursorOffset();
+    ASSERT_TRUE(waitForParse(*editor));
+    EXPECT_EQ(fired, 0) << "the first note's landing is not the second's";
+    ASSERT_TRUE(waitForFired(fired, 1));
+    EXPECT_EQ(fired, 1);
+    QTest::qWait(100);
+    EXPECT_EQ(fired, 1);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, topLeft);
+    EXPECT_NEAR(double(editor->cursorOffset()), double(before), 150.0);
+}
+
+// A change of parse options in the placeholder window parses the note on the spot and drops
+// the one in flight: the placeholder is gone, so the trim is due now, and it is not due again.
+TEST(PlaceholderTest, AParseOptionsChangeDuringThePlaceholderFiresTheHookOnceNow)
+{
+    int fired = 0;
+    MarkdownEditor::setBigParseLandedHook([&fired] { ++fired; });
+    const auto reset = qScopeGuard([] { MarkdownEditor::setBigParseLandedHook({}); });
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    ASSERT_LT(editor->wordCount(), 0);
+    ParseOptions options = editor->parseOptions();
+    options.brackets = !options.brackets;
+    editor->setParseOptions(options);
+    EXPECT_GE(editor->wordCount(), 0);
+    EXPECT_EQ(fired, 1);
+    editor->setCursorOffset(note.size() / 2);
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    const quint64 rebuilt = editor->rebuiltViewCount();
+    for (int waited = 0; editor->rebuiltViewCount() == rebuilt && waited < 10000; waited += 20)
+        QTest::qWait(20);
+    EXPECT_GT(editor->rebuiltViewCount(), rebuilt);
+    EXPECT_EQ(fired, 1) << "the parse after an edit is not a landing";
+}
+
+namespace {
+
+/// About 1 MB of lines of `lineBytes` bytes, each followed by a blank line.
+QString longLineNote(int lineBytes)
+{
+    QString line;
+    while (line.size() < lineBytes)
+        line += QStringLiteral("lorem ipsum dolor ");
+    line.truncate(lineBytes);
+    QString text;
+    while (text.size() < 1024 * 1024)
+        text += line + QStringLiteral("\n\n");
+    return text;
+}
+
+} // namespace
+
+// A chunk of 64 lines of 4 kB is 256 kB in one layout: a keystroke in it relaid all of it
+// (7 to 28 ms at 4 and 16 kB lines). A chunk ends at 4 kB of text as well, so the cost is
+// the paragraph's, as it was before the chunks.
+TEST(PlaceholderTest, AKeystrokeInTheBigPlaceholderStaysInsideTheBudgetOnLongLines)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    for (const int lineBytes : {4000, 16000}) {
+        SCOPED_TRACE(lineBytes);
+        const QString note = longLineNote(lineBytes);
+        double median = 1e9;
+        double worst = 1e9;
+        for (int attempt = 0; attempt < 3 && (median >= 10.0 || worst >= 10.0); ++attempt) {
+            auto editor = placeholderEditorWith(note);
+            editor->show();
+            ASSERT_LT(editor->wordCount(), 0);
+            editor->setCursorOffset(note.size() / 2);
+            (void)editor->grab();
+            std::vector<double> samples;
+            for (int i = 0; i < 30; ++i) {
+                QElapsedTimer clock;
+                clock.start();
+                QTest::keyClicks(editor.get(), QStringLiteral("a"));
+                (void)editor->grab();
+                samples.push_back(clock.nsecsElapsed() / 1e6);
+            }
+            ASSERT_LT(editor->wordCount(), 0) << "the parse landed inside the measurement";
+            std::sort(samples.begin(), samples.end());
+            median = samples[samples.size() / 2];
+            worst = samples.back();
+        }
+        std::printf("[ PERF     ] keystroke in the placeholder, %d-byte lines: median %.2f ms, max %.2f ms\n",
+                    lineBytes, median, worst);
+        EXPECT_LT(median, 10.0);
+        EXPECT_LT(worst, 10.0);
+    }
 }
 
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)

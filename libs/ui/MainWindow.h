@@ -915,6 +915,7 @@ void updateVimStatus();
         TabGroup *group;
         qsizetype caret;
         int scroll;
+        qsizetype top; ///< MarkdownEditor::topOffset(): where the pixel is, in text
     };
     QList<ClosedTab> m_closedTabs; ///< oldest first, at most 20
     Leaf *m_active = nullptr;

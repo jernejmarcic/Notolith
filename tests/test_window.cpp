@@ -213,6 +213,89 @@ TEST_F(WindowTest, OpensAVaultAndShowsItsTree)
     EXPECT_EQ(tree->model()->rowCount(tree->rootIndex()), 3);
 }
 
+namespace {
+
+/// 180 kB of plain three-line paragraphs: over the 128 kB the editor parses on a thread, and
+/// no line of it changes a line's height.
+QString scrollableBigNote()
+{
+    QString text;
+    for (int i = 0; i < 2400; ++i) {
+        const QString n = QStringLiteral("%1").arg(i, 5, 10, QLatin1Char('0'));
+        text += QStringLiteral("Paragraph %1 first line\nParagraph %1 second line\nParagraph %1 third line\n\n").arg(n);
+    }
+    return text;
+}
+
+bool parseLanded(MarkdownEditor *editor)
+{
+    QElapsedTimer clock;
+    clock.start();
+    while (editor->wordCount() < 0 && clock.elapsed() < 10000)
+        QTest::qWait(10);
+    return editor->wordCount() >= 0;
+}
+
+/// The source line under the top of the viewport, found with a click there.
+int topLine(MarkdownEditor *editor)
+{
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(editor->textColumn() + 4, 3));
+    return int(editor->noteText().left(editor->cursorOffset()).count(QLatin1Char('\n')));
+}
+
+} // namespace
+
+// A note left scrolled comes back where it was, and stays there when its parse lands: a big
+// note is shown as plain chunks first, whose heights are not the parsed blocks', so the
+// remembered scroll pixel alone means different text in the two.
+TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
+{
+    write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Big.md"))));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(parseLanded(editor));
+    editor->verticalScrollBar()->setValue(100000);
+    const int left = topLine(editor);
+    ASSERT_GT(left, 1000);
+
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Big.md"))));
+    editor = window.editor();
+    ASSERT_LT(editor->wordCount(), 0) << "the parse landed before the placeholder could be inspected";
+    EXPECT_NEAR(topLine(editor), left, 1.0) << "reopened, before the parse lands";
+    ASSERT_LT(editor->wordCount(), 0);
+    ASSERT_TRUE(parseLanded(editor));
+    EXPECT_NEAR(topLine(editor), left, 1.0) << "reopened, after the parse lands";
+}
+
+TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
+{
+    write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
+    MainWindow window;
+    window.openVault(dir.path());
+    window.show();
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Big.md"))));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(parseLanded(editor));
+    editor->verticalScrollBar()->setValue(150000);
+    const int left = topLine(editor);
+    ASSERT_GT(left, 1000);
+
+    window.findChild<QAction *>(QStringLiteral("workspace:close"))->trigger();
+    window.findChild<QAction *>(QStringLiteral("workspace:undo-close-pane"))->trigger();
+    editor = window.editor();
+    ASSERT_EQ(window.windowTitle().startsWith(QStringLiteral("Big.md")), true);
+    ASSERT_LT(editor->wordCount(), 0) << "the parse landed before the placeholder could be inspected";
+    const int placed = topLine(editor);
+    EXPECT_NEAR(placed, left, 1.0) << "reopened, before the parse lands";
+    ASSERT_TRUE(parseLanded(editor));
+    const int landed = topLine(editor);
+    EXPECT_NEAR(landed, left, 1.0) << "reopened, after the parse lands";
+}
+
 TEST_F(WindowTest, OpensANoteIntoTheEditor)
 {
     MainWindow window;

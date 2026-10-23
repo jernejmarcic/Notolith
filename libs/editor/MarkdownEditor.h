@@ -276,8 +276,11 @@ public:
     static bool GPUaccelerationWanted(const QString &setting, qreal devicePixelRatio);
 
     /// Called, on the UI thread, once when the parse of a note over 128 kB first
-    /// lands: the parser's temporaries are free by then and still resident. The
-    /// application gives the memory back; the editor never does.
+    /// lands (or is made on the spot by a settings change): the parser's
+    /// temporaries are free by then and still resident. The application gives
+    /// the memory back; the editor never does. A temporary editor (a canvas
+    /// card's render, a PDF export) fires it too, which costs one 5 ms trim on
+    /// a worker thread and does no harm.
     static void setBigParseLandedHook(std::function<void()> hook);
 
     /// Obsidian's Export to PDF options, with its defaults.
@@ -311,6 +314,15 @@ public:
     /// the event loop (so no timer, deferred delete or paint fires meanwhile).
     /// For callers that must have the parsed note in hand: a grab, an export.
     void finishParse();
+    /// The source offset of the line at the top of the viewport (0 when not
+    /// scrolled): what a remembered place is made of. A scroll pixel only
+    /// means the same text in the layout it was taken in, and a big note's is
+    /// not the one it opens in.
+    qsizetype topOffset() const;
+    /// Restores a remembered place. While a big note shows its chunks a pixel means other text
+    /// than it did in the parsed note, so the line at `top` goes to the top of the viewport;
+    /// otherwise (and for `top` <= 0, an entry from before offsets) the scroll pixel is set.
+    void restoreScroll(qsizetype top, int pixel);
     /// Characters in the note, frontmatter excluded (as wordCount is). Cheap:
     /// the text's length less the properties block's.
     qsizetype characterCount() const;
@@ -1166,6 +1178,12 @@ private:
     QList<std::pair<qsizetype, QString>> foldSites() const;
     void applyFoldState(const QStringList &state);
     void adoptParse(); ///< takes the finished pool parse, once; see finishParse()
+    /// adoptDecorations() for a parse that replaces a big note's chunks: the text at the top
+    /// of the viewport stays there, and the first such landing fires the hook.
+    void landDecorations(quint64 version, Decorations decorations, QList<Property> properties,
+                         QList<Heading> headings);
+    /// Scrolls so that `offset`'s line is `y` pixels down the viewport, laying out as it goes.
+    void placeLineAt(qsizetype offset, qreal y);
     void adoptDecorations(Decorations decorations, QList<Property> properties, QList<Heading> headings);
     void rebuildBlocks();
     void indexDecorations();

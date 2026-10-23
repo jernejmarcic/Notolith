@@ -455,6 +455,31 @@ TEST(Settings, NoteFoldsSurviveASaveWhateverTheirTextHoldsAndFollowARename)
     EXPECT_TRUE(reloaded.notePosition(QStringLiteral("/v/Other.md")).has_value());
 }
 
+// The text at the top of the viewport is kept beside the pixel; an entry written before it was
+// has none, and folds and the offset do not get mixed up.
+TEST(Settings, NoteTopOffsetSurvivesASaveBesideFoldsAndOldEntriesHaveNone)
+{
+    QTemporaryDir home;
+    qputenv("XDG_CONFIG_HOME", home.path().toUtf8());
+
+    const QStringList folds{QStringLiteral("10 ```python"), QStringLiteral("00 # Head")};
+    Settings settings = Settings::load();
+    settings.setNotePosition(QStringLiteral("/v/A.md"), 5, 6, folds, 123456);
+    settings.setNotePosition(QStringLiteral("/v/B.md"), 1, 2, {}, 0);
+    settings.setNotePosition(QStringLiteral("/v/Old.md"), 3, 4, folds);
+    ASSERT_TRUE(settings.save());
+
+    const Settings reloaded = Settings::load();
+    const auto a = reloaded.notePosition(QStringLiteral("/v/A.md"));
+    ASSERT_TRUE(a.has_value());
+    EXPECT_EQ(a->top, 123456);
+    EXPECT_EQ(a->folds, folds);
+    EXPECT_EQ(a->scroll, 6);
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/B.md"))->top, 0);
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/Old.md"))->top, -1);
+    EXPECT_EQ(reloaded.notePosition(QStringLiteral("/v/Old.md"))->folds, folds);
+}
+
 // --- hotkeys ------------------------------------------------------------------
 
 TEST(Hotkeys, ReadsObsidiansFormat)
