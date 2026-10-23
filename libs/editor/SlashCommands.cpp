@@ -213,6 +213,7 @@ void MarkdownEditor::insertSlashCompletion(const QString &name)
     const auto prefix = slashPrefix();
     if (!prefix)
         return;
+    const TypingScope typed(d->m_typing);
     // Removes the typed "/query" first, then runs the command - so a command
     // that inserts text (or acts on the selection) does not have to know
     // about the slash syntax it was invoked through.

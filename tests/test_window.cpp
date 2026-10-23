@@ -4919,6 +4919,93 @@ TEST_F(WindowTest, TheCorePluginsSwitchesReachTheEditor)
     qputenv("XDG_CONFIG_HOME", previous);
 }
 
+TEST_F(WindowTest, ACSVembedFollowsItsFileWhenAnotherProgramRewritesIt)
+{
+    write(QStringLiteral("data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(1), (QStringList{QStringLiteral("1"), QStringLiteral("2")}));
+
+    write(QStringLiteral("data.csv"), "a,b\n7,8\n9,10\n"); // no edit, no reopen: just the file
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 5000));
+    EXPECT_EQ(editor->tableCellTextsAt(0).at(1), (QStringList{QStringLiteral("7"), QStringLiteral("8")}));
+}
+
+namespace {
+
+/// Waits out the vault's first scan, whose own end relays out an editor's links
+/// and would find a file created meanwhile: what a test of "the file appears
+/// later" must not lean on.
+void settleIndexer(noteAppC::MainWindow &window)
+{
+    auto *indexer = window.findChild<noteAppC::Indexer *>();
+    ASSERT_NE(indexer, nullptr);
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer->isRunning(); }, 10000));
+    QTest::qWait(1000); // the watches are in place and the scan's own signals have been delivered
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !indexer->isRunning(); }, 10000));
+}
+
+} // namespace
+
+TEST_F(WindowTest, ANoteOpenedBeforeItsCSVExistsShowsTheTableWhenTheFileAppears)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it
+    // the real resolver answers {} for a file that is not there, so layout never even
+    // reaches the CSV code; what brings the table back is the scan that follows the
+    // file's creation (Index::changed -> refreshLinkStatus), which this pins
+    write(QStringLiteral("Table.md"), "![[Assets/later.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    settleIndexer(window);
+    ASSERT_TRUE(editor->displayText().contains(QStringLiteral("Assets/later.csv"))) << "the link, for now";
+
+    write(QStringLiteral("Assets/later.csv"), "a,b\n1,2\n"); // a script writes it
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 10000));
+}
+
+TEST_F(WindowTest, ADeletedCSVComesBackWhenItIsRestored)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n");
+    write(QStringLiteral("Table.md"), "![[Assets/data.csv]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Table.md")));
+    MarkdownEditor *editor = window.editor();
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 2; }, 5000));
+
+    settleIndexer(window);
+    ASSERT_TRUE(QFile::remove(path(QStringLiteral("Assets/data.csv"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->displayText().contains(QStringLiteral("data.csv")); }, 5000));
+    QTest::qWait(1500); // the trash, a minute later
+
+    write(QStringLiteral("Assets/data.csv"), "a,b\n1,2\n3,4\n");
+    ASSERT_TRUE(QTest::qWaitFor([&] { return editor->tableCellTextsAt(0).size() == 3; }, 10000));
+}
+
+TEST_F(WindowTest, AMissingImageAppearsWhenItsFileDoes)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Assets"))); // a folder of its own: not the note's, so only the vault scan sees into it
+    write(QStringLiteral("Pic.md"), "![[Assets/late.png]]\n");
+    MainWindow window;
+    window.openVault(dir.path());
+    window.openNote(path(QStringLiteral("Pic.md")));
+    MarkdownEditor *editor = window.editor();
+    settleIndexer(window);
+    ASSERT_TRUE(editor->displayText().contains(QStringLiteral("late.png")));
+
+    QImage picture(32, 32, QImage::Format_RGB32);
+    picture.fill(Qt::red);
+    ASSERT_TRUE(picture.save(path(QStringLiteral("Assets/late.png"))));
+    ASSERT_TRUE(QTest::qWaitFor([&] { return !editor->displayText().contains(QStringLiteral("late.png")); }, 10000));
+}
+
 TEST_F(WindowTest, CtrlETogglesReadingViewAndComesBackToTheModeItLeft)
 {
     QTemporaryDir config; // the switch below is the user's

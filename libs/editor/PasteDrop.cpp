@@ -150,6 +150,7 @@ void MarkdownEditor::dropEvent(QDropEvent *event)
         event->ignore();
         return;
     }
+    const TypingScope typed(d->m_typing);
     moveCursor(offsetAt(event->position().toPoint()), false);
     insertMimeData(event->mimeData());
     event->acceptProposedAction();

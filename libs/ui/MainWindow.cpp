@@ -1525,6 +1525,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     features.HTMLblocks = featureOn("html-blocks");
     features.PDFembeds = featureOn("pdf-embeds");
     features.texEmbeds = featureOn("tex-embeds");
+    features.CSVembeds = featureOn("csv-embeds");
     features.mediaEmbeds = featureOn("media-embeds");
     features.notebooks = featureOn("notebooks");
     editor->setFeatures(features);

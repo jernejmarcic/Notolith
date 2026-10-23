@@ -75,7 +75,7 @@ void MarkdownEditor::setBaseRunner(
     d->m_baseCache.clear();
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
-        if (!block.isBase)
+        if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
             continue;
         block.layout.reset();
         block.cells.clear();
@@ -99,7 +99,7 @@ void MarkdownEditor::refreshBases()
             d->m_baseCache.clear();
             bool touched = false;
             for (BlockView &block : d->m_blocks) {
-                if (!block.isBase)
+                if (!block.isBase || !block.CSVpath.isEmpty()) // a CSV embed is no base's
                     continue;
                 block.layout.reset();
                 block.cells.clear();
@@ -190,6 +190,43 @@ bool MarkdownEditor::layoutBase(BlockView &view)
     return layoutBaseTable(view, d->m_text.mid(fence->content.start, fence->content.length()).trimmed());
 }
 
+bool MarkdownEditor::layoutPlainMessage(BlockView &view, const QString &text, const QColor &colour)
+{
+    // A plain, single-line message in place of a table - pending, empty,
+    // erroring or a view with no columns all look like this, the same shape
+    // layoutQuery's addPlainLine gives a ```query``` block before it has
+    // results.
+    const qreal lineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
+    view.layout = std::make_unique<QTextLayout>(text);
+    view.layout->setCacheEnabled(true);
+    view.layout->setFont(d->m_theme.textFont());
+    QTextOption option;
+    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    view.layout->setTextOption(option);
+    QTextLayout::FormatRange range;
+    range.start = 0;
+    range.length = int(text.size());
+    range.format.setForeground(colour);
+    view.layout->setFormats({range});
+
+    view.layout->beginLayout();
+    qreal height = 0;
+    while (true) {
+        QTextLine line = view.layout->createLine();
+        if (!line.isValid())
+            break;
+        line.setLineWidth(contentWidth());
+        line.setPosition(QPointF(0, height));
+        height += lineHeight;
+    }
+    view.layout->endLayout();
+
+    view.textTop = 4;
+    view.height = qMax(height, lineHeight) + view.textTop + 4;
+    view.laidOut = true;
+    return true;
+}
+
 bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName)
 {
     view.isBase = true;
@@ -202,41 +239,8 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
 
     const QColor mutedColour = d->m_theme.color(QStringLiteral("--text-muted"));
     const QColor errorColour = d->m_theme.color(QStringLiteral("--text-error"));
-    const qreal lineHeight = lineHeightFor({BlockSpan::Kind::Paragraph, {0, 0}, 0});
-
-    // A plain, single-line message in place of a table - pending, empty,
-    // erroring or a view with no columns all look like this, the same shape
-    // layoutQuery's addPlainLine gives a ```query``` block before it has
-    // results.
     const auto plainMessage = [&](const QString &text, const QColor &colour) {
-        view.layout = std::make_unique<QTextLayout>(text);
-        view.layout->setCacheEnabled(true);
-        view.layout->setFont(d->m_theme.textFont());
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        view.layout->setTextOption(option);
-        QTextLayout::FormatRange range;
-        range.start = 0;
-        range.length = int(text.size());
-        range.format.setForeground(colour);
-        view.layout->setFormats({range});
-
-        view.layout->beginLayout();
-        qreal height = 0;
-        while (true) {
-            QTextLine line = view.layout->createLine();
-            if (!line.isValid())
-                break;
-            line.setLineWidth(contentWidth());
-            line.setPosition(QPointF(0, height));
-            height += lineHeight;
-        }
-        view.layout->endLayout();
-
-        view.textTop = 4;
-        view.height = qMax(height, lineHeight) + view.textTop + 4;
-        view.laidOut = true;
-        return true;
+        return layoutPlainMessage(view, text, colour);
     };
 
     if (yamlText.isEmpty())
@@ -254,13 +258,6 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     if (entry.results.rows.isEmpty())
         return plainMessage(tr("No results"), mutedColour);
 
-    // --- the table itself, laid out the way layoutTable lays a Markdown
-    // table out: natural column widths from content, capped so one runaway
-    // column cannot push the rest off screen, rows sized to their tallest
-    // cell. The cells built here carry no `source`/`map` (there is no note
-    // text behind a base row to point at), only what paintTable actually
-    // reads: `layout`, `rect`, `alignment`, `row`.
-
     view.baseViewName = entry.results.shownView >= 0
                               && entry.results.shownView < entry.results.viewNames.size()
                          ? entry.results.viewNames.at(entry.results.shownView)
@@ -271,11 +268,29 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     // if a vault-sized base view turns out to be a real use case: page the
     // cached BaseTableData itself instead of capping what is shown.
     constexpr int kMaxRows = 50;
-    const bool truncated = entry.results.rows.size() > kMaxRows;
-    const int shownRows = truncated ? kMaxRows : int(entry.results.rows.size());
+    return layoutDataTable(view, entry.results, kMaxRows,
+                           entry.results.rows.size() > kMaxRows
+                               ? tr("and %1 more").arg(entry.results.rows.size() - kMaxRows)
+                               : QString());
+}
+
+bool MarkdownEditor::layoutDataTable(BlockView &view, const BaseTableData &data, int maxRows,
+                                      const QString &moreText)
+{
+    const QColor mutedColour = d->m_theme.color(QStringLiteral("--text-muted"));
+    // --- the table itself, a base's and a CSV file's alike, laid out the
+    // way layoutTable lays a Markdown table out: natural column widths from
+    // content, capped so one runaway column cannot push the rest off
+    // screen, rows sized to their tallest cell. The cells built here carry
+    // no `source`/`map` (there is no note text behind a base row to point
+    // at), only what paintTable actually reads: `layout`, `rect`,
+    // `alignment`, `row`.
+
+    const bool truncated = !moreText.isEmpty();
+    const int shownRows = int(qMin<qsizetype>(data.rows.size(), maxRows));
     const int summaryRow = truncated ? shownRows + 1 : -1;
     // The view's `summaries:`, a footer under its columns, as Obsidian's.
-    const bool footer = !entry.results.summaries.isEmpty();
+    const bool footer = !data.summaries.isEmpty();
     const int footerRow = footer ? (truncated ? summaryRow : shownRows) + 1 : -1;
     const int totalRows = (footer ? footerRow : (truncated ? summaryRow : shownRows)) + 1; // +1 for the header row
 
@@ -284,49 +299,56 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     const qreal padX = 10;
     const qreal padY = 6;
     const qreal minimum = QFontMetricsF(font).horizontalAdvance(QLatin1Char('m')) * 3;
-    const int columns = entry.results.headers.size();
+    const int columns = data.headers.size();
     const QColor textColour = d->m_theme.color(QStringLiteral("--text-normal"));
 
     QList<qreal> natural(columns, minimum);
     std::vector<Cell> cells;
+    cells.reserve(size_t(totalRows) * size_t(columns));
 
+    // Hoisted out of the per-cell work: a table is thousands of cells.
+    QFont headerFont = font;
+    headerFont.setWeight(QFont::DemiBold);
+    const QFontMetricsF metrics(font);
+    const QFontMetricsF headerMetrics(headerFont);
+    QTextOption wrap;
+    wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+
+    // `countsForWidth` false is the "and N more" footer, which spans the
+    // whole table rather than deciding how wide its first column is.
     const auto addCell = [&](int row, int column, const QString &text, bool header,
-                             const QColor &colour) {
+                             const QColor &colour, bool countsForWidth = true) {
         Cell cell;
         cell.row = row;
         cell.column = column;
         cell.layout = std::make_unique<QTextLayout>(text);
         cell.layout->setCacheEnabled(true);
-        QTextOption wrap;
-        wrap.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
         cell.layout->setTextOption(wrap);
-        QFont cellFont = font;
-        if (header)
-            cellFont.setWeight(QFont::DemiBold);
-        cell.layout->setFont(cellFont);
+        cell.layout->setFont(header ? headerFont : font);
         QTextLayout::FormatRange range;
         range.start = 0;
         range.length = int(text.size());
         range.format.setForeground(colour);
         cell.layout->setFormats({range});
-        natural[column] =
-            qMax(natural.at(column), QFontMetricsF(cellFont).horizontalAdvance(text) + 2 * padX);
+        if (countsForWidth) {
+            natural[column] = qMax(natural.at(column),
+                                   (header ? headerMetrics : metrics).horizontalAdvance(text) + 2 * padX);
+        }
         cells.push_back(std::move(cell));
     };
 
     for (int c = 0; c < columns; ++c)
-        addCell(0, c, entry.results.headers.at(c), true, textColour);
+        addCell(0, c, data.headers.at(c), true, textColour);
     for (int r = 0; r < shownRows; ++r) {
-        const BaseTableRow &row = entry.results.rows.at(r);
+        const BaseTableRow &row = data.rows.at(r);
         for (int c = 0; c < columns && c < row.cells.size(); ++c)
             addCell(r + 1, c, row.cells.at(c), false, textColour);
     }
     if (truncated) {
-        addCell(summaryRow, 0, tr("and %1 more").arg(entry.results.rows.size() - kMaxRows), false,
-               mutedColour);
+        addCell(summaryRow, 0, moreText, false, mutedColour, false);
     }
-    for (int c = 0; footer && c < columns && c < entry.results.summaries.size(); ++c)
-        addCell(footerRow, c, entry.results.summaries.at(c), false, mutedColour);
+    for (int c = 0; footer && c < columns && c < data.summaries.size(); ++c)
+        addCell(footerRow, c, data.summaries.at(c), false, mutedColour);
 
     // Obsidian does not squeeze a table into the readable column - see
     // layoutTable's own comment, which this mirrors exactly.
@@ -349,7 +371,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
 
     QList<qreal> rowHeights(totalRows, cellLineHeight + 2 * padY);
     for (Cell &cell : cells) {
-        const qreal width = widths.value(cell.column, minimum) - 2 * padX;
+        const qreal width = (cell.row == summaryRow ? x : widths.value(cell.column, minimum)) - 2 * padX;
         cell.layout->beginLayout();
         qreal height = 0;
         while (true) {
@@ -372,7 +394,7 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
     }
     for (Cell &cell : cells) {
         cell.rect = QRectF(offsets.value(cell.column), rowTops.value(cell.row),
-                           widths.value(cell.column), rowHeights.value(cell.row));
+                           cell.row == summaryRow ? x : widths.value(cell.column), rowHeights.value(cell.row));
     }
 
     // Only a data row's first cell opens its note - BaseTableModel::
@@ -383,7 +405,8 @@ bool MarkdownEditor::layoutBaseTable(BlockView &view, const QString &yamlText, c
         const int dataIndex = cell.row - 1;
         if (dataIndex < 0 || dataIndex >= shownRows)
             continue;
-        view.baseRows.push_back({cell.rect, entry.results.rows.at(dataIndex).notePath});
+        if (!data.rows.at(dataIndex).notePath.isEmpty())
+            view.baseRows.push_back({cell.rect, data.rows.at(dataIndex).notePath});
     }
 
     view.cells = std::move(cells);

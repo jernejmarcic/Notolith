@@ -532,6 +532,7 @@ public:
         bool mediaEmbeds = true; ///< `![[x.mp3]]` / `![[x.mp4]]`
         bool maths = true;       ///< `$...$` and `$$...$$`
         bool fileEmbeds = true;  ///< notes, `.canvas`, and any other file's card
+        bool CSVembeds = true;   ///< `![[x.csv]]` / `![[x.tsv]]` as a table
         bool notebooks = true;   ///< running a code block through a Jupyter kernel
         bool operator==(const Features &) const = default;
     };
@@ -786,6 +787,17 @@ public:
     int GIFframeOf(const QString &path) const;
     /// For the tests: how many table cells the last paintTable drew.
     int tableCellsPainted() const;
+    /// For the tests: the text of every cell of the table laid out in the
+    /// block containing `offset`, row by row, header first - a Markdown
+    /// table, a base, a CSV embed. Empty when that block is not a table (or
+    /// is one still loading).
+    QList<QStringList> tableCellTextsAt(qsizetype offset) const;
+    /// For the tests: how many CSV files this editor holds a read of.
+    int CSVcacheSize() const;
+    /// For the tests: called on the worker thread at the top of every CSV
+    /// read, with the path; one that throws is what an out-of-memory looks
+    /// like. Null clears it.
+    static void setCSVreadHookForTests(void (*hook)(const QString &));
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -864,6 +876,12 @@ public:
     qreal sideScrollAt(qsizetype offset) const;
     /// The caret's rectangle, viewport coordinates; empty when not drawn. For the tests.
     QRectF caretRectNow() const { return caretRect(); }
+    /// How many parses have run on this editor, on the calling thread or the
+    /// pool. For the tests.
+    int parseCountForTest() const;
+    /// Pretends the last parse took this long, which is what decides whether
+    /// the next newline is parsed on the spot (applyEdit). For the tests.
+    void setLastParseTimeForTest(qint64 nanoseconds);
 
     /// The other end of the selection; the caret's offset when nothing is selected.
     qsizetype anchorOffset() const;
@@ -1156,6 +1174,7 @@ private:
     struct NotebookCacheEntry;
     struct QueryCacheEntry;
     struct BaseCacheEntry;
+    struct CSVcacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1816,6 +1835,39 @@ private:
     /// `#fragment` names (Decorations' EmbedSpan::subpath, "#" stripped);
     /// empty for a fence, which has no fragment to name one.
     bool layoutBaseTable(BlockView &view, const QString &yamlText, const QString &viewName = QString());
+    /// A one-line message in place of a table: loading, empty, an error.
+    bool layoutPlainMessage(BlockView &view, const QString &text, const QColor &colour);
+    /// `data` as a grid laid out like a Markdown table: at most `maxRows` data
+    /// rows after the header; a non-empty `moreText` is the footer line under
+    /// a table cut short. A base's table and a CSV embed's both come here.
+    bool layoutDataTable(BlockView &view, const BaseTableData &data, int maxRows, const QString &moreText);
+    // --- CSV and TSV embeds, implemented in CSVembed.cpp ---------------------
+
+    /// `![[data.csv]]` / `![[data.tsv]]`: the file as a table, through
+    /// layoutDataTable. Read and parsed on a worker thread, "Loading..." until
+    /// deliverCSV lands; false for a file that is not there, which falls back
+    /// to what layoutSourceFile does for one (the link as text).
+    bool layoutCSVembed(BlockView &view, const QString &path);
+    /// Called back (marshalled onto this thread) when a read started by
+    /// layoutCSVembed finishes; ignored if `generation` is no longer the one
+    /// on record for `path` (the file changed again meanwhile).
+    void deliverCSV(const QString &path, quint64 generation, CSVcacheEntry result);
+    /// The worker's half: read `path` and parse it. Static - it runs off the
+    /// UI thread and must not touch the editor.
+    static CSVcacheEntry readCSVfile(const QString &path, bool tsv, const QString &unreadable,
+                                     const QString &moreColumns);
+    /// A change event from the watcher: starts the debounce (200 ms from the
+    /// last event, but never more than a second from the first).
+    void CSVfileEvent();
+    /// Relays out the blocks showing `path`, so layoutCSVembed looks at it again.
+    void relayCSVblocks(const QString &path);
+    /// Watches `path` and its folder (made on the first call), so a change on
+    /// disk reaches refreshCSVfiles after a short debounce.
+    void watchCSV(const QString &path);
+    /// Stats every cached file, relaying out the blocks of those that changed.
+    void refreshCSVfiles();
+    /// Forgets every cached file and its watch: the feature went off.
+    void dropCSVcache();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;
@@ -1997,6 +2049,10 @@ private:
     /// Where `offset` is drawn, viewport coordinates, top of its line;
     /// `height`, when given, gets that line's own height (the caret's).
     QPointF pointFor(qsizetype offset, qreal *height = nullptr) const;
+    /// Whether `offset` is on the empty line a note ending in a newline has
+    /// under its last block, which belongs to no block: the caret there is
+    /// drawn under the last block, not on top of it.
+    bool belowLastBlock(qsizetype offset) const;
     /// The caret's rectangle in viewport coordinates, empty when not drawn.
     QRectF caretRect() const;
     void paintRemoteCarets(QPainter &painter) const;
