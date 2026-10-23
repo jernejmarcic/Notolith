@@ -5594,8 +5594,9 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     Leaf *const target = m_active;
     const QString kept = target ? std::exchange(target->keptPath, QString()) : QString();
     const auto keepIfStillEmpty = qScopeGuard([&] {
-        if (!kept.isEmpty() && target->notePath.isEmpty() && !target->view
-            && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [target](const auto &open) { return open.get() == target; }))
+        if (!kept.isEmpty()
+            && std::any_of(m_leaves.cbegin(), m_leaves.cend(), [target](const auto &open) { return open.get() == target; })
+            && target->notePath.isEmpty() && !target->view)
             target->keptPath = kept;
     });
     // Any navigation - the tree, the switcher, a link, history - leaves the
