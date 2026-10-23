@@ -102,6 +102,8 @@ void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, Co
     } else {
         it->image = std::move(result.image);
     }
+    it->hotspots = result.isMarkdown ? QList<CodeBlockResult::Hotspot>() : std::move(result.hotspots);
+    it->activate = result.isMarkdown ? nullptr : std::move(result.activate);
 
     bool touched = false;
     for (BlockView &block : d->m_blocks) {
@@ -116,6 +118,48 @@ void MarkdownEditor::deliverCodeBlock(const QString &key, quint64 generation, Co
         updateLayout();
         viewport()->update();
     }
+}
+
+QRect MarkdownEditor::codeBlockImageRectAt(qsizetype offset) const
+{
+    const qsizetype index = blockAt(offset);
+    if (index < 0 || index >= qsizetype(d->m_blocks.size()))
+        return {};
+    const BlockView &view = d->m_blocks[size_t(index)];
+    return view.isPluginBlock && !view.image.isNull() ? hookedEmbedImageRect(view).toRect() : QRect();
+}
+
+bool MarkdownEditor::pressCodeBlockHotspot(const QPoint &viewportPoint)
+{
+    for (const BlockView &view : d->m_blocks) {
+        if (!view.isPluginBlock || view.image.isNull())
+            continue;
+        const auto it = d->m_codeBlockCache.constFind(view.codeBlockKey);
+        if (it == d->m_codeBlockCache.cend() || it->hotspots.isEmpty() || !it->activate)
+            continue;
+        const QRectF image = hookedEmbedImageRect(view);
+        if (!image.contains(viewportPoint))
+            continue;
+        const QPointF local = viewportPoint - image.topLeft();
+        for (const CodeBlockResult::Hotspot &hotspot : it->hotspots) {
+            if (!hotspot.rect.contains(local))
+                continue;
+            // The picture it leads to comes the way any answer does; until then the old one stays, and an
+            // answer that is overtaken by another click is dropped (the generation).
+            const QString key = view.codeBlockKey;
+            const int id = hotspot.id;
+            const quint64 generation = ++d->m_codeBlockGeneration;
+            auto activate = it->activate;
+            d->m_codeBlockCache[key].generation = generation;
+            activate(id, [this, lifeline = d->m_lifeline, key, generation](CodeBlockResult result) {
+                lifeline->post(this, [this, key, generation, result = std::move(result)]() mutable {
+                    deliverCodeBlock(key, generation, std::move(result));
+                });
+            });
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace noteAppC

@@ -19,6 +19,7 @@
 #include "Index.h"
 #include "Indexer.h"
 #include "MathRenderer.h"
+#include "Markmap.h"
 #include "MermaidCache.h"
 #include "PageBody.h"
 #include "Parser.h"
@@ -409,6 +410,31 @@ TEST(PublishTest, ADiagramsOwnMarkupNeverReachesThePage)
     const QString css = site.read(QStringLiteral("site.css"));
     EXPECT_TRUE(css.contains(QStringLiteral(".diagram img")));
     EXPECT_FALSE(css.contains(QStringLiteral("mermaid-diagram")));
+}
+
+// A ```markmap fence is published as the mind map the editor made of it (the same cache the diagrams use): an <img>,
+// the map as the fence's own text asks for it.
+TEST(PublishTest, AMindMapTheEditorMadeIsPublishedAsAnImage)
+{
+    QTemporaryDir env;
+    ASSERT_TRUE(env.isValid());
+    const QByteArray oldCache = qgetenv("XDG_CACHE_HOME");
+    qputenv("XDG_CACHE_HOME", env.filePath(QStringLiteral("cache")).toUtf8());
+    const QString source = QStringLiteral("# Root\n## Branch\n- leaf");
+    const QByteArray config = noteAppC::diagramConfig(noteAppC::DiagramKind::Markmap, Theme::builtin(Theme::Mode::Dark));
+    ASSERT_TRUE(mermaidCacheStore(noteAppC::diagramCachePath(noteAppC::DiagramKind::Markmap, source, config),
+                                  noteAppC::drawMarkmap(noteAppC::parseMarkmap(source), noteAppC::markmapLook(config)).svg));
+    TestSite site({{QStringLiteral("Note.md"), "```markmap\n# Root\n## Branch\n- leaf\n```\n\n```markmap\n# never drawn\n```\n"}});
+    site.publish();
+    const QString page = site.read(QStringLiteral("note.html"));
+    if (oldCache.isNull())
+        qunsetenv("XDG_CACHE_HOME");
+    else
+        qputenv("XDG_CACHE_HOME", oldCache);
+    const QStringList images = diagramImages(page);
+    ASSERT_EQ(images.size(), 1) << page.toStdString();
+    EXPECT_TRUE(images.first().contains(QStringLiteral(">leaf</text>")));
+    EXPECT_TRUE(page.contains(QStringLiteral("never drawn"))) << "a map nobody drew stays its listing";
 }
 
 // The picture's words, for a screen reader and the site's search: the source is the alt text, escaped (a

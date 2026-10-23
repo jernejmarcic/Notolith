@@ -5,6 +5,8 @@
 
 #include "MermaidBlock.h"
 
+#include "MarkmapBlock.h"
+
 #include "Bubblewrap.h"
 #include "SyscallFilter.h"
 
@@ -43,8 +45,8 @@ constexpr rlim_t kAddressSpaceBytes = 4ULL * 1024 * 1024 * 1024; ///< the tools'
 constexpr rlim_t kJVMDataBytes = 2ULL * 1024 * 1024 * 1024;      ///< the JVM's RLIMIT_DATA: heap 512 MB, metaspace 256 MB, code cache, malloc
 /// The JVM's own caps (JAVA_TOOL_OPTIONS reaches any java the launcher script runs): a diagram needs well under 100 MB.
 const char kJVMOptions[] = "JAVA_TOOL_OPTIONS=-Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m";
-constexpr int kKindCount = 4; ///< the arrays below hold one entry per DiagramKind
-static_assert(int(DiagramKind::Graphviz) + 1 == kKindCount, "a new DiagramKind: grow kKindCount (the pools and prune flags)");
+constexpr int kKindCount = 5; ///< the arrays below hold one entry per DiagramKind
+static_assert(int(DiagramKind::Markmap) + 1 == kKindCount, "a new DiagramKind: grow kKindCount (the pools and prune flags)");
 constexpr int kMaxPixels = 8192;       ///< one side of the raster, whatever the width and ratio
 constexpr int kCacheDays = 30;                  ///< a cached SVG not used for this long is dropped
 constexpr qint64 kCacheBytes = 50 * 1024 * 1024; ///< and the oldest go first beyond this much
@@ -383,7 +385,8 @@ const Kind &kindOf(DiagramKind kind)
     static const Kind kinds[] = {{"Mermaid", "mmdr", runMermaid},
                                  {"PlantUML", "plantuml", runPlantUML},
                                  {"TikZ", "latex", runTikZ},
-                                 {"Graphviz", "dot", runGraphviz}};
+                                 {"Graphviz", "dot", runGraphviz},
+                                 {"Markmap", "", nullptr}}; // drawn in-process by MarkmapBlock.cpp, never through make()
     return kinds[int(kind)];
 }
 
@@ -418,16 +421,16 @@ Result sourceWithHint(const QString &source, QString hint)
             QImage()};
 }
 
-/// The SVG at `width` logical pixels (never wider than it is, never
-/// taller than kMaxPixels allows) and `ratio` device pixels to each.
-Result rasterise(DiagramKind kind, const QByteArray &svg, const QString &source, int width, qreal ratio)
+} // namespace
+
+QImage rasteriseSVG(const QByteArray &svg, int width, qreal ratio, qreal *logicalScale)
 {
     QSvgRenderer renderer(svg);
     QSizeF natural = renderer.isValid() ? QSizeF(renderer.defaultSize()) : QSizeF();
     if (natural.isEmpty() && renderer.isValid())
         natural = renderer.viewBoxF().size();
     if (natural.isEmpty())
-        return sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: the tool's SVG could not be drawn").arg(QLatin1String(kindOf(kind).label)));
+        return {};
     const qreal logicalWidth = qMin<qreal>(qMax(width, 1), natural.width());
     const qreal logicalHeight = natural.height() * logicalWidth / natural.width();
     qreal scale = qMax<qreal>(ratio, 1);
@@ -441,6 +444,20 @@ Result rasterise(DiagramKind kind, const QByteArray &svg, const QString &source,
         renderer.render(&painter, QRectF(QPointF(), QSizeF(pixels)));
     }
     image.setDevicePixelRatio(pixels.width() / logicalWidth);
+    if (logicalScale)
+        *logicalScale = logicalWidth / natural.width();
+    return image;
+}
+
+namespace {
+
+/// The SVG at `width` logical pixels (never wider than it is, never
+/// taller than kMaxPixels allows) and `ratio` device pixels to each.
+Result rasterise(DiagramKind kind, const QByteArray &svg, const QString &source, int width, qreal ratio)
+{
+    QImage image = rasteriseSVG(svg, width, ratio);
+    if (image.isNull())
+        return sourceWithHint(source, QCoreApplication::translate("MermaidBlock", "%1: the tool's SVG could not be drawn").arg(QLatin1String(kindOf(kind).label)));
     return {false, QString(), std::move(image)};
 }
 
@@ -536,6 +553,8 @@ QThreadPool *pool(DiagramKind kind)
 
 MarkdownEditor::CodeBlockRenderer diagramRenderer(DiagramKind kind, const QString &tool, std::function<Theme()> theme)
 {
+    if (kind == DiagramKind::Markmap)
+        return markmapRenderer(std::move(theme)); // no tool: its own renderer, in MarkmapBlock.cpp
     auto state = std::make_shared<State>();
     state->kind = kind;
     state->setting = tool;

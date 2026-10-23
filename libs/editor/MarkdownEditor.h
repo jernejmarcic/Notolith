@@ -592,6 +592,18 @@ public:
         bool isMarkdown = true;
         QString text;
         QImage image;
+        /// Places on `image`, in logical pixels from its top left, that a
+        /// click answers instead of putting the caret there (a mind map's
+        /// fold circles). `activate` is then asked, with that spot's `id`
+        /// and a `deliver` of the same contract as the renderer's own, for
+        /// the picture that replaces this one; the editor keeps the old one
+        /// up until it comes. Empty for a picture with nothing to click.
+        struct Hotspot {
+            QRectF rect;
+            int id = 0;
+        };
+        QList<Hotspot> hotspots;
+        std::function<void(int id, const std::function<void(CodeBlockResult)> &deliver)> activate;
     };
     using CodeBlockRenderer =
         std::function<void(const QString &language, const QString &source, int width, const QString &theme,
@@ -820,6 +832,9 @@ public:
     /// send one there without reimplementing this layout by hand. Null
     /// outside a hooked embed with an image.
     QRect hookedEmbedImageRectAt(qsizetype offset) const;
+    /// The same for the picture a renderer made for a fence (setCodeBlockRenderer),
+    /// where its hotspots are; null while the fence is its listing or a placeholder.
+    QRect codeBlockImageRectAt(qsizetype offset) const;
 
     /// A notebook block's state at `offset` (NotebookBlock.cpp) - default
     /// (`eligible` false) outside a fenced code block, when the notebooks
@@ -1635,6 +1650,10 @@ private:
     /// CodeBlockHook.cpp: a fence in a language setCodeBlockRenderer has.
     bool layoutPluginCode(BlockView &view);
     void deliverCodeBlock(const QString &key, quint64 generation, CodeBlockResult result);
+    /// A press on a hotspot of a plugin block's picture (CodeBlockResult::
+    /// hotspots): asks the renderer for the picture it leads to. False when
+    /// the press is not on one.
+    bool pressCodeBlockHotspot(const QPoint &viewportPoint);
     /// NotebookBlock.cpp: a fenced code block's output, shown below its own
     /// listing rather than in place of it - the one difference from
     /// layoutPluginCode's shape just above, which this otherwise mirrors.

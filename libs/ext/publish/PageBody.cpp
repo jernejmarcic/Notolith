@@ -614,7 +614,7 @@ private:
     }
 
     /// The diagram the editor already made for a fence's source (mermaid,
-    /// plantuml, tikz, dot) as an <img>, or empty (the fence is then an
+    /// plantuml, tikz, dot, markmap) as an <img>, or empty (the fence is then an
     /// ordinary code block, its source in a <pre>). Publishing never starts a
     /// tool. An <img>, not inlined: an SVG drawn as an image never runs
     /// script or loads anything, and a note decides what goes into its SVG
@@ -672,7 +672,8 @@ private:
         const CodeOptions *options = optionsFor(fence.content, note);
         const QString lang = fence.language;
         for (const noteAppC::DiagramKind kind : {noteAppC::DiagramKind::Mermaid, noteAppC::DiagramKind::PlantUML,
-                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz}) {
+                                                 noteAppC::DiagramKind::TikZ, noteAppC::DiagramKind::Graphviz,
+                                                 noteAppC::DiagramKind::Markmap}) {
             if (!noteAppC::diagramLanguages(kind).contains(lang, Qt::CaseInsensitive))
                 continue;
             const QString diagram = cachedDiagram(kind, note.text.mid(fence.content.start, fence.content.length()));
