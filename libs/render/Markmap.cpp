@@ -62,6 +62,18 @@ void readOptions(const QString &frontmatter, MarkmapOptions &options)
     }
 }
 
+/// Whether `body[i]` may be in an SVG at all: a control character, U+FFFE or half of a surrogate pair makes
+/// the whole document invalid XML, and the fence would fall back to its listing for one stray byte.
+bool xmlCharacter(const QString &body, qsizetype i)
+{
+    const QChar c = body.at(i);
+    if (c.isHighSurrogate())
+        return i + 1 < body.size() && body.at(i + 1).isLowSurrogate();
+    if (c.isLowSurrogate())
+        return i > 0 && body.at(i - 1).isHighSurrogate();
+    return c.unicode() >= 0x20 || c.isSpace() ? c.unicode() < 0xFFFE : false;
+}
+
 /// The runs of `segments` of `body`: hidden characters dropped, whitespace collapsed to single spaces and
 /// trimmed at both ends, a run for each stretch of one style.
 QList<MarkmapRun> runsOf(const QString &body, const QByteArray &flags, const QList<Range> &segments)
@@ -83,7 +95,7 @@ QList<MarkmapRun> runsOf(const QString &body, const QByteArray &flags, const QLi
             push(QLatin1Char(' '), 0); // a continuation line joins with a space
         first = false;
         for (qsizetype i = segment.start; i < segment.end; ++i) {
-            if (!(quint8(flags.at(i)) & Hidden))
+            if (!(quint8(flags.at(i)) & Hidden) && xmlCharacter(body, i))
                 push(body.at(i), quint8(flags.at(i)));
         }
     }
@@ -239,11 +251,15 @@ MarkmapTree parseMarkmap(const QString &source)
             while (indent < line.size() && line.at(indent).isSpace())
                 ++indent;
             const Range text{lineStart + indent, contentEnd};
-            if (lastIsItem && last >= 0 && (!blank || indentColumns(QStringView(line).left(indent)) >= 2)) {
-                segments[last].append(text); // a continuation of the item above
+            // `last` is -1 when what is above was left out for the cap: its continuation lines go with it,
+            // not into nodes of their own (they are not more nodes of the source).
+            if (lastIsItem && (!blank || indentColumns(QStringView(line).left(indent)) >= 2)) {
+                if (last >= 0)
+                    segments[last].append(text); // a continuation of the item above
                 node = last;
-            } else if (lastIsText && last >= 0 && !blank) {
-                segments[last].append(text); // the next line of the same paragraph
+            } else if (lastIsText && !blank) {
+                if (last >= 0)
+                    segments[last].append(text); // the next line of the same paragraph
                 node = last;
             } else {
                 items.clear();
@@ -291,22 +307,33 @@ MarkmapTree parseMarkmap(const QString &source)
     }
     if (tree.options.initialExpandLevel >= 0) {
         for (MarkmapNode &node : tree.nodes) {
-            if (node.depth >= tree.options.initialExpandLevel && !node.children.isEmpty())
+            // markmap-view's _initializeData numbers the root 1 (`depth += 1` before the first node) and folds
+            // `item.state.depth >= initialExpandLevel`; the root here is 0, so one less.
+            if (node.depth >= tree.options.initialExpandLevel - 1 && !node.children.isEmpty())
                 node.folded = true;
         }
     }
     return tree;
 }
 
-QString markmapOutlineOf(const QString &note, const QString &title)
+QString markmapSourceOfNote(const QString &note)
 {
-    const QList<Heading> headings = Parser().parse(note).headings;
-    if (headings.isEmpty())
-        return {};
-    QString out = QStringLiteral("# ") + title + QLatin1Char('\n');
-    for (const Heading &heading : headings)
-        out += QString(qMin(heading.level + 1, 6), QLatin1Char('#')) + QLatin1Char(' ') + heading.text + QLatin1Char('\n');
-    return out;
+    const Range front = Frontmatter::find(note);
+    const QString body = front.isValid() ? note.mid(front.end) : note;
+    QList<Range> code;
+    for (const CodeFenceSpan &fence : Parser().parseAll(body).decorations.codeFences)
+        code.append(fence.block);
+    std::sort(code.begin(), code.end(), [](const Range &a, const Range &b) { return a.start < b.start; });
+    QString out;
+    qsizetype from = 0;
+    for (const Range &block : std::as_const(code)) {
+        if (block.start < from)
+            continue; // inside one already cut
+        out += body.mid(from, block.start - from) + QLatin1Char('\n');
+        from = qMin<qsizetype>(block.end, body.size());
+    }
+    out += body.mid(from);
+    return out.trimmed().isEmpty() ? QString() : out;
 }
 
 // --- drawing -----------------------------------------------------------------
@@ -537,7 +564,9 @@ MarkmapDrawn drawMarkmap(const MarkmapTree &tree, const MarkmapLook &look, const
         QHash<int, int> assigned;
         for (int i = 0; i < count; ++i) {
             int at = i;
-            while (freeze > 0 && tree.nodes.at(at).depth > freeze)
+            // markmap-view's util.ts keeps `path.split('.').slice(0, colorFreezeLevel)`: the first N ids of the
+            // path, so the node at depth N (the root being 1) lends its colour; the root here is 0, so N - 1.
+            while (freeze > 0 && tree.nodes.at(at).depth >= freeze)
                 at = tree.nodes.at(at).parent;
             owner[i] = at;
             if (!assigned.contains(at))
@@ -584,7 +613,7 @@ MarkmapDrawn drawMarkmap(const MarkmapTree &tree, const MarkmapLook &look, const
     }
     out += QStringLiteral("</g>\n");
 
-    const auto family = [](const QString &name) { return name.toHtmlEscaped().replace(QLatin1Char('"'), QStringLiteral("&quot;")); };
+    const auto family = [](const QString &name) { return name.toHtmlEscaped(); }; // which escapes the quote too
     for (int i = 0; i < count; ++i) {
         const Shape &shape = shapes.at(i);
         if (!shape.shown)

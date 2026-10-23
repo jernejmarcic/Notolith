@@ -17,12 +17,12 @@ so it can be edited, and the map comes back when the caret leaves.
 That is only how the map is shown: nothing is written to the note, and it
 resets when the fence's text changes. In reading view the circles work too. The
 map follows the theme (try the light and the dark scheme); a map wider than the
-text column is scaled down to fit it. Publish and PDF export show the map as the
-fence's own text asks for it (folds from the source, not from your clicks), once
-the editor has drawn it.
+text column is scaled down to fit it. Publish and PDF export draw the map from
+the fence's own text (folds from the source, not from your clicks), in the
+theme of the output: a PDF is always light, on white paper.
 
 The switch is Settings > Core plugins > "Mind maps"; off, a fence is an ordinary
-code block and nothing is ever drawn.
+code block, on screen, in a published site and in a PDF.
 
 ## Headings and lists
 
@@ -60,9 +60,11 @@ With no single root, the map gets an empty one, as in markmap.js:
 
 ## Options and folding
 
-The frontmatter of the fence takes markmap's options `colorFreezeLevel` (branches
-deeper than this keep their ancestor's colour), `initialExpandLevel` (depth at
-which branches start folded) and `maxWidth` (pixels before a node's text wraps).
+The frontmatter of the fence takes markmap's options `colorFreezeLevel` (levels
+below this keep the colour of their ancestor on it; 1 is a single colour),
+`initialExpandLevel` (the level at which branches start folded: 1 folds even the
+root, 2 shows the root and its children) and `maxWidth` (pixels before a
+node's text wraps). Levels count from 1 at the root, as in markmap.js.
 `<!-- markmap: fold -->` after a node folds it to begin with; `foldAll` folds
 everything below it as well.
 
@@ -86,4 +88,5 @@ markmap:
 
 ## The whole note
 
-Command palette > "Show as mind map" draws the headings of the note you are in.
+Command palette > "Show as mind map" draws the whole note you are in - headings,
+lists and text, but not its code blocks or frontmatter.

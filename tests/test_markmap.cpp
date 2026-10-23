@@ -159,17 +159,44 @@ TEST(MarkmapTreeTest, FoldAllFoldsEveryDescendantThatHasChildren)
 
 TEST(MarkmapTreeTest, TheOptionsAreReadFromTheFrontmatterNestedOrFlat)
 {
-    for (const QString &front : {QStringLiteral("---\nmarkmap:\n  colorFreezeLevel: 2\n  initialExpandLevel: 1\n  maxWidth: 240\n---\n"),
-                                 QStringLiteral("---\ncolorFreezeLevel: 2\ninitialExpandLevel: 1\nmaxWidth: 240\n---\n")}) {
+    for (const QString &front : {QStringLiteral("---\nmarkmap:\n  colorFreezeLevel: 2\n  initialExpandLevel: 2\n  maxWidth: 240\n---\n"),
+                                 QStringLiteral("---\ncolorFreezeLevel: 2\ninitialExpandLevel: 2\nmaxWidth: 240\n---\n")}) {
         SCOPED_TRACE(front.toStdString());
         const MarkmapTree tree = noteAppC::parseMarkmap(front + QStringLiteral("# R\n## A\n- a1\n## B\n"));
         EXPECT_EQ(tree.options.colorFreezeLevel, 2);
-        EXPECT_EQ(tree.options.initialExpandLevel, 1);
+        EXPECT_EQ(tree.options.initialExpandLevel, 2);
         EXPECT_EQ(tree.options.maxWidth, 240);
         EXPECT_EQ(shape(tree), QStringLiteral("R(A(a1),B)")) << "the frontmatter is not drawn";
-        EXPECT_FALSE(tree.nodes.at(0).folded) << "depth 0 < 1";
-        EXPECT_TRUE(tree.nodes.at(1).folded) << "A is depth 1 and has children";
+        EXPECT_FALSE(tree.nodes.at(0).folded);
+        EXPECT_TRUE(tree.nodes.at(1).folded) << "A is on level 2 and has children";
     }
+}
+
+TEST(MarkmapTreeTest, InitialExpandLevelCountsTheRootAsLevelOneLikeMarkmapView)
+{
+    // markmap-view's view.ts, _initializeData: `depth += 1` runs before the first node is numbered, so the
+    // root has `state.depth` 1, and `initialExpandLevel >= 0 && item.state.depth >= initialExpandLevel`
+    // sets `fold: 1`. Level 1 therefore folds the root itself, 2 folds the root's children, and so on.
+    const QString body = QStringLiteral("# R\n## A\n### a1\n#### a2\n## B\n- b1\n");
+    const auto folded = [&](int level) {
+        const MarkmapTree tree = noteAppC::parseMarkmap(QStringLiteral("---\ninitialExpandLevel: %1\n---\n").arg(level) + body);
+        QStringList names;
+        for (const MarkmapNode &node : tree.nodes)
+            if (node.folded)
+                names << node.plain();
+        return names.join(QLatin1Char(','));
+    };
+    EXPECT_EQ(folded(0), QStringLiteral("R,A,a1,B")) << "everything with something to hide";
+    EXPECT_EQ(folded(1), QStringLiteral("R,A,a1,B")) << "the root is folded: only it shows";
+    EXPECT_EQ(folded(2), QStringLiteral("A,a1,B")) << "the root and its children show";
+    EXPECT_EQ(folded(3), QStringLiteral("a1")) << "a2 is on level 4, in a1";
+    EXPECT_EQ(folded(4), QString());
+    EXPECT_EQ(folded(5), QString());
+    // With no single top node the empty root is level 1 as well (markmap-lib's own).
+    const MarkmapTree several = noteAppC::parseMarkmap(QStringLiteral("---\ninitialExpandLevel: 2\n---\n- x\n  - y\n- z\n"));
+    ASSERT_TRUE(several.virtualRoot);
+    EXPECT_FALSE(several.nodes.at(0).folded);
+    EXPECT_TRUE(several.nodes.at(1).folded) << "x is level 2";
 }
 
 TEST(MarkmapTreeTest, NoOptionsMeansExpandedUnfrozenUnwrapped)
@@ -195,12 +222,42 @@ TEST(MarkmapTreeTest, ABiggerOutlineThanTheCapIsCutAndCounted)
     EXPECT_TRUE(drawn.svg.contains(QByteArray::number(noteAppC::kMarkmapMaxNodes)));
 }
 
-TEST(MarkmapTreeTest, AnOutlineOfANoteIsItsHeadingsUnderTheTitleAndSkipsCodeAndFrontmatter)
+TEST(MarkmapTreeTest, ADroppedItemsContinuationLinesAreNotMoreNodes)
 {
-    const QString note = QStringLiteral("---\ntitle: x\n# not a heading\n---\n# Top\ntext\n## One\n```\n# in code\n```\n### Two\n## Three\n");
-    const MarkmapTree tree = noteAppC::parseMarkmap(noteAppC::markmapOutlineOf(note, QStringLiteral("My note")));
-    EXPECT_EQ(shape(tree), QStringLiteral("My note(Top(One(Two),Three))"));
-    EXPECT_TRUE(noteAppC::markmapOutlineOf(QStringLiteral("just text\n"), QStringLiteral("T")).isEmpty());
+    QString source = QStringLiteral("# R\n");
+    for (int i = 0; i < 3000; ++i)
+        source += QStringLiteral("- item %1\n  second line\n\n").arg(i);
+    const MarkmapTree tree = noteAppC::parseMarkmap(source);
+    EXPECT_EQ(tree.nodes.size(), noteAppC::kMarkmapMaxNodes);
+    EXPECT_EQ(tree.total, 3001) << "3000 items and the heading, not their second lines";
+}
+
+TEST(MarkmapTreeTest, TheMapOfANoteIsItsWholeBodyLikeMarkmapJsLessFrontmatterAndCode)
+{
+    const QString note = QStringLiteral("---\ntitle: x\n# not a heading\n---\n# Top\ntext\n- buy x\n- call y\n## One\n```\n# in code\n- not a node\n```\n"
+                                       "### Two\n###### Six\n####### not a heading\n## Three\n~~~\n# also code\n~~~\n");
+    const QString source = noteAppC::markmapSourceOfNote(note);
+    EXPECT_FALSE(source.contains(QStringLiteral("in code")));
+    EXPECT_FALSE(source.contains(QStringLiteral("also code")));
+    EXPECT_FALSE(source.contains(QStringLiteral("title: x")));
+    const MarkmapTree tree = noteAppC::parseMarkmap(source);
+    EXPECT_EQ(shape(tree), QStringLiteral("Top(text,buy x,call y,One(Two(Six(####### not a heading))),Three)"))
+        << "a sixth-level heading nests as deep as it is; seven #s are text";
+    EXPECT_EQ(tree.nodes.size(), 9);
+    EXPECT_TRUE(noteAppC::markmapSourceOfNote(QStringLiteral("---\na: b\n---\n```\ncode\n```\n")).isEmpty());
+    EXPECT_TRUE(noteAppC::markmapSourceOfNote(QString()).isEmpty());
+}
+
+TEST(MarkmapTreeTest, ACharacterXMLCannotHoldDoesNotBreakTheSVG)
+{
+    const QString source = QStringLiteral("# R\x01 a\x0e b\n- lone ") + QChar(0xD83D) + QStringLiteral(" high\n- lone ") + QChar(0xDE00)
+                           + QStringLiteral(" low\n- pair \U0001F600 ok\n- \uFFFE end\n");
+    const auto drawn = noteAppC::drawMarkmap(noteAppC::parseMarkmap(source), lookOf());
+    QString why;
+    EXPECT_TRUE(wellFormed(drawn.svg, &why)) << why.toStdString();
+    EXPECT_TRUE(QString::fromUtf8(drawn.svg).contains(QStringLiteral("\U0001F600"))) << "a real pair stays";
+    QSvgRenderer renderer(drawn.svg);
+    EXPECT_TRUE(renderer.isValid());
 }
 
 // --- the SVG -----------------------------------------------------------------
@@ -305,9 +362,13 @@ TEST(MarkmapDrawTest, EachBranchHasItsColourAndTheFreezeLevelMakesItsDescendants
         return colours.size();
     };
     const int free = strokes(body);
-    const int frozen = strokes(QStringLiteral("---\ncolorFreezeLevel: 1\n---\n") + body);
+    // markmap-view's util.ts keeps `path.split('.').slice(0, colorFreezeLevel)`: the first N ids of a node's
+    // path, the root's being the first, so the node on level N (the root is level 1) lends its colour.
+    const int levelTwo = strokes(QStringLiteral("---\ncolorFreezeLevel: 2\n---\n") + body);
+    const int levelOne = strokes(QStringLiteral("---\ncolorFreezeLevel: 1\n---\n") + body);
     EXPECT_EQ(free, 5) << "a link for each of the five children, each its own colour";
-    EXPECT_EQ(frozen, 2) << "A's and B's descendants keep A's and B's colour";
+    EXPECT_EQ(levelTwo, 2) << "A's and B's descendants keep A's and B's colour";
+    EXPECT_EQ(levelOne, 1) << "everything keeps the root's";
 }
 
 TEST(MarkmapDrawTest, ColoursComeFromTheThemeAndTheLightAndDarkMapsDiffer)

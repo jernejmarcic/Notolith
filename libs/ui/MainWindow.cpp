@@ -4535,16 +4535,21 @@ void MainWindow::showAsMindMap()
 {
     if (!m_active || !m_active->editor || m_active->view)
         return;
-    if (showsEncryptedNote(m_active->editor)) { // the map is kept on disk, which an encrypted note's text never reaches
+    if (showsEncryptedNote(m_active->editor)) { // the dialog's editor is not the note's, and has no key
         QMessageBox::information(this, tr("Mind map"), tr("Mind maps are not drawn for encrypted notes."));
         return;
     }
     const QString title = m_active->notePath.isEmpty() ? tr("Untitled") : QFileInfo(m_active->notePath).completeBaseName();
-    const QString outline = markmapOutlineOf(m_active->editor->noteText(), title);
+    const QString outline = markmapSourceOfNote(m_active->editor->noteText());
     if (outline.isEmpty()) {
-        QMessageBox::information(this, tr("Mind map"), tr("This note has no headings to draw."));
+        QMessageBox::information(this, tr("Mind map"), tr("This note has nothing to draw."));
         return;
     }
+    // A fence longer than any run of backticks in the text, so nothing in it can close it early.
+    qsizetype longest = 0, run = 0;
+    for (const QChar c : outline)
+        longest = qMax(longest, run = (c == QLatin1Char('`') ? run + 1 : 0));
+    const QString fence(qMax<qsizetype>(3, longest + 1), QLatin1Char('`'));
     QDialog dialog(this);
     dialog.setObjectName(QStringLiteral("mindMapDialog"));
     dialog.setWindowTitle(tr("Mind map: %1").arg(title));
@@ -4554,7 +4559,7 @@ void MainWindow::showAsMindMap()
     applyEditorSettings(editor); // registers the markmap renderer, as for any note
     editor->setReadableLineLength(false);
     editor->setMode(MarkdownEditor::Mode::Reading);
-    editor->setNoteText(QStringLiteral("```markmap\n") + outline + QStringLiteral("```\n"));
+    editor->setNoteText(fence + QStringLiteral("markmap\n") + outline + QLatin1Char('\n') + fence + QLatin1Char('\n'));
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(editor);

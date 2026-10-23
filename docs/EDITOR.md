@@ -1473,7 +1473,7 @@ that folds the branch. Core plugin `markmap` (Settings > Core plugins, "Mind
 maps", on by default); off, the fence is a plain code block and no code of it
 runs. There is no JavaScript and no tool: the tree, the layout and the SVG are
 `libs/render/Markmap.{h,cpp}`, drawn in-process, so reading view, publish and
-PDF export show the same map.
+PDF export show the same map, each drawn from the fence's text in its own theme.
 
 - **Tree**: headings nest by level (a skipped level still hangs from the
   nearest lower one) and a list under a heading hangs from it, nested by
@@ -1485,10 +1485,15 @@ PDF export show the same map.
   tint), links and wikilinks (their text, in the accent colour, underlined),
   ~~strikethrough~~; the markers are gone.
 - **Options**: the fence's frontmatter, under a `markmap:` key or at the top
-  level: `colorFreezeLevel` (nodes deeper than this share their ancestor's
-  colour; default 0, every node its own), `initialExpandLevel` (nodes at this
-  depth or deeper start folded, the root being 0; default -1, all open) and
-  `maxWidth` (pixels before a node's text wraps; default 0, never). `<!--
+  level: `colorFreezeLevel` (nodes below this level share the colour of their
+  ancestor on it; default 0, every node its own), `initialExpandLevel` (nodes on
+  this level or deeper start folded; default -1, all open) and `maxWidth`
+  (pixels before a node's text wraps; default 0, never). Levels count as
+  markmap.js counts them, from 1 at the root: `initialExpandLevel: 1` folds the
+  root (only it shows), 2 shows the root and its children, and
+  `colorFreezeLevel: 1` gives the whole map one colour (markmap-view's
+  `view.ts` `_initializeData` and `util.ts`, pinned by
+  `MarkmapTreeTest.InitialExpandLevelCountsTheRootAsLevelOneLikeMarkmapView`). `<!--
   markmap: fold -->` after a node, or on a line of its own right after it,
   folds it to begin with; `<!-- markmap: foldAll -->` folds it and everything
   below it that has children.
@@ -1510,23 +1515,26 @@ PDF export show the same map.
   `--color-cyan`, `--color-pink`, `--color-yellow` in that order (as first used
   over the whole tree, so folding does not recolour), text `--text-normal`,
   links and the root `--interactive-accent`, the card `--background-primary`.
-  The theme (with its fonts) is part of the cache key, so a dark and a light
-  theme each have their own SVG.
+  The theme (with its fonts) decides them, so a dark and a light theme each
+  have their own SVG.
 - **Off the UI thread, and capped**: parse, layout and raster run on a pool
   thread of their own (one thread; a thousand nodes parse and draw in about 40
   ms here); the UI thread reads the theme and queues the job. At most 1000 nodes
   are drawn (`kMarkmapMaxNodes`); a bigger outline is cut there and the map
   says "Showing the first 1000 of N nodes" under itself.
-- **Cache, publish, PDF export**: the map as the source asks for it (not as a
-  click folded it) is kept as `$XDG_CACHE_HOME/noteAppC/markmap/<source hash>-<config
-  hash>.svg` (`DiagramKind::Markmap`, MermaidCache.h, pruned like the others);
-  publish and PDF export read that, as for the other diagram kinds: a map the
-  editor never drew stays a listing, and an off plugin makes none. An encrypted note
-  is not drawn (the cache is on disk).
+- **Publish, PDF export**: nothing is cached on disk. Both draw the map from the
+  fence's text (`diagramCachedSVG` for Markmap is `drawMarkmap(parseMarkmap(...))`
+  in the theme the output has: the site's dark theme for publish, the paper's
+  light theme for a PDF whatever the window uses), so a note never opened in the
+  editor still gets its map, as the source asks for it (not as a click folded it).
+  With the plugin off (`publish::Options::mindMaps`, `PdfOptions::mindMaps`) they
+  show the plain listing. An encrypted note is not drawn.
 - **Show as mind map**: the command "Mind maps: Show as mind map" (`markmap:show-note`,
-  off with the plugin) opens the note's headings in a window of their own: the note's
-  name as the root and each heading under it by level (`markmapOutlineOf`), in a
-  reading-view editor, so the circles fold there too.
+  off with the plugin) opens the whole note as a map in a window of its own, as
+  markmap.js reads a document: headings, lists and text, less the frontmatter and
+  the fenced code blocks (`markmapSourceOfNote`), in a reading-view editor, so the
+  circles fold there too. The root is the note's single top heading; with several
+  top-level nodes it is the empty one.
 
 Not covered, against markmap.js: zoom and pan, the toolbar, dragging nodes,
 clicking a link (the map is a picture), maths, images, tables and code blocks inside
@@ -1537,7 +1545,7 @@ commands other than `fold` and `foldAll`, other frontmatter options (`color`,
 
 Tests: `MarkmapTreeTest.*`, `MarkmapDrawTest.*`, `MarkmapBlockTest.*`,
 `MarkmapWindowTest.*` (`tests/test_markmap.cpp`) and
-`PublishTest.AMindMapTheEditorMadeIsPublishedAsAnImage`; the demo vault's
+`PublishTest.AMindMapIsDrawnFromTheFencesTextEvenInANoteNeverOpened`; the demo vault's
 `Diagrams/Markmap.md`.
 
 ## File cards

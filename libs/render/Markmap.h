@@ -15,16 +15,18 @@ namespace noteAppC {
 /// headings and list items become a tree, laid out left to right with the root
 /// at the left, and drawn as an SVG that plugs into the diagram pipeline
 /// (MermaidCache.h's DiagramKind::Markmap; MarkmapBlock.cpp in libs/editor is
-/// the editor's renderer, publish and PDF export read the SVG the editor made).
+/// the editor's renderer; publish and PDF export draw the map from the text themselves).
 /// Pure functions of their arguments, safe on any thread once a
 /// QGuiApplication exists (the text is measured with QFontMetricsF).
 
 /// What the fence's frontmatter can ask (markmap's own option names, found
 /// under a `markmap:` key or at the top level).
 struct MarkmapOptions {
-    /// Nodes deeper than this share their ancestor's colour; 0 gives every node its own.
+    /// Levels count from 1 at the root, as markmap.js's do. Nodes below this level share the colour of
+    /// their ancestor at it (1: one colour for the whole map); 0 gives every node its own.
     int colorFreezeLevel = 0;
-    /// Nodes at this depth or deeper start folded (the root is depth 0); -1 expands everything.
+    /// Nodes at this level or deeper start folded, so 1 shows only the root and 2 the root and its
+    /// children; -1 expands everything.
     int initialExpandLevel = -1;
     /// Longest a line of node text may be, in pixels, before it wraps; 0 never wraps.
     int maxWidth = 0;
@@ -76,14 +78,14 @@ constexpr int kMarkmapMaxNodes = 1000;
 /// options, not drawn.
 MarkmapTree parseMarkmap(const QString &source);
 
-/// The Markdown of `note`'s headings as a mind map's source, for a map of a
-/// whole note: `title` as the root and each heading one level below it (a
-/// heading's own level decides what it nests under). Headings in code fences
-/// and the frontmatter do not count. Empty when the note has none.
-QString markmapOutlineOf(const QString &note, const QString &title);
+/// What a map of a whole note is made from, as markmap.js and the Obsidian
+/// plugin make one: the note's own text (headings, lists and paragraphs), less
+/// its frontmatter and its fenced code blocks, which parseMarkmap would read
+/// as headings and items. Empty when nothing is left.
+QString markmapSourceOfNote(const QString &note);
 
 /// What a map is drawn in: the theme's tokens, as JSON (MermaidCache.h's
-/// diagramConfig carries them, so a map is cached per theme).
+/// diagramConfig carries them).
 struct MarkmapLook {
     QColor text{0x22, 0x22, 0x22};
     QColor muted{0x88, 0x88, 0x88};

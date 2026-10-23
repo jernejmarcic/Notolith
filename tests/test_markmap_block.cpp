@@ -394,15 +394,17 @@ TEST_F(MarkmapWindowTest, OffTheFenceIsAPlainCodeBlock)
     EXPECT_TRUE(openAndWait(window).isEmpty());
 }
 
-TEST_F(MarkmapWindowTest, ShowAsMindMapIsACommandOfThePluginAndDrawsTheNotesHeadings)
+TEST_F(MarkmapWindowTest, ShowAsMindMapIsACommandOfThePluginAndDrawsTheWholeNoteButItsCode)
 {
     {
+        bool drawn = false;
+        QString shown;
         MainWindow window;
         window.show();
         window.openVault(dir.path());
         QFile note(dir.filePath(QStringLiteral("Headings.md")));
         ASSERT_TRUE(note.open(QIODevice::WriteOnly));
-        note.write("# Top\ntext\n## First\n### Deep\n## Second\n");
+        note.write("---\ntitle: x\n---\n# Top\n- buy x\n- call y `` ``` `` here\n```\n# in code\n- not a node\n```\n## First\n###### Deep six\n## Second\n");
         note.close();
         window.openNote(dir.filePath(QStringLiteral("Headings.md")));
         auto *action = window.findChild<QAction *>(QStringLiteral("markmap:show-note"));
@@ -410,31 +412,38 @@ TEST_F(MarkmapWindowTest, ShowAsMindMapIsACommandOfThePluginAndDrawsTheNotesHead
         EXPECT_TRUE(action->isEnabled());
         EXPECT_TRUE(action->text().contains(QStringLiteral("mind map"), Qt::CaseInsensitive));
 
-        // The modal dialog: found while it is up, asked what it draws, closed.
-        bool drawn = false;
+        // The modal dialog: found while it is up, asked what it draws, closed. The timer is the window's,
+        // so a dialog that never draws leaves nothing firing after the test.
         QTimer::singleShot(0, [&] {
-            QTimer *poll = new QTimer;
-            QObject::connect(poll, &QTimer::timeout, [&drawn, poll] {
+            auto *poll = new QTimer(&window);
+            QObject::connect(poll, &QTimer::timeout, [&drawn, &shown, poll] {
                 for (QWidget *top : QApplication::topLevelWidgets()) {
                     if (top->objectName() != QLatin1String("mindMapDialog"))
                         continue;
                     auto *editor = top->findChild<MarkdownEditor *>();
                     if (editor && !editor->embedImageSizeAt(editor->noteText().indexOf(QLatin1String("First"))).isEmpty()) {
                         drawn = true;
+                        shown = editor->noteText();
+                        poll->stop();
                         static_cast<QDialog *>(top)->accept();
-                        poll->deleteLater();
                     }
                 }
             });
             poll->start(50);
         });
-        QTimer::singleShot(10000, [&] {
+        QTimer::singleShot(10000, &window, [&] {
             for (QWidget *top : QApplication::topLevelWidgets())
                 if (top->objectName() == QLatin1String("mindMapDialog"))
                     static_cast<QDialog *>(top)->reject();
         });
         action->trigger();
-        EXPECT_TRUE(drawn);
+        ASSERT_TRUE(drawn);
+        // The whole body, as markmap.js reads it: lists and text too, no code, no frontmatter.
+        for (const char *wanted : {"# Top", "- buy x", "- call y", "###### Deep six"})
+            EXPECT_TRUE(shown.contains(QString::fromLatin1(wanted))) << wanted;
+        for (const char *unwanted : {"in code", "not a node", "title: x"})
+            EXPECT_FALSE(shown.contains(QString::fromLatin1(unwanted))) << unwanted;
+        EXPECT_TRUE(shown.startsWith(QStringLiteral("````markmap\n"))) << "a fence longer than the ``` in the text";
     }
     configure(false);
     MainWindow off;
