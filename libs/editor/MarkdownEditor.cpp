@@ -6505,8 +6505,26 @@ void MarkdownEditor::mousePressEvent(QMouseEvent *event)
     viewport()->update();
 }
 
+namespace {
+
+/// Whether the style files exist, and their size and modification time: what changes when one is
+/// edited, created or removed, and does not when something else is written beside them.
+QString styleFilesSignature()
+{
+    QString signature;
+    for (const QString &file : {CalloutStyles::defaultPath(), LanguageStyles::defaultPath(), TaskStates::path()}) {
+        const QFileInfo info(file);
+        signature += info.exists() ? QStringLiteral("%1:%2;").arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch())
+                                   : QStringLiteral("-;");
+    }
+    return signature;
+}
+
+} // namespace
+
 void MarkdownEditor::watchStyleFiles()
 {
+    d->m_styleFilesSeen = styleFilesSignature();
     d->m_configWatcher = new QFileSystemWatcher(this);
     // The files, and the directory they live in. An editor that saves by
     // writing a new file and renaming it over the old one - most do - makes
@@ -6533,6 +6551,12 @@ void MarkdownEditor::reloadStyleFiles()
         if (QFileInfo::exists(file) && !d->m_configWatcher->files().contains(file))
             d->m_configWatcher->addPath(file);
     }
+    // The directory is the settings' too, written on every note switch: those saves are no reason
+    // to lay the note out again (and a relayout under a scroll being restored moves the text).
+    const QString signature = styleFilesSignature();
+    if (signature == d->m_styleFilesSeen)
+        return;
+    d->m_styleFilesSeen = signature;
     d->m_calloutStyles = CalloutStyles::load();
     d->m_languageStyles = LanguageStyles::load();
     if (d->m_parseOptions.taskStates)
