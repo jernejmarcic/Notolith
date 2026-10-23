@@ -4219,6 +4219,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     view.isHtml = false;
     view.isPluginBlock = false;
     view.codeBlockKey.clear();
+    view.referenceTarget.clear();
+    view.referenceKey.clear();
     view.embedPanel = false;
     view.embedLabel.clear();
     view.inlineHtmlFormats.clear();
@@ -4278,6 +4280,8 @@ void MarkdownEditor::layoutBlock(BlockView &view)
     if (renderMedia && layoutBase(view))
         return;
     if (renderMedia && layoutPluginCode(view))
+        return;
+    if (renderMedia && layoutReference(view))
         return;
     if (renderMedia && layoutHtml(view))
         return;
@@ -5777,6 +5781,10 @@ void MarkdownEditor::shiftRanges(qsizetype at, qsizetype delta)
         shift(fence.block);
         shift(fence.content);
         shift(fence.attributesRange);
+    }
+    for (ReferenceSpan &reference : d->m_decorations.references) {
+        shift(reference.block);
+        shift(reference.content);
     }
     for (TabGroup &group : d->m_tabGroups) {
         shift(group.span);

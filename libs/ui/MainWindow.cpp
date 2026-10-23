@@ -1331,6 +1331,17 @@ MainWindow::Leaf *MainWindow::newLeaf(TabGroup *group)
             deliver(result);
         });
     });
+    // A reference block's header: a note opens in a tab, anything else (a source
+    // file, a URL) with whatever the system opens it with.
+    connect(editor, &MarkdownEditor::referenceActivated, this, [this](const QString &target) {
+        if (target.startsWith(QLatin1String("http://"), Qt::CaseInsensitive)
+            || target.startsWith(QLatin1String("https://"), Qt::CaseInsensitive))
+            QDesktopServices::openUrl(QUrl(target));
+        else if (Vault::isNote(target))
+            openNote(target);
+        else
+            QDesktopServices::openUrl(QUrl::fromLocalFile(target));
+    });
     connect(editor, &MarkdownEditor::baseRowActivated, this, [this](const QString &relativePath) {
         openRelative(relativePath);
         m_active->editor->setFocus();
@@ -1512,6 +1523,7 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
     editor->setTableHandles(m_settings.boolean(QStringLiteral("editor.tableHandles")));
     editor->setComplexCodeBlocks(m_settings.boolean(QStringLiteral("editor.complexCodeBlocks")));
     editor->setCodeHighlights(m_settings.text(QStringLiteral("editor.codeHighlights")));
+    editor->setRemoteReferences(m_settings.boolean(QStringLiteral("editor.remoteReferences")));
     editor->setTabWidth(m_settings.integer(QStringLiteral("editor.tabWidth")));
     editor->setParseOptions(parseOptions());
     editor->setUseWikilinks(m_settings.boolean(QStringLiteral("links.useWikilinks")));
@@ -4528,6 +4540,7 @@ void MainWindow::exportPdf()
     pdf.taskStates = featureOn("task-states");
     pdf.codeStyler = featureOn("advanced-code-blocks");
     pdf.codeHighlights = m_settings.text(QStringLiteral("editor.codeHighlights"));
+    pdf.remoteReferences = m_settings.boolean(QStringLiteral("editor.remoteReferences"));
     pdf.theme = Theme::builtin(Theme::Mode::Light); // paper is white; the person's colours still apply
     applyUserColours(*pdf.theme, [this](const QString &key) { return m_settings.text(key); });
     if (MarkdownEditor::exportPdf(target, m_active->editor->noteText(), note.completeBaseName(),

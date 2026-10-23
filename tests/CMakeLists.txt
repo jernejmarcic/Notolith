@@ -17,7 +17,7 @@ target_link_libraries(test_search PRIVATE noteAppC_index GTest::gtest GTest::gte
 add_test(NAME search COMMAND test_search)
 
 add_executable(test_editor test_editor.cpp)
-target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Test GTest::gtest)
+target_link_libraries(test_editor PRIVATE noteAppC_editor noteAppC_render Qt6::Concurrent Qt6::Network Qt6::Test GTest::gtest)
 # PdfPage resolves libnotolith-pdfpage.so from the module directories (libs/render/PdfPage.cpp): this test
 # points at the build's, and needs it built. No host symbols in that library, so a bare test binary loads it.
 if(TARGET notolith-pdfpage)

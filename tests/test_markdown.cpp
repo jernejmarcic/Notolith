@@ -2617,3 +2617,44 @@ TEST(WordCountTest, ExclusionAndFormattingCompose)
     options.excludeBetween = true;
     EXPECT_EQ(wordCountOf(QStringLiteral("- one [skip this] **two**\n"), options), 2);
 }
+
+// --- Code Styler: ```reference blocks ----------------------------------------
+
+TEST(CodeStylerTest, ReferenceBlockReadsItsKeys)
+{
+    const QString note = QStringLiteral(
+        "intro\n\n```reference\nfile: ./src/main.py\nlang: python\nstart: 3\nend: +5\n```\n\nafter\n");
+    const Decorations decorations = decorationsOf(note, codeStylerOn());
+    ASSERT_EQ(decorations.references.size(), 1);
+    const ReferenceSpan &reference = decorations.references.first();
+    EXPECT_EQ(reference.target, QStringLiteral("./src/main.py"));
+    EXPECT_EQ(reference.language, QStringLiteral("python"));
+    EXPECT_EQ(reference.start, QStringLiteral("3"));
+    EXPECT_EQ(reference.end, QStringLiteral("+5"));
+    EXPECT_EQ(note.mid(reference.block.start, 12), QStringLiteral("```reference"));
+    EXPECT_TRUE(note.mid(reference.content.start, reference.content.length()).startsWith(QStringLiteral("file:")));
+}
+
+TEST(CodeStylerTest, ReferenceBlockKeyAliasesAndQuotes)
+{
+    const auto targetOf = [](const QString &lines) {
+        const Decorations decorations =
+            decorationsOf(QStringLiteral("```reference\n") + lines + QStringLiteral("```\n"), codeStylerOn());
+        return decorations.references.isEmpty() ? QString() : decorations.references.first().target;
+    };
+    EXPECT_EQ(targetOf(QStringLiteral("path: a.py\n")), QStringLiteral("a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("filePath: a.py\n")), QStringLiteral("a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("link: https://example.com/a.py\n")), QStringLiteral("https://example.com/a.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("file: \"my file.py\"\n")), QStringLiteral("my file.py"));
+    EXPECT_EQ(targetOf(QStringLiteral("file: [[a.py]]\n")), QStringLiteral("[[a.py]]"));
+    // a URL's colon is part of the value, not a second key separator
+    EXPECT_EQ(targetOf(QStringLiteral("LINK:  http://h:8080/x\n")), QStringLiteral("http://h:8080/x"));
+}
+
+TEST(CodeStylerTest, ReferenceBlockNeedsTheFeatureAndATarget)
+{
+    const QString note = QStringLiteral("```reference\nfile: a.py\n```\n");
+    EXPECT_TRUE(decorationsOf(note).references.isEmpty()); // codeStyler off: the plain listing
+    EXPECT_TRUE(decorationsOf(QStringLiteral("```reference\nstart: 3\n```\n"), codeStylerOn()).references.isEmpty());
+    EXPECT_TRUE(decorationsOf(QStringLiteral("```python\nfile: a.py\n```\n"), codeStylerOn()).references.isEmpty());
+}

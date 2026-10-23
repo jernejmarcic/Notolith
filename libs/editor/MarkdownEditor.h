@@ -17,6 +17,7 @@
 class QAbstractItemModel;
 class QCompleter;
 class QFileSystemWatcher;
+class QNetworkAccessManager;
 class QMimeData;
 class QModelIndex;
 class QStringListModel;
@@ -298,6 +299,7 @@ public:
         bool taskStates = false; ///< ParseOptions::taskStates: the note's own checkbox states
         bool codeStyler = false; ///< ParseOptions::codeStyler: Code Styler's syntax, drawn as on screen
         QString codeHighlights;  ///< the `editor.codeHighlights` setting: the names `info:2` may use
+        bool remoteReferences = false; ///< the `editor.remoteReferences` setting: a ```reference may fetch a URL
         /// Paper is white, so the light theme unless a caller passes its own
         /// (the person's formatting colours on top of it).
         std::optional<Theme> theme;
@@ -805,6 +807,21 @@ public:
     /// read, with the path; one that throws is what an out-of-memory looks
     /// like. Null clears it.
     static void setCSVreadHookForTests(void (*hook)(const QString &));
+    /// Whether a ```reference block may fetch an `http(s)` URL. Off by
+    /// default: nothing touches the network unasked (ReferenceBlock.cpp).
+    void setRemoteReferences(bool on);
+    /// Whether a file or URL a reference block shows is still being read.
+    bool referencesPending() const;
+    /// For the tests: how many files and URLs this editor holds a read of.
+    int referenceCacheSize() const;
+    /// The address a hosting site's page for a file (GitHub `/blob/`, GitLab
+    /// `/-/blob/`) is fetched as: the raw file's; any other link as it is.
+    static QString rawReferenceURL(const QString &link);
+    /// For the tests: the number of colour runs the panel at `offset` drew.
+    int panelFormatCountAt(qsizetype offset) const;
+    /// For the tests: called on the worker thread at the top of every local
+    /// reference read, with the path. Null clears it.
+    static void setReferenceReadHookForTests(void (*hook)(const QString &));
     /// For the tests: that cell's caption - the file name of a card, the
     /// `alt` of an `<img>` whose file is missing. Empty for an image.
     QString embedCellLabelAt(qsizetype offset, int cell) const;
@@ -1126,6 +1143,10 @@ signals:
     /// opened the same way every other pane's noteActivated already is:
     /// MainWindow connects this straight to openRelative().
     void fileEmbedActivated(const QString &relativePath);
+    /// The header of a ```reference block was clicked: `target` is the file's
+    /// absolute path or the URL, for the window to open - a note in a tab,
+    /// anything else with the system's own handler.
+    void referenceActivated(const QString &target);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -1182,6 +1203,7 @@ private:
     struct QueryCacheEntry;
     struct BaseCacheEntry;
     struct CSVcacheEntry;
+    struct ReferenceCacheEntry;
     struct InlineHTMLpair;
     struct HTMLtableEdit;
     struct CellRef;
@@ -1881,6 +1903,23 @@ private:
     void refreshCSVfiles();
     /// Forgets every cached file and its watch: the feature went off.
     void dropCSVcache();
+    // --- ```reference blocks, implemented in ReferenceBlock.cpp --------------
+
+    /// A fenced block Code Styler's `reference` names a file or URL for: that
+    /// file's lines (`start`/`end`) as a listing under the file's name. The
+    /// read is on a worker thread - or the network - never in layout: "Loading..."
+    /// until deliverReference lands. False for any other block.
+    bool layoutReference(BlockView &view);
+    /// A read or fetch finished (on this thread); ignored if `generation` is
+    /// no longer the one on record for `key`.
+    void deliverReference(const QString &key, quint64 generation, ReferenceCacheEntry result);
+    /// Asks for `url` through the network manager, never blocking.
+    void fetchReference(const QString &url, quint64 generation);
+    /// Relays out the blocks showing `key`.
+    void relayReferenceBlocks(const QString &key);
+    void watchReference(const QString &path);
+    void referenceFileEvent();
+    void refreshReferences();
     /// The view's name (if any) above the grid, then paintTable for the
     /// grid itself - the table painting is not duplicated, only framed.
     void paintBase(QPainter &painter, const BlockView &view, qreal left, qreal top) const;

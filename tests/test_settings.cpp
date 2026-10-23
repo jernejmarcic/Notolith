@@ -621,6 +621,12 @@ TEST(SettingsFeatureTest, AdvancedCodeBlocksIsACorePluginAndOnByDefault)
     EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.codeHighlights")).toString().left(9), QStringLiteral("info=blue"));
 }
 
+TEST(SettingsFeatureTest, RemoteReferencesAreOffByDefault)
+{
+    // a ```reference block never touches the network until this is turned on
+    EXPECT_EQ(Settings::defaultValue(QStringLiteral("editor.remoteReferences")), QVariant(false));
+}
+
 TEST(SettingsModuleTest, StoredValuesOfKeysRegisteredAfterLoadAreAdopted)
 {
     // The window loads Settings before the module scan registers a module's

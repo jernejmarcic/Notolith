@@ -471,6 +471,12 @@ struct MarkdownEditor::BlockView {
     /// listing chrome, and codeBlockKey finds it again on delivery.
     bool isPluginBlock = false;
     QString codeBlockKey;
+    /// A ```reference block shown as the file it names (ReferenceBlock.cpp):
+    /// what a click on its header opens (the resolved path or the URL; empty
+    /// for a file that is not there), and the cache key deliverReference
+    /// finds the block again by. Such a block is also isPluginBlock.
+    QString referenceTarget;
+    QString referenceKey;
 
     // --- Jupyter kernel output, NotebookBlock.cpp ----------------------
     /// A fenced code block with a language, shown while the notebooks
@@ -745,6 +751,21 @@ struct MarkdownEditor::CSVcacheEntry {
     bool partial = false;     ///< the file was larger than was read
 };
 
+/// A file or URL a ```reference block names, as the last read left it - one
+/// per path or URL (ReferenceBlock.cpp). `text` stays on screen while a newer
+/// read is under way.
+struct MarkdownEditor::ReferenceCacheEntry {
+    qint64 mtime = 0;     ///< a file's, to tell it changed
+    qint64 size = 0;
+    qint64 fetchedAt = 0; ///< a URL's, when it was asked for: the copy is kept a few minutes
+    bool pending = true;
+    quint64 generation = 0;
+    QString text;
+    QString error;
+    /// The newest generation started for this key, readable from a worker.
+    std::shared_ptr<std::atomic<quint64>> latest;
+};
+
 /// The recognised, paired inline tags in `view`'s block, in source
 /// order: what layoutInlineHtml hides, and what revealedSyntax shows
 /// while the caret touches the element.
@@ -921,6 +942,15 @@ struct MarkdownEditor::Private {
     QElapsedTimer m_CSVpendingSince; ///< the first unanswered change event, for the debounce's longest wait
     QSet<QString> m_CSVgone; ///< cached files that were deleted: refreshCSVfiles looks for them coming back
     QString m_CSVdelivering; ///< the path whose read has just landed: its failure is shown, not retried, by the relayout
+    QHash<QString, ReferenceCacheEntry> m_referenceCache; ///< resolved path or URL -> its last read
+    quint64 m_referenceGeneration = 0;
+    QFileSystemWatcher *m_referenceWatcher = nullptr; ///< made with the first local reference
+    QTimer *m_referenceRefresh = nullptr;
+    QElapsedTimer m_referencePendingSince;
+    QSet<QString> m_referenceGone; ///< cached files that were deleted: refreshReferences looks for them coming back
+    QString m_referenceDelivering; ///< the key whose read has just landed: its failure is shown, not retried, by the relayout
+    QNetworkAccessManager *m_referenceNet = nullptr; ///< made with the first fetch
+    bool m_remoteReferences = false;
     int m_layoutWidth = -1; ///< contentWidth() at the last invalidateLayouts()
     mutable QHash<int, qreal> m_lineHeights; ///< memoised per block kind and level
     bool m_applyingExternal = false; ///< applyEdit for another view: no caret move, no edited()

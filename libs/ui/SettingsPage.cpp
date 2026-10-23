@@ -778,6 +778,10 @@ QWidget *SettingsPage::buildEditorPage()
                       "each with a theme colour (blue, red, orange, yellow, green, cyan, purple, pink) or a "
                       "hex code, comma separated. Part of Advanced code blocks."),
                    QStringLiteral("info=blue, warn=orange, error=red"));
+    addToggleRow(layout, QStringLiteral("editor.remoteReferences"), tr("Fetch remote references"),
+                tr("Let a reference block (```reference with a link: of http or https) download the file "
+                   "it shows. Off, such a block shows a notice and a link, and nothing is sent. Part of "
+                   "Advanced code blocks."));
     addComboRow(layout, QStringLiteral("editor.listNumberStyle"), tr("Numbered lists"),
                 tr("Draw nested ordered items as written (1. 2.) or hierarchically (1.1. 1.2. "
                    "1.2.1.), counted from the items they sit in. The note's text is unchanged."),

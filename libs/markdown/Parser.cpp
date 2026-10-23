@@ -420,6 +420,33 @@ QString unquote(QString value)
     return value;
 }
 
+/// The `key: value` lines of a ```reference block, YAML as far as Code Styler
+/// documents it: the target under `file`, `path`, `filePath` or `link`, an
+/// optional `language`/`lang`, and `start` and `end`. False without a target.
+bool parseReference(const QString &text, const Range &content, const Range &block, ReferenceSpan &out)
+{
+    out.block = block;
+    out.content = content;
+    const QStringList lines = text.mid(content.start, content.length()).split(QLatin1Char('\n'));
+    for (const QString &line : lines) {
+        const qsizetype colon = line.indexOf(QLatin1Char(':'));
+        if (colon <= 0)
+            continue;
+        const QString key = line.left(colon).trimmed().toLower();
+        const QString value = unquote(line.mid(colon + 1));
+        if (key == QLatin1String("file") || key == QLatin1String("path") || key == QLatin1String("filepath")
+            || key == QLatin1String("link"))
+            out.target = value;
+        else if (key == QLatin1String("language") || key == QLatin1String("lang"))
+            out.language = value;
+        else if (key == QLatin1String("start"))
+            out.start = value;
+        else if (key == QLatin1String("end"))
+            out.end = value;
+    }
+    return !out.target.isEmpty();
+}
+
 /// The line-comment token a language would use, which is what `#|` options are
 /// written behind so the block still compiles (PLAN.md 16.2).
 QString commentPrefix(const QString &language)
@@ -1909,6 +1936,10 @@ void walkItem(MD::Item *item, Walk &walk)
                     walk.decorations.syntax.append(fence.attributesRange);
                 }
                 walk.decorations.codeFences.append(fence);
+                ReferenceSpan reference;
+                if (walk.codeStyler && walk.text && language.compare(QLatin1String("reference"), Qt::CaseInsensitive) == 0
+                    && parseReference(*walk.text, range, fence.block, reference))
+                    walk.decorations.references.append(reference);
             }
         } else {
             walk.decorations.styles.append({kind, range, 0, {}, {}, {}});

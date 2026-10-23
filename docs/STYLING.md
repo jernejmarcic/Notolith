@@ -359,6 +359,56 @@ code is untouched, and the language word is looked up in the same highlighter
 as a fence's, so an unknown one is plain code with the prefix hidden. Published
 pages and PDF export draw it the same way.
 
+### File references
+
+Part of the same core plugin: a fence whose language is `reference` shows a
+file, or part of one, as a highlighted listing with the file's name as its
+title.
+
+```markdown
+    ```reference
+    file: ./src/main.py
+    lang: python
+    start: 10
+    end: +20
+    ```
+```
+
+The block's own lines are `key: value`. The target is `file`, `path`,
+`filePath` or `link`: a path beside the note (`./x.py`), from the vault's root
+(`@/x.py`) or absolute, a wikilink (`[[x.py]]`), a bare name the vault knows,
+or an `http(s)` URL. `language` (or `lang`) overrides the language the file's
+suffix names. `start` and `end` are a line number, a word (the first line
+containing it) or a `/regex/` (the first line it matches, PCRE); `end` is
+searched from `start` on and may be `+10`, ten lines past `start` (so lines
+980 to 990 for `start: 980`, `end: +10`). With a range the title is
+`name.py:10-30`. At most 500 lines are shown, with a last line saying so.
+
+A click on the title opens the file: a note in a tab, anything else in the
+system's own program, a URL in the browser. A click anywhere else puts the
+caret in the block, which then shows as the lines above. A vault file is read
+off the UI thread (the block says "Loading..." until it lands) and read again
+when it changes on disk. A file that is not there says so in the block.
+
+**Remote files.** A `link:` URL is fetched only while Settings > Editor >
+"Fetch remote references" is on, and **that setting is off by default**: the
+block then shows a notice and the title still links to the URL, and nothing is
+sent anywhere. Chosen over on-by-default because a note someone sent you could
+otherwise make your machine request any address; vault files are the
+feature's main use and need no network. When on, the fetch is asynchronous
+(15 s limit, 2 MB cap, redirects never leave https for http), and a copy is
+kept for five minutes for every note in the session, the old one shown while
+the next one comes. GitHub `.../blob/...` and GitLab `.../-/blob/...` links
+are fetched as the raw file.
+
+**Differences from the plugin.** The plugin downloads remote files into the
+vault's plugin folder; this one keeps them in memory only, so nothing is left
+on disk, and shows no repository, version or update-button in the header. The
+file name is the title and `title:` on a reference block is not read. No line
+numbers are drawn, the range being in the title; long lines wrap rather than
+scroll. PDF export shows the same listing; a published page keeps the block as
+its `key: value` lines.
+
 ## Themes
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes

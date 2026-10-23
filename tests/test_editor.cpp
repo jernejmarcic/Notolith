@@ -12321,3 +12321,282 @@ TEST(HunkTest, TheRegionThatDiffersNeverSplitsASurrogatePair)
     EXPECT_EQ(tail.at, 0);
     EXPECT_EQ(tail.removed, 2);
 }
+
+// --- Code Styler: ```reference blocks ----------------------------------------------
+
+#include <QTcpServer>
+#include <QTcpSocket>
+
+namespace {
+
+/// An offset inside the block's listing, just past the opening fence.
+constexpr qsizetype kInsideReference = 13;
+
+/// An editor on `fenceLines` (the lines inside a ```reference fence), with the
+/// plugin on and every target resolved to `path` unless it is a URL.
+std::unique_ptr<MarkdownEditor> referenceEditorWith(const QString &fenceLines, const QString &path,
+                                                    bool on = true)
+{
+    // the caret goes below the block: with it inside, the source shows
+    const QString note = QStringLiteral("```reference\n%1```\n\nafter\n").arg(fenceLines);
+    auto editor = stylerEditorWith(note, on);
+    editor->setLinkResolver([path](const QString &) { return path; });
+    editor->setCursorOffset(note.size() - 2);
+    return editor;
+}
+
+/// The panel's text with its line separators as the newlines they stand for.
+QString listingOf(MarkdownEditor &editor)
+{
+    (void)editor.grab(); // blocks are laid out as they are painted
+    QString text = editor.panelTextAt(kInsideReference);
+    text.replace(QChar(QChar::LineSeparator), QLatin1Char('\n'));
+    return text;
+}
+
+bool waitForListing(MarkdownEditor &editor, const QString &needle)
+{
+    return QTest::qWaitFor([&] { return listingOf(editor).contains(needle); }, 5000);
+}
+
+QString numberedFile(const QTemporaryDir &dir, int lines)
+{
+    QByteArray bytes;
+    for (int i = 1; i <= lines; ++i)
+        bytes += "line" + QByteArray::number(i) + (i == 4 ? "  marker\n" : "\n");
+    return writeTextFile(dir, QStringLiteral("many.txt"), bytes);
+}
+
+std::atomic<bool> gReferenceReadOnUIthread{false};
+std::thread::id gReferenceUIthread;
+
+} // namespace
+
+TEST(ReferenceBlockTest, ShowsTheFileHighlightedUnderItsName)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "import os\nprint(os.name)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("Loading"))) << "nothing is read on the layout path: loading first";
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("import os")));
+    EXPECT_EQ(listingOf(*editor), QStringLiteral("import os\nprint(os.name)"));
+    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("hello.py"));
+    EXPECT_GT(editor->panelFormatCountAt(kInsideReference), 0) << "highlighted by the file's suffix";
+    EXPECT_EQ(editor->referenceCacheSize(), 1);
+}
+
+TEST(ReferenceBlockTest, TheLanguageKeyOverridesTheSuffix)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("script.txt"), "import os\n");
+    auto plain = referenceEditorWith(QStringLiteral("file: script.txt\n"), path);
+    ASSERT_TRUE(waitForListing(*plain, QStringLiteral("import")));
+    auto python = referenceEditorWith(QStringLiteral("file: script.txt\nlang: python\n"), path);
+    ASSERT_TRUE(waitForListing(*python, QStringLiteral("import")));
+    EXPECT_GT(python->panelFormatCountAt(kInsideReference), plain->panelFormatCountAt(kInsideReference));
+}
+
+TEST(ReferenceBlockTest, StartAndEndPickTheLines)
+{
+    QTemporaryDir dir;
+    const QString path = numberedFile(dir, 20);
+
+    auto numbers = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 3\nend: 5\n"), path);
+    ASSERT_TRUE(waitForListing(*numbers, QStringLiteral("line3")));
+    EXPECT_EQ(listingOf(*numbers), QStringLiteral("line3\nline4  marker\nline5"));
+    EXPECT_EQ(numbers->panelLabelAt(kInsideReference), QStringLiteral("many.txt:3-5"));
+
+    // `+N` counts on from start, inclusive: 10 through 12
+    auto relative = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 10\nend: +2\n"), path);
+    ASSERT_TRUE(waitForListing(*relative, QStringLiteral("line10")));
+    EXPECT_EQ(listingOf(*relative), QStringLiteral("line10\nline11\nline12"));
+
+    // a word is the first line containing it, a /regex/ the first line it matches
+    auto word = referenceEditorWith(QStringLiteral("file: many.txt\nstart: marker\nend: /^line7$/\n"), path);
+    ASSERT_TRUE(waitForListing(*word, QStringLiteral("marker")));
+    EXPECT_EQ(listingOf(*word), QStringLiteral("line4  marker\nline5\nline6\nline7"));
+
+    // no end: to the end of the file
+    auto open = referenceEditorWith(QStringLiteral("file: many.txt\nstart: 19\n"), path);
+    ASSERT_TRUE(waitForListing(*open, QStringLiteral("line19")));
+    EXPECT_EQ(listingOf(*open), QStringLiteral("line19\nline20"));
+}
+
+TEST(ReferenceBlockTest, ALineThatIsNotThereIsSaidSo)
+{
+    QTemporaryDir dir;
+    const QString path = numberedFile(dir, 5);
+    auto editor = referenceEditorWith(QStringLiteral("file: many.txt\nstart: nonexistent\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("nonexistent")));
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("No line matches")));
+}
+
+TEST(ReferenceBlockTest, AFileThatIsNotThereShowsWhy)
+{
+    auto editor = referenceEditorWith(QStringLiteral("file: gone.py\n"), QString());
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("Could not find gone.py")));
+}
+
+TEST(ReferenceBlockTest, PlainSourceWhenThePluginIsOff)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path, false);
+    QTest::qWait(50);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py"))) << "the plain listing";
+    EXPECT_TRUE(editor->panelLabelAt(kInsideReference).isEmpty());
+    EXPECT_EQ(editor->referenceCacheSize(), 0) << "nothing is read when the feature is off";
+}
+
+TEST(ReferenceBlockTest, TheCaretInsideShowsTheSource)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("print")));
+    editor->enterBlockAt(editor->noteText().indexOf(QStringLiteral("hello")) + 2);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py")));
+    EXPECT_TRUE(editor->panelLabelAt(kInsideReference).isEmpty());
+}
+
+TEST(ReferenceBlockTest, AChangeOnDiskIsReadAgain)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("live.txt"), "first\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: live.txt\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("first")));
+
+    writeTextFile(dir, QStringLiteral("live.txt"), "second version, longer\n");
+    EXPECT_TRUE(waitForListing(*editor, QStringLiteral("second version"))) << "the watcher relays the block out";
+    EXPECT_EQ(editor->referenceCacheSize(), 1);
+}
+
+TEST(ReferenceBlockTest, TheFileIsNeverReadOnTheUIthread)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    gReferenceUIthread = std::this_thread::get_id();
+    gReferenceReadOnUIthread = false;
+    MarkdownEditor::setReferenceReadHookForTests([](const QString &) {
+        gReferenceReadOnUIthread = std::this_thread::get_id() == gReferenceUIthread;
+    });
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    const bool shown = waitForListing(*editor, QStringLiteral("print"));
+    MarkdownEditor::setReferenceReadHookForTests(nullptr);
+    ASSERT_TRUE(shown);
+    EXPECT_FALSE(gReferenceReadOnUIthread);
+}
+
+TEST(ReferenceBlockTest, ClickingTheHeaderAsksForTheFileToBeOpened)
+{
+    QTemporaryDir dir;
+    const QString path = writeTextFile(dir, QStringLiteral("hello.py"), "print(1)\n");
+    auto editor = referenceEditorWith(QStringLiteral("file: hello.py\n"), path);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("print")));
+    (void)editor->grab();
+
+    QSignalSpy spy(editor.get(), &MarkdownEditor::referenceActivated);
+    const QRectF panel = editor->blockPanelAt(kInsideReference);
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(panel.top()) + 20)); // on the title strip
+    ASSERT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.first().first().toString(), path);
+
+    // a click on the listing is no link: it puts the caret in, and the source shows
+    QTest::mouseClick(editor->viewport(), Qt::LeftButton, Qt::NoModifier,
+                      QPoint(editor->textColumn() + 10, int(panel.top()) + 50));
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("file: hello.py")));
+}
+
+TEST(ReferenceBlockTest, AHostingSitesPageLinkIsFetchedAsTheRawFile)
+{
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(QStringLiteral("https://github.com/u/r/blob/main/src/a.py")),
+              QStringLiteral("https://raw.githubusercontent.com/u/r/main/src/a.py"));
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(QStringLiteral("https://gitlab.com/g/p/-/blob/v1/dir/a.py")),
+              QStringLiteral("https://gitlab.com/g/p/-/raw/v1/dir/a.py"));
+    const QString other = QStringLiteral("https://example.com/blob/a/b/c/d.txt");
+    EXPECT_EQ(MarkdownEditor::rawReferenceURL(other), other);
+}
+
+namespace {
+
+/// A web server on 127.0.0.1 answering every GET with `body`, counting them.
+struct FakeServer {
+    QTcpServer server;
+    int requests = 0;
+    QByteArray body = "remote line 1\nremote line 2\n";
+    int status = 200;
+
+    FakeServer()
+    {
+        EXPECT_TRUE(server.listen(QHostAddress::LocalHost));
+        QObject::connect(&server, &QTcpServer::newConnection, &server, [this] {
+            while (QTcpSocket *socket = server.nextPendingConnection()) {
+                QObject::connect(socket, &QTcpSocket::readyRead, socket, [this, socket] {
+                    if (!socket->peek(8192).contains("\r\n\r\n"))
+                        return;
+                    socket->readAll();
+                    ++requests;
+                    socket->write("HTTP/1.1 " + QByteArray::number(status) + " X\r\nContent-Length: "
+                                  + QByteArray::number(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
+                    socket->disconnectFromHost();
+                });
+                QObject::connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+            }
+        });
+    }
+    QString url(const QString &path = QStringLiteral("/dir/file.txt")) const
+    {
+        return QStringLiteral("http://127.0.0.1:%1%2").arg(server.serverPort()).arg(path);
+    }
+};
+
+} // namespace
+
+TEST(ReferenceBlockTest, ARemoteFileIsNotFetchedWhileTheSettingIsOff)
+{
+    FakeServer server;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url()), QString());
+    QTest::qWait(200);
+    EXPECT_EQ(server.requests, 0);
+    EXPECT_EQ(editor->referenceCacheSize(), 0);
+    EXPECT_TRUE(listingOf(*editor).contains(QStringLiteral("off")));
+    EXPECT_EQ(editor->panelLabelAt(kInsideReference), QStringLiteral("file.txt"));
+}
+
+TEST(ReferenceBlockTest, ARemoteFileIsFetchedOnceAndCached)
+{
+    FakeServer server;
+    const QString url = server.url(QStringLiteral("/dir/cached.txt"));
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("remote line 2")));
+    EXPECT_EQ(server.requests, 1);
+
+    // another editor, the same URL: the copy of the first is what it shows
+    auto second = referenceEditorWith(QStringLiteral("link: %1\n").arg(url), QString());
+    second->setRemoteReferences(true);
+    EXPECT_TRUE(listingOf(*second).contains(QStringLiteral("remote line 1"))) << "from the cache, at once";
+    // a relayout of the first (a width change) asks for nothing either
+    editor->resize(700, 500);
+    (void)editor->grab();
+    QTest::qWait(100);
+    EXPECT_EQ(server.requests, 1);
+}
+
+TEST(ReferenceBlockTest, ARemoteFailureIsShownAndNotRetriedPerLayout)
+{
+    FakeServer server;
+    server.status = 404;
+    auto editor = referenceEditorWith(QStringLiteral("link: %1\n").arg(server.url(QStringLiteral("/missing.txt"))),
+                                      QString());
+    editor->setRemoteReferences(true);
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("404")));
+    editor->resize(700, 500);
+    (void)editor->grab();
+    QTest::qWait(100);
+    EXPECT_EQ(server.requests, 1);
+}

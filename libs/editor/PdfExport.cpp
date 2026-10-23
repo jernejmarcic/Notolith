@@ -3,9 +3,11 @@
 
 #include "MermaidBlock.h"
 
+#include <QEventLoop>
 #include <QPainter>
 #include <QPdfWriter>
 #include <QScrollBar>
+#include <QThread>
 
 
 namespace noteAppC {
@@ -65,6 +67,7 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
         editor.setCodeHighlights(options.codeHighlights);
     }
     editor.setParseOptions(parse);
+    editor.setRemoteReferences(options.remoteReferences);
     // A diagram fence (mermaid, plantuml, tikz, dot) is the diagram the editor already made (never the
     // tool: an export waits for nothing); one it never made stays its listing.
     for (const DiagramKind kind : {DiagramKind::Mermaid, DiagramKind::PlantUML, DiagramKind::TikZ, DiagramKind::Graphviz})
@@ -80,6 +83,14 @@ bool MarkdownEditor::exportPdf(const QString &path, const QString &text, const Q
             editor.layoutBlock(view);
     }
     QCoreApplication::processEvents(); // the cached diagrams the layout asked for land, and re-lay-out their blocks
+    // The files a ```reference block shows are read (or fetched) off this
+    // thread: a printed page waits for them, a few seconds at the most.
+    QElapsedTimer waited;
+    waited.start();
+    while (editor.referencesPending() && waited.elapsed() < 10'000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(5);
+    }
     for (BlockView &view : editor.d->m_blocks) {
         if (!view.laidOut)
             editor.layoutBlock(view);
