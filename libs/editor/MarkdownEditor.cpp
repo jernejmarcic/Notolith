@@ -730,6 +730,19 @@ void MarkdownEditor::setMode(Mode mode)
     emit modeChanged();
 }
 
+namespace {
+std::function<void()> &bigParseLandedHook()
+{
+    static std::function<void()> hook;
+    return hook;
+}
+} // namespace
+
+void MarkdownEditor::setBigParseLandedHook(std::function<void()> hook)
+{
+    bigParseLandedHook() = std::move(hook);
+}
+
 void MarkdownEditor::setNoteText(const QString &text)
 {
     finishPropertyEdit(false); // a different note: what was typed belongs to the old one
@@ -1380,6 +1393,8 @@ void MarkdownEditor::adoptParse()
         bar->setValue(int(d->m_blocks.at(size_t(blockAt(keep))).y));
         bar->setValue(bar->value() + int(pointFor(keep).y() - keepY));
     }
+    if (placeholder && bigParseLandedHook())
+        bigParseLandedHook()();
     d->m_parsedVersion = job.version;
     // The buffer moved on while we were parsing: go round again.
     if (d->m_parsedVersion != d->m_textVersion)

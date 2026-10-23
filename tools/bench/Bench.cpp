@@ -41,6 +41,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <functional>
+#include <thread>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #include <limits>
 #include <memory>
 #include <numbers>
@@ -1470,6 +1474,51 @@ Timing benchParseLanding(int kilobytes, int runs)
     return reduce(QStringLiteral("Parse landing to painted"), QStringLiteral("%1 kB note").arg(kilobytes), samples);
 }
 
+/// The first parse of a big note landing, from the landing's signal to the painted frame, with and without
+/// the application's trim (apps/noteAppC/main.cpp: malloc_trim on a worker thread, a quarter of a second
+/// after the landing). The two alternate in one process, so the difference is the trim's.
+QList<Timing> benchFirstLanding(int kilobytes, int runs)
+{
+    const QString note = buildNote(kilobytes);
+    std::vector<double> without;
+    std::vector<double> with;
+    for (int i = 0; i < 2 * runs; ++i) {
+        const bool trim = i % 2;
+#ifdef __GLIBC__
+        MarkdownEditor::setBigParseLandedHook(trim ? std::function<void()>([] {
+                                                  QTimer::singleShot(250, qApp, [] { std::thread([] { malloc_trim(0); }).detach(); });
+                                              })
+                                                   : std::function<void()>());
+#endif
+        MarkdownEditor editor;
+        editor.resize(900, 600);
+        QElapsedTimer clock;
+        bool landed = false;
+        QObject::connect(&editor, &MarkdownEditor::wordCountChanged, &editor, [&](int words) {
+            if (words >= 0 && !landed) {
+                clock.start();
+                landed = true;
+            }
+        });
+        editor.setNoteText(note);
+        (void)paintedFrame(&editor);
+        QElapsedTimer limit;
+        limit.start();
+        while (!landed && limit.elapsed() < 30000)
+            QCoreApplication::processEvents(QEventLoop::WaitForMoreEvents, 10);
+        if (!landed)
+            break;
+        (void)paintedFrame(&editor);
+        (trim ? with : without).push_back(double(clock.nsecsElapsed()) / 1e6);
+        QTest::qWait(300); // the trim has run before the next sample starts
+    }
+#ifdef __GLIBC__
+    MarkdownEditor::setBigParseLandedHook({});
+#endif
+    return {reduce(QStringLiteral("First parse landing to painted"), QStringLiteral("%1 kB note, no trim").arg(kilobytes), without),
+            reduce(QStringLiteral("First parse landing to painted"), QStringLiteral("%1 kB note, trim hook").arg(kilobytes), with)};
+}
+
 /// The first layout of a table in a process, on a note with nothing else:
 /// whatever the table path sets up once (static tables, plugin loading) is in
 /// this one sample, which is why it has a phase of its own.
@@ -2824,6 +2873,8 @@ int main(int argc, char *argv[])
             timings << benchParseLanding(kb, 15);
         }
         timings << benchSourceTableTab(1024, 15);
+        for (const Timing &timing : benchFirstLanding(1024, 15))
+            timings << timing;
     }
 
     // 4: scroll frame time over a 5 000-line note.

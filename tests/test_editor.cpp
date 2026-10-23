@@ -1144,6 +1144,39 @@ TEST(PlaceholderTest, FindInsideAChunkLandsOnTheMatchAndShowsIt)
     EXPECT_EQ(qMin(editor->cursorOffset(), editor->anchorOffset()), match);
 }
 
+// The application hands memory back once the parse of a big note has landed (the
+// parser's temporaries are free then and stay resident otherwise); the editor only
+// says when. Once per note, not once per typing pause.
+TEST(PlaceholderTest, TheBigParseLandedHookFiresOncePerBigNoteAndNeverForASmallOne)
+{
+    int fired = 0;
+    MarkdownEditor::setBigParseLandedHook([&fired] { ++fired; });
+    {
+        auto small = placeholderEditorWith(QStringLiteral("# Small\n\nA note.\n"));
+        QTest::qWait(100);
+        EXPECT_EQ(fired, 0);
+    }
+    const QString note = plainBigNote();
+    auto editor = placeholderEditorWith(note);
+    ASSERT_LT(editor->wordCount(), 0);
+    EXPECT_EQ(fired, 0) << "not before the parse has landed";
+    ASSERT_TRUE(waitForParse(*editor));
+    EXPECT_EQ(fired, 1);
+    // An edit and the parse that follows it are not a new note.
+    editor->setCursorOffset(note.size() / 2);
+    QTest::keyClicks(editor.get(), QStringLiteral("x"));
+    const quint64 rebuilt = editor->rebuiltViewCount();
+    for (int waited = 0; editor->rebuiltViewCount() == rebuilt && waited < 10000; waited += 20)
+        QTest::qWait(20); // the debounced parse of the edit has landed when the views were rebuilt
+    EXPECT_GT(editor->rebuiltViewCount(), rebuilt);
+    EXPECT_EQ(fired, 1);
+    // A second big note is one more.
+    editor->setNoteText(note + QStringLiteral("more\n"));
+    ASSERT_TRUE(waitForParse(*editor));
+    EXPECT_EQ(fired, 2);
+    MarkdownEditor::setBigParseLandedHook({});
+}
+
 TEST(MarkdownEditorTest, SoftBreaksJoinLinesTheWayObsidianDoes)
 {
     // One paragraph across two source lines renders as one flowing line;

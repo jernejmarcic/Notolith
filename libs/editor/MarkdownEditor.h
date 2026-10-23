@@ -275,6 +275,11 @@ public:
     /// 1.67 and shuttlepod-1 at 1: docs/PERFORMANCE.md, "GPU acceleration".
     static bool GPUaccelerationWanted(const QString &setting, qreal devicePixelRatio);
 
+    /// Called, on the UI thread, once when the parse of a note over 128 kB first
+    /// lands: the parser's temporaries are free by then and still resident. The
+    /// application gives the memory back; the editor never does.
+    static void setBigParseLandedHook(std::function<void()> hook);
+
     /// Obsidian's Export to PDF options, with its defaults.
     struct PdfOptions {
         bool includeTitle = true;
