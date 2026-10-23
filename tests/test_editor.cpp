@@ -10177,6 +10177,34 @@ TEST(PasteDropTest, NoSaverSetDoesNothingForAnImagePaste)
     EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n"));
 }
 
+// Obsidian: a drop makes [title](url), a paste of the same URL is the URL as typed.
+TEST(PasteDropTest, PasteOfABrowserLinkIsTheBareUrl)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->setCursorOffset(5);
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    mime->setText(QStringLiteral("A title"));
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hellohttps://example.com/a\n"));
+}
+
+TEST(PasteDropTest, PasteOfABrowserLinkOverASelectionStaysAsItWas)
+{
+    auto editor = editorWith(QStringLiteral("hello\n"));
+    editor->selectRange({0, 5});
+    auto *mime = new QMimeData;
+    mime->setUrls({QUrl(QStringLiteral("https://example.com/a"))});
+    QGuiApplication::clipboard()->setMimeData(mime);
+
+    QTest::keyClick(editor.get(), Qt::Key_V, Qt::ControlModifier);
+
+    EXPECT_EQ(editor->noteText(), QStringLiteral("hello\n")); // main inserted nothing for a remote URL list
+}
+
 TEST(PasteDropTest, DropOfAnOutsideFileImportsAndInsertsTheEmbedAtTheDropPoint)
 {
     const QString note = QStringLiteral("above\nbelow\n");

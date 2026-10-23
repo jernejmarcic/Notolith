@@ -2080,8 +2080,10 @@ private:
     /// The insertFromMimeData logic shared by Ctrl+V and a drop: an image
     /// goes through m_attachmentSaver, local file URLs through
     /// m_fileImporter (or the path as text with neither set), else plain
-    /// text - cellSafe()'d either way. Inserts at the caret.
-    void insertMimeData(const QMimeData *mime);
+    /// text - cellSafe()'d either way. Inserts at the caret. A remote URL
+    /// is [title](url) when `dropped`, the bare URL (nothing, over a
+    /// selection) when pasted, as in Obsidian.
+    void insertMimeData(const QMimeData *mime, bool dropped = false);
     void removeSelectionOrChar(int direction);
     void moveCursor(qsizetype offset, bool keepAnchor);
     void moveVertically(int lines, bool keepAnchor);

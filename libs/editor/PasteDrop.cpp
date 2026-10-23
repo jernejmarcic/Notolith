@@ -95,7 +95,7 @@ void MarkdownEditor::setFileImporter(FileImporter importer)
     d->m_fileImporter = std::move(importer);
 }
 
-void MarkdownEditor::insertMimeData(const QMimeData *mime)
+void MarkdownEditor::insertMimeData(const QMimeData *mime, bool dropped)
 {
     if (!mime)
         return;
@@ -128,7 +128,10 @@ void MarkdownEditor::insertMimeData(const QMimeData *mime)
         const QString plain = mime->text().trimmed();
         for (const QUrl &url : urls) {
             if (!url.isLocalFile()) {
-                if (url.isValid() && isLinkScheme(url))
+                if (!dropped) {
+                    if (url.isValid() && selection().length() == 0 && url.toString().size() <= 2000)
+                        parts << url.toString(); // a paste is the URL as copied
+                } else if (url.isValid() && isLinkScheme(url))
                     parts << browserLink(url, mozTitles, plain, urls.size() == 1);
                 else if (url.isValid() && url.toString().size() <= 2000) // javascript:, data: ...: text, never a link
                     parts << url.toString();
@@ -191,7 +194,7 @@ void MarkdownEditor::dropEvent(QDropEvent *event)
     }
     const TypingScope typed(d->m_typing);
     moveCursor(offsetAt(event->position().toPoint()), false);
-    insertMimeData(event->mimeData());
+    insertMimeData(event->mimeData(), true);
     event->acceptProposedAction();
 }
 
