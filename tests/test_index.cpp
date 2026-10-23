@@ -1885,3 +1885,104 @@ TEST_F(WatchedVaultTest, AnInAppSaveCausesNoWholeWalkAndNoSecondChange)
     EXPECT_EQ(changed.size(), 1) << "the folder's read found the note current";
     EXPECT_FALSE(index.search(QStringLiteral("saved in the app")).isEmpty());
 }
+
+namespace {
+/// The eight per-file child tables of the schema: each is deleted by `file` when a note is re-put.
+const QStringList kChildTables = {QStringLiteral("headings"), QStringLiteral("links"),  QStringLiteral("tags"),
+                                  QStringLiteral("blocks"),   QStringLiteral("tasks"),  QStringLiteral("props"),
+                                  QStringLiteral("meta_notes"), QStringLiteral("names")};
+
+/// Names of the indexes the cache file holds, read on a connection of its own.
+QStringList indexNamesIn(const QString &cache)
+{
+    QStringList names;
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("index-names"));
+        db.setDatabaseName(cache);
+        if (db.open()) {
+            QSqlQuery query(db);
+            query.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'index'"));
+            while (query.next())
+                names << query.value(0).toString();
+        }
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("index-names"));
+    return names;
+}
+} // namespace
+
+// Deleting a note's row cascades into eight child tables. Without an index on
+// each `file` column that is a full scan of each table per deleted note, so a
+// save, and a re-index of a vault whose notes all changed, were quadratic.
+TEST_F(IndexTest, ACacheWrittenBeforeTheChildIndexesGainsThemAndKeepsItsRows)
+{
+    const QString cache = Index::cachePathFor(dir.path());
+    {
+        Index first;
+        build(first);
+    }
+    // A from-scratch build ends with them too (the Writer makes them as it closes, just after finished()).
+    const auto hasAll = [&] {
+        const QStringList names = indexNamesIn(cache);
+        return std::all_of(kChildTables.cbegin(), kChildTables.cend(),
+                           [&](const QString &table) { return names.contains(table + QStringLiteral("_file")); });
+    };
+    ASSERT_TRUE(QTest::qWaitFor(hasAll, 5000));
+    // The cache as an older build left it: same schema version, no child indexes.
+    {
+        QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("old-cache"));
+        old.setDatabaseName(cache);
+        ASSERT_TRUE(old.open());
+        QSqlQuery query(old);
+        for (const QString &table : kChildTables)
+            ASSERT_TRUE(query.exec(QStringLiteral("DROP INDEX IF EXISTS %1_file").arg(table)));
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("old-cache"));
+    for (const QString &table : kChildTables)
+        ASSERT_FALSE(indexNamesIn(cache).contains(table + QStringLiteral("_file")));
+
+    // Every note changed since: the scan re-puts all of them, each a cascade delete.
+    write(QStringLiteral("Home.md"), "# Home\n\nSee [[Projects/noteAppC]] and [[Ideas|my ideas]]. Edited.\n\n#home\n");
+    write(QStringLiteral("Ideas.md"), "---\naliases: [Brainwaves]\nid: 01J9\n---\n\nBack to [[Home]]. Edited.\n");
+
+    Index index;
+    build(index);
+    const QStringList names = indexNamesIn(cache);
+    for (const QString &table : kChildTables)
+        EXPECT_TRUE(names.contains(table + QStringLiteral("_file"))) << qPrintable(table);
+    EXPECT_EQ(index.noteCount(), 3);
+    EXPECT_EQ(index.resolve(QStringLiteral("Brainwaves")), QStringLiteral("Ideas.md"));
+    EXPECT_FALSE(index.allTags().contains(QStringLiteral("thinking"))) << "the old row's tags went with it";
+    EXPECT_EQ(index.backlinks(vault.absolute(QStringLiteral("Home.md"))).size(), 2);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+}
+
+TEST_F(IndexTest, ReindexingEveryChangedNoteCostsAboutWhatAColdIndexDoes)
+{
+    SKIP_WALL_CLOCK_GUARD_UNDER_SANITIZER();
+    constexpr int kNotes = 1500;
+    QDir(dir.path()).mkpath(QStringLiteral("bulk"));
+    const auto writeAll = [&](const char *tail) {
+        for (int i = 0; i < kNotes; ++i) {
+            QByteArray body = "# Note " + QByteArray::number(i) + "\n\n#tag" + QByteArray::number(i % 40) + "\n\n";
+            for (int link = 1; link <= 6; ++link)
+                body += "- See [[Note " + QByteArray::number((i * 7 + link * 13) % kNotes) + "]]\n";
+            write(QStringLiteral("bulk/Note %1.md").arg(i), body + tail);
+        }
+    };
+    writeAll("");
+    Index index;
+    QElapsedTimer clock;
+    clock.start();
+    build(index);
+    const double cold = double(clock.elapsed());
+    ASSERT_GE(index.noteCount(), kNotes);
+
+    writeAll("changed\n"); // a different size, so every row is stale
+    clock.start();
+    build(index);
+    const double stale = double(clock.elapsed());
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
+    // Quadratic it was 40x and worse; the bound is generous so a busy machine does not trip it.
+    EXPECT_LT(stale, cold * 4 + 100) << "cold " << cold << " ms, every note stale " << stale << " ms";
+}

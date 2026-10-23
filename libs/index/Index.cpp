@@ -562,12 +562,25 @@ void Index::remove(const QString &path)
     m_linkTargetsValid = m_aliasesValid = false;
 }
 
+/// Deleting a note's `files` row cascades into every child table by `file`;
+/// unindexed, each cascade scanned the whole table, on every save and in a
+/// re-index of a vault whose notes all changed. The Writer's job, not
+/// createSchema()'s: that runs on the UI thread at every open, and building
+/// these on an already-populated cache is a one-time pass that belongs here.
+static void createChildIndexes(const QSqlDatabase &db)
+{
+    QSqlQuery query(db);
+    for (const char *table : {"headings", "links", "tags", "blocks", "tasks", "props", "meta_notes", "names"})
+        query.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS %1_file ON %1(file)").arg(QLatin1String(table)));
+}
+
 struct Index::Writer::Private {
     QString connection;
     QString vaultRoot;
     QSqlDatabase db;
     std::optional<NoteRows> rows;
     QSqlQuery current;
+    bool indexesPending = false; // createChildIndexes() waits for the end of a from-scratch build
 
     QString relative(const QString &path) const { return QDir(vaultRoot).relativeFilePath(path); }
 };
@@ -586,6 +599,14 @@ Index::Writer::Writer(const QString &databasePath, const QString &vaultRoot)
     QSqlQuery pragma(d->db);
     pragma.exec(QStringLiteral("PRAGMA synchronous = NORMAL"));
     pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    // An empty cache is being built from scratch: nothing is deleted, and the
+    // child indexes are cheaper as one bulk build at the end than as eight
+    // incremental ones through every insert. A populated one needs them first.
+    QSqlQuery any(d->db);
+    d->indexesPending = !(any.exec(QStringLiteral("SELECT 1 FROM files LIMIT 1")) && any.next());
+    any.finish();
+    if (!d->indexesPending)
+        createChildIndexes(d->db);
     d->rows.emplace(d->db);
     d->current = QSqlQuery(d->db);
     d->current.prepare(QStringLiteral("SELECT mtime, size, words FROM files WHERE path = ?"));
@@ -595,6 +616,8 @@ Index::Writer::~Writer()
 {
     d->rows.reset();
     d->current = QSqlQuery();
+    if (d->indexesPending && d->db.isOpen())
+        createChildIndexes(d->db);
     d->db.close();
     d->db = QSqlDatabase();
     QSqlDatabase::removeDatabase(d->connection);
