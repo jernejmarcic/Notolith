@@ -253,7 +253,7 @@ void MarkdownEditor::watchCSV(const QString &path)
         d->m_CSVrefresh->setInterval(200); // a write in place can come in more than one go
         connect(d->m_CSVwatcher, &QFileSystemWatcher::fileChanged, this, &MarkdownEditor::CSVfileEvent);
         connect(d->m_CSVwatcher, &QFileSystemWatcher::directoryChanged, this, &MarkdownEditor::CSVfileEvent);
-        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshCSVfiles);
+        connect(d->m_CSVrefresh, &QTimer::timeout, this, &MarkdownEditor::refreshVaultFiles);
     }
     // The file, and its folder: a program that saves by writing a new file
     // and renaming it over the old one makes inotify drop the file's watch.

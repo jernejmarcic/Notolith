@@ -836,7 +836,12 @@ void updateVimStatus();
     LookupFunction m_lookupFunction;
     /// Resolves a link as the open note sees it; the editor, the preview and
     /// PDF export all use it.
-    std::function<QString(const QString &)> m_resolveLink;
+    std::function<QString(const QString &)> m_resolveLink; ///< as seen from the active note
+    /// `target` as seen from the note at `notePath`: each editor asks about its own note, not the active one's.
+    QString resolveLinkFrom(const QString &target, const QString &notePath) const;
+    void refreshOpenVaultFiles();
+    bool m_vaultDirty = false; ///< files came or went since the open notes were last refreshed
+    QElapsedTimer m_vaultPendingSince; ///< the first unanswered event, for the debounce's longest wait
 #ifdef NOTEAPPC_HAVE_CANVAS
     /// One hidden, never-shown CanvasView per `.canvas` embed an open editor
     /// asked to draw, keyed by that editor and the file/subpath it embeds -

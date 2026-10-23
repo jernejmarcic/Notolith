@@ -3231,7 +3231,8 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     const QString path = m_resolver(embed->target);
     // An embed drawn as its file never asks for its link colour, so remember the answer here:
     // refreshLinkStatus then notices the file going, or coming back.
-    d->m_unresolved.insert(embed->target, path.isEmpty());
+    if (!embed->html) // an <img> has no link span to relay out
+        d->m_unresolved.insert(embed->target, path.isEmpty());
     if (path.isEmpty())
         return false;
 
