@@ -11,6 +11,9 @@
 #include <functional>
 
 #include <QAbstractButton>
+#include <QImageReader>
+#include <QScopeGuard>
+#include <thread>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QElapsedTimer>
@@ -97,6 +100,20 @@ void autosave(MainWindow &window)
     QMetaObject::invokeMethod(&window, "autosaveInBackground");
 }
 
+/// How many Qt image-format plugins this process has mapped.
+int imagePluginsLoaded()
+{
+    QFile maps(QStringLiteral("/proc/self/maps"));
+    if (!maps.open(QIODevice::ReadOnly))
+        return -1;
+    int count = 0;
+    for (const QByteArray &line : maps.readAll().split('\n')) {
+        if (line.contains("/imageformats/"))
+            ++count;
+    }
+    return count;
+}
+
 class AutosaveTest : public ::testing::Test {
 protected:
     void SetUp() override
@@ -126,6 +143,25 @@ protected:
 };
 
 } // namespace
+
+// The module scan asks about every suffix a module claims, on a worker. A
+// suffix that no image plugin could read ("ink") must not load them all; one
+// only a plugin reads (tiff, heic) must still be refused, since the app opens
+// it as an image itself and the module would never be used.
+TEST(ModuleSuffixTest, OnlyAPluginImageSuffixAsksThePlugins)
+{
+    ASSERT_EQ(imagePluginsLoaded(), 0) << "an earlier test loaded them";
+    for (const char *suffix : {"ink", "md", "png", "pdf", "mp3", "glyphs"})
+        EXPECT_EQ(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix)),
+                  QByteArray(suffix) == "md" || QByteArray(suffix) == "png" || QByteArray(suffix) == "pdf"
+                      || QByteArray(suffix) == "mp3")
+            << suffix;
+    EXPECT_EQ(imagePluginsLoaded(), 0) << "the scan loaded the image plugins for suffixes none of them reads";
+    for (const char *suffix : {"tiff", "heic", "jxl"}) {
+        const bool qtReadsIt = QImageReader::supportedImageFormats().contains(suffix);
+        EXPECT_EQ(MainWindow::isBuiltInSuffixForTests(QString::fromLatin1(suffix)), qtReadsIt) << suffix;
+    }
+}
 
 // The commit is not on the UI thread: with it held open the autosave call has
 // returned, the file is still the old one and the tab still modified; released,
@@ -466,6 +502,106 @@ TEST_F(AutosaveTest, LosingFocusSavesWhatWasTyped)
     QCoreApplication::sendEvent(&window, &change);
     flush(window);
     EXPECT_EQ(readAll(note()), window.editor()->noteText().toUtf8());
+}
+
+/// Runs `step` on the next modal box, then clicks `button` on it.
+void onNextBox(std::function<void()> step, const QString &button)
+{
+    auto poll = std::make_shared<std::function<void()>>();
+    *poll = [step = std::move(step), button, poll] {
+        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!box) {
+            QTimer::singleShot(5, *poll);
+            return;
+        }
+        step();
+        for (QAbstractButton *candidate : box->buttons()) {
+            if (candidate->text() == button)
+                candidate->click();
+        }
+    };
+    QTimer::singleShot(0, *poll);
+}
+
+// The confirmation box of Encrypt: the window deactivates, and a commit of the
+// plain note comes up while the box is open (here the timer's, held on the save
+// thread). It must be finished before the plain file and its recovery copies
+// go, or it brings the plain text back.
+TEST_F(AutosaveTest, ACommitQueuedWhileTheEncryptBoxIsOpenLeavesNoPlainTextBehind)
+{
+    Gate gate;
+    MainWindow window;
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("correct horse battery"); });
+    window.setSaveJobHookForTests(gate.hook());
+    open(window);
+    QTest::keyClicks(window.editor(), QStringLiteral("SECRETWORD"));
+    onNextBox(
+        [&] {
+            QEvent change(QEvent::ActivationChange);
+            QCoreApplication::sendEvent(&window, &change); // the box took the focus
+            autosave(window);                              // and the pause timer fired in it
+            std::thread([&gate] {
+                QThread::msleep(300);
+                gate.release(); // the slow commit finishes after the box is answered
+            }).detach();
+        },
+        QStringLiteral("Encrypt"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    QTest::qWait(600);
+    EXPECT_TRUE(QFileInfo::exists(path(QStringLiteral("Note.mdlock"))));
+    EXPECT_FALSE(QFileInfo::exists(note())) << "the plain file is back";
+    EXPECT_TRUE(Snapshots::versions(note()).isEmpty()) << "a recovery copy of the plain text is back";
+    EXPECT_FALSE(readAll(path(QStringLiteral("Note.mdlock"))).contains("SECRETWORD"));
+}
+
+// Losing focus to a box does not queue a commit behind it: the focus-loss
+// autosave waits for the box to be answered.
+TEST_F(AutosaveTest, NoFocusLossCommitIsQueuedWhileABoxIsOpen)
+{
+    Gate gate;
+    gate.hold = false;
+    MainWindow window;
+    window.setEncryptionPromptForTests([](bool, bool) { return QStringLiteral("correct horse battery"); });
+    window.setSaveJobHookForTests(gate.hook());
+    open(window);
+    QTest::keyClicks(window.editor(), QStringLiteral("a"));
+    onNextBox(
+        [&] {
+            QEvent change(QEvent::ActivationChange);
+            QCoreApplication::sendEvent(&window, &change);
+            EXPECT_EQ(gate.commits.load(), 0) << "a commit was queued behind the open box";
+        },
+        QStringLiteral("Cancel"));
+    window.findChild<QAction *>(QStringLiteral("encrypted-notes:encrypt"))->trigger();
+    flush(window);
+    EXPECT_EQ(gate.commits.load(), 0);
+}
+
+// Discard in the could-not-save box means no write afterwards, even though the
+// box deactivated the window and the folder has since become writable.
+TEST_F(AutosaveTest, DiscardInTheCouldNotSaveBoxWritesNothingAfterwards)
+{
+    if (geteuid() == 0)
+        GTEST_SKIP() << "root writes anywhere";
+    const QString file = path(QStringLiteral("Sub/Discard.md"));
+    writeAll(file, "# Discard\n");
+    MainWindow window;
+    open(window, file);
+    QTest::keyClicks(window.editor(), QStringLiteral("a"));
+    const QFileDevice::Permissions normal = QFileInfo(path(QStringLiteral("Sub"))).permissions();
+    ASSERT_TRUE(QFile::setPermissions(path(QStringLiteral("Sub")), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    const auto restore = qScopeGuard([&] { QFile::setPermissions(path(QStringLiteral("Sub")), normal); });
+    onNextBox(
+        [&] {
+            QFile::setPermissions(path(QStringLiteral("Sub")), normal); // a retry would now succeed
+            QEvent change(QEvent::ActivationChange);
+            QCoreApplication::sendEvent(&window, &change);
+        },
+        QStringLiteral("Discard"));
+    EXPECT_TRUE(window.close());
+    flush(window);
+    QTest::qWait(300);
+    EXPECT_EQ(readAll(file), QByteArray("# Discard\n")) << "a discarded note was written";
 }
 
 // Mixed line endings go through the background path as they do through Ctrl+S.

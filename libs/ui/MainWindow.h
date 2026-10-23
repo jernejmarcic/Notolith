@@ -176,6 +176,8 @@ public:
     /// Runs on the save thread at the start of every background commit, before
     /// anything is read or written: a test holds a commit open with it.
     void setSaveJobHookForTests(std::function<void()> hook);
+    /// What the module scan asks about each suffix a module claims.
+    static bool isBuiltInSuffixForTests(const QString &suffix);
 
 #ifdef NOTEAPPC_HAVE_SHARE
     /// Sharing (docs/SHARE.md): null while the "Share a note" feature is off
@@ -867,6 +869,7 @@ void updateVimStatus();
     QThreadPool m_savePool;
     QList<SaveJob> m_saveJobs; ///< in flight, oldest first
     std::function<void()> m_saveJobHook;
+    bool m_closing = false; ///< closeEvent() accepted: no more focus-loss commits
     std::shared_ptr<NoteHistory> m_noteHistory;
     QString m_noteHistoryRoot;
     int m_historyRecords = 0;

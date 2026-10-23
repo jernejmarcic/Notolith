@@ -224,8 +224,18 @@ bool isBuiltInSuffix(const QString &suffix)
     if (suffix == QLatin1String("ipynb"))
         return true;
 #endif
-    // The module scan runs this for every suffix a module claims: the lists only, never the image plugins.
-    return !mediaKindOf(QStringLiteral("x.") + suffix, false).isEmpty();
+    // The module scan runs this on a worker for every suffix a module claims. The image plugins are
+    // asked only about a suffix one of them is known to read (a module claiming "ink" does not load
+    // them all); a module for such a suffix is refused, as the app opens the file as an image itself.
+    static const QStringList pluginImages = {
+        QStringLiteral("tif"), QStringLiteral("tiff"), QStringLiteral("heic"), QStringLiteral("heif"),
+        QStringLiteral("hif"), QStringLiteral("jxl"), QStringLiteral("jp2"), QStringLiteral("j2k"),
+        QStringLiteral("ico"), QStringLiteral("cur"), QStringLiteral("icns"), QStringLiteral("tga"),
+        QStringLiteral("ppm"), QStringLiteral("pgm"), QStringLiteral("pbm"), QStringLiteral("xbm"),
+        QStringLiteral("xpm"), QStringLiteral("wbmp"), QStringLiteral("dds"), QStringLiteral("ani"),
+        QStringLiteral("exr"), QStringLiteral("qoi"), QStringLiteral("pcx"), QStringLiteral("psd"),
+        QStringLiteral("xcf"), QStringLiteral("hdr")};
+    return !mediaKindOf(QStringLiteral("x.") + suffix, pluginImages.contains(suffix)).isEmpty();
 }
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
@@ -3416,6 +3426,7 @@ void MainWindow::buildActions()
                 statusBar()->showMessage(tr("Open a PDF first"), 3000);
                 return;
             }
+            flushSaves(); // the note it extracts into may be open, with a commit in flight
             QString error;
             if (!pdf->extractAnnotations(QString(), &error))
                 QMessageBox::warning(this, tr("Extract annotations"), error);
@@ -3431,6 +3442,7 @@ void MainWindow::buildActions()
                 statusBar()->showMessage(tr("Open an image with annotation on first"), 3000);
                 return;
             }
+            flushSaves(); // the note it extracts into may be open, with a commit in flight
             QString error;
             if (!image->extractAnnotations(QString(), &error))
                 QMessageBox::warning(this, tr("Extract annotations"), error);
@@ -7099,6 +7111,7 @@ void MainWindow::encryptCurrentNote()
         QMessageBox::warning(this, tr("Encrypt note"), tr("The encrypted copy did not read back; nothing was changed."));
         return;
     }
+    flushSaves(); // a commit queued while the box was open must land before the plain file and its copies go
     Snapshots::forget(from);
     QFile::remove(from);
     retarget(m_leaves, from, to);
@@ -7728,11 +7741,21 @@ void MainWindow::reportSaveError(const QString &path, const QString &error, bool
 void MainWindow::changeEvent(QEvent *event)
 {
     QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::ActivationChange && isActiveWindow())
+        m_closing = false; // shown again after a close
     // Focus left the window (another application, a pop-out): what was typed
     // is committed now, in the background, not at the end of the pause.
-    if (event->type() == QEvent::ActivationChange && !isActiveWindow() && (m_autosave.isActive() || m_autosaveMax.isActive())
+    // Not while a box is up (it is what took the focus, and its answer may be
+    // Discard, or the box may be about to delete the file) nor once the window is closing.
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow() && !m_closing
+        && !QApplication::activeModalWidget() && (m_autosave.isActive() || m_autosaveMax.isActive())
         && m_settings.boolean(QStringLiteral("files.autosave")))
         autosave(true);
+}
+
+bool MainWindow::isBuiltInSuffixForTests(const QString &suffix)
+{
+    return isBuiltInSuffix(suffix.toLower());
 }
 
 void MainWindow::setSaveJobHookForTests(std::function<void()> hook)
@@ -8019,6 +8042,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         event->ignore();
         return;
     }
+    m_closing = true; // what is still unsaved was discarded or has just been saved
     for (const auto &leaf : m_leaves) {
         if (!leaf->notePath.isEmpty() && !leaf->view)
             m_settings.setNotePosition(leaf->notePath, leaf->editor->cursorOffset(),
