@@ -171,6 +171,14 @@ QByteArray readAll(const QString &path)
     return file.readAll();
 }
 
+/// A private settings directory for a test that flips switches, put back after.
+struct PrivateConfig {
+    QTemporaryDir dir;
+    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
+    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
+};
+
 /// A vault with one LF note, one CRLF note and one non-note file.
 class WindowTest : public ::testing::Test {
 protected:
@@ -254,6 +262,7 @@ int topLine(MarkdownEditor *editor)
 // remembered scroll pixel alone means different text in the two.
 TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 {
+    PrivateConfig config; // the scroll is only exact against a settings directory that starts empty
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -277,6 +286,7 @@ TEST_F(WindowTest, ABigNoteReopensAtTheTextItWasLeftAtBeforeAndAfterItsParse)
 
 TEST_F(WindowTest, AReopenedClosedTabOfABigNoteLandsAtTheTextItWasClosedAt)
 {
+    PrivateConfig config; // the scroll is only exact against a settings directory that starts empty
     write(QStringLiteral("Big.md"), scrollableBigNote().toUtf8());
     MainWindow window;
     window.openVault(dir.path());
@@ -6746,14 +6756,6 @@ TEST_F(WindowTest, TreeRowsHideTheMarkdownExtensionAndTagOtherTypes)
 
 namespace {
 
-/// A private settings directory for a test that flips switches, put back after.
-struct PrivateConfig {
-    QTemporaryDir dir;
-    QByteArray previous = qgetenv("XDG_CONFIG_HOME");
-    PrivateConfig() { qputenv("XDG_CONFIG_HOME", dir.path().toUtf8()); }
-    ~PrivateConfig() { qputenv("XDG_CONFIG_HOME", previous); }
-};
-
 noteAppC::ToggleSwitch *settingsToggle(MainWindow &window, const char *key)
 {
     noteAppC::ToggleSwitch *found = nullptr;
@@ -8251,6 +8253,18 @@ TEST_F(InstanceTest, LaunchesOfOneVaultInTheSameMomentEndInOneProcess)
             ++handed;
     }
     EXPECT_EQ(handed, 3);
+}
+
+// A bare launch reopens "the vault last used", which another process reads from the settings
+// file: so a vault is remembered when it is opened, not only when a note is next switched.
+TEST_F(InstanceTest, AnOpenedVaultIsRememberedAtOnce)
+{
+    lastUsed({});
+    MainWindow window;
+    window.openVault(other.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), other.path());
+    window.openVault(dir.path());
+    EXPECT_EQ(Settings::load().recentVaults().value(0), dir.path());
 }
 
 // A lock whose owner died is not a reason to wait: the next launch takes it.

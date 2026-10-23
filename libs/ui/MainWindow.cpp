@@ -5261,6 +5261,7 @@ void MainWindow::openVault(const QString &path)
     m_tree->setRootIndex(m_files->setRootPath(m_vault.root()));
     reloadSettings(m_vault.root());
     m_settings.noteOpened(m_vault.root(), QString());
+    m_settings.save(); // at once: another process's bare launch reopens the vault most recently opened
     // Before the scan, by this vault's settings: its notebooks and meta notes
     // are indexed by the first one, and a warm cache is checked against them.
     updateNotebookIndex();
