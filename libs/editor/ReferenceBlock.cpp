@@ -113,12 +113,12 @@ int lineMatching(const QString &text, const QString &spec, int from)
     const int number = spec.toInt(&isNumber);
     if (isNumber)
         return qMax(1, number);
-    QRegularExpression pattern;
+    std::optional<QRegularExpression> pattern;
     const bool isRegex = spec.size() > 2 && spec.startsWith(QLatin1Char('/')) && spec.endsWith(QLatin1Char('/'));
     if (isRegex) {
-        pattern = QRegularExpression(spec.mid(1, spec.size() - 2));
-        if (!pattern.isValid())
-            return 0;
+        pattern = userRegularExpression(spec.mid(1, spec.size() - 2));
+        if (!pattern)
+            return 0; // invalid, too long, or one that sets its own budget
     }
     int line = 1;
     qsizetype at = 0;
@@ -128,7 +128,7 @@ int lineMatching(const QString &text, const QString &spec, int from)
             end = text.size();
         if (line >= from) {
             const QStringView row = QStringView(text).mid(at, end - at);
-            if (isRegex ? pattern.match(row).hasMatch() : row.contains(spec))
+            if (isRegex ? pattern->match(row).hasMatch() : row.contains(spec))
                 return line;
         }
         if (end >= text.size())

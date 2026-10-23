@@ -1,6 +1,9 @@
 #pragma once
 
+#include <QRegularExpression>
 #include <QString>
+
+#include <optional>
 
 #include "Decorations.h"
 #include "Metadata.h"
@@ -54,6 +57,12 @@ struct ParseOptions {
 /// parameters) with the colour as written - a theme colour's name or a hex
 /// code, which the editor resolves. In order, first of a repeated name wins.
 QList<std::pair<QString, QString>> parseHighlightKinds(const QString &spec);
+
+/// A pattern a note's author wrote (`hl:/re/`, a reference's `start:`), as PCRE
+/// with a match budget so a catastrophic one (`(a+)+$`) gives up in
+/// milliseconds instead of stalling the editor. Nullopt for one that is invalid,
+/// over 256 characters, or opens with `(*`, which could set a budget of its own.
+std::optional<QRegularExpression> userRegularExpression(const QString &pattern);
 
 /// Empty when `open`/`close` can delimit meta notes, else a sentence saying
 /// why not: each is 1-3 characters, no spaces or backslash, and none of

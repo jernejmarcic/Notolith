@@ -331,6 +331,11 @@ is given both ways the `#|` line wins, being inside the block and the form
 noteAppC wrote first; `#| highlight:` also reads text and `/regex/` items while
 the plugin is on.
 
+**Regular expressions** (`hl:/re/`, the named kinds, a reference's `start:` and
+`end:`) run with a match budget, so a catastrophic one (`(a+)+$`) simply
+matches nothing instead of stalling the editor; a pattern longer than 256
+characters, or one starting with `(*`, is ignored.
+
 **Differences from the plugin.** `unwrap:inactive` unwraps and does not wrap
 while the mouse is held down. The highlights do not cover the line numbers, and
 there is no gradient. `ref:` shows the link's text but the title is not
@@ -352,12 +357,15 @@ Use `{python} sorted(x, key=len)` or `{c++ title:'Inline' icon} std::move(x)`.
 The `{python}` and the space after it are hidden, and come back while the caret
 is in the span (like the `**` of bold). `title:` and `icon` after the language
 are accepted and hidden but drawn as nothing: there is no label or icon before
-inline code here. Code that really starts with a brace takes an empty `{}` in
-front, which is all that is hidden: `` `{}{kept}` `` shows `{kept}`. A brace
-that is not a language (`{"a": 1}`, `{ x + y }`) is left alone. Plain inline
-code is untouched, and the language word is looked up in the same highlighter
-as a fence's, so an unknown one is plain code with the prefix hidden. Published
-pages and PDF export draw it the same way.
+inline code here. Inline code is everywhere, so the prefix is recognised
+narrowly: the `{` is followed at once by a letter, the word is a language the
+highlighter has (`python`, `py`, `c++`, `js`, `rust`, `sql`, `bash` ... and
+their usual aliases), and nothing but `title:...` and `icon` follows it inside
+the braces. `{0} items`, `{name} is required`, `{ x + y } * 2`, `{"a": 1}` and
+`{mylang} code` are all plain inline code. Code that really starts with the
+braces of a language takes an empty `{}` in front, which is all that is
+hidden: `` `{}{python} x` `` shows `{python} x`. Published pages and PDF export
+draw it the same way.
 
 ### File references
 

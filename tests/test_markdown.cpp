@@ -2658,3 +2658,70 @@ TEST(CodeStylerTest, ReferenceBlockNeedsTheFeatureAndATarget)
     EXPECT_TRUE(decorationsOf(QStringLiteral("```reference\nstart: 3\n```\n"), codeStylerOn()).references.isEmpty());
     EXPECT_TRUE(decorationsOf(QStringLiteral("```python\nfile: a.py\n```\n"), codeStylerOn()).references.isEmpty());
 }
+
+// --- Code Styler: a user's regular expression cannot stall the parse -----------
+
+TEST(CodeStylerTest, ARunawayRegexIsStoppedQuickly)
+{
+    // `(a+)+$` is exponential on `aaa...!`: without a match budget 300 of these
+    // lines took about four seconds.
+    QString listing;
+    for (int i = 0; i < 300; ++i)
+        listing += QString(30, QLatin1Char('a')) + QStringLiteral("!\n");
+    QElapsedTimer clock;
+    clock.start();
+    const CodeOptions runaway = fenceOptionsOf(QStringLiteral("cpp hl:/(a+)+$/"), listing);
+    const CodeOptions named = fenceOptionsOf(QStringLiteral("cpp info:/(a+)+$/"), listing);
+    EXPECT_LT(clock.elapsed(), 1000) << "ms";
+    EXPECT_TRUE(runaway.highlight.isEmpty());
+    EXPECT_TRUE(named.highlights.value(QStringLiteral("info")).isEmpty());
+
+    // an ordinary pattern still works through the same door
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp hl:/a+!/"), listing).highlight.size(), 300);
+}
+
+TEST(CodeStylerTest, APatternThatSetsItsOwnLimitOrIsLongIsRefused)
+{
+    QString listing;
+    for (int i = 0; i < 300; ++i)
+        listing += QString(30, QLatin1Char('a')) + QStringLiteral("!\n");
+    QElapsedTimer clock;
+    clock.start();
+    // a second `(*LIMIT_MATCH=...)` overrides the budget: no pattern starting with `(*` is accepted
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/(*LIMIT_MATCH=100000000)(a+)+$/"), listing).highlight.isEmpty());
+    EXPECT_LT(clock.elapsed(), 1000);
+
+    QString padded;
+    for (int i = 0; i < 80; ++i)
+        padded += QStringLiteral("(?:)");
+    const QString line = QStringLiteral("a needle\n");
+    EXPECT_EQ(fenceOptionsOf(QStringLiteral("cpp hl:/needle/"), line).highlight, QList<int>({1}));
+    EXPECT_TRUE(fenceOptionsOf(QStringLiteral("cpp hl:/") + padded + QStringLiteral("needle/"), line).highlight.isEmpty())
+        << "over 256 characters";
+}
+
+// --- Code Styler: inline `{lang}` is only for a language -----------------------
+
+TEST(CodeStylerTest, BracesThatAreNotALanguageStayText)
+{
+    const QStringList plain = {
+        QStringLiteral("{0} items"),       QStringLiteral("{name} is required"), QStringLiteral("{ x + y } * 2"),
+        QStringLiteral("{a b} c"),         QStringLiteral("{\"a\": 1} x"),        QStringLiteral("{...rest} = o"),
+        QStringLiteral("{mylang} code"),   QStringLiteral("{python +} code"),    QStringLiteral("{python foo} code"),
+        QStringLiteral("{ python} code"),  QStringLiteral("{1abc} code"),
+    };
+    for (const QString &code : plain) {
+        SCOPED_TRACE(code.toStdString());
+        const QString text = QStringLiteral("See `") + code + QStringLiteral("` here.\n");
+        EXPECT_EQ(rendered(text, codeStylerOn()), QStringLiteral("See ") + code + QStringLiteral(" here.\n"));
+        for (const StyleSpan &span : decorationsOf(text, codeStylerOn()).styles)
+            EXPECT_TRUE(span.payload.isEmpty());
+    }
+    // known languages, their aliases, and the title/icon forms still are
+    for (const QString &code : {QStringLiteral("{python} x"), QStringLiteral("{py} x"), QStringLiteral("{C++} x"),
+                                QStringLiteral("{js title:\"T\"} x"), QStringLiteral("{rust icon} x"),
+                                QStringLiteral("{cpp title:a icon} x")}) {
+        SCOPED_TRACE(code.toStdString());
+        EXPECT_EQ(rendered(QStringLiteral("`") + code + QStringLiteral("`\n"), codeStylerOn()), QStringLiteral("x\n"));
+    }
+}

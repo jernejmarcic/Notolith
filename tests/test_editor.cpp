@@ -12691,3 +12691,17 @@ TEST(ReferenceBlockTest, WithoutAVaultNoLocalFileIsShown)
     editor->setVaultRootProvider(nullptr);
     EXPECT_TRUE(waitForListing(*editor, QStringLiteral("Outside the vault")));
 }
+
+TEST(ReferenceBlockTest, ARunawayStartPatternIsStoppedQuickly)
+{
+    QTemporaryDir dir;
+    QByteArray bytes;
+    for (int i = 0; i < 300; ++i)
+        bytes += QByteArray(30, 'a') + "!\n";
+    const QString path = writeTextFile(dir, QStringLiteral("bad.txt"), bytes);
+    auto editor = referenceEditorWith(QStringLiteral("file: bad.txt\nstart: /(a+)+$/\n"), path);
+    QElapsedTimer clock;
+    clock.start();
+    ASSERT_TRUE(waitForListing(*editor, QStringLiteral("No line matches start")));
+    EXPECT_LT(clock.elapsed(), 1500) << "ms: without the match budget this took seconds";
+}

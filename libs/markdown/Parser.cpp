@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTextStream>
 
 #include <QHash>
@@ -332,6 +333,18 @@ void nestQuotedLists(const QString &text, const SourceMap &map, QList<ListItemSp
 
 } // namespace
 
+std::optional<QRegularExpression> userRegularExpression(const QString &pattern)
+{
+    if (pattern.size() > 256 || pattern.startsWith(QLatin1String("(*")))
+        return std::nullopt;
+    // 20000 steps is about 8 ms for 300 lines of the worst a backtracking
+    // pattern does, and far more than any honest one needs.
+    QRegularExpression expression(QStringLiteral("(*LIMIT_MATCH=20000)") + pattern);
+    if (!expression.isValid())
+        return std::nullopt;
+    return expression;
+}
+
 QList<std::pair<QString, QString>> parseHighlightKinds(const QString &spec)
 {
     static const QStringList reserved = {
@@ -542,8 +555,8 @@ QList<int> parseHighlight(const QString &value, QStringView listing, int lineCou
             std::optional<QRegularExpression> pattern;
             QString word;
             if (regex) {
-                pattern = QRegularExpression(part.mid(1, part.size() - 2).toString());
-                if (!pattern->isValid())
+                pattern = userRegularExpression(part.mid(1, part.size() - 2).toString());
+                if (!pattern)
                     continue;
             } else {
                 word = (quoted ? part.mid(1, part.size() - 2) : part).toString();
@@ -553,7 +566,7 @@ QList<int> parseHighlight(const QString &value, QStringView listing, int lineCou
             const auto &all = rowsOf();
             for (int line = 1; line <= lineCount && line <= all.size(); ++line) {
                 const QStringView row = all.at(line - 1);
-                if (pattern ? row.toString().contains(*pattern) : row.contains(word))
+                if (pattern ? pattern->match(row).hasMatch() : row.contains(word))
                     lines.append(line);
             }
             continue;
@@ -997,25 +1010,63 @@ bool looksLikeFenceParameter(const QString &word, const QStringList &kinds)
     return own.contains(key) || (separator > 0 && kinds.contains(key));
 }
 
+/// The languages (and the aliases people write) an inline `{lang}` may name.
+/// A word outside the list is code in braces, not a language: `{0} items`,
+/// `{name} is required`. Lower case; the highlighter takes any of these.
+bool isInlineLanguage(const QString &word)
+{
+    static const QSet<QString> known = [] {
+        const QStringList names = {
+            "python", "py", "c", "cpp", "c++", "cc", "cxx", "h", "hpp", "java", "javascript", "js", "jsx", "mjs",
+            "typescript", "ts", "tsx", "json", "jsonc", "json5", "yaml", "yml", "toml", "xml", "html", "htm", "css",
+            "scss", "sass", "less", "sh", "bash", "zsh", "fish", "shell", "shellscript", "console", "sql", "mysql",
+            "postgresql", "sqlite", "rust", "rs", "go", "golang", "kotlin", "kt", "swift", "ruby", "rb", "php", "perl",
+            "pl", "lua", "r", "julia", "jl", "haskell", "hs", "scala", "dart", "cs", "csharp", "c#", "fsharp", "f#",
+            "objc", "objective-c", "objectivec", "matlab", "octave", "tex", "latex", "markdown", "md", "diff", "patch",
+            "ini", "dockerfile", "docker", "makefile", "make", "cmake", "nix", "elixir", "ex", "erlang", "clojure",
+            "clj", "lisp", "scheme", "racket", "ocaml", "ml", "vb", "vbnet", "vba", "powershell", "ps1", "pwsh", "asm",
+            "nasm", "gdscript", "glsl", "hlsl", "wgsl", "graphql", "gql", "proto", "protobuf", "regex", "zig", "nim",
+            "crystal", "d", "ada", "fortran", "cobol", "groovy", "gradle", "terraform", "hcl", "vue", "svelte",
+            "text", "txt", "plaintext", "plain", "bat", "batch", "awk", "sed", "vim", "viml", "tcl", "prolog",
+            "verilog", "vhdl", "systemverilog", "solidity", "sol", "apache", "nginx", "csv", "mermaid", "dot",
+            "graphviz", "plantuml", "tikz", "jupyter", "ipynb", "kql", "p4", "v", "wasm", "wat"};
+        QSet<QString> set;
+        for (const QString &name : names)
+            set.insert(name);
+        return set;
+    }();
+    return known.contains(word.toLower());
+}
+
 /// Code Styler's inline form: `{python} code` names the language of an inline
 /// code span, `{python title:'x' icon}` adds parameters nothing here draws, and
 /// a leading `{}` is the escape for code that really starts with a brace
 /// (`{}{kept}`). The prefix and the space after it are syntax; the style span
 /// the walk just made gets the language and the code that follows.
+///
+/// Inline code is common and the plugin is on by default, so this must not
+/// mistake code in braces for a prefix: the brace is followed at once by a
+/// letter, the word is a language, and whatever follows it is only the `title`
+/// and `icon` forms. `{0} items`, `{name} is`, `{ x + y } * 2` stay as written.
 void styleInlineCode(const QString &text, const Range &content, Decorations &decorations)
 {
     if (content.length() < 2 || text.at(content.start) != QLatin1Char('{'))
         return;
     const qsizetype close = text.indexOf(QLatin1Char('}'), content.start);
-    if (close < 0 || close >= content.end)
+    if (close < 0 || close >= content.end || close - content.start > 120)
         return;
-    const QStringView inner = QStringView(text).mid(content.start + 1, close - content.start - 1).trimmed();
+    const QStringView inner = QStringView(text).mid(content.start + 1, close - content.start - 1);
     qsizetype n = 0;
-    while (n < inner.size() && (inner.at(n).isLetterOrNumber() || QStringView(u"+#._-").contains(inner.at(n))))
-        ++n;
-    // `{"a": 1}` and `{ x + y }` are code in braces, not a language.
-    if ((n == 0 && !inner.isEmpty()) || (n < inner.size() && !inner.at(n).isSpace()))
-        return;
+    if (!inner.isEmpty()) {
+        if (!inner.at(0).isLetter())
+            return;
+        while (n < inner.size() && (inner.at(n).isLetterOrNumber() || QStringView(u"+#._-").contains(inner.at(n))))
+            ++n;
+        static const QRegularExpression parameters(QStringLiteral(
+            R"(^(?:\s+(?:title\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"']+)|icon(?:\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s"']+))?))*\s*$)"));
+        if (!isInlineLanguage(inner.left(n).toString()) || !parameters.match(inner.mid(n)).hasMatch())
+            return;
+    }
     qsizetype codeStart = close + 1;
     if (codeStart < content.end && text.at(codeStart) == QLatin1Char(' '))
         ++codeStart;
