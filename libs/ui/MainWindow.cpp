@@ -167,9 +167,6 @@ namespace {
 QString mediaKindOf(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QByteArrayList images = QImageReader::supportedImageFormats();
-    if (suffix != QLatin1String("pdf") && images.contains(suffix.toUtf8()))
-        return QStringLiteral("image");
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
                                       QStringLiteral("ogg"), QStringLiteral("3gp"), QStringLiteral("flac"),
                                       QStringLiteral("opus"), QStringLiteral("oga")};
@@ -177,7 +174,25 @@ QString mediaKindOf(const QString &path)
         return QStringLiteral("audio");
     static const QStringList video = {QStringLiteral("mp4"), QStringLiteral("webm"), QStringLiteral("ogv"),
                                       QStringLiteral("mov"), QStringLiteral("mkv")};
-    return video.contains(suffix) ? QStringLiteral("video") : QString();
+    if (video.contains(suffix))
+        return QStringLiteral("video");
+    // Asking Qt for its image formats dlopens every image plugin (libheif, libjxl
+    // and what they pull in) on the UI thread, and the first note opened would
+    // pay for it: the common suffixes are answered from a list, the notes and
+    // views the app opens itself never reach the plugins, and only a suffix
+    // nothing else claims is looked up there.
+    static const QStringList images = {QStringLiteral("png"), QStringLiteral("jpg"), QStringLiteral("jpeg"),
+                                       QStringLiteral("gif"), QStringLiteral("bmp"), QStringLiteral("svg"),
+                                       QStringLiteral("webp"), QStringLiteral("avif")};
+    if (images.contains(suffix))
+        return QStringLiteral("image");
+    static const QStringList notImages = {QString(), QStringLiteral("md"), QStringLiteral("mdlock"),
+                                          QStringLiteral("pdf"), QStringLiteral("canvas"), QStringLiteral("base"),
+                                          QStringLiteral("ipynb"), QStringLiteral("epub")};
+    if (notImages.contains(suffix))
+        return {};
+    static const QByteArrayList plugged = QImageReader::supportedImageFormats();
+    return plugged.contains(suffix.toUtf8()) ? QStringLiteral("image") : QString();
 }
 /// A suffix the app opens itself: a module may not claim it (the registry gives
 /// such a module a problem notice and never loads it). Per kind, under the same
