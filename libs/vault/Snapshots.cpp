@@ -75,7 +75,11 @@ bool Snapshots::record(const QString &notePath, const QString &text, qint64 mini
     if (!QFileInfo::exists(pathFile)
         && !writeFile(pathFile, QFileInfo(notePath).absoluteFilePath().toUtf8()))
         return false;
-    return writeFile(QDir(dir).filePath(QString::number(now) + QStringLiteral(".md")), text.toUtf8());
+    // A version's name is its millisecond: a burst of copies (what the note held,
+    // what was found on disk, the save) must not replace each other, and the
+    // later one must sort as the newer.
+    const qint64 stamp = existing.isEmpty() ? now : std::max(now, existing.first().time + 1);
+    return writeFile(QDir(dir).filePath(QString::number(stamp) + QStringLiteral(".md")), text.toUtf8());
 }
 
 QStringList Snapshots::notes()

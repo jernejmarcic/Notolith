@@ -164,7 +164,7 @@ namespace {
 
 /// "image", "audio", "video", or empty: the files Obsidian opens in a tab
 /// of their own, by the lists the editor's embeds use (layoutEmbed).
-QString mediaKindOf(const QString &path)
+QString mediaKindOf(const QString &path, bool askPlugins = true)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
     static const QStringList audio = {QStringLiteral("mp3"), QStringLiteral("wav"), QStringLiteral("m4a"),
@@ -190,6 +190,8 @@ QString mediaKindOf(const QString &path)
                                           QStringLiteral("pdf"), QStringLiteral("canvas"), QStringLiteral("base"),
                                           QStringLiteral("ipynb"), QStringLiteral("epub")};
     if (notImages.contains(suffix))
+        return {};
+    if (!askPlugins)
         return {};
     static const QByteArrayList plugged = QImageReader::supportedImageFormats();
     return plugged.contains(suffix.toUtf8()) ? QStringLiteral("image") : QString();
@@ -222,7 +224,8 @@ bool isBuiltInSuffix(const QString &suffix)
     if (suffix == QLatin1String("ipynb"))
         return true;
 #endif
-    return !mediaKindOf(QStringLiteral("x.") + suffix).isEmpty();
+    // The module scan runs this for every suffix a module claims: the lists only, never the image plugins.
+    return !mediaKindOf(QStringLiteral("x.") + suffix, false).isEmpty();
 }
 constexpr auto kGeometry = "window/geometry";
 /// Narrower than this there is no room for a sidebar beside a readable line:
@@ -4743,6 +4746,7 @@ void MainWindow::syncPlugins(bool rescan)
             const QString path = m_vault.confinedNotePath(relative);
             if (path.isEmpty())
                 return false;
+            flushSaves(); // an autosave in flight would write over this
             Note note;
             if (QFileInfo::exists(path) && !Vault::read(path, note))
                 return false;
@@ -7310,13 +7314,25 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
     }
     // A change from outside (a sync client) that the watcher has not reported
     // yet - it waits for writes to settle - would be written over unseen.
+    QString seenOnDisk = target->note.text; // what the commit expects to replace
+    QString externalVersion;                // a change found on disk, for the job to keep
     if (snapshots) {
         Note disk;
-        if (readNote(target->notePath, disk, nullptr) && disk.text != target->note.text && disk.text != note.text
-            && Snapshots::record(target->notePath, disk.text, 0))
-            statusBar()->showMessage(
-                tr("%1 had changed on disk: that version is in file recovery").arg(QFileInfo(target->notePath).fileName()),
-                8000);
+        if (readNote(target->notePath, disk, nullptr)) {
+            seenOnDisk = disk.text;
+            if (disk.text != target->note.text && disk.text != note.text) {
+                if (inBackground) {
+                    externalVersion = disk.text;
+                    statusBar()->showMessage(tr("%1 had changed on disk: that version is in file recovery")
+                                                 .arg(QFileInfo(target->notePath).fileName()),
+                                             8000);
+                } else if (Snapshots::record(target->notePath, disk.text, 0)) {
+                    statusBar()->showMessage(tr("%1 had changed on disk: that version is in file recovery")
+                                                 .arg(QFileInfo(target->notePath).fileName()),
+                                             8000);
+                }
+            }
+        }
     }
 
     if (inBackground) {
@@ -7324,17 +7340,31 @@ bool MainWindow::saveLeaf(Leaf *target, bool quiet, bool background)
         auto *watcher = new QFutureWatcher<SaveResult>(this);
         connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] { finishSave(watcher); });
         m_saveJobs.append({target->notePath, note, watcher});
+        // The recovery copies are kept in the order the versions existed: what
+        // the note held, what was on disk, anything that landed in between,
+        // and last the save. Another writer inside the app (a plugin, the PDF,
+        // image and EPUB sidecars) can land while the commit waits, so the file is
+        // looked at again just before it is replaced.
         watcher->setFuture(QtConcurrent::run(
             &m_savePool,
-            [path = target->notePath, bytes = Vault::encode(note), text = snapshots ? note.text : QString(),
-             firstVersion, interval = qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000,
-             snapshots] {
+            [path = target->notePath, bytes = Vault::encode(note), text = note.text, firstVersion, externalVersion,
+             seenOnDisk, failed = tr("the file could not be written"),
+             interval = qint64(m_settings.integer(QStringLiteral("fileRecovery.interval"))) * 60'000, snapshots,
+             hook = m_saveJobHook] {
+                if (hook)
+                    hook();
                 if (!firstVersion.isEmpty())
                     Snapshots::record(path, firstVersion, 0);
+                if (!externalVersion.isEmpty())
+                    Snapshots::record(path, externalVersion, 0);
+                if (snapshots) {
+                    Note now;
+                    if (Vault::read(path, now) && now.text != seenOnDisk && now.text != text)
+                        Snapshots::record(path, now.text, 0);
+                }
                 SaveResult result;
                 if (!Vault::writeBytes(path, bytes, &result.error))
-                    return SaveResult{result.error.isEmpty() ? QStringLiteral("the file could not be written")
-                                                             : result.error};
+                    return SaveResult{result.error.isEmpty() ? failed : result.error};
                 if (snapshots)
                     Snapshots::record(path, text, interval);
                 return SaveResult{};
@@ -7421,7 +7451,7 @@ void MainWindow::finishSave(QFutureWatcher<SaveResult> *watcher)
         else
             newer = true;
     }
-    if (newer)
+    if (newer && m_settings.boolean(QStringLiteral("files.autosave")))
         armAutosave();
 #ifdef NOTEAPPC_HAVE_SHARE
     if (ShareSession *session = sessionFor(job.path))
@@ -7602,12 +7632,16 @@ void MainWindow::followLostNotes(bool final)
 
 void MainWindow::reloadChangedNotes()
 {
-    // ponytail: waits for a commit that outlasts the 100 ms debounce; skip the paths in m_saveJobs and re-arm
-    // m_noteChanges from finishSave() if a slow disk ever makes this block.
-    flushSaves(); // an own save still being committed is not a change from outside
     watchOpenNotes(); // a file replaced by a rename dropped out of the watch
     followLostNotes(false);
     for (const QString &path : std::exchange(m_changedNotes, {})) {
+        // An own save still being committed is not a change from outside, and
+        // waiting for it would block the window: look again when it has landed.
+        if (std::any_of(m_saveJobs.cbegin(), m_saveJobs.cend(), [&path](const SaveJob &job) { return job.path == path; })) {
+            m_changedNotes.insert(path);
+            m_noteChanges.start();
+            continue;
+        }
         bool moduleFile = false;
         for (const auto &leaf : m_leaves) {
             if (auto *module = leaf->notePath == path ? qobject_cast<ModuleView *>(leaf->view) : nullptr) {
@@ -7689,6 +7723,21 @@ void MainWindow::reportSaveError(const QString &path, const QString &error, bool
             armAutosave();
     } else
         QMessageBox::warning(this, tr("Save"), tr("Could not save %1:\n%2").arg(path, error));
+}
+
+void MainWindow::changeEvent(QEvent *event)
+{
+    QMainWindow::changeEvent(event);
+    // Focus left the window (another application, a pop-out): what was typed
+    // is committed now, in the background, not at the end of the pause.
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow() && (m_autosave.isActive() || m_autosaveMax.isActive())
+        && m_settings.boolean(QStringLiteral("files.autosave")))
+        autosave(true);
+}
+
+void MainWindow::setSaveJobHookForTests(std::function<void()> hook)
+{
+    m_saveJobHook = std::move(hook);
 }
 
 void MainWindow::setAutosaveIntervalsForTests(int pause, int maxWait)

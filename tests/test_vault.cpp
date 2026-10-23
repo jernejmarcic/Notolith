@@ -952,3 +952,17 @@ TEST(VaultWriteNoFollow, ANoteKeepsItsLineEndingsAndBomAndALossyOneIsRefused)
     EXPECT_FALSE(error.isEmpty());
     EXPECT_FALSE(QFileInfo::exists(dir.filePath(QStringLiteral("n/Lossy.md"))));
 }
+
+// Two versions recorded in the same millisecond are two versions, the later
+// one the newer: an autosave's recovery copies come in a burst.
+TEST_F(SnapshotsTest, TwoCopiesInTheSameMillisecondDoNotReplaceEachOther)
+{
+    const QString note = QStringLiteral("/vault/Burst.md");
+    EXPECT_TRUE(noteAppC::Snapshots::record(note, QStringLiteral("first"), 0, 5000));
+    EXPECT_TRUE(noteAppC::Snapshots::record(note, QStringLiteral("second"), 0, 5000));
+    const auto versions = noteAppC::Snapshots::versions(note);
+    ASSERT_EQ(versions.size(), 2);
+    EXPECT_EQ(noteAppC::Snapshots::read(versions.at(0)), QStringLiteral("second"));
+    EXPECT_EQ(noteAppC::Snapshots::read(versions.at(1)), QStringLiteral("first"));
+    EXPECT_GT(versions.at(0).time, versions.at(1).time);
+}

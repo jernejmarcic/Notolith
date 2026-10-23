@@ -173,6 +173,9 @@ public:
     void setEncryptionPromptForTests(std::function<QString(bool creating, bool retry)> prompt);
     /// The autosave pause and its longest wait, in ms. For the tests.
     void setAutosaveIntervalsForTests(int pause, int maxWait);
+    /// Runs on the save thread at the start of every background commit, before
+    /// anything is read or written: a test holds a commit open with it.
+    void setSaveJobHookForTests(std::function<void()> hook);
 
 #ifdef NOTEAPPC_HAVE_SHARE
     /// Sharing (docs/SHARE.md): null while the "Share a note" feature is off
@@ -221,6 +224,7 @@ protected:
     /// Below a phone's width both sidebars fold away, and come back as they
     /// were once there is room again.
     void resizeEvent(QResizeEvent *event) override;
+    void changeEvent(QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -862,6 +866,7 @@ void updateVimStatus();
     /// One thread commits the autosaves, in the order they were queued.
     QThreadPool m_savePool;
     QList<SaveJob> m_saveJobs; ///< in flight, oldest first
+    std::function<void()> m_saveJobHook;
     std::shared_ptr<NoteHistory> m_noteHistory;
     QString m_noteHistoryRoot;
     int m_historyRecords = 0;
