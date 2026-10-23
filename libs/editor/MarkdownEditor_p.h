@@ -224,9 +224,27 @@ struct MarkdownEditor::FoldMark {
 };
 
 struct MarkdownEditor::BlockView {
+    // The fields every pass over all the blocks reads (rebuildBlocks, indexDecorations, the
+    // first loop of updateLayout) come first, in one or two cache lines of the 1.6 kB view.
     BlockSpan span;
-    DisplayMap map;
-    std::unique_ptr<QTextLayout> layout;
+    /// A fence longer than kCodePieceLines is split into pieces of that
+    /// many lines, each a block of its own, so an edit relays out one
+    /// piece and not the whole listing. The fence's chrome is drawn across
+    /// its pieces: header, label and tabs on the first, caption on the
+    /// last. A fence that fits, and every other block, is piece 0 of 1.
+    int piece = 0;
+    int pieces = 1;
+    /// True only for the synthetic block reading view appends after the
+    /// note's own: the numbered footnote list Obsidian's reading view
+    /// shows at the end. `span.range` is a zero-length range past the
+    /// end of the text - there is no source here, so unlike every other
+    /// block it keeps its own rows instead of a QTextLayout over view.map,
+    /// the way the properties table (PropertyRow) already does.
+    bool isFootnotesList = false;
+    /// Set the first time a layout or a highlight writes to this view, and
+    /// never cleared. A view without it is a default one with its span, which
+    /// is what lets a parse that changed nothing here keep it (rebuildBlocks).
+    bool touched = false;
     qreal y = 0;
     qreal height = 0;
     /// How far a callout's panel reaches past the box above and below (panelBleed).
@@ -235,6 +253,20 @@ struct MarkdownEditor::BlockView {
     bool active = false;
     bool laidOut = false;
     bool heightEstimated = false;
+    /// Inside a folded heading's section: it keeps its layout and height, so
+    /// opening the fold costs nothing, but takes no room and is never painted
+    /// or hit.
+    bool foldHidden = false;
+    /// Inside the tab group the caret is in, which shows every fence.
+    /// Tracked so the caret crossing a group's edge relays out the whole
+    /// group, not only the block it landed in.
+    bool editedAsSource = false;
+    /// A single listing whose fences the caret has opened. Its source is
+    /// plain text like a group's, but it keeps its panel (drawn out over
+    /// the two fence lines, editedListingPanel), run control and output.
+    bool editedListing = false;
+    DisplayMap map;
+    std::unique_ptr<QTextLayout> layout;
     /// Indices into the sorted decoration lists that touch this block, so
     /// laying one out never walks the whole document.
     int firstStyle = 0;
@@ -264,30 +296,11 @@ struct MarkdownEditor::BlockView {
     /// A fence in a tab group that is not the tab being shown, or the
     /// blank lines between two of them: no height, nothing painted.
     bool tabHidden = false;
-    /// Inside a folded heading's section: it keeps its layout and height, so
-    /// opening the fold costs nothing, but takes no room and is never painted
-    /// or hit.
-    bool foldHidden = false;
     /// Where its geometry ends: a hidden block takes no room.
     qreal bottomY() const { return foldHidden ? y : y + height; }
     /// Set on the fence a tab group is showing: it paints the strip.
     /// An index into m_tabGroups, -1 outside any group.
     int tabGroup = -1;
-    /// Inside the tab group the caret is in, which shows every fence.
-    /// Tracked so the caret crossing a group's edge relays out the whole
-    /// group, not only the block it landed in.
-    bool editedAsSource = false;
-    /// A single listing whose fences the caret has opened. Its source is
-    /// plain text like a group's, but it keeps its panel (drawn out over
-    /// the two fence lines, editedListingPanel), run control and output.
-    bool editedListing = false;
-    /// A fence longer than kCodePieceLines is split into pieces of that
-    /// many lines, each a block of its own, so an edit relays out one
-    /// piece and not the whole listing. The fence's chrome is drawn across
-    /// its pieces: header, label and tabs on the first, caption on the
-    /// last. A fence that fits, and every other block, is piece 0 of 1.
-    int piece = 0;
-    int pieces = 1;
     /// Where highlighting stood at the end of this piece, the state the
     /// next one starts from. Valid when it was worked out from this
     /// piece's current text and the end state of the piece before it.
@@ -536,13 +549,6 @@ struct MarkdownEditor::BlockView {
         bool superscript = false; ///< a reference; false is a definition's label
     };
     std::vector<FootnoteMark> footnoteMarks;
-    /// True only for the synthetic block reading view appends after the
-    /// note's own: the numbered footnote list Obsidian's reading view
-    /// shows at the end. `span.range` is a zero-length range past the
-    /// end of the text - there is no source here, so unlike every other
-    /// block it keeps its own rows instead of a QTextLayout over view.map,
-    /// the way the properties table (PropertyRow) already does.
-    bool isFootnotesList = false;
     struct FootnotesListRow {
         std::unique_ptr<QTextLayout> layout; ///< "1.  <first line of the text>"
         QRectF rect;    ///< block-local, the whole row - a click jumps here too

@@ -1442,7 +1442,8 @@ void MarkdownEditor::invalidateLayouts()
 {
     d->m_layoutWidth = contentWidth();
     for (BlockView &view : d->m_blocks) {
-        view.layout.reset();
+        if (view.touched) // an untouched view has no layout, and its cache line is not worth a visit
+            view.layout.reset();
         view.laidOut = false;
         view.heightEstimated = false;
         view.height = 0;
@@ -1537,8 +1538,9 @@ void MarkdownEditor::rebuildBlocks()
     QList<BlockSpan> spans =
         d->m_decorations.blocks.isEmpty() && !d->m_text.isEmpty() ? plainParagraphs()
                                                             : d->m_decorations.blocks;
-    std::sort(spans.begin(), spans.end(),
-              [](const BlockSpan &l, const BlockSpan &r) { return l.range.start < r.range.start; });
+    const auto byStart = [](const BlockSpan &l, const BlockSpan &r) { return l.range.start < r.range.start; };
+    if (!std::is_sorted(spans.cbegin(), spans.cend(), byStart)) // the parser's own order, nearly always
+        std::sort(spans.begin(), spans.end(), byStart);
 
     // The spans are cut up first and the views built once, in a vector sized
     // for them: a BlockView is 1.6 kB, and growing a vector of them moved
@@ -1623,17 +1625,6 @@ void MarkdownEditor::rebuildBlocks()
     }
     addGap(cursor, d->m_text.size());
 
-    std::vector<BlockView> blocks;
-    blocks.reserve(parts.size() + 1); // + a footnotes list
-    blocks.resize(parts.size());
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        blocks[i].span = parts[i].span;
-        blocks[i].piece = parts[i].piece;
-        blocks[i].pieces = parts[i].pieces;
-        blocks[i].bleedAbove = panelBleed(blocks[i], false);
-        blocks[i].bleedBelow = panelBleed(blocks[i], true);
-    }
-
     // Every parse rebuilds the blocks. A piece keeps the highlighter state the
     // old piece ending where it ends had, so a listing is not re-highlighted
     // from its top to show the piece on screen - and that state is still
@@ -1647,24 +1638,71 @@ void MarkdownEditor::rebuildBlocks()
                                    });
         return it == d->m_blocks.cbegin() ? d->m_blocks.cend() : it - 1;
     };
-    for (BlockView &view : blocks) {
+    const auto fillView = [&](BlockView &view, const Part &part) {
+        view.span = part.span;
+        view.piece = part.piece;
+        view.pieces = part.pieces;
+        view.bleedAbove = panelBleed(view, false);
+        view.bleedBelow = panelBleed(view, true);
         if (view.piece == 0
             && (view.span.kind == BlockSpan::Kind::Code || view.span.kind == BlockSpan::Kind::Table)) {
             const auto old = oldBlockAt(view.span.range.start);
             if (old != d->m_blocks.cend() && old->span.range.start == view.span.range.start)
                 view.sideScroll = old->sideScroll;
         }
-        if (view.pieces <= 1)
-            continue;
-        auto it = oldBlockAt(view.span.range.end - 1);
-        if (it == d->m_blocks.cend())
-            continue;
-        if (it->pieces <= 1 || it->span.range.end != view.span.range.end)
-            continue;
-        view.codeEnd = it->codeEnd;
-        view.codeEndValid = it->codeEndValid && it->piece == view.piece
-                            && it->span.range.start == view.span.range.start;
+        if (view.pieces > 1) {
+            auto it = oldBlockAt(view.span.range.end - 1);
+            if (it != d->m_blocks.cend() && it->pieces > 1 && it->span.range.end == view.span.range.end) {
+                view.codeEnd = it->codeEnd;
+                view.codeEndValid = it->codeEndValid && it->piece == view.piece
+                                    && it->span.range.start == view.span.range.start;
+            }
+        }
+    };
+
+    const bool footnotesList = d->m_mode == Mode::Reading && !d->m_decorations.footnoteDefinitions.isEmpty();
+    if (!parts.empty() && !footnotesList && parts.size() == d->m_blocks.size()) {
+        // The same blocks as before, as after most pauses in typing: a view
+        // nothing has laid out or highlighted yet is a default one with its
+        // span, so it stays where it is, reset, and only the blocks that
+        // changed - or that were ever drawn - are made again. Rebuilding all
+        // of them cost 77 % of a parse landing, 10 ms of a megabyte's 13.
+        std::vector<std::pair<std::size_t, BlockView>> replaced; // made before any old view is touched
+        for (std::size_t i = 0; i < parts.size(); ++i) {
+            const BlockView &old = d->m_blocks[i];
+            const Part &part = parts[i];
+            if (old.touched || old.isFootnotesList || old.piece != part.piece || old.pieces != part.pieces
+                || old.span.kind != part.span.kind || old.span.level != part.span.level
+                || !(old.span.range == part.span.range))
+                fillView(replaced.emplace_back(i, BlockView()).second, part);
+        }
+        std::size_t next = 0;
+        for (std::size_t i = 0; i < d->m_blocks.size(); ++i) {
+            BlockView &view = d->m_blocks[i];
+            if (next < replaced.size() && replaced[next].first == i) {
+                view = std::move(replaced[next++].second);
+                continue;
+            }
+            view.y = 0;
+            view.height = 0;
+            view.active = false;
+            view.laidOut = false;
+            view.heightEstimated = false;
+            view.foldHidden = false;
+            view.editedAsSource = false;
+            view.editedListing = false;
+        }
+        d->m_activeBlock = blockAt(d->m_cursor);
+        return;
     }
+
+    // Sized once, here, for the parts and a footnotes list: a BlockView is 1.6 kB,
+    // and moving each into place cost a seventh of opening a 1 MB note.
+    std::vector<BlockView> blocks;
+    blocks.reserve(parts.size() + 1);
+    blocks.resize(parts.size());
+    for (std::size_t i = 0; i < parts.size(); ++i)
+        fillView(blocks[i], parts[i]);
 
     if (blocks.empty()) {
         BlockView view;
@@ -1675,7 +1713,7 @@ void MarkdownEditor::rebuildBlocks()
     // Reading view lists footnote definitions at the end instead of where
     // they sit in the source (see layoutBlock's Mode::Reading branch above)
     // - a block with no real source range, appended after everything else.
-    if (d->m_mode == Mode::Reading && !d->m_decorations.footnoteDefinitions.isEmpty()) {
+    if (footnotesList) {
         BlockView view;
         view.span = {BlockSpan::Kind::Paragraph, {d->m_text.size(), d->m_text.size()}, 0};
         view.isFootnotesList = true;
@@ -2450,6 +2488,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::codeFormatsFor(BlockView &view)
 QList<QTextLayout::FormatRange> MarkdownEditor::highlightPiece(BlockView &view, Range *content,
                                                                QColor *plainText)
 {
+    view.touched = true;
     QString language;
     *content = codeContentOf(view, &language);
     CodeHighlighter::State state =
@@ -3920,6 +3959,7 @@ MarkdownEditor::BlockView *MarkdownEditor::sidewaysScrollableAt(const QPoint &vi
 void MarkdownEditor::layoutBlock(BlockView &view)
 {
     ++d->m_layoutCount;
+    view.touched = true;
     // Whatever this block drew rendered last time goes: a block being edited
     // shows its source, and a PDF, a video or a card left over from before
     // would be painted over that source and the blocks below it.
