@@ -874,6 +874,41 @@ TEST(MarkdownEditorTest, OpeningAMegabyteNoteIsImmediate)
     EXPECT_LT(largeMs, 60.0);
 }
 
+// A parse landing was the one place every pause in typing cost work in
+// proportion to the whole note: every block rebuilt, its layout dropped (13 ms
+// on a megabyte). Blocks nothing has drawn are kept now. Counted in views made
+// again, not in milliseconds, so a busy machine cannot move it: the landing
+// remakes the few views near the caret (about 90 here), against 7 600 at 200 kB
+// and 37 000 at a megabyte when every one was rebuilt.
+TEST(EditorPerfTest, ParseLandingCostTracksTheEditNotTheNote)
+{
+    const auto rebuiltByALanding = [](const QString &note, quint64 *rebuilt) {
+        auto editor = parsedEditorWith(note);
+        if (!editor)
+            return false; // the first parse never came back
+        editor->setCursorOffset(note.size() / 2);
+        editor->enterBlockAt(note.size() / 2);
+        (void)editor->grab();
+        QTest::keyClicks(editor.get(), QStringLiteral(" x"));
+        (void)editor->grab();
+        QSignalSpy counted(editor.get(), &MarkdownEditor::wordCountChanged);
+        const quint64 before = editor->rebuiltViewCount();
+        if (!counted.wait(10000))
+            return false; // the landing never came
+        *rebuilt = editor->rebuiltViewCount() - before;
+        return true;
+    };
+    quint64 small = 0;
+    quint64 large = 0;
+    ASSERT_TRUE(rebuiltByALanding(generateNote(200), &small)) << "the 200 kB parse never came back";
+    ASSERT_TRUE(rebuiltByALanding(generateNote(1000), &large)) << "the 1 MB parse never came back";
+    std::printf("[ PERF     ] parse landing rebuilt %llu views at 200 kB, %llu at 1 MB\n",
+                static_cast<unsigned long long>(small), static_cast<unsigned long long>(large));
+    EXPECT_GT(small, 0u);
+    EXPECT_LT(small, 400u);
+    EXPECT_LT(large, 400u);
+}
+
 TEST(MarkdownEditorTest, FinishParseAdoptsABigNotesParseWithoutRunningTheEventLoop)
 {
     // A grab inside a paint cannot spin an event loop: a timer or a deferred
