@@ -229,6 +229,9 @@ struct MarkdownEditor::BlockView {
     std::unique_ptr<QTextLayout> layout;
     qreal y = 0;
     qreal height = 0;
+    /// How far a callout's panel reaches past the box above and below (panelBleed).
+    qreal bleedAbove = 0;
+    qreal bleedBelow = 0;
     bool active = false;
     bool laidOut = false;
     bool heightEstimated = false;

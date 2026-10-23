@@ -167,9 +167,13 @@ qreal panelBleed(const View &view, bool below)
 template<typename View>
 qreal blockGap(const QString &text, const View &above, const View &below)
 {
-    if (isBlankBlock(text, above) || isBlankBlock(text, below))
+    // The bleeds are fields beside `y` (set in rebuildBlocks) and checked first:
+    // reading the kind, the pieces or the note's text for every block cost a
+    // cache miss each on a layout pass that walks them all (0.2 ms at 1 MB).
+    const qreal bleed = above.bleedBelow + below.bleedAbove;
+    if (bleed == 0 || isBlankBlock(text, above) || isBlankBlock(text, below))
         return kBlockSpacing;
-    return kBlockSpacing + panelBleed(above, true) + panelBleed(below, false);
+    return kBlockSpacing + bleed;
 }
 
 /// Width of the margin a list keeps for its bullets and checkboxes.
@@ -1612,6 +1616,8 @@ void MarkdownEditor::rebuildBlocks()
         blocks[i].span = parts[i].span;
         blocks[i].piece = parts[i].piece;
         blocks[i].pieces = parts[i].pieces;
+        blocks[i].bleedAbove = panelBleed(blocks[i], false);
+        blocks[i].bleedBelow = panelBleed(blocks[i], true);
     }
 
     // Every parse rebuilds the blocks. A piece keeps the highlighter state the
