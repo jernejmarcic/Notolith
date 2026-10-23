@@ -988,6 +988,20 @@ TEST_F(GraphDataTest, AnIndexUpdateThatChangesNothingLeavesALayoutAlone)
     EXPECT_EQ(view.screenPosition(QStringLiteral("Home.md")), resting);
 }
 
+TEST_F(GraphDataTest, ADeferredGraphReadsTheVaultOnlyWhenShown)
+{
+    Index index;
+    build(index);
+    GraphView view;
+    view.setIndex(&index, true);
+    view.setOptions(view.options()); // the vault switch re-wires the options of a pane nobody has opened
+    QTest::qWait(300); // a read would have landed by now
+    EXPECT_EQ(view.nodeCount(), 0);
+
+    view.show();
+    EXPECT_TRUE(QTest::qWaitFor([&] { return view.nodeCount() == 4; }, 5000));
+}
+
 TEST_F(GraphDataTest, AHiddenGraphCatchesUpOnIndexChangesWhenShown)
 {
     Index index;

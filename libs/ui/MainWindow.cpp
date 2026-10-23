@@ -3047,14 +3047,14 @@ void MainWindow::applyFeatures()
 #ifdef NOTEAPPC_HAVE_GRAPH
         {"graph", m_localGraph,
          [this, parent] {
-             // The factory runs on first use (the first time the pane is shown),
-             // because setIndex() below starts the index read at once.
+             // The factory runs at start, shown or not; setIndex() below defers
+             // the whole-vault read to the pane's first show.
              m_localGraph = new GraphView(parent);
              m_localGraph->setObjectName(QStringLiteral("localGraph"));
              wireGraphOptions(m_localGraph);
              m_localGraph->setLocalGraph(true);
              m_localGraph->setTheme(m_theme);
-             m_localGraph->setIndex(&m_index);
+             m_localGraph->setIndex(&m_index, true); // read when the pane is first shown
              connect(m_localGraph, &GraphView::noteActivated, this, &MainWindow::openRelative);
              connect(m_localGraph, &GraphView::noteActivatedInNewTab, this, &MainWindow::openRelativeInNewTab);
              return m_localGraph.data();

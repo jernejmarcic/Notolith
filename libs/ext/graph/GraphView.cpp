@@ -318,7 +318,9 @@ void GraphView::reapplyData()
     // Filters re-derive the node and edge lists from the index, same as a
     // fresh setIndex(). A caller feeding raw data through setGraphData()
     // has no index to re-read, so only the filters rebuild() owns apply.
-    if (m_index)
+    if (m_index && m_deferRead && !isVisible())
+        m_staleData = true; // an unseen pane re-reads when it is shown
+    else if (m_index)
         applyIndexData();
     else
         rebuild();
@@ -679,7 +681,7 @@ void GraphView::setOptions(const GraphOptions &options)
     reapplyData();
 }
 
-void GraphView::setIndex(Index *index)
+void GraphView::setIndex(Index *index, bool deferRead)
 {
     if (m_index)
         disconnect(m_index, nullptr, this, nullptr);
@@ -695,7 +697,11 @@ void GraphView::setIndex(Index *index)
                 m_staleData = true;
         });
     }
-    applyIndexData();
+    m_deferRead = deferRead;
+    if (deferRead && m_index && !isVisible())
+        m_staleData = true; // showEvent() reads it
+    else
+        applyIndexData();
 }
 
 void GraphView::applyIndexData()
