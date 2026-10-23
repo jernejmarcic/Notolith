@@ -3,6 +3,7 @@
 // hand, not through ctest, still never touches the real ~/.config, ~/.cache or
 // ~/.local/share - a direct run once left thousands of history repos there.
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 namespace {
@@ -11,6 +12,22 @@ const bool isolatedHome = [] {
     setenv("XDG_CONFIG_HOME", (home + "/config").c_str(), 1);
     setenv("XDG_CACHE_HOME", (home + "/cache").c_str(), 1);
     setenv("XDG_DATA_HOME", (home + "/data").c_str(), 1);
+    // No test process reaches a Notolith someone is using: its single-instance sockets are
+    // named under a runtime directory of its own, whatever the person's $XDG_RUNTIME_DIR holds.
+    // A directory per process, short enough for a unix socket path, removed when it ends.
+    static std::string run = [] {
+        const char *tmp = std::getenv("TMPDIR");
+        std::string pattern = std::string(tmp && *tmp ? tmp : "/tmp") + "/noteAppC-run-XXXXXX";
+        return mkdtemp(pattern.data()) ? pattern : std::string();
+    }();
+    if (!run.empty()) {
+        setenv("XDG_RUNTIME_DIR", run.c_str(), 1);
+        setenv("NOTEAPPC_INSTANCE_SOCKET", (run + "/n").c_str(), 1);
+        std::atexit([] {
+            std::error_code ignored;
+            std::filesystem::remove_all(run, ignored);
+        });
+    }
     // The desktop's Qt theme and style are not the test's: under KDE,
     // QT_QPA_PLATFORMTHEME=kde loads KWindowSystem, which warns "Could not
     // find any platform plugin" on offscreen and fails the no-warnings tests.
