@@ -13,11 +13,18 @@ data=${XDG_DATA_HOME:-$HOME/.local/share}
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
-env -u CFLAGS -u CXXFLAGS cmake -S "$src" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF >/dev/null
+# The prefix is compiled in as the module directory (ink, handwriting font, PDF, sharing).
+env -u CFLAGS -u CXXFLAGS cmake -S "$src" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    -DCMAKE_INSTALL_PREFIX="$HOME/.local" >/dev/null
 cmake --build "$build"
 cmake --install "$build" --prefix "$stage" >/dev/null
 
 install -Dm755 "$stage/bin/notolith" "$HOME/.local/bin/notolith"
+# A module is only loaded by the build that made it: the old ones go.
+modules="$HOME/.local/lib/noteAppC/modules"
+mkdir -p "$modules"
+rm -f "$modules"/*.so
+for module in "$stage"/lib*/noteAppC/modules/*.so; do install -m755 "$module" "$modules/"; done
 desktop=io.github.jernejmarcic.Notolith.desktop
 mkdir -p "$data/applications"
 if [ "${NOTOLITH_MIME:-0}" = 1 ]; then

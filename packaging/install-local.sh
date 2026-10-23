@@ -8,7 +8,7 @@
 # Build and staging go to /tmp (never ~/Documents: Syncthing would replicate
 # them). The first build fetches md4qt, MicroTeX and tinyxml2 (pinned in the
 # root CMakeLists.txt), so it needs the network. Rerun to update.
-# Remove: rm ~/.local/bin/notolith
+# Remove: rm -r ~/.local/bin/notolith ~/.local/lib/noteAppC
 #         ~/.local/share/applications/io.github.jernejmarcic.Notolith.desktop
 #         ~/.local/share/icons/hicolor/scalable/apps/io.github.jernejmarcic.Notolith.svg
 set -euo pipefail
@@ -36,7 +36,9 @@ CFLAGS="$(printf '%s' "${CFLAGS:-}" | sed -E 's/-m(arch|tune)=[^ ]+//g')"
 CXXFLAGS="$(printf '%s' "${CXXFLAGS:-}" | sed -E 's/-m(arch|tune)=[^ ]+//g')"
 export CFLAGS CXXFLAGS
 
-cmake -S "$src" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+# The prefix is compiled in as the module directory (ink, handwriting font, PDF, sharing).
+cmake -S "$src" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+    -DCMAKE_INSTALL_PREFIX="$HOME/.local"
 # Capped so a runaway compile cannot take the machine down.
 systemd-run --user --scope -q -p MemoryMax=8G nice cmake --build "$build"
 
@@ -47,6 +49,11 @@ rm -f "$build/install_manifest.txt"
 
 # install(1) unlinks the old file first, so a running Notolith keeps working.
 install -Dm755 "$stage/bin/notolith" "$HOME/.local/bin/notolith"
+# A module is only loaded by the build that made it: the old ones go.
+modules="$HOME/.local/lib/noteAppC/modules"
+mkdir -p "$modules"
+rm -f "$modules"/*.so
+for module in "$stage"/lib*/noteAppC/modules/*.so; do install -m755 "$module" "$modules/"; done
 install -Dm644 "$stage/share/applications/io.github.jernejmarcic.Notolith.desktop" \
     "$HOME/.local/share/applications/io.github.jernejmarcic.Notolith.desktop"
 install -Dm644 "$stage/share/icons/hicolor/scalable/apps/io.github.jernejmarcic.Notolith.svg" \
