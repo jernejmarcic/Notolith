@@ -71,6 +71,8 @@
 #include "FileTree.h"
 #include "Icons.h"
 #include "MarkdownEditor.h"
+#include "Markmap.h"
+#include "MarkmapBlock.h"
 #include "MermaidBlock.h"
 #include "BookmarksPane.h"
 #include "DailyNotes.h"
@@ -1569,6 +1571,30 @@ void MainWindow::applyEditorSettings(MarkdownEditor *editor)
                     }
                     renderer(language, source, width, theme, deliver);
                 });
+        }
+    }
+    // Mind maps (```markmap): the renderer is the switch here too. Nothing is made until a fence is laid out.
+    {
+        const QString key = featureOn("markmap") ? QStringLiteral("1") : QString();
+        if (editor->property("markmapKey").toString() != key) {
+            editor->setProperty("markmapKey", key);
+            if (key.isEmpty()) {
+                editor->setCodeBlockRenderer({QStringLiteral("markmap")}, nullptr);
+            } else {
+                if (!m_markmapRenderer)
+                    m_markmapRenderer = markmapRenderer([this] { return m_theme; });
+                // The text goes to the disk cache publish and PDF export read: not for an encrypted note.
+                editor->setCodeBlockRenderer(
+                    {QStringLiteral("markmap")},
+                    [this, editor](const QString &language, const QString &source, int width, const QString &theme,
+                                   const std::function<void(MarkdownEditor::CodeBlockResult)> &deliver) {
+                        if (showsEncryptedNote(editor)) {
+                            deliver({true, tr("*Mind maps are not drawn for encrypted notes.*"), QImage()});
+                            return;
+                        }
+                        m_markmapRenderer(language, source, width, theme, deliver);
+                    });
+            }
         }
     }
     // "/" commands: the palette's own list, the window's then the editor's,
@@ -3533,6 +3559,7 @@ void MainWindow::buildActions()
         &MainWindow::openRecovery);
     add(QStringLiteral("workspace:export-pdf"), tr("Export to PDF"), QString(),
         &MainWindow::exportPdf);
+    add(QStringLiteral("markmap:show-note"), tr("Mind maps: Show as mind map"), QString(), &MainWindow::showAsMindMap);
     add(QStringLiteral("daily-notes"), tr("Daily notes: Open today's daily note"), QString(),
         [this] { openDailyNote(0); });
     add(QStringLiteral("daily-notes:goto-prev"), tr("Daily notes: Open previous daily note"),
@@ -4502,6 +4529,36 @@ void MainWindow::jumpToHeading(const QString &subpath)
         jump();
         disconnect(*connection);
     });
+}
+
+void MainWindow::showAsMindMap()
+{
+    if (!m_active || !m_active->editor || m_active->view)
+        return;
+    if (showsEncryptedNote(m_active->editor)) { // the map is kept on disk, which an encrypted note's text never reaches
+        QMessageBox::information(this, tr("Mind map"), tr("Mind maps are not drawn for encrypted notes."));
+        return;
+    }
+    const QString title = m_active->notePath.isEmpty() ? tr("Untitled") : QFileInfo(m_active->notePath).completeBaseName();
+    const QString outline = markmapOutlineOf(m_active->editor->noteText(), title);
+    if (outline.isEmpty()) {
+        QMessageBox::information(this, tr("Mind map"), tr("This note has no headings to draw."));
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setObjectName(QStringLiteral("mindMapDialog"));
+    dialog.setWindowTitle(tr("Mind map: %1").arg(title));
+    dialog.resize(1000, 700);
+    auto *editor = new MarkdownEditor(&dialog);
+    editor->setTheme(m_theme);
+    applyEditorSettings(editor); // registers the markmap renderer, as for any note
+    editor->setReadableLineLength(false);
+    editor->setMode(MarkdownEditor::Mode::Reading);
+    editor->setNoteText(QStringLiteral("```markmap\n") + outline + QStringLiteral("```\n"));
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(editor);
+    dialog.exec();
 }
 
 void MainWindow::exportPdf()

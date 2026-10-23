@@ -656,6 +656,10 @@ private:
     class DailyNotes dailyNotes() const;
     /// Obsidian's Export to PDF, for the open note.
     void exportPdf();
+    /// The `markmap` plugin's "Show as mind map": the open note's headings as a
+    /// mind map in a window of its own (a reading-view editor holding a markmap
+    /// fence, so folding by a click and the theme come with it).
+    void showAsMindMap();
     /// Puts a snapshot back as `notePath`'s content, keeping what it held as
     /// a snapshot of its own first.
     void restoreSnapshot(const QString &notePath, const QString &text);
@@ -898,6 +902,8 @@ void updateVimStatus();
     /// only when its own "diagramKey<kind>" differs.
     QString m_diagramKey[4];
     MarkdownEditor::CodeBlockRenderer m_diagramRenderer[4];
+    /// The `markmap` core plugin's renderer (MarkmapBlock.h), made the first time an editor wants it.
+    MarkdownEditor::CodeBlockRenderer m_markmapRenderer;
     bool m_spellHanded = false; ///< the editor has m_spell's callbacks now
     bool m_painted = false;     ///< optional work waits for the first paint
     bool m_narrow = false;      ///< the sidebars are folded for want of width

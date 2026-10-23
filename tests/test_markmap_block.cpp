@@ -267,6 +267,123 @@ TEST_F(MarkmapBlockTest, WithNoRendererTheFenceIsAPlainCodeBlock)
     EXPECT_TRUE(editor.embedImageSizeAt(editor.noteText().indexOf(QLatin1String("Alpha"))).isEmpty());
 }
 
+// --- the window's core plugin -------------------------------------------------
+
+namespace {
+
+class MarkmapWindowTest : public MarkmapBlockTest {
+protected:
+    void SetUp() override
+    {
+        MarkmapBlockTest::SetUp();
+        QFile note(dir.filePath(QStringLiteral("Note.md")));
+        ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+        note.write(kNote.toUtf8());
+        note.close();
+    }
+    void TearDown() override
+    {
+        Settings config = Settings::load();
+        config.reset(QStringLiteral("plugins.markmap"));
+        config.save();
+    }
+    void configure(bool on)
+    {
+        Settings config = Settings::load();
+        config.setValue(QStringLiteral("plugins.markmap"), on);
+        ASSERT_TRUE(config.save());
+    }
+    /// What the editor shows for the note's map after it has had time to draw one.
+    QSize openAndWait(MainWindow &window)
+    {
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(dir.filePath(QStringLiteral("Note.md")));
+        MarkdownEditor *editor = window.editor();
+        editor->setCursorOffset(editor->noteText().size());
+        const qsizetype fence = editor->noteText().indexOf(QLatin1String("Alpha"));
+        QTest::qWaitFor([&] { return !editor->embedImageSizeAt(fence).isEmpty(); }, 3000);
+        return editor->embedImageSizeAt(fence);
+    }
+};
+
+} // namespace
+
+TEST_F(MarkmapWindowTest, TheCorePluginIsOnByDefaultAndListedWithTheOthers)
+{
+    EXPECT_TRUE(Settings::defaultValue(QStringLiteral("plugins.markmap")).toBool());
+    bool listed = false;
+    for (const auto &feature : Settings::features())
+        listed |= QByteArray(feature.id) == "markmap";
+    EXPECT_TRUE(listed);
+}
+
+TEST_F(MarkmapWindowTest, OnAMapIsDrawnInTheWindow)
+{
+    MainWindow window;
+    EXPECT_FALSE(openAndWait(window).isEmpty());
+    // Publish and PDF export find what the window drew by the fence's content.
+    EXPECT_FALSE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).isEmpty());
+}
+
+TEST_F(MarkmapWindowTest, OffTheFenceIsAPlainCodeBlockAndNothingIsMade)
+{
+    configure(false);
+    MainWindow window;
+    EXPECT_TRUE(openAndWait(window).isEmpty());
+    EXPECT_TRUE(noteAppC::diagramCachedSVG(noteAppC::DiagramKind::Markmap, kMap, Theme::builtin(Theme::Mode::Dark)).isEmpty());
+}
+
+TEST_F(MarkmapWindowTest, ShowAsMindMapIsACommandOfThePluginAndDrawsTheNotesHeadings)
+{
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        QFile note(dir.filePath(QStringLiteral("Headings.md")));
+        ASSERT_TRUE(note.open(QIODevice::WriteOnly));
+        note.write("# Top\ntext\n## First\n### Deep\n## Second\n");
+        note.close();
+        window.openNote(dir.filePath(QStringLiteral("Headings.md")));
+        auto *action = window.findChild<QAction *>(QStringLiteral("markmap:show-note"));
+        ASSERT_TRUE(action);
+        EXPECT_TRUE(action->isEnabled());
+        EXPECT_TRUE(action->text().contains(QStringLiteral("mind map"), Qt::CaseInsensitive));
+
+        // The modal dialog: found while it is up, asked what it draws, closed.
+        bool drawn = false;
+        QTimer::singleShot(0, [&] {
+            QTimer *poll = new QTimer;
+            QObject::connect(poll, &QTimer::timeout, [&drawn, poll] {
+                for (QWidget *top : QApplication::topLevelWidgets()) {
+                    if (top->objectName() != QLatin1String("mindMapDialog"))
+                        continue;
+                    auto *editor = top->findChild<MarkdownEditor *>();
+                    if (editor && !editor->embedImageSizeAt(editor->noteText().indexOf(QLatin1String("First"))).isEmpty()) {
+                        drawn = true;
+                        static_cast<QDialog *>(top)->accept();
+                        poll->deleteLater();
+                    }
+                }
+            });
+            poll->start(50);
+        });
+        QTimer::singleShot(10000, [&] {
+            for (QWidget *top : QApplication::topLevelWidgets())
+                if (top->objectName() == QLatin1String("mindMapDialog"))
+                    static_cast<QDialog *>(top)->reject();
+        });
+        action->trigger();
+        EXPECT_TRUE(drawn);
+    }
+    configure(false);
+    MainWindow off;
+    off.show();
+    auto *action = off.findChild<QAction *>(QStringLiteral("markmap:show-note"));
+    ASSERT_TRUE(action);
+    EXPECT_FALSE(action->isEnabled()) << "the plugin's command goes dark with it";
+}
+
 int main(int argc, char **argv)
 {
     qputenv("QT_QPA_PLATFORM", "offscreen");

@@ -647,6 +647,10 @@ static QList<Settings::Feature> &mutableFeatures()
          QT_TRANSLATE_NOOP("Settings", "Show an embedded .csv or .tsv file as a table, read and parsed "
                                        "off the editing thread. Off, it is a plain listing of the file."),
          false},
+        {"markmap", QT_TRANSLATE_NOOP("Settings", "Mind maps"),
+         QT_TRANSLATE_NOOP("Settings", "Draw markmap code blocks as mind maps, laid out and drawn by Notolith itself "
+                                       "(no web view). Off, the block is a plain listing."),
+         false},
         {"epub-reader", QT_TRANSLATE_NOOP("Settings", "EPUB reader"),
          QT_TRANSLATE_NOOP("Settings", "Open .epub books in a tab, with highlights and notes kept in a note "
                                        "beside the book."),
