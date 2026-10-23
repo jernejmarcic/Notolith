@@ -123,6 +123,10 @@
 #include "InkFormat.h"
 #endif
 #include "ToggleSwitch.h"
+#ifdef NOTEAPPC_HAVE_PANDOC
+#include "Pandoc.h"
+#include "PandocRunner.h"
+#endif
 #include "QuickSwitcher.h"
 #include "Snapshots.h"
 #include "FileIcons.h"
@@ -1213,6 +1217,185 @@ TEST_F(WindowTest, PopoutWindowsOffBuildsNothingAndDocksEverything)
         EXPECT_TRUE(command(window, "app:detach-left-sidebar")->isEnabled());
         for (const QWidget *group : window.findChildren<QWidget *>(QStringLiteral("tabGroup")))
             EXPECT_TRUE(group->acceptDrops());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// --- pandoc ----------------------------------------------------------------------------
+
+#ifdef NOTEAPPC_HAVE_PANDOC
+namespace {
+
+/// Types `path` into the pandoc path row of the open settings and leaves the field, as a person does.
+void setPandocPath(MainWindow &window, const QString &path)
+{
+    QLineEdit *edit = nullptr;
+    EXPECT_TRUE(QTest::qWaitFor([&] {
+        return (edit = settingsWidget<QLineEdit>(window, QStringLiteral("settingsLineEdit_pandoc.path"))) != nullptr;
+    }, 3000));
+    if (!edit)
+        return;
+    edit->clear();
+    QTest::keyClicks(edit, path);
+    QTest::keyClick(edit, Qt::Key_Return); // editingFinished: the page looks again
+}
+
+} // namespace
+
+// No pandoc: the plugin stays listed but greyed, never written on; every way in says why, and gets to the path.
+TEST_F(WindowTest, PandocMissingStaysListedAndExplains)
+{
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Welcome.md"))));
+        command(window, "app:open-settings")->trigger();
+        setPandocPath(window, QStringLiteral("/nonexistent/dir/pandoc")); // a fake path, wherever the test runs
+
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.pandoc"))) != nullptr
+                   && toggle->graphicsEffect() != nullptr; // the page rebuilt, with the plugin greyed
+        }, 3000));
+        EXPECT_FALSE(toggle->isChecked());
+        toggle->click();
+        EXPECT_FALSE(toggle->isChecked()) << "it cannot be switched";
+        auto *dialog = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+        ASSERT_NE(dialog, nullptr);
+        EXPECT_TRUE(dialog->text().contains(QStringLiteral("pandoc"))) << dialog->text().toStdString();
+        EXPECT_TRUE(dialog->text().contains(QStringLiteral("/nonexistent/dir/pandoc")));
+        EXPECT_TRUE(dialog->informativeText().contains(QStringLiteral("pacman -S pandoc")));
+        EXPECT_TRUE(dialog->informativeText().contains(QStringLiteral("pandoc.org")));
+        EXPECT_NE(dialog->findChild<QPushButton *>(QStringLiteral("pandocSetPath")), nullptr);
+        dialog->close();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+        // The commands are listed (on by default) and enabled, and each opens the same dialog.
+        for (const char *id : {"pandoc:export-docx", "pandoc:export-other", "pandoc:import"}) {
+            QAction *action = command(window, id);
+            ASSERT_NE(action, nullptr) << id;
+            EXPECT_TRUE(action->isEnabled()) << id;
+            action->trigger();
+            auto *shown = window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog"));
+            EXPECT_NE(shown, nullptr) << id;
+            if (shown)
+                shown->close();
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// Pandoc found (a stand-in executable): the switch is a switch again, and off takes the commands away.
+TEST_F(WindowTest, PandocFoundIsToggleable)
+{
+    QTemporaryDir config;
+    QTemporaryDir bin;
+    QFile fake(bin.filePath(QStringLiteral("pandoc")));
+    ASSERT_TRUE(fake.open(QIODevice::WriteOnly));
+    fake.write("#!/bin/sh\nexit 0\n");
+    fake.close();
+    fake.setPermissions(fake.permissions() | QFileDevice::ExeOwner);
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        window.openNote(path(QStringLiteral("Welcome.md")));
+        command(window, "app:open-settings")->trigger();
+        setPandocPath(window, fake.fileName());
+
+        noteAppC::ToggleSwitch *toggle = nullptr;
+        ASSERT_TRUE(QTest::qWaitFor([&] {
+            return (toggle = settingsWidget<noteAppC::ToggleSwitch>(window, QStringLiteral("settingsToggle_plugins.pandoc"))) != nullptr
+                   && toggle->graphicsEffect() == nullptr;
+        }, 3000));
+        EXPECT_TRUE(toggle->isChecked()) << "on by default";
+        EXPECT_TRUE(command(window, "pandoc:export-docx")->isEnabled());
+        toggle->click();
+        EXPECT_FALSE(toggle->isChecked());
+        EXPECT_EQ(window.findChild<QMessageBox *>(QStringLiteral("pandocMissingDialog")), nullptr);
+        for (const char *id : {"pandoc:export-docx", "pandoc:export-html", "pandoc:export-other", "pandoc:import"})
+            EXPECT_FALSE(command(window, id)->isEnabled()) << id;
+        toggle->click();
+        EXPECT_TRUE(command(window, "pandoc:export-docx")->isEnabled());
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+#endif
+
+// With pandoc installed (else skipped): a note out through the window as .docx and the .docx back in as a
+// new note, which does not touch the note that has its name.
+TEST_F(WindowTest, PandocExportsANoteAndImportsItBack)
+{
+    if (noteAppC::pandoc::locate(QString()).isEmpty())
+        GTEST_SKIP() << "pandoc is not installed";
+    QTemporaryDir config;
+    QTemporaryDir out;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    write(QStringLiteral("Round.md"), "# Round heading\n\nBody with ==marked== words and %%a comment%%.\n\n![[Other]]\n");
+    write(QStringLiteral("Other.md"), "other note text\n");
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        ASSERT_TRUE(window.openNote(path(QStringLiteral("Round.md"))));
+        const QString docx = out.filePath(QStringLiteral("Round.docx"));
+        QMetaObject::invokeMethod(&window, "exportWithPandoc", Q_ARG(QString, path(QStringLiteral("Round.md"))),
+                                  Q_ARG(QString, QStringLiteral("docx")), Q_ARG(QString, docx));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo(docx).size() > 1000; }, 20000));
+        auto *runner = window.findChild<noteAppC::pandoc::Runner *>();
+        ASSERT_NE(runner, nullptr);
+        ASSERT_TRUE(QTest::qWaitFor([&] { return !runner->running(); }, 20000)); // one run at a time
+
+        // A note called Round is there already: the import makes "Round 1" and leaves it be.
+        const QByteArray before = readAll(path(QStringLiteral("Round.md")));
+        QMetaObject::invokeMethod(&window, "importWithPandoc", Q_ARG(QString, docx), Q_ARG(QString, QString()));
+        ASSERT_TRUE(QTest::qWaitFor([&] { return QFileInfo::exists(path(QStringLiteral("Round 1.md"))); }, 20000));
+        EXPECT_EQ(readAll(path(QStringLiteral("Round.md"))), before);
+        const QString imported = QString::fromUtf8(readAll(path(QStringLiteral("Round 1.md"))));
+        EXPECT_TRUE(imported.contains(QStringLiteral("# Round heading"))) << imported.toStdString();
+        EXPECT_TRUE(imported.contains(QStringLiteral("==marked==")));
+        EXPECT_TRUE(imported.contains(QStringLiteral("other note text"))) << "the embed was inlined";
+        EXPECT_FALSE(imported.contains(QStringLiteral("a comment")));
+    }
+    qputenv("XDG_CONFIG_HOME", previous);
+}
+
+// A .docx from a file manager is wanted by the file explorer (it imports it); any other foreign file is not.
+TEST_F(WindowTest, TheTreeTakesAForeignDocumentForPandocAndNothingElse)
+{
+    ASSERT_TRUE(QDir(dir.path()).mkpath(QStringLiteral("Src")));
+    QTemporaryDir config;
+    const QByteArray previous = qgetenv("XDG_CONFIG_HOME");
+    qputenv("XDG_CONFIG_HOME", config.path().toUtf8());
+    {
+        MainWindow window;
+        window.show();
+        window.openVault(dir.path());
+        auto *tree = window.findChild<noteAppC::FileTree *>(QStringLiteral("fileExplorer"));
+        ASSERT_NE(tree, nullptr);
+        auto *model = qobject_cast<QFileSystemModel *>(tree->model());
+        WAIT_TRUE(tree->rootIndex().isValid() && model->rowCount(tree->rootIndex()) >= 2
+                      && tree->visualRect(model->index(path(QStringLiteral("Src")))).isValid(), 5000);
+        const QPoint where = tree->visualRect(model->index(path(QStringLiteral("Src")))).center();
+        const auto accepted = [&](const QString &file) {
+            QMimeData data;
+            data.setUrls({QUrl::fromLocalFile(file)});
+            QDragEnterEvent enter(where, Qt::CopyAction, &data, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(tree->viewport(), &enter);
+            return enter.isAccepted();
+        };
+        EXPECT_TRUE(accepted(QStringLiteral("/tmp/some report.docx")));
+        EXPECT_TRUE(accepted(QStringLiteral("/tmp/page.HTML")));
+        EXPECT_FALSE(accepted(QStringLiteral("/tmp/notes.txt")));
+        EXPECT_FALSE(accepted(QStringLiteral("/tmp/picture.png")));
     }
     qputenv("XDG_CONFIG_HOME", previous);
 }

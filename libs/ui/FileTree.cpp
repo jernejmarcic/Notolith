@@ -10,6 +10,9 @@
 #include <QPainter>
 #include <QSet>
 #include <QToolTip>
+#include <QUrl>
+
+#include <algorithm>
 
 #include "Icons.h"
 #include "Theme.h"
@@ -279,9 +282,18 @@ bool FileTree::isOwnDrag(const QMimeData *data) const
     return data && data->data(QLatin1String(kDragMarker)) == QByteArray::number(quintptr(this));
 }
 
+bool FileTree::isFileDrop(const QMimeData *data) const
+{
+    if (!m_fileDrops || !data || isOwnDrag(data) || !data->hasUrls())
+        return false;
+    const QList<QUrl> urls = data->urls();
+    return std::any_of(urls.cbegin(), urls.cend(),
+                       [this](const QUrl &url) { return url.isLocalFile() && m_fileDrops(url.toLocalFile()); });
+}
+
 void FileTree::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (isOwnDrag(event->mimeData()))
+    if (isOwnDrag(event->mimeData()) || isFileDrop(event->mimeData()))
         event->acceptProposedAction();
     else
         event->ignore();
@@ -292,7 +304,10 @@ void FileTree::dragMoveEvent(QDragMoveEvent *event)
     // The base keeps the drop indicator, auto-scroll and hover-expand going;
     // whether this spot takes the drop is decided here.
     QTreeView::dragMoveEvent(event);
-    if (isOwnDrag(event->mimeData()) && !dropFolderAt(event->position().toPoint()).isEmpty()) {
+    if (isFileDrop(event->mimeData())) {
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+    } else if (isOwnDrag(event->mimeData()) && !dropFolderAt(event->position().toPoint()).isEmpty()) {
         event->setDropAction(Qt::MoveAction);
         event->accept();
     } else {
@@ -304,6 +319,26 @@ void FileTree::dropEvent(QDropEvent *event)
 {
     // Not the base: its InternalMove path would hand the drop to
     // QFileSystemModel::dropMimeData, which moves the files itself.
+    if (isFileDrop(event->mimeData())) {
+        QStringList files;
+        for (const QUrl &url : event->mimeData()->urls()) {
+            if (url.isLocalFile() && m_fileDrops(url.toLocalFile()))
+                files << url.toLocalFile();
+        }
+        const auto *model = qobject_cast<const QFileSystemModel *>(this->model());
+        const QModelIndex row = indexAt(event->position().toPoint());
+        const QString folder = !model ? QString()
+                               : row.isValid() ? (model->isDir(row) ? model->filePath(row) : model->filePath(row.parent()))
+                                               : model->filePath(rootIndex());
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+        stopAutoScroll();
+        setState(NoState);
+        viewport()->update();
+        if (!folder.isEmpty())
+            emit filesDropped(files, folder);
+        return;
+    }
     const QString folder = dropFolderAt(event->position().toPoint());
     const QModelIndex dragged = currentIndex();
     const auto *files = qobject_cast<const QFileSystemModel *>(model());

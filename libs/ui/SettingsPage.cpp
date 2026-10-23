@@ -1,5 +1,11 @@
 #include "SettingsPage.h"
 
+#ifdef NOTEAPPC_HAVE_PANDOC
+#include "Pandoc.h"
+
+#include <QGraphicsOpacityEffect>
+#endif
+
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -966,10 +972,37 @@ QWidget *SettingsPage::buildCorePluginsPage()
         missing << "media-embeds";
     if (!HtmlRenderer::isAvailable())
         missing << "html-blocks";
+#ifdef NOTEAPPC_HAVE_PANDOC
+    // Looked up now, as the page opens, and only if the row is to be drawn.
+    const bool pandocFound = !pandoc::locate(m_settings->text(QStringLiteral("pandoc.path"))).isEmpty();
+#else
+    missing << "pandoc";
+#endif
     for (const Settings::Feature &feature : Settings::features()) {
         if (missing.contains(feature.id))
             continue;
         const QString key = Settings::featureKey(feature.id);
+#ifdef NOTEAPPC_HAVE_PANDOC
+        if (!pandocFound && QByteArray(feature.id) == "pandoc") {
+            // Listed but off and greyed; pressing it says what pandoc is and where to get it. Not written to
+            // the config: once pandoc is found the switch is as the person left it.
+            auto *toggle = new ToggleSwitch(this);
+            toggle->setObjectName(QStringLiteral("settingsToggle_") + key);
+            auto *dim = new QGraphicsOpacityEffect(toggle);
+            dim->setOpacity(0.45);
+            toggle->setGraphicsEffect(dim);
+            connect(toggle, &QAbstractButton::clicked, this, [this, toggle] {
+                const QSignalBlocker quiet(toggle);
+                toggle->setChecked(false);
+                emit pandocNeeded();
+            });
+            addRow(layout, {key}, QCoreApplication::translate("Settings", feature.name),
+                   QCoreApplication::translate("Settings", feature.description) + QLatin1Char(' ')
+                       + tr("Not available: pandoc was not found."),
+                   toggle, [toggle] {});
+            continue;
+        }
+#endif
         const QString reason = needsPackage.value(feature.id);
         QString description = QCoreApplication::translate("Settings", feature.description);
         if (!reason.isEmpty())
@@ -982,6 +1015,28 @@ QWidget *SettingsPage::buildCorePluginsPage()
                 toggle->setEnabled(false);
             }
     }
+#ifdef NOTEAPPC_HAVE_PANDOC
+    addLineEditRow(layout, QStringLiteral("pandoc.path"), tr("Pandoc program"),
+                   pandocFound ? tr("Its name on PATH or its full path. Empty looks for pandoc on PATH.")
+                               : tr("Pandoc was not found. Install it (pacman -S pandoc, or pandoc.org) or give its "
+                                    "full path here."),
+                   QStringLiteral("pandoc"));
+    addLineEditRow(layout, QStringLiteral("pandoc.extraArguments"), tr("Pandoc: extra arguments"),
+                   tr("Added to every export, after the ones Notolith passes, and split like a shell would split "
+                      "them (quotes group; nothing is expanded and no shell runs). For import too. Example: --toc"),
+                   QString());
+    addLineEditRow(layout, QStringLiteral("pandoc.referenceDoc"), tr("Pandoc: reference.docx"),
+                   tr("A Word file whose styles an exported .docx takes (pandoc's --reference-doc). Optional."),
+                   QString());
+    if (auto *path = layout->parentWidget()->findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_pandoc.path"))) {
+        // Found now (or lost): the switch above follows, without leaving and entering the page.
+        connect(path, &QLineEdit::editingFinished, this, [this, pandocFound] {
+            const bool found = !pandoc::locate(m_settings->text(QStringLiteral("pandoc.path"))).isEmpty();
+            if (found != pandocFound)
+                QTimer::singleShot(0, this, [this] { rebuild(); });
+        });
+    }
+#endif
     // What the installed modules asked for, and the ones that could not load.
     for (const ModuleHost::SettingRow &row : std::as_const(m_moduleRows)) {
         if (!row.options.isEmpty())
@@ -1367,5 +1422,21 @@ QLabel#settingsRowError { color: %9; font-size: 12px; }
     if (sheet != styleSheet()) // the same sheet again would restyle every row
         setStyleSheet(sheet);
 }
+
+#ifdef NOTEAPPC_HAVE_PANDOC
+void SettingsPage::showPandocSettings()
+{
+    const int index = 3; // Core plugins, as ensurePage() lists them
+    if (m_needsRebuild)
+        rebuild();
+    ensurePage(index);
+    m_nav->setCurrentRow(index);
+    if (auto *path = m_pages->widget(index)->findChild<QLineEdit *>(QStringLiteral("settingsLineEdit_pandoc.path"))) {
+        path->setFocus();
+        if (auto *scroll = qobject_cast<QScrollArea *>(m_pages->widget(index)))
+            scroll->ensureWidgetVisible(path);
+    }
+}
+#endif
 
 } // namespace noteAppC

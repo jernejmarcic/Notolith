@@ -311,7 +311,8 @@ Everything a note-taking app is for, and nothing it is not:
   backlinks, tags, search, the quick switcher, themes, callouts, code
   highlighting, maths, image embeds.
 - **Tier 1 candidates:** spellcheck (hunspell), graph view, Canvas, Bases,
-  PDF embeds (already optional), export, git sync.
+  PDF embeds (already optional), export, git sync. Export through the pandoc program is the
+  `pandoc` core plugin (docs/PANDOC.md): an optional runtime tool, never a build dependency.
 
 ## Order of building, when it is time
 

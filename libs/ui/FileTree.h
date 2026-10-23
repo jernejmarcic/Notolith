@@ -93,7 +93,14 @@ public:
     /// when nothing is selected. The caller owns it.
     QMimeData *dragData() const;
 
+    /// Takes files dragged in from another program (a file manager) too, for
+    /// filesDropped(), when `wanted` says yes to at least one of them; empty,
+    /// the tree only takes its own drags.
+    void setAcceptFileDrops(std::function<bool(const QString &path)> wanted) { m_fileDrops = std::move(wanted); }
+
 signals:
+    /// Files from outside were dropped on `folder` (absolute).
+    void filesDropped(const QStringList &files, const QString &folder);
     /// A drop wants `path` moved into `targetFolder`. The tree never moves a
     /// file itself - QFileSystemModel would skip the links, history and tabs
     /// the window keeps in step.
@@ -109,6 +116,8 @@ protected:
 
 private:
     bool isOwnDrag(const QMimeData *data) const;
+    bool isFileDrop(const QMimeData *data) const;
+    std::function<bool(const QString &)> m_fileDrops;
 
     FileRowDelegate *m_delegate = nullptr;
     QColor m_guide;
