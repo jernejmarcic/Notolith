@@ -1366,6 +1366,30 @@ TEST(CodeStylerTest, TheHighlightNamesComeFromASettingString)
     EXPECT_TRUE(parseHighlightKinds(QString()).isEmpty());
 }
 
+TEST(CodeStylerTest, InlineCodeNamesItsLanguageAndHidesThePrefix)
+{
+    const QString text = QStringLiteral("Run `{python} x = [1]` or `{}{keep}` or `plain` or `{c++ title:'T' icon} int a;`.\n");
+    const Decorations decorations = decorationsOf(text, codeStylerOn());
+    QStringList languages;
+    for (const StyleSpan &span : decorations.styles) {
+        if (span.kind == StyleSpan::Kind::InlineCode)
+            languages << span.payload;
+    }
+    EXPECT_EQ(languages, QStringList({QStringLiteral("python"), QString(), QString(), QStringLiteral("c++")}));
+    EXPECT_EQ(rendered(text, codeStylerOn()), QStringLiteral("Run x = [1] or {keep} or plain or int a;.\n"));
+
+    // The code the highlighter is given is what follows the prefix.
+    const auto first = std::find_if(decorations.styles.cbegin(), decorations.styles.cend(),
+                                    [](const StyleSpan &span) { return span.kind == StyleSpan::Kind::InlineCode; });
+    ASSERT_NE(first, decorations.styles.cend());
+    EXPECT_EQ(text.mid(first->code.start, first->code.length()), QStringLiteral("x = [1]"));
+
+    // Off, the prefix is text, and nothing names a language.
+    EXPECT_EQ(rendered(text), QStringLiteral("Run {python} x = [1] or {}{keep} or plain or {c++ title:'T' icon} int a;.\n"));
+    for (const StyleSpan &span : decorationsOf(text).styles)
+        EXPECT_TRUE(span.payload.isEmpty());
+}
+
 TEST(CodeStylerTest, ThePropertyTurnsTheNoteOff)
 {
     QString note = QStringLiteral("---\ncode-styler-ignore: true\n---\n```cpp title:x\nint a;\n```\n");

@@ -970,6 +970,38 @@ bool looksLikeFenceParameter(const QString &word, const QStringList &kinds)
     return own.contains(key) || (separator > 0 && kinds.contains(key));
 }
 
+/// Code Styler's inline form: `{python} code` names the language of an inline
+/// code span, `{python title:'x' icon}` adds parameters nothing here draws, and
+/// a leading `{}` is the escape for code that really starts with a brace
+/// (`{}{kept}`). The prefix and the space after it are syntax; the style span
+/// the walk just made gets the language and the code that follows.
+void styleInlineCode(const QString &text, const Range &content, Decorations &decorations)
+{
+    if (content.length() < 2 || text.at(content.start) != QLatin1Char('{'))
+        return;
+    const qsizetype close = text.indexOf(QLatin1Char('}'), content.start);
+    if (close < 0 || close >= content.end)
+        return;
+    const QStringView inner = QStringView(text).mid(content.start + 1, close - content.start - 1).trimmed();
+    qsizetype n = 0;
+    while (n < inner.size() && (inner.at(n).isLetterOrNumber() || QStringView(u"+#._-").contains(inner.at(n))))
+        ++n;
+    // `{"a": 1}` and `{ x + y }` are code in braces, not a language.
+    if ((n == 0 && !inner.isEmpty()) || (n < inner.size() && !inner.at(n).isSpace()))
+        return;
+    qsizetype codeStart = close + 1;
+    if (codeStart < content.end && text.at(codeStart) == QLatin1Char(' '))
+        ++codeStart;
+    if (codeStart >= content.end)
+        return; // nothing after it to colour or to show
+    decorations.syntax.append({content.start, codeStart});
+    if (n > 0) {
+        StyleSpan &span = decorations.styles.last();
+        span.payload = inner.left(n).toString();
+        span.code = {codeStart, content.end};
+    }
+}
+
 /// Where a fence's attributes sit on its opening line. md4qt positions only
 /// the language itself (`syntaxPos`); everything after it, to the end of that
 /// line, is noteAppC's own and has to be found from the raw text rather than
@@ -1807,6 +1839,8 @@ void walkItem(MD::Item *item, Walk &walk)
             }
             walk.decorations.styles.append(
                 {block ? StyleSpan::Kind::CodeBlock : kind, range, 0, language, {}, {}});
+            if (walk.codeStyler && item->type() == MD::ItemType::Code && !block && walk.text)
+                styleInlineCode(*walk.text, range, walk.decorations);
             if (item->type() == MD::ItemType::Math && code->isInline()) {
                 // Inline maths hides everything from just after the opening
                 // "$" through the closing one, so live preview keeps that one

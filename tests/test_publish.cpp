@@ -167,6 +167,20 @@ TEST(PublishTest, CodeStylerParametersTitleNumberAndColourTheLines)
     EXPECT_FALSE(plain.contains(QLatin1String("class=\"line hl")));
 }
 
+TEST(PublishTest, CodeStylerInlineCodeIsHighlightedWithoutItsPrefix)
+{
+    TestSite site({{QStringLiteral("Inline.md"), "Say `{python} import os` and `plain`.\n"}});
+    Options on;
+    on.parse.codeStyler = true;
+    site.publish(on);
+    const QString page = site.read(QStringLiteral("inline.html"));
+    EXPECT_TRUE(page.contains(QLatin1String("<code class=\"language-python\">"))) << page.toStdString();
+    EXPECT_FALSE(page.contains(QLatin1String("{python}")));
+    EXPECT_TRUE(page.contains(QLatin1String("<code>plain</code>")));
+    site.publish();
+    EXPECT_TRUE(site.read(QStringLiteral("inline.html")).contains(QLatin1String("<code>{python} import os</code>")));
+}
+
 TEST(PublishTest, SiteCSSCarriesFormattingColoursOnlyWhereSet)
 {
     TestSite site({{QStringLiteral("Note.md"), "# T\n\nSome **bold** text.\n"}});

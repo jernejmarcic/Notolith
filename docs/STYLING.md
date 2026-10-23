@@ -340,6 +340,25 @@ clickable. `{r title, hl=5}` (R Markdown) is not read: its first word is
 and `codeblocks.ini` do that job. `code-styler-ignore: true` in a note's
 properties turns the plugin off for that note.
 
+### Inline code in a language
+
+Part of the same core plugin: inline code that starts with `{language}` is
+coloured as a code block of that language is.
+
+```markdown
+Use `{python} sorted(x, key=len)` or `{c++ title:'Inline' icon} std::move(x)`.
+```
+
+The `{python}` and the space after it are hidden, and come back while the caret
+is in the span (like the `**` of bold). `title:` and `icon` after the language
+are accepted and hidden but drawn as nothing: there is no label or icon before
+inline code here. Code that really starts with a brace takes an empty `{}` in
+front, which is all that is hidden: `` `{}{kept}` `` shows `{kept}`. A brace
+that is not a language (`{"a": 1}`, `{ x + y }`) is left alone. Plain inline
+code is untouched, and the language word is looked up in the same highlighter
+as a fence's, so an unknown one is plain code with the prefix hidden. Published
+pages and PDF export draw it the same way.
+
 ## Themes
 
 Pick a colour scheme on the settings page's Appearance tab. A theme file goes

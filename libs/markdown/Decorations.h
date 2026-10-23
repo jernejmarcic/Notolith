@@ -61,6 +61,11 @@ struct StyleSpan {
     /// with the caret kept. Invalid along with `anchorHash` when there is no
     /// subpath.
     Range anchorText;
+
+    /// For Kind::InlineCode with a `{lang}` prefix (ParseOptions::codeStyler):
+    /// `payload` is the language and this is the code after the prefix, which
+    /// is hidden (`syntax`). Invalid for plain inline code.
+    Range code;
 };
 
 /// One top-level block: the unit the editor lays out, caches a height for,

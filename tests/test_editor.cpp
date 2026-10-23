@@ -3869,6 +3869,30 @@ TEST(CodeStylerEditorTest, AnUnknownNameAndAnOffPluginPaintNothing)
     EXPECT_EQ(changed, 0);
 }
 
+TEST(CodeStylerEditorTest, InlineCodeIsHighlightedInItsLanguageAndTheTagComesBackOnTheCaretLine)
+{
+    if (!CodeHighlighter::isAvailable())
+        GTEST_SKIP() << "built without KF6 SyntaxHighlighting";
+    const QString tagged = QStringLiteral("Say `{python} import os` now.\n\nElsewhere.\n");
+    const QString plain = QStringLiteral("Say `import os` now.\n\nElsewhere.\n");
+    auto styled = stylerEditorWith(tagged);
+    auto bare = stylerEditorWith(plain);
+    auto off = stylerEditorWith(tagged, false);
+    const auto keyword = [](const MarkdownEditor &editor, const QString &note) {
+        return editor.formatAt(note.indexOf(QStringLiteral("import"))).foreground().color();
+    };
+    EXPECT_NE(keyword(*styled, tagged), keyword(*bare, plain)) << "`import` is a keyword in Python";
+    EXPECT_EQ(keyword(*off, tagged), keyword(*bare, plain)) << "off: one plain colour for the whole span";
+
+    // Hidden while the caret is elsewhere, written out while it touches the span (as `**` are).
+    EXPECT_FALSE(styled->displayText().contains(QStringLiteral("{python}")));
+    EXPECT_TRUE(off->displayText().contains(QStringLiteral("{python}")));
+    styled->enterBlockAt(tagged.indexOf(QStringLiteral("import")) + 2);
+    styled->grab();
+    EXPECT_TRUE(styled->displayText().contains(QStringLiteral("{python}")));
+    EXPECT_NE(keyword(*styled, tagged), keyword(*bare, plain)) << "still coloured while the tag shows";
+}
+
 // Stage 13: setNotebookRunner is a fake here, the same way setQueryRunner and
 // setBaseRunner are faked elsewhere in this file - libs/editor must not link
 // libs/ext/notebook, so a real kernel is only ever exercised by

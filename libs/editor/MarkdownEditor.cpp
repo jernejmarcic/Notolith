@@ -2533,6 +2533,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             continue;
 
         QTextCharFormat format;
+        // Tokens that go on after the span's own format, which they refine.
+        QList<QTextLayout::FormatRange> tokens;
         switch (span.kind) {
         case StyleSpan::Kind::Bold:
             format.setFontWeight(QFont::Bold);
@@ -2551,6 +2553,8 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             format.setFont(d->m_theme.monospaceFont());
             format.setForeground(codeColour);
             format.setBackground(codeBackground);
+            if (span.code.isValid()) // `{python} code`: the language's own colours (Code Styler)
+                tokens = inlineCodeFormats(span, map);
             break;
         case StyleSpan::Kind::CodeBlock:
             if (view.span.kind == BlockSpan::Kind::Code)
@@ -2616,6 +2620,7 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
             continue; // carried by the block font
         }
         add(span.range, format);
+        formats += tokens;
     }
     // Inline HTML tags layoutInlineHtml recognised and paired: it already
     // hid the tags themselves, so this is the format for the text between
@@ -2623,6 +2628,20 @@ QList<QTextLayout::FormatRange> MarkdownEditor::formatsIn(const BlockView &view,
     for (const auto &[source, htmlFormat] : view.inlineHtmlFormats)
         add(source, htmlFormat);
     return underlay + formats;
+}
+
+QList<QTextLayout::FormatRange> MarkdownEditor::inlineCodeFormats(const StyleSpan &span, const DisplayMap &map) const
+{
+    const Range shown = map.toDisplay(span.code);
+    if (shown.length() != span.code.length())
+        return {}; // something inside it is hidden: the offsets would not line up
+    SyntaxMap syntax;
+    const bool mapped = syntaxMapFor(styleOfLanguage(span.payload), &syntax);
+    QList<QTextLayout::FormatRange> tokens = d->m_code.highlight(
+        d->m_text.mid(span.code.start, span.code.length()), span.payload, mapped ? &syntax : nullptr);
+    for (QTextLayout::FormatRange &token : tokens)
+        token.start += int(shown.start);
+    return tokens;
 }
 
 Range MarkdownEditor::codeContentOf(const BlockView &view, QString *language) const

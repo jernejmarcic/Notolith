@@ -1100,9 +1100,16 @@ private:
         case InlineNode::Strike:
             return QStringLiteral("<del>") + emitInline(node.range, note, node.kind, node.dataIndex)
                   + QStringLiteral("</del>");
-        case InlineNode::Code:
-            return QStringLiteral("<code>") + escapeHtml(stripHiddenRanges(node.range, note))
-                  + QStringLiteral("</code>");
+        case InlineNode::Code: {
+            const StyleSpan &span = note.decorations.styles.at(node.dataIndex);
+            const QString code = stripHiddenRanges(node.range, note);
+            // `{python} code`: the language's colours, as a fence gets them.
+            if (span.code.isValid()) {
+                return QStringLiteral("<code class=\"language-%1\">").arg(escapeAttr(span.payload))
+                       + highlightedLines(code, span.payload) + QStringLiteral("</code>");
+            }
+            return QStringLiteral("<code>") + escapeHtml(code) + QStringLiteral("</code>");
+        }
         case InlineNode::Highlight:
             return QStringLiteral("<mark>") + emitInline(node.range, note, node.kind, node.dataIndex)
                   + QStringLiteral("</mark>");

@@ -1287,6 +1287,9 @@ private:
     /// A named highlight's row colour, with the alpha a highlighted row gets;
     /// invalid for a name the setting does not have.
     QColor codeHighlightColour(const QString &kind) const;
+    /// The highlighter's tokens for an inline code span written `{lang} code`,
+    /// in `map`'s display coordinates.
+    QList<QTextLayout::FormatRange> inlineCodeFormats(const StyleSpan &span, const DisplayMap &map) const;
     /// Token colours for a block styled `style`: its own `syntax.*` over the
     /// theme's. False (and `*out` untouched) when nothing is configured or the
     /// setting is off, which is when the highlighter must get no map at all.
