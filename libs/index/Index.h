@@ -90,10 +90,17 @@ public:
         bool isOpen() const;
         /// `asNote`: the cached row must also be of that kind (a note, or a plain file).
         bool isCurrent(const QString &path, qint64 mtime, qint64 size, bool asNote);
+        /// Reads every row's mtime, size and kind once, so a whole walk's isCurrent() is a hash lookup instead of
+        /// a query per file. Dropped by the first put(), putAttachment() or remove(): isCurrent() then queries again.
+        void loadCurrent();
         /// Notes only, vault-relative, as Index::allPaths().
         QStringList allPaths();
         void begin();
         void commit();
+        /// The end of a from-scratch build: makes the indexes it deferred. Before the scan reports it is done,
+        /// so the Index's thread never writes into a cache this one is still changing (the destructor also
+        /// does it, for a scan cancelled before the end).
+        void finish();
         /// Each returns the names the file now answers to, for setNames().
         QStringList put(const Metadata &metadata, const QString &body);
         /// A non-note file, so `![[image.png]]` resolves: no metadata and no

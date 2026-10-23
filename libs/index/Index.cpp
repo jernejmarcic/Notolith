@@ -580,8 +580,20 @@ struct Index::Writer::Private {
     QSqlDatabase db;
     std::optional<NoteRows> rows;
     QSqlQuery current;
+    struct Row {
+        qint64 mtime;
+        qint64 size;
+        qint64 words;
+    };
+    QHash<QString, Row> known; // loadCurrent(); valid only while `loaded`
+    bool loaded = false;
     bool indexesPending = false; // createChildIndexes() waits for the end of a from-scratch build
 
+    void forgetCurrent()
+    {
+        loaded = false;
+        known.clear();
+    }
     QString relative(const QString &path) const { return QDir(vaultRoot).relativeFilePath(path); }
 };
 
@@ -616,8 +628,7 @@ Index::Writer::~Writer()
 {
     d->rows.reset();
     d->current = QSqlQuery();
-    if (d->indexesPending && d->db.isOpen())
-        createChildIndexes(d->db);
+    finish();
     d->db.close();
     d->db = QSqlDatabase();
     QSqlDatabase::removeDatabase(d->connection);
@@ -628,8 +639,24 @@ bool Index::Writer::isOpen() const
     return d->db.isOpen();
 }
 
+void Index::Writer::loadCurrent()
+{
+    d->known.clear();
+    QSqlQuery query(d->db);
+    if (!query.exec(QStringLiteral("SELECT path, mtime, size, words FROM files")))
+        return;
+    while (query.next())
+        d->known.insert(query.value(0).toString(), {query.value(1).toLongLong(), query.value(2).toLongLong(),
+                                                    query.value(3).toLongLong()});
+    d->loaded = true;
+}
+
 bool Index::Writer::isCurrent(const QString &path, qint64 mtime, qint64 size, bool asNote)
 {
+    if (d->loaded) {
+        const auto row = d->known.constFind(d->relative(path));
+        return row != d->known.cend() && row->mtime == mtime && row->size == size && (row->words >= 0) == asNote;
+    }
     d->current.bindValue(0, d->relative(path));
     const bool same = d->current.exec() && d->current.next() && d->current.value(0).toLongLong() == mtime
                    && d->current.value(1).toLongLong() == size && (d->current.value(2).toLongLong() >= 0) == asNote;
@@ -657,8 +684,16 @@ void Index::Writer::commit()
     d->db.commit();
 }
 
+void Index::Writer::finish()
+{
+    if (d->indexesPending && d->db.isOpen())
+        createChildIndexes(d->db);
+    d->indexesPending = false;
+}
+
 QStringList Index::Writer::put(const Metadata &metadata, const QString &body)
 {
+    d->forgetCurrent();
     const QString relative = d->relative(metadata.path);
     d->rows->erase(relative);
     const QStringList names = noteNames(relative, metadata);
@@ -667,6 +702,7 @@ QStringList Index::Writer::put(const Metadata &metadata, const QString &body)
 
 QStringList Index::Writer::putAttachment(const QString &path, qint64 mtime, qint64 size)
 {
+    d->forgetCurrent();
     const QString relative = d->relative(path);
     d->rows->erase(relative);
     const QStringList names = attachmentNames(relative);
@@ -675,6 +711,7 @@ QStringList Index::Writer::putAttachment(const QString &path, qint64 mtime, qint
 
 void Index::Writer::remove(const QString &path)
 {
+    d->forgetCurrent();
     d->rows->erase(d->relative(path));
 }
 

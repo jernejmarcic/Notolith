@@ -1921,13 +1921,13 @@ TEST_F(IndexTest, ACacheWrittenBeforeTheChildIndexesGainsThemAndKeepsItsRows)
         Index first;
         build(first);
     }
-    // A from-scratch build ends with them too (the Writer makes them as it closes, just after finished()).
+    // A from-scratch build has them too by the time finished() lands: the UI thread writes to the cache after that.
     const auto hasAll = [&] {
         const QStringList names = indexNamesIn(cache);
         return std::all_of(kChildTables.cbegin(), kChildTables.cend(),
                            [&](const QString &table) { return names.contains(table + QStringLiteral("_file")); });
     };
-    ASSERT_TRUE(QTest::qWaitFor(hasAll, 5000));
+    ASSERT_TRUE(hasAll());
     // The cache as an older build left it: same schema version, no child indexes.
     {
         QSqlDatabase old = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), QStringLiteral("old-cache"));
@@ -1985,4 +1985,30 @@ TEST_F(IndexTest, ReindexingEveryChangedNoteCostsAboutWhatAColdIndexDoes)
     EXPECT_EQ(index.contentRowCount(), index.noteCount());
     // Quadratic it was 40x and worse; the bound is generous so a busy machine does not trip it.
     EXPECT_LT(stale, cold * 4 + 100) << "cold " << cold << " ms, every note stale " << stale << " ms";
+}
+
+// A whole walk checks every file against the cache; that is one read of the
+// table, and it must still tell an unchanged file from a changed one, and a
+// note from a plain file the cache holds under the same path.
+TEST_F(IndexTest, AWarmWalkReindexesExactlyTheFilesThatChanged)
+{
+    const auto scan = [&](Index &index) {
+        Indexer indexer(&index);
+        QSignalSpy done(&indexer, &Indexer::finished);
+        indexer.setVault(vault);
+        EXPECT_TRUE(done.wait(20000));
+        return done.isEmpty() ? -1 : done.first().first().toInt();
+    };
+    Index index;
+    EXPECT_EQ(scan(index), 3);
+    EXPECT_EQ(scan(index), 0) << "nothing changed";
+
+    write(QStringLiteral("Home.md"), "# Home\n\nEdited, and longer than before.\n");
+    write(QStringLiteral("Added.md"), "# Added\n");
+    write(QStringLiteral("Projects/notes.txt"), "still not a note, but different\n");
+    EXPECT_EQ(scan(index), 2) << "the edited note and the new one; the changed .txt is an attachment";
+    EXPECT_EQ(scan(index), 0);
+    EXPECT_EQ(index.noteCount(), 4);
+    EXPECT_EQ(index.attachmentCount(), 1);
+    EXPECT_EQ(index.contentRowCount(), index.noteCount());
 }
