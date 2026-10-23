@@ -94,6 +94,19 @@ noteappc_fake_module(fake_twin fake-twin "${NOTEAPPC_ABI_TAG}" fake FakeModule.c
 noteappc_fake_module(fake_noid "" "${NOTEAPPC_ABI_TAG}" fakenoid FakeModule.cpp)
 noteappc_fake_module(fake_notmodule fake-notmodule "${NOTEAPPC_ABI_TAG}" fakenotmod NotAModule.cpp)
 noteappc_fake_module(fake_unresolved fake-unresolved "${NOTEAPPC_ABI_TAG}" fakeunres FakeModule.cpp FAKE_UNRESOLVED)
+# NOTEAPPC_STATIC_MODULES (R12, Android): the same discovery for a module linked into the executable. The test
+# module is a Qt static plugin in test_modules itself, imported there (Q_IMPORT_PLUGIN) like main.cpp imports ink.
+if(NOTEAPPC_STATIC_MODULES)
+    set(FAKE_ID fake-static)
+    set(FAKE_ABI "${NOTEAPPC_ABI_TAG}")
+    set(FAKE_SUFFIX fakestatic)
+    configure_file(fakemodule/manifest-static.json.in ${CMAKE_CURRENT_BINARY_DIR}/fake_static/manifest.json @ONLY)
+    add_library(fake_static STATIC fakemodule/FakeStaticModule.cpp)
+    set_target_properties(fake_static PROPERTIES AUTOMOC ON POSITION_INDEPENDENT_CODE ON)
+    target_include_directories(fake_static PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/fake_static)
+    target_compile_definitions(fake_static PRIVATE QT_STATICPLUGIN FAKE_ID="${FAKE_ID}" FAKE_SUFFIX="${FAKE_SUFFIX}")
+    target_link_libraries(fake_static PUBLIC noteAppC_modules_headers Qt6::Widgets)
+endif()
 set(NOTEAPPC_FAKE_MODULE_TARGETS fake_good fake_badabi fake_twin fake_noid fake_notmodule fake_unresolved)
 
 add_executable(test_modules test_modules.cpp)
@@ -101,6 +114,10 @@ target_link_libraries(test_modules PRIVATE noteAppC_modules Qt6::Widgets GTest::
 target_compile_definitions(test_modules PRIVATE NOTEAPPC_FAKE_MODULES_DIR="${CMAKE_CURRENT_BINARY_DIR}/fakemodules")
 set_target_properties(test_modules PROPERTIES ENABLE_EXPORTS ON) # the fake module resolves ModuleView here
 add_dependencies(test_modules ${NOTEAPPC_FAKE_MODULE_TARGETS})
+if(NOTEAPPC_STATIC_MODULES)
+    target_link_libraries(test_modules PRIVATE fake_static)
+    target_compile_definitions(test_modules PRIVATE NOTEAPPC_STATIC_FAKE)
+endif()
 if(TARGET notolith-ink) # the R2 case: the real module, copied away from its core library
     target_compile_definitions(test_modules PRIVATE NOTEAPPC_INK_MODULE_PATH="$<TARGET_FILE:notolith-ink>")
     add_dependencies(test_modules notolith-ink)

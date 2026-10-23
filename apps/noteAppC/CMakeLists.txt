@@ -2,6 +2,18 @@ qt_add_executable(noteAppC main.cpp)
 
 target_compile_definitions(noteAppC PRIVATE NOTEAPPC_VERSION="${PROJECT_VERSION}")
 target_link_libraries(noteAppC PRIVATE noteAppC_ui)
+# Static modules (NOTEAPPC_STATIC_MODULES): linked in, and imported in main.cpp - one define per module.
+if(NOTEAPPC_STATIC_MODULES)
+    get_property(noteappc_static_modules GLOBAL PROPERTY NOTEAPPC_STATIC_MODULE_TARGETS)
+    target_link_libraries(noteAppC PRIVATE ${noteappc_static_modules})
+    target_compile_definitions(noteAppC PRIVATE NOTEAPPC_STATIC_MODULES)
+    if(TARGET notolith-ink-static)
+        target_compile_definitions(noteAppC PRIVATE NOTEAPPC_STATIC_INK)
+    endif()
+    if(TARGET notolith-hwfont-static)
+        target_compile_definitions(noteAppC PRIVATE NOTEAPPC_STATIC_HWFONT)
+    endif()
+endif()
 # Loadable modules (libs/modules) resolve the editor, theme and vault symbols
 # from this executable at load time, so they must be exported.
 if(NOT ANDROID)

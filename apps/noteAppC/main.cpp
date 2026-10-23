@@ -12,9 +12,22 @@
 #include <malloc.h>
 #endif
 
+#ifdef NOTEAPPC_STATIC_MODULES
+#include <QtPlugin>
+#endif
+
 #include "MainWindow.h"
 #include "PopupStyle.h"
 #include "SingleInstance.h"
+
+// The modules built in as Qt static plugins (NOTEAPPC_STATIC_MODULES; apps/noteAppC/CMakeLists.txt sets one define each):
+// importing one is what makes the linker keep it, and ModuleRegistry::scan list it.
+#ifdef NOTEAPPC_STATIC_INK
+Q_IMPORT_PLUGIN(InkModule)
+#endif
+#ifdef NOTEAPPC_STATIC_HWFONT
+Q_IMPORT_PLUGIN(HwfontModule)
+#endif
 
 namespace {
 

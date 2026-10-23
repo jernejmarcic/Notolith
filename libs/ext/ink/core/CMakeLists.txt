@@ -29,7 +29,13 @@ FetchContent_Declare(ink_stroke_modeler
     EXCLUDE_FROM_ALL)
 FetchContent_MakeAvailable(ink_stroke_modeler)
 
-add_library(notolith-inkcore SHARED
+# Shared, unless the modules are static plugins: then there is no directory beside them to find it in.
+if(NOTEAPPC_STATIC_MODULES)
+    set(noteappc_inkcore_kind STATIC)
+else()
+    set(noteappc_inkcore_kind SHARED)
+endif()
+add_library(notolith-inkcore ${noteappc_inkcore_kind}
     InkCanvas.cpp
     InkCanvas.h
     InkCanvasSelection.cpp
@@ -69,4 +75,6 @@ target_link_libraries(notolith-inkcore
 # The modeler sets its include root directory-wide, not on its target, so name it here:
 # its headers are included as <ink_stroke_modeler/...>.
 target_include_directories(notolith-inkcore PRIVATE ${ink_stroke_modeler_SOURCE_DIR})
-install(TARGETS notolith-inkcore LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+if(NOT NOTEAPPC_STATIC_MODULES)
+    install(TARGETS notolith-inkcore LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/noteAppC/modules)
+endif()

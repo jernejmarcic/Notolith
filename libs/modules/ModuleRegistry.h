@@ -21,7 +21,10 @@ struct ModuleInfo {
     QString featureID;
     QString name;
     QString description;
-    QString path; ///< absolute path of the .so
+    QString path; ///< absolute path of the .so; empty for a static module
+    /// Linked into the executable as a Qt static plugin (NOTEAPPC_STATIC_MODULES, the Android build: no
+    /// directory to scan, nothing to dlopen). Found through QPluginLoader::staticPlugins().
+    bool isStatic = false;
     QString ABItag;
     QStringList suffixes;      ///< lower-case, no dot
     struct Command {
@@ -49,7 +52,8 @@ public:
     static QStringList defaultDirectories();
     using SuffixPredicate = std::function<bool(const QString &suffix)>;
     /// Reads every *.so's manifest with QPluginLoader::metaData(), which does
-    /// not load the library. Files without a Notolith manifest are skipped.
+    /// not load the library, then the static plugins' (same IID check, same manifest; nothing is
+    /// constructed). Files without a Notolith manifest are skipped.
     /// A module that claims a suffix `isBuiltInSuffix` accepts gets a
     /// `problem` (the app's own kinds keep their suffixes) and never loads.
     static QList<ModuleInfo> scan(const QStringList &directories, const SuffixPredicate &isBuiltInSuffix = {});
@@ -72,7 +76,7 @@ public:
     /// message, or "not a Notolith module"); empty when it has not failed.
     QString loadFailure(const QString &id) const { return m_failed.value(id); }
 
-    /// QPluginLoader::instance() then attach(host), once per module id. False
+    /// QPluginLoader::instance() (QStaticPlugin::instance() for a static module) then attach(host), once per module id. False
     /// with `error` (the manifest's problem, or the loader's message) when it
     /// cannot. A loaded library stays loaded until the process ends.
     bool ensureLoaded(const ModuleInfo &module, ModuleHost &host, QString *error);
@@ -80,7 +84,7 @@ public:
 
 private:
     QList<ModuleInfo> m_modules;
-    QHash<QString, QPluginLoader *> m_loaded;
+    QHash<QString, QPluginLoader *> m_loaded; ///< null for a static module
     QHash<QString, QString> m_failed;
     std::function<bool(const QString &)> m_enabled;
 };
