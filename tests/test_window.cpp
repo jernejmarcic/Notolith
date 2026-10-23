@@ -94,6 +94,7 @@
 #include <QClipboard>
 #include <QSignalSpy>
 #include <QAction>
+#include <QBuffer>
 #include <QDate>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -5663,6 +5664,49 @@ TEST_F(WindowTest, NewNotebookCreatesAnUntitledNotebookAndOpensIt)
     EXPECT_FALSE(off.findChild<QAction *>(QStringLiteral("notebooks:new"))->isEnabled());
     config.setValue(Settings::featureKey("notebooks"), true);
     config.save();
+}
+
+// A markdown cell's attachment is a picture in the note, not a broken link, while
+// the notebook is open; saving the notebook keeps it.
+TEST_F(WindowTest, ANotebooksCellAttachmentIsShownAsAnImage)
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray png;
+    QBuffer buffer(&png);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    const QJsonObject cell{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                           {QStringLiteral("id"), QStringLiteral("m")},
+                           {QStringLiteral("metadata"), QJsonObject()},
+                           {QStringLiteral("source"), QJsonArray{QStringLiteral("![pic](attachment:image.png)")}},
+                           {QStringLiteral("attachments"),
+                            QJsonObject{{QStringLiteral("image.png"),
+                                         QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(png.toBase64())}}}}}};
+    const QByteArray original =
+        QJsonDocument(QJsonObject{{QStringLiteral("nbformat"), 4},
+                                  {QStringLiteral("nbformat_minor"), 5},
+                                  {QStringLiteral("metadata"),
+                                   QJsonObject{{QStringLiteral("language_info"),
+                                                QJsonObject{{QStringLiteral("name"), QStringLiteral("python")}}}}},
+                                  {QStringLiteral("cells"), QJsonArray{cell}}})
+            .toJson();
+    write(QStringLiteral("Pic.ipynb"), original);
+    MainWindow window;
+    window.show();
+    window.openVault(dir.path());
+    ASSERT_TRUE(window.openNote(path(QStringLiteral("Pic.ipynb"))));
+    MarkdownEditor *editor = window.editor();
+    editor->setCursorOffset(editor->noteText().size());
+    EXPECT_EQ(editor->noteText(), QStringLiteral("![pic](attachment:image.png)\n"));
+    EXPECT_TRUE(editor->displayText().trimmed().isEmpty()) << "an image block, not the text of a broken link";
+
+    editor->setCursorOffset(editor->noteText().size() - 1);
+    QTest::keyClicks(editor, QStringLiteral("!"));
+    ASSERT_TRUE(QMetaObject::invokeMethod(&window, "save"));
+    const QByteArray saved = readAll(path(QStringLiteral("Pic.ipynb")));
+    EXPECT_TRUE(saved.contains("\"image/png\"")) << "the attachment is kept by an edit of its cell: "
+                                                  << saved.left(600).toStdString() << editor->noteText().toStdString();
 }
 
 // Two cells that read the same are two results: each block shows the output

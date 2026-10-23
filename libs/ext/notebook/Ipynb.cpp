@@ -492,13 +492,15 @@ void seedIpynbOutputs(const IpynbDocument &document)
     }
 }
 
-bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error)
+bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error, QHash<QString, QByteArray> *attachments)
 {
     IpynbDocument document;
     if (!parseIpynb(bytes, &document, error))
         return false;
     seedIpynbOutputs(document);
     *markdown = ipynbMarkdown(document);
+    if (attachments)
+        *attachments = ipynbAttachments(document);
     return true;
 }
 
@@ -576,6 +578,13 @@ QByteArray mergeIpynb(const QByteArray &fileBytes, const QString &markdown, cons
             else
                 ++gapOld;
         }
+        // One side ran out before an unchanged pair turned up: nothing anchors what is left of the other side
+        // either, so the gap is all of both (else the last cells of an edited notebook lose their ids,
+        // outputs and attachments to a fresh cell).
+        if (gapNew >= n || gapOld >= m) {
+            gapNew = n;
+            gapOld = m;
+        }
         pairGap(i, gapNew, k, gapOld);
         i = gapNew;
         k = gapOld;
@@ -639,6 +648,28 @@ QByteArray newIpynb(const KernelSpec *kernel)
                           {QStringLiteral("metadata"), metadata},
                           {QStringLiteral("nbformat"), 4},
                           {QStringLiteral("nbformat_minor"), 5}});
+}
+
+QHash<QString, QByteArray> ipynbAttachments(const IpynbDocument &document)
+{
+    QHash<QString, QByteArray> images;
+    for (const QJsonValue &value : document.root.value(QStringLiteral("cells")).toArray()) {
+        const QJsonObject cell = value.toObject();
+        if (cell.value(QStringLiteral("cell_type")).toString() != QLatin1String("markdown"))
+            continue;
+        const QJsonObject attachments = cell.value(QStringLiteral("attachments")).toObject();
+        for (auto it = attachments.begin(); it != attachments.end(); ++it) {
+            const QJsonObject bundle = it.value().toObject();
+            for (auto mime = bundle.begin(); mime != bundle.end(); ++mime) {
+                if (!mime.key().startsWith(QLatin1String("image/")) || images.contains(it.key()))
+                    continue;
+                // ponytail: one table for the notebook, so two cells that attach different pictures under one
+                // name show the first's in both; key it by cell if that ever turns up.
+                images.insert(it.key(), QByteArray::fromBase64(joined(mime.value()).toLatin1()));
+            }
+        }
+    }
+    return images;
 }
 
 } // namespace noteAppC::notebook

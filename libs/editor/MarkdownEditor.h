@@ -416,6 +416,11 @@ public:
     /// Turns a link target into an absolute path, or an empty string when it
     /// does not resolve. Supplied by the window, which owns the index.
     void setLinkResolver(std::function<QString(const QString &)> resolver);
+    /// Pictures that live in the note's own document rather than in a file:
+    /// name -> encoded image bytes. `![x](attachment:name)` shows the one
+    /// called `name`, as a notebook's markdown-cell attachments do. Read-only
+    /// and never written anywhere; an empty table (the default) costs nothing.
+    void setInlineImages(QHash<QString, QByteArray> images);
     /// The index changed, so a link drawn as pointing nowhere may point
     /// somewhere now, or the reverse. Relays out only if one did.
     void refreshLinkStatus();
@@ -1515,6 +1520,11 @@ private:
     /// code block or a small card.
     bool layoutEmbed(BlockView &view);
     bool layoutImage(BlockView &view, const EmbedSpan &embed, const QString &path);
+    /// `attachment:name` when setInlineImages holds a picture called `name`
+    /// (the "path" such an embed has), else empty.
+    QString attachmentPathOf(const QString &target) const;
+    /// The picture at `path`: a file, or an `attachment:` one from the table. Null when neither decodes.
+    QPixmap loadEmbedPixmap(const QString &path) const;
     bool layoutSourceFile(BlockView &view, const EmbedSpan &embed, const QString &path);
     /// NotebookEmbed.cpp: a runnable `![[script.py]]` embed (stage 13's
     /// rest) - called once layoutSourceFile has already built the panel's

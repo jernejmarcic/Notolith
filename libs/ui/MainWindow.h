@@ -962,6 +962,9 @@ QLabel *m_vimStatus = nullptr;
     /// The output-cache keys of the cells of each open .ipynb that ran, or were
     /// cleared, since it was read or saved: what the next save writes back.
     QHash<QString, QSet<QString>> m_notebookDirty;
+    /// The pictures the markdown cells of each open .ipynb carry, as read when it was opened
+    /// (MarkdownEditor::setInlineImages); a notebook with none has no entry.
+    QHash<QString, QHash<QString, QByteArray>> m_notebookImages;
     crypt::EncryptionSession *m_encryption = nullptr; ///< null in a build without encryption
     QString m_recordingNote;
     std::shared_ptr<SyncEngine> m_sync;

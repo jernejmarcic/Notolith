@@ -5705,6 +5705,7 @@ bool MainWindow::openNote(const QString &rawPath, NavSource source, const QStrin
     m_active->note = note;
     m_active->notePath = path;
     m_active->editor->setEnabled(true);
+    m_active->editor->setInlineImages(m_notebookImages.value(path)); // a notebook's attachments, else none
     // Open in another tab already: that document, unsaved edits and all,
     // not the older bytes on disk.
     const QList<Leaf *> others = viewsOfSameNote(m_active);
@@ -7038,8 +7039,15 @@ bool MainWindow::readNote(const QString &path, Note &out, QString *error, bool s
         }
         out = Note();
         const QByteArray bytes = file.readAll();
-        if (seedOutputs)
-            return notebook::readIpynb(bytes, &out.text, error);
+        if (seedOutputs) {
+            QHash<QString, QByteArray> images;
+            const bool read = notebook::readIpynb(bytes, &out.text, error, &images);
+            if (images.isEmpty())
+                m_notebookImages.remove(path);
+            else
+                m_notebookImages.insert(path, std::move(images));
+            return read;
+        }
         // A look at what is on disk (the change watcher, a save comparing): never seeded, or the outputs of a
         // cell that ran since the file was read would give way to the ones the file still has.
         notebook::IpynbDocument document;
@@ -7620,6 +7628,7 @@ void MainWindow::showDiskNote(const QString &path, const Note &note)
             continue;
         leaf->note = note;
         MarkdownEditor *editor = leaf->editor;
+        editor->setInlineImages(m_notebookImages.value(path));
         const QString &shown = editor->noteText();
         if (shown != note.text) {
             // Only the part that differs, so the caret and the scroll stay

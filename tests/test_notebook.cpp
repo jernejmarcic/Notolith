@@ -2196,3 +2196,63 @@ TEST(IpynbNewTest, ANewNotebookIsOneEmptyCodeCellAndTheKernelsOwnSpec)
         EXPECT_EQ(text, QStringLiteral("```python\n\n```\n"));
     }
 }
+
+TEST(IpynbAttachmentsTest, AMarkdownCellsAttachmentsComeBackAsImageBytesByName)
+{
+    const QByteArray png = QByteArray::fromBase64(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+    QJsonObject markdown{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                         {QStringLiteral("id"), QStringLiteral("m")},
+                         {QStringLiteral("metadata"), QJsonObject()},
+                         {QStringLiteral("source"), QJsonArray{QStringLiteral("![x](attachment:image.png)")}},
+                         {QStringLiteral("attachments"),
+                          QJsonObject{{QStringLiteral("image.png"),
+                                       QJsonObject{{QStringLiteral("image/png"), QString::fromLatin1(png.toBase64())}}},
+                                      {QStringLiteral("notes.txt"),
+                                       QJsonObject{{QStringLiteral("text/plain"), QStringLiteral("not a picture")}}}}}};
+    const QByteArray file = notebookOf({markdown, codeCell(QStringLiteral("c"), QStringLiteral("1"), 0, QString())});
+
+    QString text;
+    QHash<QString, QByteArray> images;
+    ASSERT_TRUE(readIpynb(file, &text, nullptr, &images));
+    EXPECT_TRUE(text.startsWith(QStringLiteral("![x](attachment:image.png)\n")));
+    ASSERT_EQ(images.size(), 1) << "only pictures";
+    EXPECT_EQ(images.value(QStringLiteral("image.png")), png);
+
+    // A notebook with none costs an empty table, and reading it without asking is unchanged.
+    QHash<QString, QByteArray> none;
+    ASSERT_TRUE(readIpynb(sampleNotebook(), &text, nullptr, &none));
+    EXPECT_TRUE(none.isEmpty());
+    ASSERT_TRUE(readIpynb(file, &text));
+
+    // Saving an edit of that cell keeps what it attached.
+    const QByteArray merged = mergeIpynb(file, QStringLiteral("![x](attachment:image.png)\n\nmore\n\n```python\n1\n```\n"));
+    EXPECT_EQ(cellAt(merged, 0).value(QStringLiteral("attachments")), markdown.value(QStringLiteral("attachments")));
+}
+
+TEST(IpynbWriteBackTest, EditingTheLastCellKeepsItsIDOutputsAndAttachments)
+{
+    QTemporaryDir cacheHome;
+    qputenv("XDG_CACHE_HOME", cacheHome.path().toUtf8());
+    QJsonObject markdown{{QStringLiteral("cell_type"), QStringLiteral("markdown")},
+                         {QStringLiteral("id"), QStringLiteral("m")},
+                         {QStringLiteral("metadata"), QJsonObject()},
+                         {QStringLiteral("source"), QJsonArray{QStringLiteral("last words")}},
+                         {QStringLiteral("attachments"),
+                          QJsonObject{{QStringLiteral("a.png"), QJsonObject{{QStringLiteral("image/png"), QStringLiteral("AAAA")}}}}}};
+    for (const bool lastIsCode : {false, true}) {
+        const QByteArray file = lastIsCode
+                                    ? notebookOf({markdown, codeCell(QStringLiteral("c"), QStringLiteral("print(1)"), 3, QStringLiteral("1\n"))})
+                                    : notebookOf({codeCell(QStringLiteral("c"), QStringLiteral("print(1)"), 3, QStringLiteral("1\n")), markdown});
+        QString text = textOf(file);
+        text.replace(lastIsCode ? QStringLiteral("print(1)") : QStringLiteral("last words"),
+                     lastIsCode ? QStringLiteral("print(11)") : QStringLiteral("last words, edited"));
+        const QByteArray merged = mergeIpynb(file, text);
+        const QJsonObject edited = cellAt(merged, 1);
+        const QJsonObject kept = cellAt(file, 1);
+        EXPECT_EQ(edited.value(QStringLiteral("id")), kept.value(QStringLiteral("id"))) << lastIsCode;
+        EXPECT_EQ(edited.value(QStringLiteral("attachments")), kept.value(QStringLiteral("attachments"))) << lastIsCode;
+        EXPECT_EQ(edited.value(QStringLiteral("outputs")), kept.value(QStringLiteral("outputs"))) << lastIsCode;
+        EXPECT_EQ(dumped(cellAt(merged, 0)), dumped(cellAt(file, 0))) << "the first is the file's own";
+    }
+}

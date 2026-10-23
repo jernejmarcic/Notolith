@@ -314,6 +314,37 @@ MarkdownEditor::MarkdownEditor(QWidget *parent)
     d->m_lastEdit.start();
 }
 
+void MarkdownEditor::setInlineImages(QHash<QString, QByteArray> images)
+{
+    if (images == d->m_inlineImages)
+        return;
+    const bool had = !d->m_inlineImages.isEmpty();
+    d->m_inlineImages = std::move(images);
+    if (!had && d->m_inlineImages.isEmpty())
+        return;
+    for (auto it = d->m_images.begin(); it != d->m_images.end();)
+        it = it.key().startsWith(QLatin1String("attachment:")) ? d->m_images.erase(it) : std::next(it);
+    invalidateLayouts();
+    updateLayout();
+    viewport()->update();
+}
+
+QString MarkdownEditor::attachmentPathOf(const QString &target) const
+{
+    if (d->m_inlineImages.isEmpty() || !target.startsWith(QLatin1String("attachment:")))
+        return {};
+    return d->m_inlineImages.contains(target.mid(11)) ? target : QString();
+}
+
+QPixmap MarkdownEditor::loadEmbedPixmap(const QString &path) const
+{
+    if (!path.startsWith(QLatin1String("attachment:")))
+        return QPixmap(path);
+    QPixmap pixmap;
+    pixmap.loadFromData(d->m_inlineImages.value(path.mid(11)));
+    return pixmap;
+}
+
 void MarkdownEditor::setLinkResolver(std::function<QString(const QString &)> resolver)
 {
     m_resolver = std::move(resolver);
@@ -3219,10 +3250,12 @@ bool MarkdownEditor::layoutEmbed(BlockView &view)
     view.notebookOutputs.clear();
 
     const EmbedSpan *embed = soleEmbedOf(view);
-    if (!embed || !m_resolver)
+    if (!embed)
         return false;
 
-    const QString path = m_resolver(embed->target);
+    QString path = attachmentPathOf(embed->target);
+    if (path.isEmpty() && m_resolver)
+        path = m_resolver(embed->target);
     if (path.isEmpty())
         return false;
 
@@ -3286,7 +3319,7 @@ bool MarkdownEditor::layoutImage(BlockView &view, const EmbedSpan &embed, const 
 {
     QPixmap pixmap = d->m_images.value(path);
     if (pixmap.isNull()) {
-        pixmap = QPixmap(path);
+        pixmap = loadEmbedPixmap(path);
         if (pixmap.isNull())
             return false;
         d->m_images.insert(path, pixmap);

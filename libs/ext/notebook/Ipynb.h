@@ -18,6 +18,7 @@
 #include "NotebookSandbox.h"
 
 #include <QByteArray>
+#include <QHash>
 #include <QJsonObject>
 #include <QSet>
 #include <QString>
@@ -46,8 +47,15 @@ QString ipynbMarkdown(const IpynbDocument &document);
 /// `#| sandbox:` line, as the editor's does.
 void seedIpynbOutputs(const IpynbDocument &document);
 
+/// The pictures its markdown cells carry (`attachments`, referenced as
+/// `![x](attachment:name)`): name -> the image's bytes. Empty for a notebook
+/// without any; the first cell's wins when two attach different ones by a name.
+QHash<QString, QByteArray> ipynbAttachments(const IpynbDocument &document);
+
 /// parse + ipynbMarkdown + seedIpynbOutputs: what opening a notebook does.
-bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error = nullptr);
+/// `attachments`, when given, receives ipynbAttachments.
+bool readIpynb(const QByteArray &bytes, QString *markdown, QString *error = nullptr,
+               QHash<QString, QByteArray> *attachments = nullptr);
 
 /// `markdown`, edited, merged into `fileBytes` (the notebook as it is on disk).
 /// Empty (with `error`) when `fileBytes` is not a notebook. Byte for byte

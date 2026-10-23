@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <QBuffer>
 #include <QClipboard>
 #include <QCoreApplication>
 #include <QDir>
@@ -5271,6 +5272,50 @@ TEST(MultiEmbedTest, AParagraphOfSeveralImageEmbedsRendersEveryOne)
     // Two embeds, each on its own line, nothing else in the block: each is
     // its own row of one cell.
     EXPECT_EQ(editor->embedCellCountAt(0), 2);
+}
+
+namespace {
+
+QByteArray redPNG()
+{
+    QImage image(20, 20, QImage::Format_RGB32);
+    image.fill(Qt::red);
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    image.save(&buffer, "PNG");
+    return bytes;
+}
+
+} // namespace
+
+TEST(InlineImageTest, AnAttachmentSourceDrawsThePictureTheTableHolds)
+{
+    auto editor = editorWith(QStringLiteral("![x](attachment:pic.png)\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "no table: the alt text, as a broken link shows";
+
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_TRUE(editor->displayText().trimmed().isEmpty()) << "its source is hidden: the picture is the block";
+    editor->setInlineImages({});
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x"))) << "and gone with the table";
+}
+
+TEST(InlineImageTest, AnAttachmentNeitherInTheTableNorAFileStaysText)
+{
+    auto editor = editorWith(QStringLiteral("![x](attachment:other.png)\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_TRUE(editor->displayText().contains(QStringLiteral("x")));
+}
+
+TEST(InlineImageTest, AnAttachmentInRunningTextIsAnInlineCell)
+{
+    auto editor = editorWith(QStringLiteral("see ![x](attachment:pic.png) here\n"));
+    editor->setLinkResolver([](const QString &) { return QString(); });
+    editor->setInlineImages({{QStringLiteral("pic.png"), redPNG()}});
+    EXPECT_EQ(editor->embedCellCountAt(0), 1);
+    EXPECT_EQ(editor->embedCellRectAt(0, 0).size(), QSizeF(20, 20));
 }
 
 TEST(MultiEmbedTest, AnEmbedInsideRunningTextStillRenders)
